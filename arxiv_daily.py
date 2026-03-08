@@ -37,11 +37,11 @@ PAPERS_DIR = os.path.join(WORK_DIR, "papers")
 RESEARCH_INTERESTS = os.getenv("RESEARCH_INTERESTS", """\
 1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较
 2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天
-3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等""").replace("\\n", "\n")
+3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等""")
 
 DETAIL_CRITERIA = os.getenv("DETAIL_CRITERIA", """\
 - Photo-z 方法论文（提出或比较 photo-z 方法/目录）
-- 星系团巡天/目录/质量标定论文""").replace("\\n", "\n")
+- 星系团巡天/目录/质量标定论文""")
 
 CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
     '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
