@@ -57,6 +57,7 @@ CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
 # 内容提取
 SECTION_CHAR_LIMIT = int(os.getenv("SECTION_CHAR_LIMIT", "8000"))
 PAPER_CHAR_LIMIT = int(os.getenv("PAPER_CHAR_LIMIT", "50000"))
+DAILY_CHAR_LIMIT = int(os.getenv("DAILY_CHAR_LIMIT", "400000"))
 SKIP_SECTIONS = json.loads(os.getenv("SKIP_SECTIONS",
     '["reference","bibliography","appendix","acknowledgement","acknowledgment",'
     '"author contribution","data availability","conflict of interest","orcid"]'))
@@ -433,38 +434,63 @@ def llm_filter_papers(papers):
                 return []
 
 
-def summarize_daily(papers, date_str):
-    """调用 LLM 生成日报总结（所有论文，基于 Abstract + Conclusion）"""
+def _build_paper_block(p):
+    """构建单篇论文的信息文本块"""
+    detail_mark = f" → [[{p['id']}]]" if p["is_detail"] else ""
+    return (
+        f"=== Paper: {p['id']} [category: {p.get('category', 'other')}]{detail_mark} ===\n"
+        f"Title: {p['title']}\n"
+        f"Authors: {p['authors']}\n"
+        f"{p.get('abstract_conclusion', '')}\n\n"
+    )
+
+
+def _split_paper_batches(papers):
+    """按 DAILY_CHAR_LIMIT 将论文分批，返回 list[list[dict]]"""
+    batches = []
+    current_batch = []
+    current_size = 0
+    for p in papers:
+        block_size = len(_build_paper_block(p))
+        if current_batch and current_size + block_size > DAILY_CHAR_LIMIT:
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+        current_batch.append(p)
+        current_size += block_size
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
+    """单次日报 LLM 调用"""
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-
-    n_total = len(papers)
-    n_detail = sum(1 for p in papers if p["is_detail"])
-
-    # 收集出现的 categories
     categories = sorted(set(p.get("category", "other") for p in papers))
 
-    # 构建论文信息列表
-    papers_info = ""
-    for p in papers:
-        detail_mark = f" → [[{p['id']}]]" if p["is_detail"] else ""
-        papers_info += (
-            f"=== Paper: {p['id']} [category: {p.get('category', 'other')}]{detail_mark} ===\n"
-            f"Title: {p['title']}\n"
-            f"Authors: {p['authors']}\n"
-            f"{p.get('abstract_conclusion', '')}\n\n"
+    papers_info = "".join(_build_paper_block(p) for p in papers)
+
+    partial_note = ""
+    if is_partial:
+        batch_ids = ", ".join(p["id"] for p in papers)
+        partial_note = (
+            f"\n注意：这是分批处理的一部分（本批 {len(papers)} 篇），"
+            f"请只为本批论文生成总结，不要输出标题头和统计行。\n"
         )
+
+    header_fmt = "" if is_partial else (
+        f"# arXiv astro-ph 每日追踪 {date_str}\n"
+        f"共 {n_total} 篇相关论文，其中 {n_detail} 篇详细收录。\n\n"
+    )
 
     system_prompt = f"""\
 你是一个专业的天体物理学家助手。请根据提供的论文摘要与结论，生成 arXiv 每日论文追踪日报。
 
 每篇论文已标注 category，请按 category 分组输出。当前出现的 category 有：{', '.join(categories)}。
-
+{partial_note}
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，直接输出内容）：
 
-# arXiv astro-ph 每日追踪 {date_str}
-共 {n_total} 篇相关论文，其中 {n_detail} 篇详细收录。
-
-## [Category 名称]
+{header_fmt}## [Category 名称]
 ### 论文标题 → [[YYMM.NNNNN]]
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
@@ -491,6 +517,37 @@ def summarize_daily(papers, date_str):
     )
 
     return response.choices[0].message.content
+
+
+def summarize_daily(papers, date_str):
+    """
+    调用 LLM 生成日报总结。
+    若总字符数超过 DAILY_CHAR_LIMIT，分批调用后拼接。
+    """
+    n_total = len(papers)
+    n_detail = sum(1 for p in papers if p["is_detail"])
+
+    total_chars = sum(len(_build_paper_block(p)) for p in papers)
+    print(f"  日报输入总长度: {total_chars} 字符 (限制: {DAILY_CHAR_LIMIT})")
+
+    if total_chars <= DAILY_CHAR_LIMIT:
+        return _call_daily_llm(papers, date_str, n_total, n_detail)
+
+    # 分批处理
+    batches = _split_paper_batches(papers)
+    print(f"  超过限制，分 {len(batches)} 批处理 ({[len(b) for b in batches]})")
+
+    header = (
+        f"# arXiv astro-ph 每日追踪 {date_str}\n"
+        f"共 {n_total} 篇相关论文，其中 {n_detail} 篇详细收录。\n"
+    )
+    parts = [header]
+    for i, batch in enumerate(batches):
+        print(f"  正在处理第 {i+1}/{len(batches)} 批 ({len(batch)} 篇)...")
+        part = _call_daily_llm(batch, date_str, n_total, n_detail, is_partial=True)
+        parts.append(part)
+
+    return "\n\n".join(parts)
 
 
 def summarize_paper_detail(paper, date_str):
