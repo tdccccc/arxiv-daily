@@ -26,14 +26,22 @@ from openai import OpenAI
 load_dotenv()
 
 # ================= 配置（全部从 .env 读取） =================
+# LLM
 API_KEY = os.environ["LLM_API_KEY"]
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
+# 输出路径
 WORK_DIR = os.getenv("WORK_DIR", os.path.join(os.path.dirname(__file__), "output"))
 DAILY_DIR = os.path.join(WORK_DIR, "daily")
 PAPERS_DIR = os.path.join(WORK_DIR, "papers")
 
+# arXiv
+ARXIV_CATEGORY = os.getenv("ARXIV_CATEGORY", "astro-ph")
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
+
+# 筛选
 RESEARCH_INTERESTS = os.getenv("RESEARCH_INTERESTS", """\
 1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较
 2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天
@@ -46,12 +54,22 @@ DETAIL_CRITERIA = os.getenv("DETAIL_CRITERIA", """\
 CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
     '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
 
+# 内容提取
+SECTION_CHAR_LIMIT = int(os.getenv("SECTION_CHAR_LIMIT", "8000"))
+PAPER_CHAR_LIMIT = int(os.getenv("PAPER_CHAR_LIMIT", "50000"))
+SKIP_SECTIONS = json.loads(os.getenv("SKIP_SECTIONS",
+    '["reference","bibliography","appendix","acknowledgement","acknowledgment",'
+    '"author contribution","data availability","conflict of interest","orcid"]'))
+PRIORITY_SECTIONS = json.loads(os.getenv("PRIORITY_SECTIONS",
+    '["abstract","conclusion","summary"]'))
+
+# 网络 & 轮询
 REQUEST_DELAY = int(os.getenv("REQUEST_DELAY", "3"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "1800"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "16"))
 # =============================================================
 
-BEIJING_TZ = pytz.timezone("Asia/Shanghai")
+BEIJING_TZ = pytz.timezone(TIMEZONE)
 MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,
@@ -71,7 +89,7 @@ def check_arxiv_update():
     检查 arXiv astro-ph/new 页面日期是否与北京时间今天一致。
     返回 (是否更新, soup 对象, 信息字符串)。
     """
-    url = "https://arxiv.org/list/astro-ph/new"
+    url = f"https://arxiv.org/list/{ARXIV_CATEGORY}/new"
     response = requests.get(url, headers=HEADERS, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -106,22 +124,6 @@ def manage_existing_file(file_path):
         backup_path = file_path.replace(".md", ".bak.md")
         shutil.move(file_path, backup_path)
         print(f"  已备份旧文件: {backup_path}")
-
-
-# 需要跳过的章节（小写匹配）
-SKIP_SECTIONS = [
-    "reference", "bibliography", "appendix",
-    "acknowledgement", "acknowledgment",
-    "author contribution", "data availability",
-    "conflict of interest", "orcid",
-]
-# 高优先级章节（结论/摘要），总字符不够时优先保留
-PRIORITY_SECTIONS = [
-    "abstract", "conclusion", "summary",
-]
-# 每个章节最大字符数 / 单篇论文总上限
-SECTION_CHAR_LIMIT = 3000
-PAPER_CHAR_LIMIT = 20000
 
 
 def _extract_sections(soup):
@@ -392,7 +394,7 @@ def llm_filter_papers(papers):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                temperature=0,
+                temperature=0,  # 筛选任务用 0 确保确定性
             )
             raw = response.choices[0].message.content
 
@@ -485,7 +487,7 @@ def summarize_daily(papers, date_str):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"以下是今日筛选出的论文：\n\n{papers_info}"},
         ],
-        temperature=0.3,
+        temperature=LLM_TEMPERATURE,
     )
 
     return response.choices[0].message.content
@@ -539,7 +541,7 @@ def summarize_paper_detail(paper, date_str):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        temperature=0.3,
+        temperature=LLM_TEMPERATURE,
     )
 
     return response.choices[0].message.content
