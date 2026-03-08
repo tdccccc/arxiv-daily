@@ -16,6 +16,7 @@ import datetime
 import re
 import json
 import shutil
+import logging
 
 import pytz
 import requests
@@ -31,6 +32,7 @@ API_KEY = os.environ["LLM_API_KEY"]
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "300"))
 
 # 输出路径
 WORK_DIR = os.getenv("WORK_DIR", os.path.join(os.path.dirname(__file__), "output"))
@@ -68,6 +70,16 @@ PRIORITY_SECTIONS = json.loads(os.getenv("PRIORITY_SECTIONS",
 REQUEST_DELAY = int(os.getenv("REQUEST_DELAY", "3"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "1800"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "16"))
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 日志
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FILE = os.getenv("LOG_FILE", "") or os.path.join(_SCRIPT_DIR, "arxiv_daily.log")
+
+# 缓存
+CACHE_DIR = os.getenv("CACHE_DIR", "") or os.path.join(_SCRIPT_DIR, ".cache")
+CACHE_EXPIRY_DAYS = int(os.getenv("CACHE_EXPIRY_DAYS", "7"))
 # =============================================================
 
 BEIJING_TZ = pytz.timezone(TIMEZONE)
@@ -81,6 +93,93 @@ HEADERS = {
 }
 
 
+# ================= Logging =================
+def _setup_logging():
+    handlers = [logging.StreamHandler()]
+    if LOG_FILE:
+        handlers.append(logging.FileHandler(LOG_FILE, encoding="utf-8"))
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
+    )
+    return logging.getLogger("arxiv_daily")
+
+
+logger = _setup_logging()
+
+
+# ================= 共享 Session & LLM 客户端 =================
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
+_llm_client = OpenAI(api_key=API_KEY, base_url=BASE_URL,
+                      timeout=LLM_TIMEOUT, max_retries=0)
+
+
+def _retry_request(url, *, timeout=15, max_retries=3, backoff=2, no_retry_statuses=()):
+    """带指数退避的 HTTP GET 重试"""
+    for attempt in range(max_retries):
+        try:
+            res = _session.get(url, timeout=timeout)
+            if res.status_code in no_retry_statuses:
+                res.raise_for_status()
+            res.raise_for_status()
+            return res
+        except requests.RequestException as e:
+            if hasattr(e, 'response') and e.response is not None and e.response.status_code in no_retry_statuses:
+                raise
+            if attempt == max_retries - 1:
+                raise
+            wait = backoff ** attempt
+            logger.warning(f"请求失败 ({url}), {wait}s 后重试: {e}")
+            time.sleep(wait)
+
+
+def _call_llm(*, messages, temperature, max_retries=3, backoff=5):
+    """带指数退避的 LLM 调用重试"""
+    for attempt in range(max_retries):
+        try:
+            resp = _llm_client.chat.completions.create(
+                model=MODEL_NAME, messages=messages, temperature=temperature)
+            return resp.choices[0].message.content
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = backoff * (2 ** attempt)  # 5s, 10s, 20s
+            logger.warning(f"LLM 调用失败, {wait}s 后重试: {e}")
+            time.sleep(wait)
+
+
+# ================= 缓存 =================
+def _cache_path(arxiv_id, kind="html"):
+    """返回缓存文件路径"""
+    return os.path.join(CACHE_DIR, kind, f"{arxiv_id}.html")
+
+
+def _read_cache(arxiv_id, kind="html"):
+    """读取缓存，过期则删除并返回 None"""
+    path = _cache_path(arxiv_id, kind)
+    if not os.path.exists(path):
+        return None
+    age_days = (time.time() - os.path.getmtime(path)) / 86400
+    if age_days > CACHE_EXPIRY_DAYS:
+        os.remove(path)
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _write_cache(arxiv_id, content, kind="html"):
+    """写入缓存"""
+    path = _cache_path(arxiv_id, kind)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+# ================= 核心函数 =================
 def get_beijing_now():
     return datetime.datetime.now(BEIJING_TZ)
 
@@ -91,27 +190,38 @@ def check_arxiv_update():
     返回 (是否更新, soup 对象, 信息字符串)。
     """
     url = f"https://arxiv.org/list/{ARXIV_CATEGORY}/new"
-    response = requests.get(url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
+    response = _retry_request(url, timeout=30)
     soup = BeautifulSoup(response.text, "html.parser")
+
+    today = get_beijing_now().date()
+    arxiv_date = None
 
     # 寻找包含日期的 h3 标签
     h3 = soup.find("h3")
-    if not h3:
-        return False, None, "未找到日期头 (h3)"
+    if h3:
+        date_text = h3.text.strip()
+        match = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", date_text)
+        if match:
+            day, month_str, year = match.groups()
+            month = MONTH_MAP.get(month_str.lower())
+            if month is not None:
+                arxiv_date = datetime.date(int(year), month, int(day))
+    else:
+        date_text = "未找到日期头 (h3)"
 
-    date_text = h3.text.strip()
-    match = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", date_text)
-    if not match:
-        return False, None, f"日期格式解析失败: {date_text}"
+    # 备选：从论文 ID 推断年月
+    if arxiv_date is None:
+        first_link = soup.select_one("dl dt a[title=Abstract]")
+        if first_link:
+            id_match = re.match(r"(\d{2})(\d{2})\.", first_link.text.strip().replace("arXiv:", ""))
+            if id_match:
+                yy, mm = int(id_match.group(1)), int(id_match.group(2))
+                if 2000 + yy == today.year and mm == today.month:
+                    arxiv_date = today
+                    date_text = f"从论文ID推断: {today}"
 
-    day, month_str, year = match.groups()
-    month = MONTH_MAP.get(month_str.lower())
-    if month is None:
-        return False, None, f"未知月份: {month_str}"
-
-    arxiv_date = datetime.date(int(year), month, int(day))
-    today = get_beijing_now().date()
+    if arxiv_date is None:
+        return False, None, f"日期解析失败: {date_text}"
 
     if arxiv_date == today:
         return True, soup, date_text
@@ -124,7 +234,7 @@ def manage_existing_file(file_path):
     if os.path.exists(file_path):
         backup_path = file_path.replace(".md", ".bak.md")
         shutil.move(file_path, backup_path)
-        print(f"  已备份旧文件: {backup_path}")
+        logger.info(f"  已备份旧文件: {backup_path}")
 
 
 def _extract_sections(soup):
@@ -249,46 +359,58 @@ def fetch_paper_content(arxiv_id, is_detail=False):
     html_url = f"https://arxiv.org/html/{arxiv_id}"
     abs_url = f"https://arxiv.org/abs/{arxiv_id}"
 
-    # 尝试 HTML 全文
+    # 尝试 HTML 全文（带缓存）
     try:
-        res = requests.get(html_url, headers=HEADERS, timeout=15)
-        if res.status_code == 200:
+        cached_html = _read_cache(arxiv_id, "html")
+        if cached_html:
+            logger.info(f"    使用缓存: html/{arxiv_id}")
+            html_text = cached_html
+        else:
+            res = _retry_request(html_url, no_retry_statuses=(404,))
             html_text = res.text
+            _write_cache(arxiv_id, html_text, "html")
 
-            # 提取 Abstract + Conclusion（用独立 soup，因为 decompose 会修改树）
-            abstract_conclusion = _extract_abstract_conclusion(
+        # 提取 Abstract + Conclusion（用独立 soup，因为 decompose 会修改树）
+        abstract_conclusion = _extract_abstract_conclusion(
+            BeautifulSoup(html_text, "html.parser")
+        )
+
+        # 如果是 detail 论文，同时提取全文章节
+        full_sections = None
+        if is_detail:
+            full_sections = _extract_sections(
                 BeautifulSoup(html_text, "html.parser")
             )
 
-            # 如果是 detail 论文，同时提取全文章节
-            full_sections = None
-            if is_detail:
-                full_sections = _extract_sections(
-                    BeautifulSoup(html_text, "html.parser")
-                )
+        if abstract_conclusion:
+            return abstract_conclusion, full_sections
 
-            if abstract_conclusion:
-                return abstract_conclusion, full_sections
-
-            # abstract_conclusion 解析失败，回退到纯文本截取
-            soup = BeautifulSoup(html_text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            plain = soup.get_text(separator="\n", strip=True)[:PAPER_CHAR_LIMIT]
-            return plain, full_sections
+        # abstract_conclusion 解析失败，回退到纯文本截取
+        soup = BeautifulSoup(html_text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer"]):
+            tag.decompose()
+        plain = soup.get_text(separator="\n", strip=True)[:PAPER_CHAR_LIMIT]
+        return plain, full_sections
     except Exception as e:
-        print(f"    HTML 获取失败 ({arxiv_id}): {e}")
+        logger.warning(f"    HTML 获取失败 ({arxiv_id}): {e}")
 
-    # 回退到 Abstract 页面
+    # 回退到 Abstract 页面（带缓存）
     try:
-        res = requests.get(abs_url, headers=HEADERS, timeout=15)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
+        cached_abs = _read_cache(arxiv_id, "abs")
+        if cached_abs:
+            logger.info(f"    使用缓存: abs/{arxiv_id}")
+            abs_text = cached_abs
+        else:
+            res = _retry_request(abs_url)
+            abs_text = res.text
+            _write_cache(arxiv_id, abs_text, "abs")
+
+        soup = BeautifulSoup(abs_text, "html.parser")
         abstract_tag = soup.find("blockquote", class_="abstract")
         abstract = abstract_tag.text.replace("Abstract:", "").strip() if abstract_tag else "N/A"
         return f"## Abstract\n{abstract}", None
     except Exception as e:
-        print(f"    Abstract 获取也失败 ({arxiv_id}): {e}")
+        logger.error(f"    Abstract 获取也失败 ({arxiv_id}): {e}")
         return f"[获取失败] arXiv ID: {arxiv_id}", None
 
 
@@ -299,12 +421,12 @@ def parse_papers(soup):
     """
     dl = soup.find("dl")
     if not dl:
-        print("未找到论文列表 (dl 标签)")
+        logger.warning("未找到论文列表 (dl 标签)")
         return []
 
     dt_list = dl.find_all("dt")
     dd_list = dl.find_all("dd")
-    print(f"发现 {len(dt_list)} 篇新论文")
+    logger.info(f"发现 {len(dt_list)} 篇新论文")
 
     papers = []
     for dt, dd in zip(dt_list, dd_list):
@@ -348,8 +470,6 @@ def llm_filter_papers(papers):
     用 LLM 一次性筛选所有论文，返回相关论文列表。
     每篇论文附带 is_detail 和 category 字段。
     """
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-
     # 构建论文列表文本
     papers_text = ""
     for p in papers:
@@ -387,51 +507,46 @@ def llm_filter_papers(papers):
     # 构建 id → paper 的查找表
     paper_map = {p["id"]: p for p in papers}
 
-    for attempt in range(2):
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0,  # 筛选任务用 0 确保确定性
-            )
-            raw = response.choices[0].message.content
+    try:
+        raw = _call_llm(messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ], temperature=0)
+    except Exception as e:
+        logger.error(f"  LLM 筛选失败: {e}，返回空列表")
+        return []
 
-            # 尝试提取 JSON（兜底：用正则匹配最外层大括号）
+    # 尝试提取 JSON（兜底：用正则匹配最外层大括号）
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
             try:
-                result = json.loads(raw)
-            except json.JSONDecodeError:
-                match = re.search(r"\{.*\}", raw, re.DOTALL)
-                if match:
-                    result = json.loads(match.group())
-                else:
-                    raise ValueError("无法从 LLM 响应中提取 JSON")
-
-            # 组装筛选结果
-            filtered = []
-            for item in result.get("papers", []):
-                pid = item.get("id", "")
-                if pid not in paper_map:
-                    print(f"  警告: LLM 返回的 ID {pid} 不在论文列表中，跳过")
-                    continue
-                paper = dict(paper_map[pid])  # 复制一份
-                paper["is_detail"] = bool(item.get("detail", False))
-                paper["category"] = item.get("category", "other")
-                label = "详细" if paper["is_detail"] else "日常"
-                print(f"  LLM 筛选[{label}|{paper['category']}]: {pid} | {paper['title'][:60]}")
-                filtered.append(paper)
-
-            print(f"LLM 筛选完成: {len(filtered)}/{len(papers)} 篇相关")
-            return filtered
-
-        except Exception as e:
-            if attempt == 0:
-                print(f"  LLM 筛选第 1 次失败: {e}，重试...")
-            else:
-                print(f"  LLM 筛选第 2 次也失败: {e}，返回空列表")
+                result = json.loads(match.group())
+            except json.JSONDecodeError as e:
+                logger.error(f"  JSON 解析失败: {e}")
                 return []
+        else:
+            logger.error("  无法从 LLM 响应中提取 JSON")
+            return []
+
+    # 组装筛选结果
+    filtered = []
+    for item in result.get("papers", []):
+        pid = item.get("id", "")
+        if pid not in paper_map:
+            logger.warning(f"  警告: LLM 返回的 ID {pid} 不在论文列表中，跳过")
+            continue
+        paper = dict(paper_map[pid])  # 复制一份
+        paper["is_detail"] = bool(item.get("detail", False))
+        paper["category"] = item.get("category", "other")
+        label = "详细" if paper["is_detail"] else "日常"
+        logger.info(f"  LLM 筛选[{label}|{paper['category']}]: {pid} | {paper['title'][:60]}")
+        filtered.append(paper)
+
+    logger.info(f"LLM 筛选完成: {len(filtered)}/{len(papers)} 篇相关")
+    return filtered
 
 
 def _build_paper_block(p):
@@ -465,14 +580,12 @@ def _split_paper_batches(papers):
 
 def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
     """单次日报 LLM 调用"""
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
     categories = sorted(set(p.get("category", "other") for p in papers))
 
     papers_info = "".join(_build_paper_block(p) for p in papers)
 
     partial_note = ""
     if is_partial:
-        batch_ids = ", ".join(p["id"] for p in papers)
         partial_note = (
             f"\n注意：这是分批处理的一部分（本批 {len(papers)} 篇），"
             f"请只为本批论文生成总结，不要输出标题头和统计行。\n"
@@ -507,16 +620,13 @@ def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
 - 每篇论文的总结要简洁（数据/方法/结果/结论各1-2句话）
 - 如果某个 category 没有论文，可以省略该分组"""
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
+    return _call_llm(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"以下是今日筛选出的论文：\n\n{papers_info}"},
         ],
         temperature=LLM_TEMPERATURE,
     )
-
-    return response.choices[0].message.content
 
 
 def summarize_daily(papers, date_str):
@@ -528,14 +638,14 @@ def summarize_daily(papers, date_str):
     n_detail = sum(1 for p in papers if p["is_detail"])
 
     total_chars = sum(len(_build_paper_block(p)) for p in papers)
-    print(f"  日报输入总长度: {total_chars} 字符 (限制: {DAILY_CHAR_LIMIT})")
+    logger.info(f"  日报输入总长度: {total_chars} 字符 (限制: {DAILY_CHAR_LIMIT})")
 
     if total_chars <= DAILY_CHAR_LIMIT:
         return _call_daily_llm(papers, date_str, n_total, n_detail)
 
     # 分批处理
     batches = _split_paper_batches(papers)
-    print(f"  超过限制，分 {len(batches)} 批处理 ({[len(b) for b in batches]})")
+    logger.info(f"  超过限制，分 {len(batches)} 批处理 ({[len(b) for b in batches]})")
 
     header = (
         f"# arXiv astro-ph 每日追踪 {date_str}\n"
@@ -543,7 +653,7 @@ def summarize_daily(papers, date_str):
     )
     parts = [header]
     for i, batch in enumerate(batches):
-        print(f"  正在处理第 {i+1}/{len(batches)} 批 ({len(batch)} 篇)...")
+        logger.info(f"  正在处理第 {i+1}/{len(batches)} 批 ({len(batch)} 篇)...")
         part = _call_daily_llm(batch, date_str, n_total, n_detail, is_partial=True)
         parts.append(part)
 
@@ -552,8 +662,6 @@ def summarize_daily(papers, date_str):
 
 def summarize_paper_detail(paper, date_str):
     """调用 LLM 为单篇 detail 论文生成详细报告"""
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-
     system_prompt = f"""\
 你是一个专业的天体物理学家助手。请根据提供的论文各章节内容，生成一篇详细的中文论文总结。
 
@@ -592,16 +700,13 @@ def summarize_paper_detail(paper, date_str):
         f"以下是论文各章节内容：\n\n{paper['full_sections']}"
     )
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
+    return _call_llm(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         temperature=LLM_TEMPERATURE,
     )
-
-    return response.choices[0].message.content
 
 
 def _generate_paper_tags(paper):
@@ -620,7 +725,7 @@ def wait_until_930():
     cutoff = now.replace(hour=9, minute=30, second=0, microsecond=0)
     if now < cutoff:
         wait_seconds = (cutoff - now).total_seconds()
-        print(f"当前北京时间 {now.strftime('%H:%M:%S')}，等待到 9:30 再开始检查...")
+        logger.info(f"当前北京时间 {now.strftime('%H:%M:%S')}，等待到 9:30 再开始检查...")
         time.sleep(wait_seconds)
 
 
@@ -631,33 +736,33 @@ def poll_arxiv_update():
     """
     for attempt in range(1, MAX_RETRIES + 1):
         now = get_beijing_now()
-        print(f"[第 {attempt}/{MAX_RETRIES} 次检查] {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"[第 {attempt}/{MAX_RETRIES} 次检查] {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
         try:
             is_updated, soup, msg = check_arxiv_update()
         except Exception as e:
-            print(f"  检查出错: {e}")
+            logger.warning(f"  检查出错: {e}")
             if attempt < MAX_RETRIES:
-                print(f"  {POLL_INTERVAL // 60} 分钟后重试...")
+                logger.info(f"  {POLL_INTERVAL // 60} 分钟后重试...")
                 time.sleep(POLL_INTERVAL)
             continue
 
         if is_updated:
-            print(f"  arXiv 已更新: {msg}")
+            logger.info(f"  arXiv 已更新: {msg}")
             return soup, msg
 
-        print(f"  未更新: {msg}")
+        logger.info(f"  未更新: {msg}")
         if attempt < MAX_RETRIES:
-            print(f"  {POLL_INTERVAL // 60} 分钟后重试...")
+            logger.info(f"  {POLL_INTERVAL // 60} 分钟后重试...")
             time.sleep(POLL_INTERVAL)
 
-    print("已达最大重试次数，今日放弃。")
+    logger.warning("已达最大重试次数，今日放弃。")
     return None
 
 
 def main():
     now = get_beijing_now()
-    print(f"脚本启动: {now.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
+    logger.info(f"脚本启动: {now.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)")
 
     # 1. 等待到 9:30
     wait_until_930()
@@ -681,58 +786,67 @@ def main():
     all_papers = parse_papers(soup)
 
     if not all_papers:
-        print("今日未发现论文。")
+        logger.info("今日未发现论文。")
         header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
         body = f"# arXiv astro-ph 每日追踪 {today_str}\n\n今日未发现论文。\n"
         with open(daily_file, "w", encoding="utf-8") as f:
             f.write(header + body)
-        print(f"空日报已保存: {daily_file}")
+        logger.info(f"空日报已保存: {daily_file}")
         return
 
     # 5. LLM 筛选相关论文
-    print(f"\n共 {len(all_papers)} 篇论文，开始 LLM 筛选...")
+    logger.info(f"\n共 {len(all_papers)} 篇论文，开始 LLM 筛选...")
     filtered_papers = llm_filter_papers(all_papers)
 
     if not filtered_papers:
-        print("LLM 筛选后无相关论文。")
+        logger.info("LLM 筛选后无相关论文。")
         header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
         body = f"# arXiv astro-ph 每日追踪 {today_str}\n\n今日无相关论文。\n"
         with open(daily_file, "w", encoding="utf-8") as f:
             f.write(header + body)
-        print(f"空日报已保存: {daily_file}")
+        logger.info(f"空日报已保存: {daily_file}")
         return
 
     detail_papers = [p for p in filtered_papers if p["is_detail"]]
-    print(f"筛选结果: {len(filtered_papers)} 篇相关，其中 {len(detail_papers)} 篇详细收录。")
+    logger.info(f"筛选结果: {len(filtered_papers)} 篇相关，其中 {len(detail_papers)} 篇详细收录。")
 
     # 6. 对筛选出的论文抓取内容
-    print("正在抓取论文内容...")
+    logger.info("正在抓取论文内容...")
     for p in filtered_papers:
         time.sleep(REQUEST_DELAY)
-        ac, fs = fetch_paper_content(p["id"], p["is_detail"])
-        p["abstract_conclusion"] = ac
-        p["full_sections"] = fs
+        try:
+            ac, fs = fetch_paper_content(p["id"], p["is_detail"])
+            p["abstract_conclusion"] = ac
+            p["full_sections"] = fs
+        except Exception as e:
+            logger.error(f"  抓取 {p['id']} 失败: {e}")
+            p["abstract_conclusion"] = f"[获取失败] arXiv ID: {p['id']}"
+            p["full_sections"] = None
 
     # 7. 日报总结
-    print("正在生成日报总结...")
+    logger.info("正在生成日报总结...")
     daily_summary = summarize_daily(filtered_papers, today_str)
 
     header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
     with open(daily_file, "w", encoding="utf-8") as f:
         f.write(header + daily_summary)
-    print(f"日报已保存: {daily_file}")
+    logger.info(f"日报已保存: {daily_file}")
 
     # 8. 详细论文报告（逐篇）
     for p in detail_papers:
         if not p["full_sections"]:
-            print(f"  跳过 {p['id']}（无法提取全文章节）")
+            logger.warning(f"  跳过 {p['id']}（无法提取全文章节）")
             continue
 
-        print(f"正在生成详细报告: {p['id']}...")
+        logger.info(f"正在生成详细报告: {p['id']}...")
         paper_file = os.path.join(PAPERS_DIR, f"{p['id']}.md")
         manage_existing_file(paper_file)
 
-        detail_summary = summarize_paper_detail(p, today_str)
+        try:
+            detail_summary = summarize_paper_detail(p, today_str)
+        except Exception as e:
+            logger.error(f"  详细报告生成失败 ({p['id']}): {e}")
+            continue
 
         tags = _generate_paper_tags(p)
         frontmatter = (
@@ -746,10 +860,10 @@ def main():
         )
         with open(paper_file, "w", encoding="utf-8") as f:
             f.write(frontmatter + detail_summary)
-        print(f"  详细报告已保存: {paper_file}")
+        logger.info(f"  详细报告已保存: {paper_file}")
 
     # 9. 统计
-    print(f"\n完成！共 {len(filtered_papers)} 篇相关，其中 {len(detail_papers)} 篇详细收录。")
+    logger.info(f"\n完成！共 {len(filtered_papers)} 篇相关，其中 {len(detail_papers)} 篇详细收录。")
 
 
 if __name__ == "__main__":
