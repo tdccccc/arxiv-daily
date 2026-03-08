@@ -25,41 +25,31 @@ from openai import OpenAI
 
 load_dotenv()
 
-# ================= 配置区域 =================
-# 1. LLM 设置（从 .env 或环境变量读取）
+# ================= 配置（全部从 .env 读取） =================
 API_KEY = os.environ["LLM_API_KEY"]
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o")
 
-# 2. 路径设置
-WORK_DIR = "/home/tiandc/Nextcloud/work/Notes/arXiv"
+WORK_DIR = os.getenv("WORK_DIR", os.path.join(os.path.dirname(__file__), "output"))
 DAILY_DIR = os.path.join(WORK_DIR, "daily")
 PAPERS_DIR = os.path.join(WORK_DIR, "papers")
 
-# 3. 研究兴趣（自然语言描述，供 LLM 筛选 prompt 使用）
-RESEARCH_INTERESTS = """\
+RESEARCH_INTERESTS = os.getenv("RESEARCH_INTERESTS", """\
 1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较
 2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天
-3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等"""
+3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等""").replace("\\n", "\n")
 
-DETAIL_CRITERIA = """\
+DETAIL_CRITERIA = os.getenv("DETAIL_CRITERIA", """\
 - Photo-z 方法论文（提出或比较 photo-z 方法/目录）
-- 星系团巡天/目录/质量标定论文"""
+- 星系团巡天/目录/质量标定论文""").replace("\\n", "\n")
 
-# 4. LLM 返回的 category → tag 映射
-CATEGORY_TAG_MAP = {
-    "photo-z": "photo-z",
-    "galaxy-cluster": "galaxy-cluster",
-    "ml": "ml",
-}
+CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
+    '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
 
-# 5. 请求间隔（秒），避免被 arXiv 封 IP
-REQUEST_DELAY = 3
-
-# 6. 轮询设置
-POLL_INTERVAL = 30 * 60  # 每 30 分钟检查一次（秒）
-MAX_RETRIES = 16         # 最多重试 16 次（9:30 ~ 17:30，共 8 小时）
-# ===========================================
+REQUEST_DELAY = int(os.getenv("REQUEST_DELAY", "3"))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "1800"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "16"))
+# =============================================================
 
 BEIJING_TZ = pytz.timezone("Asia/Shanghai")
 MONTH_MAP = {
