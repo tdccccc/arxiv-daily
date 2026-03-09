@@ -56,6 +56,9 @@ DETAIL_CRITERIA = os.getenv("DETAIL_CRITERIA", """\
 CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
     '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
 
+CATEGORY_DISPLAY_MAP = json.loads(os.getenv("CATEGORY_DISPLAY_MAP",
+    '{"photo-z":"Photo-z 相关","galaxy-cluster":"Galaxy Cluster 相关","ml":"ML 相关","other":"其他"}'))
+
 # 内容提取
 SECTION_CHAR_LIMIT = int(os.getenv("SECTION_CHAR_LIMIT", "8000"))
 PAPER_CHAR_LIMIT = int(os.getenv("PAPER_CHAR_LIMIT", "50000"))
@@ -138,12 +141,18 @@ def _retry_request(url, *, timeout=15, max_retries=3, backoff=2, no_retry_status
 
 
 def _call_llm(*, messages, temperature, max_retries=3, backoff=5):
-    """带指数退避的 LLM 调用重试"""
+    """带指数退避的 LLM 调用重试，使用流式请求避免服务端空闲断连"""
     for attempt in range(max_retries):
         try:
-            resp = _llm_client.chat.completions.create(
-                model=MODEL_NAME, messages=messages, temperature=temperature)
-            return resp.choices[0].message.content
+            stream = _llm_client.chat.completions.create(
+                model=MODEL_NAME, messages=messages,
+                temperature=temperature, stream=True)
+            chunks = []
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    chunks.append(delta.content)
+            return "".join(chunks)
         except Exception as e:
             if attempt == max_retries - 1:
                 raise
@@ -580,7 +589,12 @@ def _split_paper_batches(papers):
 
 def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
     """单次日报 LLM 调用"""
-    categories = sorted(set(p.get("category", "other") for p in papers))
+    # 构建所有 category 的显示名称列表
+    all_categories = list(CATEGORY_DISPLAY_MAP.keys())
+    category_list = "\n".join(
+        f"- {cat} → {CATEGORY_DISPLAY_MAP.get(cat, cat)}"
+        for cat in all_categories
+    )
 
     papers_info = "".join(_build_paper_block(p) for p in papers)
 
@@ -599,26 +613,27 @@ def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
     system_prompt = f"""\
 你是一个专业的天体物理学家助手。请根据提供的论文摘要与结论，生成 arXiv 每日论文追踪日报。
 
-每篇论文已标注 category，请按 category 分组输出。当前出现的 category 有：{', '.join(categories)}。
+## Category 与显示名称对应关系
+{category_list}
 {partial_note}
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，直接输出内容）：
 
-{header_fmt}## [Category 名称]
+{header_fmt}## [显示名称]
 ### 论文标题 → [[YYMM.NNNNN]]
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
-- **数据**: ...
-- **方法**: ...
-- **结果**: ...
-- **结论**: ...
-
-（每个 category 一个二级标题，按上述格式列出该分类下所有论文）
+- **一句话总结**: 用一句话概括本文做了什么（如"用XX方法对YY数据进行了ZZ分析"）
+- **数据与方法**: 使用了什么数据/样本/巡天，采用了什么方法或模型（1-2句）
+- **主要结果**: 核心发现是什么，尽量给出定量数值（精度、误差、提升幅度等）（1-2句）
+- **意义**: 对领域的贡献或启示，与前人工作相比有何不同（1句）
 
 注意：
+- 使用中文撰写，保留关键英文术语（如专有名词、物理量、巡天名称）
+- 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
 - 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文（已在输入中标记），请保留此标记
 - 未标记的论文不要加 [[]] 链接
-- 每篇论文的总结要简洁（数据/方法/结果/结论各1-2句话）
-- 如果某个 category 没有论文，可以省略该分组"""
+- 重点提取定量结果（数值、σ、百分比），避免泛泛而谈
+- 如果论文性质特殊（综述、方法论、目录发布），可灵活调整字段内容，但保持格式一致"""
 
     return _call_llm(
         messages=[
@@ -668,6 +683,8 @@ def summarize_paper_detail(paper, date_str):
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，不要输出 YAML frontmatter，直接从 # 标题开始）：
 
 # {paper['title']}
+
+- **arXiv**: [{paper['id']}](https://arxiv.org/abs/{paper['id']})
 
 ## 背景与动机
 （研究背景、前人工作、本文动机）
@@ -799,12 +816,7 @@ def main():
     filtered_papers = llm_filter_papers(all_papers)
 
     if not filtered_papers:
-        logger.info("LLM 筛选后无相关论文。")
-        header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
-        body = f"# arXiv astro-ph 每日追踪 {today_str}\n\n今日无相关论文。\n"
-        with open(daily_file, "w", encoding="utf-8") as f:
-            f.write(header + body)
-        logger.info(f"空日报已保存: {daily_file}")
+        logger.info("LLM 筛选后无相关论文，跳过日报生成。")
         return
 
     detail_papers = [p for p in filtered_papers if p["is_detail"]]
