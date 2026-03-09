@@ -863,9 +863,9 @@ def main():
         tags = _generate_paper_tags(p)
         frontmatter = (
             f"---\n"
-            f"arxiv: \"{p['id']}\"\n"
             f"title: \"{p['title']}\"\n"
             f"authors: \"{p['authors']}\"\n"
+            f"arxiv: \"{p['id']}\"\n"
             f"date: {today_str}\n"
             f"tags: [{', '.join(tags)}]\n"
             f"---\n\n"
