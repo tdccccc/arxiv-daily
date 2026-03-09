@@ -59,6 +59,22 @@ python arxiv_daily.py
 - **HTML 缓存**：论文 HTML 和 Abstract 页面缓存到本地，避免重复请求，自动过期清理
 - **容错**：单篇论文抓取或总结失败不影响其余论文处理
 
+## 自动运行（crontab）
+
+脚本启动后会自动等待到 9:30 开始轮询，每 30 分钟检查一次 arXiv 是否更新，完成后自动退出。建议通过 crontab 设置工作日自动启动：
+
+```bash
+crontab -e
+```
+
+添加一行（按实际 Python 路径修改）：
+
+```
+0 9 * * 1-5 /path/to/python /path/to/arxiv_daily.py >> /dev/null 2>&1
+```
+
+日志输出到脚本同目录的 `arxiv_daily.log`，无需额外重定向。
+
 ## 自定义研究方向
 
 修改 `.env` 中的以下变量：
