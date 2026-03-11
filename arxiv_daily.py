@@ -57,7 +57,11 @@ CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
     '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
 
 CATEGORY_DISPLAY_MAP = json.loads(os.getenv("CATEGORY_DISPLAY_MAP",
-    '{"photo-z":"Photo-z 相关","galaxy-cluster":"Galaxy Cluster 相关","ml":"ML 相关","other":"其他"}'))
+    '{"galaxy-cluster":"Galaxy Cluster 相关","photo-z":"Photo-z 相关","ml":"ML 相关","other":"其他"}'))
+
+# 允许标记 detail 的 category 列表（不在此列表中的 category 即使 LLM 标了 detail 也会降为 false）
+DETAIL_CATEGORIES = json.loads(os.getenv("DETAIL_CATEGORIES",
+    '["photo-z", "galaxy-cluster"]'))
 
 # 内容提取
 SECTION_CHAR_LIMIT = int(os.getenv("SECTION_CHAR_LIMIT", "8000"))
@@ -508,7 +512,8 @@ def llm_filter_papers(papers):
 规则：
 - 只收录与研究兴趣相关的论文，不相关的直接忽略
 - category 从 photo-z, galaxy-cluster, ml, other 中选择最匹配的一个
-- detail 只对符合详细收录标准的论文设为 true
+- detail 判定要从严：只有论文的核心主题直接匹配详细收录标准时才设为 true。仅在摘要中提及相关概念但主题不同的论文，应设为 false
+- 宁可漏选 detail 也不要错选——不确定时设为 false，日报已包含所有相关论文的总结
 - 如果没有任何相关论文，返回 {{"papers": []}}"""
 
     user_content = f"以下是今日 arXiv astro-ph 的所有新论文：\n\n{papers_text}"
@@ -550,6 +555,10 @@ def llm_filter_papers(papers):
         paper = dict(paper_map[pid])  # 复制一份
         paper["is_detail"] = bool(item.get("detail", False))
         paper["category"] = item.get("category", "other")
+        # 硬约束：只有指定 category 才允许 detail
+        if paper["is_detail"] and paper["category"] not in DETAIL_CATEGORIES:
+            paper["is_detail"] = False
+            logger.info(f"  detail 降级 ({paper['category']} 不在 DETAIL_CATEGORIES): {pid}")
         label = "详细" if paper["is_detail"] else "日常"
         logger.info(f"  LLM 筛选[{label}|{paper['category']}]: {pid} | {paper['title'][:60]}")
         filtered.append(paper)
@@ -619,16 +628,17 @@ def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，直接输出内容）：
 
 {header_fmt}## [显示名称]
-### 论文标题 → [[YYMM.NNNNN]]
+### <实际论文标题> → [[YYMM.NNNNN]]
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
 - **一句话总结**: 用一句话概括本文做了什么（如"用XX方法对YY数据进行了ZZ分析"）
-- **数据与方法**: 使用了什么数据/样本/巡天，采用了什么方法或模型（1-2句）
-- **主要结果**: 核心发现是什么，尽量给出定量数值（精度、误差、提升幅度等）（1-2句）
-- **意义**: 对领域的贡献或启示，与前人工作相比有何不同（1句）
+- **数据与方法**: 使用了什么数据/样本/巡天，采用了什么方法或模型，关键技术细节是什么（2-4句）
+- **主要结果**: 核心发现是什么，给出关键定量数值（精度、误差、提升幅度等），与已有工作的对比（2-4句）
+- **意义**: 对领域的贡献或启示，局限性，未来展望（1-2句）
 
 注意：
 - 使用中文撰写，保留关键英文术语（如专有名词、物理量、巡天名称）
+- 数学公式、物理量和符号必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$（如 $\\sigma_z = 0.03$、$M_{{500c}}$、$\\Omega_m$）
 - 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
 - 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文（已在输入中标记），请保留此标记
 - 未标记的论文不要加 [[]] 链接
@@ -707,6 +717,7 @@ def summarize_paper_detail(paper, date_str):
 注意：
 - 使用中文撰写
 - 保留关键英文术语（如专有名词、物理量）
+- 数学公式、物理量和符号必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$（如 $\\sigma_z = 0.03$、$M_{{500c}}$、$\\Omega_m$）
 - 尽可能包含定量结果（数值、误差）
 - 如果某个章节的信息不足，可以简要说明"""
 
