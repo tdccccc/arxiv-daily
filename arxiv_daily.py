@@ -33,6 +33,8 @@ BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "300"))
+THINKING_MODE = os.getenv("LLM_THINKING_MODE", "true").lower() == "true"
+REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "high")
 
 # 输出路径
 WORK_DIR = os.getenv("WORK_DIR", os.path.join(os.path.dirname(__file__), "output"))
@@ -148,9 +150,18 @@ def _call_llm(*, messages, temperature, max_retries=3, backoff=5):
     """带指数退避的 LLM 调用重试，使用流式请求避免服务端空闲断连"""
     for attempt in range(max_retries):
         try:
-            stream = _llm_client.chat.completions.create(
-                model=MODEL_NAME, messages=messages,
-                temperature=temperature, stream=True)
+            kwargs = dict(
+                model=MODEL_NAME,
+                messages=messages,
+                stream=True,
+            )
+            if THINKING_MODE:
+                kwargs["reasoning_effort"] = REASONING_EFFORT
+                kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            else:
+                kwargs["temperature"] = temperature
+
+            stream = _llm_client.chat.completions.create(**kwargs)
             chunks = []
             for chunk in stream:
                 delta = chunk.choices[0].delta
