@@ -1,4 +1,8 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -16,6 +20,9 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: { "@": "/src" },
+    alias: {
+      "@": resolve(here, "src"),
+      obsidian: resolve(here, "tests/__mocks__/obsidian.ts"),
+    },
   },
 });
