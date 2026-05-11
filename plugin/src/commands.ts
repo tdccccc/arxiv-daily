@@ -1,0 +1,132 @@
+import { App, Modal, Notice, Setting } from "obsidian";
+import type ArxivDailyPlugin from "../main";
+import { todayInTz, formatDate } from "./utils/time";
+
+export function registerCommands(plugin: ArxivDailyPlugin): void {
+  const tz = () => plugin.settings.arxiv.timezone;
+  const today = () => formatDate(todayInTz(new Date(), tz()));
+
+  plugin.addCommand({
+    id: "arxiv-daily-run-now",
+    name: "Run now (today)",
+    callback: async () => {
+      const date = today();
+      new Notice(`arXiv Daily: running for ${date}…`);
+      const result = await plugin.scheduler.runForDateNow(date);
+      new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    },
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-run-for-date",
+    name: "Run for date…",
+    callback: () => {
+      new DatePickerModal(plugin.app, async (date) => {
+        if (!date) return;
+        new Notice(`arXiv Daily: running for ${date}…`);
+        const result = await plugin.scheduler.runForDateNow(date);
+        new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+      }).open();
+    },
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-open-today",
+    name: "Open today's daily report",
+    callback: async () => {
+      const path = `${plugin.settings.output.dailyDir}/${today()}.md`;
+      const file = plugin.app.vault.getAbstractFileByPath(path);
+      if (file) {
+        await plugin.app.workspace.openLinkText(path, "", false);
+      } else {
+        new Notice(`No daily report at ${path}`);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-show-state",
+    name: "Show recent run state",
+    callback: () => new StateModal(plugin.app, plugin).open(),
+  });
+
+  plugin.addRibbonIcon("calendar-clock", "arXiv Daily: Run now", async () => {
+    const date = today();
+    new Notice(`arXiv Daily: running for ${date}…`);
+    const result = await plugin.scheduler.runForDateNow(date);
+    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+  });
+}
+
+function describeResult(r: any): string {
+  if (!r) return "no result";
+  if (r.kind === "completed") return `done (${r.papersWritten} papers)`;
+  if (r.kind === "failed_transient") return `transient: ${r.reason}`;
+  if (r.kind === "failed_permanent") return `permanent: ${r.reason}`;
+  if (r.kind === "skipped") return `skipped: ${r.reason}`;
+  return JSON.stringify(r);
+}
+
+class DatePickerModal extends Modal {
+  private value = "";
+  constructor(app: App, private onSubmit: (date: string | null) => void) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Run arXiv Daily for date" });
+    new Setting(contentEl)
+      .setName("Date")
+      .setDesc("YYYY-MM-DD (within the past 5 days for arXiv /recent)")
+      .addText((t) =>
+        t.setPlaceholder("2026-05-10").onChange((v) => {
+          this.value = v.trim();
+        }),
+      );
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Run")
+        .setCta()
+        .onClick(() => {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(this.value)) {
+            new Notice("Invalid date format");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value);
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class StateModal extends Modal {
+  constructor(app: App, private plugin: ArxivDailyPlugin) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "arXiv Daily — Recent state" });
+    const snap = this.plugin.stateStore.snapshot();
+    const entries = Object.entries(snap).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+    if (entries.length === 0) {
+      contentEl.createEl("p", { text: "No runs yet." });
+      return;
+    }
+    const ul = contentEl.createEl("ul");
+    for (const [date, e] of entries.slice(0, 20)) {
+      const li = ul.createEl("li");
+      li.setText(
+        `${date}: ${e.status} (attempts=${e.attempts}` +
+          (e.papersWritten != null ? `, papers=${e.papersWritten}` : "") +
+          (e.error ? `, err=${e.error.slice(0, 80)}` : "") +
+          `)`,
+      );
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
