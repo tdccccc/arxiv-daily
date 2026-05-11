@@ -1,0 +1,24 @@
+{
+  "name": "obsidian-arxiv-daily",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "openai": "^4.65.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.20.2",
+    "happy-dom": "^14.7.1",
+    "obsidian": "latest",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.3",
+    "vitest": "^1.4.0"
+  }
+}
