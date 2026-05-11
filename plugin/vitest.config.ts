@@ -5,6 +5,15 @@ export default defineConfig({
     environment: "happy-dom",
     globals: false,
     include: ["tests/**/*.test.ts"],
+    environmentOptions: {
+      happyDOM: {
+        settings: {
+          disableJavaScriptEvaluation: true,
+          disableJavaScriptFileLoading: true,
+          disableCSSFileLoading: true,
+        },
+      },
+    },
   },
   resolve: {
     alias: { "@": "/src" },
