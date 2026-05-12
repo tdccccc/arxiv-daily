@@ -1,35 +1,117 @@
 # arxiv-daily
 
-arXiv astro-ph 每日论文自动追踪。用 LLM 从当日全部新论文中语义筛选相关论文，生成中文日报和详细论文报告。
+任意领域 arXiv 每日论文自动追踪：用 LLM 从当日新论文中**语义筛选**与你研究兴趣相关的工作，生成中文日报和详细论文报告。
 
-> **Obsidian 插件版本**：仓库内 `plugin/` 目录提供功能等价的 TypeScript 插件，
-> 带设置 GUI、catch-up 调度和手动触发，适合在 Obsidian 里直接用，无需 cron。
-> 详见 [`plugin/README.md`](./plugin/README.md)。
+提供两种运行方式：
 
-## 工作流程
+| 方式 | 适合谁 | 特点 |
+|---|---|---|
+| **Obsidian 插件**（推荐） | 把笔记放在 Obsidian 里的研究者 | 设置 GUI、catch-up 调度、ribbon 一键触发、按 ID 单篇总结、跨平台 |
+| **Python 脚本** | 用 cron / 服务器 / 命令行工作流的用户 | 单文件，靠 `.env` 和 crontab 跑，无 GUI |
 
-1. 北京时间 9:30 起轮询 arXiv astro-ph/new，等待当日更新
-2. 解析所有新论文的标题 + 摘要
-3. LLM 一次性筛选相关论文，标记分类 (category) 和是否详细收录 (detail)
-4. 对筛选出的论文抓取 HTML 全文内容（带本地缓存，避免重复请求）
-5. 生成日报 → `daily/YYYY-MM-DD.md`（所有相关论文的简要总结，按分类分组）
-6. 对详细收录论文生成单独报告 → `papers/YYMM.NNNNN.md`
+两者输出的 Markdown 格式一致：`daily/YYYY-MM-DD.md`（日报）+ `papers/YYMM.NNNNN.md`（详细报告）。
 
-## 快速开始
+---
+
+## Obsidian 插件（v0.1.0+）
+
+### 功能
+
+- **任意 arXiv 分类**（`astro-ph` / `cs.LG` / `hep-ph` / …）可在设置里切换
+- **catch-up 调度**：Obsidian 打开时定时检查 `/list/<cat>/recent`，自动补跑过去 5 天内未完成的日期
+- **Atom API 摘要补全**：listing 不再提供 abstract，插件二段抓 Atom API 拿全文摘要供 LLM 筛选
+- **Ribbon 菜单**：Run for today / Run all pending (lookback) / Run for specific date / **Summarize by arXiv ID**（输入任意 arXiv id 单篇总结）
+- **状态可视化**：命令面板 `Show recent run state` 查看最近 N 天每天的运行状态
+- **OpenAI 兼容**：默认 DeepSeek V4 Pro，可切到 OpenAI / Claude（通过兼容代理）/ 其他
+- **跨平台**：Windows / macOS / Linux
+
+### 安装
+
+**Option A — BRAT（推荐）：**
+
+1. 在 Obsidian Community Plugins 装 [BRAT](https://github.com/TfTHacker/obsidian42-brat)
+2. BRAT settings → Add Beta plugin → 输入 `tdccccc/arxiv-daily`
+3. 启用 **arXiv Daily**
+4. Settings → arXiv Daily → 填 API Key（默认 endpoint 已经是 DeepSeek）
+
+**Option B — 手动：**
+
+从 [latest release](https://github.com/tdccccc/arxiv-daily/releases) 下载 `manifest.json` / `main.js` / `styles.css`，扔进 `<vault>/.obsidian/plugins/arxiv-daily/`。
+
+**Option C — 源码构建：**
 
 ```bash
-# 安装依赖
+git clone https://github.com/tdccccc/arxiv-daily.git
+cd arxiv-daily/plugin
+npm install
+npm run build
+# 然后照 Option B 把三个文件复制到 vault
+```
+
+### 设置概览
+
+| Section | 字段 |
+|---|---|
+| LLM | API Key, Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
+| arXiv | 分类、研究兴趣、详细收录标准、语义分类配置、时区 |
+| Output | Daily / Papers 路径（vault 相对） |
+| Schedule | 启用、`HH:MM` 调度时间、tick 间隔、lookback 天数 (≤5) |
+| Advanced | 请求间隔、缓存 TTL、字符限制、跳过/优先 sections、日志级别 |
+
+### 命令 & Ribbon
+
+| Command | 行为 |
+|---|---|
+| `arXiv Daily: Run now (today)` | 拉今日，写 daily + papers |
+| `arXiv Daily: Run for date…` | 拉指定日期（5 天窗口内） |
+| `arXiv Daily: Run all pending in lookback window` | 跑窗口内所有未完成日期 |
+| `arXiv Daily: Summarize by arXiv ID…` | 用 arxiv id 单篇总结，写 papers/ |
+| `arXiv Daily: Open today's daily report` | 打开 `<dailyDir>/<today>.md` |
+| `arXiv Daily: Show recent run state` | 查看最近 20 天状态 |
+
+ribbon 单击会弹菜单（Run today / Run all pending / Run for date / Summarize by ID）。
+
+### 调度模型
+
+Catch-up 循环（默认每 20 分钟）只在 Obsidian 打开时运行：
+
+- 每个 tick 走过 lookback 窗口（今天、昨天、…、4 天前）
+- 跳过已完成 / 永久失败 / 正在运行的日期
+- 今天若早于 `runAtLocal` 也跳过（避免抢跑）
+- 失败_transient 会在 tick 间隔后重试
+- 手动触发绕过时间门
+
+**含义：** Obsidian 必须每天打开至少一次（且过了 `runAtLocal`），插件才能跑当天。如果连续多天没开，超出 5 天窗口的日期 arXiv `/recent` 也拿不到了。需要离线/服务器跑的话用下面的 Python 脚本。
+
+更多细节见 [`plugin/README.md`](./plugin/README.md)。
+
+---
+
+## Python 脚本（适合 cron / 服务器）
+
+旧版本，单文件 `arxiv_daily.py`。Obsidian 插件没出现前的实现，仍然维护。
+
+### 工作流程
+
+1. 北京时间 9:30 起轮询 arXiv `<cat>/new`，等待当日更新
+2. 解析所有新论文的标题 + 摘要
+3. LLM 一次性筛选相关论文，标记分类 (category) 和是否详细收录 (detail)
+4. 对筛选出的论文抓取 HTML 全文内容（带本地缓存）
+5. 生成日报 → `daily/YYYY-MM-DD.md`
+6. 对详细收录论文生成单独报告 → `papers/YYMM.NNNNN.md`
+
+### 快速开始
+
+```bash
 pip install requests beautifulsoup4 pytz openai python-dotenv
 
-# 配置
 cp .env.example .env
-# 编辑 .env，填入 API Key，修改研究兴趣等
+# 编辑 .env，填入 API Key 和研究兴趣
 
-# 运行
 python arxiv_daily.py
 ```
 
-## 配置说明
+### 配置
 
 所有配置通过 `.env` 文件管理：
 
@@ -39,8 +121,8 @@ python arxiv_daily.py
 | `LLM_BASE_URL` | API 端点 | `https://api.openai.com/v1` |
 | `LLM_MODEL` | 模型名称 | `gpt-4o` |
 | `LLM_TEMPERATURE` | 生成温度 | `0.3` |
-| `LLM_TIMEOUT` | LLM 请求超时（秒），推理模型建议调大 | `300` |
-| `WORK_DIR` | 输出目录（日报和论文报告） | `./output` |
+| `LLM_TIMEOUT` | LLM 请求超时（秒） | `300` |
+| `WORK_DIR` | 输出目录 | `./output` |
 | `RESEARCH_INTERESTS` | 研究兴趣描述 | 有默认值 |
 | `DETAIL_CRITERIA` | 详细收录标准 | 有默认值 |
 | `CATEGORY_TAG_MAP` | 分类→标签映射 (JSON) | 有默认值 |
@@ -55,34 +137,31 @@ python arxiv_daily.py
 
 多行文本在 `.env` 中用双引号包裹即可直接换行，参见 `.env.example`。
 
-## 健壮性
-
-- **结构化日志**：所有输出通过 `logging` 模块，支持文件 + 控制台双输出
-- **HTTP 重试**：所有网络请求带指数退避重试，404 等不可恢复状态码直接跳过
-- **LLM 重试**：LLM 调用失败自动重试（5s/10s/20s），使用流式请求避免服务端空闲断连
-- **HTML 缓存**：论文 HTML 和 Abstract 页面缓存到本地，避免重复请求，自动过期清理
-- **容错**：单篇论文抓取或总结失败不影响其余论文处理
-
-## 自动运行（crontab）
-
-脚本启动后会自动等待到 9:30 开始轮询，每 30 分钟检查一次 arXiv 是否更新，完成后自动退出。建议通过 crontab 设置工作日自动启动：
+### 自动运行 (crontab)
 
 ```bash
 crontab -e
 ```
 
-添加一行（按实际 Python 路径修改）：
-
-```
+```cron
 0 9 * * 1-5 /path/to/python /path/to/arxiv_daily.py >> /dev/null 2>&1
 ```
 
-日志输出到脚本同目录的 `arxiv_daily.log`，无需额外重定向。
+### 与插件版的差异
 
-## 自定义研究方向
+| | 插件 (v0.1.0) | Python 脚本 |
+|---|---|---|
+| 触发 | catch-up loop + 手动 | crontab + 9:30 轮询 |
+| arXiv endpoint | `/recent` + Atom API | `/new` |
+| Abstract 来源 | Atom API 富化 | listing 自带（部分）+ /abs fallback |
+| 设置 | Obsidian GUI | `.env` |
+| 状态持久化 | 插件 data | 每次启动从 0 |
+| 多端协作 | 每台机器独立 state | 取决于你 cron 怎么布置 |
+| Lookback / 补跑 | 5 天 rolling | 仅当天 |
+| 按 ID 单篇 | ribbon 菜单 | 无 |
 
-修改 `.env` 中的以下变量：
+---
 
-- `RESEARCH_INTERESTS`：用自然语言描述你的研究兴趣，LLM 据此判断论文相关性
-- `DETAIL_CRITERIA`：哪些类型的论文需要生成详细报告
-- `CATEGORY_DISPLAY_MAP`：自定义日报中各分类的显示名称
+## 许可证
+
+[MIT](./LICENSE)
