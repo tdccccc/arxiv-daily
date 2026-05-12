@@ -2,6 +2,10 @@
 
 arXiv astro-ph 每日论文自动追踪。用 LLM 从当日全部新论文中语义筛选相关论文，生成中文日报和详细论文报告。
 
+> **Obsidian 插件版本**：仓库内 `plugin/` 目录提供功能等价的 TypeScript 插件，
+> 带设置 GUI、catch-up 调度和手动触发，适合在 Obsidian 里直接用，无需 cron。
+> 详见 [`plugin/README.md`](./plugin/README.md)。
+
 ## 工作流程
 
 1. 北京时间 9:30 起轮询 arXiv astro-ph/new，等待当日更新
