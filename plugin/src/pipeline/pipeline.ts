@@ -160,6 +160,10 @@ export class ArxivPipeline {
     // 8. Detail reports
     const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
     for (const p of detailPapers) {
+      if (await this.deps.writer.paperDetailExists(p.id)) {
+        logger.info(`pipeline: detail ${p.id} already exists, skipping`);
+        continue;
+      }
       logger.info(`pipeline: detail report for ${p.id}`);
       try {
         const detail = await summarizePaperDetail(p, {

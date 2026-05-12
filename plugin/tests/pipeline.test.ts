@@ -169,4 +169,51 @@ describe("ArxivPipeline", () => {
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
     expect(d.llm.call).not.toHaveBeenCalled();
   });
+
+  it("skips paper detail when paper file already exists", async () => {
+    const d = makeDeps();
+
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+
+    (d.writer as any).paperDetailExists = vi.fn(async (id: string) =>
+      id === arxivId,
+    );
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("筛选出相关论文")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## stub daily summary\n";
+      }
+      return "## detail summary\n";
+    });
+    d.fetcher.fetchAbstractsByIds = vi
+      .fn()
+      .mockResolvedValue(new Map([[arxivId, "abstract"]]));
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub",
+      fullSections: "## Section\nbody",
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const date = firstDateFromFixture();
+    const result = await pipeline.runForDate(date);
+    expect(result.kind).toBe("completed");
+    expect(d.writer.writeDaily).toHaveBeenCalled();
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
 });
