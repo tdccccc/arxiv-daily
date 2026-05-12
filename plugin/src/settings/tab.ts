@@ -18,7 +18,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Provider dropdown
     new Setting(containerEl)
       .setName("厂商")
-      .setDesc("选择厂商自动填充 URL 和模型，或选自定义手动输入")
+      .setDesc("选择厂商自动填充 URL 和模型，所有字段仍可手动修改")
       .addDropdown((d) => {
         for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
           d.addOption(key, preset.name);
@@ -41,25 +41,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       });
 
-    // Base URL — read-only for presets, editable for custom
+    // API Key
     new Setting(containerEl)
-      .setName("Base URL")
-      .setDesc(s.llm.provider === "custom" ? "API 端点" : `${PROVIDER_PRESETS[s.llm.provider]?.name ?? ""} 端点`)
+      .setName("API Key")
       .addText((t) => {
-        t.setValue(s.llm.baseUrl);
-        if (s.llm.provider !== "custom") {
-          t.setDisabled(true);
-        } else {
-          t.onChange(async (v) => {
-            s.llm.baseUrl = v;
+        t.inputEl.type = "password";
+        t.setPlaceholder("sk-...")
+          .setValue(s.llm.apiKey)
+          .onChange(async (v) => {
+            s.llm.apiKey = v;
             await this.plugin.saveSettings();
           });
-        }
       });
 
-    // Model — dropdown for presets, text for custom
+    // Base URL — always editable, auto-filled by provider
+    new Setting(containerEl)
+      .setName("Base URL")
+      .addText((t) =>
+        t.setValue(s.llm.baseUrl).onChange(async (v) => {
+          s.llm.baseUrl = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    // Model — dropdown preset + text input for custom override
     const preset = PROVIDER_PRESETS[s.llm.provider];
-    if (preset && s.llm.provider !== "custom" && preset.models.length > 0) {
+    if (preset && preset.models.length > 0) {
       new Setting(containerEl)
         .setName("Model")
         .addDropdown((d) => {
@@ -70,11 +77,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             s.llm.model = v;
             await this.plugin.saveSettings();
           });
+        })
+        .addText((t) => {
+          t.setPlaceholder("或输入其他模型 ID")
+            .setValue("")
+            .onChange(async (v) => {
+              if (v.trim()) {
+                s.llm.model = v.trim();
+                await this.plugin.saveSettings();
+              }
+            });
         });
     } else {
       new Setting(containerEl)
         .setName("Model")
-        .setDesc("模型名称")
         .addText((t) =>
           t.setValue(s.llm.model).onChange(async (v) => {
             s.llm.model = v;
@@ -114,7 +130,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }),
       );
 
-    // Reasoning effort — provider-specific options
+    // Reasoning effort — provider-specific options + custom input
     const efforts = preset?.reasoningEfforts ?? ["low", "medium", "high"];
     new Setting(containerEl)
       .setName("Reasoning effort")
@@ -123,13 +139,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         for (const e of efforts) {
           d.addOption(e, e);
         }
-        if (!efforts.includes(s.llm.reasoningEffort)) {
-          s.llm.reasoningEffort = efforts[0];
-        }
-        d.setValue(s.llm.reasoningEffort).onChange(async (v) => {
-          s.llm.reasoningEffort = v;
-          await this.plugin.saveSettings();
-        });
+        d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0])
+          .onChange(async (v) => {
+            s.llm.reasoningEffort = v;
+            await this.plugin.saveSettings();
+          });
+      })
+      .addText((t) => {
+        t.setPlaceholder("或输入自定义值")
+          .setValue("")
+          .onChange(async (v) => {
+            if (v.trim()) {
+              s.llm.reasoningEffort = v.trim();
+              await this.plugin.saveSettings();
+            }
+          });
       });
 
     // ─── arXiv ────────────────────────────────────────
