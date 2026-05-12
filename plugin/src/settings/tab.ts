@@ -269,12 +269,38 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       },
     );
 
-    new Setting(containerEl).setName("时区").addText((t) =>
-      t.setValue(s.arxiv.timezone).onChange(async (v) => {
-        s.arxiv.timezone = v.trim();
-        await this.plugin.saveSettings();
-      }),
-    );
+    new Setting(containerEl)
+      .setName("时区")
+      .addDropdown((d) => {
+        const zones = [
+          { v: "Asia/Shanghai", l: "北京/上海 (UTC+8)" },
+          { v: "Asia/Tokyo", l: "东京 (UTC+9)" },
+          { v: "US/Eastern", l: "美东 (UTC-5)" },
+          { v: "US/Pacific", l: "美西 (UTC-8)" },
+          { v: "Europe/London", l: "伦敦 (UTC+0)" },
+          { v: "Europe/Berlin", l: "柏林/巴黎 (UTC+1)" },
+          { v: "Europe/Moscow", l: "莫斯科 (UTC+3)" },
+          { v: "Australia/Sydney", l: "悉尼 (UTC+10)" },
+          { v: "UTC", l: "UTC" },
+        ];
+        for (const z of zones) {
+          d.addOption(z.v, z.l);
+        }
+        d.setValue(s.arxiv.timezone).onChange(async (v) => {
+          s.arxiv.timezone = v;
+          await this.plugin.saveSettings();
+        });
+      })
+      .addText((t) => {
+        t.setPlaceholder("或输入自定义时区")
+          .setValue("")
+          .onChange(async (v) => {
+            if (v.trim()) {
+              s.arxiv.timezone = v.trim();
+              await this.plugin.saveSettings();
+            }
+          });
+      });
 
     // ─── Output & Schedule ────────────────────────────
     containerEl.createEl("h2", { text: "输出 & 调度" });
