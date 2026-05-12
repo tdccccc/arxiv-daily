@@ -14,6 +14,7 @@ import { HtmlCache } from "./src/pipeline/html-cache";
 import { PaperContentFetcher } from "./src/pipeline/paper-content";
 import { MarkdownWriter } from "./src/pipeline/markdown-writer";
 import { ArxivPipeline } from "./src/pipeline/pipeline";
+import { ManualFetchService } from "./src/services/manual-fetch";
 import { registerCommands } from "./src/commands";
 
 interface PersistedData {
@@ -26,6 +27,7 @@ export default class ArxivDailyPlugin extends Plugin {
   logger!: Logger;
   stateStore!: StateStore;
   scheduler!: SchedulerService;
+  manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   private runLock = new RunLock();
 
   async onload() {
@@ -50,6 +52,13 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
       runForDate: (date) => this.buildPipeline().runForDate(date),
     });
+
+    // Wrap in an object that rebuilds dependencies on every call so settings
+    // changes (model, key, paths) always take effect without needing to reload.
+    this.manualFetch = {
+      fetchAndSummarize: (raw: string, date: string) =>
+        this.buildManualFetch().fetchAndSummarize(raw, date),
+    };
 
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerCommands(this);
@@ -84,6 +93,37 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private buildPipeline(): ArxivPipeline {
+    const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
+    return new ArxivPipeline({
+      fetcher,
+      paperFetcher,
+      writer,
+      llm,
+      logger: this.logger,
+      arxiv: this.settings.arxiv,
+      advanced: this.settings.advanced,
+      output: this.settings.output,
+      llmSettings: this.settings.llm,
+    });
+  }
+
+  private buildManualFetch(): ManualFetchService {
+    const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
+    return new ManualFetchService({
+      vault: this.app.vault,
+      fetcher,
+      paperFetcher,
+      writer,
+      llm,
+      logger: this.logger,
+      arxiv: this.settings.arxiv,
+      advanced: this.settings.advanced,
+      output: this.settings.output,
+      llmSettings: this.settings.llm,
+    });
+  }
+
+  private buildSharedDeps() {
     const llm = new LlmClient(this.settings.llm, this.logger);
     const fetcher = new ArxivFetcher({
       category: this.settings.arxiv.category,
@@ -101,17 +141,7 @@ export default class ArxivDailyPlugin extends Plugin {
       arxiv: this.settings.arxiv,
       output: this.settings.output,
     });
-    return new ArxivPipeline({
-      fetcher,
-      paperFetcher,
-      writer,
-      llm,
-      logger: this.logger,
-      arxiv: this.settings.arxiv,
-      advanced: this.settings.advanced,
-      output: this.settings.output,
-      llmSettings: this.settings.llm,
-    });
+    return { llm, fetcher, paperFetcher, writer };
   }
 
   private resolveCacheDir(): string {

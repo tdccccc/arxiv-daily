@@ -61,6 +61,12 @@ export class ArxivFetcher {
     return this.fetchHtml(url, { allow404: false });
   }
 
+  /** Fetch the raw Atom XML for a single id (for manual lookup with full metadata). */
+  async fetchAtomEntry(arxivId: string): Promise<string> {
+    const url = `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`;
+    return this.fetchHtml(url, { allow404: false });
+  }
+
   private async fetchHtml(url: string, opts: { allow404: boolean }): Promise<string> {
     await this.respectDelay();
     return retry(

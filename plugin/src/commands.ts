@@ -35,6 +35,16 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     }).open();
   }
 
+  function openArxivIdPicker() {
+    new ArxivIdModal(plugin.app, async (raw) => {
+      if (!raw) return;
+      new Notice(`arXiv Daily: summarizing ${raw}…`);
+      const today = formatDate(todayInTz(new Date(), tz()));
+      const result = await plugin.manualFetch.fetchAndSummarize(raw, today);
+      new Notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+    }).open();
+  }
+
   plugin.addCommand({
     id: "arxiv-daily-run-now",
     name: "Run now (today)",
@@ -51,6 +61,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     id: "arxiv-daily-run-all-pending",
     name: "Run all pending in lookback window",
     callback: runAllPending,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-summarize-by-id",
+    name: "Summarize by arXiv ID…",
+    callback: openArxivIdPicker,
   });
 
   plugin.addCommand({
@@ -94,6 +110,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setIcon("calendar")
         .onClick(openDatePicker),
     );
+    menu.addItem((item) =>
+      item
+        .setTitle("Summarize by arXiv ID…")
+        .setIcon("file-text")
+        .onClick(openArxivIdPicker),
+    );
     menu.showAtMouseEvent(evt);
   });
 }
@@ -104,6 +126,16 @@ function describeResult(r: any): string {
   if (r.kind === "failed_transient") return `transient: ${r.reason}`;
   if (r.kind === "failed_permanent") return `permanent: ${r.reason}`;
   if (r.kind === "skipped") return `skipped: ${r.reason}`;
+  return JSON.stringify(r);
+}
+
+function describeManualResult(r: any): string {
+  if (!r) return "no result";
+  if (r.kind === "done") return `done → ${r.path}`;
+  if (r.kind === "already_exists") return `already exists at ${r.path}`;
+  if (r.kind === "not_found") return `not found: ${r.reason}`;
+  if (r.kind === "no_html") return `no full HTML: ${r.reason}`;
+  if (r.kind === "error") return `error: ${r.reason}`;
   return JSON.stringify(r);
 }
 
@@ -130,6 +162,41 @@ class DatePickerModal extends Modal {
         .onClick(() => {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(this.value)) {
             new Notice("Invalid date format");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value);
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class ArxivIdModal extends Modal {
+  private value = "";
+  constructor(app: App, private onSubmit: (raw: string | null) => void) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Summarize paper by arXiv ID" });
+    new Setting(contentEl)
+      .setName("arXiv ID or URL")
+      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
+      .addText((t) =>
+        t.setPlaceholder("2605.08080").onChange((v) => {
+          this.value = v.trim();
+        }),
+      );
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Summarize")
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            new Notice("Please enter an arXiv ID");
             return;
           }
           this.close();
