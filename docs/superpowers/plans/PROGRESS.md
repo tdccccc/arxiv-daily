@@ -55,6 +55,60 @@
 
 ---
 
+## v0.1.1
+
+**Plan:** [`docs/superpowers/plans/2026-05-12-scheduler-skip-and-progress.md`](./2026-05-12-scheduler-skip-and-progress.md)
+**Spec:** [`docs/superpowers/specs/2026-05-12-scheduler-skip-and-progress-design.md`](../specs/2026-05-12-scheduler-skip-and-progress-design.md)
+**Result:** v0.1.1 shipped — https://github.com/tdccccc/arxiv-daily/releases/tag/v0.1.1
+**Started:** 2026-05-12
+**Finished:** 2026-05-12
+
+### Changes
+
+**Scheduler gating (Block 1):**
+- Default `schedule.enabled` → false (fresh installs don't auto-run)
+- `setScheduleEnabled()` unified toggle for ribbon + settings
+- `tickToday()` — today-only, weekend-aware, bypasses runAtLocal
+- `start()` no longer fires immediate tick; callers trigger `tickToday()`
+- Ribbon menu: status header + Enable/Disable toggle
+- Settings tab: enable toggle at top with Running/Paused status
+
+**Skip existing files (Block 2):**
+- `MarkdownWriter.dailyExists()` / `paperDetailExists()` existence checks
+- Pipeline pre-checks daily file before any network call
+- Per-paper skip in detail loop
+- Writers throw on pre-existing files (no more silent .bak rename)
+
+**Status bar progress (Block 3):**
+- `ProgressReporter` interface + `NoopProgressReporter`
+- `StatusBarController` renders idle/run/disabled state
+- Pipeline emits stage events (fetch-recent → enrich-abstract → filter → fetch-content → summarize-daily → write-detail)
+- Scheduler emits batch/idle events
+
+**LLM settings redesign:**
+- Provider presets (DeepSeek/OpenAI/Anthropic/GLM/Custom)
+- Auto-fill URL, model, thinking, reasoning effort on provider change
+- All fields remain editable for any provider
+- Latest models: GPT-5.2–5.5, Claude Opus 4.7, GLM-5.1
+- Provider-specific reasoning effort options
+
+**arXiv settings redesign:**
+- Grouped category dropdown (~50 categories)
+- Auto-generated tag/display maps from detail categories
+- Comma-separated detail categories input
+- Timezone dropdown with common presets
+
+**UI:**
+- All settings translated to English
+
+### Test coverage
+
+- 14 test files / 99 vitest tests passing
+- `tsc -noEmit` clean
+- `npm run build` produces ~550 KB CJS bundle
+
+---
+
 ## Known limitations carried into v0.1.0
 
 These were intentional MVP scoping choices, not bugs:

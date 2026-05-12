@@ -13,16 +13,19 @@
 
 ---
 
-## Obsidian 插件（v0.1.0+）
+## Obsidian 插件（v0.1.1）
 
 ### 功能
 
-- **任意 arXiv 分类**（`astro-ph` / `cs.LG` / `hep-ph` / …）可在设置里切换
+- **默认关闭**，首次安装不会自动跑，需手动启用
+- **任意 arXiv 分类**：分组下拉选择（物理/计算机/数学/统计），也支持自定义输入
 - **catch-up 调度**：Obsidian 打开时定时检查 `/list/<cat>/recent`，自动补跑过去 5 天内未完成的日期
+- **跳过已有文件**：已有 daily 或 paper 文件时自动跳过，不消耗 LLM 调用
+- **状态栏进度**：实时显示当前阶段和论文计数
 - **Atom API 摘要补全**：listing 不再提供 abstract，插件二段抓 Atom API 拿全文摘要供 LLM 筛选
-- **Ribbon 菜单**：Run for today / Run all pending (lookback) / Run for specific date / **Summarize by arXiv ID**（输入任意 arXiv id 单篇总结）
+- **多厂商 LLM 预设**：DeepSeek / OpenAI / Anthropic / GLM 下拉选择，自动填充 URL 和模型，所有字段仍可手动修改
+- **Ribbon 菜单**：Enable/Disable 开关 / Run for today / Run all pending / Run for specific date / **Summarize by arXiv ID**
 - **状态可视化**：命令面板 `Show recent run state` 查看最近 N 天每天的运行状态
-- **OpenAI 兼容**：默认 DeepSeek V4 Pro，可切到 OpenAI / Claude（通过兼容代理）/ 其他
 - **跨平台**：Windows / macOS / Linux
 
 ### 安装
@@ -52,10 +55,10 @@ npm run build
 
 | Section | 字段 |
 |---|---|
-| LLM | API Key, Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
-| arXiv | 分类、研究兴趣、详细收录标准、语义分类配置、时区 |
-| Output | Daily / Papers 路径（vault 相对） |
-| Schedule | 启用、`HH:MM` 调度时间、tick 间隔、lookback 天数 (≤5) |
+| Enable | 开关，显示 Running / Paused 状态 |
+| LLM | Provider 下拉（DeepSeek/OpenAI/Anthropic/GLM/Custom）、API Key、Base URL、Model、Temperature、Timeout、Thinking mode、Reasoning effort |
+| arXiv | 分类下拉（按领域分组）、研究兴趣、详细收录标准、详细分类（逗号分隔）、时区下拉 |
+| Output & Schedule | Daily / Papers 路径、调度时间、tick 间隔、lookback 天数 (≤5) |
 | Advanced | 请求间隔、缓存 TTL、字符限制、跳过/优先 sections、日志级别 |
 
 ### 命令 & Ribbon
@@ -69,17 +72,22 @@ npm run build
 | `arXiv Daily: Open today's daily report` | 打开 `<dailyDir>/<today>.md` |
 | `arXiv Daily: Show recent run state` | 查看最近 20 天状态 |
 
-ribbon 单击会弹菜单（Run today / Run all pending / Run for date / Summarize by ID）。
+ribbon 单击会弹菜单（Status + Enable/Disable 开关 / Run today / Run all pending / Run for date / Summarize by ID）。
 
 ### 调度模型
 
 Catch-up 循环（默认每 20 分钟）只在 Obsidian 打开时运行：
 
+- 插件默认**关闭**，需手动在设置或 ribbon 菜单中启用
 - 每个 tick 走过 lookback 窗口（今天、昨天、…、4 天前）
 - 跳过已完成 / 永久失败 / 正在运行的日期
 - 今天若早于 `runAtLocal` 也跳过（避免抢跑）
+- 周末（Sat/Sun）自动跳过，不消耗 LLM
+- 已有 daily 文件的日期直接跳过（不抓取、不调 LLM）
 - 失败_transient 会在 tick 间隔后重试
 - 手动触发绕过时间门
+- 启用时立即触发一次 today-only 总结
+- 状态栏实时显示进度（日期、阶段、论文计数）
 
 **含义：** Obsidian 必须每天打开至少一次（且过了 `runAtLocal`），插件才能跑当天。如果连续多天没开，超出 5 天窗口的日期 arXiv `/recent` 也拿不到了。需要离线/服务器跑的话用下面的 Python 脚本。
 
