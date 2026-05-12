@@ -16,7 +16,9 @@ export class MarkdownWriter {
   async writeDaily(dateStr: string, summary: string): Promise<string> {
     const path = normalizePath(`${this.opts.output.dailyDir}/${dateStr}.md`);
     await this.ensureDir(this.opts.output.dailyDir);
-    await this.backupIfExists(path);
+    if (await this.opts.vault.adapter.exists(path)) {
+      throw new Error(`daily already exists: ${path}`);
+    }
     const frontmatter = `---\ndate: ${dateStr}\ntags: [arxiv, daily]\n---\n\n`;
     await this.opts.vault.adapter.write(path, frontmatter + summary);
     this.opts.logger.info(`wrote daily: ${path}`);
@@ -30,7 +32,9 @@ export class MarkdownWriter {
   ): Promise<string> {
     const path = normalizePath(`${this.opts.output.papersDir}/${paper.id}.md`);
     await this.ensureDir(this.opts.output.papersDir);
-    await this.backupIfExists(path);
+    if (await this.opts.vault.adapter.exists(path)) {
+      throw new Error(`paper already exists: ${path}`);
+    }
     const tags = this.tagsFor(paper);
     const fm =
       `---\n` +
@@ -74,16 +78,6 @@ export class MarkdownWriter {
     }
   }
 
-  private async backupIfExists(path: string): Promise<void> {
-    if (await this.opts.vault.adapter.exists(path)) {
-      const bak = path.replace(/\.md$/, ".bak.md");
-      if (await this.opts.vault.adapter.exists(bak)) {
-        await this.opts.vault.adapter.remove(bak);
-      }
-      await this.opts.vault.adapter.rename(path, bak);
-      this.opts.logger.info(`backed up existing file → ${bak}`);
-    }
-  }
 }
 
 function escapeYaml(s: string): string {

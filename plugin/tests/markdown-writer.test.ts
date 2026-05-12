@@ -64,3 +64,48 @@ describe("MarkdownWriter existence checks", () => {
     expect(await writer.paperDetailExists("2605.06587")).toBe(true);
   });
 });
+
+describe("MarkdownWriter strictness on existing files", () => {
+  it("writeDaily throws if file already exists", async () => {
+    const { writer } = makeWriter({
+      "arxiv-daily/daily/2026-05-11.md": "x",
+    });
+    await expect(writer.writeDaily("2026-05-11", "new")).rejects.toThrow(
+      /already exists/,
+    );
+  });
+
+  it("writePaperDetail throws if file already exists", async () => {
+    const { writer } = makeWriter({
+      "arxiv-daily/papers/2605.06587.md": "x",
+    });
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+    };
+    await expect(writer.writePaperDetail(paper as any, "2026-05-11", "x"))
+      .rejects.toThrow(/already exists/);
+  });
+
+  it("writeEmptyDaily throws if file already exists", async () => {
+    const { writer } = makeWriter({
+      "arxiv-daily/daily/2026-05-11.md": "x",
+    });
+    await expect(writer.writeEmptyDaily("2026-05-11")).rejects.toThrow(
+      /already exists/,
+    );
+  });
+
+  it("writeDaily writes content (no bak file produced)", async () => {
+    const { files, writer } = makeWriter();
+    await writer.writeDaily("2026-05-11", "body");
+    expect(files["arxiv-daily/daily/2026-05-11.md"]).toContain("body");
+    expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
+  });
+});
