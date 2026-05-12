@@ -211,24 +211,38 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       },
     );
 
-    this.textareaSetting(
-      containerEl,
-      "允许 detail 的语义分类",
-      "一行一个，LLM 输出的语义分类（非 arXiv 官方分类）",
-      s.arxiv.detailCategories.join("\n"),
-      async (v) => {
-        s.arxiv.detailCategories = v
-          .split("\n")
-          .map((x) => x.trim())
-          .filter(Boolean);
-        await this.plugin.saveSettings();
-      },
-    );
+    new Setting(containerEl)
+      .setName("详细分类")
+      .setDesc("LLM 语义分类，逗号分隔（如 photo-z, galaxy-cluster）")
+      .addText((t) =>
+        t.setValue(s.arxiv.detailCategories.join(", ")).onChange(async (v) => {
+          s.arxiv.detailCategories = v
+            .split(/[,，]/)
+            .map((x) => x.trim())
+            .filter(Boolean);
+          // Auto-update tag map and display map
+          this.syncCategoryMaps(s);
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    // Advanced: tag/display map overrides
+    const advContainer = containerEl.createDiv();
+    advContainer.style.display = "none";
+    const advToggle = new Setting(containerEl)
+      .setName("展开高级配置")
+      .setDesc("自定义 Tag 和显示名称（默认从详细分类自动生成）")
+      .addToggle((t) => {
+        t.setValue(false).onChange((v) => {
+          advContainer.style.display = v ? "block" : "none";
+        });
+      });
+    advToggle.infoEl.style.cursor = "pointer";
 
     this.textareaSetting(
-      containerEl,
+      advContainer,
       "Category → Tag map (JSON)",
-      "",
+      "默认自动生成，可手动覆盖",
       JSON.stringify(s.arxiv.categoryTagMap, null, 2),
       async (v) => {
         try {
@@ -241,9 +255,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     this.textareaSetting(
-      containerEl,
+      advContainer,
       "Category → Display name (JSON)",
-      "",
+      "默认自动生成，可手动覆盖",
       JSON.stringify(s.arxiv.categoryDisplayMap, null, 2),
       async (v) => {
         try {
@@ -398,6 +412,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           this.plugin.logger.setLevel(v as any);
         }),
     );
+  }
+
+  private syncCategoryMaps(s: typeof this.plugin.settings): void {
+    const cats = s.arxiv.detailCategories;
+    const tagMap: Record<string, string> = {};
+    const displayMap: Record<string, string> = {};
+    for (const c of cats) {
+      tagMap[c] = c;
+      // Convert "galaxy-cluster" → "Galaxy Cluster"
+      displayMap[c] = c
+        .replace(/-/g, " ")
+        .replace(/\b\w/g, (ch) => ch.toUpperCase());
+    }
+    // Default entries
+    if (!tagMap["other"]) tagMap["other"] = "other";
+    displayMap["other"] = "其他";
+    s.arxiv.categoryTagMap = tagMap;
+    s.arxiv.categoryDisplayMap = displayMap;
   }
 
   private textareaSetting(
