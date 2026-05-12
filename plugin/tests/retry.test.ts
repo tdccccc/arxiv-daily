@@ -1,0 +1,49 @@
+import { describe, it, expect, vi } from "vitest";
+import { retry } from "../src/utils/retry";
+
+describe("retry", () => {
+  it("returns value on first success", async () => {
+    const fn = vi.fn().mockResolvedValue("ok");
+    const result = await retry(fn, { maxAttempts: 3, baseDelayMs: 1 });
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries on failure then succeeds", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue("ok");
+    const result = await retry(fn, { maxAttempts: 3, baseDelayMs: 1 });
+    expect(result).toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws after max attempts", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("permanent"));
+    await expect(retry(fn, { maxAttempts: 2, baseDelayMs: 1 })).rejects.toThrow("permanent");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects shouldRetry predicate", async () => {
+    const err = new Error("4xx");
+    const fn = vi.fn().mockRejectedValue(err);
+    await expect(
+      retry(fn, {
+        maxAttempts: 5,
+        baseDelayMs: 1,
+        shouldRetry: () => false,
+      }),
+    ).rejects.toThrow("4xx");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onRetry with attempt and wait", async () => {
+    const onRetry = vi.fn();
+    const fn = vi.fn().mockRejectedValueOnce(new Error("x")).mockResolvedValue("ok");
+    await retry(fn, { maxAttempts: 3, baseDelayMs: 1, onRetry });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry.mock.calls[0][1]).toBe(1);
+  });
+});

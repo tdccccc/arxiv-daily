@@ -1,0 +1,90 @@
+import { describe, it, expect, vi } from "vitest";
+import { StateStore } from "../src/services/state-store";
+import type { RunState } from "../src/settings/types";
+
+function makeStore(initial: RunState = {}) {
+  const data: { runState: RunState } = { runState: { ...initial } };
+  const load = vi.fn(async () => ({ runState: { ...data.runState } }));
+  const save = vi.fn(async (d: { runState: RunState }) => {
+    data.runState = { ...d.runState };
+  });
+  return { store: new StateStore(load, save), data, save };
+}
+
+describe("StateStore", () => {
+  it("get returns pending when no entry", async () => {
+    const { store } = makeStore();
+    await store.load();
+    expect(store.get("2026-05-11").status).toBe("pending");
+    expect(store.get("2026-05-11").attempts).toBe(0);
+  });
+
+  it("setRunning marks running with bumped attempts", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    const e = store.get("2026-05-11");
+    expect(e.status).toBe("running");
+    expect(e.attempts).toBe(1);
+  });
+
+  it("setCompleted marks completed and records papers", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    await store.setCompleted("2026-05-11", 7);
+    const e = store.get("2026-05-11");
+    expect(e.status).toBe("completed");
+    expect(e.papersWritten).toBe(7);
+  });
+
+  it("setFailed transient keeps attempts low; permanent after threshold", async () => {
+    const { store } = makeStore();
+    await store.load();
+    for (let i = 0; i < 9; i++) {
+      await store.setRunning("d");
+      await store.setFailed("d", "transient", "boom");
+      expect(store.get("d").status).toBe("failed_transient");
+    }
+    await store.setRunning("d");
+    await store.setFailed("d", "transient", "boom");
+    expect(store.get("d").status).toBe("failed_permanent");
+  });
+
+  it("setFailed permanent applies immediately", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("d");
+    await store.setFailed("d", "permanent", "bad config");
+    expect(store.get("d").status).toBe("failed_permanent");
+  });
+
+  it("isDone returns true for completed and failed_permanent", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("a");
+    await store.setCompleted("a", 1);
+    expect(store.isDone("a")).toBe(true);
+    await store.setFailed("b", "permanent", "x");
+    expect(store.isDone("b")).toBe(true);
+    expect(store.isDone("c")).toBe(false);
+  });
+
+  it("persists via save callback on each mutation", async () => {
+    const { store, save } = makeStore();
+    await store.load();
+    await store.setRunning("d");
+    await store.setCompleted("d", 3);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("snapshot returns a copy of current state", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("a");
+    const snap = store.snapshot();
+    expect(snap.a.status).toBe("running");
+    snap.a.status = "completed";
+    expect(store.get("a").status).toBe("running");
+  });
+});
