@@ -50,3 +50,12 @@ export function daysBefore(
     d: dt.getUTCDate(),
   };
 }
+
+export function isWeekendInTz(now: Date, tz: string): boolean {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+  });
+  const weekday = fmt.format(now);
+  return weekday === "Sat" || weekday === "Sun";
+}
