@@ -194,13 +194,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl).setName("启用自动调度").addToggle((t) =>
-      t.setValue(s.schedule.enabled).onChange(async (v) => {
-        s.schedule.enabled = v;
-        await this.plugin.saveSettings();
-        this.plugin.restartScheduler();
-      }),
-    );
+    new Setting(containerEl)
+      .setName("启用自动调度")
+      .setDesc("启用后立即总结今天（周末跳过，等下个工作日）")
+      .addToggle((t) =>
+        t.setValue(s.schedule.enabled).onChange(async (v) => {
+          await this.plugin.setScheduleEnabled(v);
+        }),
+      );
 
     new Setting(containerEl).setName("调度时间 (HH:MM)").addText((t) =>
       t.setValue(s.schedule.runAtLocal).onChange(async (v) => {
