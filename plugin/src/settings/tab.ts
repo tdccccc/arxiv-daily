@@ -15,8 +15,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // ─── Enable toggle (top) ─────────────────────────
     new Setting(containerEl)
-      .setName(`启用 · ${s.schedule.enabled ? "运行中" : "已暂停"}`)
-      .setDesc("启用后定时自动总结 arXiv 论文（周末跳过，等下个工作日）")
+      .setName(`Enable · ${s.schedule.enabled ? "Running" : "Paused"}`)
+      .setDesc("Auto-summarize arXiv papers on schedule (skips weekends)")
       .addToggle((t) =>
         t.setValue(s.schedule.enabled).onChange(async (v) => {
           await this.plugin.setScheduleEnabled(v);
@@ -25,12 +25,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    containerEl.createEl("h2", { text: "LLM 配置" });
+    containerEl.createEl("h2", { text: "LLM" });
 
     // Provider dropdown
     new Setting(containerEl)
-      .setName("厂商")
-      .setDesc("选择厂商自动填充 URL 和模型，所有字段仍可手动修改")
+      .setName("Provider")
+      .setDesc("Auto-fills URL and model; all fields remain editable")
       .addDropdown((d) => {
         for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
           d.addOption(key, preset.name);
@@ -91,7 +91,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
         })
         .addText((t) => {
-          t.setPlaceholder("或输入其他模型 ID")
+          t.setPlaceholder("or enter custom model ID")
             .setValue("")
             .onChange(async (v) => {
               if (v.trim()) {
@@ -118,7 +118,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }),
     );
 
-    new Setting(containerEl).setName("Timeout (秒)").addText((t) =>
+    new Setting(containerEl).setName("Timeout (sec)").addText((t) =>
       t.setValue(String(s.llm.timeoutMs / 1000)).onChange(async (v) => {
         s.llm.timeoutMs = (Number(v) || 300) * 1000;
         await this.plugin.saveSettings();
@@ -127,10 +127,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
-      ? "启用 Anthropic Extended Thinking"
+      ? "Enable Anthropic Extended Thinking"
       : s.llm.provider === "deepseek"
-        ? "启用推理模式 (DeepSeek V4 系列支持)"
-        : "启用推理/思考模式";
+        ? "Enable reasoning mode (DeepSeek V4)"
+        : "Enable reasoning/thinking mode";
 
     new Setting(containerEl)
       .setName("Thinking mode")
@@ -146,7 +146,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const efforts = preset?.reasoningEfforts ?? ["low", "medium", "high"];
     new Setting(containerEl)
       .setName("Reasoning effort")
-      .setDesc(s.llm.provider === "anthropic" ? "映射到 thinking budget 档位" : "推理力度")
+      .setDesc(s.llm.provider === "anthropic" ? "Maps to thinking budget tier" : "Reasoning strength")
       .addDropdown((d) => {
         for (const e of efforts) {
           d.addOption(e, e);
@@ -158,7 +158,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       })
       .addText((t) => {
-        t.setPlaceholder("或输入自定义值")
+        t.setPlaceholder("or enter custom value")
           .setValue("")
           .onChange(async (v) => {
             if (v.trim()) {
@@ -169,11 +169,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── arXiv ────────────────────────────────────────
-    containerEl.createEl("h2", { text: "arXiv 配置" });
+    containerEl.createEl("h2", { text: "arXiv" });
 
     // Category — grouped dropdown + custom text
     new Setting(containerEl)
-      .setName("arXiv 分类")
+      .setName("arXiv Category")
       .addDropdown((d) => {
         for (const group of ARXIV_CATEGORIES) {
           const optgroup = d.selectEl.createEl("optgroup");
@@ -190,7 +190,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       })
       .addText((t) => {
-        t.setPlaceholder("或输入自定义分类")
+        t.setPlaceholder("or enter custom category")
           .setValue("")
           .onChange(async (v) => {
             if (v.trim()) {
@@ -202,8 +202,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.textareaSetting(
       containerEl,
-      "研究兴趣",
-      "用自然语言描述",
+      "Research Interests",
+      "Describe in natural language",
       s.arxiv.researchInterests,
       async (v) => {
         s.arxiv.researchInterests = v;
@@ -213,8 +213,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.textareaSetting(
       containerEl,
-      "详细收录标准",
-      "符合此标准的论文会生成详细报告",
+      "Detail Criteria",
+      "Papers matching this will get a detailed report",
       s.arxiv.detailCriteria,
       async (v) => {
         s.arxiv.detailCriteria = v;
@@ -223,8 +223,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl)
-      .setName("详细分类")
-      .setDesc("LLM 语义分类，逗号分隔（如 photo-z, galaxy-cluster）")
+      .setName("Detail Categories")
+      .setDesc("LLM semantic categories, comma-separated (e.g. photo-z, galaxy-cluster)")
       .addText((t) =>
         t.setValue(s.arxiv.detailCategories.join(", ")).onChange(async (v) => {
           s.arxiv.detailCategories = v
@@ -244,8 +244,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const advContainer = containerEl.createDiv();
     advContainer.style.display = "none";
     const advToggle = new Setting(containerEl)
-      .setName("展开高级配置")
-      .setDesc("自定义 Tag 和显示名称（默认从详细分类自动生成）")
+      .setName("Advanced maps")
+      .setDesc("Customize tags and display names (auto-generated from detail categories)")
       .addToggle((t) => {
         t.setValue(false).onChange((v) => {
           advContainer.style.display = v ? "block" : "none";
@@ -256,7 +256,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.textareaSetting(
       advContainer,
       "Category → Tag map (JSON)",
-      "默认自动生成，可手动覆盖",
+      "Auto-generated, manually overridable",
       JSON.stringify(s.arxiv.categoryTagMap, null, 2),
       async (v) => {
         try {
@@ -271,7 +271,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.textareaSetting(
       advContainer,
       "Category → Display name (JSON)",
-      "默认自动生成，可手动覆盖",
+      "Auto-generated, manually overridable",
       JSON.stringify(s.arxiv.categoryDisplayMap, null, 2),
       async (v) => {
         try {
@@ -284,17 +284,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl)
-      .setName("时区")
+      .setName("Timezone")
       .addDropdown((d) => {
         const zones = [
-          { v: "Asia/Shanghai", l: "北京/上海 (UTC+8)" },
-          { v: "Asia/Tokyo", l: "东京 (UTC+9)" },
-          { v: "US/Eastern", l: "美东 (UTC-5)" },
-          { v: "US/Pacific", l: "美西 (UTC-8)" },
-          { v: "Europe/London", l: "伦敦 (UTC+0)" },
-          { v: "Europe/Berlin", l: "柏林/巴黎 (UTC+1)" },
-          { v: "Europe/Moscow", l: "莫斯科 (UTC+3)" },
-          { v: "Australia/Sydney", l: "悉尼 (UTC+10)" },
+          { v: "Asia/Shanghai", l: "Shanghai (UTC+8)" },
+          { v: "Asia/Tokyo", l: "Tokyo (UTC+9)" },
+          { v: "US/Eastern", l: "US East (UTC-5)" },
+          { v: "US/Pacific", l: "US West (UTC-8)" },
+          { v: "Europe/London", l: "London (UTC+0)" },
+          { v: "Europe/Berlin", l: "Berlin (UTC+1)" },
+          { v: "Europe/Moscow", l: "Moscow (UTC+3)" },
+          { v: "Australia/Sydney", l: "Sydney (UTC+10)" },
           { v: "UTC", l: "UTC" },
         ];
         for (const z of zones) {
@@ -306,7 +306,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       })
       .addText((t) => {
-        t.setPlaceholder("或输入自定义时区")
+        t.setPlaceholder("or enter custom timezone")
           .setValue("")
           .onChange(async (v) => {
             if (v.trim()) {
@@ -317,11 +317,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── Output & Schedule ────────────────────────────
-    containerEl.createEl("h2", { text: "输出 & 调度" });
+    containerEl.createEl("h2", { text: "Output & Schedule" });
 
     new Setting(containerEl)
-      .setName("Daily 路径")
-      .setDesc("vault 内相对路径")
+      .setName("Daily path")
+      .setDesc("Relative path in vault")
       .addText((t) =>
         t.setValue(s.output.dailyDir).onChange(async (v) => {
           s.output.dailyDir = v.trim();
@@ -330,8 +330,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Papers 路径")
-      .setDesc("vault 内相对路径")
+      .setName("Papers path")
+      .setDesc("Relative path in vault")
       .addText((t) =>
         t.setValue(s.output.papersDir).onChange(async (v) => {
           s.output.papersDir = v.trim();
@@ -339,14 +339,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl).setName("调度时间 (HH:MM)").addText((t) =>
+    new Setting(containerEl).setName("Run time (HH:MM)").addText((t) =>
       t.setValue(s.schedule.runAtLocal).onChange(async (v) => {
         s.schedule.runAtLocal = v.trim();
         await this.plugin.saveSettings();
       }),
     );
 
-    new Setting(containerEl).setName("Tick interval (分钟)").addText((t) =>
+    new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
       t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
         s.schedule.tickIntervalMin = Number(v) || 20;
         await this.plugin.saveSettings();
@@ -355,8 +355,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl)
-      .setName("Lookback 天数")
-      .setDesc("最大 5 (受 arXiv /recent 限制)")
+      .setName("Lookback days")
+      .setDesc("Max 5 (limited by arXiv /recent)")
       .addText((t) =>
         t.setValue(String(s.schedule.lookbackDays)).onChange(async (v) => {
           s.schedule.lookbackDays = Math.min(5, Math.max(1, Number(v) || 5));
@@ -365,7 +365,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── Advanced ─────────────────────────────────────
-    containerEl.createEl("h2", { text: "高级" });
+    containerEl.createEl("h2", { text: "Advanced" });
 
     new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
       t.setValue(String(s.advanced.requestDelayMs)).onChange(async (v) => {
@@ -404,7 +404,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.textareaSetting(
       containerEl,
-      "Skip sections (一行一个)",
+      "Skip sections (one per line)",
       "",
       s.advanced.skipSections.join("\n"),
       async (v) => {
@@ -418,7 +418,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.textareaSetting(
       containerEl,
-      "Priority sections (一行一个)",
+      "Priority sections (one per line)",
       "",
       s.advanced.prioritySections.join("\n"),
       async (v) => {
@@ -458,7 +458,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
     // Default entries
     if (!tagMap["other"]) tagMap["other"] = "other";
-    displayMap["other"] = "其他";
+    displayMap["other"] = "Other";
     s.arxiv.categoryTagMap = tagMap;
     s.arxiv.categoryDisplayMap = displayMap;
   }

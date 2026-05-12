@@ -5,7 +5,7 @@ export interface CategoryGroup {
 
 export const ARXIV_CATEGORIES: CategoryGroup[] = [
   {
-    label: "物理",
+    label: "Physics",
     categories: [
       { id: "astro-ph", name: "Astrophysics" },
       { id: "astro-ph.CO", name: "Cosmology" },
@@ -25,7 +25,7 @@ export const ARXIV_CATEGORIES: CategoryGroup[] = [
     ],
   },
   {
-    label: "计算机",
+    label: "Computer Science",
     categories: [
       { id: "cs.AI", name: "Artificial Intelligence" },
       { id: "cs.AR", name: "Hardware Architecture" },
@@ -44,7 +44,7 @@ export const ARXIV_CATEGORIES: CategoryGroup[] = [
     ],
   },
   {
-    label: "数学",
+    label: "Mathematics",
     categories: [
       { id: "math.AG", name: "Algebraic Geometry" },
       { id: "math.AP", name: "Analysis of PDEs" },
@@ -57,7 +57,7 @@ export const ARXIV_CATEGORIES: CategoryGroup[] = [
     ],
   },
   {
-    label: "统计 / 生物 / 经济",
+    label: "Statistics / Biology / Economics",
     categories: [
       { id: "stat.ML", name: "Machine Learning (Stats)" },
       { id: "stat.ME", name: "Methodology" },
