@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
+import { ARXIV_CATEGORIES } from "./arxiv-categories";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
@@ -159,15 +160,34 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── arXiv ────────────────────────────────────────
     containerEl.createEl("h2", { text: "arXiv 配置" });
 
+    // Category — grouped dropdown + custom text
     new Setting(containerEl)
-      .setName("分类")
-      .setDesc("arXiv 分类，如 astro-ph、cs.LG、hep-ph")
-      .addText((t) =>
-        t.setValue(s.arxiv.category).onChange(async (v) => {
-          s.arxiv.category = v.trim();
+      .setName("arXiv 分类")
+      .addDropdown((d) => {
+        for (const group of ARXIV_CATEGORIES) {
+          const optgroup = d.selectEl.createEl("optgroup");
+          optgroup.label = group.label;
+          for (const cat of group.categories) {
+            const opt = optgroup.createEl("option");
+            opt.value = cat.id;
+            opt.textContent = `${cat.id} — ${cat.name}`;
+          }
+        }
+        d.setValue(s.arxiv.category).onChange(async (v) => {
+          s.arxiv.category = v;
           await this.plugin.saveSettings();
-        }),
-      );
+        });
+      })
+      .addText((t) => {
+        t.setPlaceholder("或输入自定义分类")
+          .setValue("")
+          .onChange(async (v) => {
+            if (v.trim()) {
+              s.arxiv.category = v.trim();
+              await this.plugin.saveSettings();
+            }
+          });
+      });
 
     this.textareaSetting(
       containerEl,
