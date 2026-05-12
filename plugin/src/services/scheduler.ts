@@ -33,9 +33,6 @@ export class SchedulerService {
       this.tick().catch((e) => this.deps.logger.error("scheduler tick failed", e));
     }, Math.max(1, min) * 60_000);
     this.intervalHandle = handle as unknown as number;
-    this.tick().catch((e) =>
-      this.deps.logger.error("scheduler initial tick failed", e),
-    );
   }
 
   stop(): void {

@@ -304,4 +304,33 @@ describe("SchedulerService", () => {
     expect((result as any)?.kind).toBe("skipped");
     expect(runForDate).not.toHaveBeenCalled();
   });
+
+  it("start() no longer fires an immediate tick", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 0 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          runAtLocal: "00:01",
+          lookbackDays: 5,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    svc.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runForDate).not.toHaveBeenCalled();
+    svc.stop();
+  });
 });
