@@ -8,6 +8,8 @@ import { Logger } from "./src/services/logger";
 import { StateStore } from "./src/services/state-store";
 import { RunLock } from "./src/services/run-lock";
 import { SchedulerService } from "./src/services/scheduler";
+import { StatusBarController } from "./src/services/status-bar";
+import { NoopProgressReporter, type ProgressReporter } from "./src/services/progress";
 import { LlmClient } from "./src/llm/client";
 import { ArxivFetcher } from "./src/pipeline/arxiv-fetcher";
 import { HtmlCache } from "./src/pipeline/html-cache";
@@ -28,6 +30,7 @@ export default class ArxivDailyPlugin extends Plugin {
   stateStore!: StateStore;
   scheduler!: SchedulerService;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
+  progress!: ProgressReporter;
   private runLock = new RunLock();
 
   async onload() {
@@ -45,12 +48,24 @@ export default class ArxivDailyPlugin extends Plugin {
     );
     await this.stateStore.load();
 
+    try {
+      this.progress = new StatusBarController(
+        this.addStatusBarItem(),
+        this.stateStore,
+        { initiallyEnabled: this.settings.schedule.enabled },
+      );
+    } catch (e) {
+      this.logger.warn("status bar unavailable, using noop", e);
+      this.progress = new NoopProgressReporter();
+    }
+
     this.scheduler = new SchedulerService({
       getSettings: () => this.settings,
       store: this.stateStore,
       lock: this.runLock,
       logger: this.logger,
       runForDate: (date) => this.buildPipeline().runForDate(date),
+      progress: this.progress,
     });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
@@ -63,7 +78,14 @@ export default class ArxivDailyPlugin extends Plugin {
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerCommands(this);
 
-    if (this.settings.schedule.enabled) this.scheduler.start();
+    if (this.settings.schedule.enabled) {
+      this.scheduler.start();
+      this.scheduler
+        .tickToday()
+        .catch((e) =>
+          this.logger.error("scheduler initial tickToday failed", e),
+        );
+    }
   }
 
   onunload() {
@@ -77,6 +99,25 @@ export default class ArxivDailyPlugin extends Plugin {
   restartScheduler(): void {
     this.scheduler.stop();
     if (this.settings.schedule.enabled) this.scheduler.start();
+  }
+
+  async setScheduleEnabled(enabled: boolean): Promise<void> {
+    if (this.settings.schedule.enabled === enabled) return;
+    this.settings.schedule.enabled = enabled;
+    await this.saveSettings();
+    if (enabled) {
+      this.scheduler.start();
+      const result = await this.scheduler.tickToday();
+      if (result && (result as any).kind === "skipped") {
+        const reason = (result as any).reason;
+        if (reason === "weekend") {
+          this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
+        }
+      }
+    } else {
+      this.scheduler.stop();
+      this.progress.setDisabled();
+    }
   }
 
   private async loadSettingsAndState(): Promise<void> {
@@ -104,6 +145,7 @@ export default class ArxivDailyPlugin extends Plugin {
       advanced: this.settings.advanced,
       output: this.settings.output,
       llmSettings: this.settings.llm,
+      progress: this.progress,
     });
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { StatusBarController } from "../src/services/status-bar";
 import { StateStore } from "../src/services/state-store";
-import type { RunState } from "../settings/types";
+import type { RunState } from "../src/settings/types";
 
 function makeEl(): HTMLElement {
   return document.createElement("span");
