@@ -58,19 +58,36 @@ export class SchedulerService {
 
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
       const date = formatDate(daysBefore(todayObj, i));
-      const entry = this.deps.store.get(date);
-      if (this.deps.store.isDone(date)) continue;
-      if (entry.status === "running") continue;
-
-      if (date === today && minutesNow < scheduledMin) continue;
-
-      if (entry.status === "failed_transient") {
-        const tickMs = s.schedule.tickIntervalMin * 60_000;
-        if (now.getTime() - entry.lastAttempt < tickMs) continue;
-      }
-
-      await this.tryRun(date);
+      const isToday = date === today;
+      await this.tickDate(date, {
+        now,
+        timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
+      });
     }
+  }
+
+  private async tickDate(
+    date: string,
+    opts: {
+      now: Date;
+      timeGate?: { scheduledMin: number; minutesNow: number };
+    },
+  ): Promise<PipelineResult | undefined> {
+    const s = this.deps.getSettings();
+    const entry = this.deps.store.get(date);
+    if (this.deps.store.isDone(date)) return undefined;
+    if (entry.status === "running") return undefined;
+
+    if (opts.timeGate && opts.timeGate.minutesNow < opts.timeGate.scheduledMin) {
+      return undefined;
+    }
+
+    if (entry.status === "failed_transient") {
+      const tickMs = s.schedule.tickIntervalMin * 60_000;
+      if (opts.now.getTime() - entry.lastAttempt < tickMs) return undefined;
+    }
+
+    return await this.tryRun(date);
   }
 
   /** Manual trigger: ignore scheduled-time gate, still respect lock and isDone. */
