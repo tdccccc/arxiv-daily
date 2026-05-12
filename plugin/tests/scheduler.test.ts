@@ -88,6 +88,7 @@ describe("SchedulerService", () => {
   it("respects failed_transient backoff", async () => {
     const store = makeStore();
     await store.load();
+    const fixedNow = new Date("2026-05-11T05:00:00Z"); // 13:00 Shanghai
     await store.setRunning("2026-05-11");
     await store.setFailed("2026-05-11", "transient", "x");
     const lock = new RunLock();
@@ -101,7 +102,7 @@ describe("SchedulerService", () => {
       lock,
       runForDate,
       logger: new Logger("error"),
-      now: () => new Date(),
+      now: () => fixedNow,
     });
     await svc.tick();
     expect(runForDate).not.toHaveBeenCalled();
