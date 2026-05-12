@@ -227,6 +227,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Auto-sync maps from detail categories on every render
     this.syncCategoryMaps(s);
+    this.plugin.saveSettings();
 
     // Advanced: tag/display map overrides
     const advContainer = containerEl.createDiv();
