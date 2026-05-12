@@ -48,7 +48,7 @@ describe("SchedulerService", () => {
     const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 3 });
     const settings = {
       ...DEFAULT_SETTINGS,
-      schedule: { ...DEFAULT_SETTINGS.schedule, runAtLocal: "00:01", lookbackDays: 1 },
+      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "00:01", lookbackDays: 1 },
     };
     const svc = new SchedulerService({
       getSettings: () => settings,
@@ -241,7 +241,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
       }),
       store,
       lock,
@@ -267,6 +267,7 @@ describe("SchedulerService", () => {
         ...DEFAULT_SETTINGS,
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
           runAtLocal: "23:59",
           lookbackDays: 1,
         },
@@ -352,6 +353,7 @@ describe("SchedulerService", () => {
         ...DEFAULT_SETTINGS,
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
           runAtLocal: "00:01",
           lookbackDays: 3,
         },
@@ -385,7 +387,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
       }),
       store,
       lock,

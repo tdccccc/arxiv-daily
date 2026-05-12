@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     papersDir: "arxiv-daily/papers",
   },
   schedule: {
-    enabled: true,
+    enabled: false,
     runAtLocal: "09:30",
     tickIntervalMin: 20,
     lookbackDays: 5,
