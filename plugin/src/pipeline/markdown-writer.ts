@@ -50,6 +50,16 @@ export class MarkdownWriter {
     return this.writeDaily(dateStr, summary);
   }
 
+  async dailyExists(dateStr: string): Promise<boolean> {
+    const path = normalizePath(`${this.opts.output.dailyDir}/${dateStr}.md`);
+    return await this.opts.vault.adapter.exists(path);
+  }
+
+  async paperDetailExists(id: string): Promise<boolean> {
+    const path = normalizePath(`${this.opts.output.papersDir}/${id}.md`);
+    return await this.opts.vault.adapter.exists(path);
+  }
+
   private tagsFor(paper: DailyPaperWithContent): string[] {
     const tags = ["arxiv", "paper"];
     const t = this.opts.arxiv.categoryTagMap[paper.category];
