@@ -91,11 +91,32 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addRibbonIcon("calendar-clock", "arXiv Daily", (evt: MouseEvent) => {
     const menu = new Menu();
+
+    const enabled = plugin.settings.schedule.enabled;
+
+    // Status header (non-interactive)
     menu.addItem((item) =>
       item
-        .setTitle("Run for today")
-        .setIcon("play")
-        .onClick(runToday),
+        .setTitle(`Status: ${enabled ? "Enabled" : "Disabled"}`)
+        .setIcon(enabled ? "circle-check" : "circle-slash")
+        .setDisabled(true),
+    );
+    // Enable/Disable toggle
+    menu.addItem((item) =>
+      item
+        .setTitle(enabled ? "Disable" : "Enable")
+        .setIcon(enabled ? "pause" : "play")
+        .onClick(async () => {
+          await plugin.setScheduleEnabled(!enabled);
+          new Notice(
+            `arXiv Daily: ${!enabled ? "enabled" : "disabled"}`,
+          );
+        }),
+    );
+
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item.setTitle("Run for today").setIcon("play").onClick(runToday),
     );
     menu.addSeparator();
     menu.addItem((item) =>
