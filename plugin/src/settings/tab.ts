@@ -220,11 +220,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             .split(/[,，]/)
             .map((x) => x.trim())
             .filter(Boolean);
-          // Auto-update tag map and display map
           this.syncCategoryMaps(s);
           await this.plugin.saveSettings();
         }),
       );
+
+    // Auto-sync maps from detail categories on every render
+    this.syncCategoryMaps(s);
 
     // Advanced: tag/display map overrides
     const advContainer = containerEl.createDiv();
