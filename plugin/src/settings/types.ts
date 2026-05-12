@@ -1,11 +1,12 @@
 export interface LlmSettings {
   apiKey: string;
+  provider: string;
   baseUrl: string;
   model: string;
   temperature: number;
   timeoutMs: number;
   thinkingMode: boolean;
-  reasoningEffort: "low" | "medium" | "high";
+  reasoningEffort: string;
 }
 
 export interface ArxivSettings {

@@ -3,6 +3,7 @@ import type { PluginSettings } from "./types";
 export const DEFAULT_SETTINGS: PluginSettings = {
   llm: {
     apiKey: "",
+    provider: "deepseek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-v4-pro",
     temperature: 0.3,

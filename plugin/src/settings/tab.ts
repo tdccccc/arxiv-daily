@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
@@ -14,40 +15,73 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── LLM ──────────────────────────────────────────
     containerEl.createEl("h2", { text: "LLM 配置" });
 
+    // Provider dropdown
     new Setting(containerEl)
-      .setName("API Key")
-      .setDesc("OpenAI 兼容 API Key (DeepSeek / OpenAI / 其他)")
-      .addText((t) => {
-        t.inputEl.type = "password";
-        t.setPlaceholder("sk-...")
-          .setValue(s.llm.apiKey)
-          .onChange(async (v) => {
-            s.llm.apiKey = v;
-            await this.plugin.saveSettings();
-          });
+      .setName("厂商")
+      .setDesc("选择厂商自动填充 URL 和模型，或选自定义手动输入")
+      .addDropdown((d) => {
+        for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
+          d.addOption(key, preset.name);
+        }
+        d.setValue(s.llm.provider).onChange(async (v) => {
+          s.llm.provider = v;
+          const preset = PROVIDER_PRESETS[v];
+          if (preset && v !== "custom") {
+            s.llm.baseUrl = preset.baseUrl;
+            if (preset.models.length > 0) {
+              s.llm.model = preset.models[0].value;
+            }
+            s.llm.thinkingMode = preset.thinkingMode;
+            if (!preset.reasoningEfforts.includes(s.llm.reasoningEffort)) {
+              s.llm.reasoningEffort = preset.reasoningEfforts[0];
+            }
+          }
+          await this.plugin.saveSettings();
+          this.display(); // re-render to update model/effort UI
+        });
       });
 
+    // Base URL — read-only for presets, editable for custom
     new Setting(containerEl)
       .setName("Base URL")
-      .setDesc("API 端点")
-      .addText((t) =>
-        t.setValue(s.llm.baseUrl).onChange(async (v) => {
-          s.llm.baseUrl = v;
-          await this.plugin.saveSettings();
-        }),
-      );
+      .setDesc(s.llm.provider === "custom" ? "API 端点" : `${PROVIDER_PRESETS[s.llm.provider]?.name ?? ""} 端点`)
+      .addText((t) => {
+        t.setValue(s.llm.baseUrl);
+        if (s.llm.provider !== "custom") {
+          t.setDisabled(true);
+        } else {
+          t.onChange(async (v) => {
+            s.llm.baseUrl = v;
+            await this.plugin.saveSettings();
+          });
+        }
+      });
 
-    new Setting(containerEl)
-      .setName("Model")
-      .setDesc(
-        "推荐 deepseek-v4-pro；可选 deepseek-v4-flash / deepseek-chat (将弃用) / deepseek-reasoner (将弃用)",
-      )
-      .addText((t) =>
-        t.setValue(s.llm.model).onChange(async (v) => {
-          s.llm.model = v;
-          await this.plugin.saveSettings();
-        }),
-      );
+    // Model — dropdown for presets, text for custom
+    const preset = PROVIDER_PRESETS[s.llm.provider];
+    if (preset && s.llm.provider !== "custom" && preset.models.length > 0) {
+      new Setting(containerEl)
+        .setName("Model")
+        .addDropdown((d) => {
+          for (const m of preset.models) {
+            d.addOption(m.value, m.label);
+          }
+          d.setValue(s.llm.model).onChange(async (v) => {
+            s.llm.model = v;
+            await this.plugin.saveSettings();
+          });
+        });
+    } else {
+      new Setting(containerEl)
+        .setName("Model")
+        .setDesc("模型名称")
+        .addText((t) =>
+          t.setValue(s.llm.model).onChange(async (v) => {
+            s.llm.model = v;
+            await this.plugin.saveSettings();
+          }),
+        );
+    }
 
     new Setting(containerEl).setName("Temperature").addText((t) =>
       t.setValue(String(s.llm.temperature)).onChange(async (v) => {
@@ -63,9 +97,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }),
     );
 
+    // Thinking mode — desc varies by provider
+    const thinkingDesc = s.llm.provider === "anthropic"
+      ? "启用 Anthropic Extended Thinking"
+      : s.llm.provider === "deepseek"
+        ? "启用推理模式 (DeepSeek V4 系列支持)"
+        : "启用推理/思考模式";
+
     new Setting(containerEl)
       .setName("Thinking mode")
-      .setDesc("启用推理模式 (DeepSeek V4 系列支持)")
+      .setDesc(thinkingDesc)
       .addToggle((t) =>
         t.setValue(s.llm.thinkingMode).onChange(async (v) => {
           s.llm.thinkingMode = v;
@@ -73,17 +114,23 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl).setName("Reasoning effort").addDropdown((d) =>
-      d
-        .addOption("low", "low")
-        .addOption("medium", "medium")
-        .addOption("high", "high")
-        .setValue(s.llm.reasoningEffort)
-        .onChange(async (v) => {
-          s.llm.reasoningEffort = v as any;
+    // Reasoning effort — provider-specific options
+    const efforts = preset?.reasoningEfforts ?? ["low", "medium", "high"];
+    new Setting(containerEl)
+      .setName("Reasoning effort")
+      .setDesc(s.llm.provider === "anthropic" ? "映射到 thinking budget 档位" : "推理力度")
+      .addDropdown((d) => {
+        for (const e of efforts) {
+          d.addOption(e, e);
+        }
+        if (!efforts.includes(s.llm.reasoningEffort)) {
+          s.llm.reasoningEffort = efforts[0];
+        }
+        d.setValue(s.llm.reasoningEffort).onChange(async (v) => {
+          s.llm.reasoningEffort = v;
           await this.plugin.saveSettings();
-        }),
-    );
+        });
+      });
 
     // ─── arXiv ────────────────────────────────────────
     containerEl.createEl("h2", { text: "arXiv 配置" });

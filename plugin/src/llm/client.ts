@@ -35,8 +35,23 @@ export class LlmClient {
           stream: true,
         };
         if (this.settings.thinkingMode) {
-          params.reasoning_effort = this.settings.reasoningEffort;
-          (params as any).extra_body = { thinking: { type: "enabled" } };
+          if (this.settings.provider === "anthropic") {
+            // Anthropic extended thinking via OpenAI-compat proxy
+            const budgets: Record<string, number> = {
+              low: 2048,
+              medium: 8192,
+              high: 16384,
+            };
+            (params as any).extra_body = {
+              thinking: {
+                type: "enabled",
+                budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192,
+              },
+            };
+          } else {
+            params.reasoning_effort = this.settings.reasoningEffort;
+            (params as any).extra_body = { thinking: { type: "enabled" } };
+          }
         } else {
           params.temperature = opts.temperature ?? this.settings.temperature;
         }
