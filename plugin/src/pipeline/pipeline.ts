@@ -1,4 +1,6 @@
 import type { Logger } from "../services/logger";
+import type { ProgressReporter } from "../services/progress";
+import { NoopProgressReporter } from "../services/progress";
 import type {
   ArxivSettings,
   AdvancedSettings,
@@ -32,10 +34,15 @@ export interface PipelineDeps {
   advanced: AdvancedSettings;
   output: OutputSettings;
   llmSettings: LlmSettings;
+  progress?: ProgressReporter;
 }
 
 export class ArxivPipeline {
-  constructor(private deps: PipelineDeps) {}
+  private progress: ProgressReporter;
+
+  constructor(private deps: PipelineDeps) {
+    this.progress = deps.progress ?? new NoopProgressReporter();
+  }
 
   async runForDate(dateStr: string): Promise<PipelineResult> {
     const { fetcher, logger } = this.deps;
@@ -48,6 +55,7 @@ export class ArxivPipeline {
     }
 
     // 1. Fetch /recent
+    this.progress.setStage("fetch-recent");
     let recentHtml: string;
     try {
       recentHtml = await fetcher.fetchRecent();
@@ -86,6 +94,7 @@ export class ArxivPipeline {
     }
 
     // 4. Enrich abstracts via Atom API (listings no longer include them)
+    this.progress.setStage("enrich-abstract");
     try {
       const ids = bucket.papers.map((p) => p.id);
       const absMap = await fetcher.fetchAbstractsByIds(ids);
@@ -103,6 +112,7 @@ export class ArxivPipeline {
     }
 
     // 5. LLM filter
+    this.progress.setStage("filter");
     const filtered = await filterPapers(bucket.papers, {
       llm: this.deps.llm,
       logger,
@@ -115,7 +125,9 @@ export class ArxivPipeline {
 
     // 6. Fetch content for each filtered paper
     const enriched: DailyPaperWithContent[] = [];
-    for (const p of filtered) {
+    for (let i = 0; i < filtered.length; i++) {
+      const p = filtered[i];
+      this.progress.setStage("fetch-content", i + 1, filtered.length);
       try {
         const c = await this.deps.paperFetcher.fetch(p.id, {
           isDetail: p.isDetail,
@@ -140,6 +152,7 @@ export class ArxivPipeline {
     }
 
     // 7. Daily summary
+    this.progress.setStage("summarize-daily");
     let dailySummary: string;
     try {
       dailySummary = await summarizeDaily(enriched, dateStr, {
@@ -159,11 +172,13 @@ export class ArxivPipeline {
 
     // 8. Detail reports
     const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
-    for (const p of detailPapers) {
+    for (let i = 0; i < detailPapers.length; i++) {
+      const p = detailPapers[i];
       if (await this.deps.writer.paperDetailExists(p.id)) {
         logger.info(`pipeline: detail ${p.id} already exists, skipping`);
         continue;
       }
+      this.progress.setStage("write-detail", i + 1, detailPapers.length);
       logger.info(`pipeline: detail report for ${p.id}`);
       try {
         const detail = await summarizePaperDetail(p, {

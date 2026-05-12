@@ -216,4 +216,56 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
   });
+
+  it("emits progress stages in order", async () => {
+    const d = makeDeps();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("筛选出相关论文")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## stub\n";
+      }
+      return "";
+    });
+    d.fetcher.fetchAbstractsByIds = vi
+      .fn()
+      .mockResolvedValue(new Map([[arxivId, "abstract"]]));
+
+    const calls: Array<[string, number?, number?]> = [];
+    const progress = {
+      setBatch: vi.fn(),
+      setStage: vi.fn((stage: string, current?: number, total?: number) =>
+        calls.push([stage, current, total]),
+      ),
+      setIdle: vi.fn(),
+      setDisabled: vi.fn(),
+    };
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      progress: progress as any,
+    });
+    await pipeline.runForDate(firstDateFromFixture());
+
+    const stages = calls.map((c) => c[0]);
+    expect(stages).toContain("fetch-recent");
+    expect(stages).toContain("enrich-abstract");
+    expect(stages).toContain("filter");
+    expect(stages).toContain("fetch-content");
+    expect(stages).toContain("summarize-daily");
+  });
 });
