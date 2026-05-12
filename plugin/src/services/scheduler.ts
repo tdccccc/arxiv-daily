@@ -8,6 +8,7 @@ import {
   parseHHMM,
   minutesSinceMidnight,
   daysBefore,
+  isWeekendInTz,
 } from "../utils/time";
 import type { PipelineResult } from "../pipeline/pipeline";
 
@@ -64,6 +65,27 @@ export class SchedulerService {
         timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
       });
     }
+  }
+
+  async tickToday(): Promise<
+    PipelineResult | { kind: "skipped"; reason: string } | undefined
+  > {
+    const s = this.deps.getSettings();
+    if (!s.schedule.enabled) {
+      return { kind: "skipped", reason: "disabled" };
+    }
+    const tz = s.arxiv.timezone;
+    const now = (this.deps.now ?? (() => new Date()))();
+    if (isWeekendInTz(now, tz)) {
+      return { kind: "skipped", reason: "weekend" };
+    }
+    const todayObj = todayInTz(now, tz);
+    const today = formatDate(todayObj);
+    const result = await this.tickDate(today, { now });
+    if (result === undefined) {
+      return { kind: "skipped", reason: "guarded" };
+    }
+    return result;
   }
 
   private async tickDate(
