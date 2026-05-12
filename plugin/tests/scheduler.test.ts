@@ -154,4 +154,60 @@ describe("SchedulerService", () => {
     await svc.tick();
     expect(runForDate).not.toHaveBeenCalled();
   });
+
+  it("runAllPending runs every pending date in window and skips done", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-12");
+    await store.setCompleted("2026-05-12", 3); // today: done, should skip
+    // 2026-05-11 and 2026-05-10 left pending
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-12T05:00:00Z"), // 13:00 Shanghai
+    });
+    const results = await svc.runAllPending();
+    expect(runForDate).toHaveBeenCalledTimes(2);
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-10");
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => r.result.kind === "completed")).toBe(true);
+  });
+
+  it("runAllPending ignores scheduled-time gate", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 0 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          runAtLocal: "23:59",
+          lookbackDays: 1,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-12T00:00:00Z"), // 08:00 Shanghai, pre runAtLocal
+    });
+    const results = await svc.runAllPending();
+    expect(runForDate).toHaveBeenCalledTimes(1);
+    expect(results[0].date).toBe("2026-05-12");
+  });
 });

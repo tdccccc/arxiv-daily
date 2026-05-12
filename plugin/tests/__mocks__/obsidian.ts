@@ -45,6 +45,23 @@ export class Modal {
   onClose(): void {}
 }
 
+export class MenuItem {
+  setTitle(_t: string) { return this; }
+  setIcon(_icon: string | null) { return this; }
+  setDisabled(_d: boolean) { return this; }
+  onClick(_cb: (evt: MouseEvent | KeyboardEvent) => any) { return this; }
+}
+
+export class Menu {
+  addItem(cb: (item: MenuItem) => any): this {
+    cb(new MenuItem());
+    return this;
+  }
+  addSeparator(): this { return this; }
+  showAtMouseEvent(_evt: MouseEvent): this { return this; }
+  showAtPosition(_p: { x: number; y: number }): this { return this; }
+}
+
 export async function requestUrl(_opts: any): Promise<{ status: number; text: string }> {
   return { status: 200, text: "" };
 }

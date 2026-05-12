@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Setting } from "obsidian";
+import { App, Menu, Modal, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
 
@@ -6,28 +6,51 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
   const today = () => formatDate(todayInTz(new Date(), tz()));
 
-  plugin.addCommand({
-    id: "arxiv-daily-run-now",
-    name: "Run now (today)",
-    callback: async () => {
-      const date = today();
+  async function runToday() {
+    const date = today();
+    new Notice(`arXiv Daily: running for ${date}…`);
+    const result = await plugin.scheduler.runForDateNow(date);
+    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+  }
+
+  async function runAllPending() {
+    new Notice(`arXiv Daily: running all pending in lookback…`);
+    const results = await plugin.scheduler.runAllPending();
+    if (results.length === 0) {
+      new Notice("arXiv Daily: nothing pending in lookback window");
+      return;
+    }
+    const summary = results
+      .map((r) => `${r.date}: ${describeResult(r.result)}`)
+      .join("\n");
+    new Notice(`arXiv Daily (lookback):\n${summary}`, 10_000);
+  }
+
+  function openDatePicker() {
+    new DatePickerModal(plugin.app, async (date) => {
+      if (!date) return;
       new Notice(`arXiv Daily: running for ${date}…`);
       const result = await plugin.scheduler.runForDateNow(date);
       new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
-    },
+    }).open();
+  }
+
+  plugin.addCommand({
+    id: "arxiv-daily-run-now",
+    name: "Run now (today)",
+    callback: runToday,
   });
 
   plugin.addCommand({
     id: "arxiv-daily-run-for-date",
     name: "Run for date…",
-    callback: () => {
-      new DatePickerModal(plugin.app, async (date) => {
-        if (!date) return;
-        new Notice(`arXiv Daily: running for ${date}…`);
-        const result = await plugin.scheduler.runForDateNow(date);
-        new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
-      }).open();
-    },
+    callback: openDatePicker,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-run-all-pending",
+    name: "Run all pending in lookback window",
+    callback: runAllPending,
   });
 
   plugin.addCommand({
@@ -50,11 +73,28 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     callback: () => new StateModal(plugin.app, plugin).open(),
   });
 
-  plugin.addRibbonIcon("calendar-clock", "arXiv Daily: Run now", async () => {
-    const date = today();
-    new Notice(`arXiv Daily: running for ${date}…`);
-    const result = await plugin.scheduler.runForDateNow(date);
-    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+  plugin.addRibbonIcon("calendar-clock", "arXiv Daily", (evt: MouseEvent) => {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("Run for today")
+        .setIcon("play")
+        .onClick(runToday),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Run all pending (lookback)")
+        .setIcon("layers")
+        .onClick(runAllPending),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Run for specific date…")
+        .setIcon("calendar")
+        .onClick(openDatePicker),
+    );
+    menu.showAtMouseEvent(evt);
   });
 }
 

@@ -85,6 +85,37 @@ export class SchedulerService {
     return result ?? { kind: "skipped", reason: "lock held" };
   }
 
+  /**
+   * Run every pending or failed_transient date within the current lookback
+   * window, skipping completed / failed_permanent / running entries. Bypasses
+   * the runAtLocal time gate (manual trigger). Returns one entry per attempted
+   * date for caller-side reporting.
+   */
+  async runAllPending(): Promise<Array<{ date: string; result: PipelineResult | { kind: "skipped"; reason: string } }>> {
+    const s = this.deps.getSettings();
+    const tz = s.arxiv.timezone;
+    const now = (this.deps.now ?? (() => new Date()))();
+    const todayObj = todayInTz(now, tz);
+
+    const results: Array<{
+      date: string;
+      result: PipelineResult | { kind: "skipped"; reason: string };
+    }> = [];
+
+    for (let i = 0; i < s.schedule.lookbackDays; i++) {
+      const date = formatDate(daysBefore(todayObj, i));
+      const entry = this.deps.store.get(date);
+      if (this.deps.store.isDone(date)) continue;
+      if (entry.status === "running") {
+        results.push({ date, result: { kind: "skipped", reason: "already running" } });
+        continue;
+      }
+      const r = await this.tryRun(date);
+      results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
+    }
+    return results;
+  }
+
   private async tryRun(date: string): Promise<PipelineResult | undefined> {
     return this.deps.lock.withLock(date, async () => {
       await this.deps.store.setRunning(date);
