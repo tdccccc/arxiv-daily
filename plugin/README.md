@@ -18,20 +18,36 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - Per-machine run state persistence; does not sync via the vault
 - Cross-platform (Windows / macOS / Linux)
 
-## Installation (dev / test)
+## Installation
 
-1. Build the plugin:
-   ```bash
-   cd plugin
-   npm install
-   npm run build
-   ```
-2. Copy `manifest.json`, `main.js`, and `styles.css` into
-   `<vault>/.obsidian/plugins/arxiv-daily/`.
-3. Enable the plugin in Obsidian → Settings → Community plugins.
-4. Open Settings → arXiv Daily and fill in the API Key. The default
-   endpoint and model are already DeepSeek-friendly
+### Option A — via BRAT (recommended for early adopters)
+
+1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin
+   from Obsidian's Community Plugins.
+2. Open BRAT settings → **Add Beta plugin** → paste
+   `tdccccc/arxiv-daily`.
+3. BRAT installs the latest release and offers updates as new versions ship.
+4. Enable **arXiv Daily** in Obsidian → Settings → Community plugins.
+5. Open Settings → arXiv Daily, fill in the API Key. The default endpoint
+   and model are already DeepSeek-friendly
    (`https://api.deepseek.com/v1`, `deepseek-v4-pro`).
+
+### Option B — manual install
+
+1. Download `manifest.json`, `main.js`, and `styles.css` from the
+   [latest release](https://github.com/tdccccc/arxiv-daily/releases).
+2. Drop them into `<vault>/.obsidian/plugins/arxiv-daily/`.
+3. Enable the plugin in Obsidian.
+
+### Option C — build from source
+
+```bash
+git clone https://github.com/tdccccc/arxiv-daily.git
+cd arxiv-daily/plugin
+npm install
+npm run build
+# then copy manifest.json + main.js + styles.css into the vault as in Option B
+```
 
 ## Settings overview
 

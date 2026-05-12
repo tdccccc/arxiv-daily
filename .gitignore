@@ -4,3 +4,7 @@ __pycache__/
 .cache/
 *.log
 .venv/
+
+# Plugin development scratch
+node_modules/
+plugin_test/
