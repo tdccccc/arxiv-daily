@@ -50,6 +50,8 @@ function makeDeps() {
       writes[`daily/${date}.md`] = "empty";
       return `daily/${date}.md`;
     }),
+    dailyExists: vi.fn(async () => false),
+    paperDetailExists: vi.fn(async () => false),
   };
   const llm = {
     call: vi.fn().mockResolvedValueOnce(JSON.stringify({ papers: [] })),
@@ -143,5 +145,28 @@ describe("ArxivPipeline", () => {
     expect((result as any).papersWritten).toBe(1);
     expect(d.fetcher.fetchAbstractsByIds).toHaveBeenCalled();
     expect(d.writer.writeDaily).toHaveBeenCalled();
+  });
+
+  it("short-circuits with completed when daily file already exists", async () => {
+    const d = makeDeps();
+    (d.writer as any).dailyExists = vi.fn().mockResolvedValue(true);
+    (d.writer as any).paperDetailExists = vi.fn().mockResolvedValue(false);
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const result = await pipeline.runForDate("2026-05-11");
+    expect(result.kind).toBe("completed");
+    expect((result as any).papersWritten).toBe(0);
+    expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
   });
 });

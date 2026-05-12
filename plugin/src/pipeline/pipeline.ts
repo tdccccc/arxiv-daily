@@ -41,6 +41,12 @@ export class ArxivPipeline {
     const { fetcher, logger } = this.deps;
     logger.info(`pipeline: start for ${dateStr}`);
 
+    // 0. Skip if daily already exists.
+    if (await this.deps.writer.dailyExists(dateStr)) {
+      logger.info(`pipeline: daily ${dateStr} already exists, skipping`);
+      return { kind: "completed", papersWritten: 0 };
+    }
+
     // 1. Fetch /recent
     let recentHtml: string;
     try {
