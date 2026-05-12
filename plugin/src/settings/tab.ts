@@ -13,6 +13,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const s = this.plugin.settings;
     containerEl.empty();
 
+    // ─── Enable toggle (top) ─────────────────────────
+    new Setting(containerEl)
+      .setName(`启用 · ${s.schedule.enabled ? "运行中" : "已暂停"}`)
+      .setDesc("启用后定时自动总结 arXiv 论文（周末跳过，等下个工作日）")
+      .addToggle((t) =>
+        t.setValue(s.schedule.enabled).onChange(async (v) => {
+          await this.plugin.setScheduleEnabled(v);
+          this.display();
+        }),
+      );
+
     // ─── LLM ──────────────────────────────────────────
     containerEl.createEl("h2", { text: "LLM 配置" });
 
@@ -325,15 +336,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setValue(s.output.papersDir).onChange(async (v) => {
           s.output.papersDir = v.trim();
           await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("启用自动调度")
-      .setDesc("启用后立即总结今天（周末跳过，等下个工作日）")
-      .addToggle((t) =>
-        t.setValue(s.schedule.enabled).onChange(async (v) => {
-          await this.plugin.setScheduleEnabled(v);
         }),
       );
 
