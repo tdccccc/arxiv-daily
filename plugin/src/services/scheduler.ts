@@ -11,6 +11,8 @@ import {
   isWeekendInTz,
 } from "../utils/time";
 import type { PipelineResult } from "../pipeline/pipeline";
+import type { ProgressReporter } from "./progress";
+import { NoopProgressReporter } from "./progress";
 
 export interface SchedulerDeps {
   getSettings: () => PluginSettings;
@@ -19,12 +21,16 @@ export interface SchedulerDeps {
   runForDate: (date: string) => Promise<PipelineResult>;
   logger: Logger;
   now?: () => Date;
+  progress?: ProgressReporter;
 }
 
 export class SchedulerService {
   private intervalHandle: number | null = null;
+  private readonly progress: ProgressReporter;
 
-  constructor(private deps: SchedulerDeps) {}
+  constructor(private deps: SchedulerDeps) {
+    this.progress = deps.progress ?? new NoopProgressReporter();
+  }
 
   start(): void {
     const min = this.deps.getSettings().schedule.tickIntervalMin;
@@ -57,11 +63,13 @@ export class SchedulerService {
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
       const date = formatDate(daysBefore(todayObj, i));
       const isToday = date === today;
+      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
       await this.tickDate(date, {
         now,
         timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
       });
     }
+    this.progress.setIdle(this.latestCompleted());
   }
 
   async tickToday(): Promise<
@@ -74,11 +82,14 @@ export class SchedulerService {
     const tz = s.arxiv.timezone;
     const now = (this.deps.now ?? (() => new Date()))();
     if (isWeekendInTz(now, tz)) {
+      this.progress.setIdle(this.latestCompleted(), "weekend");
       return { kind: "skipped", reason: "weekend" };
     }
     const todayObj = todayInTz(now, tz);
     const today = formatDate(todayObj);
+    this.progress.setBatch(1, 1, today);
     const result = await this.tickDate(today, { now });
+    this.progress.setIdle(this.latestCompleted());
     if (result === undefined) {
       return { kind: "skipped", reason: "guarded" };
     }
@@ -117,7 +128,9 @@ export class SchedulerService {
     if (entry.status === "running") {
       return { kind: "skipped", reason: "already running" };
     }
+    this.progress.setBatch(1, 1, date);
     const result = await this.tryRun(date);
+    this.progress.setIdle(this.latestCompleted());
     return result ?? { kind: "skipped", reason: "lock held" };
   }
 
@@ -146,9 +159,11 @@ export class SchedulerService {
         results.push({ date, result: { kind: "skipped", reason: "already running" } });
         continue;
       }
+      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
       const r = await this.tryRun(date);
       results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
     }
+    this.progress.setIdle(this.latestCompleted());
     return results;
   }
 
@@ -174,5 +189,14 @@ export class SchedulerService {
       }
       return result;
     });
+  }
+
+  private latestCompleted(): string | undefined {
+    const snap = this.deps.store.snapshot();
+    const done = Object.entries(snap)
+      .filter(([, v]) => v.status === "completed")
+      .map(([k]) => k)
+      .sort();
+    return done[done.length - 1];
   }
 }

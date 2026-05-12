@@ -333,4 +333,69 @@ describe("SchedulerService", () => {
     expect(runForDate).not.toHaveBeenCalled();
     svc.stop();
   });
+
+  it("tick calls progress.setBatch per date and setIdle at end", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const progress = {
+      setBatch: vi.fn(),
+      setStage: vi.fn(),
+      setIdle: vi.fn(),
+      setDisabled: vi.fn(),
+    };
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          runAtLocal: "00:01",
+          lookbackDays: 3,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+      progress: progress as any,
+    });
+    await svc.tick();
+    expect(progress.setBatch).toHaveBeenCalledTimes(3);
+    expect(progress.setBatch).toHaveBeenCalledWith(1, 3, "2026-05-11");
+    expect(progress.setBatch).toHaveBeenCalledWith(2, 3, "2026-05-10");
+    expect(progress.setBatch).toHaveBeenCalledWith(3, 3, "2026-05-09");
+    expect(progress.setIdle).toHaveBeenCalled();
+  });
+
+  it("tickToday weekend skip emits setIdle with weekend reason", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi.fn();
+    const progress = {
+      setBatch: vi.fn(),
+      setStage: vi.fn(),
+      setIdle: vi.fn(),
+      setDisabled: vi.fn(),
+    };
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-09T05:00:00Z"),
+      progress: progress as any,
+    });
+    await svc.tickToday();
+    expect(progress.setIdle).toHaveBeenCalledWith(undefined, "weekend");
+    expect(progress.setBatch).not.toHaveBeenCalled();
+  });
 });
