@@ -5,6 +5,7 @@ import { ARXIV_CATEGORIES } from "./arxiv-categories";
 import { TOPIC_TEMPLATES } from "./topic-templates";
 import type { Topic } from "./types";
 import { slugify } from "../utils/slugify";
+import { validateFilterConfig } from "./validation";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
@@ -15,6 +16,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const s = this.plugin.settings;
     containerEl.empty();
+
+    // ─── Config-invalid banner (top) ─────────────────
+    const v = validateFilterConfig(s);
+    if (!v.ok) {
+      const banner = containerEl.createDiv();
+      banner.style.border = "1px solid var(--text-error)";
+      banner.style.background = "var(--background-modifier-error)";
+      banner.style.borderRadius = "6px";
+      banner.style.padding = "0.6em 0.8em";
+      banner.style.marginBottom = "0.75em";
+      banner.createEl("strong", { text: "Configuration incomplete" });
+      const ul = banner.createEl("ul");
+      ul.style.margin = "0.3em 0 0 1.2em";
+      ul.style.padding = "0";
+      for (const r of v.reasons) ul.createEl("li", { text: r });
+    }
 
     // ─── Enable toggle (top) ─────────────────────────
     new Setting(containerEl)

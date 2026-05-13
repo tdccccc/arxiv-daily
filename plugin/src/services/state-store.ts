@@ -30,7 +30,18 @@ export class StateStore {
 
   isDone(date: string): boolean {
     const s = this.get(date).status;
-    return s === "completed" || s === "failed_permanent";
+    return s === "completed" || s === "failed_permanent" || s === "skipped";
+  }
+
+  async setSkipped(date: string, reason: string): Promise<void> {
+    const prev = this.get(date);
+    this.state[date] = {
+      ...prev,
+      status: "skipped",
+      lastAttempt: Date.now(),
+      error: reason,
+    };
+    await this.saveFn({ runState: this.state });
   }
 
   async setRunning(date: string): Promise<void> {

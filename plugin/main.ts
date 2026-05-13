@@ -1,16 +1,18 @@
-import { Plugin } from "obsidian";
+import { Notice, Plugin } from "obsidian";
 import * as path from "node:path";
 import * as os from "node:os";
 import { DEFAULT_SETTINGS } from "./src/settings/defaults";
 import type { PluginSettings, RunState } from "./src/settings/types";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { migrateArxivSettings } from "./src/settings/migration";
+import { validateFilterConfig } from "./src/settings/validation";
 import { Logger } from "./src/services/logger";
 import { StateStore } from "./src/services/state-store";
 import { RunLock } from "./src/services/run-lock";
 import { SchedulerService } from "./src/services/scheduler";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "./src/services/progress";
+import { chooseModal } from "./src/services/modal";
 import { LlmClient } from "./src/llm/client";
 import { ArxivFetcher } from "./src/pipeline/arxiv-fetcher";
 import { HtmlCache } from "./src/pipeline/html-cache";
@@ -19,6 +21,7 @@ import { MarkdownWriter } from "./src/pipeline/markdown-writer";
 import { ArxivPipeline } from "./src/pipeline/pipeline";
 import { ManualFetchService } from "./src/services/manual-fetch";
 import { registerCommands } from "./src/commands";
+import { todayInTz, formatDate } from "./src/utils/time";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -102,23 +105,48 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled) this.scheduler.start();
   }
 
-  async setScheduleEnabled(enabled: boolean): Promise<void> {
-    if (this.settings.schedule.enabled === enabled) return;
-    this.settings.schedule.enabled = enabled;
-    await this.saveSettings();
+  async setScheduleEnabled(enabled: boolean): Promise<boolean> {
+    if (this.settings.schedule.enabled === enabled) return true;
+
     if (enabled) {
+      const v = validateFilterConfig(this.settings);
+      if (!v.ok) {
+        new Notice(`Cannot enable arXiv Daily:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
+        return false;
+      }
+      const choice = await chooseModal(
+        this.app,
+        "Enable arXiv Daily",
+        "Scheduler will check for new papers daily. Run today's summary right now?",
+        [
+          { label: "Cancel", value: "cancel" },
+          { label: "Skip today", value: "skip" },
+          { label: "Run today", value: "run", cta: true },
+        ],
+      );
+      if (choice === null || choice === "cancel") return false;
+
+      this.settings.schedule.enabled = true;
+      await this.saveSettings();
       this.scheduler.start();
-      const result = await this.scheduler.tickToday();
-      if (result && (result as any).kind === "skipped") {
-        const reason = (result as any).reason;
-        if (reason === "weekend") {
+      if (choice === "skip") {
+        const today = formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
+        await this.stateStore.setSkipped(today, "user opted out at enable time");
+        this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+      } else {
+        const result = await this.scheduler.tickToday();
+        if (result && (result as any).kind === "skipped" && (result as any).reason === "weekend") {
           this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
         }
       }
-    } else {
-      this.scheduler.stop();
-      this.progress.setDisabled();
+      return true;
     }
+
+    this.settings.schedule.enabled = false;
+    await this.saveSettings();
+    this.scheduler.stop();
+    this.progress.setDisabled();
+    return true;
   }
 
   private async loadSettingsAndState(): Promise<void> {

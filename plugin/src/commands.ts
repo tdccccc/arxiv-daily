@@ -1,12 +1,32 @@
 import { App, Menu, Modal, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
+import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
   const today = () => formatDate(todayInTz(new Date(), tz()));
 
+  function gateFilter(): boolean {
+    const v = validateFilterConfig(plugin.settings);
+    if (!v.ok) {
+      new Notice(`arXiv Daily — cannot run:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
+      return false;
+    }
+    return true;
+  }
+
+  function gateLlm(): boolean {
+    const v = validateLlmConfig(plugin.settings);
+    if (!v.ok) {
+      new Notice(`arXiv Daily — cannot run:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
+      return false;
+    }
+    return true;
+  }
+
   async function runToday() {
+    if (!gateFilter()) return;
     const date = today();
     new Notice(`arXiv Daily: running for ${date}…`);
     const result = await plugin.scheduler.runForDateNow(date);
@@ -14,6 +34,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   async function runAllPending() {
+    if (!gateFilter()) return;
     new Notice(`arXiv Daily: running all pending in lookback…`);
     const results = await plugin.scheduler.runAllPending();
     if (results.length === 0) {
@@ -27,6 +48,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   function openDatePicker() {
+    if (!gateFilter()) return;
     new DatePickerModal(plugin.app, async (date) => {
       if (!date) return;
       new Notice(`arXiv Daily: running for ${date}…`);
@@ -36,6 +58,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   function openArxivIdPicker() {
+    if (!gateLlm()) return;
     new ArxivIdModal(plugin.app, async (raw) => {
       if (!raw) return;
       new Notice(`arXiv Daily: summarizing ${raw}…`);
@@ -107,10 +130,10 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setTitle(enabled ? "Disable" : "Enable")
         .setIcon(enabled ? "pause" : "play")
         .onClick(async () => {
-          await plugin.setScheduleEnabled(!enabled);
-          new Notice(
-            `arXiv Daily: ${!enabled ? "enabled" : "disabled"}`,
-          );
+          const applied = await plugin.setScheduleEnabled(!enabled);
+          if (applied) {
+            new Notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
+          }
         }),
     );
 

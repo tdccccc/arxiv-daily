@@ -59,7 +59,8 @@ export type RunStatus =
   | "running"
   | "completed"
   | "failed_transient"
-  | "failed_permanent";
+  | "failed_permanent"
+  | "skipped";
 
 export interface RunStateEntry {
   status: RunStatus;
