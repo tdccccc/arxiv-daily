@@ -14,6 +14,23 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  /** Append a circled "?" to a Setting's name with a native browser tooltip. */
+  private attachHelp(setting: Setting, text: string): Setting {
+    const q = setting.nameEl.createEl("span", { text: "?" });
+    q.style.cssText =
+      "display:inline-flex;align-items:center;justify-content:center;" +
+      "width:1.1em;height:1.1em;margin-left:0.4em;border:1px solid currentColor;" +
+      "border-radius:50%;opacity:0.55;cursor:help;font-size:0.75em;font-weight:normal;";
+    q.title = text;
+    return setting;
+  }
+
+  /** Inline muted hint, used inside topic cards under a label. */
+  private hint(parent: HTMLElement, text: string): void {
+    const h = parent.createEl("div", { text });
+    h.style.cssText = "font-size:0.82em;opacity:0.65;margin-bottom:0.4em;";
+  }
+
   display(): void {
     const { containerEl } = this;
     const s = this.plugin.settings;
@@ -78,6 +95,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // API Key
     new Setting(containerEl)
       .setName("API Key")
+      .setDesc("Required. Your LLM provider's API key. Stored locally in data.json.")
       .addText((t) => {
         t.inputEl.type = "password";
         t.setPlaceholder("sk-...")
@@ -91,6 +109,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Base URL — always editable, auto-filled by provider
     new Setting(containerEl)
       .setName("Base URL")
+      .setDesc("LLM endpoint base. Auto-filled when you pick a provider; override for self-hosted or proxy.")
       .addText((t) =>
         t.setValue(s.llm.baseUrl).onChange(async (v) => {
           s.llm.baseUrl = v;
@@ -103,6 +122,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (preset && preset.models.length > 0) {
       new Setting(containerEl)
         .setName("Model")
+        .setDesc("Pick a preset or type a custom model ID in the right-hand box.")
         .addDropdown((d) => {
           for (const m of preset.models) {
             d.addOption(m.value, m.label);
@@ -125,6 +145,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     } else {
       new Setting(containerEl)
         .setName("Model")
+        .setDesc("Model ID for the custom provider.")
         .addText((t) =>
           t.setValue(s.llm.model).onChange(async (v) => {
             s.llm.model = v;
@@ -133,18 +154,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         );
     }
 
-    new Setting(containerEl).setName("Temperature").addText((t) =>
-      t.setValue(String(s.llm.temperature)).onChange(async (v) => {
-        s.llm.temperature = Number(v) || 0;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Temperature").addText((t) =>
+        t.setValue(String(s.llm.temperature)).onChange(async (v) => {
+          s.llm.temperature = Number(v) || 0;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "Sampling temperature. 0 = deterministic, 1+ = creative. Default 0.3.",
     );
 
-    new Setting(containerEl).setName("Timeout (sec)").addText((t) =>
-      t.setValue(String(s.llm.timeoutMs / 1000)).onChange(async (v) => {
-        s.llm.timeoutMs = (Number(v) || 300) * 1000;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Timeout (sec)").addText((t) =>
+        t.setValue(String(s.llm.timeoutMs / 1000)).onChange(async (v) => {
+          s.llm.timeoutMs = (Number(v) || 300) * 1000;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "Per-LLM-call timeout in seconds. Raise this if your model is slow (e.g. reasoning models).",
     );
 
     // Thinking mode — desc varies by provider
@@ -196,6 +223,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Category — grouped dropdown + custom text
     new Setting(containerEl)
       .setName("arXiv Category")
+      .setDesc("Which arXiv listing to fetch each day (e.g. astro-ph, cs.CL). The dropdown groups by field.")
       .addDropdown((d) => {
         for (const group of ARXIV_CATEGORIES) {
           const optgroup = d.selectEl.createEl("optgroup");
@@ -292,6 +320,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Timezone")
+      .setDesc("Used for the daily cutoff and the runAtLocal scheduler gate.")
       .addDropdown((d) => {
         const zones = [
           { v: "Asia/Shanghai", l: "Shanghai (UTC+8)" },
@@ -346,19 +375,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl).setName("Run time (HH:MM)").addText((t) =>
-      t.setValue(s.schedule.runAtLocal).onChange(async (v) => {
-        s.schedule.runAtLocal = v.trim();
-        await this.plugin.saveSettings();
-      }),
-    );
+    new Setting(containerEl)
+      .setName("Run time (HH:MM)")
+      .setDesc("Local time the scheduler aims to fire today's batch. Earlier ticks for today are skipped.")
+      .addText((t) =>
+        t.setValue(s.schedule.runAtLocal).onChange(async (v) => {
+          s.schedule.runAtLocal = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
 
-    new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
-      t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
-        s.schedule.tickIntervalMin = Number(v) || 20;
-        await this.plugin.saveSettings();
-        this.plugin.restartScheduler();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
+        t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
+          s.schedule.tickIntervalMin = Number(v) || 20;
+          await this.plugin.saveSettings();
+          this.plugin.restartScheduler();
+        }),
+      ),
+      "How often the scheduler interval wakes up to check pending dates. Default 20 minutes.",
     );
 
     new Setting(containerEl)
@@ -374,45 +409,60 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── Advanced ─────────────────────────────────────
     containerEl.createEl("h2", { text: "Advanced" });
 
-    new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
-      t.setValue(String(s.advanced.requestDelayMs)).onChange(async (v) => {
-        s.advanced.requestDelayMs = Number(v) || 3000;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
+        t.setValue(String(s.advanced.requestDelayMs)).onChange(async (v) => {
+          s.advanced.requestDelayMs = Number(v) || 3000;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "Pause between HTTP requests to arXiv. Lower = faster fetch but rougher on the server.",
     );
 
-    new Setting(containerEl).setName("Cache expiry (days)").addText((t) =>
-      t.setValue(String(s.advanced.cacheExpiryDays)).onChange(async (v) => {
-        s.advanced.cacheExpiryDays = Number(v) || 7;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Cache expiry (days)").addText((t) =>
+        t.setValue(String(s.advanced.cacheExpiryDays)).onChange(async (v) => {
+          s.advanced.cacheExpiryDays = Number(v) || 7;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "How long to keep cached paper HTML on disk before re-fetching.",
     );
 
-    new Setting(containerEl).setName("Section char limit").addText((t) =>
-      t.setValue(String(s.advanced.sectionCharLimit)).onChange(async (v) => {
-        s.advanced.sectionCharLimit = Number(v) || 8000;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Section char limit").addText((t) =>
+        t.setValue(String(s.advanced.sectionCharLimit)).onChange(async (v) => {
+          s.advanced.sectionCharLimit = Number(v) || 8000;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "Max characters per paper section sent to the LLM. Lower for small-context models.",
     );
 
-    new Setting(containerEl).setName("Paper char limit").addText((t) =>
-      t.setValue(String(s.advanced.paperCharLimit)).onChange(async (v) => {
-        s.advanced.paperCharLimit = Number(v) || 50000;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Paper char limit").addText((t) =>
+        t.setValue(String(s.advanced.paperCharLimit)).onChange(async (v) => {
+          s.advanced.paperCharLimit = Number(v) || 50000;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "Max characters of full-text body fed to the per-paper detail prompt.",
     );
 
-    new Setting(containerEl).setName("Daily char limit").addText((t) =>
-      t.setValue(String(s.advanced.dailyCharLimit)).onChange(async (v) => {
-        s.advanced.dailyCharLimit = Number(v) || 400000;
-        await this.plugin.saveSettings();
-      }),
+    this.attachHelp(
+      new Setting(containerEl).setName("Daily char limit").addText((t) =>
+        t.setValue(String(s.advanced.dailyCharLimit)).onChange(async (v) => {
+          s.advanced.dailyCharLimit = Number(v) || 400000;
+          await this.plugin.saveSettings();
+        }),
+      ),
+      "When total filtered papers exceed this many chars, split the daily summary into batched LLM calls.",
     );
 
     this.textareaSetting(
       containerEl,
       "Skip sections (one per line)",
-      "",
+      "Section headings to drop before sending the paper to the LLM (e.g. References, Acknowledgments).",
       s.advanced.skipSections.join("\n"),
       async (v) => {
         s.advanced.skipSections = v
@@ -426,7 +476,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.textareaSetting(
       containerEl,
       "Priority sections (one per line)",
-      "",
+      "Section headings to keep first when trimming to fit the char limit (e.g. Abstract, Conclusion).",
       s.advanced.prioritySections.join("\n"),
       async (v) => {
         s.advanced.prioritySections = v
@@ -437,11 +487,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       },
     );
 
-    new Setting(containerEl).setName("Log level").addDropdown((d) =>
-      d
-        .addOption("debug", "debug")
-        .addOption("info", "info")
-        .addOption("warn", "warn")
+    this.attachHelp(
+      new Setting(containerEl).setName("Log level").addDropdown((d) =>
+        d
+          .addOption("debug", "debug")
+          .addOption("info", "info")
+          .addOption("warn", "warn")
         .addOption("error", "error")
         .setValue(s.advanced.logLevel)
         .onChange(async (v) => {
@@ -449,6 +500,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.plugin.logger.setLevel(v as any);
         }),
+      ),
+      "Console log verbosity. 'debug' is noisy; 'info' is the default.",
     );
   }
 
@@ -502,6 +555,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     nameRow.style.marginBottom = "0.5em";
     const nameLabel = nameRow.createEl("label", { text: "Name" });
     nameLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    this.hint(nameRow, "Heading text used as the section title in the daily report.");
     const nameInput = nameRow.createEl("input", { type: "text" });
     nameInput.value = topic.name;
     nameInput.style.width = "100%";
@@ -512,6 +566,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     tagRow.style.marginBottom = "0.5em";
     const tagLabel = tagRow.createEl("label", { text: "Tag" });
     tagLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.");
     const tagInput = tagRow.createEl("input", { type: "text" });
     tagInput.value = topic.tag;
     tagInput.style.width = "60%";
@@ -552,6 +607,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     descRow.style.marginBottom = "0.5em";
     const descLabel = descRow.createEl("label", { text: "Description" });
     descLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    this.hint(descRow, "Plain-language description of what belongs here. The LLM reads this to decide which papers go into this topic.");
     const descArea = descRow.createEl("textarea");
     descArea.value = topic.description;
     descArea.rows = 3;
@@ -564,6 +620,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
+    this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
     const footer = form.createDiv();
     footer.style.display = "flex";
     footer.style.justifyContent = "space-between";
