@@ -58,6 +58,8 @@
 
 ## 安装
 
+> 需要先装 [Obsidian](https://obsidian.md/download)（桌面版）。
+
 ### 1. 装 BRAT 插件
 
 在 Obsidian 里 **Settings → Community plugins → Browse**，搜索 `BRAT`，Install → Enable。
