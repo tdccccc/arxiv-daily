@@ -8,6 +8,8 @@ import { slugify } from "../utils/slugify";
 import { validateFilterConfig } from "./validation";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
+  private expandedTopics = new Set<string>();
+
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app, plugin);
   }
@@ -266,13 +268,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const addBtn = controlsRow.createEl("button", { text: "+ Add Topic" });
     addBtn.onclick = async () => {
+      const newId = crypto.randomUUID();
       s.arxiv.topics.push({
-        id: crypto.randomUUID(),
+        id: newId,
         name: "",
         tag: `topic-${s.arxiv.topics.length + 1}`,
         description: "",
         detail: false,
       });
+      this.expandedTopics.add(newId);
       await this.plugin.saveSettings();
       this.display();
     };
@@ -458,14 +462,65 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
     const topic = topics[index];
+    const isExpanded = this.expandedTopics.has(topic.id);
+
     const card = container.createDiv();
     card.style.border = "1px solid var(--background-modifier-border)";
     card.style.borderRadius = "6px";
-    card.style.padding = "0.75em";
-    card.style.marginBottom = "0.75em";
+    card.style.padding = "0.5em 0.75em";
+    card.style.marginBottom = "0.5em";
+
+    // ─── Header row (always visible, clickable) ────────────
+    const header = card.createDiv();
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.gap = "0.5em";
+    header.style.cursor = "pointer";
+    header.style.userSelect = "none";
+
+    const caret = header.createEl("span", { text: isExpanded ? "▾" : "▸" });
+    caret.style.opacity = "0.6";
+    caret.style.width = "1em";
+
+    const titleSpan = header.createEl("span", {
+      text: topic.name.trim() || "(unnamed)",
+    });
+    titleSpan.style.fontWeight = "600";
+    if (!topic.name.trim()) titleSpan.style.opacity = "0.5";
+
+    if (topic.detail) {
+      const star = header.createEl("span", { text: "★" });
+      star.style.color = "var(--text-accent)";
+      star.title = "Detail report enabled";
+    }
+
+    if (topic.tag) {
+      const tagChip = header.createEl("span", { text: "#" + topic.tag });
+      tagChip.style.opacity = "0.55";
+      tagChip.style.fontSize = "0.85em";
+    }
+
+    const spacer = header.createDiv();
+    spacer.style.flex = "1";
+
+    const delBtn = header.createEl("button", { text: "×" });
+    delBtn.title = "Delete topic";
+    delBtn.style.padding = "0 0.5em";
+    delBtn.onclick = async (e) => {
+      e.stopPropagation();
+      topics.splice(index, 1);
+      this.expandedTopics.delete(topic.id);
+      await this.plugin.saveSettings();
+      this.display();
+    };
+
+    // ─── Expanded form (toggled via display) ────────────────
+    const form = card.createDiv();
+    form.style.display = isExpanded ? "" : "none";
+    form.style.marginTop = "0.6em";
 
     // Name row
-    const nameRow = card.createDiv();
+    const nameRow = form.createDiv();
     nameRow.style.marginBottom = "0.5em";
     const nameLabel = nameRow.createEl("label", { text: "Name" });
     nameLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
@@ -475,7 +530,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     nameInput.placeholder = "e.g. Photometric Redshift";
 
     // Tag row
-    const tagRow = card.createDiv();
+    const tagRow = form.createDiv();
     tagRow.style.marginBottom = "0.5em";
     const tagLabel = tagRow.createEl("label", { text: "Tag" });
     tagLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
@@ -490,6 +545,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
     refreshAutoBadge();
 
+    const refreshHeader = () => {
+      titleSpan.textContent = topic.name.trim() || "(unnamed)";
+      titleSpan.style.opacity = topic.name.trim() ? "" : "0.5";
+    };
+
     nameInput.oninput = async () => {
       const wasAuto = topic.tag === slugify(topic.name);
       topic.name = nameInput.value;
@@ -499,6 +559,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         tagInput.value = topic.tag;
       }
       refreshAutoBadge();
+      refreshHeader();
       await this.plugin.saveSettings();
     };
 
@@ -508,8 +569,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       await this.plugin.saveSettings();
     };
 
-    // Description row
-    const descRow = card.createDiv();
+    // Description
+    const descRow = form.createDiv();
     descRow.style.marginBottom = "0.5em";
     const descLabel = descRow.createEl("label", { text: "Description" });
     descLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
@@ -524,10 +585,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       await this.plugin.saveSettings();
     };
 
-    // Footer: detail toggle + delete
-    const footer = card.createDiv();
+    // Detail toggle
+    const footer = form.createDiv();
     footer.style.display = "flex";
-    footer.style.justifyContent = "space-between";
     footer.style.alignItems = "center";
 
     const detailLabel = footer.createEl("label");
@@ -539,13 +599,30 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     detailCheckbox.onchange = async () => {
       topic.detail = detailCheckbox.checked;
       await this.plugin.saveSettings();
+      // Refresh header star indicator without full re-render
+      header.querySelectorAll("span").forEach((el) => {
+        if (el.textContent === "★") el.remove();
+      });
+      if (topic.detail) {
+        const star = document.createElement("span");
+        star.textContent = "★";
+        star.style.color = "var(--text-accent)";
+        star.title = "Detail report enabled";
+        header.insertBefore(star, spacer);
+      }
     };
 
-    const delBtn = footer.createEl("button", { text: "Delete" });
-    delBtn.onclick = async () => {
-      topics.splice(index, 1);
-      await this.plugin.saveSettings();
-      this.display();
+    // Toggle expand/collapse on header click
+    header.onclick = () => {
+      if (this.expandedTopics.has(topic.id)) {
+        this.expandedTopics.delete(topic.id);
+        form.style.display = "none";
+        caret.textContent = "▸";
+      } else {
+        this.expandedTopics.add(topic.id);
+        form.style.display = "";
+        caret.textContent = "▾";
+      }
     };
   }
 
