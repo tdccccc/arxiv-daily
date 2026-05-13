@@ -37,26 +37,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
       },
     ],
     timezone: "Asia/Shanghai",
-    // Legacy — removed in Task 9.
-    researchInterests:
-      "1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较\n" +
-      "2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天\n" +
-      "3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等",
-    detailCriteria:
-      "- Photo-z 方法论文（提出或比较 photo-z 方法/目录）\n" +
-      "- 星系团巡天/目录/质量标定论文",
-    detailCategories: ["photo-z", "galaxy-cluster"],
-    categoryTagMap: {
-      "photo-z": "photo-z",
-      "galaxy-cluster": "galaxy-cluster",
-      "ml": "ml",
-    },
-    categoryDisplayMap: {
-      "galaxy-cluster": "Galaxy Cluster 相关",
-      "photo-z": "Photo-z 相关",
-      "ml": "ML 相关",
-      "other": "其他",
-    },
   },
   output: {
     dailyDir: "arxiv-daily/daily",

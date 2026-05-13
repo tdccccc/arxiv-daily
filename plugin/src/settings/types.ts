@@ -21,12 +21,6 @@ export interface ArxivSettings {
   category: string;
   topics: Topic[];
   timezone: string;
-  // Legacy — removed in Task 9 once all consumers read from `topics`.
-  researchInterests?: string;
-  detailCriteria?: string;
-  detailCategories?: string[];
-  categoryTagMap?: Record<string, string>;
-  categoryDisplayMap?: Record<string, string>;
 }
 
 export interface OutputSettings {
