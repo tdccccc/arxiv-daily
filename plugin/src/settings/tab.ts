@@ -1,4 +1,4 @@
-import { App, Modal, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting, setTooltip } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
 import { ARXIV_CATEGORIES } from "./arxiv-categories";
@@ -14,14 +14,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  /** Append a circled "?" to a Setting's name with a native browser tooltip. */
+  /** Append a circled "?" to a Setting's name with an Obsidian-styled tooltip. */
   private attachHelp(setting: Setting, text: string): Setting {
     const q = setting.nameEl.createEl("span", { text: "?" });
     q.style.cssText =
       "display:inline-flex;align-items:center;justify-content:center;" +
       "width:1.1em;height:1.1em;margin-left:0.4em;border:1px solid currentColor;" +
       "border-radius:50%;opacity:0.55;cursor:help;font-size:0.75em;font-weight:normal;";
-    q.title = text;
+    setTooltip(q, text, { placement: "top" });
     return setting;
   }
 
@@ -223,7 +223,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Category — grouped dropdown + custom text
     new Setting(containerEl)
       .setName("arXiv Category")
-      .setDesc("Which arXiv listing to fetch each day (e.g. astro-ph, cs.CL). The dropdown groups by field.")
       .addDropdown((d) => {
         for (const group of ARXIV_CATEGORIES) {
           const optgroup = d.selectEl.createEl("optgroup");
@@ -320,7 +319,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Timezone")
-      .setDesc("Used for the daily cutoff and the runAtLocal scheduler gate.")
       .addDropdown((d) => {
         const zones = [
           { v: "Asia/Shanghai", l: "Shanghai (UTC+8)" },
@@ -459,32 +457,38 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "When total filtered papers exceed this many chars, split the daily summary into batched LLM calls.",
     );
 
-    this.textareaSetting(
-      containerEl,
-      "Skip sections (one per line)",
-      "Section headings to drop before sending the paper to the LLM (e.g. References, Acknowledgments).",
-      s.advanced.skipSections.join("\n"),
-      async (v) => {
-        s.advanced.skipSections = v
-          .split("\n")
-          .map((x) => x.trim())
-          .filter(Boolean);
-        await this.plugin.saveSettings();
-      },
+    this.attachHelp(
+      this.textareaSetting(
+        containerEl,
+        "Skip sections (one per line)",
+        "",
+        s.advanced.skipSections.join("\n"),
+        async (v) => {
+          s.advanced.skipSections = v
+            .split("\n")
+            .map((x) => x.trim())
+            .filter(Boolean);
+          await this.plugin.saveSettings();
+        },
+      ),
+      "Section headings to drop before sending the paper to the LLM (e.g. References, Acknowledgments). One per line, case-insensitive.",
     );
 
-    this.textareaSetting(
-      containerEl,
-      "Priority sections (one per line)",
+    this.attachHelp(
+      this.textareaSetting(
+        containerEl,
+        "Priority sections (one per line)",
+        "",
+        s.advanced.prioritySections.join("\n"),
+        async (v) => {
+          s.advanced.prioritySections = v
+            .split("\n")
+            .map((x) => x.trim())
+            .filter(Boolean);
+          await this.plugin.saveSettings();
+        },
+      ),
       "Section headings to keep first when trimming to fit the char limit (e.g. Abstract, Conclusion).",
-      s.advanced.prioritySections.join("\n"),
-      async (v) => {
-        s.advanced.prioritySections = v
-          .split("\n")
-          .map((x) => x.trim())
-          .filter(Boolean);
-        await this.plugin.saveSettings();
-      },
     );
 
     this.attachHelp(
@@ -708,8 +712,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     desc: string,
     value: string,
     onChange: (v: string) => Promise<void>,
-  ) {
-    new Setting(container)
+  ): Setting {
+    return new Setting(container)
       .setName(name)
       .setDesc(desc)
       .addTextArea((t) => {
