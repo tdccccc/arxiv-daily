@@ -109,6 +109,84 @@
 
 ---
 
+## v0.1.2
+
+**Spec:** [`docs/superpowers/specs/2026-05-13-arxiv-topics-redesign-design.md`](../specs/2026-05-13-arxiv-topics-redesign-design.md)
+**Plan:** [`docs/superpowers/plans/2026-05-13-arxiv-topics-redesign-plan.md`](./2026-05-13-arxiv-topics-redesign-plan.md)
+**Result:** v0.1.2 shipped — https://github.com/tdccccc/arxiv-daily/releases/tag/v0.1.2
+**Started:** 2026-05-13
+**Finished:** 2026-05-13
+
+### Changes
+
+**Settings UX — topic-cards model (the headline change):**
+- `arxiv.topics: Topic[]` replaces five coupled legacy fields
+  (`researchInterests` / `detailCriteria` / `detailCategories` /
+  `categoryTagMap` / `categoryDisplayMap`)
+- Each topic owns `name` (heading text), `tag` (slug, auto-derived
+  from name on creation), `description` (LLM filter input), and
+  `detail` (toggle per topic for deep-dive reports)
+- Filter prompt rebuilt around topic list; LLM returns chosen tag or
+  `"skip"` for irrelevant papers (no more silent "Other" bucket)
+- Summariser and markdown writer read display name / tag from topics
+- Empty topics short-circuits the filter so the LLM is never called
+  with an empty target list
+- Lossy one-shot migration from v0.1.x: detailCategories ↦ topics,
+  free-form researchInterests / detailCriteria text discarded
+
+**Topic-card UI:**
+- Collapsible cards (default = one-line summary with name, ★ for
+  detail-enabled, `#tag` chip; click to expand the full edit form)
+- Auto-expand on `+ Add Topic`, in-memory expand state survives
+  sibling delete/add
+- Delete button only visible when expanded (prevents accidental
+  clicks on the collapsed row)
+- Live name → header sync as the user types
+- Five preset templates shipped in source (Blank, Astrophysics + ML,
+  NLP / LLMs, Computer Vision, Bioinformatics); Load Template
+  dropdown confirms before replacing a non-empty list
+
+**Safer defaults / onboarding:**
+- `DEFAULT_SETTINGS.arxiv.topics` is `[]` so a fresh install never
+  silently filters for the original author's research areas
+- Empty-state hint card pointing new users at the Load Template
+  dropdown and `+ Add Topic` button
+- `validateLlmConfig` / `validateFilterConfig` surface missing
+  required fields (API Key, Base URL, Model, Topics)
+- Settings panel renders a red banner with the missing-field list
+- `setScheduleEnabled` refuses to enable when the config is invalid
+  and now returns `boolean` so ribbon-menu callers don't post a
+  misleading "enabled" notice on cancel
+- Manual commands gate on config validity too (filter config for
+  Run today / Run all pending / Run for date; LLM-only for
+  Summarize by ID)
+- First-enable confirmation modal: Run today / Skip today / Cancel
+- New `skipped` RunStatus (recognised by `isDone`) so "Skip today"
+  is not re-tried by remaining interval ticks within the same day
+
+**Help text:**
+- Tier 1 (inline `.setDesc`) on first-time-setup essentials
+  (API Key, Base URL, Model, Run time) and on topic-card field
+  labels (Name, Tag, Description, Detail report)
+- Tier 2 — circled `?` badge with Obsidian's `setTooltip` — on
+  advanced fields (Temperature, Timeout, Tick interval, Request
+  delay, Cache expiry, three char limits, Skip / Priority sections,
+  Log level)
+
+**Other:**
+- Research Topics block wrapped in Obsidian `Setting` components so
+  it inherits the standard horizontal indent and vertical rhythm
+- README updated to describe the new topic-cards UI and the
+  empty-by-default policy
+
+### Test coverage
+
+- 19 test files / 134 vitest tests passing
+- `tsc -noEmit` clean
+- `npm run build` produces ~560 KB CJS bundle
+
+---
+
 ## Known limitations carried into v0.1.0
 
 These were intentional MVP scoping choices, not bugs:

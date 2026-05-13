@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin that replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.1)
+## Features (v0.1.2)
 
 - **Disabled by default** — fresh installs don't auto-summarize; opt-in via settings or ribbon
 - **Skip existing files** — pipeline checks daily/paper files before any network or LLM call
