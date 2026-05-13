@@ -1,6 +1,6 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
-import type { ArxivSettings } from "../settings/types";
+import type { ArxivSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
 
 export interface FilteredPaper extends PaperMeta {
@@ -21,39 +21,39 @@ export async function filterPapers(
   const { llm, logger, arxivSettings } = deps;
   if (papers.length === 0) return [];
 
-  const categories = Object.keys(arxivSettings.categoryDisplayMap ?? {});
-  const categoryOptions = categories.length
-    ? categories.join("|")
-    : "photo-z|galaxy-cluster|ml|other";
+  const topics: Topic[] = arxivSettings.topics ?? [];
+  if (topics.length === 0) {
+    logger.warn("paper-filter: no topics configured, skipping LLM call");
+    return [];
+  }
+
+  const topicLines = topics
+    .map((t) => `- ${t.tag}${t.detail ? " [DETAIL]" : ""}: ${t.description}`)
+    .join("\n");
+  const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
+  const validTags = new Set(topics.map((t) => t.tag));
+  const topicByTag = new Map(topics.map((t) => [t.tag, t] as const));
 
   const papersText = papers
-    .map(
-      (p) =>
-        `---\nID: ${p.id}\nTitle: ${p.title}\nAbstract: ${p.abstract}\n`,
-    )
+    .map((p) => `---\nID: ${p.id}\nTitle: ${p.title}\nAbstract: ${p.abstract}\n`)
     .join("");
 
-  const systemPrompt = `你是一位研究者的助手。请根据研究兴趣，从下方论文列表中筛选出相关论文。
+  const systemPrompt = `你是一位研究者的助手。请根据下方主题列表，为每篇论文选择最匹配的主题。
 
-## 研究兴趣
-${arxivSettings.researchInterests}
-
-## 详细收录标准
-以下类型的论文应标记 detail: true（会生成详细报告）：
-${arxivSettings.detailCriteria}
+## 主题列表
+${topicLines}
 
 ## 输出格式
 请只输出一个 JSON 对象，不要输出任何其他内容：
 {"papers": [
-  {"id": "YYMM.NNNNN", "category": "${categoryOptions}", "detail": true/false},
+  {"id": "YYMM.NNNNN", "category": "${tagOptions}", "detail": true/false},
   ...
 ]}
 
 规则：
-- 只收录与研究兴趣相关的论文，不相关的直接忽略
-- category 从 ${categoryOptions} 中选择最匹配的一个
-- detail 判定要从严：只有核心主题直接匹配详细收录标准时才设为 true
-- 宁可漏选 detail 也不要错选——不确定时设为 false，日报已包含所有相关论文的总结
+- category 选择最匹配的主题 tag；若与所有主题都不相关，返回 "skip"
+- detail 仅在带 [DETAIL] 标记的主题上有意义；当且仅当该论文是该主题的核心贡献时设为 true，其余设为 false
+- detail 判定从严：宁可漏选也不要错选——不确定时设为 false
 - 如果没有任何相关论文，返回 {"papers": []}`;
 
   const userContent = `以下是今日 arXiv ${arxivSettings.category} 的所有新论文：\n\n${papersText}`;
@@ -72,9 +72,7 @@ ${arxivSettings.detailCriteria}
     return [];
   }
 
-  let parsed: {
-    papers?: Array<{ id?: string; category?: string; detail?: boolean }>;
-  };
+  let parsed: { papers?: Array<{ id?: string; category?: string; detail?: boolean }> };
   try {
     parsed = JSON.parse(raw);
   } catch {
@@ -100,11 +98,17 @@ ${arxivSettings.detailCriteria}
       logger.warn(`paper-filter: unknown id ${id}, skipping`);
       continue;
     }
-    const category = item.category ?? "other";
+    const category = item.category ?? "";
+    if (category === "skip") continue;
+    if (!validTags.has(category)) {
+      logger.info(`paper-filter: unknown tag '${category}' for ${id}, dropping`);
+      continue;
+    }
+    const topic = topicByTag.get(category)!;
     let isDetail = Boolean(item.detail);
-    if (isDetail && !(arxivSettings.detailCategories ?? []).includes(category)) {
+    if (isDetail && !topic.detail) {
       isDetail = false;
-      logger.info(`paper-filter: demote detail for ${id} (category=${category})`);
+      logger.info(`paper-filter: demote detail for ${id} (topic ${category} has detail=false)`);
     }
     out.push({ ...meta, category, isDetail });
   }

@@ -112,7 +112,7 @@ describe("ArxivPipeline", () => {
     // Override LLM call sequence: filter returns 1 paper, then daily summary returns markdown
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
-      if (sys.includes("筛选出相关论文")) {
+      if (sys.includes("选择最匹配的主题")) {
         // Pick the first arxiv id present in the fixture
         const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
         return JSON.stringify({
@@ -181,7 +181,7 @@ describe("ArxivPipeline", () => {
     );
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
-      if (sys.includes("筛选出相关论文")) {
+      if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z", detail: true }],
         });
@@ -223,7 +223,7 @@ describe("ArxivPipeline", () => {
     const arxivId = m[1];
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
-      if (sys.includes("筛选出相关论文")) {
+      if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z", detail: false }],
         });
