@@ -57,9 +57,11 @@ npm run build
 |---|---|
 | Enable | 开关，显示 Running / Paused 状态 |
 | LLM | Provider 下拉（DeepSeek/OpenAI/Anthropic/GLM/Custom）、API Key、Base URL、Model、Temperature、Timeout、Thinking mode、Reasoning effort |
-| arXiv | 分类下拉（按领域分组）、研究兴趣、详细收录标准、详细分类（逗号分隔）、时区下拉 |
+| arXiv | 分类下拉（按领域分组）、**Research Topics**（主题卡片栈：每张卡片含名称、tag、描述、深度报告开关）、**Load Template** 下拉（Blank / Astro+ML / NLP / CV / Bio）、时区下拉 |
 | Output & Schedule | Daily / Papers 路径、调度时间、tick 间隔、lookback 天数 (≤5) |
 | Advanced | 请求间隔、缓存 TTL、字符限制、跳过/优先 sections、日志级别 |
+
+**首次使用：** 默认 topics 为空，必须先 Load Template 或 + Add Topic 至少填一条，启用 scheduler 后才会调 LLM。否则插件会跳过 filter（不消耗 token，但也不出日报）。
 
 ### 命令 & Ribbon
 

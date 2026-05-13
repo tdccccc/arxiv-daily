@@ -261,6 +261,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     const topicsContainer = containerEl.createDiv();
+    if (s.arxiv.topics.length === 0) {
+      const empty = topicsContainer.createDiv();
+      empty.style.padding = "0.75em";
+      empty.style.marginBottom = "0.75em";
+      empty.style.border = "1px dashed var(--background-modifier-border)";
+      empty.style.borderRadius = "6px";
+      empty.style.opacity = "0.85";
+      empty.createEl("strong", { text: "No topics yet." });
+      empty.createEl("div", {
+        text: "Pick a template above or click + Add Topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
+      });
+    }
     for (let i = 0; i < s.arxiv.topics.length; i++) {
       this.renderTopicCard(topicsContainer, s.arxiv.topics, i);
     }

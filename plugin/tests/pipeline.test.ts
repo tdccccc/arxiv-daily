@@ -20,6 +20,14 @@ const recentHtml = readFileSync(
   "utf8",
 );
 
+const testArxiv = {
+  ...DEFAULT_SETTINGS.arxiv,
+  topics: [
+    { id: "t1", name: "Photo-z", tag: "photo-z", description: "photo-z methods", detail: true },
+    { id: "t2", name: "Galaxy Cluster", tag: "galaxy-cluster", description: "cluster surveys", detail: true },
+  ],
+};
+
 function makeDeps() {
   const writes: Record<string, string> = {};
   const fetcher = {
@@ -78,7 +86,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
@@ -95,7 +103,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
@@ -134,7 +142,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
@@ -158,7 +166,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
@@ -205,7 +213,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
@@ -253,7 +261,7 @@ describe("ArxivPipeline", () => {
       writer: d.writer as any,
       llm: d.llm as any,
       logger: d.logger,
-      arxiv: DEFAULT_SETTINGS.arxiv,
+      arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,

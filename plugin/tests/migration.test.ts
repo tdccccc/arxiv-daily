@@ -58,12 +58,9 @@ describe("migrateArxivSettings", () => {
     expect(out.topics[0].name).toBe("Photo Z");
   });
 
-  it("uses defaults when neither topics nor legacy detailCategories are present", () => {
+  it("yields empty topics when neither topics nor legacy detailCategories are present", () => {
     const out = migrateArxivSettings({ category: "astro-ph", timezone: "UTC" });
-    expect(out.topics.length).toBeGreaterThan(0);
-    for (const t of out.topics) {
-      expect(t.id).toMatch(/^[0-9a-f-]{36}$/i);
-    }
+    expect(out.topics).toEqual([]);
   });
 
   it("never carries legacy fields through to the returned shape", () => {
@@ -83,9 +80,9 @@ describe("migrateArxivSettings", () => {
     expect(out.categoryDisplayMap).toBeUndefined();
   });
 
-  it("handles null / undefined raw input", () => {
+  it("handles null / undefined raw input by returning empty topics", () => {
     const out = migrateArxivSettings(undefined);
-    expect(out.topics.length).toBeGreaterThan(0);
+    expect(out.topics).toEqual([]);
     expect(out.category.length).toBeGreaterThan(0);
     expect(out.timezone.length).toBeGreaterThan(0);
   });

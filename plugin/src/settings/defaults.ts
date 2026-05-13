@@ -13,29 +13,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   },
   arxiv: {
     category: "astro-ph",
-    topics: [
-      {
-        id: crypto.randomUUID(),
-        name: "Photo-z",
-        tag: "photo-z",
-        description: "Photometric redshift methods, catalogs, comparisons.",
-        detail: true,
-      },
-      {
-        id: crypto.randomUUID(),
-        name: "Galaxy Cluster",
-        tag: "galaxy-cluster",
-        description: "Cluster surveys, mass calibration, catalogs, SZ/X-ray/optical.",
-        detail: true,
-      },
-      {
-        id: crypto.randomUUID(),
-        name: "ML in Astro",
-        tag: "ml-astro",
-        description: "Deep learning, simulation-based inference (SBI), and related ML/DL applications in astrophysics.",
-        detail: false,
-      },
-    ],
+    topics: [],
     timezone: "Asia/Shanghai",
   },
   output: {
