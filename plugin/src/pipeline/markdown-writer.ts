@@ -66,7 +66,7 @@ export class MarkdownWriter {
 
   private tagsFor(paper: DailyPaperWithContent): string[] {
     const tags = ["arxiv", "paper"];
-    const t = this.opts.arxiv.categoryTagMap[paper.category];
+    const t = this.opts.arxiv.categoryTagMap?.[paper.category];
     if (t) tags.push(t);
     return tags;
   }

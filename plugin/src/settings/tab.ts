@@ -204,7 +204,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       containerEl,
       "Research Interests",
       "Describe in natural language",
-      s.arxiv.researchInterests,
+      s.arxiv.researchInterests ?? "",
       async (v) => {
         s.arxiv.researchInterests = v;
         await this.plugin.saveSettings();
@@ -215,7 +215,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       containerEl,
       "Detail Criteria",
       "Papers matching this will get a detailed report",
-      s.arxiv.detailCriteria,
+      s.arxiv.detailCriteria ?? "",
       async (v) => {
         s.arxiv.detailCriteria = v;
         await this.plugin.saveSettings();
@@ -226,7 +226,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Detail Categories")
       .setDesc("LLM semantic categories, comma-separated (e.g. photo-z, galaxy-cluster)")
       .addText((t) =>
-        t.setValue(s.arxiv.detailCategories.join(", ")).onChange(async (v) => {
+        t.setValue((s.arxiv.detailCategories ?? []).join(", ")).onChange(async (v) => {
           s.arxiv.detailCategories = v
             .split(/[,，]/)
             .map((x) => x.trim())
@@ -446,7 +446,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private syncCategoryMaps(s: typeof this.plugin.settings): void {
-    const cats = s.arxiv.detailCategories;
+    const cats = s.arxiv.detailCategories ?? [];
     const tagMap: Record<string, string> = {};
     const displayMap: Record<string, string> = {};
     for (const c of cats) {

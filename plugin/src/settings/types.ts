@@ -9,14 +9,24 @@ export interface LlmSettings {
   reasoningEffort: string;
 }
 
+export interface Topic {
+  id: string;
+  name: string;
+  tag: string;
+  description: string;
+  detail: boolean;
+}
+
 export interface ArxivSettings {
   category: string;
-  researchInterests: string;
-  detailCriteria: string;
-  detailCategories: string[];
-  categoryTagMap: Record<string, string>;
-  categoryDisplayMap: Record<string, string>;
+  topics: Topic[];
   timezone: string;
+  // Legacy — removed in Task 9 once all consumers read from `topics`.
+  researchInterests?: string;
+  detailCriteria?: string;
+  detailCategories?: string[];
+  categoryTagMap?: Record<string, string>;
+  categoryDisplayMap?: Record<string, string>;
 }
 
 export interface OutputSettings {

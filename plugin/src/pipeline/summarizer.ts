@@ -56,7 +56,7 @@ async function callDailyLlm(
   deps: SummarizerDeps,
 ): Promise<string> {
   const { llm, arxivSettings, llmTemperature } = deps;
-  const categoryList = Object.entries(arxivSettings.categoryDisplayMap)
+  const categoryList = Object.entries(arxivSettings.categoryDisplayMap ?? {})
     .map(([k, v]) => `- ${k} → ${v}`)
     .join("\n");
   const papersInfo = papers.map(buildPaperBlock).join("");

@@ -13,6 +13,31 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   },
   arxiv: {
     category: "astro-ph",
+    topics: [
+      {
+        id: crypto.randomUUID(),
+        name: "Photo-z",
+        tag: "photo-z",
+        description: "Photometric redshift methods, catalogs, comparisons.",
+        detail: true,
+      },
+      {
+        id: crypto.randomUUID(),
+        name: "Galaxy Cluster",
+        tag: "galaxy-cluster",
+        description: "Cluster surveys, mass calibration, catalogs, SZ/X-ray/optical.",
+        detail: true,
+      },
+      {
+        id: crypto.randomUUID(),
+        name: "ML in Astro",
+        tag: "ml-astro",
+        description: "Deep learning, simulation-based inference (SBI), and related ML/DL applications in astrophysics.",
+        detail: false,
+      },
+    ],
+    timezone: "Asia/Shanghai",
+    // Legacy — removed in Task 9.
     researchInterests:
       "1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较\n" +
       "2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天\n" +
@@ -32,7 +57,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
       "ml": "ML 相关",
       "other": "其他",
     },
-    timezone: "Asia/Shanghai",
   },
   output: {
     dailyDir: "arxiv-daily/daily",

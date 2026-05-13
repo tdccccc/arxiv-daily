@@ -21,7 +21,7 @@ export async function filterPapers(
   const { llm, logger, arxivSettings } = deps;
   if (papers.length === 0) return [];
 
-  const categories = Object.keys(arxivSettings.categoryDisplayMap);
+  const categories = Object.keys(arxivSettings.categoryDisplayMap ?? {});
   const categoryOptions = categories.length
     ? categories.join("|")
     : "photo-z|galaxy-cluster|ml|other";
@@ -102,7 +102,7 @@ ${arxivSettings.detailCriteria}
     }
     const category = item.category ?? "other";
     let isDetail = Boolean(item.detail);
-    if (isDetail && !arxivSettings.detailCategories.includes(category)) {
+    if (isDetail && !(arxivSettings.detailCategories ?? []).includes(category)) {
       isDetail = false;
       logger.info(`paper-filter: demote detail for ${id} (category=${category})`);
     }
