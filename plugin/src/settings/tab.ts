@@ -223,63 +223,55 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── Research Topics ─────────────────────────────
-    containerEl.createEl("h3", { text: "Research Topics" });
-    const topicsDesc = containerEl.createEl("div", {
-      text: "Each topic becomes one section in the daily report.",
-    });
-    topicsDesc.style.opacity = "0.7";
-    topicsDesc.style.marginBottom = "0.5em";
+    new Setting(containerEl)
+      .setName("Research Topics")
+      .setDesc("Each topic becomes one section in the daily report.")
+      .setHeading();
 
-    const controlsRow = containerEl.createDiv();
-    controlsRow.style.display = "flex";
-    controlsRow.style.gap = "0.5em";
-    controlsRow.style.marginBottom = "0.75em";
-
-    const templateSelect = controlsRow.createEl("select");
-    const placeholderOpt = templateSelect.createEl("option");
-    placeholderOpt.value = "";
-    placeholderOpt.textContent = "Load Template…";
-    for (const tpl of TOPIC_TEMPLATES) {
-      const opt = templateSelect.createEl("option");
-      opt.value = tpl.id;
-      opt.textContent = tpl.name;
-    }
-    templateSelect.onchange = async () => {
-      const id = templateSelect.value;
-      if (!id) return;
-      templateSelect.value = "";
-      const tpl = TOPIC_TEMPLATES.find((t) => t.id === id);
-      if (!tpl) return;
-      const apply = async () => {
-        s.arxiv.category = tpl.category;
-        s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
-        await this.plugin.saveSettings();
-        this.display();
-      };
-      if (s.arxiv.topics.length === 0) {
-        await apply();
-        return;
-      }
-      const confirmed = await this.confirmReplace(
-        `Replace your ${s.arxiv.topics.length} topic(s) with the "${tpl.name}" template?`,
-      );
-      if (confirmed) await apply();
-    };
-
-    const addBtn = controlsRow.createEl("button", { text: "+ Add Topic" });
-    addBtn.onclick = async () => {
-      const newId = crypto.randomUUID();
-      s.arxiv.topics.push({
-        id: newId,
-        name: "",
-        tag: `topic-${s.arxiv.topics.length + 1}`,
-        description: "",
-        detail: false,
+    new Setting(containerEl)
+      .setName("Quick start")
+      .setDesc("Load a preset bundle of topics or add one manually.")
+      .addDropdown((d) => {
+        d.addOption("", "Load Template…");
+        for (const tpl of TOPIC_TEMPLATES) {
+          d.addOption(tpl.id, tpl.name);
+        }
+        d.onChange(async (id) => {
+          if (!id) return;
+          d.setValue("");
+          const tpl = TOPIC_TEMPLATES.find((t) => t.id === id);
+          if (!tpl) return;
+          const apply = async () => {
+            s.arxiv.category = tpl.category;
+            s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
+            await this.plugin.saveSettings();
+            this.display();
+          };
+          if (s.arxiv.topics.length === 0) {
+            await apply();
+            return;
+          }
+          const confirmed = await this.confirmReplace(
+            `Replace your ${s.arxiv.topics.length} topic(s) with the "${tpl.name}" template?`,
+          );
+          if (confirmed) await apply();
+        });
+      })
+      .addButton((b) => {
+        b.setButtonText("+ Add Topic").onClick(async () => {
+          const newId = crypto.randomUUID();
+          s.arxiv.topics.push({
+            id: newId,
+            name: "",
+            tag: `topic-${s.arxiv.topics.length + 1}`,
+            description: "",
+            detail: false,
+          });
+          this.expandedTopics.add(newId);
+          await this.plugin.saveSettings();
+          this.display();
+        });
       });
-      this.expandedTopics.add(newId);
-      await this.plugin.saveSettings();
-      this.display();
-    };
 
     const topicsContainer = containerEl.createDiv();
     if (s.arxiv.topics.length === 0) {
@@ -500,20 +492,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       tagChip.style.fontSize = "0.85em";
     }
 
-    const spacer = header.createDiv();
-    spacer.style.flex = "1";
-
-    const delBtn = header.createEl("button", { text: "×" });
-    delBtn.title = "Delete topic";
-    delBtn.style.padding = "0 0.5em";
-    delBtn.onclick = async (e) => {
-      e.stopPropagation();
-      topics.splice(index, 1);
-      this.expandedTopics.delete(topic.id);
-      await this.plugin.saveSettings();
-      this.display();
-    };
-
     // ─── Expanded form (toggled via display) ────────────────
     const form = card.createDiv();
     form.style.display = isExpanded ? "" : "none";
@@ -585,9 +563,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       await this.plugin.saveSettings();
     };
 
-    // Detail toggle
+    // Detail toggle + delete (right-aligned, only visible when expanded)
     const footer = form.createDiv();
     footer.style.display = "flex";
+    footer.style.justifyContent = "space-between";
     footer.style.alignItems = "center";
 
     const detailLabel = footer.createEl("label");
@@ -599,7 +578,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     detailCheckbox.onchange = async () => {
       topic.detail = detailCheckbox.checked;
       await this.plugin.saveSettings();
-      // Refresh header star indicator without full re-render
+      // Refresh the header star indicator without a full re-render.
       header.querySelectorAll("span").forEach((el) => {
         if (el.textContent === "★") el.remove();
       });
@@ -608,8 +587,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         star.textContent = "★";
         star.style.color = "var(--text-accent)";
         star.title = "Detail report enabled";
-        header.insertBefore(star, spacer);
+        // Insert after the title (second child).
+        const tagChip = header.querySelector('span[style*="opacity: 0.55"]');
+        if (tagChip) header.insertBefore(star, tagChip);
+        else header.appendChild(star);
       }
+    };
+
+    const delBtn = footer.createEl("button", { text: "Delete" });
+    delBtn.classList.add("mod-warning");
+    delBtn.onclick = async (e) => {
+      e.stopPropagation();
+      topics.splice(index, 1);
+      this.expandedTopics.delete(topic.id);
+      await this.plugin.saveSettings();
+      this.display();
     };
 
     // Toggle expand/collapse on header click
