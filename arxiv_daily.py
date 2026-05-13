@@ -47,23 +47,20 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
 
 # 筛选
 RESEARCH_INTERESTS = os.getenv("RESEARCH_INTERESTS", """\
-1. 星系光度红移估计 (photometric redshift / photo-z)：方法、目录、比较
-2. 星系团 (galaxy clusters)：搜寻、质量标定、目录、SZ/X-ray/光学巡天
-3. 天文中的 ML/DL 应用：深度学习、模拟推断 (SBI) 等""")
+Describe your research interests here — what kinds of papers should the LLM look for?""")
 
 DETAIL_CRITERIA = os.getenv("DETAIL_CRITERIA", """\
-- Photo-z 方法论文（提出或比较 photo-z 方法/目录）
-- 星系团巡天/目录/质量标定论文""")
+Papers proposing or comparing new methods / catalogs / benchmarks""")
 
 CATEGORY_TAG_MAP = json.loads(os.getenv("CATEGORY_TAG_MAP",
-    '{"photo-z":"photo-z","galaxy-cluster":"galaxy-cluster","ml":"ml"}'))
+    '{"example":"example","other":"other"}'))
 
 CATEGORY_DISPLAY_MAP = json.loads(os.getenv("CATEGORY_DISPLAY_MAP",
-    '{"galaxy-cluster":"Galaxy Cluster 相关","photo-z":"Photo-z 相关","ml":"ML 相关","other":"其他"}'))
+    '{"example":"Example Section","other":"Other"}'))
 
 # 允许标记 detail 的 category 列表（不在此列表中的 category 即使 LLM 标了 detail 也会降为 false）
 DETAIL_CATEGORIES = json.loads(os.getenv("DETAIL_CATEGORIES",
-    '["photo-z", "galaxy-cluster"]'))
+    '["example"]'))
 
 # 内容提取
 SECTION_CHAR_LIMIT = int(os.getenv("SECTION_CHAR_LIMIT", "8000"))
