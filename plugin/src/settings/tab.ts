@@ -1,7 +1,10 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
 import { ARXIV_CATEGORIES } from "./arxiv-categories";
+import { TOPIC_TEMPLATES } from "./topic-templates";
+import type { Topic } from "./types";
+import { slugify } from "../utils/slugify";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
@@ -200,88 +203,67 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       });
 
-    this.textareaSetting(
-      containerEl,
-      "Research Interests",
-      "Describe in natural language",
-      s.arxiv.researchInterests ?? "",
-      async (v) => {
-        s.arxiv.researchInterests = v;
-        await this.plugin.saveSettings();
-      },
-    );
+    // ─── Research Topics ─────────────────────────────
+    containerEl.createEl("h3", { text: "Research Topics" });
+    const topicsDesc = containerEl.createEl("div", {
+      text: "Each topic becomes one section in the daily report.",
+    });
+    topicsDesc.style.opacity = "0.7";
+    topicsDesc.style.marginBottom = "0.5em";
 
-    this.textareaSetting(
-      containerEl,
-      "Detail Criteria",
-      "Papers matching this will get a detailed report",
-      s.arxiv.detailCriteria ?? "",
-      async (v) => {
-        s.arxiv.detailCriteria = v;
-        await this.plugin.saveSettings();
-      },
-    );
+    const controlsRow = containerEl.createDiv();
+    controlsRow.style.display = "flex";
+    controlsRow.style.gap = "0.5em";
+    controlsRow.style.marginBottom = "0.75em";
 
-    new Setting(containerEl)
-      .setName("Detail Categories")
-      .setDesc("LLM semantic categories, comma-separated (e.g. photo-z, galaxy-cluster)")
-      .addText((t) =>
-        t.setValue((s.arxiv.detailCategories ?? []).join(", ")).onChange(async (v) => {
-          s.arxiv.detailCategories = v
-            .split(/[,，]/)
-            .map((x) => x.trim())
-            .filter(Boolean);
-          this.syncCategoryMaps(s);
-          await this.plugin.saveSettings();
-        }),
+    const templateSelect = controlsRow.createEl("select");
+    const placeholderOpt = templateSelect.createEl("option");
+    placeholderOpt.value = "";
+    placeholderOpt.textContent = "Load Template…";
+    for (const tpl of TOPIC_TEMPLATES) {
+      const opt = templateSelect.createEl("option");
+      opt.value = tpl.id;
+      opt.textContent = tpl.name;
+    }
+    templateSelect.onchange = async () => {
+      const id = templateSelect.value;
+      if (!id) return;
+      templateSelect.value = "";
+      const tpl = TOPIC_TEMPLATES.find((t) => t.id === id);
+      if (!tpl) return;
+      const apply = async () => {
+        s.arxiv.category = tpl.category;
+        s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
+        await this.plugin.saveSettings();
+        this.display();
+      };
+      if (s.arxiv.topics.length === 0) {
+        await apply();
+        return;
+      }
+      const confirmed = await this.confirmReplace(
+        `Replace your ${s.arxiv.topics.length} topic(s) with the "${tpl.name}" template?`,
       );
+      if (confirmed) await apply();
+    };
 
-    // Auto-sync maps from detail categories on every render
-    this.syncCategoryMaps(s);
-    this.plugin.saveSettings();
-
-    // Advanced: tag/display map overrides
-    const advContainer = containerEl.createDiv();
-    advContainer.style.display = "none";
-    const advToggle = new Setting(containerEl)
-      .setName("Advanced maps")
-      .setDesc("Customize tags and display names (auto-generated from detail categories)")
-      .addToggle((t) => {
-        t.setValue(false).onChange((v) => {
-          advContainer.style.display = v ? "block" : "none";
-        });
+    const addBtn = controlsRow.createEl("button", { text: "+ Add Topic" });
+    addBtn.onclick = async () => {
+      s.arxiv.topics.push({
+        id: crypto.randomUUID(),
+        name: "",
+        tag: `topic-${s.arxiv.topics.length + 1}`,
+        description: "",
+        detail: false,
       });
-    advToggle.infoEl.style.cursor = "pointer";
+      await this.plugin.saveSettings();
+      this.display();
+    };
 
-    this.textareaSetting(
-      advContainer,
-      "Category → Tag map (JSON)",
-      "Auto-generated, manually overridable",
-      JSON.stringify(s.arxiv.categoryTagMap, null, 2),
-      async (v) => {
-        try {
-          s.arxiv.categoryTagMap = JSON.parse(v);
-          await this.plugin.saveSettings();
-        } catch {
-          /* keep last valid */
-        }
-      },
-    );
-
-    this.textareaSetting(
-      advContainer,
-      "Category → Display name (JSON)",
-      "Auto-generated, manually overridable",
-      JSON.stringify(s.arxiv.categoryDisplayMap, null, 2),
-      async (v) => {
-        try {
-          s.arxiv.categoryDisplayMap = JSON.parse(v);
-          await this.plugin.saveSettings();
-        } catch {
-          /* keep last valid */
-        }
-      },
-    );
+    const topicsContainer = containerEl.createDiv();
+    for (let i = 0; i < s.arxiv.topics.length; i++) {
+      this.renderTopicCard(topicsContainer, s.arxiv.topics, i);
+    }
 
     new Setting(containerEl)
       .setName("Timezone")
@@ -445,22 +427,124 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
-  private syncCategoryMaps(s: typeof this.plugin.settings): void {
-    const cats = s.arxiv.detailCategories ?? [];
-    const tagMap: Record<string, string> = {};
-    const displayMap: Record<string, string> = {};
-    for (const c of cats) {
-      tagMap[c] = c;
-      // Convert "galaxy-cluster" → "Galaxy Cluster"
-      displayMap[c] = c
-        .replace(/-/g, " ")
-        .replace(/\b\w/g, (ch) => ch.toUpperCase());
-    }
-    // Default entries
-    if (!tagMap["other"]) tagMap["other"] = "other";
-    displayMap["other"] = "Other";
-    s.arxiv.categoryTagMap = tagMap;
-    s.arxiv.categoryDisplayMap = displayMap;
+  private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
+    const topic = topics[index];
+    const card = container.createDiv();
+    card.style.border = "1px solid var(--background-modifier-border)";
+    card.style.borderRadius = "6px";
+    card.style.padding = "0.75em";
+    card.style.marginBottom = "0.75em";
+
+    // Name row
+    const nameRow = card.createDiv();
+    nameRow.style.marginBottom = "0.5em";
+    const nameLabel = nameRow.createEl("label", { text: "Name" });
+    nameLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const nameInput = nameRow.createEl("input", { type: "text" });
+    nameInput.value = topic.name;
+    nameInput.style.width = "100%";
+    nameInput.placeholder = "e.g. Photometric Redshift";
+
+    // Tag row
+    const tagRow = card.createDiv();
+    tagRow.style.marginBottom = "0.5em";
+    const tagLabel = tagRow.createEl("label", { text: "Tag" });
+    tagLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const tagInput = tagRow.createEl("input", { type: "text" });
+    tagInput.value = topic.tag;
+    tagInput.style.width = "60%";
+    tagInput.placeholder = "kebab-case-slug";
+    const autoBadge = tagRow.createEl("span", { text: "  Auto" });
+    autoBadge.style.cssText = "opacity:0.5;font-size:0.85em;margin-left:0.5em;";
+    const refreshAutoBadge = () => {
+      autoBadge.style.display = topic.tag === slugify(topic.name) ? "" : "none";
+    };
+    refreshAutoBadge();
+
+    nameInput.oninput = async () => {
+      const wasAuto = topic.tag === slugify(topic.name);
+      topic.name = nameInput.value;
+      if (wasAuto) {
+        const derived = slugify(topic.name);
+        topic.tag = derived || `topic-${index + 1}`;
+        tagInput.value = topic.tag;
+      }
+      refreshAutoBadge();
+      await this.plugin.saveSettings();
+    };
+
+    tagInput.oninput = async () => {
+      topic.tag = tagInput.value;
+      refreshAutoBadge();
+      await this.plugin.saveSettings();
+    };
+
+    // Description row
+    const descRow = card.createDiv();
+    descRow.style.marginBottom = "0.5em";
+    const descLabel = descRow.createEl("label", { text: "Description" });
+    descLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const descArea = descRow.createEl("textarea");
+    descArea.value = topic.description;
+    descArea.rows = 3;
+    descArea.style.width = "100%";
+    descArea.placeholder =
+      "What kinds of papers should be grouped under this topic? (natural language)";
+    descArea.oninput = async () => {
+      topic.description = descArea.value;
+      await this.plugin.saveSettings();
+    };
+
+    // Footer: detail toggle + delete
+    const footer = card.createDiv();
+    footer.style.display = "flex";
+    footer.style.justifyContent = "space-between";
+    footer.style.alignItems = "center";
+
+    const detailLabel = footer.createEl("label");
+    detailLabel.style.cursor = "pointer";
+    const detailCheckbox = detailLabel.createEl("input", { type: "checkbox" });
+    detailCheckbox.checked = topic.detail;
+    detailCheckbox.style.marginRight = "0.4em";
+    detailLabel.appendText("Detail report");
+    detailCheckbox.onchange = async () => {
+      topic.detail = detailCheckbox.checked;
+      await this.plugin.saveSettings();
+    };
+
+    const delBtn = footer.createEl("button", { text: "Delete" });
+    delBtn.onclick = async () => {
+      topics.splice(index, 1);
+      await this.plugin.saveSettings();
+      this.display();
+    };
+  }
+
+  private confirmReplace(message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new Modal(this.app);
+      modal.titleEl.setText("Confirm");
+      modal.contentEl.createEl("p", { text: message });
+      const btns = modal.contentEl.createDiv();
+      btns.style.display = "flex";
+      btns.style.justifyContent = "flex-end";
+      btns.style.gap = "0.5em";
+      btns.style.marginTop = "0.75em";
+      const cancel = btns.createEl("button", { text: "Cancel" });
+      const ok = btns.createEl("button", { text: "Replace" });
+      ok.classList.add("mod-warning");
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        modal.close();
+      };
+      cancel.onclick = () => finish(false);
+      ok.onclick = () => finish(true);
+      modal.onClose = () => finish(false);
+      modal.open();
+    });
   }
 
   private textareaSetting(
