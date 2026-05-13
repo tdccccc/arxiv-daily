@@ -56,8 +56,8 @@ async function callDailyLlm(
   deps: SummarizerDeps,
 ): Promise<string> {
   const { llm, arxivSettings, llmTemperature } = deps;
-  const categoryList = Object.entries(arxivSettings.categoryDisplayMap ?? {})
-    .map(([k, v]) => `- ${k} → ${v}`)
+  const categoryList = arxivSettings.topics
+    .map((t) => `- ${t.tag} → ${t.name}`)
     .join("\n");
   const papersInfo = papers.map(buildPaperBlock).join("");
   const partialNote = isPartial
