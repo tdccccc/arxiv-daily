@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { DEFAULT_SETTINGS } from "./src/settings/defaults";
 import type { PluginSettings, RunState } from "./src/settings/types";
 import { ArxivDailySettingTab } from "./src/settings/tab";
+import { migrateArxivSettings } from "./src/settings/migration";
 import { Logger } from "./src/services/logger";
 import { StateStore } from "./src/services/state-store";
 import { RunLock } from "./src/services/run-lock";
@@ -125,7 +126,9 @@ export default class ArxivDailyPlugin extends Plugin {
       settings: DEFAULT_SETTINGS,
       runState: {},
     };
-    this.settings = mergeSettings(DEFAULT_SETTINGS, data.settings ?? ({} as PluginSettings));
+    const merged = mergeSettings(DEFAULT_SETTINGS, data.settings ?? ({} as PluginSettings));
+    merged.arxiv = migrateArxivSettings((data.settings as any)?.arxiv);
+    this.settings = merged;
   }
 
   private async persistAll(runState: RunState): Promise<void> {
