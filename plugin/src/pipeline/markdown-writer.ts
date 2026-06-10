@@ -19,7 +19,12 @@ export class MarkdownWriter {
     if (await this.opts.vault.adapter.exists(path)) {
       throw new Error(`daily already exists: ${path}`);
     }
-    const frontmatter = `---\ndate: ${dateStr}\ntags: [arxiv, daily]\n---\n\n`;
+    const frontmatter =
+      `---\n` +
+      `date: ${dateStr}\n` +
+      `weekday: ${weekdayName(dateStr)}\n` +
+      `tags: [arxiv, daily]\n` +
+      `---\n\n`;
     await this.opts.vault.adapter.write(path, frontmatter + summary);
     this.opts.logger.info(`wrote daily: ${path}`);
     return path;
@@ -42,6 +47,7 @@ export class MarkdownWriter {
       `authors: "${escapeYaml(paper.authors)}"\n` +
       `arxiv: "${paper.id}"\n` +
       `date: ${dateStr}\n` +
+      `weekday: ${weekdayName(dateStr)}\n` +
       `tags: [${tags.join(", ")}]\n` +
       `---\n\n`;
     await this.opts.vault.adapter.write(path, fm + summary);
@@ -82,4 +88,19 @@ export class MarkdownWriter {
 
 function escapeYaml(s: string): string {
   return s.replace(/"/g, '\\"');
+}
+
+function weekdayName(dateStr: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (!m) throw new Error(`Invalid date: ${dateStr}`);
+  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ][date.getUTCDay()];
 }

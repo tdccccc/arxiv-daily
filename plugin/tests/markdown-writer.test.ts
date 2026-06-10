@@ -105,7 +105,29 @@ describe("MarkdownWriter strictness on existing files", () => {
   it("writeDaily writes content (no bak file produced)", async () => {
     const { files, writer } = makeWriter();
     await writer.writeDaily("2026-05-11", "body");
-    expect(files["arxiv-daily/daily/2026-05-11.md"]).toContain("body");
+    const written = files["arxiv-daily/daily/2026-05-11.md"];
+    expect(written).toContain("date: 2026-05-11");
+    expect(written).toContain("weekday: Monday");
+    expect(written).toContain("body");
     expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
+  });
+
+  it("writePaperDetail writes date and weekday properties", async () => {
+    const { files, writer } = makeWriter();
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+    };
+    await writer.writePaperDetail(paper as any, "2026-06-10", "detail");
+    const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain("date: 2026-06-10");
+    expect(written).toContain("weekday: Wednesday");
+    expect(written).toContain("detail");
   });
 });

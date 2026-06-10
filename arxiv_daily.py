@@ -106,6 +106,15 @@ MONTH_MAP = {
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 }
+WEEKDAY_NAMES = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
 
 
 # ================= Logging =================
@@ -212,6 +221,10 @@ def _write_cache(arxiv_id, content, kind="html"):
 # ================= 核心函数 =================
 def get_beijing_now():
     return datetime.datetime.now(BEIJING_TZ)
+
+
+def weekday_name(date_str):
+    return WEEKDAY_NAMES[datetime.date.fromisoformat(date_str).weekday()]
 
 
 def check_arxiv_update():
@@ -834,7 +847,7 @@ def main():
 
     if not all_papers:
         logger.info("今日未发现论文。")
-        header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
+        header = f"---\ndate: {today_str}\nweekday: {weekday_name(today_str)}\ntags: [arxiv, daily]\n---\n\n"
         body = f"# arXiv astro-ph 每日追踪 {today_str}\n\n今日未发现论文。\n"
         with open(daily_file, "w", encoding="utf-8") as f:
             f.write(header + body)
@@ -869,7 +882,7 @@ def main():
     logger.info("正在生成日报总结...")
     daily_summary = summarize_daily(filtered_papers, today_str)
 
-    header = f"---\ndate: {today_str}\ntags: [arxiv, daily]\n---\n\n"
+    header = f"---\ndate: {today_str}\nweekday: {weekday_name(today_str)}\ntags: [arxiv, daily]\n---\n\n"
     with open(daily_file, "w", encoding="utf-8") as f:
         f.write(header + daily_summary)
     logger.info(f"日报已保存: {daily_file}")
@@ -897,6 +910,7 @@ def main():
             f"authors: \"{p['authors']}\"\n"
             f"arxiv: \"{p['id']}\"\n"
             f"date: {today_str}\n"
+            f"weekday: {weekday_name(today_str)}\n"
             f"tags: [{', '.join(tags)}]\n"
             f"---\n\n"
         )
