@@ -28,7 +28,6 @@ load_dotenv()
 
 # ================= 配置（全部从 .env 读取） =================
 # LLM
-API_KEY = os.environ["LLM_API_KEY"]
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
@@ -138,8 +137,19 @@ logger = _setup_logging()
 _session = requests.Session()
 _session.headers.update(HEADERS)
 
-_llm_client = OpenAI(api_key=API_KEY, base_url=BASE_URL,
-                      timeout=LLM_TIMEOUT, max_retries=0)
+_llm_client = None
+
+
+def _get_llm_client():
+    """Lazy-create the LLM client so pure imports do not require an API key."""
+    global _llm_client
+    if _llm_client is None:
+        api_key = os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("LLM_API_KEY is required for LLM calls")
+        _llm_client = OpenAI(api_key=api_key, base_url=BASE_URL,
+                             timeout=LLM_TIMEOUT, max_retries=0)
+    return _llm_client
 
 
 def _retry_request(url, *, timeout=15, max_retries=3, backoff=2, no_retry_statuses=()):
@@ -176,7 +186,7 @@ def _call_llm(*, messages, temperature, max_retries=3, backoff=5):
             else:
                 kwargs["temperature"] = temperature
 
-            stream = _llm_client.chat.completions.create(**kwargs)
+            stream = _get_llm_client().chat.completions.create(**kwargs)
             chunks = []
             for chunk in stream:
                 delta = chunk.choices[0].delta
