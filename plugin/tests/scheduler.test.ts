@@ -313,6 +313,61 @@ describe("SchedulerService", () => {
     expect(runForDate).toHaveBeenCalledWith("2026-05-11");
   });
 
+  it("tickTodayScheduled respects runAtLocal gate", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi.fn();
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "23:59",
+          lookbackDays: 1,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T00:00:00Z"), // 08:00 Shanghai, Monday
+    });
+    const result = await svc.tickTodayScheduled();
+    expect((result as any)?.kind).toBe("skipped");
+    expect((result as any)?.reason).toBe("guarded");
+    expect(runForDate).not.toHaveBeenCalled();
+  });
+
+  it("tickTodayScheduled runs today after runAtLocal", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 2 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "00:01",
+          lookbackDays: 1,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"), // 13:00 Shanghai, Monday
+    });
+    const result = await svc.tickTodayScheduled();
+    expect((result as any)?.kind).toBe("completed");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+  });
+
   it("tickToday respects isDone and returns skipped without running", async () => {
     const store = makeStore();
     await store.load();

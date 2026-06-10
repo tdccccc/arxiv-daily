@@ -85,9 +85,9 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled) {
       this.scheduler.start();
       this.scheduler
-        .tickToday()
+        .tickTodayScheduled()
         .catch((e) =>
-          this.logger.error("scheduler initial tickToday failed", e),
+          this.logger.error("scheduler initial tickTodayScheduled failed", e),
         );
     }
   }

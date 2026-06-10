@@ -99,6 +99,36 @@ export class SchedulerService {
     return result;
   }
 
+  async tickTodayScheduled(): Promise<
+    PipelineResult | { kind: "skipped"; reason: string } | undefined
+  > {
+    const s = this.deps.getSettings();
+    if (!s.schedule.enabled) {
+      return { kind: "skipped", reason: "disabled" };
+    }
+    const tz = s.arxiv.timezone;
+    const now = (this.deps.now ?? (() => new Date()))();
+    if (isWeekendInTz(now, tz)) {
+      this.progress.setIdle(this.latestCompleted(), "weekend");
+      return { kind: "skipped", reason: "weekend" };
+    }
+    const todayObj = todayInTz(now, tz);
+    const today = formatDate(todayObj);
+    const minutesNow = minutesSinceMidnight(now, tz);
+    const t = parseHHMM(s.schedule.runAtLocal);
+    const scheduledMin = t.hour * 60 + t.minute;
+    this.progress.setBatch(1, 1, today);
+    const result = await this.tickDate(today, {
+      now,
+      timeGate: { scheduledMin, minutesNow },
+    });
+    this.progress.setIdle(this.latestCompleted());
+    if (result === undefined) {
+      return { kind: "skipped", reason: "guarded" };
+    }
+    return result;
+  }
+
   private async tickDate(
     date: string,
     opts: {
