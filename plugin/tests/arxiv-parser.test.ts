@@ -45,4 +45,21 @@ describe("parseRecent", () => {
     const buckets = parseRecent(fixture);
     expect(buckets.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("parses abbreviated month names from arXiv headers", () => {
+    const html = `
+      <dl id="articles">
+        <h3>Wed, 10 Jun 2026 (showing 1 of 1 entries )</h3>
+        <dt><a title="Abstract" href="/abs/2606.11165">arXiv:2606.11165</a></dt>
+        <dd>
+          <div class="list-title">Title: Example Paper</div>
+          <div class="list-authors"><a>Jane Doe</a></div>
+        </dd>
+      </dl>
+    `;
+    const buckets = parseRecent(html);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].announceDate).toBe("2026-06-10");
+    expect(buckets[0].papers[0].id).toBe("2606.11165");
+  });
 });
