@@ -19,5 +19,19 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
   if (settings.arxiv.topics.length === 0) {
     reasons.push("No research topics defined");
   }
+  const seenTags = new Set<string>();
+  settings.arxiv.topics.forEach((topic, i) => {
+    const label = `Topic ${i + 1}`;
+    if (!topic.name.trim()) reasons.push(`${label} name is empty`);
+    const tag = topic.tag.trim();
+    if (!tag) {
+      reasons.push(`${label} tag is empty`);
+    } else if (seenTags.has(tag)) {
+      reasons.push(`Duplicate topic tag: ${tag}`);
+    } else {
+      seenTags.add(tag);
+    }
+    if (!topic.description.trim()) reasons.push(`${label} description is empty`);
+  });
   return { ok: reasons.length === 0, reasons };
 }

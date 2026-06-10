@@ -90,4 +90,37 @@ describe("validateFilterConfig", () => {
     );
     expect(r.ok).toBe(true);
   });
+
+  it("flags empty topic fields", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [{ id: "t", name: " ", tag: "", description: " ", detail: false }],
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/name is empty/i);
+    expect(r.reasons.join("; ")).toMatch(/tag is empty/i);
+    expect(r.reasons.join("; ")).toMatch(/description is empty/i);
+  });
+
+  it("flags duplicate topic tags", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "t1", name: "One", tag: "same", description: "x", detail: false },
+            { id: "t2", name: "Two", tag: "same", description: "y", detail: false },
+          ],
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/duplicate topic tag: same/i);
+  });
 });
