@@ -513,6 +513,14 @@ def llm_filter_papers(papers):
     用 LLM 一次性筛选所有论文，返回相关论文列表。
     每篇论文附带 is_detail 和 category 字段。
     """
+    valid_categories = _configured_categories()
+    category_options = "|".join(valid_categories)
+    category_list = "\n".join(
+        f"- {cat} → {CATEGORY_DISPLAY_MAP.get(cat, cat)}"
+        for cat in valid_categories
+    )
+    category_values = ", ".join(valid_categories)
+
     # 构建论文列表文本
     papers_text = ""
     for p in papers:
@@ -532,16 +540,19 @@ def llm_filter_papers(papers):
 以下类型的论文应标记 detail: true（会生成详细报告）：
 {DETAIL_CRITERIA}
 
+## 可选 category
+{category_list}
+
 ## 输出格式
 请只输出一个 JSON 对象，不要输出任何其他内容：
 {{"papers": [
-  {{"id": "YYMM.NNNNN", "category": "photo-z|galaxy-cluster|ml|other", "detail": true/false}},
+  {{"id": "YYMM.NNNNN", "category": "{category_options}", "detail": true/false}},
   ...
 ]}}
 
 规则：
 - 只收录与研究兴趣相关的论文，不相关的直接忽略
-- category 从 photo-z, galaxy-cluster, ml, other 中选择最匹配的一个
+- category 必须从 {category_values} 中选择最匹配的一个
 - detail 判定要从严：只有论文的核心主题直接匹配详细收录标准时才设为 true。仅在摘要中提及相关概念但主题不同的论文，应设为 false
 - 宁可漏选 detail 也不要错选——不确定时设为 false，日报已包含所有相关论文的总结
 - 如果没有任何相关论文，返回 {{"papers": []}}"""
@@ -584,7 +595,13 @@ def llm_filter_papers(papers):
             continue
         paper = dict(paper_map[pid])  # 复制一份
         paper["is_detail"] = bool(item.get("detail", False))
-        paper["category"] = item.get("category", "other")
+        category = str(item.get("category", "")).strip()
+        if not category:
+            category = "other" if "other" in valid_categories else valid_categories[0]
+        if category not in valid_categories:
+            logger.warning(f"  警告: LLM 返回未知 category {category}，跳过 {pid}")
+            continue
+        paper["category"] = category
         # 硬约束：只有指定 category 才允许 detail
         if paper["is_detail"] and paper["category"] not in DETAIL_CATEGORIES:
             paper["is_detail"] = False
@@ -595,6 +612,19 @@ def llm_filter_papers(papers):
 
     logger.info(f"LLM 筛选完成: {len(filtered)}/{len(papers)} 篇相关")
     return filtered
+
+
+def _configured_categories():
+    """Return configured category keys in stable prompt/report order."""
+    categories = []
+    for source in (CATEGORY_DISPLAY_MAP, CATEGORY_TAG_MAP):
+        for category in source.keys():
+            if category and category not in categories:
+                categories.append(category)
+    for category in DETAIL_CATEGORIES:
+        if category and category not in categories:
+            categories.append(category)
+    return categories or ["other"]
 
 
 def _build_paper_block(p):
@@ -629,7 +659,7 @@ def _split_paper_batches(papers):
 def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
     """单次日报 LLM 调用"""
     # 构建所有 category 的显示名称列表
-    all_categories = list(CATEGORY_DISPLAY_MAP.keys())
+    all_categories = _configured_categories()
     category_list = "\n".join(
         f"- {cat} → {CATEGORY_DISPLAY_MAP.get(cat, cat)}"
         for cat in all_categories
