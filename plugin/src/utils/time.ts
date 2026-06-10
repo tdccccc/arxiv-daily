@@ -59,3 +59,8 @@ export function isWeekendInTz(now: Date, tz: string): boolean {
   const weekday = fmt.format(now);
   return weekday === "Sat" || weekday === "Sun";
 }
+
+export function isWeekendDate(date: { y: number; m: number; d: number }): boolean {
+  const day = new Date(Date.UTC(date.y, date.m - 1, date.d)).getUTCDay();
+  return day === 0 || day === 6;
+}

@@ -6,6 +6,7 @@ import {
   minutesSinceMidnight,
   daysBefore,
   isWeekendInTz,
+  isWeekendDate,
 } from "../src/utils/time";
 
 describe("time utils", () => {
@@ -62,5 +63,11 @@ describe("time utils", () => {
     expect(isWeekendInTz(d, "Asia/Shanghai")).toBe(true);
     // Same instant is still Sat in UTC
     expect(isWeekendInTz(d, "UTC")).toBe(true);
+  });
+
+  it("isWeekendDate checks calendar dates without timezone conversion", () => {
+    expect(isWeekendDate({ y: 2026, m: 5, d: 9 })).toBe(true);
+    expect(isWeekendDate({ y: 2026, m: 5, d: 10 })).toBe(true);
+    expect(isWeekendDate({ y: 2026, m: 5, d: 11 })).toBe(false);
   });
 });

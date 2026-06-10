@@ -63,6 +63,36 @@ describe("SchedulerService", () => {
     expect(store.get("2026-05-11").status).toBe("completed");
   });
 
+  it("scheduled tick skips weekend dates in the lookback window", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "00:01",
+          lookbackDays: 3,
+        },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"), // Mon, includes Sun/Sat lookback
+    });
+    await svc.tick();
+    expect(runForDate).toHaveBeenCalledTimes(1);
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(store.get("2026-05-10").status).toBe("pending");
+    expect(store.get("2026-05-09").status).toBe("pending");
+  });
+
   it("skips dates already completed", async () => {
     const store = makeStore();
     await store.load();

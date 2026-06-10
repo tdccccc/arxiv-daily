@@ -9,6 +9,7 @@ import {
   minutesSinceMidnight,
   daysBefore,
   isWeekendInTz,
+  isWeekendDate,
 } from "../utils/time";
 import type { PipelineResult } from "../pipeline/pipeline";
 import type { ProgressReporter } from "./progress";
@@ -61,9 +62,11 @@ export class SchedulerService {
     const scheduledMin = t.hour * 60 + t.minute;
 
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
-      const date = formatDate(daysBefore(todayObj, i));
+      const dateObj = daysBefore(todayObj, i);
+      const date = formatDate(dateObj);
       const isToday = date === today;
       this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
+      if (isWeekendDate(dateObj)) continue;
       await this.tickDate(date, {
         now,
         timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
