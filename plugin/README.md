@@ -3,8 +3,11 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.2)
+## Features (v0.1.3)
 
+- **arXiv date parsing fix** — accepts abbreviated month names in listing
+  headers (for example `Wed, 10 Jun 2026`) so June and later daily runs
+  match the correct `/recent` bucket.
 - **Topic cards** — collapsible cards replace the five legacy arXiv fields
   (`researchInterests` / `detailCriteria` / `detailCategories` /
   `categoryTagMap` / `categoryDisplayMap`). Each topic owns `name`
@@ -23,7 +26,7 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   Obsidian `setTooltip`-backed `(?)` badge on advanced fields; muted
   hint text below topic-card labels.
 - One-shot, lossy migration from v0.1.x on first load (`migration.ts`).
-- 134 vitest tests passing, `tsc -noEmit` clean, ~560 KB bundle.
+- 135 vitest tests passing, `tsc -noEmit` clean, ~560 KB bundle.
 
 ## Installation
 
