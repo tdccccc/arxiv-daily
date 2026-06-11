@@ -14,15 +14,17 @@ import {
 import type { PipelineResult } from "../pipeline/pipeline";
 import type { ProgressReporter } from "./progress";
 import { NoopProgressReporter } from "./progress";
+import type { RunCancellationService } from "./cancellation";
 
 export interface SchedulerDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
   lock: RunLock;
-  runForDate: (date: string) => Promise<PipelineResult>;
+  runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
   logger: Logger;
   now?: () => Date;
   progress?: ProgressReporter;
+  cancellation?: RunCancellationService;
 }
 
 export class SchedulerService {
@@ -49,6 +51,14 @@ export class SchedulerService {
     }
   }
 
+  cancelCurrentRun(reason = "cancelled by user"): string[] {
+    return this.deps.cancellation?.cancelAll(reason) ?? [];
+  }
+
+  activeRuns(): string[] {
+    return this.deps.cancellation?.activeDates() ?? [];
+  }
+
   async tick(): Promise<void> {
     const s = this.deps.getSettings();
     if (!s.schedule.enabled) return;
@@ -62,6 +72,7 @@ export class SchedulerService {
     const scheduledMin = t.hour * 60 + t.minute;
 
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
+      if (this.isCancellationRequested()) break;
       const dateObj = daysBefore(todayObj, i);
       const date = formatDate(dateObj);
       const isToday = date === today;
@@ -71,6 +82,7 @@ export class SchedulerService {
         now,
         timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
       });
+      if (this.isCancellationRequested()) break;
     }
     this.progress.setIdle(this.latestCompleted());
   }
@@ -189,6 +201,7 @@ export class SchedulerService {
     }> = [];
 
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
+      if (this.isCancellationRequested()) break;
       const date = formatDate(daysBefore(todayObj, i));
       const entry = this.deps.store.get(date);
       if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
@@ -198,6 +211,7 @@ export class SchedulerService {
       this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
       const r = await this.tryRun(date);
       results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
+      if (this.isCancellationRequested()) break;
     }
     this.progress.setIdle(this.latestCompleted());
     return results;
@@ -221,6 +235,7 @@ export class SchedulerService {
     }> = [];
 
     for (let i = 0; i < s.schedule.lookbackDays; i++) {
+      if (this.isCancellationRequested()) break;
       const date = formatDate(daysBefore(todayObj, i));
       const entry = this.deps.store.get(date);
       if (this.deps.store.isDone(date)) continue;
@@ -231,6 +246,7 @@ export class SchedulerService {
       this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
       const r = await this.tryRun(date);
       results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
+      if (this.isCancellationRequested()) break;
     }
     this.progress.setIdle(this.latestCompleted());
     return results;
@@ -238,26 +254,41 @@ export class SchedulerService {
 
   private async tryRun(date: string): Promise<PipelineResult | undefined> {
     return this.deps.lock.withLock(date, async () => {
-      await this.deps.store.setRunning(date);
+      this.deps.cancellation?.prepareRun();
+      const signal = this.deps.cancellation?.begin(date);
       let result: PipelineResult;
       try {
-        result = await this.deps.runForDate(date);
+        await this.deps.store.setRunning(date);
+        result = signal
+          ? await this.deps.runForDate(date, signal)
+          : await this.deps.runForDate(date);
       } catch (e) {
-        result = { kind: "failed_transient", reason: (e as Error).message };
+        result = {
+          kind: "failed_transient",
+          reason: (e as Error).message,
+        };
       }
-      if (result.kind === "completed") {
-        await this.deps.store.setCompleted(date, result.papersWritten);
-        this.deps.logger.notice(`arXiv ${date}: ${result.papersWritten} papers written`);
-      } else if (result.kind === "failed_transient") {
-        await this.deps.store.setFailed(date, "transient", result.reason);
-        this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
-      } else {
-        await this.deps.store.setFailed(date, "permanent", result.reason);
-        this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
-        this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
+      try {
+        if (result.kind === "completed") {
+          await this.deps.store.setCompleted(date, result.papersWritten);
+          this.deps.logger.notice(`arXiv ${date}: ${result.papersWritten} papers written`);
+        } else if (result.kind === "failed_transient") {
+          await this.deps.store.setFailed(date, "transient", result.reason);
+          this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
+        } else {
+          await this.deps.store.setFailed(date, "permanent", result.reason);
+          this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
+          this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
+        }
+      } finally {
+        this.deps.cancellation?.finish(date);
       }
       return result;
     });
+  }
+
+  private isCancellationRequested(): boolean {
+    return this.deps.cancellation?.isCancellationRequested() ?? false;
   }
 
   private latestCompleted(): string | undefined {

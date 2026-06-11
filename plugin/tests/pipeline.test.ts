@@ -116,6 +116,28 @@ function firstDateFromFixture(): string {
 }
 
 describe("ArxivPipeline", () => {
+  it("returns failed_transient without fetching when the signal is already cancelled", async () => {
+    const d = makeDeps();
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const controller = new AbortController();
+    controller.abort("cancelled by test");
+    const result = await pipeline.runForDate(firstDateFromFixture(), controller.signal);
+    expect(result.kind).toBe("failed_transient");
+    expect((result as any).reason).toBe("cancelled by test");
+    expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
+  });
+
   it("returns failed_transient when date not in /recent", async () => {
     const d = makeDeps();
     const pipeline = new ArxivPipeline({

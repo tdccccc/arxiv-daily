@@ -1,5 +1,6 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
+import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
 
@@ -12,6 +13,7 @@ export interface PaperFilterDeps {
   llm: LlmClient;
   logger: Logger;
   arxivSettings: ArxivSettings;
+  signal?: AbortSignal;
 }
 
 export async function filterPapers(
@@ -19,6 +21,7 @@ export async function filterPapers(
   deps: PaperFilterDeps,
 ): Promise<FilteredPaper[]> {
   const { llm, logger, arxivSettings } = deps;
+  throwIfCancelled(deps.signal);
   if (papers.length === 0) return [];
 
   const topics: Topic[] = arxivSettings.topics ?? [];
@@ -65,12 +68,14 @@ ${topicLines}
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      { temperature: 0 },
+      { temperature: 0, signal: deps.signal },
     );
   } catch (e) {
+    if (isCancellationError(e)) throw e;
     logger.error("paper-filter: LLM call failed", e);
     return [];
   }
+  throwIfCancelled(deps.signal);
 
   let parsed: { papers?: Array<{ id?: string; category?: string; detail?: boolean }> };
   try {

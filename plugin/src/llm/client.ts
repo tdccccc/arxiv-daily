@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
+import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -11,6 +12,7 @@ export interface ChatMessage {
 export interface CallOptions {
   /** Overrides settings.temperature. Ignored when thinkingMode = true. */
   temperature?: number;
+  signal?: AbortSignal;
 }
 
 export class LlmClient {
@@ -29,6 +31,7 @@ export class LlmClient {
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
     return retry(
       async () => {
+        throwIfCancelled(opts.signal);
         const params: Record<string, unknown> = {
           model: this.settings.model,
           messages,
@@ -55,17 +58,23 @@ export class LlmClient {
         } else {
           params.temperature = opts.temperature ?? this.settings.temperature;
         }
-        const stream = await this.client.chat.completions.create(params as any);
+        const stream = await this.client.chat.completions.create(params as any, {
+          signal: opts.signal,
+        } as any);
         const chunks: string[] = [];
         for await (const chunk of stream as any) {
+          throwIfCancelled(opts.signal);
           const delta = chunk.choices?.[0]?.delta?.content;
           if (delta) chunks.push(delta);
         }
+        throwIfCancelled(opts.signal);
         return chunks.join("");
       },
       {
         maxAttempts: 3,
         baseDelayMs: 5000,
+        signal: opts.signal,
+        shouldRetry: (err) => !isCancellationError(err),
         onRetry: (err, attempt, wait) =>
           this.logger.warn(
             `LLM retry #${attempt} after ${wait}ms: ${(err as Error).message}`,

@@ -46,4 +46,32 @@ describe("retry", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onRetry.mock.calls[0][1]).toBe(1);
   });
+
+  it("does not start when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort("cancelled by test");
+    const fn = vi.fn().mockResolvedValue("ok");
+    await expect(
+      retry(fn, {
+        maxAttempts: 3,
+        baseDelayMs: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("cancelled by test");
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("does not retry after cancellation during backoff", async () => {
+    const controller = new AbortController();
+    const fn = vi.fn().mockRejectedValue(new Error("boom"));
+    await expect(
+      retry(fn, {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        signal: controller.signal,
+        onRetry: () => controller.abort("cancelled by test"),
+      }),
+    ).rejects.toThrow("cancelled by test");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
 });

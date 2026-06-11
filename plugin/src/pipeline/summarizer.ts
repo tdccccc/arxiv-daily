@@ -1,5 +1,6 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
+import { throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, AdvancedSettings } from "../settings/types";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
@@ -19,6 +20,7 @@ export interface SummarizerDeps {
   arxivSettings: ArxivSettings;
   advanced: AdvancedSettings;
   llmTemperature: number;
+  signal?: AbortSignal;
 }
 
 function buildPaperBlock(p: DailyPaperWithContent): string {
@@ -110,7 +112,7 @@ ${headerFmt}## [显示名称]
       { role: "system", content: systemPrompt },
       { role: "user", content: `以下是今日筛选出的论文：\n\n${papersInfo}` },
     ],
-    { temperature: llmTemperature },
+    { temperature: llmTemperature, signal: deps.signal },
   );
 }
 
@@ -119,6 +121,7 @@ export async function summarizeDaily(
   dateStr: string,
   deps: SummarizerDeps,
 ): Promise<string> {
+  throwIfCancelled(deps.signal);
   const nTotal = papers.length;
   const nDetail = papers.filter((p) => p.isDetail).length;
   const totalChars = papers.reduce((s, p) => s + buildPaperBlock(p).length, 0);
@@ -139,11 +142,13 @@ export async function summarizeDaily(
     `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n`;
   const parts: string[] = [header];
   for (let i = 0; i < batches.length; i++) {
+    throwIfCancelled(deps.signal);
     deps.logger.info(`summarizeDaily: batch ${i + 1}/${batches.length}`);
     parts.push(
       await callDailyLlm(batches[i], dateStr, nTotal, nDetail, true, deps),
     );
   }
+  throwIfCancelled(deps.signal);
   return parts.join("\n\n");
 }
 
@@ -151,6 +156,7 @@ export async function summarizePaperDetail(
   paper: DailyPaperWithContent,
   deps: SummarizerDeps,
 ): Promise<string> {
+  throwIfCancelled(deps.signal);
   if (!paper.fullSections) {
     throw new Error(
       `summarizePaperDetail: paper ${paper.id} has no full sections`,
@@ -201,6 +207,6 @@ export async function summarizePaperDetail(
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent },
     ],
-    { temperature: deps.llmTemperature },
+    { temperature: deps.llmTemperature, signal: deps.signal },
   );
 }

@@ -9,6 +9,7 @@ import { validateFilterConfig } from "./src/settings/validation";
 import { Logger } from "./src/services/logger";
 import { StateStore } from "./src/services/state-store";
 import { RunLock } from "./src/services/run-lock";
+import { RunCancellationService } from "./src/services/cancellation";
 import { SchedulerService } from "./src/services/scheduler";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "./src/services/progress";
@@ -37,6 +38,7 @@ export default class ArxivDailyPlugin extends Plugin {
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
   private runLock = new RunLock();
+  private runCancellation = new RunCancellationService();
 
   async onload() {
     await this.loadSettingsAndState();
@@ -69,8 +71,9 @@ export default class ArxivDailyPlugin extends Plugin {
       store: this.stateStore,
       lock: this.runLock,
       logger: this.logger,
-      runForDate: (date) => this.buildPipeline().runForDate(date),
+      runForDate: (date, signal) => this.buildPipeline().runForDate(date, signal),
       progress: this.progress,
+      cancellation: this.runCancellation,
     });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
@@ -94,6 +97,7 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   onunload() {
+    this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();
   }
 

@@ -113,6 +113,16 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     new Notice("arXiv Daily: run state cleared");
   }
 
+  function cancelCurrentRun() {
+    const active = plugin.scheduler.activeRuns();
+    if (active.length === 0) {
+      new Notice("arXiv Daily: no active run to cancel");
+      return;
+    }
+    const cancelled = plugin.scheduler.cancelCurrentRun();
+    new Notice(`arXiv Daily: cancellation requested for ${cancelled.join(", ")}`);
+  }
+
   async function openPaperInbox() {
     try {
       const path = await plugin.buildPaperIndex().writeInboxPage();
@@ -240,6 +250,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "arxiv-daily-cancel-current-run",
+    name: "Cancel current run",
+    callback: cancelCurrentRun,
+  });
+
+  plugin.addCommand({
     id: "arxiv-daily-summarize-by-id",
     name: "Summarize by arXiv ID…",
     callback: openArxivIdPicker,
@@ -356,6 +372,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setTitle("Clear run state…")
         .setIcon("trash-2")
         .onClick(clearRunState),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Cancel current run")
+        .setIcon("circle-stop")
+        .onClick(cancelCurrentRun),
     );
     menu.addItem((item) =>
       item

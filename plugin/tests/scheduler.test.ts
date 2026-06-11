@@ -3,6 +3,7 @@ import { SchedulerService } from "../src/services/scheduler";
 import { Logger } from "../src/services/logger";
 import { StateStore } from "../src/services/state-store";
 import { RunLock } from "../src/services/run-lock";
+import { RunCancellationService } from "../src/services/cancellation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 function makeStore() {
@@ -544,5 +545,81 @@ describe("SchedulerService", () => {
     await svc.tickToday();
     expect(progress.setIdle).toHaveBeenCalledWith(undefined, "weekend");
     expect(progress.setBatch).not.toHaveBeenCalled();
+  });
+
+  it("cancels an active run and records a transient failure", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const cancellation = new RunCancellationService();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const runForDate = vi.fn((_date: string, signal?: AbortSignal) => {
+      markStarted();
+      return new Promise((resolve) => {
+        signal?.addEventListener("abort", () =>
+          resolve({
+            kind: "failed_transient",
+            reason: String((signal as any).reason ?? "cancelled by user"),
+          }),
+        );
+      });
+    });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
+      }),
+      store,
+      lock,
+      runForDate: runForDate as any,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+      cancellation,
+    });
+
+    const pending = svc.runForDateNow("2026-05-11");
+    await started;
+    expect(svc.activeRuns()).toEqual(["2026-05-11"]);
+    expect(svc.cancelCurrentRun()).toEqual(["2026-05-11"]);
+
+    const result = await pending;
+    expect((result as any).kind).toBe("failed_transient");
+    expect((result as any).reason).toBe("cancelled by user");
+    expect(store.get("2026-05-11").status).toBe("failed_transient");
+    expect(store.get("2026-05-11").error).toBe("cancelled by user");
+    expect(svc.activeRuns()).toEqual([]);
+  });
+
+  it("stops runAllPending after cancellation is requested", async () => {
+    const store = makeStore();
+    await store.load();
+    const lock = new RunLock();
+    const cancellation = new RunCancellationService();
+    let svc!: SchedulerService;
+    const runForDate = vi.fn(async () => {
+      svc.cancelCurrentRun();
+      return { kind: "failed_transient", reason: "cancelled by user" };
+    });
+    svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+      }),
+      store,
+      lock,
+      runForDate: runForDate as any,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-12T05:00:00Z"),
+      cancellation,
+    });
+
+    const results = await svc.runAllPending();
+    expect(runForDate).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    expect(results[0].date).toBe("2026-05-12");
+    expect(results[0].result.kind).toBe("failed_transient");
   });
 });
