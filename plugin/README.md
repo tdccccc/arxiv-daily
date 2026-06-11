@@ -163,6 +163,9 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Run now` | Pulls today, writes daily + papers |
 | `arXiv Daily: Run for date…` | Pulls a specific date within the last 5 days |
 | `arXiv Daily: Run all pending in lookback window` | Runs every pending date |
+| `arXiv Daily: Retry failed dates in lookback window` | Clears failed state for recent failed dates and reruns them |
+| `arXiv Daily: Force run for date…` | Clears stored state for one date and runs it without schedule guards |
+| `arXiv Daily: Clear run state…` | Clears persisted completed/failed/skipped state without deleting notes |
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
 | `arXiv Daily: Show recent run state` | Lists last 20 dates and their statuses |

@@ -86,6 +86,24 @@ export class StateStore {
     await this.saveFn({ runState: this.state });
   }
 
+  async clearDate(date: string): Promise<void> {
+    if (!(date in this.state)) return;
+    delete this.state[date];
+    await this.saveFn({ runState: this.state });
+  }
+
+  async clearAll(): Promise<void> {
+    this.state = {};
+    await this.saveFn({ runState: this.state });
+  }
+
+  failedDates(): string[] {
+    return Object.entries(this.state)
+      .filter(([, v]) => v.status === "failed_transient" || v.status === "failed_permanent")
+      .map(([date]) => date)
+      .sort();
+  }
+
   snapshot(): RunState {
     const out: RunState = {};
     for (const [k, v] of Object.entries(this.state)) {

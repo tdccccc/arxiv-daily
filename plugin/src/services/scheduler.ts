@@ -167,6 +167,42 @@ export class SchedulerService {
     return result ?? { kind: "skipped", reason: "lock held" };
   }
 
+  async forceRunForDate(
+    date: string,
+  ): Promise<PipelineResult | { kind: "skipped"; reason: string }> {
+    const entry = this.deps.store.get(date);
+    if (entry.status === "running") {
+      return { kind: "skipped", reason: "already running" };
+    }
+    await this.deps.store.clearDate(date);
+    return this.runForDateNow(date);
+  }
+
+  async retryFailedInLookback(): Promise<Array<{ date: string; result: PipelineResult | { kind: "skipped"; reason: string } }>> {
+    const s = this.deps.getSettings();
+    const tz = s.arxiv.timezone;
+    const now = (this.deps.now ?? (() => new Date()))();
+    const todayObj = todayInTz(now, tz);
+    const results: Array<{
+      date: string;
+      result: PipelineResult | { kind: "skipped"; reason: string };
+    }> = [];
+
+    for (let i = 0; i < s.schedule.lookbackDays; i++) {
+      const date = formatDate(daysBefore(todayObj, i));
+      const entry = this.deps.store.get(date);
+      if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
+        continue;
+      }
+      await this.deps.store.clearDate(date);
+      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
+      const r = await this.tryRun(date);
+      results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
+    }
+    this.progress.setIdle(this.latestCompleted());
+    return results;
+  }
+
   /**
    * Run every pending or failed_transient date within the current lookback
    * window, skipping completed / failed_permanent / running entries. Bypasses

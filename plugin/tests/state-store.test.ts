@@ -87,4 +87,35 @@ describe("StateStore", () => {
     snap.a.status = "completed";
     expect(store.get("a").status).toBe("running");
   });
+
+  it("clearDate removes one entry", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("a");
+    await store.setRunning("b");
+    await store.clearDate("a");
+    expect(store.get("a").status).toBe("pending");
+    expect(store.get("b").status).toBe("running");
+  });
+
+  it("clearAll removes every entry", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("a");
+    await store.setRunning("b");
+    await store.clearAll();
+    expect(store.snapshot()).toEqual({});
+  });
+
+  it("failedDates returns sorted failed entries only", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-12");
+    await store.setFailed("2026-05-12", "transient", "x");
+    await store.setRunning("2026-05-11");
+    await store.setCompleted("2026-05-11", 1);
+    await store.setRunning("2026-05-10");
+    await store.setFailed("2026-05-10", "permanent", "x");
+    expect(store.failedDates()).toEqual(["2026-05-10", "2026-05-12"]);
+  });
 });

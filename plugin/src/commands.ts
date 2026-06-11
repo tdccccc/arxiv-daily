@@ -2,6 +2,7 @@ import { App, Menu, Modal, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
 import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
+import { chooseModal } from "./services/modal";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -47,6 +48,17 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     new Notice(`arXiv Daily (lookback):\n${summary}`, 10_000);
   }
 
+  async function retryFailedInLookback() {
+    if (!gateFilter()) return;
+    new Notice(`arXiv Daily: retrying failed dates in lookback…`);
+    const results = await plugin.scheduler.retryFailedInLookback();
+    if (results.length === 0) {
+      new Notice("arXiv Daily: no failed dates in lookback window");
+      return;
+    }
+    new Notice(`arXiv Daily retry:\n${describeRunResults(results)}`, 10_000);
+  }
+
   function openDatePicker() {
     if (!gateFilter()) return;
     new DatePickerModal(plugin.app, async (date) => {
@@ -55,6 +67,40 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       const result = await plugin.scheduler.runForDateNow(date);
       new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     }).open();
+  }
+
+  function openForceDatePicker() {
+    if (!gateFilter()) return;
+    new DatePickerModal(
+      plugin.app,
+      async (date) => {
+        if (!date) return;
+        new Notice(`arXiv Daily: force running for ${date}…`);
+        const result = await plugin.scheduler.forceRunForDate(date);
+        new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+      },
+      {
+        title: "Force run arXiv Daily for date",
+        desc: "YYYY-MM-DD. Clears stored run state for this date before running; existing daily files are still not overwritten.",
+        buttonText: "Force run",
+      },
+    ).open();
+  }
+
+  async function clearRunState() {
+    const choice = await chooseModal(
+      plugin.app,
+      "Clear arXiv Daily run state",
+      "This clears stored completed/failed/skipped statuses. Existing markdown files are not changed.",
+      [
+        { label: "Cancel", value: "cancel" },
+        { label: "Clear state", value: "clear", warning: true },
+      ],
+    );
+    if (choice !== "clear") return;
+    await plugin.stateStore.clearAll();
+    plugin.progress.setIdle(undefined);
+    new Notice("arXiv Daily: run state cleared");
   }
 
   function openArxivIdPicker() {
@@ -84,6 +130,24 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     id: "arxiv-daily-run-all-pending",
     name: "Run all pending in lookback window",
     callback: runAllPending,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-retry-failed",
+    name: "Retry failed dates in lookback window",
+    callback: retryFailedInLookback,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-force-run-for-date",
+    name: "Force run for date…",
+    callback: openForceDatePicker,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-clear-run-state",
+    name: "Clear run state…",
+    callback: clearRunState,
   });
 
   plugin.addCommand({
@@ -150,9 +214,27 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     );
     menu.addItem((item) =>
       item
+        .setTitle("Retry failed (lookback)")
+        .setIcon("refresh-cw")
+        .onClick(retryFailedInLookback),
+    );
+    menu.addItem((item) =>
+      item
         .setTitle("Run for specific date…")
         .setIcon("calendar")
         .onClick(openDatePicker),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Force run for date…")
+        .setIcon("rotate-cw")
+        .onClick(openForceDatePicker),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Clear run state…")
+        .setIcon("trash-2")
+        .onClick(clearRunState),
     );
     menu.addItem((item) =>
       item
@@ -183,17 +265,27 @@ function describeManualResult(r: any): string {
   return JSON.stringify(r);
 }
 
+function describeRunResults(
+  results: Array<{ date: string; result: any }>,
+): string {
+  return results.map((r) => `${r.date}: ${describeResult(r.result)}`).join("\n");
+}
+
 class DatePickerModal extends Modal {
   private value = "";
-  constructor(app: App, private onSubmit: (date: string | null) => void) {
+  constructor(
+    app: App,
+    private onSubmit: (date: string | null) => void,
+    private opts: { title?: string; desc?: string; buttonText?: string } = {},
+  ) {
     super(app);
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Run arXiv Daily for date" });
+    contentEl.createEl("h2", { text: this.opts.title ?? "Run arXiv Daily for date" });
     new Setting(contentEl)
       .setName("Date")
-      .setDesc("YYYY-MM-DD (within the past 5 days for arXiv /recent)")
+      .setDesc(this.opts.desc ?? "YYYY-MM-DD (within the past 5 days for arXiv /recent)")
       .addText((t) =>
         t.setPlaceholder("2026-05-10").onChange((v) => {
           this.value = v.trim();
@@ -201,7 +293,7 @@ class DatePickerModal extends Modal {
       );
     new Setting(contentEl).addButton((b) =>
       b
-        .setButtonText("Run")
+        .setButtonText(this.opts.buttonText ?? "Run")
         .setCta()
         .onClick(() => {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(this.value)) {

@@ -165,6 +165,33 @@ describe("SchedulerService", () => {
     expect(runForDate).toHaveBeenCalledTimes(1);
   });
 
+  it("forceRunForDate clears existing state before running", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    await store.setFailed("2026-05-11", "permanent", "old");
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 2 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    const result = await svc.forceRunForDate("2026-05-11");
+    expect((result as any).kind).toBe("completed");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(store.get("2026-05-11").attempts).toBe(1);
+    expect(store.get("2026-05-11").error).toBeUndefined();
+  });
+
   it("does nothing when schedule is disabled", async () => {
     const store = makeStore();
     await store.load();
@@ -239,6 +266,39 @@ describe("SchedulerService", () => {
     const results = await svc.runAllPending();
     expect(runForDate).toHaveBeenCalledTimes(1);
     expect(results[0].date).toBe("2026-05-12");
+  });
+
+  it("retryFailedInLookback reruns failed dates only", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-12");
+    await store.setFailed("2026-05-12", "transient", "network");
+    await store.setRunning("2026-05-11");
+    await store.setCompleted("2026-05-11", 1);
+    await store.setRunning("2026-05-10");
+    await store.setFailed("2026-05-10", "permanent", "old");
+    const lock = new RunLock();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 0 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-12T05:00:00Z"),
+    });
+    const results = await svc.retryFailedInLookback();
+    expect(results.map((r) => r.date)).toEqual(["2026-05-12", "2026-05-10"]);
+    expect(runForDate).toHaveBeenCalledTimes(2);
+    expect(runForDate).toHaveBeenCalledWith("2026-05-12");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-10");
+    expect(store.get("2026-05-12").status).toBe("completed");
+    expect(store.get("2026-05-10").status).toBe("completed");
   });
 
   it("tickToday returns skipped:disabled when schedule disabled", async () => {
