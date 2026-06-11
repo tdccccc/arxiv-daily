@@ -4,6 +4,7 @@ import {
   normalizeArxivId,
 } from "../src/services/manual-fetch";
 import { Logger } from "../src/services/logger";
+import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 const atomFor = (id: string, opts: Partial<{ title: string; authors: string[]; primary: string; abstract: string }> = {}) => {
@@ -29,13 +30,31 @@ function makeDeps(overrides: Partial<{
   content: { abstractConclusion: string; fullSections: string | null } | null;
   llmText: string;
 }> = {}) {
+  const files: Record<string, string> = {};
+  const dirs = new Set<string>();
   const vault = {
     adapter: {
-      exists: vi.fn(async () => overrides.exists ?? false),
-      write: vi.fn(async () => undefined),
-      mkdir: vi.fn(async () => undefined),
-      rename: vi.fn(async () => undefined),
-      remove: vi.fn(async () => undefined),
+      read: vi.fn(async (path: string) => files[path]),
+      exists: vi.fn(async (path: string) => {
+        if (overrides.exists !== undefined && path.endsWith(".md")) {
+          return overrides.exists;
+        }
+        return path in files || dirs.has(path);
+      }),
+      write: vi.fn(async (path: string, content: string) => {
+        files[path] = content;
+      }),
+      mkdir: vi.fn(async (path: string) => {
+        dirs.add(path);
+      }),
+      rename: vi.fn(async (from: string, to: string) => {
+        files[to] = files[from];
+        delete files[from];
+      }),
+      remove: vi.fn(async (path: string) => {
+        delete files[path];
+        dirs.delete(path);
+      }),
     },
   };
   const fetcher = {
@@ -56,7 +75,7 @@ function makeDeps(overrides: Partial<{
   const llm = {
     call: vi.fn(async () => overrides.llmText ?? "# Summary\n\nbody"),
   };
-  return { vault, fetcher, paperFetcher, writer, llm };
+  return { files, vault, fetcher, paperFetcher, writer, llm };
 }
 
 describe("normalizeArxivId", () => {
@@ -141,5 +160,34 @@ describe("ManualFetchService", () => {
     expect(paperArg.id).toBe("2605.08080");
     expect(paperArg.title).toContain("Test paper");
     expect(paperArg.isDetail).toBe(true);
+  });
+
+  it("updates the paper index when a manual detail note is created", async () => {
+    const d = makeDeps();
+    const paperIndex = new PaperIndexStore(
+      d.vault as any,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-11T01:30:00.000Z"),
+    );
+    const svc = new ManualFetchService({
+      vault: d.vault as any,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const r = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
+    expect(r.kind).toBe("done");
+    const index = JSON.parse(d.files["arxiv-daily/index/papers.json"]);
+    expect(index.papers["2605.08080"].status).toBe("saved");
+    expect(index.papers["2605.08080"].detail).toBe(true);
+    expect(index.papers["2605.08080"].paperPath).toBe("papers/2605.08080.md");
   });
 });

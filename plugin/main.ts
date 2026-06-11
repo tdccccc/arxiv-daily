@@ -189,6 +189,7 @@ export default class ArxivDailyPlugin extends Plugin {
       fetcher,
       paperFetcher,
       writer,
+      paperIndex: this.buildPaperIndex(),
       llm,
       logger: this.logger,
       arxiv: this.settings.arxiv,
@@ -221,6 +222,15 @@ export default class ArxivDailyPlugin extends Plugin {
 
   buildPaperIndex(): PaperIndexStore {
     return new PaperIndexStore(this.app.vault, this.settings.output);
+  }
+
+  buildMarkdownWriter(): MarkdownWriter {
+    return new MarkdownWriter({
+      vault: this.app.vault,
+      logger: this.logger,
+      arxiv: this.settings.arxiv,
+      output: this.settings.output,
+    });
   }
 
   private resolveCacheDir(): string {

@@ -4,6 +4,12 @@ import { todayInTz, formatDate } from "./utils/time";
 import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
 import { chooseModal } from "./services/modal";
 import { buildDiagnosticsReport } from "./services/diagnostics";
+import { normalizeArxivId } from "./services/manual-fetch";
+import {
+  isPaperStatus,
+  type PaperIndexEntry,
+  type PaperStatus,
+} from "./services/paper-index";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -104,6 +110,85 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     new Notice("arXiv Daily: run state cleared");
   }
 
+  async function openPaperInbox() {
+    try {
+      const path = await plugin.buildPaperIndex().writeInboxPage();
+      await plugin.app.workspace.openLinkText(path, "", false);
+      new Notice(`arXiv Daily: opened paper inbox`);
+    } catch (e) {
+      new Notice(`arXiv Daily: could not open paper inbox: ${(e as Error).message}`, 10_000);
+    }
+  }
+
+  function openSetPaperStatusModal() {
+    new PaperStatusModal(plugin.app, async (id, status) => {
+      if (!id || !status) return;
+      await setPaperStatus(id, status);
+    }).open();
+  }
+
+  function openCreatePaperNoteModal() {
+    new PaperIdModal(
+      plugin.app,
+      "Create arXiv Daily paper note",
+      "arXiv ID or URL",
+      "Create note",
+      async (raw) => {
+        if (!raw) return;
+        const id = normalizeArxivId(raw);
+        if (!id) {
+          new Notice("Invalid arXiv ID");
+          return;
+        }
+        await createPaperNote(id);
+      },
+    ).open();
+  }
+
+  async function setCurrentPaperStatus(status: PaperStatus) {
+    const id = getCurrentPaperId(plugin);
+    if (!id) {
+      new Notice("arXiv Daily: current note is not an indexed arXiv paper");
+      return;
+    }
+    await setPaperStatus(id, status);
+  }
+
+  async function setPaperStatus(rawId: string, status: PaperStatus) {
+    const id = normalizeArxivId(rawId);
+    if (!id) {
+      new Notice("Invalid arXiv ID");
+      return;
+    }
+    const store = plugin.buildPaperIndex();
+    const entry = await store.setStatus(id, status);
+    if (!entry) {
+      new Notice(`arXiv Daily: ${id} is not in papers.json`);
+      return;
+    }
+    if (status === "saved") {
+      await ensurePaperNote(plugin, store, entry);
+    }
+    new Notice(`arXiv Daily: ${id} marked ${status}`);
+  }
+
+  async function createPaperNote(rawId: string) {
+    const id = normalizeArxivId(rawId);
+    if (!id) {
+      new Notice("Invalid arXiv ID");
+      return;
+    }
+    const store = plugin.buildPaperIndex();
+    const entry = await store.get(id);
+    if (!entry) {
+      new Notice(`arXiv Daily: ${id} is not in papers.json`);
+      return;
+    }
+    const path = await ensurePaperNote(plugin, store, entry);
+    await plugin.app.workspace.openLinkText(path, "", false);
+    new Notice(`arXiv Daily: paper note ready at ${path}`);
+  }
+
   function openArxivIdPicker() {
     if (!gateLlm()) return;
     new ArxivIdModal(plugin.app, async (raw) => {
@@ -156,6 +241,32 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     name: "Summarize by arXiv ID…",
     callback: openArxivIdPicker,
   });
+
+  plugin.addCommand({
+    id: "arxiv-daily-open-paper-inbox",
+    name: "Open paper inbox",
+    callback: openPaperInbox,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-set-paper-status",
+    name: "Set paper status…",
+    callback: openSetPaperStatusModal,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-create-paper-note",
+    name: "Create paper note…",
+    callback: openCreatePaperNoteModal,
+  });
+
+  for (const status of PAPER_STATUSES) {
+    plugin.addCommand({
+      id: `arxiv-daily-mark-current-${status}`,
+      name: `Mark current paper as ${status}`,
+      callback: () => setCurrentPaperStatus(status),
+    });
+  }
 
   plugin.addCommand({
     id: "arxiv-daily-open-today",
@@ -249,6 +360,24 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setIcon("file-text")
         .onClick(openArxivIdPicker),
     );
+    menu.addItem((item) =>
+      item
+        .setTitle("Open paper inbox")
+        .setIcon("inbox")
+        .onClick(openPaperInbox),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Set paper status…")
+        .setIcon("list-checks")
+        .onClick(openSetPaperStatusModal),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Create paper note…")
+        .setIcon("file-plus")
+        .onClick(openCreatePaperNoteModal),
+    );
     menu.addSeparator();
     menu.addItem((item) =>
       item
@@ -259,6 +388,15 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     menu.showAtMouseEvent(evt);
   });
 }
+
+const PAPER_STATUSES: PaperStatus[] = [
+  "inbox",
+  "to_read",
+  "reading",
+  "read",
+  "saved",
+  "ignored",
+];
 
 function describeResult(r: any): string {
   if (!r) return "no result";
@@ -359,6 +497,91 @@ class ArxivIdModal extends Modal {
   }
 }
 
+class PaperIdModal extends Modal {
+  private value = "";
+  constructor(
+    app: App,
+    private title: string,
+    private fieldName: string,
+    private buttonText: string,
+    private onSubmit: (raw: string | null) => void,
+  ) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: this.title });
+    new Setting(contentEl)
+      .setName(this.fieldName)
+      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
+      .addText((t) =>
+        t.setPlaceholder("2605.08080").onChange((v) => {
+          this.value = v.trim();
+        }),
+      );
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText(this.buttonText)
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            new Notice("Please enter an arXiv ID");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value);
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class PaperStatusModal extends Modal {
+  private value = "";
+  private status: PaperStatus = "inbox";
+  constructor(app: App, private onSubmit: (id: string | null, status: PaperStatus | null) => void) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Set arXiv Daily paper status" });
+    new Setting(contentEl)
+      .setName("arXiv ID or URL")
+      .setDesc("Paper must already exist in arxiv-daily/index/papers.json")
+      .addText((t) =>
+        t.setPlaceholder("2605.08080").onChange((v) => {
+          this.value = v.trim();
+        }),
+      );
+    new Setting(contentEl)
+      .setName("Status")
+      .addDropdown((d) => {
+        for (const status of PAPER_STATUSES) d.addOption(status, status);
+        d.setValue(this.status).onChange((v) => {
+          if (isPaperStatus(v)) this.status = v;
+        });
+      });
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Set status")
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            new Notice("Please enter an arXiv ID");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value, this.status);
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 class StateModal extends Modal {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
@@ -431,4 +654,42 @@ class DiagnosticsModal extends Modal {
   onClose() {
     this.contentEl.empty();
   }
+}
+
+async function ensurePaperNote(
+  plugin: ArxivDailyPlugin,
+  store: ReturnType<ArxivDailyPlugin["buildPaperIndex"]>,
+  entry: PaperIndexEntry,
+): Promise<string> {
+  const writer = plugin.buildMarkdownWriter();
+  if (entry.paperPath && (await plugin.app.vault.adapter.exists(entry.paperPath))) {
+    return entry.paperPath;
+  }
+  const defaultPath = writer.paperDetailPath(entry.arxivId);
+  if (await plugin.app.vault.adapter.exists(defaultPath)) {
+    await store.setPaperPath(entry.arxivId, defaultPath);
+    return defaultPath;
+  }
+  const path = await writer.writePaperNote({ ...entry, paperPath: defaultPath });
+  await store.setPaperPath(entry.arxivId, path);
+  return path;
+}
+
+function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
+  const app = plugin.app as any;
+  const file = app.workspace?.getActiveFile?.();
+  const frontmatter = file
+    ? app.metadataCache?.getFileCache?.(file)?.frontmatter
+    : null;
+  const fromFrontmatter = normalizeArxivId(
+    String(frontmatter?.arxiv_id ?? frontmatter?.arxiv ?? ""),
+  );
+  if (fromFrontmatter) return fromFrontmatter;
+  const basename =
+    typeof file?.basename === "string"
+      ? file.basename
+      : typeof file?.name === "string"
+      ? file.name.replace(/\.md$/i, "")
+      : "";
+  return normalizeArxivId(basename);
 }

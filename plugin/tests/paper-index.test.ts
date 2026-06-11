@@ -218,4 +218,24 @@ describe("PaperIndexStore", () => {
       "2606.00001",
     ]);
   });
+
+  it("writes an inbox markdown page from indexed papers", async () => {
+    const { files, store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    const path = await store.writeInboxPage();
+    expect(path).toBe("arxiv-daily/inbox.md");
+    expect(files[path]).toContain("# arXiv Daily Inbox");
+    expect(files[path]).toContain("Status: inbox");
+    expect(files[path]).toContain("## photo-z");
+    expect(files[path]).toContain("- [ ] 2606.12345 A paper");
+    expect(files[path]).toContain("arXiv: https://arxiv.org/abs/2606.12345");
+  });
 });

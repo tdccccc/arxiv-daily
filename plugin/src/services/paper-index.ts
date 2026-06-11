@@ -206,6 +206,16 @@ export class PaperIndexStore {
       .sort(compareEntries);
   }
 
+  async writeInboxPage(status: PaperStatus = "inbox"): Promise<string> {
+    const papers = await this.listByStatus(status);
+    await this.ensureDirDeep(this.paths.rootDir);
+    await this.vault.adapter.write(
+      this.paths.inboxPath,
+      renderInboxMarkdown(papers, status, this.now()),
+    );
+    return this.paths.inboxPath;
+  }
+
   private async ensureDirDeep(dir: string): Promise<void> {
     const parts = normalizePath(dir).split("/").filter(Boolean);
     let cur = "";
@@ -408,4 +418,40 @@ function compareEntries(a: PaperIndexEntry, b: PaperIndexEntry): number {
     return priorityOrder[a.priority] - priorityOrder[b.priority];
   }
   return b.published.localeCompare(a.published);
+}
+
+export function renderInboxMarkdown(
+  papers: PaperIndexEntry[],
+  status: PaperStatus,
+  now: Date,
+): string {
+  const lines = [
+    "# arXiv Daily Inbox",
+    "",
+    `Generated: ${now.toISOString()}`,
+    `Status: ${status}`,
+    `Total: ${papers.length}`,
+    "",
+  ];
+  if (papers.length === 0) {
+    lines.push("No papers.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  let currentTopic = "";
+  for (const paper of papers) {
+    const topic = paper.primaryTopic || "uncategorized";
+    if (topic !== currentTopic) {
+      if (currentTopic) lines.push("");
+      currentTopic = topic;
+      lines.push(`## ${topic}`, "");
+    }
+    const note = paper.paperPath ? ` | note: [[${paper.arxivId}]]` : "";
+    lines.push(`- [ ] ${paper.arxivId} ${paper.title}`);
+    lines.push(
+      `  - status: ${paper.status}; priority: ${paper.priority}; published: ${paper.published}${note}`,
+    );
+    lines.push(`  - arXiv: ${paper.arxivUrl}`);
+  }
+  return `${lines.join("\n")}\n`;
 }

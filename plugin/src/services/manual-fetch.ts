@@ -7,6 +7,7 @@ import type { Vault } from "obsidian";
 import { normalizePath } from "obsidian";
 import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
+import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
@@ -20,6 +21,7 @@ export interface ManualFetchDeps {
   fetcher: ArxivFetcher;
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
+  paperIndex?: PaperIndexStore;
   llm: LlmClient;
   logger: Logger;
   arxiv: ArxivSettings;
@@ -127,8 +129,46 @@ export class ManualFetchService {
       return { kind: "error", reason: `LLM summary: ${(e as Error).message}` };
     }
 
-    // 5. Write
-    const path = await this.deps.writer.writePaperDetail(paper, dateStr, summary);
+    // 5. Index + write
+    let indexEntry: PaperIndexEntry | undefined;
+    if (this.deps.paperIndex) {
+      try {
+        const indexed = await this.deps.paperIndex.upsertFromDailyPaper({
+          arxivId: id,
+          title,
+          authors,
+          date: dateStr,
+          arxivCategory: this.deps.arxiv.category,
+          primaryTopic: category,
+          detail: true,
+        });
+        indexEntry = indexed.entry;
+        if (indexed.wasNew) {
+          const saved = await this.deps.paperIndex.setStatus(id, "saved");
+          indexEntry = saved ?? indexEntry;
+        }
+      } catch (e) {
+        logger.error(`manual-fetch: paper index update failed for ${id}`, e);
+        return {
+          kind: "error",
+          reason: `paper index: ${(e as Error).message}`,
+        };
+      }
+    }
+
+    const path = await this.deps.writer.writePaperDetail(
+      paper,
+      dateStr,
+      summary,
+      indexEntry,
+    );
+    if (this.deps.paperIndex) {
+      try {
+        await this.deps.paperIndex.setPaperPath(id, path);
+      } catch (e) {
+        logger.error(`manual-fetch: failed to store paperPath for ${id}`, e);
+      }
+    }
     logger.info(`manual-fetch: wrote ${path}`);
     return { kind: "done", path };
   }
