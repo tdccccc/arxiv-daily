@@ -100,4 +100,30 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("apiKeySet: no");
     expect(report).toContain('name="(empty)", tag="(empty)"');
   });
+
+  it("includes paper inbox diagnostics when provided", () => {
+    const report = buildDiagnosticsReport({
+      settings: makeSettings(),
+      runState: {},
+      now: new Date("2026-06-11T01:00:00.000Z"),
+      paperInbox: {
+        path: "arxiv-daily/index/papers.json",
+        inboxPath: "arxiv-daily/inbox.md",
+        exists: true,
+        schemaVersion: 1,
+        total: 3,
+        statusCounts: { inbox: 2, saved: 1 },
+        invalidStatuses: [],
+        missingPaperPaths: ["2606.12345: arxiv-daily/papers/2606.12345.md"],
+      },
+    });
+
+    expect(report).toContain("paperInbox:");
+    expect(report).toContain("path: arxiv-daily/index/papers.json");
+    expect(report).toContain("inboxPath: arxiv-daily/inbox.md");
+    expect(report).toContain("schemaVersion: 1");
+    expect(report).toContain("total: 3");
+    expect(report).toContain("statusCounts: inbox=2, saved=1");
+    expect(report).toContain("2606.12345: arxiv-daily/papers/2606.12345.md");
+  });
 });

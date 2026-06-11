@@ -137,12 +137,15 @@ tdccccc/arxiv-daily
 | 补跑过去 N 天 | Ribbon → **Run all pending** |
 | 指定日期 | 命令面板 (`Cmd/Ctrl+P`) → **arXiv Daily: Run for date…** |
 | 按 arXiv ID 单篇 | Ribbon → **Summarize by arXiv ID…** —— 弹窗粘贴 `2605.12345` 或完整 URL |
+| 打开论文收件箱 | 命令面板 → **arXiv Daily: Open paper inbox** |
+| 标记论文状态 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as saved/read/ignored** |
 | 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
 
 ---
 
 ## 注意事项
 
+- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。论文级状态和去重记录在 `arxiv-daily/index/papers.json`，只有 detail / saved / 手动创建的论文会有单篇 md。
 - **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时跑。完全离开几天，超出 5 天窗口的就拿不到了（arXiv `/recent` 限制）
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵

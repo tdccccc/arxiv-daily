@@ -3,7 +3,10 @@ import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
 import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
 import { chooseModal } from "./services/modal";
-import { buildDiagnosticsReport } from "./services/diagnostics";
+import {
+  buildDiagnosticsReport,
+  type PaperInboxDiagnostics,
+} from "./services/diagnostics";
 import { normalizeArxivId } from "./services/manual-fetch";
 import {
   isPaperStatus,
@@ -617,20 +620,40 @@ class DiagnosticsModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    const report = buildDiagnosticsReport({
-      settings: this.plugin.settings,
-      runState: this.plugin.stateStore.snapshot(),
-      version: this.plugin.manifest?.version,
-    });
     contentEl.createEl("h2", { text: "arXiv Daily diagnostics" });
     const textarea = contentEl.createEl("textarea");
-    textarea.value = report;
+    textarea.value = "Loading diagnostics...";
     textarea.readOnly = true;
     textarea.style.width = "100%";
     textarea.style.height = "360px";
     textarea.style.fontFamily = "var(--font-monospace)";
     textarea.style.fontSize = "var(--font-smaller)";
     textarea.style.resize = "vertical";
+    let report = textarea.value;
+    void collectPaperInboxDiagnostics(this.plugin)
+      .then((paperInbox) => {
+        report = buildDiagnosticsReport({
+          settings: this.plugin.settings,
+          runState: this.plugin.stateStore.snapshot(),
+          version: this.plugin.manifest?.version,
+          paperInbox,
+        });
+        textarea.value = report;
+      })
+      .catch((e) => {
+        report = buildDiagnosticsReport({
+          settings: this.plugin.settings,
+          runState: this.plugin.stateStore.snapshot(),
+          version: this.plugin.manifest?.version,
+          paperInbox: {
+            path: this.plugin.buildPaperIndex().paths.papersJsonPath,
+            inboxPath: this.plugin.buildPaperIndex().paths.inboxPath,
+            exists: false,
+            error: (e as Error).message,
+          },
+        });
+        textarea.value = report;
+      });
     new Setting(contentEl).addButton((b) =>
       b
         .setButtonText("Copy")
@@ -692,4 +715,49 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
       ? file.name.replace(/\.md$/i, "")
       : "";
   return normalizeArxivId(basename);
+}
+
+async function collectPaperInboxDiagnostics(
+  plugin: ArxivDailyPlugin,
+): Promise<PaperInboxDiagnostics> {
+  const store = plugin.buildPaperIndex();
+  const exists = await plugin.app.vault.adapter.exists(store.paths.papersJsonPath);
+  const diag: PaperInboxDiagnostics = {
+    path: store.paths.papersJsonPath,
+    inboxPath: store.paths.inboxPath,
+    exists,
+  };
+  if (!exists) return diag;
+  try {
+    const inbox = await store.load();
+    const entries = Object.values(inbox.papers);
+    const statusCounts: Record<string, number> = {};
+    const invalidStatuses: string[] = [];
+    const missingPaperPaths: string[] = [];
+    for (const entry of entries) {
+      statusCounts[entry.status] = (statusCounts[entry.status] ?? 0) + 1;
+      if (!isPaperStatus(entry.status)) {
+        invalidStatuses.push(`${entry.arxivId}: ${entry.status}`);
+      }
+      if (
+        entry.paperPath &&
+        !(await plugin.app.vault.adapter.exists(entry.paperPath))
+      ) {
+        missingPaperPaths.push(`${entry.arxivId}: ${entry.paperPath}`);
+      }
+    }
+    return {
+      ...diag,
+      schemaVersion: inbox.schemaVersion,
+      total: entries.length,
+      statusCounts,
+      invalidStatuses,
+      missingPaperPaths,
+    };
+  } catch (e) {
+    return {
+      ...diag,
+      error: (e as Error).message,
+    };
+  }
 }

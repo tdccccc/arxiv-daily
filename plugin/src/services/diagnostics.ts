@@ -8,6 +8,19 @@ export interface DiagnosticsInput {
   version?: string;
   now?: Date;
   recentLimit?: number;
+  paperInbox?: PaperInboxDiagnostics;
+}
+
+export interface PaperInboxDiagnostics {
+  path: string;
+  inboxPath: string;
+  exists: boolean;
+  schemaVersion?: number;
+  total?: number;
+  statusCounts?: Record<string, number>;
+  invalidStatuses?: string[];
+  missingPaperPaths?: string[];
+  error?: string;
 }
 
 export function buildDiagnosticsReport(input: DiagnosticsInput): string {
@@ -88,6 +101,9 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     "",
     `recentRunState(limit=${recentLimit}):`,
     ...formatRunState(recentEntries),
+    "",
+    "paperInbox:",
+    ...formatPaperInbox(input.paperInbox),
   ];
 
   return `${lines.join("\n")}\n`;
@@ -171,4 +187,37 @@ function formatTimestamp(timestamp: number): string {
 
 function formatList(items: string[]): string {
   return items.length ? items.join(", ") : "none";
+}
+
+function formatPaperInbox(diag: PaperInboxDiagnostics | undefined): string[] {
+  if (!diag) return ["  unavailable"];
+  const lines = [
+    `  path: ${diag.path}`,
+    `  inboxPath: ${diag.inboxPath}`,
+    `  exists: ${diag.exists ? "yes" : "no"}`,
+  ];
+  if (diag.error) {
+    lines.push(`  error: ${diag.error}`);
+    return lines;
+  }
+  if (diag.schemaVersion != null) lines.push(`  schemaVersion: ${diag.schemaVersion}`);
+  if (diag.total != null) lines.push(`  total: ${diag.total}`);
+  if (diag.statusCounts) {
+    const counts = Object.entries(diag.statusCounts)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([status, count]) => `${status}=${count}`)
+      .join(", ");
+    lines.push(`  statusCounts: ${counts || "none"}`);
+  }
+  if (diag.invalidStatuses?.length) {
+    lines.push("  invalidStatuses:", ...diag.invalidStatuses.map((s) => `    - ${s}`));
+  } else {
+    lines.push("  invalidStatuses: none");
+  }
+  if (diag.missingPaperPaths?.length) {
+    lines.push("  missingPaperPaths:", ...diag.missingPaperPaths.map((p) => `    - ${p}`));
+  } else {
+    lines.push("  missingPaperPaths: none");
+  }
+  return lines;
 }
