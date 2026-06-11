@@ -12,6 +12,9 @@ function makeVault(initialFiles: Record<string, string> = {}) {
         async write(path: string, content: string) {
           files[path] = content;
         },
+        async read(path: string) {
+          return files[path];
+        },
         async exists(path: string) {
           return Object.prototype.hasOwnProperty.call(files, path);
         },
@@ -126,8 +129,86 @@ describe("MarkdownWriter strictness on existing files", () => {
     };
     await writer.writePaperDetail(paper as any, "2026-06-10", "detail");
     const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain("type: paper");
+    expect(written).toContain('arxiv_id: "2605.06587"');
+    expect(written).toContain("status: inbox");
+    expect(written).toContain("priority: normal");
     expect(written).toContain("date: 2026-06-10");
     expect(written).toContain("weekday: Wednesday");
     expect(written).toContain("detail");
+  });
+
+  it("writePaperDetail uses paper index fields when provided", async () => {
+    const { files, writer } = makeWriter();
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+    };
+    await writer.writePaperDetail(paper as any, "2026-06-10", "detail", {
+      arxivId: "2605.06587",
+      source: "arxiv",
+      title: "T",
+      authors: ["A"],
+      published: "2026-06-09",
+      updated: "2026-06-10",
+      category: "astro-ph",
+      topics: ["photo-z"],
+      primaryTopic: "photo-z",
+      detail: true,
+      status: "saved",
+      priority: "high",
+      seenDates: ["2026-06-09", "2026-06-10"],
+      dailyReports: [],
+      paperPath: null,
+      arxivUrl: "https://arxiv.org/abs/2605.06587",
+      pdfUrl: "https://arxiv.org/pdf/2605.06587",
+      pdfPath: "",
+      zoteroKey: "ZOTERO",
+      citationKey: "cite",
+      projects: [],
+    });
+    const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain("status: saved");
+    expect(written).toContain("priority: high");
+    expect(written).toContain('  - "2026-06-09"');
+    expect(written).toContain('zotero_key: "ZOTERO"');
+    expect(written).toContain('citation_key: "cite"');
+  });
+
+  it("writePaperNote creates a lightweight note from an index entry", async () => {
+    const { files, writer } = makeWriter();
+    await writer.writePaperNote({
+      arxivId: "2605.06587",
+      source: "arxiv",
+      title: "T",
+      authors: ["A"],
+      published: "2026-06-09",
+      updated: "2026-06-10",
+      category: "astro-ph",
+      topics: ["photo-z"],
+      primaryTopic: "photo-z",
+      detail: false,
+      status: "saved",
+      priority: "normal",
+      seenDates: ["2026-06-10"],
+      dailyReports: [],
+      paperPath: null,
+      arxivUrl: "https://arxiv.org/abs/2605.06587",
+      pdfUrl: "https://arxiv.org/pdf/2605.06587",
+      pdfPath: "",
+      zoteroKey: "",
+      citationKey: "",
+      projects: [],
+    });
+    const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain("status: saved");
+    expect(written).toContain("- **arXiv**: [2605.06587]");
+    expect(written).toContain("## Notes");
   });
 });

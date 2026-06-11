@@ -1,11 +1,16 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import type { ArxivSettings, AdvancedSettings } from "../settings/types";
+import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
   fullSections: string | null;
+  inboxStatus?: PaperStatus;
+  seenBefore?: boolean;
+  paperPath?: string | null;
+  indexEntry?: PaperIndexEntry;
 }
 
 export interface SummarizerDeps {
@@ -17,11 +22,16 @@ export interface SummarizerDeps {
 }
 
 function buildPaperBlock(p: DailyPaperWithContent): string {
-  const detailMark = p.isDetail ? ` → [[${p.id}]]` : "";
+  const detailMark = p.isDetail || p.paperPath ? ` → [[${p.id}]]` : "";
+  const inboxLine =
+    `Inbox: ${p.seenBefore ? "seen_before" : "new"}, ` +
+    `status: ${p.inboxStatus ?? "inbox"}, ` +
+    `note: ${detailMark ? "local_note" : "arxiv_only"}\n`;
   return (
     `=== Paper: ${p.id} [category: ${p.category}]${detailMark} ===\n` +
     `Title: ${p.title}\n` +
     `Authors: ${p.authors}\n` +
+    inboxLine +
     `${p.abstractConclusion}\n\n`
   );
 }
@@ -92,6 +102,7 @@ ${headerFmt}## [显示名称]
 - 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
 - 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文，请保留此标记
 - 未标记的论文不要加 [[]] 链接
+- 输入中的 Inbox 行说明论文是 new 还是 seen_before；可在总结中自然保留该状态，不要把 ignored 论文补回来
 - 重点提取定量结果，避免泛泛而谈`;
 
   return llm.call(

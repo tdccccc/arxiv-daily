@@ -11,8 +11,9 @@ import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
 import type { LlmClient } from "../llm/client";
+import type { PaperIndexEntry, PaperIndexStore } from "../services/paper-index";
 import { parseRecent, type DateBucket } from "./arxiv-parser";
-import { filterPapers } from "./paper-filter";
+import { filterPapers, type FilteredPaper } from "./paper-filter";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -28,6 +29,7 @@ export interface PipelineDeps {
   fetcher: ArxivFetcher;
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
+  paperIndex?: PaperIndexStore;
   llm: LlmClient;
   logger: Logger;
   arxiv: ArxivSettings;
@@ -123,11 +125,21 @@ export class ArxivPipeline {
       return { kind: "completed", papersWritten: 0 };
     }
 
+    const indexed = await this.indexFilteredPapers(filtered, dateStr);
+    if (indexed.kind !== "ok") return indexed.result;
+    const visiblePapers = indexed.papers.filter(
+      (p) => p.indexEntry?.status !== "ignored",
+    );
+    if (visiblePapers.length === 0) {
+      await this.deps.writer.writeEmptyDaily(dateStr);
+      return { kind: "completed", papersWritten: 0 };
+    }
+
     // 6. Fetch content for each filtered paper
     const enriched: DailyPaperWithContent[] = [];
-    for (let i = 0; i < filtered.length; i++) {
-      const p = filtered[i];
-      this.progress.setStage("fetch-content", i + 1, filtered.length);
+    for (let i = 0; i < visiblePapers.length; i++) {
+      const p = visiblePapers[i];
+      this.progress.setStage("fetch-content", i + 1, visiblePapers.length);
       try {
         const c = await this.deps.paperFetcher.fetch(p.id, {
           isDetail: p.isDetail,
@@ -140,6 +152,9 @@ export class ArxivPipeline {
           ...p,
           abstractConclusion: c.abstractConclusion,
           fullSections: c.fullSections,
+          inboxStatus: p.indexEntry?.status,
+          seenBefore: p.seenBefore,
+          paperPath: p.indexEntry?.paperPath ?? null,
         });
       } catch (e) {
         logger.error(`pipeline: content fetch failed for ${p.id}`, e);
@@ -147,6 +162,9 @@ export class ArxivPipeline {
           ...p,
           abstractConclusion: `[获取失败] arXiv ID: ${p.id}`,
           fullSections: null,
+          inboxStatus: p.indexEntry?.status,
+          seenBefore: p.seenBefore,
+          paperPath: p.indexEntry?.paperPath ?? null,
         });
       }
     }
@@ -168,6 +186,20 @@ export class ArxivPipeline {
         reason: `daily summary LLM failed: ${(e as Error).message}`,
       };
     }
+    const dailyPath = this.deps.writer.dailyPath(dateStr);
+    if (this.deps.paperIndex) {
+      try {
+        await this.deps.paperIndex.addDailyReports(
+          visiblePapers.map((p) => p.id),
+          dailyPath,
+        );
+      } catch (e) {
+        return {
+          kind: "failed_transient",
+          reason: `paper index daily report update failed: ${(e as Error).message}`,
+        };
+      }
+    }
     await this.deps.writer.writeDaily(dateStr, dailySummary);
 
     // 8. Detail reports
@@ -176,6 +208,12 @@ export class ArxivPipeline {
       const p = detailPapers[i];
       if (await this.deps.writer.paperDetailExists(p.id)) {
         logger.info(`pipeline: detail ${p.id} already exists, skipping`);
+        if (this.deps.paperIndex) {
+          await this.deps.paperIndex.setPaperPath(
+            p.id,
+            this.deps.writer.paperDetailPath(p.id),
+          );
+        }
         continue;
       }
       this.progress.setStage("write-detail", i + 1, detailPapers.length);
@@ -188,12 +226,76 @@ export class ArxivPipeline {
           advanced: this.deps.advanced,
           llmTemperature: this.deps.llmSettings.temperature,
         });
-        await this.deps.writer.writePaperDetail(p, dateStr, detail);
+        const path = await this.deps.writer.writePaperDetail(
+          p,
+          dateStr,
+          detail,
+          p.indexEntry,
+        );
+        if (this.deps.paperIndex) {
+          await this.deps.paperIndex.setPaperPath(p.id, path);
+        }
       } catch (e) {
         logger.error(`pipeline: detail failed for ${p.id}`, e);
       }
     }
 
     return { kind: "completed", papersWritten: enriched.length };
+  }
+
+  private async indexFilteredPapers(
+    filtered: FilteredPaper[],
+    dateStr: string,
+  ): Promise<
+    | {
+        kind: "ok";
+        papers: Array<
+          FilteredPaper & {
+            indexEntry?: PaperIndexEntry;
+            wasNew?: boolean;
+            seenBefore?: boolean;
+          }
+        >;
+      }
+    | { kind: "error"; result: PipelineResult }
+  > {
+    const paperIndex = this.deps.paperIndex;
+    if (!paperIndex) {
+      return {
+        kind: "ok",
+        papers: filtered.map((p) => ({ ...p, wasNew: true, seenBefore: false })),
+      };
+    }
+
+    try {
+      const results = await paperIndex.upsertManyFromDailyPapers(
+        filtered.map((p) => ({
+          arxivId: p.id,
+          title: p.title,
+          authors: p.authors,
+          date: dateStr,
+          arxivCategory: this.deps.arxiv.category,
+          primaryTopic: p.category,
+          detail: p.isDetail,
+        })),
+      );
+      return {
+        kind: "ok",
+        papers: filtered.map((p, i) => ({
+          ...p,
+          indexEntry: results[i].entry,
+          wasNew: results[i].wasNew,
+          seenBefore: !results[i].wasNew,
+        })),
+      };
+    } catch (e) {
+      return {
+        kind: "error",
+        result: {
+          kind: "failed_permanent",
+          reason: `paper index update failed: ${(e as Error).message}`,
+        },
+      };
+    }
   }
 }

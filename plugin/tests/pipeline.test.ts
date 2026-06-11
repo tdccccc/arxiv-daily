@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { Logger } from "../src/services/logger";
+import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 vi.mock("obsidian", () => ({
@@ -58,6 +59,8 @@ function makeDeps() {
       writes[`daily/${date}.md`] = "empty";
       return `daily/${date}.md`;
     }),
+    dailyPath: vi.fn((date: string) => `daily/${date}.md`),
+    paperDetailPath: vi.fn((id: string) => `papers/${id}.md`),
     dailyExists: vi.fn(async () => false),
     paperDetailExists: vi.fn(async () => false),
   };
@@ -66,6 +69,41 @@ function makeDeps() {
   };
   const logger = new Logger("error");
   return { writes, fetcher, paperFetcher, writer, llm, logger };
+}
+
+function makePaperIndex() {
+  const files: Record<string, string> = {};
+  const dirs = new Set<string>();
+  const vault = {
+    adapter: {
+      async read(path: string) {
+        return files[path];
+      },
+      async write(path: string, content: string) {
+        files[path] = content;
+      },
+      async exists(path: string) {
+        return path in files || dirs.has(path);
+      },
+      async mkdir(path: string) {
+        dirs.add(path);
+      },
+      async rename(from: string, to: string) {
+        files[to] = files[from];
+        delete files[from];
+      },
+      async remove(path: string) {
+        delete files[path];
+        dirs.delete(path);
+      },
+    },
+  };
+  const store = new PaperIndexStore(
+    vault as any,
+    DEFAULT_SETTINGS.output,
+    () => new Date("2026-06-11T01:30:00.000Z"),
+  );
+  return { files, store };
 }
 
 function firstDateFromFixture(): string {
@@ -155,6 +193,96 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).toHaveBeenCalled();
   });
 
+  it("persists non-detail kept papers to the paper index without writing a paper note", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## Photo-z\n### Stub\n";
+      }
+      return "";
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const date = firstDateFromFixture();
+    const result = await pipeline.runForDate(date);
+    expect(result.kind).toBe("completed");
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    const entry = json.papers[arxivId];
+    expect(entry.status).toBe("inbox");
+    expect(entry.priority).toBe("normal");
+    expect(entry.paperPath).toBeNull();
+    expect(entry.seenDates).toEqual([date]);
+    expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
+  });
+
+  it("updates ignored papers in the paper index without including them in the daily body", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+    const date = firstDateFromFixture();
+    await store.upsertFromDailyPaper({
+      arxivId,
+      title: "Old",
+      authors: "A",
+      date: "2026-05-01",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await store.setStatus(arxivId, "ignored");
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+        });
+      }
+      throw new Error("daily summarizer should not be called");
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const result = await pipeline.runForDate(date);
+    expect(result.kind).toBe("completed");
+    expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(d.writer.writeEmptyDaily).toHaveBeenCalledWith(date);
+    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    expect(json.papers[arxivId].status).toBe("ignored");
+    expect(json.papers[arxivId].seenDates).toContain(date);
+  });
+
   it("short-circuits with completed when daily file already exists", async () => {
     const d = makeDeps();
     (d.writer as any).dailyExists = vi.fn().mockResolvedValue(true);
@@ -223,6 +351,46 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.writer.writeDaily).toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("writes detail reports and stores paperPath in the paper index", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## stub daily summary\n";
+      }
+      return "## detail summary\n";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub",
+      fullSections: "## Section\nbody",
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    await pipeline.runForDate(firstDateFromFixture());
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    expect(json.papers[arxivId].paperPath).toBe(`papers/${arxivId}.md`);
   });
 
   it("emits progress stages in order", async () => {

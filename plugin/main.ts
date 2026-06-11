@@ -22,6 +22,7 @@ import { ArxivPipeline } from "./src/pipeline/pipeline";
 import { ManualFetchService } from "./src/services/manual-fetch";
 import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "./src/utils/time";
+import { PaperIndexStore } from "./src/services/paper-index";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -170,6 +171,7 @@ export default class ArxivDailyPlugin extends Plugin {
       fetcher,
       paperFetcher,
       writer,
+      paperIndex: this.buildPaperIndex(),
       llm,
       logger: this.logger,
       arxiv: this.settings.arxiv,
@@ -215,6 +217,10 @@ export default class ArxivDailyPlugin extends Plugin {
       output: this.settings.output,
     });
     return { llm, fetcher, paperFetcher, writer };
+  }
+
+  buildPaperIndex(): PaperIndexStore {
+    return new PaperIndexStore(this.app.vault, this.settings.output);
   }
 
   private resolveCacheDir(): string {
