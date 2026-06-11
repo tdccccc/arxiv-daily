@@ -62,6 +62,40 @@
 
    Zotero、PDF、引用和项目笔记都依赖稳定的论文 metadata。先把 JSON schema、去重和状态流转做好，再做外部工具接入。
 
+## Storage Layout
+
+JSON-first 只针对论文级 inbox 索引，不改变日报作为 markdown 入口的定位。
+
+建议目录结构：
+
+```text
+arxiv-daily/
+  daily/
+    2026-06-11.md
+  index/
+    papers.json
+  papers/
+    2606.12345.md
+```
+
+职责划分：
+
+| Path | Role | Created by default |
+|---|---|---|
+| `arxiv-daily/daily/YYYY-MM-DD.md` | 每日发现入口，按 topic 展示当天相关论文 | Yes |
+| `arxiv-daily/index/papers.json` | 所有相关论文的状态、去重、seen dates 和外部工具字段 | Yes |
+| `arxiv-daily/papers/<arxiv_id>.md` | 重要论文的长期阅读笔记和深度分析 | Only for detail / high priority / saved / manual |
+| `arxiv-daily/inbox.md` | 从 JSON 生成的当前待处理视图 | On command or scheduled refresh |
+
+日报仍然是每天最主要的阅读入口。它应该从当天 pipeline 结果和 `papers.json` 共同生成：
+
+- 按 topic 分组展示当天相关论文。
+- 标明论文是 `new` 还是 `seen before`。
+- 对 `ignored` 论文弱化或默认隐藏，具体策略可以后续配置。
+- 如果论文已有 markdown note，链接到 `paperPath`。
+- 如果论文没有 markdown note，展示 arXiv 链接、摘要和一句话结论。
+- 将日报路径写回对应论文记录的 `dailyReports`。
+
 ## Proposed Paper Index
 
 完整 paper inbox 建议保存在 vault 可见目录：
@@ -178,7 +212,7 @@ citation_key: ""
    - `priority: high`。
    - `status: saved`。
    - 用户手动执行 `Create paper note`。
-5. 日报中区分 new / seen before，并可以弱化已 `ignored` 的论文。
+5. 日报继续创建 markdown，并从 `papers.json` 标注 new / seen before，弱化已 `ignored` 的论文。
 6. 增加论文状态命令：
    - `Mark current paper as to read`
    - `Mark current paper as reading`
@@ -199,6 +233,8 @@ citation_key: ""
 - detail、high priority、saved 或用户主动创建的论文会拥有 `paperPath` 和 markdown note。
 - 用户把论文标记为 `ignored` 后，后续再次出现不会被当作新论文提醒。
 - 用户修改过的状态字段不会被后续日报生成覆盖。
+- 每个成功运行的日期仍会创建或保留 `arxiv-daily/daily/YYYY-MM-DD.md`。
+- 日报中没有 markdown note 的普通论文仍可通过 arXiv 链接访问。
 - inbox 页面可以从 JSON 生成，列出未处理论文：
 
 ```markdown
