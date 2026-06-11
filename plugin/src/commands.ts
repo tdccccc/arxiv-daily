@@ -3,6 +3,7 @@ import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
 import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
 import { chooseModal } from "./services/modal";
+import { buildDiagnosticsReport } from "./services/diagnostics";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -176,6 +177,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     callback: () => new StateModal(plugin.app, plugin).open(),
   });
 
+  plugin.addCommand({
+    id: "arxiv-daily-show-diagnostics",
+    name: "Show diagnostics",
+    callback: () => new DiagnosticsModal(plugin.app, plugin).open(),
+  });
+
   plugin.addRibbonIcon("calendar-clock", "arXiv Daily", (evt: MouseEvent) => {
     const menu = new Menu();
 
@@ -241,6 +248,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setTitle("Summarize by arXiv ID…")
         .setIcon("file-text")
         .onClick(openArxivIdPicker),
+    );
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Show diagnostics")
+        .setIcon("clipboard-list")
+        .onClick(() => new DiagnosticsModal(plugin.app, plugin).open()),
     );
     menu.showAtMouseEvent(evt);
   });
@@ -368,6 +382,51 @@ class StateModal extends Modal {
           `)`,
       );
     }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class DiagnosticsModal extends Modal {
+  constructor(app: App, private plugin: ArxivDailyPlugin) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    const report = buildDiagnosticsReport({
+      settings: this.plugin.settings,
+      runState: this.plugin.stateStore.snapshot(),
+      version: this.plugin.manifest?.version,
+    });
+    contentEl.createEl("h2", { text: "arXiv Daily diagnostics" });
+    const textarea = contentEl.createEl("textarea");
+    textarea.value = report;
+    textarea.readOnly = true;
+    textarea.style.width = "100%";
+    textarea.style.height = "360px";
+    textarea.style.fontFamily = "var(--font-monospace)";
+    textarea.style.fontSize = "var(--font-smaller)";
+    textarea.style.resize = "vertical";
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Copy")
+        .setCta()
+        .onClick(async () => {
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(report);
+            } else {
+              textarea.select();
+              document.execCommand("copy");
+            }
+            new Notice("arXiv Daily: diagnostics copied");
+          } catch {
+            textarea.select();
+            new Notice("Could not copy diagnostics; text is selectable");
+          }
+        }),
+    );
   }
   onClose() {
     this.contentEl.empty();

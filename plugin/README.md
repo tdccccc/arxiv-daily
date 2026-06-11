@@ -169,6 +169,7 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
 | `arXiv Daily: Show recent run state` | Lists last 20 dates and their statuses |
+| `arXiv Daily: Show diagnostics` | Shows a copyable local diagnostic report without exposing the API key |
 
 Manual commands gate on config validity:
 - Run today / Run all pending / Run for date → requires LLM config + topics
