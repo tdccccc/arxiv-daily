@@ -25,6 +25,7 @@ import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "./src/utils/time";
 import { PaperIndexStore } from "./src/services/paper-index";
 import { DailySelectionSyncService } from "./src/services/daily-selection";
+import { BibtexService } from "./src/services/bibtex";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -255,6 +256,15 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
       arxiv: this.settings.arxiv,
       output: this.settings.output,
+    });
+  }
+
+  buildBibtexService(): BibtexService {
+    const { fetcher } = this.buildSharedDeps();
+    return new BibtexService({
+      fetcher,
+      paperIndex: this.buildPaperIndex(),
+      logger: this.logger,
     });
   }
 

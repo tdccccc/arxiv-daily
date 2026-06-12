@@ -503,9 +503,9 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] 漏报兜底：让 pipeline 保留当日抓取全集与入选论文集合，按 arXiv ID 计算未入选列表。
 - [x] 漏报兜底：日报末尾渲染默认收起的未入选论文列表，只包含标题、arXiv 链接和基础 metadata，不消耗 LLM。
 - [x] 漏报兜底：过滤 ignored 论文，并补测试保证入选数 + 未入选数等于抓取总数。
-- [ ] BibTeX：新增按 arXiv ID 获取 BibTeX 的服务，解析 entry key 并处理网络失败、空响应和非法 ID。
-- [ ] BibTeX：新增命令从当前论文笔记或用户输入 arXiv ID 获取 BibTeX，复制到剪贴板并写回 `citationKey`。
-- [ ] BibTeX：补测试覆盖 BibTeX key 解析、index 更新、当前文件 frontmatter / 正文识别 arXiv ID。
+- [x] BibTeX：新增按 arXiv ID 获取 BibTeX 的服务，解析 entry key 并处理网络失败、空响应和非法 ID。
+- [x] BibTeX：新增命令从当前论文笔记或用户输入 arXiv ID 获取 BibTeX，复制到剪贴板并写回 `citationKey`。
+- [x] BibTeX：补测试覆盖 BibTeX key 解析、index 更新、当前文件 frontmatter / 正文识别 arXiv ID。
 - [ ] 多分类：把 settings 从 `arxiv.category` 迁移到 `arxiv.categories: string[]`，保留旧配置兼容读取。
 - [ ] 多分类：设置页支持增删多个 arXiv category，并校验重复、空值和非法分类。
 - [ ] 多分类：pipeline 多分类抓取后按 arXiv ID 去重，交叉挂载论文只进入一次 LLM 分类和 index 更新。

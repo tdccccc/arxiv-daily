@@ -190,6 +190,18 @@ export class PaperIndexStore {
     return entry;
   }
 
+  async setCitationKey(
+    arxivId: string,
+    citationKey: string,
+  ): Promise<PaperIndexEntry | null> {
+    const inbox = await this.load();
+    const entry = inbox.papers[arxivId];
+    if (!entry) return null;
+    entry.citationKey = citationKey;
+    await this.save(inbox);
+    return entry;
+  }
+
   async setPaperPath(arxivId: string, paperPath: string): Promise<PaperIndexEntry | null> {
     const inbox = await this.load();
     const entry = inbox.papers[arxivId];

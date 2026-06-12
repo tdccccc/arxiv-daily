@@ -13,6 +13,7 @@ import {
   type PaperIndexEntry,
   type PaperStatus,
 } from "./services/paper-index";
+import { extractArxivIdFromMarkdown } from "./services/bibtex";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -148,6 +149,19 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     ).open();
   }
 
+  function openCopyBibtexModal() {
+    new PaperIdModal(
+      plugin.app,
+      "Copy arXiv BibTeX",
+      "arXiv ID or URL",
+      "Copy BibTeX",
+      async (raw) => {
+        if (!raw) return;
+        await copyBibtex(raw);
+      },
+    ).open();
+  }
+
   async function setCurrentPaperStatus(status: PaperStatus) {
     const id = getCurrentPaperId(plugin);
     if (!id) {
@@ -190,6 +204,32 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     const path = await ensurePaperNote(plugin, store, entry);
     await plugin.app.workspace.openLinkText(path, "", false);
     new Notice(`arXiv Daily: paper note ready at ${path}`);
+  }
+
+  async function copyCurrentPaperBibtex() {
+    const id = await getCurrentPaperIdFromActiveFile(plugin);
+    if (!id) {
+      new Notice("arXiv Daily: current note is not an arXiv paper");
+      return;
+    }
+    await copyBibtex(id);
+  }
+
+  async function copyBibtex(rawId: string) {
+    const result = await plugin.buildBibtexService().fetchAndStore(rawId);
+    if (result.kind !== "done") {
+      new Notice(`arXiv Daily: BibTeX failed — ${result.reason}`, 10_000);
+      return;
+    }
+    try {
+      await writeClipboard(result.bibtex);
+      new Notice(
+        `arXiv Daily: copied BibTeX for ${result.arxivId} (${result.citationKey})` +
+          (result.entryUpdated ? "" : "; not in papers.json"),
+      );
+    } catch {
+      new Notice("arXiv Daily: BibTeX fetched but clipboard copy failed", 10_000);
+    }
   }
 
   function openArxivIdPicker() {
@@ -271,6 +311,18 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     id: "arxiv-daily-create-paper-note",
     name: "Create paper note…",
     callback: openCreatePaperNoteModal,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-copy-current-bibtex",
+    name: "Copy BibTeX for current paper",
+    callback: copyCurrentPaperBibtex,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-copy-bibtex-by-id",
+    name: "Copy BibTeX by arXiv ID…",
+    callback: openCopyBibtexModal,
   });
 
   for (const status of PAPER_STATUSES) {
@@ -379,6 +431,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setTitle("Create paper note…")
         .setIcon("file-plus")
         .onClick(openCreatePaperNoteModal),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Copy BibTeX by arXiv ID…")
+        .setIcon("copy")
+        .onClick(openCopyBibtexModal),
     );
     menu.addItem((item) =>
       item
@@ -731,6 +789,43 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
       ? file.name.replace(/\.md$/i, "")
       : "";
   return normalizeArxivId(basename);
+}
+
+async function getCurrentPaperIdFromActiveFile(
+  plugin: ArxivDailyPlugin,
+): Promise<string | null> {
+  const fromMetadata = getCurrentPaperId(plugin);
+  if (fromMetadata) return fromMetadata;
+
+  const app = plugin.app as any;
+  const file = app.workspace?.getActiveFile?.();
+  if (!file?.path) return null;
+  try {
+    const markdown = await plugin.app.vault.adapter.read(file.path);
+    return extractArxivIdFromMarkdown(markdown);
+  } catch {
+    return null;
+  }
+}
+
+async function writeClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("execCommand copy returned false");
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 async function collectPaperIndexDiagnostics(
