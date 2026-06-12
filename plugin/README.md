@@ -81,6 +81,12 @@ npm run build
 |---|---|
 | `src/core/adapters.ts` | Host-neutral contracts for HTTP, storage, secrets, progress, and resource opening |
 
+### Host adapters
+
+| File | Role |
+|---|---|
+| `src/hosts/obsidian/http-client.ts` | Obsidian `requestUrl` implementation of the core `HttpClient` contract |
+
 ### Settings layer
 
 | File | Role |

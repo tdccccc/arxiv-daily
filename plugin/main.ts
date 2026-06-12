@@ -31,6 +31,7 @@ import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   registerDashboardView,
 } from "./src/dashboard/view";
+import { ObsidianHttpClient } from "./src/hosts/obsidian/http-client";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -234,9 +235,11 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildSharedDeps() {
     const llm = new LlmClient(this.settings.llm, this.logger);
+    const http = new ObsidianHttpClient();
     const fetcher = new ArxivFetcher({
       category: this.settings.arxiv.category,
       categories: arxivCategories(this.settings.arxiv),
+      http,
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });

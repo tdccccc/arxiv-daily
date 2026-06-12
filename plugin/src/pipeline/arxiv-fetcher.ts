@@ -1,11 +1,12 @@
-import { requestUrl } from "obsidian";
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import { parseAtomAbstracts } from "./atom-parser";
+import type { HttpClient } from "../core/adapters";
 
 export interface ArxivFetcherOptions {
   category?: string;
   categories?: string[];
+  http: HttpClient;
   logger: Logger;
   requestDelayMs: number;
 }
@@ -77,13 +78,12 @@ export class ArxivFetcher {
     await this.respectDelay();
     return retry(
       async () => {
-        const res = await requestUrl({
+        const res = await this.opts.http.request({
           url,
           method: "GET",
           headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
-          throw: false,
         });
-        if (res.status >= 200 && res.status < 300) return res.text;
+        if (res.status >= 200 && res.status < 300) return res.bodyText;
         if (opts.allow404 && res.status === 404) {
           const e: any = new Error(`HTTP 404: ${url}`);
           e.status = 404;
