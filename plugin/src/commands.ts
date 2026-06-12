@@ -14,6 +14,7 @@ import {
   type PaperStatus,
 } from "./services/paper-index";
 import { extractArxivIdFromMarkdown } from "./services/bibtex";
+import { openDashboardView } from "./dashboard/view";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -340,6 +341,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "arxiv-daily-open-reading-dashboard",
+    name: "Open reading dashboard",
+    callback: () => openDashboardView(plugin),
+  });
+
+  plugin.addCommand({
     id: "arxiv-daily-show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),
@@ -419,6 +426,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setTitle("Open today's daily report")
         .setIcon("file-text")
         .onClick(openTodayDaily),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Open reading dashboard")
+        .setIcon("book-open-check")
+        .onClick(() => openDashboardView(plugin)),
     );
     menu.addItem((item) =>
       item

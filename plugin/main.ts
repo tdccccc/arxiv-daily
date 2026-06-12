@@ -27,6 +27,10 @@ import { PaperIndexStore } from "./src/services/paper-index";
 import { DailySelectionSyncService } from "./src/services/daily-selection";
 import { BibtexService } from "./src/services/bibtex";
 import { arxivCategories } from "./src/settings/categories";
+import {
+  ARXIV_DAILY_DASHBOARD_VIEW,
+  registerDashboardView,
+} from "./src/dashboard/view";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -88,6 +92,7 @@ export default class ArxivDailyPlugin extends Plugin {
     };
 
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
+    registerDashboardView(this);
     registerCommands(this);
     this.dailySelectionSync = new DailySelectionSyncService({
       vault: this.app.vault,
@@ -119,6 +124,7 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   onunload() {
+    void this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW);
     this.dailySelectionSync?.clear();
     this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();

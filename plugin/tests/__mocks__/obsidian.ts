@@ -18,9 +18,32 @@ export interface Vault {
   };
 }
 
-export interface App {}
+export interface WorkspaceLeaf {
+  setViewState(state: any): Promise<void>;
+}
+
+export interface Workspace {
+  getLeavesOfType(type: string): WorkspaceLeaf[];
+  getLeaf(newLeaf?: boolean): WorkspaceLeaf | null;
+  revealLeaf(leaf: WorkspaceLeaf): Promise<void>;
+  detachLeavesOfType(type: string): Promise<void>;
+}
+
+export interface App {
+  workspace?: Workspace;
+}
 
 export class Plugin {}
+
+export class ItemView {
+  contentEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
+  constructor(readonly leaf: WorkspaceLeaf) {}
+  getViewType(): string { return ""; }
+  getDisplayText(): string { return ""; }
+  getIcon(): string { return ""; }
+  onOpen(): Promise<void> | void {}
+  onClose(): Promise<void> | void {}
+}
 
 export class PluginSettingTab {
   constructor(_app: App, _plugin: Plugin) {}
