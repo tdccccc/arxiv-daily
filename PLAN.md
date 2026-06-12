@@ -6,7 +6,7 @@
 
 > arXiv Daily = 每日发现 + 日报内筛选 + Reading Dashboard + 后续阅读管理
 
-主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）；v0.1.5–v0.1.8 全部围绕这条主线。
+主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）以及 Workflow Quick Wins（v0.1.5）；v0.1.6–v0.1.8 继续围绕这条主线。
 
 宿主策略已定：**以 Obsidian 为主**，长期作为第一宿主和移动端方案；v0.1.7 把 core 抽成 host 无关之后，**顺带**产出一个轻量 VS Code 扩展（复用 core 和 Dashboard model，见 VS Code Companion Extension 一节）；不做独立 app。
 
@@ -26,25 +26,24 @@
 
 已经具备：
 
-- 按 arXiv category 抓取 `/recent`，Atom API 补全摘要，章节抽取优先保留高价值正文内容。
+- 按一个或多个 arXiv category 抓取 `/recent`，按 arXiv ID 去重后进入同一轮 LLM 筛选；Atom API 补全摘要，章节抽取优先保留高价值正文内容。
 - 按用户配置的 topics 进行 LLM 分类和筛选。
 - 生成每日 markdown 日报：每篇论文按核心问题 / 关键方法 / 主要结果 / 为什么值得看 / 局限或边界五字段总结，并标注信息来源章节。
 - 为 detail topic 生成单篇论文详情页（研究问题 / 方法设计 / 关键证据 / 主要结论 / 适用边界 / 一句话价值判断）。
 - 隐藏主索引 `arxiv-daily/.index/papers.json`：按 arXiv ID 去重，合并 seenDates / dailyReports，用户控制字段不被覆盖，旧 `index/` 路径自动迁移。
 - 日报内“关注 / 重点” checkbox，修改后防抖自动同步到 papers.json；取消勾选只回退插件默认状态，不降级用户手动设置的 saved / read / ignored。
+- 插件启动后补扫 lookback 窗口内日报 checkbox，手机 / 其他设备同步回来的勾选会在桌面端重启后补写到 `papers.json`。
 - 日报标注 new / seen_before；ignored 论文不再进入日报。
+- 日报末尾折叠列出未入选论文，作为 LLM 漏报兜底；ignored 论文不进入兜底列表。
+- 支持复制 arXiv BibTeX，解析 entry key 并写回 `citationKey`。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
-- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）。
+- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.5。
 
 仍然可以继续加强：
 
-- 勾选同步只监听 Obsidian 运行中的文件修改事件：手机 / 其他设备上勾选、经文件同步回来的改动，桌面端重启后不会被补处理。
-- 只支持单个 arXiv 分类，跨方向研究（如 astro-ph + cs.LG）覆盖不了。
-- LLM 筛选存在漏报风险，日报里看不到当天未入选的论文，无法快速兜底确认。
 - 五字段结构化摘要只存在于日报 markdown 中，papers.json 里没有，Dashboard 搜索、周报复用都缺数据。
-- 没有 BibTeX / 引用获取能力，从“读到论文”到“写作引用”之间断链。
 - 缺少跨日期回看、筛选、批量处理的 GUI Dashboard（v0.1.6）。
 - 超出 arXiv `/recent` 5 天窗口的日期无法补跑（出差、休假场景论文直接丢失）。
 - PDF、Zotero、项目笔记的结构化接入（v0.1.8）。
@@ -216,7 +215,9 @@ citation_key: ""
 
 与最初设计的一处差异：`priority: high` 不自动创建 markdown note——勾“重点”保持零副作用，笔记只通过 detail / saved / 手动创建产生（Paper Note Creation 表已同步）。
 
-## v0.1.5: Workflow Quick Wins
+## v0.1.5: Workflow Quick Wins（已完成）
+
+> 2026-06-13 完成，插件版本准备到 `0.1.5`。验证：`npm test` 193 条通过，`npm run build` 通过。发布时创建 tag `v0.1.5`。
 
 目标：在 Dashboard 之前，用小成本补齐科研日常里最痛的几个断点。各项彼此独立，可逐项发布。
 
@@ -511,7 +512,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] 多分类：设置页支持增删多个 arXiv category，并校验重复、空值和非法分类。
 - [x] 多分类：pipeline 多分类抓取后按 arXiv ID 去重，交叉挂载论文只进入一次 LLM 分类和 index 更新。
 - [x] 多分类：明确 index schema 中 `category` / `categories` 的兼容策略，并补迁移和测试。
-- [ ] v0.1.5 收尾：更新 README / PLAN 状态，跑完整测试和 build，发布前确认版本号与 tag 计划。
+- [x] v0.1.5 收尾：更新 README / PLAN 状态，跑完整测试和 build，发布前确认版本号与 tag 计划。
 
 ### v0.1.6 Obsidian Reading Dashboard
 
@@ -560,7 +561,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 
 ## Recommended Next Step
 
-**阶段 1：v0.1.5 Workflow Quick Wins**（当前）
+**阶段 1：v0.1.5 Workflow Quick Wins**（已完成）
 
 按收益 / 成本顺序推进，每项独立可发布：
 
@@ -569,7 +570,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 3. BibTeX 快捷获取（接通写作引用环节）。
 4. 多 arXiv 分类支持。
 
-**阶段 2：v0.1.6 Reading Dashboard**
+**阶段 2：v0.1.6 Reading Dashboard**（当前）
 
 1. 先定 paper index schema v2（结构化摘要字段），让 pipeline 从现在开始积累数据。
 2. 只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
