@@ -216,6 +216,33 @@ describe("PaperIndexStore", () => {
     expect(entry.dailyReports).toEqual(["arxiv-daily/daily/2026-06-11.md"]);
   });
 
+  it("stores and merges source arXiv categories", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      arxivCategories: ["astro-ph", "cs.LG"],
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-12",
+      arxivCategory: "cs.CL",
+      arxivCategories: ["cs.CL", "cs.LG"],
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+
+    expect(entry.category).toBe("cs.CL");
+    expect(entry.categories).toEqual(["astro-ph", "cs.LG", "cs.CL"]);
+  });
+
   it("throws PaperIndexError for malformed JSON", async () => {
     const { store } = makeStore({
       "arxiv-daily/index/papers.json": "{not-json",

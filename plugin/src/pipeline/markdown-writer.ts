@@ -1,6 +1,7 @@
 import { type Vault, normalizePath } from "obsidian";
 import type { Logger } from "../services/logger";
 import type { ArxivSettings, OutputSettings } from "../settings/types";
+import { formatArxivCategories } from "../settings/categories";
 import type { DailyPaperWithContent } from "./summarizer";
 import type { PaperIndexEntry } from "../services/paper-index";
 
@@ -122,7 +123,7 @@ export class MarkdownWriter {
     dateStr: string,
     options: WriteDailyOptions = {},
   ): Promise<string> {
-    const summary = `# arXiv ${this.opts.arxiv.category} 每日追踪 ${dateStr}\n\n今日未发现相关论文。\n`;
+    const summary = `# arXiv ${formatArxivCategories(this.opts.arxiv)} 每日追踪 ${dateStr}\n\n今日未发现相关论文。\n`;
     return this.writeDaily(dateStr, summary, options);
   }
 

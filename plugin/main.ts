@@ -26,6 +26,7 @@ import { todayInTz, formatDate } from "./src/utils/time";
 import { PaperIndexStore } from "./src/services/paper-index";
 import { DailySelectionSyncService } from "./src/services/daily-selection";
 import { BibtexService } from "./src/services/bibtex";
+import { arxivCategories } from "./src/settings/categories";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -229,6 +230,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const llm = new LlmClient(this.settings.llm, this.logger);
     const fetcher = new ArxivFetcher({
       category: this.settings.arxiv.category,
+      categories: arxivCategories(this.settings.arxiv),
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });

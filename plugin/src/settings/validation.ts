@@ -1,4 +1,5 @@
 import type { PluginSettings } from "./types";
+import { arxivCategories } from "./categories";
 
 export interface ValidationResult {
   ok: boolean;
@@ -16,6 +17,22 @@ export function validateLlmConfig(settings: PluginSettings): ValidationResult {
 export function validateFilterConfig(settings: PluginSettings): ValidationResult {
   const llm = validateLlmConfig(settings);
   const reasons = [...llm.reasons];
+  const categories = arxivCategories(settings.arxiv);
+  if (categories.length === 0) {
+    reasons.push("No arXiv categories configured");
+  }
+  const seenCategories = new Set<string>();
+  for (const category of settings.arxiv.categories ?? []) {
+    const trimmed = category.trim();
+    if (!trimmed) {
+      reasons.push("arXiv category is empty");
+      continue;
+    }
+    if (seenCategories.has(trimmed)) {
+      reasons.push(`Duplicate arXiv category: ${trimmed}`);
+    }
+    seenCategories.add(trimmed);
+  }
   if (settings.arxiv.topics.length === 0) {
     reasons.push("No research topics defined");
   }

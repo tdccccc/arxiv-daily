@@ -19,7 +19,7 @@ function makeTopics(): Topic[] {
 }
 
 function makeArxiv(topics: Topic[]): ArxivSettings {
-  return { category: "astro-ph", topics, timezone: "UTC" };
+  return { category: "astro-ph", categories: ["astro-ph"], topics, timezone: "UTC" };
 }
 
 const samplePaper: PaperMeta = {

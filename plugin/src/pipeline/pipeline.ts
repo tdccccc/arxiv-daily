@@ -7,6 +7,7 @@ import type {
   OutputSettings,
   LlmSettings,
 } from "../settings/types";
+import { arxivCategories } from "../settings/categories";
 import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
@@ -23,6 +24,10 @@ import {
   summarizePaperDetail,
   type DailyPaperWithContent,
 } from "./summarizer";
+
+interface SourcePaperMeta extends PaperMeta {
+  arxivCategories: string[];
+}
 
 export type PipelineResult =
   | { kind: "completed"; papersWritten: number }
@@ -79,45 +84,17 @@ export class ArxivPipeline {
     }
     throwIfCancelled(signal);
 
-    // 1. Fetch /recent
+    // 1-2. Fetch and parse /recent for all configured categories.
     this.progress.setStage("fetch-recent");
-    let recentHtml: string;
-    try {
-      recentHtml = await fetcher.fetchRecent();
-    } catch (e) {
-      if (isCancellationError(e)) throw e;
-      return {
-        kind: "failed_transient",
-        reason: `fetch /recent failed: ${(e as Error).message}`,
-      };
-    }
-    throwIfCancelled(signal);
-
-    // 2. Parse
-    let buckets: DateBucket[];
-    try {
-      buckets = parseRecent(recentHtml);
-    } catch (e) {
-      if (isCancellationError(e)) throw e;
-      return {
-        kind: "failed_permanent",
-        reason: `parse failed: ${(e as Error).message}`,
-      };
-    }
-    throwIfCancelled(signal);
-    const bucket = buckets.find((b) => b.announceDate === dateStr);
-    if (!bucket) {
-      return {
-        kind: "failed_transient",
-        reason: `date ${dateStr} not in /recent (have: ${buckets
-          .map((b) => b.announceDate)
-          .join(",")})`,
-      };
-    }
-    logger.info(`pipeline: ${bucket.papers.length} papers for ${dateStr}`);
+    const fetched = await this.fetchPapersForDate(dateStr, signal);
+    if (fetched.kind !== "ok") return fetched.result;
+    const sourcePapers = fetched.papers;
+    logger.info(
+      `pipeline: ${sourcePapers.length} papers for ${dateStr} across ${fetched.categories.join(", ")}`,
+    );
 
     // 3. Empty day
-    if (bucket.papers.length === 0) {
+    if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
       await this.deps.writer.writeEmptyDaily(dateStr);
       return { kind: "completed", papersWritten: 0 };
@@ -126,9 +103,9 @@ export class ArxivPipeline {
     // 4. Enrich abstracts via Atom API (listings no longer include them)
     this.progress.setStage("enrich-abstract");
     try {
-      const ids = bucket.papers.map((p) => p.id);
+      const ids = sourcePapers.map((p) => p.id);
       const absMap = await fetcher.fetchAbstractsByIds(ids);
-      for (const p of bucket.papers) {
+      for (const p of sourcePapers) {
         const a = absMap.get(p.id);
         if (a) p.abstract = a;
       }
@@ -145,7 +122,7 @@ export class ArxivPipeline {
 
     // 5. LLM filter
     this.progress.setStage("filter");
-    const filtered = await filterPapers(bucket.papers, {
+    const filtered = await filterPapers(sourcePapers, {
       llm: this.deps.llm,
       logger,
       arxivSettings: this.deps.arxiv,
@@ -155,7 +132,7 @@ export class ArxivPipeline {
     const ignoredIds = await this.loadIgnoredPaperIds();
     if (ignoredIds.kind !== "ok") return ignoredIds.result;
     const missedPapers = unselectedPapers(
-      bucket.papers,
+      sourcePapers,
       filtered,
       ignoredIds.ids,
     );
@@ -332,7 +309,8 @@ export class ArxivPipeline {
           title: p.title,
           authors: p.authors,
           date: dateStr,
-          arxivCategory: this.deps.arxiv.category,
+          arxivCategory: sourceCategories(p)[0] ?? this.deps.arxiv.category,
+          arxivCategories: sourceCategories(p),
           primaryTopic: p.category,
           detail: p.isDetail,
         })),
@@ -355,6 +333,79 @@ export class ArxivPipeline {
         },
       };
     }
+  }
+
+  private async fetchPapersForDate(
+    dateStr: string,
+    signal?: AbortSignal,
+  ): Promise<
+    | { kind: "ok"; papers: SourcePaperMeta[]; categories: string[] }
+    | { kind: "error"; result: PipelineResult }
+  > {
+    const { fetcher, logger } = this.deps;
+    const categories = arxivCategories(this.deps.arxiv);
+    const byId = new Map<string, SourcePaperMeta>();
+
+    for (const category of categories) {
+      throwIfCancelled(signal);
+      let recentHtml: string;
+      try {
+        recentHtml = await fetcher.fetchRecent(category);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        return {
+          kind: "error",
+          result: {
+            kind: "failed_transient",
+            reason: `fetch /recent failed for ${category}: ${(e as Error).message}`,
+          },
+        };
+      }
+
+      let buckets: DateBucket[];
+      try {
+        buckets = parseRecent(recentHtml);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        return {
+          kind: "error",
+          result: {
+            kind: "failed_permanent",
+            reason: `parse failed for ${category}: ${(e as Error).message}`,
+          },
+        };
+      }
+
+      const bucket = buckets.find((b) => b.announceDate === dateStr);
+      if (!bucket) {
+        return {
+          kind: "error",
+          result: {
+            kind: "failed_transient",
+            reason: `date ${dateStr} not in ${category} /recent (have: ${buckets
+              .map((b) => b.announceDate)
+              .join(",")})`,
+          },
+        };
+      }
+
+      logger.info(
+        `pipeline: ${bucket.papers.length} papers for ${dateStr} in ${category}`,
+      );
+      for (const paper of bucket.papers) {
+        const existing = byId.get(paper.id);
+        if (existing) {
+          existing.arxivCategories = appendUnique(
+            existing.arxivCategories,
+            category,
+          );
+        } else {
+          byId.set(paper.id, { ...paper, arxivCategories: [category] });
+        }
+      }
+    }
+
+    return { kind: "ok", papers: Array.from(byId.values()), categories };
   }
 
   private async loadIgnoredPaperIds(): Promise<
@@ -395,4 +446,13 @@ function unselectedPapers(
   return allPapers.filter(
     (paper) => !selectedIds.has(paper.id) && !ignoredIds.has(paper.id),
   );
+}
+
+function sourceCategories(paper: PaperMeta): string[] {
+  const categories = (paper as Partial<SourcePaperMeta>).arxivCategories;
+  return Array.isArray(categories) ? categories : [];
+}
+
+function appendUnique(values: string[], value: string): string[] {
+  return values.includes(value) ? values : [...values, value];
 }

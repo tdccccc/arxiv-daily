@@ -27,6 +27,7 @@ export interface PaperIndexEntry {
   published: string;
   updated: string;
   category: string;
+  categories?: string[];
   topics: string[];
   primaryTopic: string;
   detail: boolean;
@@ -57,6 +58,7 @@ export interface PaperIndexUpsert {
   authors: string | string[];
   date: string;
   arxivCategory: string;
+  arxivCategories?: string[];
   primaryTopic: string;
   detail: boolean;
   dailyReport?: string;
@@ -301,6 +303,15 @@ function upsertEntry(
   const wasNew = !existing;
   const authors = normalizeAuthors(input.authors);
   const topic = input.primaryTopic.trim();
+  const inputCategories = normalizeCategories([
+    ...(input.arxivCategories ?? []),
+    input.arxivCategory,
+  ]);
+  const existingCategories = normalizeCategories([
+    ...(existing?.categories ?? []),
+    existing?.category ?? "",
+  ]);
+  const categories = appendUniqueMany(existingCategories, inputCategories);
   const paperPath =
     input.paperPath === undefined
       ? existing?.paperPath ?? null
@@ -315,7 +326,8 @@ function upsertEntry(
     authors: authors.length ? authors : existing?.authors ?? [],
     published: existing?.published || input.date,
     updated: input.date,
-    category: input.arxivCategory || existing?.category || "",
+    category: inputCategories[0] || existing?.category || categories[0] || "",
+    categories,
     topics: appendUnique(existing?.topics ?? [], topic),
     primaryTopic: topic || existing?.primaryTopic || "",
     detail: Boolean(existing?.detail || input.detail),
@@ -370,6 +382,10 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     published: stringOr(obj.published, ""),
     updated: stringOr(obj.updated, ""),
     category: stringOr(obj.category, ""),
+    categories: normalizeCategories([
+      ...stringArray(obj.categories),
+      stringOr(obj.category, ""),
+    ]),
     topics: stringArray(obj.topics),
     primaryTopic: stringOr(obj.primaryTopic, ""),
     detail: Boolean(obj.detail),
@@ -397,6 +413,21 @@ function appendUnique(items: string[], next: string): string[] {
   const out = [...items];
   const trimmed = next.trim();
   if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  return out;
+}
+
+function appendUniqueMany(items: string[], values: string[]): string[] {
+  let out = items;
+  for (const value of values) out = appendUnique(out, value);
+  return out;
+}
+
+function normalizeCategories(values: string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    const category = value.trim();
+    if (category && !out.includes(category)) out.push(category);
+  }
   return out;
 }
 

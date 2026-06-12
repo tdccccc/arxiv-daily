@@ -6,6 +6,7 @@ import { TOPIC_TEMPLATES } from "./topic-templates";
 import type { Topic } from "./types";
 import { slugify } from "../utils/slugify";
 import { validateFilterConfig } from "./validation";
+import { arxivCategories } from "./categories";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
@@ -29,6 +30,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private hint(parent: HTMLElement, text: string): void {
     const h = parent.createEl("div", { text });
     h.style.cssText = "font-size:0.82em;opacity:0.65;margin-bottom:0.4em;";
+  }
+
+  private async setArxivCategories(categories: string[]): Promise<void> {
+    const normalized = normalizeUniqueCategories(categories);
+    const next = normalized.length > 0 ? normalized : ["astro-ph"];
+    this.plugin.settings.arxiv.categories = next;
+    this.plugin.settings.arxiv.category = next[0];
+    await this.plugin.saveSettings();
   }
 
   display(): void {
@@ -220,34 +229,57 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── arXiv ────────────────────────────────────────
     containerEl.createEl("h2", { text: "arXiv" });
 
-    // Category — grouped dropdown + custom text
+    const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
-      .setName("arXiv Category")
-      .addDropdown((d) => {
-        for (const group of ARXIV_CATEGORIES) {
-          const optgroup = d.selectEl.createEl("optgroup");
-          optgroup.label = group.label;
-          for (const cat of group.categories) {
-            const opt = optgroup.createEl("option");
-            opt.value = cat.id;
-            opt.textContent = `${cat.id} — ${cat.name}`;
-          }
-        }
-        d.setValue(s.arxiv.category).onChange(async (v) => {
-          s.arxiv.category = v;
-          await this.plugin.saveSettings();
-        });
-      })
-      .addText((t) => {
-        t.setPlaceholder("or enter custom category")
-          .setValue("")
-          .onChange(async (v) => {
-            if (v.trim()) {
-              s.arxiv.category = v.trim();
-              await this.plugin.saveSettings();
-            }
+      .setName("arXiv Categories")
+      .setDesc("Fetch one or more arXiv categories; duplicate papers are merged by arXiv ID.")
+      .setHeading();
+
+    for (let i = 0; i < categories.length; i++) {
+      new Setting(containerEl)
+        .setName(`Category ${i + 1}`)
+        .addDropdown((d) => {
+          addCategoryOptions(d.selectEl, categories[i]);
+          d.setValue(categories[i]).onChange(async (v) => {
+            const next = [...categories];
+            next[i] = v;
+            await this.setArxivCategories(next);
+            this.display();
           });
-      });
+        })
+        .addText((t) => {
+          t.setPlaceholder("or enter custom category")
+            .setValue("")
+            .onChange(async (v) => {
+              if (v.trim()) {
+                const next = [...categories];
+                next[i] = v.trim();
+                await this.setArxivCategories(next);
+                this.display();
+              }
+            });
+        })
+        .addButton((b) =>
+          b
+            .setButtonText("Remove")
+            .setDisabled(categories.length === 1)
+            .onClick(async () => {
+              if (categories.length === 1) return;
+              await this.setArxivCategories(categories.filter((_, j) => j !== i));
+              this.display();
+            }),
+        );
+    }
+
+    new Setting(containerEl).addButton((b) =>
+      b.setButtonText("+ Add Category").onClick(async () => {
+        await this.setArxivCategories([
+          ...categories,
+          nextCategoryCandidate(categories),
+        ]);
+        this.display();
+      }),
+    );
 
     // ─── Research Topics ─────────────────────────────
     new Setting(containerEl)
@@ -270,6 +302,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           if (!tpl) return;
           const apply = async () => {
             s.arxiv.category = tpl.category;
+            s.arxiv.categories = [tpl.category];
             s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
             await this.plugin.saveSettings();
             this.display();
@@ -722,4 +755,46 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.inputEl.style.width = "100%";
       });
   }
+}
+
+function addCategoryOptions(
+  selectEl: HTMLSelectElement,
+  current?: string,
+): void {
+  let hasCurrent = false;
+  for (const group of ARXIV_CATEGORIES) {
+    const optgroup = selectEl.createEl("optgroup");
+    optgroup.label = group.label;
+    for (const cat of group.categories) {
+      if (cat.id === current) hasCurrent = true;
+      const opt = optgroup.createEl("option");
+      opt.value = cat.id;
+      opt.textContent = `${cat.id} — ${cat.name}`;
+    }
+  }
+  if (current && !hasCurrent) {
+    const opt = selectEl.createEl("option");
+    opt.value = current;
+    opt.textContent = `${current} — custom`;
+  }
+}
+
+function normalizeUniqueCategories(categories: string[]): string[] {
+  const out: string[] = [];
+  for (const value of categories) {
+    const category = value.trim();
+    if (!category || out.includes(category)) continue;
+    out.push(category);
+  }
+  return out;
+}
+
+function nextCategoryCandidate(existing: string[]): string {
+  const seen = new Set(existing);
+  for (const group of ARXIV_CATEGORIES) {
+    for (const category of group.categories) {
+      if (!seen.has(category.id)) return category.id;
+    }
+  }
+  return "cs.LG";
 }

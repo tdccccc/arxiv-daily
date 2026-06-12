@@ -13,7 +13,21 @@ describe("migrateArxivSettings", () => {
     const out = migrateArxivSettings(input);
     expect(out.topics).toEqual(input.topics);
     expect(out.category).toBe("cs.CL");
+    expect(out.categories).toEqual(["cs.CL"]);
     expect(out.timezone).toBe("UTC");
+  });
+
+  it("keeps normalized categories when already configured", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      categories: ["astro-ph", "cs.LG", "astro-ph", " "],
+      topics: [
+        { id: "u1", name: "ML", tag: "ml", description: "x", detail: false },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.category).toBe("astro-ph");
+    expect(out.categories).toEqual(["astro-ph", "cs.LG"]);
   });
 
   it("builds topics from legacy detailCategories + displayMap", () => {
@@ -61,6 +75,7 @@ describe("migrateArxivSettings", () => {
   it("yields empty topics when neither topics nor legacy detailCategories are present", () => {
     const out = migrateArxivSettings({ category: "astro-ph", timezone: "UTC" });
     expect(out.topics).toEqual([]);
+    expect(out.categories).toEqual(["astro-ph"]);
   });
 
   it("never carries legacy fields through to the returned shape", () => {
@@ -84,6 +99,7 @@ describe("migrateArxivSettings", () => {
     const out = migrateArxivSettings(undefined);
     expect(out.topics).toEqual([]);
     expect(out.category.length).toBeGreaterThan(0);
+    expect(out.categories.length).toBeGreaterThan(0);
     expect(out.timezone.length).toBeGreaterThan(0);
   });
 });

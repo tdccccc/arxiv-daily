@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS } from "./defaults";
 import type { ArxivSettings, Topic } from "./types";
+import { normalizeCategoryList } from "./categories";
 
 function titleCase(slug: string): string {
   return slug
@@ -14,13 +15,16 @@ function freshDefaults(): Topic[] {
 export function migrateArxivSettings(raw: unknown): ArxivSettings {
   const arxiv = (raw ?? {}) as Record<string, unknown>;
 
-  const category =
-    typeof arxiv.category === "string" ? arxiv.category : DEFAULT_SETTINGS.arxiv.category;
+  const categories = normalizeCategoryList(
+    arxiv.categories,
+    normalizeCategoryList(arxiv.category, DEFAULT_SETTINGS.arxiv.categories),
+  );
+  const category = categories[0];
   const timezone =
     typeof arxiv.timezone === "string" ? arxiv.timezone : DEFAULT_SETTINGS.arxiv.timezone;
 
   if (Array.isArray(arxiv.topics) && arxiv.topics.length > 0) {
-    return { category, topics: arxiv.topics as Topic[], timezone };
+    return { category, categories, topics: arxiv.topics as Topic[], timezone };
   }
 
   const detailCategories = Array.isArray(arxiv.detailCategories)
@@ -40,5 +44,5 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
         }))
       : freshDefaults();
 
-  return { category, topics, timezone };
+  return { category, categories, topics, timezone };
 }

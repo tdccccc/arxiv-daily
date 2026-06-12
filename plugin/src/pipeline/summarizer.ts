@@ -2,6 +2,7 @@ import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import { throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, AdvancedSettings } from "../settings/types";
+import { formatArxivCategories } from "../settings/categories";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
 import { injectSelectionControls } from "../services/daily-selection";
@@ -109,7 +110,7 @@ async function callDailyLlm(
     : "";
   const headerFmt = isPartial
     ? ""
-    : `# arXiv ${arxivSettings.category} 每日追踪 ${dateStr}\n` +
+    : `# arXiv ${formatArxivCategories(arxivSettings)} 每日追踪 ${dateStr}\n` +
       `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n\n`;
 
   const systemPrompt = `你是一个专业的研究助手。请根据提供的论文摘要、结论与可用正文摘录，生成 arXiv 每日论文追踪日报。
@@ -179,7 +180,7 @@ export async function summarizeDaily(
     `summarizeDaily: batching into ${batches.length} (${batches.map((b) => b.length).join(",")})`,
   );
   const header =
-    `# arXiv ${deps.arxivSettings.category} 每日追踪 ${dateStr}\n` +
+    `# arXiv ${formatArxivCategories(deps.arxivSettings)} 每日追踪 ${dateStr}\n` +
     `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n`;
   const parts: string[] = [header];
   for (let i = 0; i < batches.length; i++) {

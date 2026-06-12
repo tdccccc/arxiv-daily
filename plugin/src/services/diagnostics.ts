@@ -1,4 +1,5 @@
 import type { PluginSettings, RunState, RunStateEntry } from "../settings/types";
+import { formatArxivCategories } from "../settings/categories";
 import { validateFilterConfig, validateLlmConfig } from "../settings/validation";
 import { daysBefore, formatDate, isWeekendDate, todayInTz } from "../utils/time";
 
@@ -64,6 +65,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     "",
     "arxiv:",
     `  category: ${settings.arxiv.category}`,
+    `  categories: ${formatArxivCategories(settings.arxiv)}`,
     `  timezone: ${settings.arxiv.timezone}`,
     `  localDate: ${dateContext.localDate}`,
     `  localWeekday: ${dateContext.localWeekday}`,

@@ -4,7 +4,8 @@ import type { Logger } from "../services/logger";
 import { parseAtomAbstracts } from "./atom-parser";
 
 export interface ArxivFetcherOptions {
-  category: string;
+  category?: string;
+  categories?: string[];
   logger: Logger;
   requestDelayMs: number;
 }
@@ -15,8 +16,8 @@ export class ArxivFetcher {
   constructor(private opts: ArxivFetcherOptions) {}
 
   /** Fetch the /list/<cat>/recent page with show=2000 to capture all 5 days in one shot. */
-  async fetchRecent(): Promise<string> {
-    const url = `https://arxiv.org/list/${this.opts.category}/recent?skip=0&show=2000`;
+  async fetchRecent(category = this.primaryCategory()): Promise<string> {
+    const url = `https://arxiv.org/list/${category}/recent?skip=0&show=2000`;
     return this.fetchHtml(url, { allow404: false });
   }
 
@@ -107,5 +108,9 @@ export class ArxivFetcher {
     const wait = this.opts.requestDelayMs - elapsed;
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     this.lastRequestAt = Date.now();
+  }
+
+  private primaryCategory(): string {
+    return this.opts.categories?.[0] ?? this.opts.category ?? "astro-ph";
   }
 }

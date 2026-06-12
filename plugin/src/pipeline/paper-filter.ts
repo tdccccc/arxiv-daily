@@ -2,6 +2,7 @@ import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, Topic } from "../settings/types";
+import { formatArxivCategories } from "../settings/categories";
 import type { PaperMeta } from "./arxiv-parser";
 
 export interface FilteredPaper extends PaperMeta {
@@ -59,7 +60,7 @@ ${topicLines}
 - detail 判定从严：宁可漏选也不要错选——不确定时设为 false
 - 如果没有任何相关论文，返回 {"papers": []}`;
 
-  const userContent = `以下是今日 arXiv ${arxivSettings.category} 的所有新论文：\n\n${papersText}`;
+  const userContent = `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n${papersText}`;
 
   let raw: string;
   try {

@@ -129,7 +129,8 @@ interface Topic {
 }
 
 interface ArxivSettings {
-  category: string;   // e.g. "astro-ph"
+  category: string;     // primary category, kept for compatibility
+  categories: string[]; // e.g. ["astro-ph", "cs.LG"]
   topics: Topic[];
   timezone: string;
 }

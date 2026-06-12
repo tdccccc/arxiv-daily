@@ -130,7 +130,8 @@ interface PaperIndexEntry {
   authors: string[];
   published: string;
   updated: string;
-  category: string;
+  category: string; // primary/source-compatible category
+  categories?: string[]; // actual source categories when fetched from multiple lists
   topics: string[];
   primaryTopic: string;
   detail: boolean;
@@ -250,7 +251,7 @@ LLM 筛选存在漏报，而漏掉一篇关键论文的代价远大于多扫几�
 
 跨方向研究是常态（astro-ph + cs.LG、cs.CL + cs.AI）。当前设置只支持单分类，是真实覆盖缺口。
 
-- `arxiv.category: string` 改为 `categories: string[]`，含设置迁移和 UI 适配。
+- `arxiv.category: string` 兼容保留为 primary category，新增 `categories: string[]`，含设置迁移和 UI 适配。
 - 多分类抓取后合并，按 arXiv ID 去重，交叉挂载论文只处理一次。
 - 日报标题、frontmatter 和 index 的 `category` 字段适配多分类；index 中保存论文实际所属分类，而不是配置值。
 - 验收：配置两个分类时，交叉挂载论文只出现一次、只消耗一次 LLM 调用。
@@ -506,10 +507,10 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] BibTeX：新增按 arXiv ID 获取 BibTeX 的服务，解析 entry key 并处理网络失败、空响应和非法 ID。
 - [x] BibTeX：新增命令从当前论文笔记或用户输入 arXiv ID 获取 BibTeX，复制到剪贴板并写回 `citationKey`。
 - [x] BibTeX：补测试覆盖 BibTeX key 解析、index 更新、当前文件 frontmatter / 正文识别 arXiv ID。
-- [ ] 多分类：把 settings 从 `arxiv.category` 迁移到 `arxiv.categories: string[]`，保留旧配置兼容读取。
-- [ ] 多分类：设置页支持增删多个 arXiv category，并校验重复、空值和非法分类。
-- [ ] 多分类：pipeline 多分类抓取后按 arXiv ID 去重，交叉挂载论文只进入一次 LLM 分类和 index 更新。
-- [ ] 多分类：明确 index schema 中 `category` / `categories` 的兼容策略，并补迁移和测试。
+- [x] 多分类：把 settings 从 `arxiv.category` 迁移到 `arxiv.categories: string[]`，保留旧配置兼容读取。
+- [x] 多分类：设置页支持增删多个 arXiv category，并校验重复、空值和非法分类。
+- [x] 多分类：pipeline 多分类抓取后按 arXiv ID 去重，交叉挂载论文只进入一次 LLM 分类和 index 更新。
+- [x] 多分类：明确 index schema 中 `category` / `categories` 的兼容策略，并补迁移和测试。
 - [ ] v0.1.5 收尾：更新 README / PLAN 状态，跑完整测试和 build，发布前确认版本号与 tag 计划。
 
 ### v0.1.6 Obsidian Reading Dashboard

@@ -19,6 +19,7 @@ export interface Topic {
 
 export interface ArxivSettings {
   category: string;
+  categories: string[];
   topics: Topic[];
   timezone: string;
 }

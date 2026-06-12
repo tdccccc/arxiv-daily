@@ -138,7 +138,7 @@ export class ManualFetchService {
           title,
           authors,
           date: dateStr,
-          arxivCategory: this.deps.arxiv.category,
+          arxivCategory: category,
           primaryTopic: category,
           detail: true,
         });

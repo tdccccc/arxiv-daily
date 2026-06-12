@@ -270,6 +270,58 @@ describe("ArxivPipeline", () => {
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });
 
+  it("fetches multiple categories and deduplicates papers before filtering", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const papers = firstBucketPapersFromFixture();
+    const arxivId = papers[0].id;
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## Photo-z\n### Stub\n";
+      }
+      return "";
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: {
+        ...testArxiv,
+        category: "astro-ph",
+        categories: ["astro-ph", "cs.LG"],
+      },
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate(firstDateFromFixture());
+
+    expect(result.kind).toBe("completed");
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("astro-ph");
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("cs.LG");
+    expect(d.fetcher.fetchAbstractsByIds.mock.calls[0][0]).toHaveLength(
+      papers.length,
+    );
+    const filterUserPrompt = d.llm.call.mock.calls[0][0][1].content as string;
+    expect(
+      filterUserPrompt.match(new RegExp(arxivId.replace(".", "\\."), "g")),
+    ).toHaveLength(1);
+    const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(json.papers[arxivId].category).toBe("astro-ph");
+    expect(json.papers[arxivId].categories).toEqual(["astro-ph", "cs.LG"]);
+  });
+
   it("passes unselected non-ignored papers to the daily fallback list", async () => {
     const d = makeDeps();
     const { store } = makePaperIndex();

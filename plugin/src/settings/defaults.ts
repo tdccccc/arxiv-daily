@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   },
   arxiv: {
     category: "astro-ph",
+    categories: ["astro-ph"],
     topics: [],
     timezone: "Asia/Shanghai",
   },

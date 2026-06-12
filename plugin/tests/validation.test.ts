@@ -91,6 +91,22 @@ describe("validateFilterConfig", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("flags empty and duplicate arXiv categories", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          categories: ["astro-ph", " ", "astro-ph"],
+          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/arXiv category is empty/);
+    expect(r.reasons.join("; ")).toMatch(/Duplicate arXiv category: astro-ph/);
+  });
+
   it("flags empty topic fields", () => {
     const r = validateFilterConfig(
       makeSettings({
