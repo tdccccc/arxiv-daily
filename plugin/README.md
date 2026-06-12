@@ -122,6 +122,7 @@ npm run build
 | File | Role |
 |---|---|
 | `src/cli/config.ts` | Loads Node CLI runtime config from JSON and environment variables |
+| `src/cli/runtime.ts` | Builds Node CLI pipeline dependencies from config and host adapters |
 
 ### Dashboard
 
