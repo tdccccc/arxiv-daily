@@ -1,13 +1,20 @@
-import { Notice } from "obsidian";
-
 export type LogLevel = "debug" | "info" | "warn" | "error";
+export type NoticeSink = (message: string, timeoutMs: number) => void;
+
 const ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
 export class Logger {
-  constructor(private level: LogLevel = "info") {}
+  constructor(
+    private level: LogLevel = "info",
+    private noticeSink?: NoticeSink,
+  ) {}
 
   setLevel(level: LogLevel) {
     this.level = level;
+  }
+
+  setNoticeSink(noticeSink: NoticeSink | undefined) {
+    this.noticeSink = noticeSink;
   }
 
   private allowed(l: LogLevel) {
@@ -28,6 +35,10 @@ export class Logger {
   }
 
   notice(msg: string, timeoutMs = 5000) {
-    new Notice(msg, timeoutMs);
+    if (this.noticeSink) {
+      this.noticeSink(msg, timeoutMs);
+      return;
+    }
+    this.info(msg);
   }
 }

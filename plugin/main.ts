@@ -52,7 +52,10 @@ export default class ArxivDailyPlugin extends Plugin {
 
   async onload() {
     await this.loadSettingsAndState();
-    this.logger = new Logger(this.settings.advanced.logLevel);
+    this.logger = new Logger(
+      this.settings.advanced.logLevel,
+      (message, timeoutMs) => new Notice(message, timeoutMs),
+    );
 
     this.stateStore = new StateStore(
       async () => {
