@@ -6,9 +6,9 @@
 
 > arXiv Daily = 每日发现 + 日报内筛选 + Reading Dashboard + 后续阅读管理
 
-当前插件已经基本完成“每日发现”：抓取 arXiv、按研究主题筛选、生成日报、为重点论文生成详情页。下一阶段的重点不是增加一个单独 inbox 页面，而是把日报变成自然筛选入口：用户读日报时直接勾选“关注”或“重点”，插件把选择同步到内部 JSON 索引；只有重要论文才生成长期 markdown 笔记。
+当前插件已经完成“每日发现”和“日报内筛选”（v0.1.4）：抓取 arXiv、按研究主题筛选、生成日报、为重点论文生成详情页；用户读日报时直接勾选“关注”或“重点”，插件把选择自动同步到内部 JSON 索引，只有重要论文才生成长期 markdown 笔记。下一阶段分两步走：先用小成本补齐科研工作流断点（多设备勾选、漏报兜底、BibTeX、多分类），再做 Obsidian 内 Reading Dashboard 解决跨日期回看。
 
-用户对 GUI 的需求是成立的：当关注、重点、saved、read 等状态积累起来后，不能要求用户逐篇日报回翻。后续应先做 Obsidian 内的 Reading Dashboard，用表格、筛选、搜索和汇总视图消费 `papers.json`；独立软件只有在需求明显超出 Obsidian 后再评估。
+用户对 GUI 的需求是成立的：当关注、重点、saved、read 等状态积累起来后，不能要求用户逐篇日报回翻。后续应先做 Obsidian 内的 Reading Dashboard，用表格、筛选、搜索和汇总视图消费 `papers.json`；独立工作台是长期愿景，按 Standalone Research Workbench 一节的验证路径推进。
 
 核心目标不是替代 Zotero、Dataview 或 Obsidian，而是把每天新出现的论文稳定地接入现有科研笔记工作流，并提供一个能回看、检索和批量处理论文状态的工作台。
 
@@ -24,23 +24,28 @@
 
 已经具备：
 
-- 按 arXiv category 抓取 `/recent`。
+- 按 arXiv category 抓取 `/recent`，Atom API 补全摘要，章节抽取优先保留高价值正文内容。
 - 按用户配置的 topics 进行 LLM 分类和筛选。
-- 生成每日 markdown 日报。
-- 为 detail topic 生成单篇论文详情页。
-- 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情。
-- 支持日期级 run state：completed、failed、skipped、running。
-- 支持失败日期重试、强制清除日期状态重跑、清空 run state。
-- 支持 diagnostics 报告，用于定位配置、日期窗口和运行状态问题。
+- 生成每日 markdown 日报：每篇论文按核心问题 / 关键方法 / 主要结果 / 为什么值得看 / 局限或边界五字段总结，并标注信息来源章节。
+- 为 detail topic 生成单篇论文详情页（研究问题 / 方法设计 / 关键证据 / 主要结论 / 适用边界 / 一句话价值判断）。
+- 隐藏主索引 `arxiv-daily/.index/papers.json`：按 arXiv ID 去重，合并 seenDates / dailyReports，用户控制字段不被覆盖，旧 `index/` 路径自动迁移。
+- 日报内“关注 / 重点” checkbox，修改后防抖自动同步到 papers.json；取消勾选只回退插件默认状态，不降级用户手动设置的 saved / read / ignored。
+- 日报标注 new / seen_before；ignored 论文不再进入日报。
+- 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
+- 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
+- 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
 - release 已自动化，tag 触发 GitHub release asset 构建。
 
 仍然可以继续加强：
 
-- 更好的周回顾视图或搜索方式，用于查看已勾选“关注/重点”的论文。
-- Obsidian 内 GUI Dashboard：按状态、priority、topic、日期范围、是否有 note / Zotero 字段筛选论文。
-- 对关注/重点论文的批量状态修改、快速打开日报/论文笔记、周度汇总。
-- 已收藏但未进 Zotero、待读但未阅读等科研工作流视图。
-- PDF、BibTeX、Zotero、项目笔记的结构化接入。
+- 勾选同步只监听 Obsidian 运行中的文件修改事件：手机 / 其他设备上勾选、经文件同步回来的改动，桌面端重启后不会被补处理。
+- 只支持单个 arXiv 分类，跨方向研究（如 astro-ph + cs.LG）覆盖不了。
+- LLM 筛选存在漏报风险，日报里看不到当天未入选的论文，无法快速兜底确认。
+- 五字段结构化摘要只存在于日报 markdown 中，papers.json 里没有，Dashboard 搜索、周报复用都缺数据。
+- 没有 BibTeX / 引用获取能力，从“读到论文”到“写作引用”之间断链。
+- 缺少跨日期回看、筛选、批量处理的 GUI Dashboard（v0.1.6）。
+- 超出 arXiv `/recent` 5 天窗口的日期无法补跑（出差、休假场景论文直接丢失）。
+- PDF、Zotero、项目笔记的结构化接入（v0.1.8）。
 
 ## Design Principles
 
@@ -48,9 +53,9 @@
 
    `arxiv-daily/.index/papers.json` 保存所有被筛选为相关的论文记录。不要把长期论文状态放进 `.obsidian/plugins/arxiv-daily/data.json`，避免插件安装、更新或手动覆盖时误伤长期数据。
 
-2. **Obsidian 优先，不先做单独软件**
+2. **Obsidian 优先，独立工作台走验证路径**
 
-   现阶段用户价值来自和 Obsidian vault、双链、搜索、Dataview、同步工具的自然结合。单独软件会引入数据库、同步、UI 和发布维护成本，应等需求明显超出 Obsidian 后再考虑。
+   现阶段用户价值来自和 Obsidian vault、双链、搜索、Dataview、同步工具的自然结合。独立工作台是长期愿景，但要按 Standalone Research Workbench 一节的方式先零成本验证（VS Code + 终端 agent 打开 vault），并在 core 抽取完成后再选宿主，避免过早承担数据库、同步、UI 和发布维护成本。
 
 3. **GUI 先做成 Obsidian 内工作台**
 
@@ -100,6 +105,7 @@ arxiv-daily/
 - 如果论文已有 markdown note，链接到 `paperPath`。
 - 如果论文没有 markdown note，展示 arXiv 链接、摘要和一句话结论。
 - 将日报路径写回对应论文记录的 `dailyReports`。
+- 末尾折叠列出当日全部未入选论文的标题与链接，作为 LLM 漏报的兜底（v0.1.5）。
 
 ## Proposed Paper Index
 
@@ -152,7 +158,7 @@ arxiv-daily/.index/papers.json
 | arXiv 当天全部论文 | No |
 | LLM 判断相关但非重点论文 | No, only index in JSON |
 | `detail: true` | Yes |
-| `priority: high` | Yes |
+| `priority: high`（勾选“重点”） | No, only index in JSON（避免 checkbox 触发昂贵副作用） |
 | `status: saved` | Yes |
 | 用户执行 `Create paper note` | Yes |
 
@@ -198,7 +204,13 @@ citation_key: ""
 | `normal` | 默认优先级 |
 | `high` | 高价值或近期需要阅读 |
 
-## v0.2.0: Daily Selection Layer
+## Release Versioning
+
+发布 tag 与里程碑编号一致，只递增最后一位（v0.1.4、v0.1.5、…）。如果某个里程碑分多次 patch 发布、或中间插入 hotfix，后续里程碑编号顺延并更新本文档。
+
+## v0.1.4: Daily Selection Layer
+
+> 状态：已完成（2026-06-12，`c8ee23d` / `094a9e8`），180 条测试全部通过，以 tag `v0.1.4` 发布。与最初 scope 的一处差异：`priority: high` 不自动创建 markdown note——勾选“重点”保持零副作用，笔记只通过 detail / saved / 手动创建产生。
 
 目标：把日报变成论文筛选的主操作界面。用户打开当天日报，快速扫过大多数论文，只对少数感兴趣或重点关注的论文打勾；插件自动把勾选结果同步到 `papers.json`。日常操作闭环直接发生在日报里。
 
@@ -221,7 +233,6 @@ citation_key: ""
 3. 新相关论文默认写入 `status: inbox` 和 `priority: normal`。
 4. 只在必要时创建 markdown note：
    - `detail: true`。
-   - `priority: high`。
    - `status: saved`。
    - 用户手动执行 `Create paper note`。
 5. 日报继续创建 markdown，并从 `papers.json` 标注 new / seen before，弱化已 `ignored` 的论文。
@@ -253,7 +264,47 @@ citation_key: ""
 - checkbox 取消勾选时，如果论文仍是插件默认的 `to_read` 状态，则回到 `status: inbox`；如果用户已手动设置为 `saved` / `read` / `ignored`，不自动降级。
 - `arxiv-daily/.index/papers.json` 是内部状态文件，默认隐藏，日常不需要在文件树中打开。
 
-## v0.3.0: Obsidian Reading Dashboard
+## v0.1.5: Workflow Quick Wins
+
+目标：在 Dashboard 之前，用小成本补齐科研日常里最痛的几个断点。各项彼此独立，可逐项发布。
+
+### 1. 勾选状态启动补扫
+
+勾选同步目前只依赖 Obsidian 运行中的 `modify` 事件。在手机或另一台机器上勾选“关注 / 重点”，文件经 Obsidian Sync / iCloud 同步回来后，桌面端重启不会补处理这些勾选。
+
+- 插件启动（layout ready）后，重新解析最近 lookback 窗口内的日报文件并同步勾选状态。
+- 复用现有 parser、映射和防抖逻辑，不引入第二套实现。
+- 补扫和实时同步都不得把 saved / read / ignored 降级回 to_read：勾选映射只在当前状态属于 inbox / to_read 时生效（当前 `stateForSelection` 对已勾选论文会无条件返回 to_read，补扫前需要先收紧这一点，否则每次启动都会把手动标记的 saved 拉回去）。
+- 验收：手机勾选 → 文件同步 → 桌面重启 Obsidian，`papers.json` 状态正确，全程无需手动命令；对已 saved 论文反复补扫不改变其状态。
+
+### 2. 日报漏报兜底
+
+LLM 筛选存在漏报，而漏掉一篇关键论文的代价远大于多扫几十行标题。补上这一块后，日报可以完全替代刷 arXiv 列表页。
+
+- 日报末尾追加折叠区（callout 或 `<details>`），列出当日该分类全部未入选论文的标题 + arXiv 链接。
+- 纯标题列表，不经过 LLM，token 成本为零。
+- `ignored` 论文不进此列表。
+- 验收：相关论文数 + 未入选数 = 当日该分类论文总数；折叠区默认收起，不干扰正常阅读。
+
+### 3. BibTeX 快捷获取
+
+读论文的终点是写作引用。arXiv 直接提供 `https://arxiv.org/bibtex/<arxiv_id>` 端点，实现成本很低，从 v0.1.8 提前。
+
+- 新增命令：按 arXiv ID / 当前论文笔记复制 BibTeX。
+- 解析 BibTeX entry key 写回 `citationKey` 字段。
+- 完整的 Zotero bridge 和批量导出仍留在 v0.1.8。
+- 验收：从日报或论文笔记一步拿到可直接粘进 `.bib` 的条目，`papers.json` 同步记录 `citationKey`。
+
+### 4. 多 arXiv 分类
+
+跨方向研究是常态（astro-ph + cs.LG、cs.CL + cs.AI）。当前设置只支持单分类，是真实覆盖缺口。
+
+- `arxiv.category: string` 改为 `categories: string[]`，含设置迁移和 UI 适配。
+- 多分类抓取后合并，按 arXiv ID 去重，交叉挂载论文只处理一次。
+- 日报标题、frontmatter 和 index 的 `category` 字段适配多分类。
+- 验收：配置两个分类时，交叉挂载论文只出现一次、只消耗一次 LLM 调用。
+
+## v0.1.6: Obsidian Reading Dashboard
 
 目标：做一个 Obsidian 内 GUI 工作台，让用户不用逐篇日报回翻，就能查看、搜索、汇总和处理已关注、重点、saved、read、ignored 等论文。
 
@@ -265,6 +316,8 @@ citation_key: ""
 - **可批量处理**：关注/重点论文多起来后，必须支持多选和批量状态修改。
 
 ### Scope
+
+前置（schema v2）：在做 Dashboard UI 之前，先扩展 paper index schema，把 pipeline 已经生成的结构化摘要写进每条论文记录（如 `summary: { coreProblem, keyMethod, mainResult, whyRelevant }`，或先只收一个一句话字段）。Dashboard 卡片、搜索和视图导出都依赖它；字段来源可以是解析日报 markdown，也可以让 daily LLM 改为结构化输出后由插件渲染 markdown（倾向后者，但需保持现有日报格式稳定）。先定 schema 让数据从现在开始积累，避免 Dashboard 上线后再改数据结构和回填。
 
 1. 新增 `arXiv Daily: Open reading dashboard` 命令和 ribbon 菜单入口。
 2. 新增 Obsidian custom view，例如 `arxiv-daily-dashboard`。
@@ -289,7 +342,7 @@ citation_key: ""
    - title。
    - authors。
    - topic/tag。
-   - 后续可加入日报摘要片段或结构化 summary 字段。
+   - schema v2 的结构化 summary 字段（核心问题 / 关键方法 / 主要结果）。
 6. 表格列建议：
    - checkbox。
    - priority。
@@ -332,10 +385,10 @@ citation_key: ""
 - 用户可以单篇或批量修改 status / priority，保存到 `papers.json`。
 - 用户可以从 Dashboard 打开 paper note、创建 lightweight note、打开 daily report。
 - Dashboard 的汇总数字与当前筛选结果一致。
-- Dashboard 不创建新的 markdown 回顾页面作为主入口；如后续需要，可以提供“导出当前视图为 Markdown”命令。
+- Dashboard 不创建新的 markdown 回顾页面作为主入口；视图导出 / 组会分享需求较小，整条路线最后再做（见 Backlog）。
 - 所有状态修改都保留用户手写的 paper note 内容。
 
-## v0.4.0: Core Extraction + CLI Fallback
+## v0.1.7: Core Extraction + CLI Fallback
 
 目标：把抓取、分类、去重、总结、索引这些核心逻辑抽成可复用 core，为 cron/headless 和未来独立客户端打基础。
 
@@ -350,18 +403,20 @@ citation_key: ""
   - `arxiv-daily run-pending`。
   - `arxiv-daily summarize --id 2606.12345`。
 - 可选把 run state 写进 vault 输出目录，避免 CLI 和 Obsidian scheduler 重复跑。
+- 用 arXiv export API 按日期范围补跑超出 `/recent` 5 天窗口的缺失日期（出差、休假场景）；注意 announce date 与 submittedDate 的分桶差异，补跑产物需标注为近似窗口。
+- 生成 markdown 的链接风格可配置：`[[wikilink]]`（Obsidian）或标准相对链接（VS Code 等通用编辑器可导航），为宿主迁移做准备；数学公式坚持标准 LaTeX 语法。
+- Node CLI 稳定后退役根目录 `arxiv_daily.py`：它和插件已是两份并行维护的 pipeline（章节抽取优化就同时改了两处），统一到共享 core 后停止双份维护。
 - 保持 Obsidian 插件仍是主用户界面。
 
-## v0.5.0: Research Tool Integrations
+## v0.1.8: Research Tool Integrations
 
 目标：连接 Zotero、PDF 和引用管理，但不替代它们。
 
 优先级建议：
 
-1. **BibTeX / citation helper**
-   - 从 arXiv 导出 BibTeX。
-   - 写入 `citationKey`。
-   - 支持复制引用片段。
+1. **BibTeX / citation helper**（单篇复制 BibTeX、写入 `citationKey` 已提前到 v0.1.5）
+   - 批量导出当前筛选结果为 `.bib` 文件。
+   - 引用片段模板（`\cite{key}`、pandoc、Typst）。
 
 2. **Zotero bridge**
    - 先支持手动字段：`zoteroKey`、`zoteroUri`。
@@ -376,6 +431,15 @@ citation_key: ""
 4. **Project notes**
    - 支持 `projects` 字段。
    - 允许把论文链接追加到某个项目笔记。
+
+## Backlog
+
+优先级未定、但值得保留的方向：
+
+- 作者关注：维护 watched authors 列表，抓取阶段字符串匹配，命中论文在日报中加标记；零 LLM 成本，适合跟踪导师、合作者和竞争组。
+- 版本更新提醒：已关注 / saved 的论文出现新版本（v2+）时在日报提示；v2 往往意味着被接收或大修。
+- 多来源接入：bioRxiv、ADS、OpenReview、RSS；依赖 v0.1.7 core 抽取后的 fetcher 抽象，避免在 Obsidian 插件里直接堆来源。
+- 视图导出与组会分享：把 Dashboard 当前筛选结果导出为一页 markdown 清单（journal club / 周报），与周度自动汇总合并考虑；需求较小，放在整条路线最后。
 
 ## Possible Obsidian Workflows
 
@@ -490,38 +554,59 @@ Dashboard 应该被实现为 Obsidian custom view，而不是生成一个长期�
 - Dashboard 不直接编辑 note 正文；只更新 `papers.json` 和必要 frontmatter。
 - 如果未来做独立软件，优先复用 query/filter/action 这些 dashboard model 层，而不是复用 Obsidian DOM 视图。
 
-## When to Consider a Standalone App
+## Standalone Research Workbench
 
-GUI 需求成立，但短期不建议做单独软件。先把 GUI 做成 Obsidian 内 Dashboard。只有出现以下需求时再评估独立客户端：
+长期愿景：一个 VS Code / Claude Desktop 式的独立工作台——打开目标文件夹，浏览和编辑 markdown 论文笔记，内嵌终端 agent（Claude Code / Codex 等），arXiv Daily pipeline 和 Reading Dashboard 内置其中。
 
-- 需要后台常驻自动运行，不依赖 Obsidian 打开。
-- 需要复杂多列 UI、批量拖拽、跨库聚合。
+这个愿景拆成三层看：
+
+1. 领域层：抓取、筛选、总结、paper index、状态流转——已有，是真正的差异化资产。
+2. 工作台层：文件树、markdown 阅读 / 编辑（数学公式、双链、搜索）、Dashboard 视图。
+3. agent 层：在工作区内运行终端 agent，让它读写论文笔记和 `papers.json`（对话式文献整理、批量改状态、写综述草稿）。
+
+降低风险的推进方式：
+
+- 零成本先验证工作方式：vault 本身就是一个文件夹，现在就可以用 VS Code / Cursor 打开 vault、在集成终端里跑 Claude Code 来模拟这个工作台；再给 vault 写一份 CLAUDE.md（教 agent papers.json 的 schema、状态语义和笔记约定），agent 层的核心体验立刻可用。如果这种用法成为日常、Obsidian 越开越少，就是独立化的真实证据。
+- 中期路线不变：v0.1.5 快赢 → v0.1.6 Dashboard（model 层保持 host 无关）→ v0.1.7 core 抽取。这三步对所有结局（留在 Obsidian / VS Code 扩展 / 独立 app）都是必经路径，没有浪费。
+- 到决策点再选宿主，按成本排序（当前倾向：短期留在 Obsidian 把 v0.1.5–v0.1.7 做完，VS Code 扩展是最可能的迁移目标）：
+  1. VS Code 扩展：编辑器、终端、agent 集成全部现成，只需写 sidebar Dashboard 和命令；最贴近“像 VS Code”的形态，成本最低。
+  2. Electron 壳组装：CodeMirror（编辑）+ xterm.js / node-pty（终端 agent）+ 自有 Dashboard UI，复用 core；UI 完全自主，但要自担三平台打包、自动更新、安全的长尾维护。
+  3. 留在 Obsidian：如果验证发现双链生态和移动端同步仍离不开它。
+- 不自研 markdown 编辑器内核：数学渲染、双链、全文搜索、文件同步、移动端是无底洞，永远组装现成组件。
+
+立即独立化的触发信号：
+
+- VS Code + Claude Code 工作流试用数周后明显优于 Obsidian 工作流。
+- 需要后台常驻自动运行，不依赖任何宿主打开。
 - 需要面向不使用 Obsidian 的用户。
-- 需要内置完整 Markdown 文件阅读/编辑、同步和冲突处理，而不是复用 Obsidian。
-- 需要多设备实时同步且不依赖 vault 文件同步。
-- 需要数据库级查询和大规模历史分析。
-- 需要同时接 arXiv、ADS、Semantic Scholar、RSS、Zotero 等多个来源。
+- agent 工作流需要宿主深度配合（agent 驱动的批量整理、对话式检索），Obsidian 插件 API 无法支撑。
+- 需要数据库级查询、多来源聚合（arXiv、ADS、Semantic Scholar、RSS、Zotero）。
 
-即使未来做单独软件，也应优先把当前插件里的抓取、分类、去重、JSON schema 和 note 生成逻辑抽成可复用核心，而不是重写。
+无论最终选哪个宿主，都先把抓取、分类、去重、JSON schema 和 note 生成逻辑抽成可复用核心（v0.1.7），不重写。
 
 ## Recommended Next Step
 
-下一步建议按两段推进：
+**阶段 0：发布 v0.1.4（已完成 2026-06-12）**
 
-**阶段 1：收尾 Daily Selection Layer**
+Daily Selection Layer 以 tag `v0.1.4` 发布；后续 tag 只递增最后一位。
 
-1. 日报每篇论文加入 `关注` / `重点` checkbox，并带稳定 HTML 注释标记。
-2. 新增 daily selection parser，能从日报 markdown 中解析每个 arXiv ID 的勾选状态。
-3. 监听 daily 文件修改，防抖后自动同步到 `papers.json`。
-4. 勾选关注映射为 `to_read/normal`，勾选重点映射为 `to_read/high`。
-5. 确定 `papers.json` 最终路径：继续用 `arxiv-daily/index/papers.json`，或实现迁移到 `arxiv-daily/.index/papers.json`，避免文档和代码长期分叉。
-6. 保留手动状态命令作为高级操作。
+**阶段 1：v0.1.5 Workflow Quick Wins**
 
-**阶段 2：实现 Obsidian Reading Dashboard**
+按收益 / 成本顺序推进，每项独立可发布：
 
-1. 先做只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
-2. 再做单篇状态修改。
-3. 最后做多选和批量操作。
-4. Dashboard 稳定后，再考虑 core extraction / CLI fallback。
+1. 勾选状态启动补扫（手机 / 多设备 triage 立刻可用，注意先收紧降级保护）。
+2. 日报漏报兜底（未入选论文折叠列表，零 token）。
+3. BibTeX 快捷获取（接通写作引用环节）。
+4. 多 arXiv 分类支持。
 
-这个顺序最贴近日常使用：日报负责“今天挑出来”，Dashboard 负责“之后找得到、看得清、处理得动”。
+**阶段 2：v0.1.6 Reading Dashboard**
+
+1. 先定 paper index schema v2（结构化摘要字段），让 pipeline 从现在开始积累数据。
+2. 只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
+3. 单篇状态修改，再做多选和批量操作。
+
+**阶段 3：v0.1.7 及之后**
+
+core 抽取 + Node CLI（退役 Python 脚本）、超窗补跑 fallback；之后按 v0.1.8 推进 Zotero / PDF / 项目笔记接入。
+
+这个顺序最贴近日常使用：日报负责“今天挑出来”，快赢层补齐“手机上也能挑、漏不掉、引用拿得到”，Dashboard 负责“之后找得到、看得清、处理得动”。
