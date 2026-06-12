@@ -490,6 +490,73 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - Dashboard 不直接编辑 note 正文；只更新 `papers.json` 和必要 frontmatter。
 - query/filter/action model 与 DOM 视图分离，VS Code 扩展复用 model 层而不是 Obsidian 视图。
 
+## Detailed Roadmap Todo
+
+每个 checklist item 都应该尽量形成一个可独立验证、可独立提交的完成点。提交前先跑相关测试；涉及插件行为的改动至少跑 `npm test`，里程碑收尾再跑 `npm run build`。
+
+### v0.1.5 Workflow Quick Wins
+
+- [ ] 启动补扫：收紧 checkbox selection 到 paper state 的映射，确保 saved / read / ignored 不会被已勾选 checkbox 降级。
+- [ ] 启动补扫：把现有 daily selection parser 暴露为可复用同步入口，避免启动补扫和实时 `modify` 事件维护两套逻辑。
+- [ ] 启动补扫：在 `layoutReady` 后扫描最近 lookback 窗口内的 `daily/*.md`，按日期排序同步 checkbox 到 `papers.json`。
+- [ ] 启动补扫：补测试覆盖移动端同步场景、已 saved 论文反复补扫、无日报文件和无 index 文件的空操作。
+- [ ] 漏报兜底：让 pipeline 保留当日抓取全集与入选论文集合，按 arXiv ID 计算未入选列表。
+- [ ] 漏报兜底：日报末尾渲染默认收起的未入选论文列表，只包含标题、arXiv 链接和基础 metadata，不消耗 LLM。
+- [ ] 漏报兜底：过滤 ignored 论文，并补测试保证入选数 + 未入选数等于抓取总数。
+- [ ] BibTeX：新增按 arXiv ID 获取 BibTeX 的服务，解析 entry key 并处理网络失败、空响应和非法 ID。
+- [ ] BibTeX：新增命令从当前论文笔记或用户输入 arXiv ID 获取 BibTeX，复制到剪贴板并写回 `citationKey`。
+- [ ] BibTeX：补测试覆盖 BibTeX key 解析、index 更新、当前文件 frontmatter / 正文识别 arXiv ID。
+- [ ] 多分类：把 settings 从 `arxiv.category` 迁移到 `arxiv.categories: string[]`，保留旧配置兼容读取。
+- [ ] 多分类：设置页支持增删多个 arXiv category，并校验重复、空值和非法分类。
+- [ ] 多分类：pipeline 多分类抓取后按 arXiv ID 去重，交叉挂载论文只进入一次 LLM 分类和 index 更新。
+- [ ] 多分类：明确 index schema 中 `category` / `categories` 的兼容策略，并补迁移和测试。
+- [ ] v0.1.5 收尾：更新 README / PLAN 状态，跑完整测试和 build，发布前确认版本号与 tag 计划。
+
+### v0.1.6 Obsidian Reading Dashboard
+
+- [ ] schema v2：确定 `summary` 字段结构，新增 migration，并让 pipeline 写入结构化摘要。
+- [ ] Dashboard model：抽出 host 无关 query/filter/sort/stat/action model，覆盖 tabs、搜索、筛选和汇总。
+- [ ] Dashboard view shell：注册 `arxiv-daily-dashboard` custom view、命令和 ribbon 入口。
+- [ ] Dashboard list：实现表格 / 列表渲染、空状态、加载失败状态和基础样式。
+- [ ] Dashboard filters：实现 topic、date range、status、priority、has note、detail、missing citation / Zotero 筛选。
+- [ ] Dashboard actions：实现打开 note / daily / arXiv / PDF、创建 note、单篇状态和 priority 修改。
+- [ ] Dashboard batch：实现多选和批量 ignored / read / saved / priority 修改；批量创建 note 必须二次确认。
+- [ ] Dashboard diagnostics：扩展 paper index / note consistency 检查，并把结果接入现有 diagnostics 报告。
+- [ ] v0.1.6 收尾：补单元测试和 UI model 测试，更新文档，跑完整测试和 build。
+
+### v0.1.7 Core Extraction + CLI Fallback
+
+- [ ] Adapter contracts：定义 `HttpClient`、`StorageAdapter`、`SecretProvider`、`ProgressReporter`、resource opener 等接口。
+- [ ] Core extraction：把 fetch、filter、summarize、write daily、paper index 更新从 Obsidian API 中剥离。
+- [ ] Obsidian adapter：用 adapter 重新接回现有插件功能，保持用户行为不变。
+- [ ] Node CLI：新增 `run --date`、`run-pending`、`summarize --id` 命令，复用 core。
+- [ ] CLI config：支持 env / 配置文件读取 API key、topics、输出路径和 link style。
+- [ ] Run state：把 CLI 与 Obsidian scheduler 的 run state 放到同一 vault 输出目录，避免重复运行。
+- [ ] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
+- [ ] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
+- [ ] Python 退役：CLI 稳定后冻结或移除根目录 `arxiv_daily.py` 的主流程，文档引导到 Node CLI。
+- [ ] v0.1.7 收尾：跑插件测试、CLI 测试、build，更新 README / PLAN。
+
+### v0.1.8 Research Tool Integrations
+
+- [ ] BibTeX 批量导出：从 Dashboard 当前筛选结果导出 `.bib`，处理重复 citation key。
+- [ ] 引用片段模板：支持 LaTeX、pandoc markdown、Typst 等 citation snippet。
+- [ ] Zotero 手动字段：支持 `zoteroKey` / `zoteroUri` 的读取、编辑、校验和 Dashboard 缺失提示。
+- [ ] Zotero bridge：评估并实现 Better BibTeX citekey 或 Zotero local API 的低风险接入。
+- [ ] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。
+- [ ] Project notes：支持 `projects` 字段维护，并把论文链接追加到指定项目笔记。
+- [ ] v0.1.8 收尾：更新 docs、测试、build，并确认不替代 Zotero / PDF 阅读器的边界。
+
+### VS Code Companion Extension
+
+- [ ] Extension scaffold：独立 VS Code extension 目录、manifest、build/test 脚本和 VSIX 发布策略。
+- [ ] Workspace adapter：把包含 `arxiv-daily/` 的 workspace folder 识别为 vault，接入 core storage。
+- [ ] Secret adapter：用 VS Code SecretStorage 保存 API key。
+- [ ] Webview Dashboard：复用 v0.1.6 dashboard model，实现 tabs、搜索、筛选、打开资源和单篇状态修改。
+- [ ] Commands：命令面板接入 run、run-pending、summarize by ID。
+- [ ] Link compatibility：新生成 markdown 使用标准相对链接；存量 wikilink 只保证 Dashboard 导航可用。
+- [ ] Extension 收尾：最小手动验收 VS Code 打开 vault、浏览 Dashboard、改状态、运行 pipeline。
+
 ## Recommended Next Step
 
 **阶段 1：v0.1.5 Workflow Quick Wins**（当前）
