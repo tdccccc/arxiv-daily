@@ -4,17 +4,20 @@
 
 定位：
 
-> arXiv Daily = 每日发现 + 论文收件箱 + 后续阅读管理
+> arXiv Daily = 每日发现 + 日报内筛选 + Reading Dashboard + 后续阅读管理
 
-当前插件已经基本完成“每日发现”：抓取 arXiv、按研究主题筛选、生成日报、为重点论文生成详情页。后续不建议立刻做成单独软件，而是先继续做 Obsidian-native 插件，用 JSON 维护完整 paper inbox，只为重要论文生成长期 markdown 笔记。
+当前插件已经基本完成“每日发现”：抓取 arXiv、按研究主题筛选、生成日报、为重点论文生成详情页。下一阶段的重点不是增加一个单独 inbox 页面，而是把日报变成自然筛选入口：用户读日报时直接勾选“关注”或“重点”，插件把选择同步到内部 JSON 索引；只有重要论文才生成长期 markdown 笔记。
 
-核心目标不是替代 Zotero、Dataview 或 Obsidian，而是把每天新出现的论文稳定地接入现有科研笔记工作流。
+用户对 GUI 的需求是成立的：当关注、重点、saved、read 等状态积累起来后，不能要求用户逐篇日报回翻。后续应先做 Obsidian 内的 Reading Dashboard，用表格、筛选、搜索和汇总视图消费 `papers.json`；独立软件只有在需求明显超出 Obsidian 后再评估。
+
+核心目标不是替代 Zotero、Dataview 或 Obsidian，而是把每天新出现的论文稳定地接入现有科研笔记工作流，并提供一个能回看、检索和批量处理论文状态的工作台。
 
 ## Glossary
 
 - **Daily discovery**：每天抓取 arXiv，按 topic 筛选和总结，生成日报。
-- **Paper inbox**：新发现但还没有被用户处理过的论文集合。这里的 inbox 是一种状态，不一定是一个文件夹。
+- **Paper index**：以 JSON 保存的论文级状态和去重索引，不是日常阅读入口。
 - **Paper object**：以 arXiv ID 为稳定主键的一篇论文记录。默认存放在 `papers.json` 中；只有 detail、high priority、saved 或用户主动创建笔记的论文才对应 markdown 详情页。
+- **Reading Dashboard**：Obsidian 内的插件视图，用于检索、筛选、回看、汇总和批量更新论文状态；它读取 `papers.json`，但不替代 Markdown 编辑器。
 - **Reading management**：对论文做后续处理，例如待读、正在读、已读、收藏、忽略、关联 Zotero 或项目笔记。
 
 ## Current State
@@ -31,40 +34,43 @@
 - 支持 diagnostics 报告，用于定位配置、日期窗口和运行状态问题。
 - release 已自动化，tag 触发 GitHub release asset 构建。
 
-仍然缺少：
+仍然可以继续加强：
 
-- 论文级状态：inbox、to_read、reading、read、saved、ignored。
-- 以 arXiv ID 为中心的跨日期去重和更新。
-- 论文级 inbox 页面或命令。
-- 当前论文状态的快捷修改命令。
+- 更好的周回顾视图或搜索方式，用于查看已勾选“关注/重点”的论文。
+- Obsidian 内 GUI Dashboard：按状态、priority、topic、日期范围、是否有 note / Zotero 字段筛选论文。
+- 对关注/重点论文的批量状态修改、快速打开日报/论文笔记、周度汇总。
 - 已收藏但未进 Zotero、待读但未阅读等科研工作流视图。
 - PDF、BibTeX、Zotero、项目笔记的结构化接入。
 
 ## Design Principles
 
-1. **JSON 索引是 paper inbox 主数据源**
+1. **JSON 索引是内部状态主数据源**
 
-   `arxiv-daily/index/papers.json` 保存所有被筛选为相关的论文记录。不要把长期 paper inbox 放进 `.obsidian/plugins/arxiv-daily/data.json`，避免插件安装、更新或手动覆盖时误伤长期数据。
+   `arxiv-daily/.index/papers.json` 保存所有被筛选为相关的论文记录。不要把长期论文状态放进 `.obsidian/plugins/arxiv-daily/data.json`，避免插件安装、更新或手动覆盖时误伤长期数据。
 
 2. **Obsidian 优先，不先做单独软件**
 
    现阶段用户价值来自和 Obsidian vault、双链、搜索、Dataview、同步工具的自然结合。单独软件会引入数据库、同步、UI 和发布维护成本，应等需求明显超出 Obsidian 后再考虑。
 
-3. **论文为中心，日报只是视图**
+3. **GUI 先做成 Obsidian 内工作台**
+
+   需要 GUI 来解决回看、检索、汇总和批量处理，但第一版 GUI 应该是 Obsidian custom view。Markdown 阅读、编辑、双链、文件同步继续交给 Obsidian，Dashboard 只负责把 `papers.json` 变成可操作的论文列表和回顾视图。
+
+4. **论文为中心，日报只是视图**
 
    当前以日期为中心：某天是否跑过、某天生成了什么。下一阶段要把论文变成稳定对象：这篇论文何时发现、属于什么 topic、当前处理状态是什么、是否值得收藏。markdown 详情页是重要论文的长期笔记，不是所有相关论文的必要载体。
 
-4. **轻量状态机，不做复杂项目管理**
+5. **轻量状态机，不做复杂项目管理**
 
    状态字段应该足够支持科研阅读管理，但避免一开始做成复杂任务系统。
 
-5. **先结构化，再做集成**
+6. **先结构化，再做集成**
 
    Zotero、PDF、引用和项目笔记都依赖稳定的论文 metadata。先把 JSON schema、去重和状态流转做好，再做外部工具接入。
 
 ## Storage Layout
 
-JSON-first 只针对论文级 inbox 索引，不改变日报作为 markdown 入口的定位。
+JSON-first 只针对论文级状态索引，不改变日报作为 markdown 入口的定位。
 
 建议目录结构：
 
@@ -72,7 +78,7 @@ JSON-first 只针对论文级 inbox 索引，不改变日报作为 markdown 入�
 arxiv-daily/
   daily/
     2026-06-11.md
-  index/
+  .index/
     papers.json
   papers/
     2606.12345.md
@@ -83,9 +89,8 @@ arxiv-daily/
 | Path | Role | Created by default |
 |---|---|---|
 | `arxiv-daily/daily/YYYY-MM-DD.md` | 每日发现入口，按 topic 展示当天相关论文 | Yes |
-| `arxiv-daily/index/papers.json` | 所有相关论文的状态、去重、seen dates 和外部工具字段 | Yes |
+| `arxiv-daily/.index/papers.json` | 插件内部状态：所有相关论文的状态、去重、seen dates 和外部工具字段；默认隐藏 | Yes |
 | `arxiv-daily/papers/<arxiv_id>.md` | 重要论文的长期阅读笔记和深度分析 | Only for detail / high priority / saved / manual |
-| `arxiv-daily/inbox.md` | 从 JSON 生成的当前待处理视图 | On command or scheduled refresh |
 
 日报仍然是每天最主要的阅读入口。它应该从当天 pipeline 结果和 `papers.json` 共同生成：
 
@@ -98,10 +103,10 @@ arxiv-daily/
 
 ## Proposed Paper Index
 
-完整 paper inbox 建议保存在 vault 可见目录：
+完整 paper index 建议保存在 vault 可见目录：
 
 ```text
-arxiv-daily/index/papers.json
+arxiv-daily/.index/papers.json
 ```
 
 建议结构：
@@ -193,13 +198,20 @@ citation_key: ""
 | `normal` | 默认优先级 |
 | `high` | 高价值或近期需要阅读 |
 
-## v0.2.0: Paper Inbox Layer
+## v0.2.0: Daily Selection Layer
 
-目标：在不大改现有工作流的前提下，让每篇论文成为可管理的稳定对象。
+目标：把日报变成论文筛选的主操作界面。用户打开当天日报，快速扫过大多数论文，只对少数感兴趣或重点关注的论文打勾；插件自动把勾选结果同步到 `papers.json`。日常操作闭环直接发生在日报里。
+
+核心原则：
+
+- **日报是主入口**：用户不应该读完日报后再去 inbox 里找同一批论文处理。
+- **只做正向筛选**：大部分论文扫过不动；少数勾“关注”；极少数勾“重点”。
+- **勾选即同步**：checkbox 修改后自动更新 `papers.json`，不要求用户手动运行同步命令。
+- **index 是内部状态**：`papers.json` 用于去重、状态和后续集成，不作为日常阅读文件。
 
 ### Scope
 
-1. 新增 `arxiv-daily/index/papers.json`，作为完整 paper inbox 主索引。
+1. 新增 `arxiv-daily/.index/papers.json`，作为完整 paper index 主索引；旧的 `arxiv-daily/index/papers.json` 会兼容读取，并在下次保存后迁移到隐藏路径。
 2. 以 `arxiv_id` 去重和合并：
    - 已存在记录时不重复创建。
    - 追加 `seenDates`。
@@ -213,17 +225,19 @@ citation_key: ""
    - `status: saved`。
    - 用户手动执行 `Create paper note`。
 5. 日报继续创建 markdown，并从 `papers.json` 标注 new / seen before，弱化已 `ignored` 的论文。
-6. 增加论文状态命令：
-   - `Mark current paper as to read`
-   - `Mark current paper as reading`
-   - `Mark current paper as read`
-   - `Mark current paper as saved`
-   - `Mark current paper as ignored`
-   - `Create paper note`
-7. 增加 inbox 视图：
-   - 命令生成或打开 `arxiv-daily/inbox.md`。
-   - 从 `papers.json` 列出 `status: inbox` 的论文。
-   - 按 topic、priority、published date 排序。
+6. 日报中每篇论文加入两个轻量 checkbox：
+
+```markdown
+- [ ] 关注 <!-- arxiv-daily:2606.12345:watch -->
+- [ ] 重点 <!-- arxiv-daily:2606.12345:highlight -->
+```
+
+   - 未勾选：保持普通 `inbox`。
+   - 勾选关注：`status: to_read`, `priority: normal`。
+   - 勾选重点：`status: to_read`, `priority: high`。
+   - 重点不自动生成长笔记，避免 checkbox 带来昂贵副作用；需要笔记时仍用 detail 或手动创建。
+7. 插件监听 daily markdown 文件修改，解析 checkbox 标记并自动同步到 `papers.json`。
+8. 保留论文状态命令作为高级操作，但它不是主要筛选路径；默认入口只保留日报和单篇论文笔记。
 
 ### Acceptance Criteria
 
@@ -235,41 +249,110 @@ citation_key: ""
 - 用户修改过的状态字段不会被后续日报生成覆盖。
 - 每个成功运行的日期仍会创建或保留 `arxiv-daily/daily/YYYY-MM-DD.md`。
 - 日报中没有 markdown note 的普通论文仍可通过 arXiv 链接访问。
-- inbox 页面可以从 JSON 生成，列出未处理论文：
+- 日报中的 `关注` / `重点` checkbox 被勾选后，无需手动同步命令，插件会自动更新 `papers.json`。
+- checkbox 取消勾选时，如果论文仍是插件默认的 `to_read` 状态，则回到 `status: inbox`；如果用户已手动设置为 `saved` / `read` / `ignored`，不自动降级。
+- `arxiv-daily/.index/papers.json` 是内部状态文件，默认隐藏，日常不需要在文件树中打开。
 
-```markdown
-# arXiv Daily Inbox
+## v0.3.0: Obsidian Reading Dashboard
 
-## Photo-z
+目标：做一个 Obsidian 内 GUI 工作台，让用户不用逐篇日报回翻，就能查看、搜索、汇总和处理已关注、重点、saved、read、ignored 等论文。
 
-- [ ] 2606.12345 Example Paper Title
-  - status: inbox
-  - priority: normal
-  - arXiv: https://arxiv.org/abs/2606.12345
-```
+核心原则：
 
-## v0.3.0: Reading Workflow
+- **Dashboard 是主回顾入口**：日报负责当天 triage，Dashboard 负责跨日期回看。
+- **不重做 Markdown 编辑器**：论文笔记仍在 Obsidian editor 中打开，Dashboard 只提供列表、筛选和状态操作。
+- **先本地、后集成**：第一版只读写 `papers.json` 和 vault markdown，不引入数据库或外部同步。
+- **可批量处理**：关注/重点论文多起来后，必须支持多选和批量状态修改。
 
-目标：把 inbox 变成日常科研阅读入口。
+### Scope
+
+1. 新增 `arXiv Daily: Open reading dashboard` 命令和 ribbon 菜单入口。
+2. 新增 Obsidian custom view，例如 `arxiv-daily-dashboard`。
+3. Dashboard 从 `PaperIndexStore` 读取数据，提供这些 tabs：
+   - `关注`：`status: to_read` 且 `priority !== high`。
+   - `重点`：`priority: high`。
+   - `正在读`：`status: reading`。
+   - `已收藏`：`status: saved`。
+   - `已读`：`status: read`。
+   - `全部`：除 ignored 以外的所有论文。
+   - `忽略`：`status: ignored`。
+4. 提供筛选：
+   - topic。
+   - date range（按 `published` / `seenDates`）。
+   - status。
+   - priority。
+   - 是否有 `paperPath`。
+   - 是否 `detail`。
+   - 是否缺 `zoteroKey` / `citationKey`。
+5. 提供搜索：
+   - arXiv ID。
+   - title。
+   - authors。
+   - topic/tag。
+   - 后续可加入日报摘要片段或结构化 summary 字段。
+6. 表格列建议：
+   - checkbox。
+   - priority。
+   - status。
+   - title。
+   - topic。
+   - published / first seen。
+   - note。
+   - arXiv / PDF。
+7. 行内操作：
+   - `to_read` / `reading` / `read` / `saved` / `ignored`。
+   - 创建或打开 paper note。
+   - 打开首次出现的 daily report。
+   - 复制 arXiv / PDF / citation placeholder。
+8. 批量操作：
+   - 标记为 ignored。
+   - 标记为 read。
+   - 标记为 saved。
+   - 设置 priority。
+   - 为 selected 创建 lightweight notes（必须确认）。
+9. 汇总区：
+   - 当前筛选结果数量。
+   - 按 topic 统计。
+   - 按 status / priority 统计。
+   - 本周新增、已关注、重点、saved 数量。
+   - saved 但缺 Zotero / citation key 的数量。
+10. diagnostics 增加 paper index / note consistency 检查：
+    - `papers.json` schema 版本不支持。
+    - 非法 status / priority。
+    - `seenDates` 格式错误。
+    - `paperPath` 指向的 markdown note 不存在。
+    - markdown note 中的 `arxiv_id` 和 JSON 不一致。
+
+### Acceptance Criteria
+
+- 用户可以从命令面板或 ribbon 打开 Dashboard。
+- Dashboard 不需要打开任何日报，也能列出所有 `关注` 和 `重点` 论文。
+- 搜索 `arxivId` / 标题 / 作者任意关键词可以过滤结果。
+- 用户可以按 topic、状态、priority、日期范围筛选。
+- 用户可以单篇或批量修改 status / priority，保存到 `papers.json`。
+- 用户可以从 Dashboard 打开 paper note、创建 lightweight note、打开 daily report。
+- Dashboard 的汇总数字与当前筛选结果一致。
+- Dashboard 不创建新的 markdown 回顾页面作为主入口；如后续需要，可以提供“导出当前视图为 Markdown”命令。
+- 所有状态修改都保留用户手写的 paper note 内容。
+
+## v0.4.0: Core Extraction + CLI Fallback
+
+目标：把抓取、分类、去重、总结、索引这些核心逻辑抽成可复用 core，为 cron/headless 和未来独立客户端打基础。
 
 可做功能：
 
-- 生成 `to-read.md`、`saved.md`、`recent-high-priority.md` 等工作流页面。
-- 支持批量状态修改，例如把一组低相关论文标记为 ignored。
-- 支持设置默认策略：
-  - detail 论文默认 `to_read` 并创建 markdown note。
-  - 非 detail 论文默认 `inbox` 且只进入 JSON。
-  - 某些 topic 默认 high priority。
-- 支持重新分类某篇论文的 topic。
-- diagnostics 增加 paper index / note consistency 检查：
-  - `papers.json` schema 版本不支持。
-  - 重复 arXiv ID。
-  - 非法 status。
-  - `seenDates` 格式错误。
-  - `paperPath` 指向的 markdown note 不存在。
-  - markdown note 中的 `arxiv_id` 和 JSON 不一致。
+- 将 Obsidian 相关依赖隔离在 adapter 层：
+  - `requestUrl` -> `HttpClient`。
+  - `Vault` -> `StorageAdapter`。
+  - `Notice` / status bar -> `ProgressReporter`。
+- 让 Node CLI 复用同一套 pipeline：
+  - `arxiv-daily run --date YYYY-MM-DD`。
+  - `arxiv-daily run-pending`。
+  - `arxiv-daily summarize --id 2606.12345`。
+- 可选把 run state 写进 vault 输出目录，避免 CLI 和 Obsidian scheduler 重复跑。
+- 保持 Obsidian 插件仍是主用户界面。
 
-## v0.4.0: Research Tool Integrations
+## v0.5.0: Research Tool Integrations
 
 目标：连接 Zotero、PDF 和引用管理，但不替代它们。
 
@@ -300,17 +383,20 @@ citation_key: ""
 
 1. 每天自动生成日报。
 2. 打开日报，快速扫 new papers。
-3. 对感兴趣论文执行 `Mark as to read` 或 `Mark as saved`。
-4. 对无关论文执行 `Mark as ignored`。
-5. 关闭日报，后续从 inbox/to-read 页面继续处理。
+3. 大部分论文不动。
+4. 对感兴趣论文勾选 `关注`。
+5. 对特别重要论文勾选 `重点`。
+6. 插件自动把勾选结果同步到 `papers.json`。
+7. 关闭日报；后续需要时从单篇笔记、搜索或未来的回顾视图继续处理少数被挑出的论文。
 
 ### Weekly Review
 
-1. 打开 `arxiv-daily/inbox.md`。
-2. 处理过去一周未决论文。
-3. 把高价值论文转为 `saved`。
-4. 把近期要读的论文转为 `to_read`。
-5. 把无关论文转为 `ignored`。
+1. 打开 Reading Dashboard。
+2. 切到 `关注` 或 `重点` tab，按本周日期范围过滤。
+3. 回顾已勾选关注/重点的论文。
+4. 把高价值论文转为 `saved`。
+5. 把近期正在读的论文转为 `reading` 或 `read`。
+6. 批量把无关论文转为 `ignored`。
 
 ### Zotero Follow-up
 
@@ -323,7 +409,7 @@ citation_key: ""
 
 ### JSON Index Updates
 
-`papers.json` 是长期 paper inbox 主索引。更新时需要做到：
+`papers.json` 是长期 paper index 主索引。更新时需要做到：
 
 - 原子写入，避免写一半损坏 JSON。
 - 读入后按 `schemaVersion` 迁移。
@@ -347,7 +433,7 @@ citation_key: ""
 建议 TypeScript 结构：
 
 ```ts
-interface PaperInbox {
+interface PaperIndex {
   schemaVersion: 1;
   updatedAt: string;
   papers: Record<string, PaperIndexEntry>;
@@ -380,7 +466,7 @@ interface PaperIndexEntry {
 
 用途：
 
-- 加速 inbox modal 或命令。
+- 支撑日报勾选状态、跨日期去重和后续周回顾。
 - diagnostics 快速发现重复和缺字段。
 - 支持后续 Zotero / PDF / project note 接入。
 
@@ -393,12 +479,25 @@ interface PaperIndexEntry {
 
 默认策略：只补缺，不覆盖用户控制字段。
 
+### Dashboard Architecture
+
+Dashboard 应该被实现为 Obsidian custom view，而不是生成一个长期维护的 `inbox.md` 文件：
+
+- `PaperIndexStore` 继续是唯一状态源。
+- Dashboard 启动时 load index，状态更新后 save index 并局部刷新。
+- 表格过滤、搜索、排序先在内存中完成；数据量到几千篇前不需要数据库。
+- Paper note 的阅读和编辑通过 `workspace.openLinkText` 打开 Obsidian markdown editor。
+- Dashboard 不直接编辑 note 正文；只更新 `papers.json` 和必要 frontmatter。
+- 如果未来做独立软件，优先复用 query/filter/action 这些 dashboard model 层，而不是复用 Obsidian DOM 视图。
+
 ## When to Consider a Standalone App
 
-短期不建议做单独软件。只有出现以下需求时再评估：
+GUI 需求成立，但短期不建议做单独软件。先把 GUI 做成 Obsidian 内 Dashboard。只有出现以下需求时再评估独立客户端：
 
 - 需要后台常驻自动运行，不依赖 Obsidian 打开。
 - 需要复杂多列 UI、批量拖拽、跨库聚合。
+- 需要面向不使用 Obsidian 的用户。
+- 需要内置完整 Markdown 文件阅读/编辑、同步和冲突处理，而不是复用 Obsidian。
 - 需要多设备实时同步且不依赖 vault 文件同步。
 - 需要数据库级查询和大规模历史分析。
 - 需要同时接 arXiv、ADS、Semantic Scholar、RSS、Zotero 等多个来源。
@@ -407,13 +506,22 @@ interface PaperIndexEntry {
 
 ## Recommended Next Step
 
-下一步建议开 `v0.2.0`，只做 Paper Inbox Layer 的最小闭环：
+下一步建议按两段推进：
 
-1. 新增 `arxiv-daily/index/papers.json`。
-2. `arxiv_id` 去重和已有 JSON 记录更新。
-3. `status` / `priority` / `seenDates` / `dailyReports` 字段。
-4. 当前论文状态修改命令。
-5. detail / high priority / saved 论文的 markdown note 创建策略。
-6. 一个从 JSON 生成的 inbox 页面。
+**阶段 1：收尾 Daily Selection Layer**
 
-这个范围足够小，和当前架构连续，也不会让 vault 每天增加大量低价值 markdown 文件。工作流会从“每天读一篇日报”变成“长期维护一个可筛选、可追踪、可按需生成笔记、可接入 Zotero 的论文收件箱”。
+1. 日报每篇论文加入 `关注` / `重点` checkbox，并带稳定 HTML 注释标记。
+2. 新增 daily selection parser，能从日报 markdown 中解析每个 arXiv ID 的勾选状态。
+3. 监听 daily 文件修改，防抖后自动同步到 `papers.json`。
+4. 勾选关注映射为 `to_read/normal`，勾选重点映射为 `to_read/high`。
+5. 确定 `papers.json` 最终路径：继续用 `arxiv-daily/index/papers.json`，或实现迁移到 `arxiv-daily/.index/papers.json`，避免文档和代码长期分叉。
+6. 保留手动状态命令作为高级操作。
+
+**阶段 2：实现 Obsidian Reading Dashboard**
+
+1. 先做只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
+2. 再做单篇状态修改。
+3. 最后做多选和批量操作。
+4. Dashboard 稳定后，再考虑 core extraction / CLI fallback。
+
+这个顺序最贴近日常使用：日报负责“今天挑出来”，Dashboard 负责“之后找得到、看得清、处理得动”。
