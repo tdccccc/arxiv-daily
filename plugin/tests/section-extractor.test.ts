@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  classifySection,
   extractAbstractConclusion,
   extractSections,
 } from "../src/pipeline/section-extractor";
@@ -16,6 +17,21 @@ const sample = `
 `;
 
 describe("section-extractor", () => {
+  it("classifies domain-specific non-standard section titles", () => {
+    expect(classifySection("Photometric redshift inference")).toContain("method");
+    expect(classifySection("The weak-lensing shear catalogue")).toContain("data");
+    expect(classifySection("Cosmological constraints")).toContain("result");
+  });
+
+  it("uses body preview signals when titles are not explicit", () => {
+    expect(
+      classifySection("Cluster mass calibration", "We model the likelihood and calibrate the selection function."),
+    ).toContain("method");
+    expect(
+      classifySection("Galaxy sample", "We find a 12 percent improvement over the baseline."),
+    ).toContain("result");
+  });
+
   it("extractAbstractConclusion finds abstract and conclusion sections", () => {
     const out = extractAbstractConclusion(sample, { sectionCharLimit: 8000 });
     expect(out).toContain("## Abstract");
@@ -59,6 +75,43 @@ describe("section-extractor", () => {
     });
     expect(out).toBeTruthy();
     expect(out!.length).toBeLessThan(2000);
+  });
+
+  it("prioritizes high-value classified sections when budget is tight", () => {
+    const intro = "intro ".repeat(220);
+    const method = "We model the likelihood and calibrate the selection function. ".repeat(4);
+    const result = "We find improved constraints and report a 12 percent gain. ".repeat(4);
+    const html = `<html><body>
+      <h2>Introduction</h2><p>${intro}</p>
+      <h2>Photometric redshift inference</h2><p>${method}</p>
+      <h2>Cosmological constraints</h2><p>${result}</p>
+    </body></html>`;
+    const out = extractSections(html, {
+      sectionCharLimit: 2000,
+      paperCharLimit: 700,
+      skipSections: [],
+      prioritySections: [],
+    });
+    expect(out).toContain("## Photometric redshift inference");
+    expect(out).toContain("## Cosmological constraints");
+    expect(out).not.toContain("## Introduction");
+  });
+
+  it("preserves figure captions and compact table text", () => {
+    const html = `<html><body>
+      <h2>Results</h2>
+      <p>result body</p>
+      <figure><figcaption>Figure 1: posterior constraints improve at high redshift.</figcaption></figure>
+      <table><caption>Table 1: benchmark metrics.</caption><tr><td>RMSE</td><td>0.12</td></tr></table>
+    </body></html>`;
+    const out = extractSections(html, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+      skipSections: [],
+      prioritySections: [],
+    });
+    expect(out).toContain("Figure caption: Figure 1");
+    expect(out).toContain("Table text: Table 1");
   });
 
   it("extractAbstractConclusion returns null when neither present", () => {

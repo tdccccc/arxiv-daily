@@ -5,7 +5,7 @@ arXiv astro-ph 每日论文追踪脚本
 功能：
 1. 北京时间 9:30 起，每 30 分钟轮询 arXiv 是否已更新为当日内容
 2. 确认更新后，解析所有论文元数据，用 LLM 全量筛选相关论文
-3. 日常追踪层：所有相关论文用 Abstract + Conclusion 快速总结 → daily/
+3. 日常追踪层：所有相关论文尽量用 Abstract + Conclusion + 可用正文摘录快速总结 → daily/
 4. 详细阅读层：特别相关论文提取全文有用章节做详细总结 → papers/
 """
 
@@ -290,16 +290,131 @@ def manage_existing_file(file_path):
         logger.info(f"  已备份旧文件: {backup_path}")
 
 
+SKIP_SECTION_KINDS = {"reference", "appendix", "acknowledgement"}
+
+
+def _normalize_section_text(text):
+    text = text.lower()
+    text = re.sub(r"\\[a-z]+", " ", text)
+    text = re.sub(r"^\s*(\d+(\.\d+)*|[ivxlcdm]+|[a-z])\s*[\).:-]?\s+", "", text, flags=re.I)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return text.strip()
+
+
+def _score_patterns(scores, kind, text, amount, patterns):
+    for pattern in patterns:
+        if re.search(pattern, text):
+            scores[kind] = scores.get(kind, 0) + amount
+
+
+def _classify_section(title, body_preview=""):
+    title_text = _normalize_section_text(title)
+    body_text = _normalize_section_text((body_preview or "")[:1200])
+    scores = {}
+
+    _score_patterns(scores, "reference", title_text, 6, [r"\b(references?|bibliography)\b"])
+    _score_patterns(scores, "appendix", title_text, 6, [r"\bappendix\b"])
+    _score_patterns(scores, "acknowledgement", title_text, 6, [
+        r"\b(acknowledgements?|acknowledgments?|author contributions?|data availability|conflict of interest|orcid)\b",
+    ])
+    _score_patterns(scores, "conclusion", title_text, 5, [
+        r"\b(conclusions?|summary|concluding remarks?|final remarks?)\b",
+    ])
+    _score_patterns(scores, "abstract", title_text, 5, [r"\babstract\b"])
+    _score_patterns(scores, "related", title_text, 4, [
+        r"\b(related work|previous work|literature review)\b",
+    ])
+    _score_patterns(scores, "introduction", title_text, 4, [
+        r"\b(introduction|background|motivation|overview)\b",
+    ])
+    _score_patterns(scores, "data", title_text, 4, [
+        r"\b(data|datasets?|samples?|observations?|survey|surveys|catalogs?|catalogues?|spectra|spectroscopic|photometry|photometric|imaging|images?|light curves?|data release)\b",
+        r"\b(the\s+)?\w+\s+(catalog|catalogue|sample|survey)\b",
+    ])
+    _score_patterns(scores, "method", title_text, 4, [
+        r"\b(methods?|methodology|approach|models?|modelling|modeling|algorithm|framework|pipeline|inference|calibration|estimator|likelihood|selection function|selection effects|forward model|training|architecture|network|reconstruction|synthesis|fitting)\b",
+    ])
+    _score_patterns(scores, "experiment", title_text, 4, [
+        r"\b(experiments?|evaluation|benchmark|validation|tests?|setup|baselines?|ablation|comparison)\b",
+    ])
+    _score_patterns(scores, "result", title_text, 4, [
+        r"\b(results?|findings?|measurements?|constraints?|performance|detections?|properties|estimates?)\b",
+    ])
+    _score_patterns(scores, "discussion", title_text, 4, [
+        r"\b(discussion|implications?|interpretation|analysis)\b",
+    ])
+    _score_patterns(scores, "limitation", title_text, 4, [
+        r"\b(limitations?|caveats?|uncertaint(y|ies)|systematics?|future work|robustness|biases?)\b",
+    ])
+
+    _score_patterns(scores, "data", body_text, 1, [
+        r"\b(we use|we used|our sample|observed with|observations were|data release|catalogue|catalog|survey|spectra|photometry)\b",
+    ])
+    _score_patterns(scores, "method", body_text, 1, [
+        r"\b(we model|we estimate|we infer|we train|we calibrate|algorithm|likelihood|pipeline|selection function|forward model)\b",
+    ])
+    _score_patterns(scores, "experiment", body_text, 1, [
+        r"\b(we evaluate|we validate|benchmark|baseline|test set|simulation setup|experimental setup)\b",
+    ])
+    _score_patterns(scores, "result", body_text, 1, [
+        r"\b(we find|we found|we measure|we measured|we show|our results|we obtain|we detect|we constrain|we report|improves?|outperforms?)\b",
+    ])
+    _score_patterns(scores, "discussion", body_text, 1, [
+        r"\b(we discuss|this suggests|this implies|interpretation|implication)\b",
+    ])
+    _score_patterns(scores, "limitation", body_text, 1, [
+        r"\b(uncertainty|uncertainties|limitation|limitations|caveat|caveats|systematic|systematics|bias|future work)\b",
+    ])
+
+    kinds = [kind for kind, _ in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
+    return kinds or ["other"]
+
+
+def _section_rank(kinds, configured_priority=False):
+    if configured_priority or any(k in ("abstract", "conclusion") for k in kinds):
+        return 0
+    if any(k in ("result", "experiment", "method", "data", "limitation", "discussion") for k in kinds):
+        return 1
+    if "other" in kinds:
+        return 2
+    if any(k in ("introduction", "related") for k in kinds):
+        return 3
+    return 2
+
+
+def _compact_node_text(node, max_len=1600):
+    return node.get_text(separator=" ", strip=True)[:max_len]
+
+
+def _preserve_figure_table_text(soup):
+    for tag in list(soup.select("figure, .ltx_figure, table, .ltx_table")):
+        if not tag.parent:
+            continue
+        is_table = tag.name == "table" or "ltx_table" in tag.get("class", [])
+        caption = tag.select_one("figcaption, caption, .ltx_caption")
+        text = _compact_node_text(caption) if caption else _compact_node_text(tag)
+        if not text:
+            tag.decompose()
+            continue
+        replacement = soup.new_tag("p")
+        replacement.string = f"{'Table text' if is_table else 'Figure caption'}: {text}"
+        tag.replace_with(replacement)
+
+
+def _strip_noise(soup):
+    _preserve_figure_table_text(soup)
+    for tag in soup(["script", "style", "nav", "footer"]):
+        tag.decompose()
+
+
 def _extract_sections(soup):
     """
     从 arXiv HTML 论文中按章节提取内容。
-    策略：保留所有章节，只跳过 References/Appendix/Acknowledgements 等。
-    如果总长度超限，优先保留 Abstract/Conclusion/Summary。
+    策略：按标题与正文预览自动分类，优先保留结果/方法/数据/实验/讨论/局限等高密度章节。
+    如果总长度超限，仍保留一部分 other，Introduction/Related Work 优先级最低。
     返回 "## Section Title\ncontent\n\n..." 格式的文本。
     """
-    # 移除无关标签
-    for tag in soup(["script", "style", "nav", "footer", "figure", "table"]):
-        tag.decompose()
+    _strip_noise(soup)
 
     # 查找所有章节标题 (h2, h3, h4)
     headers = soup.find_all(re.compile(r"^h[2-4]$"))
@@ -308,7 +423,7 @@ def _extract_sections(soup):
 
     # 第一遍：收集所有有效章节
     all_sections = []
-    for hdr in headers:
+    for index, hdr in enumerate(headers):
         title = hdr.get_text(strip=True)
         title_lower = title.lower()
 
@@ -327,37 +442,55 @@ def _extract_sections(soup):
         if not section_text.strip():
             continue
 
-        is_priority = any(k in title_lower for k in PRIORITY_SECTIONS)
-        all_sections.append((title, section_text, is_priority))
+        kinds = _classify_section(title, section_text)
+        if any(k in SKIP_SECTION_KINDS for k in kinds):
+            continue
+
+        is_priority = (
+            any(k in title_lower for k in PRIORITY_SECTIONS)
+            or any(k in ("abstract", "conclusion") for k in kinds)
+        )
+        rank = _section_rank(kinds, is_priority)
+        all_sections.append({
+            "title": title,
+            "text": section_text,
+            "priority": is_priority,
+            "rank": rank,
+            "index": index,
+        })
 
     if not all_sections:
         return None
 
     # 第二遍：先放入高优先级章节，再按原始顺序填充其余章节
-    priority = [(t, s) for t, s, p in all_sections if p]
-    normal = [(t, s) for t, s, p in all_sections if not p]
+    priority = [s for s in all_sections if s["priority"]]
+    normal = sorted(
+        [s for s in all_sections if not s["priority"]],
+        key=lambda s: (s["rank"], s["index"]),
+    )
 
-    reserved = sum(len(s) for _, s in priority)
+    reserved = sum(len(s["text"]) for s in priority)
     budget = PAPER_CHAR_LIMIT - reserved
 
     selected = []
     total = 0
-    for title, text in normal:
+    for section in normal:
+        text = section["text"]
         if total + len(text) > budget:
             # 预算不够，截断当前章节放入剩余空间
             remaining = budget - total
             if remaining > 500:
-                selected.append((title, text[:remaining]))
-            break
-        selected.append((title, text))
+                selected.append({**section, "text": text[:remaining]})
+                total += remaining
+            continue
+        selected.append(section)
         total += len(text)
 
     # 按原始顺序合并输出
-    order = {t: i for i, (t, _, _) in enumerate(all_sections)}
     merged = selected + priority
-    merged.sort(key=lambda x: order.get(x[0], 999))
+    merged.sort(key=lambda s: s["index"])
 
-    return "\n\n".join(f"## {t}\n{s}" for t, s in merged) if merged else None
+    return "\n\n".join(f"## {s['title']}\n{s['text']}" for s in merged) if merged else None
 
 
 def _extract_abstract_conclusion(soup):
@@ -365,8 +498,7 @@ def _extract_abstract_conclusion(soup):
     从 arXiv HTML 论文中仅提取 Abstract + Conclusion/Summary 章节。
     返回 "## Abstract\n...\n\n## Conclusions\n..." 格式文本，或 None。
     """
-    for tag in soup(["script", "style", "nav", "footer", "figure", "table"]):
-        tag.decompose()
+    _strip_noise(soup)
 
     sections = []
 
@@ -406,8 +538,8 @@ def fetch_paper_content(arxiv_id, is_detail=False):
     抓取单篇论文内容。
     返回 (abstract_conclusion, full_sections)。
     - abstract_conclusion: 所有论文都有（Abstract + Conclusion 文本）
-    - full_sections: 仅 is_detail=True 时提取（所有有用章节），否则为 None
-    对 detail 论文，只发一次 HTML 请求，同时提取两种内容。
+    - full_sections: is_detail=True 时提取所有有用章节，否则为 None
+    调用方可为日报传入 is_detail=True，以便在不生成单篇详情时也利用正文摘录。
     """
     html_url = f"https://arxiv.org/html/{arxiv_id}"
     abs_url = f"https://arxiv.org/abs/{arxiv_id}"
@@ -637,6 +769,44 @@ def _configured_categories():
     return categories or ["other"]
 
 
+def _extract_section_titles(markdown_text):
+    """Extract markdown section titles from paper excerpts."""
+    if not markdown_text:
+        return []
+    titles = []
+    for m in re.finditer(r"^##\s+(.+)$", markdown_text, re.M):
+        title = m.group(1).strip()
+        if title and title not in titles:
+            titles.append(title)
+    return titles
+
+
+def _paper_source_sections(p):
+    titles = []
+    for title in _extract_section_titles(p.get("abstract_conclusion", "")):
+        if title not in titles:
+            titles.append(title)
+    for title in _extract_section_titles(p.get("full_sections", "")):
+        if title not in titles:
+            titles.append(title)
+    if titles:
+        return ", ".join(titles)
+    if p.get("abstract_conclusion", "").startswith("[获取失败]"):
+        return "获取失败"
+    return "正文摘录"
+
+
+def _build_daily_content(p):
+    parts = []
+    abstract_conclusion = (p.get("abstract_conclusion") or "").strip()
+    if abstract_conclusion:
+        parts.append(abstract_conclusion)
+    full_sections = (p.get("full_sections") or "").strip()
+    if full_sections:
+        parts.append(f"Full-text excerpts:\n{full_sections}")
+    return "\n\n".join(parts)
+
+
 def _build_paper_block(p):
     """构建单篇论文的信息文本块"""
     detail_mark = f" → [[{p['id']}]]" if p["is_detail"] else ""
@@ -644,7 +814,8 @@ def _build_paper_block(p):
         f"=== Paper: {p['id']} [category: {p.get('category', 'other')}]{detail_mark} ===\n"
         f"Title: {p['title']}\n"
         f"Authors: {p['authors']}\n"
-        f"{p.get('abstract_conclusion', '')}\n\n"
+        f"Source sections: {_paper_source_sections(p)}\n"
+        f"{_build_daily_content(p)}\n\n"
     )
 
 
@@ -690,7 +861,9 @@ def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
     )
 
     system_prompt = f"""\
-你是一个专业的天体物理学家助手。请根据提供的论文摘要与结论，生成 arXiv 每日论文追踪日报。
+你是一个专业的天体物理学家助手。请根据提供的论文摘要、结论与可用正文摘录，生成 arXiv 每日论文追踪日报。
+
+你的任务不是复述摘要，而是帮助研究者快速判断这篇论文的核心价值：它解决了什么具体问题、用了什么关键方法、得到什么证据、结论边界在哪里。
 
 ## Category 与显示名称对应关系
 {category_list}
@@ -699,23 +872,28 @@ def _call_daily_llm(papers, date_str, n_total, n_detail, is_partial=False):
 
 {header_fmt}## [显示名称]
 ### <实际论文标题> → [[YYMM.NNNNN]]
+> 信息来源：<按输入的 Source sections 填写，例如 Abstract, Conclusion；不要编造>
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
-- **一句话总结**: 用一句话概括本文做了什么（如"用XX方法对YY数据进行了ZZ分析"）
-- **数据**: 使用了什么数据集/样本/巡天（2-4句）
-- **方法**: 采用了什么方法或模型，关键技术细节是什么（2-4句）
-- **主要结果**: 核心发现是什么，给出关键定量数值（精度、误差、提升幅度等），与已有工作的对比（2-4句）
-- **意义**: 对领域的贡献或启示，局限性，未来展望（1-2句）
+- **核心问题**: 论文试图解决的具体问题是什么，为什么值得研究（1句）
+- **关键方法**: 作者用了什么方法、数据、模型、观测、模拟或理论工具（1-2句）
+- **主要结果**: 优先写数值、误差、显著性、提升幅度、样本规模、参数范围、与前人/基线的对比；没有数值则写清作者声称的定性结果（1-2句）
+- **为什么值得看**: 这篇论文具体改变了什么判断、解决了什么问题、约束了什么范围，或适用于什么场景（1句）
+- **局限或边界**: 适用条件、不确定性、未覆盖的问题；若原文未说明，写"原文未说明"（1句）
 
 注意：
-- 所有论文（无论是否详细收录）都必须按上述完整格式输出，包含一句话总结、数据、方法、主要结果、意义五个字段，不得省略或只列标题
+- 所有论文（无论是否详细收录）都必须按上述完整格式输出，包含信息来源与五个核心字段，不得省略或只列标题
 - 使用中文撰写，保留关键英文术语（如专有名词、物理量、巡天名称）
 - 数学公式、物理量和符号必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$（如 $\\sigma_z = 0.03$、$M_{{500c}}$、$\\Omega_m$）
 - 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
 - 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文（已在输入中标记），请保留此标记
 - 未标记的论文不要加 [[]] 链接
-- 重点提取定量结果（数值、σ、百分比），避免泛泛而谈
-- 如果论文性质特殊（综述、方法论、目录发布），可灵活调整字段内容，但保持格式一致"""
+- 先在内部判断论文属于方法、观测、理论、模拟、数据发布、综述等哪类，但不要输出类型；根据论文类型提取最核心的信息
+- 只基于输入内容回答，不要引入外部知识，不要补全输入中没有说明的数据、实验、指标或结论
+- 如果输入没有说明某项信息，请写"原文未说明"，不要猜测
+- 如果输入只有摘要或摘要+结论，请按摘要级信息生成快速筛选摘要；如果输入包含正文结果、实验、方法或讨论章节，请优先使用这些高密度证据
+- 区分作者已经用数据/实验/理论推导支持的结果和仅由作者声称的结果；证据细节不足时写"作者声称"
+- 不要写"具有重要意义""提高了理解"这类空泛句子；每个价值判断必须说明具体改变了什么判断、约束了什么问题、或适用于什么场景"""
 
     return _call_llm(
         messages=[
@@ -762,36 +940,42 @@ def summarize_paper_detail(paper, date_str):
     system_prompt = f"""\
 你是一个专业的天体物理学家助手。请根据提供的论文各章节内容，生成一篇详细的中文论文总结。
 
+你的任务不是复述摘要，而是还原论文的贡献链条：研究问题 -> 方法设计 -> 关键证据 -> 主要结论 -> 适用边界。
+
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，不要输出 YAML frontmatter，直接从 # 标题开始）：
 
 # {paper['title']}
 
 - **arXiv**: [{paper['id']}](https://arxiv.org/abs/{paper['id']})
 
-## 背景与动机
-（研究背景、前人工作、本文动机）
+## 研究问题
+论文要解决的具体问题是什么？为什么这个问题值得研究？
 
-## 数据
-（使用了什么数据集、样本大小、数据处理方法）
+## 方法设计
+作者采用了什么核心方法、模型、数据、实验、观测、模拟或理论框架？
 
-## 方法
-（核心方法/模型/算法的详细描述）
+## 关键证据
+作者用什么证据支持结论？优先保留数值、样本规模、误差、显著性、参数范围、基线对比或实验设置。
 
-## 结果
-（主要发现、定量结果、与前人工作的比较）
+## 主要结论
+论文最核心的发现或贡献是什么？区分作者已经证明的结果和作者提出的解释。
 
-## 讨论
-（结果的意义、局限性、与其他工作的对比）
+## 适用边界
+结论在哪些条件下成立？有哪些限制、不确定性或未覆盖的问题？
 
-## 结论
-（核心结论、未来展望）
+## 一句话价值判断
+用一句话说明这篇论文最值得关注的点，避免空泛评价。
 
 注意：
 - 使用中文撰写
 - 保留关键英文术语（如专有名词、物理量）
 - 数学公式、物理量和符号必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$（如 $\\sigma_z = 0.03$、$M_{{500c}}$、$\\Omega_m$）
-- 尽可能包含定量结果（数值、误差）
-- 如果某个章节的信息不足，可以简要说明"""
+- 只基于输入内容回答，不要引入外部知识，不要补全输入中没有说明的数据、实验、指标或结论
+- 如果某项信息在输入中没有说明，请写"原文未说明"
+- 先在内部判断论文属于方法、观测、理论、模拟、数据发布、综述等哪类，但不要输出类型；根据论文类型组织重点
+- 优先提取数值、误差、显著性、提升幅度、样本规模、参数范围、与前人/基线的对比
+- 区分作者已经用数据/实验/理论推导支持的结果和作者提出的解释；证据细节不足时写"作者声称"
+- 不要写"具有重要意义""提高了理解"这类空泛句子；每个价值判断必须说明具体改变了什么判断、约束了什么问题、或适用于什么场景"""
 
     user_content = (
         f"论文 ID: {paper['id']}\n"
@@ -910,7 +1094,8 @@ def main():
     for p in filtered_papers:
         time.sleep(REQUEST_DELAY)
         try:
-            ac, fs = fetch_paper_content(p["id"], p["is_detail"])
+            # 日报也尽量利用可获取的正文摘录；is_detail 仍只控制是否生成单篇详情。
+            ac, fs = fetch_paper_content(p["id"], True)
             p["abstract_conclusion"] = ac
             p["full_sections"] = fs
         except Exception as e:
