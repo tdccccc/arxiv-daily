@@ -109,7 +109,7 @@ describe("buildDiagnosticsReport", () => {
       paperIndex: {
         path: "arxiv-daily/.index/papers.json",
         exists: true,
-        schemaVersion: 1,
+        schemaVersion: 2,
         total: 3,
         statusCounts: { inbox: 2, saved: 1 },
         invalidStatuses: [],
@@ -119,7 +119,7 @@ describe("buildDiagnosticsReport", () => {
 
     expect(report).toContain("paperIndex:");
     expect(report).toContain("path: arxiv-daily/.index/papers.json");
-    expect(report).toContain("schemaVersion: 1");
+    expect(report).toContain("schemaVersion: 2");
     expect(report).toContain("total: 3");
     expect(report).toContain("statusCounts: inbox=2, saved=1");
     expect(report).toContain("2606.12345: arxiv-daily/papers/2606.12345.md");

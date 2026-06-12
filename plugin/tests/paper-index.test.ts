@@ -88,7 +88,7 @@ describe("PaperIndexStore", () => {
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
     });
@@ -113,6 +113,7 @@ describe("PaperIndexStore", () => {
     expect(dirs.has("arxiv-daily")).toBe(true);
     expect(dirs.has("arxiv-daily/.index")).toBe(true);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.schemaVersion).toBe(2);
     expect(saved.papers["2606.12345"].title).toBe("A paper");
   });
 
@@ -154,6 +155,7 @@ describe("PaperIndexStore", () => {
 
     expect(files["arxiv-daily/index/papers.json"]).toBeUndefined();
     const migrated = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(migrated.schemaVersion).toBe(2);
     expect(migrated.papers["2606.12345"].status).toBe("saved");
     expect(migrated.papers["2606.12345"].priority).toBe("high");
   });
@@ -241,6 +243,36 @@ describe("PaperIndexStore", () => {
 
     expect(entry.category).toBe("cs.CL");
     expect(entry.categories).toEqual(["astro-ph", "cs.LG", "cs.CL"]);
+  });
+
+  it("stores structured paper summaries", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+
+    const changed = await store.setSummaries({
+      "2606.12345": {
+        coreProblem: "Problem",
+        keyMethod: "Method",
+      },
+      "2606.99999": {
+        coreProblem: "Missing",
+      },
+    });
+
+    expect(changed).toBe(1);
+    const entry = await store.get("2606.12345");
+    expect(entry?.summary).toEqual({
+      coreProblem: "Problem",
+      keyMethod: "Method",
+    });
   });
 
   it("throws PaperIndexError for malformed JSON", async () => {

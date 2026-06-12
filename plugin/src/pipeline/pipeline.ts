@@ -24,6 +24,7 @@ import {
   summarizePaperDetail,
   type DailyPaperWithContent,
 } from "./summarizer";
+import { extractPaperSummaries } from "./daily-summary-parser";
 
 interface SourcePaperMeta extends PaperMeta {
   arxivCategories: string[];
@@ -220,6 +221,9 @@ export class ArxivPipeline {
         await this.deps.paperIndex.addDailyReports(
           visiblePapers.map((p) => p.id),
           dailyPath,
+        );
+        await this.deps.paperIndex.setSummaries(
+          extractPaperSummaries(dailySummary),
         );
       } catch (e) {
         if (isCancellationError(e)) throw e;

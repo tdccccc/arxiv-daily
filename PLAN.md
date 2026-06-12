@@ -43,7 +43,6 @@
 
 仍然可以继续加强：
 
-- 五字段结构化摘要只存在于日报 markdown 中，papers.json 里没有，Dashboard 搜索、周报复用都缺数据。
 - 缺少跨日期回看、筛选、批量处理的 GUI Dashboard（v0.1.6）。
 - 超出 arXiv `/recent` 5 天窗口的日期无法补跑（出差、休假场景论文直接丢失）。
 - PDF、Zotero、项目笔记的结构化接入（v0.1.8）。
@@ -113,13 +112,22 @@ arxiv-daily/
 
 ## Paper Index
 
-主索引 `arxiv-daily/.index/papers.json`，schema v1 已实现：
+主索引 `arxiv-daily/.index/papers.json`，schema v2 已实现：
 
 ```ts
 interface PaperIndex {
-  schemaVersion: 1;
+  schemaVersion: 2;
   updatedAt: string;
   papers: Record<string, PaperIndexEntry>;
+}
+
+interface PaperSummary {
+  sourceSections?: string;
+  coreProblem?: string;
+  keyMethod?: string;
+  mainResult?: string;
+  whyRelevant?: string;
+  limitations?: string;
 }
 
 interface PaperIndexEntry {
@@ -131,6 +139,7 @@ interface PaperIndexEntry {
   updated: string;
   category: string; // primary/source-compatible category
   categories?: string[]; // actual source categories when fetched from multiple lists
+  summary?: PaperSummary;
   topics: string[];
   primaryTopic: string;
   detail: boolean;
@@ -148,7 +157,7 @@ interface PaperIndexEntry {
 }
 ```
 
-schema v2 计划在 v0.1.6 前置中定稿：增加结构化摘要字段（核心问题 / 关键方法 / 主要结果），供 Dashboard 搜索、卡片和后续导出使用。schema 变更必须带 `schemaVersion` 迁移；定稿后同步更新本节。
+schema v2 在 v0.1.6 前置中定稿：新增 `summary` 字段，保存日报中已经生成的核心问题 / 关键方法 / 主要结果 / 为什么值得看 / 局限或边界，以及信息来源章节。旧 schema v1 文件会在读取后迁移，后续保存统一写出 schemaVersion 2。
 
 ### Paper Note Creation
 
@@ -271,7 +280,7 @@ LLM 筛选存在漏报，而漏掉一篇关键论文的代价远大于多扫几�
 
 ### Scope
 
-前置（schema v2）：在做 Dashboard UI 之前，先扩展 paper index schema，把 pipeline 已经生成的结构化摘要写进每条论文记录（如 `summary: { coreProblem, keyMethod, mainResult, whyRelevant }`，或先只收一个一句话字段）。Dashboard 卡片、搜索和视图导出都依赖它；字段来源可以是解析日报 markdown，也可以让 daily LLM 改为结构化输出后由插件渲染 markdown（倾向后者，但需保持现有日报格式稳定）。先定 schema 让数据从现在开始积累，避免 Dashboard 上线后再改数据结构和回填。
+前置（schema v2，已完成）：paper index 已新增 `summary` 字段，pipeline 会从日报 markdown 解析核心问题 / 关键方法 / 主要结果 / 为什么值得看 / 局限或边界并写入每条论文记录。Dashboard 卡片、搜索和视图导出都以该字段为结构化数据源；旧 schema v1 会迁移到 v2。
 
 1. 新增 `arXiv Daily: Open reading dashboard` 命令和 ribbon 菜单入口。
 2. 新增 Obsidian custom view，例如 `arxiv-daily-dashboard`。
@@ -516,7 +525,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 
 ### v0.1.6 Obsidian Reading Dashboard
 
-- [ ] schema v2：确定 `summary` 字段结构，新增 migration，并让 pipeline 写入结构化摘要。
+- [x] schema v2：确定 `summary` 字段结构，新增 migration，并让 pipeline 写入结构化摘要。
 - [ ] Dashboard model：抽出 host 无关 query/filter/sort/stat/action model，覆盖 tabs、搜索、筛选和汇总。
 - [ ] Dashboard view shell：注册 `arxiv-daily-dashboard` custom view、命令和 ribbon 入口。
 - [ ] Dashboard list：实现表格 / 列表渲染、空状态、加载失败状态和基础样式。
@@ -572,7 +581,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 
 **阶段 2：v0.1.6 Reading Dashboard**（当前）
 
-1. 先定 paper index schema v2（结构化摘要字段），让 pipeline 从现在开始积累数据。
+1. ~~先定 paper index schema v2（结构化摘要字段），让 pipeline 从现在开始积累数据。~~ 已完成。
 2. 只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
 3. 单篇状态修改，再做多选和批量操作。
 

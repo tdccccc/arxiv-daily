@@ -240,7 +240,17 @@ describe("ArxivPipeline", () => {
         });
       }
       if (sys.includes("每日论文追踪日报")) {
-        return "## Photo-z\n### Stub\n";
+        return [
+          "## Photo-z",
+          "### Stub",
+          "> 信息来源：Abstract",
+          `- **arXiv**: [${arxivId}](https://arxiv.org/abs/${arxivId})`,
+          "- **核心问题**: Problem.",
+          "- **关键方法**: Method.",
+          "- **主要结果**: Result.",
+          "- **为什么值得看**: Relevant.",
+          "- **局限或边界**: Limits.",
+        ].join("\n");
       }
       return "";
     });
@@ -266,6 +276,14 @@ describe("ArxivPipeline", () => {
     expect(entry.status).toBe("inbox");
     expect(entry.priority).toBe("normal");
     expect(entry.paperPath).toBeNull();
+    expect(entry.summary).toEqual({
+      sourceSections: "Abstract",
+      coreProblem: "Problem.",
+      keyMethod: "Method.",
+      mainResult: "Result.",
+      whyRelevant: "Relevant.",
+      limitations: "Limits.",
+    });
     expect(entry.seenDates).toEqual([date]);
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });

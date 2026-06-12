@@ -1,7 +1,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import type { OutputSettings } from "../settings/types";
 
-export const PAPER_INBOX_SCHEMA_VERSION = 1;
+export const PAPER_INBOX_SCHEMA_VERSION = 2;
 
 export type PaperStatus =
   | "inbox"
@@ -14,9 +14,18 @@ export type PaperStatus =
 export type PaperPriority = "low" | "normal" | "high";
 
 export interface PaperInbox {
-  schemaVersion: 1;
+  schemaVersion: number;
   updatedAt: string;
   papers: Record<string, PaperIndexEntry>;
+}
+
+export interface PaperSummary {
+  sourceSections?: string;
+  coreProblem?: string;
+  keyMethod?: string;
+  mainResult?: string;
+  whyRelevant?: string;
+  limitations?: string;
 }
 
 export interface PaperIndexEntry {
@@ -28,6 +37,7 @@ export interface PaperIndexEntry {
   updated: string;
   category: string;
   categories?: string[];
+  summary?: PaperSummary;
   topics: string[];
   primaryTopic: string;
   detail: boolean;
@@ -204,6 +214,21 @@ export class PaperIndexStore {
     return entry;
   }
 
+  async setSummaries(
+    summaries: Record<string, PaperSummary>,
+  ): Promise<number> {
+    const inbox = await this.load();
+    let changed = 0;
+    for (const [arxivId, summary] of Object.entries(summaries)) {
+      const entry = inbox.papers[arxivId];
+      if (!entry) continue;
+      entry.summary = normalizeSummary(summary);
+      changed += 1;
+    }
+    if (changed > 0) await this.save(inbox);
+    return changed;
+  }
+
   async setPaperPath(arxivId: string, paperPath: string): Promise<PaperIndexEntry | null> {
     const inbox = await this.load();
     const entry = inbox.papers[arxivId];
@@ -328,6 +353,7 @@ function upsertEntry(
     updated: input.date,
     category: inputCategories[0] || existing?.category || categories[0] || "",
     categories,
+    summary: existing?.summary,
     topics: appendUnique(existing?.topics ?? [], topic),
     primaryTopic: topic || existing?.primaryTopic || "",
     detail: Boolean(existing?.detail || input.detail),
@@ -352,7 +378,7 @@ function upsertEntry(
 function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   if (!raw || typeof raw !== "object") return emptyInbox(now);
   const obj = raw as any;
-  if (obj.schemaVersion !== PAPER_INBOX_SCHEMA_VERSION) {
+  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
     throw new Error(`unsupported schemaVersion: ${obj.schemaVersion}`);
   }
   const papers: Record<string, PaperIndexEntry> = {};
@@ -386,6 +412,7 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
       ...stringArray(obj.categories),
       stringOr(obj.category, ""),
     ]),
+    summary: normalizeSummary(obj.summary),
     topics: stringArray(obj.topics),
     primaryTopic: stringOr(obj.primaryTopic, ""),
     detail: Boolean(obj.detail),
@@ -429,6 +456,23 @@ function normalizeCategories(values: string[]): string[] {
     if (category && !out.includes(category)) out.push(category);
   }
   return out;
+}
+
+function normalizeSummary(value: unknown): PaperSummary | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const obj = value as Record<string, unknown>;
+  const summary: PaperSummary = {
+    sourceSections: stringOr(obj.sourceSections, ""),
+    coreProblem: stringOr(obj.coreProblem, ""),
+    keyMethod: stringOr(obj.keyMethod, ""),
+    mainResult: stringOr(obj.mainResult, ""),
+    whyRelevant: stringOr(obj.whyRelevant, ""),
+    limitations: stringOr(obj.limitations, ""),
+  };
+  for (const key of Object.keys(summary) as Array<keyof PaperSummary>) {
+    if (!summary[key]) delete summary[key];
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined;
 }
 
 function normalizeAuthors(value: string | string[] | unknown): string[] {
