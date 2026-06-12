@@ -182,7 +182,7 @@ describe("daily selection", () => {
       detail: false,
     });
     const sync = new DailySelectionSyncService({
-      vault: vault as any,
+      storage: storageFromVault(vault),
       getOutput: () => DEFAULT_SETTINGS.output,
       buildPaperIndex: () => store,
       logger: new Logger("error"),
@@ -273,7 +273,7 @@ describe("daily selection", () => {
     await store.setPriority("2606.77777", "high");
 
     const sync = new DailySelectionSyncService({
-      vault: vault as any,
+      storage: storageFromVault(vault),
       getOutput: () => DEFAULT_SETTINGS.output,
       getLookbackDays: () => 2,
       getTimezone: () => "Asia/Shanghai",
@@ -340,7 +340,7 @@ describe("daily selection", () => {
       () => new Date("2026-06-12T00:00:00.000Z"),
     );
     const sync = new DailySelectionSyncService({
-      vault: vault as any,
+      storage: storageFromVault(vault),
       getOutput: () => DEFAULT_SETTINGS.output,
       getLookbackDays: () => 2,
       getTimezone: () => "Asia/Shanghai",

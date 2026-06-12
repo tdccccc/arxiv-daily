@@ -97,7 +97,7 @@ export default class ArxivDailyPlugin extends Plugin {
     registerDashboardView(this);
     registerCommands(this);
     this.dailySelectionSync = new DailySelectionSyncService({
-      vault: this.app.vault,
+      storage: new ObsidianStorageAdapter(this.app.vault),
       getOutput: () => this.settings.output,
       getLookbackDays: () => this.settings.schedule.lookbackDays,
       getTimezone: () => this.settings.arxiv.timezone,

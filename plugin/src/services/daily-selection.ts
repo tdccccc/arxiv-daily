@@ -1,4 +1,4 @@
-import { normalizePath, type Vault } from "obsidian";
+import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { daysBefore, formatDate, todayInTz } from "../utils/time";
 import type { Logger } from "./logger";
@@ -163,7 +163,7 @@ export class DailySelectionSyncService {
 
   constructor(
     private opts: {
-      vault: Vault;
+      storage: StorageAdapter;
       getOutput: () => OutputSettings;
       buildPaperIndex: () => PaperIndexStore;
       logger: Logger;
@@ -175,7 +175,7 @@ export class DailySelectionSyncService {
   ) {}
 
   schedule(file: { path?: string } | null | undefined): void {
-    const path = normalizePath(file?.path ?? "");
+    const path = this.opts.storage.normalizePath(file?.path ?? "");
     if (!this.isDailyPath(path)) return;
     const existing = this.timers.get(path);
     if (existing) clearTimeout(existing);
@@ -189,9 +189,9 @@ export class DailySelectionSyncService {
   }
 
   async syncPath(path: string): Promise<DailySelectionSyncResult | null> {
-    const norm = normalizePath(path);
+    const norm = this.opts.storage.normalizePath(path);
     if (!this.isDailyPath(norm)) return null;
-    const content = await this.opts.vault.adapter.read(norm);
+    const content = await this.opts.storage.readText(norm);
     const result = await this.syncMarkdown(content);
     if (result.changed > 0) {
       this.opts.logger.info(
@@ -207,9 +207,9 @@ export class DailySelectionSyncService {
     const allSelections: DailyPaperSelection[] = [];
 
     for (const path of paths) {
-      if (!(await this.opts.vault.adapter.exists(path))) continue;
+      if (!(await this.opts.storage.exists(path))) continue;
       existingPaths.push(path);
-      const content = await this.opts.vault.adapter.read(path);
+      const content = await this.opts.storage.readText(path);
       allSelections.push(...parseDailySelections(content));
     }
 
@@ -253,17 +253,25 @@ export class DailySelectionSyncService {
     const timezone = this.opts.getTimezone?.() ?? "UTC";
     const now = this.opts.now?.() ?? new Date();
     const today = todayInTz(now, timezone);
-    const dailyDir = normalizePath(this.opts.getOutput().dailyDir);
+    const dailyDir = this.opts.storage.normalizePath(
+      this.opts.getOutput().dailyDir,
+    );
     const paths: string[] = [];
     for (let i = lookbackDays - 1; i >= 0; i--) {
-      paths.push(normalizePath(`${dailyDir}/${formatDate(daysBefore(today, i))}.md`));
+      paths.push(
+        this.opts.storage.normalizePath(
+          `${dailyDir}/${formatDate(daysBefore(today, i))}.md`,
+        ),
+      );
     }
     return paths;
   }
 
   private isDailyPath(path: string): boolean {
     if (!path.endsWith(".md")) return false;
-    const dailyDir = normalizePath(this.opts.getOutput().dailyDir);
+    const dailyDir = this.opts.storage.normalizePath(
+      this.opts.getOutput().dailyDir,
+    );
     return path.startsWith(`${dailyDir}/`);
   }
 }
