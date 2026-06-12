@@ -52,6 +52,7 @@
 - **按你的研究主题筛选** —— 用一句自然语言描述每个研究方向（"photo-z 方法、目录、比较"），LLM 自动判断当天哪些论文属于哪个主题
 - **日报 + 单篇深度报告** —— 日报里每个主题一节；标记为"详细收录"的主题，会对核心贡献论文额外生成完整解读
 - **日报内直接挑选** —— 在日报中勾选"关注"或"重点"，插件会自动同步到 `papers.json`，不用再去 inbox 里二次整理
+- **Reading Dashboard** —— 在 Obsidian 里跨日期查看关注、重点、阅读中、已收藏、已读、忽略论文，支持搜索、筛选、汇总和批量改状态
 - **多 LLM 厂商内置预设** —— DeepSeek / OpenAI / Anthropic / GLM 一键切换，也支持任何 OpenAI 兼容的端点
 - **catch-up 调度** —— 每次打开 Obsidian 自动补跑过去 5 天内漏掉的，不必每天都开着
 - **省 token** —— 周末自动跳过、已生成的日报不重跑、不相关的论文不展开摘要
@@ -142,13 +143,14 @@ tdccccc/arxiv-daily
 | 指定日期 | 命令面板 (`Cmd/Ctrl+P`) → **arXiv Daily: Run for date…** |
 | 按 arXiv ID 单篇 | Ribbon → **Summarize by arXiv ID…** —— 弹窗粘贴 `2605.12345` 或完整 URL |
 | 标记论文状态 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as saved/read/ignored** |
+| 回看论文列表 | 命令面板或 ribbon → **Open reading dashboard** |
 | 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
 
 ---
 
 ## 注意事项
 
-- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常不需要打开，只有 detail / saved / 手动创建的论文会有单篇 md。
+- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 Reading Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
 - **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时跑。完全离开几天，超出 5 天窗口的就拿不到了（arXiv `/recent` 限制）
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵

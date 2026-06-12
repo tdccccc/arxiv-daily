@@ -3,8 +3,17 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.3)
+## Features (v0.1.6)
 
+- **Reading Dashboard** — Obsidian custom view for cross-date paper review.
+  It reads `.index/papers.json` and supports tabs, search, topic/date/status/
+  priority/note/detail/citation/Zotero filters, summary stats, row actions,
+  and batch status/priority/note operations.
+- **Paper index schema v2** — stores structured daily summary fields
+  (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
+  `sourceSections`) for Dashboard search and review.
+- **Workflow quick wins** — startup sync for daily checkbox selections,
+  missed-paper fallback lists, BibTeX quick copy, and multiple arXiv categories.
 - **arXiv date parsing fix** — accepts abbreviated month names in listing
   headers (for example `Wed, 10 Jun 2026`) so June and later daily runs
   match the correct `/recent` bucket.
@@ -26,7 +35,7 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   Obsidian `setTooltip`-backed `(?)` badge on advanced fields; muted
   hint text below topic-card labels.
 - One-shot, lossy migration from v0.1.x on first load (`migration.ts`).
-- 135 vitest tests passing, `tsc -noEmit` clean, ~560 KB bundle.
+- Full vitest suite and production build are expected to pass before release.
 
 ## Installation
 
@@ -94,10 +103,21 @@ npm run build
 | `src/pipeline/pipeline.ts` | Orchestrator: fetch → filter → summarize → write |
 | `src/pipeline/html-cache.ts` | Disk cache for paper HTML |
 
+### Dashboard
+
+| File | Role |
+|---|---|
+| `src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view and future VS Code Webview |
+| `src/dashboard/view.ts` | Obsidian custom view, command/ribbon target, table rendering, filters, row actions, batch operations |
+
 ### Services
 
 | File | Role |
 |---|---|
+| `src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, status/priority/citation/summary updates |
+| `src/services/paper-note.ts` | Shared lightweight paper-note creation helper |
+| `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
+| `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update |
 | `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
 | `src/services/state-store.ts` | Per-date `RunStatus` persistence; `isDone` includes `"skipped"` |
 | `src/services/run-lock.ts` | Mutex per-date to prevent double-runs |
@@ -117,7 +137,7 @@ npm run build
 | `src/utils/time.ts` | Timezone-aware date utilities |
 | `src/llm/client.ts` | OpenAI-compatible LLM caller |
 
-## Data model (v0.1.2)
+## Data model (v0.1.6)
 
 ```ts
 interface Topic {
@@ -138,6 +158,15 @@ interface ArxivSettings {
 type RunStatus = "pending" | "running" | "completed"
                | "failed_transient" | "failed_permanent"
                | "skipped";  // v0.1.2: user opted out at enable time
+
+interface PaperSummary {
+  sourceSections?: string;
+  coreProblem?: string;
+  keyMethod?: string;
+  mainResult?: string;
+  whyRelevant?: string;
+  limitations?: string;
+}
 ```
 
 The `topic.detail` flag replaces v0.1.1's separate `detailCategories` list.
@@ -170,8 +199,11 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
 | `arXiv Daily: Set paper status…` | Updates one indexed paper to to_read/reading/read/saved/ignored |
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
+| `arXiv Daily: Copy BibTeX for current paper` | Copies arXiv BibTeX for the active paper |
+| `arXiv Daily: Copy BibTeX by arXiv ID…` | Copies arXiv BibTeX by ID and stores `citationKey` when indexed |
 | `arXiv Daily: Mark current paper as <status>` | Updates the active paper note's indexed status |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
+| `arXiv Daily: Open reading dashboard` | Opens the Reading Dashboard custom view |
 | `arXiv Daily: Show recent run state` | Lists last 20 dates and their statuses |
 | `arXiv Daily: Show diagnostics` | Shows a copyable local diagnostic report without exposing the API key |
 

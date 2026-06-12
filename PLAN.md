@@ -6,7 +6,7 @@
 
 > arXiv Daily = 每日发现 + 日报内筛选 + Reading Dashboard + 后续阅读管理
 
-主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）以及 Workflow Quick Wins（v0.1.5）；v0.1.6–v0.1.8 继续围绕这条主线。
+主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）、Workflow Quick Wins（v0.1.5）以及 Obsidian Reading Dashboard（v0.1.6）；v0.1.7–v0.1.8 继续围绕这条主线。
 
 宿主策略已定：**以 Obsidian 为主**，长期作为第一宿主和移动端方案；v0.1.7 把 core 抽成 host 无关之后，**顺带**产出一个轻量 VS Code 扩展（复用 core 和 Dashboard model，见 VS Code Companion Extension 一节）；不做独立 app。
 
@@ -39,11 +39,11 @@
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
-- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.5。
+- Obsidian Reading Dashboard 已可从命令面板或 ribbon 打开，支持跨日期 tabs、搜索、筛选、汇总、打开 note / daily / arXiv / PDF、单篇和批量状态 / priority 修改。
+- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.6。
 
 仍然可以继续加强：
 
-- 缺少跨日期回看、筛选、批量处理的 GUI Dashboard（v0.1.6）。
 - 超出 arXiv `/recent` 5 天窗口的日期无法补跑（出差、休假场景论文直接丢失）。
 - PDF、Zotero、项目笔记的结构化接入（v0.1.8）。
 
@@ -266,7 +266,9 @@ LLM 筛选存在漏报，而漏掉一篇关键论文的代价远大于多扫几�
 - 日报标题、frontmatter 和 index 的 `category` 字段适配多分类；index 中保存论文实际所属分类，而不是配置值。
 - 验收：配置两个分类时，交叉挂载论文只出现一次、只消耗一次 LLM 调用。
 
-## v0.1.6: Obsidian Reading Dashboard
+## v0.1.6: Obsidian Reading Dashboard（已完成）
+
+> 2026-06-13 完成，插件版本准备到 `0.1.6`。验证：`npm test` 203 条通过，`npm run build` 通过。发布时创建 tag `v0.1.6`。
 
 目标：做一个 Obsidian 内 GUI 工作台，让用户不用逐篇日报回翻，就能查看、搜索、汇总和处理已关注、重点、saved、read、ignored 等论文。
 
@@ -533,7 +535,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] Dashboard actions：实现打开 note / daily / arXiv / PDF、创建 note、单篇状态和 priority 修改。
 - [x] Dashboard batch：实现多选和批量 ignored / read / saved / priority 修改；批量创建 note 必须二次确认。
 - [x] Dashboard diagnostics：扩展 paper index / note consistency 检查，并把结果接入现有 diagnostics 报告。
-- [ ] v0.1.6 收尾：补单元测试和 UI model 测试，更新文档，跑完整测试和 build。
+- [x] v0.1.6 收尾：补单元测试和 UI model 测试，更新文档，跑完整测试和 build。
 
 ### v0.1.7 Core Extraction + CLI Fallback
 
@@ -579,13 +581,13 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 3. BibTeX 快捷获取（接通写作引用环节）。
 4. 多 arXiv 分类支持。
 
-**阶段 2：v0.1.6 Reading Dashboard**（当前）
+**阶段 2：v0.1.6 Reading Dashboard**（已完成）
 
 1. ~~先定 paper index schema v2（结构化摘要字段），让 pipeline 从现在开始积累数据。~~ 已完成。
-2. 只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。
-3. 单篇状态修改，再做多选和批量操作。
+2. ~~只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。~~ 已完成。
+3. ~~单篇状态修改，再做多选和批量操作。~~ 已完成。
 
-**阶段 3：v0.1.7 Core Extraction**
+**阶段 3：v0.1.7 Core Extraction**（当前）
 
 adapter 层、Node CLI（退役 Python 脚本）、CLI 配置方案、超窗补跑 fallback、链接风格可配置。
 
