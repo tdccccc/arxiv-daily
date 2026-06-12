@@ -1,6 +1,6 @@
 {
   "name": "obsidian-arxiv-daily",
-  "version": "0.2.0",
+  "version": "0.1.4",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
