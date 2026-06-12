@@ -2,10 +2,12 @@ import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
   queryDashboard,
+  type DashboardDateField,
   type DashboardQuery,
   type DashboardRow,
   type DashboardTab,
 } from "./model";
+import type { PaperPriority, PaperStatus } from "../services/paper-index";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -17,6 +19,23 @@ const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "read", label: "Read" },
   { id: "all", label: "All" },
   { id: "ignored", label: "Ignored" },
+];
+
+const STATUS_OPTIONS: Array<{ value: "" | PaperStatus; label: string }> = [
+  { value: "", label: "Any status" },
+  { value: "inbox", label: "Inbox" },
+  { value: "to_read", label: "To read" },
+  { value: "reading", label: "Reading" },
+  { value: "read", label: "Read" },
+  { value: "saved", label: "Saved" },
+  { value: "ignored", label: "Ignored" },
+];
+
+const PRIORITY_OPTIONS: Array<{ value: "" | PaperPriority; label: string }> = [
+  { value: "", label: "Any priority" },
+  { value: "high", label: "High" },
+  { value: "normal", label: "Normal" },
+  { value: "low", label: "Low" },
 ];
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -52,6 +71,8 @@ class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private query: DashboardQuery = { tab: "watch" };
   private error: string | null = null;
+  private statsEl: HTMLElement | null = null;
+  private resultsEl: HTMLElement | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -120,17 +141,27 @@ class ArxivDailyDashboardView extends ItemView {
 
     const result = queryDashboard(this.entries, this.query);
     this.renderTabs(contentEl, result.tabCounts);
-    this.renderStats(contentEl, result);
+    this.renderFilters(contentEl);
 
+    this.statsEl = contentEl.createEl("div");
+    this.resultsEl = contentEl.createEl("div");
+    this.renderCurrentResults();
+  }
+
+  private renderCurrentResults(): void {
+    if (!this.statsEl || !this.resultsEl) return;
+    const result = queryDashboard(this.entries, this.query);
+    this.statsEl.empty();
+    this.resultsEl.empty();
+    this.renderStats(this.statsEl, result);
     if (result.rows.length === 0) {
-      contentEl.createEl("div", {
+      this.resultsEl.createEl("div", {
         cls: "arxiv-daily-dashboard__state",
         text: "No papers in this view.",
       });
       return;
     }
-
-    this.renderTable(contentEl, result.rows);
+    this.renderTable(this.resultsEl, result.rows);
   }
 
   private renderHeader(contentEl: HTMLElement): void {
@@ -213,6 +244,218 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
+  private renderFilters(contentEl: HTMLElement): void {
+    const filters = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__filters",
+    });
+
+    const search = this.createFilterField(filters, "Search").createEl("input", {
+      attr: {
+        type: "search",
+        placeholder: "ID, title, author, topic, summary",
+      },
+    }) as HTMLInputElement;
+    search.value = this.query.search ?? "";
+    search.addEventListener("input", () => {
+      this.query = { ...this.query, search: search.value.trim() || undefined };
+      this.renderCurrentResults();
+    });
+
+    const topic = this.createSelect(
+      this.createFilterField(filters, "Topic"),
+      [
+        { value: "", label: "Any topic" },
+        ...topicOptions(this.entries).map((value) => ({ value, label: value })),
+      ],
+      this.query.topics?.[0] ?? "",
+    );
+    topic.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        topics: topic.value ? [topic.value] : undefined,
+      };
+      this.renderCurrentResults();
+    });
+
+    const dateField = this.createSelect(
+      this.createFilterField(filters, "Date field"),
+      [
+        { value: "seen", label: "First seen" },
+        { value: "published", label: "Published" },
+      ],
+      this.query.dateField ?? "seen",
+    );
+    dateField.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        dateField: dateField.value as DashboardDateField,
+      };
+      this.renderCurrentResults();
+    });
+
+    const dateFrom = this.createFilterField(filters, "From").createEl("input", {
+      attr: { type: "date" },
+    }) as HTMLInputElement;
+    dateFrom.value = this.query.dateFrom ?? "";
+    dateFrom.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        dateFrom: dateFrom.value || undefined,
+      };
+      this.renderCurrentResults();
+    });
+
+    const dateTo = this.createFilterField(filters, "To").createEl("input", {
+      attr: { type: "date" },
+    }) as HTMLInputElement;
+    dateTo.value = this.query.dateTo ?? "";
+    dateTo.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        dateTo: dateTo.value || undefined,
+      };
+      this.renderCurrentResults();
+    });
+
+    const status = this.createSelect(
+      this.createFilterField(filters, "Status"),
+      STATUS_OPTIONS,
+      this.query.statuses?.[0] ?? "",
+    );
+    status.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        statuses: status.value ? [status.value as PaperStatus] : undefined,
+      };
+      this.renderCurrentResults();
+    });
+
+    const priority = this.createSelect(
+      this.createFilterField(filters, "Priority"),
+      PRIORITY_OPTIONS,
+      this.query.priorities?.[0] ?? "",
+    );
+    priority.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        priorities: priority.value
+          ? [priority.value as PaperPriority]
+          : undefined,
+      };
+      this.renderCurrentResults();
+    });
+
+    const note = this.createSelect(
+      this.createFilterField(filters, "Note"),
+      [
+        { value: "", label: "Any note" },
+        { value: "yes", label: "Has note" },
+        { value: "no", label: "No note" },
+      ],
+      boolSelectValue(this.query.hasNote),
+    );
+    note.addEventListener("change", () => {
+      this.query = { ...this.query, hasNote: boolSelectQuery(note.value) };
+      this.renderCurrentResults();
+    });
+
+    const detail = this.createSelect(
+      this.createFilterField(filters, "Detail"),
+      [
+        { value: "", label: "Any detail" },
+        { value: "yes", label: "Detail" },
+        { value: "no", label: "No detail" },
+      ],
+      boolSelectValue(this.query.detail),
+    );
+    detail.addEventListener("change", () => {
+      this.query = { ...this.query, detail: boolSelectQuery(detail.value) };
+      this.renderCurrentResults();
+    });
+
+    this.createCheckboxFilter(
+      filters,
+      "Missing citation",
+      Boolean(this.query.missingCitationKey),
+      (checked) => {
+        this.query = {
+          ...this.query,
+          missingCitationKey: checked || undefined,
+        };
+        this.renderCurrentResults();
+      },
+    );
+
+    this.createCheckboxFilter(
+      filters,
+      "Missing Zotero",
+      Boolean(this.query.missingZoteroKey),
+      (checked) => {
+        this.query = {
+          ...this.query,
+          missingZoteroKey: checked || undefined,
+        };
+        this.renderCurrentResults();
+      },
+    );
+
+    const reset = filters.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__filter-reset",
+      attr: {
+        type: "button",
+        "aria-label": "Reset filters",
+        title: "Reset filters",
+      },
+    });
+    setIcon(reset, "rotate-ccw");
+    reset.addEventListener("click", () => {
+      this.query = { tab: this.query.tab ?? "watch" };
+      this.render();
+    });
+  }
+
+  private createFilterField(parent: HTMLElement, label: string): HTMLElement {
+    const field = parent.createEl("label", {
+      cls: "arxiv-daily-dashboard__filter",
+    });
+    field.createEl("span", {
+      cls: "arxiv-daily-dashboard__filter-label",
+      text: label,
+    });
+    return field;
+  }
+
+  private createSelect(
+    parent: HTMLElement,
+    options: Array<{ value: string; label: string }>,
+    selected: string,
+  ): HTMLSelectElement {
+    const select = parent.createEl("select") as HTMLSelectElement;
+    for (const option of options) {
+      const el = select.createEl("option", { text: option.label });
+      el.value = option.value;
+    }
+    select.value = selected;
+    return select;
+  }
+
+  private createCheckboxFilter(
+    parent: HTMLElement,
+    label: string,
+    checked: boolean,
+    onChange: (checked: boolean) => void,
+  ): void {
+    const field = parent.createEl("label", {
+      cls: "arxiv-daily-dashboard__filter arxiv-daily-dashboard__filter--checkbox",
+    });
+    const input = field.createEl("input", {
+      attr: { type: "checkbox" },
+    }) as HTMLInputElement;
+    input.checked = checked;
+    field.createSpan({ text: label });
+    input.addEventListener("change", () => onChange(input.checked));
+  }
+
   private renderTable(contentEl: HTMLElement, rows: DashboardRow[]): void {
     const scroller = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__table-wrap",
@@ -269,6 +512,29 @@ class ArxivDailyDashboardView extends ItemView {
       });
     }
   }
+}
+
+function topicOptions(entries: DashboardRow["entry"][]): string[] {
+  const topics = new Set<string>();
+  for (const entry of entries) {
+    for (const topic of [entry.primaryTopic, ...entry.topics]) {
+      const trimmed = topic.trim();
+      if (trimmed) topics.add(trimmed);
+    }
+  }
+  return [...topics].sort((a, b) => a.localeCompare(b));
+}
+
+function boolSelectValue(value: boolean | undefined): string {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return "";
+}
+
+function boolSelectQuery(value: string): boolean | undefined {
+  if (value === "yes") return true;
+  if (value === "no") return false;
+  return undefined;
 }
 
 function summaryLine(entry: DashboardRow["entry"]): string {

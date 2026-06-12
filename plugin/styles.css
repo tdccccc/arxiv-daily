@@ -66,6 +66,53 @@
   font-variant-numeric: tabular-nums;
 }
 
+.arxiv-daily-dashboard__filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__filter {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-dashboard__filter input,
+.arxiv-daily-dashboard__filter select {
+  width: 100%;
+  min-height: 30px;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__filter--checkbox {
+  min-height: 30px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.arxiv-daily-dashboard__filter--checkbox input {
+  width: auto;
+  min-height: 0;
+}
+
+.arxiv-daily-dashboard__filter-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arxiv-daily-dashboard__filter-reset {
+  align-self: end;
+  justify-self: start;
+}
+
 .arxiv-daily-dashboard__stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

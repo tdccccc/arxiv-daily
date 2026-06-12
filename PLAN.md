@@ -529,7 +529,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] Dashboard model：抽出 host 无关 query/filter/sort/stat/action model，覆盖 tabs、搜索、筛选和汇总。
 - [x] Dashboard view shell：注册 `arxiv-daily-dashboard` custom view、命令和 ribbon 入口。
 - [x] Dashboard list：实现表格 / 列表渲染、空状态、加载失败状态和基础样式。
-- [ ] Dashboard filters：实现 topic、date range、status、priority、has note、detail、missing citation / Zotero 筛选。
+- [x] Dashboard filters：实现 topic、date range、status、priority、has note、detail、missing citation / Zotero 筛选。
 - [ ] Dashboard actions：实现打开 note / daily / arXiv / PDF、创建 note、单篇状态和 priority 修改。
 - [ ] Dashboard batch：实现多选和批量 ignored / read / saved / priority 修改；批量创建 note 必须二次确认。
 - [ ] Dashboard diagnostics：扩展 paper index / note consistency 检查，并把结果接入现有 diagnostics 报告。
