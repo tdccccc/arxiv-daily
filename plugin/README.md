@@ -117,6 +117,12 @@ npm run build
 | `src/pipeline/pipeline.ts` | Orchestrator: fetch → filter → summarize → write |
 | `src/pipeline/html-cache.ts` | Disk cache for paper HTML |
 
+### CLI
+
+| File | Role |
+|---|---|
+| `src/cli/config.ts` | Loads Node CLI runtime config from JSON and environment variables |
+
 ### Dashboard
 
 | File | Role |
