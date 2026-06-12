@@ -32,6 +32,7 @@ import {
   registerDashboardView,
 } from "./src/dashboard/view";
 import { ObsidianHttpClient } from "./src/hosts/obsidian/http-client";
+import { ObsidianStorageAdapter } from "./src/hosts/obsidian/storage-adapter";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -249,7 +250,7 @@ export default class ArxivDailyPlugin extends Plugin {
     });
     const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger);
     const writer = new MarkdownWriter({
-      vault: this.app.vault,
+      storage: new ObsidianStorageAdapter(this.app.vault),
       logger: this.logger,
       arxiv: this.settings.arxiv,
       output: this.settings.output,
@@ -263,7 +264,7 @@ export default class ArxivDailyPlugin extends Plugin {
 
   buildMarkdownWriter(): MarkdownWriter {
     return new MarkdownWriter({
-      vault: this.app.vault,
+      storage: new ObsidianStorageAdapter(this.app.vault),
       logger: this.logger,
       arxiv: this.settings.arxiv,
       output: this.settings.output,

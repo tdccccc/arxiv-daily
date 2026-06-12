@@ -86,6 +86,7 @@ npm run build
 | File | Role |
 |---|---|
 | `src/hosts/obsidian/http-client.ts` | Obsidian `requestUrl` implementation of the core `HttpClient` contract |
+| `src/hosts/obsidian/storage-adapter.ts` | Obsidian `Vault` implementation of the core `StorageAdapter` contract |
 
 ### Settings layer
 

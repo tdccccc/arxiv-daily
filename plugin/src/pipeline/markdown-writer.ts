@@ -1,4 +1,4 @@
-import { type Vault, normalizePath } from "obsidian";
+import type { StorageAdapter } from "../core/adapters";
 import type { Logger } from "../services/logger";
 import type { ArxivSettings, OutputSettings } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
@@ -6,7 +6,7 @@ import type { DailyPaperWithContent } from "./summarizer";
 import type { PaperIndexEntry } from "../services/paper-index";
 
 export interface MarkdownWriterOpts {
-  vault: Vault;
+  storage: StorageAdapter;
   logger: Logger;
   arxiv: ArxivSettings;
   output: OutputSettings;
@@ -26,11 +26,15 @@ export class MarkdownWriter {
   constructor(private opts: MarkdownWriterOpts) {}
 
   dailyPath(dateStr: string): string {
-    return normalizePath(`${this.opts.output.dailyDir}/${dateStr}.md`);
+    return this.opts.storage.normalizePath(
+      `${this.opts.output.dailyDir}/${dateStr}.md`,
+    );
   }
 
   paperDetailPath(id: string): string {
-    return normalizePath(`${this.opts.output.papersDir}/${id}.md`);
+    return this.opts.storage.normalizePath(
+      `${this.opts.output.papersDir}/${id}.md`,
+    );
   }
 
   async writeDaily(
@@ -40,7 +44,7 @@ export class MarkdownWriter {
   ): Promise<string> {
     const path = this.dailyPath(dateStr);
     await this.ensureDir(this.opts.output.dailyDir);
-    if (await this.opts.vault.adapter.exists(path)) {
+    if (await this.opts.storage.exists(path)) {
       throw new Error(`daily already exists: ${path}`);
     }
     const frontmatter =
@@ -49,7 +53,7 @@ export class MarkdownWriter {
       `weekday: ${weekdayName(dateStr)}\n` +
       `tags: [arxiv, daily]\n` +
       `---\n\n`;
-    await this.opts.vault.adapter.write(
+    await this.opts.storage.writeText(
       path,
       frontmatter + appendMissedPapers(summary, options.missedPapers ?? []),
     );
@@ -65,7 +69,7 @@ export class MarkdownWriter {
   ): Promise<string> {
     const path = this.paperDetailPath(paper.id);
     await this.ensureDir(this.opts.output.papersDir);
-    if (await this.opts.vault.adapter.exists(path)) {
+    if (await this.opts.storage.exists(path)) {
       throw new Error(`paper already exists: ${path}`);
     }
     const tags = this.tagsFor(paper);
@@ -82,7 +86,7 @@ export class MarkdownWriter {
       citationKey: indexEntry?.citationKey ?? "",
       tags,
     });
-    await this.opts.vault.adapter.write(path, fm + summary);
+    await this.opts.storage.writeText(path, fm + summary);
     this.opts.logger.info(`wrote paper: ${path}`);
     return path;
   }
@@ -90,7 +94,7 @@ export class MarkdownWriter {
   async writePaperNote(entry: PaperIndexEntry, body?: string): Promise<string> {
     const path = entry.paperPath ?? this.paperDetailPath(entry.arxivId);
     await this.ensureDir(this.opts.output.papersDir);
-    if (await this.opts.vault.adapter.exists(path)) {
+    if (await this.opts.storage.exists(path)) {
       throw new Error(`paper already exists: ${path}`);
     }
     const topic = this.opts.arxiv.topics.find((t) => t.tag === entry.primaryTopic);
@@ -114,7 +118,7 @@ export class MarkdownWriter {
         `- **arXiv**: [${entry.arxivId}](${entry.arxivUrl})\n` +
         `- **PDF**: [PDF](${entry.pdfUrl})\n\n` +
         `## Notes\n\n`;
-    await this.opts.vault.adapter.write(path, fm + noteBody);
+    await this.opts.storage.writeText(path, fm + noteBody);
     this.opts.logger.info(`wrote paper note: ${path}`);
     return path;
   }
@@ -129,12 +133,12 @@ export class MarkdownWriter {
 
   async dailyExists(dateStr: string): Promise<boolean> {
     const path = this.dailyPath(dateStr);
-    return await this.opts.vault.adapter.exists(path);
+    return await this.opts.storage.exists(path);
   }
 
   async paperDetailExists(id: string): Promise<boolean> {
     const path = this.paperDetailPath(id);
-    return await this.opts.vault.adapter.exists(path);
+    return await this.opts.storage.exists(path);
   }
 
   private tagsFor(paper: DailyPaperWithContent): string[] {
@@ -145,9 +149,9 @@ export class MarkdownWriter {
   }
 
   private async ensureDir(rel: string): Promise<void> {
-    const norm = normalizePath(rel);
-    if (!(await this.opts.vault.adapter.exists(norm))) {
-      await this.opts.vault.adapter.mkdir(norm);
+    const norm = this.opts.storage.normalizePath(rel);
+    if (!(await this.opts.storage.exists(norm))) {
+      await this.opts.storage.mkdir(norm);
     }
   }
 

@@ -1,40 +1,42 @@
 import { describe, it, expect } from "vitest";
+import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
-function makeVault(initialFiles: Record<string, string> = {}) {
+function makeStorage(initialFiles: Record<string, string> = {}) {
   const files: Record<string, string> = { ...initialFiles };
   return {
     files,
-    vault: {
-      adapter: {
-        async write(path: string, content: string) {
-          files[path] = content;
-        },
-        async read(path: string) {
-          return files[path];
-        },
-        async exists(path: string) {
-          return Object.prototype.hasOwnProperty.call(files, path);
-        },
-        async mkdir(_path: string) {},
-        async rename(from: string, to: string) {
-          files[to] = files[from];
-          delete files[from];
-        },
-        async remove(path: string) {
-          delete files[path];
-        },
+    storage: {
+      normalizePath(path: string) {
+        return path.replace(/\\/g, "/");
       },
-    } as any,
+      async writeText(path: string, content: string) {
+        files[path] = content;
+      },
+      async readText(path: string) {
+        return files[path];
+      },
+      async exists(path: string) {
+        return Object.prototype.hasOwnProperty.call(files, path);
+      },
+      async mkdir(_path: string) {},
+      async rename(from: string, to: string) {
+        files[to] = files[from];
+        delete files[from];
+      },
+      async remove(path: string) {
+        delete files[path];
+      },
+    } satisfies StorageAdapter,
   };
 }
 
 function makeWriter(initialFiles: Record<string, string> = {}) {
-  const { files, vault } = makeVault(initialFiles);
+  const { files, storage } = makeStorage(initialFiles);
   const writer = new MarkdownWriter({
-    vault,
+    storage,
     logger: new Logger("error"),
     arxiv: DEFAULT_SETTINGS.arxiv,
     output: DEFAULT_SETTINGS.output,
