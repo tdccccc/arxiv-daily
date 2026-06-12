@@ -24,6 +24,7 @@ import { ManualFetchService } from "./src/services/manual-fetch";
 import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "./src/utils/time";
 import { PaperIndexStore } from "./src/services/paper-index";
+import { DailySelectionSyncService } from "./src/services/daily-selection";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -37,6 +38,7 @@ export default class ArxivDailyPlugin extends Plugin {
   scheduler!: SchedulerService;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
+  private dailySelectionSync!: DailySelectionSyncService;
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService();
 
@@ -85,6 +87,15 @@ export default class ArxivDailyPlugin extends Plugin {
 
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerCommands(this);
+    this.dailySelectionSync = new DailySelectionSyncService({
+      vault: this.app.vault,
+      getOutput: () => this.settings.output,
+      buildPaperIndex: () => this.buildPaperIndex(),
+      logger: this.logger,
+    });
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => this.dailySelectionSync.schedule(file)),
+    );
 
     if (this.settings.schedule.enabled) {
       this.scheduler.start();
@@ -97,6 +108,7 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   onunload() {
+    this.dailySelectionSync?.clear();
     this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();
   }

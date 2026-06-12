@@ -52,9 +52,10 @@ describe("derivePaperInboxPaths", () => {
   it("uses the shared output root by default", () => {
     expect(derivePaperInboxPaths(DEFAULT_SETTINGS.output)).toEqual({
       rootDir: "arxiv-daily",
-      indexDir: "arxiv-daily/index",
-      papersJsonPath: "arxiv-daily/index/papers.json",
-      inboxPath: "arxiv-daily/inbox.md",
+      indexDir: "arxiv-daily/.index",
+      papersJsonPath: "arxiv-daily/.index/papers.json",
+      legacyIndexDir: "arxiv-daily/index",
+      legacyPapersJsonPath: "arxiv-daily/index/papers.json",
     });
   });
 
@@ -66,9 +67,10 @@ describe("derivePaperInboxPaths", () => {
       }),
     ).toEqual({
       rootDir: "reports",
-      indexDir: "reports/index",
-      papersJsonPath: "reports/index/papers.json",
-      inboxPath: "reports/inbox.md",
+      indexDir: "reports/.index",
+      papersJsonPath: "reports/.index/papers.json",
+      legacyIndexDir: "reports/index",
+      legacyPapersJsonPath: "reports/index/papers.json",
     });
   });
 
@@ -83,7 +85,7 @@ describe("derivePaperInboxPaths", () => {
 });
 
 describe("PaperIndexStore", () => {
-  it("loads an empty inbox when papers.json is missing", async () => {
+  it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({
       schemaVersion: 1,
@@ -109,9 +111,51 @@ describe("PaperIndexStore", () => {
     expect(entry.paperPath).toBeNull();
     expect(entry.seenDates).toEqual(["2026-06-11"]);
     expect(dirs.has("arxiv-daily")).toBe(true);
-    expect(dirs.has("arxiv-daily/index")).toBe(true);
-    const saved = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    expect(dirs.has("arxiv-daily/.index")).toBe(true);
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(saved.papers["2606.12345"].title).toBe("A paper");
+  });
+
+  it("migrates from the old visible index path on next save", async () => {
+    const legacy = {
+      schemaVersion: 1,
+      updatedAt: "2026-06-10T00:00:00.000Z",
+      papers: {
+        "2606.12345": {
+          arxivId: "2606.12345",
+          source: "arxiv",
+          title: "Legacy paper",
+          authors: ["A"],
+          published: "2026-06-10",
+          updated: "2026-06-10",
+          category: "astro-ph",
+          topics: ["photo-z"],
+          primaryTopic: "photo-z",
+          detail: false,
+          status: "to_read",
+          priority: "high",
+          seenDates: ["2026-06-10"],
+          dailyReports: ["arxiv-daily/daily/2026-06-10.md"],
+          paperPath: null,
+          arxivUrl: "https://arxiv.org/abs/2606.12345",
+          pdfUrl: "https://arxiv.org/pdf/2606.12345",
+          pdfPath: "",
+          zoteroKey: "",
+          citationKey: "",
+          projects: [],
+        },
+      },
+    };
+    const { files, store } = makeStore({
+      "arxiv-daily/index/papers.json": JSON.stringify(legacy),
+    });
+
+    await store.setStatus("2606.12345", "saved");
+
+    expect(files["arxiv-daily/index/papers.json"]).toBeUndefined();
+    const migrated = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(migrated.papers["2606.12345"].status).toBe("saved");
+    expect(migrated.papers["2606.12345"].priority).toBe("high");
   });
 
   it("merges repeated papers without overwriting user fields", async () => {
@@ -217,25 +261,5 @@ describe("PaperIndexStore", () => {
       "2606.00002",
       "2606.00001",
     ]);
-  });
-
-  it("writes an inbox markdown page from indexed papers", async () => {
-    const { files, store } = makeStore();
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345",
-      title: "A paper",
-      authors: "A",
-      date: "2026-06-11",
-      arxivCategory: "astro-ph",
-      primaryTopic: "photo-z",
-      detail: false,
-    });
-    const path = await store.writeInboxPage();
-    expect(path).toBe("arxiv-daily/inbox.md");
-    expect(files[path]).toContain("# arXiv Daily Inbox");
-    expect(files[path]).toContain("Status: inbox");
-    expect(files[path]).toContain("## photo-z");
-    expect(files[path]).toContain("- [ ] 2606.12345 A paper");
-    expect(files[path]).toContain("arXiv: https://arxiv.org/abs/2606.12345");
   });
 });

@@ -22,13 +22,16 @@
 ## Photo-z 相关
 
 ### Improved Photometric Redshifts from Multi-Survey Cross-Calibration → [[2605.12345]]
+> 信息来源：Abstract, Results, Conclusion
 - **作者**: Y. Zhang et al.
 - **arXiv**: [2605.12345](https://arxiv.org/abs/2605.12345)
-- **一句话总结**: 利用 DES、HSC、LSST 三套巡天交叉标定，photo-z 精度提升约 15%
-- **数据**: DES Y6 + HSC PDR3 + LSST DP0 模拟样本，约 200 万星系...
-- **方法**: 改进的 SED 模板拟合 + 跨巡天系统误差联合标定...
+- [ ] 关注 <!-- arxiv-daily:2605.12345:watch -->
+- [ ] 重点 <!-- arxiv-daily:2605.12345:highlight -->
+- **核心问题**: 多巡天 photo-z 训练集系统差异会把红移估计误差带入 LSST 早期样本。
+- **关键方法**: 利用 DES、HSC、LSST 三套巡天交叉标定，联合约束模板拟合中的系统误差。
 - **主要结果**: σ_NMAD = 0.018（vs. 单巡天 0.022）；catastrophic outlier 比例降至 2.1%...
-- **意义**: 为 LSST 第一年数据准备了系统误差校正流程...
+- **为什么值得看**: 结果直接约束 LSST 第一年 photo-z 系统误差校正流程。
+- **局限或边界**: 原文未说明。
 
 ## Galaxy Cluster 相关
 
@@ -40,7 +43,7 @@
 今日无相关论文更新。
 ```
 
-带 `[[2605.12345]]` 链接的论文，会同时在 `arxiv-daily/papers/2605.12345.md` 生成完整解读（**背景与动机 / 数据 / 方法 / 结果 / 讨论 / 结论** 六个章节）。
+带 `[[2605.12345]]` 链接的论文，会同时在 `arxiv-daily/papers/2605.12345.md` 生成完整解读（**研究问题 / 方法设计 / 关键证据 / 主要结论 / 适用边界 / 一句话价值判断** 六个章节）。
 
 ---
 
@@ -48,6 +51,7 @@
 
 - **按你的研究主题筛选** —— 用一句自然语言描述每个研究方向（"photo-z 方法、目录、比较"），LLM 自动判断当天哪些论文属于哪个主题
 - **日报 + 单篇深度报告** —— 日报里每个主题一节；标记为"详细收录"的主题，会对核心贡献论文额外生成完整解读
+- **日报内直接挑选** —— 在日报中勾选"关注"或"重点"，插件会自动同步到 `papers.json`，不用再去 inbox 里二次整理
 - **多 LLM 厂商内置预设** —— DeepSeek / OpenAI / Anthropic / GLM 一键切换，也支持任何 OpenAI 兼容的端点
 - **catch-up 调度** —— 每次打开 Obsidian 自动补跑过去 5 天内漏掉的，不必每天都开着
 - **省 token** —— 周末自动跳过、已生成的日报不重跑、不相关的论文不展开摘要
@@ -137,7 +141,6 @@ tdccccc/arxiv-daily
 | 补跑过去 N 天 | Ribbon → **Run all pending** |
 | 指定日期 | 命令面板 (`Cmd/Ctrl+P`) → **arXiv Daily: Run for date…** |
 | 按 arXiv ID 单篇 | Ribbon → **Summarize by arXiv ID…** —— 弹窗粘贴 `2605.12345` 或完整 URL |
-| 打开论文收件箱 | 命令面板 → **arXiv Daily: Open paper inbox** |
 | 标记论文状态 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as saved/read/ignored** |
 | 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
 
@@ -145,7 +148,7 @@ tdccccc/arxiv-daily
 
 ## 注意事项
 
-- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。论文级状态和去重记录在 `arxiv-daily/index/papers.json`，只有 detail / saved / 手动创建的论文会有单篇 md。
+- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常不需要打开，只有 detail / saved / 手动创建的论文会有单篇 md。
 - **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时跑。完全离开几天，超出 5 天窗口的就拿不到了（arXiv `/recent` 限制）
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵

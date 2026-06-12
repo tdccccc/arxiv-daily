@@ -5,7 +5,7 @@ import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
 import { chooseModal } from "./services/modal";
 import {
   buildDiagnosticsReport,
-  type PaperInboxDiagnostics,
+  type PaperIndexDiagnostics,
 } from "./services/diagnostics";
 import { normalizeArxivId } from "./services/manual-fetch";
 import {
@@ -121,16 +121,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     }
     const cancelled = plugin.scheduler.cancelCurrentRun();
     new Notice(`arXiv Daily: cancellation requested for ${cancelled.join(", ")}`);
-  }
-
-  async function openPaperInbox() {
-    try {
-      const path = await plugin.buildPaperIndex().writeInboxPage();
-      await plugin.app.workspace.openLinkText(path, "", false);
-      new Notice(`arXiv Daily: opened paper inbox`);
-    } catch (e) {
-      new Notice(`arXiv Daily: could not open paper inbox: ${(e as Error).message}`, 10_000);
-    }
   }
 
   function openSetPaperStatusModal() {
@@ -272,12 +262,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-open-paper-inbox",
-    name: "Open paper inbox",
-    callback: openPaperInbox,
-  });
-
-  plugin.addCommand({
     id: "arxiv-daily-set-paper-status",
     name: "Set paper status…",
     callback: openSetPaperStatusModal,
@@ -386,12 +370,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     );
     menu.addItem((item) =>
       item
-        .setTitle("Open paper inbox")
-        .setIcon("inbox")
-        .onClick(openPaperInbox),
-    );
-    menu.addItem((item) =>
-      item
         .setTitle("Summarize by arXiv ID…")
         .setIcon("file-text")
         .onClick(openArxivIdPicker),
@@ -433,7 +411,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 }
 
 const PAPER_STATUSES: PaperStatus[] = [
-  "inbox",
   "to_read",
   "reading",
   "read",
@@ -583,7 +560,7 @@ class PaperIdModal extends Modal {
 
 class PaperStatusModal extends Modal {
   private value = "";
-  private status: PaperStatus = "inbox";
+  private status: PaperStatus = "to_read";
   constructor(app: App, private onSubmit: (id: string | null, status: PaperStatus | null) => void) {
     super(app);
   }
@@ -592,7 +569,7 @@ class PaperStatusModal extends Modal {
     contentEl.createEl("h2", { text: "Set arXiv Daily paper status" });
     new Setting(contentEl)
       .setName("arXiv ID or URL")
-      .setDesc("Paper must already exist in arxiv-daily/index/papers.json")
+      .setDesc("Paper must already exist in the internal arXiv Daily paper index")
       .addText((t) =>
         t.setPlaceholder("2605.08080").onChange((v) => {
           this.value = v.trim();
@@ -670,13 +647,13 @@ class DiagnosticsModal extends Modal {
     textarea.style.fontSize = "var(--font-smaller)";
     textarea.style.resize = "vertical";
     let report = textarea.value;
-    void collectPaperInboxDiagnostics(this.plugin)
-      .then((paperInbox) => {
+    void collectPaperIndexDiagnostics(this.plugin)
+      .then((paperIndex) => {
         report = buildDiagnosticsReport({
           settings: this.plugin.settings,
           runState: this.plugin.stateStore.snapshot(),
           version: this.plugin.manifest?.version,
-          paperInbox,
+          paperIndex,
         });
         textarea.value = report;
       })
@@ -685,9 +662,8 @@ class DiagnosticsModal extends Modal {
           settings: this.plugin.settings,
           runState: this.plugin.stateStore.snapshot(),
           version: this.plugin.manifest?.version,
-          paperInbox: {
+          paperIndex: {
             path: this.plugin.buildPaperIndex().paths.papersJsonPath,
-            inboxPath: this.plugin.buildPaperIndex().paths.inboxPath,
             exists: false,
             error: (e as Error).message,
           },
@@ -757,20 +733,21 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
   return normalizeArxivId(basename);
 }
 
-async function collectPaperInboxDiagnostics(
+async function collectPaperIndexDiagnostics(
   plugin: ArxivDailyPlugin,
-): Promise<PaperInboxDiagnostics> {
+): Promise<PaperIndexDiagnostics> {
   const store = plugin.buildPaperIndex();
-  const exists = await plugin.app.vault.adapter.exists(store.paths.papersJsonPath);
-  const diag: PaperInboxDiagnostics = {
+  const exists =
+    (await plugin.app.vault.adapter.exists(store.paths.papersJsonPath)) ||
+    (await plugin.app.vault.adapter.exists(store.paths.legacyPapersJsonPath));
+  const diag: PaperIndexDiagnostics = {
     path: store.paths.papersJsonPath,
-    inboxPath: store.paths.inboxPath,
     exists,
   };
   if (!exists) return diag;
   try {
-    const inbox = await store.load();
-    const entries = Object.values(inbox.papers);
+    const index = await store.load();
+    const entries = Object.values(index.papers);
     const statusCounts: Record<string, number> = {};
     const invalidStatuses: string[] = [];
     const missingPaperPaths: string[] = [];
@@ -788,7 +765,7 @@ async function collectPaperInboxDiagnostics(
     }
     return {
       ...diag,
-      schemaVersion: inbox.schemaVersion,
+      schemaVersion: index.schemaVersion,
       total: entries.length,
       statusCounts,
       invalidStatuses,

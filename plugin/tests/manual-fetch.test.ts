@@ -185,7 +185,7 @@ describe("ManualFetchService", () => {
 
     const r = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
     expect(r.kind).toBe("done");
-    const index = JSON.parse(d.files["arxiv-daily/index/papers.json"]);
+    const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
     expect(index.papers["2605.08080"].status).toBe("saved");
     expect(index.papers["2605.08080"].detail).toBe(true);
     expect(index.papers["2605.08080"].paperPath).toBe("papers/2605.08080.md");

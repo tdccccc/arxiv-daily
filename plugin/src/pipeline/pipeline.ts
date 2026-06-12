@@ -177,7 +177,9 @@ export class ArxivPipeline {
       this.progress.setStage("fetch-content", i + 1, visiblePapers.length);
       try {
         const c = await this.deps.paperFetcher.fetch(p.id, {
-          isDetail: p.isDetail,
+          // Daily summaries should use any high-value sections we can extract.
+          // The detail flag still only controls whether a separate paper note is written.
+          isDetail: true,
           sectionCharLimit: this.deps.advanced.sectionCharLimit,
           paperCharLimit: this.deps.advanced.paperCharLimit,
           skipSections: this.deps.advanced.skipSections,

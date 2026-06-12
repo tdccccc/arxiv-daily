@@ -47,7 +47,8 @@ export interface PaperInboxPaths {
   rootDir: string;
   indexDir: string;
   papersJsonPath: string;
-  inboxPath: string;
+  legacyIndexDir: string;
+  legacyPapersJsonPath: string;
 }
 
 export interface PaperIndexUpsert {
@@ -77,12 +78,14 @@ export function derivePaperInboxPaths(output: OutputSettings): PaperInboxPaths {
       ? dailyParent
       : dailyParent || papersParent || "arxiv-daily";
   const rootDir = normalizePath(root);
-  const indexDir = normalizePath(`${rootDir}/index`);
+  const indexDir = normalizePath(`${rootDir}/.index`);
+  const legacyIndexDir = normalizePath(`${rootDir}/index`);
   return {
     rootDir,
     indexDir,
     papersJsonPath: normalizePath(`${indexDir}/papers.json`),
-    inboxPath: normalizePath(`${rootDir}/inbox.md`),
+    legacyIndexDir,
+    legacyPapersJsonPath: normalizePath(`${legacyIndexDir}/papers.json`),
   };
 }
 
@@ -98,16 +101,17 @@ export class PaperIndexStore {
   }
 
   async load(): Promise<PaperInbox> {
-    if (!(await this.vault.adapter.exists(this.paths.papersJsonPath))) {
+    const path = await this.readableIndexPath();
+    if (!path) {
       return emptyInbox(this.now());
     }
 
     let raw: string;
     try {
-      raw = await this.vault.adapter.read(this.paths.papersJsonPath);
+      raw = await this.vault.adapter.read(path);
     } catch (e) {
       throw new PaperIndexError(
-        `failed to read paper index: ${this.paths.papersJsonPath}`,
+        `failed to read paper index: ${path}`,
         e,
       );
     }
@@ -116,7 +120,7 @@ export class PaperIndexStore {
       return normalizeInbox(JSON.parse(raw), this.now());
     } catch (e) {
       throw new PaperIndexError(
-        `failed to parse paper index: ${this.paths.papersJsonPath}`,
+        `failed to parse paper index: ${path}`,
         e,
       );
     }
@@ -133,6 +137,7 @@ export class PaperIndexStore {
       this.paths.papersJsonPath,
       `${JSON.stringify(next, null, 2)}\n`,
     );
+    await this.removeLegacyIndexFile();
   }
 
   async upsertFromDailyPaper(input: PaperIndexUpsert): Promise<{
@@ -206,16 +211,6 @@ export class PaperIndexStore {
       .sort(compareEntries);
   }
 
-  async writeInboxPage(status: PaperStatus = "inbox"): Promise<string> {
-    const papers = await this.listByStatus(status);
-    await this.ensureDirDeep(this.paths.rootDir);
-    await this.vault.adapter.write(
-      this.paths.inboxPath,
-      renderInboxMarkdown(papers, status, this.now()),
-    );
-    return this.paths.inboxPath;
-  }
-
   private async ensureDirDeep(dir: string): Promise<void> {
     const parts = normalizePath(dir).split("/").filter(Boolean);
     let cur = "";
@@ -224,6 +219,31 @@ export class PaperIndexStore {
       if (!(await this.vault.adapter.exists(cur))) {
         await this.vault.adapter.mkdir(cur);
       }
+    }
+  }
+
+  private async readableIndexPath(): Promise<string | null> {
+    if (await this.vault.adapter.exists(this.paths.papersJsonPath)) {
+      return this.paths.papersJsonPath;
+    }
+    if (await this.vault.adapter.exists(this.paths.legacyPapersJsonPath)) {
+      return this.paths.legacyPapersJsonPath;
+    }
+    return null;
+  }
+
+  private async removeLegacyIndexFile(): Promise<void> {
+    if (
+      this.paths.legacyPapersJsonPath === this.paths.papersJsonPath ||
+      !(await this.vault.adapter.exists(this.paths.legacyPapersJsonPath))
+    ) {
+      return;
+    }
+    try {
+      await this.vault.adapter.remove(this.paths.legacyPapersJsonPath);
+    } catch {
+      // The hidden index has already been written; a stale legacy file should
+      // not make the main save operation fail.
     }
   }
 
@@ -418,40 +438,4 @@ function compareEntries(a: PaperIndexEntry, b: PaperIndexEntry): number {
     return priorityOrder[a.priority] - priorityOrder[b.priority];
   }
   return b.published.localeCompare(a.published);
-}
-
-export function renderInboxMarkdown(
-  papers: PaperIndexEntry[],
-  status: PaperStatus,
-  now: Date,
-): string {
-  const lines = [
-    "# arXiv Daily Inbox",
-    "",
-    `Generated: ${now.toISOString()}`,
-    `Status: ${status}`,
-    `Total: ${papers.length}`,
-    "",
-  ];
-  if (papers.length === 0) {
-    lines.push("No papers.");
-    return `${lines.join("\n")}\n`;
-  }
-
-  let currentTopic = "";
-  for (const paper of papers) {
-    const topic = paper.primaryTopic || "uncategorized";
-    if (topic !== currentTopic) {
-      if (currentTopic) lines.push("");
-      currentTopic = topic;
-      lines.push(`## ${topic}`, "");
-    }
-    const note = paper.paperPath ? ` | note: [[${paper.arxivId}]]` : "";
-    lines.push(`- [ ] ${paper.arxivId} ${paper.title}`);
-    lines.push(
-      `  - status: ${paper.status}; priority: ${paper.priority}; published: ${paper.published}${note}`,
-    );
-    lines.push(`  - arXiv: ${paper.arxivUrl}`);
-  }
-  return `${lines.join("\n")}\n`;
 }

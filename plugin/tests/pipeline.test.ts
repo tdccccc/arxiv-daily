@@ -177,14 +177,14 @@ describe("ArxivPipeline", () => {
 
   it("enriches abstracts and runs filter+summarize for a kept paper", async () => {
     const d = makeDeps();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
     // Override LLM call sequence: filter returns 1 paper, then daily summary returns markdown
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
-        // Pick the first arxiv id present in the fixture
-        const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
         return JSON.stringify({
-          papers: [{ id: m[1], category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z", detail: false }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -212,6 +212,10 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect((result as any).papersWritten).toBe(1);
     expect(d.fetcher.fetchAbstractsByIds).toHaveBeenCalled();
+    expect(d.paperFetcher.fetch).toHaveBeenCalledWith(
+      arxivId,
+      expect.objectContaining({ isDetail: true }),
+    );
     expect(d.writer.writeDaily).toHaveBeenCalled();
   });
 
@@ -249,7 +253,7 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
-    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     const entry = json.papers[arxivId];
     expect(entry.status).toBe("inbox");
     expect(entry.priority).toBe("normal");
@@ -300,7 +304,7 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
     expect(d.writer.writeEmptyDaily).toHaveBeenCalledWith(date);
-    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[arxivId].status).toBe("ignored");
     expect(json.papers[arxivId].seenDates).toContain(date);
   });
@@ -411,7 +415,7 @@ describe("ArxivPipeline", () => {
     });
     await pipeline.runForDate(firstDateFromFixture());
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
-    const json = JSON.parse(files["arxiv-daily/index/papers.json"]);
+    const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[arxivId].paperPath).toBe(`papers/${arxivId}.md`);
   });
 

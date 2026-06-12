@@ -4,6 +4,7 @@ import { throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, AdvancedSettings } from "../settings/types";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
+import { injectSelectionControls } from "../services/daily-selection";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -23,6 +24,36 @@ export interface SummarizerDeps {
   signal?: AbortSignal;
 }
 
+function extractSectionTitles(markdown: string | null | undefined): string[] {
+  if (!markdown) return [];
+  const titles: string[] = [];
+  const re = /^##\s+(.+)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(markdown)) !== null) {
+    const title = m[1].trim();
+    if (title && !titles.includes(title)) titles.push(title);
+  }
+  return titles;
+}
+
+function paperSourceSections(p: DailyPaperWithContent): string {
+  const titles = [
+    ...extractSectionTitles(p.abstractConclusion),
+    ...extractSectionTitles(p.fullSections),
+  ].filter((title, i, arr) => arr.indexOf(title) === i);
+  if (titles.length) return titles.join(", ");
+  if (p.abstractConclusion.startsWith("[获取失败]")) return "获取失败";
+  return "正文摘录";
+}
+
+function buildDailyContent(p: DailyPaperWithContent): string {
+  const parts = [p.abstractConclusion.trim()].filter(Boolean);
+  if (p.fullSections?.trim()) {
+    parts.push(`Full-text excerpts:\n${p.fullSections.trim()}`);
+  }
+  return parts.join("\n\n");
+}
+
 function buildPaperBlock(p: DailyPaperWithContent): string {
   const detailMark = p.isDetail || p.paperPath ? ` → [[${p.id}]]` : "";
   const inboxLine =
@@ -33,8 +64,9 @@ function buildPaperBlock(p: DailyPaperWithContent): string {
     `=== Paper: ${p.id} [category: ${p.category}]${detailMark} ===\n` +
     `Title: ${p.title}\n` +
     `Authors: ${p.authors}\n` +
+    `Source sections: ${paperSourceSections(p)}\n` +
     inboxLine +
-    `${p.abstractConclusion}\n\n`
+    `${buildDailyContent(p)}\n\n`
   );
 }
 
@@ -80,7 +112,9 @@ async function callDailyLlm(
     : `# arXiv ${arxivSettings.category} 每日追踪 ${dateStr}\n` +
       `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n\n`;
 
-  const systemPrompt = `你是一个专业的研究助手。请根据提供的论文摘要与结论，生成 arXiv 每日论文追踪日报。
+  const systemPrompt = `你是一个专业的研究助手。请根据提供的论文摘要、结论与可用正文摘录，生成 arXiv 每日论文追踪日报。
+
+你的任务不是复述摘要，而是帮助研究者快速判断这篇论文的核心价值：它解决了什么具体问题、用了什么关键方法、得到什么证据、结论边界在哪里。
 
 ## Category 与显示名称对应关系
 ${categoryList}
@@ -89,31 +123,38 @@ ${partialNote}
 
 ${headerFmt}## [显示名称]
 ### <实际论文标题> → [[YYMM.NNNNN]]
+> 信息来源：<按输入的 Source sections 填写，例如 Abstract, Conclusion；不要编造>
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
-- **一句话总结**: 用一句话概括本文做了什么
-- **数据**: 使用了什么数据集/样本/巡天（2-4句）
-- **方法**: 采用了什么方法或模型，关键技术细节是什么（2-4句）
-- **主要结果**: 核心发现是什么，给出关键定量数值（精度、误差、提升幅度等），与已有工作的对比（2-4句）
-- **意义**: 对领域的贡献或启示，局限性，未来展望（1-2句）
+- **核心问题**: 论文试图解决的具体问题是什么，为什么值得研究（1句）
+- **关键方法**: 作者用了什么方法、数据、模型、观测、模拟或理论工具（1-2句）
+- **主要结果**: 优先写数值、误差、显著性、提升幅度、样本规模、参数范围、与前人/基线的对比；没有数值则写清作者声称的定性结果（1-2句）
+- **为什么值得看**: 这篇论文具体改变了什么判断、解决了什么问题、约束了什么范围，或适用于什么场景（1句）
+- **局限或边界**: 适用条件、不确定性、未覆盖的问题；若原文未说明，写"原文未说明"（1句）
 
 注意：
-- 所有论文（无论是否详细收录）都必须按上述完整格式输出，包含五个字段，不得省略或只列标题
+- 所有论文（无论是否详细收录）都必须按上述完整格式输出，包含信息来源与五个核心字段，不得省略或只列标题
 - 使用中文撰写，保留关键英文术语
 - 数学公式必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$
 - 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
 - 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文，请保留此标记
 - 未标记的论文不要加 [[]] 链接
 - 输入中的 Inbox 行说明论文是 new 还是 seen_before；可在总结中自然保留该状态，不要把 ignored 论文补回来
-- 重点提取定量结果，避免泛泛而谈`;
+- 先在内部判断论文属于方法、观测、理论、模拟、数据发布、综述等哪类，但不要输出类型；根据论文类型提取最核心的信息
+- 只基于输入内容回答，不要引入外部知识，不要补全输入中没有说明的数据、实验、指标或结论
+- 如果输入没有说明某项信息，请写"原文未说明"，不要猜测
+- 如果输入只有摘要或摘要+结论，请按摘要级信息生成快速筛选摘要；如果输入包含正文结果、实验、方法或讨论章节，请优先使用这些高密度证据
+- 区分作者已经用数据/实验/理论推导支持的结果和仅由作者声称的结果；证据细节不足时写"作者声称"
+- 不要写"具有重要意义""提高了理解"这类空泛句子；每个价值判断必须说明具体改变了什么判断、约束了什么问题、或适用于什么场景`;
 
-  return llm.call(
+  const summary = await llm.call(
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: `以下是今日筛选出的论文：\n\n${papersInfo}` },
     ],
     { temperature: llmTemperature, signal: deps.signal },
   );
+  return injectSelectionControls(summary, papers);
 }
 
 export async function summarizeDaily(
@@ -165,36 +206,42 @@ export async function summarizePaperDetail(
 
   const systemPrompt = `你是一个专业的研究助手。请根据提供的论文各章节内容，生成一篇详细的中文论文总结。
 
+你的任务不是复述摘要，而是还原论文的贡献链条：研究问题 -> 方法设计 -> 关键证据 -> 主要结论 -> 适用边界。
+
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，不要输出 YAML frontmatter，直接从 # 标题开始）：
 
 # ${paper.title}
 
 - **arXiv**: [${paper.id}](https://arxiv.org/abs/${paper.id})
 
-## 背景与动机
-（研究背景、前人工作、本文动机）
+## 研究问题
+论文要解决的具体问题是什么？为什么这个问题值得研究？
 
-## 数据
-（使用了什么数据集、样本大小、数据处理方法）
+## 方法设计
+作者采用了什么核心方法、模型、数据、实验、观测、模拟或理论框架？
 
-## 方法
-（核心方法/模型/算法的详细描述）
+## 关键证据
+作者用什么证据支持结论？优先保留数值、样本规模、误差、显著性、参数范围、基线对比或实验设置。
 
-## 结果
-（主要发现、定量结果、与前人工作的比较）
+## 主要结论
+论文最核心的发现或贡献是什么？区分作者已经证明的结果和作者提出的解释。
 
-## 讨论
-（结果的意义、局限性、与其他工作的对比）
+## 适用边界
+结论在哪些条件下成立？有哪些限制、不确定性或未覆盖的问题？
 
-## 结论
-（核心结论、未来展望）
+## 一句话价值判断
+用一句话说明这篇论文最值得关注的点，避免空泛评价。
 
 注意：
 - 使用中文撰写
 - 保留关键英文术语（如专有名词、物理量）
 - 数学公式、物理量和符号必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$
-- 尽可能包含定量结果（数值、误差）
-- 如果某个章节的信息不足，可以简要说明`;
+- 只基于输入内容回答，不要引入外部知识，不要补全输入中没有说明的数据、实验、指标或结论
+- 如果某项信息在输入中没有说明，请写"原文未说明"
+- 先在内部判断论文属于方法、观测、理论、模拟、数据发布、综述等哪类，但不要输出类型；根据论文类型组织重点
+- 优先提取数值、误差、显著性、提升幅度、样本规模、参数范围、与前人/基线的对比
+- 区分作者已经用数据/实验/理论推导支持的结果和作者提出的解释；证据细节不足时写"作者声称"
+- 不要写"具有重要意义""提高了理解"这类空泛句子；每个价值判断必须说明具体改变了什么判断、约束了什么问题、或适用于什么场景`;
 
   const userContent =
     `论文 ID: ${paper.id}\n` +

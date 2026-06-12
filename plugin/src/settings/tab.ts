@@ -444,7 +444,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       ),
-      "Max characters of full-text body fed to the per-paper detail prompt.",
+      "Max characters of full-text body fed to daily summaries and per-paper detail prompts.",
     );
 
     this.attachHelp(

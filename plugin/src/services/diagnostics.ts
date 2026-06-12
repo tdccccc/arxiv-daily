@@ -8,12 +8,11 @@ export interface DiagnosticsInput {
   version?: string;
   now?: Date;
   recentLimit?: number;
-  paperInbox?: PaperInboxDiagnostics;
+  paperIndex?: PaperIndexDiagnostics;
 }
 
-export interface PaperInboxDiagnostics {
+export interface PaperIndexDiagnostics {
   path: string;
-  inboxPath: string;
   exists: boolean;
   schemaVersion?: number;
   total?: number;
@@ -102,8 +101,8 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     `recentRunState(limit=${recentLimit}):`,
     ...formatRunState(recentEntries),
     "",
-    "paperInbox:",
-    ...formatPaperInbox(input.paperInbox),
+    "paperIndex:",
+    ...formatPaperIndex(input.paperIndex),
   ];
 
   return `${lines.join("\n")}\n`;
@@ -189,11 +188,10 @@ function formatList(items: string[]): string {
   return items.length ? items.join(", ") : "none";
 }
 
-function formatPaperInbox(diag: PaperInboxDiagnostics | undefined): string[] {
+function formatPaperIndex(diag: PaperIndexDiagnostics | undefined): string[] {
   if (!diag) return ["  unavailable"];
   const lines = [
     `  path: ${diag.path}`,
-    `  inboxPath: ${diag.inboxPath}`,
     `  exists: ${diag.exists ? "yes" : "no"}`,
   ];
   if (diag.error) {

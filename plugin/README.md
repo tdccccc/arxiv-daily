@@ -167,8 +167,7 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Force run for date…` | Clears stored state for one date and runs it without schedule guards |
 | `arXiv Daily: Clear run state…` | Clears persisted completed/failed/skipped state without deleting notes |
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
-| `arXiv Daily: Open paper inbox` | Generates and opens `arxiv-daily/inbox.md` from `papers.json` |
-| `arXiv Daily: Set paper status…` | Updates one indexed paper to inbox/to_read/reading/read/saved/ignored |
+| `arXiv Daily: Set paper status…` | Updates one indexed paper to to_read/reading/read/saved/ignored |
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
 | `arXiv Daily: Mark current paper as <status>` | Updates the active paper note's indexed status |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
@@ -179,17 +178,31 @@ Manual commands gate on config validity:
 - Run today / Run all pending / Run for date → requires LLM config + topics
 - Summarize by arXiv ID → requires LLM config only
 
-## Paper inbox
+## Daily selections
 
 Daily reports remain markdown files under `<dailyDir>`. Filtered papers are
-also indexed in `<root>/index/papers.json`, where `<root>` is derived from the
-configured daily/papers output directories. Ordinary relevant papers stay in
-JSON only; detail papers, saved papers, and manually promoted papers get
-markdown notes under `<papersDir>`.
+also indexed in the hidden `<root>/.index/papers.json`, where `<root>` is
+derived from the configured daily/papers output directories. Ordinary relevant
+papers stay in JSON only; detail papers, saved papers, and manually promoted
+papers get markdown notes under `<papersDir>`.
+
+Each paper in a daily report includes two markdown checkboxes:
+
+```markdown
+- [ ] 关注 <!-- arxiv-daily:2606.12345:watch -->
+- [ ] 重点 <!-- arxiv-daily:2606.12345:highlight -->
+```
+
+When the daily file changes, the plugin automatically syncs checked boxes back
+to `papers.json`: `关注` becomes `status=to_read, priority=normal`; `重点`
+becomes `status=to_read, priority=high`. `papers.json` is an internal state
+file for de-duplication and later integrations; daily reports remain the
+primary triage surface.
 
 Paper status values are `inbox`, `to_read`, `reading`, `read`, `saved`, and
-`ignored`. Marking a paper as `saved` creates a lightweight paper note if one
-does not already exist.
+`ignored`; `inbox` is the internal default for papers that have appeared in a
+daily report but have not been selected. Marking a paper as `saved` creates a
+lightweight paper note if one does not already exist.
 
 ## Scheduling
 

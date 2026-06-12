@@ -101,14 +101,13 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain('name="(empty)", tag="(empty)"');
   });
 
-  it("includes paper inbox diagnostics when provided", () => {
+  it("includes paper index diagnostics when provided", () => {
     const report = buildDiagnosticsReport({
       settings: makeSettings(),
       runState: {},
       now: new Date("2026-06-11T01:00:00.000Z"),
-      paperInbox: {
-        path: "arxiv-daily/index/papers.json",
-        inboxPath: "arxiv-daily/inbox.md",
+      paperIndex: {
+        path: "arxiv-daily/.index/papers.json",
         exists: true,
         schemaVersion: 1,
         total: 3,
@@ -118,9 +117,8 @@ describe("buildDiagnosticsReport", () => {
       },
     });
 
-    expect(report).toContain("paperInbox:");
-    expect(report).toContain("path: arxiv-daily/index/papers.json");
-    expect(report).toContain("inboxPath: arxiv-daily/inbox.md");
+    expect(report).toContain("paperIndex:");
+    expect(report).toContain("path: arxiv-daily/.index/papers.json");
     expect(report).toContain("schemaVersion: 1");
     expect(report).toContain("total: 3");
     expect(report).toContain("statusCounts: inbox=2, saved=1");
