@@ -1,14 +1,18 @@
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
+  planDashboardAction,
   queryDashboard,
+  type DashboardAction,
   type DashboardDateField,
+  type DashboardPatch,
   type DashboardQuery,
   type DashboardRow,
   type DashboardTab,
 } from "./model";
 import type { PaperPriority, PaperStatus } from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
+import { chooseModal } from "../services/modal";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -80,6 +84,8 @@ class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private query: DashboardQuery = { tab: "watch" };
   private error: string | null = null;
+  private selectedIds = new Set<string>();
+  private batchEl: HTMLElement | null = null;
   private statsEl: HTMLElement | null = null;
   private resultsEl: HTMLElement | null = null;
 
@@ -153,16 +159,19 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderFilters(contentEl);
 
     this.statsEl = contentEl.createEl("div");
+    this.batchEl = contentEl.createEl("div");
     this.resultsEl = contentEl.createEl("div");
     this.renderCurrentResults();
   }
 
   private renderCurrentResults(): void {
-    if (!this.statsEl || !this.resultsEl) return;
+    if (!this.statsEl || !this.batchEl || !this.resultsEl) return;
     const result = queryDashboard(this.entries, this.query);
     this.statsEl.empty();
+    this.batchEl.empty();
     this.resultsEl.empty();
     this.renderStats(this.statsEl, result);
+    this.renderBatchControls(this.batchEl, result.rows);
     if (result.rows.length === 0) {
       this.resultsEl.createEl("div", {
         cls: "arxiv-daily-dashboard__state",
@@ -474,6 +483,27 @@ class ArxivDailyDashboardView extends ItemView {
     });
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
+    const selectAllCell = headRow.createEl("th");
+    const selectAll = selectAllCell.createEl("input", {
+      attr: {
+        type: "checkbox",
+        "aria-label": "Select visible papers",
+      },
+    }) as HTMLInputElement;
+    const visibleIds = rows.map((row) => row.arxivId);
+    const selectedVisible = visibleIds.filter((id) => this.selectedIds.has(id));
+    selectAll.checked =
+      visibleIds.length > 0 && selectedVisible.length === visibleIds.length;
+    selectAll.indeterminate =
+      selectedVisible.length > 0 && selectedVisible.length < visibleIds.length;
+    selectAll.addEventListener("change", () => {
+      for (const id of visibleIds) {
+        if (selectAll.checked) this.selectedIds.add(id);
+        else this.selectedIds.delete(id);
+      }
+      this.renderCurrentResults();
+    });
+
     for (const label of [
       "Priority",
       "Status",
@@ -490,6 +520,20 @@ class ArxivDailyDashboardView extends ItemView {
     const tbody = table.createEl("tbody");
     for (const row of rows) {
       const tr = tbody.createEl("tr");
+      const selectCell = tr.createEl("td");
+      const checkbox = selectCell.createEl("input", {
+        attr: {
+          type: "checkbox",
+          "aria-label": `Select ${row.arxivId}`,
+        },
+      }) as HTMLInputElement;
+      checkbox.checked = this.selectedIds.has(row.arxivId);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) this.selectedIds.add(row.arxivId);
+        else this.selectedIds.delete(row.arxivId);
+        this.renderCurrentResults();
+      });
+
       const priorityCell = tr.createEl("td");
       this.createInlineSelect(
         priorityCell,
@@ -570,6 +614,112 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
+  private renderBatchControls(
+    contentEl: HTMLElement,
+    visibleRows: DashboardRow[],
+  ): void {
+    const selectedCount = this.selectedIds.size;
+    const toolbar = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__batch",
+    });
+    toolbar.createEl("span", {
+      cls: "arxiv-daily-dashboard__batch-count",
+      text: `${selectedCount} selected`,
+    });
+
+    this.createBatchButton(
+      toolbar,
+      "archive-x",
+      "Ignore",
+      selectedCount,
+      () =>
+        this.runBatchAction({
+          type: "set_status",
+          arxivIds: this.selectedArxivIds(),
+          status: "ignored",
+        }),
+    );
+    this.createBatchButton(
+      toolbar,
+      "check-check",
+      "Read",
+      selectedCount,
+      () =>
+        this.runBatchAction({
+          type: "set_status",
+          arxivIds: this.selectedArxivIds(),
+          status: "read",
+        }),
+    );
+    this.createBatchButton(
+      toolbar,
+      "bookmark",
+      "Saved",
+      selectedCount,
+      () =>
+        this.runBatchAction({
+          type: "set_status",
+          arxivIds: this.selectedArxivIds(),
+          status: "saved",
+        }),
+    );
+    this.createBatchButton(
+      toolbar,
+      "file-plus",
+      "Notes",
+      selectedCount,
+      () =>
+        this.runBatchAction({
+          type: "create_notes",
+          arxivIds: this.selectedArxivIds(),
+        }),
+    );
+
+    const priority = this.createSelect(
+      toolbar.createEl("label", {
+        cls: "arxiv-daily-dashboard__batch-priority",
+      }),
+      ROW_PRIORITY_OPTIONS,
+      "normal",
+    );
+    priority.setAttribute("aria-label", "Batch priority");
+    priority.disabled = selectedCount === 0;
+    const applyPriority = toolbar.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
+      attr: {
+        type: "button",
+        "aria-label": "Apply priority",
+        title: "Apply priority",
+      },
+    }) as HTMLButtonElement;
+    setIcon(applyPriority, "check");
+    applyPriority.disabled = selectedCount === 0;
+    applyPriority.addEventListener("click", () => {
+      void this.runBatchAction({
+        type: "set_priority",
+        arxivIds: this.selectedArxivIds(),
+        priority: priority.value as PaperPriority,
+      });
+    });
+
+    const clear = toolbar.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
+      attr: {
+        type: "button",
+        "aria-label": "Clear selection",
+        title: "Clear selection",
+      },
+    }) as HTMLButtonElement;
+    setIcon(clear, "x");
+    clear.disabled = selectedCount === 0;
+    clear.addEventListener("click", () => {
+      this.selectedIds.clear();
+      this.renderCurrentResults();
+    });
+
+    if (visibleRows.length === 0) toolbar.addClass("is-empty");
+  }
+
   private createInlineSelect(
     parent: HTMLElement,
     options: Array<{ value: string; label: string }>,
@@ -603,6 +753,28 @@ class ArxivDailyDashboardView extends ItemView {
     }) as HTMLButtonElement;
     setIcon(button, icon);
     button.addEventListener("click", () => onClick(button));
+  }
+
+  private createBatchButton(
+    parent: HTMLElement,
+    icon: string,
+    label: string,
+    selectedCount: number,
+    action: () => Promise<void>,
+  ): void {
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-dashboard__batch-button",
+      attr: {
+        type: "button",
+        title: label,
+      },
+    }) as HTMLButtonElement;
+    setIcon(button, icon);
+    button.createSpan({ text: label });
+    button.disabled = selectedCount === 0;
+    button.addEventListener("click", () => {
+      void this.runControlAction(button, action);
+    });
   }
 
   private async runControlAction(
@@ -659,6 +831,62 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
     await this.plugin.app.workspace.openLinkText(path, "", false);
+  }
+
+  private selectedArxivIds(): string[] {
+    return [...this.selectedIds];
+  }
+
+  private async runBatchAction(action: DashboardAction): Promise<void> {
+    const plan = planDashboardAction(this.entries, action);
+    if (plan.patches.length === 0) {
+      new Notice("arXiv Daily: no selected papers need changes");
+      return;
+    }
+    if (plan.requiresConfirmation) {
+      const noteCount = plan.patches.filter((patch) => patch.ensureNote).length;
+      const choice = await chooseModal(
+        this.plugin.app,
+        "Create paper notes",
+        `Create ${noteCount} paper notes?`,
+        [
+          { label: "Cancel", value: "cancel" },
+          { label: "Create notes", value: "create", cta: true },
+        ],
+      );
+      if (choice !== "create") return;
+    }
+
+    const store = this.plugin.buildPaperIndex();
+    let changed = 0;
+    for (const patch of plan.patches) {
+      const entry = await this.applyBatchPatch(store, patch);
+      if (!entry) continue;
+      changed += 1;
+    }
+    this.selectedIds.clear();
+    new Notice(`arXiv Daily: updated ${changed} papers`);
+    await this.reloadIndex();
+  }
+
+  private async applyBatchPatch(
+    store: ReturnType<ArxivDailyPlugin["buildPaperIndex"]>,
+    patch: DashboardPatch,
+  ): Promise<DashboardRow["entry"] | null> {
+    let entry = await store.get(patch.arxivId);
+    if (!entry) return null;
+    if (patch.status) {
+      entry = await store.setStatus(patch.arxivId, patch.status);
+      if (!entry) return null;
+    }
+    if (patch.priority) {
+      entry = await store.setPriority(patch.arxivId, patch.priority);
+      if (!entry) return null;
+    }
+    if (patch.ensureNote) {
+      await ensurePaperNote(this.plugin, store, entry);
+    }
+    return entry;
   }
 }
 

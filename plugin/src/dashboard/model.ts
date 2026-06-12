@@ -265,7 +265,7 @@ export function planDashboardAction(
   return {
     patches,
     missingIds,
-    requiresConfirmation: action.type === "create_notes" && patches.length > 1,
+    requiresConfirmation: patches.some((patch) => patch.ensureNote),
   };
 }
 

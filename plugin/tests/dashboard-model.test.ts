@@ -215,7 +215,7 @@ describe("dashboard model", () => {
         },
       ],
       missingIds: ["missing"],
-      requiresConfirmation: false,
+      requiresConfirmation: true,
     });
     expect(notePlan).toEqual({
       patches: [

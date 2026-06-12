@@ -143,6 +143,39 @@
   line-height: 1.25;
 }
 
+.arxiv-daily-dashboard__batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__batch-count {
+  min-width: 86px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.arxiv-daily-dashboard__batch-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__batch-priority select {
+  min-height: 30px;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__batch-icon {
+  flex: 0 0 auto;
+}
+
 .arxiv-daily-dashboard__table-wrap {
   overflow-x: auto;
   border: 1px solid var(--background-modifier-border);
@@ -180,38 +213,43 @@
 
 .arxiv-daily-dashboard__table th:nth-child(1),
 .arxiv-daily-dashboard__table td:nth-child(1) {
-  width: 88px;
+  width: 44px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(2),
 .arxiv-daily-dashboard__table td:nth-child(2) {
-  width: 96px;
+  width: 88px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(3),
 .arxiv-daily-dashboard__table td:nth-child(3) {
-  width: 38%;
+  width: 96px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(4),
 .arxiv-daily-dashboard__table td:nth-child(4) {
-  width: 120px;
+  width: 36%;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(5),
-.arxiv-daily-dashboard__table td:nth-child(5),
-.arxiv-daily-dashboard__table th:nth-child(6),
-.arxiv-daily-dashboard__table td:nth-child(6) {
-  width: 104px;
+.arxiv-daily-dashboard__table td:nth-child(5) {
+  width: 120px;
 }
 
+.arxiv-daily-dashboard__table th:nth-child(6),
+.arxiv-daily-dashboard__table td:nth-child(6),
 .arxiv-daily-dashboard__table th:nth-child(7),
 .arxiv-daily-dashboard__table td:nth-child(7) {
-  width: 152px;
+  width: 104px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(8),
 .arxiv-daily-dashboard__table td:nth-child(8) {
+  width: 152px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(9),
+.arxiv-daily-dashboard__table td:nth-child(9) {
   width: 140px;
 }
 
