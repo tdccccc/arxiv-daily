@@ -207,7 +207,7 @@
 
 .arxiv-daily-dashboard__table th:nth-child(7),
 .arxiv-daily-dashboard__table td:nth-child(7) {
-  width: 72px;
+  width: 152px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(8),
@@ -235,6 +235,22 @@
 
 .arxiv-daily-dashboard__summary {
   color: var(--text-faint);
+}
+
+.arxiv-daily-dashboard__inline-select {
+  width: 100%;
+  min-height: 28px;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.arxiv-daily-dashboard__action {
+  flex: 0 0 auto;
 }
 
 .arxiv-daily-dashboard__state {

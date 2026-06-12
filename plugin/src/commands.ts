@@ -15,6 +15,7 @@ import {
 } from "./services/paper-index";
 import { extractArxivIdFromMarkdown } from "./services/bibtex";
 import { openDashboardView } from "./dashboard/view";
+import { ensurePaperNote } from "./services/paper-note";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -764,25 +765,6 @@ class DiagnosticsModal extends Modal {
   onClose() {
     this.contentEl.empty();
   }
-}
-
-async function ensurePaperNote(
-  plugin: ArxivDailyPlugin,
-  store: ReturnType<ArxivDailyPlugin["buildPaperIndex"]>,
-  entry: PaperIndexEntry,
-): Promise<string> {
-  const writer = plugin.buildMarkdownWriter();
-  if (entry.paperPath && (await plugin.app.vault.adapter.exists(entry.paperPath))) {
-    return entry.paperPath;
-  }
-  const defaultPath = writer.paperDetailPath(entry.arxivId);
-  if (await plugin.app.vault.adapter.exists(defaultPath)) {
-    await store.setPaperPath(entry.arxivId, defaultPath);
-    return defaultPath;
-  }
-  const path = await writer.writePaperNote({ ...entry, paperPath: defaultPath });
-  await store.setPaperPath(entry.arxivId, path);
-  return path;
 }
 
 function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {

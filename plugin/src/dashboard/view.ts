@@ -8,6 +8,7 @@ import {
   type DashboardTab,
 } from "./model";
 import type { PaperPriority, PaperStatus } from "../services/paper-index";
+import { ensurePaperNote } from "../services/paper-note";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -37,6 +38,14 @@ const PRIORITY_OPTIONS: Array<{ value: "" | PaperPriority; label: string }> = [
   { value: "normal", label: "Normal" },
   { value: "low", label: "Low" },
 ];
+const ROW_STATUS_OPTIONS = STATUS_OPTIONS.filter((option) => option.value) as Array<{
+  value: PaperStatus;
+  label: string;
+}>;
+const ROW_PRIORITY_OPTIONS = PRIORITY_OPTIONS.filter((option) => option.value) as Array<{
+  value: PaperPriority;
+  label: string;
+}>;
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   plugin.registerView(
@@ -472,7 +481,7 @@ class ArxivDailyDashboardView extends ItemView {
       "Topic",
       "Published",
       "First seen",
-      "Note",
+      "Actions",
       "Citation",
     ]) {
       headRow.createEl("th", { text: label });
@@ -481,8 +490,29 @@ class ArxivDailyDashboardView extends ItemView {
     const tbody = table.createEl("tbody");
     for (const row of rows) {
       const tr = tbody.createEl("tr");
-      tr.createEl("td", { text: row.entry.priority });
-      tr.createEl("td", { text: row.entry.status });
+      const priorityCell = tr.createEl("td");
+      this.createInlineSelect(
+        priorityCell,
+        ROW_PRIORITY_OPTIONS,
+        row.entry.priority,
+        (value, control) => {
+          void this.runControlAction(control, () =>
+            this.updatePriority(row.entry, value as PaperPriority),
+          );
+        },
+      );
+
+      const statusCell = tr.createEl("td");
+      this.createInlineSelect(
+        statusCell,
+        ROW_STATUS_OPTIONS,
+        row.entry.status,
+        (value, control) => {
+          void this.runControlAction(control, () =>
+            this.updateStatus(row.entry, value as PaperStatus),
+          );
+        },
+      );
 
       const titleCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__title-cell",
@@ -506,11 +536,129 @@ class ArxivDailyDashboardView extends ItemView {
       tr.createEl("td", { text: row.topic });
       tr.createEl("td", { text: row.entry.published || "-" });
       tr.createEl("td", { text: row.firstSeen || "-" });
-      tr.createEl("td", { text: row.hasNote ? "yes" : "-" });
+      const actionCell = tr.createEl("td", {
+        cls: "arxiv-daily-dashboard__actions",
+      });
+      this.createIconButton(
+        actionCell,
+        row.hasNote ? "file-text" : "file-plus",
+        row.hasNote ? "Open note" : "Create note",
+        (button) => {
+          void this.runControlAction(button, () =>
+            this.openOrCreateNote(row.entry),
+          );
+        },
+      );
+      this.createIconButton(actionCell, "calendar", "Open daily report", (button) => {
+        void this.runControlAction(button, () =>
+          this.openDailyReport(row.entry),
+        );
+      });
+      this.createIconButton(actionCell, "external-link", "Open arXiv", (button) => {
+        void this.runControlAction(button, async () => {
+          openUrl(row.entry.arxivUrl, "arXiv");
+        });
+      });
+      this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
+        void this.runControlAction(button, async () => {
+          openUrl(row.entry.pdfUrl, "PDF");
+        });
+      });
       tr.createEl("td", {
         text: row.missingCitationKey ? "missing" : row.entry.citationKey,
       });
     }
+  }
+
+  private createInlineSelect(
+    parent: HTMLElement,
+    options: Array<{ value: string; label: string }>,
+    selected: string,
+    onChange: (value: string, control: HTMLSelectElement) => void,
+  ): void {
+    const select = parent.createEl("select", {
+      cls: "arxiv-daily-dashboard__inline-select",
+    }) as HTMLSelectElement;
+    for (const option of options) {
+      const el = select.createEl("option", { text: option.label });
+      el.value = option.value;
+    }
+    select.value = selected;
+    select.addEventListener("change", () => onChange(select.value, select));
+  }
+
+  private createIconButton(
+    parent: HTMLElement,
+    icon: string,
+    label: string,
+    onClick: (button: HTMLButtonElement) => void,
+  ): void {
+    const button = parent.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__action",
+      attr: {
+        type: "button",
+        "aria-label": label,
+        title: label,
+      },
+    }) as HTMLButtonElement;
+    setIcon(button, icon);
+    button.addEventListener("click", () => onClick(button));
+  }
+
+  private async runControlAction(
+    control: HTMLButtonElement | HTMLSelectElement,
+    action: () => Promise<void>,
+  ): Promise<void> {
+    control.disabled = true;
+    try {
+      await action();
+    } catch (e) {
+      new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+    } finally {
+      control.disabled = false;
+    }
+  }
+
+  private async updateStatus(
+    entry: DashboardRow["entry"],
+    status: PaperStatus,
+  ): Promise<void> {
+    const store = this.plugin.buildPaperIndex();
+    const updated = await store.setStatus(entry.arxivId, status);
+    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
+    if (status === "saved") {
+      await ensurePaperNote(this.plugin, store, updated);
+    }
+    new Notice(`arXiv Daily: ${entry.arxivId} marked ${status}`);
+    await this.reloadIndex();
+  }
+
+  private async updatePriority(
+    entry: DashboardRow["entry"],
+    priority: PaperPriority,
+  ): Promise<void> {
+    const store = this.plugin.buildPaperIndex();
+    const updated = await store.setPriority(entry.arxivId, priority);
+    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
+    new Notice(`arXiv Daily: ${entry.arxivId} priority set to ${priority}`);
+    await this.reloadIndex();
+  }
+
+  private async openOrCreateNote(entry: DashboardRow["entry"]): Promise<void> {
+    const store = this.plugin.buildPaperIndex();
+    const latest = (await store.get(entry.arxivId)) ?? entry;
+    const path = await ensurePaperNote(this.plugin, store, latest);
+    await this.plugin.app.workspace.openLinkText(path, "", false);
+    await this.reloadIndex();
+  }
+
+  private async openDailyReport(entry: DashboardRow["entry"]): Promise<void> {
+    const path = entry.dailyReports[0];
+    if (!path) {
+      new Notice(`arXiv Daily: ${entry.arxivId} has no daily report`);
+      return;
+    }
+    await this.plugin.app.workspace.openLinkText(path, "", false);
   }
 }
 
@@ -535,6 +683,14 @@ function boolSelectQuery(value: string): boolean | undefined {
   if (value === "yes") return true;
   if (value === "no") return false;
   return undefined;
+}
+
+function openUrl(url: string, label: string): void {
+  if (!url.trim()) {
+    new Notice(`arXiv Daily: no ${label} URL`);
+    return;
+  }
+  window.open(url, "_blank", "noopener");
 }
 
 function summaryLine(entry: DashboardRow["entry"]): string {
