@@ -526,7 +526,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 ### v0.1.6 Obsidian Reading Dashboard
 
 - [x] schema v2：确定 `summary` 字段结构，新增 migration，并让 pipeline 写入结构化摘要。
-- [ ] Dashboard model：抽出 host 无关 query/filter/sort/stat/action model，覆盖 tabs、搜索、筛选和汇总。
+- [x] Dashboard model：抽出 host 无关 query/filter/sort/stat/action model，覆盖 tabs、搜索、筛选和汇总。
 - [ ] Dashboard view shell：注册 `arxiv-daily-dashboard` custom view、命令和 ribbon 入口。
 - [ ] Dashboard list：实现表格 / 列表渲染、空状态、加载失败状态和基础样式。
 - [ ] Dashboard filters：实现 topic、date range、status、priority、has note、detail、missing citation / Zotero 筛选。
