@@ -6,6 +6,7 @@ import {
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { StorageAdapter } from "../src/core/adapters";
 
 const atomFor = (id: string, opts: Partial<{ title: string; authors: string[]; primary: string; abstract: string }> = {}) => {
   const title = opts.title ?? "Test paper title";
@@ -57,6 +58,17 @@ function makeDeps(overrides: Partial<{
       }),
     },
   };
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
+    },
+    readText: vault.adapter.read,
+    writeText: vault.adapter.write,
+    exists: vault.adapter.exists,
+    mkdir: vault.adapter.mkdir,
+    rename: vault.adapter.rename,
+    remove: vault.adapter.remove,
+  } satisfies StorageAdapter;
   const fetcher = {
     fetchAtomEntry: vi.fn(async () => overrides.atom ?? atomFor("2605.08080")),
   };
@@ -75,7 +87,7 @@ function makeDeps(overrides: Partial<{
   const llm = {
     call: vi.fn(async () => overrides.llmText ?? "# Summary\n\nbody"),
   };
-  return { files, vault, fetcher, paperFetcher, writer, llm };
+  return { files, vault, storage, fetcher, paperFetcher, writer, llm };
 }
 
 describe("normalizeArxivId", () => {
@@ -165,7 +177,7 @@ describe("ManualFetchService", () => {
   it("updates the paper index when a manual detail note is created", async () => {
     const d = makeDeps();
     const paperIndex = new PaperIndexStore(
-      d.vault as any,
+      d.storage,
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-11T01:30:00.000Z"),
     );

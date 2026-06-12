@@ -7,6 +7,7 @@ import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { StorageAdapter } from "../src/core/adapters";
 
 vi.mock("obsidian", () => ({
   Notice: class {
@@ -75,32 +76,33 @@ function makeDeps() {
 function makePaperIndex() {
   const files: Record<string, string> = {};
   const dirs = new Set<string>();
-  const vault = {
-    adapter: {
-      async read(path: string) {
-        return files[path];
-      },
-      async write(path: string, content: string) {
-        files[path] = content;
-      },
-      async exists(path: string) {
-        return path in files || dirs.has(path);
-      },
-      async mkdir(path: string) {
-        dirs.add(path);
-      },
-      async rename(from: string, to: string) {
-        files[to] = files[from];
-        delete files[from];
-      },
-      async remove(path: string) {
-        delete files[path];
-        dirs.delete(path);
-      },
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
     },
-  };
+    async readText(path: string) {
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path: string) {
+      dirs.add(path);
+    },
+    async rename(from: string, to: string) {
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  } satisfies StorageAdapter;
   const store = new PaperIndexStore(
-    vault as any,
+    storage,
     DEFAULT_SETTINGS.output,
     () => new Date("2026-06-11T01:30:00.000Z"),
   );

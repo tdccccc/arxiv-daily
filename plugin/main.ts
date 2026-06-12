@@ -259,7 +259,10 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   buildPaperIndex(): PaperIndexStore {
-    return new PaperIndexStore(this.app.vault, this.settings.output);
+    return new PaperIndexStore(
+      new ObsidianStorageAdapter(this.app.vault),
+      this.settings.output,
+    );
   }
 
   buildMarkdownWriter(): MarkdownWriter {

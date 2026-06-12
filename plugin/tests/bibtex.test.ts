@@ -7,35 +7,37 @@ import {
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { StorageAdapter } from "../src/core/adapters";
 
-function makeVault(initialFiles: Record<string, string> = {}) {
+function makeStorage(initialFiles: Record<string, string> = {}) {
   const files: Record<string, string> = { ...initialFiles };
   const dirs = new Set<string>();
-  const vault = {
-    adapter: {
-      async read(path: string) {
-        return files[path];
-      },
-      async write(path: string, content: string) {
-        files[path] = content;
-      },
-      async exists(path: string) {
-        return path in files || dirs.has(path);
-      },
-      async mkdir(path: string) {
-        dirs.add(path);
-      },
-      async rename(from: string, to: string) {
-        files[to] = files[from];
-        delete files[from];
-      },
-      async remove(path: string) {
-        delete files[path];
-        dirs.delete(path);
-      },
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
     },
-  };
-  return { files, vault };
+    async readText(path: string) {
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path: string) {
+      dirs.add(path);
+    },
+    async rename(from: string, to: string) {
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  } satisfies StorageAdapter;
+  return { files, storage };
 }
 
 describe("BibTeX service", () => {
@@ -73,9 +75,9 @@ describe("BibTeX service", () => {
   });
 
   it("fetches BibTeX and stores citationKey for indexed papers", async () => {
-    const { files, vault } = makeVault();
+    const { files, storage } = makeStorage();
     const store = new PaperIndexStore(
-      vault as any,
+      storage,
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-13T00:00:00.000Z"),
     );
@@ -113,9 +115,9 @@ describe("BibTeX service", () => {
   });
 
   it("returns BibTeX even when the paper is not indexed", async () => {
-    const { vault } = makeVault();
+    const { storage } = makeStorage();
     const store = new PaperIndexStore(
-      vault as any,
+      storage,
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-13T00:00:00.000Z"),
     );

@@ -9,6 +9,7 @@ import {
 import { PaperIndexStore, type PaperInbox, type PaperIndexEntry } from "../src/services/paper-index";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { StorageAdapter } from "../src/core/adapters";
 
 function entry(
   id: string,
@@ -45,6 +46,20 @@ function index(entries: PaperIndexEntry[]): PaperInbox {
     schemaVersion: 1,
     updatedAt: "2026-06-12T00:00:00.000Z",
     papers: Object.fromEntries(entries.map((e) => [e.arxivId, e])),
+  };
+}
+
+function storageFromVault(vault: any): StorageAdapter {
+  return {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
+    },
+    readText: vault.adapter.read,
+    writeText: vault.adapter.write,
+    exists: vault.adapter.exists,
+    mkdir: vault.adapter.mkdir,
+    rename: vault.adapter.rename,
+    remove: vault.adapter.remove,
   };
 }
 
@@ -153,7 +168,7 @@ describe("daily selection", () => {
       },
     };
     const store = new PaperIndexStore(
-      vault as any,
+      storageFromVault(vault),
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-12T00:00:00.000Z"),
     );
@@ -221,7 +236,7 @@ describe("daily selection", () => {
       },
     };
     const store = new PaperIndexStore(
-      vault as any,
+      storageFromVault(vault),
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-12T00:00:00.000Z"),
     );
@@ -320,7 +335,7 @@ describe("daily selection", () => {
       },
     };
     const store = new PaperIndexStore(
-      vault as any,
+      storageFromVault(vault),
       DEFAULT_SETTINGS.output,
       () => new Date("2026-06-12T00:00:00.000Z"),
     );

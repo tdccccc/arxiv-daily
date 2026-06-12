@@ -1,4 +1,4 @@
-import { normalizePath, type Vault } from "obsidian";
+import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 
 export const PAPER_INBOX_SCHEMA_VERSION = 2;
@@ -82,9 +82,12 @@ export class PaperIndexError extends Error {
   }
 }
 
-export function derivePaperInboxPaths(output: OutputSettings): PaperInboxPaths {
-  const dailyParent = parentDir(output.dailyDir);
-  const papersParent = parentDir(output.papersDir);
+export function derivePaperInboxPaths(
+  output: OutputSettings,
+  normalizePath: (path: string) => string = normalizeStoragePath,
+): PaperInboxPaths {
+  const dailyParent = parentDir(output.dailyDir, normalizePath);
+  const papersParent = parentDir(output.papersDir, normalizePath);
   const root =
     dailyParent && dailyParent === papersParent
       ? dailyParent
@@ -105,11 +108,13 @@ export class PaperIndexStore {
   readonly paths: PaperInboxPaths;
 
   constructor(
-    private vault: Vault,
+    private storage: StorageAdapter,
     output: OutputSettings,
     private now: () => Date = () => new Date(),
   ) {
-    this.paths = derivePaperInboxPaths(output);
+    this.paths = derivePaperInboxPaths(output, (path) =>
+      this.storage.normalizePath(path),
+    );
   }
 
   async load(): Promise<PaperInbox> {
@@ -120,7 +125,7 @@ export class PaperIndexStore {
 
     let raw: string;
     try {
-      raw = await this.vault.adapter.read(path);
+      raw = await this.storage.readText(path);
     } catch (e) {
       throw new PaperIndexError(
         `failed to read paper index: ${path}`,
@@ -233,7 +238,7 @@ export class PaperIndexStore {
     const inbox = await this.load();
     const entry = inbox.papers[arxivId];
     if (!entry) return null;
-    entry.paperPath = normalizePath(paperPath);
+    entry.paperPath = this.storage.normalizePath(paperPath);
     await this.save(inbox);
     return entry;
   }
@@ -251,21 +256,21 @@ export class PaperIndexStore {
   }
 
   private async ensureDirDeep(dir: string): Promise<void> {
-    const parts = normalizePath(dir).split("/").filter(Boolean);
+    const parts = this.storage.normalizePath(dir).split("/").filter(Boolean);
     let cur = "";
     for (const part of parts) {
       cur = cur ? `${cur}/${part}` : part;
-      if (!(await this.vault.adapter.exists(cur))) {
-        await this.vault.adapter.mkdir(cur);
+      if (!(await this.storage.exists(cur))) {
+        await this.storage.mkdir(cur);
       }
     }
   }
 
   private async readableIndexPath(): Promise<string | null> {
-    if (await this.vault.adapter.exists(this.paths.papersJsonPath)) {
+    if (await this.storage.exists(this.paths.papersJsonPath)) {
       return this.paths.papersJsonPath;
     }
-    if (await this.vault.adapter.exists(this.paths.legacyPapersJsonPath)) {
+    if (await this.storage.exists(this.paths.legacyPapersJsonPath)) {
       return this.paths.legacyPapersJsonPath;
     }
     return null;
@@ -274,12 +279,12 @@ export class PaperIndexStore {
   private async removeLegacyIndexFile(): Promise<void> {
     if (
       this.paths.legacyPapersJsonPath === this.paths.papersJsonPath ||
-      !(await this.vault.adapter.exists(this.paths.legacyPapersJsonPath))
+      !(await this.storage.exists(this.paths.legacyPapersJsonPath))
     ) {
       return;
     }
     try {
-      await this.vault.adapter.remove(this.paths.legacyPapersJsonPath);
+      await this.storage.remove(this.paths.legacyPapersJsonPath);
     } catch {
       // The hidden index has already been written; a stale legacy file should
       // not make the main save operation fail.
@@ -289,22 +294,22 @@ export class PaperIndexStore {
   private async writeAtomic(path: string, content: string): Promise<void> {
     const tmp = `${path}.tmp`;
     const bak = `${path}.bak`;
-    await this.vault.adapter.write(tmp, content);
-    if (!(await this.vault.adapter.exists(path))) {
-      await this.vault.adapter.rename(tmp, path);
+    await this.storage.writeText(tmp, content);
+    if (!(await this.storage.exists(path))) {
+      await this.storage.rename(tmp, path);
       return;
     }
 
-    if (await this.vault.adapter.exists(bak)) {
-      await this.vault.adapter.remove(bak);
+    if (await this.storage.exists(bak)) {
+      await this.storage.remove(bak);
     }
-    await this.vault.adapter.rename(path, bak);
+    await this.storage.rename(path, bak);
     try {
-      await this.vault.adapter.rename(tmp, path);
-      await this.vault.adapter.remove(bak);
+      await this.storage.rename(tmp, path);
+      await this.storage.remove(bak);
     } catch (e) {
-      if (await this.vault.adapter.exists(bak)) {
-        await this.vault.adapter.rename(bak, path);
+      if (await this.storage.exists(bak)) {
+        await this.storage.rename(bak, path);
       }
       throw new PaperIndexError(`failed to save paper index: ${path}`, e);
     }
@@ -341,8 +346,8 @@ function upsertEntry(
     input.paperPath === undefined
       ? existing?.paperPath ?? null
       : input.paperPath
-      ? normalizePath(input.paperPath)
-      : null;
+        ? normalizeStoragePath(input.paperPath)
+        : null;
 
   const entry: PaperIndexEntry = {
     arxivId,
@@ -420,7 +425,7 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     priority,
     seenDates: stringArray(obj.seenDates),
     dailyReports: stringArray(obj.dailyReports),
-    paperPath: obj.paperPath ? normalizePath(String(obj.paperPath)) : null,
+    paperPath: obj.paperPath ? normalizeStoragePath(String(obj.paperPath)) : null,
     arxivUrl: stringOr(obj.arxivUrl, `https://arxiv.org/abs/${arxivId}`),
     pdfUrl: stringOr(obj.pdfUrl, `https://arxiv.org/pdf/${arxivId}`),
     pdfPath: stringOr(obj.pdfPath, ""),
@@ -430,10 +435,20 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
   };
 }
 
-function parentDir(path: string): string {
+function parentDir(
+  path: string,
+  normalizePath: (path: string) => string = normalizeStoragePath,
+): string {
   const parts = normalizePath(path).split("/").filter(Boolean);
   if (parts.length <= 1) return "";
   return parts.slice(0, -1).join("/");
+}
+
+function normalizeStoragePath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/+|\/+$/g, "");
 }
 
 function appendUnique(items: string[], next: string): string[] {

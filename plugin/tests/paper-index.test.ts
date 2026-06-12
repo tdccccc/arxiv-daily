@@ -4,44 +4,46 @@ import {
   PaperIndexStore,
   derivePaperInboxPaths,
 } from "../src/services/paper-index";
+import type { StorageAdapter } from "../src/core/adapters";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
-function makeVault(initialFiles: Record<string, string> = {}) {
+function makeStorage(initialFiles: Record<string, string> = {}) {
   const files: Record<string, string> = { ...initialFiles };
   const dirs = new Set<string>();
-  const vault = {
-    adapter: {
-      async read(path: string) {
-        if (!(path in files)) throw new Error(`missing ${path}`);
-        return files[path];
-      },
-      async write(path: string, content: string) {
-        files[path] = content;
-      },
-      async exists(path: string) {
-        return path in files || dirs.has(path);
-      },
-      async mkdir(path: string) {
-        dirs.add(path);
-      },
-      async rename(from: string, to: string) {
-        if (!(from in files)) throw new Error(`missing ${from}`);
-        files[to] = files[from];
-        delete files[from];
-      },
-      async remove(path: string) {
-        delete files[path];
-        dirs.delete(path);
-      },
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
     },
-  };
-  return { files, dirs, vault };
+    async readText(path: string) {
+      if (!(path in files)) throw new Error(`missing ${path}`);
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path: string) {
+      dirs.add(path);
+    },
+    async rename(from: string, to: string) {
+      if (!(from in files)) throw new Error(`missing ${from}`);
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  } satisfies StorageAdapter;
+  return { files, dirs, storage };
 }
 
 function makeStore(initialFiles: Record<string, string> = {}) {
-  const { files, dirs, vault } = makeVault(initialFiles);
+  const { files, dirs, storage } = makeStorage(initialFiles);
   const store = new PaperIndexStore(
-    vault as any,
+    storage,
     DEFAULT_SETTINGS.output,
     () => new Date("2026-06-11T01:30:00.000Z"),
   );
