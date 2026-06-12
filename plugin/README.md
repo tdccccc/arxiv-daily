@@ -75,6 +75,12 @@ npm run build
 
 ## Key modules (developer reference)
 
+### Core contracts
+
+| File | Role |
+|---|---|
+| `src/core/adapters.ts` | Host-neutral contracts for HTTP, storage, secrets, progress, and resource opening |
+
 ### Settings layer
 
 | File | Role |

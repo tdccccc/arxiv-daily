@@ -1,0 +1,79 @@
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface HttpRequest {
+  url: string;
+  method?: HttpMethod;
+  headers?: Record<string, string>;
+  body?: string | ArrayBuffer;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface HttpResponse {
+  status: number;
+  headers: Record<string, string>;
+  bodyText: string;
+}
+
+export interface HttpClient {
+  request(req: HttpRequest): Promise<HttpResponse>;
+}
+
+export interface StorageEntry {
+  path: string;
+  type: "file" | "folder";
+}
+
+export interface StorageAdapter {
+  normalizePath(path: string): string;
+  readText(path: string): Promise<string>;
+  writeText(path: string, content: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  mkdir(path: string): Promise<void>;
+  remove(path: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+  list?(dir: string): Promise<StorageEntry[]>;
+  readBinary?(path: string): Promise<ArrayBuffer>;
+  writeBinary?(path: string, content: ArrayBuffer): Promise<void>;
+}
+
+export interface SecretProvider {
+  getSecret(key: string): Promise<string | null>;
+  setSecret?(key: string, value: string): Promise<void>;
+  deleteSecret?(key: string): Promise<void>;
+}
+
+export type ProgressStage =
+  | "fetch-recent"
+  | "enrich-abstract"
+  | "filter"
+  | "fetch-content"
+  | "summarize-daily"
+  | "write-detail";
+
+export type IdleReason = "weekend" | "disabled";
+
+export interface ProgressReporter {
+  setBatch(currentDay: number, totalDays: number, date: string): void;
+  setStage(stage: ProgressStage, current?: number, total?: number): void;
+  setIdle(lastCompletedDate?: string, reason?: IdleReason): void;
+  setDisabled(): void;
+}
+
+export interface ResourceOpenOptions {
+  newLeaf?: boolean;
+}
+
+export interface ResourceOpener {
+  openNote(path: string, opts?: ResourceOpenOptions): Promise<void>;
+  openDailyReport(path: string, opts?: ResourceOpenOptions): Promise<void>;
+  openUrl(url: string): Promise<void>;
+}
+
+export interface HostAdapters {
+  http: HttpClient;
+  storage: StorageAdapter;
+  secrets: SecretProvider;
+  progress: ProgressReporter;
+  opener: ResourceOpener;
+}
