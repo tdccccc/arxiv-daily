@@ -3,8 +3,7 @@ import type { PaperContentFetcher } from "../pipeline/paper-content";
 import type { MarkdownWriter } from "../pipeline/markdown-writer";
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "./logger";
-import type { Vault } from "obsidian";
-import { normalizePath } from "obsidian";
+import type { StorageAdapter } from "../core/adapters";
 import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
 import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
@@ -17,7 +16,7 @@ export type ManualFetchResult =
   | { kind: "error"; reason: string };
 
 export interface ManualFetchDeps {
-  vault: Vault;
+  storage: StorageAdapter;
   fetcher: ArxivFetcher;
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
@@ -50,7 +49,7 @@ export class ManualFetchService {
   constructor(private deps: ManualFetchDeps) {}
 
   async fetchAndSummarize(rawId: string, dateStr: string): Promise<ManualFetchResult> {
-    const { vault, output, logger } = this.deps;
+    const { storage, output, logger } = this.deps;
 
     const id = normalizeArxivId(rawId);
     if (!id) {
@@ -58,8 +57,8 @@ export class ManualFetchService {
     }
 
     // 1. Duplicate check
-    const targetPath = normalizePath(`${output.papersDir}/${id}.md`);
-    if (await vault.adapter.exists(targetPath)) {
+    const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
+    if (await storage.exists(targetPath)) {
       logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
       return { kind: "already_exists", path: targetPath };
     }

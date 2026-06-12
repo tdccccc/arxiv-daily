@@ -118,7 +118,7 @@ describe("ManualFetchService", () => {
   const baseDeps = (overrides: any = {}) => {
     const d = makeDeps(overrides);
     const svc = new ManualFetchService({
-      vault: d.vault as any,
+      storage: d.storage,
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
       writer: d.writer as any,
@@ -182,7 +182,7 @@ describe("ManualFetchService", () => {
       () => new Date("2026-06-11T01:30:00.000Z"),
     );
     const svc = new ManualFetchService({
-      vault: d.vault as any,
+      storage: d.storage,
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
       writer: d.writer as any,

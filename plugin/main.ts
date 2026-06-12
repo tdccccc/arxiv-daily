@@ -220,7 +220,7 @@ export default class ArxivDailyPlugin extends Plugin {
   private buildManualFetch(): ManualFetchService {
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
     return new ManualFetchService({
-      vault: this.app.vault,
+      storage: new ObsidianStorageAdapter(this.app.vault),
       fetcher,
       paperFetcher,
       writer,
