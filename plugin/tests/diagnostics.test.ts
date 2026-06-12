@@ -112,16 +112,27 @@ describe("buildDiagnosticsReport", () => {
         schemaVersion: 2,
         total: 3,
         statusCounts: { inbox: 2, saved: 1 },
-        invalidStatuses: [],
+        unsupportedSchemaVersion: "9",
+        invalidStatuses: ["2606.22222: stale"],
+        invalidPriorities: ["2606.33333: urgent"],
+        invalidSeenDates: ["2606.44444: 20260611"],
         missingPaperPaths: ["2606.12345: arxiv-daily/papers/2606.12345.md"],
+        noteArxivIdMismatches: [
+          "2606.55555: arxiv-daily/papers/2606.55555.md has arxiv_id 2606.99999",
+        ],
       },
     });
 
     expect(report).toContain("paperIndex:");
     expect(report).toContain("path: arxiv-daily/.index/papers.json");
     expect(report).toContain("schemaVersion: 2");
+    expect(report).toContain("unsupportedSchemaVersion: 9");
     expect(report).toContain("total: 3");
     expect(report).toContain("statusCounts: inbox=2, saved=1");
+    expect(report).toContain("2606.22222: stale");
+    expect(report).toContain("2606.33333: urgent");
+    expect(report).toContain("2606.44444: 20260611");
     expect(report).toContain("2606.12345: arxiv-daily/papers/2606.12345.md");
+    expect(report).toContain("has arxiv_id 2606.99999");
   });
 });

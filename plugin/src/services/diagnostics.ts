@@ -18,8 +18,12 @@ export interface PaperIndexDiagnostics {
   schemaVersion?: number;
   total?: number;
   statusCounts?: Record<string, number>;
+  unsupportedSchemaVersion?: string;
   invalidStatuses?: string[];
+  invalidPriorities?: string[];
+  invalidSeenDates?: string[];
   missingPaperPaths?: string[];
+  noteArxivIdMismatches?: string[];
   error?: string;
 }
 
@@ -201,6 +205,9 @@ function formatPaperIndex(diag: PaperIndexDiagnostics | undefined): string[] {
     return lines;
   }
   if (diag.schemaVersion != null) lines.push(`  schemaVersion: ${diag.schemaVersion}`);
+  if (diag.unsupportedSchemaVersion) {
+    lines.push(`  unsupportedSchemaVersion: ${diag.unsupportedSchemaVersion}`);
+  }
   if (diag.total != null) lines.push(`  total: ${diag.total}`);
   if (diag.statusCounts) {
     const counts = Object.entries(diag.statusCounts)
@@ -214,10 +221,28 @@ function formatPaperIndex(diag: PaperIndexDiagnostics | undefined): string[] {
   } else {
     lines.push("  invalidStatuses: none");
   }
+  if (diag.invalidPriorities?.length) {
+    lines.push("  invalidPriorities:", ...diag.invalidPriorities.map((s) => `    - ${s}`));
+  } else {
+    lines.push("  invalidPriorities: none");
+  }
+  if (diag.invalidSeenDates?.length) {
+    lines.push("  invalidSeenDates:", ...diag.invalidSeenDates.map((s) => `    - ${s}`));
+  } else {
+    lines.push("  invalidSeenDates: none");
+  }
   if (diag.missingPaperPaths?.length) {
     lines.push("  missingPaperPaths:", ...diag.missingPaperPaths.map((p) => `    - ${p}`));
   } else {
     lines.push("  missingPaperPaths: none");
+  }
+  if (diag.noteArxivIdMismatches?.length) {
+    lines.push(
+      "  noteArxivIdMismatches:",
+      ...diag.noteArxivIdMismatches.map((p) => `    - ${p}`),
+    );
+  } else {
+    lines.push("  noteArxivIdMismatches: none");
   }
   return lines;
 }

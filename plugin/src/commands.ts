@@ -9,6 +9,8 @@ import {
 } from "./services/diagnostics";
 import { normalizeArxivId } from "./services/manual-fetch";
 import {
+  PAPER_INBOX_SCHEMA_VERSION,
+  isPaperPriority,
   isPaperStatus,
   type PaperIndexEntry,
   type PaperStatus,
@@ -827,39 +829,83 @@ async function collectPaperIndexDiagnostics(
   plugin: ArxivDailyPlugin,
 ): Promise<PaperIndexDiagnostics> {
   const store = plugin.buildPaperIndex();
-  const exists =
-    (await plugin.app.vault.adapter.exists(store.paths.papersJsonPath)) ||
-    (await plugin.app.vault.adapter.exists(store.paths.legacyPapersJsonPath));
+  const path = (await plugin.app.vault.adapter.exists(store.paths.papersJsonPath))
+    ? store.paths.papersJsonPath
+    : (await plugin.app.vault.adapter.exists(store.paths.legacyPapersJsonPath))
+    ? store.paths.legacyPapersJsonPath
+    : null;
   const diag: PaperIndexDiagnostics = {
     path: store.paths.papersJsonPath,
-    exists,
+    exists: Boolean(path),
   };
-  if (!exists) return diag;
+  if (!path) return diag;
   try {
-    const index = await store.load();
-    const entries = Object.values(index.papers);
+    const raw = JSON.parse(await plugin.app.vault.adapter.read(path));
+    const obj = raw && typeof raw === "object" ? (raw as any) : {};
+    const rawSchemaVersion = obj.schemaVersion;
+    const schemaVersion =
+      typeof rawSchemaVersion === "number" ? rawSchemaVersion : undefined;
+    const papers =
+      obj.papers && typeof obj.papers === "object"
+        ? (obj.papers as Record<string, unknown>)
+        : {};
     const statusCounts: Record<string, number> = {};
     const invalidStatuses: string[] = [];
+    const invalidPriorities: string[] = [];
+    const invalidSeenDates: string[] = [];
     const missingPaperPaths: string[] = [];
-    for (const entry of entries) {
-      statusCounts[entry.status] = (statusCounts[entry.status] ?? 0) + 1;
-      if (!isPaperStatus(entry.status)) {
-        invalidStatuses.push(`${entry.arxivId}: ${entry.status}`);
+    const noteArxivIdMismatches: string[] = [];
+
+    for (const [id, value] of Object.entries(papers)) {
+      const entry = value && typeof value === "object" ? (value as any) : {};
+      const arxivId = stringOr(entry.arxivId, id);
+      const status = stringOr(entry.status, "");
+      const priority = stringOr(entry.priority, "");
+      if (status) statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+      if (!isPaperStatus(status)) {
+        invalidStatuses.push(`${arxivId}: ${status || "(missing)"}`);
       }
-      if (
-        entry.paperPath &&
-        !(await plugin.app.vault.adapter.exists(entry.paperPath))
-      ) {
-        missingPaperPaths.push(`${entry.arxivId}: ${entry.paperPath}`);
+      if (!isPaperPriority(priority)) {
+        invalidPriorities.push(`${arxivId}: ${priority || "(missing)"}`);
+      }
+      if (!Array.isArray(entry.seenDates)) {
+        invalidSeenDates.push(`${arxivId}: seenDates is not an array`);
+      } else {
+        for (const date of entry.seenDates) {
+          if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            invalidSeenDates.push(`${arxivId}: ${String(date)}`);
+          }
+        }
+      }
+
+      const paperPath = stringOr(entry.paperPath, "");
+      if (paperPath && !(await plugin.app.vault.adapter.exists(paperPath))) {
+        missingPaperPaths.push(`${arxivId}: ${paperPath}`);
+        continue;
+      }
+      if (paperPath) {
+        const noteArxivId = await readNoteArxivId(plugin, paperPath);
+        if (noteArxivId && noteArxivId !== arxivId) {
+          noteArxivIdMismatches.push(
+            `${arxivId}: ${paperPath} has arxiv_id ${noteArxivId}`,
+          );
+        }
       }
     }
     return {
       ...diag,
-      schemaVersion: index.schemaVersion,
-      total: entries.length,
+      schemaVersion,
+      unsupportedSchemaVersion:
+        rawSchemaVersion !== 1 && rawSchemaVersion !== PAPER_INBOX_SCHEMA_VERSION
+          ? String(rawSchemaVersion)
+          : undefined,
+      total: Object.keys(papers).length,
       statusCounts,
       invalidStatuses,
+      invalidPriorities,
+      invalidSeenDates,
       missingPaperPaths,
+      noteArxivIdMismatches,
     };
   } catch (e) {
     return {
@@ -867,4 +913,24 @@ async function collectPaperIndexDiagnostics(
       error: (e as Error).message,
     };
   }
+}
+
+async function readNoteArxivId(
+  plugin: ArxivDailyPlugin,
+  path: string,
+): Promise<string | null> {
+  try {
+    const markdown = await plugin.app.vault.adapter.read(path);
+    const frontmatter = /^---\s*\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
+    if (!frontmatter) return null;
+    const raw = /^arxiv_id:\s*(.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
+    if (!raw) return null;
+    return normalizeArxivId(raw.replace(/^["']|["']$/g, ""));
+  } catch {
+    return null;
+  }
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
