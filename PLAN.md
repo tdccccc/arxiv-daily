@@ -496,10 +496,10 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 
 ### v0.1.5 Workflow Quick Wins
 
-- [ ] 启动补扫：收紧 checkbox selection 到 paper state 的映射，确保 saved / read / ignored 不会被已勾选 checkbox 降级。
-- [ ] 启动补扫：把现有 daily selection parser 暴露为可复用同步入口，避免启动补扫和实时 `modify` 事件维护两套逻辑。
-- [ ] 启动补扫：在 `layoutReady` 后扫描最近 lookback 窗口内的 `daily/*.md`，按日期排序同步 checkbox 到 `papers.json`。
-- [ ] 启动补扫：补测试覆盖移动端同步场景、已 saved 论文反复补扫、无日报文件和无 index 文件的空操作。
+- [x] 启动补扫：收紧 checkbox selection 到 paper state 的映射，确保 saved / read / ignored 不会被已勾选 checkbox 降级。
+- [x] 启动补扫：把现有 daily selection parser 暴露为可复用同步入口，避免启动补扫和实时 `modify` 事件维护两套逻辑。
+- [x] 启动补扫：在 `layoutReady` 后扫描最近 lookback 窗口内的 `daily/*.md`，按日期排序同步 checkbox 到 `papers.json`。
+- [x] 启动补扫：补测试覆盖移动端同步场景、已 saved 论文反复补扫、无日报文件和无 index 文件的空操作。
 - [ ] 漏报兜底：让 pipeline 保留当日抓取全集与入选论文集合，按 arXiv ID 计算未入选列表。
 - [ ] 漏报兜底：日报末尾渲染默认收起的未入选论文列表，只包含标题、arXiv 链接和基础 metadata，不消耗 LLM。
 - [ ] 漏报兜底：过滤 ignored 论文，并补测试保证入选数 + 未入选数等于抓取总数。

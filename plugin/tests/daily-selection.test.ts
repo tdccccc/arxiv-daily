@@ -94,12 +94,16 @@ describe("daily selection", () => {
       entry("2606.54321"),
       entry("2606.99999", "to_read", "high"),
       entry("2606.88888", "saved", "high"),
+      entry("2606.77777", "read", "normal"),
+      entry("2606.66666", "ignored", "normal"),
     ]);
     const result = applySelectionsToIndex(data, [
       { arxivId: "2606.12345", watch: true, highlight: false },
       { arxivId: "2606.54321", watch: true, highlight: true },
       { arxivId: "2606.99999", watch: false, highlight: false },
       { arxivId: "2606.88888", watch: false, highlight: false },
+      { arxivId: "2606.77777", watch: true, highlight: false },
+      { arxivId: "2606.66666", watch: true, highlight: true },
     ]);
     expect(result.changed).toBe(3);
     expect(data.papers["2606.12345"].status).toBe("to_read");
@@ -110,6 +114,10 @@ describe("daily selection", () => {
     expect(data.papers["2606.99999"].priority).toBe("normal");
     expect(data.papers["2606.88888"].status).toBe("saved");
     expect(data.papers["2606.88888"].priority).toBe("high");
+    expect(data.papers["2606.77777"].status).toBe("read");
+    expect(data.papers["2606.77777"].priority).toBe("normal");
+    expect(data.papers["2606.66666"].status).toBe("ignored");
+    expect(data.papers["2606.66666"].priority).toBe("normal");
   });
 
   it("syncs a daily file into papers.json", async () => {
@@ -170,5 +178,172 @@ describe("daily selection", () => {
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(saved.papers["2606.12345"].status).toBe("to_read");
     expect(saved.papers["2606.12345"].priority).toBe("high");
+  });
+
+  it("syncs recent daily files on startup without clearing saved papers", async () => {
+    const files: Record<string, string> = {
+      "arxiv-daily/daily/2026-06-11.md": [
+        "- [x] 关注 <!-- arxiv-daily:2606.12345:watch -->",
+        "- [ ] 重点 <!-- arxiv-daily:2606.12345:highlight -->",
+        "- [x] 关注 <!-- arxiv-daily:2606.77777:watch -->",
+        "- [x] 重点 <!-- arxiv-daily:2606.77777:highlight -->",
+      ].join("\n"),
+      "arxiv-daily/daily/2026-06-12.md": [
+        "- [ ] 关注 <!-- arxiv-daily:2606.12345:watch -->",
+        "- [ ] 重点 <!-- arxiv-daily:2606.12345:highlight -->",
+        "- [x] 关注 <!-- arxiv-daily:2606.54321:watch -->",
+        "- [x] 重点 <!-- arxiv-daily:2606.54321:highlight -->",
+      ].join("\n"),
+    };
+    const dirs = new Set<string>();
+    const vault = {
+      adapter: {
+        async read(path: string) {
+          return files[path];
+        },
+        async write(path: string, content: string) {
+          files[path] = content;
+        },
+        async exists(path: string) {
+          return path in files || dirs.has(path);
+        },
+        async mkdir(path: string) {
+          dirs.add(path);
+        },
+        async rename(from: string, to: string) {
+          files[to] = files[from];
+          delete files[from];
+        },
+        async remove(path: string) {
+          delete files[path];
+          dirs.delete(path);
+        },
+      },
+    };
+    const store = new PaperIndexStore(
+      vault as any,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-12T00:00:00.000Z"),
+    );
+    await store.upsertManyFromDailyPapers([
+      {
+        arxivId: "2606.12345",
+        title: "A paper",
+        authors: "A",
+        date: "2026-06-11",
+        arxivCategory: "astro-ph",
+        primaryTopic: "ml-astro",
+        detail: false,
+      },
+      {
+        arxivId: "2606.54321",
+        title: "Another paper",
+        authors: "B",
+        date: "2026-06-12",
+        arxivCategory: "astro-ph",
+        primaryTopic: "ml-astro",
+        detail: false,
+      },
+      {
+        arxivId: "2606.77777",
+        title: "Saved paper",
+        authors: "C",
+        date: "2026-06-11",
+        arxivCategory: "astro-ph",
+        primaryTopic: "ml-astro",
+        detail: false,
+      },
+    ]);
+    await store.setStatus("2606.77777", "saved");
+    await store.setPriority("2606.77777", "high");
+
+    const sync = new DailySelectionSyncService({
+      vault: vault as any,
+      getOutput: () => DEFAULT_SETTINGS.output,
+      getLookbackDays: () => 2,
+      getTimezone: () => "Asia/Shanghai",
+      now: () => new Date("2026-06-12T12:00:00+08:00"),
+      buildPaperIndex: () => store,
+      logger: new Logger("error"),
+      debounceMs: 1,
+    });
+
+    const result = await sync.syncRecentDailyFiles();
+
+    expect(result.scanned).toBe(2);
+    expect(result.paths).toEqual([
+      "arxiv-daily/daily/2026-06-11.md",
+      "arxiv-daily/daily/2026-06-12.md",
+    ]);
+    expect(result.changed).toBe(2);
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.papers["2606.12345"].status).toBe("to_read");
+    expect(saved.papers["2606.12345"].priority).toBe("normal");
+    expect(saved.papers["2606.54321"].status).toBe("to_read");
+    expect(saved.papers["2606.54321"].priority).toBe("high");
+    expect(saved.papers["2606.77777"].status).toBe("saved");
+    expect(saved.papers["2606.77777"].priority).toBe("high");
+
+    const second = await sync.syncRecentDailyFiles();
+
+    expect(second.changed).toBe(0);
+    const savedAgain = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(savedAgain.papers["2606.77777"].status).toBe("saved");
+    expect(savedAgain.papers["2606.77777"].priority).toBe("high");
+  });
+
+  it("startup sync is a no-op without recent daily files or an index", async () => {
+    const files: Record<string, string> = {};
+    const dirs = new Set<string>();
+    const vault = {
+      adapter: {
+        async read(path: string) {
+          return files[path];
+        },
+        async write(path: string, content: string) {
+          files[path] = content;
+        },
+        async exists(path: string) {
+          return path in files || dirs.has(path);
+        },
+        async mkdir(path: string) {
+          dirs.add(path);
+        },
+        async rename(from: string, to: string) {
+          files[to] = files[from];
+          delete files[from];
+        },
+        async remove(path: string) {
+          delete files[path];
+          dirs.delete(path);
+        },
+      },
+    };
+    const store = new PaperIndexStore(
+      vault as any,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-12T00:00:00.000Z"),
+    );
+    const sync = new DailySelectionSyncService({
+      vault: vault as any,
+      getOutput: () => DEFAULT_SETTINGS.output,
+      getLookbackDays: () => 2,
+      getTimezone: () => "Asia/Shanghai",
+      now: () => new Date("2026-06-12T12:00:00+08:00"),
+      buildPaperIndex: () => store,
+      logger: new Logger("error"),
+      debounceMs: 1,
+    });
+
+    const result = await sync.syncRecentDailyFiles();
+
+    expect(result).toEqual({
+      found: 0,
+      changed: 0,
+      missing: [],
+      scanned: 0,
+      paths: [],
+    });
+    expect(files["arxiv-daily/.index/papers.json"]).toBeUndefined();
   });
 });

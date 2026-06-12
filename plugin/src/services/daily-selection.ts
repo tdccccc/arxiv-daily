@@ -1,5 +1,6 @@
 import { normalizePath, type Vault } from "obsidian";
 import type { OutputSettings } from "../settings/types";
+import { daysBefore, formatDate, todayInTz } from "../utils/time";
 import type { Logger } from "./logger";
 import type {
   PaperIndexEntry,
@@ -21,6 +22,12 @@ export interface DailySelectionSyncResult {
   found: number;
   changed: number;
   missing: string[];
+}
+
+export interface DailySelectionStartupSyncResult
+  extends DailySelectionSyncResult {
+  scanned: number;
+  paths: string[];
 }
 
 export function selectionControlsForPaper(
@@ -136,8 +143,11 @@ function stateForSelection(
   entry: PaperIndexEntry,
   selection: DailyPaperSelection,
 ): { status: PaperStatus; priority: PaperPriority } | null {
-  if (selection.highlight) return { status: "to_read", priority: "high" };
-  if (selection.watch) return { status: "to_read", priority: "normal" };
+  if (selection.highlight || selection.watch) {
+    if (entry.status !== "inbox" && entry.status !== "to_read") return null;
+    if (selection.highlight) return { status: "to_read", priority: "high" };
+    return { status: "to_read", priority: "normal" };
+  }
 
   if (entry.status === "to_read") {
     return { status: "inbox", priority: "normal" };
@@ -158,6 +168,9 @@ export class DailySelectionSyncService {
       buildPaperIndex: () => PaperIndexStore;
       logger: Logger;
       debounceMs?: number;
+      getLookbackDays?: () => number;
+      getTimezone?: () => string;
+      now?: () => Date;
     },
   ) {}
 
@@ -179,12 +192,7 @@ export class DailySelectionSyncService {
     const norm = normalizePath(path);
     if (!this.isDailyPath(norm)) return null;
     const content = await this.opts.vault.adapter.read(norm);
-    const selections = parseDailySelections(content);
-    if (selections.length === 0) return { found: 0, changed: 0, missing: [] };
-    const result = await applyDailySelections(
-      this.opts.buildPaperIndex(),
-      selections,
-    );
+    const result = await this.syncMarkdown(content);
     if (result.changed > 0) {
       this.opts.logger.info(
         `daily-selection: synced ${result.changed}/${result.found} selections from ${norm}`,
@@ -193,9 +201,64 @@ export class DailySelectionSyncService {
     return result;
   }
 
+  async syncRecentDailyFiles(): Promise<DailySelectionStartupSyncResult> {
+    const paths = this.recentDailyPaths();
+    const existingPaths: string[] = [];
+    const allSelections: DailyPaperSelection[] = [];
+
+    for (const path of paths) {
+      if (!(await this.opts.vault.adapter.exists(path))) continue;
+      existingPaths.push(path);
+      const content = await this.opts.vault.adapter.read(path);
+      allSelections.push(...parseDailySelections(content));
+    }
+
+    const selections = mergeSelections(allSelections);
+    const result =
+      selections.length > 0
+        ? await applyDailySelections(this.opts.buildPaperIndex(), selections)
+        : { found: 0, changed: 0, missing: [] };
+
+    if (result.changed > 0) {
+      this.opts.logger.info(
+        `daily-selection: startup synced ${result.changed}/${result.found} selections from ${existingPaths.length} daily files`,
+      );
+    }
+
+    return {
+      ...result,
+      scanned: existingPaths.length,
+      paths: existingPaths,
+    };
+  }
+
   clear(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+  }
+
+  private async syncMarkdown(
+    markdown: string,
+  ): Promise<DailySelectionSyncResult> {
+    const selections = parseDailySelections(markdown);
+    if (selections.length === 0) return { found: 0, changed: 0, missing: [] };
+    return applyDailySelections(this.opts.buildPaperIndex(), selections);
+  }
+
+  private recentDailyPaths(): string[] {
+    const lookbackDays = Math.max(
+      1,
+      Math.floor(this.opts.getLookbackDays?.() ?? 1),
+    );
+    const timezone = this.opts.getTimezone?.() ?? "UTC";
+    const now = this.opts.now?.() ?? new Date();
+    const today = todayInTz(now, timezone);
+    const dailyDir = normalizePath(this.opts.getOutput().dailyDir);
+    const paths: string[] = [];
+    for (let i = lookbackDays - 1; i >= 0; i--) {
+      paths.push(normalizePath(`${dailyDir}/${formatDate(daysBefore(today, i))}.md`));
+    }
+    return paths;
   }
 
   private isDailyPath(path: string): boolean {
@@ -203,4 +266,22 @@ export class DailySelectionSyncService {
     const dailyDir = normalizePath(this.opts.getOutput().dailyDir);
     return path.startsWith(`${dailyDir}/`);
   }
+}
+
+function mergeSelections(
+  selections: DailyPaperSelection[],
+): DailyPaperSelection[] {
+  const merged = new Map<string, DailyPaperSelection>();
+  for (const selection of selections) {
+    const cur =
+      merged.get(selection.arxivId) ?? {
+        arxivId: selection.arxivId,
+        watch: false,
+        highlight: false,
+      };
+    cur.watch = cur.watch || selection.watch || selection.highlight;
+    cur.highlight = cur.highlight || selection.highlight;
+    merged.set(selection.arxivId, cur);
+  }
+  return Array.from(merged.values());
 }

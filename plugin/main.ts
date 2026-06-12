@@ -90,12 +90,21 @@ export default class ArxivDailyPlugin extends Plugin {
     this.dailySelectionSync = new DailySelectionSyncService({
       vault: this.app.vault,
       getOutput: () => this.settings.output,
+      getLookbackDays: () => this.settings.schedule.lookbackDays,
+      getTimezone: () => this.settings.arxiv.timezone,
       buildPaperIndex: () => this.buildPaperIndex(),
       logger: this.logger,
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => this.dailySelectionSync.schedule(file)),
     );
+    this.app.workspace.onLayoutReady(() => {
+      this.dailySelectionSync
+        .syncRecentDailyFiles()
+        .catch((e) =>
+          this.logger.error("daily-selection: startup sync failed", e),
+        );
+    });
 
     if (this.settings.schedule.enabled) {
       this.scheduler.start();
