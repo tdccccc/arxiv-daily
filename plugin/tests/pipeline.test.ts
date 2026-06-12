@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
+import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -47,7 +48,7 @@ function makeDeps() {
       .mockResolvedValue({ abstractConclusion: "## Abstract\nstub", fullSections: null }),
   };
   const writer = {
-    writeDaily: vi.fn(async (date: string, content: string) => {
+    writeDaily: vi.fn(async (date: string, content: string, _options?: any) => {
       writes[`daily/${date}.md`] = content;
       return `daily/${date}.md`;
     }),
@@ -55,7 +56,7 @@ function makeDeps() {
       writes[`papers/${p.id}.md`] = content;
       return `papers/${p.id}.md`;
     }),
-    writeEmptyDaily: vi.fn(async (date: string) => {
+    writeEmptyDaily: vi.fn(async (date: string, _options?: any) => {
       writes[`daily/${date}.md`] = "empty";
       return `daily/${date}.md`;
     }),
@@ -113,6 +114,13 @@ function firstDateFromFixture(): string {
     July: 7, August: 8, September: 9, October: 10, November: 11, December: 12,
   };
   return `${m[3]}-${String(months[m[2]]).padStart(2, "0")}-${String(Number(m[1])).padStart(2, "0")}`;
+}
+
+function firstBucketPapersFromFixture() {
+  const date = firstDateFromFixture();
+  const bucket = parseRecent(recentHtml).find((b) => b.announceDate === date);
+  if (!bucket) throw new Error(`fixture bucket not found: ${date}`);
+  return bucket.papers;
 }
 
 describe("ArxivPipeline", () => {
@@ -262,6 +270,59 @@ describe("ArxivPipeline", () => {
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });
 
+  it("passes unselected non-ignored papers to the daily fallback list", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const papers = firstBucketPapersFromFixture();
+    const selectedId = papers[0].id;
+    const ignoredMissedId = papers[1].id;
+    const date = firstDateFromFixture();
+    await store.upsertFromDailyPaper({
+      arxivId: ignoredMissedId,
+      title: "Ignored missed paper",
+      authors: "A",
+      date: "2026-05-01",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await store.setStatus(ignoredMissedId, "ignored");
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: selectedId, category: "photo-z", detail: false }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## Photo-z\n### Stub\n";
+      }
+      return "";
+    });
+
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate(date);
+
+    expect(result.kind).toBe("completed");
+    const options = d.writer.writeDaily.mock.calls[0][2];
+    const missedIds = options.missedPapers.map((paper: any) => paper.id);
+    expect(missedIds).not.toContain(selectedId);
+    expect(missedIds).not.toContain(ignoredMissedId);
+    expect(missedIds).toHaveLength(papers.length - 2);
+  });
+
   it("updates ignored papers in the paper index without including them in the daily body", async () => {
     const d = makeDeps();
     const { files, store } = makePaperIndex();
@@ -303,7 +364,14 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
     expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
-    expect(d.writer.writeEmptyDaily).toHaveBeenCalledWith(date);
+    expect(d.writer.writeEmptyDaily).toHaveBeenCalledWith(
+      date,
+      expect.objectContaining({ missedPapers: expect.any(Array) }),
+    );
+    const missedIds = d.writer.writeEmptyDaily.mock.calls[0][1].missedPapers.map(
+      (paper: any) => paper.id,
+    );
+    expect(missedIds).not.toContain(arxivId);
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[arxivId].status).toBe("ignored");
     expect(json.papers[arxivId].seenDates).toContain(date);

@@ -11,6 +11,16 @@ export interface MarkdownWriterOpts {
   output: OutputSettings;
 }
 
+export interface DailyMissedPaper {
+  id: string;
+  title: string;
+  authors: string;
+}
+
+export interface WriteDailyOptions {
+  missedPapers?: DailyMissedPaper[];
+}
+
 export class MarkdownWriter {
   constructor(private opts: MarkdownWriterOpts) {}
 
@@ -22,7 +32,11 @@ export class MarkdownWriter {
     return normalizePath(`${this.opts.output.papersDir}/${id}.md`);
   }
 
-  async writeDaily(dateStr: string, summary: string): Promise<string> {
+  async writeDaily(
+    dateStr: string,
+    summary: string,
+    options: WriteDailyOptions = {},
+  ): Promise<string> {
     const path = this.dailyPath(dateStr);
     await this.ensureDir(this.opts.output.dailyDir);
     if (await this.opts.vault.adapter.exists(path)) {
@@ -34,7 +48,10 @@ export class MarkdownWriter {
       `weekday: ${weekdayName(dateStr)}\n` +
       `tags: [arxiv, daily]\n` +
       `---\n\n`;
-    await this.opts.vault.adapter.write(path, frontmatter + summary);
+    await this.opts.vault.adapter.write(
+      path,
+      frontmatter + appendMissedPapers(summary, options.missedPapers ?? []),
+    );
     this.opts.logger.info(`wrote daily: ${path}`);
     return path;
   }
@@ -101,9 +118,12 @@ export class MarkdownWriter {
     return path;
   }
 
-  async writeEmptyDaily(dateStr: string): Promise<string> {
+  async writeEmptyDaily(
+    dateStr: string,
+    options: WriteDailyOptions = {},
+  ): Promise<string> {
     const summary = `# arXiv ${this.opts.arxiv.category} 每日追踪 ${dateStr}\n\n今日未发现相关论文。\n`;
-    return this.writeDaily(dateStr, summary);
+    return this.writeDaily(dateStr, summary, options);
   }
 
   async dailyExists(dateStr: string): Promise<boolean> {
@@ -130,6 +150,36 @@ export class MarkdownWriter {
     }
   }
 
+}
+
+function appendMissedPapers(
+  summary: string,
+  missedPapers: DailyMissedPaper[],
+): string {
+  if (missedPapers.length === 0) return summary;
+  const body = summary.trimEnd();
+  return `${body}\n\n${renderMissedPapers(missedPapers)}\n`;
+}
+
+function renderMissedPapers(missedPapers: DailyMissedPaper[]): string {
+  const lines = missedPapers.map((paper) => {
+    const title = compactText(paper.title) || paper.id;
+    const authors = compactText(paper.authors);
+    const suffix = authors ? `（${authors}）` : "";
+    return `- [${paper.id}](https://arxiv.org/abs/${paper.id}) — ${title}${suffix}`;
+  });
+  return [
+    `<details>`,
+    `<summary>未入选论文（可能漏报） · ${missedPapers.length} 篇</summary>`,
+    "",
+    ...lines,
+    "",
+    `</details>`,
+  ].join("\n");
+}
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function escapeYaml(s: string): string {

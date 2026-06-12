@@ -115,6 +115,33 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
   });
 
+  it("writeDaily appends collapsed missed papers", async () => {
+    const { files, writer } = makeWriter();
+    await writer.writeDaily("2026-05-11", "body\n", {
+      missedPapers: [
+        {
+          id: "2605.11111",
+          title: " Missed   Paper ",
+          authors: "A. Author et al.",
+        },
+        {
+          id: "2605.22222",
+          title: "",
+          authors: "",
+        },
+      ],
+    });
+    const written = files["arxiv-daily/daily/2026-05-11.md"];
+    expect(written).toContain("<details>");
+    expect(written).toContain("未入选论文（可能漏报） · 2 篇");
+    expect(written).toContain(
+      "- [2605.11111](https://arxiv.org/abs/2605.11111) — Missed Paper（A. Author et al.）",
+    );
+    expect(written).toContain(
+      "- [2605.22222](https://arxiv.org/abs/2605.22222) — 2605.22222",
+    );
+  });
+
   it("writePaperDetail writes date and weekday properties", async () => {
     const { files, writer } = makeWriter();
     const paper = {

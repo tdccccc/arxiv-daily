@@ -16,7 +16,7 @@ import {
   isCancellationError,
   throwIfCancelled,
 } from "../services/cancellation";
-import { parseRecent, type DateBucket } from "./arxiv-parser";
+import { parseRecent, type DateBucket, type PaperMeta } from "./arxiv-parser";
 import { filterPapers, type FilteredPaper } from "./paper-filter";
 import {
   summarizeDaily,
@@ -152,8 +152,15 @@ export class ArxivPipeline {
       signal,
     });
     throwIfCancelled(signal);
+    const ignoredIds = await this.loadIgnoredPaperIds();
+    if (ignoredIds.kind !== "ok") return ignoredIds.result;
+    const missedPapers = unselectedPapers(
+      bucket.papers,
+      filtered,
+      ignoredIds.ids,
+    );
     if (filtered.length === 0) {
-      await this.deps.writer.writeEmptyDaily(dateStr);
+      await this.deps.writer.writeEmptyDaily(dateStr, { missedPapers });
       return { kind: "completed", papersWritten: 0 };
     }
 
@@ -165,7 +172,7 @@ export class ArxivPipeline {
     );
     if (visiblePapers.length === 0) {
       throwIfCancelled(signal);
-      await this.deps.writer.writeEmptyDaily(dateStr);
+      await this.deps.writer.writeEmptyDaily(dateStr, { missedPapers });
       return { kind: "completed", papersWritten: 0 };
     }
 
@@ -246,7 +253,7 @@ export class ArxivPipeline {
       }
     }
     throwIfCancelled(signal);
-    await this.deps.writer.writeDaily(dateStr, dailySummary);
+    await this.deps.writer.writeDaily(dateStr, dailySummary, { missedPapers });
 
     // 8. Detail reports
     const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
@@ -349,4 +356,43 @@ export class ArxivPipeline {
       };
     }
   }
+
+  private async loadIgnoredPaperIds(): Promise<
+    | { kind: "ok"; ids: Set<string> }
+    | { kind: "error"; result: PipelineResult }
+  > {
+    const paperIndex = this.deps.paperIndex;
+    if (!paperIndex) return { kind: "ok", ids: new Set() };
+
+    try {
+      const inbox = await paperIndex.load();
+      return {
+        kind: "ok",
+        ids: new Set(
+          Object.values(inbox.papers)
+            .filter((entry) => entry.status === "ignored")
+            .map((entry) => entry.arxivId),
+        ),
+      };
+    } catch (e) {
+      return {
+        kind: "error",
+        result: {
+          kind: "failed_permanent",
+          reason: `paper index ignored filter failed: ${(e as Error).message}`,
+        },
+      };
+    }
+  }
+}
+
+function unselectedPapers(
+  allPapers: PaperMeta[],
+  filtered: FilteredPaper[],
+  ignoredIds: Set<string>,
+): PaperMeta[] {
+  const selectedIds = new Set(filtered.map((paper) => paper.id));
+  return allPapers.filter(
+    (paper) => !selectedIds.has(paper.id) && !ignoredIds.has(paper.id),
+  );
 }
