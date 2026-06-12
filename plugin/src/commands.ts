@@ -213,6 +213,16 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     }).open();
   }
 
+  async function openTodayDaily() {
+    const path = `${plugin.settings.output.dailyDir}/${today()}.md`;
+    const file = plugin.app.vault.getAbstractFileByPath(path);
+    if (file) {
+      await plugin.app.workspace.openLinkText(path, "", false);
+    } else {
+      new Notice(`No daily report at ${path}`);
+    }
+  }
+
   plugin.addCommand({
     id: "arxiv-daily-run-now",
     name: "Run now (today)",
@@ -290,15 +300,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   plugin.addCommand({
     id: "arxiv-daily-open-today",
     name: "Open today's daily report",
-    callback: async () => {
-      const path = `${plugin.settings.output.dailyDir}/${today()}.md`;
-      const file = plugin.app.vault.getAbstractFileByPath(path);
-      if (file) {
-        await plugin.app.workspace.openLinkText(path, "", false);
-      } else {
-        new Notice(`No daily report at ${path}`);
-      }
-    },
+    callback: openTodayDaily,
   });
 
   plugin.addCommand({
@@ -317,6 +319,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     const menu = new Menu();
 
     const enabled = plugin.settings.schedule.enabled;
+    const activeRuns = plugin.scheduler.activeRuns();
 
     // Status header (non-interactive)
     menu.addItem((item) =>
@@ -342,7 +345,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     menu.addItem((item) =>
       item.setTitle("Run for today").setIcon("play").onClick(runToday),
     );
-    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Cancel current run")
+        .setIcon("circle-stop")
+        .setDisabled(activeRuns.length === 0)
+        .onClick(cancelCurrentRun),
+    );
     menu.addItem((item) =>
       item
         .setTitle("Run all pending (lookback)")
@@ -367,23 +376,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setIcon("rotate-cw")
         .onClick(openForceDatePicker),
     );
+
+    menu.addSeparator();
     menu.addItem((item) =>
       item
-        .setTitle("Clear run state…")
-        .setIcon("trash-2")
-        .onClick(clearRunState),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Cancel current run")
-        .setIcon("circle-stop")
-        .onClick(cancelCurrentRun),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Summarize by arXiv ID…")
+        .setTitle("Open today's daily report")
         .setIcon("file-text")
-        .onClick(openArxivIdPicker),
+        .onClick(openTodayDaily),
     );
     menu.addItem((item) =>
       item
@@ -393,9 +392,9 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     );
     menu.addItem((item) =>
       item
-        .setTitle("Set paper status…")
-        .setIcon("list-checks")
-        .onClick(openSetPaperStatusModal),
+        .setTitle("Summarize by arXiv ID…")
+        .setIcon("file-text")
+        .onClick(openArxivIdPicker),
     );
     menu.addItem((item) =>
       item
@@ -403,12 +402,31 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         .setIcon("file-plus")
         .onClick(openCreatePaperNoteModal),
     );
+    menu.addItem((item) =>
+      item
+        .setTitle("Set paper status…")
+        .setIcon("list-checks")
+        .onClick(openSetPaperStatusModal),
+    );
+
     menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Show recent run state")
+        .setIcon("list")
+        .onClick(() => new StateModal(plugin.app, plugin).open()),
+    );
     menu.addItem((item) =>
       item
         .setTitle("Show diagnostics")
         .setIcon("clipboard-list")
         .onClick(() => new DiagnosticsModal(plugin.app, plugin).open()),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Clear run state…")
+        .setIcon("trash-2")
+        .onClick(clearRunState),
     );
     menu.showAtMouseEvent(evt);
   });
