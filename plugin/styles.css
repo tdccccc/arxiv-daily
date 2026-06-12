@@ -1,1 +1,204 @@
 /* arXiv Daily plugin styles */
+
+.arxiv-daily-dashboard {
+  --arxiv-daily-table-min-width: 980px;
+  height: 100%;
+  padding: 16px;
+  overflow: auto;
+}
+
+.arxiv-daily-dashboard__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__header h2 {
+  margin: 0;
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-dashboard__refresh {
+  flex: 0 0 auto;
+}
+
+.arxiv-daily-dashboard__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.arxiv-daily-dashboard__tab.is-active {
+  color: var(--text-normal);
+  border-color: var(--interactive-accent);
+  background: var(--background-primary);
+}
+
+.arxiv-daily-dashboard__tab-count {
+  min-width: 1.8em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.arxiv-daily-dashboard__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 10px 0;
+}
+
+.arxiv-daily-dashboard__stat {
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__stat-value {
+  display: block;
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.arxiv-daily-dashboard__stat-label {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.25;
+}
+
+.arxiv-daily-dashboard__table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+
+.arxiv-daily-dashboard__table {
+  width: 100%;
+  min-width: var(--arxiv-daily-table-min-width);
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.arxiv-daily-dashboard__table th,
+.arxiv-daily-dashboard__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+  text-align: left;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-dashboard__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-dashboard__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(1),
+.arxiv-daily-dashboard__table td:nth-child(1) {
+  width: 88px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(2),
+.arxiv-daily-dashboard__table td:nth-child(2) {
+  width: 96px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(3),
+.arxiv-daily-dashboard__table td:nth-child(3) {
+  width: 38%;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(4),
+.arxiv-daily-dashboard__table td:nth-child(4) {
+  width: 120px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(5),
+.arxiv-daily-dashboard__table td:nth-child(5),
+.arxiv-daily-dashboard__table th:nth-child(6),
+.arxiv-daily-dashboard__table td:nth-child(6) {
+  width: 104px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(7),
+.arxiv-daily-dashboard__table td:nth-child(7) {
+  width: 72px;
+}
+
+.arxiv-daily-dashboard__table th:nth-child(8),
+.arxiv-daily-dashboard__table td:nth-child(8) {
+  width: 140px;
+}
+
+.arxiv-daily-dashboard__title-cell {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-dashboard__title {
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+  line-height: 1.3;
+}
+
+.arxiv-daily-dashboard__meta,
+.arxiv-daily-dashboard__summary {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+}
+
+.arxiv-daily-dashboard__summary {
+  color: var(--text-faint);
+}
+
+.arxiv-daily-dashboard__state {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 18px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+}
+
+.arxiv-daily-dashboard__state--error {
+  color: var(--text-error);
+  border-color: var(--background-modifier-error);
+}

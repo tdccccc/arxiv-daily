@@ -7,6 +7,8 @@ export function normalizePath(p: string): string {
   return p;
 }
 
+export function setIcon(_parent: HTMLElement, _iconId: string): void {}
+
 export interface Vault {
   adapter: {
     read(path: string): Promise<string>;
