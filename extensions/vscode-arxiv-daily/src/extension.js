@@ -1,20 +1,11 @@
 const vscode = require("vscode");
+const { openDashboard } = require("./dashboard");
 const { promptAndStoreApiKey } = require("./secrets");
-const { findArxivDailyVault } = require("./workspace");
 
 function activate(context) {
   const commands = [
     vscode.commands.registerCommand("arxivDaily.openDashboard", async () => {
-      const vault = await findArxivDailyVault(vscode);
-      if (!vault) {
-        void vscode.window.showWarningMessage(
-          "arXiv Daily: no workspace folder contains arxiv-daily/.",
-        );
-        return;
-      }
-      void vscode.window.showInformationMessage(
-        `arXiv Daily: found vault in ${vault.workspaceFolder.name}; Dashboard wiring is planned next.`,
-      );
+      await openDashboard(vscode, context);
     }),
     vscode.commands.registerCommand("arxivDaily.run", () => {
       void vscode.window.showInformationMessage(
