@@ -15,13 +15,13 @@ workspace detection, Dashboard, pipeline commands, and API-key storage.
 - Minimal activation entrypoint with placeholder command handlers.
 - Workspace adapter detects a folder containing `arxiv-daily/` and exposes a
   `workspace.fs`-backed storage interface compatible with the shared core shape.
+- Secret adapter stores the LLM API key through VS Code `SecretStorage`.
 - Local scaffold checks through `npm run build` and `npm test`.
 
 ## Planned Scope
 
 - Reuse the host-neutral core storage and Dashboard model from the Obsidian
   plugin.
-- Store API keys with VS Code `SecretStorage`.
 - Render the Reading Dashboard in a Webview.
 - Launch generated markdown files through VS Code's native editor and preview.
 

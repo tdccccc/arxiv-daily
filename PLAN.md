@@ -582,7 +582,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 
 - [x] Extension scaffold：独立 VS Code extension 目录、manifest、build/test 脚本和 VSIX 发布策略。
 - [x] Workspace adapter：把包含 `arxiv-daily/` 的 workspace folder 识别为 vault，接入 core storage。
-- [ ] Secret adapter：用 VS Code SecretStorage 保存 API key。
+- [x] Secret adapter：用 VS Code SecretStorage 保存 API key。
 - [ ] Webview Dashboard：复用 v0.1.6 dashboard model，实现 tabs、搜索、筛选、打开资源和单篇状态修改。
 - [ ] Commands：命令面板接入 run、run-pending、summarize by ID。
 - [ ] Link compatibility：新生成 markdown 使用标准相对链接；存量 wikilink 只保证 Dashboard 导航可用。

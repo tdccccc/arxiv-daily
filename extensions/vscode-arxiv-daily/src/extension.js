@@ -1,4 +1,5 @@
 const vscode = require("vscode");
+const { promptAndStoreApiKey } = require("./secrets");
 const { findArxivDailyVault } = require("./workspace");
 
 function activate(context) {
@@ -30,10 +31,8 @@ function activate(context) {
         "arXiv Daily: summarize-by-ID command wiring is planned next.",
       );
     }),
-    vscode.commands.registerCommand("arxivDaily.configureApiKey", () => {
-      void vscode.window.showInformationMessage(
-        "arXiv Daily: SecretStorage wiring is planned next.",
-      );
+    vscode.commands.registerCommand("arxivDaily.configureApiKey", async () => {
+      await promptAndStoreApiKey(vscode, context);
     }),
   ];
 
