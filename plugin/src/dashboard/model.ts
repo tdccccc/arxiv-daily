@@ -148,7 +148,7 @@ export function matchesDashboardQuery(
     return false;
   }
   if (query.detail != null && entry.detail !== query.detail) return false;
-  if (query.missingZoteroKey && entry.zoteroKey.trim()) return false;
+  if (query.missingZoteroKey && hasZoteroMetadata(entry)) return false;
   if (query.missingCitationKey && entry.citationKey.trim()) return false;
   return true;
 }
@@ -205,7 +205,7 @@ export function buildDashboardStats(
     if (matchesDashboardTab(entry, "highlight")) stats.highlight += 1;
     if (entry.status === "saved") {
       stats.saved += 1;
-      if (!entry.zoteroKey.trim()) stats.savedMissingZoteroKey += 1;
+      if (!hasZoteroMetadata(entry)) stats.savedMissingZoteroKey += 1;
       if (!entry.citationKey.trim()) stats.savedMissingCitationKey += 1;
     }
   }
@@ -278,7 +278,7 @@ function toDashboardRow(entry: PaperIndexEntry): DashboardRow {
     topic: displayTopic(entry),
     firstSeen: firstSeenDate(entry),
     hasNote: Boolean(entry.paperPath),
-    missingZoteroKey: !entry.zoteroKey.trim(),
+    missingZoteroKey: !hasZoteroMetadata(entry),
     missingCitationKey: !entry.citationKey.trim(),
   };
 }
@@ -348,6 +348,8 @@ function searchableText(entry: PaperIndexEntry): string {
     ...entry.topics,
     entry.category,
     ...(entry.categories ?? []),
+    entry.zoteroKey,
+    entry.zoteroUri,
     ...summaryText(entry.summary),
   ]
     .join(" ")
@@ -412,6 +414,10 @@ function displayTopic(entry: PaperIndexEntry): string {
 
 function firstSeenDate(entry: PaperIndexEntry): string {
   return [...entry.seenDates].sort()[0] ?? entry.published;
+}
+
+function hasZoteroMetadata(entry: PaperIndexEntry): boolean {
+  return Boolean(entry.zoteroKey.trim() || entry.zoteroUri.trim());
 }
 
 function uniqueIds(ids: string[]): string[] {

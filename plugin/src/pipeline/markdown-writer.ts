@@ -101,6 +101,7 @@ export class MarkdownWriter {
       priority: indexEntry?.priority ?? "normal",
       seenDates: indexEntry?.seenDates ?? [dateStr],
       zoteroKey: indexEntry?.zoteroKey ?? "",
+      zoteroUri: indexEntry?.zoteroUri ?? "",
       citationKey: indexEntry?.citationKey ?? "",
       tags,
     });
@@ -127,6 +128,7 @@ export class MarkdownWriter {
       priority: entry.priority,
       seenDates: entry.seenDates,
       zoteroKey: entry.zoteroKey,
+      zoteroUri: entry.zoteroUri,
       citationKey: entry.citationKey,
       tags,
     });
@@ -249,6 +251,7 @@ function paperFrontmatter(meta: {
   priority: string;
   seenDates: string[];
   zoteroKey: string;
+  zoteroUri: string;
   citationKey: string;
   tags: string[];
 }): string {
@@ -268,6 +271,7 @@ function paperFrontmatter(meta: {
     `seen_dates:\n` +
     meta.seenDates.map((d) => `  - "${d}"\n`).join("") +
     `zotero_key: "${escapeYaml(meta.zoteroKey)}"\n` +
+    `zotero_uri: "${escapeYaml(meta.zoteroUri)}"\n` +
     `citation_key: "${escapeYaml(meta.citationKey)}"\n` +
     `tags: [${meta.tags.join(", ")}]\n` +
     `---\n\n`

@@ -254,6 +254,7 @@ describe("MarkdownWriter strictness on existing files", () => {
       pdfUrl: "https://arxiv.org/pdf/2605.06587",
       pdfPath: "",
       zoteroKey: "ZOTERO",
+      zoteroUri: "zotero://select/items/ABC123",
       citationKey: "cite",
       projects: [],
     });
@@ -262,6 +263,7 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("priority: high");
     expect(written).toContain('  - "2026-06-09"');
     expect(written).toContain('zotero_key: "ZOTERO"');
+    expect(written).toContain('zotero_uri: "zotero://select/items/ABC123"');
     expect(written).toContain('citation_key: "cite"');
   });
 
@@ -287,6 +289,7 @@ describe("MarkdownWriter strictness on existing files", () => {
       pdfUrl: "https://arxiv.org/pdf/2605.06587",
       pdfPath: "",
       zoteroKey: "",
+      zoteroUri: "",
       citationKey: "",
       projects: [],
     });

@@ -1,4 +1,12 @@
-import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
+import {
+  ItemView,
+  Modal,
+  Notice,
+  Setting,
+  setIcon,
+  type App,
+  type WorkspaceLeaf,
+} from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
   planDashboardAction,
@@ -10,7 +18,12 @@ import {
   type DashboardRow,
   type DashboardTab,
 } from "./model";
-import type { PaperPriority, PaperStatus } from "../services/paper-index";
+import {
+  validateZoteroFields,
+  type PaperIndexEntry,
+  type PaperPriority,
+  type PaperStatus,
+} from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
 
@@ -608,6 +621,11 @@ class ArxivDailyDashboardView extends ItemView {
           openUrl(row.entry.pdfUrl, "PDF");
         });
       });
+      this.createIconButton(actionCell, "library", "Edit Zotero fields", (button) => {
+        void this.runControlAction(button, () =>
+          this.openZoteroFieldsModal(row.entry),
+        );
+      });
       tr.createEl("td", {
         text: row.missingCitationKey ? "missing" : row.entry.citationKey,
       });
@@ -840,6 +858,19 @@ class ArxivDailyDashboardView extends ItemView {
     await this.plugin.app.workspace.openLinkText(path, "", false);
   }
 
+  private async openZoteroFieldsModal(
+    entry: DashboardRow["entry"],
+  ): Promise<void> {
+    new ZoteroFieldsModal(this.plugin.app, entry, async (fields) => {
+      const updated = await this.plugin
+        .buildPaperIndex()
+        .setZoteroFields(entry.arxivId, fields);
+      if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
+      new Notice(`arXiv Daily: Zotero fields updated for ${entry.arxivId}`);
+      await this.reloadIndex();
+    }).open();
+  }
+
   private selectedArxivIds(): string[] {
     return [...this.selectedIds];
   }
@@ -962,4 +993,73 @@ function summaryLine(entry: DashboardRow["entry"]): string {
     summary.limitations ||
     ""
   );
+}
+
+class ZoteroFieldsModal extends Modal {
+  private zoteroKey: string;
+  private zoteroUri: string;
+
+  constructor(
+    app: App,
+    private entry: PaperIndexEntry,
+    private onSubmit: (fields: {
+      zoteroKey: string;
+      zoteroUri: string;
+    }) => Promise<void>,
+  ) {
+    super(app);
+    this.zoteroKey = entry.zoteroKey;
+    this.zoteroUri = entry.zoteroUri;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Edit Zotero fields" });
+    contentEl.createEl("p", {
+      text: `${this.entry.arxivId} · ${this.entry.title}`,
+    });
+    new Setting(contentEl)
+      .setName("Zotero key")
+      .setDesc("Manual Zotero or Better BibTeX key; leave empty if unknown.")
+      .addText((text) =>
+        text.setValue(this.zoteroKey).onChange((value) => {
+          this.zoteroKey = value.trim();
+        }),
+      );
+    new Setting(contentEl)
+      .setName("Zotero URI")
+      .setDesc("zotero:// or http(s) URL for opening the Zotero item.")
+      .addText((text) =>
+        text.setValue(this.zoteroUri).onChange((value) => {
+          this.zoteroUri = value.trim();
+        }),
+      );
+    new Setting(contentEl).addButton((button) =>
+      button
+        .setButtonText("Save")
+        .setCta()
+        .onClick(() => {
+          const fields = {
+            zoteroKey: this.zoteroKey,
+            zoteroUri: this.zoteroUri,
+          };
+          const validation = validateZoteroFields(fields);
+          if (!validation.ok) {
+            new Notice(
+              `arXiv Daily: ${validation.reasons.join("; ")}`,
+              10_000,
+            );
+            return;
+          }
+          this.close();
+          this.onSubmit(fields).catch((e) => {
+            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+          });
+        }),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
 }

@@ -36,6 +36,7 @@ function entry(
     pdfUrl: `https://arxiv.org/pdf/${id}`,
     pdfPath: "",
     zoteroKey: "",
+    zoteroUri: "",
     citationKey: "",
     projects: [],
   };

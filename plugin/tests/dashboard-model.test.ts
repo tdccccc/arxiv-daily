@@ -30,6 +30,7 @@ function paper(
     pdfUrl: `https://arxiv.org/pdf/${arxivId}`,
     pdfPath: "",
     zoteroKey: "",
+    zoteroUri: "",
     citationKey: "",
     projects: [],
     ...overrides,
@@ -150,6 +151,28 @@ describe("dashboard model", () => {
     expect(publishedRange.rows.map((row) => row.arxivId)).not.toContain(
       "2606.00002",
     );
+  });
+
+  it("treats zoteroUri as Zotero metadata for search and missing filters", () => {
+    const entries = fixtures().map((entry) =>
+      entry.arxivId === "2606.00003"
+        ? {
+            ...entry,
+            zoteroUri: "zotero://select/items/ABC123",
+          }
+        : entry,
+    );
+    const missing = queryDashboard(entries, {
+      tab: "saved",
+      missingZoteroKey: true,
+    });
+    const byUri = queryDashboard(entries, {
+      tab: "saved",
+      search: "ABC123",
+    });
+
+    expect(missing.rows).toHaveLength(0);
+    expect(byUri.rows.map((row) => row.arxivId)).toEqual(["2606.00003"]);
   });
 
   it("builds filtered summary stats", () => {
