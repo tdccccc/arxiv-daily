@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.9)
+## Features (v0.1.10)
 
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
@@ -13,13 +13,21 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   reports with the approximate date semantics.
 - **Configurable markdown links** — daily reports can use Obsidian wikilinks
   or standard relative Markdown links for CLI / VS Code-friendly output.
-- **Reading Dashboard** — Obsidian custom view for cross-date paper review.
-  It reads `.index/papers.json` and supports Starred / All tabs, a clickable
-  daily-report calendar, search, topic/date/note/detail filters, summary stats,
-  row actions, and batch star/note operations.
-- **Research workflow handoff** — row actions open paper notes, source daily
-  reports, arXiv pages, and PDFs. arXiv Daily handles discovery and review;
-  Zotero remains the source of truth for citation keys and BibTeX.
+- **arXiv Daily Dashboard as the primary entry** — the Obsidian ribbon opens
+  the Dashboard directly. Starred / All tabs, run controls, and the More menu
+  are available from the top toolbar.
+- **Daily-report calendar** — the Dashboard shows monthly daily reports,
+  highlights today, provides a Today shortcut, and opens a report by clicking
+  its date.
+- **Simplified reading workflow** — one-click stars mark high-priority papers;
+  unstarred papers stay neutral. Dashboard filters cover search, topic,
+  first-seen date range, note presence, and detail availability.
+- **Focused row actions** — open/create the paper note, open the source daily
+  report, open arXiv, open the PDF, or download the PDF. Paper titles,
+  authors, and summaries are selectable for copying.
+- **Research workflow handoff** — arXiv Daily handles discovery, review,
+  local notes, and optional PDF downloads. Zotero remains the external source
+  of truth for citation keys and BibTeX.
 - **Paper index schema v2** — stores structured daily summary fields
   (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
   `sourceSections`) for Dashboard search and review.
@@ -236,7 +244,7 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
 | `arXiv Daily: Mark current paper as <mark>` | Updates the active paper note's indexed mark |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
-| `arXiv Daily: Open reading dashboard` | Opens the Reading Dashboard custom view |
+| `arXiv Daily: Open reading dashboard` | Opens the arXiv Daily Dashboard custom view |
 | `arXiv Daily: Show recent run state` | Lists last 20 dates and their statuses |
 | `arXiv Daily: Show diagnostics` | Shows a copyable local diagnostic report without exposing the API key |
 

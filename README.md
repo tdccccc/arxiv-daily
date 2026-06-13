@@ -52,7 +52,8 @@
 - **按你的研究主题筛选** —— 用一句自然语言描述每个研究方向（"photo-z 方法、目录、比较"），LLM 自动判断当天哪些论文属于哪个主题
 - **日报 + 单篇深度报告** —— 日报里每个主题一节；标记为"详细收录"的主题，会对核心贡献论文额外生成完整解读
 - **日报内直接挑选** —— 在日报中勾选"关注"或"重点"，插件会自动同步到 `papers.json`，不用再去 inbox 里二次整理
-- **Reading Dashboard** —— 在 Obsidian 里跨日期查看关注、重点、已保存和全部论文，支持日报日历、搜索、筛选、汇总、打开日报 / 论文笔记 / arXiv / PDF、手动下载 PDF、追加到项目笔记和批量标记
+- **arXiv Daily Dashboard** —— ribbon 单击直接打开主工作台；用 Starred / All、日报日历、搜索、topic/日期/note/detail 筛选和汇总数字回看论文
+- **聚焦阅读动作** —— Dashboard 行操作可以打开/创建论文笔记、打开来源日报、打开 arXiv、打开 PDF 或手动下载 PDF；论文标题、作者和摘要可以直接选中复制
 - **多 LLM 厂商内置预设** —— DeepSeek / OpenAI / Anthropic / GLM 一键切换，也支持任何 OpenAI 兼容的端点
 - **catch-up 调度** —— 每次打开 Obsidian 自动补跑过去 5 天内漏掉的，不必每天都开着
 - **省 token** —— 周末自动跳过、已生成的日报不重跑、不相关的论文不展开摘要
@@ -138,20 +139,21 @@ tdccccc/arxiv-daily
 | 方式 | 怎么操作 |
 |---|---|
 | 自动每日 | Enable 打开，每天到 Run time 自动跑 |
-| 立即跑今天 | 左侧 ribbon 图标 → **Run for today** |
-| 补跑过去 N 天 | Ribbon → **Run all pending** |
-| 指定日期 | 命令面板 (`Cmd/Ctrl+P`) → **arXiv Daily: Run for date…** |
-| 按 arXiv ID 单篇 | Ribbon → **Summarize by arXiv ID…** —— 弹窗粘贴 `2605.12345` 或完整 URL |
-| 标记论文 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as Watch / Highlight / Saved / Ignored** |
-| 回看论文和日报 | 命令面板或 ribbon → **Open reading dashboard** |
-| 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
+| 打开主工作台 | 左侧 ribbon 图标，或命令面板 → **arXiv Daily: Open reading dashboard** |
+| 立即跑今天 | Dashboard 顶部 → **Run Today** |
+| 补跑过去 N 天 | Dashboard 顶部 → **Run Pending** |
+| 指定日期 | Dashboard 顶部 → **More → Run for date…**，或命令面板 (`Cmd/Ctrl+P`) |
+| 按 arXiv ID 单篇 | Dashboard 顶部 → **More → Summarize by arXiv ID…**，弹窗粘贴 `2605.12345` 或完整 URL |
+| 标记重点论文 | Dashboard 论文列表点星标，或日报中勾选"重点" |
+| 打开某天日报 | Dashboard 月历点击对应日期 |
+| 打开今日日报 | Dashboard 月历点今天，或命令面板 → **arXiv Daily: Open today's daily report** |
 
 ---
 
 ## 注意事项
 
-- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 Reading Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
-- **不替代 Zotero 或 PDF 阅读器** —— arXiv Daily 负责发现、总结、回看和标记重点；正式入库、citation key 和 BibTeX 仍交给 Zotero。插件只维护本地 `pdfPath` 和项目笔记链接。
+- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 arXiv Daily Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
+- **不替代 Zotero 或 PDF 阅读器** —— arXiv Daily 负责发现、总结、回看和标记重点；正式入库、citation key 和 BibTeX 仍交给 Zotero。插件只维护本地 PDF 路径并提供打开/下载入口。
 - **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时自动跑；手动指定超出 `/recent` 5 天窗口的日期时，会用 arXiv export API 的 submittedDate 单日窗口近似补跑，并在日报中标注。
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵
