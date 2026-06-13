@@ -681,6 +681,14 @@ class ArxivDailyDashboardView extends ItemView {
           openUrl(row.entry.arxivUrl, "arXiv");
         });
       });
+      this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
+        void this.runControlAction(button, () => this.openPdf(row.entry));
+      });
+      this.createIconButton(actionCell, "download", "Download PDF", (button) => {
+        void this.runControlAction(button, () =>
+          this.downloadPdf(row.entry),
+        );
+      });
     }
   }
 
@@ -1043,6 +1051,27 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
     await this.plugin.app.workspace.openLinkText(path, "", false);
+  }
+
+  private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
+    if (entry.pdfPath.trim()) {
+      await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
+      return;
+    }
+    openUrl(entry.pdfUrl, "PDF");
+  }
+
+  private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
+    const result = await this.plugin.buildPdfService().downloadForEntry(entry);
+    if (result.kind !== "done") {
+      new Notice(`arXiv Daily: PDF download failed - ${result.reason}`, 10_000);
+      return;
+    }
+    new Notice(
+      `arXiv Daily: downloaded PDF for ${result.arxivId} -> ${result.path}`,
+      10_000,
+    );
+    await this.reloadIndex();
   }
 
   private selectedArxivIds(): string[] {

@@ -18,8 +18,8 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   daily-report calendar, search, topic/date/note/detail filters, summary stats,
   row actions, and batch star/note operations.
 - **Research workflow handoff** — row actions open paper notes, source daily
-  reports, and arXiv pages. arXiv Daily handles discovery and review; Zotero
-  remains the source of truth for citation keys and BibTeX.
+  reports, arXiv pages, and PDFs. arXiv Daily handles discovery and review;
+  Zotero remains the source of truth for citation keys and BibTeX.
 - **Paper index schema v2** — stores structured daily summary fields
   (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
   `sourceSections`) for Dashboard search and review.

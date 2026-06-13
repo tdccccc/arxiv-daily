@@ -392,7 +392,7 @@
 
 .arxiv-daily-dashboard__table th:nth-child(6),
 .arxiv-daily-dashboard__table td:nth-child(6) {
-  width: 104px;
+  width: 116px;
 }
 
 .arxiv-daily-dashboard__title-cell {
@@ -431,14 +431,15 @@
 }
 
 .arxiv-daily-dashboard__actions {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
   gap: 4px;
   user-select: none;
 }
 
 .arxiv-daily-dashboard__action {
-  flex: 0 0 auto;
+  height: 28px;
+  width: 28px;
 }
 
 .arxiv-daily-dashboard__state {
