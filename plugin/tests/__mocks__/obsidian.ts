@@ -17,6 +17,8 @@ export interface Vault {
     mkdir(path: string): Promise<void>;
     rename(from: string, to: string): Promise<void>;
     remove(path: string): Promise<void>;
+    readBinary?(path: string): Promise<ArrayBuffer>;
+    writeBinary?(path: string, content: ArrayBuffer): Promise<void>;
   };
 }
 
@@ -29,9 +31,11 @@ export interface Workspace {
   getLeaf(newLeaf?: boolean): WorkspaceLeaf | null;
   revealLeaf(leaf: WorkspaceLeaf): Promise<void>;
   detachLeavesOfType(type: string): Promise<void>;
+  openLinkText(path: string, sourcePath: string, newLeaf?: boolean): Promise<void>;
 }
 
 export interface App {
+  vault?: Vault;
   workspace?: Workspace;
 }
 

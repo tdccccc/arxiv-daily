@@ -27,12 +27,12 @@ import { PaperIndexStore } from "./src/services/paper-index";
 import { DailySelectionSyncService } from "./src/services/daily-selection";
 import { BibtexService } from "./src/services/bibtex";
 import { arxivCategories } from "./src/settings/categories";
+import type { HostAdapters } from "./src/core/adapters";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   registerDashboardView,
 } from "./src/dashboard/view";
-import { ObsidianHttpClient } from "./src/hosts/obsidian/http-client";
-import { ObsidianStorageAdapter } from "./src/hosts/obsidian/storage-adapter";
+import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -50,6 +50,7 @@ export default class ArxivDailyPlugin extends Plugin {
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService();
   private legacyRunState: RunState = {};
+  private host!: HostAdapters;
 
   async onload() {
     await this.loadSettingsAndState();
@@ -57,9 +58,14 @@ export default class ArxivDailyPlugin extends Plugin {
       this.settings.advanced.logLevel,
       (message, timeoutMs) => new Notice(message, timeoutMs),
     );
+    this.host = buildObsidianHostAdapters({
+      app: this.app,
+      getSettings: () => this.settings,
+      persistSettings: () => this.persistSettings(),
+    });
 
     this.stateStore = createStorageStateStore(
-      new ObsidianStorageAdapter(this.app.vault),
+      this.host.storage,
       this.settings.output,
     );
     await this.stateStore.load();
@@ -80,6 +86,7 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger.warn("status bar unavailable, using noop", e);
       this.progress = new NoopProgressReporter();
     }
+    this.host.progress = this.progress;
 
     this.scheduler = new SchedulerService({
       getSettings: () => this.settings,
@@ -102,7 +109,7 @@ export default class ArxivDailyPlugin extends Plugin {
     registerDashboardView(this);
     registerCommands(this);
     this.dailySelectionSync = new DailySelectionSyncService({
-      storage: new ObsidianStorageAdapter(this.app.vault),
+      storage: this.host.storage,
       getOutput: () => this.settings.output,
       getLookbackDays: () => this.settings.schedule.lookbackDays,
       getTimezone: () => this.settings.arxiv.timezone,
@@ -226,7 +233,7 @@ export default class ArxivDailyPlugin extends Plugin {
   private buildManualFetch(): ManualFetchService {
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
     return new ManualFetchService({
-      storage: new ObsidianStorageAdapter(this.app.vault),
+      storage: this.host.storage,
       fetcher,
       paperFetcher,
       writer,
@@ -242,11 +249,10 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildSharedDeps() {
     const llm = new LlmClient(this.settings.llm, this.logger);
-    const http = new ObsidianHttpClient();
     const fetcher = new ArxivFetcher({
       category: this.settings.arxiv.category,
       categories: arxivCategories(this.settings.arxiv),
-      http,
+      http: this.host.http,
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });
@@ -256,7 +262,7 @@ export default class ArxivDailyPlugin extends Plugin {
     });
     const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger);
     const writer = new MarkdownWriter({
-      storage: new ObsidianStorageAdapter(this.app.vault),
+      storage: this.host.storage,
       logger: this.logger,
       arxiv: this.settings.arxiv,
       output: this.settings.output,
@@ -266,14 +272,14 @@ export default class ArxivDailyPlugin extends Plugin {
 
   buildPaperIndex(): PaperIndexStore {
     return new PaperIndexStore(
-      new ObsidianStorageAdapter(this.app.vault),
+      this.host.storage,
       this.settings.output,
     );
   }
 
   buildMarkdownWriter(): MarkdownWriter {
     return new MarkdownWriter({
-      storage: new ObsidianStorageAdapter(this.app.vault),
+      storage: this.host.storage,
       logger: this.logger,
       arxiv: this.settings.arxiv,
       output: this.settings.output,
