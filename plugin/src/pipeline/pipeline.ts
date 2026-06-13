@@ -30,6 +30,9 @@ interface SourcePaperMeta extends PaperMeta {
   arxivCategories: string[];
 }
 
+const SUBMITTED_DATE_FALLBACK_NOTE =
+  "本日报使用 arXiv export API 的 submittedDate 单日窗口补跑；与 /recent 的 announce date 分桶可能不完全一致。";
+
 export type PipelineResult =
   | { kind: "completed"; papersWritten: number }
   | { kind: "failed_transient"; reason: string }
@@ -90,6 +93,11 @@ export class ArxivPipeline {
     const fetched = await this.fetchPapersForDate(dateStr, signal);
     if (fetched.kind !== "ok") return fetched.result;
     const sourcePapers = fetched.papers;
+    const dateWindowNote =
+      fetched.dateWindow === "submittedDateFallback" ||
+      fetched.dateWindow === "mixed"
+        ? SUBMITTED_DATE_FALLBACK_NOTE
+        : undefined;
     logger.info(
       `pipeline: ${sourcePapers.length} papers for ${dateStr} across ${fetched.categories.join(", ")}`,
     );
@@ -97,7 +105,7 @@ export class ArxivPipeline {
     // 3. Empty day
     if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
-      await this.deps.writer.writeEmptyDaily(dateStr);
+      await this.deps.writer.writeEmptyDaily(dateStr, { dateWindowNote });
       return { kind: "completed", papersWritten: 0 };
     }
 
@@ -138,7 +146,10 @@ export class ArxivPipeline {
       ignoredIds.ids,
     );
     if (filtered.length === 0) {
-      await this.deps.writer.writeEmptyDaily(dateStr, { missedPapers });
+      await this.deps.writer.writeEmptyDaily(dateStr, {
+        missedPapers,
+        dateWindowNote,
+      });
       return { kind: "completed", papersWritten: 0 };
     }
 
@@ -150,7 +161,10 @@ export class ArxivPipeline {
     );
     if (visiblePapers.length === 0) {
       throwIfCancelled(signal);
-      await this.deps.writer.writeEmptyDaily(dateStr, { missedPapers });
+      await this.deps.writer.writeEmptyDaily(dateStr, {
+        missedPapers,
+        dateWindowNote,
+      });
       return { kind: "completed", papersWritten: 0 };
     }
 
@@ -245,7 +259,10 @@ export class ArxivPipeline {
       }
     }
     throwIfCancelled(signal);
-    await this.deps.writer.writeDaily(dateStr, dailySummary, { missedPapers });
+    await this.deps.writer.writeDaily(dateStr, dailySummary, {
+      missedPapers,
+      dateWindowNote,
+    });
 
     // 8. Detail reports
     const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
@@ -354,12 +371,19 @@ export class ArxivPipeline {
     dateStr: string,
     signal?: AbortSignal,
   ): Promise<
-    | { kind: "ok"; papers: SourcePaperMeta[]; categories: string[] }
+    | {
+        kind: "ok";
+        papers: SourcePaperMeta[];
+        categories: string[];
+        dateWindow: "recent" | "submittedDateFallback" | "mixed";
+      }
     | { kind: "error"; result: PipelineResult }
   > {
     const { fetcher, logger } = this.deps;
     const categories = arxivCategories(this.deps.arxiv);
     const byId = new Map<string, SourcePaperMeta>();
+    let usedRecent = false;
+    let usedFallback = false;
 
     for (const category of categories) {
       throwIfCancelled(signal);
@@ -393,34 +417,52 @@ export class ArxivPipeline {
 
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
-        return {
-          kind: "error",
-          result: {
-            kind: "failed_transient",
-            reason: `date ${dateStr} not in ${category} /recent (have: ${buckets
-              .map((b) => b.announceDate)
-              .join(",")})`,
-          },
-        };
+        let fallbackPapers: PaperMeta[];
+        try {
+          fallbackPapers = await fetcher.fetchBySubmittedDate(category, dateStr);
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          return {
+            kind: "error",
+            result: {
+              kind: "failed_transient",
+              reason:
+                `date ${dateStr} not in ${category} /recent and export fallback failed ` +
+                `(have: ${buckets.map((b) => b.announceDate).join(",")}): ${(e as Error).message}`,
+            },
+          };
+        }
+        usedFallback = true;
+        logger.info(
+          `pipeline: ${fallbackPapers.length} submittedDate fallback papers for ${dateStr} in ${category}`,
+        );
+        for (const paper of fallbackPapers) {
+          addSourcePaper(byId, paper, sourceCategories(paper, category));
+        }
+        continue;
       }
 
+      usedRecent = true;
       logger.info(
         `pipeline: ${bucket.papers.length} papers for ${dateStr} in ${category}`,
       );
       for (const paper of bucket.papers) {
-        const existing = byId.get(paper.id);
-        if (existing) {
-          existing.arxivCategories = appendUnique(
-            existing.arxivCategories,
-            category,
-          );
-        } else {
-          byId.set(paper.id, { ...paper, arxivCategories: [category] });
-        }
+        addSourcePaper(byId, paper, [category]);
       }
     }
 
-    return { kind: "ok", papers: Array.from(byId.values()), categories };
+    const dateWindow =
+      usedRecent && usedFallback
+        ? "mixed"
+        : usedFallback
+          ? "submittedDateFallback"
+          : "recent";
+    return {
+      kind: "ok",
+      papers: Array.from(byId.values()),
+      categories,
+      dateWindow,
+    };
   }
 
   private async loadIgnoredPaperIds(): Promise<
@@ -463,9 +505,34 @@ function unselectedPapers(
   );
 }
 
-function sourceCategories(paper: PaperMeta): string[] {
+function sourceCategories(paper: PaperMeta, fallbackCategory?: string): string[] {
   const categories = (paper as Partial<SourcePaperMeta>).arxivCategories;
-  return Array.isArray(categories) ? categories : [];
+  if (Array.isArray(categories)) return categories;
+  const atomCategories = (paper as { categories?: unknown }).categories;
+  if (Array.isArray(atomCategories)) {
+    return atomCategories.filter(
+      (value): value is string => typeof value === "string",
+    );
+  }
+  return fallbackCategory ? [fallbackCategory] : [];
+}
+
+function addSourcePaper(
+  byId: Map<string, SourcePaperMeta>,
+  paper: PaperMeta,
+  categories: string[],
+): void {
+  const existing = byId.get(paper.id);
+  if (existing) {
+    for (const category of categories) {
+      existing.arxivCategories = appendUnique(
+        existing.arxivCategories,
+        category,
+      );
+    }
+  } else {
+    byId.set(paper.id, { ...paper, arxivCategories: categories });
+  }
 }
 
 function appendUnique(values: string[], value: string): string[] {

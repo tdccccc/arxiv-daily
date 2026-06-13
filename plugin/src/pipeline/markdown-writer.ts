@@ -20,6 +20,7 @@ export interface DailyMissedPaper {
 
 export interface WriteDailyOptions {
   missedPapers?: DailyMissedPaper[];
+  dateWindowNote?: string;
 }
 
 export class MarkdownWriter {
@@ -70,7 +71,9 @@ export class MarkdownWriter {
       `---\n\n`;
     await this.opts.storage.writeText(
       path,
-      frontmatter + appendMissedPapers(summary, options.missedPapers ?? []),
+      frontmatter +
+        dateWindowNote(options.dateWindowNote) +
+        appendMissedPapers(summary, options.missedPapers ?? []),
     );
     this.opts.logger.info(`wrote daily: ${path}`);
     return path;
@@ -179,6 +182,10 @@ function appendMissedPapers(
   if (missedPapers.length === 0) return summary;
   const body = summary.trimEnd();
   return `${body}\n\n${renderMissedPapers(missedPapers)}\n`;
+}
+
+function dateWindowNote(note: string | undefined): string {
+  return note ? `> ${note}\n\n` : "";
 }
 
 function renderMissedPapers(missedPapers: DailyMissedPaper[]): string {

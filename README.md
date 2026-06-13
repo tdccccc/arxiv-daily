@@ -151,7 +151,7 @@ tdccccc/arxiv-daily
 ## 注意事项
 
 - **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 Reading Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
-- **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时跑。完全离开几天，超出 5 天窗口的就拿不到了（arXiv `/recent` 限制）
+- **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时自动跑；手动指定超出 `/recent` 5 天窗口的日期时，会用 arXiv export API 的 submittedDate 单日窗口近似补跑，并在日报中标注。
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵
 - **手机暂不支持** —— 用了 Electron 文件系统，目前 desktop-only

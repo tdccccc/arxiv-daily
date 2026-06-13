@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { parseAtomAbstracts } from "../src/pipeline/atom-parser";
+import { parseAtomAbstracts, parseAtomPapers } from "../src/pipeline/atom-parser";
 
 const sample = `<?xml version='1.0' encoding='UTF-8'?>
-<feed xmlns="http://www.w3.org/2005/Atom">
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
   <entry>
     <id>http://arxiv.org/abs/2605.08080v1</id>
     <title>Paper one</title>
+    <published>2026-05-11T00:00:00Z</published>
+    <updated>2026-05-12T00:00:00Z</updated>
+    <author><name>A. Author</name></author>
+    <author><name>B. Author</name></author>
+    <arxiv:primary_category term="astro-ph.CO"/>
+    <category term="astro-ph.CO"/>
+    <category term="cs.LG"/>
     <summary>This is the first abstract with some  whitespace.</summary>
   </entry>
   <entry>
@@ -56,5 +63,22 @@ describe("parseAtomAbstracts", () => {
       `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`,
     );
     expect(m.size).toBe(0);
+  });
+});
+
+describe("parseAtomPapers", () => {
+  it("extracts metadata for export API fallback", () => {
+    const papers = parseAtomPapers(sample);
+
+    expect(papers[0]).toMatchObject({
+      id: "2605.08080",
+      title: "Paper one",
+      authors: "A. Author et al.",
+      abstract: "This is the first abstract with some whitespace.",
+      published: "2026-05-11T00:00:00Z",
+      updated: "2026-05-12T00:00:00Z",
+      primaryCategory: "astro-ph.CO",
+      categories: ["astro-ph.CO", "cs.LG"],
+    });
   });
 });

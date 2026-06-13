@@ -1,7 +1,8 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
-import { parseAtomAbstracts } from "./atom-parser";
+import { parseAtomAbstracts, parseAtomPapers } from "./atom-parser";
 import type { HttpClient } from "../core/adapters";
+import type { PaperMeta } from "./arxiv-parser";
 
 export interface ArxivFetcherOptions {
   category?: string;
@@ -42,6 +43,19 @@ export class ArxivFetcher {
       for (const [k, v] of parseAtomAbstracts(xml)) out.set(k, v);
     }
     return out;
+  }
+
+  async fetchBySubmittedDate(
+    category: string,
+    dateStr: string,
+  ): Promise<PaperMeta[]> {
+    const day = dateStr.replace(/-/g, "");
+    const query = `cat:${category} AND submittedDate:[${day}0000 TO ${day}2359]`;
+    const url =
+      `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}` +
+      `&start=0&max_results=2000&sortBy=submittedDate&sortOrder=ascending`;
+    const xml = await this.fetchHtml(url, { allow404: false });
+    return parseAtomPapers(xml);
   }
 
   /** Fetch /html/<id> for full paper rendering. Returns ok:false on 404. */

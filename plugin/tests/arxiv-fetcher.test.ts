@@ -52,4 +52,34 @@ describe("ArxivFetcher", () => {
     expect(result).toEqual({ ok: false, status: 404 });
     expect(http.request).toHaveBeenCalledTimes(1);
   });
+
+  it("fetches submitted-date fallback papers from the export API", async () => {
+    const requests: HttpRequest[] = [];
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        requests.push(req);
+        return {
+          status: 200,
+          headers: {},
+          bodyText: `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><id>http://arxiv.org/abs/2606.12345v1</id><title>Fallback paper</title><author><name>A. Author</name></author><summary>Abstract.</summary><published>2026-06-13T00:00:00Z</published><updated>2026-06-13T00:00:00Z</updated><category term="astro-ph"/></entry></feed>`,
+        };
+      }),
+    };
+
+    const papers = await makeFetcher(http).fetchBySubmittedDate(
+      "astro-ph",
+      "2026-06-13",
+    );
+
+    expect(papers).toHaveLength(1);
+    expect(papers[0]).toMatchObject({
+      id: "2606.12345",
+      title: "Fallback paper",
+      abstract: "Abstract.",
+    });
+    expect(requests[0].url).toContain("https://export.arxiv.org/api/query?");
+    expect(decodeURIComponent(requests[0].url)).toContain(
+      "cat:astro-ph AND submittedDate:[202606130000 TO 202606132359]",
+    );
+  });
 });

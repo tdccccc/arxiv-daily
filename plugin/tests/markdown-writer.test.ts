@@ -186,6 +186,19 @@ describe("MarkdownWriter strictness on existing files", () => {
     );
   });
 
+  it("writeDaily includes submitted-date fallback notes", async () => {
+    const { files, writer } = makeWriter();
+    await writer.writeDaily("2026-05-11", "body", {
+      dateWindowNote: "submittedDate fallback",
+    });
+
+    const written = files["arxiv-daily/daily/2026-05-11.md"];
+    expect(written).toContain("> submittedDate fallback");
+    expect(written.indexOf("> submittedDate fallback")).toBeLessThan(
+      written.indexOf("body"),
+    );
+  });
+
   it("writePaperDetail writes date and weekday properties", async () => {
     const { files, writer } = makeWriter();
     const paper = {

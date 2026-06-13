@@ -107,7 +107,7 @@ npm run build
 
 | File | Role |
 |---|---|
-| `src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent` and `/abs` |
+| `src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent`, export API submittedDate fallback, and `/abs` |
 | `src/pipeline/arxiv-parser.ts` | HTML listing → `PaperMeta[]` |
 | `src/pipeline/atom-parser.ts` | Atom API → abstract enrichment |
 | `src/pipeline/paper-filter.ts` | LLM-call: classifies papers into topics (or `"skip"`); short-circuits when topics is empty |

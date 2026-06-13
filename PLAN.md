@@ -37,6 +37,7 @@
 - 日报末尾折叠列出未入选论文，作为 LLM 漏报兜底；ignored 论文不进入兜底列表。
 - 支持复制 arXiv BibTeX，解析 entry key 并写回 `citationKey`。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
+- 超出 arXiv `/recent` 5 天窗口的手动日期补跑会 fallback 到 arXiv export API 的 submittedDate 单日窗口，并在日报中标注近似窗口语义。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
 - Obsidian Reading Dashboard 已可从命令面板或 ribbon 打开，支持跨日期 tabs、搜索、筛选、汇总、打开 note / daily / arXiv / PDF、单篇和批量状态 / priority 修改。
@@ -44,7 +45,6 @@
 
 仍然可以继续加强：
 
-- 超出 arXiv `/recent` 5 天窗口的日期无法补跑（出差、休假场景论文直接丢失）。
 - PDF、Zotero、项目笔记的结构化接入（v0.1.8）。
 
 ## Design Principles
@@ -547,7 +547,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] Node CLI：新增 `run --date`、`run-pending`、`summarize --id` 命令，复用 core。
 - [x] CLI config：支持 env / 配置文件读取 API key、topics、输出路径和 link style。
 - [x] Run state：把 CLI 与 Obsidian scheduler 的 run state 放到同一 vault 输出目录，避免重复运行。
-- [ ] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
+- [x] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
 - [x] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
 - [x] Python 退役：CLI 稳定后冻结或移除根目录 `arxiv_daily.py` 的主流程，文档引导到 Node CLI。
 - [ ] v0.1.7 收尾：跑插件测试、CLI 测试、build，更新 README / PLAN。
