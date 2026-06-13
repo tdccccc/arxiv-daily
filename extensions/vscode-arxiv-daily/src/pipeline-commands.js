@@ -2,6 +2,8 @@ const { DEFAULT_API_KEY_SECRET, createSecretProvider } = require("./secrets");
 const { findArxivDailyVault } = require("./workspace");
 
 const DEFAULT_CLI_PATH = "arxiv-daily";
+const OBSIDIAN_PLUGIN_DATA_PATH = ".obsidian/plugins/arxiv-daily/data.json";
+const VSCODE_CLI_CONFIG_PATH = "arxiv-daily/.index/vscode-cli.config.json";
 
 async function runForToday(vscodeApi, context, now = () => new Date()) {
   const date = formatDate(now());
@@ -47,6 +49,15 @@ async function runCliCommand(vscodeApi, context, args) {
 
   const cliPath = cliPathFromSettings(vscodeApi);
   const vaultRoot = uriToFsPath(vault.vaultRootUri);
+  let configPath = null;
+  try {
+    configPath = await prepareCliConfig(vscodeApi, vault);
+  } catch (error) {
+    void vscodeApi.window.showErrorMessage(
+      `arXiv Daily: failed to prepare CLI config: ${error.message}`,
+    );
+    return false;
+  }
   const terminal = vscodeApi.window.createTerminal({
     name: "arXiv Daily",
     cwd: vaultRoot,
@@ -56,8 +67,50 @@ async function runCliCommand(vscodeApi, context, args) {
     },
   });
   terminal.show();
-  terminal.sendText(buildCliCommand(cliPath, [...args, "--vault-root", vaultRoot]));
+  const cliArgs = [...args];
+  if (configPath) cliArgs.push("--config", configPath);
+  cliArgs.push("--vault-root", vaultRoot);
+  terminal.sendText(buildCliCommand(cliPath, cliArgs));
   return true;
+}
+
+async function prepareCliConfig(vscodeApi, vault) {
+  const storage = vault.storage;
+  if (!(await storage.exists(OBSIDIAN_PLUGIN_DATA_PATH))) return null;
+
+  const raw = JSON.parse(await storage.readText(OBSIDIAN_PLUGIN_DATA_PATH));
+  const settings = sanitizeSettingsForCli(extractPluginSettings(raw));
+  await storage.mkdir("arxiv-daily/.index");
+  await storage.writeText(
+    VSCODE_CLI_CONFIG_PATH,
+    JSON.stringify({ settings, linkStyle: "relative" }, null, 2),
+  );
+  return uriToFsPath(
+    vscodeApi.Uri.joinPath(
+      vault.vaultRootUri,
+      ...VSCODE_CLI_CONFIG_PATH.split("/"),
+    ),
+  );
+}
+
+function extractPluginSettings(data) {
+  if (!isRecord(data)) {
+    throw new Error("Obsidian plugin data must be a JSON object");
+  }
+  const settings = isRecord(data.settings) ? data.settings : data;
+  if (!isRecord(settings)) {
+    throw new Error("Obsidian plugin settings must be a JSON object");
+  }
+  return settings;
+}
+
+function sanitizeSettingsForCli(settings) {
+  const next = JSON.parse(JSON.stringify(settings));
+  if (!isRecord(next.llm)) next.llm = {};
+  next.llm.apiKey = "";
+  if (!isRecord(next.output)) next.output = {};
+  next.output.linkStyle = "relative";
+  return next;
 }
 
 function cliPathFromSettings(vscodeApi) {
@@ -94,10 +147,17 @@ function uriToFsPath(uri) {
   return uri.fsPath || uri.path;
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 module.exports = {
+  OBSIDIAN_PLUGIN_DATA_PATH,
+  VSCODE_CLI_CONFIG_PATH,
   buildCliCommand,
   formatDate,
   normalizeArxivId,
+  prepareCliConfig,
   runForToday,
   runPending,
   summarizeById,

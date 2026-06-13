@@ -25,6 +25,7 @@ const savedIndex = JSON.parse(
   ),
 );
 assert.equal(savedIndex.papers["2606.12345"].status, "reading");
+assert.equal(savedIndex.papers["2606.12345"].updated, "2026-06-13");
 assert(savedIndex.updatedAt, "status update should refresh index updatedAt");
 
 await panel.webview.receive({
@@ -48,8 +49,16 @@ assert.equal(vscodeApi.terminals[0].options.env.ARXIV_DAILY_API_KEY, "sk-smoke")
 assert.equal(vscodeApi.terminals[0].options.env.ARXIV_DAILY_LINK_STYLE, "relative");
 assert.equal(
   vscodeApi.terminals[0].sent[0],
-  "arxiv-daily run --date 2026-06-13 --vault-root /workspace/vault",
+  "arxiv-daily run --date 2026-06-13 --config /workspace/vault/arxiv-daily/.index/vscode-cli.config.json --vault-root /workspace/vault",
 );
+const cliConfigText = new TextDecoder().decode(
+  await vscodeApi.fs.readFile(uri("/workspace/vault/arxiv-daily/.index/vscode-cli.config.json")),
+);
+const cliConfig = JSON.parse(cliConfigText);
+assert.equal(cliConfig.settings.arxiv.topics[0].tag, "photo-z");
+assert.equal(cliConfig.settings.llm.apiKey, "");
+assert(!cliConfigText.includes("sk-smoke"));
+assert(!cliConfigText.includes("obsidian-smoke-key"));
 
 console.log("arXiv Daily VS Code extension smoke OK");
 
@@ -58,6 +67,11 @@ function seedVault(fs) {
   fs.addDirectory("/workspace/vault/arxiv-daily/.index");
   fs.addDirectory("/workspace/vault/arxiv-daily/daily");
   fs.addDirectory("/workspace/vault/arxiv-daily/papers");
+  fs.addDirectory("/workspace/vault/.obsidian/plugins/arxiv-daily");
+  fs.addFile(
+    "/workspace/vault/.obsidian/plugins/arxiv-daily/data.json",
+    JSON.stringify(samplePluginData(), null, 2),
+  );
   fs.addFile(
     "/workspace/vault/arxiv-daily/.index/papers.json",
     JSON.stringify(
@@ -99,6 +113,58 @@ function seedVault(fs) {
     ),
   );
   fs.addFile("/workspace/vault/arxiv-daily/papers/2606.12345.md", "# Paper");
+}
+
+function samplePluginData() {
+  return {
+    settings: {
+      llm: {
+        apiKey: "obsidian-smoke-key",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        model: "deepseek-v4-pro",
+        temperature: 0.3,
+        timeoutMs: 300000,
+        thinkingMode: true,
+        reasoningEffort: "high",
+      },
+      arxiv: {
+        category: "astro-ph",
+        categories: ["astro-ph"],
+        topics: [
+          {
+            id: "topic-1",
+            name: "Photo-z",
+            tag: "photo-z",
+            description: "photometric redshift calibration",
+            detail: true,
+          },
+        ],
+        timezone: "Asia/Shanghai",
+      },
+      output: {
+        dailyDir: "arxiv-daily/daily",
+        papersDir: "arxiv-daily/papers",
+        linkStyle: "wikilink",
+      },
+      schedule: {
+        enabled: false,
+        runAtLocal: "09:30",
+        tickIntervalMin: 20,
+        lookbackDays: 5,
+      },
+      advanced: {
+        requestDelayMs: 3000,
+        cacheExpiryDays: 7,
+        sectionCharLimit: 8000,
+        paperCharLimit: 50000,
+        dailyCharLimit: 400000,
+        skipSections: [],
+        prioritySections: ["abstract", "conclusion"],
+        logLevel: "info",
+      },
+    },
+  };
 }
 
 function createMockVscodeApi() {

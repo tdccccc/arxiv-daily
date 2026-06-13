@@ -61,6 +61,7 @@ const storage = memoryStorage(index);
 await updatePaperStatus(storage, "2606.00001", "reading", () => new Date("2026-06-13T12:00:00.000Z"));
 const saved = JSON.parse(await storage.readText("arxiv-daily/.index/papers.json"));
 assert.equal(saved.papers["2606.00001"].status, "reading");
+assert.equal(saved.papers["2606.00001"].updated, "2026-06-13");
 assert.equal(saved.updatedAt, "2026-06-13T12:00:00.000Z");
 
 assert.equal(

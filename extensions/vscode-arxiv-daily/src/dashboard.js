@@ -69,9 +69,9 @@ async function updatePaperStatus(storage, arxivId, status, now = () => new Date(
   const index = await loadPaperIndex(storage);
   const entry = index.papers?.[arxivId];
   if (!entry) throw new Error(`${arxivId} is not in papers.json`);
+  const timestamp = now().toISOString();
   entry.status = status;
-  entry.updated = now().toISOString();
-  index.updatedAt = entry.updated;
+  index.updatedAt = timestamp;
   await storage.writeText(PAPER_INDEX_PATH, JSON.stringify(index, null, 2));
   return entry;
 }
