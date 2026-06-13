@@ -6,7 +6,7 @@
 
 > arXiv Daily = 每日发现 + 日报内筛选 + Reading Dashboard + 后续阅读管理
 
-主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）、Workflow Quick Wins（v0.1.5）以及 Obsidian Reading Dashboard（v0.1.6）；v0.1.7–v0.1.8 继续围绕这条主线。
+主线只有一条：把 arXiv pipeline 这套核心资产（抓取、筛选、总结、paper index、状态流转）持续做深，并逐步接入真实科研工作流——当天 triage、跨日期回看、写作引用、Zotero / PDF / 项目笔记。当前已完成“每日发现”和“日报内筛选”（v0.1.4）、Workflow Quick Wins（v0.1.5）、Obsidian Reading Dashboard（v0.1.6）以及 Core Extraction + CLI Fallback（v0.1.7）；v0.1.8 继续围绕这条主线。
 
 宿主策略已定：**以 Obsidian 为主**，长期作为第一宿主和移动端方案；v0.1.7 把 core 抽成 host 无关之后，**顺带**产出一个轻量 VS Code 扩展（复用 core 和 Dashboard model，见 VS Code Companion Extension 一节）；不做独立 app。
 
@@ -41,7 +41,7 @@
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
 - Obsidian Reading Dashboard 已可从命令面板或 ribbon 打开，支持跨日期 tabs、搜索、筛选、汇总、打开 note / daily / arXiv / PDF、单篇和批量状态 / priority 修改。
-- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.6。
+- release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.7。
 
 仍然可以继续加强：
 
@@ -357,6 +357,8 @@ LLM 筛选存在漏报，而漏掉一篇关键论文的代价远大于多扫几�
 
 ## v0.1.7: Core Extraction + CLI Fallback
 
+> 2026-06-13 完成，插件版本准备到 `0.1.7`。验证：`npm test` 241 条通过，`npm run build` 通过。发布时创建 tag `v0.1.7`。
+
 目标：把抓取、分类、去重、总结、索引这些核心逻辑抽成可复用 core，为 cron/headless 和 VS Code 扩展打基础。
 
 可做功能：
@@ -550,7 +552,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
 - [x] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
 - [x] Python 退役：CLI 稳定后冻结或移除根目录 `arxiv_daily.py` 的主流程，文档引导到 Node CLI。
-- [ ] v0.1.7 收尾：跑插件测试、CLI 测试、build，更新 README / PLAN。
+- [x] v0.1.7 收尾：跑插件测试、CLI 测试、build，更新 README / PLAN。
 
 ### v0.1.8 Research Tool Integrations
 
@@ -589,10 +591,10 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 2. ~~只读 Dashboard：tabs、搜索、筛选、汇总、打开 note/daily/arXiv。~~ 已完成。
 3. ~~单篇状态修改，再做多选和批量操作。~~ 已完成。
 
-**阶段 3：v0.1.7 Core Extraction**（当前）
+**阶段 3：v0.1.7 Core Extraction**（已完成）
 
 adapter 层、Node CLI（退役 Python 脚本）、CLI 配置方案、超窗补跑 fallback、链接风格可配置。
 
-**阶段 4：v0.1.8 Research Tool Integrations（主线）+ VS Code Companion Extension（顺带，可并行）**
+**阶段 4：v0.1.8 Research Tool Integrations（主线）+ VS Code Companion Extension（顺带，可并行，下一步）**
 
 这个顺序最贴近日常使用：日报负责“今天挑出来”，快赢层补齐“手机上也能挑、漏不掉、引用拿得到”，Dashboard 负责“之后找得到、看得清、处理得动”，core 抽取让这套能力既能 cron 跑、也能顺带长进 VS Code。

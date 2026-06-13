@@ -3,8 +3,16 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.6)
+## Features (v0.1.7)
 
+- **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
+  host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
+  `summarize`).
+- **Submitted-date catch-up fallback** — manual date runs outside arXiv
+  `/recent` use the export API `submittedDate` day window and annotate daily
+  reports with the approximate date semantics.
+- **Configurable markdown links** — daily reports can use Obsidian wikilinks
+  or standard relative Markdown links for CLI / VS Code-friendly output.
 - **Reading Dashboard** — Obsidian custom view for cross-date paper review.
   It reads `.index/papers.json` and supports tabs, search, topic/date/status/
   priority/note/detail/citation/Zotero filters, summary stats, row actions,
@@ -160,7 +168,7 @@ npm run build
 | `src/utils/time.ts` | Timezone-aware date utilities |
 | `src/llm/client.ts` | OpenAI-compatible LLM caller |
 
-## Data model (v0.1.6)
+## Data model (schema v2)
 
 ```ts
 interface Topic {
