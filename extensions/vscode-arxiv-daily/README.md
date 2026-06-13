@@ -18,6 +18,9 @@ workspace detection, Dashboard, pipeline commands, and API-key storage.
 - Secret adapter stores the LLM API key through VS Code `SecretStorage`.
 - Webview Dashboard reads `.index/papers.json` and supports tabs, search,
   status/priority filters, resource opening, and single-paper status updates.
+- Pipeline commands run the arXiv Daily CLI in a VS Code terminal with the API
+  key injected through terminal environment variables and relative link style
+  forced for VS Code-friendly output.
 - Local scaffold checks through `npm run build` and `npm test`.
 
 ## Planned Scope
@@ -26,6 +29,8 @@ workspace detection, Dashboard, pipeline commands, and API-key storage.
   plugin.
 - Replace the local Dashboard model mirror with a directly shared package once
   the Obsidian plugin core is published in an importable form.
+- Replace the terminal CLI bridge with direct core calls once the extension has
+  the same bundled runtime as the Obsidian plugin.
 - Launch generated markdown files through VS Code's native editor and preview.
 
 ## Release Strategy
