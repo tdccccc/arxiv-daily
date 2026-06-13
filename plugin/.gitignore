@@ -1,4 +1,5 @@
 node_modules/
 main.js
+arxiv-daily-cli.cjs
 *.log
 .vitest-cache/

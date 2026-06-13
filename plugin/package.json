@@ -2,9 +2,13 @@
   "name": "obsidian-arxiv-daily",
   "version": "0.1.6",
   "private": true,
+  "bin": {
+    "arxiv-daily": "./arxiv-daily-cli.cjs"
+  },
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "cli": "node arxiv-daily-cli.cjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
