@@ -316,9 +316,15 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     callback: () => new DiagnosticsModal(plugin.app, plugin).open(),
   });
 
-  plugin.addRibbonIcon("book-open-check", "arXiv Daily Dashboard", () => {
-    void openDashboardView(plugin);
-  });
+  const dashboardRibbonIcon = plugin.addRibbonIcon(
+    "book-open-check",
+    "arXiv Daily Dashboard",
+    () => {
+      void openDashboardView(plugin);
+    },
+  );
+  dashboardRibbonIcon.style.order = "999";
+  dashboardRibbonIcon.addClass("arxiv-daily-ribbon-dashboard");
 }
 
 type PaperMark = "inbox" | "watch" | "highlight" | "saved" | "ignored";
