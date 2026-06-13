@@ -25,6 +25,7 @@ import {
 } from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
+import { formatDate, todayInTz } from "../utils/time";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -214,10 +215,20 @@ class ArxivDailyDashboardView extends ItemView {
 
     const result = queryDashboard(this.entries, this.query);
     this.renderTabs(contentEl, result.tabCounts);
-    this.renderDailyCalendar(contentEl);
-    this.renderFilters(contentEl);
 
-    this.statsEl = contentEl.createEl("div");
+    const overview = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__overview",
+    });
+    const filterPanel = overview.createEl("div", {
+      cls: "arxiv-daily-dashboard__overview-main",
+    });
+    const calendarPanel = overview.createEl("div", {
+      cls: "arxiv-daily-dashboard__overview-calendar",
+    });
+    this.renderFilters(filterPanel);
+    this.statsEl = filterPanel.createEl("div");
+    this.renderDailyCalendar(calendarPanel);
+
     this.batchEl = contentEl.createEl("div");
     this.resultsEl = contentEl.createEl("div");
     this.renderCurrentResults();
@@ -301,7 +312,19 @@ class ArxivDailyDashboardView extends ItemView {
     const controls = header.createEl("div", {
       cls: "arxiv-daily-dashboard__calendar-controls",
     });
-    const month = this.calendarMonth ?? latestReportMonth(this.dailyReports);
+    const today = this.todayDate();
+    const todayMonth = today.slice(0, 7);
+    const month =
+      this.calendarMonth ?? latestReportMonth(this.dailyReports) ?? todayMonth;
+    const todayButton = controls.createEl("button", {
+      cls: "arxiv-daily-dashboard__calendar-today",
+      text: "Today",
+      attr: {
+        type: "button",
+        "aria-label": "Go to current month",
+        title: "Go to current month",
+      },
+    }) as HTMLButtonElement;
     const prev = controls.createEl("button", {
       cls: "clickable-icon",
       attr: { type: "button", "aria-label": "Previous month", title: "Previous month" },
@@ -318,6 +341,7 @@ class ArxivDailyDashboardView extends ItemView {
     setIcon(next, "chevron-right");
 
     if (!month) {
+      todayButton.disabled = true;
       prev.disabled = true;
       next.disabled = true;
       section.createEl("div", {
@@ -327,6 +351,11 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
+    todayButton.disabled = month === todayMonth;
+    todayButton.addEventListener("click", () => {
+      this.calendarMonth = todayMonth;
+      this.render();
+    });
     prev.addEventListener("click", () => {
       this.calendarMonth = shiftMonth(month, -1);
       this.render();
@@ -372,6 +401,7 @@ class ArxivDailyDashboardView extends ItemView {
         cls: "arxiv-daily-dashboard__calendar-day-number",
         text: String(Number(cell.date.slice(-2))),
       });
+      if (cell.date === today) button.addClass("is-today");
       if (report) {
         button.addClass("has-report");
         button.createSpan({
@@ -385,6 +415,12 @@ class ArxivDailyDashboardView extends ItemView {
         button.disabled = true;
       }
     }
+  }
+
+  private todayDate(): string {
+    return formatDate(
+      todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
+    );
   }
 
   private renderStats(
