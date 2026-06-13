@@ -46,11 +46,12 @@
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
 - Obsidian Reading Dashboard 已可从命令面板或 ribbon 打开，支持跨日期 tabs、搜索、筛选、汇总、打开 note / daily / arXiv / PDF、单篇和批量状态 / priority 修改。
+- VS Code Companion Extension 已具备独立 scaffold、workspace vault 识别、SecretStorage API key、Webview Dashboard、状态修改、资源打开，以及经 CLI 终端桥接的 run / run-pending / summarize by ID 命令；新生成 markdown 强制使用相对链接。
 - release 已自动化，tag 触发 GitHub release asset 构建（v0.1.4 起生效）；当前插件版本已准备到 v0.1.8。
 
 仍然可以继续加强：
 
-- 轻量 VS Code Companion Extension，复用 core 和 Dashboard model。
+- 把 VS Code extension 的本地 Dashboard model mirror 替换成可直接 import 的共享 package，并把终端 CLI bridge 替换成直接 core 调用。
 
 ## Design Principles
 
@@ -586,7 +587,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] Webview Dashboard：用对齐 v0.1.6 dashboard model 语义的本地 model，实现 tabs、搜索、筛选、打开资源和单篇状态修改。
 - [x] Commands：命令面板接入 run、run-pending、summarize by ID。
 - [x] Link compatibility：新生成 markdown 使用标准相对链接；存量 wikilink 只保证 Dashboard 导航可用。
-- [ ] Extension 收尾：最小手动验收 VS Code 打开 vault、浏览 Dashboard、改状态、运行 pipeline。
+- [x] Extension 收尾：本地 smoke 验收覆盖 VS Code 打开 vault、浏览 Dashboard、改状态、运行 pipeline；真实 Extension Host 点击作为发布前人工复核。
 
 ## Recommended Next Step
 

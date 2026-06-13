@@ -22,6 +22,9 @@ workspace detection, Dashboard, pipeline commands, and API-key storage.
   key injected through terminal environment variables and relative link style
   forced for VS Code-friendly output.
 - Local scaffold checks through `npm run build` and `npm test`.
+- `npm run smoke` covers the companion workflow locally: open a vault, render the
+  Dashboard, change a paper status, open a resource, and send a pipeline command
+  to a terminal.
 
 ## Planned Scope
 
@@ -42,6 +45,7 @@ It is intentionally decoupled from the Obsidian plugin tag series.
 cd extensions/vscode-arxiv-daily
 npm run build
 npm test
+npm run smoke
 npm run vsix:package
 ```
 
