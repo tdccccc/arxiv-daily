@@ -624,6 +624,11 @@ class ArxivDailyDashboardView extends ItemView {
           this.downloadPdf(row.entry),
         );
       });
+      this.createIconButton(actionCell, "book-marked", "Open Zotero", (button) => {
+        void this.runControlAction(button, () =>
+          this.openZotero(row.entry),
+        );
+      });
       this.createIconButton(actionCell, "library", "Edit Zotero fields", (button) => {
         void this.runControlAction(button, () =>
           this.openZoteroFieldsModal(row.entry),
@@ -879,6 +884,15 @@ class ArxivDailyDashboardView extends ItemView {
     }).open();
   }
 
+  private async openZotero(entry: DashboardRow["entry"]): Promise<void> {
+    const uri = getZoteroOpenUri(entry);
+    if (!uri) {
+      new Notice("arXiv Daily: no Zotero URI; edit Zotero fields first");
+      return;
+    }
+    openUrl(uri, "Zotero");
+  }
+
   private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
     if (entry.pdfPath.trim()) {
       await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
@@ -1027,6 +1041,13 @@ function openUrl(url: string, label: string): void {
     return;
   }
   window.open(url, "_blank", "noopener");
+}
+
+export function getZoteroOpenUri(
+  entry: Pick<PaperIndexEntry, "zoteroUri">,
+): string | null {
+  const uri = entry.zoteroUri.trim();
+  return uri || null;
 }
 
 function summaryLine(entry: DashboardRow["entry"]): string {

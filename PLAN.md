@@ -38,7 +38,7 @@
 - 支持复制 arXiv BibTeX，解析 entry key 并写回 `citationKey`。
 - Dashboard 当前筛选结果可以批量导出 `.bib`，重复 citation key 会在导出时改写为唯一 key 并回写索引。
 - 支持复制 LaTeX、pandoc Markdown、Typst citation snippet；缺少 `citationKey` 时会先抓取 BibTeX 补齐。
-- 支持在 Dashboard 手动维护 Zotero key / URI，并用缺失筛选和汇总提示待导入 Zotero 的 saved 论文。
+- 支持在 Dashboard 手动维护 Zotero key / URI、通过 `zoteroUri` 打开 Zotero item，并用缺失筛选和汇总提示待导入 Zotero 的 saved 论文。
 - 支持从 Dashboard 手动下载单篇 arXiv PDF 到 vault，写回 `pdfPath`，之后优先打开本地 PDF。
 - 支持从 Dashboard 把论文追加到项目笔记，并维护 `projects` 字段；重复追加会自动去重。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
@@ -424,7 +424,8 @@ Dashboard 的 query/filter/action model 同样从 Obsidian DOM 视图中剥离�
 
 2. **Zotero bridge**
    - 先支持手动字段：`zoteroKey`、`zoteroUri`。
-   - 再考虑 Better BibTeX citekey 或 Zotero local API。
+   - 通过手动维护的 `zoteroUri` 打开 Zotero item。
+   - Better BibTeX citekey 或 Zotero local API 自动同步留作后续增强。
    - 视图中列出 `saved` 但没有 `zoteroKey` 的论文。
 
 3. **PDF management**
@@ -443,6 +444,7 @@ Dashboard 的 query/filter/action model 同样从 Obsidian DOM 视图中剥离�
 - 作者关注：维护 watched authors 列表，抓取阶段字符串匹配，命中论文在日报中加标记；零 LLM 成本，适合跟踪导师、合作者和竞争组。
 - 版本更新提醒：已关注 / saved 的论文出现新版本（v2+）时在日报提示；v2 往往意味着被接收或大修。
 - 多来源接入：bioRxiv、ADS、OpenReview、RSS；依赖 v0.1.7 core 抽取后的 fetcher 抽象，避免在 Obsidian 插件里直接堆来源。
+- Better BibTeX / Zotero local API 自动同步：从 Zotero 自动回填 citekey 或 URI；需要评估用户本机 Zotero 运行状态、Better BibTeX 安装情况和失败提示，当前不作为 v0.1.8 硬依赖。
 - 视图导出与组会分享：把 Dashboard 当前筛选结果导出为一页 markdown 清单（journal club / 周报），与周度自动汇总合并考虑；需求较小，放在整条路线最后。
 - vault 内 CLAUDE.md：教终端 agent `papers.json` 的 schema、状态语义和笔记约定，支持对话式文献整理；与 VS Code 扩展互补，零开发成本即可先行试用。
 
@@ -569,7 +571,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] BibTeX 批量导出：从 Dashboard 当前筛选结果导出 `.bib`，处理重复 citation key。
 - [x] 引用片段模板：支持 LaTeX、pandoc markdown、Typst 等 citation snippet。
 - [x] Zotero 手动字段：支持 `zoteroKey` / `zoteroUri` 的读取、编辑、校验和 Dashboard 缺失提示。
-- [ ] Zotero bridge：评估并实现 Better BibTeX citekey 或 Zotero local API 的低风险接入。
+- [x] Zotero bridge：通过手动维护的 `zoteroUri` 打开 Zotero item；Better BibTeX / Zotero local API 自动同步留作后续增强。
 - [x] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。
 - [x] Project notes：支持 `projects` 字段维护，并把论文链接追加到指定项目笔记。
 - [ ] v0.1.8 收尾：更新 docs、测试、build，并确认不替代 Zotero / PDF 阅读器的边界。

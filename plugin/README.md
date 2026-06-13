@@ -16,7 +16,7 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Reading Dashboard** — Obsidian custom view for cross-date paper review.
   It reads `.index/papers.json` and supports tabs, search, topic/date/status/
   priority/note/detail/citation/Zotero filters, summary stats, row actions,
-  and batch status/priority/note operations.
+  Zotero item opening, and batch status/priority/note operations.
 - **Paper index schema v2** — stores structured daily summary fields
   (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
   `sourceSections`) for Dashboard search and review.

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
+  getZoteroOpenUri,
   openDashboardView,
 } from "../src/dashboard/view";
 
@@ -39,5 +40,17 @@ describe("openDashboardView", () => {
       active: true,
     });
     expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+  });
+});
+
+describe("getZoteroOpenUri", () => {
+  it("returns a trimmed Zotero URI when present", () => {
+    expect(getZoteroOpenUri({ zoteroUri: " zotero://select/items/ABC " })).toBe(
+      "zotero://select/items/ABC",
+    );
+  });
+
+  it("returns null when no Zotero URI is stored", () => {
+    expect(getZoteroOpenUri({ zoteroUri: " " })).toBeNull();
   });
 });
