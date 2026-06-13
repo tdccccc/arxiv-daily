@@ -141,7 +141,7 @@ npm run build
 | `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
 | `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update |
 | `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
-| `src/services/state-store.ts` | Per-date `RunStatus` persistence; `isDone` includes `"skipped"` |
+| `src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
 | `src/services/run-lock.ts` | Mutex per-date to prevent double-runs |
 | `src/services/logger.ts` | Logging with Obsidian `Notice` integration |
 | `src/services/progress.ts` | `ProgressReporter` interface + `NoopProgressReporter` |

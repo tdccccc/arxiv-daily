@@ -105,6 +105,11 @@ export class StateStore {
     await this.saveFn({ runState: this.state });
   }
 
+  async replaceAll(runState: RunState): Promise<void> {
+    this.state = cloneRunState(runState);
+    await this.saveFn({ runState: this.state });
+  }
+
   failedDates(): string[] {
     return Object.entries(this.state)
       .filter(([, v]) => v.status === "failed_transient" || v.status === "failed_permanent")
@@ -119,6 +124,14 @@ export class StateStore {
     }
     return out;
   }
+}
+
+function cloneRunState(runState: RunState): RunState {
+  const out: RunState = {};
+  for (const [date, entry] of Object.entries(runState)) {
+    out[date] = { ...entry };
+  }
+  return out;
 }
 
 export function deriveStorageStateStorePaths(

@@ -89,6 +89,7 @@ arxiv-daily/
     2026-06-11.md
   .index/
     papers.json
+    run-state.json
   papers/
     2606.12345.md
 ```
@@ -99,6 +100,7 @@ arxiv-daily/
 |---|---|---|
 | `arxiv-daily/daily/YYYY-MM-DD.md` | 每日发现入口，按 topic 展示当天相关论文 | Yes |
 | `arxiv-daily/.index/papers.json` | 插件内部状态：所有相关论文的状态、去重、seen dates 和外部工具字段；默认隐藏 | Yes |
+| `arxiv-daily/.index/run-state.json` | Obsidian scheduler 与 Node CLI 共享的日期级运行状态 | Yes |
 | `arxiv-daily/papers/<arxiv_id>.md` | 重要论文的长期阅读笔记和深度分析 | Only for detail / saved / manual |
 
 日报是每天最主要的阅读入口，从当天 pipeline 结果和 `papers.json` 共同生成：
@@ -544,7 +546,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [ ] Obsidian adapter：用 adapter 重新接回现有插件功能，保持用户行为不变。
 - [ ] Node CLI：新增 `run --date`、`run-pending`、`summarize --id` 命令，复用 core。
 - [ ] CLI config：支持 env / 配置文件读取 API key、topics、输出路径和 link style。
-- [ ] Run state：把 CLI 与 Obsidian scheduler 的 run state 放到同一 vault 输出目录，避免重复运行。
+- [x] Run state：把 CLI 与 Obsidian scheduler 的 run state 放到同一 vault 输出目录，避免重复运行。
 - [ ] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
 - [ ] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
 - [ ] Python 退役：CLI 稳定后冻结或移除根目录 `arxiv_daily.py` 的主流程，文档引导到 Node CLI。

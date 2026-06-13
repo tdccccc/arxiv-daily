@@ -144,6 +144,22 @@ describe("StateStore", () => {
     expect(store.snapshot()).toEqual({});
   });
 
+  it("replaceAll swaps state with a copy", async () => {
+    const { store } = makeStore();
+    await store.load();
+    const next: RunState = {
+      "2026-06-13": {
+        status: "completed",
+        lastAttempt: 1,
+        attempts: 1,
+        papersWritten: 2,
+      },
+    };
+    await store.replaceAll(next);
+    next["2026-06-13"].status = "running";
+    expect(store.get("2026-06-13").status).toBe("completed");
+  });
+
   it("failedDates returns sorted failed entries only", async () => {
     const { store } = makeStore();
     await store.load();

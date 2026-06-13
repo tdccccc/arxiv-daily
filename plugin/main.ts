@@ -7,7 +7,7 @@ import { ArxivDailySettingTab } from "./src/settings/tab";
 import { migrateArxivSettings } from "./src/settings/migration";
 import { validateFilterConfig } from "./src/settings/validation";
 import { Logger } from "./src/services/logger";
-import { StateStore } from "./src/services/state-store";
+import { createStorageStateStore, type StateStore } from "./src/services/state-store";
 import { RunLock } from "./src/services/run-lock";
 import { RunCancellationService } from "./src/services/cancellation";
 import { SchedulerService } from "./src/services/scheduler";
@@ -36,7 +36,7 @@ import { ObsidianStorageAdapter } from "./src/hosts/obsidian/storage-adapter";
 
 interface PersistedData {
   settings: PluginSettings;
-  runState: RunState;
+  runState?: RunState;
 }
 
 export default class ArxivDailyPlugin extends Plugin {
@@ -49,6 +49,7 @@ export default class ArxivDailyPlugin extends Plugin {
   private dailySelectionSync!: DailySelectionSyncService;
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService();
+  private legacyRunState: RunState = {};
 
   async onload() {
     await this.loadSettingsAndState();
@@ -57,16 +58,17 @@ export default class ArxivDailyPlugin extends Plugin {
       (message, timeoutMs) => new Notice(message, timeoutMs),
     );
 
-    this.stateStore = new StateStore(
-      async () => {
-        const data = (await this.loadData()) as PersistedData | null;
-        return { runState: data?.runState ?? {} };
-      },
-      async ({ runState }) => {
-        await this.persistAll(runState);
-      },
+    this.stateStore = createStorageStateStore(
+      new ObsidianStorageAdapter(this.app.vault),
+      this.settings.output,
     );
     await this.stateStore.load();
+    if (
+      Object.keys(this.stateStore.snapshot()).length === 0 &&
+      Object.keys(this.legacyRunState).length > 0
+    ) {
+      await this.stateStore.replaceAll(this.legacyRunState);
+    }
 
     try {
       this.progress = new StatusBarController(
@@ -136,7 +138,7 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.persistAll(this.stateStore?.snapshot() ?? {});
+    await this.persistSettings();
   }
 
   restartScheduler(): void {
@@ -193,13 +195,14 @@ export default class ArxivDailyPlugin extends Plugin {
       settings: DEFAULT_SETTINGS,
       runState: {},
     };
+    this.legacyRunState = data.runState ?? {};
     const merged = mergeSettings(DEFAULT_SETTINGS, data.settings ?? ({} as PluginSettings));
     merged.arxiv = migrateArxivSettings((data.settings as any)?.arxiv);
     this.settings = merged;
   }
 
-  private async persistAll(runState: RunState): Promise<void> {
-    const data: PersistedData = { settings: this.settings, runState };
+  private async persistSettings(): Promise<void> {
+    const data: PersistedData = { settings: this.settings };
     await this.saveData(data);
   }
 
