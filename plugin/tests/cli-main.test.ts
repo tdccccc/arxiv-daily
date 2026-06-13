@@ -109,6 +109,30 @@ describe("CLI main", () => {
     expect(io.stdout.join("")).toContain("run 2026-06-13: completed");
   });
 
+  it("uses scheduler-backed runs when available", async () => {
+    const io = captureIo();
+    const runtime = fakeRuntime();
+    runtime.scheduler = {
+      runForDateNow: vi.fn(async () => ({
+        kind: "skipped" as const,
+        reason: "already done",
+      })),
+      runAllPending: vi.fn(async () => []),
+    };
+
+    const code = await runCli({
+      argv: ["run", "--date", "2026-06-13"],
+      io: io.io,
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => runtime,
+    });
+
+    expect(code).toBe(0);
+    expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13");
+    expect(runtime.pipeline.runForDate).not.toHaveBeenCalled();
+    expect(io.stdout.join("")).toContain("skipped (already done)");
+  });
+
   it("runs pending dates across the configured lookback window", async () => {
     const io = captureIo();
     const runtime = fakeRuntime();

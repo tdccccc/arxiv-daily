@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { StateStore } from "../src/services/state-store";
+import {
+  createStorageStateStore,
+  deriveStorageStateStorePaths,
+  StateStore,
+} from "../src/services/state-store";
 import type { RunState } from "../src/settings/types";
+import type { StorageAdapter } from "../src/core/adapters";
+import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 function makeStore(initial: RunState = {}) {
   const data: { runState: RunState } = { runState: { ...initial } };
@@ -9,6 +15,37 @@ function makeStore(initial: RunState = {}) {
     data.runState = { ...d.runState };
   });
   return { store: new StateStore(load, save), data, save };
+}
+
+function makeStorage(initialFiles: Record<string, string> = {}) {
+  const files: Record<string, string> = { ...initialFiles };
+  const dirs = new Set<string>();
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
+    },
+    async readText(path: string) {
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path: string) {
+      dirs.add(path);
+    },
+    async rename(from: string, to: string) {
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  } satisfies StorageAdapter;
+  return { files, dirs, storage };
 }
 
 describe("StateStore", () => {
@@ -117,5 +154,36 @@ describe("StateStore", () => {
     await store.setRunning("2026-05-10");
     await store.setFailed("2026-05-10", "permanent", "x");
     expect(store.failedDates()).toEqual(["2026-05-10", "2026-05-12"]);
+  });
+
+  it("derives storage run state path next to the paper index", () => {
+    expect(
+      deriveStorageStateStorePaths(
+        DEFAULT_SETTINGS.output,
+        (path) => path.replace(/\\/g, "/"),
+      ),
+    ).toEqual({
+      indexDir: "arxiv-daily/.index",
+      runStatePath: "arxiv-daily/.index/run-state.json",
+    });
+  });
+
+  it("persists run state through storage", async () => {
+    const { files, dirs, storage } = makeStorage();
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+
+    await store.load();
+    await store.setRunning("2026-06-13");
+    await store.setCompleted("2026-06-13", 2);
+
+    expect(dirs.has("arxiv-daily")).toBe(true);
+    expect(dirs.has("arxiv-daily/.index")).toBe(true);
+    const saved = JSON.parse(files["arxiv-daily/.index/run-state.json"]);
+    expect(saved.schemaVersion).toBe(1);
+    expect(saved.runState["2026-06-13"].status).toBe("completed");
+
+    const reloaded = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+    await reloaded.load();
+    expect(reloaded.get("2026-06-13").papersWritten).toBe(2);
   });
 });

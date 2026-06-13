@@ -7,6 +7,8 @@ import {
 } from "../settings/validation";
 import { daysBefore, formatDate, todayInTz } from "../utils/time";
 
+type CliRunResult = PipelineResult | { kind: "skipped"; reason: string };
+
 export interface WritableTextStream {
   write(chunk: string): unknown;
 }
@@ -19,6 +21,10 @@ export interface CliIo {
 export interface CliCommandRuntime {
   pipeline: {
     runForDate(date: string): Promise<PipelineResult>;
+  };
+  scheduler?: {
+    runForDateNow(date: string): Promise<CliRunResult>;
+    runAllPending(): Promise<Array<{ date: string; result: CliRunResult }>>;
   };
   manualFetch: {
     fetchAndSummarize(id: string, date: string): Promise<ManualFetchResult>;
@@ -105,15 +111,26 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     const runtime = await buildRuntime(config);
     if (parsed.command.name === "run") {
       if (!parsed.command.date) throw new Error("run requires --date");
-      const result = await runtime.pipeline.runForDate(parsed.command.date);
-      return writePipelineResult(io, parsed.command.date, result);
+      const result = runtime.scheduler
+        ? await runtime.scheduler.runForDateNow(parsed.command.date)
+        : await runtime.pipeline.runForDate(parsed.command.date);
+      return writeRunResult(io, parsed.command.date, result);
     }
     if (parsed.command.name === "run-pending") {
+      if (runtime.scheduler) {
+        const results = await runtime.scheduler.runAllPending();
+        let failed = false;
+        for (const { date, result } of results) {
+          const code = writeRunResult(io, date, result);
+          if (code !== 0) failed = true;
+        }
+        return failed ? 1 : 0;
+      }
       const dates = pendingDates(config, now());
       let failed = false;
       for (const date of dates) {
         const result = await runtime.pipeline.runForDate(date);
-        const code = writePipelineResult(io, date, result);
+        const code = writeRunResult(io, date, result);
         if (code !== 0) failed = true;
       }
       return failed ? 1 : 0;
@@ -204,16 +221,20 @@ function pendingDates(config: CliRuntimeConfig, now: Date): string[] {
   return dates;
 }
 
-function writePipelineResult(
+function writeRunResult(
   io: CliIo,
   date: string,
-  result: PipelineResult,
+  result: CliRunResult,
 ): number {
   if (result.kind === "completed") {
     writeLine(
       io.stdout,
       `run ${date}: completed (${result.papersWritten} papers written)`,
     );
+    return 0;
+  }
+  if (result.kind === "skipped") {
+    writeLine(io.stdout, `run ${date}: skipped (${result.reason})`);
     return 0;
   }
   writeLine(io.stderr, `run ${date}: ${result.kind} (${result.reason})`);

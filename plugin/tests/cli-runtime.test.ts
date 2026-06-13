@@ -38,7 +38,7 @@ describe("CLI runtime", () => {
       fetch: async () => new Response("ok", { status: 200 }),
     });
 
-    const runtime = buildCliRuntime(config, { host });
+    const runtime = await buildCliRuntime(config, { host });
 
     expect(runtime.writer.dailyPath("2026-06-13")).toBe(
       "arxiv-daily/daily/2026-06-13.md",
@@ -60,5 +60,11 @@ describe("CLI runtime", () => {
       await host.storage.readText("arxiv-daily/.index/papers.json"),
     );
     expect(saved.papers["2606.12345"].title).toBe("Runtime paper");
+
+    await runtime.stateStore.setRunning("2026-06-13");
+    await runtime.stateStore.setCompleted("2026-06-13", 2);
+    expect(await host.storage.exists("arxiv-daily/.index/run-state.json")).toBe(
+      true,
+    );
   });
 });

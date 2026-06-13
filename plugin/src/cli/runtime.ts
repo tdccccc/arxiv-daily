@@ -7,9 +7,16 @@ import { MarkdownWriter } from "../pipeline/markdown-writer";
 import { PaperContentFetcher } from "../pipeline/paper-content";
 import { ArxivPipeline } from "../pipeline/pipeline";
 import { arxivCategories } from "../settings/categories";
+import { RunCancellationService } from "../services/cancellation";
 import { Logger } from "../services/logger";
 import { ManualFetchService } from "../services/manual-fetch";
 import { PaperIndexStore } from "../services/paper-index";
+import { RunLock } from "../services/run-lock";
+import { SchedulerService } from "../services/scheduler";
+import {
+  createStorageStateStore,
+  type StateStore,
+} from "../services/state-store";
 import type { CliRuntimeConfig } from "./config";
 
 export interface CliRuntime {
@@ -19,6 +26,8 @@ export interface CliRuntime {
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
   paperIndex: PaperIndexStore;
+  stateStore: StateStore;
+  scheduler: SchedulerService;
   llm: LlmClient;
   pipeline: ArxivPipeline;
   manualFetch: ManualFetchService;
@@ -29,10 +38,10 @@ export interface BuildCliRuntimeOptions {
   logger?: Logger;
 }
 
-export function buildCliRuntime(
+export async function buildCliRuntime(
   config: CliRuntimeConfig,
   opts: BuildCliRuntimeOptions = {},
-): CliRuntime {
+): Promise<CliRuntime> {
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
     opts.logger ?? new Logger(config.settings.advanced.logLevel);
@@ -56,6 +65,11 @@ export function buildCliRuntime(
     output: config.settings.output,
   });
   const paperIndex = new PaperIndexStore(host.storage, config.settings.output);
+  const stateStore = createStorageStateStore(
+    host.storage,
+    config.settings.output,
+  );
+  await stateStore.load();
   const pipeline = new ArxivPipeline({
     fetcher,
     paperFetcher,
@@ -82,6 +96,15 @@ export function buildCliRuntime(
     output: config.settings.output,
     llmSettings: config.settings.llm,
   });
+  const scheduler = new SchedulerService({
+    getSettings: () => config.settings,
+    store: stateStore,
+    lock: new RunLock(),
+    runForDate: (date, signal) => pipeline.runForDate(date, signal),
+    logger,
+    progress: host.progress,
+    cancellation: new RunCancellationService(),
+  });
 
   return {
     host,
@@ -90,6 +113,8 @@ export function buildCliRuntime(
     paperFetcher,
     writer,
     paperIndex,
+    stateStore,
+    scheduler,
     llm,
     pipeline,
     manualFetch,

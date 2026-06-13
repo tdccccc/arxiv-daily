@@ -1,9 +1,17 @@
 import type { RunState, RunStateEntry, RunStatus } from "../settings/types";
+import type { StorageAdapter } from "../core/adapters";
+import type { OutputSettings } from "../settings/types";
+import { derivePaperInboxPaths } from "./paper-index";
 
 const MAX_TRANSIENT_ATTEMPTS = 10;
 
 export type StateLoadFn = () => Promise<{ runState: RunState }>;
 export type StateSaveFn = (data: { runState: RunState }) => Promise<void>;
+
+export interface StorageStateStorePaths {
+  indexDir: string;
+  runStatePath: string;
+}
 
 export class StateStore {
   private state: RunState = {};
@@ -111,4 +119,68 @@ export class StateStore {
     }
     return out;
   }
+}
+
+export function deriveStorageStateStorePaths(
+  output: OutputSettings,
+  normalizePath: (path: string) => string,
+): StorageStateStorePaths {
+  const indexDir = derivePaperInboxPaths(output, normalizePath).indexDir;
+  return {
+    indexDir,
+    runStatePath: normalizePath(`${indexDir}/run-state.json`),
+  };
+}
+
+export function createStorageStateStore(
+  storage: StorageAdapter,
+  output: OutputSettings,
+): StateStore {
+  const paths = deriveStorageStateStorePaths(output, (path) =>
+    storage.normalizePath(path),
+  );
+  return new StateStore(
+    async () => {
+      if (!(await storage.exists(paths.runStatePath))) return { runState: {} };
+      const raw = await storage.readText(paths.runStatePath);
+      const parsed = JSON.parse(raw);
+      return {
+        runState:
+          parsed && typeof parsed === "object" && parsed.runState
+            ? (parsed.runState as RunState)
+            : {},
+      };
+    },
+    async ({ runState }) => {
+      await ensureDirDeep(storage, paths.indexDir);
+      await writeAtomic(storage, paths.runStatePath, {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        runState,
+      });
+    },
+  );
+}
+
+async function ensureDirDeep(
+  storage: StorageAdapter,
+  dir: string,
+): Promise<void> {
+  const parts = storage.normalizePath(dir).split("/").filter(Boolean);
+  let cur = "";
+  for (const part of parts) {
+    cur = cur ? `${cur}/${part}` : part;
+    if (!(await storage.exists(cur))) await storage.mkdir(cur);
+  }
+}
+
+async function writeAtomic(
+  storage: StorageAdapter,
+  path: string,
+  value: unknown,
+): Promise<void> {
+  const tmp = `${path}.tmp`;
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  await storage.writeText(tmp, content);
+  await storage.rename(tmp, path);
 }
