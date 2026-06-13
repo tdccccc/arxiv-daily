@@ -1,7 +1,7 @@
 /* arXiv Daily plugin styles */
 
 .arxiv-daily-dashboard {
-  --arxiv-daily-table-min-width: 860px;
+  --arxiv-daily-table-min-width: 780px;
   height: 100%;
   padding: 16px;
   overflow: auto;
@@ -340,12 +340,13 @@
 
 .arxiv-daily-dashboard__table th:nth-child(2),
 .arxiv-daily-dashboard__table td:nth-child(2) {
-  width: 104px;
+  width: 56px;
+  text-align: center;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(3),
 .arxiv-daily-dashboard__table td:nth-child(3) {
-  width: 42%;
+  width: auto;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(4),
@@ -359,15 +360,8 @@
 }
 
 .arxiv-daily-dashboard__table th:nth-child(6),
-.arxiv-daily-dashboard__table td:nth-child(6),
-.arxiv-daily-dashboard__table th:nth-child(7),
-.arxiv-daily-dashboard__table td:nth-child(7) {
-  width: 104px;
-}
-
-.arxiv-daily-dashboard__table th:nth-child(7),
-.arxiv-daily-dashboard__table td:nth-child(7) {
-  width: 152px;
+.arxiv-daily-dashboard__table td:nth-child(6) {
+  width: 168px;
 }
 
 .arxiv-daily-dashboard__title-cell {
@@ -376,8 +370,9 @@
 
 .arxiv-daily-dashboard__title {
   color: var(--text-normal);
+  font-size: var(--font-ui-medium);
   font-weight: var(--font-semibold);
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .arxiv-daily-dashboard__meta,
@@ -392,10 +387,16 @@
   color: var(--text-faint);
 }
 
-.arxiv-daily-dashboard__inline-select {
-  width: 100%;
-  min-height: 28px;
-  font-size: var(--font-ui-small);
+.arxiv-daily-dashboard__star {
+  color: var(--text-faint);
+}
+
+.arxiv-daily-dashboard__star.is-starred {
+  color: var(--text-accent);
+}
+
+.arxiv-daily-dashboard__star.is-starred svg {
+  fill: currentColor;
 }
 
 .arxiv-daily-dashboard__actions {

@@ -88,19 +88,13 @@ function fixtures(): PaperIndexEntry[] {
 }
 
 describe("dashboard model", () => {
-  it("uses the watch tab by default and counts all tabs", () => {
+  it("uses the starred tab by default and counts simplified tabs", () => {
     const result = queryDashboard(fixtures());
 
-    expect(result.rows.map((row) => row.arxivId)).toEqual([
-      "2606.00001",
-      "2606.00005",
-    ]);
+    expect(result.rows.map((row) => row.arxivId)).toEqual(["2606.00002"]);
     expect(result.tabCounts).toEqual({
-      watch: 2,
-      highlight: 1,
-      saved: 1,
+      starred: 1,
       all: 4,
-      ignored: 1,
     });
   });
 
@@ -129,8 +123,8 @@ describe("dashboard model", () => {
       dateFrom: "2026-06-12",
       dateTo: "2026-06-13",
     });
-    const savedWithNote = queryDashboard(fixtures(), {
-      tab: "saved",
+    const withNote = queryDashboard(fixtures(), {
+      tab: "all",
       hasNote: true,
     });
     const publishedRange = queryDashboard(fixtures(), {
@@ -143,7 +137,7 @@ describe("dashboard model", () => {
       "2606.00003",
       "2606.00005",
     ]);
-    expect(savedWithNote.rows.map((row) => row.arxivId)).toEqual([
+    expect(withNote.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",
     ]);
     expect(publishedRange.rows.map((row) => row.arxivId)).not.toContain(
@@ -167,9 +161,7 @@ describe("dashboard model", () => {
     expect(result.stats.statusCounts.saved).toBe(1);
     expect(result.stats.priorityCounts.high).toBe(1);
     expect(result.stats.weekAdded).toBe(4);
-    expect(result.stats.watch).toBe(2);
-    expect(result.stats.highlight).toBe(1);
-    expect(result.stats.saved).toBe(1);
+    expect(result.stats.starred).toBe(1);
   });
 
   it("sorts with explicit keys and directions", () => {

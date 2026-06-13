@@ -18,11 +18,7 @@ import {
   type DashboardRow,
   type DashboardTab,
 } from "./model";
-import {
-  type PaperIndexEntry,
-  type PaperPriority,
-  type PaperStatus,
-} from "../services/paper-index";
+import { type PaperIndexEntry } from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
 import { formatDate, todayInTz } from "../utils/time";
@@ -30,30 +26,15 @@ import { formatDate, todayInTz } from "../utils/time";
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
-  { id: "watch", label: "Watch" },
-  { id: "highlight", label: "Highlight" },
-  { id: "saved", label: "Saved" },
+  { id: "starred", label: "Starred" },
   { id: "all", label: "All" },
-  { id: "ignored", label: "Ignored" },
-];
-
-type PaperMark = "inbox" | "watch" | "highlight" | "saved" | "ignored";
-
-const MARK_OPTIONS: Array<{ value: PaperMark; label: string }> = [
-  { value: "inbox", label: "Unmarked" },
-  { value: "watch", label: "Watch" },
-  { value: "highlight", label: "Highlight" },
-  { value: "saved", label: "Saved" },
-  { value: "ignored", label: "Ignored" },
 ];
 
 interface DailyReportDay {
   date: string;
   path: string;
   papers: number;
-  watch: number;
-  highlight: number;
-  saved: number;
+  starred: number;
 }
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -89,7 +70,7 @@ class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private dailyReports: DailyReportDay[] = [];
   private calendarMonth: string | null = null;
-  private query: DashboardQuery = { tab: "watch" };
+  private query: DashboardQuery = { tab: "starred" };
   private error: string | null = null;
   private selectedIds = new Set<string>();
   private batchEl: HTMLElement | null = null;
@@ -151,9 +132,7 @@ class ArxivDailyDashboardView extends ItemView {
         date,
         path,
         papers: 0,
-        watch: 0,
-        highlight: 0,
-        saved: 0,
+        starred: 0,
       });
     }
 
@@ -169,19 +148,14 @@ class ArxivDailyDashboardView extends ItemView {
             date,
             path,
             papers: 0,
-            watch: 0,
-            highlight: 0,
-            saved: 0,
+            starred: 0,
           };
         byDate.set(date, report);
         const countKey = `${date}:${entry.arxivId}`;
         if (counted.has(countKey)) continue;
         counted.add(countKey);
         report.papers += 1;
-        const mark = markForEntry(entry);
-        if (mark === "watch") report.watch += 1;
-        if (mark === "highlight") report.highlight += 1;
-        if (mark === "saved") report.saved += 1;
+        if (isStarredEntry(entry)) report.starred += 1;
       }
     }
 
@@ -278,7 +252,7 @@ class ArxivDailyDashboardView extends ItemView {
     const tabs = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__tabs",
     });
-    const active = this.query.tab ?? "watch";
+    const active = this.query.tab ?? "starred";
     for (const tab of DASHBOARD_TABS) {
       const button = tabs.createEl("button", {
         cls: "arxiv-daily-dashboard__tab",
@@ -388,7 +362,7 @@ class ArxivDailyDashboardView extends ItemView {
               ? `No daily report ${cell.date}`
               : "Empty calendar cell",
           title: report
-            ? `${report.date}: ${report.papers} indexed papers`
+            ? `${report.date}: ${report.papers} indexed papers${report.starred ? `, ${report.starred} starred` : ""}`
             : cell.date ?? "",
         },
       }) as HTMLButtonElement;
@@ -433,9 +407,8 @@ class ArxivDailyDashboardView extends ItemView {
     const items = [
       ["Shown", result.stats.total],
       ["This week", result.stats.weekAdded],
-      ["Watch", result.stats.watch],
-      ["Highlight", result.stats.highlight],
-      ["Saved", result.stats.saved],
+      ["Starred", result.stats.starred],
+      ["Notes", result.rows.filter((row) => row.hasNote).length],
     ] as const;
 
     for (const [label, value] of items) {
@@ -564,7 +537,7 @@ class ArxivDailyDashboardView extends ItemView {
     });
     setIcon(reset, "rotate-ccw");
     reset.addEventListener("click", () => {
-      this.query = { tab: this.query.tab ?? "watch" };
+      this.query = { tab: this.query.tab ?? "starred" };
       this.render();
     });
   }
@@ -625,11 +598,10 @@ class ArxivDailyDashboardView extends ItemView {
     });
 
     for (const label of [
-      "Mark",
+      "Star",
       "Title",
       "Topic",
       "Published",
-      "First seen",
       "Actions",
     ]) {
       headRow.createEl("th", { text: label });
@@ -653,16 +625,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
 
       const markCell = tr.createEl("td");
-      this.createInlineSelect(
-        markCell,
-        MARK_OPTIONS,
-        markForEntry(row.entry),
-        (value, control) => {
-          void this.runControlAction(control, () =>
-            this.updateMark(row.entry, value as PaperMark),
-          );
-        },
-      );
+      this.createStarToggle(markCell, row.entry);
 
       const titleCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__title-cell",
@@ -685,7 +648,6 @@ class ArxivDailyDashboardView extends ItemView {
 
       tr.createEl("td", { text: row.topic });
       tr.createEl("td", { text: row.entry.published || "-" });
-      tr.createEl("td", { text: row.firstSeen || "-" });
       const actionCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__actions",
       });
@@ -740,35 +702,19 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.createBatchButton(
       toolbar,
-      "eye",
-      "Watch",
-      selectedCount,
-      () =>
-        this.runBatchMark("watch"),
-    );
-    this.createBatchButton(
-      toolbar,
       "star",
-      "Highlight",
+      "Star",
       selectedCount,
       () =>
-        this.runBatchMark("highlight"),
+        this.runBatchStar(true),
     );
     this.createBatchButton(
       toolbar,
-      "bookmark",
-      "Saved",
+      "star-off",
+      "Unstar",
       selectedCount,
       () =>
-        this.runBatchMark("saved"),
-    );
-    this.createBatchButton(
-      toolbar,
-      "archive-x",
-      "Ignore",
-      selectedCount,
-      () =>
-        this.runBatchMark("ignored"),
+        this.runBatchStar(false),
     );
     this.createBatchButton(
       toolbar,
@@ -800,21 +746,28 @@ class ArxivDailyDashboardView extends ItemView {
     if (visibleRows.length === 0) toolbar.addClass("is-empty");
   }
 
-  private createInlineSelect(
+  private createStarToggle(
     parent: HTMLElement,
-    options: Array<{ value: string; label: string }>,
-    selected: string,
-    onChange: (value: string, control: HTMLSelectElement) => void,
+    entry: DashboardRow["entry"],
   ): void {
-    const select = parent.createEl("select", {
-      cls: "arxiv-daily-dashboard__inline-select",
-    }) as HTMLSelectElement;
-    for (const option of options) {
-      const el = select.createEl("option", { text: option.label });
-      el.value = option.value;
-    }
-    select.value = selected;
-    select.addEventListener("change", () => onChange(select.value, select));
+    const starred = isStarredEntry(entry);
+    const label = starred ? "Unstar paper" : "Star paper";
+    const button = parent.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__star",
+      attr: {
+        type: "button",
+        "aria-label": label,
+        "aria-pressed": String(starred),
+        title: label,
+      },
+    }) as HTMLButtonElement;
+    if (starred) button.addClass("is-starred");
+    setIcon(button, "star");
+    button.addEventListener("click", () => {
+      void this.runControlAction(button, () =>
+        this.updateStar(entry, !starred),
+      );
+    });
   }
 
   private createIconButton(
@@ -858,7 +811,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async runControlAction(
-    control: HTMLButtonElement | HTMLSelectElement,
+    control: HTMLButtonElement,
     action: () => Promise<void>,
   ): Promise<void> {
     control.disabled = true;
@@ -871,20 +824,19 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
-  private async updateMark(
+  private async updateStar(
     entry: DashboardRow["entry"],
-    mark: PaperMark,
+    starred: boolean,
   ): Promise<void> {
     const store = this.plugin.buildPaperIndex();
-    const state = stateForMark(mark);
-    let updated = await store.setStatus(entry.arxivId, state.status);
+    const updated = await store.setPriority(
+      entry.arxivId,
+      starred ? "high" : "normal",
+    );
     if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-    updated = await store.setPriority(entry.arxivId, state.priority);
-    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-    if (mark === "saved") {
-      await ensurePaperNote(this.plugin, store, updated);
-    }
-    new Notice(`arXiv Daily: ${entry.arxivId} marked ${labelForMark(mark)}`);
+    new Notice(
+      `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
+    );
     await this.reloadIndex();
   }
 
@@ -948,13 +900,11 @@ class ArxivDailyDashboardView extends ItemView {
     return [...this.selectedIds];
   }
 
-  private async runBatchMark(mark: PaperMark): Promise<void> {
-    const state = stateForMark(mark);
+  private async runBatchStar(starred: boolean): Promise<void> {
     await this.runBatchAction({
-      type: "set_mark",
+      type: "set_priority",
       arxivIds: this.selectedArxivIds(),
-      status: state.status,
-      priority: state.priority,
+      priority: starred ? "high" : "normal",
     });
   }
 
@@ -1055,31 +1005,8 @@ function summaryLine(entry: DashboardRow["entry"]): string {
   );
 }
 
-function markForEntry(entry: DashboardRow["entry"]): PaperMark {
-  if (entry.status === "saved") return "saved";
-  if (entry.status === "ignored") return "ignored";
-  if (entry.status === "to_read" && entry.priority === "high") {
-    return "highlight";
-  }
-  if (entry.status === "to_read" || entry.status === "reading") {
-    return "watch";
-  }
-  return "inbox";
-}
-
-function stateForMark(mark: PaperMark): {
-  status: PaperStatus;
-  priority: PaperPriority;
-} {
-  if (mark === "watch") return { status: "to_read", priority: "normal" };
-  if (mark === "highlight") return { status: "to_read", priority: "high" };
-  if (mark === "saved") return { status: "saved", priority: "normal" };
-  if (mark === "ignored") return { status: "ignored", priority: "normal" };
-  return { status: "inbox", priority: "normal" };
-}
-
-function labelForMark(mark: PaperMark): string {
-  return MARK_OPTIONS.find((option) => option.value === mark)?.label ?? mark;
+function isStarredEntry(entry: DashboardRow["entry"]): boolean {
+  return entry.status !== "ignored" && entry.priority === "high";
 }
 
 function normalizeVaultPath(path: string): string {

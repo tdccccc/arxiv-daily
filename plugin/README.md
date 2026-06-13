@@ -14,9 +14,9 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Configurable markdown links** — daily reports can use Obsidian wikilinks
   or standard relative Markdown links for CLI / VS Code-friendly output.
 - **Reading Dashboard** — Obsidian custom view for cross-date paper review.
-  It reads `.index/papers.json` and supports Watch / Highlight / Saved tabs,
-  a clickable daily-report calendar, search, topic/date/note/detail filters,
-  summary stats, row actions, and batch mark/note operations.
+  It reads `.index/papers.json` and supports Starred / All tabs, a clickable
+  daily-report calendar, search, topic/date/note/detail filters, summary stats,
+  row actions, and batch star/note operations.
 - **Research workflow integrations** — manually download arXiv PDFs into the
   vault and append papers to project notes. arXiv Daily handles discovery and
   review; Zotero remains the source of truth for citation keys and BibTeX.
@@ -265,10 +265,10 @@ becomes `status=to_read, priority=high`. `papers.json` is an internal state
 file for de-duplication and later integrations; daily reports remain the
 primary triage surface.
 
-Dashboard exposes the paper marks `Unmarked`, `Watch`, `Highlight`, `Saved`,
-and `Ignored`. Internally `Watch` maps to `status=to_read, priority=normal`,
-`Highlight` maps to `status=to_read, priority=high`, and `Saved` creates a
-lightweight paper note if one does not already exist.
+Dashboard treats `priority=high` as `Starred`. The star button only toggles
+that priority, so unstarred papers stay neutral in the dashboard. The older
+`status` values remain in `papers.json` for compatibility with daily checkbox
+sync, saved notes, and existing indexes.
 
 ## Scheduling
 

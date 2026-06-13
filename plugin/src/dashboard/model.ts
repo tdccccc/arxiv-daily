@@ -5,12 +5,7 @@ import type {
   PaperSummary,
 } from "../services/paper-index";
 
-export type DashboardTab =
-  | "watch"
-  | "highlight"
-  | "saved"
-  | "all"
-  | "ignored";
+export type DashboardTab = "starred" | "all";
 
 export type DashboardDateField = "published" | "seen";
 
@@ -57,9 +52,7 @@ export interface DashboardStats {
   statusCounts: Record<PaperStatus, number>;
   priorityCounts: Record<PaperPriority, number>;
   weekAdded: number;
-  watch: number;
-  highlight: number;
-  saved: number;
+  starred: number;
 }
 
 export interface DashboardResult {
@@ -103,7 +96,7 @@ export interface DashboardActionPlan {
   requiresConfirmation: boolean;
 }
 
-const DEFAULT_TAB: DashboardTab = "watch";
+const DEFAULT_TAB: DashboardTab = "starred";
 const STATUS_ORDER: Record<PaperStatus, number> = {
   to_read: 0,
   saved: 1,
@@ -154,19 +147,10 @@ export function matchesDashboardTab(
   tab: DashboardTab,
 ): boolean {
   switch (tab) {
-    case "watch":
-      return (
-        (entry.status === "to_read" || entry.status === "reading") &&
-        entry.priority !== "high"
-      );
-    case "highlight":
+    case "starred":
       return entry.status !== "ignored" && entry.priority === "high";
-    case "saved":
-      return entry.status === "saved";
     case "all":
       return entry.status !== "ignored";
-    case "ignored":
-      return entry.status === "ignored";
   }
 }
 
@@ -181,9 +165,7 @@ export function buildDashboardStats(
     statusCounts: emptyStatusCounts(),
     priorityCounts: emptyPriorityCounts(),
     weekAdded: 0,
-    watch: 0,
-    highlight: 0,
-    saved: 0,
+    starred: 0,
   };
 
   for (const entry of entries) {
@@ -194,9 +176,7 @@ export function buildDashboardStats(
     if (entryHasSeenDateInRange(entry, weekRange.start, weekRange.end)) {
       stats.weekAdded += 1;
     }
-    if (matchesDashboardTab(entry, "watch")) stats.watch += 1;
-    if (matchesDashboardTab(entry, "highlight")) stats.highlight += 1;
-    if (entry.status === "saved") stats.saved += 1;
+    if (matchesDashboardTab(entry, "starred")) stats.starred += 1;
   }
 
   return stats;
@@ -206,11 +186,8 @@ export function buildDashboardTabCounts(
   entries: PaperIndexEntry[],
 ): Record<DashboardTab, number> {
   return {
-    watch: entries.filter((entry) => matchesDashboardTab(entry, "watch")).length,
-    highlight: entries.filter((entry) => matchesDashboardTab(entry, "highlight")).length,
-    saved: entries.filter((entry) => matchesDashboardTab(entry, "saved")).length,
+    starred: entries.filter((entry) => matchesDashboardTab(entry, "starred")).length,
     all: entries.filter((entry) => matchesDashboardTab(entry, "all")).length,
-    ignored: entries.filter((entry) => matchesDashboardTab(entry, "ignored")).length,
   };
 }
 
