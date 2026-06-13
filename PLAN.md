@@ -37,6 +37,7 @@
 - 日报末尾折叠列出未入选论文，作为 LLM 漏报兜底；ignored 论文不进入兜底列表。
 - 支持复制 arXiv BibTeX，解析 entry key 并写回 `citationKey`。
 - Dashboard 当前筛选结果可以批量导出 `.bib`，重复 citation key 会在导出时改写为唯一 key 并回写索引。
+- 支持复制 LaTeX、pandoc Markdown、Typst citation snippet；缺少 `citationKey` 时会先抓取 BibTeX 补齐。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
 - 超出 arXiv `/recent` 5 天窗口的手动日期补跑会 fallback 到 arXiv export API 的 submittedDate 单日窗口，并在日报中标注近似窗口语义。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
@@ -558,7 +559,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 ### v0.1.8 Research Tool Integrations
 
 - [x] BibTeX 批量导出：从 Dashboard 当前筛选结果导出 `.bib`，处理重复 citation key。
-- [ ] 引用片段模板：支持 LaTeX、pandoc markdown、Typst 等 citation snippet。
+- [x] 引用片段模板：支持 LaTeX、pandoc markdown、Typst 等 citation snippet。
 - [ ] Zotero 手动字段：支持 `zoteroKey` / `zoteroUri` 的读取、编辑、校验和 Dashboard 缺失提示。
 - [ ] Zotero bridge：评估并实现 Better BibTeX citekey 或 Zotero local API 的低风险接入。
 - [ ] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。

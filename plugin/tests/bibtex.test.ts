@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BibtexService,
   extractArxivIdFromMarkdown,
+  formatCitationSnippet,
   parseBibtexKey,
   rewriteBibtexKey,
 } from "../src/services/bibtex";
@@ -52,6 +53,15 @@ describe("BibTeX service", () => {
     expect(parseBibtexKey("not bibtex")).toBeNull();
     expect(rewriteBibtexKey("@article{OldKey,\n title={T}\n}", "NewKey")).toBe(
       "@article{NewKey,\n title={T}\n}",
+    );
+    expect(formatCitationSnippet("Smith2026", "latex")).toBe(
+      "\\cite{Smith2026}",
+    );
+    expect(formatCitationSnippet(["Smith2026", "Jones2026"], "pandoc")).toBe(
+      "[@Smith2026; @Jones2026]",
+    );
+    expect(formatCitationSnippet(["Smith2026", "Jones2026"], "typst")).toBe(
+      "@Smith2026 @Jones2026",
     );
   });
 
@@ -141,6 +151,86 @@ describe("BibTeX service", () => {
       citationKey: "Key2026",
       entryUpdated: false,
     });
+  });
+
+  it("builds citation snippets from existing citation keys", async () => {
+    const { storage } = makeStorage();
+    const store = new PaperIndexStore(
+      storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-13T00:00:00.000Z"),
+    );
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-13",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await store.setCitationKey("2606.12345", "ExistingKey");
+    const fetchBibtex = vi.fn().mockResolvedValue("@misc{Unused,\n}\n");
+    const service = new BibtexService({
+      fetcher: { fetchBibtex },
+      paperIndex: store,
+      logger: new Logger("error"),
+    });
+
+    const result = await service.citationSnippetForId(
+      "2606.12345",
+      "pandoc",
+    );
+
+    expect(result).toMatchObject({
+      kind: "done",
+      arxivId: "2606.12345",
+      citationKey: "ExistingKey",
+      snippet: "[@ExistingKey]",
+      source: "index",
+      entryUpdated: false,
+    });
+    expect(fetchBibtex).not.toHaveBeenCalled();
+  });
+
+  it("fetches BibTeX before building citation snippets when the key is missing", async () => {
+    const { files, storage } = makeStorage();
+    const store = new PaperIndexStore(
+      storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-13T00:00:00.000Z"),
+    );
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-13",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    const service = new BibtexService({
+      fetcher: {
+        fetchBibtex: vi.fn().mockResolvedValue("@misc{FetchedKey,\n}\n"),
+      },
+      paperIndex: store,
+      logger: new Logger("error"),
+    });
+
+    const result = await service.citationSnippetForId(
+      "2606.12345",
+      "latex",
+    );
+
+    expect(result).toMatchObject({
+      kind: "done",
+      citationKey: "FetchedKey",
+      snippet: "\\cite{FetchedKey}",
+      source: "bibtex",
+      entryUpdated: true,
+    });
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.papers["2606.12345"].citationKey).toBe("FetchedKey");
   });
 
   it("rejects invalid ids and invalid BibTeX responses", async () => {

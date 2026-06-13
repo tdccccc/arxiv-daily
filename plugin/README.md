@@ -148,7 +148,7 @@ npm run build
 | `src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, status/priority/citation/summary updates |
 | `src/services/paper-note.ts` | Shared lightweight paper-note creation helper |
 | `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
-| `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update, and filtered Dashboard `.bib` export |
+| `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update, citation snippets, and filtered Dashboard `.bib` export |
 | `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
 | `src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
 | `src/services/run-lock.ts` | Mutex per-date to prevent double-runs |

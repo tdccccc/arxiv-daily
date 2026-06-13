@@ -15,7 +15,10 @@ import {
   type PaperIndexEntry,
   type PaperStatus,
 } from "./services/paper-index";
-import { extractArxivIdFromMarkdown } from "./services/bibtex";
+import {
+  extractArxivIdFromMarkdown,
+  type CitationSnippetFormat,
+} from "./services/bibtex";
 import { openDashboardView } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
 
@@ -166,6 +169,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     ).open();
   }
 
+  function openCopyCitationSnippetModal() {
+    new CitationSnippetModal(plugin.app, async (raw, format) => {
+      if (!raw || !format) return;
+      await copyCitationSnippet(raw, format);
+    }).open();
+  }
+
   async function setCurrentPaperStatus(status: PaperStatus) {
     const id = getCurrentPaperId(plugin);
     if (!id) {
@@ -219,6 +229,17 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     await copyBibtex(id);
   }
 
+  async function copyCurrentPaperCitationSnippet() {
+    const id = await getCurrentPaperIdFromActiveFile(plugin);
+    if (!id) {
+      new Notice("arXiv Daily: current note is not an arXiv paper");
+      return;
+    }
+    const format = await chooseCitationFormat(plugin.app);
+    if (!format) return;
+    await copyCitationSnippet(id, format);
+  }
+
   async function copyBibtex(rawId: string) {
     const result = await plugin.buildBibtexService().fetchAndStore(rawId);
     if (result.kind !== "done") {
@@ -233,6 +254,27 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       );
     } catch {
       new Notice("arXiv Daily: BibTeX fetched but clipboard copy failed", 10_000);
+    }
+  }
+
+  async function copyCitationSnippet(
+    rawId: string,
+    format: CitationSnippetFormat,
+  ) {
+    const result = await plugin
+      .buildBibtexService()
+      .citationSnippetForId(rawId, format);
+    if (result.kind !== "done") {
+      new Notice(`arXiv Daily: citation snippet failed — ${result.reason}`, 10_000);
+      return;
+    }
+    try {
+      await writeClipboard(result.snippet);
+      new Notice(
+        `arXiv Daily: copied ${format} citation for ${result.arxivId} (${result.citationKey})`,
+      );
+    } catch {
+      new Notice("arXiv Daily: citation snippet copy failed", 10_000);
     }
   }
 
@@ -327,6 +369,18 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     id: "arxiv-daily-copy-bibtex-by-id",
     name: "Copy BibTeX by arXiv ID…",
     callback: openCopyBibtexModal,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-copy-current-citation-snippet",
+    name: "Copy citation snippet for current paper…",
+    callback: copyCurrentPaperCitationSnippet,
+  });
+
+  plugin.addCommand({
+    id: "arxiv-daily-copy-citation-snippet-by-id",
+    name: "Copy citation snippet by arXiv ID…",
+    callback: openCopyCitationSnippetModal,
   });
 
   for (const status of PAPER_STATUSES) {
@@ -456,6 +510,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     );
     menu.addItem((item) =>
       item
+        .setTitle("Copy citation snippet…")
+        .setIcon("quote")
+        .onClick(openCopyCitationSnippetModal),
+    );
+    menu.addItem((item) =>
+      item
         .setTitle("Set paper status…")
         .setIcon("list-checks")
         .onClick(openSetPaperStatusModal),
@@ -492,6 +552,31 @@ const PAPER_STATUSES: PaperStatus[] = [
   "ignored",
 ];
 
+const CITATION_FORMATS: Array<{
+  value: CitationSnippetFormat;
+  label: string;
+}> = [
+  { value: "latex", label: "LaTeX \\cite{key}" },
+  { value: "pandoc", label: "Pandoc [@key]" },
+  { value: "typst", label: "Typst @key" },
+];
+
+async function chooseCitationFormat(
+  app: App,
+): Promise<CitationSnippetFormat | null> {
+  const choice = await chooseModal(
+    app,
+    "Copy citation snippet",
+    "Choose the citation syntax to copy.",
+    CITATION_FORMATS.map((format, index) => ({
+      label: format.label,
+      value: format.value,
+      cta: index === 0,
+    })),
+  );
+  return choice && isCitationSnippetFormat(choice) ? choice : null;
+}
+
 function describeResult(r: any): string {
   if (!r) return "no result";
   if (r.kind === "completed") return `done (${r.papersWritten} papers)`;
@@ -515,6 +600,10 @@ function describeRunResults(
   results: Array<{ date: string; result: any }>,
 ): string {
   return results.map((r) => `${r.date}: ${describeResult(r.result)}`).join("\n");
+}
+
+function isCitationSnippetFormat(value: string): value is CitationSnippetFormat {
+  return value === "latex" || value === "pandoc" || value === "typst";
 }
 
 class DatePickerModal extends Modal {
@@ -627,6 +716,61 @@ class PaperIdModal extends Modal {
         }),
     );
   }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class CitationSnippetModal extends Modal {
+  private value = "";
+  private format: CitationSnippetFormat = "latex";
+
+  constructor(
+    app: App,
+    private onSubmit: (
+      raw: string | null,
+      format: CitationSnippetFormat | null,
+    ) => void,
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Copy citation snippet" });
+    new Setting(contentEl)
+      .setName("arXiv ID or URL")
+      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
+      .addText((t) =>
+        t.setPlaceholder("2605.08080").onChange((v) => {
+          this.value = v.trim();
+        }),
+      );
+    new Setting(contentEl)
+      .setName("Format")
+      .addDropdown((d) => {
+        for (const format of CITATION_FORMATS) {
+          d.addOption(format.value, format.label);
+        }
+        d.setValue(this.format).onChange((value) => {
+          if (isCitationSnippetFormat(value)) this.format = value;
+        });
+      });
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Copy snippet")
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            new Notice("Please enter an arXiv ID");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value, this.format);
+        }),
+    );
+  }
+
   onClose() {
     this.contentEl.empty();
   }

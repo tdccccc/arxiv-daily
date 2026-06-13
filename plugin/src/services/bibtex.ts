@@ -21,6 +21,22 @@ export type BibtexResult =
   | { kind: "fetch_error"; reason: string }
   | { kind: "invalid_bibtex"; reason: string };
 
+export type CitationSnippetFormat = "latex" | "pandoc" | "typst";
+
+export type CitationSnippetResult =
+  | {
+      kind: "done";
+      arxivId: string;
+      citationKey: string;
+      snippet: string;
+      format: CitationSnippetFormat;
+      entryUpdated: boolean;
+      source: "index" | "bibtex";
+    }
+  | { kind: "invalid_id"; reason: string }
+  | { kind: "fetch_error"; reason: string }
+  | { kind: "invalid_bibtex"; reason: string };
+
 export interface BibtexServiceDeps {
   fetcher: Pick<ArxivFetcher, "fetchBibtex">;
   paperIndex?: PaperIndexStore;
@@ -113,6 +129,44 @@ export class BibtexService {
       bibtex: bibtex.trimEnd(),
       citationKey,
       entryUpdated,
+    };
+  }
+
+  async citationSnippetForId(
+    rawId: string,
+    format: CitationSnippetFormat,
+  ): Promise<CitationSnippetResult> {
+    const arxivId = normalizeArxivId(rawId);
+    if (!arxivId) {
+      return { kind: "invalid_id", reason: `invalid arXiv id: ${rawId}` };
+    }
+
+    if (this.deps.paperIndex) {
+      const entry = await this.deps.paperIndex.get(arxivId);
+      const citationKey = entry?.citationKey.trim();
+      if (citationKey) {
+        return {
+          kind: "done",
+          arxivId,
+          citationKey,
+          snippet: formatCitationSnippet(citationKey, format),
+          format,
+          entryUpdated: false,
+          source: "index",
+        };
+      }
+    }
+
+    const result = await this.fetchAndStore(arxivId);
+    if (result.kind !== "done") return result;
+    return {
+      kind: "done",
+      arxivId: result.arxivId,
+      citationKey: result.citationKey,
+      snippet: formatCitationSnippet(result.citationKey, format),
+      format,
+      entryUpdated: result.entryUpdated,
+      source: "bibtex",
     };
   }
 
@@ -222,6 +276,25 @@ export class BibtexService {
 export function parseBibtexKey(bibtex: string): string | null {
   const match = /@\w+\s*\{\s*([^,\s]+)\s*,/m.exec(bibtex);
   return match?.[1]?.trim() || null;
+}
+
+export function formatCitationSnippet(
+  citationKeys: string | string[],
+  format: CitationSnippetFormat,
+): string {
+  const keys = (Array.isArray(citationKeys) ? citationKeys : [citationKeys])
+    .map((key) => key.trim())
+    .filter(Boolean);
+  if (keys.length === 0) return "";
+
+  switch (format) {
+    case "latex":
+      return `\\cite{${keys.join(",")}}`;
+    case "pandoc":
+      return `[${keys.map((key) => `@${key}`).join("; ")}]`;
+    case "typst":
+      return keys.map((key) => `@${key}`).join(" ");
+  }
 }
 
 export function rewriteBibtexKey(bibtex: string, citationKey: string): string {

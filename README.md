@@ -145,6 +145,7 @@ tdccccc/arxiv-daily
 | 标记论文状态 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as saved/read/ignored** |
 | 回看论文列表 | 命令面板或 ribbon → **Open reading dashboard** |
 | 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
+| 复制引用片段 | 命令面板 → **arXiv Daily: Copy citation snippet for current paper…** 或 **Copy citation snippet by arXiv ID…** |
 
 ---
 
