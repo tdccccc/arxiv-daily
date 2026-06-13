@@ -166,21 +166,30 @@ tdccccc/arxiv-daily
 
 ## 命令行版本（cron / 服务器）
 
-如果不想开 Obsidian，只想 cron 跑 + 文件夹里出报告，根目录的 `arxiv_daily.py` 单文件脚本也能用：
+如果不想开 Obsidian，只想 cron 跑 + 文件夹里出报告，使用 `plugin/` 里的 Node CLI。它复用 Obsidian 插件的同一套 core pipeline、配置 schema 和 `arxiv-daily/.index/run-state.json`：
 
 ```bash
-pip install requests beautifulsoup4 pytz openai python-dotenv
-cp .env.example .env       # 填 API Key 和研究兴趣
-python arxiv_daily.py
+cd plugin
+npm install
+npm run build
+
+ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
 ```
 
-详细配置项见 `.env.example`。crontab 示例：
+也可以放一个 `arxiv-daily.config.json`，再运行：
+
+```bash
+npm run cli -- run --date 2026-06-13 --config arxiv-daily.config.json --vault-root /path/to/vault
+npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vault-root /path/to/vault
+```
+
+crontab 示例：
 
 ```cron
-0 9 * * 1-5 /path/to/python /path/to/arxiv_daily.py
+0 9 * * 1-5 cd /path/to/arxiv-daily/plugin && ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
 ```
 
-> 注：Python 版本是早期实现，功能不如插件完整（没有 topic 卡片、template、按 ID 单篇等），适合纯 headless 场景。
+> 注：根目录 `arxiv_daily.py` 已退役为兼容 shim，只转发到 Node CLI，不再维护独立 Python pipeline。
 
 ---
 
