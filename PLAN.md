@@ -542,7 +542,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 ### v0.1.7 Core Extraction + CLI Fallback
 
 - [x] Adapter contracts：定义 `HttpClient`、`StorageAdapter`、`SecretProvider`、`ProgressReporter`、resource opener 等接口。
-- [ ] Core extraction：把 fetch、filter、summarize、write daily、paper index 更新从 Obsidian API 中剥离。
+- [x] Core extraction：把 fetch、filter、summarize、write daily、paper index 更新从 Obsidian API 中剥离。
 - [x] Obsidian adapter：用 adapter 重新接回现有插件功能，保持用户行为不变。
 - [x] Node CLI：新增 `run --date`、`run-pending`、`summarize --id` 命令，复用 core。
 - [x] CLI config：支持 env / 配置文件读取 API key、topics、输出路径和 link style。
