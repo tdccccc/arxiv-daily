@@ -417,6 +417,23 @@ export class ArxivPipeline {
 
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
+        const bounds = recentDateBounds(buckets);
+        if (!bounds || dateStr >= bounds.oldest) {
+          const reason =
+            bounds && dateStr > bounds.newest
+              ? `date ${dateStr} is newer than newest ${category} /recent bucket ` +
+                `${bounds.newest}; arXiv announce page may not be available yet`
+              : `date ${dateStr} is not in ${category} /recent ` +
+                `(have: ${buckets.map((b) => b.announceDate).join(",")})`;
+          return {
+            kind: "error",
+            result: {
+              kind: "failed_transient",
+              reason,
+            },
+          };
+        }
+
         let fallbackPapers: PaperMeta[];
         try {
           fallbackPapers = await fetcher.fetchBySubmittedDate(category, dateStr);
@@ -537,4 +554,12 @@ function addSourcePaper(
 
 function appendUnique(values: string[], value: string): string[] {
   return values.includes(value) ? values : [...values, value];
+}
+
+function recentDateBounds(
+  buckets: DateBucket[],
+): { oldest: string; newest: string } | null {
+  const dates = buckets.map((bucket) => bucket.announceDate).sort();
+  if (dates.length === 0) return null;
+  return { oldest: dates[0], newest: dates[dates.length - 1] };
 }
