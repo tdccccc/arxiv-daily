@@ -1,5 +1,6 @@
 import {
   ItemView,
+  Menu,
   Modal,
   Notice,
   Setting,
@@ -20,6 +21,7 @@ import {
 import { type PaperIndexEntry } from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
+import { validateFilterConfig } from "../settings/validation";
 import { formatDate, todayInTz } from "../utils/time";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
@@ -88,7 +90,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "arXiv Daily Reading Dashboard";
+    return "arXiv Daily Dashboard";
   }
 
   getIcon(): string {
@@ -187,7 +189,7 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     const result = queryDashboard(this.entries, this.query);
-    this.renderTabs(contentEl, result.tabCounts);
+    this.renderToolbar(contentEl, result.tabCounts);
 
     const overview = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__overview",
@@ -229,26 +231,17 @@ class ArxivDailyDashboardView extends ItemView {
     const header = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__header",
     });
-    header.createEl("h2", { text: "Reading Dashboard" });
-    const refresh = header.createEl("button", {
-      cls: "clickable-icon arxiv-daily-dashboard__refresh",
-      attr: {
-        type: "button",
-        "aria-label": "Refresh dashboard",
-        title: "Refresh dashboard",
-      },
-    });
-    setIcon(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => {
-      void this.reloadIndex();
-    });
+    header.createEl("h2", { text: "arXiv Daily Dashboard" });
   }
 
-  private renderTabs(
+  private renderToolbar(
     contentEl: HTMLElement,
     counts: Record<DashboardTab, number>,
   ): void {
-    const tabs = contentEl.createEl("div", {
+    const toolbar = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__toolbar",
+    });
+    const tabs = toolbar.createEl("div", {
       cls: "arxiv-daily-dashboard__tabs",
     });
     const active = this.query.tab ?? "starred";
@@ -271,6 +264,44 @@ class ArxivDailyDashboardView extends ItemView {
         this.render();
       });
     }
+
+    const actions = toolbar.createEl("div", {
+      cls: "arxiv-daily-dashboard__toolbar-actions",
+    });
+    this.createToolbarButton(
+      actions,
+      "refresh-cw",
+      "Refresh",
+      "Refresh dashboard",
+      (button) => {
+        void this.runControlAction(button, () => this.reloadIndex());
+      },
+    );
+    this.createToolbarButton(
+      actions,
+      "play",
+      "Run Today",
+      "Run today",
+      (button) => {
+        void this.runControlAction(button, () => this.runToday());
+      },
+    );
+    this.createToolbarButton(
+      actions,
+      "layers",
+      "Run Pending",
+      "Run all pending in lookback",
+      (button) => {
+        void this.runControlAction(button, () => this.runAllPending());
+      },
+    );
+    this.createToolbarButton(
+      actions,
+      "more-horizontal",
+      "More",
+      "More arXiv Daily actions",
+      (_button, evt) => this.showMoreMenu(evt),
+    );
   }
 
   private renderDailyCalendar(contentEl: HTMLElement): void {
@@ -753,6 +784,136 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
+  private createToolbarButton(
+    parent: HTMLElement,
+    icon: string,
+    label: string,
+    title: string,
+    onClick: (button: HTMLButtonElement, evt: MouseEvent) => void,
+  ): void {
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-dashboard__toolbar-button",
+      attr: {
+        type: "button",
+        "aria-label": title,
+        title,
+      },
+    }) as HTMLButtonElement;
+    setIcon(button, icon);
+    button.createSpan({ text: label });
+    button.addEventListener("click", (evt) => onClick(button, evt));
+  }
+
+  private showMoreMenu(evt: MouseEvent): void {
+    const menu = new Menu();
+    const enabled = this.plugin.settings.schedule.enabled;
+    const activeRuns = this.plugin.scheduler.activeRuns();
+
+    menu.addItem((item) =>
+      item
+        .setTitle(`Scheduler: ${enabled ? "Enabled" : "Disabled"}`)
+        .setIcon(enabled ? "circle-check" : "circle-slash")
+        .setDisabled(true),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle(enabled ? "Disable scheduler" : "Enable scheduler")
+        .setIcon(enabled ? "pause" : "play")
+        .onClick(async () => {
+          const applied = await this.plugin.setScheduleEnabled(!enabled);
+          if (applied) {
+            new Notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
+          }
+        }),
+    );
+
+    menu.addSeparator();
+    this.addCommandMenuItem(menu, "Run for date...", "calendar", "arxiv-daily-run-for-date");
+    this.addCommandMenuItem(
+      menu,
+      "Force run for date...",
+      "rotate-cw",
+      "arxiv-daily-force-run-for-date",
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Retry failed dates")
+        .setIcon("refresh-cw")
+        .onClick(() => {
+          void this.retryFailedInLookback();
+        }),
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Cancel current run",
+      "circle-stop",
+      "arxiv-daily-cancel-current-run",
+      true,
+      activeRuns.length === 0,
+    );
+
+    menu.addSeparator();
+    this.addCommandMenuItem(
+      menu,
+      "Summarize by arXiv ID...",
+      "file-text",
+      "arxiv-daily-summarize-by-id",
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Create paper note...",
+      "file-plus",
+      "arxiv-daily-create-paper-note",
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Set paper mark...",
+      "list-checks",
+      "arxiv-daily-set-paper-status",
+    );
+
+    menu.addSeparator();
+    this.addCommandMenuItem(
+      menu,
+      "Show recent run state",
+      "list",
+      "arxiv-daily-show-state",
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Show diagnostics",
+      "clipboard-list",
+      "arxiv-daily-show-diagnostics",
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Clear run state...",
+      "trash-2",
+      "arxiv-daily-clear-run-state",
+    );
+
+    menu.showAtMouseEvent(evt);
+  }
+
+  private addCommandMenuItem(
+    menu: Menu,
+    label: string,
+    icon: string,
+    commandId: string,
+    refreshAfter = false,
+    disabled = false,
+  ): void {
+    menu.addItem((item) =>
+      item
+        .setTitle(label)
+        .setIcon(icon)
+        .setDisabled(disabled)
+        .onClick(() => {
+          void this.runDashboardCommand(commandId, refreshAfter);
+        }),
+    );
+  }
+
   private createIconButton(
     parent: HTMLElement,
     icon: string,
@@ -805,6 +966,67 @@ class ArxivDailyDashboardView extends ItemView {
     } finally {
       control.disabled = false;
     }
+  }
+
+  private gateFilter(): boolean {
+    const validation = validateFilterConfig(this.plugin.settings);
+    if (!validation.ok) {
+      new Notice(
+        `arXiv Daily - cannot run:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
+        10_000,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  private async runToday(): Promise<void> {
+    if (!this.gateFilter()) return;
+    const date = this.todayDate();
+    new Notice(`arXiv Daily: running for ${date}...`);
+    const result = await this.plugin.scheduler.runForDateNow(date);
+    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    await this.reloadIndex();
+  }
+
+  private async runAllPending(): Promise<void> {
+    if (!this.gateFilter()) return;
+    new Notice("arXiv Daily: running all pending in lookback...");
+    const results = await this.plugin.scheduler.runAllPending();
+    if (results.length === 0) {
+      new Notice("arXiv Daily: nothing pending in lookback window");
+      return;
+    }
+    new Notice(`arXiv Daily (lookback):\n${describeRunResults(results)}`, 10_000);
+    await this.reloadIndex();
+  }
+
+  private async retryFailedInLookback(): Promise<void> {
+    if (!this.gateFilter()) return;
+    new Notice("arXiv Daily: retrying failed dates in lookback...");
+    const results = await this.plugin.scheduler.retryFailedInLookback();
+    if (results.length === 0) {
+      new Notice("arXiv Daily: no failed dates in lookback window");
+      return;
+    }
+    new Notice(`arXiv Daily retry:\n${describeRunResults(results)}`, 10_000);
+    await this.reloadIndex();
+  }
+
+  private async runDashboardCommand(
+    commandId: string,
+    refreshAfter: boolean,
+  ): Promise<void> {
+    const commands = (this.plugin.app as any).commands;
+    if (!commands?.executeCommandById) {
+      throw new Error("Obsidian command registry is unavailable");
+    }
+    const result = commands.executeCommandById(commandId);
+    if (result === false) {
+      throw new Error(`command not found: ${commandId}`);
+    }
+    if (isPromiseLike(result)) await result;
+    if (refreshAfter) await this.reloadIndex();
   }
 
   private async updateStar(
@@ -990,6 +1212,29 @@ function summaryLine(entry: DashboardRow["entry"]): string {
 
 function isStarredEntry(entry: DashboardRow["entry"]): boolean {
   return entry.status !== "ignored" && entry.priority === "high";
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return Boolean(
+    value &&
+      (typeof value === "object" || typeof value === "function") &&
+      typeof (value as { then?: unknown }).then === "function",
+  );
+}
+
+function describeResult(result: any): string {
+  if (!result) return "no result";
+  if (result.kind === "completed") return `done (${result.papersWritten} papers)`;
+  if (result.kind === "failed_transient") return `transient: ${result.reason}`;
+  if (result.kind === "failed_permanent") return `permanent: ${result.reason}`;
+  if (result.kind === "skipped") return `skipped: ${result.reason}`;
+  return JSON.stringify(result);
+}
+
+function describeRunResults(results: Array<{ date: string; result: any }>): string {
+  return results
+    .map((entry) => `${entry.date}: ${describeResult(entry.result)}`)
+    .join("\n");
 }
 
 function normalizeVaultPath(path: string): string {

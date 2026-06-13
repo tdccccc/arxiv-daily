@@ -1,4 +1,4 @@
-import { App, Menu, Modal, Notice, Setting } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "./utils/time";
 import { validateFilterConfig, validateLlmConfig } from "./settings/validation";
@@ -316,120 +316,8 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     callback: () => new DiagnosticsModal(plugin.app, plugin).open(),
   });
 
-  plugin.addRibbonIcon("calendar-clock", "arXiv Daily", (evt: MouseEvent) => {
-    const menu = new Menu();
-
-    const enabled = plugin.settings.schedule.enabled;
-    const activeRuns = plugin.scheduler.activeRuns();
-
-    // Status header (non-interactive)
-    menu.addItem((item) =>
-      item
-        .setTitle(`Status: ${enabled ? "Enabled" : "Disabled"}`)
-        .setIcon(enabled ? "circle-check" : "circle-slash")
-        .setDisabled(true),
-    );
-    // Enable/Disable toggle
-    menu.addItem((item) =>
-      item
-        .setTitle(enabled ? "Disable" : "Enable")
-        .setIcon(enabled ? "pause" : "play")
-        .onClick(async () => {
-          const applied = await plugin.setScheduleEnabled(!enabled);
-          if (applied) {
-            new Notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
-          }
-        }),
-    );
-
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item.setTitle("Run for today").setIcon("play").onClick(runToday),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Cancel current run")
-        .setIcon("circle-stop")
-        .setDisabled(activeRuns.length === 0)
-        .onClick(cancelCurrentRun),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Run all pending (lookback)")
-        .setIcon("layers")
-        .onClick(runAllPending),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Retry failed (lookback)")
-        .setIcon("refresh-cw")
-        .onClick(retryFailedInLookback),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Run for specific date…")
-        .setIcon("calendar")
-        .onClick(openDatePicker),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Force run for date…")
-        .setIcon("rotate-cw")
-        .onClick(openForceDatePicker),
-    );
-
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item
-        .setTitle("Open today's daily report")
-        .setIcon("file-text")
-        .onClick(openTodayDaily),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Open reading dashboard")
-        .setIcon("book-open-check")
-        .onClick(() => openDashboardView(plugin)),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Summarize by arXiv ID…")
-        .setIcon("file-text")
-        .onClick(openArxivIdPicker),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Create paper note…")
-        .setIcon("file-plus")
-        .onClick(openCreatePaperNoteModal),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Set paper mark…")
-        .setIcon("list-checks")
-        .onClick(openSetPaperMarkModal),
-    );
-
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item
-        .setTitle("Show recent run state")
-        .setIcon("list")
-        .onClick(() => new StateModal(plugin.app, plugin).open()),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Show diagnostics")
-        .setIcon("clipboard-list")
-        .onClick(() => new DiagnosticsModal(plugin.app, plugin).open()),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Clear run state…")
-        .setIcon("trash-2")
-        .onClick(clearRunState),
-    );
-    menu.showAtMouseEvent(evt);
+  plugin.addRibbonIcon("book-open-check", "arXiv Daily Dashboard", () => {
+    void openDashboardView(plugin);
   });
 }
 
