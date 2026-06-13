@@ -13,11 +13,12 @@ workspace detection, Dashboard, pipeline commands, and API-key storage.
 - Command IDs reserved for Dashboard, run, run-pending, summarize-by-ID, and API
   key configuration.
 - Minimal activation entrypoint with placeholder command handlers.
+- Workspace adapter detects a folder containing `arxiv-daily/` and exposes a
+  `workspace.fs`-backed storage interface compatible with the shared core shape.
 - Local scaffold checks through `npm run build` and `npm test`.
 
 ## Planned Scope
 
-- Detect a workspace folder containing `arxiv-daily/` and treat it as the vault.
 - Reuse the host-neutral core storage and Dashboard model from the Obsidian
   plugin.
 - Store API keys with VS Code `SecretStorage`.

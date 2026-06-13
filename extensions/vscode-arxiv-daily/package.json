@@ -45,7 +45,7 @@
   },
   "scripts": {
     "build": "node scripts/check-package.mjs",
-    "test": "node scripts/check-package.mjs",
+    "test": "node scripts/check-package.mjs && node scripts/workspace-adapter-test.mjs",
     "vsix:package": "npx @vscode/vsce package --out dist/arxiv-daily-vscode-${npm_package_version}.vsix"
   }
 }
