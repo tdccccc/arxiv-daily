@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.7)
+## Features (v0.1.8)
 
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
@@ -17,6 +17,11 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   It reads `.index/papers.json` and supports tabs, search, topic/date/status/
   priority/note/detail/citation/Zotero filters, summary stats, row actions,
   Zotero item opening, and batch status/priority/note operations.
+- **Research tool integrations** — export filtered Dashboard results as
+  BibTeX, copy LaTeX / pandoc / Typst citation snippets, maintain Zotero
+  metadata, manually download arXiv PDFs into the vault, and append papers to
+  project notes. arXiv Daily stores links and metadata; it does not replace
+  Zotero or a PDF reader.
 - **Paper index schema v2** — stores structured daily summary fields
   (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
   `sourceSections`) for Dashboard search and review.
@@ -234,6 +239,8 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
 | `arXiv Daily: Copy BibTeX for current paper` | Copies arXiv BibTeX for the active paper |
 | `arXiv Daily: Copy BibTeX by arXiv ID…` | Copies arXiv BibTeX by ID and stores `citationKey` when indexed |
+| `arXiv Daily: Copy citation snippet for current paper…` | Copies a LaTeX, pandoc Markdown, or Typst citation snippet for the active paper |
+| `arXiv Daily: Copy citation snippet by arXiv ID…` | Copies a citation snippet by ID, fetching BibTeX first when the indexed paper has no `citationKey` |
 | `arXiv Daily: Mark current paper as <status>` | Updates the active paper note's indexed status |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
 | `arXiv Daily: Open reading dashboard` | Opens the Reading Dashboard custom view |
