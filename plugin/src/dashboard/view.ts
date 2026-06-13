@@ -1,11 +1,8 @@
 import {
   ItemView,
   Menu,
-  Modal,
   Notice,
-  Setting,
   setIcon,
-  type App,
   type WorkspaceLeaf,
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
@@ -18,7 +15,6 @@ import {
   type DashboardRow,
   type DashboardTab,
 } from "./model";
-import { type PaperIndexEntry } from "../services/paper-index";
 import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
 import { validateFilterConfig } from "../settings/validation";
@@ -685,19 +681,6 @@ class ArxivDailyDashboardView extends ItemView {
           openUrl(row.entry.arxivUrl, "arXiv");
         });
       });
-      this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
-        void this.runControlAction(button, () => this.openPdf(row.entry));
-      });
-      this.createIconButton(actionCell, "download", "Download PDF", (button) => {
-        void this.runControlAction(button, () =>
-          this.downloadPdf(row.entry),
-        );
-      });
-      this.createIconButton(actionCell, "folder-plus", "Add to project", (button) => {
-        void this.runControlAction(button, () =>
-          this.openProjectNoteModal(row.entry),
-        );
-      });
     }
   }
 
@@ -1062,45 +1045,6 @@ class ArxivDailyDashboardView extends ItemView {
     await this.plugin.app.workspace.openLinkText(path, "", false);
   }
 
-  private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
-    if (entry.pdfPath.trim()) {
-      await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
-      return;
-    }
-    openUrl(entry.pdfUrl, "PDF");
-  }
-
-  private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
-    const result = await this.plugin.buildPdfService().downloadForEntry(entry);
-    if (result.kind !== "done") {
-      new Notice(`arXiv Daily: PDF download failed — ${result.reason}`, 10_000);
-      return;
-    }
-    new Notice(
-      `arXiv Daily: downloaded PDF for ${result.arxivId} → ${result.path}`,
-      10_000,
-    );
-    await this.reloadIndex();
-  }
-
-  private async openProjectNoteModal(
-    entry: DashboardRow["entry"],
-  ): Promise<void> {
-    new ProjectNoteModal(this.plugin.app, entry, async (projectPath) => {
-      const result = await this.plugin
-        .buildProjectNotesService()
-        .addPaperToProject(entry, projectPath);
-      if (result.kind !== "done") {
-        throw new Error(result.reason);
-      }
-      new Notice(
-        `arXiv Daily: ${result.appended ? "added" : "already listed"} ${result.arxivId} in ${result.projectPath}`,
-        10_000,
-      );
-      await this.reloadIndex();
-    }).open();
-  }
-
   private selectedArxivIds(): string[] {
     return [...this.selectedIds];
   }
@@ -1277,51 +1221,4 @@ function calendarCells(month: string): Array<{ date: string | null }> {
   }
   while (cells.length % 7 !== 0) cells.push({ date: null });
   return cells;
-}
-
-class ProjectNoteModal extends Modal {
-  private projectPath = "";
-
-  constructor(
-    app: App,
-    private entry: PaperIndexEntry,
-    private onSubmit: (projectPath: string) => Promise<void>,
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Add paper to project" });
-    contentEl.createEl("p", {
-      text: `${this.entry.arxivId} · ${this.entry.title}`,
-    });
-    new Setting(contentEl)
-      .setName("Project note")
-      .setDesc("Vault path, for example Projects/photo-z.md. .md is added when omitted.")
-      .addText((text) =>
-        text.setPlaceholder("Projects/photo-z.md").onChange((value) => {
-          this.projectPath = value.trim();
-        }),
-      );
-    new Setting(contentEl).addButton((button) =>
-      button
-        .setButtonText("Add")
-        .setCta()
-        .onClick(() => {
-          if (!this.projectPath) {
-            new Notice("arXiv Daily: project note path is required");
-            return;
-          }
-          this.close();
-          this.onSubmit(this.projectPath).catch((e) => {
-            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
-          });
-        }),
-    );
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-  }
 }
