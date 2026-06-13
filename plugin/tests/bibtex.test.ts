@@ -3,6 +3,7 @@ import {
   BibtexService,
   extractArxivIdFromMarkdown,
   parseBibtexKey,
+  rewriteBibtexKey,
 } from "../src/services/bibtex";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
@@ -49,6 +50,9 @@ describe("BibTeX service", () => {
       "2606.12345",
     );
     expect(parseBibtexKey("not bibtex")).toBeNull();
+    expect(rewriteBibtexKey("@article{OldKey,\n title={T}\n}", "NewKey")).toBe(
+      "@article{NewKey,\n title={T}\n}",
+    );
   });
 
   it("extracts arXiv IDs from markdown frontmatter and body", () => {
@@ -153,5 +157,95 @@ describe("BibTeX service", () => {
     await expect(service.fetchAndStore("2606.12345")).resolves.toMatchObject({
       kind: "invalid_bibtex",
     });
+  });
+
+  it("exports many BibTeX entries and rewrites duplicate citation keys", async () => {
+    const { files, storage } = makeStorage();
+    const store = new PaperIndexStore(
+      storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-13T00:00:00.000Z"),
+    );
+    await store.upsertManyFromDailyPapers([
+      {
+        arxivId: "2606.12345",
+        title: "A paper",
+        authors: "A",
+        date: "2026-06-13",
+        arxivCategory: "astro-ph",
+        primaryTopic: "photo-z",
+        detail: false,
+      },
+      {
+        arxivId: "2606.54321",
+        title: "Another paper",
+        authors: "B",
+        date: "2026-06-13",
+        arxivCategory: "astro-ph",
+        primaryTopic: "photo-z",
+        detail: false,
+      },
+    ]);
+    const service = new BibtexService({
+      fetcher: {
+        fetchBibtex: vi.fn(async (id: string) => `@article{SameKey,\n title={${id}}\n}\n`),
+      },
+      paperIndex: store,
+      storage,
+      output: DEFAULT_SETTINGS.output,
+      logger: new Logger("error"),
+    });
+
+    const result = await service.exportManyToFile(
+      [{ arxivId: "2606.12345" }, { arxivId: "2606.54321" }],
+      { path: "arxiv-daily/exports/test.bib" },
+    );
+
+    expect(result).toMatchObject({
+      kind: "done",
+      path: "arxiv-daily/exports/test.bib",
+      requested: 2,
+      exported: 2,
+      keysRenamed: 1,
+    });
+    expect(files["arxiv-daily/exports/test.bib"]).toContain(
+      "@article{SameKey,\n title={2606.12345}",
+    );
+    expect(files["arxiv-daily/exports/test.bib"]).toContain(
+      "@article{SameKey_260654321,\n title={2606.54321}",
+    );
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.papers["2606.12345"].citationKey).toBe("SameKey");
+    expect(saved.papers["2606.54321"].citationKey).toBe("SameKey_260654321");
+  });
+
+  it("keeps successful entries when some batch BibTeX fetches fail", async () => {
+    const { files, storage } = makeStorage();
+    const service = new BibtexService({
+      fetcher: {
+        fetchBibtex: vi.fn(async (id: string) =>
+          id === "2606.12345" ? "@misc{GoodKey,\n}\n" : "not bibtex",
+        ),
+      },
+      storage,
+      output: DEFAULT_SETTINGS.output,
+      logger: new Logger("error"),
+    });
+
+    const result = await service.exportManyToFile(
+      [{ arxivId: "2606.12345" }, { arxivId: "2606.54321" }],
+      { path: "arxiv-daily/exports/partial.bib" },
+    );
+
+    expect(result).toMatchObject({
+      kind: "done",
+      requested: 2,
+      exported: 1,
+      failures: [{ arxivId: "2606.54321" }],
+    });
+    expect(files["arxiv-daily/exports/partial.bib"]).toContain(
+      "% Failed 2606.54321: could not parse BibTeX citation key",
+    );
+    expect(files["arxiv-daily/exports/partial.bib"]).toContain("@misc{GoodKey,");
   });
 });

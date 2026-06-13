@@ -291,6 +291,8 @@ export default class ArxivDailyPlugin extends Plugin {
     return new BibtexService({
       fetcher,
       paperIndex: this.buildPaperIndex(),
+      storage: this.host.storage,
+      output: this.settings.output,
       logger: this.logger,
     });
   }

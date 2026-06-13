@@ -674,6 +674,13 @@ class ArxivDailyDashboardView extends ItemView {
           arxivIds: this.selectedArxivIds(),
         }),
     );
+    this.createBatchButton(
+      toolbar,
+      "download",
+      "Export BibTeX",
+      visibleRows.length,
+      () => this.exportVisibleBibtex(visibleRows),
+    );
 
     const priority = this.createSelect(
       toolbar.createEl("label", {
@@ -866,6 +873,29 @@ class ArxivDailyDashboardView extends ItemView {
     }
     this.selectedIds.clear();
     new Notice(`arXiv Daily: updated ${changed} papers`);
+    await this.reloadIndex();
+  }
+
+  private async exportVisibleBibtex(rows: DashboardRow[]): Promise<void> {
+    if (rows.length === 0) {
+      new Notice("arXiv Daily: no visible papers to export");
+      return;
+    }
+    const result = await this.plugin
+      .buildBibtexService()
+      .exportManyToFile(rows.map((row) => row.entry));
+    if (result.kind === "empty") {
+      new Notice("arXiv Daily: no BibTeX entries exported", 10_000);
+      return;
+    }
+
+    const details = [
+      `exported ${result.exported}/${result.requested} BibTeX entries`,
+      result.keysRenamed > 0 ? `${result.keysRenamed} keys renamed` : "",
+      result.failures.length > 0 ? `${result.failures.length} failed` : "",
+      `→ ${result.path}`,
+    ].filter(Boolean);
+    new Notice(`arXiv Daily: ${details.join("; ")}`, 10_000);
     await this.reloadIndex();
   }
 
