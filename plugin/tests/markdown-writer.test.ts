@@ -262,9 +262,9 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("status: saved");
     expect(written).toContain("priority: high");
     expect(written).toContain('  - "2026-06-09"');
-    expect(written).toContain('zotero_key: "ZOTERO"');
-    expect(written).toContain('zotero_uri: "zotero://select/items/ABC123"');
-    expect(written).toContain('citation_key: "cite"');
+    expect(written).not.toContain("zotero_key");
+    expect(written).not.toContain("zotero_uri");
+    expect(written).not.toContain("citation_key");
   });
 
   it("writePaperNote creates a lightweight note from an index entry", async () => {

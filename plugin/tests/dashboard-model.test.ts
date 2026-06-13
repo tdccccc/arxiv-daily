@@ -56,7 +56,6 @@ function fixtures(): PaperIndexEntry[] {
       status: "to_read",
       priority: "high",
       seenDates: ["2026-06-11"],
-      citationKey: "Gamma2026",
       summary: {
         keyMethod: "Contrastive transformer model.",
       },
@@ -92,13 +91,14 @@ describe("dashboard model", () => {
   it("uses the watch tab by default and counts all tabs", () => {
     const result = queryDashboard(fixtures());
 
-    expect(result.rows.map((row) => row.arxivId)).toEqual(["2606.00001"]);
+    expect(result.rows.map((row) => row.arxivId)).toEqual([
+      "2606.00001",
+      "2606.00005",
+    ]);
     expect(result.tabCounts).toEqual({
-      watch: 1,
+      watch: 2,
       highlight: 1,
-      reading: 1,
       saved: 1,
-      read: 0,
       all: 4,
       ignored: 1,
     });
@@ -122,18 +122,16 @@ describe("dashboard model", () => {
     ]);
   });
 
-  it("filters by date range, note existence, and missing citation metadata", () => {
+  it("filters by date range and note existence", () => {
     const seenRange = queryDashboard(fixtures(), {
       tab: "all",
       dateField: "seen",
       dateFrom: "2026-06-12",
       dateTo: "2026-06-13",
-      missingCitationKey: true,
     });
-    const savedMissingZoteroWithNote = queryDashboard(fixtures(), {
+    const savedWithNote = queryDashboard(fixtures(), {
       tab: "saved",
       hasNote: true,
-      missingZoteroKey: true,
     });
     const publishedRange = queryDashboard(fixtures(), {
       tab: "all",
@@ -145,34 +143,12 @@ describe("dashboard model", () => {
       "2606.00003",
       "2606.00005",
     ]);
-    expect(savedMissingZoteroWithNote.rows.map((row) => row.arxivId)).toEqual([
+    expect(savedWithNote.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",
     ]);
     expect(publishedRange.rows.map((row) => row.arxivId)).not.toContain(
       "2606.00002",
     );
-  });
-
-  it("treats zoteroUri as Zotero metadata for search and missing filters", () => {
-    const entries = fixtures().map((entry) =>
-      entry.arxivId === "2606.00003"
-        ? {
-            ...entry,
-            zoteroUri: "zotero://select/items/ABC123",
-          }
-        : entry,
-    );
-    const missing = queryDashboard(entries, {
-      tab: "saved",
-      missingZoteroKey: true,
-    });
-    const byUri = queryDashboard(entries, {
-      tab: "saved",
-      search: "ABC123",
-    });
-
-    expect(missing.rows).toHaveLength(0);
-    expect(byUri.rows.map((row) => row.arxivId)).toEqual(["2606.00003"]);
   });
 
   it("builds filtered summary stats", () => {
@@ -191,11 +167,9 @@ describe("dashboard model", () => {
     expect(result.stats.statusCounts.saved).toBe(1);
     expect(result.stats.priorityCounts.high).toBe(1);
     expect(result.stats.weekAdded).toBe(4);
-    expect(result.stats.watch).toBe(1);
+    expect(result.stats.watch).toBe(2);
     expect(result.stats.highlight).toBe(1);
     expect(result.stats.saved).toBe(1);
-    expect(result.stats.savedMissingZoteroKey).toBe(1);
-    expect(result.stats.savedMissingCitationKey).toBe(1);
   });
 
   it("sorts with explicit keys and directions", () => {
@@ -228,6 +202,12 @@ describe("dashboard model", () => {
       arxivIds: ["2606.00001", "2606.00002"],
       priority: "high",
     });
+    const markPlan = planDashboardAction(entries, {
+      type: "set_mark",
+      arxivIds: ["2606.00001", "2606.00003"],
+      status: "to_read",
+      priority: "high",
+    });
 
     expect(statusPlan).toEqual({
       patches: [
@@ -250,6 +230,18 @@ describe("dashboard model", () => {
     });
     expect(priorityPlan.patches).toEqual([
       { arxivId: "2606.00001", priority: "high" },
+    ]);
+    expect(markPlan.patches).toEqual([
+      {
+        arxivId: "2606.00001",
+        status: "to_read",
+        priority: "high",
+      },
+      {
+        arxivId: "2606.00003",
+        status: "to_read",
+        priority: "high",
+      },
     ]);
   });
 });

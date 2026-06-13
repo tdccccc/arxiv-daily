@@ -1,7 +1,7 @@
 /* arXiv Daily plugin styles */
 
 .arxiv-daily-dashboard {
-  --arxiv-daily-table-min-width: 980px;
+  --arxiv-daily-table-min-width: 860px;
   height: 100%;
   padding: 16px;
   overflow: auto;
@@ -72,6 +72,97 @@
   align-items: end;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__calendar {
+  margin-bottom: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 10px 0 12px;
+}
+
+.arxiv-daily-dashboard__calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.arxiv-daily-dashboard__calendar-header h3 {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-dashboard__calendar-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.arxiv-daily-dashboard__calendar-month {
+  min-width: 72px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.arxiv-daily-dashboard__calendar-weekdays,
+.arxiv-daily-dashboard__calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(34px, 1fr));
+  gap: 4px;
+}
+
+.arxiv-daily-dashboard__calendar-weekdays {
+  margin-bottom: 4px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.arxiv-daily-dashboard__calendar-day {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.arxiv-daily-dashboard__calendar-day:disabled {
+  opacity: 0.5;
+}
+
+.arxiv-daily-dashboard__calendar-day.is-empty {
+  visibility: hidden;
+}
+
+.arxiv-daily-dashboard__calendar-day.has-report {
+  border-color: var(--interactive-accent);
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-dashboard__calendar-day.has-report:hover {
+  background: var(--background-modifier-hover);
+}
+
+.arxiv-daily-dashboard__calendar-day-count {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  color: var(--text-accent);
+  font-size: 10px;
+  line-height: 1;
 }
 
 .arxiv-daily-dashboard__filter {
@@ -218,22 +309,22 @@
 
 .arxiv-daily-dashboard__table th:nth-child(2),
 .arxiv-daily-dashboard__table td:nth-child(2) {
-  width: 88px;
+  width: 104px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(3),
 .arxiv-daily-dashboard__table td:nth-child(3) {
-  width: 96px;
+  width: 42%;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(4),
 .arxiv-daily-dashboard__table td:nth-child(4) {
-  width: 36%;
+  width: 120px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(5),
 .arxiv-daily-dashboard__table td:nth-child(5) {
-  width: 120px;
+  width: 104px;
 }
 
 .arxiv-daily-dashboard__table th:nth-child(6),
@@ -243,14 +334,9 @@
   width: 104px;
 }
 
-.arxiv-daily-dashboard__table th:nth-child(8),
-.arxiv-daily-dashboard__table td:nth-child(8) {
+.arxiv-daily-dashboard__table th:nth-child(7),
+.arxiv-daily-dashboard__table td:nth-child(7) {
   width: 152px;
-}
-
-.arxiv-daily-dashboard__table th:nth-child(9),
-.arxiv-daily-dashboard__table td:nth-child(9) {
-  width: 140px;
 }
 
 .arxiv-daily-dashboard__title-cell {

@@ -208,37 +208,6 @@ export class PaperIndexStore {
     return entry;
   }
 
-  async setCitationKey(
-    arxivId: string,
-    citationKey: string,
-  ): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.citationKey = citationKey;
-    await this.save(inbox);
-    return entry;
-  }
-
-  async setZoteroFields(
-    arxivId: string,
-    fields: { zoteroKey?: string; zoteroUri?: string },
-  ): Promise<PaperIndexEntry | null> {
-    const validation = validateZoteroFields(fields);
-    if (!validation.ok) {
-      throw new PaperIndexError(
-        `invalid Zotero fields: ${validation.reasons.join("; ")}`,
-      );
-    }
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    if (fields.zoteroKey !== undefined) entry.zoteroKey = fields.zoteroKey.trim();
-    if (fields.zoteroUri !== undefined) entry.zoteroUri = fields.zoteroUri.trim();
-    await this.save(inbox);
-    return entry;
-  }
-
   async setSummaries(
     summaries: Record<string, PaperSummary>,
   ): Promise<number> {
@@ -482,35 +451,6 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     citationKey: stringOr(obj.citationKey, ""),
     projects: stringArray(obj.projects),
   };
-}
-
-export function validateZoteroFields(fields: {
-  zoteroKey?: string;
-  zoteroUri?: string;
-}): { ok: true; reasons: [] } | { ok: false; reasons: string[] } {
-  const reasons: string[] = [];
-  const zoteroKey = fields.zoteroKey?.trim() ?? "";
-  const zoteroUri = fields.zoteroUri?.trim() ?? "";
-  if (zoteroKey && /\s/.test(zoteroKey)) {
-    reasons.push("zoteroKey must not contain whitespace");
-  }
-  if (zoteroUri && !isValidZoteroUri(zoteroUri)) {
-    reasons.push("zoteroUri must be a zotero:// or http(s) URL");
-  }
-  return reasons.length === 0 ? { ok: true, reasons: [] } : { ok: false, reasons };
-}
-
-function isValidZoteroUri(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "zotero:" ||
-      url.protocol === "http:" ||
-      url.protocol === "https:"
-    );
-  } catch {
-    return false;
-  }
 }
 
 function parentDir(

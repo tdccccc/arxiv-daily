@@ -19,7 +19,6 @@ import {
   type DashboardTab,
 } from "./model";
 import {
-  validateZoteroFields,
   type PaperIndexEntry,
   type PaperPriority,
   type PaperStatus,
@@ -32,37 +31,29 @@ export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "watch", label: "Watch" },
   { id: "highlight", label: "Highlight" },
-  { id: "reading", label: "Reading" },
   { id: "saved", label: "Saved" },
-  { id: "read", label: "Read" },
   { id: "all", label: "All" },
   { id: "ignored", label: "Ignored" },
 ];
 
-const STATUS_OPTIONS: Array<{ value: "" | PaperStatus; label: string }> = [
-  { value: "", label: "Any status" },
-  { value: "inbox", label: "Inbox" },
-  { value: "to_read", label: "To read" },
-  { value: "reading", label: "Reading" },
-  { value: "read", label: "Read" },
+type PaperMark = "inbox" | "watch" | "highlight" | "saved" | "ignored";
+
+const MARK_OPTIONS: Array<{ value: PaperMark; label: string }> = [
+  { value: "inbox", label: "Unmarked" },
+  { value: "watch", label: "Watch" },
+  { value: "highlight", label: "Highlight" },
   { value: "saved", label: "Saved" },
   { value: "ignored", label: "Ignored" },
 ];
 
-const PRIORITY_OPTIONS: Array<{ value: "" | PaperPriority; label: string }> = [
-  { value: "", label: "Any priority" },
-  { value: "high", label: "High" },
-  { value: "normal", label: "Normal" },
-  { value: "low", label: "Low" },
-];
-const ROW_STATUS_OPTIONS = STATUS_OPTIONS.filter((option) => option.value) as Array<{
-  value: PaperStatus;
-  label: string;
-}>;
-const ROW_PRIORITY_OPTIONS = PRIORITY_OPTIONS.filter((option) => option.value) as Array<{
-  value: PaperPriority;
-  label: string;
-}>;
+interface DailyReportDay {
+  date: string;
+  path: string;
+  papers: number;
+  watch: number;
+  highlight: number;
+  saved: number;
+}
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   plugin.registerView(
@@ -95,6 +86,8 @@ export async function openDashboardView(
 
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
+  private dailyReports: DailyReportDay[] = [];
+  private calendarMonth: string | null = null;
   private query: DashboardQuery = { tab: "watch" };
   private error: string | null = null;
   private selectedIds = new Set<string>();
@@ -134,12 +127,64 @@ class ArxivDailyDashboardView extends ItemView {
     try {
       const index = await this.plugin.buildPaperIndex().load();
       this.entries = Object.values(index.papers);
+      this.dailyReports = this.loadDailyReports(this.entries);
+      this.calendarMonth ??= latestReportMonth(this.dailyReports);
       this.error = null;
     } catch (e) {
       this.entries = [];
+      this.dailyReports = [];
       this.error = (e as Error).message;
     }
     this.render();
+  }
+
+  private loadDailyReports(entries: DashboardRow["entry"][]): DailyReportDay[] {
+    const dailyDir = normalizeVaultPath(this.plugin.settings.output.dailyDir);
+    const byDate = new Map<string, DailyReportDay>();
+
+    for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+      const path = normalizeVaultPath(file.path);
+      const date = dailyDateFromPath(path, dailyDir);
+      if (!date) continue;
+      byDate.set(date, {
+        date,
+        path,
+        papers: 0,
+        watch: 0,
+        highlight: 0,
+        saved: 0,
+      });
+    }
+
+    const counted = new Set<string>();
+    for (const entry of entries) {
+      for (const reportPath of entry.dailyReports) {
+        const path = normalizeVaultPath(reportPath);
+        const date = dailyDateFromPath(path, dailyDir);
+        if (!date) continue;
+        const report =
+          byDate.get(date) ??
+          {
+            date,
+            path,
+            papers: 0,
+            watch: 0,
+            highlight: 0,
+            saved: 0,
+          };
+        byDate.set(date, report);
+        const countKey = `${date}:${entry.arxivId}`;
+        if (counted.has(countKey)) continue;
+        counted.add(countKey);
+        report.papers += 1;
+        const mark = markForEntry(entry);
+        if (mark === "watch") report.watch += 1;
+        if (mark === "highlight") report.highlight += 1;
+        if (mark === "saved") report.saved += 1;
+      }
+    }
+
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   }
 
   private renderLoading(): void {
@@ -169,6 +214,7 @@ class ArxivDailyDashboardView extends ItemView {
 
     const result = queryDashboard(this.entries, this.query);
     this.renderTabs(contentEl, result.tabCounts);
+    this.renderDailyCalendar(contentEl);
     this.renderFilters(contentEl);
 
     this.statsEl = contentEl.createEl("div");
@@ -243,6 +289,104 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
+  private renderDailyCalendar(contentEl: HTMLElement): void {
+    const section = contentEl.createEl("section", {
+      cls: "arxiv-daily-dashboard__calendar",
+    });
+    const header = section.createEl("div", {
+      cls: "arxiv-daily-dashboard__calendar-header",
+    });
+    header.createEl("h3", { text: "Daily reports" });
+
+    const controls = header.createEl("div", {
+      cls: "arxiv-daily-dashboard__calendar-controls",
+    });
+    const month = this.calendarMonth ?? latestReportMonth(this.dailyReports);
+    const prev = controls.createEl("button", {
+      cls: "clickable-icon",
+      attr: { type: "button", "aria-label": "Previous month", title: "Previous month" },
+    }) as HTMLButtonElement;
+    setIcon(prev, "chevron-left");
+    controls.createEl("span", {
+      cls: "arxiv-daily-dashboard__calendar-month",
+      text: month || "No reports",
+    });
+    const next = controls.createEl("button", {
+      cls: "clickable-icon",
+      attr: { type: "button", "aria-label": "Next month", title: "Next month" },
+    }) as HTMLButtonElement;
+    setIcon(next, "chevron-right");
+
+    if (!month) {
+      prev.disabled = true;
+      next.disabled = true;
+      section.createEl("div", {
+        cls: "arxiv-daily-dashboard__state",
+        text: "No daily reports found.",
+      });
+      return;
+    }
+
+    prev.addEventListener("click", () => {
+      this.calendarMonth = shiftMonth(month, -1);
+      this.render();
+    });
+    next.addEventListener("click", () => {
+      this.calendarMonth = shiftMonth(month, 1);
+      this.render();
+    });
+
+    const byDate = new Map(this.dailyReports.map((report) => [report.date, report]));
+    const weekdays = section.createEl("div", {
+      cls: "arxiv-daily-dashboard__calendar-weekdays",
+    });
+    for (const label of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) {
+      weekdays.createSpan({ text: label });
+    }
+
+    const grid = section.createEl("div", {
+      cls: "arxiv-daily-dashboard__calendar-grid",
+    });
+    for (const cell of calendarCells(month)) {
+      const report = cell.date ? byDate.get(cell.date) : undefined;
+      const button = grid.createEl("button", {
+        cls: "arxiv-daily-dashboard__calendar-day",
+        attr: {
+          type: "button",
+          "aria-label": report
+            ? `Open daily report ${report.date}`
+            : cell.date
+              ? `No daily report ${cell.date}`
+              : "Empty calendar cell",
+          title: report
+            ? `${report.date}: ${report.papers} indexed papers`
+            : cell.date ?? "",
+        },
+      }) as HTMLButtonElement;
+      if (!cell.date) {
+        button.disabled = true;
+        button.addClass("is-empty");
+        continue;
+      }
+      button.createSpan({
+        cls: "arxiv-daily-dashboard__calendar-day-number",
+        text: String(Number(cell.date.slice(-2))),
+      });
+      if (report) {
+        button.addClass("has-report");
+        button.createSpan({
+          cls: "arxiv-daily-dashboard__calendar-day-count",
+          text: String(report.papers),
+        });
+        button.addEventListener("click", () => {
+          void this.plugin.app.workspace.openLinkText(report.path, "", false);
+        });
+      } else {
+        button.disabled = true;
+      }
+    }
+  }
+
   private renderStats(
     contentEl: HTMLElement,
     result: ReturnType<typeof queryDashboard>,
@@ -256,8 +400,6 @@ class ArxivDailyDashboardView extends ItemView {
       ["Watch", result.stats.watch],
       ["Highlight", result.stats.highlight],
       ["Saved", result.stats.saved],
-      ["Saved missing citation", result.stats.savedMissingCitationKey],
-      ["Saved missing Zotero", result.stats.savedMissingZoteroKey],
     ] as const;
 
     for (const [label, value] of items) {
@@ -348,34 +490,6 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const status = this.createSelect(
-      this.createFilterField(filters, "Status"),
-      STATUS_OPTIONS,
-      this.query.statuses?.[0] ?? "",
-    );
-    status.addEventListener("change", () => {
-      this.query = {
-        ...this.query,
-        statuses: status.value ? [status.value as PaperStatus] : undefined,
-      };
-      this.renderCurrentResults();
-    });
-
-    const priority = this.createSelect(
-      this.createFilterField(filters, "Priority"),
-      PRIORITY_OPTIONS,
-      this.query.priorities?.[0] ?? "",
-    );
-    priority.addEventListener("change", () => {
-      this.query = {
-        ...this.query,
-        priorities: priority.value
-          ? [priority.value as PaperPriority]
-          : undefined,
-      };
-      this.renderCurrentResults();
-    });
-
     const note = this.createSelect(
       this.createFilterField(filters, "Note"),
       [
@@ -403,32 +517,6 @@ class ArxivDailyDashboardView extends ItemView {
       this.query = { ...this.query, detail: boolSelectQuery(detail.value) };
       this.renderCurrentResults();
     });
-
-    this.createCheckboxFilter(
-      filters,
-      "Missing citation",
-      Boolean(this.query.missingCitationKey),
-      (checked) => {
-        this.query = {
-          ...this.query,
-          missingCitationKey: checked || undefined,
-        };
-        this.renderCurrentResults();
-      },
-    );
-
-    this.createCheckboxFilter(
-      filters,
-      "Missing Zotero",
-      Boolean(this.query.missingZoteroKey),
-      (checked) => {
-        this.query = {
-          ...this.query,
-          missingZoteroKey: checked || undefined,
-        };
-        this.renderCurrentResults();
-      },
-    );
 
     const reset = filters.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__filter-reset",
@@ -470,23 +558,6 @@ class ArxivDailyDashboardView extends ItemView {
     return select;
   }
 
-  private createCheckboxFilter(
-    parent: HTMLElement,
-    label: string,
-    checked: boolean,
-    onChange: (checked: boolean) => void,
-  ): void {
-    const field = parent.createEl("label", {
-      cls: "arxiv-daily-dashboard__filter arxiv-daily-dashboard__filter--checkbox",
-    });
-    const input = field.createEl("input", {
-      attr: { type: "checkbox" },
-    }) as HTMLInputElement;
-    input.checked = checked;
-    field.createSpan({ text: label });
-    input.addEventListener("change", () => onChange(input.checked));
-  }
-
   private renderTable(contentEl: HTMLElement, rows: DashboardRow[]): void {
     const scroller = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__table-wrap",
@@ -518,14 +589,12 @@ class ArxivDailyDashboardView extends ItemView {
     });
 
     for (const label of [
-      "Priority",
-      "Status",
+      "Mark",
       "Title",
       "Topic",
       "Published",
       "First seen",
       "Actions",
-      "Citation",
     ]) {
       headRow.createEl("th", { text: label });
     }
@@ -547,26 +616,14 @@ class ArxivDailyDashboardView extends ItemView {
         this.renderCurrentResults();
       });
 
-      const priorityCell = tr.createEl("td");
+      const markCell = tr.createEl("td");
       this.createInlineSelect(
-        priorityCell,
-        ROW_PRIORITY_OPTIONS,
-        row.entry.priority,
+        markCell,
+        MARK_OPTIONS,
+        markForEntry(row.entry),
         (value, control) => {
           void this.runControlAction(control, () =>
-            this.updatePriority(row.entry, value as PaperPriority),
-          );
-        },
-      );
-
-      const statusCell = tr.createEl("td");
-      this.createInlineSelect(
-        statusCell,
-        ROW_STATUS_OPTIONS,
-        row.entry.status,
-        (value, control) => {
-          void this.runControlAction(control, () =>
-            this.updateStatus(row.entry, value as PaperStatus),
+            this.updateMark(row.entry, value as PaperMark),
           );
         },
       );
@@ -624,23 +681,10 @@ class ArxivDailyDashboardView extends ItemView {
           this.downloadPdf(row.entry),
         );
       });
-      this.createIconButton(actionCell, "book-marked", "Open Zotero", (button) => {
-        void this.runControlAction(button, () =>
-          this.openZotero(row.entry),
-        );
-      });
-      this.createIconButton(actionCell, "library", "Edit Zotero fields", (button) => {
-        void this.runControlAction(button, () =>
-          this.openZoteroFieldsModal(row.entry),
-        );
-      });
       this.createIconButton(actionCell, "folder-plus", "Add to project", (button) => {
         void this.runControlAction(button, () =>
           this.openProjectNoteModal(row.entry),
         );
-      });
-      tr.createEl("td", {
-        text: row.missingCitationKey ? "missing" : row.entry.citationKey,
       });
     }
   }
@@ -660,27 +704,19 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.createBatchButton(
       toolbar,
-      "archive-x",
-      "Ignore",
+      "eye",
+      "Watch",
       selectedCount,
       () =>
-        this.runBatchAction({
-          type: "set_status",
-          arxivIds: this.selectedArxivIds(),
-          status: "ignored",
-        }),
+        this.runBatchMark("watch"),
     );
     this.createBatchButton(
       toolbar,
-      "check-check",
-      "Read",
+      "star",
+      "Highlight",
       selectedCount,
       () =>
-        this.runBatchAction({
-          type: "set_status",
-          arxivIds: this.selectedArxivIds(),
-          status: "read",
-        }),
+        this.runBatchMark("highlight"),
     );
     this.createBatchButton(
       toolbar,
@@ -688,11 +724,15 @@ class ArxivDailyDashboardView extends ItemView {
       "Saved",
       selectedCount,
       () =>
-        this.runBatchAction({
-          type: "set_status",
-          arxivIds: this.selectedArxivIds(),
-          status: "saved",
-        }),
+        this.runBatchMark("saved"),
+    );
+    this.createBatchButton(
+      toolbar,
+      "archive-x",
+      "Ignore",
+      selectedCount,
+      () =>
+        this.runBatchMark("ignored"),
     );
     this.createBatchButton(
       toolbar,
@@ -705,40 +745,6 @@ class ArxivDailyDashboardView extends ItemView {
           arxivIds: this.selectedArxivIds(),
         }),
     );
-    this.createBatchButton(
-      toolbar,
-      "download",
-      "Export BibTeX",
-      visibleRows.length,
-      () => this.exportVisibleBibtex(visibleRows),
-    );
-
-    const priority = this.createSelect(
-      toolbar.createEl("label", {
-        cls: "arxiv-daily-dashboard__batch-priority",
-      }),
-      ROW_PRIORITY_OPTIONS,
-      "normal",
-    );
-    priority.setAttribute("aria-label", "Batch priority");
-    priority.disabled = selectedCount === 0;
-    const applyPriority = toolbar.createEl("button", {
-      cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
-      attr: {
-        type: "button",
-        "aria-label": "Apply priority",
-        title: "Apply priority",
-      },
-    }) as HTMLButtonElement;
-    setIcon(applyPriority, "check");
-    applyPriority.disabled = selectedCount === 0;
-    applyPriority.addEventListener("click", () => {
-      void this.runBatchAction({
-        type: "set_priority",
-        arxivIds: this.selectedArxivIds(),
-        priority: priority.value as PaperPriority,
-      });
-    });
 
     const clear = toolbar.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
@@ -829,28 +835,20 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
-  private async updateStatus(
+  private async updateMark(
     entry: DashboardRow["entry"],
-    status: PaperStatus,
+    mark: PaperMark,
   ): Promise<void> {
     const store = this.plugin.buildPaperIndex();
-    const updated = await store.setStatus(entry.arxivId, status);
+    const state = stateForMark(mark);
+    let updated = await store.setStatus(entry.arxivId, state.status);
     if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-    if (status === "saved") {
+    updated = await store.setPriority(entry.arxivId, state.priority);
+    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
+    if (mark === "saved") {
       await ensurePaperNote(this.plugin, store, updated);
     }
-    new Notice(`arXiv Daily: ${entry.arxivId} marked ${status}`);
-    await this.reloadIndex();
-  }
-
-  private async updatePriority(
-    entry: DashboardRow["entry"],
-    priority: PaperPriority,
-  ): Promise<void> {
-    const store = this.plugin.buildPaperIndex();
-    const updated = await store.setPriority(entry.arxivId, priority);
-    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-    new Notice(`arXiv Daily: ${entry.arxivId} priority set to ${priority}`);
+    new Notice(`arXiv Daily: ${entry.arxivId} marked ${labelForMark(mark)}`);
     await this.reloadIndex();
   }
 
@@ -869,28 +867,6 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
     await this.plugin.app.workspace.openLinkText(path, "", false);
-  }
-
-  private async openZoteroFieldsModal(
-    entry: DashboardRow["entry"],
-  ): Promise<void> {
-    new ZoteroFieldsModal(this.plugin.app, entry, async (fields) => {
-      const updated = await this.plugin
-        .buildPaperIndex()
-        .setZoteroFields(entry.arxivId, fields);
-      if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-      new Notice(`arXiv Daily: Zotero fields updated for ${entry.arxivId}`);
-      await this.reloadIndex();
-    }).open();
-  }
-
-  private async openZotero(entry: DashboardRow["entry"]): Promise<void> {
-    const uri = getZoteroOpenUri(entry);
-    if (!uri) {
-      new Notice("arXiv Daily: no Zotero URI; edit Zotero fields first");
-      return;
-    }
-    openUrl(uri, "Zotero");
   }
 
   private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
@@ -936,6 +912,16 @@ class ArxivDailyDashboardView extends ItemView {
     return [...this.selectedIds];
   }
 
+  private async runBatchMark(mark: PaperMark): Promise<void> {
+    const state = stateForMark(mark);
+    await this.runBatchAction({
+      type: "set_mark",
+      arxivIds: this.selectedArxivIds(),
+      status: state.status,
+      priority: state.priority,
+    });
+  }
+
   private async runBatchAction(action: DashboardAction): Promise<void> {
     const plan = planDashboardAction(this.entries, action);
     if (plan.patches.length === 0) {
@@ -965,29 +951,6 @@ class ArxivDailyDashboardView extends ItemView {
     }
     this.selectedIds.clear();
     new Notice(`arXiv Daily: updated ${changed} papers`);
-    await this.reloadIndex();
-  }
-
-  private async exportVisibleBibtex(rows: DashboardRow[]): Promise<void> {
-    if (rows.length === 0) {
-      new Notice("arXiv Daily: no visible papers to export");
-      return;
-    }
-    const result = await this.plugin
-      .buildBibtexService()
-      .exportManyToFile(rows.map((row) => row.entry));
-    if (result.kind === "empty") {
-      new Notice("arXiv Daily: no BibTeX entries exported", 10_000);
-      return;
-    }
-
-    const details = [
-      `exported ${result.exported}/${result.requested} BibTeX entries`,
-      result.keysRenamed > 0 ? `${result.keysRenamed} keys renamed` : "",
-      result.failures.length > 0 ? `${result.failures.length} failed` : "",
-      `→ ${result.path}`,
-    ].filter(Boolean);
-    new Notice(`arXiv Daily: ${details.join("; ")}`, 10_000);
     await this.reloadIndex();
   }
 
@@ -1043,13 +1006,6 @@ function openUrl(url: string, label: string): void {
   window.open(url, "_blank", "noopener");
 }
 
-export function getZoteroOpenUri(
-  entry: Pick<PaperIndexEntry, "zoteroUri">,
-): string | null {
-  const uri = entry.zoteroUri.trim();
-  return uri || null;
-}
-
 function summaryLine(entry: DashboardRow["entry"]): string {
   const summary = entry.summary;
   if (!summary) return "";
@@ -1063,73 +1019,73 @@ function summaryLine(entry: DashboardRow["entry"]): string {
   );
 }
 
-class ZoteroFieldsModal extends Modal {
-  private zoteroKey: string;
-  private zoteroUri: string;
-
-  constructor(
-    app: App,
-    private entry: PaperIndexEntry,
-    private onSubmit: (fields: {
-      zoteroKey: string;
-      zoteroUri: string;
-    }) => Promise<void>,
-  ) {
-    super(app);
-    this.zoteroKey = entry.zoteroKey;
-    this.zoteroUri = entry.zoteroUri;
+function markForEntry(entry: DashboardRow["entry"]): PaperMark {
+  if (entry.status === "saved") return "saved";
+  if (entry.status === "ignored") return "ignored";
+  if (entry.status === "to_read" && entry.priority === "high") {
+    return "highlight";
   }
+  if (entry.status === "to_read" || entry.status === "reading") {
+    return "watch";
+  }
+  return "inbox";
+}
 
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Edit Zotero fields" });
-    contentEl.createEl("p", {
-      text: `${this.entry.arxivId} · ${this.entry.title}`,
+function stateForMark(mark: PaperMark): {
+  status: PaperStatus;
+  priority: PaperPriority;
+} {
+  if (mark === "watch") return { status: "to_read", priority: "normal" };
+  if (mark === "highlight") return { status: "to_read", priority: "high" };
+  if (mark === "saved") return { status: "saved", priority: "normal" };
+  if (mark === "ignored") return { status: "ignored", priority: "normal" };
+  return { status: "inbox", priority: "normal" };
+}
+
+function labelForMark(mark: PaperMark): string {
+  return MARK_OPTIONS.find((option) => option.value === mark)?.label ?? mark;
+}
+
+function normalizeVaultPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function dailyDateFromPath(path: string, dailyDir: string): string | null {
+  const normalized = normalizeVaultPath(path);
+  const prefix = `${dailyDir}/`;
+  if (!normalized.startsWith(prefix)) return null;
+  const rest = normalized.slice(prefix.length);
+  const match = /^(\d{4}-\d{2}-\d{2})\.md$/i.exec(rest);
+  return match?.[1] ?? null;
+}
+
+function latestReportMonth(reports: DailyReportDay[]): string | null {
+  const latest = reports[reports.length - 1]?.date;
+  return latest ? latest.slice(0, 7) : null;
+}
+
+function shiftMonth(month: string, delta: number): string {
+  const [year, monthIndex] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, monthIndex - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function calendarCells(month: string): Array<{ date: string | null }> {
+  const [year, monthIndex] = month.split("-").map(Number);
+  const first = new Date(Date.UTC(year, monthIndex - 1, 1));
+  const daysInMonth = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate();
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const cells: Array<{ date: string | null }> = Array.from(
+    { length: mondayOffset },
+    () => ({ date: null }),
+  );
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({
+      date: `${month}-${String(day).padStart(2, "0")}`,
     });
-    new Setting(contentEl)
-      .setName("Zotero key")
-      .setDesc("Manual Zotero or Better BibTeX key; leave empty if unknown.")
-      .addText((text) =>
-        text.setValue(this.zoteroKey).onChange((value) => {
-          this.zoteroKey = value.trim();
-        }),
-      );
-    new Setting(contentEl)
-      .setName("Zotero URI")
-      .setDesc("zotero:// or http(s) URL for opening the Zotero item.")
-      .addText((text) =>
-        text.setValue(this.zoteroUri).onChange((value) => {
-          this.zoteroUri = value.trim();
-        }),
-      );
-    new Setting(contentEl).addButton((button) =>
-      button
-        .setButtonText("Save")
-        .setCta()
-        .onClick(() => {
-          const fields = {
-            zoteroKey: this.zoteroKey,
-            zoteroUri: this.zoteroUri,
-          };
-          const validation = validateZoteroFields(fields);
-          if (!validation.ok) {
-            new Notice(
-              `arXiv Daily: ${validation.reasons.join("; ")}`,
-              10_000,
-            );
-            return;
-          }
-          this.close();
-          this.onSubmit(fields).catch((e) => {
-            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
-          });
-        }),
-    );
   }
-
-  onClose(): void {
-    this.contentEl.empty();
-  }
+  while (cells.length % 7 !== 0) cells.push({ date: null });
+  return cells;
 }
 
 class ProjectNoteModal extends Modal {

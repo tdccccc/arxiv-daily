@@ -8,9 +8,7 @@ import type {
 export type DashboardTab =
   | "watch"
   | "highlight"
-  | "reading"
   | "saved"
-  | "read"
   | "all"
   | "ignored";
 
@@ -37,8 +35,6 @@ export interface DashboardQuery {
   dateTo?: string;
   hasNote?: boolean;
   detail?: boolean;
-  missingZoteroKey?: boolean;
-  missingCitationKey?: boolean;
   sort?: {
     key: DashboardSortKey;
     direction?: DashboardSortDirection;
@@ -53,8 +49,6 @@ export interface DashboardRow {
   topic: string;
   firstSeen: string;
   hasNote: boolean;
-  missingZoteroKey: boolean;
-  missingCitationKey: boolean;
 }
 
 export interface DashboardStats {
@@ -66,8 +60,6 @@ export interface DashboardStats {
   watch: number;
   highlight: number;
   saved: number;
-  savedMissingZoteroKey: number;
-  savedMissingCitationKey: number;
 }
 
 export interface DashboardResult {
@@ -85,6 +77,12 @@ export type DashboardAction =
   | {
       type: "set_priority";
       arxivIds: string[];
+      priority: PaperPriority;
+    }
+  | {
+      type: "set_mark";
+      arxivIds: string[];
+      status: PaperStatus;
       priority: PaperPriority;
     }
   | {
@@ -108,9 +106,9 @@ export interface DashboardActionPlan {
 const DEFAULT_TAB: DashboardTab = "watch";
 const STATUS_ORDER: Record<PaperStatus, number> = {
   to_read: 0,
-  reading: 1,
-  saved: 2,
-  inbox: 3,
+  saved: 1,
+  inbox: 2,
+  reading: 3,
   read: 4,
   ignored: 5,
 };
@@ -148,8 +146,6 @@ export function matchesDashboardQuery(
     return false;
   }
   if (query.detail != null && entry.detail !== query.detail) return false;
-  if (query.missingZoteroKey && hasZoteroMetadata(entry)) return false;
-  if (query.missingCitationKey && entry.citationKey.trim()) return false;
   return true;
 }
 
@@ -159,15 +155,14 @@ export function matchesDashboardTab(
 ): boolean {
   switch (tab) {
     case "watch":
-      return entry.status === "to_read" && entry.priority !== "high";
+      return (
+        (entry.status === "to_read" || entry.status === "reading") &&
+        entry.priority !== "high"
+      );
     case "highlight":
       return entry.status !== "ignored" && entry.priority === "high";
-    case "reading":
-      return entry.status === "reading";
     case "saved":
       return entry.status === "saved";
-    case "read":
-      return entry.status === "read";
     case "all":
       return entry.status !== "ignored";
     case "ignored":
@@ -189,8 +184,6 @@ export function buildDashboardStats(
     watch: 0,
     highlight: 0,
     saved: 0,
-    savedMissingZoteroKey: 0,
-    savedMissingCitationKey: 0,
   };
 
   for (const entry of entries) {
@@ -203,11 +196,7 @@ export function buildDashboardStats(
     }
     if (matchesDashboardTab(entry, "watch")) stats.watch += 1;
     if (matchesDashboardTab(entry, "highlight")) stats.highlight += 1;
-    if (entry.status === "saved") {
-      stats.saved += 1;
-      if (!hasZoteroMetadata(entry)) stats.savedMissingZoteroKey += 1;
-      if (!entry.citationKey.trim()) stats.savedMissingCitationKey += 1;
-    }
+    if (entry.status === "saved") stats.saved += 1;
   }
 
   return stats;
@@ -219,9 +208,7 @@ export function buildDashboardTabCounts(
   return {
     watch: entries.filter((entry) => matchesDashboardTab(entry, "watch")).length,
     highlight: entries.filter((entry) => matchesDashboardTab(entry, "highlight")).length,
-    reading: entries.filter((entry) => matchesDashboardTab(entry, "reading")).length,
     saved: entries.filter((entry) => matchesDashboardTab(entry, "saved")).length,
-    read: entries.filter((entry) => matchesDashboardTab(entry, "read")).length,
     all: entries.filter((entry) => matchesDashboardTab(entry, "all")).length,
     ignored: entries.filter((entry) => matchesDashboardTab(entry, "ignored")).length,
   };
@@ -257,6 +244,20 @@ export function planDashboardAction(
       continue;
     }
 
+    if (action.type === "set_mark") {
+      if (entry.status === action.status && entry.priority === action.priority) {
+        continue;
+      }
+      const patch: DashboardPatch = {
+        arxivId,
+        status: action.status,
+        priority: action.priority,
+      };
+      if (action.status === "saved" && !entry.paperPath) patch.ensureNote = true;
+      patches.push(patch);
+      continue;
+    }
+
     if (!entry.paperPath) {
       patches.push({ arxivId, ensureNote: true });
     }
@@ -278,8 +279,6 @@ function toDashboardRow(entry: PaperIndexEntry): DashboardRow {
     topic: displayTopic(entry),
     firstSeen: firstSeenDate(entry),
     hasNote: Boolean(entry.paperPath),
-    missingZoteroKey: !hasZoteroMetadata(entry),
-    missingCitationKey: !entry.citationKey.trim(),
   };
 }
 
@@ -348,8 +347,6 @@ function searchableText(entry: PaperIndexEntry): string {
     ...entry.topics,
     entry.category,
     ...(entry.categories ?? []),
-    entry.zoteroKey,
-    entry.zoteroUri,
     ...summaryText(entry.summary),
   ]
     .join(" ")
@@ -414,10 +411,6 @@ function displayTopic(entry: PaperIndexEntry): string {
 
 function firstSeenDate(entry: PaperIndexEntry): string {
   return [...entry.seenDates].sort()[0] ?? entry.published;
-}
-
-function hasZoteroMetadata(entry: PaperIndexEntry): boolean {
-  return Boolean(entry.zoteroKey.trim() || entry.zoteroUri.trim());
 }
 
 function uniqueIds(ids: string[]): string[] {

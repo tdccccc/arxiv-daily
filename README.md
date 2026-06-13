@@ -52,7 +52,7 @@
 - **按你的研究主题筛选** —— 用一句自然语言描述每个研究方向（"photo-z 方法、目录、比较"），LLM 自动判断当天哪些论文属于哪个主题
 - **日报 + 单篇深度报告** —— 日报里每个主题一节；标记为"详细收录"的主题，会对核心贡献论文额外生成完整解读
 - **日报内直接挑选** —— 在日报中勾选"关注"或"重点"，插件会自动同步到 `papers.json`，不用再去 inbox 里二次整理
-- **Reading Dashboard** —— 在 Obsidian 里跨日期查看关注、重点、阅读中、已收藏、已读、忽略论文，支持搜索、筛选、汇总、Zotero 字段维护和打开、手动下载 PDF、追加到项目笔记和批量改状态
+- **Reading Dashboard** —— 在 Obsidian 里跨日期查看关注、重点、已保存和全部论文，支持日报日历、搜索、筛选、汇总、打开日报 / 论文笔记 / arXiv / PDF、手动下载 PDF、追加到项目笔记和批量标记
 - **多 LLM 厂商内置预设** —— DeepSeek / OpenAI / Anthropic / GLM 一键切换，也支持任何 OpenAI 兼容的端点
 - **catch-up 调度** —— 每次打开 Obsidian 自动补跑过去 5 天内漏掉的，不必每天都开着
 - **省 token** —— 周末自动跳过、已生成的日报不重跑、不相关的论文不展开摘要
@@ -142,17 +142,16 @@ tdccccc/arxiv-daily
 | 补跑过去 N 天 | Ribbon → **Run all pending** |
 | 指定日期 | 命令面板 (`Cmd/Ctrl+P`) → **arXiv Daily: Run for date…** |
 | 按 arXiv ID 单篇 | Ribbon → **Summarize by arXiv ID…** —— 弹窗粘贴 `2605.12345` 或完整 URL |
-| 标记论文状态 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as saved/read/ignored** |
-| 回看论文列表 | 命令面板或 ribbon → **Open reading dashboard** |
+| 标记论文 | 论文详情页里用命令面板 → **arXiv Daily: Mark current paper as Watch / Highlight / Saved / Ignored** |
+| 回看论文和日报 | 命令面板或 ribbon → **Open reading dashboard** |
 | 打开今日日报 | 命令面板 → **arXiv Daily: Open today's daily report** |
-| 复制引用片段 | 命令面板 → **arXiv Daily: Copy citation snippet for current paper…** 或 **Copy citation snippet by arXiv ID…** |
 
 ---
 
 ## 注意事项
 
 - **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 Reading Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
-- **不替代 Zotero 或 PDF 阅读器** —— v0.1.8 只维护 `citationKey`、`zoteroKey`、`zoteroUri`、`pdfPath` 和项目笔记链接，并从 Dashboard 打开这些外部资源；Better BibTeX / Zotero local API 自动同步留作后续增强。
+- **不替代 Zotero 或 PDF 阅读器** —— arXiv Daily 负责发现、总结、回看和标记重点；正式入库、citation key 和 BibTeX 仍交给 Zotero。插件只维护本地 `pdfPath` 和项目笔记链接。
 - **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时自动跑；手动指定超出 `/recent` 5 天窗口的日期时，会用 arXiv export API 的 submittedDate 单日窗口近似补跑，并在日报中标注。
 - **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
 - **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵

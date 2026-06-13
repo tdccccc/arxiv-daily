@@ -21,17 +21,17 @@ describe("ArxivFetcher", () => {
         return {
           status: 200,
           headers: {},
-          bodyText: "@misc{Key2026,\n}\n",
+          bodyText: "<html>recent</html>",
         };
       }),
     };
 
-    const bibtex = await makeFetcher(http).fetchBibtex("2606.12345");
+    const html = await makeFetcher(http).fetchRecent("astro-ph");
 
-    expect(bibtex).toContain("Key2026");
+    expect(html).toContain("recent");
     expect(requests).toEqual([
       {
-        url: "https://arxiv.org/bibtex/2606.12345",
+        url: "https://arxiv.org/list/astro-ph/recent?skip=0&show=2000",
         method: "GET",
         headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
       },

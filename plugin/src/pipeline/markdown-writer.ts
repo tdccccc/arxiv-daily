@@ -100,9 +100,6 @@ export class MarkdownWriter {
       status: indexEntry?.status ?? "inbox",
       priority: indexEntry?.priority ?? "normal",
       seenDates: indexEntry?.seenDates ?? [dateStr],
-      zoteroKey: indexEntry?.zoteroKey ?? "",
-      zoteroUri: indexEntry?.zoteroUri ?? "",
-      citationKey: indexEntry?.citationKey ?? "",
       tags,
     });
     await this.opts.storage.writeText(path, fm + summary);
@@ -127,9 +124,6 @@ export class MarkdownWriter {
       status: entry.status,
       priority: entry.priority,
       seenDates: entry.seenDates,
-      zoteroKey: entry.zoteroKey,
-      zoteroUri: entry.zoteroUri,
-      citationKey: entry.citationKey,
       tags,
     });
     const noteBody =
@@ -250,9 +244,6 @@ function paperFrontmatter(meta: {
   status: string;
   priority: string;
   seenDates: string[];
-  zoteroKey: string;
-  zoteroUri: string;
-  citationKey: string;
   tags: string[];
 }): string {
   return (
@@ -270,9 +261,6 @@ function paperFrontmatter(meta: {
     `primary_topic: ${meta.primaryTopic}\n` +
     `seen_dates:\n` +
     meta.seenDates.map((d) => `  - "${d}"\n`).join("") +
-    `zotero_key: "${escapeYaml(meta.zoteroKey)}"\n` +
-    `zotero_uri: "${escapeYaml(meta.zoteroUri)}"\n` +
-    `citation_key: "${escapeYaml(meta.citationKey)}"\n` +
     `tags: [${meta.tags.join(", ")}]\n` +
     `---\n\n`
   );

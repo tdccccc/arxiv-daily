@@ -13,12 +13,9 @@ import {
   isPaperPriority,
   isPaperStatus,
   type PaperIndexEntry,
+  type PaperPriority,
   type PaperStatus,
 } from "./services/paper-index";
-import {
-  extractArxivIdFromMarkdown,
-  type CitationSnippetFormat,
-} from "./services/bibtex";
 import { openDashboardView } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
 
@@ -131,10 +128,10 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     new Notice(`arXiv Daily: cancellation requested for ${cancelled.join(", ")}`);
   }
 
-  function openSetPaperStatusModal() {
-    new PaperStatusModal(plugin.app, async (id, status) => {
-      if (!id || !status) return;
-      await setPaperStatus(id, status);
+  function openSetPaperMarkModal() {
+    new PaperMarkModal(plugin.app, async (id, mark) => {
+      if (!id || !mark) return;
+      await setPaperMark(id, mark);
     }).open();
   }
 
@@ -156,51 +153,37 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     ).open();
   }
 
-  function openCopyBibtexModal() {
-    new PaperIdModal(
-      plugin.app,
-      "Copy arXiv BibTeX",
-      "arXiv ID or URL",
-      "Copy BibTeX",
-      async (raw) => {
-        if (!raw) return;
-        await copyBibtex(raw);
-      },
-    ).open();
-  }
-
-  function openCopyCitationSnippetModal() {
-    new CitationSnippetModal(plugin.app, async (raw, format) => {
-      if (!raw || !format) return;
-      await copyCitationSnippet(raw, format);
-    }).open();
-  }
-
-  async function setCurrentPaperStatus(status: PaperStatus) {
+  async function setCurrentPaperMark(mark: PaperMark) {
     const id = getCurrentPaperId(plugin);
     if (!id) {
       new Notice("arXiv Daily: current note is not an indexed arXiv paper");
       return;
     }
-    await setPaperStatus(id, status);
+    await setPaperMark(id, mark);
   }
 
-  async function setPaperStatus(rawId: string, status: PaperStatus) {
+  async function setPaperMark(rawId: string, mark: PaperMark) {
     const id = normalizeArxivId(rawId);
     if (!id) {
       new Notice("Invalid arXiv ID");
       return;
     }
     const store = plugin.buildPaperIndex();
-    const entry = await store.setStatus(id, status);
+    const state = stateForMark(mark);
+    let entry = await store.setStatus(id, state.status);
     if (!entry) {
       new Notice(`arXiv Daily: ${id} is not in papers.json`);
       return;
     }
-    if (status === "saved") {
+    entry = await store.setPriority(id, state.priority);
+    if (!entry) {
+      new Notice(`arXiv Daily: ${id} is not in papers.json`);
+      return;
+    }
+    if (mark === "saved") {
       await ensurePaperNote(plugin, store, entry);
     }
-    new Notice(`arXiv Daily: ${id} marked ${status}`);
+    new Notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
   }
 
   async function createPaperNote(rawId: string) {
@@ -218,64 +201,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     const path = await ensurePaperNote(plugin, store, entry);
     await plugin.app.workspace.openLinkText(path, "", false);
     new Notice(`arXiv Daily: paper note ready at ${path}`);
-  }
-
-  async function copyCurrentPaperBibtex() {
-    const id = await getCurrentPaperIdFromActiveFile(plugin);
-    if (!id) {
-      new Notice("arXiv Daily: current note is not an arXiv paper");
-      return;
-    }
-    await copyBibtex(id);
-  }
-
-  async function copyCurrentPaperCitationSnippet() {
-    const id = await getCurrentPaperIdFromActiveFile(plugin);
-    if (!id) {
-      new Notice("arXiv Daily: current note is not an arXiv paper");
-      return;
-    }
-    const format = await chooseCitationFormat(plugin.app);
-    if (!format) return;
-    await copyCitationSnippet(id, format);
-  }
-
-  async function copyBibtex(rawId: string) {
-    const result = await plugin.buildBibtexService().fetchAndStore(rawId);
-    if (result.kind !== "done") {
-      new Notice(`arXiv Daily: BibTeX failed — ${result.reason}`, 10_000);
-      return;
-    }
-    try {
-      await writeClipboard(result.bibtex);
-      new Notice(
-        `arXiv Daily: copied BibTeX for ${result.arxivId} (${result.citationKey})` +
-          (result.entryUpdated ? "" : "; not in papers.json"),
-      );
-    } catch {
-      new Notice("arXiv Daily: BibTeX fetched but clipboard copy failed", 10_000);
-    }
-  }
-
-  async function copyCitationSnippet(
-    rawId: string,
-    format: CitationSnippetFormat,
-  ) {
-    const result = await plugin
-      .buildBibtexService()
-      .citationSnippetForId(rawId, format);
-    if (result.kind !== "done") {
-      new Notice(`arXiv Daily: citation snippet failed — ${result.reason}`, 10_000);
-      return;
-    }
-    try {
-      await writeClipboard(result.snippet);
-      new Notice(
-        `arXiv Daily: copied ${format} citation for ${result.arxivId} (${result.citationKey})`,
-      );
-    } catch {
-      new Notice("arXiv Daily: citation snippet copy failed", 10_000);
-    }
   }
 
   function openArxivIdPicker() {
@@ -349,8 +274,8 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "arxiv-daily-set-paper-status",
-    name: "Set paper status…",
-    callback: openSetPaperStatusModal,
+    name: "Set paper mark…",
+    callback: openSetPaperMarkModal,
   });
 
   plugin.addCommand({
@@ -359,35 +284,11 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     callback: openCreatePaperNoteModal,
   });
 
-  plugin.addCommand({
-    id: "arxiv-daily-copy-current-bibtex",
-    name: "Copy BibTeX for current paper",
-    callback: copyCurrentPaperBibtex,
-  });
-
-  plugin.addCommand({
-    id: "arxiv-daily-copy-bibtex-by-id",
-    name: "Copy BibTeX by arXiv ID…",
-    callback: openCopyBibtexModal,
-  });
-
-  plugin.addCommand({
-    id: "arxiv-daily-copy-current-citation-snippet",
-    name: "Copy citation snippet for current paper…",
-    callback: copyCurrentPaperCitationSnippet,
-  });
-
-  plugin.addCommand({
-    id: "arxiv-daily-copy-citation-snippet-by-id",
-    name: "Copy citation snippet by arXiv ID…",
-    callback: openCopyCitationSnippetModal,
-  });
-
-  for (const status of PAPER_STATUSES) {
+  for (const mark of PAPER_MARKS) {
     plugin.addCommand({
-      id: `arxiv-daily-mark-current-${status}`,
-      name: `Mark current paper as ${status}`,
-      callback: () => setCurrentPaperStatus(status),
+      id: `arxiv-daily-mark-current-${mark.value}`,
+      name: `Mark current paper as ${mark.label}`,
+      callback: () => setCurrentPaperMark(mark.value),
     });
   }
 
@@ -504,21 +405,9 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     );
     menu.addItem((item) =>
       item
-        .setTitle("Copy BibTeX by arXiv ID…")
-        .setIcon("copy")
-        .onClick(openCopyBibtexModal),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Copy citation snippet…")
-        .setIcon("quote")
-        .onClick(openCopyCitationSnippetModal),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Set paper status…")
+        .setTitle("Set paper mark…")
         .setIcon("list-checks")
-        .onClick(openSetPaperStatusModal),
+        .onClick(openSetPaperMarkModal),
     );
 
     menu.addSeparator();
@@ -544,37 +433,33 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 }
 
-const PAPER_STATUSES: PaperStatus[] = [
-  "to_read",
-  "reading",
-  "read",
-  "saved",
-  "ignored",
+type PaperMark = "inbox" | "watch" | "highlight" | "saved" | "ignored";
+
+const PAPER_MARKS: Array<{ value: PaperMark; label: string }> = [
+  { value: "inbox", label: "Unmarked" },
+  { value: "watch", label: "Watch" },
+  { value: "highlight", label: "Highlight" },
+  { value: "saved", label: "Saved" },
+  { value: "ignored", label: "Ignored" },
 ];
 
-const CITATION_FORMATS: Array<{
-  value: CitationSnippetFormat;
-  label: string;
-}> = [
-  { value: "latex", label: "LaTeX \\cite{key}" },
-  { value: "pandoc", label: "Pandoc [@key]" },
-  { value: "typst", label: "Typst @key" },
-];
+function isPaperMark(value: string): value is PaperMark {
+  return PAPER_MARKS.some((mark) => mark.value === value);
+}
 
-async function chooseCitationFormat(
-  app: App,
-): Promise<CitationSnippetFormat | null> {
-  const choice = await chooseModal(
-    app,
-    "Copy citation snippet",
-    "Choose the citation syntax to copy.",
-    CITATION_FORMATS.map((format, index) => ({
-      label: format.label,
-      value: format.value,
-      cta: index === 0,
-    })),
-  );
-  return choice && isCitationSnippetFormat(choice) ? choice : null;
+function labelForMark(mark: PaperMark): string {
+  return PAPER_MARKS.find((item) => item.value === mark)?.label ?? mark;
+}
+
+function stateForMark(mark: PaperMark): {
+  status: PaperStatus;
+  priority: PaperPriority;
+} {
+  if (mark === "watch") return { status: "to_read", priority: "normal" };
+  if (mark === "highlight") return { status: "to_read", priority: "high" };
+  if (mark === "saved") return { status: "saved", priority: "normal" };
+  if (mark === "ignored") return { status: "ignored", priority: "normal" };
+  return { status: "inbox", priority: "normal" };
 }
 
 function describeResult(r: any): string {
@@ -600,10 +485,6 @@ function describeRunResults(
   results: Array<{ date: string; result: any }>,
 ): string {
   return results.map((r) => `${r.date}: ${describeResult(r.result)}`).join("\n");
-}
-
-function isCitationSnippetFormat(value: string): value is CitationSnippetFormat {
-  return value === "latex" || value === "pandoc" || value === "typst";
 }
 
 class DatePickerModal extends Modal {
@@ -721,70 +602,15 @@ class PaperIdModal extends Modal {
   }
 }
 
-class CitationSnippetModal extends Modal {
+class PaperMarkModal extends Modal {
   private value = "";
-  private format: CitationSnippetFormat = "latex";
-
-  constructor(
-    app: App,
-    private onSubmit: (
-      raw: string | null,
-      format: CitationSnippetFormat | null,
-    ) => void,
-  ) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Copy citation snippet" });
-    new Setting(contentEl)
-      .setName("arXiv ID or URL")
-      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
-      .addText((t) =>
-        t.setPlaceholder("2605.08080").onChange((v) => {
-          this.value = v.trim();
-        }),
-      );
-    new Setting(contentEl)
-      .setName("Format")
-      .addDropdown((d) => {
-        for (const format of CITATION_FORMATS) {
-          d.addOption(format.value, format.label);
-        }
-        d.setValue(this.format).onChange((value) => {
-          if (isCitationSnippetFormat(value)) this.format = value;
-        });
-      });
-    new Setting(contentEl).addButton((b) =>
-      b
-        .setButtonText("Copy snippet")
-        .setCta()
-        .onClick(() => {
-          if (!this.value) {
-            new Notice("Please enter an arXiv ID");
-            return;
-          }
-          this.close();
-          this.onSubmit(this.value, this.format);
-        }),
-    );
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-class PaperStatusModal extends Modal {
-  private value = "";
-  private status: PaperStatus = "to_read";
-  constructor(app: App, private onSubmit: (id: string | null, status: PaperStatus | null) => void) {
+  private mark: PaperMark = "watch";
+  constructor(app: App, private onSubmit: (id: string | null, mark: PaperMark | null) => void) {
     super(app);
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Set arXiv Daily paper status" });
+    contentEl.createEl("h2", { text: "Set arXiv Daily paper mark" });
     new Setting(contentEl)
       .setName("arXiv ID or URL")
       .setDesc("Paper must already exist in the internal arXiv Daily paper index")
@@ -794,16 +620,16 @@ class PaperStatusModal extends Modal {
         }),
       );
     new Setting(contentEl)
-      .setName("Status")
+      .setName("Mark")
       .addDropdown((d) => {
-        for (const status of PAPER_STATUSES) d.addOption(status, status);
-        d.setValue(this.status).onChange((v) => {
-          if (isPaperStatus(v)) this.status = v;
+        for (const mark of PAPER_MARKS) d.addOption(mark.value, mark.label);
+        d.setValue(this.mark).onChange((v) => {
+          if (isPaperMark(v)) this.mark = v;
         });
       });
     new Setting(contentEl).addButton((b) =>
       b
-        .setButtonText("Set status")
+        .setButtonText("Set mark")
         .setCta()
         .onClick(() => {
           if (!this.value) {
@@ -811,7 +637,7 @@ class PaperStatusModal extends Modal {
             return;
           }
           this.close();
-          this.onSubmit(this.value, this.status);
+          this.onSubmit(this.value, this.mark);
         }),
     );
   }
@@ -930,43 +756,6 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
       ? file.name.replace(/\.md$/i, "")
       : "";
   return normalizeArxivId(basename);
-}
-
-async function getCurrentPaperIdFromActiveFile(
-  plugin: ArxivDailyPlugin,
-): Promise<string | null> {
-  const fromMetadata = getCurrentPaperId(plugin);
-  if (fromMetadata) return fromMetadata;
-
-  const app = plugin.app as any;
-  const file = app.workspace?.getActiveFile?.();
-  if (!file?.path) return null;
-  try {
-    const markdown = await plugin.app.vault.adapter.read(file.path);
-    return extractArxivIdFromMarkdown(markdown);
-  } catch {
-    return null;
-  }
-}
-
-async function writeClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    if (!document.execCommand("copy")) {
-      throw new Error("execCommand copy returned false");
-    }
-  } finally {
-    textarea.remove();
-  }
 }
 
 async function collectPaperIndexDiagnostics(

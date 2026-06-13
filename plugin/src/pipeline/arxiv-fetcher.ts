@@ -77,11 +77,6 @@ export class ArxivFetcher {
     return this.fetchHtml(url, { allow404: false });
   }
 
-  async fetchBibtex(arxivId: string): Promise<string> {
-    const url = `https://arxiv.org/bibtex/${arxivId}`;
-    return this.fetchHtml(url, { allow404: false });
-  }
-
   async fetchPdf(arxivId: string): Promise<ArrayBuffer> {
     const url = `https://arxiv.org/pdf/${arxivId}`;
     return this.fetchBinary(url);

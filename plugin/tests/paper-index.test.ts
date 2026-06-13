@@ -278,37 +278,6 @@ describe("PaperIndexStore", () => {
     });
   });
 
-  it("stores and validates manual Zotero fields", async () => {
-    const { store } = makeStore();
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345",
-      title: "A paper",
-      authors: "A. Author",
-      date: "2026-06-11",
-      arxivCategory: "astro-ph",
-      primaryTopic: "photo-z",
-      detail: false,
-    });
-
-    const updated = await store.setZoteroFields("2606.12345", {
-      zoteroKey: "Smith2026",
-      zoteroUri: "zotero://select/items/ABC123",
-    });
-
-    expect(updated?.zoteroKey).toBe("Smith2026");
-    expect(updated?.zoteroUri).toBe("zotero://select/items/ABC123");
-    await expect(
-      store.setZoteroFields("2606.12345", {
-        zoteroKey: "bad key",
-      }),
-    ).rejects.toThrow(PaperIndexError);
-    await expect(
-      store.setZoteroFields("2606.12345", {
-        zoteroUri: "not-a-url",
-      }),
-    ).rejects.toThrow(PaperIndexError);
-  });
-
   it("throws PaperIndexError for malformed JSON", async () => {
     const { store } = makeStore({
       "arxiv-daily/index/papers.json": "{not-json",

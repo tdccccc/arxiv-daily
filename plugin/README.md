@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.8)
+## Features (v0.1.9)
 
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
@@ -14,19 +14,17 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Configurable markdown links** — daily reports can use Obsidian wikilinks
   or standard relative Markdown links for CLI / VS Code-friendly output.
 - **Reading Dashboard** — Obsidian custom view for cross-date paper review.
-  It reads `.index/papers.json` and supports tabs, search, topic/date/status/
-  priority/note/detail/citation/Zotero filters, summary stats, row actions,
-  Zotero item opening, and batch status/priority/note operations.
-- **Research tool integrations** — export filtered Dashboard results as
-  BibTeX, copy LaTeX / pandoc / Typst citation snippets, maintain Zotero
-  metadata, manually download arXiv PDFs into the vault, and append papers to
-  project notes. arXiv Daily stores links and metadata; it does not replace
-  Zotero or a PDF reader.
+  It reads `.index/papers.json` and supports Watch / Highlight / Saved tabs,
+  a clickable daily-report calendar, search, topic/date/note/detail filters,
+  summary stats, row actions, and batch mark/note operations.
+- **Research workflow integrations** — manually download arXiv PDFs into the
+  vault and append papers to project notes. arXiv Daily handles discovery and
+  review; Zotero remains the source of truth for citation keys and BibTeX.
 - **Paper index schema v2** — stores structured daily summary fields
   (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
   `sourceSections`) for Dashboard search and review.
 - **Workflow quick wins** — startup sync for daily checkbox selections,
-  missed-paper fallback lists, BibTeX quick copy, and multiple arXiv categories.
+  missed-paper fallback lists, and multiple arXiv categories.
 - **arXiv date parsing fix** — accepts abbreviated month names in listing
   headers (for example `Wed, 10 Jun 2026`) so June and later daily runs
   match the correct `/recent` bucket.
@@ -150,10 +148,9 @@ npm run build
 
 | File | Role |
 |---|---|
-| `src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, status/priority/citation/Zotero/summary updates |
+| `src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, mark/status/priority/summary/project updates |
 | `src/services/paper-note.ts` | Shared lightweight paper-note creation helper |
 | `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
-| `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update, citation snippets, and filtered Dashboard `.bib` export |
 | `src/services/pdf.ts` | Manual arXiv PDF download into vault storage and `pdfPath` updates |
 | `src/services/project-notes.ts` | Project-note append workflow and `projects` field updates |
 | `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
@@ -235,13 +232,9 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Force run for date…` | Clears stored state for one date and runs it without schedule guards |
 | `arXiv Daily: Clear run state…` | Clears persisted completed/failed/skipped state without deleting notes |
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
-| `arXiv Daily: Set paper status…` | Updates one indexed paper to to_read/reading/read/saved/ignored |
+| `arXiv Daily: Set paper mark…` | Updates one indexed paper to Unmarked / Watch / Highlight / Saved / Ignored |
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
-| `arXiv Daily: Copy BibTeX for current paper` | Copies arXiv BibTeX for the active paper |
-| `arXiv Daily: Copy BibTeX by arXiv ID…` | Copies arXiv BibTeX by ID and stores `citationKey` when indexed |
-| `arXiv Daily: Copy citation snippet for current paper…` | Copies a LaTeX, pandoc Markdown, or Typst citation snippet for the active paper |
-| `arXiv Daily: Copy citation snippet by arXiv ID…` | Copies a citation snippet by ID, fetching BibTeX first when the indexed paper has no `citationKey` |
-| `arXiv Daily: Mark current paper as <status>` | Updates the active paper note's indexed status |
+| `arXiv Daily: Mark current paper as <mark>` | Updates the active paper note's indexed mark |
 | `arXiv Daily: Open today's daily report` | Opens `<dailyDir>/<today>.md` |
 | `arXiv Daily: Open reading dashboard` | Opens the Reading Dashboard custom view |
 | `arXiv Daily: Show recent run state` | Lists last 20 dates and their statuses |
@@ -272,9 +265,9 @@ becomes `status=to_read, priority=high`. `papers.json` is an internal state
 file for de-duplication and later integrations; daily reports remain the
 primary triage surface.
 
-Paper status values are `inbox`, `to_read`, `reading`, `read`, `saved`, and
-`ignored`; `inbox` is the internal default for papers that have appeared in a
-daily report but have not been selected. Marking a paper as `saved` creates a
+Dashboard exposes the paper marks `Unmarked`, `Watch`, `Highlight`, `Saved`,
+and `Ignored`. Internally `Watch` maps to `status=to_read, priority=normal`,
+`Highlight` maps to `status=to_read, priority=high`, and `Saved` creates a
 lightweight paper note if one does not already exist.
 
 ## Scheduling
