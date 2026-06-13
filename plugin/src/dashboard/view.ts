@@ -12,7 +12,6 @@ import {
   planDashboardAction,
   queryDashboard,
   type DashboardAction,
-  type DashboardDateField,
   type DashboardPatch,
   type DashboardQuery,
   type DashboardRow,
@@ -455,22 +454,6 @@ class ArxivDailyDashboardView extends ItemView {
       this.query = {
         ...this.query,
         topics: topic.value ? [topic.value] : undefined,
-      };
-      this.renderCurrentResults();
-    });
-
-    const dateField = this.createSelect(
-      this.createFilterField(filters, "Date field"),
-      [
-        { value: "seen", label: "First seen" },
-        { value: "published", label: "Published" },
-      ],
-      this.query.dateField ?? "seen",
-    );
-    dateField.addEventListener("change", () => {
-      this.query = {
-        ...this.query,
-        dateField: dateField.value as DashboardDateField,
       };
       this.renderCurrentResults();
     });

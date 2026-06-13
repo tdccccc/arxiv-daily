@@ -7,8 +7,6 @@ import type {
 
 export type DashboardTab = "starred" | "all";
 
-export type DashboardDateField = "published" | "seen";
-
 export type DashboardSortKey =
   | "priority"
   | "status"
@@ -25,7 +23,6 @@ export interface DashboardQuery {
   topics?: string[];
   statuses?: PaperStatus[];
   priorities?: PaperPriority[];
-  dateField?: DashboardDateField;
   dateFrom?: string;
   dateTo?: string;
   hasNote?: boolean;
@@ -360,9 +357,6 @@ function matchesDateRange(
   const from = query.dateFrom?.trim() ?? "";
   const to = query.dateTo?.trim() ?? "";
   if (!from && !to) return true;
-  if ((query.dateField ?? "seen") === "published") {
-    return dateInRange(entry.published, from, to);
-  }
   return entryHasSeenDateInRange(entry, from, to);
 }
 

@@ -119,18 +119,12 @@ describe("dashboard model", () => {
   it("filters by date range and note existence", () => {
     const seenRange = queryDashboard(fixtures(), {
       tab: "all",
-      dateField: "seen",
       dateFrom: "2026-06-12",
       dateTo: "2026-06-13",
     });
     const withNote = queryDashboard(fixtures(), {
       tab: "all",
       hasNote: true,
-    });
-    const publishedRange = queryDashboard(fixtures(), {
-      tab: "all",
-      dateField: "published",
-      dateFrom: "2026-06-10",
     });
 
     expect(seenRange.rows.map((row) => row.arxivId)).toEqual([
@@ -140,9 +134,6 @@ describe("dashboard model", () => {
     expect(withNote.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",
     ]);
-    expect(publishedRange.rows.map((row) => row.arxivId)).not.toContain(
-      "2606.00002",
-    );
   });
 
   it("builds filtered summary stats", () => {
