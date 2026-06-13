@@ -40,6 +40,7 @@
 - 支持复制 LaTeX、pandoc Markdown、Typst citation snippet；缺少 `citationKey` 时会先抓取 BibTeX 补齐。
 - 支持在 Dashboard 手动维护 Zotero key / URI，并用缺失筛选和汇总提示待导入 Zotero 的 saved 论文。
 - 支持从 Dashboard 手动下载单篇 arXiv PDF 到 vault，写回 `pdfPath`，之后优先打开本地 PDF。
+- 支持从 Dashboard 把论文追加到项目笔记，并维护 `projects` 字段；重复追加会自动去重。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
 - 超出 arXiv `/recent` 5 天窗口的手动日期补跑会 fallback 到 arXiv export API 的 submittedDate 单日窗口，并在日报中标注近似窗口语义。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
@@ -570,7 +571,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] Zotero 手动字段：支持 `zoteroKey` / `zoteroUri` 的读取、编辑、校验和 Dashboard 缺失提示。
 - [ ] Zotero bridge：评估并实现 Better BibTeX citekey 或 Zotero local API 的低风险接入。
 - [x] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。
-- [ ] Project notes：支持 `projects` 字段维护，并把论文链接追加到指定项目笔记。
+- [x] Project notes：支持 `projects` 字段维护，并把论文链接追加到指定项目笔记。
 - [ ] v0.1.8 收尾：更新 docs、测试、build，并确认不替代 Zotero / PDF 阅读器的边界。
 
 ### VS Code Companion Extension

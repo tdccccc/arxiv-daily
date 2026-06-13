@@ -27,6 +27,7 @@ import { PaperIndexStore } from "./src/services/paper-index";
 import { DailySelectionSyncService } from "./src/services/daily-selection";
 import { BibtexService } from "./src/services/bibtex";
 import { PdfService } from "./src/services/pdf";
+import { ProjectNotesService } from "./src/services/project-notes";
 import { arxivCategories } from "./src/settings/categories";
 import type { HostAdapters } from "./src/core/adapters";
 import {
@@ -302,6 +303,15 @@ export default class ArxivDailyPlugin extends Plugin {
     const { fetcher } = this.buildSharedDeps();
     return new PdfService({
       fetcher,
+      storage: this.host.storage,
+      paperIndex: this.buildPaperIndex(),
+      output: this.settings.output,
+      logger: this.logger,
+    });
+  }
+
+  buildProjectNotesService(): ProjectNotesService {
+    return new ProjectNotesService({
       storage: this.host.storage,
       paperIndex: this.buildPaperIndex(),
       output: this.settings.output,

@@ -150,6 +150,7 @@ npm run build
 | `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
 | `src/services/bibtex.ts` | arXiv BibTeX fetch, citation key extraction, `citationKey` update, citation snippets, and filtered Dashboard `.bib` export |
 | `src/services/pdf.ts` | Manual arXiv PDF download into vault storage and `pdfPath` updates |
+| `src/services/project-notes.ts` | Project-note append workflow and `projects` field updates |
 | `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
 | `src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
 | `src/services/run-lock.ts` | Mutex per-date to prevent double-runs |

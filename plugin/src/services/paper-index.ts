@@ -275,6 +275,21 @@ export class PaperIndexStore {
     return entry;
   }
 
+  async addProject(
+    arxivId: string,
+    projectPath: string,
+  ): Promise<PaperIndexEntry | null> {
+    const inbox = await this.load();
+    const entry = inbox.papers[arxivId];
+    if (!entry) return null;
+    entry.projects = appendUnique(
+      entry.projects,
+      normalizeStoragePath(projectPath),
+    );
+    await this.save(inbox);
+    return entry;
+  }
+
   async get(arxivId: string): Promise<PaperIndexEntry | null> {
     const inbox = await this.load();
     return inbox.papers[arxivId] ?? null;

@@ -629,6 +629,11 @@ class ArxivDailyDashboardView extends ItemView {
           this.openZoteroFieldsModal(row.entry),
         );
       });
+      this.createIconButton(actionCell, "folder-plus", "Add to project", (button) => {
+        void this.runControlAction(button, () =>
+          this.openProjectNoteModal(row.entry),
+        );
+      });
       tr.createEl("td", {
         text: row.missingCitationKey ? "missing" : row.entry.citationKey,
       });
@@ -895,6 +900,24 @@ class ArxivDailyDashboardView extends ItemView {
     await this.reloadIndex();
   }
 
+  private async openProjectNoteModal(
+    entry: DashboardRow["entry"],
+  ): Promise<void> {
+    new ProjectNoteModal(this.plugin.app, entry, async (projectPath) => {
+      const result = await this.plugin
+        .buildProjectNotesService()
+        .addPaperToProject(entry, projectPath);
+      if (result.kind !== "done") {
+        throw new Error(result.reason);
+      }
+      new Notice(
+        `arXiv Daily: ${result.appended ? "added" : "already listed"} ${result.arxivId} in ${result.projectPath}`,
+        10_000,
+      );
+      await this.reloadIndex();
+    }).open();
+  }
+
   private selectedArxivIds(): string[] {
     return [...this.selectedIds];
   }
@@ -1077,6 +1100,53 @@ class ZoteroFieldsModal extends Modal {
           }
           this.close();
           this.onSubmit(fields).catch((e) => {
+            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+          });
+        }),
+    );
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+class ProjectNoteModal extends Modal {
+  private projectPath = "";
+
+  constructor(
+    app: App,
+    private entry: PaperIndexEntry,
+    private onSubmit: (projectPath: string) => Promise<void>,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Add paper to project" });
+    contentEl.createEl("p", {
+      text: `${this.entry.arxivId} · ${this.entry.title}`,
+    });
+    new Setting(contentEl)
+      .setName("Project note")
+      .setDesc("Vault path, for example Projects/photo-z.md. .md is added when omitted.")
+      .addText((text) =>
+        text.setPlaceholder("Projects/photo-z.md").onChange((value) => {
+          this.projectPath = value.trim();
+        }),
+      );
+    new Setting(contentEl).addButton((button) =>
+      button
+        .setButtonText("Add")
+        .setCta()
+        .onClick(() => {
+          if (!this.projectPath) {
+            new Notice("arXiv Daily: project note path is required");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.projectPath).catch((e) => {
             new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
           });
         }),
