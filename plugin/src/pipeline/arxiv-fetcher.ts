@@ -82,6 +82,11 @@ export class ArxivFetcher {
     return this.fetchHtml(url, { allow404: false });
   }
 
+  async fetchPdf(arxivId: string): Promise<ArrayBuffer> {
+    const url = `https://arxiv.org/pdf/${arxivId}`;
+    return this.fetchBinary(url);
+  }
+
   /** Fetch the raw Atom XML for a single id (for manual lookup with full metadata). */
   async fetchAtomEntry(arxivId: string): Promise<string> {
     const url = `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`;
@@ -109,6 +114,35 @@ export class ArxivFetcher {
         maxAttempts: 3,
         baseDelayMs: 2000,
         shouldRetry: (err: any) => err?.status !== 404,
+        onRetry: (err, attempt, wait) =>
+          this.opts.logger.warn(
+            `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,
+          ),
+      },
+    );
+  }
+
+  private async fetchBinary(url: string): Promise<ArrayBuffer> {
+    await this.respectDelay();
+    return retry(
+      async () => {
+        const res = await this.opts.http.request({
+          url,
+          method: "GET",
+          headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
+          responseType: "arrayBuffer",
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}: ${url}`);
+        }
+        if (!res.bodyBuffer) {
+          throw new Error(`empty binary response: ${url}`);
+        }
+        return res.bodyBuffer;
+      },
+      {
+        maxAttempts: 3,
+        baseDelayMs: 2000,
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,

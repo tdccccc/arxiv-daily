@@ -263,6 +263,18 @@ export class PaperIndexStore {
     return entry;
   }
 
+  async setPdfPath(
+    arxivId: string,
+    pdfPath: string,
+  ): Promise<PaperIndexEntry | null> {
+    const inbox = await this.load();
+    const entry = inbox.papers[arxivId];
+    if (!entry) return null;
+    entry.pdfPath = this.storage.normalizePath(pdfPath);
+    await this.save(inbox);
+    return entry;
+  }
+
   async get(arxivId: string): Promise<PaperIndexEntry | null> {
     const inbox = await this.load();
     return inbox.papers[arxivId] ?? null;

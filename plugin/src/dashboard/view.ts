@@ -617,9 +617,12 @@ class ArxivDailyDashboardView extends ItemView {
         });
       });
       this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
-        void this.runControlAction(button, async () => {
-          openUrl(row.entry.pdfUrl, "PDF");
-        });
+        void this.runControlAction(button, () => this.openPdf(row.entry));
+      });
+      this.createIconButton(actionCell, "download", "Download PDF", (button) => {
+        void this.runControlAction(button, () =>
+          this.downloadPdf(row.entry),
+        );
       });
       this.createIconButton(actionCell, "library", "Edit Zotero fields", (button) => {
         void this.runControlAction(button, () =>
@@ -869,6 +872,27 @@ class ArxivDailyDashboardView extends ItemView {
       new Notice(`arXiv Daily: Zotero fields updated for ${entry.arxivId}`);
       await this.reloadIndex();
     }).open();
+  }
+
+  private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
+    if (entry.pdfPath.trim()) {
+      await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
+      return;
+    }
+    openUrl(entry.pdfUrl, "PDF");
+  }
+
+  private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
+    const result = await this.plugin.buildPdfService().downloadForEntry(entry);
+    if (result.kind !== "done") {
+      new Notice(`arXiv Daily: PDF download failed — ${result.reason}`, 10_000);
+      return;
+    }
+    new Notice(
+      `arXiv Daily: downloaded PDF for ${result.arxivId} → ${result.path}`,
+      10_000,
+    );
+    await this.reloadIndex();
   }
 
   private selectedArxivIds(): string[] {

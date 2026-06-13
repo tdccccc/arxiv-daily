@@ -39,6 +39,7 @@
 - Dashboard 当前筛选结果可以批量导出 `.bib`，重复 citation key 会在导出时改写为唯一 key 并回写索引。
 - 支持复制 LaTeX、pandoc Markdown、Typst citation snippet；缺少 `citationKey` 时会先抓取 BibTeX 补齐。
 - 支持在 Dashboard 手动维护 Zotero key / URI，并用缺失筛选和汇总提示待导入 Zotero 的 saved 论文。
+- 支持从 Dashboard 手动下载单篇 arXiv PDF 到 vault，写回 `pdfPath`，之后优先打开本地 PDF。
 - 支持手动按日期运行、补跑 lookback、按 arXiv ID 生成详情、手动创建论文笔记、论文状态命令。
 - 超出 arXiv `/recent` 5 天窗口的手动日期补跑会 fallback 到 arXiv export API 的 submittedDate 单日窗口，并在日报中标注近似窗口语义。
 - 支持日期级 run state：completed、failed、skipped、running；失败重试、强制重跑、清空状态、取消当前运行。
@@ -95,6 +96,8 @@ arxiv-daily/
     run-state.json
   papers/
     2606.12345.md
+  pdfs/
+    2606.12345.pdf
 ```
 
 职责划分：
@@ -105,6 +108,7 @@ arxiv-daily/
 | `arxiv-daily/.index/papers.json` | 插件内部状态：所有相关论文的状态、去重、seen dates 和外部工具字段；默认隐藏 | Yes |
 | `arxiv-daily/.index/run-state.json` | Obsidian scheduler 与 Node CLI 共享的日期级运行状态 | Yes |
 | `arxiv-daily/papers/<arxiv_id>.md` | 重要论文的长期阅读笔记和深度分析 | Only for detail / saved / manual |
+| `arxiv-daily/pdfs/<arxiv_id>.pdf` | 用户手动下载的 arXiv PDF，本地打开优先于远程 PDF URL | Only manual |
 
 日报是每天最主要的阅读入口，从当天 pipeline 结果和 `papers.json` 共同生成：
 
@@ -565,7 +569,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] 引用片段模板：支持 LaTeX、pandoc markdown、Typst 等 citation snippet。
 - [x] Zotero 手动字段：支持 `zoteroKey` / `zoteroUri` 的读取、编辑、校验和 Dashboard 缺失提示。
 - [ ] Zotero bridge：评估并实现 Better BibTeX citekey 或 Zotero local API 的低风险接入。
-- [ ] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。
+- [x] PDF 管理：手动下载 arXiv PDF、写入 `pdfPath`、打开本地 PDF，不默认批量下载。
 - [ ] Project notes：支持 `projects` 字段维护，并把论文链接追加到指定项目笔记。
 - [ ] v0.1.8 收尾：更新 docs、测试、build，并确认不替代 Zotero / PDF 阅读器的边界。
 

@@ -82,4 +82,28 @@ describe("ArxivFetcher", () => {
       "cat:astro-ph AND submittedDate:[202606130000 TO 202606132359]",
     );
   });
+
+  it("fetches PDF bytes with an arrayBuffer response", async () => {
+    const requests: HttpRequest[] = [];
+    const bodyBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        requests.push(req);
+        return {
+          status: 200,
+          headers: {},
+          bodyText: "",
+          bodyBuffer,
+        };
+      }),
+    };
+
+    const pdf = await makeFetcher(http).fetchPdf("2606.12345");
+
+    expect(Array.from(new Uint8Array(pdf))).toEqual([1, 2, 3]);
+    expect(requests[0]).toMatchObject({
+      url: "https://arxiv.org/pdf/2606.12345",
+      responseType: "arrayBuffer",
+    });
+  });
 });

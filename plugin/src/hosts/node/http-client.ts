@@ -45,6 +45,14 @@ export class NodeHttpClient implements HttpClient {
       res.headers.forEach((value, key) => {
         headers[key] = value;
       });
+      if (req.responseType === "arrayBuffer") {
+        return {
+          status: res.status,
+          headers,
+          bodyText: "",
+          bodyBuffer: await res.arrayBuffer(),
+        };
+      }
       return {
         status: res.status,
         headers,

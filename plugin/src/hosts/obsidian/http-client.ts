@@ -18,6 +18,10 @@ export class ObsidianHttpClient implements HttpClient {
       status: res.status,
       headers: (res.headers ?? {}) as Record<string, string>,
       bodyText: res.text,
+      bodyBuffer:
+        req.responseType === "arrayBuffer"
+          ? (res as { arrayBuffer?: ArrayBuffer }).arrayBuffer
+          : undefined,
     };
   }
 }

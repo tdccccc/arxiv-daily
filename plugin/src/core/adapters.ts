@@ -5,6 +5,7 @@ export interface HttpRequest {
   method?: HttpMethod;
   headers?: Record<string, string>;
   body?: string | ArrayBuffer;
+  responseType?: "text" | "arrayBuffer";
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -13,6 +14,7 @@ export interface HttpResponse {
   status: number;
   headers: Record<string, string>;
   bodyText: string;
+  bodyBuffer?: ArrayBuffer;
 }
 
 export interface HttpClient {
