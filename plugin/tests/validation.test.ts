@@ -107,6 +107,24 @@ describe("validateFilterConfig", () => {
     expect(r.reasons.join("; ")).toMatch(/Duplicate arXiv category: astro-ph/);
   });
 
+  it("flags invalid link style", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+        },
+        output: {
+          ...DEFAULT_SETTINGS.output,
+          linkStyle: "absolute" as any,
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/Invalid link style: absolute/);
+  });
+
   it("flags empty topic fields", () => {
     const r = validateFilterConfig(
       makeSettings({

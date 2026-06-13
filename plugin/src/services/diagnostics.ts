@@ -81,6 +81,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     "output:",
     `  dailyDir: ${settings.output.dailyDir}`,
     `  papersDir: ${settings.output.papersDir}`,
+    `  linkStyle: ${settings.output.linkStyle ?? "wikilink"}`,
     "",
     "schedule:",
     `  enabled: ${settings.schedule.enabled}`,

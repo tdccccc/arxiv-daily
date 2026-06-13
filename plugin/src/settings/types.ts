@@ -27,7 +27,10 @@ export interface ArxivSettings {
 export interface OutputSettings {
   dailyDir: string;
   papersDir: string;
+  linkStyle?: LinkStyle;
 }
+
+export type LinkStyle = "wikilink" | "relative";
 
 export interface ScheduleSettings {
   enabled: boolean;

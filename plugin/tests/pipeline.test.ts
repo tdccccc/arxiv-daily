@@ -63,6 +63,7 @@ function makeDeps() {
     }),
     dailyPath: vi.fn((date: string) => `daily/${date}.md`),
     paperDetailPath: vi.fn((id: string) => `papers/${id}.md`),
+    paperDetailLink: vi.fn((id: string) => `[[${id}]]`),
     dailyExists: vi.fn(async () => false),
     paperDetailExists: vi.fn(async () => false),
   };
@@ -225,6 +226,11 @@ describe("ArxivPipeline", () => {
     expect(d.paperFetcher.fetch).toHaveBeenCalledWith(
       arxivId,
       expect.objectContaining({ isDetail: true }),
+    );
+    expect(d.writer.paperDetailLink).toHaveBeenCalledWith(
+      arxivId,
+      date,
+      undefined,
     );
     expect(d.writer.writeDaily).toHaveBeenCalled();
   });

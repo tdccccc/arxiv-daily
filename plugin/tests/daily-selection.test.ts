@@ -88,6 +88,19 @@ describe("daily selection", () => {
     expect(out.indexOf("关注")).toBeGreaterThan(out.indexOf("arXiv"));
   });
 
+  it("injects controls after a relative detail heading when arXiv line is absent", () => {
+    const out = injectSelectionControls(
+      [
+        "### Example Paper → [2606.12345](../papers/2606.12345.md)",
+        "- **作者**: A",
+        "- **核心问题**: ...",
+      ].join("\n"),
+      [{ id: "2606.12345" }],
+    );
+    expect(out).toContain("<!-- arxiv-daily:2606.12345:watch -->");
+    expect(out.indexOf("关注")).toBeGreaterThan(out.indexOf("Example Paper"));
+  });
+
   it("parses checked watch and highlight controls", () => {
     const selections = parseDailySelections(
       [

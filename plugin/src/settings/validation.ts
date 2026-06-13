@@ -21,6 +21,13 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
   if (categories.length === 0) {
     reasons.push("No arXiv categories configured");
   }
+  if (
+    settings.output.linkStyle &&
+    settings.output.linkStyle !== "wikilink" &&
+    settings.output.linkStyle !== "relative"
+  ) {
+    reasons.push(`Invalid link style: ${settings.output.linkStyle}`);
+  }
   const seenCategories = new Set<string>();
   for (const category of settings.arxiv.categories ?? []) {
     const trimmed = category.trim();

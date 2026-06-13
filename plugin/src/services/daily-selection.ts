@@ -90,7 +90,7 @@ function insertControlsForPaper(
   }
 
   const linkedHeading = new RegExp(
-    String.raw`^###\s+.*\[\[${escapeRegExp(arxivId)}\]\]`,
+    String.raw`^###\s+.*(?:\[\[${escapeRegExp(arxivId)}\]\]|\[${escapeRegExp(arxivId)}\]\([^)]+\))`,
   );
   for (let i = 0; i < lines.length; i++) {
     if (linkedHeading.test(lines[i])) {

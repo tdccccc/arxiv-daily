@@ -548,7 +548,7 @@ Dashboard 实现为 Obsidian custom view，而不是生成一个长期维护的 
 - [x] CLI config：支持 env / 配置文件读取 API key、topics、输出路径和 link style。
 - [x] Run state：把 CLI 与 Obsidian scheduler 的 run state 放到同一 vault 输出目录，避免重复运行。
 - [ ] 超窗补跑：用 arXiv export API 支持日期范围 fallback，并在日报中标注近似窗口语义。
-- [ ] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
+- [x] Link style：支持 wikilink 和标准相对链接，保证 Obsidian 与 VS Code / 通用编辑器都能导航。
 - [ ] Python 退役：CLI 稳定后冻结或移除根目录 `arxiv_daily.py` 的主流程，文档引导到 Node CLI。
 - [ ] v0.1.7 收尾：跑插件测试、CLI 测试、build，更新 README / PLAN。
 

@@ -70,7 +70,7 @@ npm run build
 | **Enable** | Toggle, shows Running / Paused status |
 | **LLM** | Provider dropdown, API Key, Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
 | **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail toggle), Load Template dropdown, + Add Topic button, Timezone |
-| **Output & Schedule** | Daily / Papers paths, Run time, Tick interval, Lookback days (≤ 5) |
+| **Output & Schedule** | Daily / Papers paths, Link style, Run time, Tick interval, Lookback days (≤ 5) |
 | **Advanced** | Request delay, cache TTL, char limits, skip / priority sections, log level |
 
 ## Key modules (developer reference)

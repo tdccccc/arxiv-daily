@@ -407,6 +407,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Link style")
+      .setDesc("Markdown links generated in daily reports")
+      .addDropdown((d) =>
+        d
+          .addOption("wikilink", "Obsidian wikilink")
+          .addOption("relative", "Standard relative link")
+          .setValue(s.output.linkStyle ?? "wikilink")
+          .onChange(async (v) => {
+            s.output.linkStyle = v === "relative" ? "relative" : "wikilink";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Run time (HH:MM)")
       .setDesc("Local time the scheduler aims to fire today's batch. Earlier ticks for today are skipped.")
       .addText((t) =>

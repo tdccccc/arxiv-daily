@@ -177,6 +177,11 @@ export class ArxivPipeline {
           inboxStatus: p.indexEntry?.status,
           seenBefore: p.seenBefore,
           paperPath: p.indexEntry?.paperPath ?? null,
+          detailLink: this.deps.writer.paperDetailLink(
+            p.id,
+            dateStr,
+            p.indexEntry?.paperPath,
+          ),
         });
       } catch (e) {
         if (isCancellationError(e)) throw e;
@@ -188,6 +193,11 @@ export class ArxivPipeline {
           inboxStatus: p.indexEntry?.status,
           seenBefore: p.seenBefore,
           paperPath: p.indexEntry?.paperPath ?? null,
+          detailLink: this.deps.writer.paperDetailLink(
+            p.id,
+            dateStr,
+            p.indexEntry?.paperPath,
+          ),
         });
       }
       throwIfCancelled(signal);
@@ -204,6 +214,7 @@ export class ArxivPipeline {
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
         llmTemperature: this.deps.llmSettings.temperature,
+        linkStyle: this.deps.output.linkStyle ?? "wikilink",
         signal,
       });
     } catch (e) {

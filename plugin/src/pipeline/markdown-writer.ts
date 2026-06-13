@@ -37,6 +37,21 @@ export class MarkdownWriter {
     );
   }
 
+  paperDetailLink(
+    id: string,
+    dateStr: string,
+    paperPath?: string | null,
+  ): string {
+    if ((this.opts.output.linkStyle ?? "wikilink") === "relative") {
+      const target = this.opts.storage.normalizePath(
+        paperPath || this.paperDetailPath(id),
+      );
+      const relative = relativePath(this.dailyPath(dateStr), target);
+      return `[${id}](${encodeRelativeLinkTarget(relative)})`;
+    }
+    return `[[${id}]]`;
+  }
+
   async writeDaily(
     dateStr: string,
     summary: string,
@@ -181,6 +196,32 @@ function renderMissedPapers(missedPapers: DailyMissedPaper[]): string {
     "",
     `</details>`,
   ].join("\n");
+}
+
+function relativePath(fromFile: string, toFile: string): string {
+  const fromDir = parentParts(fromFile);
+  const toParts = pathParts(toFile);
+  let i = 0;
+  while (i < fromDir.length && i < toParts.length && fromDir[i] === toParts[i]) {
+    i++;
+  }
+  const up = Array(fromDir.length - i).fill("..");
+  const down = toParts.slice(i);
+  const rel = [...up, ...down].join("/");
+  return rel || toParts[toParts.length - 1] || ".";
+}
+
+function parentParts(path: string): string[] {
+  const parts = pathParts(path);
+  return parts.slice(0, -1);
+}
+
+function pathParts(path: string): string[] {
+  return path.split("/").filter((part) => part && part !== ".");
+}
+
+function encodeRelativeLinkTarget(path: string): string {
+  return encodeURI(path).replace(/\(/g, "%28").replace(/\)/g, "%29");
 }
 
 function compactText(value: string): string {

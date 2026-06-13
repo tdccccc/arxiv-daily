@@ -20,6 +20,7 @@ describe("CLI config loader", () => {
     expect(cfg.vaultRoot).toBe("/workspace");
     expect(cfg.cacheDir).toBe("/workspace/.arxiv-daily/cache");
     expect(cfg.linkStyle).toBe("wikilink");
+    expect(cfg.settings.output.linkStyle).toBe("wikilink");
     expect(cfg.settings.llm.apiKey).toBe("key");
     expect(cfg.settings.arxiv.categories).toEqual(["astro-ph"]);
   });
@@ -62,6 +63,7 @@ describe("CLI config loader", () => {
     expect(cfg.vaultRoot).toBe("/workspace/vault");
     expect(cfg.cacheDir).toBe("/workspace/.cache/arxiv");
     expect(cfg.linkStyle).toBe("relative");
+    expect(cfg.settings.output.linkStyle).toBe("relative");
     expect(cfg.settings.llm.provider).toBe("openai");
     expect(cfg.settings.llm.apiKey).toBe("file-key");
     expect(cfg.settings.llm.model).toBe("gpt-test");
@@ -104,6 +106,7 @@ describe("CLI config loader", () => {
 
     expect(cfg.vaultRoot).toBe("/vault");
     expect(cfg.linkStyle).toBe("relative");
+    expect(cfg.settings.output.linkStyle).toBe("relative");
     expect(cfg.settings.llm.apiKey).toBe("env-key");
     expect(cfg.settings.llm.model).toBe("env-model");
     expect(cfg.settings.arxiv.category).toBe("astro-ph");

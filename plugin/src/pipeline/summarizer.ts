@@ -1,7 +1,11 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import { throwIfCancelled } from "../services/cancellation";
-import type { ArxivSettings, AdvancedSettings } from "../settings/types";
+import type {
+  AdvancedSettings,
+  ArxivSettings,
+  LinkStyle,
+} from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
@@ -13,6 +17,7 @@ export interface DailyPaperWithContent extends FilteredPaper {
   inboxStatus?: PaperStatus;
   seenBefore?: boolean;
   paperPath?: string | null;
+  detailLink?: string;
   indexEntry?: PaperIndexEntry;
 }
 
@@ -22,6 +27,7 @@ export interface SummarizerDeps {
   arxivSettings: ArxivSettings;
   advanced: AdvancedSettings;
   llmTemperature: number;
+  linkStyle?: LinkStyle;
   signal?: AbortSignal;
 }
 
@@ -56,7 +62,8 @@ function buildDailyContent(p: DailyPaperWithContent): string {
 }
 
 function buildPaperBlock(p: DailyPaperWithContent): string {
-  const detailMark = p.isDetail || p.paperPath ? ` → [[${p.id}]]` : "";
+  const detailMark =
+    p.isDetail || p.paperPath ? ` → ${p.detailLink ?? `[[${p.id}]]`}` : "";
   const inboxLine =
     `Inbox: ${p.seenBefore ? "seen_before" : "new"}, ` +
     `status: ${p.inboxStatus ?? "inbox"}, ` +
@@ -105,6 +112,10 @@ async function callDailyLlm(
     .map((t) => `- ${t.tag} → ${t.name}`)
     .join("\n");
   const papersInfo = papers.map(buildPaperBlock).join("");
+  const detailLinkTemplate =
+    deps.linkStyle === "relative"
+      ? `[YYMM.NNNNN](../papers/YYMM.NNNNN.md)`
+      : `[[YYMM.NNNNN]]`;
   const partialNote = isPartial
     ? `\n注意：这是分批处理的一部分（本批 ${papers.length} 篇），请只为本批论文生成总结，不要输出标题头和统计行。\n`
     : "";
@@ -123,7 +134,7 @@ ${partialNote}
 请严格按照以下 Markdown 格式输出（不要输出 Markdown 代码块标记，直接输出内容）：
 
 ${headerFmt}## [显示名称]
-### <实际论文标题> → [[YYMM.NNNNN]]
+### <实际论文标题> → ${detailLinkTemplate}
 > 信息来源：<按输入的 Source sections 填写，例如 Abstract, Conclusion；不要编造>
 - **作者**: First Author et al.
 - **arXiv**: [ID](https://arxiv.org/abs/ID)
@@ -138,8 +149,8 @@ ${headerFmt}## [显示名称]
 - 使用中文撰写，保留关键英文术语
 - 数学公式必须使用 LaTeX 格式：行内用 $...$，独立公式用 $$...$$
 - 必须输出所有 category 的二级标题（使用上面的显示名称），如果某个 category 今日无论文，在标题下写"今日无相关论文更新。"
-- 标题后带 → [[YYMM.NNNNN]] 的论文为详细收录论文，请保留此标记
-- 未标记的论文不要加 [[]] 链接
+- 标题后带 → ${detailLinkTemplate} 的论文为详细收录论文，请保留输入中的链接标记
+- 未标记的论文不要自行新增本地链接
 - 输入中的 Inbox 行说明论文是 new 还是 seen_before；可在总结中自然保留该状态，不要把 ignored 论文补回来
 - 先在内部判断论文属于方法、观测、理论、模拟、数据发布、综述等哪类，但不要输出类型；根据论文类型提取最核心的信息
 - 只基于输入内容回答，不要引入外部知识，不要补全输入中没有说明的数据、实验、指标或结论

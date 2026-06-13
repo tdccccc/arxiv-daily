@@ -65,6 +65,7 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("baseUrl: https://llm.example/v1");
     expect(report).toContain("model: test-model");
     expect(report).toContain("apiKeySet: yes");
+    expect(report).toContain("linkStyle: wikilink");
     expect(report).not.toContain("sk-secret-value");
     expect(report).not.toContain("private matching criteria");
     expect(report).toContain("localDate: 2026-06-11");

@@ -1,13 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
-import type { PluginSettings, Topic } from "../settings/types";
+import type { LinkStyle, PluginSettings, Topic } from "../settings/types";
 import {
   arxivCategories,
   normalizeCategoryList,
 } from "../settings/categories";
 
-export type LinkStyle = "wikilink" | "relative";
+export type { LinkStyle } from "../settings/types";
 
 export interface CliRuntimeConfig {
   settings: PluginSettings;
@@ -63,8 +63,10 @@ export async function loadCliConfig(
     envConfig.cacheDir ?? stringOr(file.cacheDir, ".arxiv-daily/cache"),
   );
   const linkStyle = normalizeLinkStyle(
-    envConfig.linkStyle ?? stringOr(file.linkStyle, "wikilink"),
+    envConfig.linkStyle ??
+      stringOr(file.linkStyle, settings.output.linkStyle ?? "wikilink"),
   );
+  settings.output.linkStyle = linkStyle;
 
   return {
     settings,

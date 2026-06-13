@@ -3,6 +3,7 @@ import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { OutputSettings } from "../src/settings/types";
 
 function makeStorage(initialFiles: Record<string, string> = {}) {
   const files: Record<string, string> = { ...initialFiles };
@@ -33,13 +34,16 @@ function makeStorage(initialFiles: Record<string, string> = {}) {
   };
 }
 
-function makeWriter(initialFiles: Record<string, string> = {}) {
+function makeWriter(
+  initialFiles: Record<string, string> = {},
+  output: Partial<OutputSettings> = {},
+) {
   const { files, storage } = makeStorage(initialFiles);
   const writer = new MarkdownWriter({
     storage,
     logger: new Logger("error"),
     arxiv: DEFAULT_SETTINGS.arxiv,
-    output: DEFAULT_SETTINGS.output,
+    output: { ...DEFAULT_SETTINGS.output, ...output },
   });
   return { files, writer };
 }
@@ -67,6 +71,44 @@ describe("MarkdownWriter existence checks", () => {
       "arxiv-daily/papers/2605.06587.md": "x",
     });
     expect(await writer.paperDetailExists("2605.06587")).toBe(true);
+  });
+});
+
+describe("MarkdownWriter link style", () => {
+  it("uses Obsidian wikilinks by default", () => {
+    const { writer } = makeWriter();
+    expect(writer.paperDetailLink("2605.06587", "2026-05-11")).toBe(
+      "[[2605.06587]]",
+    );
+  });
+
+  it("uses standard relative markdown links when configured", () => {
+    const { writer } = makeWriter(
+      {},
+      {
+        dailyDir: "arxiv-daily/daily",
+        papersDir: "arxiv-daily/papers",
+        linkStyle: "relative",
+      },
+    );
+
+    expect(writer.paperDetailLink("2605.06587", "2026-05-11")).toBe(
+      "[2605.06587](../papers/2605.06587.md)",
+    );
+  });
+
+  it("uses existing paper paths for relative links", () => {
+    const { writer } = makeWriter({}, { linkStyle: "relative" });
+
+    expect(
+      writer.paperDetailLink(
+        "2605.06587",
+        "2026-05-11",
+        "research notes/papers/2605.06587 (saved).md",
+      ),
+    ).toBe(
+      "[2605.06587](../../research%20notes/papers/2605.06587%20%28saved%29.md)",
+    );
   });
 });
 
