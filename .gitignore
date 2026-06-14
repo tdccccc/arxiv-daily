@@ -1,4 +1,5 @@
 .env
+PLAN.md
 __pycache__/
 *.pyc
 .cache/
