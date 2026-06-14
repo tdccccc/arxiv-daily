@@ -199,6 +199,35 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
+  it("keeps missing dates inside the recent window retryable without submittedDate fallback", async () => {
+    const d = makeDeps();
+    d.fetcher.fetchRecent = vi.fn().mockResolvedValue(
+      [
+        `<dl id="articles"><h3>Fri, 12 Jun 2026</h3></dl>`,
+        `<dl id="articles"><h3>Wed, 10 Jun 2026</h3></dl>`,
+      ].join("\n"),
+    );
+    d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate("2026-06-11");
+
+    expect(result.kind).toBe("failed_transient");
+    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
+  });
+
   it("writes empty daily when LLM returns no relevant papers", async () => {
     const d = makeDeps();
     const pipeline = new ArxivPipeline({

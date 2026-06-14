@@ -418,18 +418,12 @@ export class ArxivPipeline {
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
-        if (!bounds || dateStr >= bounds.oldest) {
-          const reason =
-            bounds && dateStr > bounds.newest
-              ? `date ${dateStr} is newer than newest ${category} /recent bucket ` +
-                `${bounds.newest}; arXiv announce page may not be available yet`
-              : `date ${dateStr} is not in ${category} /recent ` +
-                `(have: ${buckets.map((b) => b.announceDate).join(",")})`;
+        if (!shouldUseSubmittedDateFallback(dateStr, bounds)) {
           return {
             kind: "error",
             result: {
               kind: "failed_transient",
-              reason,
+              reason: missingRecentDateReason(dateStr, category, buckets, bounds),
             },
           };
         }
@@ -562,4 +556,28 @@ function recentDateBounds(
   const dates = buckets.map((bucket) => bucket.announceDate).sort();
   if (dates.length === 0) return null;
   return { oldest: dates[0], newest: dates[dates.length - 1] };
+}
+
+function shouldUseSubmittedDateFallback(
+  dateStr: string,
+  bounds: { oldest: string; newest: string } | null,
+): boolean {
+  if (!bounds) return false;
+  return dateStr < bounds.oldest;
+}
+
+function missingRecentDateReason(
+  dateStr: string,
+  category: string,
+  buckets: DateBucket[],
+  bounds: { oldest: string; newest: string } | null,
+): string {
+  if (bounds && dateStr > bounds.newest) {
+    return (
+      `date ${dateStr} is newer than newest ${category} /recent bucket ` +
+      `${bounds.newest}; arXiv announce page may not be available yet`
+    );
+  }
+  const have = buckets.map((b) => b.announceDate).join(",");
+  return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
 }
