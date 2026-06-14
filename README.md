@@ -1,185 +1,158 @@
-# arxiv-daily
+# arXiv Daily
 
-> 让每天最相关的 arXiv 论文，自动出现在你的 Obsidian 里。
+> Daily arXiv discovery for Obsidian, with LLM filtering, structured paper summaries, and a Dashboard for reviewing papers across dates.
 
-不用再每天手动刷 arXiv 列表。设置好你的研究主题，Obsidian 打开时插件自动：
+[中文说明](./docs/README.zh-CN.md)
 
-- 抓取当天新论文
-- 用 LLM 筛掉跟你无关的
-- 按主题分类生成中文日报
-- 对核心相关论文额外生成一份详细解读
+arXiv Daily helps you turn the daily arXiv feed into a small, reviewable reading list inside your vault. It fetches new papers, filters them against your research topics, writes Markdown daily reports, and keeps a local paper index that powers the **arXiv Daily Dashboard**.
 
----
+## Core Workflow
 
-## 效果预览
+1. Configure arXiv categories, research topics, and an LLM provider.
+2. Let the plugin run on schedule, or run it manually from the Dashboard.
+3. Read the daily Markdown report and star important papers.
+4. Use the Dashboard to search, filter, revisit daily reports, open paper notes, and open arXiv/PDF links.
+5. When a paper should enter your formal library, open its arXiv page and import it with Zotero.
 
-每天打开 Obsidian，vault 里会多出一个文件 `arxiv-daily/daily/2026-05-13.md`：
+arXiv Daily is for discovery and review. Zotero remains the source of truth for citation keys, BibTeX, and long-term bibliography management.
 
-```markdown
-# arXiv astro-ph 每日追踪 2026-05-13
-共 8 篇相关论文，其中 3 篇详细收录。
+## Highlights
 
-## Photo-z 相关
+- **Dashboard-first reading flow**: the ribbon icon opens the arXiv Daily Dashboard directly.
+- **Starred / All review model**: star only the papers that matter; unstarred papers stay neutral.
+- **Daily report calendar**: dates with reports are marked, today is highlighted, and clicking a date opens that report.
+- **Search and filters**: filter by keyword, topic, first-seen date range, note presence, and detail availability.
+- **Focused paper actions**: open or create a paper note, open the source daily report, open arXiv, open a PDF, or download the PDF.
+- **Markdown-native output**: daily reports and paper notes stay as ordinary Markdown files in your vault.
+- **Catch-up scheduling**: missed weekdays in the lookback window are retried when Obsidian is open.
+- **Shared core and CLI**: the Obsidian plugin and Node CLI use the same pipeline.
 
-### Improved Photometric Redshifts from Multi-Survey Cross-Calibration → [[2605.12345]]
-> 信息来源：Abstract, Results, Conclusion
-- **作者**: Y. Zhang et al.
-- **arXiv**: [2605.12345](https://arxiv.org/abs/2605.12345)
-- [ ] 关注 <!-- arxiv-daily:2605.12345:watch -->
-- [ ] 重点 <!-- arxiv-daily:2605.12345:highlight -->
-- **核心问题**: 多巡天 photo-z 训练集系统差异会把红移估计误差带入 LSST 早期样本。
-- **关键方法**: 利用 DES、HSC、LSST 三套巡天交叉标定，联合约束模板拟合中的系统误差。
-- **主要结果**: σ_NMAD = 0.018（vs. 单巡天 0.022）；catastrophic outlier 比例降至 2.1%...
-- **为什么值得看**: 结果直接约束 LSST 第一年 photo-z 系统误差校正流程。
-- **局限或边界**: 原文未说明。
+## Dashboard
 
-## Galaxy Cluster 相关
+The Dashboard is the main entry point after setup.
 
-### SZ-Selected Cluster Survey at z > 1.5 → [[2605.12350]]
-- **作者**: A. Smith et al.
-- ...
+- **Starred** shows high-priority papers you marked for follow-up.
+- **All** shows every non-ignored indexed paper.
+- The left side contains search, topic/date/note/detail filters, and summary counts.
+- The calendar opens historical daily reports without browsing folders.
+- Paper rows keep the reading actions close to the title, authors, and summary.
 
-## ML in Astro
-今日无相关论文更新。
+The Dashboard reads `arxiv-daily/.index/papers.json`. It does not replace the Markdown editor; paper notes and daily reports still open in Obsidian's native editor.
+
+## Output Layout
+
+By default, generated files live under `arxiv-daily/` in your vault:
+
+```text
+arxiv-daily/
+  daily/
+    2026-06-13.md
+  papers/
+    2606.12345.md
+  pdfs/
+    2606.12345.pdf
+  .index/
+    papers.json
+    run-state.json
 ```
 
-带 `[[2605.12345]]` 链接的论文，会同时在 `arxiv-daily/papers/2605.12345.md` 生成完整解读（**研究问题 / 方法设计 / 关键证据 / 主要结论 / 适用边界 / 一句话价值判断** 六个章节）。
+- `daily/YYYY-MM-DD.md`: daily discovery report grouped by topic.
+- `papers/<arxiv_id>.md`: detailed notes for detail papers or manually created notes.
+- `pdfs/<arxiv_id>.pdf`: manually downloaded arXiv PDFs.
+- `.index/papers.json`: local paper index used by the Dashboard.
+- `.index/run-state.json`: scheduler and CLI run state.
 
----
+## Install
 
-## 主要功能
+arXiv Daily is desktop-only.
 
-- **按你的研究主题筛选** —— 用一句自然语言描述每个研究方向（"photo-z 方法、目录、比较"），LLM 自动判断当天哪些论文属于哪个主题
-- **日报 + 单篇深度报告** —— 日报里每个主题一节；标记为"详细收录"的主题，会对核心贡献论文额外生成完整解读
-- **日报内直接挑选** —— 在日报中勾选"关注"或"重点"，插件会自动同步到 `papers.json`，不用再去 inbox 里二次整理
-- **arXiv Daily Dashboard** —— ribbon 单击直接打开主工作台；用 Starred / All、日报日历、搜索、topic/日期/note/detail 筛选和汇总数字回看论文
-- **聚焦阅读动作** —— Dashboard 行操作可以打开/创建论文笔记、打开来源日报、打开 arXiv、打开 PDF 或手动下载 PDF；论文标题、作者和摘要可以直接选中复制
-- **多 LLM 厂商内置预设** —— DeepSeek / OpenAI / Anthropic / GLM 一键切换，也支持任何 OpenAI 兼容的端点
-- **catch-up 调度** —— 每次打开 Obsidian 自动补跑过去 5 天内漏掉的，不必每天都开着
-- **省 token** —— 周末自动跳过、已生成的日报不重跑、不相关的论文不展开摘要
-- **一键单篇** —— 知道某篇 arxiv ID，弹窗直接出详细解读
-- **跨平台** —— Windows / macOS / Linux 都跑
+### Community Plugins
 
----
+After the plugin is approved in the Obsidian Community directory:
 
-## 安装
+1. Open **Settings -> Community plugins -> Browse**.
+2. Search for **arXiv Daily**.
+3. Install and enable it.
 
-> 需要先装 [Obsidian](https://obsidian.md/download)（桌面版）。
+### BRAT Beta
 
-### 1. 装 BRAT 插件
+Before the community listing is fully available, install with [BRAT](https://github.com/TfTHacker/obsidian42-brat):
 
-在 Obsidian 里 **Settings → Community plugins → Browse**，搜索 `BRAT`，Install → Enable。
+1. Install and enable BRAT.
+2. Open **BRAT settings -> Add Beta plugin**.
+3. Enter:
 
-（仓库主页：[obsidian42-brat](https://github.com/TfTHacker/obsidian42-brat)）
-
-### 2. 通过 BRAT 装 arxiv-daily
-
-**BRAT 设置面板 → Add Beta plugin →** 粘贴：
-
-```
+```text
 tdccccc/arxiv-daily
 ```
 
-回 Community Plugins 启用 **arXiv Daily**。
+### Manual Install
 
-> 不想用 BRAT 也行：从 [Releases](https://github.com/tdccccc/arxiv-daily/releases) 下最新版的 `manifest.json` / `main.js` / `styles.css` 三个文件，扔进 `<vault>/.obsidian/plugins/arxiv-daily/` 重启 Obsidian 即可。
+Download `manifest.json`, `main.js`, and `styles.css` from the latest release:
 
----
+https://github.com/tdccccc/arxiv-daily/releases/latest
 
-## 第一次配置
+Place them in:
 
-打开 **Settings → arXiv Daily**，从上往下走：
+```text
+<vault>/.obsidian/plugins/arxiv-daily/
+```
 
-### 1. 选 LLM 服务商 + 填 API Key
+Then restart Obsidian and enable **arXiv Daily**.
 
-在 **LLM** 段：
+## Quick Start
 
-- **Provider** 下拉选一个（DeepSeek / OpenAI / Anthropic / GLM / Custom）—— Base URL 和默认 Model 会自动填好
-- **API Key** 粘贴你的 key
+1. Open **Settings -> arXiv Daily**.
+2. Choose an LLM provider and enter an API key.
+3. Select one or more arXiv categories.
+4. Add at least one research topic.
+5. Enable the scheduler, or open the Dashboard and click **Run Today**.
 
-如果用自建/代理端点，选 **Custom**，手动改 Base URL 和 Model。
+Research topics are natural-language descriptions of what you want to track. The LLM uses them to decide which papers are relevant and how they should be grouped.
 
-### 2. 选 arXiv 分类
+## Daily Reports
 
-在 **arXiv** 段，**arXiv Category** 下拉按领域分组：物理 / 计算机 / 数学 / 统计。比如：
+Daily reports are Markdown files. Each selected paper includes:
 
-- 天体物理 → `astro-ph`
-- NLP → `cs.CL`
-- 机器学习 → `cs.LG`
+- authors and arXiv link
+- source sections used for summarization
+- core problem
+- key method
+- main result
+- why it is relevant
+- limitations or boundaries
+- watch/highlight checkboxes for Markdown-first triage
 
-下拉里没有的，右边输入框可以手填。
+Highlighting a paper in the daily report maps to a Dashboard star.
 
-### 3. 设置研究主题
+## Commands
 
-最快的方式：**Load Template** 下拉选一个预设（Astrophysics + ML / NLP / Computer Vision / Bioinformatics），点选后自动填一组示例主题，你只需要按需删改。
+Most day-to-day actions are available from the Dashboard toolbar.
 
-也可以点 **+ Add Topic** 手动加。每张主题卡片里：
-
-- **Name** —— 日报里这一节的标题（"Photo-z 相关"）
-- **Tag** —— 写进每篇论文 YAML 的 Obsidian `#tag`，从 Name 自动派生
-- **Description** —— **重要**：自然语言写清楚什么样的论文应该归到这个主题，LLM 按这个分类
-- **Detail report** —— 打开则该主题的核心贡献论文会额外生成深度解读
-
-> 默认 topics 为空。**至少加一个主题**，插件才会调用 LLM；否则 scheduler 就算开了也不会干活。
-
-### 4. 打开 Enable 开关
-
-页面顶部 **Enable** toggle。点开后会弹窗问你：
-
-- **Run today** —— 立即跑今天的，几分钟后就能看到第一份日报
-- **Skip today** —— 不跑今天，等明天定时
-- **Cancel** —— 不启用
-
-之后保持 Obsidian 开着，每天到 `Run time`（默认 09:30 上海时间）自动出报告。
-
----
-
-## 怎么触发
-
-| 方式 | 怎么操作 |
+| Action | Where |
 |---|---|
-| 自动每日 | Enable 打开，每天到 Run time 自动跑 |
-| 打开主工作台 | 左侧 ribbon 图标，或命令面板 → **arXiv Daily: Open reading dashboard** |
-| 立即跑今天 | Dashboard 顶部 → **Run Today** |
-| 补跑过去 N 天 | Dashboard 顶部 → **Run Pending** |
-| 指定日期 | Dashboard 顶部 → **More → Run for date…**，或命令面板 (`Cmd/Ctrl+P`) |
-| 按 arXiv ID 单篇 | Dashboard 顶部 → **More → Summarize by arXiv ID…**，弹窗粘贴 `2605.12345` 或完整 URL |
-| 标记重点论文 | Dashboard 论文列表点星标，或日报中勾选"重点" |
-| 打开某天日报 | Dashboard 月历点击对应日期 |
-| 打开今日日报 | Dashboard 月历点今天，或命令面板 → **arXiv Daily: Open today's daily report** |
+| Open Dashboard | Ribbon icon or command palette |
+| Run today | Dashboard toolbar |
+| Run pending lookback dates | Dashboard toolbar |
+| Run a specific date | Dashboard **More** menu or command palette |
+| Summarize by arXiv ID | Dashboard **More** menu or command palette |
+| Open a daily report | Dashboard calendar |
+| Star a paper | Dashboard row star button or daily report highlight checkbox |
 
----
+## Network And Privacy
 
-## 注意事项
+arXiv Daily uses network access only for the services needed to fetch and summarize papers.
 
-- **日报仍是 markdown** —— 每天继续生成 `arxiv-daily/daily/YYYY-MM-DD.md`。在日报里勾选"关注"/"重点"会自动同步论文状态；论文级状态和去重记录在隐藏的 `arxiv-daily/.index/papers.json`，日常回看用 arXiv Daily Dashboard，只有 detail / saved / 手动创建的论文会有单篇 md。
-- **不替代 Zotero 或 PDF 阅读器** —— arXiv Daily 负责发现、总结、回看和标记重点；正式入库、citation key 和 BibTeX 仍交给 Zotero。插件只维护本地 PDF 路径并提供打开/下载入口。
-- **要保持 Obsidian 开着** —— 插件只在 Obsidian 运行时自动跑；手动指定超出 `/recent` 5 天窗口的日期时，会用 arXiv export API 的 submittedDate 单日窗口近似补跑，并在日报中标注。
-- **每个 vault 独立** —— 多台机器同步同一个 vault 时，可能两台机都会跑同一天（输出一致，但浪费一次 LLM 调用）
-- **token 成本** —— 8-15 篇论文 + 3 篇深度报告大约一两毛钱（看模型），整体不算贵
-- **手机暂不支持** —— 用了 Electron 文件系统，目前 desktop-only
+- It connects to `arxiv.org` and `export.arxiv.org` to fetch paper listings, abstracts, HTML pages, and manually downloaded PDFs.
+- It connects to the LLM provider endpoint you configure in settings. Sent content can include paper titles, authors, abstracts, and selected paper text snippets needed for filtering and summarization.
+- API keys are stored in Obsidian plugin settings. Diagnostic output does not include API keys.
+- The plugin does not include client-side telemetry.
+- The plugin does not send vault content to services other than arXiv and the configured LLM provider for the requested workflow.
+- By default, generated files are written only under `arxiv-daily/` inside the vault.
 
----
+## CLI Usage
 
-## 网络与隐私
-
-- 插件会访问 `arxiv.org` / `export.arxiv.org`，用于获取论文列表、摘要、正文页面和用户手动下载的 PDF。
-- 插件会访问你在设置中选择或填写的 LLM provider endpoint，用于论文筛选和总结；发送内容包括论文标题、作者、摘要和必要的正文片段。
-- API Key 保存在 Obsidian 插件设置中；诊断信息不会输出 API Key。
-- 插件不包含客户端 telemetry，不会把 vault 内容发送到 arXiv 或 LLM provider 之外的服务。
-- 默认只在 vault 内的 `arxiv-daily/` 路径写入日报、论文笔记、PDF 和内部索引。
-
----
-
-## 高级选项
-
-设置面板的 **Output & Schedule** 和 **Advanced** 段还有更多调参（输出路径、调度时间、字符限制、跳过/优先 section、日志级别等）。每个字段旁边的 `?` 图标鼠标悬停看说明。
-
----
-
-## 命令行版本（cron / 服务器）
-
-如果不想开 Obsidian，只想 cron 跑 + 文件夹里出报告，使用 `plugin/` 里的 Node CLI。它复用 Obsidian 插件的同一套 core pipeline、配置 schema 和 `arxiv-daily/.index/run-state.json`：
+The Node CLI is available for cron or server workflows. It is secondary to the Obsidian plugin and intentionally kept minimal in this README.
 
 ```bash
 cd plugin
@@ -189,27 +162,25 @@ npm run build
 ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
 ```
 
-也可以放一个 `arxiv-daily.config.json`，再运行：
+With a config file:
 
 ```bash
 npm run cli -- run --date 2026-06-13 --config arxiv-daily.config.json --vault-root /path/to/vault
 npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vault-root /path/to/vault
 ```
 
-crontab 示例：
+The legacy root `arxiv_daily.py` is only a compatibility shim that forwards to the Node CLI.
 
-```cron
-0 9 * * 1-5 cd /path/to/arxiv-daily/plugin && ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
+## Development
+
+Implementation details and developer notes live in [plugin/README.md](./plugin/README.md).
+
+```bash
+cd plugin
+npm install
+npm test
+npm run build
 ```
-
-> 注：根目录 `arxiv_daily.py` 已退役为兼容 shim，只转发到 Node CLI，不再维护独立 Python pipeline。
-
----
-
-## 反馈 & 贡献
-
-- Bug / 需求：[GitHub Issues](https://github.com/tdccccc/arxiv-daily/issues)
-- 实现细节、开发文档、架构说明：见 [`plugin/README.md`](./plugin/README.md)
 
 ## License
 
