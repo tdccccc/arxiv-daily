@@ -7,6 +7,17 @@ __pycache__/
 .venv/
 .worktree/
 
+# Ignore hidden local files/directories by default.
+.*
+
+# Keep project files that affect setup, release, or packaging tracked.
+!.gitignore
+!/.env.example
+!/.python-version
+!/.github/
+!/.github/**
+!extensions/vscode-arxiv-daily/.vscodeignore
+
 # Plugin development scratch
 node_modules/
 plugin_test/
