@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.10)
+## Features (v0.1.11)
 
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
@@ -22,6 +22,13 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Simplified reading workflow** — one-click stars mark high-priority papers;
   unstarred papers stay neutral. Dashboard filters cover search, topic,
   first-seen date range, note presence, and detail availability.
+- **Dashboard sorting** — sort visible papers by starred first, recently seen,
+  published date, topic, or title.
+- **First-run onboarding** — Settings includes a Getting Started checklist, and
+  Dashboard empty states point users to setup, Run Today, Run Pending, or All.
+- **Safer arXiv date handling** — current or scheduled dates newer than the
+  latest `/recent` announce bucket stay retryable instead of using the
+  submitted-date fallback.
 - **Focused row actions** — open/create the paper note, open the source daily
   report, open arXiv, open the PDF, or download the PDF. Paper titles,
   authors, and summaries are selectable for copying.
