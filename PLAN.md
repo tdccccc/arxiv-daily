@@ -52,7 +52,7 @@ v0.1.10 的重心是把 Dashboard 明确为 Obsidian 内主入口，并把阅读
 - 支持 diagnostics 报告，覆盖配置、日期窗口、运行状态和 paper index 一致性。
 - Shared core + Node CLI 已可复用同一套 pipeline：`run`、`run-pending`、`summarize`。
 - Markdown 链接风格可配置为 Obsidian wikilink 或标准相对链接，方便 CLI / VS Code 输出。
-- release 已自动化：push `v*.*.*` tag 会触发 GitHub Actions 构建 Obsidian release assets。
+- release 已自动化：push 与 `manifest.json` 版本完全一致的 `*.*.*` tag 会触发 GitHub Actions 构建 Obsidian release assets。
 
 Dashboard 当前状态：
 
@@ -226,11 +226,11 @@ Dashboard 默认只强调 Star：
 
 ## Release Versioning
 
-发布 tag 与当前插件版本一致，只递增最后一位（例如 `v0.1.9` -> `v0.1.10`）。如果某个里程碑分多次 patch 发布、或中间插入 hotfix，后续计划编号顺延并更新本文档。
+发布 tag 必须与当前插件版本完全一致，并且不能带 `v` 前缀（例如 `0.1.10`，不是 `v0.1.10`）。Obsidian Community Directory 会按 `manifest.json` 的 `version` 精确查找同名 GitHub release。后续只递增最后一位；如果某个里程碑分多次 patch 发布、或中间插入 hotfix，后续计划编号顺延并更新本文档。
 
 发布前最低要求：
 
-- `plugin/manifest.json`、`plugin/package.json`、`plugin/package-lock.json`、`plugin/versions.json` 版本一致。
+- 根目录 `manifest.json`、根目录 `versions.json`、`plugin/manifest.json`、`plugin/package.json`、`plugin/package-lock.json`、`plugin/versions.json` 版本一致。
 - `cd plugin && npm run build` 通过。
 - `cd plugin && npm test` 通过。
 - 提交 release prep commit 后创建 tag。

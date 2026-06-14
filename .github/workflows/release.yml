@@ -3,7 +3,7 @@ name: Release Obsidian plugin
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "*.*.*"
 
 permissions:
   contents: write
@@ -17,12 +17,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: plugin/package-lock.json
 
@@ -31,17 +31,30 @@ jobs:
 
       - name: Verify version matches tag
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="$GITHUB_REF_NAME"
+          root_manifest_version="$(node -p "require('../manifest.json').version")"
           manifest_version="$(node -p "require('./manifest.json').version")"
           package_version="$(node -p "require('./package.json').version")"
+          if [ "$root_manifest_version" != "$tag_version" ]; then
+            echo "root manifest.json version $root_manifest_version does not match tag $GITHUB_REF_NAME"
+            exit 1
+          fi
           if [ "$manifest_version" != "$tag_version" ]; then
-            echo "manifest.json version $manifest_version does not match tag $GITHUB_REF_NAME"
+            echo "plugin manifest.json version $manifest_version does not match tag $GITHUB_REF_NAME"
             exit 1
           fi
           if [ "$package_version" != "$tag_version" ]; then
             echo "package.json version $package_version does not match tag $GITHUB_REF_NAME"
             exit 1
           fi
+          node -e "const versions = require('../versions.json'); process.exit(versions[process.argv[1]] ? 0 : 1)" "$tag_version" || {
+            echo "root versions.json does not contain $tag_version"
+            exit 1
+          }
+          node -e "const versions = require('./versions.json'); process.exit(versions[process.argv[1]] ? 0 : 1)" "$tag_version" || {
+            echo "plugin versions.json does not contain $tag_version"
+            exit 1
+          }
 
       - name: Run tests
         run: npm test
