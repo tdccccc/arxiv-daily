@@ -370,7 +370,7 @@ function describeManualResult(r: any): string {
   if (r.kind === "done") return `done → ${r.path}`;
   if (r.kind === "already_exists") return `already exists at ${r.path}`;
   if (r.kind === "not_found") return `not found: ${r.reason}`;
-  if (r.kind === "no_html") return `no full HTML: ${r.reason}`;
+  if (r.kind === "no_html") return `no full text: ${r.reason}`;
   if (r.kind === "error") return `error: ${r.reason}`;
   return JSON.stringify(r);
 }

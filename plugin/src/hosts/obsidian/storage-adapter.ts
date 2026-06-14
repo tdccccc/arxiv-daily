@@ -1,5 +1,5 @@
 import { normalizePath, type Vault } from "obsidian";
-import type { StorageAdapter } from "../../core/adapters";
+import type { StorageAdapter, StorageEntry } from "../../core/adapters";
 
 export class ObsidianStorageAdapter implements StorageAdapter {
   constructor(private vault: Vault) {}
@@ -33,6 +33,17 @@ export class ObsidianStorageAdapter implements StorageAdapter {
       this.normalizePath(from),
       this.normalizePath(to),
     );
+  }
+
+  async list(path: string): Promise<StorageEntry[]> {
+    const listed = await this.vault.adapter.list(this.normalizePath(path));
+    return [
+      ...listed.files.map((entry) => ({ path: entry, type: "file" as const })),
+      ...listed.folders.map((entry) => ({
+        path: entry,
+        type: "folder" as const,
+      })),
+    ];
   }
 
   async readBinary(path: string): Promise<ArrayBuffer> {

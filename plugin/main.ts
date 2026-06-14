@@ -1,6 +1,4 @@
 import { Notice, Plugin } from "obsidian";
-import * as path from "node:path";
-import * as os from "node:os";
 import { DEFAULT_SETTINGS } from "./src/settings/defaults";
 import type { PluginSettings, RunState } from "./src/settings/types";
 import { ArxivDailySettingTab } from "./src/settings/tab";
@@ -17,7 +15,10 @@ import { chooseModal } from "./src/services/modal";
 import { LlmClient } from "./src/llm/client";
 import { ArxivFetcher } from "./src/pipeline/arxiv-fetcher";
 import { HtmlCache } from "./src/pipeline/html-cache";
-import { PaperContentFetcher } from "./src/pipeline/paper-content";
+import {
+  cleanupSourceCache,
+  PaperContentFetcher,
+} from "./src/pipeline/paper-content";
 import { MarkdownWriter } from "./src/pipeline/markdown-writer";
 import { ArxivPipeline } from "./src/pipeline/pipeline";
 import { ManualFetchService } from "./src/services/manual-fetch";
@@ -105,6 +106,9 @@ export default class ArxivDailyPlugin extends Plugin {
       fetchAndSummarize: (raw: string, date: string) =>
         this.buildManualFetch().fetchAndSummarize(raw, date),
     };
+    this.cleanupCaches().catch((e) =>
+      this.logger.warn("cache cleanup failed", e),
+    );
 
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerDashboardView(this);
@@ -258,10 +262,15 @@ export default class ArxivDailyPlugin extends Plugin {
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });
     const cache = new HtmlCache({
-      rootDir: this.resolveCacheDir(),
+      rootDir: this.pluginCacheDir(),
+      expiryDays: this.settings.advanced.cacheExpiryDays,
+      storage: this.host.storage,
+    });
+    const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger, {
+      storage: this.host.storage,
+      cacheDir: `${this.pluginDir()}/.cache/source`,
       expiryDays: this.settings.advanced.cacheExpiryDays,
     });
-    const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger);
     const writer = new MarkdownWriter({
       storage: this.host.storage,
       logger: this.logger,
@@ -307,21 +316,31 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
-  private resolveCacheDir(): string {
-    let base: string | null = null;
-    try {
-      const electron = (globalThis as any).require?.("electron");
-      if (electron) {
-        base =
-          (electron.remote ? electron.remote.app : electron.app)?.getPath?.(
-            "userData",
-          ) ?? null;
-      }
-    } catch {
-      base = null;
+  private pluginDir(): string {
+    return this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
+  }
+
+  private pluginCacheDir(): string {
+    return `${this.pluginDir()}/.cache`;
+  }
+
+  private async cleanupCaches(): Promise<void> {
+    const cache = new HtmlCache({
+      rootDir: this.pluginCacheDir(),
+      expiryDays: this.settings.advanced.cacheExpiryDays,
+      storage: this.host.storage,
+    });
+    const textRemoved = await cache.cleanupExpired();
+    const sourceRemoved = await cleanupSourceCache({
+      storage: this.host.storage,
+      cacheDir: `${this.pluginDir()}/.cache/source`,
+      expiryDays: this.settings.advanced.cacheExpiryDays,
+    });
+    if (textRemoved || sourceRemoved) {
+      this.logger.info(
+        `cache cleanup: removed ${textRemoved} html/abs files and ${sourceRemoved} source files`,
+      );
     }
-    if (!base) base = os.homedir();
-    return path.join(base, "arxiv-daily-cache");
   }
 }
 

@@ -82,6 +82,19 @@ export class ArxivFetcher {
     return this.fetchBinary(url);
   }
 
+  async fetchSource(
+    arxivId: string,
+  ): Promise<{ ok: true; body: ArrayBuffer } | { ok: false; status: number }> {
+    const url = `https://arxiv.org/e-print/${arxivId}`;
+    try {
+      const body = await this.fetchBinary(url, { allow404: true });
+      return { ok: true, body };
+    } catch (err: any) {
+      if (err?.status === 404) return { ok: false, status: 404 };
+      throw err;
+    }
+  }
+
   /** Fetch the raw Atom XML for a single id (for manual lookup with full metadata). */
   async fetchAtomEntry(arxivId: string): Promise<string> {
     const url = `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`;
@@ -117,7 +130,10 @@ export class ArxivFetcher {
     );
   }
 
-  private async fetchBinary(url: string): Promise<ArrayBuffer> {
+  private async fetchBinary(
+    url: string,
+    opts: { allow404?: boolean } = {},
+  ): Promise<ArrayBuffer> {
     await this.respectDelay();
     return retry(
       async () => {
@@ -128,7 +144,9 @@ export class ArxivFetcher {
           responseType: "arrayBuffer",
         });
         if (res.status < 200 || res.status >= 300) {
-          throw new Error(`HTTP ${res.status}: ${url}`);
+          const e: any = new Error(`HTTP ${res.status}: ${url}`);
+          e.status = res.status;
+          throw e;
         }
         if (!res.bodyBuffer) {
           throw new Error(`empty binary response: ${url}`);
@@ -138,6 +156,7 @@ export class ArxivFetcher {
       {
         maxAttempts: 3,
         baseDelayMs: 2000,
+        shouldRetry: (err: any) => !(opts.allow404 && err?.status === 404),
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,

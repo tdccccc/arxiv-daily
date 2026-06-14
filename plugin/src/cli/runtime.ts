@@ -4,7 +4,10 @@ import { LlmClient } from "../llm/client";
 import { ArxivFetcher } from "../pipeline/arxiv-fetcher";
 import { HtmlCache } from "../pipeline/html-cache";
 import { MarkdownWriter } from "../pipeline/markdown-writer";
-import { PaperContentFetcher } from "../pipeline/paper-content";
+import {
+  cleanupSourceCache,
+  PaperContentFetcher,
+} from "../pipeline/paper-content";
 import { ArxivPipeline } from "../pipeline/pipeline";
 import { arxivCategories } from "../settings/categories";
 import { RunCancellationService } from "../services/cancellation";
@@ -57,7 +60,21 @@ export async function buildCliRuntime(
     rootDir: config.cacheDir,
     expiryDays: config.settings.advanced.cacheExpiryDays,
   });
-  const paperFetcher = new PaperContentFetcher(fetcher, cache, logger);
+  await cache.cleanupExpired().catch((e) =>
+    logger.warn(`cache cleanup failed: ${(e as Error).message}`),
+  );
+  const paperFetcher = new PaperContentFetcher(fetcher, cache, logger, {
+    storage: host.storage,
+    cacheDir: ".arxiv-daily/cache/source",
+    expiryDays: config.settings.advanced.cacheExpiryDays,
+  });
+  await cleanupSourceCache({
+    storage: host.storage,
+    cacheDir: ".arxiv-daily/cache/source",
+    expiryDays: config.settings.advanced.cacheExpiryDays,
+  }).catch((e) =>
+    logger.warn(`source cache cleanup failed: ${(e as Error).message}`),
+  );
   const writer = new MarkdownWriter({
     storage: host.storage,
     logger,

@@ -83,7 +83,11 @@ export class ManualFetchService {
     }
 
     // 3. Pull /html and extract full sections
-    let content: { abstractConclusion: string; fullSections: string | null };
+    let content: {
+      abstractConclusion: string;
+      fullSections: string | null;
+      fullTextFailure?: string;
+    };
     try {
       content = await this.deps.paperFetcher.fetch(id, {
         isDetail: true,
@@ -99,7 +103,9 @@ export class ManualFetchService {
     if (!content.fullSections) {
       return {
         kind: "no_html",
-        reason: `no rendered HTML for ${id}; cannot produce a detail summary`,
+        reason:
+          content.fullTextFailure ??
+          `no rendered HTML or extractable arXiv source for ${id}; cannot produce a detail summary`,
       };
     }
 
