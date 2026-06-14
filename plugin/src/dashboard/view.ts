@@ -22,6 +22,7 @@ import { syncDashboardHistory } from "./history-sync";
 import { validateFilterConfig } from "../settings/validation";
 import { formatDate, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
+import { chooseModal } from "../services/modal";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -1039,6 +1040,15 @@ class ArxivDailyDashboardView extends ItemView {
       () =>
         this.runBatchStar(false),
     );
+    this.createBatchButton(
+      actions,
+      "trash-2",
+      "Delete summary",
+      this.selectedDetailSummaryCount(),
+      () =>
+        this.runBatchDeleteSummary(),
+      { warning: true },
+    );
 
     const clear = actions.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
@@ -1255,6 +1265,7 @@ class ArxivDailyDashboardView extends ItemView {
     label: string,
     selectedCount: number,
     action: () => Promise<void>,
+    options: { warning?: boolean } = {},
   ): void {
     const button = parent.createEl("button", {
       cls: "arxiv-daily-dashboard__batch-button",
@@ -1265,6 +1276,7 @@ class ArxivDailyDashboardView extends ItemView {
     }) as HTMLButtonElement;
     setIcon(button, icon);
     button.createSpan({ text: label });
+    if (options.warning) button.addClass("mod-warning");
     button.disabled = selectedCount === 0;
     button.addEventListener("click", () => {
       void this.runControlAction(button, action);
@@ -1405,12 +1417,75 @@ class ArxivDailyDashboardView extends ItemView {
     return [...this.selectedIds];
   }
 
+  private selectedDetailSummaryCount(): number {
+    return this.selectedArxivIds().filter((id) =>
+      this.detailSummaryIds.has(id),
+    ).length;
+  }
+
   private async runBatchStar(starred: boolean): Promise<void> {
     await this.runBatchAction({
       type: "set_priority",
       arxivIds: this.selectedArxivIds(),
       priority: starred ? "high" : "normal",
     });
+  }
+
+  private async runBatchDeleteSummary(): Promise<void> {
+    const entries = this.selectedArxivIds()
+      .map((id) => this.entries.find((entry) => entry.arxivId === id))
+      .filter((entry): entry is DashboardRow["entry"] =>
+        Boolean(entry && this.detailSummaryPaths.has(entry.arxivId)),
+      );
+    if (entries.length === 0) {
+      new Notice("arXiv Daily: no selected papers have detail summaries");
+      return;
+    }
+
+    const choice = await chooseModal(
+      this.plugin.app,
+      "Delete detail summaries",
+      `Delete ${entries.length} detail summary file${entries.length === 1 ? "" : "s"} from the vault? Daily report entries will stay in the Dashboard.`,
+      [
+        { label: "Cancel", value: "cancel" },
+        { label: "Delete", value: "delete", warning: true },
+      ],
+    );
+    if (choice !== "delete") return;
+
+    const store = this.plugin.buildPaperIndex();
+    let deletedFiles = 0;
+    for (const path of uniquePaths(
+      entries.map((entry) => this.detailSummaryPaths.get(entry.arxivId)),
+    )) {
+      try {
+        if (!(await this.plugin.app.vault.adapter.exists(path))) continue;
+        await this.plugin.app.vault.adapter.remove(path);
+        deletedFiles += 1;
+      } catch (e) {
+        this.plugin.logger.warn(
+          `dashboard: failed to delete detail summary ${path}`,
+          e,
+        );
+        throw new Error(`failed to delete ${path}: ${(e as Error).message}`);
+      }
+    }
+
+    const clearIds = entries
+      .filter((entry) => entry.dailyReports.length > 0)
+      .map((entry) => entry.arxivId);
+    const removeIds = entries
+      .filter((entry) => entry.dailyReports.length === 0)
+      .map((entry) => entry.arxivId);
+    const cleared = await store.clearPaperDetails(clearIds);
+    const removed = await store.removePapers(removeIds);
+
+    this.selectedIds.clear();
+    new Notice(
+      `arXiv Daily: deleted ${deletedFiles} summaries, cleared ${cleared}, removed ${removed} orphan entries`,
+      10_000,
+    );
+    await this.reloadIndex();
   }
 
   private async runBatchAction(action: DashboardAction): Promise<void> {

@@ -52,11 +52,25 @@ export async function syncDashboardHistory(
     ],
   );
 
-  if (inputs.length === 0) return current;
+  let index = current;
+  if (inputs.length > 0) {
+    await deps.store.upsertManyFromDailyPapers(inputs);
+    deps.logger?.info(`dashboard: synced ${inputs.length} historical papers`);
+    index = await deps.store.load();
+  }
 
-  await deps.store.upsertManyFromDailyPapers(inputs);
-  deps.logger?.info(`dashboard: synced ${inputs.length} historical papers`);
-  return deps.store.load();
+  const stale = staleDetailActions(index, paperCandidates, deps.output);
+  if (stale.clearIds.length > 0) {
+    const changed = await deps.store.clearPaperDetails(stale.clearIds);
+    deps.logger?.info(`dashboard: cleared ${changed} stale detail summaries`);
+  }
+  if (stale.removeIds.length > 0) {
+    const changed = await deps.store.removePapers(stale.removeIds);
+    deps.logger?.info(`dashboard: removed ${changed} orphan detail summaries`);
+  }
+  return stale.clearIds.length > 0 || stale.removeIds.length > 0
+    ? deps.store.load()
+    : index;
 }
 
 async function collectPaperCandidates(
@@ -145,7 +159,6 @@ function parseDailyCandidates(
     const topic = topicFromHeading(currentTopic, topics);
     const title = cleanDailyHeading(currentHeading);
     const authors = parseDailyAuthors(block);
-    const headingDetail = /(?:→|->)\s*(?:\[\[|\[)/.test(currentHeading);
     for (const arxivId of ids) {
       const paper = paperCandidates.get(arxivId);
       out.push({
@@ -155,7 +168,7 @@ function parseDailyCandidates(
         date,
         topic: topic || paper?.topic || "arxiv",
         dailyReport,
-        detail: headingDetail || Boolean(paper?.detail),
+        detail: Boolean(paper?.detail),
         path: paper?.detail ? paper.path : undefined,
       });
     }
@@ -237,6 +250,36 @@ function needsSync(
   }
   if (candidate.topic && !existing.topics.includes(candidate.topic)) return true;
   return false;
+}
+
+function staleDetailActions(
+  inbox: PaperInbox,
+  paperCandidates: Map<string, PaperCandidate>,
+  output: OutputSettings,
+): { clearIds: string[]; removeIds: string[] } {
+  const papersDir = normalizeVaultPath(output.papersDir);
+  const detailIds = new Set(
+    [...paperCandidates.values()]
+      .filter((candidate) => candidate.detail)
+      .map((candidate) => candidate.arxivId),
+  );
+  const clearIds: string[] = [];
+  const removeIds: string[] = [];
+
+  for (const entry of Object.values(inbox.papers)) {
+    if (detailIds.has(entry.arxivId)) continue;
+    const paperPath = normalizeVaultPath(entry.paperPath ?? "");
+    const referencesManagedPaper =
+      Boolean(paperPath) && isDirectChildMarkdown(paperPath, papersDir);
+    if (!entry.detail && !referencesManagedPaper) continue;
+    if (entry.dailyReports.length === 0) {
+      removeIds.push(entry.arxivId);
+    } else {
+      clearIds.push(entry.arxivId);
+    }
+  }
+
+  return { clearIds, removeIds };
 }
 
 function parseFrontmatter(markdown: string): Record<string, string> {

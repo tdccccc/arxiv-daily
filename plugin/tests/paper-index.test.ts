@@ -278,6 +278,63 @@ describe("PaperIndexStore", () => {
     });
   });
 
+  it("clears detail metadata without removing the paper entry", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+      paperPath: "arxiv-daily/papers/2606.12345.md",
+    });
+
+    const changed = await store.clearPaperDetails(["2606.12345", "missing"]);
+
+    expect(changed).toBe(1);
+    const entry = await store.get("2606.12345");
+    expect(entry).toMatchObject({
+      detail: false,
+      paperPath: null,
+    });
+  });
+
+  it("removes paper entries explicitly", async () => {
+    const { store } = makeStore();
+    await store.upsertManyFromDailyPapers([
+      {
+        arxivId: "2606.00001",
+        title: "A paper",
+        authors: "A",
+        date: "2026-06-11",
+        arxivCategory: "astro-ph",
+        primaryTopic: "photo-z",
+        detail: false,
+      },
+      {
+        arxivId: "2606.00002",
+        title: "Another paper",
+        authors: "B",
+        date: "2026-06-11",
+        arxivCategory: "astro-ph",
+        primaryTopic: "photo-z",
+        detail: false,
+      },
+    ]);
+
+    const changed = await store.removePapers([
+      "2606.00001",
+      "missing",
+      "2606.00001",
+    ]);
+
+    expect(changed).toBe(1);
+    expect(await store.get("2606.00001")).toBeNull();
+    expect(await store.get("2606.00002")).not.toBeNull();
+  });
+
   it("throws PaperIndexError for malformed JSON", async () => {
     const { store } = makeStore({
       "arxiv-daily/index/papers.json": "{not-json",

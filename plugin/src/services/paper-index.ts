@@ -228,8 +228,35 @@ export class PaperIndexStore {
     const entry = inbox.papers[arxivId];
     if (!entry) return null;
     entry.paperPath = this.storage.normalizePath(paperPath);
+    entry.detail = true;
     await this.save(inbox);
     return entry;
+  }
+
+  async clearPaperDetails(arxivIds: string[]): Promise<number> {
+    const inbox = await this.load();
+    let changed = 0;
+    for (const arxivId of uniqueStrings(arxivIds)) {
+      const entry = inbox.papers[arxivId];
+      if (!entry || (!entry.detail && entry.paperPath == null)) continue;
+      entry.detail = false;
+      entry.paperPath = null;
+      changed += 1;
+    }
+    if (changed > 0) await this.save(inbox);
+    return changed;
+  }
+
+  async removePapers(arxivIds: string[]): Promise<number> {
+    const inbox = await this.load();
+    let changed = 0;
+    for (const arxivId of uniqueStrings(arxivIds)) {
+      if (!(arxivId in inbox.papers)) continue;
+      delete inbox.papers[arxivId];
+      changed += 1;
+    }
+    if (changed > 0) await this.save(inbox);
+    return changed;
   }
 
   async setPdfPath(
@@ -473,6 +500,15 @@ function appendUnique(items: string[], next: string): string[] {
   const out = [...items];
   const trimmed = next.trim();
   if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  return out;
+}
+
+function uniqueStrings(items: string[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    const trimmed = item.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  }
   return out;
 }
 

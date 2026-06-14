@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { syncDashboardHistory } from "../src/dashboard/history-sync";
 import { PaperIndexStore } from "../src/services/paper-index";
+import type { PaperIndexEntry } from "../src/services/paper-index";
 import type { StorageAdapter } from "../src/core/adapters";
 import type { OutputSettings } from "../src/settings/types";
 
@@ -103,6 +104,53 @@ function detailMarkdown(id: string, title: string): string {
   ].join("\n");
 }
 
+function indexJson(
+  papers: Record<string, Partial<PaperIndexEntry>>,
+): string {
+  const out: Record<string, PaperIndexEntry> = {};
+  for (const [id, overrides] of Object.entries(papers)) {
+    out[id] = indexedPaper(id, overrides);
+  }
+  return JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-06-13T00:00:00.000Z",
+    papers: out,
+  });
+}
+
+function indexedPaper(
+  id: string,
+  overrides: Partial<PaperIndexEntry> = {},
+): PaperIndexEntry {
+  return {
+    arxivId: id,
+    source: "arxiv",
+    title: `Paper ${id}`,
+    authors: ["A. Author"],
+    published: "2026-06-10",
+    updated: "2026-06-10",
+    category: "photo-z",
+    categories: ["photo-z"],
+    summary: undefined,
+    topics: ["photo-z"],
+    primaryTopic: "photo-z",
+    detail: false,
+    status: "inbox",
+    priority: "normal",
+    seenDates: ["2026-06-10"],
+    dailyReports: [],
+    paperPath: null,
+    arxivUrl: `https://arxiv.org/abs/${id}`,
+    pdfUrl: `https://arxiv.org/pdf/${id}`,
+    pdfPath: "",
+    zoteroKey: "",
+    zoteroUri: "",
+    citationKey: "",
+    projects: [],
+    ...overrides,
+  };
+}
+
 describe("syncDashboardHistory", () => {
   it("backfills daily papers and detail summary files into the paper index", async () => {
     const { files, storage } = makeStorage({
@@ -184,5 +232,70 @@ describe("syncDashboardHistory", () => {
       paperPath: "arxiv/papers/2606.00003.md",
       dailyReports: [],
     });
+  });
+
+  it("clears deleted detail summaries while keeping daily report papers", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00001": {
+          detail: true,
+          paperPath: "arxiv/papers/2606.00001.md",
+          dailyReports: ["arxiv/daily/2026-06-10.md"],
+        },
+      }),
+      "arxiv/daily/2026-06-10.md": [
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Deleted Detail Paper -> [[2606.00001]]",
+        "- **Authors**: A. Author",
+        "- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.00001"]).toMatchObject({
+      detail: false,
+      paperPath: null,
+      dailyReports: ["arxiv/daily/2026-06-10.md"],
+    });
+  });
+
+  it("removes orphan detail entries when their paper file is gone", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00003": {
+          title: "Orphan Detail Paper",
+          detail: true,
+          paperPath: "arxiv/papers/2606.00003.md",
+          dailyReports: [],
+        },
+      }),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.00003"]).toBeUndefined();
   });
 });
