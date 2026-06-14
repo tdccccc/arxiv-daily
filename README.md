@@ -21,7 +21,7 @@ arXiv Daily is for discovery and review. Zotero remains the source of truth for 
 - **Dashboard-first reading flow**: the ribbon icon opens the arXiv Daily Dashboard directly.
 - **Starred / All review model**: star only the papers that matter; unstarred papers stay neutral.
 - **Daily report calendar**: dates with reports are marked, today is highlighted, and clicking a date opens that report.
-- **Search and filters**: filter by keyword, topic, first-seen date range, note presence, and detail availability.
+- **Search, filters, and sorting**: filter by keyword, topic, first-seen date range, note presence, and detail availability; sort by starred, recently seen, published date, topic, or title.
 - **Focused paper actions**: open or create a paper note, open the source daily report, open arXiv, open a PDF, or download the PDF.
 - **Markdown-native output**: daily reports and paper notes stay as ordinary Markdown files in your vault.
 - **Catch-up scheduling**: missed weekdays in the lookback window are retried when Obsidian is open.
@@ -34,6 +34,7 @@ The Dashboard is the main entry point after setup.
 - **Starred** shows high-priority papers you marked for follow-up.
 - **All** shows every non-ignored indexed paper.
 - The left side contains search, topic/date/note/detail filters, and summary counts.
+- Sort controls help switch between starred-first, recently seen, published-date, topic, and title views.
 - The calendar opens historical daily reports without browsing folders.
 - Paper rows keep the reading actions close to the title, authors, and summary.
 

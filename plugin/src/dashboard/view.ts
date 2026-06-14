@@ -13,6 +13,8 @@ import {
   type DashboardPatch,
   type DashboardQuery,
   type DashboardRow,
+  type DashboardSortDirection,
+  type DashboardSortKey,
   type DashboardTab,
 } from "./model";
 import { ensurePaperNote } from "../services/paper-note";
@@ -26,6 +28,50 @@ export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "starred", label: "Starred" },
   { id: "all", label: "All" },
+];
+
+const SORT_OPTIONS: Array<{
+  value: string;
+  label: string;
+  key: DashboardSortKey;
+  direction: DashboardSortDirection;
+}> = [
+  {
+    value: "priority:asc",
+    label: "Starred first",
+    key: "priority",
+    direction: "asc",
+  },
+  {
+    value: "firstSeen:desc",
+    label: "Recently seen",
+    key: "firstSeen",
+    direction: "desc",
+  },
+  {
+    value: "published:desc",
+    label: "Published newest",
+    key: "published",
+    direction: "desc",
+  },
+  {
+    value: "published:asc",
+    label: "Published oldest",
+    key: "published",
+    direction: "asc",
+  },
+  {
+    value: "topic:asc",
+    label: "Topic A-Z",
+    key: "topic",
+    direction: "asc",
+  },
+  {
+    value: "title:asc",
+    label: "Title A-Z",
+    key: "title",
+    direction: "asc",
+  },
 ];
 
 interface DailyReportDay {
@@ -354,7 +400,10 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private resetFilters(): void {
-    this.query = { tab: this.query.tab ?? "starred" };
+    this.query = {
+      tab: this.query.tab ?? "starred",
+      ...(this.query.sort ? { sort: this.query.sort } : {}),
+    };
     this.render();
   }
 
@@ -682,6 +731,22 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
+    const sort = this.createSelect(
+      this.createFilterField(filters, "Sort"),
+      SORT_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+      })),
+      sortValue(this.query.sort),
+    );
+    sort.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        sort: sortQuery(sort.value),
+      };
+      this.renderCurrentResults();
+    });
+
     const reset = filters.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__filter-reset",
       attr: {
@@ -692,8 +757,7 @@ class ArxivDailyDashboardView extends ItemView {
     });
     setIcon(reset, "rotate-ccw");
     reset.addEventListener("click", () => {
-      this.query = { tab: this.query.tab ?? "starred" };
-      this.render();
+      this.resetFilters();
     });
   }
 
@@ -1305,6 +1369,23 @@ function boolSelectQuery(value: string): boolean | undefined {
   if (value === "yes") return true;
   if (value === "no") return false;
   return undefined;
+}
+
+function sortValue(sort: DashboardQuery["sort"]): string {
+  const key = sort?.key ?? "priority";
+  const direction = sort?.direction ?? "asc";
+  return `${key}:${direction}`;
+}
+
+function sortQuery(value: string): DashboardQuery["sort"] {
+  const option =
+    SORT_OPTIONS.find((candidate) => candidate.value === value) ??
+    SORT_OPTIONS[0];
+  if (option.value === SORT_OPTIONS[0].value) return undefined;
+  return {
+    key: option.key,
+    direction: option.direction,
+  };
 }
 
 function openUrl(url: string, label: string): void {

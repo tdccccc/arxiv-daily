@@ -169,6 +169,40 @@ describe("dashboard model", () => {
     expect(byPublishedDesc.rows[0].arxivId).not.toBe("2606.00002");
   });
 
+  it("sorts by recently seen, topic, and title", () => {
+    const byFirstSeenDesc = queryDashboard(fixtures(), {
+      tab: "all",
+      sort: { key: "firstSeen", direction: "desc" },
+    });
+    const byTopicAsc = queryDashboard(fixtures(), {
+      tab: "all",
+      sort: { key: "topic", direction: "asc" },
+    });
+    const byTitleAsc = queryDashboard(fixtures(), {
+      tab: "all",
+      sort: { key: "title", direction: "asc" },
+    });
+
+    expect(byFirstSeenDesc.rows.map((row) => row.arxivId)).toEqual([
+      "2606.00005",
+      "2606.00003",
+      "2606.00002",
+      "2606.00001",
+    ]);
+    expect(byTopicAsc.rows.map((row) => row.arxivId)).toEqual([
+      "2606.00003",
+      "2606.00002",
+      "2606.00001",
+      "2606.00005",
+    ]);
+    expect(byTitleAsc.rows.map((row) => row.arxivId)).toEqual([
+      "2606.00001",
+      "2606.00002",
+      "2606.00003",
+      "2606.00005",
+    ]);
+  });
+
   it("plans host-neutral dashboard actions without side effects", () => {
     const entries = fixtures();
     const statusPlan = planDashboardAction(entries, {
