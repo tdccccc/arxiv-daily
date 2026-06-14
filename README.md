@@ -161,6 +161,16 @@ tdccccc/arxiv-daily
 
 ---
 
+## 网络与隐私
+
+- 插件会访问 `arxiv.org` / `export.arxiv.org`，用于获取论文列表、摘要、正文页面和用户手动下载的 PDF。
+- 插件会访问你在设置中选择或填写的 LLM provider endpoint，用于论文筛选和总结；发送内容包括论文标题、作者、摘要和必要的正文片段。
+- API Key 保存在 Obsidian 插件设置中；诊断信息不会输出 API Key。
+- 插件不包含客户端 telemetry，不会把 vault 内容发送到 arXiv 或 LLM provider 之外的服务。
+- 默认只在 vault 内的 `arxiv-daily/` 路径写入日报、论文笔记、PDF 和内部索引。
+
+---
+
 ## 高级选项
 
 设置面板的 **Output & Schedule** 和 **Advanced** 段还有更多调参（输出路径、调度时间、字符限制、跳过/优先 section、日志级别等）。每个字段旁边的 `?` 图标鼠标悬停看说明。
