@@ -323,7 +323,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       void openDashboardView(plugin);
     },
   );
-  dashboardRibbonIcon.style.order = "999";
   dashboardRibbonIcon.addClass("arxiv-daily-ribbon-dashboard");
 }
 
@@ -576,14 +575,11 @@ class DiagnosticsModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: "arXiv Daily diagnostics" });
-    const textarea = contentEl.createEl("textarea");
+    const textarea = contentEl.createEl("textarea", {
+      cls: "arxiv-daily-diagnostics-textarea",
+    });
     textarea.value = "Loading diagnostics...";
     textarea.readOnly = true;
-    textarea.style.width = "100%";
-    textarea.style.height = "360px";
-    textarea.style.fontFamily = "var(--font-monospace)";
-    textarea.style.fontSize = "var(--font-smaller)";
-    textarea.style.resize = "vertical";
     let report = textarea.value;
     void collectPaperIndexDiagnostics(this.plugin)
       .then((paperIndex) => {

@@ -19,19 +19,33 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Append a circled "?" to a Setting's name with an Obsidian-styled tooltip. */
   private attachHelp(setting: Setting, text: string): Setting {
-    const q = setting.nameEl.createEl("span", { text: "?" });
-    q.style.cssText =
-      "display:inline-flex;align-items:center;justify-content:center;" +
-      "width:1.1em;height:1.1em;margin-left:0.4em;border:1px solid currentColor;" +
-      "border-radius:50%;opacity:0.55;cursor:help;font-size:0.75em;font-weight:normal;";
+    const q = setting.nameEl.createEl("span", {
+      cls: "arxiv-daily-settings__help",
+      text: "?",
+    });
     setTooltip(q, text, { placement: "top" });
     return setting;
   }
 
   /** Inline muted hint, used inside topic cards under a label. */
   private hint(parent: HTMLElement, text: string): void {
-    const h = parent.createEl("div", { text });
-    h.style.cssText = "font-size:0.82em;opacity:0.65;margin-bottom:0.4em;";
+    parent.createEl("div", {
+      cls: "arxiv-daily-settings__hint",
+      text,
+    });
+  }
+
+  private sectionHeading(
+    containerEl: HTMLElement,
+    name: string,
+    section: "llm" | "arxiv" | "topics" | "schedule" | "advanced",
+    desc?: string,
+  ): Setting {
+    const heading = new Setting(containerEl).setName(name).setHeading();
+    if (desc) heading.setDesc(desc);
+    heading.settingEl.addClass("arxiv-daily-settings__section");
+    heading.settingEl.setAttribute("data-arxiv-daily-section", section);
+    return heading;
   }
 
   private async setArxivCategories(categories: string[]): Promise<void> {
@@ -53,16 +67,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── Config-invalid banner (top) ─────────────────
     const v = validateFilterConfig(s);
     if (!v.ok) {
-      const banner = containerEl.createDiv();
-      banner.style.border = "1px solid var(--text-error)";
-      banner.style.background = "var(--background-modifier-error)";
-      banner.style.borderRadius = "6px";
-      banner.style.padding = "0.6em 0.8em";
-      banner.style.marginBottom = "0.75em";
+      const banner = containerEl.createDiv({
+        cls: "arxiv-daily-settings__invalid-banner",
+      });
       banner.createEl("strong", { text: "Configuration incomplete" });
-      const ul = banner.createEl("ul");
-      ul.style.margin = "0.3em 0 0 1.2em";
-      ul.style.padding = "0";
+      const ul = banner.createEl("ul", {
+        cls: "arxiv-daily-settings__invalid-list",
+      });
       for (const r of v.reasons) ul.createEl("li", { text: r });
     }
 
@@ -78,11 +89,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    containerEl.createEl("h2", {
-      text: "LLM",
-      cls: "arxiv-daily-settings__section",
-      attr: { "data-arxiv-daily-section": "llm" },
-    });
+    this.sectionHeading(containerEl, "LLM", "llm");
 
     // Provider dropdown
     new Setting(containerEl)
@@ -241,11 +248,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── arXiv ────────────────────────────────────────
-    containerEl.createEl("h2", {
-      text: "arXiv",
-      cls: "arxiv-daily-settings__section",
-      attr: { "data-arxiv-daily-section": "arxiv" },
-    });
+    this.sectionHeading(containerEl, "arXiv", "arxiv");
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
@@ -300,12 +303,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     // ─── Research Topics ─────────────────────────────
-    const topicsHeading = new Setting(containerEl)
-      .setName("Research Topics")
-      .setDesc("Each topic becomes one section in the daily report.")
-      .setHeading();
-    topicsHeading.settingEl.addClass("arxiv-daily-settings__section");
-    topicsHeading.settingEl.setAttribute("data-arxiv-daily-section", "topics");
+    this.sectionHeading(
+      containerEl,
+      "Research Topics",
+      "topics",
+      "Each topic becomes one section in the daily report.",
+    );
 
     new Setting(containerEl)
       .setName("Quick start")
@@ -355,12 +358,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const topicsContainer = containerEl.createDiv();
     if (s.arxiv.topics.length === 0) {
-      const empty = topicsContainer.createDiv();
-      empty.style.padding = "0.75em";
-      empty.style.marginBottom = "0.75em";
-      empty.style.border = "1px dashed var(--background-modifier-border)";
-      empty.style.borderRadius = "6px";
-      empty.style.opacity = "0.85";
+      const empty = topicsContainer.createDiv({
+        cls: "arxiv-daily-settings__empty-topics",
+      });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createEl("div", {
         text: "Pick a template above or click + Add Topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
@@ -404,11 +404,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── Output & Schedule ────────────────────────────
-    containerEl.createEl("h2", {
-      text: "Output & Schedule",
-      cls: "arxiv-daily-settings__section",
-      attr: { "data-arxiv-daily-section": "schedule" },
-    });
+    this.sectionHeading(containerEl, "Output & Schedule", "schedule");
 
     new Setting(containerEl)
       .setName("Daily path")
@@ -476,11 +472,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── Advanced ─────────────────────────────────────
-    containerEl.createEl("h2", {
-      text: "Advanced",
-      cls: "arxiv-daily-settings__section",
-      attr: { "data-arxiv-daily-section": "advanced" },
-    });
+    this.sectionHeading(containerEl, "Advanced", "advanced");
 
     this.attachHelp(
       new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
@@ -739,78 +731,92 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const topic = topics[index];
     const isExpanded = this.expandedTopics.has(topic.id);
 
-    const card = container.createDiv();
-    card.style.border = "1px solid var(--background-modifier-border)";
-    card.style.borderRadius = "6px";
-    card.style.padding = "0.5em 0.75em";
-    card.style.marginBottom = "0.5em";
+    const card = container.createDiv({
+      cls: "arxiv-daily-settings__topic-card",
+    });
 
     // ─── Header row (always visible, clickable) ────────────
-    const header = card.createDiv();
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.gap = "0.5em";
-    header.style.cursor = "pointer";
-    header.style.userSelect = "none";
+    const header = card.createDiv({
+      cls: "arxiv-daily-settings__topic-header",
+    });
 
-    const caret = header.createEl("span", { text: isExpanded ? "▾" : "▸" });
-    caret.style.opacity = "0.6";
-    caret.style.width = "1em";
+    const caret = header.createEl("span", {
+      cls: "arxiv-daily-settings__topic-caret",
+      text: isExpanded ? "▾" : "▸",
+    });
 
     const titleSpan = header.createEl("span", {
+      cls: "arxiv-daily-settings__topic-title",
       text: topic.name.trim() || "(unnamed)",
     });
-    titleSpan.style.fontWeight = "600";
-    if (!topic.name.trim()) titleSpan.style.opacity = "0.5";
+    titleSpan.toggleClass("is-muted", !topic.name.trim());
 
+    let star: HTMLElement | null = null;
     if (topic.detail) {
-      const star = header.createEl("span", { text: "★" });
-      star.style.color = "var(--text-accent)";
-      star.title = "Detail report enabled";
+      star = header.createEl("span", {
+        cls: "arxiv-daily-settings__topic-star",
+        text: "★",
+        attr: { title: "Detail report enabled" },
+      });
     }
 
+    let tagChip: HTMLElement | null = null;
     if (topic.tag) {
-      const tagChip = header.createEl("span", { text: "#" + topic.tag });
-      tagChip.style.opacity = "0.55";
-      tagChip.style.fontSize = "0.85em";
+      tagChip = header.createEl("span", {
+        cls: "arxiv-daily-settings__topic-tag",
+        text: "#" + topic.tag,
+      });
     }
 
     // ─── Expanded form (toggled via display) ────────────────
-    const form = card.createDiv();
-    form.style.display = isExpanded ? "" : "none";
-    form.style.marginTop = "0.6em";
+    const form = card.createDiv({
+      cls: "arxiv-daily-settings__topic-form",
+    });
+    form.toggleClass("is-collapsed", !isExpanded);
 
     // Name row
-    const nameRow = form.createDiv();
-    nameRow.style.marginBottom = "0.5em";
-    const nameLabel = nameRow.createEl("label", { text: "Name" });
-    nameLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const nameRow = form.createDiv({
+      cls: "arxiv-daily-settings__topic-row",
+    });
+    nameRow.createEl("label", {
+      cls: "arxiv-daily-settings__topic-label",
+      text: "Name",
+    });
     this.hint(nameRow, "Heading text used as the section title in the daily report.");
-    const nameInput = nameRow.createEl("input", { type: "text" });
+    const nameInput = nameRow.createEl("input", {
+      cls: "arxiv-daily-settings__topic-name-input",
+      type: "text",
+    });
     nameInput.value = topic.name;
-    nameInput.style.width = "100%";
     nameInput.placeholder = "e.g. Photometric Redshift";
 
     // Tag row
-    const tagRow = form.createDiv();
-    tagRow.style.marginBottom = "0.5em";
-    const tagLabel = tagRow.createEl("label", { text: "Tag" });
-    tagLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const tagRow = form.createDiv({
+      cls: "arxiv-daily-settings__topic-row",
+    });
+    tagRow.createEl("label", {
+      cls: "arxiv-daily-settings__topic-label",
+      text: "Tag",
+    });
     this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.");
-    const tagInput = tagRow.createEl("input", { type: "text" });
+    const tagInput = tagRow.createEl("input", {
+      cls: "arxiv-daily-settings__topic-tag-input",
+      type: "text",
+    });
     tagInput.value = topic.tag;
-    tagInput.style.width = "60%";
     tagInput.placeholder = "kebab-case-slug";
-    const autoBadge = tagRow.createEl("span", { text: "  Auto" });
-    autoBadge.style.cssText = "opacity:0.5;font-size:0.85em;margin-left:0.5em;";
+    const autoBadge = tagRow.createEl("span", {
+      cls: "arxiv-daily-settings__topic-auto",
+      text: "Auto",
+    });
     const refreshAutoBadge = () => {
-      autoBadge.style.display = topic.tag === slugify(topic.name) ? "" : "none";
+      autoBadge.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
     };
     refreshAutoBadge();
 
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
-      titleSpan.style.opacity = topic.name.trim() ? "" : "0.5";
+      titleSpan.toggleClass("is-muted", !topic.name.trim());
     };
 
     nameInput.oninput = async () => {
@@ -835,15 +841,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Description
-    const descRow = form.createDiv();
-    descRow.style.marginBottom = "0.5em";
-    const descLabel = descRow.createEl("label", { text: "Description" });
-    descLabel.style.cssText = "display:block;font-weight:600;margin-bottom:0.25em;";
+    const descRow = form.createDiv({
+      cls: "arxiv-daily-settings__topic-row",
+    });
+    descRow.createEl("label", {
+      cls: "arxiv-daily-settings__topic-label",
+      text: "Description",
+    });
     this.hint(descRow, "Plain-language description of what belongs here. The LLM reads this to decide which papers go into this topic.");
-    const descArea = descRow.createEl("textarea");
+    const descArea = descRow.createEl("textarea", {
+      cls: "arxiv-daily-settings__topic-description",
+    });
     descArea.value = topic.description;
     descArea.rows = 3;
-    descArea.style.width = "100%";
     descArea.placeholder =
       "What kinds of papers should be grouped under this topic? (natural language)";
     descArea.oninput = async () => {
@@ -854,31 +864,29 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
     this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
-    const footer = form.createDiv();
-    footer.style.display = "flex";
-    footer.style.justifyContent = "space-between";
-    footer.style.alignItems = "center";
+    const footer = form.createDiv({
+      cls: "arxiv-daily-settings__topic-footer",
+    });
 
-    const detailLabel = footer.createEl("label");
-    detailLabel.style.cursor = "pointer";
+    const detailLabel = footer.createEl("label", {
+      cls: "arxiv-daily-settings__topic-detail-label",
+    });
     const detailCheckbox = detailLabel.createEl("input", { type: "checkbox" });
     detailCheckbox.checked = topic.detail;
-    detailCheckbox.style.marginRight = "0.4em";
+    detailCheckbox.addClass("arxiv-daily-settings__topic-detail-checkbox");
     detailLabel.appendText("Detail report");
     detailCheckbox.onchange = async () => {
       topic.detail = detailCheckbox.checked;
       await this.plugin.saveSettings();
       // Refresh the header star indicator without a full re-render.
-      header.querySelectorAll("span").forEach((el) => {
-        if (el.textContent === "★") el.remove();
-      });
+      star?.remove();
+      star = null;
       if (topic.detail) {
-        const star = document.createElement("span");
+        star = document.createElement("span");
+        star.addClass("arxiv-daily-settings__topic-star");
         star.textContent = "★";
-        star.style.color = "var(--text-accent)";
-        star.title = "Detail report enabled";
+        star.setAttribute("title", "Detail report enabled");
         // Insert after the title (second child).
-        const tagChip = header.querySelector('span[style*="opacity: 0.55"]');
         if (tagChip) header.insertBefore(star, tagChip);
         else header.appendChild(star);
       }
@@ -898,11 +906,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     header.onclick = () => {
       if (this.expandedTopics.has(topic.id)) {
         this.expandedTopics.delete(topic.id);
-        form.style.display = "none";
+        form.addClass("is-collapsed");
         caret.textContent = "▸";
       } else {
         this.expandedTopics.add(topic.id);
-        form.style.display = "";
+        form.removeClass("is-collapsed");
         caret.textContent = "▾";
       }
     };
@@ -913,11 +921,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       const modal = new Modal(this.app);
       modal.titleEl.setText("Confirm");
       modal.contentEl.createEl("p", { text: message });
-      const btns = modal.contentEl.createDiv();
-      btns.style.display = "flex";
-      btns.style.justifyContent = "flex-end";
-      btns.style.gap = "0.5em";
-      btns.style.marginTop = "0.75em";
+      const btns = modal.contentEl.createDiv({
+        cls: "arxiv-daily-modal-button-row",
+      });
       const cancel = btns.createEl("button", { text: "Cancel" });
       const ok = btns.createEl("button", { text: "Replace" });
       ok.classList.add("mod-warning");
@@ -948,7 +954,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .addTextArea((t) => {
         t.setValue(value).onChange((v) => onChange(v));
         t.inputEl.rows = 6;
-        t.inputEl.style.width = "100%";
+        t.inputEl.addClass("arxiv-daily-settings__textarea");
       });
   }
 }

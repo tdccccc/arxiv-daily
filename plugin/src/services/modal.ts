@@ -21,11 +21,9 @@ export function chooseModal(
     const modal = new Modal(app);
     modal.titleEl.setText(title);
     modal.contentEl.createEl("p", { text: message });
-    const btnRow = modal.contentEl.createDiv();
-    btnRow.style.display = "flex";
-    btnRow.style.justifyContent = "flex-end";
-    btnRow.style.gap = "0.5em";
-    btnRow.style.marginTop = "0.75em";
+    const btnRow = modal.contentEl.createDiv({
+      cls: "arxiv-daily-modal-button-row",
+    });
 
     let settled = false;
     const finish = (value: string | null) => {
