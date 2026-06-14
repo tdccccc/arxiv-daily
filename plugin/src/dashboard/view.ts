@@ -516,12 +516,11 @@ class ArxivDailyDashboardView extends ItemView {
       attr: {
         type: "button",
         "aria-label": "Go to current month",
-        title: "Go to current month",
       },
     }) as HTMLButtonElement;
     const prev = controls.createEl("button", {
       cls: "clickable-icon",
-      attr: { type: "button", "aria-label": "Previous month", title: "Previous month" },
+      attr: { type: "button", "aria-label": "Previous month" },
     }) as HTMLButtonElement;
     setIcon(prev, "chevron-left");
     controls.createEl("span", {
@@ -530,7 +529,7 @@ class ArxivDailyDashboardView extends ItemView {
     });
     const next = controls.createEl("button", {
       cls: "clickable-icon",
-      attr: { type: "button", "aria-label": "Next month", title: "Next month" },
+      attr: { type: "button", "aria-label": "Next month" },
     }) as HTMLButtonElement;
     setIcon(next, "chevron-right");
 
@@ -577,13 +576,10 @@ class ArxivDailyDashboardView extends ItemView {
         attr: {
           type: "button",
           "aria-label": report
-            ? `Open daily report ${report.date}`
+            ? `Open daily report ${report.date}: ${report.papers} indexed papers${report.starred ? `, ${report.starred} starred` : ""}`
             : cell.date
               ? `No daily report ${cell.date}`
               : "Empty calendar cell",
-          title: report
-            ? `${report.date}: ${report.papers} indexed papers${report.starred ? `, ${report.starred} starred` : ""}`
-            : cell.date ?? "",
         },
       }) as HTMLButtonElement;
       if (!cell.date) {
@@ -731,28 +727,11 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const sort = this.createSelect(
-      this.createFilterField(filters, "Sort"),
-      SORT_OPTIONS.map((option) => ({
-        value: option.value,
-        label: option.label,
-      })),
-      sortValue(this.query.sort),
-    );
-    sort.addEventListener("change", () => {
-      this.query = {
-        ...this.query,
-        sort: sortQuery(sort.value),
-      };
-      this.renderCurrentResults();
-    });
-
     const reset = filters.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__filter-reset",
       attr: {
         type: "button",
         "aria-label": "Reset filters",
-        title: "Reset filters",
       },
     });
     setIcon(reset, "rotate-ccw");
@@ -909,13 +888,16 @@ class ArxivDailyDashboardView extends ItemView {
     const toolbar = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__batch",
     });
-    toolbar.createEl("span", {
+    const actions = toolbar.createEl("div", {
+      cls: "arxiv-daily-dashboard__batch-actions",
+    });
+    actions.createEl("span", {
       cls: "arxiv-daily-dashboard__batch-count",
       text: `${selectedCount} selected`,
     });
 
     this.createBatchButton(
-      toolbar,
+      actions,
       "star",
       "Star",
       selectedCount,
@@ -923,7 +905,7 @@ class ArxivDailyDashboardView extends ItemView {
         this.runBatchStar(true),
     );
     this.createBatchButton(
-      toolbar,
+      actions,
       "star-off",
       "Unstar",
       selectedCount,
@@ -931,7 +913,7 @@ class ArxivDailyDashboardView extends ItemView {
         this.runBatchStar(false),
     );
     this.createBatchButton(
-      toolbar,
+      actions,
       "file-plus",
       "Notes",
       selectedCount,
@@ -942,12 +924,11 @@ class ArxivDailyDashboardView extends ItemView {
         }),
     );
 
-    const clear = toolbar.createEl("button", {
+    const clear = actions.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__batch-icon",
       attr: {
         type: "button",
         "aria-label": "Clear selection",
-        title: "Clear selection",
       },
     }) as HTMLButtonElement;
     setIcon(clear, "x");
@@ -957,7 +938,34 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
+    this.renderSortControl(toolbar);
+
     if (visibleRows.length === 0) toolbar.addClass("is-empty");
+  }
+
+  private renderSortControl(parent: HTMLElement): void {
+    const field = parent.createEl("label", {
+      cls: "arxiv-daily-dashboard__batch-sort",
+    });
+    field.createSpan({
+      cls: "arxiv-daily-dashboard__batch-sort-label",
+      text: "Sort",
+    });
+    const sort = this.createSelect(
+      field,
+      SORT_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+      })),
+      sortValue(this.query.sort),
+    );
+    sort.addEventListener("change", () => {
+      this.query = {
+        ...this.query,
+        sort: sortQuery(sort.value),
+      };
+      this.renderCurrentResults();
+    });
   }
 
   private createStarToggle(
@@ -972,7 +980,6 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": label,
         "aria-pressed": String(starred),
-        title: label,
       },
     }) as HTMLButtonElement;
     if (starred) button.addClass("is-starred");
@@ -996,7 +1003,6 @@ class ArxivDailyDashboardView extends ItemView {
       attr: {
         type: "button",
         "aria-label": title,
-        title,
       },
     }) as HTMLButtonElement;
     setIcon(button, icon);
@@ -1125,7 +1131,6 @@ class ArxivDailyDashboardView extends ItemView {
       attr: {
         type: "button",
         "aria-label": label,
-        title: label,
       },
     }) as HTMLButtonElement;
     setIcon(button, icon);
@@ -1143,7 +1148,7 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__batch-button",
       attr: {
         type: "button",
-        title: label,
+        "aria-label": label,
       },
     }) as HTMLButtonElement;
     setIcon(button, icon);

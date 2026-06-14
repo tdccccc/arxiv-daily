@@ -407,8 +407,17 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px 12px;
   margin-bottom: 12px;
+}
+
+.arxiv-daily-dashboard__batch-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .arxiv-daily-dashboard__batch-count {
@@ -434,6 +443,22 @@
 
 .arxiv-daily-dashboard__batch-icon {
   flex: 0 0 auto;
+}
+
+.arxiv-daily-dashboard__batch-sort {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-dashboard__batch-sort select {
+  min-height: 30px;
+  max-width: 190px;
+  font-size: var(--font-ui-small);
 }
 
 .arxiv-daily-dashboard__table-wrap {
