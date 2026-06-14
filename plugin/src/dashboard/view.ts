@@ -19,6 +19,7 @@ import { ensurePaperNote } from "../services/paper-note";
 import { chooseModal } from "../services/modal";
 import { validateFilterConfig } from "../settings/validation";
 import { formatDate, todayInTz } from "../utils/time";
+import { getSetupStatus } from "../onboarding";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
@@ -214,13 +215,157 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderStats(this.statsEl, result);
     this.renderBatchControls(this.batchEl, result.rows);
     if (result.rows.length === 0) {
-      this.resultsEl.createEl("div", {
-        cls: "arxiv-daily-dashboard__state",
-        text: "No papers in this view.",
-      });
+      this.renderEmptyState(this.resultsEl, result);
       return;
     }
     this.renderTable(this.resultsEl, result.rows);
+  }
+
+  private renderEmptyState(
+    contentEl: HTMLElement,
+    result: ReturnType<typeof queryDashboard>,
+  ): void {
+    const setup = getSetupStatus(this.plugin.settings);
+    const state = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__empty",
+    });
+
+    if (!setup.readyToRun && this.entries.length === 0) {
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-title",
+        text: "Finish setup before running arXiv Daily",
+      });
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-desc",
+        text: "Add your LLM settings and at least one research topic, then run today from the Dashboard.",
+      });
+      if (setup.reasons.length > 0) {
+        const reasons = state.createEl("ul", {
+          cls: "arxiv-daily-dashboard__empty-list",
+        });
+        for (const reason of setup.reasons) {
+          reasons.createEl("li", { text: reason });
+        }
+      }
+      const actions = this.createEmptyActions(state);
+      this.createEmptyActionButton(actions, "settings", "Open Settings", (button) => {
+        button.disabled = true;
+        this.openSettings();
+        button.disabled = false;
+      });
+      return;
+    }
+
+    if (this.entries.length === 0) {
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-title",
+        text: "No papers indexed yet",
+      });
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-desc",
+        text: "Run today or run pending dates to create daily reports and populate this Dashboard.",
+      });
+      const actions = this.createEmptyActions(state);
+      this.createEmptyActionButton(actions, "play", "Run Today", (button) => {
+        void this.runControlAction(button, () => this.runToday());
+      });
+      this.createEmptyActionButton(actions, "layers", "Run Pending", (button) => {
+        void this.runControlAction(button, () => this.runAllPending());
+      });
+      return;
+    }
+
+    if (this.hasActiveFilters()) {
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-title",
+        text: "No papers match these filters",
+      });
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-desc",
+        text: "Reset filters to return to the current reading list.",
+      });
+      const actions = this.createEmptyActions(state);
+      this.createEmptyActionButton(actions, "rotate-ccw", "Reset Filters", () => {
+        this.resetFilters();
+      });
+      return;
+    }
+
+    if ((this.query.tab ?? "starred") === "starred" && result.tabCounts.all > 0) {
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-title",
+        text: "No starred papers yet",
+      });
+      state.createEl("div", {
+        cls: "arxiv-daily-dashboard__empty-desc",
+        text: "Star the papers worth returning to. Use All to browse everything already indexed.",
+      });
+      const actions = this.createEmptyActions(state);
+      this.createEmptyActionButton(actions, "list", "Show All", () => {
+        this.query = { ...this.query, tab: "all" };
+        this.render();
+      });
+      return;
+    }
+
+    state.createEl("div", {
+      cls: "arxiv-daily-dashboard__empty-title",
+      text: "No papers in this view",
+    });
+    state.createEl("div", {
+      cls: "arxiv-daily-dashboard__empty-desc",
+      text: "Run arXiv Daily again or adjust your topic settings if this looks unexpected.",
+    });
+  }
+
+  private createEmptyActions(parent: HTMLElement): HTMLElement {
+    return parent.createEl("div", {
+      cls: "arxiv-daily-dashboard__empty-actions",
+    });
+  }
+
+  private createEmptyActionButton(
+    parent: HTMLElement,
+    icon: string,
+    label: string,
+    onClick: (button: HTMLButtonElement) => void,
+  ): HTMLButtonElement {
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-dashboard__empty-action",
+      attr: { type: "button" },
+    }) as HTMLButtonElement;
+    setIcon(button, icon);
+    button.createSpan({ text: label });
+    button.addEventListener("click", () => onClick(button));
+    return button;
+  }
+
+  private hasActiveFilters(): boolean {
+    return Boolean(
+      this.query.search ||
+        (this.query.topics?.length ?? 0) > 0 ||
+        (this.query.statuses?.length ?? 0) > 0 ||
+        (this.query.priorities?.length ?? 0) > 0 ||
+        this.query.dateFrom ||
+        this.query.dateTo ||
+        this.query.hasNote != null ||
+        this.query.detail != null,
+    );
+  }
+
+  private resetFilters(): void {
+    this.query = { tab: this.query.tab ?? "starred" };
+    this.render();
+  }
+
+  private openSettings(): void {
+    const settings = (this.plugin.app as any).setting;
+    if (settings?.open && settings?.openTabById) {
+      settings.open();
+      settings.openTabById(this.plugin.manifest.id);
+      return;
+    }
+    new Notice("Open Settings -> Community plugins -> arXiv Daily.");
   }
 
   private renderHeader(contentEl: HTMLElement): void {

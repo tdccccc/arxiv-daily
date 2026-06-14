@@ -1,5 +1,112 @@
 /* arXiv Daily plugin styles */
 
+.arxiv-daily-settings .arxiv-daily-settings__section {
+  scroll-margin-top: 24px;
+}
+
+.arxiv-daily-setup {
+  margin-bottom: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 14px;
+  background: var(--background-secondary);
+}
+
+.arxiv-daily-setup__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+}
+
+.arxiv-daily-setup__title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-setup__subtitle {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-setup__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.arxiv-daily-setup__item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--background-primary);
+}
+
+.arxiv-daily-setup__item.is-done {
+  color: var(--text-muted);
+}
+
+.arxiv-daily-setup__check {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1;
+}
+
+.arxiv-daily-setup__item.is-done .arxiv-daily-setup__check {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.arxiv-daily-setup__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-setup__link {
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.arxiv-daily-setup__details {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-setup__details ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.arxiv-daily-setup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.arxiv-daily-setup__actions button {
+  min-height: 30px;
+}
+
 .arxiv-daily-dashboard {
   --arxiv-daily-table-min-width: 780px;
   height: 100%;
@@ -448,6 +555,43 @@
   padding: 18px;
   color: var(--text-muted);
   background: var(--background-secondary);
+}
+
+.arxiv-daily-dashboard__empty {
+  max-width: 760px;
+}
+
+.arxiv-daily-dashboard__empty-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+  line-height: 1.35;
+}
+
+.arxiv-daily-dashboard__empty-desc {
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+.arxiv-daily-dashboard__empty-list {
+  margin: 10px 0 0 18px;
+  padding: 0;
+}
+
+.arxiv-daily-dashboard__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.arxiv-daily-dashboard__empty-action {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--font-ui-small);
 }
 
 .arxiv-daily-dashboard__state--error {

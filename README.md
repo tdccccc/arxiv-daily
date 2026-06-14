@@ -2,7 +2,7 @@
 
 > Daily arXiv discovery for Obsidian, with LLM filtering, structured paper summaries, and a Dashboard for reviewing papers across dates.
 
-[中文说明](./docs/README.zh-CN.md)
+[Getting Started](./docs/getting-started.md) · [中文说明](./docs/README.zh-CN.md)
 
 arXiv Daily helps you turn the daily arXiv feed into a small, reviewable reading list inside your vault. It fetches new papers, filters them against your research topics, writes Markdown daily reports, and keeps a local paper index that powers the **arXiv Daily Dashboard**.
 
@@ -101,6 +101,8 @@ Place them in:
 Then restart Obsidian and enable **arXiv Daily**.
 
 ## Quick Start
+
+For a first-run walkthrough, see [Getting Started](./docs/getting-started.md).
 
 1. Open **Settings -> arXiv Daily**.
 2. Choose an LLM provider and enter an API key.

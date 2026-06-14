@@ -7,6 +7,8 @@ import type { Topic } from "./types";
 import { slugify } from "../utils/slugify";
 import { validateFilterConfig } from "./validation";
 import { arxivCategories } from "./categories";
+import { getSetupStatus } from "../onboarding";
+import { openDashboardView } from "../dashboard/view";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
@@ -44,6 +46,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const s = this.plugin.settings;
     containerEl.empty();
+    containerEl.addClass("arxiv-daily-settings");
+
+    this.renderSetupGuide(containerEl);
 
     // ─── Config-invalid banner (top) ─────────────────
     const v = validateFilterConfig(s);
@@ -73,7 +78,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    containerEl.createEl("h2", { text: "LLM" });
+    containerEl.createEl("h2", {
+      text: "LLM",
+      cls: "arxiv-daily-settings__section",
+      attr: { "data-arxiv-daily-section": "llm" },
+    });
 
     // Provider dropdown
     new Setting(containerEl)
@@ -112,6 +121,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             s.llm.apiKey = v;
             await this.plugin.saveSettings();
+            this.refreshSetupGuide();
           });
       });
 
@@ -123,6 +133,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setValue(s.llm.baseUrl).onChange(async (v) => {
           s.llm.baseUrl = v;
           await this.plugin.saveSettings();
+          this.refreshSetupGuide();
         }),
       );
 
@@ -136,10 +147,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           for (const m of preset.models) {
             d.addOption(m.value, m.label);
           }
-          d.setValue(s.llm.model).onChange(async (v) => {
-            s.llm.model = v;
-            await this.plugin.saveSettings();
-          });
+            d.setValue(s.llm.model).onChange(async (v) => {
+              s.llm.model = v;
+              await this.plugin.saveSettings();
+              this.refreshSetupGuide();
+            });
         })
         .addText((t) => {
           t.setPlaceholder("or enter custom model ID")
@@ -148,6 +160,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
               if (v.trim()) {
                 s.llm.model = v.trim();
                 await this.plugin.saveSettings();
+                this.refreshSetupGuide();
               }
             });
         });
@@ -156,11 +169,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Model")
         .setDesc("Model ID for the custom provider.")
         .addText((t) =>
-          t.setValue(s.llm.model).onChange(async (v) => {
-            s.llm.model = v;
-            await this.plugin.saveSettings();
-          }),
-        );
+        t.setValue(s.llm.model).onChange(async (v) => {
+          s.llm.model = v;
+          await this.plugin.saveSettings();
+          this.refreshSetupGuide();
+        }),
+      );
     }
 
     this.attachHelp(
@@ -227,7 +241,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── arXiv ────────────────────────────────────────
-    containerEl.createEl("h2", { text: "arXiv" });
+    containerEl.createEl("h2", {
+      text: "arXiv",
+      cls: "arxiv-daily-settings__section",
+      attr: { "data-arxiv-daily-section": "arxiv" },
+    });
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
@@ -282,10 +300,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     // ─── Research Topics ─────────────────────────────
-    new Setting(containerEl)
+    const topicsHeading = new Setting(containerEl)
       .setName("Research Topics")
       .setDesc("Each topic becomes one section in the daily report.")
       .setHeading();
+    topicsHeading.settingEl.addClass("arxiv-daily-settings__section");
+    topicsHeading.settingEl.setAttribute("data-arxiv-daily-section", "topics");
 
     new Setting(containerEl)
       .setName("Quick start")
@@ -384,7 +404,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── Output & Schedule ────────────────────────────
-    containerEl.createEl("h2", { text: "Output & Schedule" });
+    containerEl.createEl("h2", {
+      text: "Output & Schedule",
+      cls: "arxiv-daily-settings__section",
+      attr: { "data-arxiv-daily-section": "schedule" },
+    });
 
     new Setting(containerEl)
       .setName("Daily path")
@@ -452,7 +476,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── Advanced ─────────────────────────────────────
-    containerEl.createEl("h2", { text: "Advanced" });
+    containerEl.createEl("h2", {
+      text: "Advanced",
+      cls: "arxiv-daily-settings__section",
+      attr: { "data-arxiv-daily-section": "advanced" },
+    });
 
     this.attachHelp(
       new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
@@ -556,6 +584,157 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
+  private renderSetupGuide(containerEl: HTMLElement): void {
+    containerEl.appendChild(this.createSetupGuide());
+  }
+
+  private refreshSetupGuide(): void {
+    const current = this.containerEl.querySelector(".arxiv-daily-setup");
+    if (current instanceof HTMLElement) {
+      current.replaceWith(this.createSetupGuide());
+    }
+  }
+
+  private createSetupGuide(): HTMLElement {
+    const status = getSetupStatus(this.plugin.settings);
+    const guide = document.createElement("section");
+    guide.addClass("arxiv-daily-setup");
+    const header = guide.createEl("div", {
+      cls: "arxiv-daily-setup__header",
+    });
+    header.createEl("div", {
+      cls: "arxiv-daily-setup__title",
+      text: "Getting Started",
+    });
+    header.createEl("div", {
+      cls: "arxiv-daily-setup__subtitle",
+      text: status.readyToRun
+        ? "Configuration is ready. Run today or open the Dashboard."
+        : "Complete these items before the first run.",
+    });
+
+    const list = guide.createEl("div", {
+      cls: "arxiv-daily-setup__list",
+    });
+    this.renderSetupItem(
+      list,
+      status.llmReady,
+      "LLM API key, base URL, and model",
+      "Configure LLM",
+      () => this.scrollToSection("llm"),
+    );
+    this.renderSetupItem(
+      list,
+      status.categoriesReady,
+      "At least one arXiv category",
+      "Choose categories",
+      () => this.scrollToSection("arxiv"),
+    );
+    this.renderSetupItem(
+      list,
+      status.topicsReady,
+      "At least one complete research topic",
+      "Set topics",
+      () => this.scrollToSection("topics"),
+    );
+    this.renderSetupItem(
+      list,
+      status.readyToRun,
+      "Ready to run",
+      "Review missing items",
+      () => this.scrollToFirstMissingSection(status),
+    );
+
+    if (!status.readyToRun && status.reasons.length > 0) {
+      const details = guide.createEl("details", {
+        cls: "arxiv-daily-setup__details",
+      });
+      details.createEl("summary", { text: "Show missing configuration" });
+      const ul = details.createEl("ul");
+      for (const reason of status.reasons) ul.createEl("li", { text: reason });
+    }
+
+    const actions = guide.createEl("div", {
+      cls: "arxiv-daily-setup__actions",
+    });
+    const run = actions.createEl("button", {
+      text: "Run Today",
+      attr: { type: "button" },
+    }) as HTMLButtonElement;
+    run.disabled = !status.readyToRun;
+    run.addEventListener("click", () => {
+      void this.executeCommand("arxiv-daily-run-now");
+    });
+
+    const dashboard = actions.createEl("button", {
+      text: "Open Dashboard",
+      attr: { type: "button" },
+    });
+    dashboard.addEventListener("click", () => {
+      void openDashboardView(this.plugin);
+    });
+
+    return guide;
+  }
+
+  private renderSetupItem(
+    parent: HTMLElement,
+    done: boolean,
+    label: string,
+    actionLabel: string,
+    onAction: () => void,
+  ): void {
+    const item = parent.createEl("div", {
+      cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
+    });
+    item.createEl("span", {
+      cls: "arxiv-daily-setup__check",
+      text: done ? "✓" : "•",
+    });
+    item.createEl("span", {
+      cls: "arxiv-daily-setup__label",
+      text: label,
+    });
+    const action = item.createEl("button", {
+      cls: "arxiv-daily-setup__link",
+      text: done ? "Done" : actionLabel,
+      attr: { type: "button" },
+    }) as HTMLButtonElement;
+    action.disabled = done;
+    action.addEventListener("click", onAction);
+  }
+
+  private scrollToFirstMissingSection(status: ReturnType<typeof getSetupStatus>): void {
+    if (!status.llmReady) {
+      this.scrollToSection("llm");
+      return;
+    }
+    if (!status.categoriesReady) {
+      this.scrollToSection("arxiv");
+      return;
+    }
+    if (!status.topicsReady) {
+      this.scrollToSection("topics");
+      return;
+    }
+  }
+
+  private scrollToSection(section: "llm" | "arxiv" | "topics" | "schedule" | "advanced"): void {
+    const target = this.containerEl.querySelector(
+      `[data-arxiv-daily-section="${section}"]`,
+    );
+    if (target instanceof HTMLElement) {
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }
+
+  private async executeCommand(commandId: string): Promise<void> {
+    const commands = (this.plugin.app as any).commands;
+    if (!commands?.executeCommandById) return;
+    const result = commands.executeCommandById(commandId);
+    if (result && typeof result.then === "function") await result;
+  }
+
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
     const topic = topics[index];
     const isExpanded = this.expandedTopics.has(topic.id);
@@ -645,12 +824,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       refreshAutoBadge();
       refreshHeader();
       await this.plugin.saveSettings();
+      this.refreshSetupGuide();
     };
 
     tagInput.oninput = async () => {
       topic.tag = tagInput.value;
       refreshAutoBadge();
       await this.plugin.saveSettings();
+      this.refreshSetupGuide();
     };
 
     // Description
@@ -668,6 +849,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     descArea.oninput = async () => {
       topic.description = descArea.value;
       await this.plugin.saveSettings();
+      this.refreshSetupGuide();
     };
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
