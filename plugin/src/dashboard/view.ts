@@ -26,8 +26,8 @@ import { getSetupStatus } from "../onboarding";
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
-  { id: "starred", label: "Starred" },
   { id: "all", label: "All" },
+  { id: "starred", label: "Starred" },
 ];
 
 const SORT_OPTIONS: Array<{
@@ -232,7 +232,7 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     const result = queryDashboard(this.entries, this.query);
-    this.renderToolbar(contentEl, result.tabCounts);
+    this.renderToolbar(contentEl, result);
 
     const overview = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__overview",
@@ -426,7 +426,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private renderToolbar(
     contentEl: HTMLElement,
-    counts: Record<DashboardTab, number>,
+    result: ReturnType<typeof queryDashboard>,
   ): void {
     const toolbar = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__toolbar",
@@ -447,13 +447,39 @@ class ArxivDailyDashboardView extends ItemView {
       button.createSpan({ text: tab.label });
       button.createSpan({
         cls: "arxiv-daily-dashboard__tab-count",
-        text: String(counts[tab.id]),
+        text: String(result.tabCounts[tab.id]),
       });
       button.addEventListener("click", () => {
         this.query = { ...this.query, tab: tab.id };
         this.render();
       });
     }
+    this.renderToolbarFilter(
+      tabs,
+      "Has note",
+      this.query.hasNote === true,
+      this.countToolbarFilter((entry) => Boolean(entry.paperPath)),
+      () => {
+        this.query = {
+          ...this.query,
+          hasNote: this.query.hasNote === true ? undefined : true,
+        };
+        this.render();
+      },
+    );
+    this.renderToolbarFilter(
+      tabs,
+      "Has detail",
+      this.query.detail === true,
+      this.countToolbarFilter((entry) => entry.detail === true),
+      () => {
+        this.query = {
+          ...this.query,
+          detail: this.query.detail === true ? undefined : true,
+        };
+        this.render();
+      },
+    );
 
     const actions = toolbar.createEl("div", {
       cls: "arxiv-daily-dashboard__toolbar-actions",
@@ -607,6 +633,40 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
+  private renderToolbarFilter(
+    parent: HTMLElement,
+    label: string,
+    active: boolean,
+    count: number,
+    onClick: () => void,
+  ): void {
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-dashboard__tab arxiv-daily-dashboard__tab--filter",
+      attr: {
+        type: "button",
+        "aria-pressed": String(active),
+      },
+    });
+    if (active) button.addClass("is-active");
+    button.createSpan({ text: label });
+    button.createSpan({
+      cls: "arxiv-daily-dashboard__tab-count",
+      text: String(count),
+    });
+    button.addEventListener("click", onClick);
+  }
+
+  private countToolbarFilter(
+    predicate: (entry: DashboardRow["entry"]) => boolean,
+  ): number {
+    const active = this.query.tab ?? "starred";
+    return this.entries.filter((entry) => {
+      if (active === "starred" && !isStarredEntry(entry)) return false;
+      if (active === "all" && entry.status === "ignored") return false;
+      return predicate(entry);
+    }).length;
+  }
+
   private todayDate(): string {
     return formatDate(
       todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
@@ -647,7 +707,11 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__filters",
     });
 
-    const search = this.createFilterField(filters, "Search").createEl("input", {
+    const search = this.createFilterField(
+      filters,
+      "Search",
+      "arxiv-daily-dashboard__filter--search",
+    ).createEl("input", {
       attr: {
         type: "search",
         placeholder: "ID, title, author, topic, summary",
@@ -660,7 +724,11 @@ class ArxivDailyDashboardView extends ItemView {
     });
 
     const topic = this.createSelect(
-      this.createFilterField(filters, "Topic"),
+      this.createFilterField(
+        filters,
+        "Topic",
+        "arxiv-daily-dashboard__filter--topic",
+      ),
       [
         { value: "", label: "Any topic" },
         ...topicOptions(this.entries).map((value) => ({ value, label: value })),
@@ -675,8 +743,20 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const dateFrom = this.createFilterField(filters, "From").createEl("input", {
-      attr: { type: "date" },
+    const dateField = this.createFilterField(
+      filters,
+      "Date",
+      "arxiv-daily-dashboard__filter--date-range",
+    );
+    const dateInputs = dateField.createEl("div", {
+      cls: "arxiv-daily-dashboard__date-range",
+    });
+    dateInputs.createSpan({
+      cls: "arxiv-daily-dashboard__date-range-prefix",
+      text: "from",
+    });
+    const dateFrom = dateInputs.createEl("input", {
+      attr: { type: "date", "aria-label": "Date from" },
     }) as HTMLInputElement;
     dateFrom.value = this.query.dateFrom ?? "";
     dateFrom.addEventListener("change", () => {
@@ -686,9 +766,13 @@ class ArxivDailyDashboardView extends ItemView {
       };
       this.renderCurrentResults();
     });
+    dateInputs.createSpan({
+      cls: "arxiv-daily-dashboard__date-range-separator",
+      text: "to",
+    });
 
-    const dateTo = this.createFilterField(filters, "To").createEl("input", {
-      attr: { type: "date" },
+    const dateTo = dateInputs.createEl("input", {
+      attr: { type: "date", "aria-label": "Date to" },
     }) as HTMLInputElement;
     dateTo.value = this.query.dateTo ?? "";
     dateTo.addEventListener("change", () => {
@@ -699,35 +783,10 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const note = this.createSelect(
-      this.createFilterField(filters, "Note"),
-      [
-        { value: "", label: "Any note" },
-        { value: "yes", label: "Has note" },
-        { value: "no", label: "No note" },
-      ],
-      boolSelectValue(this.query.hasNote),
-    );
-    note.addEventListener("change", () => {
-      this.query = { ...this.query, hasNote: boolSelectQuery(note.value) };
-      this.renderCurrentResults();
+    const resetWrap = filters.createEl("div", {
+      cls: "arxiv-daily-dashboard__filter-reset-wrap",
     });
-
-    const detail = this.createSelect(
-      this.createFilterField(filters, "Detail"),
-      [
-        { value: "", label: "Any detail" },
-        { value: "yes", label: "Detail" },
-        { value: "no", label: "No detail" },
-      ],
-      boolSelectValue(this.query.detail),
-    );
-    detail.addEventListener("change", () => {
-      this.query = { ...this.query, detail: boolSelectQuery(detail.value) };
-      this.renderCurrentResults();
-    });
-
-    const reset = filters.createEl("button", {
+    const reset = resetWrap.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__filter-reset",
       attr: {
         type: "button",
@@ -740,9 +799,15 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
-  private createFilterField(parent: HTMLElement, label: string): HTMLElement {
+  private createFilterField(
+    parent: HTMLElement,
+    label: string,
+    cls?: string,
+  ): HTMLElement {
     const field = parent.createEl("label", {
-      cls: "arxiv-daily-dashboard__filter",
+      cls: cls
+        ? `arxiv-daily-dashboard__filter ${cls}`
+        : "arxiv-daily-dashboard__filter",
     });
     field.createEl("span", {
       cls: "arxiv-daily-dashboard__filter-label",
@@ -1362,18 +1427,6 @@ function topicOptions(entries: DashboardRow["entry"][]): string[] {
     }
   }
   return [...topics].sort((a, b) => a.localeCompare(b));
-}
-
-function boolSelectValue(value: boolean | undefined): string {
-  if (value === true) return "yes";
-  if (value === false) return "no";
-  return "";
-}
-
-function boolSelectQuery(value: string): boolean | undefined {
-  if (value === "yes") return true;
-  if (value === "no") return false;
-  return undefined;
 }
 
 function sortValue(sort: DashboardQuery["sort"]): string {

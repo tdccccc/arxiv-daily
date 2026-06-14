@@ -126,13 +126,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .arxiv-daily-dashboard__header h2 {
   margin: 0;
-  font-size: var(--font-ui-large);
+  font-size: 1.25rem;
   font-weight: var(--font-semibold);
+  line-height: 1.2;
 }
 
 .arxiv-daily-dashboard__refresh {
@@ -144,7 +145,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+  padding-top: 2px;
 }
 
 .arxiv-daily-dashboard__tabs {
@@ -208,8 +210,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
   gap: 16px;
-  align-items: start;
-  margin-bottom: 12px;
+  align-items: stretch;
+  margin-bottom: 8px;
 }
 
 .arxiv-daily-dashboard__overview-main,
@@ -217,12 +219,25 @@
   min-width: 0;
 }
 
+.arxiv-daily-dashboard__overview-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.arxiv-daily-dashboard__overview-main > :last-child {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
 .arxiv-daily-dashboard__filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-areas:
+    "search search search"
+    "topic date reset";
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 300px) 32px;
   align-items: end;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 14px 10px;
+  margin-bottom: 24px;
 }
 
 .arxiv-daily-dashboard__calendar {
@@ -350,6 +365,38 @@
   font-size: var(--font-ui-small);
 }
 
+.arxiv-daily-dashboard__filter--search {
+  grid-area: search;
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__filter--topic {
+  grid-area: topic;
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__filter--date-range {
+  grid-area: date;
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__date-range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.arxiv-daily-dashboard__date-range input {
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__date-range-prefix,
+.arxiv-daily-dashboard__date-range-separator {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
 .arxiv-daily-dashboard__filter--checkbox {
   min-height: 30px;
   flex-direction: row;
@@ -368,9 +415,15 @@
   white-space: nowrap;
 }
 
-.arxiv-daily-dashboard__filter-reset {
+.arxiv-daily-dashboard__filter-reset-wrap {
+  grid-area: reset;
   align-self: end;
-  justify-self: start;
+  justify-self: end;
+}
+
+.arxiv-daily-dashboard__filter-reset {
+  width: 30px;
+  height: 30px;
 }
 
 .arxiv-daily-dashboard__stats {
@@ -380,15 +433,19 @@
   margin-bottom: 0;
   border-top: 1px solid var(--background-modifier-border);
   border-bottom: 1px solid var(--background-modifier-border);
-  padding: 10px 0;
+  padding: 8px 0;
 }
 
 .arxiv-daily-dashboard__stat {
+  display: flex;
   min-width: 0;
+  align-items: baseline;
+  gap: 15px;
 }
 
 .arxiv-daily-dashboard__stat-value {
   display: block;
+  order: 2;
   color: var(--text-normal);
   font-size: var(--font-ui-medium);
   font-variant-numeric: tabular-nums;
@@ -397,7 +454,8 @@
 
 .arxiv-daily-dashboard__stat-label {
   display: block;
-  margin-top: 2px;
+  order: 1;
+  margin-top: 0;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   line-height: 1.25;
@@ -409,7 +467,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .arxiv-daily-dashboard__batch-actions {
@@ -643,5 +701,24 @@
     border-top: 1px solid var(--background-modifier-border);
     padding-top: 10px;
     padding-left: 0;
+  }
+
+  .arxiv-daily-dashboard__filters {
+    grid-template-columns: minmax(120px, 1fr) minmax(200px, 260px) 32px;
+  }
+}
+
+@media (max-width: 520px) {
+  .arxiv-daily-dashboard__filters {
+    grid-template-areas:
+      "search"
+      "topic"
+      "date"
+      "reset";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .arxiv-daily-dashboard__filter-reset-wrap {
+    justify-self: start;
   }
 }
