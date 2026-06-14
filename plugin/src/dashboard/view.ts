@@ -78,6 +78,15 @@ const SORT_OPTIONS: Array<{
   },
 ];
 
+const DISPLAY_OPTIONS = [
+  { value: "20", label: "20" },
+  { value: "50", label: "50" },
+  { value: "100", label: "100" },
+  { value: "all", label: "All" },
+] as const;
+
+type DashboardDisplayLimit = (typeof DISPLAY_OPTIONS)[number]["value"];
+
 interface DailyReportDay {
   date: string;
   path: string;
@@ -121,6 +130,7 @@ class ArxivDailyDashboardView extends ItemView {
   private detailSummaryPaths = new Map<string, string>();
   private calendarMonth: string | null = null;
   private query: DashboardQuery = { tab: "starred" };
+  private displayLimit: DashboardDisplayLimit = "20";
   private error: string | null = null;
   private selectedIds = new Set<string>();
   private batchEl: HTMLElement | null = null;
@@ -334,13 +344,14 @@ class ArxivDailyDashboardView extends ItemView {
     this.statsEl.empty();
     this.batchEl.empty();
     this.resultsEl.empty();
+    const visibleRows = this.displayedRows(result.rows);
     this.renderStats(this.statsEl, result);
-    this.renderBatchControls(this.batchEl, result.rows);
+    this.renderBatchControls(this.batchEl, visibleRows, result.rows.length);
     if (result.rows.length === 0) {
       this.renderEmptyState(this.resultsEl, result);
       return;
     }
-    this.renderTable(this.resultsEl, result.rows);
+    this.renderTable(this.resultsEl, visibleRows);
   }
 
   private renderEmptyState(
@@ -1017,6 +1028,7 @@ class ArxivDailyDashboardView extends ItemView {
   private renderBatchControls(
     contentEl: HTMLElement,
     visibleRows: DashboardRow[],
+    totalRows: number,
   ): void {
     const selectedCount = this.selectedIds.size;
     const toolbar = contentEl.createEl("div", {
@@ -1070,9 +1082,41 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    this.renderSortControl(toolbar);
+    const controls = toolbar.createEl("div", {
+      cls: "arxiv-daily-dashboard__batch-controls",
+    });
+    controls.createEl("span", {
+      cls: "arxiv-daily-dashboard__batch-showing",
+      text: `Showing ${visibleRows.length} of ${totalRows}`,
+    });
+    this.renderDisplayControl(controls);
+    this.renderSortControl(controls);
 
     if (visibleRows.length === 0) toolbar.addClass("is-empty");
+  }
+
+  private renderDisplayControl(parent: HTMLElement): void {
+    const field = parent.createEl("label", {
+      cls: "arxiv-daily-dashboard__batch-display",
+    });
+    field.createSpan({
+      cls: "arxiv-daily-dashboard__batch-display-label",
+      text: "Display",
+    });
+    const display = this.createSelect(
+      field,
+      DISPLAY_OPTIONS.map((option) => ({
+        value: option.value,
+        label: option.label,
+      })),
+      this.displayLimit,
+    );
+    display.addEventListener("change", () => {
+      if (isDashboardDisplayLimit(display.value)) {
+        this.displayLimit = display.value;
+        this.renderCurrentResults();
+      }
+    });
   }
 
   private renderSortControl(parent: HTMLElement): void {
@@ -1098,6 +1142,11 @@ class ArxivDailyDashboardView extends ItemView {
       };
       this.renderCurrentResults();
     });
+  }
+
+  private displayedRows(rows: DashboardRow[]): DashboardRow[] {
+    if (this.displayLimit === "all") return rows;
+    return rows.slice(0, Number(this.displayLimit));
   }
 
   private createStarToggle(
@@ -1584,6 +1633,10 @@ function sortQuery(value: string): DashboardQuery["sort"] {
     key: option.key,
     direction: option.direction,
   };
+}
+
+function isDashboardDisplayLimit(value: string): value is DashboardDisplayLimit {
+  return DISPLAY_OPTIONS.some((option) => option.value === value);
 }
 
 function openUrl(url: string, label: string): void {

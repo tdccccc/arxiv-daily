@@ -503,12 +503,43 @@
   flex: 0 0 auto;
 }
 
+.arxiv-daily-dashboard__batch-controls {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  margin-left: auto;
+}
+
+.arxiv-daily-dashboard__batch-showing {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.arxiv-daily-dashboard__batch-display {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-dashboard__batch-display select {
+  min-height: 30px;
+  max-width: 88px;
+  font-size: var(--font-ui-small);
+}
+
 .arxiv-daily-dashboard__batch-sort {
   display: inline-flex;
   min-width: 0;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
