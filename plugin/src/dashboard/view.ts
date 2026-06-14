@@ -19,7 +19,10 @@ import {
 } from "./model";
 import { looksLikeDetailSummary } from "./detail-summary";
 import { syncDashboardHistory } from "./history-sync";
-import { validateFilterConfig } from "../settings/validation";
+import {
+  validateFilterConfig,
+  validateLlmConfig,
+} from "../settings/validation";
 import { formatDate, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
@@ -978,14 +981,17 @@ class ArxivDailyDashboardView extends ItemView {
       });
       this.createIconButton(
         actionCell,
-        "file-text",
-        row.hasDetailSummary ? "Open detail summary" : "No detail summary",
+        row.hasDetailSummary ? "file-text" : "sparkles",
+        row.hasDetailSummary
+          ? "Open detail summary"
+          : "Summarize by arXiv ID",
         (button) => {
-          void this.runControlAction(button, () =>
-            this.openDetailSummary(row.entry),
-          );
+          void this.runControlAction(button, () => {
+            return row.hasDetailSummary
+              ? this.openDetailSummary(row.entry)
+              : this.summarizeDetailById(row.entry);
+          });
         },
-        !row.hasDetailSummary,
       );
       this.createIconButton(actionCell, "calendar", "Open daily report", (button) => {
         void this.runControlAction(button, () =>
@@ -1309,6 +1315,18 @@ class ArxivDailyDashboardView extends ItemView {
     return true;
   }
 
+  private gateLlm(): boolean {
+    const validation = validateLlmConfig(this.plugin.settings);
+    if (!validation.ok) {
+      new Notice(
+        `arXiv Daily - cannot summarize:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
+        10_000,
+      );
+      return false;
+    }
+    return true;
+  }
+
   private async runToday(): Promise<void> {
     if (!this.gateFilter()) return;
     const date = this.todayDate();
@@ -1381,6 +1399,21 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
     await this.plugin.app.workspace.openLinkText(path, "", false);
+  }
+
+  private async summarizeDetailById(
+    entry: DashboardRow["entry"],
+  ): Promise<void> {
+    if (!this.gateLlm()) return;
+    new Notice(`arXiv Daily: summarizing ${entry.arxivId}...`);
+    const result = await this.plugin.manualFetch.fetchAndSummarize(
+      entry.arxivId,
+      this.todayDate(),
+    );
+    new Notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+    if (result.kind !== "done" && result.kind !== "already_exists") return;
+    await this.reloadIndex();
+    await this.plugin.app.workspace.openLinkText(result.path, "", false);
   }
 
   private async openDailyReport(entry: DashboardRow["entry"]): Promise<void> {
@@ -1592,6 +1625,16 @@ function describeResult(result: any): string {
   if (result.kind === "failed_transient") return `transient: ${result.reason}`;
   if (result.kind === "failed_permanent") return `permanent: ${result.reason}`;
   if (result.kind === "skipped") return `skipped: ${result.reason}`;
+  return JSON.stringify(result);
+}
+
+function describeManualResult(result: any): string {
+  if (!result) return "no result";
+  if (result.kind === "done") return `done -> ${result.path}`;
+  if (result.kind === "already_exists") return `already exists at ${result.path}`;
+  if (result.kind === "not_found") return `not found: ${result.reason}`;
+  if (result.kind === "no_html") return `no full HTML: ${result.reason}`;
+  if (result.kind === "error") return `error: ${result.reason}`;
   return JSON.stringify(result);
 }
 
