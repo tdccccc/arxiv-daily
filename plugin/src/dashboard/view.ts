@@ -17,8 +17,8 @@ import {
   type DashboardSortKey,
   type DashboardTab,
 } from "./model";
-import { ensurePaperNote } from "../services/paper-note";
-import { chooseModal } from "../services/modal";
+import { looksLikeDetailSummary } from "./detail-summary";
+import { syncDashboardHistory } from "./history-sync";
 import { validateFilterConfig } from "../settings/validation";
 import { formatDate, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
@@ -113,6 +113,8 @@ export async function openDashboardView(
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private dailyReports: DailyReportDay[] = [];
+  private detailSummaryIds = new Set<string>();
+  private detailSummaryPaths = new Map<string, string>();
   private calendarMonth: string | null = null;
   private query: DashboardQuery = { tab: "starred" };
   private error: string | null = null;
@@ -151,17 +153,83 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
-      const index = await this.plugin.buildPaperIndex().load();
+      const store = this.plugin.buildPaperIndex();
+      const index = await syncDashboardHistory({
+        vault: this.plugin.app.vault,
+        store,
+        output: this.plugin.settings.output,
+        topics: this.plugin.settings.arxiv.topics,
+        logger: this.plugin.logger,
+      });
       this.entries = Object.values(index.papers);
+      await this.loadDetailSummaries(store, this.entries);
       this.dailyReports = this.loadDailyReports(this.entries);
       this.calendarMonth ??= latestReportMonth(this.dailyReports);
       this.error = null;
     } catch (e) {
       this.entries = [];
       this.dailyReports = [];
+      this.detailSummaryIds = new Set();
+      this.detailSummaryPaths = new Map();
       this.error = (e as Error).message;
     }
     this.render();
+  }
+
+  private async loadDetailSummaries(
+    store: ReturnType<ArxivDailyPlugin["buildPaperIndex"]>,
+    entries: DashboardRow["entry"][],
+  ): Promise<void> {
+    const ids = new Set<string>();
+    const paths = new Map<string, string>();
+    const writer = this.plugin.buildMarkdownWriter();
+
+    for (const entry of entries) {
+      const path = await this.findDetailSummaryPath(
+        entry,
+        writer.paperDetailPath(entry.arxivId),
+      );
+      if (!path) continue;
+      ids.add(entry.arxivId);
+      paths.set(entry.arxivId, path);
+      if (
+        normalizeVaultPath(entry.paperPath ?? "") !== normalizeVaultPath(path)
+      ) {
+        try {
+          const updated = await store.setPaperPath(entry.arxivId, path);
+          entry.paperPath = updated?.paperPath ?? path;
+        } catch (e) {
+          this.plugin.logger.warn(
+            `dashboard: failed to sync paperPath for ${entry.arxivId}`,
+            e,
+          );
+        }
+      }
+    }
+
+    this.detailSummaryIds = ids;
+    this.detailSummaryPaths = paths;
+  }
+
+  private async findDetailSummaryPath(
+    entry: DashboardRow["entry"],
+    defaultPath: string,
+  ): Promise<string | null> {
+    const candidates = uniquePaths([entry.paperPath, defaultPath]);
+    for (const path of candidates) {
+      try {
+        const normalized = normalizeVaultPath(path);
+        if (!(await this.plugin.app.vault.adapter.exists(normalized))) continue;
+        const markdown = await this.plugin.app.vault.adapter.read(normalized);
+        if (looksLikeDetailSummary(markdown)) return normalized;
+      } catch (e) {
+        this.plugin.logger.warn(
+          `dashboard: failed to inspect detail summary for ${entry.arxivId}`,
+          e,
+        );
+      }
+    }
+    return null;
   }
 
   private loadDailyReports(entries: DashboardRow["entry"][]): DailyReportDay[] {
@@ -231,7 +299,9 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
-    const result = queryDashboard(this.entries, this.query);
+    const result = queryDashboard(this.entries, this.query, {
+      detailSummaryIds: this.detailSummaryIds,
+    });
     this.renderToolbar(contentEl, result);
 
     const overview = contentEl.createEl("div", {
@@ -254,7 +324,9 @@ class ArxivDailyDashboardView extends ItemView {
 
   private renderCurrentResults(): void {
     if (!this.statsEl || !this.batchEl || !this.resultsEl) return;
-    const result = queryDashboard(this.entries, this.query);
+    const result = queryDashboard(this.entries, this.query, {
+      detailSummaryIds: this.detailSummaryIds,
+    });
     this.statsEl.empty();
     this.batchEl.empty();
     this.resultsEl.empty();
@@ -394,8 +466,7 @@ class ArxivDailyDashboardView extends ItemView {
         (this.query.priorities?.length ?? 0) > 0 ||
         this.query.dateFrom ||
         this.query.dateTo ||
-        this.query.hasNote != null ||
-        this.query.detail != null,
+        this.query.detailSummary != null,
     );
   }
 
@@ -456,26 +527,16 @@ class ArxivDailyDashboardView extends ItemView {
     }
     this.renderToolbarFilter(
       tabs,
-      "Has note",
-      this.query.hasNote === true,
-      this.countToolbarFilter((entry) => Boolean(entry.paperPath)),
+      "Detail summary",
+      this.query.detailSummary === true,
+      this.countToolbarFilter((entry) =>
+        this.detailSummaryIds.has(entry.arxivId),
+      ),
       () => {
         this.query = {
           ...this.query,
-          hasNote: this.query.hasNote === true ? undefined : true,
-        };
-        this.render();
-      },
-    );
-    this.renderToolbarFilter(
-      tabs,
-      "Has detail",
-      this.query.detail === true,
-      this.countToolbarFilter((entry) => entry.detail === true),
-      () => {
-        this.query = {
-          ...this.query,
-          detail: this.query.detail === true ? undefined : true,
+          detailSummary:
+            this.query.detailSummary === true ? undefined : true,
         };
         this.render();
       },
@@ -684,7 +745,7 @@ class ArxivDailyDashboardView extends ItemView {
       ["Shown", result.stats.total],
       ["This week", result.stats.weekAdded],
       ["Starred", result.stats.starred],
-      ["Notes", result.rows.filter((row) => row.hasNote).length],
+      ["Details", result.rows.filter((row) => row.hasDetailSummary).length],
     ] as const;
 
     for (const [label, value] of items) {
@@ -916,13 +977,14 @@ class ArxivDailyDashboardView extends ItemView {
       });
       this.createIconButton(
         actionCell,
-        row.hasNote ? "file-text" : "file-plus",
-        row.hasNote ? "Open note" : "Create note",
+        "file-text",
+        row.hasDetailSummary ? "Open detail summary" : "No detail summary",
         (button) => {
           void this.runControlAction(button, () =>
-            this.openOrCreateNote(row.entry),
+            this.openDetailSummary(row.entry),
           );
         },
+        !row.hasDetailSummary,
       );
       this.createIconButton(actionCell, "calendar", "Open daily report", (button) => {
         void this.runControlAction(button, () =>
@@ -976,17 +1038,6 @@ class ArxivDailyDashboardView extends ItemView {
       selectedCount,
       () =>
         this.runBatchStar(false),
-    );
-    this.createBatchButton(
-      actions,
-      "file-plus",
-      "Notes",
-      selectedCount,
-      () =>
-        this.runBatchAction({
-          type: "create_notes",
-          arxivIds: this.selectedArxivIds(),
-        }),
     );
 
     const clear = actions.createEl("button", {
@@ -1132,12 +1183,6 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.addCommandMenuItem(
       menu,
-      "Create paper note...",
-      "file-plus",
-      "arxiv-daily-create-paper-note",
-    );
-    this.addCommandMenuItem(
-      menu,
       "Set paper mark...",
       "list-checks",
       "arxiv-daily-set-paper-status",
@@ -1190,6 +1235,7 @@ class ArxivDailyDashboardView extends ItemView {
     icon: string,
     label: string,
     onClick: (button: HTMLButtonElement) => void,
+    disabled = false,
   ): void {
     const button = parent.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__action",
@@ -1199,6 +1245,7 @@ class ArxivDailyDashboardView extends ItemView {
       },
     }) as HTMLButtonElement;
     setIcon(button, icon);
+    button.disabled = disabled;
     button.addEventListener("click", () => onClick(button));
   }
 
@@ -1315,12 +1362,13 @@ class ArxivDailyDashboardView extends ItemView {
     await this.reloadIndex();
   }
 
-  private async openOrCreateNote(entry: DashboardRow["entry"]): Promise<void> {
-    const store = this.plugin.buildPaperIndex();
-    const latest = (await store.get(entry.arxivId)) ?? entry;
-    const path = await ensurePaperNote(this.plugin, store, latest);
+  private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
+    const path = this.detailSummaryPaths.get(entry.arxivId);
+    if (!path) {
+      new Notice(`arXiv Daily: ${entry.arxivId} has no detail summary`);
+      return;
+    }
     await this.plugin.app.workspace.openLinkText(path, "", false);
-    await this.reloadIndex();
   }
 
   private async openDailyReport(entry: DashboardRow["entry"]): Promise<void> {
@@ -1371,19 +1419,6 @@ class ArxivDailyDashboardView extends ItemView {
       new Notice("arXiv Daily: no selected papers need changes");
       return;
     }
-    if (plan.requiresConfirmation) {
-      const noteCount = plan.patches.filter((patch) => patch.ensureNote).length;
-      const choice = await chooseModal(
-        this.plugin.app,
-        "Create paper notes",
-        `Create ${noteCount} paper notes?`,
-        [
-          { label: "Cancel", value: "cancel" },
-          { label: "Create notes", value: "create", cta: true },
-        ],
-      );
-      if (choice !== "create") return;
-    }
 
     const store = this.plugin.buildPaperIndex();
     let changed = 0;
@@ -1410,9 +1445,6 @@ class ArxivDailyDashboardView extends ItemView {
     if (patch.priority) {
       entry = await store.setPriority(patch.arxivId, patch.priority);
       if (!entry) return null;
-    }
-    if (patch.ensureNote) {
-      await ensurePaperNote(this.plugin, store, entry);
     }
     return entry;
   }
@@ -1496,6 +1528,18 @@ function describeRunResults(results: Array<{ date: string; result: any }>): stri
 
 function normalizeVaultPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function uniquePaths(paths: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of paths) {
+    const normalized = normalizeVaultPath(path ?? "");
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 function dailyDateFromPath(path: string, dailyDir: string): string | null {

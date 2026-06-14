@@ -25,8 +25,7 @@ export interface DashboardQuery {
   priorities?: PaperPriority[];
   dateFrom?: string;
   dateTo?: string;
-  hasNote?: boolean;
-  detail?: boolean;
+  detailSummary?: boolean;
   sort?: {
     key: DashboardSortKey;
     direction?: DashboardSortDirection;
@@ -40,7 +39,7 @@ export interface DashboardRow {
   authors: string;
   topic: string;
   firstSeen: string;
-  hasNote: boolean;
+  hasDetailSummary: boolean;
 }
 
 export interface DashboardStats {
@@ -56,6 +55,11 @@ export interface DashboardResult {
   rows: DashboardRow[];
   stats: DashboardStats;
   tabCounts: Record<DashboardTab, number>;
+}
+
+export interface DashboardQueryOptions {
+  now?: Date;
+  detailSummaryIds?: ReadonlySet<string>;
 }
 
 export type DashboardAction =
@@ -74,17 +78,12 @@ export type DashboardAction =
       arxivIds: string[];
       status: PaperStatus;
       priority: PaperPriority;
-    }
-  | {
-      type: "create_notes";
-      arxivIds: string[];
     };
 
 export interface DashboardPatch {
   arxivId: string;
   status?: PaperStatus;
   priority?: PaperPriority;
-  ensureNote?: boolean;
 }
 
 export interface DashboardActionPlan {
@@ -111,10 +110,15 @@ const PRIORITY_ORDER: Record<PaperPriority, number> = {
 export function queryDashboard(
   entries: PaperIndexEntry[],
   query: DashboardQuery = {},
-  opts: { now?: Date } = {},
+  opts: DashboardQueryOptions = {},
 ): DashboardResult {
-  const filtered = entries.filter((entry) => matchesDashboardQuery(entry, query));
-  const rows = sortRows(filtered.map(toDashboardRow), query.sort);
+  const filtered = entries.filter((entry) =>
+    matchesDashboardQuery(entry, query, opts),
+  );
+  const rows = sortRows(
+    filtered.map((entry) => toDashboardRow(entry, opts)),
+    query.sort,
+  );
   return {
     rows,
     stats: buildDashboardStats(rows.map((row) => row.entry), opts),
@@ -125,6 +129,7 @@ export function queryDashboard(
 export function matchesDashboardQuery(
   entry: PaperIndexEntry,
   query: DashboardQuery = {},
+  opts: DashboardQueryOptions = {},
 ): boolean {
   if (!matchesDashboardTab(entry, query.tab ?? DEFAULT_TAB)) return false;
   if (!matchesSearch(entry, query.search ?? "")) return false;
@@ -132,10 +137,12 @@ export function matchesDashboardQuery(
   if (!matchesAny(entry.status, query.statuses ?? [])) return false;
   if (!matchesAny(entry.priority, query.priorities ?? [])) return false;
   if (!matchesDateRange(entry, query)) return false;
-  if (query.hasNote != null && Boolean(entry.paperPath) !== query.hasNote) {
+  if (
+    query.detailSummary != null &&
+    hasDetailSummary(entry, opts) !== query.detailSummary
+  ) {
     return false;
   }
-  if (query.detail != null && entry.detail !== query.detail) return false;
   return true;
 }
 
@@ -206,9 +213,7 @@ export function planDashboardAction(
 
     if (action.type === "set_status") {
       if (entry.status === action.status) continue;
-      const patch: DashboardPatch = { arxivId, status: action.status };
-      if (action.status === "saved" && !entry.paperPath) patch.ensureNote = true;
-      patches.push(patch);
+      patches.push({ arxivId, status: action.status });
       continue;
     }
 
@@ -227,24 +232,22 @@ export function planDashboardAction(
         status: action.status,
         priority: action.priority,
       };
-      if (action.status === "saved" && !entry.paperPath) patch.ensureNote = true;
       patches.push(patch);
       continue;
-    }
-
-    if (!entry.paperPath) {
-      patches.push({ arxivId, ensureNote: true });
     }
   }
 
   return {
     patches,
     missingIds,
-    requiresConfirmation: patches.some((patch) => patch.ensureNote),
+    requiresConfirmation: false,
   };
 }
 
-function toDashboardRow(entry: PaperIndexEntry): DashboardRow {
+function toDashboardRow(
+  entry: PaperIndexEntry,
+  opts: DashboardQueryOptions,
+): DashboardRow {
   return {
     entry,
     arxivId: entry.arxivId,
@@ -252,8 +255,15 @@ function toDashboardRow(entry: PaperIndexEntry): DashboardRow {
     authors: entry.authors.join(", "),
     topic: displayTopic(entry),
     firstSeen: firstSeenDate(entry),
-    hasNote: Boolean(entry.paperPath),
+    hasDetailSummary: hasDetailSummary(entry, opts),
   };
+}
+
+function hasDetailSummary(
+  entry: PaperIndexEntry,
+  opts: DashboardQueryOptions,
+): boolean {
+  return Boolean(opts.detailSummaryIds?.has(entry.arxivId));
 }
 
 function sortRows(

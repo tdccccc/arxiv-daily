@@ -116,24 +116,29 @@ describe("dashboard model", () => {
     ]);
   });
 
-  it("filters by date range and note existence", () => {
+  it("filters by date range and detail summary existence", () => {
     const seenRange = queryDashboard(fixtures(), {
       tab: "all",
       dateFrom: "2026-06-12",
       dateTo: "2026-06-13",
     });
-    const withNote = queryDashboard(fixtures(), {
-      tab: "all",
-      hasNote: true,
-    });
+    const withDetailSummary = queryDashboard(
+      fixtures(),
+      {
+        tab: "all",
+        detailSummary: true,
+      },
+      { detailSummaryIds: new Set(["2606.00003"]) },
+    );
 
     expect(seenRange.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",
       "2606.00005",
     ]);
-    expect(withNote.rows.map((row) => row.arxivId)).toEqual([
+    expect(withDetailSummary.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",
     ]);
+    expect(withDetailSummary.rows[0].hasDetailSummary).toBe(true);
   });
 
   it("builds filtered summary stats", () => {
@@ -210,10 +215,6 @@ describe("dashboard model", () => {
       arxivIds: ["2606.00001", "2606.00003", "missing", "2606.00001"],
       status: "saved",
     });
-    const notePlan = planDashboardAction(entries, {
-      type: "create_notes",
-      arxivIds: ["2606.00001", "2606.00005"],
-    });
     const priorityPlan = planDashboardAction(entries, {
       type: "set_priority",
       arxivIds: ["2606.00001", "2606.00002"],
@@ -231,19 +232,10 @@ describe("dashboard model", () => {
         {
           arxivId: "2606.00001",
           status: "saved",
-          ensureNote: true,
         },
       ],
       missingIds: ["missing"],
-      requiresConfirmation: true,
-    });
-    expect(notePlan).toEqual({
-      patches: [
-        { arxivId: "2606.00001", ensureNote: true },
-        { arxivId: "2606.00005", ensureNote: true },
-      ],
-      missingIds: [],
-      requiresConfirmation: true,
+      requiresConfirmation: false,
     });
     expect(priorityPlan.patches).toEqual([
       { arxivId: "2606.00001", priority: "high" },
