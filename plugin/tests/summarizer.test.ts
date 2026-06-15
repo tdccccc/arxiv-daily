@@ -411,4 +411,35 @@ describe("summarizeDaily link style", () => {
     expect(out).toContain("## Topic A");
     expect(out).toMatch(/## Topic B\n今日无相关论文更新。/);
   });
+
+  it("caps detail temperature at 0.3 but keeps lower values", async () => {
+    const mk = (temp: number) => {
+      const llm = { call: vi.fn(async (_messages: any[], _opts: any) => "## 研究问题\nx") };
+      const paper = {
+        id: "2606.12345",
+        title: "P",
+        authors: "A",
+        abstract: "a",
+        category: "topic",
+        isDetail: true,
+        abstractConclusion: "## Abstract\na",
+        fullSections: "## Method\nx",
+      };
+      const deps = {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: DEFAULT_SETTINGS.arxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: temp,
+      };
+      return { llm, paper, deps };
+    };
+    const hi = mk(0.7);
+    await summarizePaperDetail(hi.paper, hi.deps);
+    expect(hi.llm.call.mock.calls[0][1].temperature).toBe(0.3);
+
+    const lo = mk(0.1);
+    await summarizePaperDetail(lo.paper, lo.deps);
+    expect(lo.llm.call.mock.calls[0][1].temperature).toBe(0.1);
+  });
 });

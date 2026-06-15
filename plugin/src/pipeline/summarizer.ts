@@ -14,6 +14,8 @@ import dailySystemTemplate from "../prompts/daily-summary.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
 
+const DETAIL_TEMPERATURE_CAP = 0.3;
+
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
   fullSections: string | null;
@@ -412,6 +414,9 @@ export async function summarizePaperDetail(
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent },
     ],
-    { temperature: deps.llmTemperature, signal: deps.signal },
+    {
+      temperature: Math.min(deps.llmTemperature, DETAIL_TEMPERATURE_CAP),
+      signal: deps.signal,
+    },
   );
 }
