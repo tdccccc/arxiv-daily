@@ -373,4 +373,42 @@ describe("summarizeDaily link style", () => {
     );
     expect(warnSpy.mock.calls.flat().join(" ")).toContain("2606.22222");
   });
+
+  it("ensures every configured category appears even if the model omits one", async () => {
+    const llm = {
+      call: vi.fn(async () =>
+        "## Topic A\n### P\n- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+      ),
+    };
+    const out = await summarizeDaily(
+      [
+        {
+          id: "2606.11111",
+          title: "P",
+          authors: "A",
+          abstract: "a",
+          category: "a",
+          isDetail: false,
+          abstractConclusion: "## Abstract\na",
+          fullSections: null,
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "a", name: "Topic A", tag: "a", description: "x", detail: false },
+            { id: "b", name: "Topic B", tag: "b", description: "y", detail: false },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+    expect(out).toContain("## Topic A");
+    expect(out).toMatch(/## Topic B\n今日无相关论文更新。/);
+  });
 });

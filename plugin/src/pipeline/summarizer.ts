@@ -204,10 +204,33 @@ function normalizeDailySummary(
   papers: DailyPaperWithContent[],
   arxivSettings: ArxivSettings,
 ): string {
-  return mergeDuplicateCategorySections(
-    canonicalizeDetailHeadingLinks(markdown, papers),
-    arxivSettings.topics.map((topic) => topic.name),
+  const names = arxivSettings.topics.map((topic) => topic.name);
+  return ensureAllCategorySections(
+    mergeDuplicateCategorySections(
+      canonicalizeDetailHeadingLinks(markdown, papers),
+      names,
+    ),
+    names,
   );
+}
+
+function ensureAllCategorySections(
+  markdown: string,
+  categoryNames: string[],
+): string {
+  const names = unique(categoryNames);
+  const present = new Set(
+    markdown
+      .split("\n")
+      .filter((line) => line.startsWith("## "))
+      .map((line) => line.slice(3).trim()),
+  );
+  const missing = names.filter((name) => !present.has(name));
+  if (missing.length === 0) return markdown;
+  const additions = missing
+    .map((name) => `## ${name}\n今日无相关论文更新。`)
+    .join("\n\n");
+  return `${markdown.replace(/\s+$/, "")}\n\n${additions}`;
 }
 
 function warnOnMissingOrDuplicateIds(
