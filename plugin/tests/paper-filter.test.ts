@@ -118,4 +118,16 @@ describe("filterPapers", () => {
     });
     expect(out).toEqual([]);
   });
+
+  it("system prompt matches the golden snapshot", async () => {
+    const llm = {
+      call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [] })),
+    };
+    await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+    });
+    expect(llm.call.mock.calls[0][0][0].content as string).toMatchSnapshot();
+  });
 });
