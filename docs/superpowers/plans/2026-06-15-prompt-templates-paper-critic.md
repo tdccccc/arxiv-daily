@@ -767,8 +767,26 @@ cd plugin && git add src/settings/defaults.ts tests/validation.test.ts && git co
 
 **Files:**
 - Modify: `plugin/src/prompts/paper-detail.system.md`
+- Modify: `plugin/src/pipeline/summarizer.ts`（`summarizePaperDetail` 注入 `topicName` 人设变量）
 - Modify: `plugin/src/dashboard/detail-summary.ts:2-9`
 - Test: `plugin/tests/summarizer.test.ts`、`plugin/tests/dashboard-detail-summary.test.ts`
+
+**新增：领域专家人设（已与用户确认 2026-06-15）**——仅详细总结加人设；筛选 / 日报 persona 不变。三处改动叠加进下面的步骤：
+
+1. **模板开场**（并入 Step 3）：`paper-detail.system.md` 第一行
+   `你是一个专业的研究助手。请根据提供的论文各章节内容，生成一篇详细的中文论文总结。`
+   改为
+   `你是一位资深研究者，专长于「{{topicName}}」相关领域。请根据提供的论文各章节内容，生成一篇详细的中文论文总结。`
+2. **调用点注入 topicName**（`summarizer.ts` 的 `summarizePaperDetail`，并入 Step 3）：在 `renderPrompt(detailSystemTemplate, {...})` 前算
+   ```ts
+   const topic = deps.arxivSettings.topics.find((t) => t.tag === paper.category);
+   const topicName = topic?.name || paper.category;
+   ```
+   并把 `topicName` 加进 renderPrompt 的变量对象（与 `title`、`id` 并列）。
+3. **测试断言**（并入 Step 1）：把该用例 `arxivSettings` 改成带命名 topic，如
+   `{ ...DEFAULT_SETTINGS.arxiv, topics: [{ id: "t", name: "宇宙学", tag: "topic", description: "d", detail: true }] }`，
+   并追加 `expect(sys).toContain("资深研究者")`、`expect(sys).toContain("宇宙学")`。
+4. 提交信息（Step 9）补一句 What：注入按 topic 的领域专家人设。
 
 - [ ] **Step 1: 改详细总结快照测试为显式断言新结构**
 
