@@ -193,6 +193,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
+      await this.clearRunStateForMissingDailyReports();
       const store = this.plugin.buildPaperIndex();
       const index = await syncDashboardHistory({
         vault: this.plugin.app.vault,
@@ -214,6 +215,24 @@ class ArxivDailyDashboardView extends ItemView {
       this.error = (e as Error).message;
     }
     this.render();
+  }
+
+  private async clearRunStateForMissingDailyReports(): Promise<void> {
+    const writer = this.plugin.buildMarkdownWriter();
+    const snapshot = this.plugin.stateStore.snapshot();
+    let cleared = 0;
+    for (const [date, entry] of Object.entries(snapshot)) {
+      if (entry.status !== "completed") continue;
+      const path = normalizeVaultPath(writer.dailyPath(date));
+      if (await this.plugin.app.vault.adapter.exists(path)) continue;
+      await this.plugin.stateStore.clearDate(date);
+      cleared += 1;
+    }
+    if (cleared > 0) {
+      this.plugin.logger.info(
+        `dashboard: cleared ${cleared} completed run-state entries for missing daily reports`,
+      );
+    }
   }
 
   private async loadDetailSummaries(
@@ -294,15 +313,8 @@ class ArxivDailyDashboardView extends ItemView {
         const path = normalizeVaultPath(reportPath);
         const date = dailyDateFromPath(path, dailyDir);
         if (!date) continue;
-        const report =
-          byDate.get(date) ??
-          {
-            date,
-            path,
-            papers: 0,
-            starred: 0,
-          };
-        byDate.set(date, report);
+        const report = byDate.get(date);
+        if (!report) continue;
         const countKey = `${date}:${entry.arxivId}`;
         if (counted.has(countKey)) continue;
         counted.add(countKey);

@@ -39,16 +39,23 @@ interface DailyCandidate extends PaperCandidate {
   dailyReport: string;
 }
 
+interface DailyCandidateCollection {
+  candidates: DailyCandidate[];
+  paperIdsByReport: Map<string, Set<string>>;
+  parsedReports: Set<string>;
+}
+
 export async function syncDashboardHistory(
   deps: DashboardHistorySyncDeps,
 ): Promise<PaperInbox> {
   const current = await deps.store.load();
-  const paperCandidates = await collectPaperCandidates(deps);
-  const dailyCandidates = await collectDailyCandidates(deps, paperCandidates);
+  const dailyReportPaths = collectDailyReportPaths(deps);
+  const paperCandidates = await collectPaperCandidates(deps, dailyReportPaths);
+  const dailyCollection = await collectDailyCandidates(deps, paperCandidates);
   const inputs = buildSyncInputs(
     current,
     [
-      ...dailyCandidates,
+      ...dailyCollection.candidates,
       ...[...paperCandidates.values()].filter((candidate) => candidate.detail),
     ],
   );
@@ -69,13 +76,30 @@ export async function syncDashboardHistory(
     const changed = await deps.store.removePapers(stale.removeIds);
     deps.logger?.info(`dashboard: removed ${changed} orphan detail summaries`);
   }
-  return stale.clearIds.length > 0 || stale.removeIds.length > 0
-    ? deps.store.load()
-    : index;
+  if (stale.clearIds.length > 0 || stale.removeIds.length > 0) {
+    index = await deps.store.load();
+  }
+
+  const pruned = pruneStaleDailyReports(
+    index,
+    dailyReportPaths,
+    dailyCollection.paperIdsByReport,
+    dailyCollection.parsedReports,
+    deps.output,
+  );
+  if (pruned.changed > 0 || pruned.removed > 0) {
+    await deps.store.save(index);
+    deps.logger?.info(
+      `dashboard: pruned ${pruned.changed} stale daily references and removed ${pruned.removed} orphan daily papers`,
+    );
+    index = await deps.store.load();
+  }
+  return index;
 }
 
 async function collectPaperCandidates(
   deps: DashboardHistorySyncDeps,
+  dailyReportPaths: Set<string>,
 ): Promise<Map<string, PaperCandidate>> {
   const papersDir = normalizeVaultPath(deps.output.papersDir);
   const out = new Map<string, PaperCandidate>();
@@ -92,18 +116,23 @@ async function collectPaperCandidates(
       if (!arxivId) continue;
       const detail = looksLikeDetailSummary(markdown);
       const topic = topicFromPaper(frontmatter, deps.topics);
+      const dailyReport = dailyReportPathFromLink(frontmatter.daily_report);
+      const existingDailyReport =
+        dailyReport && dailyReportPaths.has(dailyReport)
+          ? dailyReport
+          : undefined;
       out.set(arxivId, {
         arxivId,
         title: frontmatter.title || firstH1(markdown) || arxivId,
         authors: frontmatter.authors || "",
         date:
           frontmatter.date ||
-          dateFromDailyReport(frontmatter.daily_report) ||
+          dateFromDailyReport(dailyReport) ||
           "1970-01-01",
         topic,
         path,
         detail,
-        dailyReport: dailyReportPathFromLink(frontmatter.daily_report),
+        dailyReport: existingDailyReport,
       });
     } catch (e) {
       deps.logger?.warn(`dashboard: failed to inspect paper file ${path}`, e);
@@ -112,18 +141,34 @@ async function collectPaperCandidates(
   return out;
 }
 
+function collectDailyReportPaths(deps: DashboardHistorySyncDeps): Set<string> {
+  const dailyDir = normalizeVaultPath(deps.output.dailyDir);
+  const out = new Set<string>();
+  for (const file of deps.vault.getMarkdownFiles()) {
+    const path = normalizeVaultPath(file.path);
+    if (!dailyDateFromPath(path, dailyDir)) continue;
+    out.add(path);
+  }
+  return out;
+}
+
 async function collectDailyCandidates(
   deps: DashboardHistorySyncDeps,
   paperCandidates: Map<string, PaperCandidate>,
-): Promise<DailyCandidate[]> {
+): Promise<DailyCandidateCollection> {
   const dailyDir = normalizeVaultPath(deps.output.dailyDir);
-  const out: DailyCandidate[] = [];
+  const candidates: DailyCandidate[] = [];
+  const paperIdsByReport = new Map<string, Set<string>>();
+  const parsedReports = new Set<string>();
   const seen = new Set<string>();
   for (const file of deps.vault.getMarkdownFiles()) {
     const path = normalizeVaultPath(file.path);
     const date = dailyDateFromPath(path, dailyDir);
     if (!date) continue;
     try {
+      parsedReports.add(path);
+      const ids = paperIdsByReport.get(path) ?? new Set<string>();
+      paperIdsByReport.set(path, ids);
       const markdown = await deps.vault.adapter.read(path);
       for (const candidate of parseDailyCandidates(
         markdown,
@@ -135,13 +180,14 @@ async function collectDailyCandidates(
         const key = `${candidate.dailyReport}:${candidate.arxivId}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push(candidate);
+        ids.add(candidate.arxivId);
+        candidates.push(candidate);
       }
     } catch (e) {
       deps.logger?.warn(`dashboard: failed to inspect daily file ${path}`, e);
     }
   }
-  return out;
+  return { candidates, paperIdsByReport, parsedReports };
 }
 
 function parseDailyCandidates(
@@ -286,6 +332,68 @@ function staleDetailActions(
   return { clearIds, removeIds };
 }
 
+function pruneStaleDailyReports(
+  inbox: PaperInbox,
+  existingDailyReports: Set<string>,
+  paperIdsByReport: Map<string, Set<string>>,
+  parsedReports: Set<string>,
+  output: OutputSettings,
+): { changed: number; removed: number } {
+  const dailyDir = normalizeVaultPath(output.dailyDir);
+  let changed = 0;
+  let removed = 0;
+
+  for (const [arxivId, entry] of Object.entries({ ...inbox.papers })) {
+    const removedDates = new Set<string>();
+    const dailyReports = entry.dailyReports
+      .map(normalizeVaultPath)
+      .filter((path) => {
+        const date = dailyDateFromPath(path, dailyDir);
+        if (!date) return true;
+        const reportMissing = !existingDailyReports.has(path);
+        const paperMissingFromParsedReport =
+          parsedReports.has(path) &&
+          !paperIdsByReport.get(path)?.has(entry.arxivId);
+        if (reportMissing || paperMissingFromParsedReport) {
+          removedDates.add(date);
+          return false;
+        }
+        return true;
+      });
+
+    if (!sameStrings(entry.dailyReports, dailyReports)) {
+      entry.dailyReports = dailyReports;
+      changed += 1;
+    }
+
+    if (removedDates.size > 0) {
+      const remainingDates = new Set(
+        dailyReports
+          .map((path) => dailyDateFromPath(path, dailyDir))
+          .filter((date): date is string => Boolean(date)),
+      );
+      const seenDates = entry.seenDates.filter(
+        (date) => !removedDates.has(date) || remainingDates.has(date),
+      );
+      if (!sameStrings(entry.seenDates, seenDates)) {
+        entry.seenDates = seenDates;
+        changed += 1;
+      }
+    }
+
+    if (
+      entry.dailyReports.length === 0 &&
+      !entry.detail &&
+      !entry.paperPath
+    ) {
+      delete inbox.papers[arxivId];
+      removed += 1;
+    }
+  }
+
+  return { changed, removed };
+}
+
 function parseFrontmatter(markdown: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) return {};
@@ -421,6 +529,10 @@ function slugTopic(value: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || "arxiv"
   );
+}
+
+function sameStrings(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 function normalizeVaultPath(path: string): string {

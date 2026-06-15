@@ -230,7 +230,7 @@ describe("syncDashboardHistory", () => {
       title: "Orphan Detail Paper",
       detail: true,
       paperPath: "arxiv/papers/2606.00003.md",
-      dailyReports: ["arxiv/daily/2026-06-10.md"],
+      dailyReports: [],
     });
   });
 
@@ -297,5 +297,84 @@ describe("syncDashboardHistory", () => {
     });
 
     expect(index.papers["2606.00003"]).toBeUndefined();
+  });
+
+  it("prunes deleted daily report references from the paper index", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.10000": {
+          title: "Deleted Daily Only",
+          seenDates: ["2026-06-15"],
+          dailyReports: ["arxiv/daily/2026-06-15.md"],
+        },
+        "2606.10001": {
+          title: "Still Reported",
+          seenDates: ["2026-06-14", "2026-06-15"],
+          dailyReports: [
+            "arxiv/daily/2026-06-14.md",
+            "arxiv/daily/2026-06-15.md",
+          ],
+        },
+        "2606.10002": {
+          title: "Removed From Existing Daily",
+          seenDates: ["2026-06-14"],
+          dailyReports: ["arxiv/daily/2026-06-14.md"],
+        },
+      }),
+      "arxiv/daily/2026-06-14.md": [
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Still Reported",
+        "- **Authors**: A. Author",
+        "- **arXiv**: [2606.10001](https://arxiv.org/abs/2606.10001)",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-16T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.10000"]).toBeUndefined();
+    expect(index.papers["2606.10002"]).toBeUndefined();
+    expect(index.papers["2606.10001"]).toMatchObject({
+      seenDates: ["2026-06-14"],
+      dailyReports: ["arxiv/daily/2026-06-14.md"],
+    });
+  });
+
+  it("does not backfill missing daily reports from detail frontmatter", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/papers/2606.20000.md": detailMarkdown(
+        "2606.20000",
+        "Manual Detail",
+      ),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-16T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.20000"]).toMatchObject({
+      detail: true,
+      paperPath: "arxiv/papers/2606.20000.md",
+      dailyReports: [],
+    });
   });
 });
