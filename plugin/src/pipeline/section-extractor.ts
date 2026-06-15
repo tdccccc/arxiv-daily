@@ -288,7 +288,6 @@ function sectionRank(kinds: SectionKind[], configuredPriority: boolean): number 
   ) {
     return 1;
   }
-  if (kinds.includes("other")) return 2;
-  if (kinds.some((k) => k === "introduction" || k === "related")) return 3;
-  return 2;
+  if (kinds.some((k) => k === "introduction" || k === "related")) return 2;
+  return 3;
 }

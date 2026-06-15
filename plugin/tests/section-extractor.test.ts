@@ -120,4 +120,21 @@ describe("section-extractor", () => {
     });
     expect(out).toBeNull();
   });
+
+  it("ranks introduction above generic sections when budget is tight", () => {
+    const intro = "Background and motivation text. ".repeat(40);
+    const generic = "Notation conventions used throughout. ".repeat(40);
+    const html = `<html><body>
+      <h2>Introduction</h2><p>${intro}</p>
+      <h2>Notation</h2><p>${generic}</p>
+    </body></html>`;
+    const out = extractSections(html, {
+      sectionCharLimit: 2000,
+      paperCharLimit: 900,
+      skipSections: [],
+      prioritySections: [],
+    });
+    expect(out).toContain("## Introduction");
+    expect(out).not.toContain("## Notation");
+  });
 });
