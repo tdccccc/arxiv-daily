@@ -19,6 +19,8 @@ const DETAIL_TEMPERATURE_CAP = 0.3;
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
   fullSections: string | null;
+  published?: string;
+  updated?: string;
   inboxStatus?: PaperStatus;
   seenBefore?: boolean;
   paperPath?: string | null;
@@ -409,7 +411,7 @@ export async function summarizePaperDetail(
     `以下是论文各章节内容：\n\n${paper.fullSections}\n` +
     `</paper_data>`;
 
-  return deps.llm.call(
+  const summary = await deps.llm.call(
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent },
@@ -419,4 +421,8 @@ export async function summarizePaperDetail(
       signal: deps.signal,
     },
   );
+  if (!summary.trim()) {
+    throw new Error(`summarizePaperDetail: empty LLM response for ${paper.id}`);
+  }
+  return summary;
 }

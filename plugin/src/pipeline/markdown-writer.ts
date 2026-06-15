@@ -72,7 +72,7 @@ export class MarkdownWriter {
 
   async writePaperDetail(
     paper: DailyPaperWithContent,
-    dateStr: string,
+    _dateStr: string,
     summary: string,
     indexEntry?: PaperIndexEntry,
   ): Promise<string> {
@@ -82,12 +82,15 @@ export class MarkdownWriter {
       throw new Error(`paper already exists: ${path}`);
     }
     const tags = this.tagsFor(paper);
+    const published = dateOnly(indexEntry?.published ?? paper.published);
+    const publishedReport = await this.publishedReportLink(published);
     const fm = paperFrontmatter({
       title: paper.title,
       authors: paper.authors,
       arxivId: paper.id,
       primaryTopic: indexEntry?.primaryTopic ?? paper.category,
-      dailyReport: dailyReportLink(this.dailyPath(dateStr), dateStr),
+      published,
+      publishedReport,
       tags,
     });
     await this.opts.storage.writeText(path, fm + summary);
@@ -108,7 +111,8 @@ export class MarkdownWriter {
       authors: entry.authors.join(", "),
       arxivId: entry.arxivId,
       primaryTopic: entry.primaryTopic,
-      dailyReport: latestDailyReportLink(entry.dailyReports),
+      published: dateOnly(entry.published),
+      publishedReport: await this.publishedReportLink(dateOnly(entry.published)),
       tags,
     });
     const noteBody =
@@ -154,6 +158,16 @@ export class MarkdownWriter {
     }
   }
 
+  private async publishedReportLink(
+    published: string | undefined,
+  ): Promise<string | undefined> {
+    if (!published) return undefined;
+    const path = this.dailyPath(published);
+    return (await this.opts.storage.exists(path))
+      ? dailyReportLink(path, published)
+      : undefined;
+  }
+
 }
 
 function dateWindowNote(note: string | undefined): string {
@@ -195,11 +209,14 @@ function paperFrontmatter(meta: {
   authors: string;
   arxivId: string;
   primaryTopic: string;
-  dailyReport?: string;
+  published?: string;
+  publishedReport?: string;
   tags: string[];
 }): string {
-  const dailyReport = meta.dailyReport
-    ? `daily_report: "${escapeYaml(meta.dailyReport)}"\n`
+  const published = meta.publishedReport
+    ? `published: "${escapeYaml(meta.publishedReport)}"\n`
+    : meta.published
+      ? `published: ${meta.published}\n`
     : "";
   return (
     `---\n` +
@@ -207,21 +224,22 @@ function paperFrontmatter(meta: {
     `authors: "${escapeYaml(meta.authors)}"\n` +
     `arxiv_id: "${meta.arxivId}"\n` +
     `primary_topic: ${meta.primaryTopic}\n` +
-    dailyReport +
+    published +
     `tags: [${meta.tags.join(", ")}]\n` +
     `---\n\n`
   );
-}
-
-function latestDailyReportLink(paths: string[]): string | undefined {
-  const path = paths[paths.length - 1];
-  return path ? dailyReportLink(path) : undefined;
 }
 
 function dailyReportLink(path: string, label?: string): string {
   const target = path.replace(/\.md$/i, "");
   const fallbackLabel = target.split("/").pop() || target;
   return `[[${target}|${label ?? fallbackLabel}]]`;
+}
+
+function dateOnly(value: string | undefined): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+  return match?.[1] ?? (trimmed || undefined);
 }
 
 function weekdayName(dateStr: string): string {

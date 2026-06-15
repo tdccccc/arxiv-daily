@@ -127,6 +127,8 @@ export class ManualFetchService {
       isDetail: true,
       abstractConclusion: content.abstractConclusion,
       fullSections: content.fullSections,
+      published,
+      updated,
     };
     let summary: string;
     try {

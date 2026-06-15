@@ -172,7 +172,40 @@ describe("MarkdownWriter strictness on existing files", () => {
     );
   });
 
-  it("writePaperDetail writes clean paper properties with a daily report link", async () => {
+  it("writePaperDetail writes published date as a daily report link when that report exists", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/daily/2026-06-09.md": "daily",
+    });
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+      published: "2026-06-09T02:28:06Z",
+    };
+    await writer.writePaperDetail(paper as any, "2026-06-10", "detail");
+    const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain('arxiv_id: "2605.06587"');
+    expect(written).toContain(
+      'published: "[[arxiv-daily/daily/2026-06-09|2026-06-09]]"',
+    );
+    expect(written).not.toContain("daily_report:");
+    expect(written).not.toContain("type: paper");
+    expect(written).not.toContain("source: arxiv");
+    expect(written).not.toContain('arxiv: "2605.06587"');
+    expect(written).not.toContain("date: 2026-06-10");
+    expect(written).not.toContain("weekday: Wednesday");
+    expect(written).not.toContain("status: inbox");
+    expect(written).not.toContain("priority: normal");
+    expect(written).not.toContain("seen_dates");
+    expect(written).toContain("detail");
+  });
+
+  it("writePaperDetail writes plain published date when no matching daily report exists", async () => {
     const { files, writer } = makeWriter();
     const paper = {
       id: "2605.06587",
@@ -183,22 +216,13 @@ describe("MarkdownWriter strictness on existing files", () => {
       isDetail: true,
       abstractConclusion: "",
       fullSections: null,
+      published: "2026-06-09T02:28:06Z",
     };
     await writer.writePaperDetail(paper as any, "2026-06-10", "detail");
     const written = files["arxiv-daily/papers/2605.06587.md"];
-    expect(written).toContain('arxiv_id: "2605.06587"');
-    expect(written).toContain(
-      'daily_report: "[[arxiv-daily/daily/2026-06-10|2026-06-10]]"',
-    );
-    expect(written).not.toContain("type: paper");
-    expect(written).not.toContain("source: arxiv");
-    expect(written).not.toContain('arxiv: "2605.06587"');
-    expect(written).not.toContain("date: 2026-06-10");
-    expect(written).not.toContain("weekday: Wednesday");
-    expect(written).not.toContain("status: inbox");
-    expect(written).not.toContain("priority: normal");
-    expect(written).not.toContain("seen_dates");
-    expect(written).toContain("detail");
+    expect(written).toContain("published: 2026-06-09");
+    expect(written).not.toContain("[[arxiv-daily/daily/2026-06-09");
+    expect(written).not.toContain("daily_report:");
   });
 
   it("writePaperDetail does not mirror paper index state into properties", async () => {
@@ -239,6 +263,7 @@ describe("MarkdownWriter strictness on existing files", () => {
     });
     const written = files["arxiv-daily/papers/2605.06587.md"];
     expect(written).toContain("primary_topic: photo-z");
+    expect(written).toContain("published: 2026-06-09");
     expect(written).not.toContain("status: saved");
     expect(written).not.toContain("priority: high");
     expect(written).not.toContain('  - "2026-06-09"');
@@ -274,9 +299,8 @@ describe("MarkdownWriter strictness on existing files", () => {
       projects: [],
     });
     const written = files["arxiv-daily/papers/2605.06587.md"];
-    expect(written).toContain(
-      'daily_report: "[[arxiv-daily/daily/2026-06-10|2026-06-10]]"',
-    );
+    expect(written).toContain("published: 2026-06-09");
+    expect(written).not.toContain("daily_report:");
     expect(written).not.toContain("status: saved");
     expect(written).not.toContain("priority: normal");
     expect(written).toContain("- **arXiv**: [2605.06587]");

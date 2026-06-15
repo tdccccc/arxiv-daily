@@ -443,3 +443,44 @@ describe("summarizeDaily link style", () => {
     expect(lo.llm.call.mock.calls[0][1].temperature).toBe(0.1);
   });
 });
+
+describe("summarizePaperDetail", () => {
+  it("rejects empty LLM responses", async () => {
+    const llm = {
+      call: vi.fn(async () => "  \n"),
+    };
+
+    await expect(
+      summarizePaperDetail(
+        {
+          id: "2606.12938",
+          title: "Cluster Mass Inference from Galaxy Kinematics",
+          authors: "A. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: true,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: "## Introduction\ncontent",
+        },
+        {
+          llm: llm as any,
+          logger: new Logger("error"),
+          arxivSettings: {
+            ...DEFAULT_SETTINGS.arxiv,
+            topics: [
+              {
+                id: "topic",
+                name: "Topic",
+                tag: "topic",
+                description: "topic",
+                detail: true,
+              },
+            ],
+          },
+          advanced: DEFAULT_SETTINGS.advanced,
+          llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+        },
+      ),
+    ).rejects.toThrow(/empty LLM response/);
+  });
+});
