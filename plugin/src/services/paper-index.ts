@@ -68,6 +68,8 @@ export interface PaperIndexUpsert {
   title: string;
   authors: string | string[];
   date: string;
+  published?: string;
+  updated?: string;
   arxivCategory: string;
   arxivCategories?: string[];
   primaryTopic: string;
@@ -385,6 +387,8 @@ function upsertEntry(
     existing?.category ?? "",
   ]);
   const categories = appendUniqueMany(existingCategories, inputCategories);
+  const published = dateOnly(input.published) || existing?.published || dateOnly(input.date);
+  const updated = dateOnly(input.updated) || existing?.updated || dateOnly(input.date);
   const paperPath =
     input.paperPath === undefined
       ? existing?.paperPath ?? null
@@ -397,8 +401,8 @@ function upsertEntry(
     source: "arxiv",
     title: input.title.trim() || existing?.title || arxivId,
     authors: authors.length ? authors : existing?.authors ?? [],
-    published: existing?.published || input.date,
-    updated: input.date,
+    published,
+    updated,
     category: inputCategories[0] || existing?.category || categories[0] || "",
     categories,
     summary: existing?.summary,
@@ -407,7 +411,7 @@ function upsertEntry(
     detail: Boolean(existing?.detail || input.detail),
     status: existing?.status ?? "inbox",
     priority: existing?.priority ?? "normal",
-    seenDates: appendUnique(existing?.seenDates ?? [], input.date),
+    seenDates: appendUnique(existing?.seenDates ?? [], dateOnly(input.date)),
     dailyReports: input.dailyReport
       ? appendUnique(existing?.dailyReports ?? [], input.dailyReport)
       : existing?.dailyReports ?? [],
@@ -494,6 +498,12 @@ function normalizeStoragePath(path: string): string {
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
     .replace(/^\/+|\/+$/g, "");
+}
+
+function dateOnly(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+  return match?.[1] ?? trimmed;
 }
 
 function appendUnique(items: string[], next: string): string[] {

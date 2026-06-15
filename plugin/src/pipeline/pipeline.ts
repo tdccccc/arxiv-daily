@@ -28,6 +28,8 @@ import { extractPaperSummaries } from "./daily-summary-parser";
 
 interface SourcePaperMeta extends PaperMeta {
   arxivCategories: string[];
+  published?: string;
+  updated?: string;
 }
 
 const SUBMITTED_DATE_FALLBACK_NOTE =
@@ -113,13 +115,21 @@ export class ArxivPipeline {
     this.progress.setStage("enrich-abstract");
     try {
       const ids = sourcePapers.map((p) => p.id);
-      const absMap = await fetcher.fetchAbstractsByIds(ids);
+      const metadataMap = await fetcher.fetchMetadataByIds(ids);
       for (const p of sourcePapers) {
-        const a = absMap.get(p.id);
-        if (a) p.abstract = a;
+        const meta = metadataMap.get(p.id);
+        if (!meta) continue;
+        if (meta.abstract) p.abstract = meta.abstract;
+        const published = dateOnly(meta.published);
+        const updated = dateOnly(meta.updated);
+        if (published) p.published = published;
+        if (updated) p.updated = updated;
+        for (const category of sourceCategories(meta)) {
+          p.arxivCategories = appendUnique(p.arxivCategories, category);
+        }
       }
       logger.info(
-        `pipeline: enriched ${absMap.size}/${ids.length} abstracts via Atom API`,
+        `pipeline: enriched ${metadataMap.size}/${ids.length} papers via Atom API`,
       );
     } catch (e) {
       if (isCancellationError(e)) throw e;
@@ -341,6 +351,8 @@ export class ArxivPipeline {
           title: p.title,
           authors: p.authors,
           date: dateStr,
+          published: paperPublishedDate(p),
+          updated: paperUpdatedDate(p),
           arxivCategory: sourceCategories(p)[0] ?? this.deps.arxiv.category,
           arxivCategories: sourceCategories(p),
           primaryTopic: p.category,
@@ -526,6 +538,20 @@ function sourceCategories(paper: PaperMeta, fallbackCategory?: string): string[]
     );
   }
   return fallbackCategory ? [fallbackCategory] : [];
+}
+
+function paperPublishedDate(paper: PaperMeta): string | undefined {
+  return dateOnly((paper as Partial<SourcePaperMeta>).published);
+}
+
+function paperUpdatedDate(paper: PaperMeta): string | undefined {
+  return dateOnly((paper as Partial<SourcePaperMeta>).updated);
+}
+
+function dateOnly(value: string | undefined): string | undefined {
+  const trimmed = value?.trim() ?? "";
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+  return match?.[1] ?? (trimmed || undefined);
 }
 
 function addSourcePaper(

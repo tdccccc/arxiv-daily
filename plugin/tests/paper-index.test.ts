@@ -119,6 +119,25 @@ describe("PaperIndexStore", () => {
     expect(saved.papers["2606.12345"].title).toBe("A paper");
   });
 
+  it("stores arXiv publish dates separately from local seen dates", async () => {
+    const { store } = makeStore();
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2602.01548",
+      title: "An older paper",
+      authors: "A. Author",
+      date: "2026-06-13",
+      published: "2026-02-02T02:28:06Z",
+      updated: "2026-06-15T02:34:08Z",
+      arxivCategory: "astro-ph.GA",
+      primaryTopic: "photo-z",
+      detail: true,
+    });
+
+    expect(entry.published).toBe("2026-02-02");
+    expect(entry.updated).toBe("2026-06-15");
+    expect(entry.seenDates).toEqual(["2026-06-13"]);
+  });
+
   it("migrates from the old visible index path on next save", async () => {
     const legacy = {
       schemaVersion: 1,
@@ -191,7 +210,7 @@ describe("PaperIndexStore", () => {
     expect(wasNew).toBe(false);
     expect(entry.title).toBe("Updated title");
     expect(entry.published).toBe("2026-06-10");
-    expect(entry.updated).toBe("2026-06-11");
+    expect(entry.updated).toBe("2026-06-10");
     expect(entry.topics).toEqual(["photo-z", "galaxy-cluster"]);
     expect(entry.detail).toBe(true);
     expect(entry.status).toBe("saved");

@@ -1,6 +1,6 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
-import { parseAtomAbstracts, parseAtomPapers } from "./atom-parser";
+import { parseAtomPapers, type AtomPaperMeta } from "./atom-parser";
 import type { HttpClient } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
 
@@ -33,14 +33,23 @@ export class ArxivFetcher {
    * arXiv recommends batches of <=300; we conservatively cap at 200.
    */
   async fetchAbstractsByIds(ids: string[]): Promise<Map<string, string>> {
+    const metadata = await this.fetchMetadataByIds(ids);
     const out = new Map<string, string>();
+    for (const [id, paper] of metadata) {
+      if (paper.abstract) out.set(id, paper.abstract);
+    }
+    return out;
+  }
+
+  async fetchMetadataByIds(ids: string[]): Promise<Map<string, AtomPaperMeta>> {
+    const out = new Map<string, AtomPaperMeta>();
     const BATCH = 200;
     for (let i = 0; i < ids.length; i += BATCH) {
       const batch = ids.slice(i, i + BATCH);
       if (batch.length === 0) continue;
       const url = `https://export.arxiv.org/api/query?id_list=${batch.join(",")}&max_results=${batch.length}`;
       const xml = await this.fetchHtml(url, { allow404: false });
-      for (const [k, v] of parseAtomAbstracts(xml)) out.set(k, v);
+      for (const paper of parseAtomPapers(xml)) out.set(paper.id, paper);
     }
     return out;
   }

@@ -31,11 +31,34 @@ const testArxiv = {
   ],
 };
 
+function atomMeta(
+  id: string,
+  overrides: Partial<ReturnType<typeof baseAtomMeta>> = {},
+) {
+  return { ...baseAtomMeta(id), ...overrides };
+}
+
+function baseAtomMeta(id: string) {
+  return {
+    id,
+    title: `Atom title ${id}`,
+    authors: "Atom Author et al.",
+    abstract: "atom abstract",
+    published: "2026-02-02T02:28:06Z",
+    updated: "2026-06-15T02:34:08Z",
+    primaryCategory: "astro-ph.GA",
+    categories: ["astro-ph.GA"],
+  };
+}
+
 function makeDeps() {
   const writes: Record<string, string> = {};
   const fetcher = {
     fetchRecent: vi.fn().mockResolvedValue(recentHtml),
     fetchAbstractsByIds: vi.fn().mockResolvedValue(new Map<string, string>()),
+    fetchMetadataByIds: vi.fn(async (ids: string[]) =>
+      new Map(ids.map((id) => [id, atomMeta(id)])),
+    ),
     fetchBySubmittedDate: vi.fn().mockResolvedValue([]),
     fetchPaperHtml: vi.fn().mockResolvedValue({ ok: false, status: 404 }),
     fetchPaperAbsPage: vi
@@ -265,9 +288,9 @@ describe("ArxivPipeline", () => {
       }
       return "";
     });
-    d.fetcher.fetchAbstractsByIds = vi
+    d.fetcher.fetchMetadataByIds = vi
       .fn()
-      .mockResolvedValue(new Map([["stub", "abstract"]]));
+      .mockResolvedValue(new Map([[arxivId, atomMeta(arxivId)]]));
 
     const pipeline = new ArxivPipeline({
       fetcher: d.fetcher as any,
@@ -284,7 +307,7 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
     expect((result as any).papersWritten).toBe(1);
-    expect(d.fetcher.fetchAbstractsByIds).toHaveBeenCalled();
+    expect(d.fetcher.fetchMetadataByIds).toHaveBeenCalled();
     expect(d.paperFetcher.fetch).toHaveBeenCalledWith(
       arxivId,
       expect.objectContaining({ isDetail: true }),
@@ -355,6 +378,8 @@ describe("ArxivPipeline", () => {
       limitations: "Limits.",
     });
     expect(entry.seenDates).toEqual([date]);
+    expect(entry.published).toBe("2026-02-02");
+    expect(entry.updated).toBe("2026-06-15");
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });
 
@@ -363,6 +388,14 @@ describe("ArxivPipeline", () => {
     const { files, store } = makePaperIndex();
     const papers = firstBucketPapersFromFixture();
     const arxivId = papers[0].id;
+    d.fetcher.fetchMetadataByIds = vi.fn(async (ids: string[]) =>
+      new Map(
+        ids.map((id) => [
+          id,
+          atomMeta(id, { primaryCategory: "", categories: [] }),
+        ]),
+      ),
+    );
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
@@ -398,7 +431,7 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("astro-ph");
     expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("cs.LG");
-    expect(d.fetcher.fetchAbstractsByIds.mock.calls[0][0]).toHaveLength(
+    expect(d.fetcher.fetchMetadataByIds.mock.calls[0][0]).toHaveLength(
       papers.length,
     );
     const filterUserPrompt = d.llm.call.mock.calls[0][0][1].content as string;
@@ -625,9 +658,9 @@ describe("ArxivPipeline", () => {
       }
       return "## detail summary\n";
     });
-    d.fetcher.fetchAbstractsByIds = vi
+    d.fetcher.fetchMetadataByIds = vi
       .fn()
-      .mockResolvedValue(new Map([[arxivId, "abstract"]]));
+      .mockResolvedValue(new Map([[arxivId, atomMeta(arxivId)]]));
     d.paperFetcher.fetch = vi.fn().mockResolvedValue({
       abstractConclusion: "## Abstract\nstub",
       fullSections: "## Section\nbody",
@@ -707,9 +740,9 @@ describe("ArxivPipeline", () => {
       }
       return "";
     });
-    d.fetcher.fetchAbstractsByIds = vi
+    d.fetcher.fetchMetadataByIds = vi
       .fn()
-      .mockResolvedValue(new Map([[arxivId, "abstract"]]));
+      .mockResolvedValue(new Map([[arxivId, atomMeta(arxivId)]]));
 
     const calls: Array<[string, number?, number?]> = [];
     const progress = {

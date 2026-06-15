@@ -7,6 +7,7 @@ import type { StorageAdapter } from "../core/adapters";
 import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
 import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
+import { parseAtomPapers, type AtomPaperMeta } from "../pipeline/atom-parser";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
@@ -60,6 +61,7 @@ export class ManualFetchService {
     const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
     if (await storage.exists(targetPath)) {
       logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
+      await this.syncExistingIndexEntry(id, dateStr, targetPath);
       return { kind: "already_exists", path: targetPath };
     }
 
@@ -67,6 +69,9 @@ export class ManualFetchService {
     let title = "";
     let authors = "Unknown";
     let category = "other";
+    let published = "";
+    let updated = "";
+    let categories: string[] = [];
     let abstract = "";
     try {
       const meta = await this.fetchAtomMetadata(id);
@@ -75,7 +80,10 @@ export class ManualFetchService {
       }
       title = meta.title;
       authors = meta.authors;
-      category = meta.primaryCategory;
+      category = meta.primaryCategory || meta.categories[0] || "other";
+      published = meta.published;
+      updated = meta.updated;
+      categories = meta.categories;
       abstract = meta.abstract;
     } catch (e) {
       logger.error(`manual-fetch: atom metadata failed for ${id}`, e);
@@ -143,7 +151,10 @@ export class ManualFetchService {
           title,
           authors,
           date: dateStr,
+          published,
+          updated,
           arxivCategory: category,
+          arxivCategories: categories,
           primaryTopic: category,
           detail: true,
         });
@@ -178,33 +189,51 @@ export class ManualFetchService {
     return { kind: "done", path };
   }
 
-  /** Returns title/authors/primary_category/abstract for one id, or null if not found. */
-  private async fetchAtomMetadata(id: string): Promise<{
-    title: string;
-    authors: string;
-    primaryCategory: string;
-    abstract: string;
-  } | null> {
-    const xml = await this.deps.fetcher.fetchAtomEntry(id);
-    const doc = new DOMParser().parseFromString(xml, "application/xml");
-    const entry = doc.querySelector("entry");
-    if (!entry) return null;
-    const titleEl = entry.querySelector("title");
-    const summaryEl = entry.querySelector("summary");
-    const authorEls = Array.from(entry.querySelectorAll("author > name"));
-    const primaryEl = entry.querySelector("primary_category, *|primary_category");
-    const titleText = (titleEl?.textContent ?? "").replace(/\s+/g, " ").trim();
-    const abstract = (summaryEl?.textContent ?? "").replace(/\s+/g, " ").trim();
-    if (!titleText || !abstract) return null;
-    const authorNames = authorEls.map((n) => (n.textContent ?? "").trim()).filter(Boolean);
-    const authors =
-      authorNames.length === 0
-        ? "Unknown"
-        : authorNames.length === 1
-        ? authorNames[0]
-        : `${authorNames[0]} et al.`;
-    const primaryCategory =
-      primaryEl?.getAttribute("term") ?? "other";
-    return { title: titleText, authors, primaryCategory, abstract };
+  private async syncExistingIndexEntry(
+    id: string,
+    dateStr: string,
+    targetPath: string,
+  ): Promise<void> {
+    const { paperIndex, logger } = this.deps;
+    if (!paperIndex) return;
+    try {
+      const meta = await this.fetchAtomMetadata(id);
+      if (!meta) return;
+      const indexed = await paperIndex.upsertFromDailyPaper({
+        arxivId: id,
+        title: meta.title,
+        authors: meta.authors,
+        date: dateStr,
+        published: meta.published,
+        updated: meta.updated,
+        arxivCategory: meta.primaryCategory || meta.categories[0] || "other",
+        arxivCategories: meta.categories,
+        primaryTopic: meta.primaryCategory || meta.categories[0] || "other",
+        detail: true,
+        paperPath: targetPath,
+      });
+      if (indexed.wasNew) await paperIndex.setStatus(id, "saved");
+    } catch (e) {
+      logger.warn(
+        `manual-fetch: failed to refresh existing index entry for ${id}: ${(e as Error).message}`,
+      );
+    }
   }
+
+  /** Returns Atom metadata for one id, or null if not found. */
+  private async fetchAtomMetadata(id: string): Promise<AtomPaperMeta | null> {
+    const xml = await this.deps.fetcher.fetchAtomEntry(id);
+    const paper = parseAtomPapers(xml).find((candidate) => candidate.id === id);
+    if (!paper || !paper.title || !paper.abstract) return null;
+    const primaryCategory = paper.primaryCategory || paper.categories[0] || "other";
+    return {
+      ...paper,
+      primaryCategory,
+      categories: appendUnique(paper.categories, primaryCategory),
+    };
+  }
+}
+
+function appendUnique(values: string[], value: string): string[] {
+  return value && !values.includes(value) ? [...values, value] : values;
 }

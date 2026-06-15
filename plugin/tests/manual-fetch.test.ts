@@ -8,18 +8,33 @@ import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { StorageAdapter } from "../src/core/adapters";
 
-const atomFor = (id: string, opts: Partial<{ title: string; authors: string[]; primary: string; abstract: string }> = {}) => {
+const atomFor = (
+  id: string,
+  opts: Partial<{
+    title: string;
+    authors: string[];
+    primary: string;
+    abstract: string;
+    published: string;
+    updated: string;
+  }> = {},
+) => {
   const title = opts.title ?? "Test paper title";
   const abstract = opts.abstract ?? "Abstract body.";
   const primary = opts.primary ?? "astro-ph.CO";
   const authors = opts.authors ?? ["Foo Bar", "Baz Qux"];
+  const published = opts.published ?? "2026-02-02T02:28:06Z";
+  const updated = opts.updated ?? "2026-06-15T02:34:08Z";
   const authorXml = authors.map((a) => `<author><name>${a}</name></author>`).join("");
   return `<?xml version='1.0'?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
     <entry>
       <id>http://arxiv.org/abs/${id}v1</id>
+      <published>${published}</published>
+      <updated>${updated}</updated>
       <title>${title}</title>
       <summary>${abstract}</summary>
       <arxiv:primary_category term="${primary}"/>
+      <category term="${primary}"/>
       ${authorXml}
     </entry>
   </feed>`;
@@ -145,6 +160,42 @@ describe("ManualFetchService", () => {
     expect(paperFetcher.fetch).not.toHaveBeenCalled();
   });
 
+  it("refreshes the paper index when the target file already exists", async () => {
+    const d = makeDeps({ exists: true });
+    const paperIndex = new PaperIndexStore(
+      d.storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-11T01:30:00.000Z"),
+    );
+    const svc = new ManualFetchService({
+      storage: d.storage,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const r = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
+
+    expect(r.kind).toBe("already_exists");
+    expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+    const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
+    expect(index.papers["2605.08080"].published).toBe("2026-02-02");
+    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
+    expect(index.papers["2605.08080"].paperPath).toBe(
+      "arxiv-daily/papers/2605.08080.md",
+    );
+  });
+
   it("returns not_found when Atom has no entry", async () => {
     const { svc } = baseDeps({
       atom: `<?xml version='1.0'?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`,
@@ -201,5 +252,8 @@ describe("ManualFetchService", () => {
     expect(index.papers["2605.08080"].status).toBe("saved");
     expect(index.papers["2605.08080"].detail).toBe(true);
     expect(index.papers["2605.08080"].paperPath).toBe("papers/2605.08080.md");
+    expect(index.papers["2605.08080"].published).toBe("2026-02-02");
+    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
   });
 });
