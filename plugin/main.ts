@@ -25,7 +25,6 @@ import { ManualFetchService } from "./src/services/manual-fetch";
 import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "./src/utils/time";
 import { PaperIndexStore } from "./src/services/paper-index";
-import { DailySelectionSyncService } from "./src/services/daily-selection";
 import { PdfService } from "./src/services/pdf";
 import { ProjectNotesService } from "./src/services/project-notes";
 import { arxivCategories } from "./src/settings/categories";
@@ -48,7 +47,6 @@ export default class ArxivDailyPlugin extends Plugin {
   scheduler!: SchedulerService;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
-  private dailySelectionSync!: DailySelectionSyncService;
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService();
   private legacyRunState: RunState = {};
@@ -113,25 +111,6 @@ export default class ArxivDailyPlugin extends Plugin {
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerDashboardView(this);
     registerCommands(this);
-    this.dailySelectionSync = new DailySelectionSyncService({
-      storage: this.host.storage,
-      getOutput: () => this.settings.output,
-      getLookbackDays: () => this.settings.schedule.lookbackDays,
-      getTimezone: () => this.settings.arxiv.timezone,
-      buildPaperIndex: () => this.buildPaperIndex(),
-      logger: this.logger,
-    });
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => this.dailySelectionSync.schedule(file)),
-    );
-    this.app.workspace.onLayoutReady(() => {
-      this.dailySelectionSync
-        .syncRecentDailyFiles()
-        .catch((e) =>
-          this.logger.error("daily-selection: startup sync failed", e),
-        );
-    });
-
     if (this.settings.schedule.enabled) {
       this.scheduler.start();
       this.scheduler
@@ -144,7 +123,6 @@ export default class ArxivDailyPlugin extends Plugin {
 
   onunload() {
     void this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW);
-    this.dailySelectionSync?.clear();
     this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();
   }

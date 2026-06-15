@@ -193,7 +193,22 @@ async function writeAtomic(
   value: unknown,
 ): Promise<void> {
   const tmp = `${path}.tmp`;
+  const bak = `${path}.bak`;
   const content = `${JSON.stringify(value, null, 2)}\n`;
+  if (await storage.exists(tmp)) await storage.remove(tmp);
   await storage.writeText(tmp, content);
-  await storage.rename(tmp, path);
+  if (!(await storage.exists(path))) {
+    await storage.rename(tmp, path);
+    return;
+  }
+
+  if (await storage.exists(bak)) await storage.remove(bak);
+  await storage.rename(path, bak);
+  try {
+    await storage.rename(tmp, path);
+    await storage.remove(bak);
+  } catch (e) {
+    if (await storage.exists(bak)) await storage.rename(bak, path);
+    throw e;
+  }
 }

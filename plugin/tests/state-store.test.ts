@@ -37,6 +37,9 @@ function makeStorage(initialFiles: Record<string, string> = {}) {
       dirs.add(path);
     },
     async rename(from: string, to: string) {
+      if (to in files || dirs.has(to)) {
+        throw new Error("Destination file already exists!");
+      }
       files[to] = files[from];
       delete files[from];
     },
