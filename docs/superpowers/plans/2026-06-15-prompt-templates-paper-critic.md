@@ -821,7 +821,7 @@ cd plugin && git add src/settings/defaults.ts tests/validation.test.ts && git co
       },
     );
     const sys = calls[0][0].content as string;
-    expect(sys).toContain("## 贡献与新意");
+    expect(sys).toContain("## 贡献与创新点");
     expect(sys).toContain("## 阅读价值");
     expect(sys).toContain("精读");
     expect(sys).toContain("略读");
@@ -838,17 +838,17 @@ cd plugin && git add src/settings/defaults.ts tests/validation.test.ts && git co
 - [ ] **Step 2: 运行确认失败**
 
 Run: `cd plugin && npx vitest run tests/summarizer.test.ts`
-Expected: FAIL（当前模板无「贡献与新意」「阅读价值」）。
+Expected: FAIL（当前模板无「贡献与创新点」「阅读价值」）。
 
 - [ ] **Step 3: 改详细总结模板为 critic 结构**
 
-编辑 `plugin/src/prompts/paper-detail.system.md`：在「## 主要结论」与「## 适用边界」之间插入「## 贡献与新意」，并把末尾「## 一句话价值判断」整段替换为「## 阅读价值」。改后的章节区与注意区如下（其余开头、护栏行保持不变）：
+编辑 `plugin/src/prompts/paper-detail.system.md`：在「## 主要结论」与「## 适用边界」之间插入「## 贡献与创新点」，并把末尾「## 一句话价值判断」整段替换为「## 阅读价值」。改后的章节区与注意区如下（其余开头、护栏行保持不变）：
 
 ```md
 ## 主要结论
 论文最核心的发现或贡献是什么？区分作者已经证明的结果和作者提出的解释。
 
-## 贡献与新意
+## 贡献与创新点
 相对已有工作，这篇论文新在哪里？是关键技术点，还是已有方法的工程组合？
 只依据原文自身（引言、相关工作、摘要）给出的定位与对比来写；原文没有给出与前人的对比，就写"原文未说明"，不要用你自己的知识编造前人工作或差异。
 
@@ -862,7 +862,7 @@ Expected: FAIL（当前模板无「贡献与新意」「阅读价值」）。
 注意区追加一条（与现有护栏并列，放在「不要写空泛句子」那条之前或之后均可）：
 
 ```md
-- 「贡献与新意」只能基于原文对自身的定位；原文未与前人对比时写"原文未说明"，禁止编造前人工作
+- 「贡献与创新点」只能基于原文对自身的定位；原文未与前人对比时写"原文未说明"，禁止编造前人工作
 ```
 
 - [ ] **Step 4: 运行确认通过**
@@ -896,7 +896,7 @@ Expected: PASS。
       "## 主要结论",
       repeatedText(2),
       "",
-      "## 贡献与新意",
+      "## 贡献与创新点",
       repeatedText(2),
       "",
       "## 适用边界",
@@ -924,7 +924,7 @@ const DETAIL_SUMMARY_HEADINGS = [
   "方法设计",
   "关键证据",
   "主要结论",
-  "贡献与新意",
+  "贡献与创新点",
   "适用边界",
   "阅读价值",
 ];
@@ -938,7 +938,7 @@ Expected: 全量 PASS；构建 green。
 - [ ] **Step 9: 提交**
 
 ```bash
-cd plugin && git add src/prompts/paper-detail.system.md src/dashboard/detail-summary.ts tests/summarizer.test.ts tests/dashboard-detail-summary.test.ts tests/__snapshots__/summarizer.test.ts.snap && git commit -m "feat(summarizer): upgrade detail summary into a paper-critic" -m "Why: the detail summary lacked explicit evaluation dimensions; add contribution/novelty positioning and a concrete read-priority verdict while keeping all anti-hallucination guardrails." -m "What: add 贡献与新意 (grounded only in the paper's own intro/related/abstract; 原文未说明 when absent) and replace 一句话价值判断 with 阅读价值 (精读/略读/记一个点 + reason); track DETAIL_SUMMARY_HEADINGS to the new structure. Daily report, parser and dashboard data model untouched." -m "Validation: npx vitest run (full suite green); npm run build green."
+cd plugin && git add src/prompts/paper-detail.system.md src/dashboard/detail-summary.ts tests/summarizer.test.ts tests/dashboard-detail-summary.test.ts tests/__snapshots__/summarizer.test.ts.snap && git commit -m "feat(summarizer): upgrade detail summary into a paper-critic" -m "Why: the detail summary lacked explicit evaluation dimensions; add contribution/novelty positioning and a concrete read-priority verdict while keeping all anti-hallucination guardrails." -m "What: add 贡献与创新点 (grounded only in the paper's own intro/related/abstract; 原文未说明 when absent) and replace 一句话价值判断 with 阅读价值 (精读/略读/记一个点 + reason); track DETAIL_SUMMARY_HEADINGS to the new structure. Daily report, parser and dashboard data model untouched." -m "Validation: npx vitest run (full suite green); npm run build green."
 ```
 
 ---

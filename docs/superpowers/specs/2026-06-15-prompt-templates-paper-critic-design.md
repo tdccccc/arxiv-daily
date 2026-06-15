@@ -77,12 +77,12 @@ loader: { ".md": "text" }
 ## 方法设计        (method，保留)
 ## 关键证据        (evidence，保留)
 ## 主要结论        (results，保留，含"证明 vs 声称"区分)
-## 贡献与新意      (NEW)
+## 贡献与创新点      (NEW)
 ## 适用边界        (limitations，保留)
 ## 阅读价值        (由"一句话价值判断"升级)
 ```
 
-### 新增「贡献与新意」（contribution + novelty 合并一段）
+### 新增「贡献与创新点」（contribution + novelty 合并一段）
 
 - 内容：相对已有工作"新在哪"；是关键技术点还是工程组合。
 - **反幻觉约束**：只依据原文自身在引言 / 相关工作 / 摘要里给出的定位与对比来写。原文没有给出与前人的对比，就写"原文未说明"；**禁止用模型自身知识编造前人工作或对比**。（这是允许的，因为从原文引言提取差异属于"读输入"，不属于引入外部知识。）
@@ -106,7 +106,7 @@ loader: { ".md": "text" }
 
 ### 兼容性
 
-- 更新 `plugin/src/dashboard/detail-summary.ts:2` 的 `DETAIL_SUMMARY_HEADINGS`：加入「贡献与新意」「阅读价值」，移除「一句话价值判断」，让检测标题集跟随真实结构。
+- 更新 `plugin/src/dashboard/detail-summary.ts:2` 的 `DETAIL_SUMMARY_HEADINGS`：加入「贡献与创新点」「阅读价值」，移除「一句话价值判断」，让检测标题集跟随真实结构。
 - 保留的 5 个原标题（研究问题 / 方法设计 / 关键证据 / 主要结论 / 适用边界）使 `looksLikeDetailSummary`（"命中 ≥3 标题" 或 "≥4 段落" 两条任一）稳定为真——即使不更新标题集也不会破，更新只是为了不靠巧合。
 
 ## Part C：章节抽取提权（Option A）+ 放宽字数限制
@@ -125,7 +125,7 @@ loader: { ".md": "text" }
 3. **背景 / 新意**：introduction、background、related
 4. **杂项**：其余
 
-效果：introduction / related 不再最先被砍、且排在杂项之上，为「贡献与新意」提供可靠输入；长论文预算紧张时核心数值证据仍先拿到预算。HTML 与 LaTeX 两条路径取材一致，不因走哪条而漂移。
+效果：introduction / related 不再最先被砍、且排在杂项之上，为「贡献与创新点」提供可靠输入；长论文预算紧张时核心数值证据仍先拿到预算。HTML 与 LaTeX 两条路径取材一致，不因走哪条而漂移。
 
 ### 放宽默认限制
 
@@ -153,6 +153,6 @@ loader: { ".md": "text" }
 
 - **A**：三个模板的快照等值测试（渲染输出 == 当前内联字符串）。
 - **C**：两个 `sectionRank` 的单测（核心证据 > 背景/新意 > 杂项）；构造超预算的长论文用例，断言 results/method 仍被保留、intro/related 排在杂项之前被收入。
-- **B**：样例详细总结仍被 `looksLikeDetailSummary` 判为真；在 1–2 篇真实论文上肉眼检查输出含「贡献与新意」「阅读价值」，且「阅读价值」带 精读/略读/记一个点 标签。
+- **B**：样例详细总结仍被 `looksLikeDetailSummary` 判为真；在 1–2 篇真实论文上肉眼检查输出含「贡献与创新点」「阅读价值」，且「阅读价值」带 精读/略读/记一个点 标签。
 - 全量：`npm run build`（tsc + esbuild）通过；`npm test` 通过。
 ```
