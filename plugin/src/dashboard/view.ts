@@ -1330,7 +1330,9 @@ class ArxivDailyDashboardView extends ItemView {
         .setIcon(icon)
         .setDisabled(disabled)
         .onClick(() => {
-          void this.runDashboardCommand(commandId, refreshAfter);
+          void this.runDashboardCommand(commandId, refreshAfter).catch((e) => {
+            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+          });
         }),
     );
   }
@@ -1453,15 +1455,10 @@ class ArxivDailyDashboardView extends ItemView {
     commandId: string,
     refreshAfter: boolean,
   ): Promise<void> {
-    const commands = (this.plugin.app as any).commands;
-    if (!commands?.executeCommandById) {
-      throw new Error("Obsidian command registry is unavailable");
-    }
-    const result = commands.executeCommandById(commandId);
-    if (result === false) {
+    const executed = await executeObsidianCommand(this.plugin.app, commandId);
+    if (!executed) {
       throw new Error(`command not found: ${commandId}`);
     }
-    if (isPromiseLike(result)) await result;
     if (refreshAfter) await this.reloadIndex();
   }
 
@@ -1710,6 +1707,47 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
       (typeof value === "object" || typeof value === "function") &&
       typeof (value as { then?: unknown }).then === "function",
   );
+}
+
+export async function executeObsidianCommand(
+  app: unknown,
+  commandId: string,
+): Promise<boolean> {
+  const commands = (app as {
+    commands?: {
+      executeCommandById?: (id: string) => unknown;
+      commands?: Record<
+        string,
+        {
+          callback?: () => unknown;
+          checkCallback?: (checking: boolean) => unknown;
+        }
+      >;
+    };
+  })?.commands;
+  if (!commands) return false;
+
+  if (typeof commands.executeCommandById === "function") {
+    const result = commands.executeCommandById(commandId);
+    if (isPromiseLike(result)) await result;
+    return result !== false;
+  }
+
+  const command = commands.commands?.[commandId];
+  if (!command) return false;
+  const callback = command.callback;
+  if (typeof callback === "function") {
+    const result = callback();
+    if (isPromiseLike(result)) await result;
+    return result !== false;
+  }
+  const checkCallback = command.checkCallback;
+  if (typeof checkCallback === "function") {
+    const result = checkCallback(false);
+    if (isPromiseLike(result)) await result;
+    return result !== false;
+  }
+  return false;
 }
 
 function describeResult(result: any): string {

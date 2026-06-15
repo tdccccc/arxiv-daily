@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
+  executeObsidianCommand,
   openDashboardView,
   openMarkdownFileOnce,
 } from "../src/dashboard/view";
@@ -86,5 +87,45 @@ describe("openMarkdownFileOnce", () => {
       "",
       false,
     );
+  });
+});
+
+describe("executeObsidianCommand", () => {
+  it("uses executeCommandById when available", async () => {
+    const executeCommandById = vi.fn().mockReturnValue(true);
+
+    const executed = await executeObsidianCommand(
+      { commands: { executeCommandById } },
+      "arxiv-daily-run-for-date",
+    );
+
+    expect(executed).toBe(true);
+    expect(executeCommandById).toHaveBeenCalledWith(
+      "arxiv-daily-run-for-date",
+    );
+  });
+
+  it("falls back to command callbacks when executeCommandById is unavailable", async () => {
+    const callback = vi.fn();
+
+    const executed = await executeObsidianCommand(
+      {
+        commands: {
+          commands: {
+            "arxiv-daily-run-for-date": { callback },
+          },
+        },
+      },
+      "arxiv-daily-run-for-date",
+    );
+
+    expect(executed).toBe(true);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false for missing commands", async () => {
+    await expect(
+      executeObsidianCommand({ commands: { commands: {} } }, "missing"),
+    ).resolves.toBe(false);
   });
 });
