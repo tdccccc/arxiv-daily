@@ -64,4 +64,57 @@ describe("summarizeDaily link style", () => {
       "=== Paper: 2606.12345 [category: topic] → [2606.12345](../papers/2606.12345.md) ===",
     );
   });
+
+  it("does not inject legacy daily selection controls", async () => {
+    const dailyMarkdown = [
+      "# arXiv astro-ph 每日追踪 2026-06-13",
+      "## Topic",
+      "### Example Paper",
+      "- **arXiv**: [2606.12345](https://arxiv.org/abs/2606.12345)",
+      "- **核心问题**: 原文未说明",
+    ].join("\n");
+    const llm = {
+      call: vi.fn(async () => dailyMarkdown),
+    };
+
+    const out = await summarizeDaily(
+      [
+        {
+          id: "2606.12345",
+          title: "Example Paper",
+          authors: "A. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: false,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: null,
+          inboxStatus: "to_read",
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            {
+              id: "topic",
+              name: "Topic",
+              tag: "topic",
+              description: "topic",
+              detail: false,
+            },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+
+    expect(out).toBe(dailyMarkdown);
+    expect(out).not.toContain("arxiv-daily:2606.12345:watch");
+    expect(out).not.toContain("关注");
+    expect(out).not.toContain("重点");
+  });
 });

@@ -10,8 +10,6 @@ import type {
   PaperIndexStore,
 } from "./paper-index";
 
-export const DAILY_SELECTION_MARKER = "arxiv-daily";
-
 export interface DailyPaperSelection {
   arxivId: string;
   watch: boolean;
@@ -30,18 +28,6 @@ export interface DailySelectionStartupSyncResult
   paths: string[];
 }
 
-export function selectionControlsForPaper(
-  arxivId: string,
-  entry?: PaperIndexEntry | null,
-): string {
-  const watch = entry?.status === "to_read";
-  const highlight = entry?.status === "to_read" && entry.priority === "high";
-  return [
-    `- [${watch || highlight ? "x" : " "}] 关注 <!-- ${DAILY_SELECTION_MARKER}:${arxivId}:watch -->`,
-    `- [${highlight ? "x" : " "}] 重点 <!-- ${DAILY_SELECTION_MARKER}:${arxivId}:highlight -->`,
-  ].join("\n");
-}
-
 export function parseDailySelections(markdown: string): DailyPaperSelection[] {
   const selections = new Map<string, DailyPaperSelection>();
   const re =
@@ -58,52 +44,6 @@ export function parseDailySelections(markdown: string): DailyPaperSelection[] {
     selections.set(arxivId, cur);
   }
   return Array.from(selections.values());
-}
-
-export function injectSelectionControls(
-  markdown: string,
-  papers: Array<{ id: string; indexEntry?: PaperIndexEntry }>,
-): string {
-  let out = markdown;
-  for (const paper of papers) {
-    if (out.includes(`${DAILY_SELECTION_MARKER}:${paper.id}:watch`)) continue;
-    const controls = selectionControlsForPaper(paper.id, paper.indexEntry);
-    out = insertControlsForPaper(out, paper.id, controls);
-  }
-  return out;
-}
-
-function insertControlsForPaper(
-  markdown: string,
-  arxivId: string,
-  controls: string,
-): string {
-  const lines = markdown.split("\n");
-  const arxivLine = new RegExp(
-    String.raw`arxiv\.org/(?:abs|pdf)/${escapeRegExp(arxivId)}|${escapeRegExp(`[${arxivId}]`)}`,
-  );
-  for (let i = 0; i < lines.length; i++) {
-    if (arxivLine.test(lines[i])) {
-      lines.splice(i + 1, 0, controls);
-      return lines.join("\n");
-    }
-  }
-
-  const linkedHeading = new RegExp(
-    String.raw`^###\s+.*(?:\[\[${escapeRegExp(arxivId)}\]\]|\[${escapeRegExp(arxivId)}\]\([^)]+\))`,
-  );
-  for (let i = 0; i < lines.length; i++) {
-    if (linkedHeading.test(lines[i])) {
-      lines.splice(i + 1, 0, controls);
-      return lines.join("\n");
-    }
-  }
-
-  return markdown;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export async function applyDailySelections(

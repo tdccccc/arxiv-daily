@@ -9,7 +9,6 @@ import type {
 import { formatArxivCategories } from "../settings/categories";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
-import { injectSelectionControls } from "../services/daily-selection";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -159,14 +158,13 @@ ${headerFmt}## [显示名称]
 - 区分作者已经用数据/实验/理论推导支持的结果和仅由作者声称的结果；证据细节不足时写"作者声称"
 - 不要写"具有重要意义""提高了理解"这类空泛句子；每个价值判断必须说明具体改变了什么判断、约束了什么问题、或适用于什么场景`;
 
-  const summary = await llm.call(
+  return llm.call(
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: `以下是今日筛选出的论文：\n\n${papersInfo}` },
     ],
     { temperature: llmTemperature, signal: deps.signal },
   );
-  return injectSelectionControls(summary, papers);
 }
 
 export async function summarizeDaily(

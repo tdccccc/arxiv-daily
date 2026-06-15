@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applySelectionsToIndex,
   DailySelectionSyncService,
-  injectSelectionControls,
   parseDailySelections,
-  selectionControlsForPaper,
 } from "../src/services/daily-selection";
 import { PaperIndexStore, type PaperInbox, type PaperIndexEntry } from "../src/services/paper-index";
 import { Logger } from "../src/services/logger";
@@ -65,43 +63,6 @@ function storageFromVault(vault: any): StorageAdapter {
 }
 
 describe("daily selection", () => {
-  it("renders controls with existing to_read/high state checked", () => {
-    expect(selectionControlsForPaper("2606.12345")).toContain("[ ] 关注");
-    const controls = selectionControlsForPaper(
-      "2606.12345",
-      entry("2606.12345", "to_read", "high"),
-    );
-    expect(controls).toContain("[x] 关注");
-    expect(controls).toContain("[x] 重点");
-  });
-
-  it("injects controls after the arXiv link line", () => {
-    const out = injectSelectionControls(
-      [
-        "### Example Paper",
-        "- **作者**: A",
-        "- **arXiv**: [2606.12345](https://arxiv.org/abs/2606.12345)",
-        "- **核心问题**: ...",
-      ].join("\n"),
-      [{ id: "2606.12345" }],
-    );
-    expect(out).toContain("<!-- arxiv-daily:2606.12345:watch -->");
-    expect(out.indexOf("关注")).toBeGreaterThan(out.indexOf("arXiv"));
-  });
-
-  it("injects controls after a relative detail heading when arXiv line is absent", () => {
-    const out = injectSelectionControls(
-      [
-        "### Example Paper → [2606.12345](../papers/2606.12345.md)",
-        "- **作者**: A",
-        "- **核心问题**: ...",
-      ].join("\n"),
-      [{ id: "2606.12345" }],
-    );
-    expect(out).toContain("<!-- arxiv-daily:2606.12345:watch -->");
-    expect(out.indexOf("关注")).toBeGreaterThan(out.indexOf("Example Paper"));
-  });
-
   it("parses checked watch and highlight controls", () => {
     const selections = parseDailySelections(
       [
