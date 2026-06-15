@@ -242,7 +242,7 @@ describe("summarizeDaily link style", () => {
     expect(calls[0][0].content as string).toMatchSnapshot();
   });
 
-  it("detail system prompt matches the golden snapshot", async () => {
+  it("detail prompt is a structured paper-critic", async () => {
     const calls: any[] = [];
     const llm = {
       call: vi.fn(async (messages: any[]) => {
@@ -253,7 +253,7 @@ describe("summarizeDaily link style", () => {
     await summarizePaperDetail(
       {
         id: "2606.12345",
-        title: "Detail Snapshot Paper",
+        title: "Critic Paper",
         authors: "A. Author",
         abstract: "abstract",
         category: "topic",
@@ -264,11 +264,26 @@ describe("summarizeDaily link style", () => {
       {
         llm: llm as any,
         logger: new Logger("error"),
-        arxivSettings: DEFAULT_SETTINGS.arxiv,
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "t", name: "宇宙学", tag: "topic", description: "d", detail: true },
+          ],
+        },
         advanced: DEFAULT_SETTINGS.advanced,
         llmTemperature: DEFAULT_SETTINGS.llm.temperature,
       },
     );
-    expect(calls[0][0].content as string).toMatchSnapshot();
+    const sys = calls[0][0].content as string;
+    expect(sys).toContain("资深研究者");
+    expect(sys).toContain("宇宙学");
+    expect(sys).toContain("## 贡献与创新点");
+    expect(sys).toContain("## 阅读价值");
+    expect(sys).toContain("精读");
+    expect(sys).toContain("略读");
+    expect(sys).toContain("记一个点");
+    expect(sys).not.toContain("## 一句话价值判断");
+    expect(sys).toContain("不要引入外部知识");
+    expect(sys).toContain("原文未说明");
   });
 });

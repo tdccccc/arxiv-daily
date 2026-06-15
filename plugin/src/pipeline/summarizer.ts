@@ -333,9 +333,12 @@ export async function summarizePaperDetail(
     );
   }
 
+  const topic = deps.arxivSettings.topics.find((t) => t.tag === paper.category);
+  const topicName = topic?.name || paper.category;
   const systemPrompt = renderPrompt(detailSystemTemplate, {
     title: paper.title,
     id: paper.id,
+    topicName,
   });
 
   const userContent =

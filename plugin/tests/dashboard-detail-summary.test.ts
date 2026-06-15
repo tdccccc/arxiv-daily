@@ -32,10 +32,13 @@ describe("looksLikeDetailSummary", () => {
       "## 主要结论",
       repeatedText(2),
       "",
+      "## 贡献与创新点",
+      repeatedText(2),
+      "",
       "## 适用边界",
       repeatedText(2),
       "",
-      "## 一句话价值判断",
+      "## 阅读价值",
       repeatedText(1),
     ].join("\n");
 
