@@ -121,4 +121,27 @@ The repeated method section describes data, calibration, validation, and uncerta
       fullSections.match(/validation, and uncertainty checks/g),
     ).toHaveLength(2);
   });
+
+  it("treats limitations as core evidence over introduction when budget is tight", () => {
+    const intro = "Motivation and background context here. ".repeat(25);
+    const limitation = "Caveats, systematics, and uncertainty budget. ".repeat(20);
+    const source = String.raw`
+\documentclass{article}
+\begin{document}
+\section{Introduction}
+${intro}
+\section{Limitations}
+${limitation}
+\end{document}
+`;
+    const result = extractLatexSource(texBuffer(source), {
+      sectionCharLimit: 2000,
+      paperCharLimit: 800,
+      skipSections: ["references", "appendix"],
+      prioritySections: [],
+    });
+    const full = result.fullSections ?? "";
+    expect(full).toContain("## Limitations");
+    expect(full).not.toContain("## Introduction");
+  });
 });

@@ -462,13 +462,23 @@ function sectionRank(section: Section, opts: SourceExtractOpts): number {
     return 0;
   }
   const classified = classifySection(section.title, section.body);
-  if (classified.includes("abstract")) return 0;
-  if (classified.includes("conclusion")) return 1;
-  if (classified.includes("result")) return 2;
-  if (classified.includes("method")) return 3;
-  if (classified.includes("data")) return 4;
-  if (/intro|background/i.test(section.title)) return 5;
-  return 10;
+  if (classified.includes("abstract") || classified.includes("conclusion")) {
+    return 0;
+  }
+  if (
+    classified.some((k) =>
+      ["result", "experiment", "method", "data", "limitation", "discussion"].includes(k),
+    )
+  ) {
+    return 1;
+  }
+  if (
+    classified.some((k) => k === "introduction" || k === "related") ||
+    /intro|background/i.test(title)
+  ) {
+    return 2;
+  }
+  return 3;
 }
 
 function firstSectionMatching(
