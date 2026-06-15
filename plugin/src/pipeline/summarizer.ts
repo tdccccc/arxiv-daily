@@ -169,7 +169,9 @@ export async function summarizeDaily(
       false,
       deps,
     );
-    return normalizeDailySummary(summary, papers, deps.arxivSettings);
+    const normalized = normalizeDailySummary(summary, papers, deps.arxivSettings);
+    warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
+    return normalized;
   }
 
   const batches = splitBatches(papers, deps.advanced.dailyCharLimit);
@@ -188,7 +190,13 @@ export async function summarizeDaily(
     );
   }
   throwIfCancelled(deps.signal);
-  return normalizeDailySummary(parts.join("\n\n"), papers, deps.arxivSettings);
+  const normalized = normalizeDailySummary(
+    parts.join("\n\n"),
+    papers,
+    deps.arxivSettings,
+  );
+  warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
+  return normalized;
 }
 
 function normalizeDailySummary(
@@ -200,6 +208,29 @@ function normalizeDailySummary(
     canonicalizeDetailHeadingLinks(markdown, papers),
     arxivSettings.topics.map((topic) => topic.name),
   );
+}
+
+function warnOnMissingOrDuplicateIds(
+  markdown: string,
+  papers: DailyPaperWithContent[],
+  logger: Logger,
+): void {
+  const outputIds = markdown.match(/\b\d{4}\.\d{4,5}\b/g) ?? [];
+  const counts = new Map<string, number>();
+  for (const id of outputIds) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const inputIds = papers.map((p) => p.id);
+  const missing = inputIds.filter((id) => !counts.has(id));
+  const duplicated = unique(inputIds.filter((id) => (counts.get(id) ?? 0) > 1));
+  if (missing.length) {
+    logger.warn(
+      `summarizeDaily: ${missing.length} paper(s) missing from output: ${missing.join(", ")}`,
+    );
+  }
+  if (duplicated.length) {
+    logger.warn(
+      `summarizeDaily: ${duplicated.length} paper(s) duplicated in output: ${duplicated.join(", ")}`,
+    );
+  }
 }
 
 function canonicalizeDetailHeadingLinks(

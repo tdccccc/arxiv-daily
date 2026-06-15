@@ -335,4 +335,42 @@ describe("summarizeDaily link style", () => {
     expect(user).toContain("<paper_data>");
     expect(user).toContain("</paper_data>");
   });
+
+  it("warns when a daily paper is missing from the output", async () => {
+    const logger = new Logger("error");
+    const warnSpy = vi.spyOn(logger, "warn");
+    const llm = {
+      call: vi.fn(async () =>
+        "## Topic\n### Kept\n- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+      ),
+    };
+    const base = {
+      authors: "A",
+      abstract: "a",
+      category: "topic",
+      isDetail: false,
+      abstractConclusion: "## Abstract\na",
+      fullSections: null,
+    };
+    await summarizeDaily(
+      [
+        { ...base, id: "2606.11111", title: "Kept" },
+        { ...base, id: "2606.22222", title: "Dropped" },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger,
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "topic", name: "Topic", tag: "topic", description: "t", detail: false },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+    expect(warnSpy.mock.calls.flat().join(" ")).toContain("2606.22222");
+  });
 });
