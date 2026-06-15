@@ -123,6 +123,32 @@ export async function openDashboardView(
   await workspace.revealLeaf(leaf);
 }
 
+export async function openMarkdownFileOnce(
+  app: {
+    workspace: {
+      getLeavesOfType?(type: string): unknown[];
+      revealLeaf?(leaf: unknown): Promise<void>;
+      openLinkText(path: string, sourcePath: string, newLeaf?: boolean): Promise<void>;
+    };
+  },
+  path: string,
+): Promise<void> {
+  const target = normalizeVaultPath(path);
+  const leaves = app.workspace.getLeavesOfType?.("markdown") ?? [];
+  for (const leaf of leaves) {
+    const leafPath = markdownPathFromLeaf(leaf);
+    if (leafPath && normalizeVaultPath(leafPath) === target) {
+      if (app.workspace.revealLeaf) {
+        await app.workspace.revealLeaf(leaf);
+      } else {
+        await app.workspace.openLinkText(path, "", false);
+      }
+      return;
+    }
+  }
+  await app.workspace.openLinkText(path, "", false);
+}
+
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private dailyReports: DailyReportDay[] = [];
@@ -701,7 +727,7 @@ class ArxivDailyDashboardView extends ItemView {
           text: String(report.papers),
         });
         button.addEventListener("click", () => {
-          void this.plugin.app.workspace.openLinkText(report.path, "", false);
+          void openMarkdownFileOnce(this.plugin.app, report.path);
         });
       } else {
         button.disabled = true;
@@ -1447,7 +1473,7 @@ class ArxivDailyDashboardView extends ItemView {
       new Notice(`arXiv Daily: ${entry.arxivId} has no detail summary`);
       return;
     }
-    await this.plugin.app.workspace.openLinkText(path, "", false);
+    await openMarkdownFileOnce(this.plugin.app, path);
   }
 
   private async summarizeDetailById(
@@ -1462,7 +1488,7 @@ class ArxivDailyDashboardView extends ItemView {
     new Notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
     if (result.kind !== "done" && result.kind !== "already_exists") return;
     await this.reloadIndex();
-    await this.plugin.app.workspace.openLinkText(result.path, "", false);
+    await openMarkdownFileOnce(this.plugin.app, result.path);
   }
 
   private async openDailyReport(entry: DashboardRow["entry"]): Promise<void> {
@@ -1471,7 +1497,7 @@ class ArxivDailyDashboardView extends ItemView {
       new Notice(`arXiv Daily: ${entry.arxivId} has no daily report`);
       return;
     }
-    await this.plugin.app.workspace.openLinkText(path, "", false);
+    await openMarkdownFileOnce(this.plugin.app, path);
   }
 
   private async openPdf(entry: DashboardRow["entry"]): Promise<void> {
@@ -1699,6 +1725,17 @@ function describeRunResults(results: Array<{ date: string; result: any }>): stri
 
 function normalizeVaultPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function markdownPathFromLeaf(leaf: unknown): string | null {
+  const candidate = leaf as {
+    getViewState?: () => { state?: { file?: unknown } };
+    view?: { file?: { path?: unknown } };
+  };
+  const stateFile = candidate.getViewState?.().state?.file;
+  if (typeof stateFile === "string") return stateFile;
+  const viewPath = candidate.view?.file?.path;
+  return typeof viewPath === "string" ? viewPath : null;
 }
 
 function uniquePaths(paths: Array<string | null | undefined>): string[] {

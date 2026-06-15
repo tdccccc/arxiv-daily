@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   openDashboardView,
+  openMarkdownFileOnce,
 } from "../src/dashboard/view";
 
 describe("openDashboardView", () => {
@@ -39,5 +40,51 @@ describe("openDashboardView", () => {
       active: true,
     });
     expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+  });
+});
+
+describe("openMarkdownFileOnce", () => {
+  it("reveals an already open markdown file", async () => {
+    const leaf = {
+      getViewState: vi.fn().mockReturnValue({
+        state: { file: "arxiv-daily/papers/2606.12345.md" },
+      }),
+    };
+    const workspace = {
+      getLeavesOfType: vi.fn().mockReturnValue([leaf]),
+      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      openLinkText: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await openMarkdownFileOnce(
+      { workspace },
+      "arxiv-daily/papers/2606.12345.md",
+    );
+
+    expect(workspace.getLeavesOfType).toHaveBeenCalledWith("markdown");
+    expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+    expect(workspace.openLinkText).not.toHaveBeenCalled();
+  });
+
+  it("opens the markdown file when no existing leaf matches", async () => {
+    const workspace = {
+      getLeavesOfType: vi.fn().mockReturnValue([
+        { view: { file: { path: "arxiv-daily/papers/2606.54321.md" } } },
+      ]),
+      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      openLinkText: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await openMarkdownFileOnce(
+      { workspace },
+      "arxiv-daily/papers/2606.12345.md",
+    );
+
+    expect(workspace.revealLeaf).not.toHaveBeenCalled();
+    expect(workspace.openLinkText).toHaveBeenCalledWith(
+      "arxiv-daily/papers/2606.12345.md",
+      "",
+      false,
+    );
   });
 });
