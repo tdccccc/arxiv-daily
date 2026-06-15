@@ -158,3 +158,10 @@ describe("validateFilterConfig", () => {
     expect(r.reasons.join("; ")).toMatch(/duplicate topic tag: same/i);
   });
 });
+
+describe("advanced default char limits", () => {
+  it("uses the relaxed extraction budgets", () => {
+    expect(DEFAULT_SETTINGS.advanced.paperCharLimit).toBe(100_000);
+    expect(DEFAULT_SETTINGS.advanced.sectionCharLimit).toBe(16_000);
+  });
+});

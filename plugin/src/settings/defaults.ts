@@ -31,8 +31,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   advanced: {
     requestDelayMs: 3000,
     cacheExpiryDays: 7,
-    sectionCharLimit: 8000,
-    paperCharLimit: 50_000,
+    sectionCharLimit: 16000,
+    paperCharLimit: 100_000,
     dailyCharLimit: 400_000,
     skipSections: [
       "reference",
