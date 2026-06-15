@@ -15,6 +15,7 @@ const common = {
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   minify: prod,
+  loader: { ".md": "text" },
 };
 
 const contexts = await Promise.all([
