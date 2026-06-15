@@ -84,8 +84,8 @@ function detailMarkdown(id: string, title: string): string {
     "---",
     `title: "${title}"`,
     `authors: "A. Author et al."`,
-    `arxiv: "${id}"`,
-    "date: 2026-06-10",
+    `arxiv_id: "${id}"`,
+    'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
     "tags: [arxiv, paper, photo-z]",
     "---",
     "",
@@ -230,7 +230,7 @@ describe("syncDashboardHistory", () => {
       title: "Orphan Detail Paper",
       detail: true,
       paperPath: "arxiv/papers/2606.00003.md",
-      dailyReports: [],
+      dailyReports: ["arxiv/daily/2026-06-10.md"],
     });
   });
 

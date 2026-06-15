@@ -32,6 +32,7 @@ interface PaperCandidate {
   topic: string;
   path?: string;
   detail: boolean;
+  dailyReport?: string;
 }
 
 interface DailyCandidate extends PaperCandidate {
@@ -95,10 +96,14 @@ async function collectPaperCandidates(
         arxivId,
         title: frontmatter.title || firstH1(markdown) || arxivId,
         authors: frontmatter.authors || "",
-        date: frontmatter.date || "1970-01-01",
+        date:
+          frontmatter.date ||
+          dateFromDailyReport(frontmatter.daily_report) ||
+          "1970-01-01",
         topic,
         path,
         detail,
+        dailyReport: dailyReportPathFromLink(frontmatter.daily_report),
       });
     } catch (e) {
       deps.logger?.warn(`dashboard: failed to inspect paper file ${path}`, e);
@@ -205,8 +210,7 @@ function buildSyncInputs(
   const seenInputs = new Set<string>();
   for (const candidate of candidates) {
     const existing = inbox.papers[candidate.arxivId];
-    const dailyReport =
-      "dailyReport" in candidate ? candidate.dailyReport : undefined;
+    const dailyReport = candidate.dailyReport;
     const paperPath = candidate.detail ? candidate.path : undefined;
     const key = [
       candidate.arxivId,
@@ -318,6 +322,21 @@ function topicFromPaper(frontmatter: Record<string, string>, topics: Topic[]): s
     .map((tag) => tag.trim())
     .filter((tag) => tag && !["arxiv", "paper"].includes(tag.toLowerCase()));
   return topicFromHeading(tags[0] ?? "arxiv", topics);
+}
+
+function dateFromDailyReport(value: string | undefined): string {
+  if (!value) return "";
+  const match = /\b(\d{4}-\d{2}-\d{2})\b/.exec(value);
+  return match?.[1] ?? "";
+}
+
+function dailyReportPathFromLink(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const wiki = /^\[\[([^\]|]+)(?:\|[^\]]+)?\]\]$/.exec(value.trim());
+  if (!wiki) return undefined;
+  const path = normalizeVaultPath(wiki[1].trim());
+  if (!path) return undefined;
+  return path.endsWith(".md") ? path : `${path}.md`;
 }
 
 function topicFromHeading(heading: string, topics: Topic[]): string {

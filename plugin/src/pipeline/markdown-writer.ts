@@ -95,11 +95,8 @@ export class MarkdownWriter {
       title: paper.title,
       authors: paper.authors,
       arxivId: paper.id,
-      date: dateStr,
       primaryTopic: indexEntry?.primaryTopic ?? paper.category,
-      status: indexEntry?.status ?? "inbox",
-      priority: indexEntry?.priority ?? "normal",
-      seenDates: indexEntry?.seenDates ?? [dateStr],
+      dailyReport: dailyReportLink(this.dailyPath(dateStr), dateStr),
       tags,
     });
     await this.opts.storage.writeText(path, fm + summary);
@@ -119,11 +116,8 @@ export class MarkdownWriter {
       title: entry.title,
       authors: entry.authors.join(", "),
       arxivId: entry.arxivId,
-      date: entry.updated || entry.published,
       primaryTopic: entry.primaryTopic,
-      status: entry.status,
-      priority: entry.priority,
-      seenDates: entry.seenDates,
+      dailyReport: latestDailyReportLink(entry.dailyReports),
       tags,
     });
     const noteBody =
@@ -239,31 +233,34 @@ function paperFrontmatter(meta: {
   title: string;
   authors: string;
   arxivId: string;
-  date: string;
   primaryTopic: string;
-  status: string;
-  priority: string;
-  seenDates: string[];
+  dailyReport?: string;
   tags: string[];
 }): string {
+  const dailyReport = meta.dailyReport
+    ? `daily_report: "${escapeYaml(meta.dailyReport)}"\n`
+    : "";
   return (
     `---\n` +
-    `type: paper\n` +
-    `source: arxiv\n` +
     `title: "${escapeYaml(meta.title)}"\n` +
     `authors: "${escapeYaml(meta.authors)}"\n` +
     `arxiv_id: "${meta.arxivId}"\n` +
-    `arxiv: "${meta.arxivId}"\n` +
-    `date: ${meta.date}\n` +
-    `weekday: ${weekdayName(meta.date)}\n` +
-    `status: ${meta.status}\n` +
-    `priority: ${meta.priority}\n` +
     `primary_topic: ${meta.primaryTopic}\n` +
-    `seen_dates:\n` +
-    meta.seenDates.map((d) => `  - "${d}"\n`).join("") +
+    dailyReport +
     `tags: [${meta.tags.join(", ")}]\n` +
     `---\n\n`
   );
+}
+
+function latestDailyReportLink(paths: string[]): string | undefined {
+  const path = paths[paths.length - 1];
+  return path ? dailyReportLink(path) : undefined;
+}
+
+function dailyReportLink(path: string, label?: string): string {
+  const target = path.replace(/\.md$/i, "");
+  const fallbackLabel = target.split("/").pop() || target;
+  return `[[${target}|${label ?? fallbackLabel}]]`;
 }
 
 function weekdayName(dateStr: string): string {
