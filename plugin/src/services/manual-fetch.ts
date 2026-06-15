@@ -59,10 +59,19 @@ export class ManualFetchService {
 
     // 1. Duplicate check
     const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
+    let replaceEmptyExistingNote = false;
     if (await storage.exists(targetPath)) {
-      logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
-      await this.syncExistingIndexEntry(id, dateStr, targetPath);
-      return { kind: "already_exists", path: targetPath };
+      const existing = await storage.readText(targetPath).catch(() => undefined);
+      if (typeof existing === "string" && isFrontmatterOnlyNote(existing)) {
+        replaceEmptyExistingNote = true;
+        logger.warn(
+          `manual-fetch: ${id} exists at ${targetPath} but has no markdown body; regenerating`,
+        );
+      } else {
+        logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
+        await this.syncExistingIndexEntry(id, dateStr, targetPath);
+        return { kind: "already_exists", path: targetPath };
+      }
     }
 
     // 2. Pull metadata + abstract from Atom API
@@ -174,6 +183,9 @@ export class ManualFetchService {
       }
     }
 
+    if (replaceEmptyExistingNote) {
+      await storage.remove(targetPath);
+    }
     const path = await this.deps.writer.writePaperDetail(
       paper,
       dateStr,
@@ -238,4 +250,11 @@ export class ManualFetchService {
 
 function appendUnique(values: string[], value: string): string[] {
   return value && !values.includes(value) ? [...values, value] : values;
+}
+
+function isFrontmatterOnlyNote(markdown: string): boolean {
+  const trimmedStart = markdown.trimStart();
+  if (!trimmedStart.startsWith("---")) return markdown.trim().length === 0;
+  const match = /^---\s*\n[\s\S]*?\n---\s*(?:\n|$)([\s\S]*)$/.exec(trimmedStart);
+  return match ? match[1].trim().length === 0 : markdown.trim().length === 0;
 }

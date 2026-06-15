@@ -160,6 +160,39 @@ describe("ManualFetchService", () => {
     expect(paperFetcher.fetch).not.toHaveBeenCalled();
   });
 
+  it("regenerates an existing frontmatter-only paper note", async () => {
+    const d = makeDeps();
+    d.files["arxiv-daily/papers/2605.08080.md"] = [
+      "---",
+      'title: "Test paper title"',
+      'arxiv_id: "2605.08080"',
+      "---",
+      "",
+    ].join("\n");
+    const svc = new ManualFetchService({
+      storage: d.storage,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const r = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
+
+    expect(r.kind).toBe("done");
+    expect(d.paperFetcher.fetch).toHaveBeenCalled();
+    expect(d.llm.call).toHaveBeenCalled();
+    expect(d.vault.adapter.remove).toHaveBeenCalledWith(
+      "arxiv-daily/papers/2605.08080.md",
+    );
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshes the paper index when the target file already exists", async () => {
     const d = makeDeps({ exists: true });
     const paperIndex = new PaperIndexStore(
