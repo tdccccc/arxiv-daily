@@ -15,3 +15,5 @@
 - detail 仅在带 [DETAIL] 标记的主题上有意义；当且仅当该论文是该主题的核心贡献时设为 true，其余设为 false
 - detail 判定从严：宁可漏选也不要错选——不确定时设为 false
 - 如果没有任何相关论文，返回 {"papers": []}
+
+{{injectionGuard}}
