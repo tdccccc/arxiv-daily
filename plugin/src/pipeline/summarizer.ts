@@ -12,6 +12,7 @@ import type { FilteredPaper } from "./paper-filter";
 import { renderPrompt } from "../prompts/render";
 import dailySystemTemplate from "../prompts/daily-summary.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
+import injectionGuard from "../prompts/injection-guard.md";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -131,12 +132,16 @@ async function callDailyLlm(
     partialNote,
     headerFmt,
     detailLinkTemplate,
+    injectionGuard,
   });
 
   return llm.call(
     [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `以下是今日筛选出的论文：\n\n${papersInfo}` },
+      {
+        role: "user",
+        content: `以下是今日筛选出的论文：\n\n<paper_data>\n${papersInfo}</paper_data>`,
+      },
     ],
     { temperature: llmTemperature, signal: deps.signal },
   );
