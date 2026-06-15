@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { summarizeDaily } from "../src/pipeline/summarizer";
+import { summarizeDaily, summarizePaperDetail } from "../src/pipeline/summarizer";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { Logger } from "../src/services/logger";
 
@@ -235,6 +235,36 @@ describe("summarizeDaily link style", () => {
             { id: "topic", name: "Topic", tag: "topic", description: "topic", detail: true },
           ],
         },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+    expect(calls[0][0].content as string).toMatchSnapshot();
+  });
+
+  it("detail system prompt matches the golden snapshot", async () => {
+    const calls: any[] = [];
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        calls.push(messages);
+        return "## 研究问题\nx";
+      }),
+    };
+    await summarizePaperDetail(
+      {
+        id: "2606.12345",
+        title: "Detail Snapshot Paper",
+        authors: "A. Author",
+        abstract: "abstract",
+        category: "topic",
+        isDetail: true,
+        abstractConclusion: "## Abstract\nabstract",
+        fullSections: "## Method\nWe model the likelihood.",
+      },
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: DEFAULT_SETTINGS.arxiv,
         advanced: DEFAULT_SETTINGS.advanced,
         llmTemperature: DEFAULT_SETTINGS.llm.temperature,
       },
