@@ -202,4 +202,43 @@ describe("summarizeDaily link style", () => {
       out.indexOf("### Detail Paper"),
     );
   });
+
+  it("daily system prompt matches the golden snapshot", async () => {
+    const calls: any[] = [];
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        calls.push(messages);
+        return "## Topic\n今日无相关论文更新。";
+      }),
+    };
+    await summarizeDaily(
+      [
+        {
+          id: "2606.12345",
+          title: "Snapshot Paper",
+          authors: "A. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: true,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: null,
+          detailLink: "[[2606.12345]]",
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "topic", name: "Topic", tag: "topic", description: "topic", detail: true },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+    expect(calls[0][0].content as string).toMatchSnapshot();
+  });
 });
