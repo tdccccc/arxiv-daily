@@ -166,17 +166,18 @@ async function collectDailyCandidates(
     const date = dailyDateFromPath(path, dailyDir);
     if (!date) continue;
     try {
-      parsedReports.add(path);
-      const ids = paperIdsByReport.get(path) ?? new Set<string>();
-      paperIdsByReport.set(path, ids);
       const markdown = await deps.vault.adapter.read(path);
-      for (const candidate of parseDailyCandidates(
+      const parsed = parseDailyCandidates(
         markdown,
         path,
         date,
         deps.topics,
         paperCandidates,
-      )) {
+      );
+      parsedReports.add(path);
+      const ids = paperIdsByReport.get(path) ?? new Set<string>();
+      paperIdsByReport.set(path, ids);
+      for (const candidate of parsed) {
         const key = `${candidate.dailyReport}:${candidate.arxivId}`;
         if (seen.has(key)) continue;
         seen.add(key);

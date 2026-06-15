@@ -274,7 +274,6 @@ export async function cleanupSourceCache(
   const entries = await storage.list(root);
   for (const entry of entries) {
     if (entry.type !== "folder") continue;
-    const arxivId = entry.path.split("/").pop() ?? "";
     const metaPath = storage.normalizePath(`${entry.path}/source.meta.json`);
     const sourcePath = storage.normalizePath(`${entry.path}/source`);
     let expired = false;
@@ -297,7 +296,11 @@ export async function cleanupSourceCache(
         // Ignore cache cleanup races.
       }
     }
-    if (!arxivId) continue;
+    try {
+      if (await storage.exists(entry.path)) await storage.remove(entry.path);
+    } catch {
+      // Ignore cache cleanup races.
+    }
   }
   return removed;
 }

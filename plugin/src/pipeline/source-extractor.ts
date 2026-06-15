@@ -188,17 +188,22 @@ function expandLatexInputs(
   if (depth > 12 || seen.has(currentPath)) return text;
   seen.add(currentPath);
   const dir = parentDir(currentPath);
-  return text.replace(/\\(?:input|include)\s*\{([^}]+)\}/g, (_match, raw) => {
-    const target = resolveInputPath(dir, String(raw), files);
-    if (!target) return "";
-    return expandLatexInputs(
-      target,
-      files.get(target) ?? "",
-      files,
-      new Set(seen),
-      depth + 1,
-    );
-  });
+  const expanded = text.replace(
+    /\\(?:input|include)\s*\{([^}]+)\}/g,
+    (_match, raw) => {
+      const target = resolveInputPath(dir, String(raw), files);
+      if (!target) return "";
+      return expandLatexInputs(
+        target,
+        files.get(target) ?? "",
+        files,
+        seen,
+        depth + 1,
+      );
+    },
+  );
+  seen.delete(currentPath);
+  return expanded;
 }
 
 function resolveInputPath(

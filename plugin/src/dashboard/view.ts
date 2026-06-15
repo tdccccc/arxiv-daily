@@ -222,6 +222,8 @@ class ArxivDailyDashboardView extends ItemView {
     const snapshot = this.plugin.stateStore.snapshot();
     let cleared = 0;
     for (const [date, entry] of Object.entries(snapshot)) {
+      // Only completed runs imply a daily file should exist; failed/skipped
+      // states are scheduling decisions and should survive file cleanup.
       if (entry.status !== "completed") continue;
       const path = normalizeVaultPath(writer.dailyPath(date));
       if (await this.plugin.app.vault.adapter.exists(path)) continue;

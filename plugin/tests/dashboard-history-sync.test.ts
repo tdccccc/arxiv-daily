@@ -351,6 +351,43 @@ describe("syncDashboardHistory", () => {
     });
   });
 
+  it("keeps indexed daily papers when an existing daily file cannot be read", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.15000": {
+          title: "Unreadable Daily Paper",
+          seenDates: ["2026-06-15"],
+          dailyReports: ["arxiv/daily/2026-06-15.md"],
+        },
+      }),
+      "arxiv/daily/2026-06-15.md": "# temporarily unavailable",
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-16T00:00:00.000Z"),
+    );
+    const vault = makeVault(files);
+    vault.adapter.read = async (path: string) => {
+      if (path === "arxiv/daily/2026-06-15.md") {
+        throw new Error("sync in progress");
+      }
+      return files[path];
+    };
+
+    const index = await syncDashboardHistory({
+      vault,
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.15000"]).toMatchObject({
+      seenDates: ["2026-06-15"],
+      dailyReports: ["arxiv/daily/2026-06-15.md"],
+    });
+  });
+
   it("does not backfill missing daily reports from detail frontmatter", async () => {
     const { files, storage } = makeStorage({
       "arxiv/papers/2606.20000.md": detailMarkdown(

@@ -95,4 +95,30 @@ The method section describes the data, model assumptions, inference procedure, a
     expect(result.fullSections).toContain("inference procedure");
     expect(result.abstractConclusion).toContain("## Conclusion");
   });
+
+  it("expands repeated input files without treating siblings as cycles", () => {
+    const archive = tarBuffer({
+      "paper/main.tex": String.raw`
+\documentclass{article}
+\begin{document}
+\begin{abstract}
+This source archive repeats one included section in two different places.
+\end{abstract}
+\input{sections/method}
+\input{sections/method}
+\end{document}
+`,
+      "paper/sections/method.tex": String.raw`
+\section{Method}
+The repeated method section describes data, calibration, validation, and uncertainty checks.
+`,
+    });
+
+    const result = extractLatexSource(toArrayBuffer(gzipSync(archive)), opts);
+    const fullSections = result.fullSections ?? "";
+
+    expect(
+      fullSections.match(/validation, and uncertainty checks/g),
+    ).toHaveLength(2);
+  });
 });

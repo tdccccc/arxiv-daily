@@ -193,5 +193,6 @@ The results include a measured improvement, uncertainty estimates, and a compari
     expect(removed).toBe(2);
     expect(files.has(`${root}/2606.13359/source`)).toBe(false);
     expect(files.has(`${root}/2606.13359/source.meta.json`)).toBe(false);
+    expect(dirs.has(`${root}/2606.13359`)).toBe(false);
   });
 });
