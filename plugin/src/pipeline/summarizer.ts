@@ -341,16 +341,17 @@ export async function summarizePaperDetail(
   const topic = deps.arxivSettings.topics.find((t) => t.tag === paper.category);
   const topicName = topic?.name || paper.category;
   const systemPrompt = renderPrompt(detailSystemTemplate, {
-    title: paper.title,
-    id: paper.id,
     topicName,
+    injectionGuard,
   });
 
   const userContent =
-    `论文 ID: ${paper.id}\n` +
+    `<paper_data>\n` +
     `标题: ${paper.title}\n` +
+    `arXiv: https://arxiv.org/abs/${paper.id}\n` +
     `作者: ${paper.authors}\n\n` +
-    `以下是论文各章节内容：\n\n${paper.fullSections}`;
+    `以下是论文各章节内容：\n\n${paper.fullSections}\n` +
+    `</paper_data>`;
 
   return deps.llm.call(
     [
