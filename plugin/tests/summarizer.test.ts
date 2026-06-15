@@ -56,6 +56,10 @@ describe("summarizeDaily link style", () => {
 
     const systemPrompt = calls[0][0].content;
     const userPrompt = calls[0][1].content;
+    expect(systemPrompt).toContain("### <实际论文标题>\n> 信息来源");
+    expect(systemPrompt).toContain(
+      "详细收录论文的唯一格式差异",
+    );
     expect(systemPrompt).toContain(
       "### <实际论文标题> → [YYMM.NNNNN](../papers/YYMM.NNNNN.md)",
     );
@@ -116,5 +120,86 @@ describe("summarizeDaily link style", () => {
     expect(out).not.toContain("arxiv-daily:2606.12345:watch");
     expect(out).not.toContain("关注");
     expect(out).not.toContain("重点");
+  });
+
+  it("merges duplicate topic sections and strips hallucinated detail links", async () => {
+    const dailyMarkdown = [
+      "# arXiv astro-ph 每日追踪 2026-06-13",
+      "共 2 篇相关论文，其中 1 篇详细收录。",
+      "",
+      "## Topic",
+      "### Plain Paper → [[2606.11111]]",
+      "- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+      "",
+      "## Other",
+      "今日无相关论文更新。",
+      "",
+      "## Topic",
+      "### Detail Paper → [[2606.22222]]",
+      "- **arXiv**: [2606.22222](https://arxiv.org/abs/2606.22222)",
+    ].join("\n");
+    const llm = {
+      call: vi.fn(async () => dailyMarkdown),
+    };
+
+    const out = await summarizeDaily(
+      [
+        {
+          id: "2606.11111",
+          title: "Plain Paper",
+          authors: "A. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: false,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: null,
+        },
+        {
+          id: "2606.22222",
+          title: "Detail Paper",
+          authors: "B. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: true,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: null,
+          detailLink: "[[2606.22222]]",
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            {
+              id: "topic",
+              name: "Topic",
+              tag: "topic",
+              description: "topic",
+              detail: true,
+            },
+            {
+              id: "other",
+              name: "Other",
+              tag: "other",
+              description: "other",
+              detail: false,
+            },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        llmTemperature: DEFAULT_SETTINGS.llm.temperature,
+      },
+    );
+
+    expect(out.match(/^## Topic$/gm)).toHaveLength(1);
+    expect(out).toContain("### Plain Paper\n");
+    expect(out).not.toContain("### Plain Paper → [[2606.11111]]");
+    expect(out).toContain("### Detail Paper → [[2606.22222]]");
+    expect(out.indexOf("### Plain Paper")).toBeLessThan(
+      out.indexOf("### Detail Paper"),
+    );
   });
 });

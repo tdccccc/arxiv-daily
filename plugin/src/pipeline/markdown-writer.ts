@@ -12,14 +12,7 @@ export interface MarkdownWriterOpts {
   output: OutputSettings;
 }
 
-export interface DailyMissedPaper {
-  id: string;
-  title: string;
-  authors: string;
-}
-
 export interface WriteDailyOptions {
-  missedPapers?: DailyMissedPaper[];
   dateWindowNote?: string;
 }
 
@@ -71,9 +64,7 @@ export class MarkdownWriter {
       `---\n\n`;
     await this.opts.storage.writeText(
       path,
-      frontmatter +
-        dateWindowNote(options.dateWindowNote) +
-        appendMissedPapers(summary, options.missedPapers ?? []),
+      frontmatter + dateWindowNote(options.dateWindowNote) + summary,
     );
     this.opts.logger.info(`wrote daily: ${path}`);
     return path;
@@ -165,34 +156,8 @@ export class MarkdownWriter {
 
 }
 
-function appendMissedPapers(
-  summary: string,
-  missedPapers: DailyMissedPaper[],
-): string {
-  if (missedPapers.length === 0) return summary;
-  const body = summary.trimEnd();
-  return `${body}\n\n${renderMissedPapers(missedPapers)}\n`;
-}
-
 function dateWindowNote(note: string | undefined): string {
   return note ? `> ${note}\n\n` : "";
-}
-
-function renderMissedPapers(missedPapers: DailyMissedPaper[]): string {
-  const lines = missedPapers.map((paper) => {
-    const title = compactText(paper.title) || paper.id;
-    const authors = compactText(paper.authors);
-    const suffix = authors ? `（${authors}）` : "";
-    return `- [${paper.id}](https://arxiv.org/abs/${paper.id}) — ${title}${suffix}`;
-  });
-  return [
-    `<details>`,
-    `<summary>未入选论文（可能漏报） · ${missedPapers.length} 篇</summary>`,
-    "",
-    ...lines,
-    "",
-    `</details>`,
-  ].join("\n");
 }
 
 function relativePath(fromFile: string, toFile: string): string {
@@ -219,10 +184,6 @@ function pathParts(path: string): string[] {
 
 function encodeRelativeLinkTarget(path: string): string {
   return encodeURI(path).replace(/\(/g, "%28").replace(/\)/g, "%29");
-}
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function escapeYaml(s: string): string {
