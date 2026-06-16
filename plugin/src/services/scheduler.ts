@@ -35,6 +35,10 @@ export class SchedulerService {
     this.progress = deps.progress ?? new NoopProgressReporter();
   }
 
+  replaceStore(store: StateStore): void {
+    this.deps.store = store;
+  }
+
   start(): void {
     const min = this.deps.getSettings().schedule.tickIntervalMin;
     this.stop();

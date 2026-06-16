@@ -157,12 +157,13 @@ export class ManualFetchService {
     let indexEntry: PaperIndexEntry | undefined;
     if (this.deps.paperIndex) {
       try {
+        const existing = await this.deps.paperIndex.get(id);
         const indexed = await this.deps.paperIndex.upsertFromDailyPaper({
           arxivId: id,
           title,
           authors,
           date: dateStr,
-          published,
+          published: existing?.published ?? published,
           updated,
           arxivCategory: category,
           arxivCategories: categories,
@@ -213,12 +214,13 @@ export class ManualFetchService {
     try {
       const meta = await this.fetchAtomMetadata(id);
       if (!meta) return;
+      const existing = await paperIndex.get(id);
       const indexed = await paperIndex.upsertFromDailyPaper({
         arxivId: id,
         title: meta.title,
         authors: meta.authors,
         date: dateStr,
-        published: meta.published,
+        published: existing?.published ?? meta.published,
         updated: meta.updated,
         arxivCategory: meta.primaryCategory || meta.categories[0] || "other",
         arxivCategories: meta.categories,

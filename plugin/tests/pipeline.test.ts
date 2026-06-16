@@ -173,11 +173,9 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
-  it("returns failed_transient when /recent misses the date and fallback fails", async () => {
+  it("returns failed_transient when /recent misses the date", async () => {
     const d = makeDeps();
-    d.fetcher.fetchBySubmittedDate = vi
-      .fn()
-      .mockRejectedValue(new Error("export unavailable"));
+    d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);
     const pipeline = new ArxivPipeline({
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
@@ -191,7 +189,8 @@ describe("ArxivPipeline", () => {
     });
     const result = await pipeline.runForDate("1999-01-01");
     expect(result.kind).toBe("failed_transient");
-    expect((result as any).reason).toContain("export fallback failed");
+    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
   });
 
   it("keeps newer-than-recent announce dates retryable without submittedDate fallback", async () => {
@@ -378,7 +377,7 @@ describe("ArxivPipeline", () => {
       limitations: "Limits.",
     });
     expect(entry.seenDates).toEqual([date]);
-    expect(entry.published).toBe("2026-02-02");
+    expect(entry.published).toBe(date);
     expect(entry.updated).toBe("2026-06-15");
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });
@@ -443,45 +442,14 @@ describe("ArxivPipeline", () => {
     expect(json.papers[arxivId].categories).toEqual(["astro-ph", "cs.LG"]);
   });
 
-  it("falls back to submittedDate export API when date is outside recent", async () => {
+  it("does not use submittedDate export API when date is outside recent", async () => {
     const d = makeDeps();
-    const arxivId = "2606.12345";
     d.fetcher.fetchRecent = vi
       .fn()
       .mockResolvedValue(
         `<html><body><dl id="articles"><h3>Wed, 10 Jun 2026</h3></dl></body></html>`,
       );
-    d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([
-      {
-        id: arxivId,
-        title: "Fallback paper",
-        authors: "A. Author",
-        abstract: "Abstract",
-        categories: ["astro-ph"],
-      },
-    ]);
-    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
-      const sys = msgs[0]?.content ?? "";
-      if (sys.includes("选择最匹配的主题")) {
-        return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
-        });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return [
-          "## Photo-z",
-          "### Fallback paper",
-          "> 信息来源：Abstract",
-          `- **arXiv**: [${arxivId}](https://arxiv.org/abs/${arxivId})`,
-          "- **核心问题**: Problem.",
-          "- **关键方法**: Method.",
-          "- **主要结果**: Result.",
-          "- **为什么值得看**: Relevant.",
-          "- **局限或边界**: Limits.",
-        ].join("\n");
-      }
-      return "";
-    });
+    d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);
 
     const pipeline = new ArxivPipeline({
       fetcher: d.fetcher as any,
@@ -497,14 +465,10 @@ describe("ArxivPipeline", () => {
 
     const result = await pipeline.runForDate("2026-06-09");
 
-    expect(result.kind).toBe("completed");
-    expect(d.fetcher.fetchBySubmittedDate).toHaveBeenCalledWith(
-      "astro-ph",
-      "2026-06-09",
-    );
-    expect(d.writer.writeDaily.mock.calls[0][2]).toMatchObject({
-      dateWindowNote: expect.stringContaining("submittedDate"),
-    });
+    expect(result.kind).toBe("failed_transient");
+    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
   it("updates ignored papers in the paper index without including them in the daily body", async () => {

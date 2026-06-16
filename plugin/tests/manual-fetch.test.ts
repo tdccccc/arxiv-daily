@@ -289,4 +289,48 @@ describe("ManualFetchService", () => {
     expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
     expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
   });
+
+  it("preserves an existing announce date when manual detail note is created", async () => {
+    const d = makeDeps();
+    const paperIndex = new PaperIndexStore(
+      d.storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-11T01:30:00.000Z"),
+    );
+    await paperIndex.upsertFromDailyPaper({
+      arxivId: "2605.08080",
+      title: "Indexed paper",
+      authors: "A. Author",
+      date: "2026-06-16",
+      published: "2026-06-16",
+      updated: "2026-06-16",
+      arxivCategory: "astro-ph.CO",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    const svc = new ManualFetchService({
+      storage: d.storage,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const r = await svc.fetchAndSummarize("2605.08080", "2026-06-17");
+
+    expect(r.kind).toBe("done");
+    const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
+    expect(index.papers["2605.08080"].published).toBe("2026-06-16");
+    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["2605.08080"].seenDates).toEqual([
+      "2026-06-16",
+      "2026-06-17",
+    ]);
+  });
 });

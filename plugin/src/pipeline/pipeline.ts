@@ -32,9 +32,6 @@ interface SourcePaperMeta extends PaperMeta {
   updated?: string;
 }
 
-const SUBMITTED_DATE_FALLBACK_NOTE =
-  "本日报使用 arXiv export API 的 submittedDate 单日窗口补跑；与 /recent 的 announce date 分桶可能不完全一致。";
-
 export type PipelineResult =
   | { kind: "completed"; papersWritten: number }
   | { kind: "failed_transient"; reason: string }
@@ -95,11 +92,7 @@ export class ArxivPipeline {
     const fetched = await this.fetchPapersForDate(dateStr, signal);
     if (fetched.kind !== "ok") return fetched.result;
     const sourcePapers = fetched.papers;
-    const dateWindowNote =
-      fetched.dateWindow === "submittedDateFallback" ||
-      fetched.dateWindow === "mixed"
-        ? SUBMITTED_DATE_FALLBACK_NOTE
-        : undefined;
+    const dateWindowNote = undefined;
     logger.info(
       `pipeline: ${sourcePapers.length} papers for ${dateStr} across ${fetched.categories.join(", ")}`,
     );
@@ -120,9 +113,7 @@ export class ArxivPipeline {
         const meta = metadataMap.get(p.id);
         if (!meta) continue;
         if (meta.abstract) p.abstract = meta.abstract;
-        const published = dateOnly(meta.published);
         const updated = dateOnly(meta.updated);
-        if (published) p.published = published;
         if (updated) p.updated = updated;
         for (const category of sourceCategories(meta)) {
           p.arxivCategories = appendUnique(p.arxivCategories, category);
@@ -335,7 +326,7 @@ export class ArxivPipeline {
           title: p.title,
           authors: p.authors,
           date: dateStr,
-          published: paperPublishedDate(p),
+          published: dateStr,
           updated: paperUpdatedDate(p),
           arxivCategory: sourceCategories(p)[0] ?? this.deps.arxiv.category,
           arxivCategories: sourceCategories(p),
@@ -371,15 +362,13 @@ export class ArxivPipeline {
         kind: "ok";
         papers: SourcePaperMeta[];
         categories: string[];
-        dateWindow: "recent" | "submittedDateFallback" | "mixed";
+        dateWindow: "recent";
       }
     | { kind: "error"; result: PipelineResult }
   > {
     const { fetcher, logger } = this.deps;
     const categories = arxivCategories(this.deps.arxiv);
     const byId = new Map<string, SourcePaperMeta>();
-    let usedRecent = false;
-    let usedFallback = false;
 
     for (const category of categories) {
       throwIfCancelled(signal);
@@ -414,61 +403,32 @@ export class ArxivPipeline {
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
-        if (!shouldUseSubmittedDateFallback(dateStr, bounds)) {
-          return {
-            kind: "error",
-            result: {
-              kind: "failed_transient",
-              reason: missingRecentDateReason(dateStr, category, buckets, bounds),
-            },
-          };
-        }
-
-        let fallbackPapers: PaperMeta[];
-        try {
-          fallbackPapers = await fetcher.fetchBySubmittedDate(category, dateStr);
-        } catch (e) {
-          if (isCancellationError(e)) throw e;
-          return {
-            kind: "error",
-            result: {
-              kind: "failed_transient",
-              reason:
-                `date ${dateStr} not in ${category} /recent and export fallback failed ` +
-                `(have: ${buckets.map((b) => b.announceDate).join(",")}): ${(e as Error).message}`,
-            },
-          };
-        }
-        usedFallback = true;
-        logger.info(
-          `pipeline: ${fallbackPapers.length} submittedDate fallback papers for ${dateStr} in ${category}`,
-        );
-        for (const paper of fallbackPapers) {
-          addSourcePaper(byId, paper, sourceCategories(paper, category));
-        }
-        continue;
+        return {
+          kind: "error",
+          result: {
+            kind: "failed_transient",
+            reason: missingRecentDateReason(dateStr, category, buckets, bounds),
+          },
+        };
       }
 
-      usedRecent = true;
       logger.info(
         `pipeline: ${bucket.papers.length} papers for ${dateStr} in ${category}`,
       );
       for (const paper of bucket.papers) {
-        addSourcePaper(byId, paper, [category]);
+        addSourcePaper(
+          byId,
+          { ...paper, published: dateStr } as SourcePaperMeta,
+          [category],
+        );
       }
     }
 
-    const dateWindow =
-      usedRecent && usedFallback
-        ? "mixed"
-        : usedFallback
-          ? "submittedDateFallback"
-          : "recent";
     return {
       kind: "ok",
       papers: Array.from(byId.values()),
       categories,
-      dateWindow,
+      dateWindow: "recent",
     };
   }
 }
@@ -483,10 +443,6 @@ function sourceCategories(paper: PaperMeta, fallbackCategory?: string): string[]
     );
   }
   return fallbackCategory ? [fallbackCategory] : [];
-}
-
-function paperPublishedDate(paper: PaperMeta): string | undefined {
-  return dateOnly((paper as Partial<SourcePaperMeta>).published);
 }
 
 function paperUpdatedDate(paper: PaperMeta): string | undefined {
@@ -527,14 +483,6 @@ function recentDateBounds(
   const dates = buckets.map((bucket) => bucket.announceDate).sort();
   if (dates.length === 0) return null;
   return { oldest: dates[0], newest: dates[dates.length - 1] };
-}
-
-function shouldUseSubmittedDateFallback(
-  dateStr: string,
-  bounds: { oldest: string; newest: string } | null,
-): boolean {
-  if (!bounds) return false;
-  return dateStr < bounds.oldest;
 }
 
 function missingRecentDateReason(

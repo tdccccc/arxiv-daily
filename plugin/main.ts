@@ -136,6 +136,21 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled) this.scheduler.start();
   }
 
+  async reloadStateStoreForOutputPaths(): Promise<void> {
+    const nextStore = createStorageStateStore(
+      this.host.storage,
+      this.settings.output,
+    );
+    await nextStore.load();
+    this.stateStore = nextStore;
+    this.scheduler.replaceStore(nextStore);
+    if (this.settings.schedule.enabled) {
+      this.progress.setIdle(latestCompletedDate(nextStore));
+    } else {
+      this.progress.setDisabled();
+    }
+  }
+
   async setScheduleEnabled(enabled: boolean): Promise<boolean> {
     if (this.settings.schedule.enabled === enabled) return true;
 
@@ -333,4 +348,12 @@ function mergeSettings(
     schedule: { ...defaults.schedule, ...(partial.schedule ?? {}) },
     advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },
   };
+}
+
+function latestCompletedDate(store: StateStore): string | undefined {
+  const completed = Object.entries(store.snapshot())
+    .filter(([, entry]) => entry.status === "completed")
+    .map(([date]) => date)
+    .sort();
+  return completed[completed.length - 1];
 }

@@ -17,6 +17,29 @@ function makeStore() {
 }
 
 describe("SchedulerService", () => {
+  it("uses a replacement state store for later runs", async () => {
+    const oldStore = makeStore();
+    const newStore = makeStore();
+    await oldStore.load();
+    await newStore.load();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store: oldStore,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+    });
+
+    svc.replaceStore(newStore);
+    await svc.runForDateNow("2026-06-16");
+
+    expect(oldStore.get("2026-06-16").status).toBe("pending");
+    expect(newStore.get("2026-06-16").status).toBe("completed");
+  });
+
   it("does not run before runAtLocal time", async () => {
     const store = makeStore();
     await store.load();

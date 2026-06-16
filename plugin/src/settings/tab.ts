@@ -8,7 +8,7 @@ import { slugify } from "../utils/slugify";
 import { validateFilterConfig } from "./validation";
 import { arxivCategories } from "./categories";
 import { getSetupStatus } from "../onboarding";
-import { openDashboardView } from "../dashboard/view";
+import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
@@ -413,6 +413,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setValue(s.output.dailyDir).onChange(async (v) => {
           s.output.dailyDir = v.trim();
           await this.plugin.saveSettings();
+          await this.plugin.reloadStateStoreForOutputPaths();
         }),
       );
 
@@ -423,6 +424,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setValue(s.output.papersDir).onChange(async (v) => {
           s.output.papersDir = v.trim();
           await this.plugin.saveSettings();
+          await this.plugin.reloadStateStoreForOutputPaths();
         }),
       );
 
@@ -721,10 +723,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private async executeCommand(commandId: string): Promise<void> {
-    const commands = (this.plugin.app as any).commands;
-    if (!commands?.executeCommandById) return;
-    const result = commands.executeCommandById(commandId);
-    if (result && typeof result.then === "function") await result;
+    await executeObsidianCommand(
+      this.plugin.app,
+      commandId,
+      this.plugin.manifest.id,
+    );
   }
 
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
