@@ -512,8 +512,11 @@ describe("SchedulerService", () => {
       .fn()
       .mockResolvedValue({ kind: "completed", papersWritten: 1 });
     const progress = {
+      setTask: vi.fn(),
       setBatch: vi.fn(),
       setStage: vi.fn(),
+      setComplete: vi.fn(),
+      setError: vi.fn(),
       setIdle: vi.fn(),
       setDisabled: vi.fn(),
     };
@@ -539,6 +542,8 @@ describe("SchedulerService", () => {
     expect(progress.setBatch).toHaveBeenCalledWith(1, 3, "2026-05-11");
     expect(progress.setBatch).toHaveBeenCalledWith(2, 3, "2026-05-10");
     expect(progress.setBatch).toHaveBeenCalledWith(3, 3, "2026-05-09");
+    expect(progress.setTask).toHaveBeenCalledWith("arXiv Daily report", "2026-05-11");
+    expect(progress.setComplete).toHaveBeenCalledWith("Daily report complete: 2026-05-11");
     expect(progress.setIdle).toHaveBeenCalled();
   });
 
@@ -548,8 +553,11 @@ describe("SchedulerService", () => {
     const lock = new RunLock();
     const runForDate = vi.fn();
     const progress = {
+      setTask: vi.fn(),
       setBatch: vi.fn(),
       setStage: vi.fn(),
+      setComplete: vi.fn(),
+      setError: vi.fn(),
       setIdle: vi.fn(),
       setDisabled: vi.fn(),
     };

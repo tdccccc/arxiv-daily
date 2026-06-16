@@ -46,18 +46,23 @@ export interface SecretProvider {
 }
 
 export type ProgressStage =
+  | "fetch-metadata"
   | "fetch-recent"
   | "enrich-abstract"
   | "filter"
   | "fetch-content"
   | "summarize-daily"
+  | "summarize-detail"
   | "write-detail";
 
 export type IdleReason = "weekend" | "disabled";
 
 export interface ProgressReporter {
+  setTask(title: string, detail?: string): void;
   setBatch(currentDay: number, totalDays: number, date: string): void;
   setStage(stage: ProgressStage, current?: number, total?: number): void;
+  setComplete(message?: string): void;
+  setError(message: string): void;
   setIdle(lastCompletedDate?: string, reason?: IdleReason): void;
   setDisabled(): void;
 }

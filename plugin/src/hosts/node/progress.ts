@@ -11,6 +11,10 @@ export interface WritableTextStream {
 export class StreamProgressReporter implements ProgressReporter {
   constructor(private stream: WritableTextStream = process.stderr) {}
 
+  setTask(title: string, detail?: string): void {
+    this.write(`task ${title}${detail ? ` ${detail}` : ""}`);
+  }
+
   setBatch(currentDay: number, totalDays: number, date: string): void {
     this.write(`batch ${currentDay}/${totalDays} ${date}`);
   }
@@ -19,6 +23,14 @@ export class StreamProgressReporter implements ProgressReporter {
     const count =
       current !== undefined && total !== undefined ? ` ${current}/${total}` : "";
     this.write(`stage ${stage}${count}`);
+  }
+
+  setComplete(message?: string): void {
+    this.write(`complete${message ? ` ${message}` : ""}`);
+  }
+
+  setError(message: string): void {
+    this.write(`error ${message}`);
   }
 
   setIdle(lastCompletedDate?: string, reason?: IdleReason): void {

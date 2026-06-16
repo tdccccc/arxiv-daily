@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { StatusBarController } from "../src/services/status-bar";
 import { StateStore } from "../src/services/state-store";
 import type { RunState } from "../src/settings/types";
@@ -18,6 +18,11 @@ function makeStore(initial: RunState = {}): StateStore {
 }
 
 describe("StatusBarController", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+  });
+
   it("renders 'arXiv: disabled' when constructed with disabled state", async () => {
     const store = makeStore();
     await store.load();
@@ -73,6 +78,44 @@ describe("StatusBarController", () => {
     ctrl.setBatch(2, 5, "2026-05-10");
     ctrl.setStage("fetch-content", 3, 8);
     expect(el.textContent).toBe("arXiv: 2026-05-10 [2/5] · fetch 3/8");
+  });
+
+  it("shows a floating progress panel while a task runs", async () => {
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+    ctrl.setTask("arXiv Daily detail", "2606.12938");
+    ctrl.setStage("summarize-detail");
+
+    expect(el.textContent).toBe("arXiv: arXiv Daily detail · detail summary");
+    const panel = document.body.querySelector(".arxiv-daily-progress");
+    expect(panel?.classList.contains("is-hidden")).toBe(false);
+    expect(panel?.textContent).toContain("arXiv Daily detail");
+    expect(panel?.textContent).toContain("2606.12938");
+    expect(panel?.textContent).toContain("detail summary");
+  });
+
+  it("keeps completion panel visible when setIdle follows setComplete", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+
+    ctrl.setTask("arXiv Daily report", "2026-06-16");
+    ctrl.setComplete("Daily report complete: 2026-06-16");
+    ctrl.setIdle("2026-06-16");
+
+    const panel = document.body.querySelector(".arxiv-daily-progress");
+    expect(panel?.classList.contains("is-complete")).toBe(true);
+    expect(panel?.classList.contains("is-hidden")).toBe(false);
+
+    vi.advanceTimersByTime(1_500);
+    expect(panel?.classList.contains("is-hidden")).toBe(false);
+
+    vi.advanceTimersByTime(2_500);
+    expect(panel?.classList.contains("is-hidden")).toBe(true);
   });
 
   it("setDisabled overrides any prior state", async () => {

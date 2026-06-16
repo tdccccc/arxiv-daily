@@ -242,6 +242,7 @@ export default class ArxivDailyPlugin extends Plugin {
       advanced: this.settings.advanced,
       output: this.settings.output,
       llmSettings: this.settings.llm,
+      progress: this.progress,
     });
   }
 

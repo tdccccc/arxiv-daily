@@ -52,7 +52,10 @@ describe("host adapter contracts", () => {
 
   it("keeps the existing noop progress reporter aligned with core", () => {
     const progress: ProgressReporter = new NoopProgressReporter();
+    expect(() => progress.setTask("Daily", "2026-06-13")).not.toThrow();
     expect(() => progress.setStage("filter", 1, 2)).not.toThrow();
+    expect(() => progress.setComplete("done")).not.toThrow();
+    expect(() => progress.setError("failed")).not.toThrow();
     expect(() => progress.setIdle("2026-06-13", "weekend")).not.toThrow();
   });
 });

@@ -3,6 +3,8 @@ import type { PaperContentFetcher } from "../pipeline/paper-content";
 import type { MarkdownWriter } from "../pipeline/markdown-writer";
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "./logger";
+import type { ProgressReporter } from "./progress";
+import { NoopProgressReporter } from "./progress";
 import type { StorageAdapter } from "../core/adapters";
 import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
@@ -28,6 +30,7 @@ export interface ManualFetchDeps {
   advanced: AdvancedSettings;
   output: OutputSettings;
   llmSettings: LlmSettings;
+  progress?: ProgressReporter;
 }
 
 const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/;
@@ -47,7 +50,11 @@ export function normalizeArxivId(input: string): string | null {
 }
 
 export class ManualFetchService {
-  constructor(private deps: ManualFetchDeps) {}
+  private progress: ProgressReporter;
+
+  constructor(private deps: ManualFetchDeps) {
+    this.progress = deps.progress ?? new NoopProgressReporter();
+  }
 
   async fetchAndSummarize(rawId: string, dateStr: string): Promise<ManualFetchResult> {
     const { storage, output, logger } = this.deps;
@@ -56,6 +63,8 @@ export class ManualFetchService {
     if (!id) {
       return { kind: "error", reason: `invalid arXiv id: ${rawId}` };
     }
+    this.progress.setTask("arXiv Daily detail", id);
+    this.progress.setStage("fetch-metadata");
 
     // 1. Duplicate check
     const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
@@ -73,6 +82,7 @@ export class ManualFetchService {
         if (entry) {
           await this.deps.writer.refreshPaperNoteFrontmatter(entry, targetPath);
         }
+        this.progress.setComplete(`Detail note already exists: ${id}`);
         return { kind: "already_exists", path: targetPath };
       }
     }
@@ -88,6 +98,7 @@ export class ManualFetchService {
     try {
       const meta = await this.fetchAtomMetadata(id);
       if (!meta) {
+        this.progress.setError(`arXiv has no entry for ${id}`);
         return { kind: "not_found", reason: `arXiv has no entry for ${id}` };
       }
       title = meta.title;
@@ -99,10 +110,12 @@ export class ManualFetchService {
       abstract = meta.abstract;
     } catch (e) {
       logger.error(`manual-fetch: atom metadata failed for ${id}`, e);
+      this.progress.setError(`Metadata failed: ${(e as Error).message}`);
       return { kind: "error", reason: `atom metadata: ${(e as Error).message}` };
     }
 
     // 3. Pull /html and extract full sections
+    this.progress.setStage("fetch-content");
     let content: {
       abstractConclusion: string;
       fullSections: string | null;
@@ -118,9 +131,11 @@ export class ManualFetchService {
       });
     } catch (e) {
       logger.error(`manual-fetch: content fetch failed for ${id}`, e);
+      this.progress.setError(`Content fetch failed: ${(e as Error).message}`);
       return { kind: "error", reason: `content fetch: ${(e as Error).message}` };
     }
     if (!content.fullSections) {
+      this.progress.setError(`No full text for ${id}`);
       return {
         kind: "no_html",
         reason:
@@ -144,6 +159,7 @@ export class ManualFetchService {
     };
     let summary: string;
     try {
+      this.progress.setStage("summarize-detail");
       summary = await summarizePaperDetail(paper, {
         llm: this.deps.llm,
         logger,
@@ -153,10 +169,12 @@ export class ManualFetchService {
       });
     } catch (e) {
       logger.error(`manual-fetch: LLM summary failed for ${id}`, e);
+      this.progress.setError(`Summary failed: ${(e as Error).message}`);
       return { kind: "error", reason: `LLM summary: ${(e as Error).message}` };
     }
 
     // 5. Index + write
+    this.progress.setStage("write-detail");
     let indexEntry: PaperIndexEntry | undefined;
     if (this.deps.paperIndex) {
       try {
@@ -181,6 +199,7 @@ export class ManualFetchService {
         }
       } catch (e) {
         logger.error(`manual-fetch: paper index update failed for ${id}`, e);
+        this.progress.setError(`Index update failed: ${(e as Error).message}`);
         return {
           kind: "error",
           reason: `paper index: ${(e as Error).message}`,
@@ -205,6 +224,7 @@ export class ManualFetchService {
       }
     }
     logger.info(`manual-fetch: wrote ${path}`);
+    this.progress.setComplete(`Detail note ready: ${id}`);
     return { kind: "done", path };
   }
 

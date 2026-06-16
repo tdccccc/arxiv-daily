@@ -262,6 +262,7 @@ export class SchedulerService {
       const signal = this.deps.cancellation?.begin(date);
       let result: PipelineResult;
       try {
+        this.progress.setTask("arXiv Daily report", date);
         await this.deps.store.setRunning(date);
         result = signal
           ? await this.deps.runForDate(date, signal)
@@ -276,13 +277,16 @@ export class SchedulerService {
         if (result.kind === "completed") {
           await this.deps.store.setCompleted(date, result.papersWritten);
           this.deps.logger.notice(`arXiv ${date}: ${result.papersWritten} papers written`);
+          this.progress.setComplete(`Daily report complete: ${date}`);
         } else if (result.kind === "failed_transient") {
           await this.deps.store.setFailed(date, "transient", result.reason);
           this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
+          this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
         } else {
           await this.deps.store.setFailed(date, "permanent", result.reason);
           this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
           this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
+          this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
         }
       } finally {
         this.deps.cancellation?.finish(date);
