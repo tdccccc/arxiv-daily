@@ -225,6 +225,52 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).not.toContain("daily_report:");
   });
 
+  it("writePaperDetail prefers the daily report date over stale Atom published dates", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/daily/2026-06-12.md": "daily",
+    });
+    const paper = {
+      id: "2606.12938",
+      title: "Cluster Mass Inference from Galaxy Kinematics",
+      authors: "Bonny Y. Wang et al.",
+      abstract: "",
+      category: "galaxy-cluster",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+      published: "2026-06-11",
+    };
+    await writer.writePaperDetail(paper as any, "2026-06-16", "detail", {
+      arxivId: "2606.12938",
+      source: "arxiv",
+      title: "Cluster Mass Inference from Galaxy Kinematics",
+      authors: ["Bonny Y. Wang et al."],
+      published: "2026-06-11",
+      updated: "2026-06-11",
+      category: "astro-ph.CO",
+      topics: ["galaxy-cluster"],
+      primaryTopic: "galaxy-cluster",
+      detail: true,
+      status: "inbox",
+      priority: "high",
+      seenDates: ["2026-06-12"],
+      dailyReports: ["arxiv-daily/daily/2026-06-12.md"],
+      paperPath: null,
+      arxivUrl: "https://arxiv.org/abs/2606.12938",
+      pdfUrl: "https://arxiv.org/pdf/2606.12938",
+      pdfPath: "",
+      zoteroKey: "",
+      zoteroUri: "",
+      citationKey: "",
+      projects: [],
+    });
+    const written = files["arxiv-daily/papers/2606.12938.md"];
+    expect(written).toContain(
+      'published: "[[arxiv-daily/daily/2026-06-12|2026-06-12]]"',
+    );
+    expect(written).not.toContain("2026-06-11");
+  });
+
   it("writePaperDetail does not mirror paper index state into properties", async () => {
     const { files, writer } = makeWriter();
     const paper = {
@@ -299,11 +345,59 @@ describe("MarkdownWriter strictness on existing files", () => {
       projects: [],
     });
     const written = files["arxiv-daily/papers/2605.06587.md"];
-    expect(written).toContain("published: 2026-06-09");
+    expect(written).toContain("published: 2026-06-10");
     expect(written).not.toContain("daily_report:");
     expect(written).not.toContain("status: saved");
     expect(written).not.toContain("priority: normal");
     expect(written).toContain("- **arXiv**: [2605.06587]");
     expect(written).toContain("## Notes");
+  });
+
+  it("refreshPaperNoteFrontmatter preserves body and uses the daily report date", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/daily/2026-06-12.md": "daily",
+      "arxiv-daily/papers/2606.12938.md": [
+        "---",
+        'published: "[[arxiv-daily/daily/2026-06-11|2026-06-11]]"',
+        "---",
+        "",
+        "# Cluster Mass Inference from Galaxy Kinematics",
+        "",
+        "body",
+      ].join("\n"),
+    });
+
+    await writer.refreshPaperNoteFrontmatter({
+      arxivId: "2606.12938",
+      source: "arxiv",
+      title: "Cluster Mass Inference from Galaxy Kinematics",
+      authors: ["Bonny Y. Wang et al."],
+      published: "2026-06-11",
+      updated: "2026-06-11",
+      category: "astro-ph.CO",
+      topics: ["galaxy-cluster"],
+      primaryTopic: "galaxy-cluster",
+      detail: true,
+      status: "inbox",
+      priority: "high",
+      seenDates: ["2026-06-12"],
+      dailyReports: ["arxiv-daily/daily/2026-06-12.md"],
+      paperPath: "arxiv-daily/papers/2606.12938.md",
+      arxivUrl: "https://arxiv.org/abs/2606.12938",
+      pdfUrl: "https://arxiv.org/pdf/2606.12938",
+      pdfPath: "",
+      zoteroKey: "",
+      zoteroUri: "",
+      citationKey: "",
+      projects: [],
+    });
+
+    const written = files["arxiv-daily/papers/2606.12938.md"];
+    expect(written).toContain(
+      'published: "[[arxiv-daily/daily/2026-06-12|2026-06-12]]"',
+    );
+    expect(written).not.toContain("2026-06-11");
+    expect(written).toContain("# Cluster Mass Inference from Galaxy Kinematics");
+    expect(written).toContain("body");
   });
 });

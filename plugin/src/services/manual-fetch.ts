@@ -69,7 +69,10 @@ export class ManualFetchService {
         );
       } else {
         logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
-        await this.syncExistingIndexEntry(id, dateStr, targetPath);
+        const entry = await this.syncExistingIndexEntry(id, dateStr, targetPath);
+        if (entry) {
+          await this.deps.writer.refreshPaperNoteFrontmatter(entry, targetPath);
+        }
         return { kind: "already_exists", path: targetPath };
       }
     }
@@ -158,12 +161,13 @@ export class ManualFetchService {
     if (this.deps.paperIndex) {
       try {
         const existing = await this.deps.paperIndex.get(id);
+        const displayDate = displayDateFromIndexEntry(existing);
         const indexed = await this.deps.paperIndex.upsertFromDailyPaper({
           arxivId: id,
           title,
           authors,
           date: dateStr,
-          published: existing?.published ?? published,
+          published: displayDate ?? published,
           updated,
           arxivCategory: category,
           arxivCategories: categories,
@@ -208,19 +212,20 @@ export class ManualFetchService {
     id: string,
     dateStr: string,
     targetPath: string,
-  ): Promise<void> {
+  ): Promise<PaperIndexEntry | undefined> {
     const { paperIndex, logger } = this.deps;
-    if (!paperIndex) return;
+    if (!paperIndex) return undefined;
     try {
       const meta = await this.fetchAtomMetadata(id);
-      if (!meta) return;
+      if (!meta) return undefined;
       const existing = await paperIndex.get(id);
+      const displayDate = displayDateFromIndexEntry(existing);
       const indexed = await paperIndex.upsertFromDailyPaper({
         arxivId: id,
         title: meta.title,
         authors: meta.authors,
         date: dateStr,
-        published: existing?.published ?? meta.published,
+        published: displayDate ?? meta.published,
         updated: meta.updated,
         arxivCategory: meta.primaryCategory || meta.categories[0] || "other",
         arxivCategories: meta.categories,
@@ -228,11 +233,15 @@ export class ManualFetchService {
         detail: true,
         paperPath: targetPath,
       });
-      if (indexed.wasNew) await paperIndex.setStatus(id, "saved");
+      if (indexed.wasNew) {
+        return (await paperIndex.setStatus(id, "saved")) ?? indexed.entry;
+      }
+      return indexed.entry;
     } catch (e) {
       logger.warn(
         `manual-fetch: failed to refresh existing index entry for ${id}: ${(e as Error).message}`,
       );
+      return undefined;
     }
   }
 
@@ -252,6 +261,21 @@ export class ManualFetchService {
 
 function appendUnique(values: string[], value: string): string[] {
   return value && !values.includes(value) ? [...values, value] : values;
+}
+
+function displayDateFromIndexEntry(
+  entry: Pick<PaperIndexEntry, "dailyReports" | "published"> | null | undefined,
+): string | undefined {
+  if (!entry) return undefined;
+  return firstDailyReportDate(entry.dailyReports) ?? entry.published;
+}
+
+function firstDailyReportDate(paths: string[]): string | undefined {
+  const dates = paths
+    .map((path) => /(\d{4}-\d{2}-\d{2})\.md$/i.exec(path.trim())?.[1])
+    .filter((date): date is string => Boolean(date))
+    .sort();
+  return dates[0];
 }
 
 function isFrontmatterOnlyNote(markdown: string): boolean {

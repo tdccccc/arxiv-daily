@@ -82,7 +82,9 @@ export class MarkdownWriter {
       throw new Error(`paper already exists: ${path}`);
     }
     const tags = this.tagsFor(paper);
-    const published = dateOnly(indexEntry?.published ?? paper.published);
+    const published = dateOnly(
+      displayDateFromIndexEntry(indexEntry) ?? paper.published,
+    );
     const publishedReport = await this.publishedReportLink(published);
     const fm = paperFrontmatter({
       title: paper.title,
@@ -111,8 +113,10 @@ export class MarkdownWriter {
       authors: entry.authors.join(", "),
       arxivId: entry.arxivId,
       primaryTopic: entry.primaryTopic,
-      published: dateOnly(entry.published),
-      publishedReport: await this.publishedReportLink(dateOnly(entry.published)),
+      published: dateOnly(displayDateFromIndexEntry(entry)),
+      publishedReport: await this.publishedReportLink(
+        dateOnly(displayDateFromIndexEntry(entry)),
+      ),
       tags,
     });
     const noteBody =
@@ -123,6 +127,21 @@ export class MarkdownWriter {
         `## Notes\n\n`;
     await this.opts.storage.writeText(path, fm + noteBody);
     this.opts.logger.info(`wrote paper note: ${path}`);
+    return path;
+  }
+
+  async refreshPaperNoteFrontmatter(
+    entry: PaperIndexEntry,
+    paperPath?: string | null,
+  ): Promise<string> {
+    const path = this.opts.storage.normalizePath(
+      paperPath || entry.paperPath || this.paperDetailPath(entry.arxivId),
+    );
+    const markdown = await this.opts.storage.readText(path);
+    const body = stripFrontmatter(markdown).replace(/^\s+/, "");
+    const fm = await this.paperFrontmatterForEntry(entry);
+    await this.opts.storage.writeText(path, fm + body);
+    this.opts.logger.info(`refreshed paper frontmatter: ${path}`);
     return path;
   }
 
@@ -166,6 +185,21 @@ export class MarkdownWriter {
     return (await this.opts.storage.exists(path))
       ? dailyReportLink(path, published)
       : undefined;
+  }
+
+  private async paperFrontmatterForEntry(entry: PaperIndexEntry): Promise<string> {
+    const topic = this.opts.arxiv.topics.find((t) => t.tag === entry.primaryTopic);
+    const tags = ["arxiv", "paper", topic?.tag ?? entry.primaryTopic].filter(Boolean);
+    const published = dateOnly(displayDateFromIndexEntry(entry));
+    return paperFrontmatter({
+      title: entry.title,
+      authors: entry.authors.join(", "),
+      arxivId: entry.arxivId,
+      primaryTopic: entry.primaryTopic,
+      published,
+      publishedReport: await this.publishedReportLink(published),
+      tags,
+    });
   }
 
 }
@@ -234,6 +268,28 @@ function dailyReportLink(path: string, label?: string): string {
   const target = path.replace(/\.md$/i, "");
   const fallbackLabel = target.split("/").pop() || target;
   return `[[${target}|${label ?? fallbackLabel}]]`;
+}
+
+function displayDateFromIndexEntry(
+  entry: Pick<PaperIndexEntry, "dailyReports" | "published"> | undefined,
+): string | undefined {
+  if (!entry) return undefined;
+  return firstDailyReportDate(entry.dailyReports) ?? entry.published;
+}
+
+function firstDailyReportDate(paths: string[]): string | undefined {
+  const dates = paths
+    .map((path) => /(\d{4}-\d{2}-\d{2})\.md$/i.exec(path.trim())?.[1])
+    .filter((date): date is string => Boolean(date))
+    .sort();
+  return dates[0];
+}
+
+function stripFrontmatter(markdown: string): string {
+  const trimmedStart = markdown.trimStart();
+  const leading = markdown.length - trimmedStart.length;
+  const match = /^---\s*\n[\s\S]*?\n---\s*(?:\n|$)/.exec(trimmedStart);
+  return match ? trimmedStart.slice(match[0].length) : markdown.slice(leading);
 }
 
 function dateOnly(value: string | undefined): string | undefined {

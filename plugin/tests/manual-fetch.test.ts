@@ -96,6 +96,7 @@ function makeDeps(overrides: Partial<{
   };
   const writer = {
     writePaperDetail: vi.fn(async (p: any) => `papers/${p.id}.md`),
+    refreshPaperNoteFrontmatter: vi.fn(async (_entry: any, path: string) => path),
     writeDaily: vi.fn(),
     writeEmptyDaily: vi.fn(),
   };
@@ -220,6 +221,13 @@ describe("ManualFetchService", () => {
     expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
     expect(d.llm.call).not.toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arxivId: "2605.08080",
+        published: "2026-02-02",
+      }),
+      "arxiv-daily/papers/2605.08080.md",
+    );
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
     expect(index.papers["2605.08080"].published).toBe("2026-02-02");
     expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
@@ -227,6 +235,54 @@ describe("ManualFetchService", () => {
     expect(index.papers["2605.08080"].paperPath).toBe(
       "arxiv-daily/papers/2605.08080.md",
     );
+  });
+
+  it("refreshes existing note frontmatter with the daily report date", async () => {
+    const d = makeDeps({ exists: true });
+    const paperIndex = new PaperIndexStore(
+      d.storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-11T01:30:00.000Z"),
+    );
+    await paperIndex.upsertFromDailyPaper({
+      arxivId: "2605.08080",
+      title: "Indexed paper",
+      authors: "A. Author",
+      date: "2026-06-12",
+      published: "2026-06-11",
+      updated: "2026-06-11",
+      arxivCategory: "astro-ph.CO",
+      primaryTopic: "photo-z",
+      detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-12.md",
+      paperPath: "arxiv-daily/papers/2605.08080.md",
+    });
+    const svc = new ManualFetchService({
+      storage: d.storage,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const r = await svc.fetchAndSummarize("2605.08080", "2026-06-17");
+
+    expect(r.kind).toBe("already_exists");
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arxivId: "2605.08080",
+        published: "2026-06-12",
+      }),
+      "arxiv-daily/papers/2605.08080.md",
+    );
+    const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
+    expect(index.papers["2605.08080"].published).toBe("2026-06-12");
   });
 
   it("returns not_found when Atom has no entry", async () => {
@@ -290,7 +346,7 @@ describe("ManualFetchService", () => {
     expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
   });
 
-  it("preserves an existing announce date when manual detail note is created", async () => {
+  it("uses an existing daily report date over a stale Atom published date", async () => {
     const d = makeDeps();
     const paperIndex = new PaperIndexStore(
       d.storage,
@@ -301,12 +357,13 @@ describe("ManualFetchService", () => {
       arxivId: "2605.08080",
       title: "Indexed paper",
       authors: "A. Author",
-      date: "2026-06-16",
-      published: "2026-06-16",
-      updated: "2026-06-16",
+      date: "2026-06-12",
+      published: "2026-06-11",
+      updated: "2026-06-11",
       arxivCategory: "astro-ph.CO",
       primaryTopic: "photo-z",
       detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-12.md",
     });
     const svc = new ManualFetchService({
       storage: d.storage,
@@ -326,11 +383,14 @@ describe("ManualFetchService", () => {
 
     expect(r.kind).toBe("done");
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
-    expect(index.papers["2605.08080"].published).toBe("2026-06-16");
+    expect(index.papers["2605.08080"].published).toBe("2026-06-12");
     expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
     expect(index.papers["2605.08080"].seenDates).toEqual([
-      "2026-06-16",
+      "2026-06-12",
       "2026-06-17",
+    ]);
+    expect(index.papers["2605.08080"].dailyReports).toEqual([
+      "arxiv-daily/daily/2026-06-12.md",
     ]);
   });
 });
