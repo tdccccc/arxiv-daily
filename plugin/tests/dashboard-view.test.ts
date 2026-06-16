@@ -105,6 +105,52 @@ describe("executeObsidianCommand", () => {
     );
   });
 
+  it("tries the Obsidian plugin-prefixed command id first", async () => {
+    const executeCommandById = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    const executed = await executeObsidianCommand(
+      { commands: { executeCommandById } },
+      "arxiv-daily-run-for-date",
+      "arxiv-daily",
+    );
+
+    expect(executed).toBe(true);
+    expect(executeCommandById).toHaveBeenNthCalledWith(
+      1,
+      "arxiv-daily:arxiv-daily-run-for-date",
+    );
+    expect(executeCommandById).toHaveBeenNthCalledWith(
+      2,
+      "arxiv-daily-run-for-date",
+    );
+  });
+
+  it("uses the registered command id when the registry is available", async () => {
+    const executeCommandById = vi.fn().mockReturnValue(true);
+
+    const executed = await executeObsidianCommand(
+      {
+        commands: {
+          executeCommandById,
+          commands: {
+            "arxiv-daily-run-for-date": {},
+          },
+        },
+      },
+      "arxiv-daily-run-for-date",
+      "arxiv-daily",
+    );
+
+    expect(executed).toBe(true);
+    expect(executeCommandById).toHaveBeenCalledTimes(1);
+    expect(executeCommandById).toHaveBeenCalledWith(
+      "arxiv-daily-run-for-date",
+    );
+  });
+
   it("falls back to command callbacks when executeCommandById is unavailable", async () => {
     const callback = vi.fn();
 
@@ -117,6 +163,25 @@ describe("executeObsidianCommand", () => {
         },
       },
       "arxiv-daily-run-for-date",
+    );
+
+    expect(executed).toBe(true);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds plugin-prefixed callbacks in the command registry", async () => {
+    const callback = vi.fn();
+
+    const executed = await executeObsidianCommand(
+      {
+        commands: {
+          commands: {
+            "arxiv-daily:arxiv-daily-run-for-date": { callback },
+          },
+        },
+      },
+      "arxiv-daily-run-for-date",
+      "arxiv-daily",
     );
 
     expect(executed).toBe(true);

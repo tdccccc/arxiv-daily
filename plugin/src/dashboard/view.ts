@@ -1017,13 +1017,6 @@ class ArxivDailyDashboardView extends ItemView {
         cls: "arxiv-daily-dashboard__meta",
         text: `${row.arxivId} · ${row.authors || "Unknown authors"}`,
       });
-      const summary = summaryLine(row.entry);
-      if (summary) {
-        titleCell.createEl("div", {
-          cls: "arxiv-daily-dashboard__summary",
-          text: summary,
-        });
-      }
 
       tr.createEl("td", { text: row.topic });
       tr.createEl("td", { text: row.entry.published || "-" });
@@ -1455,7 +1448,11 @@ class ArxivDailyDashboardView extends ItemView {
     commandId: string,
     refreshAfter: boolean,
   ): Promise<void> {
-    const executed = await executeObsidianCommand(this.plugin.app, commandId);
+    const executed = await executeObsidianCommand(
+      this.plugin.app,
+      commandId,
+      this.plugin.manifest.id,
+    );
     if (!executed) {
       throw new Error(`command not found: ${commandId}`);
     }
@@ -1684,19 +1681,6 @@ function openUrl(url: string, label: string): void {
   window.open(url, "_blank", "noopener");
 }
 
-function summaryLine(entry: DashboardRow["entry"]): string {
-  const summary = entry.summary;
-  if (!summary) return "";
-  return (
-    summary.coreProblem ||
-    summary.whyRelevant ||
-    summary.keyMethod ||
-    summary.mainResult ||
-    summary.limitations ||
-    ""
-  );
-}
-
 function isStarredEntry(entry: DashboardRow["entry"]): boolean {
   return entry.status !== "ignored" && entry.priority === "high";
 }
@@ -1712,6 +1696,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 export async function executeObsidianCommand(
   app: unknown,
   commandId: string,
+  pluginId?: string,
 ): Promise<boolean> {
   const commands = (app as {
     commands?: {
@@ -1726,14 +1711,26 @@ export async function executeObsidianCommand(
     };
   })?.commands;
   if (!commands) return false;
+  const ids = commandId.includes(":")
+    ? [commandId]
+    : uniqueCommandIds([
+        pluginId ? `${pluginId}:${commandId}` : "",
+        commandId,
+      ]);
+  const registeredIds = ids.filter((id) => commands.commands?.[id]);
+  const executableIds = registeredIds.length ? registeredIds : ids;
 
   if (typeof commands.executeCommandById === "function") {
-    const result = commands.executeCommandById(commandId);
-    if (isPromiseLike(result)) await result;
-    return result !== false;
+    for (const id of executableIds) {
+      const result = commands.executeCommandById(id);
+      if (isPromiseLike(result)) await result;
+      if (result !== false) return true;
+    }
+    return false;
   }
 
-  const command = commands.commands?.[commandId];
+  const id = registeredIds[0];
+  const command = id ? commands.commands?.[id] : undefined;
   if (!command) return false;
   const callback = command.callback;
   if (typeof callback === "function") {
@@ -1748,6 +1745,15 @@ export async function executeObsidianCommand(
     return result !== false;
   }
   return false;
+}
+
+function uniqueCommandIds(ids: string[]): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    if (!id || out.includes(id)) continue;
+    out.push(id);
+  }
+  return out;
 }
 
 function describeResult(result: any): string {
