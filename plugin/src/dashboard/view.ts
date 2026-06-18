@@ -1281,12 +1281,6 @@ class ArxivDailyDashboardView extends ItemView {
           void this.runAllPending();
         }),
     );
-    this.addCommandMenuItem(
-      menu,
-      "Set paper mark...",
-      "list-checks",
-      "arxiv-daily-set-paper-status",
-    );
 
     menu.addSeparator();
     this.addCommandMenuItem(
