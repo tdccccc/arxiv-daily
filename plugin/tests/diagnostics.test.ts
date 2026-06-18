@@ -37,7 +37,7 @@ describe("buildDiagnosticsReport", () => {
           },
         ],
       },
-      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 2 },
+      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true },
     });
     const runState: RunState = {
       "2026-06-11": {

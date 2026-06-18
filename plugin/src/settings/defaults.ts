@@ -6,8 +6,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-v4-pro",
-    temperature: 0.3,
-    timeoutMs: 300_000,
     thinkingMode: true,
     reasoningEffort: "high",
   },
@@ -26,7 +24,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     enabled: false,
     runAtLocal: "09:30",
     tickIntervalMin: 20,
-    lookbackDays: 5,
   },
   advanced: {
     requestDelayMs: 3000,

@@ -50,7 +50,7 @@ describe("SchedulerService", () => {
       schedule: {
         ...DEFAULT_SETTINGS.schedule,
         runAtLocal: "23:59",
-        lookbackDays: 1,
+
       },
     };
     const svc = new SchedulerService({
@@ -72,7 +72,7 @@ describe("SchedulerService", () => {
     const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 3 });
     const settings = {
       ...DEFAULT_SETTINGS,
-      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "00:01", lookbackDays: 1 },
+      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "00:01" },
     };
     const svc = new SchedulerService({
       getSettings: () => settings,
@@ -83,7 +83,8 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-11T05:00:00Z"), // 13:00 Shanghai
     });
     await svc.tick();
-    expect(runForDate).toHaveBeenCalledTimes(1);
+    // With lookbackDays=5, checks 05-11 (Mon), 05-10 (Sun, skip), 05-09 (Sat, skip), 05-08 (Fri), 05-07 (Thu)
+    expect(runForDate).toHaveBeenCalledTimes(3);
     expect(store.get("2026-05-11").status).toBe("completed");
   });
 
@@ -101,7 +102,6 @@ describe("SchedulerService", () => {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
           runAtLocal: "00:01",
-          lookbackDays: 3,
         },
       }),
       store,
@@ -111,8 +111,11 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-11T05:00:00Z"), // Mon, includes Sun/Sat lookback
     });
     await svc.tick();
-    expect(runForDate).toHaveBeenCalledTimes(1);
+    // With lookbackDays=5, checks 05-11 (Mon), 05-10 (Sun, skip), 05-09 (Sat, skip), 05-08 (Fri), 05-07 (Thu)
+    expect(runForDate).toHaveBeenCalledTimes(3);
     expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-08");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-07");
     expect(store.get("2026-05-10").status).toBe("pending");
     expect(store.get("2026-05-09").status).toBe("pending");
   });
@@ -127,7 +130,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule },
       }),
       store,
       lock,
@@ -150,7 +153,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule },
       }),
       store,
       lock,
@@ -174,7 +177,7 @@ describe("SchedulerService", () => {
       schedule: {
         ...DEFAULT_SETTINGS.schedule,
         runAtLocal: "23:59",
-        lookbackDays: 1,
+
       },
     };
     const svc = new SchedulerService({
@@ -201,7 +204,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule,  },
       }),
       store,
       lock,
@@ -249,7 +252,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+        schedule: { ...DEFAULT_SETTINGS.schedule },
       }),
       store,
       lock,
@@ -258,10 +261,14 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-12T05:00:00Z"), // 13:00 Shanghai
     });
     const results = await svc.runAllPending();
-    expect(runForDate).toHaveBeenCalledTimes(2);
+    // With lookbackDays=5, checks 05-12 (Tue), 05-11 (Mon), 05-10 (Sun), 05-09 (Sat), 05-08 (Fri)
+    // 05-12 is done, 05-11 and 05-10 are pending, 05-09 and 05-08 are pending
+    expect(runForDate).toHaveBeenCalledTimes(4);
     expect(runForDate).toHaveBeenCalledWith("2026-05-11");
     expect(runForDate).toHaveBeenCalledWith("2026-05-10");
-    expect(results).toHaveLength(2);
+    expect(runForDate).toHaveBeenCalledWith("2026-05-09");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-08");
+    expect(results).toHaveLength(4);
     expect(results.every((r) => r.result.kind === "completed")).toBe(true);
   });
 
@@ -278,7 +285,6 @@ describe("SchedulerService", () => {
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
           runAtLocal: "23:59",
-          lookbackDays: 1,
         },
       }),
       store,
@@ -288,7 +294,9 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-12T00:00:00Z"), // 08:00 Shanghai, pre runAtLocal
     });
     const results = await svc.runAllPending();
-    expect(runForDate).toHaveBeenCalledTimes(1);
+    // With lookbackDays=5, checks 05-12, 05-11, 05-10, 05-09, 05-08
+    // All dates should be run since we're ignoring the time gate
+    expect(runForDate).toHaveBeenCalledTimes(5);
     expect(results[0].date).toBe("2026-05-12");
   });
 
@@ -308,7 +316,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+        schedule: { ...DEFAULT_SETTINGS.schedule,  },
       }),
       store,
       lock,
@@ -355,7 +363,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true,  },
       }),
       store,
       lock,
@@ -383,7 +391,7 @@ describe("SchedulerService", () => {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
           runAtLocal: "23:59",
-          lookbackDays: 1,
+  
         },
       }),
       store,
@@ -409,7 +417,7 @@ describe("SchedulerService", () => {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
           runAtLocal: "23:59",
-          lookbackDays: 1,
+  
         },
       }),
       store,
@@ -438,7 +446,7 @@ describe("SchedulerService", () => {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
           runAtLocal: "00:01",
-          lookbackDays: 1,
+  
         },
       }),
       store,
@@ -462,7 +470,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule,  },
       }),
       store,
       lock,
@@ -488,7 +496,7 @@ describe("SchedulerService", () => {
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
           runAtLocal: "00:01",
-          lookbackDays: 5,
+  
         },
       }),
       store,
@@ -527,7 +535,7 @@ describe("SchedulerService", () => {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
           runAtLocal: "00:01",
-          lookbackDays: 3,
+  
         },
       }),
       store,
@@ -538,10 +546,12 @@ describe("SchedulerService", () => {
       progress: progress as any,
     });
     await svc.tick();
-    expect(progress.setBatch).toHaveBeenCalledTimes(3);
-    expect(progress.setBatch).toHaveBeenCalledWith(1, 3, "2026-05-11");
-    expect(progress.setBatch).toHaveBeenCalledWith(2, 3, "2026-05-10");
-    expect(progress.setBatch).toHaveBeenCalledWith(3, 3, "2026-05-09");
+    expect(progress.setBatch).toHaveBeenCalledTimes(5);
+    expect(progress.setBatch).toHaveBeenCalledWith(1, 5, "2026-05-11");
+    expect(progress.setBatch).toHaveBeenCalledWith(2, 5, "2026-05-10");
+    expect(progress.setBatch).toHaveBeenCalledWith(3, 5, "2026-05-09");
+    expect(progress.setBatch).toHaveBeenCalledWith(4, 5, "2026-05-08");
+    expect(progress.setBatch).toHaveBeenCalledWith(5, 5, "2026-05-07");
     expect(progress.setTask).toHaveBeenCalledWith("arXiv Daily report", "2026-05-11");
     expect(progress.setComplete).toHaveBeenCalledWith("Daily report complete: 2026-05-11");
     expect(progress.setIdle).toHaveBeenCalled();
@@ -564,7 +574,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true,  },
       }),
       store,
       lock,
@@ -601,7 +611,7 @@ describe("SchedulerService", () => {
     const svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, lookbackDays: 1 },
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true,  },
       }),
       store,
       lock,
@@ -637,7 +647,7 @@ describe("SchedulerService", () => {
     svc = new SchedulerService({
       getSettings: () => ({
         ...DEFAULT_SETTINGS,
-        schedule: { ...DEFAULT_SETTINGS.schedule, lookbackDays: 3 },
+        schedule: { ...DEFAULT_SETTINGS.schedule,  },
       }),
       store,
       lock,

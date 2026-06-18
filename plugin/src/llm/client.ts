@@ -4,13 +4,16 @@ import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
+const LLM_TIMEOUT_MS = 300_000; // 5 minutes
+export const LLM_TEMPERATURE = 0.1;
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
 
 export interface CallOptions {
-  /** Overrides settings.temperature. Ignored when thinkingMode = true. */
+  /** Overrides default temperature. Ignored when thinkingMode = true. */
   temperature?: number;
   signal?: AbortSignal;
 }
@@ -22,7 +25,7 @@ export class LlmClient {
     this.client = new OpenAI({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: settings.timeoutMs,
+      timeout: LLM_TIMEOUT_MS,
       maxRetries: 0,
       dangerouslyAllowBrowser: true,
     });
@@ -56,7 +59,7 @@ export class LlmClient {
             (params as any).extra_body = { thinking: { type: "enabled" } };
           }
         } else {
-          params.temperature = opts.temperature ?? this.settings.temperature;
+          params.temperature = opts.temperature ?? LLM_TEMPERATURE;
         }
         const stream = await this.client.chat.completions.create(params as any, {
           signal: opts.signal,

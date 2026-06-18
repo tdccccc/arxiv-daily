@@ -16,6 +16,8 @@ import type { ProgressReporter } from "./progress";
 import { NoopProgressReporter } from "./progress";
 import type { RunCancellationService } from "./cancellation";
 
+const LOOKBACK_DAYS = 5;
+
 export interface SchedulerDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
@@ -75,12 +77,12 @@ export class SchedulerService {
     const t = parseHHMM(s.schedule.runAtLocal);
     const scheduledMin = t.hour * 60 + t.minute;
 
-    for (let i = 0; i < s.schedule.lookbackDays; i++) {
+    for (let i = 0; i < LOOKBACK_DAYS; i++) {
       if (this.isCancellationRequested()) break;
       const dateObj = daysBefore(todayObj, i);
       const date = formatDate(dateObj);
       const isToday = date === today;
-      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
+      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
       if (isWeekendDate(dateObj)) continue;
       await this.tickDate(date, {
         now,
@@ -204,7 +206,7 @@ export class SchedulerService {
       result: PipelineResult | { kind: "skipped"; reason: string };
     }> = [];
 
-    for (let i = 0; i < s.schedule.lookbackDays; i++) {
+    for (let i = 0; i < LOOKBACK_DAYS; i++) {
       if (this.isCancellationRequested()) break;
       const date = formatDate(daysBefore(todayObj, i));
       const entry = this.deps.store.get(date);
@@ -212,7 +214,7 @@ export class SchedulerService {
         continue;
       }
       await this.deps.store.clearDate(date);
-      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
+      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
       const r = await this.tryRun(date);
       results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
       if (this.isCancellationRequested()) break;
@@ -238,7 +240,7 @@ export class SchedulerService {
       result: PipelineResult | { kind: "skipped"; reason: string };
     }> = [];
 
-    for (let i = 0; i < s.schedule.lookbackDays; i++) {
+    for (let i = 0; i < LOOKBACK_DAYS; i++) {
       if (this.isCancellationRequested()) break;
       const date = formatDate(daysBefore(todayObj, i));
       const entry = this.deps.store.get(date);
@@ -247,7 +249,7 @@ export class SchedulerService {
         results.push({ date, result: { kind: "skipped", reason: "already running" } });
         continue;
       }
-      this.progress.setBatch(i + 1, s.schedule.lookbackDays, date);
+      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
       const r = await this.tryRun(date);
       results.push({ date, result: r ?? { kind: "skipped", reason: "lock held" } });
       if (this.isCancellationRequested()) break;

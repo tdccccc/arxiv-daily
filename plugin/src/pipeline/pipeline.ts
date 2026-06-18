@@ -213,7 +213,6 @@ export class ArxivPipeline {
         logger,
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
-        llmTemperature: this.deps.llmSettings.temperature,
         linkStyle: this.deps.output.linkStyle ?? "wikilink",
         signal,
       });
@@ -270,7 +269,6 @@ export class ArxivPipeline {
           logger,
           arxivSettings: this.deps.arxiv,
           advanced: this.deps.advanced,
-          llmTemperature: this.deps.llmSettings.temperature,
           signal,
         });
         throwIfCancelled(signal);

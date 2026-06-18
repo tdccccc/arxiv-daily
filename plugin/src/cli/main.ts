@@ -212,7 +212,7 @@ function optionValue(argv: string[], option: string): string | undefined {
 }
 
 function pendingDates(config: CliRuntimeConfig, now: Date): string[] {
-  const lookbackDays = Math.max(1, config.settings.schedule.lookbackDays);
+  const lookbackDays = 5; // LOOKBACK_DAYS constant
   const today = todayInTz(now, config.settings.arxiv.timezone);
   const dates: string[] = [];
   for (let i = lookbackDays - 1; i >= 0; i--) {

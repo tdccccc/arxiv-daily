@@ -3,8 +3,6 @@ export interface LlmSettings {
   provider: string;
   baseUrl: string;
   model: string;
-  temperature: number;
-  timeoutMs: number;
   thinkingMode: boolean;
   reasoningEffort: string;
 }
@@ -36,7 +34,6 @@ export interface ScheduleSettings {
   enabled: boolean;
   runAtLocal: string;
   tickIntervalMin: number;
-  lookbackDays: number;
 }
 
 export interface AdvancedSettings {

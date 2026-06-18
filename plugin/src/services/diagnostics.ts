@@ -62,8 +62,6 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     `  baseUrl: ${settings.llm.baseUrl}`,
     `  model: ${settings.llm.model}`,
     `  apiKeySet: ${settings.llm.apiKey.trim() ? "yes" : "no"}`,
-    `  temperature: ${settings.llm.temperature}`,
-    `  timeoutMs: ${settings.llm.timeoutMs}`,
     `  thinkingMode: ${settings.llm.thinkingMode}`,
     `  reasoningEffort: ${settings.llm.reasoningEffort}`,
     "",
@@ -87,7 +85,6 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     `  enabled: ${settings.schedule.enabled}`,
     `  runAtLocal: ${settings.schedule.runAtLocal}`,
     `  tickIntervalMin: ${settings.schedule.tickIntervalMin}`,
-    `  lookbackDays: ${settings.schedule.lookbackDays}`,
     "",
     "advanced:",
     `  requestDelayMs: ${settings.advanced.requestDelayMs}`,
@@ -158,7 +155,7 @@ function getDateContext(now: Date, settings: PluginSettings, runState: RunState)
       weekday: "long",
     }).format(now);
     const lookbackLines = Array.from(
-      { length: settings.schedule.lookbackDays },
+      { length: 5 }, // LOOKBACK_DAYS
       (_, i) => {
         const dateObj = daysBefore(today, i);
         const date = formatDate(dateObj);

@@ -144,16 +144,15 @@ describe("CLI main", () => {
       loadConfig: vi.fn(async () =>
         testConfig({
           arxiv: { timezone: "UTC" },
-          schedule: { lookbackDays: 3 },
         }),
       ),
       buildRuntime: () => runtime,
     });
 
     expect(code).toBe(0);
-    expect(runtime.pipeline.runForDate).toHaveBeenCalledTimes(3);
-    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(1, "2026-06-11");
-    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(3, "2026-06-13");
+    expect(runtime.pipeline.runForDate).toHaveBeenCalledTimes(5);
+    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(1, "2026-06-09");
+    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(5, "2026-06-13");
   });
 
   it("summarizes one arXiv ID with an optional date", async () => {

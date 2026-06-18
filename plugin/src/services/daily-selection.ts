@@ -186,10 +186,7 @@ export class DailySelectionSyncService {
   }
 
   private recentDailyPaths(): string[] {
-    const lookbackDays = Math.max(
-      1,
-      Math.floor(this.opts.getLookbackDays?.() ?? 1),
-    );
+    const lookbackDays = 5; // LOOKBACK_DAYS constant
     const timezone = this.opts.getTimezone?.() ?? "UTC";
     const now = this.opts.now?.() ?? new Date();
     const today = todayInTz(now, timezone);

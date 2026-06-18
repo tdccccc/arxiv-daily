@@ -163,7 +163,6 @@ export class ManualFetchService {
         logger,
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
-        llmTemperature: this.deps.llmSettings.temperature,
       });
     } catch (e) {
       logger.error(`manual-fetch: LLM summary failed for ${id}`, e);

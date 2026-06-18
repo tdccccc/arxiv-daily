@@ -184,26 +184,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
     }
 
-    this.attachHelp(
-      new Setting(containerEl).setName("Temperature").addText((t) =>
-        t.setValue(String(s.llm.temperature)).onChange(async (v) => {
-          s.llm.temperature = Number(v) || 0;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "Sampling temperature. 0 = deterministic, 1+ = creative. Default 0.3.",
-    );
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Timeout (sec)").addText((t) =>
-        t.setValue(String(s.llm.timeoutMs / 1000)).onChange(async (v) => {
-          s.llm.timeoutMs = (Number(v) || 300) * 1000;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "Per-LLM-call timeout in seconds. Raise this if your model is slow (e.g. reasoning models).",
-    );
-
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
       ? "Enable Anthropic Extended Thinking"
@@ -463,68 +443,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "How often the scheduler interval wakes up to check pending dates. Default 20 minutes.",
     );
 
-    new Setting(containerEl)
-      .setName("Lookback days")
-      .setDesc("Max 5 (limited by arXiv /recent)")
-      .addText((t) =>
-        t.setValue(String(s.schedule.lookbackDays)).onChange(async (v) => {
-          s.schedule.lookbackDays = Math.min(5, Math.max(1, Number(v) || 5));
-          await this.plugin.saveSettings();
-        }),
-      );
-
     // ─── Advanced ─────────────────────────────────────
     this.sectionHeading(containerEl, "Advanced", "advanced");
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Request delay (ms)").addText((t) =>
-        t.setValue(String(s.advanced.requestDelayMs)).onChange(async (v) => {
-          s.advanced.requestDelayMs = Number(v) || 3000;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "Pause between HTTP requests to arXiv. Lower = faster fetch but rougher on the server.",
-    );
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Cache expiry (days)").addText((t) =>
-        t.setValue(String(s.advanced.cacheExpiryDays)).onChange(async (v) => {
-          s.advanced.cacheExpiryDays = Number(v) || 7;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "How long to keep cached paper HTML on disk before re-fetching.",
-    );
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Section char limit").addText((t) =>
-        t.setValue(String(s.advanced.sectionCharLimit)).onChange(async (v) => {
-          s.advanced.sectionCharLimit = Number(v) || 8000;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "Max characters per paper section sent to the LLM. Lower for small-context models.",
-    );
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Paper char limit").addText((t) =>
-        t.setValue(String(s.advanced.paperCharLimit)).onChange(async (v) => {
-          s.advanced.paperCharLimit = Number(v) || 50000;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "Max characters of full-text body fed to daily summaries and per-paper detail prompts.",
-    );
-
-    this.attachHelp(
-      new Setting(containerEl).setName("Daily char limit").addText((t) =>
-        t.setValue(String(s.advanced.dailyCharLimit)).onChange(async (v) => {
-          s.advanced.dailyCharLimit = Number(v) || 400000;
-          await this.plugin.saveSettings();
-        }),
-      ),
-      "When total filtered papers exceed this many chars, split the daily summary into batched LLM calls.",
-    );
 
     this.attachHelp(
       new Setting(containerEl).setName("Log level").addDropdown((d) =>
@@ -532,13 +452,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .addOption("debug", "debug")
           .addOption("info", "info")
           .addOption("warn", "warn")
-        .addOption("error", "error")
-        .setValue(s.advanced.logLevel)
-        .onChange(async (v) => {
-          s.advanced.logLevel = v as any;
-          await this.plugin.saveSettings();
-          this.plugin.logger.setLevel(v as any);
-        }),
+          .addOption("error", "error")
+          .setValue(s.advanced.logLevel)
+          .onChange(async (v) => {
+            s.advanced.logLevel = v as any;
+            await this.plugin.saveSettings();
+            this.plugin.logger.setLevel(v as any);
+          }),
       ),
       "Console log verbosity. 'debug' is noisy; 'info' is the default.",
     );
