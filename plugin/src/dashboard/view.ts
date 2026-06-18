@@ -620,11 +620,11 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.createToolbarButton(
       actions,
-      "layers",
-      "Run Pending",
-      "Run all pending in lookback",
-      (button) => {
-        void this.runControlAction(button, () => this.runAllPending());
+      "file-text",
+      "Summarize by ID",
+      "Summarize paper by arXiv ID",
+      (_button, evt) => {
+        void this.runDashboardCommand("arxiv-daily-summarize-by-id", false);
       },
     );
     this.createToolbarButton(
@@ -1273,11 +1273,13 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
-    this.addCommandMenuItem(
-      menu,
-      "Summarize by arXiv ID...",
-      "file-text",
-      "arxiv-daily-summarize-by-id",
+    menu.addItem((item) =>
+      item
+        .setTitle("Run Pending")
+        .setIcon("layers")
+        .onClick(() => {
+          void this.runAllPending();
+        }),
     );
     this.addCommandMenuItem(
       menu,
