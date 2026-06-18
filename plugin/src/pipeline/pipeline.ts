@@ -214,6 +214,7 @@ export class ArxivPipeline {
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
         linkStyle: this.deps.output.linkStyle ?? "wikilink",
+        summaryLanguage: this.deps.output.summaryLanguage,
         signal,
       });
     } catch (e) {
@@ -269,6 +270,7 @@ export class ArxivPipeline {
           logger,
           arxivSettings: this.deps.arxiv,
           advanced: this.deps.advanced,
+          summaryLanguage: this.deps.output.summaryLanguage,
           signal,
         });
         throwIfCancelled(signal);

@@ -149,6 +149,21 @@ describe("MarkdownWriter strictness on existing files", () => {
     );
   });
 
+  it("writeEmptyDaily uses the configured summary language", async () => {
+    const { files, writer } = makeWriter(
+      {},
+      {
+        summaryLanguage: "en",
+      },
+    );
+    await writer.writeEmptyDaily("2026-05-11");
+
+    const written = files["arxiv-daily/daily/2026-05-11.md"];
+    expect(written).toContain("# arXiv astro-ph Daily Digest 2026-05-11");
+    expect(written).toContain("No relevant papers found today.");
+    expect(written).not.toContain("今日未发现相关论文");
+  });
+
   it("writeDaily writes content (no bak file produced)", async () => {
     const { files, writer } = makeWriter();
     await writer.writeDaily("2026-05-11", "body");

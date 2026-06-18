@@ -5,13 +5,24 @@ import type {
   AdvancedSettings,
   ArxivSettings,
   LinkStyle,
+  SummaryLanguage,
 } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
+import {
+  dailyCountLine,
+  dailyHeader,
+  noCategoryPapersText,
+  normalizeSummaryLanguage,
+} from "../settings/summary-language";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { FilteredPaper } from "./paper-filter";
 import { renderPrompt } from "../prompts/render";
 import dailySystemTemplate from "../prompts/daily-summary.system.md";
+import dailySystemTemplateEn from "../prompts/daily-summary.en.system.md";
+import dailyPartialTemplate from "../prompts/daily-summary.partial.system.md";
+import dailyPartialTemplateEn from "../prompts/daily-summary.partial.en.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
+import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
 
 export interface DailyPaperWithContent extends FilteredPaper {
@@ -32,6 +43,7 @@ export interface SummarizerDeps {
   arxivSettings: ArxivSettings;
   advanced: AdvancedSettings;
   linkStyle?: LinkStyle;
+  summaryLanguage?: SummaryLanguage;
   signal?: AbortSignal;
 }
 
@@ -120,15 +132,21 @@ async function callDailyLlm(
     deps.linkStyle === "relative"
       ? `[YYMM.NNNNN](../papers/YYMM.NNNNN.md)`
       : `[[YYMM.NNNNN]]`;
+  const summaryLanguage = normalizeSummaryLanguage(deps.summaryLanguage);
   const partialNote = isPartial
-    ? `\n注意：这是分批处理的一部分（本批 ${papers.length} 篇），请只为本批论文生成总结，不要输出标题头和统计行。\n`
+    ? renderPrompt(
+        summaryLanguage === "en" ? dailyPartialTemplateEn : dailyPartialTemplate,
+        { paperCount: String(papers.length) },
+      )
     : "";
   const headerFmt = isPartial
     ? ""
-    : `# arXiv ${formatArxivCategories(arxivSettings)} 每日追踪 ${dateStr}\n` +
-      `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n\n`;
+    : `${dailyHeader(summaryLanguage, formatArxivCategories(arxivSettings), dateStr)}\n` +
+      `${dailyCountLine(summaryLanguage, nTotal, nDetail)}\n\n`;
 
-  const systemPrompt = renderPrompt(dailySystemTemplate, {
+  const systemTemplate =
+    summaryLanguage === "en" ? dailySystemTemplateEn : dailySystemTemplate;
+  const systemPrompt = renderPrompt(systemTemplate, {
     categoryList,
     partialNote,
     headerFmt,
@@ -170,7 +188,12 @@ export async function summarizeDaily(
       false,
       deps,
     );
-    const normalized = normalizeDailySummary(summary, papers, deps.arxivSettings);
+    const normalized = normalizeDailySummary(
+      summary,
+      papers,
+      deps.arxivSettings,
+      deps.summaryLanguage,
+    );
     warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
     return normalized;
   }
@@ -180,8 +203,8 @@ export async function summarizeDaily(
     `summarizeDaily: batching into ${batches.length} (${batches.map((b) => b.length).join(",")})`,
   );
   const header =
-    `# arXiv ${formatArxivCategories(deps.arxivSettings)} 每日追踪 ${dateStr}\n` +
-    `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。\n`;
+    `${dailyHeader(deps.summaryLanguage, formatArxivCategories(deps.arxivSettings), dateStr)}\n` +
+    `${dailyCountLine(deps.summaryLanguage, nTotal, nDetail)}\n`;
   const parts: string[] = [header];
   for (let i = 0; i < batches.length; i++) {
     throwIfCancelled(deps.signal);
@@ -195,6 +218,7 @@ export async function summarizeDaily(
     parts.join("\n\n"),
     papers,
     deps.arxivSettings,
+    deps.summaryLanguage,
   );
   warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
   return normalized;
@@ -204,20 +228,24 @@ function normalizeDailySummary(
   markdown: string,
   papers: DailyPaperWithContent[],
   arxivSettings: ArxivSettings,
+  summaryLanguage?: SummaryLanguage,
 ): string {
   const names = arxivSettings.topics.map((topic) => topic.name);
   return ensureAllCategorySections(
     mergeDuplicateCategorySections(
       canonicalizeDetailHeadingLinks(markdown, papers),
       names,
+      summaryLanguage,
     ),
     names,
+    summaryLanguage,
   );
 }
 
 function ensureAllCategorySections(
   markdown: string,
   categoryNames: string[],
+  summaryLanguage?: SummaryLanguage,
 ): string {
   const names = unique(categoryNames);
   const present = new Set(
@@ -229,7 +257,7 @@ function ensureAllCategorySections(
   const missing = names.filter((name) => !present.has(name));
   if (missing.length === 0) return markdown;
   const additions = missing
-    .map((name) => `## ${name}\n今日无相关论文更新。`)
+    .map((name) => `## ${name}\n${noCategoryPapersText(summaryLanguage)}`)
     .join("\n\n");
   return `${markdown.replace(/\s+$/, "")}\n\n${additions}`;
 }
@@ -293,6 +321,7 @@ function canonicalizeDetailHeadingLink(
 function mergeDuplicateCategorySections(
   markdown: string,
   categoryNames: string[],
+  summaryLanguage?: SummaryLanguage,
 ): string {
   const names = unique(categoryNames);
   const nameSet = new Set(names);
@@ -335,7 +364,7 @@ function mergeDuplicateCategorySections(
     if (!blocks) continue;
     appendBlank(out);
     out.push(`## ${name}`);
-    out.push(...mergeCategoryContentBlocks(blocks));
+    out.push(...mergeCategoryContentBlocks(blocks, summaryLanguage));
   }
   for (const block of unknownBlocks) {
     appendBlank(out);
@@ -344,12 +373,19 @@ function mergeDuplicateCategorySections(
   return out.join("\n");
 }
 
-function mergeCategoryContentBlocks(blocks: string[][]): string[] {
+function mergeCategoryContentBlocks(
+  blocks: string[][],
+  summaryLanguage?: SummaryLanguage,
+): string[] {
   const cleaned = blocks.map(trimOuterBlank);
   const substantial = cleaned.filter((block) => !isNoUpdateBlock(block));
   const selected = substantial.length
     ? substantial
-    : [cleaned.find((block) => block.length > 0) ?? ["今日无相关论文更新。"]];
+    : [
+        cleaned.find((block) => block.length > 0) ?? [
+          noCategoryPapersText(summaryLanguage),
+        ],
+      ];
   const out: string[] = [];
   for (const block of selected) {
     appendBlank(out);
@@ -362,7 +398,11 @@ function isNoUpdateBlock(lines: string[]): boolean {
   const body = trimOuterBlank(lines);
   return (
     body.length === 0 ||
-    body.every((line) => line.trim() === "今日无相关论文更新。")
+    body.every((line) =>
+      ["今日无相关论文更新。", "No relevant paper updates today."].includes(
+        line.trim(),
+      ),
+    )
   );
 }
 
@@ -395,7 +435,10 @@ export async function summarizePaperDetail(
 
   const topic = deps.arxivSettings.topics.find((t) => t.tag === paper.category);
   const topicName = topic?.name || paper.category;
-  const systemPrompt = renderPrompt(detailSystemTemplate, {
+  const summaryLanguage = normalizeSummaryLanguage(deps.summaryLanguage);
+  const systemTemplate =
+    summaryLanguage === "en" ? detailSystemTemplateEn : detailSystemTemplate;
+  const systemPrompt = renderPrompt(systemTemplate, {
     topicName,
     injectionGuard,
   });

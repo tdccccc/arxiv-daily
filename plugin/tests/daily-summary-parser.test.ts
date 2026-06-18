@@ -35,4 +35,46 @@ describe("extractPaperSummaries", () => {
       coreProblem: "Other problem.",
     });
   });
+
+  it("extracts current Chinese and English summary fields", () => {
+    const summaries = extractPaperSummaries(
+      [
+        "## Topic",
+        "### Current Chinese Paper",
+        "> 信息来源：Abstract",
+        "- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+        "- **研究问题**: Chinese problem.",
+        "- **方法设计**: Chinese method.",
+        "- **核心结果**: Chinese result.",
+        "- **研究价值**: Chinese value.",
+        "- **适用边界**: Chinese limits.",
+        "",
+        "### English Paper",
+        "> Source sections: Abstract, Results",
+        "- **arXiv**: [2606.22222](https://arxiv.org/abs/2606.22222)",
+        "- **Research problem**: English problem.",
+        "- **Method design**: English method.",
+        "- **Core results**: English result.",
+        "- **Research value**: English value.",
+        "- **Scope and limits**: English limits.",
+      ].join("\n"),
+    );
+
+    expect(summaries["2606.11111"]).toEqual({
+      sourceSections: "Abstract",
+      coreProblem: "Chinese problem.",
+      keyMethod: "Chinese method.",
+      mainResult: "Chinese result.",
+      whyRelevant: "Chinese value.",
+      limitations: "Chinese limits.",
+    });
+    expect(summaries["2606.22222"]).toEqual({
+      sourceSections: "Abstract, Results",
+      coreProblem: "English problem.",
+      keyMethod: "English method.",
+      mainResult: "English result.",
+      whyRelevant: "English value.",
+      limitations: "English limits.",
+    });
+  });
 });

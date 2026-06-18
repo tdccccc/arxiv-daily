@@ -2,6 +2,10 @@ import type { StorageAdapter } from "../core/adapters";
 import type { Logger } from "../services/logger";
 import type { ArxivSettings, OutputSettings } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
+import {
+  dailyHeader,
+  noDailyPapersText,
+} from "../settings/summary-language";
 import type { DailyPaperWithContent } from "./summarizer";
 import type { PaperIndexEntry } from "../services/paper-index";
 
@@ -149,7 +153,9 @@ export class MarkdownWriter {
     dateStr: string,
     options: WriteDailyOptions = {},
   ): Promise<string> {
-    const summary = `# arXiv ${formatArxivCategories(this.opts.arxiv)} 每日追踪 ${dateStr}\n\n今日未发现相关论文。\n`;
+    const summary =
+      `${dailyHeader(this.opts.output.summaryLanguage, formatArxivCategories(this.opts.arxiv), dateStr)}\n\n` +
+      `${noDailyPapersText(this.opts.output.summaryLanguage)}\n`;
     return this.writeDaily(dateStr, summary, options);
   }
 

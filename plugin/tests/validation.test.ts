@@ -9,6 +9,7 @@ function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
     ...overrides,
     llm: { ...DEFAULT_SETTINGS.llm, ...(overrides.llm ?? {}) },
     arxiv: { ...DEFAULT_SETTINGS.arxiv, ...(overrides.arxiv ?? {}) },
+    output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
   };
 }
 
@@ -123,6 +124,24 @@ describe("validateFilterConfig", () => {
     );
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/Invalid link style: absolute/);
+  });
+
+  it("flags invalid summary language", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+        },
+        output: {
+          ...DEFAULT_SETTINGS.output,
+          summaryLanguage: "fr" as any,
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/Invalid summary language: fr/);
   });
 
   it("flags empty topic fields", () => {

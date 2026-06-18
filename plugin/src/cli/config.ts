@@ -1,7 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
-import type { LinkStyle, PluginSettings, Topic } from "../settings/types";
+import type {
+  LinkStyle,
+  PluginSettings,
+  SummaryLanguage,
+  Topic,
+} from "../settings/types";
 import {
   arxivCategories,
   normalizeCategoryList,
@@ -67,6 +72,9 @@ export async function loadCliConfig(
       stringOr(file.linkStyle, settings.output.linkStyle ?? "wikilink"),
   );
   settings.output.linkStyle = linkStyle;
+  settings.output.summaryLanguage = normalizeSummaryLanguageSetting(
+    settings.output.summaryLanguage ?? "zh",
+  );
 
   return {
     settings,
@@ -167,6 +175,7 @@ function configFromEnv(env: Record<string, string | undefined>): EnvCliConfig {
 
   setString(output, "dailyDir", env.ARXIV_DAILY_DAILY_DIR);
   setString(output, "papersDir", env.ARXIV_DAILY_PAPERS_DIR);
+  setString(output, "summaryLanguage", env.ARXIV_DAILY_SUMMARY_LANGUAGE);
   setString(advanced, "logLevel", env.ARXIV_DAILY_LOG_LEVEL);
 
   if (Object.keys(llm).length > 0) settings.llm = llm;
@@ -221,6 +230,12 @@ function applyPartialSettings(
 function normalizeLinkStyle(value: string): LinkStyle {
   if (value === "wikilink" || value === "relative") return value;
   throw new CliConfigError(`invalid linkStyle: ${value}`);
+}
+
+function normalizeSummaryLanguageSetting(value: unknown): SummaryLanguage {
+  if (value === "zh" || value === undefined) return "zh";
+  if (value === "en") return "en";
+  throw new CliConfigError(`invalid summaryLanguage: ${String(value)}`);
 }
 
 function parseTopicsJson(value: string): Topic[] {

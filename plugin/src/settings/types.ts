@@ -26,9 +26,11 @@ export interface OutputSettings {
   dailyDir: string;
   papersDir: string;
   linkStyle?: LinkStyle;
+  summaryLanguage?: SummaryLanguage;
 }
 
 export type LinkStyle = "wikilink" | "relative";
+export type SummaryLanguage = "zh" | "en";
 
 export interface ScheduleSettings {
   enabled: boolean;

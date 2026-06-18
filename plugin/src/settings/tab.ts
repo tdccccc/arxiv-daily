@@ -423,6 +423,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Summary language")
+      .setDesc("Language used for daily and detail summaries")
+      .addDropdown((d) =>
+        d
+          .addOption("zh", "Chinese")
+          .addOption("en", "English")
+          .setValue(s.output.summaryLanguage ?? "zh")
+          .onChange(async (v) => {
+            s.output.summaryLanguage = v === "en" ? "en" : "zh";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Run time (HH:MM)")
       .setDesc("Local time the scheduler aims to fire today's batch. Earlier ticks for today are skipped.")
       .addText((t) =>

@@ -242,6 +242,65 @@ describe("summarizeDaily link style", () => {
     expect(calls[0][0].content as string).toMatchSnapshot();
   });
 
+  it("uses the English daily prompt when configured", async () => {
+    const calls: any[] = [];
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        calls.push(messages);
+        return [
+          "# arXiv astro-ph Daily Digest 2026-06-13",
+          "1 relevant paper, including 0 with detail notes.",
+          "",
+          "## Topic",
+          "### English Paper",
+          "> Source sections: Abstract",
+          "- **Authors**: A. Author et al.",
+          "- **arXiv**: [2606.12345](https://arxiv.org/abs/2606.12345)",
+          "- **Research problem**: x",
+          "- **Method design**: x",
+          "- **Core results**: x",
+          "- **Research value**: x",
+          "- **Scope and limits**: x",
+        ].join("\n");
+      }),
+    };
+    const out = await summarizeDaily(
+      [
+        {
+          id: "2606.12345",
+          title: "English Paper",
+          authors: "A. Author",
+          abstract: "abstract",
+          category: "topic",
+          isDetail: false,
+          abstractConclusion: "## Abstract\nabstract",
+          fullSections: null,
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "topic", name: "Topic", tag: "topic", description: "topic", detail: false },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        summaryLanguage: "en",
+      },
+    );
+
+    const sys = calls[0][0].content as string;
+    expect(sys).toContain("Write in English");
+    expect(sys).toContain("## [Display name]");
+    expect(sys).toContain("- **Research problem**");
+    expect(sys).toContain("# arXiv astro-ph Daily Digest 2026-06-13");
+    expect(sys).not.toContain("使用中文撰写");
+    expect(out).toContain("- **Research problem**: x");
+  });
+
   it("detail prompt is a structured paper-critic", async () => {
     const calls: any[] = [];
     const llm = {
@@ -292,6 +351,48 @@ describe("summarizeDaily link style", () => {
     expect(user).toContain("<paper_data>");
     expect(user).toContain("标题: Critic Paper");
     expect(user).toContain("arXiv: https://arxiv.org/abs/2606.12345");
+  });
+
+  it("uses the English detail prompt when configured", async () => {
+    const calls: any[] = [];
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        calls.push(messages);
+        return "## Research Problem\nx";
+      }),
+    };
+    await summarizePaperDetail(
+      {
+        id: "2606.12345",
+        title: "English Detail Paper",
+        authors: "A. Author",
+        abstract: "abstract",
+        category: "topic",
+        isDetail: true,
+        abstractConclusion: "## Abstract\nabstract",
+        fullSections: "## Method\nWe model the likelihood.",
+      },
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "t", name: "Cosmology", tag: "topic", description: "d", detail: true },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+        summaryLanguage: "en",
+      },
+    );
+    const sys = calls[0][0].content as string;
+    const user = calls[0][1].content as string;
+    expect(sys).toContain("generate a detailed English paper summary");
+    expect(sys).toContain("## Research Problem");
+    expect(sys).toContain("## Reading Value");
+    expect(sys).toContain("Read closely");
+    expect(sys).not.toContain("## 研究问题");
+    expect(user).toContain("标题: English Detail Paper");
   });
 
   it("daily prompt guards injection and wraps input", async () => {

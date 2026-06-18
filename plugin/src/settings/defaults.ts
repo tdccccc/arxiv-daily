@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     dailyDir: "arxiv-daily/daily",
     papersDir: "arxiv-daily/papers",
     linkStyle: "wikilink",
+    summaryLanguage: "zh",
   },
   schedule: {
     enabled: false,

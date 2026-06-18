@@ -21,6 +21,7 @@ describe("CLI config loader", () => {
     expect(cfg.cacheDir).toBe("/workspace/.arxiv-daily/cache");
     expect(cfg.linkStyle).toBe("wikilink");
     expect(cfg.settings.output.linkStyle).toBe("wikilink");
+    expect(cfg.settings.output.summaryLanguage).toBe("zh");
     expect(cfg.settings.llm.apiKey).toBe("key");
     expect(cfg.settings.arxiv.categories).toEqual(["astro-ph"]);
   });
@@ -55,6 +56,7 @@ describe("CLI config loader", () => {
           output: {
             dailyDir: "daily",
             papersDir: "papers",
+            summaryLanguage: "en",
           },
         }),
     });
@@ -71,6 +73,7 @@ describe("CLI config loader", () => {
     expect(cfg.settings.arxiv.categories).toEqual(["cs.LG"]);
     expect(cfg.settings.arxiv.topics).toHaveLength(1);
     expect(cfg.settings.output.dailyDir).toBe("daily");
+    expect(cfg.settings.output.summaryLanguage).toBe("en");
   });
 
   it("lets env override file settings", async () => {
@@ -83,6 +86,7 @@ describe("CLI config loader", () => {
         ARXIV_DAILY_CATEGORIES: "astro-ph,cs.LG,astro-ph",
         ARXIV_DAILY_DAILY_DIR: "env-daily",
         ARXIV_DAILY_LINK_STYLE: "relative",
+        ARXIV_DAILY_SUMMARY_LANGUAGE: "en",
         ARXIV_DAILY_VAULT_ROOT: "/vault",
         ARXIV_DAILY_TOPICS_JSON: JSON.stringify([
           {
@@ -107,6 +111,7 @@ describe("CLI config loader", () => {
     expect(cfg.vaultRoot).toBe("/vault");
     expect(cfg.linkStyle).toBe("relative");
     expect(cfg.settings.output.linkStyle).toBe("relative");
+    expect(cfg.settings.output.summaryLanguage).toBe("en");
     expect(cfg.settings.llm.apiKey).toBe("env-key");
     expect(cfg.settings.llm.model).toBe("env-model");
     expect(cfg.settings.arxiv.category).toBe("astro-ph");
@@ -136,5 +141,17 @@ describe("CLI config loader", () => {
         },
       }),
     ).rejects.toThrow(/invalid linkStyle/);
+
+    await expect(
+      loadCliConfig({
+        cwd: "/workspace",
+        env: { ARXIV_DAILY_SUMMARY_LANGUAGE: "fr" },
+        readText: async () => {
+          const err = new Error("missing") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        },
+      }),
+    ).rejects.toThrow(/invalid summaryLanguage/);
   });
 });

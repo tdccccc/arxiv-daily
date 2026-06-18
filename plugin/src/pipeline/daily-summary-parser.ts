@@ -1,11 +1,11 @@
 import type { PaperSummary } from "../services/paper-index";
 
-const FIELD_LABELS: Array<[keyof PaperSummary, string]> = [
-  ["coreProblem", "核心问题"],
-  ["keyMethod", "关键方法"],
-  ["mainResult", "主要结果"],
-  ["whyRelevant", "为什么值得看"],
-  ["limitations", "局限或边界"],
+const FIELD_LABELS: Array<[keyof PaperSummary, string[]]> = [
+  ["coreProblem", ["研究问题", "核心问题", "Research problem"]],
+  ["keyMethod", ["方法设计", "关键方法", "Method design"]],
+  ["mainResult", ["核心结果", "主要结果", "Core results"]],
+  ["whyRelevant", ["研究价值", "为什么值得看", "Research value"]],
+  ["limitations", ["适用边界", "局限或边界", "Scope and limits"]],
 ];
 
 export function extractPaperSummaries(
@@ -22,8 +22,8 @@ export function extractPaperSummaries(
     const sourceSections = extractSourceSections(block);
     if (sourceSections) summary.sourceSections = sourceSections;
 
-    for (const [key, label] of FIELD_LABELS) {
-      const value = extractBulletField(block, label);
+    for (const [key, labels] of FIELD_LABELS) {
+      const value = extractAnyBulletField(block, labels);
       if (value) summary[key] = value;
     }
 
@@ -47,6 +47,7 @@ function extractArxivId(block: string): string | null {
 function extractSourceSections(block: string): string {
   return compact(
     /^>\s*信息来源[:：]\s*(.+)$/m.exec(block)?.[1] ??
+      /^>\s*Source sections[:：]\s*(.+)$/im.exec(block)?.[1] ??
       /^Source sections[:：]\s*(.+)$/im.exec(block)?.[1] ??
       "",
   );
@@ -59,6 +60,14 @@ function extractBulletField(block: string, label: string): string {
     "m",
   );
   return compact(re.exec(block)?.[1] ?? "");
+}
+
+function extractAnyBulletField(block: string, labels: string[]): string {
+  for (const label of labels) {
+    const value = extractBulletField(block, label);
+    if (value) return value;
+  }
+  return "";
 }
 
 function compact(value: string): string {

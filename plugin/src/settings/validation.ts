@@ -28,6 +28,13 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
   ) {
     reasons.push(`Invalid link style: ${settings.output.linkStyle}`);
   }
+  if (
+    settings.output.summaryLanguage &&
+    settings.output.summaryLanguage !== "zh" &&
+    settings.output.summaryLanguage !== "en"
+  ) {
+    reasons.push(`Invalid summary language: ${settings.output.summaryLanguage}`);
+  }
   const seenCategories = new Set<string>();
   for (const category of settings.arxiv.categories ?? []) {
     const trimmed = category.trim();

@@ -163,6 +163,7 @@ export class ManualFetchService {
         logger,
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
+        summaryLanguage: this.deps.output.summaryLanguage,
       });
     } catch (e) {
       logger.error(`manual-fetch: LLM summary failed for ${id}`, e);
