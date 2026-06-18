@@ -1,7 +1,7 @@
 {
   "id": "arxiv-daily",
   "name": "arXiv Daily",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "minAppVersion": "1.4.0",
   "description": "Daily arXiv tracker that filters and summarizes papers via LLM into your vault.",
   "author": "Da-Chuan Tian",
