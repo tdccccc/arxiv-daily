@@ -14,7 +14,7 @@ import dailySystemTemplate from "../prompts/daily-summary.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
 
-const DETAIL_TEMPERATURE_CAP = 0.3;
+const TEMPERATURE_CAP = 0.3;
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -147,7 +147,7 @@ async function callDailyLlm(
         content: `以下是今日筛选出的论文：\n\n<paper_data>\n${papersInfo}</paper_data>`,
       },
     ],
-    { temperature: llmTemperature, signal: deps.signal },
+    { temperature: Math.min(llmTemperature, TEMPERATURE_CAP), signal: deps.signal },
   );
 }
 
@@ -417,7 +417,7 @@ export async function summarizePaperDetail(
       { role: "user", content: userContent },
     ],
     {
-      temperature: Math.min(deps.llmTemperature, DETAIL_TEMPERATURE_CAP),
+      temperature: Math.min(deps.llmTemperature, TEMPERATURE_CAP),
       signal: deps.signal,
     },
   );
