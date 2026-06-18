@@ -34,18 +34,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     sectionCharLimit: 16000,
     paperCharLimit: 100_000,
     dailyCharLimit: 400_000,
-    skipSections: [
-      "reference",
-      "bibliography",
-      "appendix",
-      "acknowledgement",
-      "acknowledgment",
-      "author contribution",
-      "data availability",
-      "conflict of interest",
-      "orcid",
-    ],
-    prioritySections: ["abstract", "conclusion", "summary"],
     logLevel: "info",
   },
 };

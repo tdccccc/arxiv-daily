@@ -126,8 +126,6 @@ export class ManualFetchService {
         isDetail: true,
         sectionCharLimit: this.deps.advanced.sectionCharLimit,
         paperCharLimit: this.deps.advanced.paperCharLimit,
-        skipSections: this.deps.advanced.skipSections,
-        prioritySections: this.deps.advanced.prioritySections,
       });
     } catch (e) {
       logger.error(`manual-fetch: content fetch failed for ${id}`, e);

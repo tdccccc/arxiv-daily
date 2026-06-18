@@ -1,0 +1,32 @@
+Use case: productivity-visual
+Asset type: widescreen 16:9 product introduction hero poster for an Obsidian plugin
+
+Primary request:
+Create a polished hero image for an academic research workflow plugin called arXiv Daily, but do not render the product name or any readable text in the image.
+
+Scene/backdrop:
+A modern dark-mode knowledge workspace on a desktop screen, inspired by a serious note-taking and research dashboard environment without using any official app logo or trademark. The workspace sits on a dark graphite background with subtle depth, clean panels, and restrained technical polish.
+
+Subject:
+The image should visually explain a research workflow: daily research papers flow into the workspace, the plugin filters papers by research topics, generates Markdown-like daily report pages, shows a dashboard with search and filter controls, calendar blocks, starred paper markers, progress/status indicators, and lets users open paper notes, abstract paper pages, PDF-like documents, and detailed summaries. Use purely abstract UI glyphs, rows, chips, cards, dots, bars, icons, and placeholder line blocks. No letters, no numbers, no words.
+
+Style/medium:
+Professional SaaS/product illustration, crisp semi-realistic UI mockup, subtle 3D depth, clean research productivity aesthetic. Serious academic workflow tool, premium and trustworthy, not playful, not cartoonish.
+
+Composition/framing:
+16:9 landscape hero image. Main dashboard interface occupies the right half of the frame. Leave generous clean negative space on the left and lower-left area for later overlaid Chinese text. Around the dashboard, include a few floating paper cards, markdown-like note pages, abstract research-paper icons, PDF-like icons, and subtle workflow arrows from an abstract feed area to filter chips to daily report pages to dashboard review. Keep hierarchy clear, spacious, and not cluttered.
+
+Lighting/mood:
+Calm, focused, technical, high-end dark interface lighting. Soft screen glow, realistic spacing, subtle shadows, gentle dimensionality.
+
+Color palette:
+Dark graphite and charcoal background, restrained purple accent, abstract arXiv-red accent, white/off-white paper surfaces, small green success/progress accents. Balanced palette, not dominated by purple gradients.
+
+Materials/textures:
+Glass-like dark UI panels, matte paper cards, crisp iconography, subtle bevels and shadows, clean vector-like UI precision with semi-realistic depth.
+
+Text:
+No text. Do not render any readable characters.
+
+Constraints:
+No readable text. No Chinese characters. No fake words. No letters. No numbers. No logos. No trademarks. No watermark. Do not use the official Obsidian logo or official arXiv logo. Use only abstract visual references. Avoid busy clutter. Avoid cartoon mascots. Avoid decorative blobs, bokeh, or generic gradient orbs. Make it look like a serious academic research workflow tool.

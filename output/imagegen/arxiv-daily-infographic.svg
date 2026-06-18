@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="1152" viewBox="0 0 2048 1152">
+  <defs>
+    <style>
+      .font { font-family: "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif; }
+      .bg { fill: #f5f6fa; }
+      .card { fill: #ffffff; stroke: #dbe1ee; stroke-width: 2; }
+      .panel { fill: #fbfbfd; stroke: #d7dce8; stroke-width: 2; }
+      .soft { fill: #eef1f7; }
+      .soft2 { fill: #f7f8fb; }
+      .ink { fill: #1f2430; }
+      .muted { fill: #647087; }
+      .faint { fill: #8b94a8; }
+      .accent { fill: #7a67e8; }
+      .accent2 { fill: #f0edff; }
+      .green { fill: #2aa876; }
+      .red { fill: #c7443f; }
+      .line { stroke: #c4ccda; stroke-width: 2.5; fill: none; }
+      .arrow { stroke: #7a67e8; stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .title { font-size: 74px; font-weight: 850; letter-spacing: 0; }
+      .subtitle { font-size: 30px; font-weight: 520; }
+      .h2 { font-size: 34px; font-weight: 820; }
+      .h3 { font-size: 24px; font-weight: 780; }
+      .body { font-size: 22px; font-weight: 520; }
+      .small { font-size: 18px; font-weight: 520; }
+      .tiny { font-size: 15px; font-weight: 520; }
+      .ui { font-size: 17px; font-weight: 560; }
+      .ui-bold { font-size: 18px; font-weight: 760; }
+    </style>
+    <marker id="arrowhead" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#7a67e8"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="2048" height="1152"/>
+  <rect x="64" y="54" width="1920" height="1044" rx="34" fill="#ffffff" stroke="#e0e5ef" stroke-width="2"/>
+
+  <g class="font">
+    <text x="118" y="142" class="title ink">arXiv Daily</text>
+    <text x="122" y="194" class="subtitle muted">把每日 arXiv 论文变成 Obsidian 里的筛选、总结、回看工作流</text>
+
+    <g transform="translate(118,246)">
+      <rect x="0" y="0" width="506" height="328" rx="22" fill="#f4f6fb" stroke="#d8dfed" stroke-width="2"/>
+      <text x="32" y="58" class="h2 ink">它有什么用？</text>
+      <g class="body muted">
+        <text x="34" y="116">1. 自动抓取每日 arXiv 新论文</text>
+        <text x="34" y="162">2. 按研究主题筛选、归类和排序</text>
+        <text x="34" y="208">3. 生成 Markdown 日报与论文笔记</text>
+        <text x="34" y="254">4. 在 Dashboard 中搜索、星标、回看</text>
+        <text x="34" y="300">5. 一键打开论文、PDF、日报和详细总结</text>
+      </g>
+    </g>
+
+    <g transform="translate(118,616)">
+      <rect x="0" y="0" width="506" height="320" rx="22" fill="#fff8f2" stroke="#efdbc7" stroke-width="2"/>
+      <text x="32" y="58" class="h2 ink">怎么安装和使用？</text>
+      <g class="body muted">
+        <text x="34" y="118">1. 打开 Obsidian Community plugins</text>
+        <text x="34" y="164">2. Browse 搜索 arXiv Daily</text>
+        <text x="34" y="210">3. Install 并 Enable 插件</text>
+        <text x="34" y="256">4. 设置 API Key、arXiv 分类和研究主题</text>
+        <text x="34" y="302">5. 打开 Dashboard，点击 Run Today</text>
+      </g>
+    </g>
+
+    <g transform="translate(676,224)">
+      <rect x="0" y="0" width="1214" height="764" rx="28" fill="#f8f9fc" stroke="#d9deea" stroke-width="2"/>
+
+      <g transform="translate(28,28)">
+        <text x="0" y="33" class="h3 ink">arXiv Daily Dashboard</text>
+        <rect x="1018" y="4" width="92" height="32" rx="7" class="soft"/>
+        <text x="1064" y="26" text-anchor="middle" class="ui muted">Refresh</text>
+      </g>
+
+      <g transform="translate(28,86)">
+        <rect x="0" y="0" width="128" height="34" rx="7" fill="#ffffff" stroke="#7a67e8" stroke-width="2"/>
+        <text x="22" y="24" class="ui ink">Starred</text>
+        <rect x="90" y="7" width="24" height="20" rx="10" fill="#dfe3ec"/>
+        <text x="98" y="22" class="tiny muted">8</text>
+        <rect x="138" y="0" width="104" height="34" rx="7" class="soft" stroke="#dfe3ec"/>
+        <text x="168" y="24" class="ui muted">All</text>
+        <rect x="204" y="7" width="28" height="20" rx="10" fill="#dfe3ec"/>
+        <text x="212" y="22" class="tiny muted">42</text>
+        <rect x="252" y="0" width="164" height="34" rx="7" class="soft" stroke="#dfe3ec"/>
+        <text x="276" y="24" class="ui muted">Detail summary</text>
+
+        <rect x="650" y="0" width="88" height="34" rx="7" class="soft" stroke="#dfe3ec"/>
+        <text x="694" y="23" text-anchor="middle" class="ui muted">Refresh</text>
+        <rect x="748" y="0" width="112" height="34" rx="7" class="green"/>
+        <text x="804" y="23" text-anchor="middle" class="ui" fill="#ffffff">Run Today</text>
+        <rect x="870" y="0" width="126" height="34" rx="7" class="soft" stroke="#dfe3ec"/>
+        <text x="933" y="23" text-anchor="middle" class="ui muted">Run Pending</text>
+        <rect x="1006" y="0" width="84" height="34" rx="7" class="soft" stroke="#dfe3ec"/>
+        <text x="1048" y="23" text-anchor="middle" class="ui muted">More</text>
+      </g>
+
+      <g transform="translate(28,146)">
+        <rect x="0" y="0" width="642" height="182" rx="12" fill="#ffffff" stroke="#e0e5ef"/>
+        <text x="20" y="32" class="ui-bold ink">Filters</text>
+        <text x="20" y="72" class="tiny muted">Search</text>
+        <rect x="20" y="84" width="586" height="32" rx="6" fill="#f2f4f8" stroke="#dfe3ec"/>
+        <text x="36" y="106" class="tiny faint">title, author, arXiv ID, summary...</text>
+        <text x="20" y="146" class="tiny muted">Topic</text>
+        <rect x="76" y="124" width="188" height="32" rx="6" fill="#f2f4f8" stroke="#dfe3ec"/>
+        <text x="96" y="146" class="tiny faint">Any topic</text>
+        <text x="294" y="146" class="tiny muted">First seen</text>
+        <rect x="376" y="124" width="148" height="32" rx="6" fill="#f2f4f8" stroke="#dfe3ec"/>
+        <rect x="536" y="124" width="34" height="32" rx="6" class="soft" stroke="#dfe3ec"/>
+
+        <g transform="translate(0,206)">
+          <rect x="0" y="0" width="642" height="74" rx="10" fill="#ffffff" stroke="#e0e5ef"/>
+          <g transform="translate(22,17)">
+            <text x="0" y="26" class="tiny muted">Total</text><text x="58" y="26" class="ui-bold ink">42</text>
+            <text x="152" y="26" class="tiny muted">Starred</text><text x="224" y="26" class="ui-bold ink">8</text>
+            <text x="318" y="26" class="tiny muted">Details</text><text x="386" y="26" class="ui-bold ink">5</text>
+            <text x="478" y="26" class="tiny muted">Daily reports</text><text x="584" y="26" class="ui-bold ink">12</text>
+          </g>
+        </g>
+      </g>
+
+      <g transform="translate(704,146)">
+        <rect x="0" y="0" width="454" height="280" rx="12" fill="#ffffff" stroke="#e0e5ef"/>
+        <text x="20" y="32" class="ui-bold ink">Daily reports</text>
+        <rect x="228" y="10" width="58" height="28" rx="6" class="soft" stroke="#dfe3ec"/>
+        <text x="257" y="29" text-anchor="middle" class="tiny muted">Today</text>
+        <text x="320" y="30" class="tiny muted">2026-06</text>
+        <g transform="translate(20,58)">
+          <g class="tiny muted">
+            <text x="14" y="18">Sun</text><text x="72" y="18">Mon</text><text x="132" y="18">Tue</text><text x="190" y="18">Wed</text><text x="252" y="18">Thu</text><text x="312" y="18">Fri</text><text x="374" y="18">Sat</text>
+          </g>
+          <g transform="translate(0,30)">
+            <rect x="0" y="0" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="58" y="0" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="116" y="0" width="48" height="34" rx="5" class="soft2" stroke="#7a67e8" stroke-width="2"/>
+            <rect x="174" y="0" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="232" y="0" width="48" height="34" rx="5" class="soft2" stroke="#7a67e8" stroke-width="2"/>
+            <rect x="290" y="0" width="48" height="34" rx="5" class="soft2" stroke="#7a67e8" stroke-width="2"/>
+            <rect x="348" y="0" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="0" y="44" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="58" y="44" width="48" height="34" rx="5" class="soft2" stroke="#7a67e8" stroke-width="2"/>
+            <rect x="116" y="44" width="48" height="34" rx="5" fill="#f0edff" stroke="#7a67e8" stroke-width="2"/>
+            <rect x="174" y="44" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="232" y="44" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="290" y="44" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+            <rect x="348" y="44" width="48" height="34" rx="5" class="soft2" stroke="#e0e5ef"/>
+          </g>
+        </g>
+      </g>
+
+      <g transform="translate(28,454)">
+        <rect x="0" y="0" width="1130" height="46" rx="8" fill="#ffffff"/>
+        <text x="18" y="30" class="tiny muted">0 selected</text>
+        <rect x="116" y="9" width="84" height="28" rx="6" class="soft" stroke="#dfe3ec"/>
+        <text x="135" y="29" class="tiny muted">Save</text>
+        <rect x="208" y="9" width="98" height="28" rx="6" class="soft" stroke="#dfe3ec"/>
+        <text x="228" y="29" class="tiny muted">Ignore</text>
+        <text x="736" y="29" class="tiny muted">Showing 20</text>
+        <rect x="824" y="9" width="102" height="28" rx="6" class="soft" stroke="#dfe3ec"/>
+        <text x="842" y="29" class="tiny muted">20 rows</text>
+        <text x="948" y="29" class="tiny muted">Sort</text>
+        <rect x="984" y="9" width="124" height="28" rx="6" class="soft" stroke="#dfe3ec"/>
+        <text x="1000" y="29" class="tiny muted">Starred first</text>
+      </g>
+
+      <g transform="translate(28,514)">
+        <rect x="0" y="0" width="1130" height="194" rx="8" fill="#ffffff" stroke="#d9deea"/>
+        <rect x="0" y="0" width="1130" height="38" rx="8" fill="#eef1f7"/>
+        <text x="26" y="25" class="tiny muted">☐</text>
+        <text x="72" y="25" class="tiny muted">Star</text>
+        <text x="150" y="25" class="tiny muted">Title</text>
+        <text x="742" y="25" class="tiny muted">Topic</text>
+        <text x="850" y="25" class="tiny muted">Published</text>
+        <text x="996" y="25" class="tiny muted">Actions</text>
+
+        <g transform="translate(0,38)">
+          <rect x="0" y="0" width="1130" height="52" fill="#ffffff"/>
+          <text x="26" y="31" class="tiny muted">☐</text>
+          <text x="78" y="31" class="ui" fill="#7a67e8">★</text>
+          <text x="150" y="22" class="ui-bold ink">A relevant paper title</text>
+          <text x="150" y="42" class="tiny muted">YYMM.NNNNN · Authors</text>
+          <text x="742" y="31" class="tiny muted">主题</text>
+          <text x="850" y="31" class="tiny muted">YYYY-MM-DD</text>
+          <text x="998" y="31" class="tiny muted">□ □ □ □</text>
+        </g>
+        <line x1="0" y1="90" x2="1130" y2="90" stroke="#e1e5ee"/>
+        <g transform="translate(0,90)">
+          <rect x="0" y="0" width="1130" height="52" fill="#ffffff"/>
+          <text x="26" y="31" class="tiny muted">☐</text>
+          <text x="78" y="31" class="ui faint">☆</text>
+          <text x="150" y="22" class="ui-bold ink">Another paper worth reviewing</text>
+          <text x="150" y="42" class="tiny muted">YYMM.NNNNN · Authors</text>
+          <text x="742" y="31" class="tiny muted">主题</text>
+          <text x="850" y="31" class="tiny muted">YYYY-MM-DD</text>
+          <text x="998" y="31" class="tiny muted">□ □ □ □</text>
+        </g>
+        <line x1="0" y1="142" x2="1130" y2="142" stroke="#e1e5ee"/>
+        <g transform="translate(0,142)">
+          <rect x="0" y="0" width="1130" height="52" fill="#ffffff"/>
+          <text x="26" y="31" class="tiny muted">☐</text>
+          <text x="78" y="31" class="ui faint">☆</text>
+          <text x="150" y="22" class="ui-bold ink">Paper with detail summary available</text>
+          <text x="150" y="42" class="tiny muted">YYMM.NNNNN · Authors</text>
+          <text x="742" y="31" class="tiny muted">主题</text>
+          <text x="850" y="31" class="tiny muted">YYYY-MM-DD</text>
+          <text x="998" y="31" class="tiny muted">□ □ □ □</text>
+        </g>
+      </g>
+    </g>
+
+  </g>
+</svg>

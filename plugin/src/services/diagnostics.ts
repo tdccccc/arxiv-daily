@@ -95,8 +95,6 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     `  sectionCharLimit: ${settings.advanced.sectionCharLimit}`,
     `  paperCharLimit: ${settings.advanced.paperCharLimit}`,
     `  dailyCharLimit: ${settings.advanced.dailyCharLimit}`,
-    `  prioritySections: ${formatList(settings.advanced.prioritySections)}`,
-    `  skipSections: ${formatList(settings.advanced.skipSections)}`,
     `  logLevel: ${settings.advanced.logLevel}`,
     "",
     "lookbackDates:",

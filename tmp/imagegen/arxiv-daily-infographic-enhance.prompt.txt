@@ -1,0 +1,44 @@
+Use case: productivity-visual
+Asset type: polished product infographic for an Obsidian plugin
+
+Input image role:
+The input image is the current infographic layout and content reference. Preserve its core information, Chinese wording, and Dashboard structure, but redesign it to look more visually attractive, refined, and memorable.
+
+Primary request:
+Create a more beautiful, polished, modern flat product infographic for "arXiv Daily", an Obsidian plugin for daily arXiv paper discovery and review.
+
+Keep the same main content:
+- Title: "arXiv Daily"
+- Chinese subtitle about turning daily arXiv papers into an Obsidian filtering, summarizing, and review workflow
+- Left-side sections explaining what the plugin does and how to install/use it
+- Right-side Dashboard mockup with tabs, filters, stats, daily reports calendar, Run Today / Run Pending / More buttons, and a paper table
+
+Design direction:
+Make the result less stiff than the reference. Use a high-end flat SaaS/product illustration style with better visual hierarchy, more elegant spacing, subtle depth, and a stronger hero composition.
+Keep it clean, academic, and professional. It should feel like a polished plugin showcase graphic for a README, release page, or Community Plugins listing.
+
+Composition:
+16:9 landscape.
+Keep the title and explanatory sections on the left.
+Keep the Dashboard mockup as the main visual on the right.
+Use tasteful decorative paper cards, thin workflow lines, subtle background shapes, and soft shadows if helpful, but do not clutter the image.
+
+Dashboard fidelity:
+The Dashboard should remain recognizably similar to the input:
+tabs, toolbar buttons, filters, stats, daily reports calendar, batch controls, and table columns.
+Do not turn it into a generic app mockup.
+
+Text constraints:
+Preserve all Chinese text from the input as accurately as possible.
+Do not invent extra paragraphs.
+Do not add specific user config, personal paths, or concrete topic names.
+Avoid fake Chinese characters, garbled text, misspellings, or random labels.
+If any small UI text is difficult, simplify it rather than inventing nonsense.
+
+Visual constraints:
+No official Obsidian logo.
+No official arXiv logo.
+No watermarks.
+No mascots.
+No excessive gradients, blob decorations, or busy marketing clutter.
+Keep the image flat, crisp, and readable.

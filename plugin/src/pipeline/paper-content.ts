@@ -20,8 +20,6 @@ export interface PaperContentOpts {
   isDetail: boolean;
   sectionCharLimit: number;
   paperCharLimit: number;
-  skipSections: string[];
-  prioritySections: string[];
 }
 
 export interface PaperContentSourceCache {
@@ -63,8 +61,6 @@ export class PaperContentFetcher {
       const sectionsOpts: ExtractSectionsOpts = {
         sectionCharLimit: opts.sectionCharLimit,
         paperCharLimit: opts.paperCharLimit,
-        skipSections: opts.skipSections,
-        prioritySections: opts.prioritySections,
       };
       const fs = opts.isDetail ? extractSections(html, sectionsOpts) : null;
       if (ac && (!opts.isDetail || fs)) {

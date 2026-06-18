@@ -45,8 +45,6 @@ export interface AdvancedSettings {
   sectionCharLimit: number;
   paperCharLimit: number;
   dailyCharLimit: number;
-  skipSections: string[];
-  prioritySections: string[];
   logLevel: "debug" | "info" | "warn" | "error";
 }
 

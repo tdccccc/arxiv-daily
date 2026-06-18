@@ -44,8 +44,6 @@ describe("section-extractor", () => {
     const out = extractSections(sample, {
       sectionCharLimit: 8000,
       paperCharLimit: 50000,
-      skipSections: ["reference", "appendix", "bibliography"],
-      prioritySections: ["abstract", "conclusion", "summary"],
     });
     expect(out).toContain("## Introduction");
     expect(out).toContain("## Methods");
@@ -58,8 +56,6 @@ describe("section-extractor", () => {
     const out = extractSections("<html><body><p>no headings here</p></body></html>", {
       sectionCharLimit: 8000,
       paperCharLimit: 50000,
-      skipSections: [],
-      prioritySections: [],
     });
     expect(out).toBeNull();
   });
@@ -70,8 +66,6 @@ describe("section-extractor", () => {
     const out = extractSections(html, {
       sectionCharLimit: 1000,
       paperCharLimit: 50000,
-      skipSections: [],
-      prioritySections: [],
     });
     expect(out).toBeTruthy();
     expect(out!.length).toBeLessThan(2000);
@@ -89,8 +83,6 @@ describe("section-extractor", () => {
     const out = extractSections(html, {
       sectionCharLimit: 2000,
       paperCharLimit: 700,
-      skipSections: [],
-      prioritySections: [],
     });
     expect(out).toContain("## Photometric redshift inference");
     expect(out).toContain("## Cosmological constraints");
@@ -107,8 +99,6 @@ describe("section-extractor", () => {
     const out = extractSections(html, {
       sectionCharLimit: 8000,
       paperCharLimit: 50000,
-      skipSections: [],
-      prioritySections: [],
     });
     expect(out).toContain("Figure caption: Figure 1");
     expect(out).toContain("Table text: Table 1");
@@ -131,8 +121,6 @@ describe("section-extractor", () => {
     const out = extractSections(html, {
       sectionCharLimit: 2000,
       paperCharLimit: 900,
-      skipSections: [],
-      prioritySections: [],
     });
     expect(out).toContain("## Introduction");
     expect(out).not.toContain("## Notation");

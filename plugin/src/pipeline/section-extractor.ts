@@ -5,8 +5,6 @@ export interface AbstractConclusionOpts {
 export interface ExtractSectionsOpts {
   sectionCharLimit: number;
   paperCharLimit: number;
-  skipSections: string[];
-  prioritySections: string[];
 }
 
 export type SectionKind =
@@ -231,17 +229,13 @@ export function extractSections(html: string, opts: ExtractSectionsOpts): string
   const all: S[] = [];
   for (const [index, h] of headers.entries()) {
     const title = (h.textContent ?? "").trim();
-    const lower = title.toLowerCase();
-    if (opts.skipSections.some((s) => lower.includes(s.toLowerCase()))) continue;
     const body = textBetween(h).slice(0, opts.sectionCharLimit);
     if (!body) continue;
     const kinds = classifySection(title, body);
     if (kinds.some((k) => ["reference", "appendix", "acknowledgement"].includes(k))) {
       continue;
     }
-    const priority =
-      opts.prioritySections.some((s) => lower.includes(s.toLowerCase())) ||
-      kinds.some((k) => k === "abstract" || k === "conclusion");
+    const priority = kinds.some((k) => k === "abstract" || k === "conclusion");
     const rank = sectionRank(kinds, priority);
     all.push({ title, body, kinds, priority, rank, index });
   }

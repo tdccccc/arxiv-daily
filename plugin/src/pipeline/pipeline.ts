@@ -169,8 +169,6 @@ export class ArxivPipeline {
           isDetail: true,
           sectionCharLimit: this.deps.advanced.sectionCharLimit,
           paperCharLimit: this.deps.advanced.paperCharLimit,
-          skipSections: this.deps.advanced.skipSections,
-          prioritySections: this.deps.advanced.prioritySections,
         });
         enriched.push({
           ...p,

@@ -137,8 +137,6 @@ ${limitation}
     const result = extractLatexSource(texBuffer(source), {
       sectionCharLimit: 2000,
       paperCharLimit: 800,
-      skipSections: ["references", "appendix"],
-      prioritySections: [],
     });
     const full = result.fullSections ?? "";
     expect(full).toContain("## Limitations");

@@ -4,8 +4,6 @@ import { classifySection } from "./section-extractor";
 export interface SourceExtractOpts {
   sectionCharLimit: number;
   paperCharLimit: number;
-  skipSections: string[];
-  prioritySections: string[];
 }
 
 export interface SourceExtractResult {
@@ -437,7 +435,7 @@ function shouldSkipSection(section: Section, opts: SourceExtractOpts): boolean {
   ) {
     return true;
   }
-  const skipTerms = [...opts.skipSections, "references", "bibliography"];
+  const skipTerms = ["references", "bibliography"];
   return skipTerms.some((term) => {
     const lower = term.trim().toLowerCase();
     return lower && title.includes(lower);
@@ -453,14 +451,6 @@ function compareSectionPriority(opts: SourceExtractOpts) {
 
 function sectionRank(section: Section, opts: SourceExtractOpts): number {
   const title = section.title.toLowerCase();
-  if (
-    opts.prioritySections.some((term) => {
-      const lower = term.trim().toLowerCase();
-      return lower && title.includes(lower);
-    })
-  ) {
-    return 0;
-  }
   const classified = classifySection(section.title, section.body);
   if (classified.includes("abstract") || classified.includes("conclusion")) {
     return 0;

@@ -527,40 +527,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     this.attachHelp(
-      this.textareaSetting(
-        containerEl,
-        "Skip sections (one per line)",
-        "",
-        s.advanced.skipSections.join("\n"),
-        async (v) => {
-          s.advanced.skipSections = v
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean);
-          await this.plugin.saveSettings();
-        },
-      ),
-      "Section headings to drop before sending the paper to the LLM (e.g. References, Acknowledgments). One per line, case-insensitive.",
-    );
-
-    this.attachHelp(
-      this.textareaSetting(
-        containerEl,
-        "Priority sections (one per line)",
-        "",
-        s.advanced.prioritySections.join("\n"),
-        async (v) => {
-          s.advanced.prioritySections = v
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean);
-          await this.plugin.saveSettings();
-        },
-      ),
-      "Section headings to keep first when trimming to fit the char limit (e.g. Abstract, Conclusion).",
-    );
-
-    this.attachHelp(
       new Setting(containerEl).setName("Log level").addDropdown((d) =>
         d
           .addOption("debug", "debug")
