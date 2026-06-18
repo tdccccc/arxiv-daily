@@ -158,7 +158,7 @@ export async function summarizeDaily(
 ): Promise<string> {
   throwIfCancelled(deps.signal);
   const nTotal = papers.length;
-  const nDetail = papers.filter((p) => p.isDetail).length;
+  const nDetail = papers.filter((p) => p.isDetail || p.paperPath).length;
   const totalChars = papers.reduce((s, p) => s + buildPaperBlock(p).length, 0);
   deps.logger.info(
     `summarizeDaily: ${totalChars} chars (limit ${deps.advanced.dailyCharLimit})`,
