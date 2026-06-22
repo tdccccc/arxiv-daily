@@ -738,7 +738,6 @@ class ArxivDailyDashboardView extends ItemView {
       this.render();
     });
 
-    const byDate = new Map(this.dailyReports.map((report) => [report.date, report]));
     const weekdays = section.createEl("div", {
       cls: "arxiv-daily-dashboard__calendar-weekdays",
     });
@@ -749,40 +748,40 @@ class ArxivDailyDashboardView extends ItemView {
     const grid = section.createEl("div", {
       cls: "arxiv-daily-dashboard__calendar-grid",
     });
-    for (const cell of calendarCells(month)) {
-      const report = cell.date ? byDate.get(cell.date) : undefined;
+
+    // Use the new buildCalendarCells method
+    for (const cell of this.buildCalendarCells(month)) {
       const button = grid.createEl("button", {
-        cls: "arxiv-daily-dashboard__calendar-day",
+        cls: this.getCalendarCellClasses(cell),
         attr: {
           type: "button",
-          "aria-label": report
-            ? `Open daily report ${report.date}: ${report.papers} indexed papers${report.starred ? `, ${report.starred} starred` : ""}`
-            : cell.date
-              ? `No daily report ${cell.date}`
-              : "Empty calendar cell",
+          "aria-label": this.getCalendarCellAriaLabel(cell),
         },
       }) as HTMLButtonElement;
+
       if (!cell.date) {
         button.disabled = true;
         button.addClass("is-empty");
         continue;
       }
+
+      // Date number
       button.createSpan({
         cls: "arxiv-daily-dashboard__calendar-day-number",
         text: String(Number(cell.date.slice(-2))),
       });
+
+      // Today indicator
       if (cell.date === today) button.addClass("is-today");
-      if (report) {
-        button.addClass("has-report");
-        button.createSpan({
-          cls: "arxiv-daily-dashboard__calendar-day-count",
-          text: String(report.papers),
-        });
-        button.addEventListener("click", () => {
-          void openMarkdownFileOnce(this.plugin.app, report.path);
-        });
-      } else {
-        button.disabled = true;
+
+      // State-specific rendering
+      switch (cell.state) {
+        case "has-report":
+          this.renderReportCell(button, cell);
+          break;
+        case "runnable":
+          this.renderRunnableCell(button, cell);
+          break;
       }
     }
   }
@@ -872,6 +871,70 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     return cells;
+  }
+
+  private getCalendarCellClasses(cell: CalendarCell): string {
+    const classes = ["arxiv-daily-dashboard__calendar-day"];
+
+    if (!cell.date) {
+      classes.push("is-empty");
+    } else if (cell.state === "has-report") {
+      classes.push("has-report");
+    } else if (cell.state === "runnable") {
+      classes.push("is-runnable");
+    }
+
+    return classes.join(" ");
+  }
+
+  private getCalendarCellAriaLabel(cell: CalendarCell): string {
+    if (!cell.date) {
+      return "Empty calendar cell";
+    }
+
+    if (cell.state === "has-report" && cell.report) {
+      return `Open daily report ${cell.report.date}: ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
+    }
+
+    if (cell.state === "runnable") {
+      return `Click to run for ${cell.date}`;
+    }
+
+    return `No daily report ${cell.date}`;
+  }
+
+  private renderRunnableCell(button: HTMLButtonElement, cell: CalendarCell): void {
+    button.addClass("is-runnable");
+
+    // Play icon
+    const icon = button.createSpan({
+      cls: "arxiv-daily-dashboard__calendar-day-icon",
+    });
+    setIcon(icon, "play");
+
+    // Click handler to run
+    button.addEventListener("click", () => {
+      void this.runDateFromCalendar(cell.date!);
+    });
+  }
+
+  private renderReportCell(button: HTMLButtonElement, cell: CalendarCell): void {
+    if (!cell.report) return;
+
+    button.addClass("has-report");
+    button.createSpan({
+      cls: "arxiv-daily-dashboard__calendar-day-count",
+      text: String(cell.report.papers),
+    });
+    button.addEventListener("click", () => {
+      void openMarkdownFileOnce(this.plugin.app, cell.report!.path);
+    });
+  }
+
+  // Task 5 will implement the actual run logic
+  private async runDateFromCalendar(date: string): Promise<void> {
+    // Placeholder: will be implemented in Task 5
+    throw new Error("Not implemented yet");
   }
 
   private renderStats(

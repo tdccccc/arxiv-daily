@@ -19,3 +19,15 @@ describe("Calendar Cell Builder", () => {
     expect(true).toBe(true); // Placeholder
   });
 });
+
+describe("Calendar Cell Rendering", () => {
+  it("should apply correct CSS classes for each state", () => {
+    // Test will verify CSS class application
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should render play icon for runnable dates", () => {
+    // Test will verify icon rendering
+    expect(true).toBe(true); // Placeholder
+  });
+});
