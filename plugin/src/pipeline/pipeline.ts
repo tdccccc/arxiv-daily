@@ -101,8 +101,8 @@ export class ArxivPipeline {
     // 3. Empty day
     if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
-      await this.deps.writer.writeEmptyDaily(dateStr, { dateWindowNote });
-      return { kind: "completed", papersWritten: 0 };
+      // Don't write empty file - let scheduler retry later
+      return { kind: "pending", reason: "no papers from arXiv" };
     }
 
     // 4. Enrich abstracts via Atom API (listings no longer include them)
