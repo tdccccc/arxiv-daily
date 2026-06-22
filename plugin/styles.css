@@ -535,33 +535,11 @@
 
 .arxiv-daily-dashboard__calendar-day.is-runnable .arxiv-daily-dashboard__calendar-day-icon {
   position: absolute;
-  bottom: 3px;
-  right: 3px;
+  bottom: 5px;
+  right: 5px;
   width: 12px;
   height: 12px;
   color: var(--color-green);
-}
-
-.arxiv-daily-dashboard__calendar-day.is-runnable::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 4px 8px;
-  background: var(--background-modifier-tooltip);
-  color: var(--text-normal);
-  border-radius: 4px;
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-  z-index: 10;
-}
-
-.arxiv-daily-dashboard__calendar-day.is-runnable:hover::after {
-  opacity: 1;
 }
 
 .arxiv-daily-dashboard__calendar-day-count {

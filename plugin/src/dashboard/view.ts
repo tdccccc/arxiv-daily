@@ -746,14 +746,12 @@ class ArxivDailyDashboardView extends ItemView {
 
     // Use the new buildCalendarCells method
     for (const cell of this.buildCalendarCells(month)) {
-      const attrs: Record<string, string> = { type: "button" };
-      // Don't set aria-label for runnable cells to avoid native tooltip
-      if (cell.state !== "runnable") {
-        attrs["aria-label"] = this.getCalendarCellAriaLabel(cell);
-      }
       const button = grid.createEl("button", {
         cls: this.getCalendarCellClasses(cell),
-        attr: attrs,
+        attr: {
+          type: "button",
+          "aria-label": this.getCalendarCellAriaLabel(cell),
+        },
       }) as HTMLButtonElement;
 
       if (!cell.date) {
