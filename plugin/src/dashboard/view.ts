@@ -580,12 +580,6 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__header",
     });
     header.createEl("h2", { text: "arXiv Daily Dashboard" });
-
-    // Add settings button
-    const actions = header.createEl("div", {
-      cls: "arxiv-daily-dashboard__header-actions",
-    });
-    this.createSettingsButton(actions);
   }
 
   private renderToolbar(
@@ -672,6 +666,7 @@ class ArxivDailyDashboardView extends ItemView {
       "More arXiv Daily actions",
       (_button, evt) => this.showMoreMenu(evt),
     );
+    this.createSettingsButton(actions);
   }
 
   private renderDailyCalendar(contentEl: HTMLElement): void {
@@ -751,12 +746,14 @@ class ArxivDailyDashboardView extends ItemView {
 
     // Use the new buildCalendarCells method
     for (const cell of this.buildCalendarCells(month)) {
+      const attrs: Record<string, string> = { type: "button" };
+      // Don't set aria-label for runnable cells to avoid native tooltip
+      if (cell.state !== "runnable") {
+        attrs["aria-label"] = this.getCalendarCellAriaLabel(cell);
+      }
       const button = grid.createEl("button", {
         cls: this.getCalendarCellClasses(cell),
-        attr: {
-          type: "button",
-          "aria-label": this.getCalendarCellAriaLabel(cell),
-        },
+        attr: attrs,
       }) as HTMLButtonElement;
 
       if (!cell.date) {
