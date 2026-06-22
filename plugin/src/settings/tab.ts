@@ -210,6 +210,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
     }
 
+    // Get Models button — fetches available models from API
+    const fetchModelsContainer = containerEl.createDiv({
+      cls: "arxiv-daily-settings__fetch-models",
+    });
+    const fetchModelsButton = fetchModelsContainer.createEl("button", {
+      text: "Get Models",
+      cls: "arxiv-daily-settings__fetch-models-btn",
+      attr: { type: "button" },
+    }) as HTMLButtonElement;
+
+    fetchModelsButton.addEventListener("click", async () => {
+      fetchModelsButton.disabled = true;
+      fetchModelsButton.textContent = "Fetching...";
+
+      try {
+        const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
+        const models = await client.fetchModels();
+        this.showModelDropdown(models, fetchModelsContainer);
+      } catch (e) {
+        new Notice(`Failed to fetch models: ${(e as Error).message}`);
+      } finally {
+        fetchModelsButton.disabled = false;
+        fetchModelsButton.textContent = "Get Models";
+      }
+    });
+
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
       ? "Enable Anthropic Extended Thinking"
@@ -867,6 +893,49 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       ok.onclick = () => finish(true);
       modal.onClose = () => finish(false);
       modal.open();
+    });
+  }
+
+  private showModelDropdown(models: string[], container: HTMLElement): void {
+    // Remove existing dropdown if any
+    const existing = container.querySelector(".arxiv-daily-settings__model-dropdown");
+    if (existing) existing.remove();
+
+    if (models.length === 0) {
+      new Notice("No models found");
+      return;
+    }
+
+    const dropdown = container.createDiv({
+      cls: "arxiv-daily-settings__model-dropdown",
+    });
+
+    const select = dropdown.createEl("select", {
+      cls: "arxiv-daily-settings__model-select",
+    });
+
+    for (const model of models) {
+      select.createEl("option", { value: model, text: model });
+    }
+
+    // Pre-select current model if in list
+    const currentModel = this.plugin.settings.llm.model;
+    if (models.includes(currentModel)) {
+      select.value = currentModel;
+    }
+
+    const applyBtn = dropdown.createEl("button", {
+      text: "Apply",
+      cls: "arxiv-daily-settings__model-apply-btn",
+      attr: { type: "button" },
+    }) as HTMLButtonElement;
+
+    applyBtn.addEventListener("click", async () => {
+      this.plugin.settings.llm.model = select.value;
+      await this.plugin.saveSettings();
+      this.refreshSetupGuide();
+      new Notice(`Model set to: ${select.value}`);
+      dropdown.remove();
     });
   }
 

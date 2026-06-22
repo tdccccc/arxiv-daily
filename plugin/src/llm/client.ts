@@ -44,6 +44,91 @@ export class LlmClient {
     }
   }
 
+  async fetchModels(): Promise<string[]> {
+    const baseUrl = this.settings.baseUrl.replace(/\/+$/, "");
+    const apiKey = this.settings.apiKey;
+
+    if (!baseUrl || !apiKey) {
+      throw new Error("Please fill in API Base URL and API Key first");
+    }
+
+    const candidates = this.buildModelUrlCandidates(baseUrl);
+
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          return this.parseModelList(data);
+        }
+      } catch {
+        // Try next candidate
+        continue;
+      }
+    }
+
+    throw new Error("Failed to fetch models from any endpoint");
+  }
+
+  private buildModelUrlCandidates(baseUrl: string): string[] {
+    const candidates: string[] = [];
+
+    // Primary: baseURL + /v1/models
+    candidates.push(`${baseUrl}/v1/models`);
+
+    // If URL ends with known suffix, strip and try
+    const knownSuffixes = [
+      "/api/claudecode",
+      "/api/anthropic",
+      "/apps/anthropic",
+      "/api/coding",
+      "/claudecode",
+      "/anthropic",
+      "/step_plan",
+      "/coding",
+      "/claude",
+    ];
+
+    for (const suffix of knownSuffixes) {
+      if (baseUrl.endsWith(suffix)) {
+        const stripped = baseUrl.slice(0, -suffix.length);
+        candidates.push(`${stripped}/v1/models`);
+        break;
+      }
+    }
+
+    // Fallback: baseURL + /models
+    candidates.push(`${baseUrl}/models`);
+
+    return candidates;
+  }
+
+  private parseModelList(data: unknown): string[] {
+    if (
+      data &&
+      typeof data === "object" &&
+      "data" in data &&
+      Array.isArray((data as { data: unknown }).data)
+    ) {
+      return (data as { data: Array<{ id?: string }> }).data
+        .map((model) => model.id)
+        .filter((id): id is string => Boolean(id));
+    }
+    if (Array.isArray(data)) {
+      return data
+        .map((model: { id?: string; name?: string }) => model.id || model.name)
+        .filter((id): id is string => Boolean(id));
+    }
+    throw new Error("Invalid model list format");
+  }
+
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
     return retry(
       async () => {
