@@ -23,7 +23,7 @@ import {
   validateFilterConfig,
   validateLlmConfig,
 } from "../settings/validation";
-import { daysBefore, formatDate, isWeekendDate, todayInTz } from "../utils/time";
+import { daysBefore, formatDate, isWeekendDate, parseHHMM, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 
@@ -840,10 +840,41 @@ class ArxivDailyDashboardView extends ItemView {
     return dates;
   }
 
+  private isRunnable(date: string): boolean {
+    const today = this.todayDate();
+    const hasFile = this.dailyReports.some(r => r.date === date);
+
+    // In lookback window
+    if (!this.getLookbackDates().has(date)) return false;
+
+    // Not weekend
+    const [y, m, d] = date.split('-').map(Number);
+    if (isWeekendDate({ y, m, d })) return false;
+
+    // No file
+    if (hasFile) return false;
+
+    // If today, check time window
+    if (date === today) {
+      const now = new Date();
+      const settings = this.plugin.settings;
+      const startTime = parseHHMM(settings.schedule.runAtLocal);
+      const endTime = { hour: 18, minute: 0 }; // Default end time
+
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const startMinutes = startTime.hour * 60 + startTime.minute;
+      const endMinutes = endTime.hour * 60 + endTime.minute;
+
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+
+    // Past dates: runnable
+    return true;
+  }
+
   private buildCalendarCells(month: string): CalendarCell[] {
     const cells: CalendarCell[] = [];
     const byDate = new Map(this.dailyReports.map(r => [r.date, r]));
-    const lookbackDates = this.getLookbackDates();
 
     for (const cellDate of calendarCells(month)) {
       if (!cellDate.date) {
@@ -857,7 +888,7 @@ class ArxivDailyDashboardView extends ItemView {
       if (report) {
         // Check if report has 0 papers (no-papers state)
         state = report.papers === 0 ? "no-papers" : "has-report";
-      } else if (lookbackDates.has(cellDate.date)) {
+      } else if (this.isRunnable(cellDate.date)) {
         state = "runnable";
       } else {
         state = "empty";

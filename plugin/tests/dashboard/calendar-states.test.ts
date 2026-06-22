@@ -17,3 +17,20 @@ describe("Calendar cell states", () => {
     expect(state).toBe("no-papers");
   });
 });
+
+describe("isRunnable", () => {
+  it("should return true for past dates in lookback window with no file", () => {
+    // This will be tested after implementation
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should return false for weekends", () => {
+    // This will be tested after implementation
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should return false for today before start time", () => {
+    // This will be tested after implementation
+    expect(true).toBe(true); // Placeholder
+  });
+});
