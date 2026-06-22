@@ -63,6 +63,16 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - One-shot, lossy migration from v0.1.x on first load (`migration.ts`).
 - Full vitest suite and production build are expected to pass before release.
 
+## Dashboard Features
+
+### Settings Button
+- Click the "Settings" button in the top-right corner of the Dashboard to quickly access plugin settings
+
+### Calendar Runnable Dates
+- Dates within the 5-day lookback window that don't have daily reports are highlighted in green
+- Click on a green date to generate a report for that date
+- Hover over the date to see a tooltip with instructions
+
 ## Installation
 
 ### Option A — via BRAT (recommended)
