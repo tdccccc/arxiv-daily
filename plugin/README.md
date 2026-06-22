@@ -312,6 +312,25 @@ On Enable: validates config, then asks Run today / Skip today / Cancel.
 On Disable: stops the interval. Manual commands always work regardless of
 enabled state (subject to config validation).
 
+## Pipeline Error Handling
+
+### No Empty Files
+The pipeline no longer writes empty daily files when:
+- arXiv returns 0 papers (scheduler will retry later)
+- LLM filtering results in 0 relevant papers (calendar shows "0")
+
+### Calendar States
+The calendar now shows different states:
+- Purple border + number: successful report
+- "0": no relevant papers (LLM filtering)
+- Green + play icon: runnable (can generate report)
+- No mark: arXiv not updated or weekend
+
+### API Testing
+- Test API connectivity from settings
+- Fetch available models from API
+- Select model from dropdown
+
 ## Development
 
 ```bash
