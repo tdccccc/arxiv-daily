@@ -29,13 +29,11 @@ The calendar currently shows dates with existing daily reports but doesn't indic
 
 ### 2. Calendar Runnable Dates
 
-**Decision:** Extend the calendar model with a unified date state system.
+**Decision:** Extend the calendar model with a simplified date state system.
 
 **Date States:**
 - `has-report` - Date has an existing daily report (purple border, current behavior)
 - `runnable` - Date is within lookback window, no report, can be run (green background, play icon)
-- `running` - Date is currently being processed (future extension)
-- `failed` - Date failed to generate report (future extension)
 - `empty` - Date outside lookback window or no data available
 
 **Visual Design for Runnable Dates:**
@@ -57,10 +55,7 @@ Add a new type to represent calendar cell state:
 type CalendarCellState = 
   | "empty"        // No date or outside lookback
   | "runnable"     // Can generate report
-  | "has-report"   // Report exists
-  | "running"      // Currently processing
-  | "failed"       // Failed to generate
-  | "skipped";     // Intentionally skipped
+  | "has-report";  // Report exists
 ```
 
 #### 2. Calendar Cell Interface
@@ -72,7 +67,6 @@ interface CalendarCell {
   date: string | null;
   state: CalendarCellState;
   report?: DailyReportDay;
-  runState?: RunStateEntry;
 }
 ```
 
@@ -81,8 +75,7 @@ interface CalendarCell {
 A date is considered "runnable" if:
 1. Date is within the lookback window (5 days by default)
 2. No daily report exists for that date
-3. Run state is `pending` or `failed_transient` (not `running`, `completed`, `failed_permanent`, or `skipped`)
-4. Date is not a weekend (optional, based on settings)
+3. Date is not a weekend (optional, based on settings)
 
 ### Component Changes
 
@@ -174,12 +167,6 @@ private renderDailyCalendar(contentEl: HTMLElement): void {
       case "runnable":
         this.renderRunnableCell(button, cell);
         break;
-      case "running":
-        this.renderRunningCell(button, cell);
-        break;
-      case "failed":
-        this.renderFailedCell(button, cell);
-        break;
     }
   }
 }
@@ -191,7 +178,6 @@ private renderDailyCalendar(contentEl: HTMLElement): void {
 private buildCalendarCells(month: string): CalendarCell[] {
   const cells: CalendarCell[] = [];
   const byDate = new Map(this.dailyReports.map(r => [r.date, r]));
-  const today = this.todayDate();
   const lookbackDates = this.getLookbackDates();
   
   for (const cellDate of calendarCells(month)) {
@@ -201,19 +187,12 @@ private buildCalendarCells(month: string): CalendarCell[] {
     }
     
     const report = byDate.get(cellDate.date);
-    const runState = this.plugin.stateStore.get(cellDate.date);
     
     let state: CalendarCellState;
     if (report) {
       state = "has-report";
     } else if (lookbackDates.has(cellDate.date)) {
-      if (runState.status === "running") {
-        state = "running";
-      } else if (runState.status === "failed_permanent" || runState.status === "skipped") {
-        state = "failed";
-      } else {
-        state = "runnable";
-      }
+      state = "runnable";
     } else {
       state = "empty";
     }
@@ -222,7 +201,6 @@ private buildCalendarCells(month: string): CalendarCell[] {
       date: cellDate.date,
       state,
       report,
-      runState,
     });
   }
   
@@ -377,6 +355,8 @@ The state-based design allows easy addition of:
    - Visual: Grayed out, skip icon
    - Click: Unskip option
 
+**Note:** These states are not implemented in the current design but can be added later by extending the `CalendarCellState` type.
+
 ## User Experience Flow
 
 ### Settings Button
@@ -454,14 +434,6 @@ The state-based design allows easy addition of:
 - Focuses scope on the core feature
 - Running state requires real-time updates which add complexity
 - Can be added in a future iteration
-
-### Error Handling for Calendar Clicks
-**Decision:** If a run fails, the date will remain in `runnable` state (if `failed_transient`) or move to `failed` state (if `failed_permanent`). Users can click again to retry.
-
-**Rationale:**
-- Matches the scheduler's retry logic
-- Provides clear visual feedback about failure state
-- Allows users to manually retry failed dates
 
 ## References
 
