@@ -1,4 +1,4 @@
-import { App, Modal, PluginSettingTab, Setting, setTooltip } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, setTooltip } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
 import { ARXIV_CATEGORIES } from "./arxiv-categories";
@@ -9,6 +9,7 @@ import { validateFilterConfig } from "./validation";
 import { arxivCategories } from "./categories";
 import { getSetupStatus } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
+import { LlmClient } from "../llm/client";
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
@@ -130,6 +131,31 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.refreshSetupGuide();
           });
+      });
+
+    // Test Connection
+    new Setting(containerEl)
+      .setName("Test Connection")
+      .setDesc("Verify that your LLM API key and endpoint are working.")
+      .addButton((b) => {
+        b.setButtonText("Test").onClick(async () => {
+          b.setButtonText("Testing...");
+          b.setDisabled(true);
+          try {
+            const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
+            const result = await client.testConnection();
+            if (result.success) {
+              new Notice("API connection successful!");
+            } else {
+              new Notice(`API connection failed: ${result.error}`);
+            }
+          } catch (e) {
+            new Notice(`API connection failed: ${(e as Error).message}`);
+          } finally {
+            b.setButtonText("Test");
+            b.setDisabled(false);
+          }
+        });
       });
 
     // Base URL — always editable, auto-filled by provider

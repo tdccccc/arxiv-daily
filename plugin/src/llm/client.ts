@@ -31,6 +31,19 @@ export class LlmClient {
     });
   }
 
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    try {
+      await this.client.chat.completions.create({
+        model: this.settings.model,
+        messages: [{ role: "user", content: "Hello" }],
+        max_tokens: 5,
+      });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: (e as Error).message };
+    }
+  }
+
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
     return retry(
       async () => {
