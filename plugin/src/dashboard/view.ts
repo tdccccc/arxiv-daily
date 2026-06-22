@@ -543,11 +543,30 @@ class ArxivDailyDashboardView extends ItemView {
     new Notice("Open Settings -> Community plugins -> arXiv Daily.");
   }
 
+  private createSettingsButton(parent: HTMLElement): void {
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-dashboard__settings-btn",
+      attr: {
+        type: "button",
+        "aria-label": "Open arXiv Daily settings",
+      },
+    }) as HTMLButtonElement;
+    setIcon(button, "settings");
+    button.createSpan({ text: "Settings" });
+    button.addEventListener("click", () => this.openSettings());
+  }
+
   private renderHeader(contentEl: HTMLElement): void {
     const header = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__header",
     });
     header.createEl("h2", { text: "arXiv Daily Dashboard" });
+
+    // Add settings button
+    const actions = header.createEl("div", {
+      cls: "arxiv-daily-dashboard__header-actions",
+    });
+    this.createSettingsButton(actions);
   }
 
   private renderToolbar(

@@ -286,6 +286,26 @@
   line-height: 1.2;
 }
 
+.arxiv-daily-dashboard__header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.arxiv-daily-dashboard__settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+
+.arxiv-daily-dashboard__settings-btn:hover {
+  background: var(--interactive-hover);
+}
+
 .arxiv-daily-dashboard__refresh {
   flex: 0 0 auto;
 }
