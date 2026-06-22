@@ -112,6 +112,12 @@ The current UI has some usability issues:
   height: 8px;
   color: var(--color-green);
 }
+
+/* Input field width for Base URL and API Key */
+.arxiv-daily-settings input[type="text"],
+.arxiv-daily-settings input[type="password"] {
+  width: 100%;
+}
 ```
 
 ### Settings Changes
@@ -128,10 +134,12 @@ The current UI has some usability issues:
 - Get Models button on same line as Model dropdown
 
 **Update:**
-- Base URL input width: 100%
-- API Key input width: 100%
+- Base URL input width: 100% (longer input field)
+- API Key input width: 100% (longer input field)
 - Model dropdown: empty by default, populated by Get Models
 - Get Models success/failure messages
+
+**Note:** Base URL and API Key input fields should be wider than default to accommodate long URLs and keys.
 
 ### Getting Started Changes
 
