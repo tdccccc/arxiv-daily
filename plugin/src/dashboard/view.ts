@@ -94,6 +94,17 @@ interface DailyReportDay {
   starred: number;
 }
 
+export type CalendarCellState =
+  | "empty"        // No date or outside lookback
+  | "runnable"     // Can generate report
+  | "has-report";  // Report exists
+
+export interface CalendarCell {
+  date: string | null;
+  state: CalendarCellState;
+  report?: DailyReportDay;
+}
+
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   plugin.registerView(
     ARXIV_DAILY_DASHBOARD_VIEW,
