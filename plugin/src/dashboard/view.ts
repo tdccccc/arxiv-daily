@@ -149,6 +149,23 @@ export async function openMarkdownFileOnce(
   await app.workspace.openLinkText(path, "", false);
 }
 
+export function appendSettingsButton(
+  parent: HTMLElement,
+  onClick: () => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "arxiv-daily-dashboard__settings-btn";
+  button.type = "button";
+  button.setAttribute("aria-label", "Open arXiv Daily settings");
+  setIcon(button, "settings");
+  const label = document.createElement("span");
+  label.textContent = "Settings";
+  button.appendChild(label);
+  button.addEventListener("click", onClick);
+  parent.appendChild(button);
+  return button;
+}
+
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private dailyReports: DailyReportDay[] = [];
@@ -544,16 +561,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private createSettingsButton(parent: HTMLElement): void {
-    const button = parent.createEl("button", {
-      cls: "arxiv-daily-dashboard__settings-btn",
-      attr: {
-        type: "button",
-        "aria-label": "Open arXiv Daily settings",
-      },
-    }) as HTMLButtonElement;
-    setIcon(button, "settings");
-    button.createSpan({ text: "Settings" });
-    button.addEventListener("click", () => this.openSettings());
+    appendSettingsButton(parent, () => this.openSettings());
   }
 
   private renderHeader(contentEl: HTMLElement): void {
