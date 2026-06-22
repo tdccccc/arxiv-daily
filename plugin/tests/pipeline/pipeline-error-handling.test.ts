@@ -68,10 +68,10 @@ describe("Pipeline arXiv 0 papers handling", () => {
     const logger = new Logger("error");
 
     const pipeline = new ArxivPipeline({
-      fetcher,
-      paperFetcher,
-      writer,
-      llm,
+      fetcher: fetcher as any,
+      paperFetcher: paperFetcher as any,
+      writer: writer as any,
+      llm: llm as any,
       logger,
       arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
@@ -124,10 +124,10 @@ describe("Pipeline LLM 0 papers handling", () => {
     const logger = new Logger("error");
 
     const pipeline = new ArxivPipeline({
-      fetcher,
-      paperFetcher,
-      writer,
-      llm,
+      fetcher: fetcher as any,
+      paperFetcher: paperFetcher as any,
+      writer: writer as any,
+      llm: llm as any,
       logger,
       arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
@@ -204,11 +204,11 @@ describe("Pipeline index 0 papers handling", () => {
     };
 
     const pipeline = new ArxivPipeline({
-      fetcher,
-      paperFetcher,
-      writer,
-      paperIndex,
-      llm,
+      fetcher: fetcher as any,
+      paperFetcher: paperFetcher as any,
+      writer: writer as any,
+      paperIndex: paperIndex as any,
+      llm: llm as any,
       logger,
       arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,

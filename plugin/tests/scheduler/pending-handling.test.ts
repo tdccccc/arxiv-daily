@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SchedulerService, type SchedulerDeps } from "../../src/services/scheduler";
-import { RunLock } from "../../src/services/run-lock";
 import type { PipelineResult } from "../../src/pipeline/pipeline";
+import { RunLock } from "../../src/services/run-lock";
 
 vi.mock("obsidian", () => ({
   Notice: class { constructor() {} },
@@ -47,7 +47,7 @@ describe("Scheduler pending result handling", () => {
 
   beforeEach(() => {
     deps = makeDeps({
-      runForDate: vi.fn(async () => ({ kind: "pending", reason: "no papers from arXiv" })),
+      runForDate: vi.fn(async (): Promise<PipelineResult> => ({ kind: "pending", reason: "no papers from arXiv" })),
     });
   });
 
@@ -79,7 +79,7 @@ describe("Scheduler pending result handling", () => {
     const scheduler = new SchedulerService(deps);
     await scheduler.runForDateNow("2026-06-22");
 
-    expect(deps.progress.setIdle).toHaveBeenCalled();
+    expect(deps.progress?.setIdle).toHaveBeenCalled();
   });
 
   it("should return the pending result from runForDateNow", async () => {

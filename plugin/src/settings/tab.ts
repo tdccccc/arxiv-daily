@@ -92,30 +92,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── LLM ──────────────────────────────────────────
     this.sectionHeading(containerEl, "LLM", "llm");
 
-    // Provider dropdown
+    // Base URL — always editable, default to DeepSeek
     new Setting(containerEl)
-      .setName("Provider")
-      .setDesc("Auto-fills URL and model; all fields remain editable")
-      .addDropdown((d) => {
-        for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
-          d.addOption(key, preset.name);
-        }
-        d.setValue(s.llm.provider).onChange(async (v) => {
-          s.llm.provider = v;
-          const preset = PROVIDER_PRESETS[v];
-          if (preset && v !== "custom") {
-            s.llm.baseUrl = preset.baseUrl;
-            if (preset.models.length > 0) {
-              s.llm.model = preset.models[0].value;
-            }
-            s.llm.thinkingMode = preset.thinkingMode;
-            if (!preset.reasoningEfforts.includes(s.llm.reasoningEffort)) {
-              s.llm.reasoningEffort = preset.reasoningEfforts[0];
-            }
-          }
-          await this.plugin.saveSettings();
-          this.display(); // re-render to update model/effort UI
-        });
+      .setName("Base URL")
+      .setDesc("LLM endpoint base. Default is DeepSeek. Override for other providers.")
+      .addText((t) => {
+        t.inputEl.style.width = "100%";
+        t.setPlaceholder("https://api.deepseek.com/v1")
+          .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
+          .onChange(async (v) => {
+            s.llm.baseUrl = v;
+            await this.plugin.saveSettings();
+            this.refreshSetupGuide();
+          });
       });
 
     // API Key
@@ -124,6 +113,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Required. Your LLM provider's API key. Stored locally in data.json.")
       .addText((t) => {
         t.inputEl.type = "password";
+        t.inputEl.style.width = "100%";
         t.setPlaceholder("sk-...")
           .setValue(s.llm.apiKey)
           .onChange(async (v) => {
@@ -133,107 +123,47 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       });
 
-    // Test Connection
-    new Setting(containerEl)
-      .setName("Test Connection")
-      .setDesc("Verify that your LLM API key and endpoint are working.")
-      .addButton((b) => {
-        b.setButtonText("Test").onClick(async () => {
-          b.setButtonText("Testing...");
-          b.setDisabled(true);
-          try {
-            const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
-            const result = await client.testConnection();
-            if (result.success) {
-              new Notice("API connection successful!");
-            } else {
-              new Notice(`API connection failed: ${result.error}`);
-            }
-          } catch (e) {
-            new Notice(`API connection failed: ${(e as Error).message}`);
-          } finally {
-            b.setButtonText("Test");
-            b.setDisabled(false);
+    // Model — Get Models button + dropdown
+    const modelSetting = new Setting(containerEl)
+      .setName("Model")
+      .setDesc("Click Get Models to fetch available models from API.");
+
+    // Get Models button
+    const fetchModelsButton = modelSetting.addButton((b) => {
+      b.setButtonText("Get Models");
+      b.onClick(async () => {
+        b.setButtonText("Fetching...");
+        b.setDisabled(true);
+        try {
+          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
+          const models = await client.fetchModels();
+          if (models.length > 0) {
+            this.showModelDropdown(models, modelSetting.settingEl);
+            new Notice(`API 连接成功，找到 ${models.length} 个模型`);
+          } else {
+            new Notice("API 连接成功，但未找到可用模型");
           }
-        });
+        } catch (e) {
+          new Notice(`API 连接失败：${(e as Error).message}`);
+        } finally {
+          b.setButtonText("Get Models");
+          b.setDisabled(false);
+        }
       });
-
-    // Base URL — always editable, auto-filled by provider
-    new Setting(containerEl)
-      .setName("Base URL")
-      .setDesc("LLM endpoint base. Auto-filled when you pick a provider; override for self-hosted or proxy.")
-      .addText((t) =>
-        t.setValue(s.llm.baseUrl).onChange(async (v) => {
-          s.llm.baseUrl = v;
-          await this.plugin.saveSettings();
-          this.refreshSetupGuide();
-        }),
-      );
-
-    // Model — dropdown preset + text input for custom override
-    const preset = PROVIDER_PRESETS[s.llm.provider];
-    if (preset && preset.models.length > 0) {
-      new Setting(containerEl)
-        .setName("Model")
-        .setDesc("Pick a preset or type a custom model ID in the right-hand box.")
-        .addDropdown((d) => {
-          for (const m of preset.models) {
-            d.addOption(m.value, m.label);
-          }
-            d.setValue(s.llm.model).onChange(async (v) => {
-              s.llm.model = v;
-              await this.plugin.saveSettings();
-              this.refreshSetupGuide();
-            });
-        })
-        .addText((t) => {
-          t.setPlaceholder("or enter custom model ID")
-            .setValue("")
-            .onChange(async (v) => {
-              if (v.trim()) {
-                s.llm.model = v.trim();
-                await this.plugin.saveSettings();
-                this.refreshSetupGuide();
-              }
-            });
-        });
-    } else {
-      new Setting(containerEl)
-        .setName("Model")
-        .setDesc("Model ID for the custom provider.")
-        .addText((t) =>
-        t.setValue(s.llm.model).onChange(async (v) => {
-          s.llm.model = v;
-          await this.plugin.saveSettings();
-          this.refreshSetupGuide();
-        }),
-      );
-    }
-
-    // Get Models button — fetches available models from API
-    const fetchModelsContainer = containerEl.createDiv({
-      cls: "arxiv-daily-settings__fetch-models",
     });
-    const fetchModelsButton = fetchModelsContainer.createEl("button", {
-      text: "Get Models",
-      cls: "arxiv-daily-settings__fetch-models-btn",
-      attr: { type: "button" },
-    }) as HTMLButtonElement;
 
-    fetchModelsButton.addEventListener("click", async () => {
-      fetchModelsButton.disabled = true;
-      fetchModelsButton.textContent = "Fetching...";
-
-      try {
-        const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
-        const models = await client.fetchModels();
-        this.showModelDropdown(models, fetchModelsContainer);
-      } catch (e) {
-        new Notice(`Failed to fetch models: ${(e as Error).message}`);
-      } finally {
-        fetchModelsButton.disabled = false;
-        fetchModelsButton.textContent = "Get Models";
+    // Model dropdown (empty by default, populated by Get Models)
+    modelSetting.addDropdown((d) => {
+      d.selectEl.style.minWidth = "200px";
+      d.selectEl.addClass("arxiv-daily-settings__model-select");
+      if (s.llm.model) {
+        d.addOption(s.llm.model, s.llm.model);
       }
+      d.setValue(s.llm.model).onChange(async (v) => {
+        s.llm.model = v;
+        await this.plugin.saveSettings();
+        this.refreshSetupGuide();
+      });
     });
 
     // Thinking mode — desc varies by provider
@@ -254,7 +184,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // Reasoning effort — provider-specific options + custom input
-    const efforts = preset?.reasoningEfforts ?? ["low", "medium", "high"];
+    const efforts = ["low", "medium", "high"];
     new Setting(containerEl)
       .setName("Reasoning effort")
       .setDesc(s.llm.provider === "anthropic" ? "Maps to thinking budget tier" : "Reasoning strength")
@@ -897,45 +827,40 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private showModelDropdown(models: string[], container: HTMLElement): void {
-    // Remove existing dropdown if any
-    const existing = container.querySelector(".arxiv-daily-settings__model-dropdown");
-    if (existing) existing.remove();
+    // Find the existing dropdown in the model setting
+    const modelSetting = container.closest(".setting-item");
+    if (!modelSetting) return;
 
-    if (models.length === 0) {
-      new Notice("No models found");
-      return;
-    }
+    const select = modelSetting.querySelector("select") as HTMLSelectElement;
+    if (!select) return;
 
-    const dropdown = container.createDiv({
-      cls: "arxiv-daily-settings__model-dropdown",
-    });
+    // Clear existing options
+    select.innerHTML = "";
 
-    const select = dropdown.createEl("select", {
-      cls: "arxiv-daily-settings__model-select",
-    });
-
+    // Add new options
     for (const model of models) {
-      select.createEl("option", { value: model, text: model });
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      select.appendChild(option);
     }
 
     // Pre-select current model if in list
     const currentModel = this.plugin.settings.llm.model;
     if (models.includes(currentModel)) {
       select.value = currentModel;
+    } else if (models.length > 0) {
+      // Select first model if current not in list
+      select.value = models[0];
+      this.plugin.settings.llm.model = models[0];
+      this.plugin.saveSettings();
     }
 
-    const applyBtn = dropdown.createEl("button", {
-      text: "Apply",
-      cls: "arxiv-daily-settings__model-apply-btn",
-      attr: { type: "button" },
-    }) as HTMLButtonElement;
-
-    applyBtn.addEventListener("click", async () => {
+    // Update model when selection changes
+    select.addEventListener("change", async () => {
       this.plugin.settings.llm.model = select.value;
       await this.plugin.saveSettings();
       this.refreshSetupGuide();
-      new Notice(`Model set to: ${select.value}`);
-      dropdown.remove();
     });
   }
 
