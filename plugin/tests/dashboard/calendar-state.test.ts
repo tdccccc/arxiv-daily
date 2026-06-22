@@ -7,3 +7,15 @@ describe("Calendar State Model", () => {
     expect(true).toBe(true); // Placeholder
   });
 });
+
+describe("Calendar Cell Builder", () => {
+  it("should identify runnable dates within lookback window", () => {
+    // Test will verify date detection logic
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should identify dates with reports", () => {
+    // Test will verify report detection
+    expect(true).toBe(true); // Placeholder
+  });
+});

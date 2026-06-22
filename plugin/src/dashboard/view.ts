@@ -23,7 +23,7 @@ import {
   validateFilterConfig,
   validateLlmConfig,
 } from "../settings/validation";
-import { formatDate, todayInTz } from "../utils/time";
+import { daysBefore, formatDate, isWeekendDate, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 
@@ -825,6 +825,53 @@ class ArxivDailyDashboardView extends ItemView {
     return formatDate(
       todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
     );
+  }
+
+  private getLookbackDates(): Set<string> {
+    const dates = new Set<string>();
+    const today = todayInTz(new Date(), this.plugin.settings.arxiv.timezone);
+    const lookbackDays = 5; // LOOKBACK_DAYS from scheduler.ts
+
+    for (let i = 0; i < lookbackDays; i++) {
+      const date = daysBefore(today, i);
+      if (!isWeekendDate(date)) {
+        dates.add(formatDate(date));
+      }
+    }
+
+    return dates;
+  }
+
+  private buildCalendarCells(month: string): CalendarCell[] {
+    const cells: CalendarCell[] = [];
+    const byDate = new Map(this.dailyReports.map(r => [r.date, r]));
+    const lookbackDates = this.getLookbackDates();
+
+    for (const cellDate of calendarCells(month)) {
+      if (!cellDate.date) {
+        cells.push({ date: null, state: "empty" });
+        continue;
+      }
+
+      const report = byDate.get(cellDate.date);
+
+      let state: CalendarCellState;
+      if (report) {
+        state = "has-report";
+      } else if (lookbackDates.has(cellDate.date)) {
+        state = "runnable";
+      } else {
+        state = "empty";
+      }
+
+      cells.push({
+        date: cellDate.date,
+        state,
+        report,
+      });
+    }
+
+    return cells;
   }
 
   private renderStats(
