@@ -280,6 +280,11 @@ export class SchedulerService {
           await this.deps.store.setCompleted(date, result.papersWritten);
           this.deps.logger.notice(`arXiv ${date}: ${result.papersWritten} papers written`);
           this.progress.setComplete(`Daily report complete: ${date}`);
+        } else if (result.kind === "pending") {
+          // Don't mark as completed - clear running state so scheduler can retry later
+          await this.deps.store.clearDate(date);
+          this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);
+          this.progress.setIdle(this.latestCompleted());
         } else if (result.kind === "failed_transient") {
           await this.deps.store.setFailed(date, "transient", result.reason);
           this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
