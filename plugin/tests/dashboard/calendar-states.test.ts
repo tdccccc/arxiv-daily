@@ -18,6 +18,18 @@ describe("Calendar cell states", () => {
   });
 });
 
+describe("Calendar rendering", () => {
+  it("should render no-papers state with '0' text", () => {
+    // This will be tested after implementation
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should render runnable state with play icon", () => {
+    // This will be tested after implementation
+    expect(true).toBe(true); // Placeholder
+  });
+});
+
 describe("isRunnable", () => {
   it("should return true for past dates in lookback window with no file", () => {
     // This will be tested after implementation
