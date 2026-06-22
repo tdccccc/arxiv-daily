@@ -97,7 +97,8 @@ interface DailyReportDay {
 export type CalendarCellState =
   | "empty"        // No date or outside lookback
   | "runnable"     // Can generate report
-  | "has-report";  // Report exists
+  | "has-report"   // Report exists
+  | "no-papers";   // LLM filtered to 0 papers
 
 export interface CalendarCell {
   date: string | null;
