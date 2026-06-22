@@ -34,6 +34,7 @@ interface SourcePaperMeta extends PaperMeta {
 
 export type PipelineResult =
   | { kind: "completed"; papersWritten: number }
+  | { kind: "pending"; reason: string }
   | { kind: "failed_transient"; reason: string }
   | { kind: "failed_permanent"; reason: string };
 
