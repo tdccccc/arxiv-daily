@@ -931,10 +931,20 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
-  // Task 5 will implement the actual run logic
   private async runDateFromCalendar(date: string): Promise<void> {
-    // Placeholder: will be implemented in Task 5
-    throw new Error("Not implemented yet");
+    const setup = getSetupStatus(this.plugin.settings);
+    if (!setup.readyToRun) {
+      new Notice("arXiv Daily: Please complete setup first");
+      this.openSettings();
+      return;
+    }
+
+    new Notice(`arXiv Daily: running for ${date}…`);
+    const result = await this.plugin.scheduler.runForDateNow(date);
+    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+
+    // Refresh dashboard
+    await this.reloadIndex();
   }
 
   private renderStats(

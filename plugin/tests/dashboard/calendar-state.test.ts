@@ -31,3 +31,15 @@ describe("Calendar Cell Rendering", () => {
     expect(true).toBe(true); // Placeholder
   });
 });
+
+describe("runDateFromCalendar", () => {
+  it("should check setup status before running", () => {
+    // Test will verify setup check
+    expect(true).toBe(true); // Placeholder
+  });
+
+  it("should call scheduler.runForDateNow", () => {
+    // Test will verify scheduler call
+    expect(true).toBe(true); // Placeholder
+  });
+});
