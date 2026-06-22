@@ -141,7 +141,8 @@ export class ArxivPipeline {
     });
     throwIfCancelled(signal);
     if (filtered.length === 0) {
-      await this.deps.writer.writeEmptyDaily(dateStr, { dateWindowNote });
+      throwIfCancelled(signal);
+      // Don't write empty file - show "0" in calendar
       return { kind: "completed", papersWritten: 0 };
     }
 

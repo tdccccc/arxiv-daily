@@ -250,7 +250,7 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
-  it("writes empty daily when LLM returns no relevant papers", async () => {
+  it("returns completed with 0 papers when LLM returns no relevant papers", async () => {
     const d = makeDeps();
     const pipeline = new ArxivPipeline({
       fetcher: d.fetcher as any,
@@ -267,7 +267,8 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
     expect((result as any).papersWritten).toBe(0);
-    expect(d.writer.writeEmptyDaily).toHaveBeenCalled();
+    // Should NOT write empty file - calendar shows "0" instead
+    expect(d.writer.writeEmptyDaily).not.toHaveBeenCalled();
   });
 
   it("enriches abstracts and runs filter+summarize for a kept paper", async () => {
