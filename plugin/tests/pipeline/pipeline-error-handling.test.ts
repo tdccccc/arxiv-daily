@@ -145,3 +145,84 @@ describe("Pipeline LLM 0 papers handling", () => {
     expect(writer.writeEmptyDaily).not.toHaveBeenCalled();
   });
 });
+
+describe("Pipeline index 0 papers handling", () => {
+  it("should return completed with 0 papers when all papers are ignored in index", async () => {
+    const fetcher = {
+      fetchRecent: vi.fn().mockResolvedValue(recentHtml),
+      fetchMetadataByIds: vi.fn(async (ids: string[]) =>
+        new Map(ids.map((id) => [{
+          id,
+          title: `Title ${id}`,
+          authors: "Author et al.",
+          abstract: "abstract",
+          published: "2026-05-11T02:28:06Z",
+          updated: "2026-05-11T02:34:08Z",
+          primaryCategory: "astro-ph.GA",
+          categories: ["astro-ph.GA"],
+        }]).map(([id, meta]) => [id, meta])),
+      ),
+      fetchAbstractsByIds: vi.fn(),
+      fetchBySubmittedDate: vi.fn(),
+      fetchPaperHtml: vi.fn(),
+      fetchPaperAbsPage: vi.fn(),
+    };
+    const writer = {
+      writeDaily: vi.fn(),
+      writePaperDetail: vi.fn(),
+      writeEmptyDaily: vi.fn(),
+      dailyPath: vi.fn(),
+      paperDetailPath: vi.fn(),
+      paperDetailLink: vi.fn(),
+      dailyExists: vi.fn(async () => false),
+      paperDetailExists: vi.fn(async () => false),
+    };
+    // LLM returns 1 paper so it passes filtering, but we'll set it to ignored in the index
+    const llm = {
+      call: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          papers: [
+            { id: "2605.00001", category: "photo-z", detail: false },
+          ],
+        }),
+      ),
+    };
+    const paperFetcher = { fetch: vi.fn() };
+    const logger = new Logger("error");
+
+    // Create a paper index that returns all papers as ignored
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn().mockResolvedValue([
+        {
+          entry: { status: "ignored" },
+          wasNew: false,
+        },
+      ]),
+      addDailyReports: vi.fn(),
+      setSummaries: vi.fn(),
+      setPaperPath: vi.fn(),
+    };
+
+    const pipeline = new ArxivPipeline({
+      fetcher,
+      paperFetcher,
+      writer,
+      paperIndex,
+      llm,
+      logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate("2026-05-11");
+    // Should return completed with 0 papers
+    expect(result.kind).toBe("completed");
+    if (result.kind === "completed") {
+      expect(result.papersWritten).toBe(0);
+    }
+    // Should NOT write empty file
+    expect(writer.writeEmptyDaily).not.toHaveBeenCalled();
+  });
+});

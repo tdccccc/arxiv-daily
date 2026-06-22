@@ -513,13 +513,8 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
     expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
-    expect(d.writer.writeEmptyDaily).toHaveBeenCalledWith(
-      date,
-      expect.any(Object),
-    );
-    expect(d.writer.writeEmptyDaily.mock.calls[0][1]).not.toHaveProperty(
-      "missedPapers",
-    );
+    // Should NOT write empty file - calendar shows "0" instead
+    expect(d.writer.writeEmptyDaily).not.toHaveBeenCalled();
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[arxivId].status).toBe("ignored");
     expect(json.papers[arxivId].seenDates).toContain(date);
