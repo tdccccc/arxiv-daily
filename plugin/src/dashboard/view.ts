@@ -775,6 +775,9 @@ class ArxivDailyDashboardView extends ItemView {
         case "has-report":
           this.renderReportCell(button, cell);
           break;
+        case "no-papers":
+          this.renderNoPapersCell(button, cell);
+          break;
         case "runnable":
           this.renderRunnableCell(button, cell);
           break;
@@ -852,7 +855,8 @@ class ArxivDailyDashboardView extends ItemView {
 
       let state: CalendarCellState;
       if (report) {
-        state = "has-report";
+        // Check if report has 0 papers (no-papers state)
+        state = report.papers === 0 ? "no-papers" : "has-report";
       } else if (lookbackDates.has(cellDate.date)) {
         state = "runnable";
       } else {
@@ -876,6 +880,9 @@ class ArxivDailyDashboardView extends ItemView {
       classes.push("is-empty");
     } else if (cell.state === "has-report") {
       classes.push("has-report");
+    } else if (cell.state === "no-papers") {
+      classes.push("has-report");
+      classes.push("no-papers");
     } else if (cell.state === "runnable") {
       classes.push("is-runnable");
     }
@@ -890,6 +897,10 @@ class ArxivDailyDashboardView extends ItemView {
 
     if (cell.state === "has-report" && cell.report) {
       return `Open daily report ${cell.report.date}: ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
+    }
+
+    if (cell.state === "no-papers") {
+      return `Daily report ${cell.date}: 0 papers found`;
     }
 
     if (cell.state === "runnable") {
@@ -915,6 +926,24 @@ class ArxivDailyDashboardView extends ItemView {
     button.addEventListener("click", () => {
       void this.runDateFromCalendar(cell.date!);
     });
+  }
+
+  private renderNoPapersCell(button: HTMLButtonElement, cell: CalendarCell): void {
+    button.addClass("has-report");
+    button.addClass("no-papers");
+
+    // Show "0" as the count
+    button.createSpan({
+      cls: "arxiv-daily-dashboard__calendar-day-count",
+      text: "0",
+    });
+
+    // Click handler to open the report
+    if (cell.report) {
+      button.addEventListener("click", () => {
+        void openMarkdownFileOnce(this.plugin.app, cell.report!.path);
+      });
+    }
   }
 
   private renderReportCell(button: HTMLButtonElement, cell: CalendarCell): void {
