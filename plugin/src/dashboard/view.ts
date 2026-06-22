@@ -906,6 +906,9 @@ class ArxivDailyDashboardView extends ItemView {
   private renderRunnableCell(button: HTMLButtonElement, cell: CalendarCell): void {
     button.addClass("is-runnable");
 
+    // Set tooltip for CSS ::after pseudo-element
+    button.setAttribute("data-tooltip", `Click to run for ${cell.date}`);
+
     // Play icon
     const icon = button.createSpan({
       cls: "arxiv-daily-dashboard__calendar-day-icon",
