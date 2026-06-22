@@ -23,7 +23,7 @@ import {
   validateFilterConfig,
   validateLlmConfig,
 } from "../settings/validation";
-import { daysBefore, formatDate, isWeekendDate, parseHHMM, todayInTz } from "../utils/time";
+import { daysBefore, formatDate, isWeekendDate, minutesSinceMidnight, parseHHMM, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 
@@ -854,18 +854,16 @@ class ArxivDailyDashboardView extends ItemView {
     // No file
     if (hasFile) return false;
 
-    // If today, check time window
+    // If today, check time gate (only start time; matches scheduler behaviour)
     if (date === today) {
       const now = new Date();
       const settings = this.plugin.settings;
+      const tz = settings.arxiv.timezone;
+      const currentMinutes = minutesSinceMidnight(now, tz);
       const startTime = parseHHMM(settings.schedule.runAtLocal);
-      const endTime = { hour: 18, minute: 0 }; // Default end time
-
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
       const startMinutes = startTime.hour * 60 + startTime.minute;
-      const endMinutes = endTime.hour * 60 + endTime.minute;
 
-      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+      return currentMinutes >= startMinutes;
     }
 
     // Past dates: runnable
