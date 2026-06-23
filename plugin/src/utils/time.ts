@@ -38,6 +38,27 @@ export function minutesSinceMidnight(now: Date, tz: string): number {
   return hour * 60 + minute;
 }
 
+export function isTimeWithinLocalWindow(
+  now: Date,
+  tz: string,
+  startHHMM: string,
+  endHHMM: string,
+): boolean {
+  const minutesNow = minutesSinceMidnight(now, tz);
+  const start = minutesFromHHMM(startHHMM);
+  const end = minutesFromHHMM(endHHMM);
+  return isMinutesWithinWindow(minutesNow, start, end);
+}
+
+export function isMinutesWithinWindow(
+  minutesNow: number,
+  startMinutes: number,
+  endMinutes: number,
+): boolean {
+  if (startMinutes > endMinutes) return false;
+  return minutesNow >= startMinutes && minutesNow <= endMinutes;
+}
+
 export function daysBefore(
   date: { y: number; m: number; d: number },
   n: number,
@@ -63,4 +84,9 @@ export function isWeekendInTz(now: Date, tz: string): boolean {
 export function isWeekendDate(date: { y: number; m: number; d: number }): boolean {
   const day = new Date(Date.UTC(date.y, date.m - 1, date.d)).getUTCDay();
   return day === 0 || day === 6;
+}
+
+export function minutesFromHHMM(value: string): number {
+  const parsed = parseHHMM(value);
+  return parsed.hour * 60 + parsed.minute;
 }

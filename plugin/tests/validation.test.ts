@@ -184,3 +184,10 @@ describe("advanced default char limits", () => {
     expect(DEFAULT_SETTINGS.advanced.sectionCharLimit).toBe(16_000);
   });
 });
+
+describe("schedule defaults", () => {
+  it("uses a default run window from 09:00 to 18:00", () => {
+    expect(DEFAULT_SETTINGS.schedule.runAtLocal).toBe("09:00");
+    expect(DEFAULT_SETTINGS.schedule.runUntilLocal).toBe("18:00");
+  });
+});

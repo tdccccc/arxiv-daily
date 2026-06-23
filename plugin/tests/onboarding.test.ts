@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getSetupStatus } from "../src/onboarding";
+import { getSetupStatus, shouldRenderSetupGuide } from "../src/onboarding";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
 
@@ -61,6 +61,29 @@ describe("getSetupStatus", () => {
     expect(status.topicsReady).toBe(true);
     expect(status.readyToRun).toBe(true);
     expect(status.reasons).toEqual([]);
+  });
+
+  it("renders the setup guide only while setup is incomplete", () => {
+    const incomplete = getSetupStatus(makeSettings());
+    const complete = getSetupStatus(
+      makeSettings({
+        llm: { apiKey: "sk-test" },
+        arxiv: {
+          topics: [
+            {
+              id: "topic",
+              name: "Compact objects",
+              tag: "compact-objects",
+              description: "Neutron stars and black holes",
+              detail: false,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(shouldRenderSetupGuide(incomplete)).toBe(true);
+    expect(shouldRenderSetupGuide(complete)).toBe(false);
   });
 
   it("keeps incomplete topics actionable", () => {

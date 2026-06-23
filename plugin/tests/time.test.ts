@@ -5,6 +5,7 @@ import {
   parseHHMM,
   minutesSinceMidnight,
   daysBefore,
+  isTimeWithinLocalWindow,
   isWeekendInTz,
   isWeekendDate,
 } from "../src/utils/time";
@@ -33,6 +34,52 @@ describe("time utils", () => {
   it("minutesSinceMidnight computes minutes for given tz", () => {
     const d = new Date("2026-05-11T01:30:00Z"); // 09:30 Shanghai
     expect(minutesSinceMidnight(d, "Asia/Shanghai")).toBe(9 * 60 + 30);
+  });
+
+  it("isTimeWithinLocalWindow checks an inclusive same-day window", () => {
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T01:00:00Z"),
+        "Asia/Shanghai",
+        "09:00",
+        "18:00",
+      ),
+    ).toBe(true);
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T10:00:00Z"),
+        "Asia/Shanghai",
+        "09:00",
+        "18:00",
+      ),
+    ).toBe(true);
+  });
+
+  it("isTimeWithinLocalWindow rejects times outside or invalid same-day windows", () => {
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T00:30:00Z"),
+        "Asia/Shanghai",
+        "09:00",
+        "18:00",
+      ),
+    ).toBe(false);
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T11:00:00Z"),
+        "Asia/Shanghai",
+        "09:00",
+        "18:00",
+      ),
+    ).toBe(false);
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T03:00:00Z"),
+        "Asia/Shanghai",
+        "23:59",
+        "18:00",
+      ),
+    ).toBe(false);
   });
 
   it("daysBefore subtracts whole days", () => {

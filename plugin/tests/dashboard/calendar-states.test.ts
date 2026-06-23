@@ -2,29 +2,29 @@ import { describe, it, expect } from "vitest";
 import type { CalendarCellState } from "../../src/dashboard/view";
 
 describe("Calendar cell states", () => {
-  it("should include no-papers state", () => {
-    const states: CalendarCellState[] = ["empty", "runnable", "has-report", "no-papers"];
-    expect(states).toContain("no-papers");
+  it("should include no-relevant-papers state", () => {
+    const states: CalendarCellState[] = ["empty", "runnable", "has-report", "no-relevant-papers"];
+    expect(states).toContain("no-relevant-papers");
   });
 
-  it("should identify no-papers state for reports with 0 papers", () => {
-    // Verify the type accepts all four states including no-papers
-    const allStates: CalendarCellState[] = ["empty", "runnable", "has-report", "no-papers"];
+  it("should identify no-relevant-papers state for reports with 0 papers", () => {
+    // Verify the type accepts all four states including no-relevant-papers.
+    const allStates: CalendarCellState[] = ["empty", "runnable", "has-report", "no-relevant-papers"];
     expect(allStates).toHaveLength(4);
     // The actual logic is tested via buildCalendarCells integration;
     // this verifies the type system includes the new state.
-    const state: CalendarCellState = "no-papers";
-    expect(state).toBe("no-papers");
+    const state: CalendarCellState = "no-relevant-papers";
+    expect(state).toBe("no-relevant-papers");
   });
 });
 
 describe("Calendar rendering", () => {
-  it("should render no-papers state with '0' count text", () => {
-    // Verify that no-papers cells display "0" as the paper count
-    const noPapersReport = { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 };
-    expect(noPapersReport.papers).toBe(0);
-    // The renderNoPapersCell method creates a span with text "0"
-    const countText = String(noPapersReport.papers);
+  it("should render no-relevant-papers state with '0' count text", () => {
+    // Verify that no-relevant-papers cells display "0" as the paper count.
+    const noRelevantPapersReport = { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 };
+    expect(noRelevantPapersReport.papers).toBe(0);
+    // The renderNoRelevantPapersCell method creates a span with text "0".
+    const countText = String(noRelevantPapersReport.papers);
     expect(countText).toBe("0");
   });
 

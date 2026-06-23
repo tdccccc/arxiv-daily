@@ -10,6 +10,10 @@ export interface SetupStatus {
   reasons: string[];
 }
 
+export function shouldRenderSetupGuide(status: Pick<SetupStatus, "readyToRun">): boolean {
+  return !status.readyToRun;
+}
+
 export function getSetupStatus(settings: PluginSettings): SetupStatus {
   const llmReady = Boolean(
     settings.llm.apiKey.trim() &&

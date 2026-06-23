@@ -5,7 +5,9 @@ import type { PluginSettings } from "../settings/types";
 import {
   todayInTz,
   formatDate,
-  parseHHMM,
+  isMinutesWithinWindow,
+  isTimeWithinLocalWindow,
+  minutesFromHHMM,
   minutesSinceMidnight,
   daysBefore,
   isWeekendInTz,
@@ -18,6 +20,11 @@ import type { RunCancellationService } from "./cancellation";
 
 const LOOKBACK_DAYS = 5;
 
+export interface SchedulerRecentDates {
+  refresh: () => Promise<unknown>;
+  hasDate?: (date: string) => boolean;
+}
+
 export interface SchedulerDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
@@ -27,6 +34,7 @@ export interface SchedulerDeps {
   now?: () => Date;
   progress?: ProgressReporter;
   cancellation?: RunCancellationService;
+  recentDates?: SchedulerRecentDates;
 }
 
 export class SchedulerService {
@@ -74,8 +82,15 @@ export class SchedulerService {
     const todayObj = todayInTz(now, tz);
     const today = formatDate(todayObj);
     const minutesNow = minutesSinceMidnight(now, tz);
-    const t = parseHHMM(s.schedule.runAtLocal);
-    const scheduledMin = t.hour * 60 + t.minute;
+    const scheduledMin = minutesFromHHMM(s.schedule.runAtLocal);
+    const endMin = minutesFromHHMM(s.schedule.runUntilLocal);
+
+    if (!isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
+      this.progress.setIdle(this.latestCompleted());
+      return;
+    }
+
+    await this.deps.recentDates?.refresh();
 
     for (let i = 0; i < LOOKBACK_DAYS; i++) {
       if (this.isCancellationRequested()) break;
@@ -86,7 +101,7 @@ export class SchedulerService {
       if (isWeekendDate(dateObj)) continue;
       await this.tickDate(date, {
         now,
-        timeGate: isToday ? { scheduledMin, minutesNow } : undefined,
+        timeGate: isToday ? { scheduledMin, endMin, minutesNow } : undefined,
       });
       if (this.isCancellationRequested()) break;
     }
@@ -133,12 +148,15 @@ export class SchedulerService {
     const todayObj = todayInTz(now, tz);
     const today = formatDate(todayObj);
     const minutesNow = minutesSinceMidnight(now, tz);
-    const t = parseHHMM(s.schedule.runAtLocal);
-    const scheduledMin = t.hour * 60 + t.minute;
+    const scheduledMin = minutesFromHHMM(s.schedule.runAtLocal);
+    const endMin = minutesFromHHMM(s.schedule.runUntilLocal);
+    if (isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
+      await this.deps.recentDates?.refresh();
+    }
     this.progress.setBatch(1, 1, today);
     const result = await this.tickDate(today, {
       now,
-      timeGate: { scheduledMin, minutesNow },
+      timeGate: { scheduledMin, endMin, minutesNow },
     });
     this.progress.setIdle(this.latestCompleted());
     if (result === undefined) {
@@ -151,7 +169,7 @@ export class SchedulerService {
     date: string,
     opts: {
       now: Date;
-      timeGate?: { scheduledMin: number; minutesNow: number };
+      timeGate?: { scheduledMin: number; endMin: number; minutesNow: number };
     },
   ): Promise<PipelineResult | undefined> {
     const s = this.deps.getSettings();
@@ -159,7 +177,14 @@ export class SchedulerService {
     if (this.deps.store.isDone(date)) return undefined;
     if (entry.status === "running") return undefined;
 
-    if (opts.timeGate && opts.timeGate.minutesNow < opts.timeGate.scheduledMin) {
+    if (
+      opts.timeGate &&
+      !isMinutesWithinWindow(
+        opts.timeGate.minutesNow,
+        opts.timeGate.scheduledMin,
+        opts.timeGate.endMin,
+      )
+    ) {
       return undefined;
     }
 
@@ -234,6 +259,9 @@ export class SchedulerService {
     const tz = s.arxiv.timezone;
     const now = (this.deps.now ?? (() => new Date()))();
     const todayObj = todayInTz(now, tz);
+    const today = formatDate(todayObj);
+
+    await this.deps.recentDates?.refresh();
 
     const results: Array<{
       date: string;
@@ -243,6 +271,13 @@ export class SchedulerService {
     for (let i = 0; i < LOOKBACK_DAYS; i++) {
       if (this.isCancellationRequested()) break;
       const date = formatDate(daysBefore(todayObj, i));
+      if (
+        date !== today &&
+        this.deps.recentDates?.hasDate &&
+        !this.deps.recentDates.hasDate(date)
+      ) {
+        continue;
+      }
       const entry = this.deps.store.get(date);
       if (this.deps.store.isDone(date)) continue;
       if (entry.status === "running") {

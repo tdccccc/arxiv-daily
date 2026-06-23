@@ -44,6 +44,20 @@
   font-size: 0.82em;
 }
 
+.arxiv-daily-settings__llm-input {
+  box-sizing: border-box;
+  width: 260px;
+  max-width: 100%;
+}
+
+.arxiv-daily-settings__model-select {
+  min-width: 160px;
+}
+
+.arxiv-daily-settings__time-input {
+  width: 72px;
+}
+
 .arxiv-daily-settings__invalid-banner {
   margin-bottom: 0.75em;
   border: 1px solid var(--text-error);
@@ -494,7 +508,7 @@
   font-weight: var(--font-semibold);
 }
 
-.arxiv-daily-dashboard__calendar-day.no-papers {
+.arxiv-daily-dashboard__calendar-day.no-relevant-papers {
   color: var(--text-muted);
   font-size: 10px;
   opacity: 0.7;
@@ -541,11 +555,19 @@
 
 .arxiv-daily-dashboard__calendar-day.is-runnable .arxiv-daily-dashboard__calendar-day-icon {
   position: absolute;
-  bottom: 7px;
-  right: 7px;
-  width: 8px;
-  height: 8px;
+  right: 3px;
+  bottom: 3px;
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
   color: var(--color-green);
+}
+
+.arxiv-daily-dashboard__calendar-day.is-runnable .arxiv-daily-dashboard__calendar-day-icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .arxiv-daily-dashboard__calendar-day-count {
@@ -555,29 +577,6 @@
   color: var(--text-accent);
   font-size: 9px;
   line-height: 1;
-}
-
-/* Tooltip for different states */
-.arxiv-daily-dashboard__calendar-day[aria-label]::after {
-  content: attr(aria-label);
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 4px 8px;
-  background: var(--background-modifier-tooltip);
-  color: var(--text-normal);
-  border-radius: 4px;
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-  z-index: 10;
-}
-
-.arxiv-daily-dashboard__calendar-day[aria-label]:hover::after {
-  opacity: 1;
 }
 
 .arxiv-daily-dashboard__filter {

@@ -88,6 +88,64 @@ describe("SchedulerService", () => {
     expect(store.get("2026-05-11").status).toBe("completed");
   });
 
+  it("does not run scheduled polling after runUntilLocal", async () => {
+    const store = makeStore();
+    await store.load();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "09:00",
+          runUntilLocal: "18:00",
+        },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T11:01:00Z"), // 19:01 Shanghai
+    });
+
+    await svc.tick();
+
+    expect(runForDate).not.toHaveBeenCalled();
+  });
+
+  it("refreshes recent dates when scheduled polling wakes inside the run window", async () => {
+    const store = makeStore();
+    await store.load();
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "09:00",
+          runUntilLocal: "18:00",
+        },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"), // 13:00 Shanghai
+      recentDates,
+    });
+
+    await svc.tick();
+
+    expect(recentDates.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("scheduled tick skips weekend dates in the lookback window", async () => {
     const store = makeStore();
     await store.load();

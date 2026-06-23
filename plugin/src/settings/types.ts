@@ -35,6 +35,7 @@ export type SummaryLanguage = "zh" | "en";
 export interface ScheduleSettings {
   enabled: boolean;
   runAtLocal: string;
+  runUntilLocal: string;
   tickIntervalMin: number;
 }
 

@@ -23,7 +23,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   },
   schedule: {
     enabled: false,
-    runAtLocal: "09:30",
+    runAtLocal: "09:00",
+    runUntilLocal: "18:00",
     tickIntervalMin: 20,
   },
   advanced: {

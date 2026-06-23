@@ -18,6 +18,43 @@ export interface CallOptions {
   signal?: AbortSignal;
 }
 
+const KNOWN_MODEL_BASE_SUFFIXES = [
+  "/api/claudecode",
+  "/api/anthropic",
+  "/apps/anthropic",
+  "/api/coding",
+  "/claudecode",
+  "/anthropic",
+  "/step_plan",
+  "/coding",
+  "/claude",
+];
+
+export function buildModelUrlCandidates(baseUrl: string): string[] {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  const candidates: string[] = [];
+  const addCandidate = (url: string): void => {
+    if (!candidates.includes(url)) candidates.push(url);
+  };
+
+  if (normalized.endsWith("/v1")) {
+    addCandidate(`${normalized}/models`);
+  } else {
+    addCandidate(`${normalized}/v1/models`);
+  }
+
+  for (const suffix of KNOWN_MODEL_BASE_SUFFIXES) {
+    if (normalized.endsWith(suffix)) {
+      const stripped = normalized.slice(0, -suffix.length);
+      addCandidate(`${stripped}/v1/models`);
+      break;
+    }
+  }
+
+  addCandidate(`${normalized}/models`);
+  return candidates;
+}
+
 export class LlmClient {
   private client: OpenAI;
 
@@ -52,7 +89,7 @@ export class LlmClient {
       throw new Error("Please fill in API Base URL and API Key first");
     }
 
-    const candidates = this.buildModelUrlCandidates(baseUrl);
+    const candidates = buildModelUrlCandidates(baseUrl);
 
     for (const url of candidates) {
       try {
@@ -75,39 +112,6 @@ export class LlmClient {
     }
 
     throw new Error("Failed to fetch models from any endpoint");
-  }
-
-  private buildModelUrlCandidates(baseUrl: string): string[] {
-    const candidates: string[] = [];
-
-    // Primary: baseURL + /v1/models
-    candidates.push(`${baseUrl}/v1/models`);
-
-    // If URL ends with known suffix, strip and try
-    const knownSuffixes = [
-      "/api/claudecode",
-      "/api/anthropic",
-      "/apps/anthropic",
-      "/api/coding",
-      "/claudecode",
-      "/anthropic",
-      "/step_plan",
-      "/coding",
-      "/claude",
-    ];
-
-    for (const suffix of knownSuffixes) {
-      if (baseUrl.endsWith(suffix)) {
-        const stripped = baseUrl.slice(0, -suffix.length);
-        candidates.push(`${stripped}/v1/models`);
-        break;
-      }
-    }
-
-    // Fallback: baseURL + /models
-    candidates.push(`${baseUrl}/models`);
-
-    return candidates;
   }
 
   private parseModelList(data: unknown): string[] {

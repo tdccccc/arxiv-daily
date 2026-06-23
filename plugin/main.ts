@@ -27,6 +27,7 @@ import { todayInTz, formatDate } from "./src/utils/time";
 import { PaperIndexStore } from "./src/services/paper-index";
 import { PdfService } from "./src/services/pdf";
 import { ProjectNotesService } from "./src/services/project-notes";
+import { RecentDatesCache } from "./src/services/recent-dates";
 import { arxivCategories } from "./src/settings/categories";
 import type { HostAdapters } from "./src/core/adapters";
 import {
@@ -45,6 +46,7 @@ export default class ArxivDailyPlugin extends Plugin {
   logger!: Logger;
   stateStore!: StateStore;
   scheduler!: SchedulerService;
+  recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
   private runLock = new RunLock();
@@ -62,6 +64,11 @@ export default class ArxivDailyPlugin extends Plugin {
       app: this.app,
       getSettings: () => this.settings,
       persistSettings: () => this.persistSettings(),
+    });
+    this.recentDates = new RecentDatesCache({
+      getSettings: () => this.settings,
+      buildFetcher: () => this.buildArxivFetcher(),
+      logger: this.logger,
     });
 
     this.stateStore = createStorageStateStore(
@@ -96,6 +103,7 @@ export default class ArxivDailyPlugin extends Plugin {
       runForDate: (date, signal) => this.buildPipeline().runForDate(date, signal),
       progress: this.progress,
       cancellation: this.runCancellation,
+      recentDates: this.recentDates,
     });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
@@ -246,15 +254,19 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
-  private buildSharedDeps() {
-    const llm = new LlmClient(this.settings.llm, this.logger);
-    const fetcher = new ArxivFetcher({
+  buildArxivFetcher(): ArxivFetcher {
+    return new ArxivFetcher({
       category: this.settings.arxiv.category,
       categories: arxivCategories(this.settings.arxiv),
       http: this.host.http,
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });
+  }
+
+  private buildSharedDeps() {
+    const llm = new LlmClient(this.settings.llm, this.logger);
+    const fetcher = this.buildArxivFetcher();
     const cache = new HtmlCache({
       rootDir: this.pluginCacheDir(),
       expiryDays: this.settings.advanced.cacheExpiryDays,

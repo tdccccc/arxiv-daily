@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { appendSettingsButton, type CalendarCell, type CalendarCellState } from "../../src/dashboard/view";
+import {
+  appendSettingsButton,
+  calendarCellAriaLabel,
+  type CalendarCell,
+  type CalendarCellState,
+} from "../../src/dashboard/view";
 
 describe("Dashboard Integration", () => {
   it("should render settings button and calendar with runnable dates", () => {
@@ -14,12 +19,12 @@ describe("Dashboard Integration", () => {
 
   it("should support all calendar cell states", () => {
     // Verify CalendarCellState type covers all expected states
-    const states: CalendarCellState[] = ["empty", "runnable", "has-report", "no-papers"];
+    const states: CalendarCellState[] = ["empty", "runnable", "has-report", "no-relevant-papers"];
     expect(states).toHaveLength(4);
     expect(states).toContain("empty");
     expect(states).toContain("runnable");
     expect(states).toContain("has-report");
-    expect(states).toContain("no-papers");
+    expect(states).toContain("no-relevant-papers");
   });
 
   it("should create calendar cells with correct structure", () => {
@@ -42,13 +47,13 @@ describe("Dashboard Integration", () => {
     expect(reportCell.report!.papers).toBe(5);
     expect(reportCell.report!.starred).toBe(2);
 
-    const noPapersCell: CalendarCell = {
+    const noRelevantPapersCell: CalendarCell = {
       date: "2026-06-18",
-      state: "no-papers",
+      state: "no-relevant-papers",
       report: { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 },
     };
-    expect(noPapersCell.state).toBe("no-papers");
-    expect(noPapersCell.report!.papers).toBe(0);
+    expect(noRelevantPapersCell.state).toBe("no-relevant-papers");
+    expect(noRelevantPapersCell.report!.papers).toBe(0);
   });
 
   it("should apply correct CSS classes based on calendar cell state", () => {
@@ -59,9 +64,9 @@ describe("Dashboard Integration", () => {
         classes.push("is-empty");
       } else if (cell.state === "has-report") {
         classes.push("has-report");
-      } else if (cell.state === "no-papers") {
+      } else if (cell.state === "no-relevant-papers") {
         classes.push("has-report");
-        classes.push("no-papers");
+        classes.push("no-relevant-papers");
       } else if (cell.state === "runnable") {
         classes.push("is-runnable");
       }
@@ -73,28 +78,28 @@ describe("Dashboard Integration", () => {
     expect(emptyCell).toContain("is-empty");
     expect(emptyCell).not.toContain("is-runnable");
     expect(emptyCell).not.toContain("has-report");
-    expect(emptyCell).not.toContain("no-papers");
+    expect(emptyCell).not.toContain("no-relevant-papers");
 
     const runnableCell = getCalendarCellClasses({ date: "2026-06-20", state: "runnable" });
     expect(runnableCell).toContain("arxiv-daily-dashboard__calendar-day");
     expect(runnableCell).toContain("is-runnable");
     expect(runnableCell).not.toContain("is-empty");
     expect(runnableCell).not.toContain("has-report");
-    expect(runnableCell).not.toContain("no-papers");
+    expect(runnableCell).not.toContain("no-relevant-papers");
 
     const reportCell = getCalendarCellClasses({ date: "2026-06-19", state: "has-report" });
     expect(reportCell).toContain("arxiv-daily-dashboard__calendar-day");
     expect(reportCell).toContain("has-report");
     expect(reportCell).not.toContain("is-empty");
     expect(reportCell).not.toContain("is-runnable");
-    expect(reportCell).not.toContain("no-papers");
+    expect(reportCell).not.toContain("no-relevant-papers");
 
-    const noPapersCell = getCalendarCellClasses({ date: "2026-06-18", state: "no-papers" });
-    expect(noPapersCell).toContain("arxiv-daily-dashboard__calendar-day");
-    expect(noPapersCell).toContain("has-report");
-    expect(noPapersCell).toContain("no-papers");
-    expect(noPapersCell).not.toContain("is-empty");
-    expect(noPapersCell).not.toContain("is-runnable");
+    const noRelevantPapersCell = getCalendarCellClasses({ date: "2026-06-18", state: "no-relevant-papers" });
+    expect(noRelevantPapersCell).toContain("arxiv-daily-dashboard__calendar-day");
+    expect(noRelevantPapersCell).toContain("has-report");
+    expect(noRelevantPapersCell).toContain("no-relevant-papers");
+    expect(noRelevantPapersCell).not.toContain("is-empty");
+    expect(noRelevantPapersCell).not.toContain("is-runnable");
   });
 
   it("should invoke onClick handler for settings button", () => {
@@ -106,49 +111,39 @@ describe("Dashboard Integration", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  it("should verify CSS classes for no-papers state are used correctly", () => {
-    // Verify that no-papers cells get both has-report and no-papers classes
-    // This matches the view.ts getCalendarCellClasses logic where no-papers
-    // cells receive both "has-report" and "no-papers" classes for styling
+  it("should verify CSS classes for no-relevant-papers state are used correctly", () => {
+    // Verify that no-relevant-papers cells get both has-report and no-relevant-papers classes.
     const cell: CalendarCell = {
       date: "2026-06-15",
-      state: "no-papers",
+      state: "no-relevant-papers",
       report: { date: "2026-06-15", path: "arxiv-daily/daily/2026-06-15.md", papers: 0, starred: 0 },
     };
 
-    // The no-papers state should inherit has-report styling (border, font-weight)
-    // and add no-papers styling (muted color, smaller font, reduced opacity)
-    expect(cell.state).toBe("no-papers");
+    expect(cell.state).toBe("no-relevant-papers");
     expect(cell.report).toBeDefined();
     expect(cell.report!.papers).toBe(0);
   });
 
   it("should render runnable cells with correct aria labels", () => {
-    // Verify the aria label format for runnable cells
     const cell: CalendarCell = { date: "2026-06-20", state: "runnable" };
-    const ariaLabel = `Click to run for ${cell.date}`;
-    expect(ariaLabel).toBe("Click to run for 2026-06-20");
+    expect(calendarCellAriaLabel(cell)).toBe("Run daily report");
   });
 
-  it("should render no-papers cells with correct aria labels", () => {
-    // Verify the aria label format for no-papers cells
+  it("should render no-relevant-papers cells with correct aria labels", () => {
     const cell: CalendarCell = {
       date: "2026-06-18",
-      state: "no-papers",
+      state: "no-relevant-papers",
       report: { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 },
     };
-    const ariaLabel = `Daily report ${cell.date}: 0 papers found`;
-    expect(ariaLabel).toBe("Daily report 2026-06-18: 0 papers found");
+    expect(calendarCellAriaLabel(cell)).toBe("No relevant papers");
   });
 
   it("should render has-report cells with correct aria labels", () => {
-    // Verify the aria label format for has-report cells
     const cell: CalendarCell = {
       date: "2026-06-19",
       state: "has-report",
       report: { date: "2026-06-19", path: "arxiv-daily/daily/2026-06-19.md", papers: 5, starred: 2 },
     };
-    const ariaLabel = `Open daily report ${cell.report!.date}: ${cell.report!.papers} indexed papers, ${cell.report!.starred} starred`;
-    expect(ariaLabel).toBe("Open daily report 2026-06-19: 5 indexed papers, 2 starred");
+    expect(calendarCellAriaLabel(cell)).toBe("5 indexed papers, 2 starred");
   });
 });

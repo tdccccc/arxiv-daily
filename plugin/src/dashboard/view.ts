@@ -23,7 +23,8 @@ import {
   validateFilterConfig,
   validateLlmConfig,
 } from "../settings/validation";
-import { daysBefore, formatDate, isWeekendDate, minutesSinceMidnight, parseHHMM, todayInTz } from "../utils/time";
+import type { RunStateEntry } from "../settings/types";
+import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "../utils/time";
 import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 
@@ -98,12 +99,151 @@ export type CalendarCellState =
   | "empty"        // No date or outside lookback
   | "runnable"     // Can generate report
   | "has-report"   // Report exists
-  | "no-papers";   // LLM filtered to 0 papers
+  | "no-relevant-papers"; // LLM filtered to 0 relevant papers
+
+export type CalendarEmptyReason =
+  | "blank"
+  | "arxiv-not-updated"
+  | "future"
+  | "before-tracking";
 
 export interface CalendarCell {
   date: string | null;
   state: CalendarCellState;
   report?: DailyReportDay;
+  emptyReason?: CalendarEmptyReason;
+}
+
+export interface CalendarCellResolution {
+  state: CalendarCellState;
+  emptyReason?: CalendarEmptyReason;
+}
+
+export interface CalendarRunWhitelistInput {
+  date: string;
+  today: string;
+  now: Date;
+  timezone: string;
+  runAtLocal: string;
+  runUntilLocal: string;
+  inLookback: boolean;
+  isWeekend: boolean;
+  hasDailyReport: boolean;
+  recentDates: ReadonlySet<string>;
+  runState?: RunStateEntry;
+}
+
+export function resolveCalendarCellState({
+  report,
+  runnable,
+  runState,
+  emptyReason,
+}: {
+  report?: { papers: number };
+  runnable: boolean;
+  runState?: RunStateEntry;
+  emptyReason?: CalendarEmptyReason;
+}): CalendarCellResolution {
+  if (report) {
+    return {
+      state: report.papers === 0 ? "no-relevant-papers" : "has-report",
+    };
+  }
+
+  if (isArxivNotUpdatedRunState(runState)) {
+    return { state: "empty", emptyReason: "arxiv-not-updated" };
+  }
+
+  if (runnable) return { state: "runnable" };
+
+  return emptyReason
+    ? { state: "empty", emptyReason }
+    : { state: "empty" };
+}
+
+export function isCalendarRunWhitelisted(
+  input: CalendarRunWhitelistInput,
+): boolean {
+  if (!input.inLookback) return false;
+  if (input.isWeekend) return false;
+  if (input.hasDailyReport) return false;
+  if (isRunStateBlockedForCalendarRun(input.runState)) return false;
+
+  if (input.date === input.today) {
+    return isTimeWithinLocalWindow(
+      input.now,
+      input.timezone,
+      input.runAtLocal,
+      input.runUntilLocal,
+    );
+  }
+
+  return input.recentDates.has(input.date);
+}
+
+export interface CalendarEmptyReasonInput {
+  date: string;
+  today: string;
+  trackingStartDate: string;
+  recentDates: ReadonlySet<string>;
+}
+
+export function resolveCalendarEmptyReason(
+  input: CalendarEmptyReasonInput,
+): CalendarEmptyReason {
+  if (input.date > input.today) return "future";
+  if (
+    input.date < input.trackingStartDate &&
+    !input.recentDates.has(input.date)
+  ) {
+    return "before-tracking";
+  }
+  return "arxiv-not-updated";
+}
+
+export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
+  if (!cell.date) {
+    return undefined;
+  }
+
+  if (cell.state === "has-report" && cell.report) {
+    return `${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
+  }
+
+  if (cell.state === "no-relevant-papers") {
+    return "No relevant papers";
+  }
+
+  if (cell.state === "runnable") {
+    return "Run daily report";
+  }
+
+  if (cell.emptyReason === "arxiv-not-updated") {
+    return "arXiv not updated";
+  }
+
+  if (cell.emptyReason === "future") {
+    return "Future date";
+  }
+
+  return undefined;
+}
+
+function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
+  return (
+    runState?.status === "skipped" ||
+    runState?.status === "failed_permanent" ||
+    (runState?.status === "completed" && runState.papersWritten === 0)
+  );
+}
+
+function isRunStateBlockedForCalendarRun(runState?: RunStateEntry): boolean {
+  return (
+    runState?.status === "running" ||
+    runState?.status === "skipped" ||
+    runState?.status === "failed_permanent" ||
+    (runState?.status === "completed" && runState.papersWritten === 0)
+  );
 }
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -222,6 +362,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
+      await this.plugin.recentDates.refresh();
       await this.clearRunStateForMissingDailyReports();
       const store = this.plugin.buildPaperIndex();
       const index = await syncDashboardHistory({
@@ -751,9 +892,10 @@ class ArxivDailyDashboardView extends ItemView {
         cls: this.getCalendarCellClasses(cell),
         attr: {
           type: "button",
-          "aria-label": this.getCalendarCellAriaLabel(cell),
         },
       }) as HTMLButtonElement;
+      const ariaLabel = this.getCalendarCellAriaLabel(cell);
+      if (ariaLabel) button.setAttribute("aria-label", ariaLabel);
 
       if (!cell.date) {
         button.disabled = true;
@@ -775,8 +917,8 @@ class ArxivDailyDashboardView extends ItemView {
         case "has-report":
           this.renderReportCell(button, cell);
           break;
-        case "no-papers":
-          this.renderNoPapersCell(button, cell);
+        case "no-relevant-papers":
+          this.renderNoRelevantPapersCell(button, cell);
           break;
         case "runnable":
           this.renderRunnableCell(button, cell);
@@ -840,61 +982,71 @@ class ArxivDailyDashboardView extends ItemView {
     return dates;
   }
 
-  private isRunnable(date: string): boolean {
+  private isRunnable(
+    date: string,
+    runState: RunStateEntry | undefined,
+    hasDailyReport: boolean,
+  ): boolean {
     const today = this.todayDate();
-    const hasFile = this.dailyReports.some(r => r.date === date);
+    const parsed = parseCalendarDate(date);
+    const settings = this.plugin.settings;
 
-    // In lookback window
-    if (!this.getLookbackDates().has(date)) return false;
+    return isCalendarRunWhitelisted({
+      date,
+      today,
+      now: new Date(),
+      timezone: settings.arxiv.timezone,
+      runAtLocal: settings.schedule.runAtLocal,
+      runUntilLocal: settings.schedule.runUntilLocal,
+      inLookback: this.getLookbackDates().has(date),
+      isWeekend: parsed ? isWeekendDate(parsed) : false,
+      hasDailyReport,
+      recentDates: this.plugin.recentDates.snapshot().dates,
+      runState,
+    });
+  }
 
-    // Not weekend
-    const [y, m, d] = date.split('-').map(Number);
-    if (isWeekendDate({ y, m, d })) return false;
+  private getCalendarEmptyReason(date: string): CalendarEmptyReason {
+    return resolveCalendarEmptyReason({
+      date,
+      today: this.todayDate(),
+      trackingStartDate: this.getTrackingStartDate(),
+      recentDates: this.plugin.recentDates.snapshot().dates,
+    });
+  }
 
-    // No file
-    if (hasFile) return false;
-
-    // If today, check time gate (only start time; matches scheduler behaviour)
-    if (date === today) {
-      const now = new Date();
-      const settings = this.plugin.settings;
-      const tz = settings.arxiv.timezone;
-      const currentMinutes = minutesSinceMidnight(now, tz);
-      const startTime = parseHHMM(settings.schedule.runAtLocal);
-      const startMinutes = startTime.hour * 60 + startTime.minute;
-
-      return currentMinutes >= startMinutes;
-    }
-
-    // Past dates: runnable
-    return true;
+  private getTrackingStartDate(): string {
+    const candidates = [
+      ...this.dailyReports.map((report) => report.date),
+      ...Object.keys(this.plugin.stateStore.snapshot()),
+    ].sort();
+    return candidates[0] ?? this.todayDate();
   }
 
   private buildCalendarCells(month: string): CalendarCell[] {
     const cells: CalendarCell[] = [];
     const byDate = new Map(this.dailyReports.map(r => [r.date, r]));
+    const runState = this.plugin.stateStore.snapshot();
 
     for (const cellDate of calendarCells(month)) {
       if (!cellDate.date) {
-        cells.push({ date: null, state: "empty" });
+        cells.push({ date: null, state: "empty", emptyReason: "blank" });
         continue;
       }
 
       const report = byDate.get(cellDate.date);
-
-      let state: CalendarCellState;
-      if (report) {
-        // Check if report has 0 papers (no-papers state)
-        state = report.papers === 0 ? "no-papers" : "has-report";
-      } else if (this.isRunnable(cellDate.date)) {
-        state = "runnable";
-      } else {
-        state = "empty";
-      }
+      const dateRunState = runState[cellDate.date];
+      const resolution = resolveCalendarCellState({
+        report,
+        runnable: this.isRunnable(cellDate.date, dateRunState, Boolean(report)),
+        runState: dateRunState,
+        emptyReason: this.getCalendarEmptyReason(cellDate.date),
+      });
 
       cells.push({
         date: cellDate.date,
-        state,
+        state: resolution.state,
+        emptyReason: resolution.emptyReason,
         report,
       });
     }
@@ -909,9 +1061,9 @@ class ArxivDailyDashboardView extends ItemView {
       classes.push("is-empty");
     } else if (cell.state === "has-report") {
       classes.push("has-report");
-    } else if (cell.state === "no-papers") {
+    } else if (cell.state === "no-relevant-papers") {
       classes.push("has-report");
-      classes.push("no-papers");
+      classes.push("no-relevant-papers");
     } else if (cell.state === "runnable") {
       classes.push("is-runnable");
     }
@@ -919,31 +1071,12 @@ class ArxivDailyDashboardView extends ItemView {
     return classes.join(" ");
   }
 
-  private getCalendarCellAriaLabel(cell: CalendarCell): string {
-    if (!cell.date) {
-      return "Empty calendar cell";
-    }
-
-    if (cell.state === "has-report" && cell.report) {
-      return `Open daily report ${cell.report.date}: ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
-    }
-
-    if (cell.state === "no-papers") {
-      return `Daily report ${cell.date}: 0 papers found`;
-    }
-
-    if (cell.state === "runnable") {
-      return `Click to run for ${cell.date}`;
-    }
-
-    return `No daily report ${cell.date}`;
+  private getCalendarCellAriaLabel(cell: CalendarCell): string | undefined {
+    return calendarCellAriaLabel(cell);
   }
 
   private renderRunnableCell(button: HTMLButtonElement, cell: CalendarCell): void {
     button.addClass("is-runnable");
-
-    // Set tooltip for CSS ::after pseudo-element
-    button.setAttribute("data-tooltip", `Click to run for ${cell.date}`);
 
     // Play icon
     const icon = button.createSpan({
@@ -957,9 +1090,9 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
-  private renderNoPapersCell(button: HTMLButtonElement, cell: CalendarCell): void {
+  private renderNoRelevantPapersCell(button: HTMLButtonElement, cell: CalendarCell): void {
     button.addClass("has-report");
-    button.addClass("no-papers");
+    button.addClass("no-relevant-papers");
 
     // Show "0" as the count
     button.createSpan({
@@ -993,6 +1126,13 @@ class ArxivDailyDashboardView extends ItemView {
     if (!setup.readyToRun) {
       new Notice("arXiv Daily: Please complete setup first");
       this.openSettings();
+      return;
+    }
+
+    await this.plugin.recentDates.refresh();
+    if (date !== this.todayDate() && !this.plugin.recentDates.hasDate(date)) {
+      new Notice(`arXiv Daily ${date}: arXiv not updated`);
+      await this.reloadIndex();
       return;
     }
 
@@ -1624,6 +1764,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private async runToday(): Promise<void> {
     if (!this.gateFilter()) return;
+    await this.plugin.recentDates.refresh();
     const date = this.todayDate();
     new Notice(`arXiv Daily: running for ${date}...`);
     const result = await this.plugin.scheduler.runForDateNow(date);
@@ -1633,6 +1774,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private async runAllPending(): Promise<void> {
     if (!this.gateFilter()) return;
+    await this.plugin.recentDates.refresh();
     new Notice("arXiv Daily: running all pending in lookback...");
     const results = await this.plugin.scheduler.runAllPending();
     if (results.length === 0) {
@@ -2055,4 +2197,14 @@ function calendarCells(month: string): Array<{ date: string | null }> {
   }
   while (cells.length % 7 !== 0) cells.push({ date: null });
   return cells;
+}
+
+function parseCalendarDate(date: string): { y: number; m: number; d: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) return null;
+  return {
+    y: Number(match[1]),
+    m: Number(match[2]),
+    d: Number(match[3]),
+  };
 }

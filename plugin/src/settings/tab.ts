@@ -7,7 +7,7 @@ import type { Topic } from "./types";
 import { slugify } from "../utils/slugify";
 import { validateFilterConfig } from "./validation";
 import { arxivCategories } from "./categories";
-import { getSetupStatus } from "../onboarding";
+import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
 import { LlmClient } from "../llm/client";
 
@@ -97,7 +97,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Base URL")
       .setDesc("LLM endpoint base. Default is DeepSeek. Override for other providers.")
       .addText((t) => {
-        t.inputEl.style.width = "100%";
+        t.inputEl.addClass("arxiv-daily-settings__llm-input");
         t.setPlaceholder("https://api.deepseek.com/v1")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
           .onChange(async (v) => {
@@ -113,7 +113,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Required. Your LLM provider's API key. Stored locally in data.json.")
       .addText((t) => {
         t.inputEl.type = "password";
-        t.inputEl.style.width = "100%";
+        t.inputEl.addClass("arxiv-daily-settings__llm-input");
         t.setPlaceholder("sk-...")
           .setValue(s.llm.apiKey)
           .onChange(async (v) => {
@@ -154,7 +154,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Model dropdown (empty by default, populated by Get Models)
     modelSetting.addDropdown((d) => {
-      d.selectEl.style.minWidth = "200px";
       d.selectEl.addClass("arxiv-daily-settings__model-select");
       if (s.llm.model) {
         d.addOption(s.llm.model, s.llm.model);
@@ -419,14 +418,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Run time (HH:MM)")
-      .setDesc("Local time the scheduler aims to fire today's batch. Earlier ticks for today are skipped.")
-      .addText((t) =>
-        t.setValue(s.schedule.runAtLocal).onChange(async (v) => {
-          s.schedule.runAtLocal = v.trim();
-          await this.plugin.saveSettings();
-        }),
-      );
+      .setName("Run window")
+      .setDesc("Local time window for scheduled polling. Window behavior will be finalized with the dashboard Run rules.")
+      .addText((t) => {
+        t.inputEl.addClass("arxiv-daily-settings__time-input");
+        t.setPlaceholder("09:00")
+          .setValue(s.schedule.runAtLocal)
+          .onChange(async (v) => {
+            s.schedule.runAtLocal = v.trim();
+            await this.plugin.saveSettings();
+          });
+      })
+      .addText((t) => {
+        t.inputEl.addClass("arxiv-daily-settings__time-input");
+        t.setPlaceholder("18:00")
+          .setValue(s.schedule.runUntilLocal)
+          .onChange(async (v) => {
+            s.schedule.runUntilLocal = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
 
     this.attachHelp(
       new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
@@ -461,18 +472,28 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private renderSetupGuide(containerEl: HTMLElement): void {
-    containerEl.appendChild(this.createSetupGuide());
+    const guide = this.createSetupGuide();
+    if (guide) containerEl.appendChild(guide);
   }
 
   private refreshSetupGuide(): void {
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
+    const next = this.createSetupGuide();
     if (current instanceof HTMLElement) {
-      current.replaceWith(this.createSetupGuide());
+      if (next) {
+        current.replaceWith(next);
+      } else {
+        current.remove();
+      }
+    } else if (next) {
+      this.containerEl.prepend(next);
     }
   }
 
-  private createSetupGuide(): HTMLElement {
+  private createSetupGuide(): HTMLElement | null {
     const status = getSetupStatus(this.plugin.settings);
+    if (!shouldRenderSetupGuide(status)) return null;
+
     const guide = document.createElement("section");
     guide.addClass("arxiv-daily-setup");
     const header = guide.createEl("div", {
@@ -484,9 +505,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     header.createEl("div", {
       cls: "arxiv-daily-setup__subtitle",
-      text: status.readyToRun
-        ? "Configuration is ready. Run today or open the Dashboard."
-        : "Complete these items before the first run.",
+      text: "Complete these items before the first run.",
     });
 
     const list = guide.createEl("div", {
