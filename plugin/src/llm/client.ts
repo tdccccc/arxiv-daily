@@ -55,13 +55,31 @@ export function buildModelUrlCandidates(baseUrl: string): string[] {
   return candidates;
 }
 
+export function normalizeOpenAiBaseUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  if (!normalized) return normalized;
+  if (normalized.endsWith("/v1")) return normalized;
+
+  try {
+    const parsed = new URL(normalized);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    if (!path || path === "/") {
+      return `${normalized}/v1`;
+    }
+  } catch {
+    return normalized;
+  }
+
+  return normalized;
+}
+
 export class LlmClient {
   private client: OpenAI;
 
   constructor(private settings: LlmSettings, private logger: Logger) {
     this.client = new OpenAI({
       apiKey: settings.apiKey,
-      baseURL: settings.baseUrl,
+      baseURL: normalizeOpenAiBaseUrl(settings.baseUrl),
       timeout: LLM_TIMEOUT_MS,
       maxRetries: 0,
       dangerouslyAllowBrowser: true,
