@@ -32,8 +32,8 @@ If the introduction or related work explicitly contrasts with prior work, quote 
 ## Scope and Limits
 Under what conditions do the conclusions hold? What limitations, uncertainties, or uncovered questions remain? Consider applicability, caveats reported by the authors, unresolved issues, and future directions. Answer only from the paper itself; if the authors do not discuss an aspect, write "Not discussed in the source text".
 
-## Reading Value
-Start with exactly one triage label: **Read closely** / **Skim** / **Note one point**, then give one sentence explaining why. Avoid generic praise.
+## Academic Value Assessment
+Based only on the paper-provided material, objectively assess the paper's academic value. Explain whether its main value comes from a new problem, new method, new data or observational evidence, new theoretical interpretation, incremental improvement, or an engineering combination of existing work; judge how strongly the evidence supports the core conclusions through experiments, data, derivation, or comparisons; then state whether it is best used as strong evidence, a method reference, background material, or a trend signal. Use 2-3 sentences and avoid generic praise.
 
 Notes:
 - Write in English
@@ -42,6 +42,7 @@ Notes:
 - Answer only from the input content. Do not introduce external knowledge or fill in data, experiments, metrics, or conclusions not present in the input
 - If a required item is not specified in the input, write "Not specified in the source text"
 - "Contributions and Novelty" must be based only on how the source text positions the paper. If the source text does not compare with prior work, write "Not specified in the source text" and do not invent prior work
+- "Academic Value Assessment" is not generic praise and must not be a simple high/medium/low rating. State where the value comes from, how far the evidence supports it, and which judgments remain limited. If the source text lacks enough evidence, explicitly write "The source text is insufficient to assess"
 - Internally classify the paper as method, observation, theory, simulation, data release, review, etc., but do not output the type. Organize the emphasis according to the paper type
 - Prioritize numbers, errors, significance, improvements, sample sizes, parameter ranges, and comparisons with prior work or baselines
 - Distinguish results supported by data, experiments, or theoretical derivation from interpretations proposed by the authors. If evidence details are insufficient, write "The authors claim"

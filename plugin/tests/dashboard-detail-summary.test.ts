@@ -38,7 +38,7 @@ describe("looksLikeDetailSummary", () => {
       "## 适用边界",
       repeatedText(2),
       "",
-      "## 阅读价值",
+      "## 学术价值判断",
       repeatedText(1),
     ].join("\n");
 

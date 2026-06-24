@@ -6,7 +6,7 @@ const DETAIL_SUMMARY_HEADINGS = [
   "主要结论",
   "贡献与创新点",
   "适用边界",
-  "阅读价值",
+  "学术价值判断",
 ];
 
 export function looksLikeDetailSummary(markdown: string): boolean {
