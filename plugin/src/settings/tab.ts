@@ -11,6 +11,22 @@ import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
 import { LlmClient } from "../llm/client";
 
+export type ModelFetchNotice =
+  | { kind: "success"; count: number }
+  | { kind: "empty" }
+  | { kind: "error"; message: string };
+
+export function modelFetchNoticeMessage(result: ModelFetchNotice): string {
+  switch (result.kind) {
+    case "success":
+      return `API connection successful. Found ${result.count} models.`;
+    case "empty":
+      return "API connection successful, but no available models were found.";
+    case "error":
+      return `API connection failed: ${result.message}`;
+  }
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
 
@@ -139,12 +155,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           const models = await client.fetchModels();
           if (models.length > 0) {
             this.showModelDropdown(models, modelSetting.settingEl);
-            new Notice(`API 连接成功，找到 ${models.length} 个模型`);
+            new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
           } else {
-            new Notice("API 连接成功，但未找到可用模型");
+            new Notice(modelFetchNoticeMessage({ kind: "empty" }));
           }
         } catch (e) {
-          new Notice(`API 连接失败：${(e as Error).message}`);
+          new Notice(modelFetchNoticeMessage({ kind: "error", message: (e as Error).message }));
         } finally {
           b.setButtonText("Get Models");
           b.setDisabled(false);

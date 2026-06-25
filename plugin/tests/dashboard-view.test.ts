@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
+  collectIndexedDetailSummaryRefs,
   executeObsidianCommand,
   openDashboardView,
   openMarkdownFileOnce,
 } from "../src/dashboard/view";
+import type { PaperIndexEntry } from "../src/services/paper-index";
 
 describe("openDashboardView", () => {
   it("reveals an existing dashboard leaf", async () => {
@@ -194,3 +196,60 @@ describe("executeObsidianCommand", () => {
     ).resolves.toBe(false);
   });
 });
+
+describe("collectIndexedDetailSummaryRefs", () => {
+  it("uses synced index detail fields without reading markdown files again", () => {
+    const refs = collectIndexedDetailSummaryRefs([
+      indexedPaper("2606.00001", {
+        detail: true,
+        paperPath: "arxiv/papers/2606.00001.md",
+      }),
+      indexedPaper("2606.00002", {
+        detail: false,
+        paperPath: "arxiv/papers/2606.00002.md",
+      }),
+      indexedPaper("2606.00003", {
+        detail: true,
+        paperPath: null,
+      }),
+    ]);
+
+    expect([...refs.ids]).toEqual(["2606.00001"]);
+    expect(refs.paths.get("2606.00001")).toBe("arxiv/papers/2606.00001.md");
+    expect(refs.paths.has("2606.00002")).toBe(false);
+    expect(refs.paths.has("2606.00003")).toBe(false);
+  });
+});
+
+function indexedPaper(
+  id: string,
+  overrides: Partial<PaperIndexEntry> = {},
+): PaperIndexEntry {
+  return {
+    arxivId: id,
+    source: "arxiv",
+    title: `Paper ${id}`,
+    authors: ["A. Author"],
+    published: "2026-06-10",
+    updated: "2026-06-10",
+    category: "photo-z",
+    categories: ["photo-z"],
+    summary: undefined,
+    topics: ["photo-z"],
+    primaryTopic: "photo-z",
+    detail: false,
+    status: "inbox",
+    priority: "normal",
+    seenDates: ["2026-06-10"],
+    dailyReports: [],
+    paperPath: null,
+    arxivUrl: `https://arxiv.org/abs/${id}`,
+    pdfUrl: `https://arxiv.org/pdf/${id}`,
+    pdfPath: "",
+    zoteroKey: "",
+    zoteroUri: "",
+    citationKey: "",
+    projects: [],
+    ...overrides,
+  };
+}

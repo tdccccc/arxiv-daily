@@ -18,6 +18,7 @@ export interface DashboardHistorySyncDeps {
   store: PaperIndexStore;
   output: OutputSettings;
   topics: Topic[];
+  markdownFiles?: DashboardMarkdownFile[];
   logger?: {
     info(message: string, ...rest: unknown[]): void;
     warn(message: string, ...rest: unknown[]): void;
@@ -49,9 +50,18 @@ export async function syncDashboardHistory(
   deps: DashboardHistorySyncDeps,
 ): Promise<PaperInbox> {
   const current = await deps.store.load();
-  const dailyReportPaths = collectDailyReportPaths(deps);
-  const paperCandidates = await collectPaperCandidates(deps, dailyReportPaths);
-  const dailyCollection = await collectDailyCandidates(deps, paperCandidates);
+  const markdownFiles = deps.markdownFiles ?? deps.vault.getMarkdownFiles();
+  const dailyReportPaths = collectDailyReportPaths(deps, markdownFiles);
+  const paperCandidates = await collectPaperCandidates(
+    deps,
+    dailyReportPaths,
+    markdownFiles,
+  );
+  const dailyCollection = await collectDailyCandidates(
+    deps,
+    paperCandidates,
+    markdownFiles,
+  );
   const inputs = buildSyncInputs(
     current,
     [
@@ -100,10 +110,11 @@ export async function syncDashboardHistory(
 async function collectPaperCandidates(
   deps: DashboardHistorySyncDeps,
   dailyReportPaths: Set<string>,
+  markdownFiles: DashboardMarkdownFile[],
 ): Promise<Map<string, PaperCandidate>> {
   const papersDir = normalizeVaultPath(deps.output.papersDir);
   const out = new Map<string, PaperCandidate>();
-  for (const file of deps.vault.getMarkdownFiles()) {
+  for (const file of markdownFiles) {
     const path = normalizeVaultPath(file.path);
     if (!isDirectChildMarkdown(path, papersDir)) continue;
     try {
@@ -141,10 +152,13 @@ async function collectPaperCandidates(
   return out;
 }
 
-function collectDailyReportPaths(deps: DashboardHistorySyncDeps): Set<string> {
+function collectDailyReportPaths(
+  deps: DashboardHistorySyncDeps,
+  markdownFiles: DashboardMarkdownFile[],
+): Set<string> {
   const dailyDir = normalizeVaultPath(deps.output.dailyDir);
   const out = new Set<string>();
-  for (const file of deps.vault.getMarkdownFiles()) {
+  for (const file of markdownFiles) {
     const path = normalizeVaultPath(file.path);
     if (!dailyDateFromPath(path, dailyDir)) continue;
     out.add(path);
@@ -155,13 +169,14 @@ function collectDailyReportPaths(deps: DashboardHistorySyncDeps): Set<string> {
 async function collectDailyCandidates(
   deps: DashboardHistorySyncDeps,
   paperCandidates: Map<string, PaperCandidate>,
+  markdownFiles: DashboardMarkdownFile[],
 ): Promise<DailyCandidateCollection> {
   const dailyDir = normalizeVaultPath(deps.output.dailyDir);
   const candidates: DailyCandidate[] = [];
   const paperIdsByReport = new Map<string, Set<string>>();
   const parsedReports = new Set<string>();
   const seen = new Set<string>();
-  for (const file of deps.vault.getMarkdownFiles()) {
+  for (const file of markdownFiles) {
     const path = normalizeVaultPath(file.path);
     const date = dailyDateFromPath(path, dailyDir);
     if (!date) continue;

@@ -126,4 +126,87 @@ describe("RecentDatesCache", () => {
 
     expect(cache.hasDate("2026-01-01")).toBe(false);
   });
+
+  it("returns the cached snapshot at the foreground deadline while the refresh continues", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFetch: (html: string) => void = () => {};
+      const fetcher = {
+        fetchRecent: vi
+          .fn()
+          .mockResolvedValueOnce(recentHtml("2026-06-21", "2606.00000"))
+          .mockImplementationOnce(
+            () =>
+              new Promise<string>((resolve) => {
+                resolveFetch = resolve;
+              }),
+          ),
+      };
+      const cache = new RecentDatesCache({
+        getSettings: () => settingsWithCategories(["cs.CL"]),
+        buildFetcher: () => fetcher,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        now: () => new Date("2026-06-23T01:00:00Z"),
+      });
+      await cache.refresh();
+      expect(cache.hasDate("2026-06-21")).toBe(true);
+      expect(cache.hasDate("2026-06-22")).toBe(false);
+
+      const pending = cache.refreshWithin(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const result = await pending;
+      expect(result.completed).toBe(false);
+      expect(result.timedOut).toBe(true);
+      expect(result.snapshot.status).toBe("ready");
+      expect(result.snapshot.dates.has("2026-06-21")).toBe(true);
+      expect(result.snapshot.dates.has("2026-06-22")).toBe(false);
+
+      resolveFetch(recentHtml("2026-06-22", "2606.00001"));
+      await result.refresh;
+
+      expect(cache.hasDate("2026-06-22")).toBe(true);
+      expect(fetcher.fetchRecent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses an in-flight refresh for concurrent foreground waits", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFetch: (html: string) => void = () => {};
+      const fetcher = {
+        fetchRecent: vi.fn(
+          () =>
+            new Promise<string>((resolve) => {
+              resolveFetch = resolve;
+            }),
+        ),
+      };
+      const cache = new RecentDatesCache({
+        getSettings: () => settingsWithCategories(["cs.CL"]),
+        buildFetcher: () => fetcher,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        now: () => new Date("2026-06-23T01:00:00Z"),
+      });
+
+      const first = cache.refreshWithin(1000);
+      const second = cache.refreshWithin(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(firstResult.timedOut).toBe(true);
+      expect(secondResult.timedOut).toBe(true);
+      expect(fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+
+      resolveFetch(recentHtml("2026-06-22", "2606.00001"));
+      await Promise.all([firstResult.refresh, secondResult.refresh]);
+
+      expect(cache.hasDate("2026-06-22")).toBe(true);
+      expect(fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

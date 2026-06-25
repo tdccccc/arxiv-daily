@@ -17,8 +17,7 @@ import {
   type DashboardSortKey,
   type DashboardTab,
 } from "./model";
-import { looksLikeDetailSummary } from "./detail-summary";
-import { syncDashboardHistory } from "./history-sync";
+import { syncDashboardHistory, type DashboardMarkdownFile } from "./history-sync";
 import {
   validateFilterConfig,
   validateLlmConfig,
@@ -29,6 +28,7 @@ import { getSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
+const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
 
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "all", label: "All" },
@@ -247,6 +247,20 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
   return undefined;
 }
 
+export function collectIndexedDetailSummaryRefs(
+  entries: DashboardRow["entry"][],
+): { ids: Set<string>; paths: Map<string, string> } {
+  const ids = new Set<string>();
+  const paths = new Map<string, string>();
+  for (const entry of entries) {
+    const path = normalizeVaultPath(entry.paperPath ?? "");
+    if (!entry.detail || !path) continue;
+    ids.add(entry.arxivId);
+    paths.set(entry.arxivId, path);
+  }
+  return { ids, paths };
+}
+
 export async function buildCalendarDailyReportMap(
   input: CalendarDailyReportMapInput,
 ): Promise<Map<string, DailyReportDay>> {
@@ -388,6 +402,9 @@ class ArxivDailyDashboardView extends ItemView {
   private batchEl: HTMLElement | null = null;
   private statsEl: HTMLElement | null = null;
   private resultsEl: HTMLElement | null = null;
+  private recentDatesNotice: string | null = null;
+  private recentDatesRefresh: Promise<unknown> | null = null;
+  private isOpen = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -409,28 +426,32 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.isOpen = true;
     await this.reloadIndex();
   }
 
   async onClose(): Promise<void> {
+    this.isOpen = false;
     this.contentEl.empty();
   }
 
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
-      await this.plugin.recentDates.refresh();
+      await this.refreshRecentDatesForForeground();
+      const markdownFiles = this.plugin.app.vault.getMarkdownFiles();
       const store = this.plugin.buildPaperIndex();
       const index = await syncDashboardHistory({
         vault: this.plugin.app.vault,
         store,
         output: this.plugin.settings.output,
         topics: this.plugin.settings.arxiv.topics,
+        markdownFiles,
         logger: this.plugin.logger,
       });
       this.entries = Object.values(index.papers);
-      await this.loadDetailSummaries(store, this.entries);
-      this.dailyReports = this.loadDailyReports(this.entries);
+      this.loadDetailSummaries(this.entries);
+      this.dailyReports = this.loadDailyReports(this.entries, markdownFiles);
       this.calendarMonth ??= latestReportMonth(this.dailyReports);
       await this.refreshCalendarDailyReports(
         this.calendarMonth ?? this.todayDate().slice(0, 7),
@@ -447,67 +468,50 @@ class ArxivDailyDashboardView extends ItemView {
     this.render();
   }
 
-  private async loadDetailSummaries(
-    store: ReturnType<ArxivDailyPlugin["buildPaperIndex"]>,
-    entries: DashboardRow["entry"][],
-  ): Promise<void> {
-    const ids = new Set<string>();
-    const paths = new Map<string, string>();
-    const writer = this.plugin.buildMarkdownWriter();
+  private async refreshRecentDatesForForeground(): Promise<void> {
+    const result = await this.plugin.recentDates.refreshWithin(
+      RECENT_DATES_FOREGROUND_TIMEOUT_MS,
+    );
+    this.recentDatesNotice = result.timedOut
+      ? recentDatesFallbackNotice(result.snapshot.refreshedAt)
+      : result.snapshot.error
+        ? `arXiv recent dates partially refreshed: ${result.snapshot.error}`
+        : null;
+    if (result.completed) return;
 
-    for (const entry of entries) {
-      const path = await this.findDetailSummaryPath(
-        entry,
-        writer.paperDetailPath(entry.arxivId),
-      );
-      if (!path) continue;
-      ids.add(entry.arxivId);
-      paths.set(entry.arxivId, path);
-      if (
-        normalizeVaultPath(entry.paperPath ?? "") !== normalizeVaultPath(path)
-      ) {
-        try {
-          const updated = await store.setPaperPath(entry.arxivId, path);
-          entry.paperPath = updated?.paperPath ?? path;
-        } catch (e) {
-          this.plugin.logger.warn(
-            `dashboard: failed to sync paperPath for ${entry.arxivId}`,
-            e,
-          );
+    const refresh = result.refresh
+      .then((snapshot) => {
+        this.recentDatesNotice = snapshot.error
+          ? `arXiv recent dates partially refreshed: ${snapshot.error}`
+          : null;
+        if (this.isOpen) this.render();
+      })
+      .catch((e) => {
+        this.recentDatesNotice = `arXiv recent dates refresh failed: ${(e as Error).message}`;
+        if (this.isOpen) this.render();
+      })
+      .finally(() => {
+        if (this.recentDatesRefresh === refresh) {
+          this.recentDatesRefresh = null;
         }
-      }
-    }
-
-    this.detailSummaryIds = ids;
-    this.detailSummaryPaths = paths;
+      });
+    this.recentDatesRefresh = refresh;
   }
 
-  private async findDetailSummaryPath(
-    entry: DashboardRow["entry"],
-    defaultPath: string,
-  ): Promise<string | null> {
-    const candidates = uniquePaths([entry.paperPath, defaultPath]);
-    for (const path of candidates) {
-      try {
-        const normalized = normalizeVaultPath(path);
-        if (!(await this.plugin.app.vault.adapter.exists(normalized))) continue;
-        const markdown = await this.plugin.app.vault.adapter.read(normalized);
-        if (looksLikeDetailSummary(markdown)) return normalized;
-      } catch (e) {
-        this.plugin.logger.warn(
-          `dashboard: failed to inspect detail summary for ${entry.arxivId}`,
-          e,
-        );
-      }
-    }
-    return null;
+  private loadDetailSummaries(entries: DashboardRow["entry"][]): void {
+    const refs = collectIndexedDetailSummaryRefs(entries);
+    this.detailSummaryIds = refs.ids;
+    this.detailSummaryPaths = refs.paths;
   }
 
-  private loadDailyReports(entries: DashboardRow["entry"][]): DailyReportDay[] {
+  private loadDailyReports(
+    entries: DashboardRow["entry"][],
+    markdownFiles: DashboardMarkdownFile[] = this.plugin.app.vault.getMarkdownFiles(),
+  ): DailyReportDay[] {
     const dailyDir = normalizeVaultPath(this.plugin.settings.output.dailyDir);
     const byDate = new Map<string, DailyReportDay>();
 
-    for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+    for (const file of markdownFiles) {
       const path = normalizeVaultPath(file.path);
       const date = dailyDateFromPath(path, dailyDir);
       if (!date) continue;
@@ -579,6 +583,7 @@ class ArxivDailyDashboardView extends ItemView {
       detailSummaryIds: this.detailSummaryIds,
     });
     this.renderToolbar(contentEl, result);
+    this.renderRecentDatesNotice(contentEl);
 
     const overview = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__overview",
@@ -596,6 +601,14 @@ class ArxivDailyDashboardView extends ItemView {
     this.batchEl = contentEl.createEl("div");
     this.resultsEl = contentEl.createEl("div");
     this.renderCurrentResults();
+  }
+
+  private renderRecentDatesNotice(contentEl: HTMLElement): void {
+    if (!this.recentDatesNotice) return;
+    contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__notice",
+      text: this.recentDatesNotice,
+    });
   }
 
   private renderCurrentResults(): void {
@@ -2194,6 +2207,17 @@ function describeRunResults(results: Array<{ date: string; result: any }>): stri
   return results
     .map((entry) => `${entry.date}: ${describeResult(entry.result)}`)
     .join("\n");
+}
+
+function recentDatesFallbackNotice(refreshedAt: number): string {
+  if (!refreshedAt) {
+    return "arXiv recent dates are still refreshing in the background.";
+  }
+  const refreshed = new Date(refreshedAt).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `arXiv recent dates are still refreshing in the background; using cached data from ${refreshed}.`;
 }
 
 function normalizeVaultPath(path: string): string {

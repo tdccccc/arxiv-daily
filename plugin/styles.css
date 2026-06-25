@@ -354,6 +354,17 @@
   font-size: var(--font-ui-small);
 }
 
+.arxiv-daily-dashboard__notice {
+  margin: -4px 0 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.35;
+}
+
 .arxiv-daily-dashboard__tab {
   display: inline-flex;
   align-items: center;

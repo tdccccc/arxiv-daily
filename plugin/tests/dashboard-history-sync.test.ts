@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { syncDashboardHistory } from "../src/dashboard/history-sync";
 import { PaperIndexStore } from "../src/services/paper-index";
 import type { PaperIndexEntry } from "../src/services/paper-index";
@@ -413,5 +413,46 @@ describe("syncDashboardHistory", () => {
       paperPath: "arxiv/papers/2606.20000.md",
       dailyReports: [],
     });
+  });
+
+  it("can reuse a pre-scanned markdown file list instead of repeatedly querying the vault", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Fast Paper",
+        "- **Authors**: A. Author",
+        "- **arXiv**: [2606.30000](https://arxiv.org/abs/2606.30000)",
+      ].join("\n"),
+      "arxiv/papers/2606.30001.md": detailMarkdown(
+        "2606.30001",
+        "Fast Detail",
+      ),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-16T00:00:00.000Z"),
+    );
+    const vault = makeVault(files);
+    const markdownFiles = vault.getMarkdownFiles();
+    vault.getMarkdownFiles = vi.fn(() => {
+      throw new Error("sync should use the pre-scanned markdown file list");
+    });
+
+    const index = await syncDashboardHistory({
+      vault,
+      store,
+      output,
+      topics,
+      markdownFiles,
+    });
+
+    expect(vault.getMarkdownFiles).not.toHaveBeenCalled();
+    expect(Object.keys(index.papers).sort()).toEqual([
+      "2606.30000",
+      "2606.30001",
+    ]);
   });
 });

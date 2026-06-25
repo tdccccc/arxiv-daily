@@ -16,6 +16,13 @@ export interface RecentDatesSnapshot {
   error?: string;
 }
 
+export interface RecentDatesRefreshResult {
+  snapshot: RecentDatesSnapshot;
+  refresh: Promise<RecentDatesSnapshot>;
+  completed: boolean;
+  timedOut: boolean;
+}
+
 export interface RecentDatesCacheDeps {
   getSettings: () => PluginSettings;
   buildFetcher: () => RecentFetcher;
@@ -29,6 +36,7 @@ export class RecentDatesCache {
     dates: new Set(),
     refreshedAt: 0,
   };
+  private inFlight: Promise<RecentDatesSnapshot> | null = null;
 
   constructor(private readonly deps: RecentDatesCacheDeps) {}
 
@@ -41,6 +49,42 @@ export class RecentDatesCache {
   }
 
   async refresh(): Promise<RecentDatesSnapshot> {
+    return this.ensureRefresh();
+  }
+
+  async refreshWithin(timeoutMs: number): Promise<RecentDatesRefreshResult> {
+    const refresh = this.ensureRefresh();
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), Math.max(0, timeoutMs));
+    });
+    const result = await Promise.race([refresh, timeout]);
+
+    if (result === "timeout") {
+      return {
+        snapshot: this.snapshot(),
+        refresh,
+        completed: false,
+        timedOut: true,
+      };
+    }
+
+    return {
+      snapshot: cloneSnapshot(result),
+      refresh,
+      completed: true,
+      timedOut: false,
+    };
+  }
+
+  private ensureRefresh(): Promise<RecentDatesSnapshot> {
+    if (this.inFlight) return this.inFlight;
+    this.inFlight = this.doRefresh().finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  private async doRefresh(): Promise<RecentDatesSnapshot> {
     const settings = this.deps.getSettings();
     const categories = arxivCategories(settings.arxiv);
     const fetcher = this.deps.buildFetcher();
