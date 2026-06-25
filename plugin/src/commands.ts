@@ -18,6 +18,7 @@ import {
 } from "./services/paper-index";
 import { openDashboardView } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
+import { formatRunHistoryRecords } from "./services/run-history";
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -311,6 +312,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "arxiv-daily-show-run-history",
+    name: "Show run history",
+    callback: () => new RunHistoryModal(plugin.app, plugin).open(),
+  });
+
+  plugin.addCommand({
     id: "arxiv-daily-show-diagnostics",
     name: "Show diagnostics",
     callback: () => new DiagnosticsModal(plugin.app, plugin).open(),
@@ -562,6 +569,54 @@ class StateModal extends Modal {
           `)`,
       );
     }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class RunHistoryModal extends Modal {
+  constructor(app: App, private plugin: ArxivDailyPlugin) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "arXiv Daily run history" });
+    const textarea = contentEl.createEl("textarea", {
+      cls: "arxiv-daily-diagnostics-textarea",
+    });
+    textarea.value = "Loading run history...";
+    textarea.readOnly = true;
+    let report = textarea.value;
+    void this.plugin.runHistoryStore
+      .readLatest(100)
+      .then((records) => {
+        report = formatRunHistoryRecords(records);
+        textarea.value = report;
+      })
+      .catch((e) => {
+        report = `Failed to load run history: ${(e as Error).message}`;
+        textarea.value = report;
+      });
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Copy")
+        .setCta()
+        .onClick(async () => {
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(report);
+            } else {
+              textarea.select();
+              document.execCommand("copy");
+            }
+            new Notice("arXiv Daily: run history copied");
+          } catch {
+            textarea.select();
+            new Notice("Could not copy run history; text is selectable");
+          }
+        }),
+    );
   }
   onClose() {
     this.contentEl.empty();

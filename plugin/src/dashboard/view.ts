@@ -88,7 +88,7 @@ const DISPLAY_OPTIONS = [
 
 type DashboardDisplayLimit = (typeof DISPLAY_OPTIONS)[number]["value"];
 
-interface DailyReportDay {
+export interface DailyReportDay {
   date: string;
   path: string;
   papers: number;
@@ -105,7 +105,8 @@ export type CalendarEmptyReason =
   | "blank"
   | "arxiv-not-updated"
   | "future"
-  | "before-tracking";
+  | "before-tracking"
+  | "report-missing";
 
 export interface CalendarCell {
   date: string | null;
@@ -154,6 +155,10 @@ export function resolveCalendarCellState({
     return { state: "empty", emptyReason: "arxiv-not-updated" };
   }
 
+  if (isCompletedRunState(runState)) {
+    return { state: "empty", emptyReason: "report-missing" };
+  }
+
   if (runnable) return { state: "runnable" };
 
   return emptyReason
@@ -186,6 +191,15 @@ export interface CalendarEmptyReasonInput {
   today: string;
   trackingStartDate: string;
   recentDates: ReadonlySet<string>;
+}
+
+export interface CalendarDailyReportMapInput {
+  month: string;
+  scannedReports: DailyReportDay[];
+  runState: Record<string, RunStateEntry | undefined>;
+  dailyPath: (date: string) => string;
+  exists: (path: string) => Promise<boolean>;
+  normalizePath: (path: string) => string;
 }
 
 export function resolveCalendarEmptyReason(
@@ -222,11 +236,49 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
     return "arXiv not updated";
   }
 
+  if (cell.emptyReason === "report-missing") {
+    return "Daily report missing";
+  }
+
   if (cell.emptyReason === "future") {
     return "Future date";
   }
 
   return undefined;
+}
+
+export async function buildCalendarDailyReportMap(
+  input: CalendarDailyReportMapInput,
+): Promise<Map<string, DailyReportDay>> {
+  const scannedByDate = new Map(
+    input.scannedReports.map((report) => [report.date, report]),
+  );
+  const out = new Map<string, DailyReportDay>();
+
+  for (const cell of calendarCells(input.month)) {
+    if (!cell.date) continue;
+    const path = input.normalizePath(input.dailyPath(cell.date));
+    if (!(await input.exists(path))) continue;
+    const scanned = scannedByDate.get(cell.date);
+    out.set(
+      cell.date,
+      scanned
+        ? { ...scanned, path: input.normalizePath(scanned.path) }
+        : {
+            date: cell.date,
+            path,
+            papers: completedPapersWritten(input.runState[cell.date]) ?? 0,
+            starred: 0,
+          },
+    );
+  }
+
+  return out;
+}
+
+function completedPapersWritten(runState?: RunStateEntry): number | undefined {
+  if (runState?.status !== "completed") return undefined;
+  return runState.papersWritten;
 }
 
 function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
@@ -242,8 +294,12 @@ function isRunStateBlockedForCalendarRun(runState?: RunStateEntry): boolean {
     runState?.status === "running" ||
     runState?.status === "skipped" ||
     runState?.status === "failed_permanent" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
+    runState?.status === "completed"
   );
+}
+
+function isCompletedRunState(runState?: RunStateEntry): boolean {
+  return runState?.status === "completed";
 }
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -321,6 +377,7 @@ export function appendSettingsButton(
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
   private dailyReports: DailyReportDay[] = [];
+  private calendarDailyReports = new Map<string, DailyReportDay>();
   private detailSummaryIds = new Set<string>();
   private detailSummaryPaths = new Map<string, string>();
   private calendarMonth: string | null = null;
@@ -363,7 +420,6 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderLoading();
     try {
       await this.plugin.recentDates.refresh();
-      await this.clearRunStateForMissingDailyReports();
       const store = this.plugin.buildPaperIndex();
       const index = await syncDashboardHistory({
         vault: this.plugin.app.vault,
@@ -376,35 +432,19 @@ class ArxivDailyDashboardView extends ItemView {
       await this.loadDetailSummaries(store, this.entries);
       this.dailyReports = this.loadDailyReports(this.entries);
       this.calendarMonth ??= latestReportMonth(this.dailyReports);
+      await this.refreshCalendarDailyReports(
+        this.calendarMonth ?? this.todayDate().slice(0, 7),
+      );
       this.error = null;
     } catch (e) {
       this.entries = [];
       this.dailyReports = [];
+      this.calendarDailyReports = new Map();
       this.detailSummaryIds = new Set();
       this.detailSummaryPaths = new Map();
       this.error = (e as Error).message;
     }
     this.render();
-  }
-
-  private async clearRunStateForMissingDailyReports(): Promise<void> {
-    const writer = this.plugin.buildMarkdownWriter();
-    const snapshot = this.plugin.stateStore.snapshot();
-    let cleared = 0;
-    for (const [date, entry] of Object.entries(snapshot)) {
-      // Only completed runs imply a daily file should exist; failed/skipped
-      // states are scheduling decisions and should survive file cleanup.
-      if (entry.status !== "completed") continue;
-      const path = normalizeVaultPath(writer.dailyPath(date));
-      if (await this.plugin.app.vault.adapter.exists(path)) continue;
-      await this.plugin.stateStore.clearDate(date);
-      cleared += 1;
-    }
-    if (cleared > 0) {
-      this.plugin.logger.info(
-        `dashboard: cleared ${cleared} completed run-state entries for missing daily reports`,
-      );
-    }
   }
 
   private async loadDetailSummaries(
@@ -496,6 +536,18 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  private async refreshCalendarDailyReports(month: string): Promise<void> {
+    const writer = this.plugin.buildMarkdownWriter();
+    this.calendarDailyReports = await buildCalendarDailyReportMap({
+      month,
+      scannedReports: this.dailyReports,
+      runState: this.plugin.stateStore.snapshot(),
+      dailyPath: (date) => writer.dailyPath(date),
+      exists: (path) => this.plugin.app.vault.adapter.exists(path),
+      normalizePath: normalizeVaultPath,
+    });
   }
 
   private renderLoading(): void {
@@ -864,15 +916,17 @@ class ArxivDailyDashboardView extends ItemView {
     todayButton.disabled = month === todayMonth;
     todayButton.addEventListener("click", () => {
       this.calendarMonth = todayMonth;
-      this.render();
+      void this.refreshCalendarDailyReports(todayMonth).then(() => this.render());
     });
     prev.addEventListener("click", () => {
-      this.calendarMonth = shiftMonth(month, -1);
-      this.render();
+      const nextMonth = shiftMonth(month, -1);
+      this.calendarMonth = nextMonth;
+      void this.refreshCalendarDailyReports(nextMonth).then(() => this.render());
     });
     next.addEventListener("click", () => {
-      this.calendarMonth = shiftMonth(month, 1);
-      this.render();
+      const nextMonth = shiftMonth(month, 1);
+      this.calendarMonth = nextMonth;
+      void this.refreshCalendarDailyReports(nextMonth).then(() => this.render());
     });
 
     const weekdays = section.createEl("div", {
@@ -1025,7 +1079,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private buildCalendarCells(month: string): CalendarCell[] {
     const cells: CalendarCell[] = [];
-    const byDate = new Map(this.dailyReports.map(r => [r.date, r]));
+    const byDate = this.calendarDailyReports;
     const runState = this.plugin.stateStore.snapshot();
 
     for (const cellDate of calendarCells(month)) {
@@ -1137,7 +1191,9 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     new Notice(`arXiv Daily: running for ${date}…`);
-    const result = await this.plugin.scheduler.runForDateNow(date);
+    const result = await this.plugin.scheduler.runForDateNow(date, {
+      trigger: "calendar",
+    });
     new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
 
     // Refresh dashboard
@@ -1643,6 +1699,12 @@ class ArxivDailyDashboardView extends ItemView {
       "Show recent run state",
       "list",
       "arxiv-daily-show-state",
+    );
+    this.addCommandMenuItem(
+      menu,
+      "Show run history",
+      "history",
+      "arxiv-daily-show-run-history",
     );
     this.addCommandMenuItem(
       menu,

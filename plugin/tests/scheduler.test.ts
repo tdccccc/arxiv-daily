@@ -5,6 +5,7 @@ import { StateStore } from "../src/services/state-store";
 import { RunLock } from "../src/services/run-lock";
 import { RunCancellationService } from "../src/services/cancellation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { RunHistoryRecord } from "../src/services/run-history";
 
 function makeStore() {
   const data = { runState: {} as Record<string, any> };
@@ -14,6 +15,18 @@ function makeStore() {
       data.runState = { ...d.runState };
     },
   );
+}
+
+function makeHistory() {
+  const records: RunHistoryRecord[] = [];
+  return {
+    records,
+    store: {
+      safeAppend: vi.fn(async (record: RunHistoryRecord) => {
+        records.push(record);
+      }),
+    },
+  };
 }
 
 describe("SchedulerService", () => {
@@ -248,6 +261,154 @@ describe("SchedulerService", () => {
     });
     await svc.runForDateNow("2026-05-11");
     expect(runForDate).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an existing non-zero completed count when an existing daily short-circuits", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-06-24");
+    await store.setCompleted("2026-06-24", 10);
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 0 });
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+    });
+
+    await svc.runForDateNow("2026-06-24");
+
+    expect(store.get("2026-06-24").status).toBe("completed");
+    expect(store.get("2026-06-24").papersWritten).toBe(10);
+  });
+
+  it("writes run history for started and completed outcomes", async () => {
+    const store = makeStore();
+    await store.load();
+    const history = makeHistory();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValue({ kind: "completed", papersWritten: 4 });
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+      dailyPathForDate: (date) => `arxiv-daily/daily/${date}.md`,
+    });
+
+    await svc.runForDateNow("2026-06-24", { trigger: "calendar" });
+
+    expect(history.records).toMatchObject([
+      {
+        event: "started",
+        trigger: "calendar",
+        date: "2026-06-24",
+        status: "running",
+        dailyPath: "arxiv-daily/daily/2026-06-24.md",
+      },
+      {
+        event: "completed",
+        trigger: "calendar",
+        date: "2026-06-24",
+        status: "completed",
+        resultKind: "completed",
+        papersWritten: 4,
+        requestedPapersWritten: 4,
+      },
+    ]);
+  });
+
+  it("writes failed run history with errorMessage for thrown runs", async () => {
+    const store = makeStore();
+    await store.load();
+    const history = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => {
+        throw new Error("network timeout");
+      }),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+      dailyPathForDate: (date) => `arxiv-daily/daily/${date}.md`,
+    });
+
+    await svc.runForDateNow("2026-06-24");
+
+    expect(history.records.at(-1)).toMatchObject({
+      event: "failed",
+      trigger: "manual",
+      date: "2026-06-24",
+      status: "failed_transient",
+      resultKind: "failed_transient",
+      reason: "network timeout",
+      errorMessage: "network timeout",
+    });
+  });
+
+  it("marks preserved paper counts in run history", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-06-24");
+    await store.setCompleted("2026-06-24", 10);
+    const history = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => ({ kind: "completed" as const, papersWritten: 0 })),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+    });
+
+    await svc.runForDateNow("2026-06-24");
+
+    expect(history.records.at(-1)).toMatchObject({
+      event: "completed",
+      papersWritten: 10,
+      requestedPapersWritten: 0,
+      preservedPapersWritten: true,
+    });
+  });
+
+  it("writes skipped run history when manual run is already running", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-06-24");
+    const history = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+    });
+
+    const result = await svc.runForDateNow("2026-06-24", { trigger: "calendar" });
+
+    expect(result).toEqual({ kind: "skipped", reason: "already running" });
+    expect(history.records).toMatchObject([
+      {
+        event: "skipped",
+        trigger: "calendar",
+        date: "2026-06-24",
+        resultKind: "skipped",
+        reason: "already running",
+      },
+    ]);
   });
 
   it("forceRunForDate clears existing state before running", async () => {

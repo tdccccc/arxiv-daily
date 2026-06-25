@@ -11,6 +11,7 @@ export type StateSaveFn = (data: { runState: RunState }) => Promise<void>;
 export interface StorageStateStorePaths {
   indexDir: string;
   runStatePath: string;
+  runHistoryPath: string;
 }
 
 export class StateStore {
@@ -142,6 +143,7 @@ export function deriveStorageStateStorePaths(
   return {
     indexDir,
     runStatePath: normalizePath(`${indexDir}/run-state.json`),
+    runHistoryPath: normalizePath(`${indexDir}/run-history.jsonl`),
   };
 }
 

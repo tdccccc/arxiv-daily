@@ -184,6 +184,7 @@ describe("StateStore", () => {
     ).toEqual({
       indexDir: "arxiv-daily/.index",
       runStatePath: "arxiv-daily/.index/run-state.json",
+      runHistoryPath: "arxiv-daily/.index/run-history.jsonl",
     });
   });
 

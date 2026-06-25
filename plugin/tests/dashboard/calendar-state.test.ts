@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   calendarCellAriaLabel,
+  buildCalendarDailyReportMap,
   isCalendarRunWhitelisted,
   resolveCalendarEmptyReason,
   resolveCalendarCellState,
@@ -53,8 +54,14 @@ describe("Calendar State Model", () => {
   });
 
   it("should define empty reasons for non-visual calendar context", () => {
-    const reasons: CalendarEmptyReason[] = ["blank", "arxiv-not-updated", "future", "before-tracking"];
-    expect(reasons).toHaveLength(4);
+    const reasons: CalendarEmptyReason[] = [
+      "blank",
+      "arxiv-not-updated",
+      "future",
+      "before-tracking",
+      "report-missing",
+    ];
+    expect(reasons).toHaveLength(5);
   });
 });
 
@@ -78,6 +85,15 @@ describe("Calendar Cell Builder", () => {
         runState: runState("failed_permanent"),
       }),
     ).toEqual({ state: "empty", emptyReason: "arxiv-not-updated" });
+  });
+
+  it("uses completed non-zero run state as a non-runnable missing-report fallback", () => {
+    expect(
+      resolveCalendarCellState({
+        runnable: true,
+        runState: runState("completed", { papersWritten: 10 }),
+      }),
+    ).toEqual({ state: "empty", emptyReason: "report-missing" });
   });
 
   it("keeps pending and transient dates runnable when the date is otherwise runnable", () => {
@@ -143,6 +159,43 @@ describe("Calendar Cell Builder", () => {
     expect(cell.state).toBe("no-relevant-papers");
     expect(cell.report).toBeDefined();
     expect(cell.report!.papers).toBe(0);
+  });
+
+  it("uses direct daily path existence when scanned markdown reports miss a file", async () => {
+    const existingPaths = new Set(["arxiv-daily/daily/2026-06-24.md"]);
+    const reports = await buildCalendarDailyReportMap({
+      month: "2026-06",
+      scannedReports: [],
+      runState: {
+        "2026-06-24": runState("completed", { papersWritten: 10 }),
+      },
+      dailyPath: (date) => `arxiv-daily/daily/${date}.md`,
+      exists: async (path) => existingPaths.has(path),
+      normalizePath: (path) => path,
+    });
+
+    const report = reports.get("2026-06-24");
+    expect(report).toEqual({
+      date: "2026-06-24",
+      path: "arxiv-daily/daily/2026-06-24.md",
+      papers: 10,
+      starred: 0,
+    });
+
+    expect(
+      resolveCalendarCellState({
+        report,
+        runnable: isCalendarRunWhitelisted(
+          whitelistInput({
+            date: "2026-06-24",
+            today: "2026-06-25",
+            hasDailyReport: Boolean(report),
+            recentDates: new Set(["2026-06-24"]),
+          }),
+        ),
+        runState: runState("completed", { papersWritten: 10 }),
+      }),
+    ).toEqual({ state: "has-report" });
   });
 });
 
@@ -217,6 +270,7 @@ describe("isCalendarRunWhitelisted", () => {
       runState("skipped"),
       runState("failed_permanent"),
       runState("completed", { papersWritten: 0 }),
+      runState("completed", { papersWritten: 10 }),
     ]) {
       expect(
         isCalendarRunWhitelisted(
@@ -396,6 +450,16 @@ describe("calendarCellAriaLabel", () => {
         emptyReason: "before-tracking",
       }),
     ).toBeUndefined();
+  });
+
+  it("labels completed dates whose daily report is missing", () => {
+    expect(
+      calendarCellAriaLabel({
+        date: "2026-06-24",
+        state: "empty",
+        emptyReason: "report-missing",
+      }),
+    ).toBe("Daily report missing");
   });
 
   it("labels zero-count reports as no relevant papers", () => {

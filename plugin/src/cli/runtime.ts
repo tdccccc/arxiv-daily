@@ -14,6 +14,7 @@ import { RunCancellationService } from "../services/cancellation";
 import { Logger } from "../services/logger";
 import { ManualFetchService } from "../services/manual-fetch";
 import { PaperIndexStore } from "../services/paper-index";
+import { RunHistoryStore } from "../services/run-history";
 import { RunLock } from "../services/run-lock";
 import { SchedulerService } from "../services/scheduler";
 import {
@@ -30,6 +31,7 @@ export interface CliRuntime {
   writer: MarkdownWriter;
   paperIndex: PaperIndexStore;
   stateStore: StateStore;
+  runHistoryStore: RunHistoryStore;
   scheduler: SchedulerService;
   llm: LlmClient;
   pipeline: ArxivPipeline;
@@ -86,6 +88,11 @@ export async function buildCliRuntime(
     host.storage,
     config.settings.output,
   );
+  const runHistoryStore = RunHistoryStore.fromStorage(
+    host.storage,
+    config.settings.output,
+    logger,
+  );
   await stateStore.load();
   const pipeline = new ArxivPipeline({
     fetcher,
@@ -121,6 +128,8 @@ export async function buildCliRuntime(
     logger,
     progress: host.progress,
     cancellation: new RunCancellationService(),
+    runHistory: runHistoryStore,
+    dailyPathForDate: (date) => writer.dailyPath(date),
   });
 
   return {
@@ -131,6 +140,7 @@ export async function buildCliRuntime(
     writer,
     paperIndex,
     stateStore,
+    runHistoryStore,
     scheduler,
     llm,
     pipeline,

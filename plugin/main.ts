@@ -6,6 +6,7 @@ import { migrateArxivSettings } from "./src/settings/migration";
 import { validateFilterConfig } from "./src/settings/validation";
 import { Logger } from "./src/services/logger";
 import { createStorageStateStore, type StateStore } from "./src/services/state-store";
+import { RunHistoryStore } from "./src/services/run-history";
 import { RunLock } from "./src/services/run-lock";
 import { RunCancellationService } from "./src/services/cancellation";
 import { SchedulerService } from "./src/services/scheduler";
@@ -45,6 +46,7 @@ export default class ArxivDailyPlugin extends Plugin {
   settings!: PluginSettings;
   logger!: Logger;
   stateStore!: StateStore;
+  runHistoryStore!: RunHistoryStore;
   scheduler!: SchedulerService;
   recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
@@ -75,6 +77,11 @@ export default class ArxivDailyPlugin extends Plugin {
       this.host.storage,
       this.settings.output,
     );
+    this.runHistoryStore = RunHistoryStore.fromStorage(
+      this.host.storage,
+      this.settings.output,
+      this.logger,
+    );
     await this.stateStore.load();
     if (
       Object.keys(this.stateStore.snapshot()).length === 0 &&
@@ -104,6 +111,8 @@ export default class ArxivDailyPlugin extends Plugin {
       progress: this.progress,
       cancellation: this.runCancellation,
       recentDates: this.recentDates,
+      runHistory: this.runHistoryStore,
+      dailyPathForDate: (date) => this.buildMarkdownWriter().dailyPath(date),
     });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
@@ -152,6 +161,12 @@ export default class ArxivDailyPlugin extends Plugin {
     await nextStore.load();
     this.stateStore = nextStore;
     this.scheduler.replaceStore(nextStore);
+    this.runHistoryStore = RunHistoryStore.fromStorage(
+      this.host.storage,
+      this.settings.output,
+      this.logger,
+    );
+    this.scheduler.replaceRunHistory(this.runHistoryStore);
     if (this.settings.schedule.enabled) {
       this.progress.setIdle(latestCompletedDate(nextStore));
     } else {
