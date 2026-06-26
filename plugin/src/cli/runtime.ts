@@ -50,7 +50,7 @@ export async function buildCliRuntime(
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
     opts.logger ?? new Logger(config.settings.advanced.logLevel);
-  const llm = new LlmClient(config.settings.llm, logger);
+  const llm = new LlmClient(config.settings.llm, logger, host.http);
   const fetcher = new ArxivFetcher({
     category: config.settings.arxiv.category,
     categories: arxivCategories(config.settings.arxiv),

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
+import type { HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
@@ -76,7 +77,11 @@ export function normalizeOpenAiBaseUrl(baseUrl: string): string {
 export class LlmClient {
   private client: OpenAI;
 
-  constructor(private settings: LlmSettings, private logger: Logger) {
+  constructor(
+    private settings: LlmSettings,
+    private logger: Logger,
+    private http?: HttpClient,
+  ) {
     this.client = new OpenAI({
       apiKey: settings.apiKey,
       baseURL: normalizeOpenAiBaseUrl(settings.baseUrl),
@@ -111,17 +116,32 @@ export class LlmClient {
 
     for (const url of candidates) {
       try {
-        const response = await fetch(url, {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          return this.parseModelList(data);
+        let data: unknown;
+        if (this.http) {
+          const res = await this.http.request({
+            url,
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (res.status >= 200 && res.status < 300) {
+            data = JSON.parse(res.bodyText);
+            return this.parseModelList(data);
+          }
+        } else {
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (response.ok) {
+            data = await response.json();
+            return this.parseModelList(data);
+          }
         }
       } catch {
         // Try next candidate

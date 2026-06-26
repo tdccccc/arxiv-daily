@@ -30,7 +30,7 @@ import { PdfService } from "./src/services/pdf";
 import { ProjectNotesService } from "./src/services/project-notes";
 import { RecentDatesCache } from "./src/services/recent-dates";
 import { arxivCategories } from "./src/settings/categories";
-import type { HostAdapters } from "./src/core/adapters";
+import type { HostAdapters, HttpClient } from "./src/core/adapters";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   registerDashboardView,
@@ -55,6 +55,10 @@ export default class ArxivDailyPlugin extends Plugin {
   private runCancellation = new RunCancellationService();
   private legacyRunState: RunState = {};
   private host!: HostAdapters;
+
+  getHttpClient(): HttpClient | undefined {
+    return this.host?.http;
+  }
 
   async onload() {
     await this.loadSettingsAndState();
@@ -280,7 +284,7 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private buildSharedDeps() {
-    const llm = new LlmClient(this.settings.llm, this.logger);
+    const llm = new LlmClient(this.settings.llm, this.logger, this.host.http);
     const fetcher = this.buildArxivFetcher();
     const cache = new HtmlCache({
       rootDir: this.pluginCacheDir(),

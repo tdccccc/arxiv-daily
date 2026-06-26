@@ -151,7 +151,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         b.setButtonText("Fetching...");
         b.setDisabled(true);
         try {
-          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger);
+          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient());
           const models = await client.fetchModels();
           if (models.length > 0) {
             this.showModelDropdown(models, modelSetting.settingEl);
