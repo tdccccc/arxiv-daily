@@ -174,10 +174,10 @@ describe("dashboard model", () => {
     expect(byPublishedDesc.rows[0].arxivId).not.toBe("2606.00002");
   });
 
-  it("sorts by recently seen, topic, and title", () => {
-    const byFirstSeenDesc = queryDashboard(fixtures(), {
+  it("sorts by published, topic, and title", () => {
+    const byPublishedDesc = queryDashboard(fixtures(), {
       tab: "all",
-      sort: { key: "firstSeen", direction: "desc" },
+      sort: { key: "published", direction: "desc" },
     });
     const byTopicAsc = queryDashboard(fixtures(), {
       tab: "all",
@@ -188,7 +188,7 @@ describe("dashboard model", () => {
       sort: { key: "title", direction: "asc" },
     });
 
-    expect(byFirstSeenDesc.rows.map((row) => row.arxivId)).toEqual([
+    expect(byPublishedDesc.rows.map((row) => row.arxivId)).toEqual([
       "2606.00005",
       "2606.00003",
       "2606.00002",

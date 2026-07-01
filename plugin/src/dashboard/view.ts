@@ -39,49 +39,14 @@ const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "starred", label: "Starred" },
 ];
 
-const SORT_OPTIONS: Array<{
-  value: string;
-  label: string;
-  key: DashboardSortKey;
-  direction: DashboardSortDirection;
-}> = [
-  {
-    value: "priority:asc",
-    label: "Starred first",
-    key: "priority",
-    direction: "asc",
-  },
-  {
-    value: "firstSeen:desc",
-    label: "Recently seen",
-    key: "firstSeen",
-    direction: "desc",
-  },
-  {
-    value: "published:desc",
-    label: "Published newest",
-    key: "published",
-    direction: "desc",
-  },
-  {
-    value: "published:asc",
-    label: "Published oldest",
-    key: "published",
-    direction: "asc",
-  },
-  {
-    value: "topic:asc",
-    label: "Topic A-Z",
-    key: "topic",
-    direction: "asc",
-  },
-  {
-    value: "title:asc",
-    label: "Title A-Z",
-    key: "title",
-    direction: "asc",
-  },
-];
+const SORT_LABELS: Record<DashboardSortKey, string> = {
+  priority: "Starred first",
+  published: "Published",
+  topic: "Topic",
+  title: "Title",
+};
+
+const DEFAULT_SORT_KEY: DashboardSortKey = "priority";
 
 export interface DashboardPage<T> {
   rows: T[];
@@ -1611,18 +1576,39 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__batch-sort-label",
       text: "Sort",
     });
-    const sort = this.createSelect(
+    const currentKey = this.query.sort?.key ?? DEFAULT_SORT_KEY;
+    const currentDir = this.query.sort?.direction ?? "asc";
+
+    const keySelect = this.createSelect(
       field,
-      SORT_OPTIONS.map((option) => ({
-        value: option.value,
-        label: option.label,
+      Object.entries(SORT_LABELS).map(([key, label]) => ({
+        value: key,
+        label,
       })),
-      sortValue(this.query.sort),
+      currentKey,
     );
-    sort.addEventListener("change", () => {
+    keySelect.addEventListener("change", () => {
+      const newKey = keySelect.value as DashboardSortKey;
+      if (newKey === currentKey) return;
       this.query = {
         ...this.query,
-        sort: sortQuery(sort.value),
+        sort: { key: newKey, direction: currentDir },
+      };
+      this.currentPage = 0;
+      this.renderCurrentResults();
+    });
+
+    const dirIcon = currentDir === "asc" ? "arrow-up" : "arrow-down";
+    const dirButton = field.createEl("button", {
+      cls: "clickable-icon",
+      attr: { type: "button", "aria-label": "Toggle sort direction" },
+    }) as HTMLButtonElement;
+    setIcon(dirButton, dirIcon);
+    dirButton.addEventListener("click", () => {
+      const newDir: DashboardSortDirection = currentDir === "asc" ? "desc" : "asc";
+      this.query = {
+        ...this.query,
+        sort: { key: currentKey, direction: newDir },
       };
       this.currentPage = 0;
       this.renderCurrentResults();
@@ -2165,23 +2151,6 @@ function topicOptions(entries: DashboardRow["entry"][]): string[] {
     }
   }
   return [...topics].sort((a, b) => a.localeCompare(b));
-}
-
-function sortValue(sort: DashboardQuery["sort"]): string {
-  const key = sort?.key ?? "priority";
-  const direction = sort?.direction ?? "asc";
-  return `${key}:${direction}`;
-}
-
-function sortQuery(value: string): DashboardQuery["sort"] {
-  const option =
-    SORT_OPTIONS.find((candidate) => candidate.value === value) ??
-    SORT_OPTIONS[0];
-  if (option.value === SORT_OPTIONS[0].value) return undefined;
-  return {
-    key: option.key,
-    direction: option.direction,
-  };
 }
 
 function openUrl(

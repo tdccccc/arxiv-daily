@@ -9,11 +9,9 @@ export type DashboardTab = "starred" | "all";
 
 export type DashboardSortKey =
   | "priority"
-  | "status"
   | "title"
   | "topic"
-  | "published"
-  | "firstSeen";
+  | "published";
 
 export type DashboardSortDirection = "asc" | "desc";
 
@@ -93,14 +91,6 @@ export interface DashboardActionPlan {
 }
 
 const DEFAULT_TAB: DashboardTab = "starred";
-const STATUS_ORDER: Record<PaperStatus, number> = {
-  to_read: 0,
-  saved: 1,
-  inbox: 2,
-  reading: 3,
-  read: 4,
-  ignored: 5,
-};
 const PRIORITY_ORDER: Record<PaperPriority, number> = {
   high: 0,
   normal: 1,
@@ -288,24 +278,19 @@ function compareBySortKey(
   switch (key) {
     case "priority":
       return PRIORITY_ORDER[a.entry.priority] - PRIORITY_ORDER[b.entry.priority];
-    case "status":
-      return STATUS_ORDER[a.entry.status] - STATUS_ORDER[b.entry.status];
     case "title":
       return a.title.localeCompare(b.title);
     case "topic":
       return a.topic.localeCompare(b.topic);
     case "published":
       return a.entry.published.localeCompare(b.entry.published);
-    case "firstSeen":
-      return a.firstSeen.localeCompare(b.firstSeen);
   }
+  return 0;
 }
 
 function compareDefault(a: DashboardRow, b: DashboardRow): number {
   const priority = PRIORITY_ORDER[a.entry.priority] - PRIORITY_ORDER[b.entry.priority];
   if (priority !== 0) return priority;
-  const firstSeen = b.firstSeen.localeCompare(a.firstSeen);
-  if (firstSeen !== 0) return firstSeen;
   const published = b.entry.published.localeCompare(a.entry.published);
   if (published !== 0) return published;
   return a.title.localeCompare(b.title);
