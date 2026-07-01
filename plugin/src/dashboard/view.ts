@@ -486,7 +486,7 @@ class ArxivDailyDashboardView extends ItemView {
       this.entries = Object.values(index.papers);
       this.loadDetailSummaries(this.entries);
       this.dailyReports = this.loadDailyReports(this.entries, markdownFiles);
-      this.calendarMonth ??= latestReportMonth(this.dailyReports);
+      this.calendarMonth ??= this.todayDate().slice(0, 7);
       await this.refreshCalendarDailyReports(
         this.calendarMonth ?? this.todayDate().slice(0, 7),
       );
