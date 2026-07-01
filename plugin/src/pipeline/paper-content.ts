@@ -51,6 +51,8 @@ export class PaperContentFetcher {
         html = res.body;
         await this.cache.set(htmlKey, "html", html);
       }
+    } else {
+      this.logger.debug(`paper-content: html cache hit for ${arxivId}`);
     }
 
     let htmlContent: PaperContent | null = null;
@@ -64,6 +66,10 @@ export class PaperContentFetcher {
       };
       const fs = opts.isDetail ? extractSections(html, sectionsOpts) : null;
       if (ac && (!opts.isDetail || fs)) {
+        this.logger.info(
+          `paper-content: extracted ${arxivId} from rendered HTML` +
+            (fs ? ` (${fs.length} chars sections)` : ""),
+        );
         return {
           abstractConclusion: ac,
           fullSections: fs,
@@ -81,6 +87,7 @@ export class PaperContentFetcher {
         fullTextSource: fs ? "arxiv-html" : undefined,
       };
       if (!opts.isDetail || fs) return htmlContent;
+      this.logger.warn(`paper-content: html sections empty for ${arxivId}, falling back to source`);
     }
 
     // 2. Fallback to arXiv source when full text sections are needed.
@@ -102,6 +109,9 @@ export class PaperContentFetcher {
 
     // 3. Fallback to /abs page for daily summaries. Manual detail summaries
     // still reject this because it is not full text.
+    this.logger.info(
+      `paper-content: fallback to abs page for ${arxivId} (sourceFailure=${!!sourceFailure})`,
+    );
     return {
       abstractConclusion:
         htmlContent?.abstractConclusion ?? (await this.fetchAbsAbstract(arxivId)),

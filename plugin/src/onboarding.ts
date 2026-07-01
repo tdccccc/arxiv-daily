@@ -1,6 +1,7 @@
 import type { PluginSettings } from "./settings/types";
 import { arxivCategories } from "./settings/categories";
 import { validateFilterConfig } from "./settings/validation";
+import type { Logger } from "./services/logger";
 
 export interface SetupStatus {
   llmReady: boolean;
@@ -38,4 +39,14 @@ export function getSetupStatus(settings: PluginSettings): SetupStatus {
     readyToRun: validation.ok,
     reasons: validation.reasons,
   };
+}
+
+export function logSetupStatus(
+  logger: Logger,
+  context: string,
+  status: SetupStatus,
+): void {
+  logger.info(
+    `onboarding: ${context}: ready=${status.readyToRun}, llm=${status.llmReady}, categories=${status.categoriesReady}, topics=${status.topicsReady}, reasons=${status.reasons.join("; ") || "none"}`,
+  );
 }

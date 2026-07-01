@@ -49,7 +49,7 @@ export async function buildCliRuntime(
 ): Promise<CliRuntime> {
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
-    opts.logger ?? new Logger(config.settings.advanced.logLevel);
+    opts.logger ?? new Logger(config.settings.advanced.logLevel, undefined, config.settings.arxiv.timezone);
   const llm = new LlmClient(config.settings.llm, logger, host.http);
   const fetcher = new ArxivFetcher({
     category: config.settings.arxiv.category,

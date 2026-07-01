@@ -59,8 +59,10 @@ export class ManualFetchService {
   async fetchAndSummarize(rawId: string, dateStr: string): Promise<ManualFetchResult> {
     const { storage, output, logger } = this.deps;
 
+    logger.info(`manual-fetch: requested detail summary for ${rawId} on ${dateStr}`);
     const id = normalizeArxivId(rawId);
     if (!id) {
+      logger.warn(`manual-fetch: invalid arXiv id: ${rawId}`);
       return { kind: "error", reason: `invalid arXiv id: ${rawId}` };
     }
     this.progress.setTask("arXiv Daily detail", id);
@@ -70,7 +72,10 @@ export class ManualFetchService {
     const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
     let replaceEmptyExistingNote = false;
     if (await storage.exists(targetPath)) {
-      const existing = await storage.readText(targetPath).catch(() => undefined);
+      const existing = await storage.readText(targetPath).catch((e) => {
+        logger.warn(`manual-fetch: failed to read existing note ${targetPath}`, e);
+        return undefined;
+      });
       if (typeof existing === "string" && isFrontmatterOnlyNote(existing)) {
         replaceEmptyExistingNote = true;
         logger.warn(
@@ -98,9 +103,11 @@ export class ManualFetchService {
     try {
       const meta = await this.fetchAtomMetadata(id);
       if (!meta) {
+        logger.warn(`manual-fetch: arXiv has no entry for ${id}`);
         this.progress.setError(`arXiv has no entry for ${id}`);
         return { kind: "not_found", reason: `arXiv has no entry for ${id}` };
       }
+      logger.info(`manual-fetch: fetched Atom metadata for ${id}`);
       title = meta.title;
       authors = meta.authors;
       category = meta.primaryCategory || meta.categories[0] || "other";
@@ -133,6 +140,11 @@ export class ManualFetchService {
       return { kind: "error", reason: `content fetch: ${(e as Error).message}` };
     }
     if (!content.fullSections) {
+      logger.warn(
+        `manual-fetch: no full text for ${id}: ${
+          content.fullTextFailure ?? "no rendered HTML or extractable source"
+        }`,
+      );
       this.progress.setError(`No full text for ${id}`);
       return {
         kind: "no_html",
@@ -191,9 +203,13 @@ export class ManualFetchService {
           detail: true,
         });
         indexEntry = indexed.entry;
+        logger.info(
+          `manual-fetch: paper index ${indexed.wasNew ? "created" : "updated"} for ${id}`,
+        );
         if (indexed.wasNew) {
           const saved = await this.deps.paperIndex.setStatus(id, "saved");
           indexEntry = saved ?? indexEntry;
+          logger.info(`manual-fetch: marked ${id} as saved`);
         }
       } catch (e) {
         logger.error(`manual-fetch: paper index update failed for ${id}`, e);
@@ -206,8 +222,10 @@ export class ManualFetchService {
     }
 
     if (replaceEmptyExistingNote) {
+      logger.info(`manual-fetch: removing empty existing note ${targetPath}`);
       await storage.remove(targetPath);
     }
+    logger.info(`manual-fetch: writing detail note for ${id}`);
     const path = await this.deps.writer.writePaperDetail(
       paper,
       dateStr,
@@ -217,6 +235,7 @@ export class ManualFetchService {
     if (this.deps.paperIndex) {
       try {
         await this.deps.paperIndex.setPaperPath(id, path);
+        logger.info(`manual-fetch: stored paperPath for ${id} -> ${path}`);
       } catch (e) {
         logger.error(`manual-fetch: failed to store paperPath for ${id}`, e);
       }

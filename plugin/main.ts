@@ -65,6 +65,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.logger = new Logger(
       this.settings.advanced.logLevel,
       (message, timeoutMs) => new Notice(message, timeoutMs),
+      this.settings.arxiv.timezone,
     );
     this.host = buildObsidianHostAdapters({
       app: this.app,

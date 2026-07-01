@@ -29,7 +29,8 @@ export class HtmlCache {
         await fs.unlink(p).catch(() => {});
         return null;
       }
-      return await fs.readFile(p, "utf8");
+      const content = await fs.readFile(p, "utf8");
+      return content;
     } catch {
       return null;
     }

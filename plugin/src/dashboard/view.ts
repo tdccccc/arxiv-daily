@@ -1,8 +1,10 @@
 import {
   ItemView,
   Menu,
+  Modal,
   Notice,
   setIcon,
+  type App,
   type WorkspaceLeaf,
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
@@ -24,8 +26,10 @@ import {
 } from "../settings/validation";
 import type { RunStateEntry } from "../settings/types";
 import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "../utils/time";
-import { getSetupStatus } from "../onboarding";
+import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
+import { buildDiagnosticsReport } from "../services/diagnostics";
+import { formatRunHistoryRecords } from "../services/run-history";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
@@ -79,14 +83,15 @@ const SORT_OPTIONS: Array<{
   },
 ];
 
-const DISPLAY_OPTIONS = [
-  { value: "20", label: "20" },
-  { value: "50", label: "50" },
-  { value: "100", label: "100" },
-  { value: "all", label: "All" },
-] as const;
-
-type DashboardDisplayLimit = (typeof DISPLAY_OPTIONS)[number]["value"];
+export interface DashboardPage<T> {
+  rows: T[];
+  total: number;
+  totalPages: number;
+  currentPage: number;
+  start: number;
+  end: number;
+  pageSize: number;
+}
 
 export interface DailyReportDay {
   date: string;
@@ -335,6 +340,7 @@ export async function openDashboardView(
 
   const leaf = workspace.getLeaf(true);
   if (!leaf) {
+    plugin.logger.info("ArXiv Daily: no workspace leaf available");
     new Notice("arXiv Daily: no workspace leaf available");
     return;
   }
@@ -396,7 +402,8 @@ class ArxivDailyDashboardView extends ItemView {
   private detailSummaryPaths = new Map<string, string>();
   private calendarMonth: string | null = null;
   private query: DashboardQuery = { tab: "starred" };
-  private displayLimit: DashboardDisplayLimit = "20";
+  private pageSize = 20;
+  private currentPage = 0;
   private error: string | null = null;
   private selectedIds = new Set<string>();
   private batchEl: HTMLElement | null = null;
@@ -404,6 +411,7 @@ class ArxivDailyDashboardView extends ItemView {
   private resultsEl: HTMLElement | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
+  private lastSyncedDailyPaths: Set<string> | null = null;
   private isOpen = false;
 
   constructor(
@@ -438,8 +446,33 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
-      await this.refreshRecentDatesForForeground();
-      const markdownFiles = this.plugin.app.vault.getMarkdownFiles();
+      this.refreshRecentDatesForForeground();
+      const allFiles = this.plugin.app.vault.getMarkdownFiles();
+      const dailyDir = normalizeVaultPath(this.plugin.settings.output.dailyDir);
+      const papersDir = normalizeVaultPath(this.plugin.settings.output.papersDir);
+      const markdownFiles = filterDashboardMarkdownFiles(
+        allFiles,
+        dailyDir,
+        papersDir,
+      );
+      this.plugin.logger.info(
+        `dashboard: scanning ${markdownFiles.length}/${allFiles.length} files (${dailyDir}, ${papersDir})`,
+      );
+      const dailyPaths = dailyFilePathSet(markdownFiles, dailyDir);
+      if (
+        shouldSkipDashboardHistorySync(
+          this.lastSyncedDailyPaths,
+          dailyPaths,
+          this.entries.length,
+        )
+      ) {
+        this.error = null;
+        this.plugin.logger.info(
+          `dashboard: skipped history sync for ${dailyPaths.size} unchanged daily files`,
+        );
+        this.render();
+        return;
+      }
       const store = this.plugin.buildPaperIndex();
       const index = await syncDashboardHistory({
         vault: this.plugin.app.vault,
@@ -449,6 +482,7 @@ class ArxivDailyDashboardView extends ItemView {
         markdownFiles,
         logger: this.plugin.logger,
       });
+      this.lastSyncedDailyPaths = dailyPaths;
       this.entries = Object.values(index.papers);
       this.loadDetailSummaries(this.entries);
       this.dailyReports = this.loadDailyReports(this.entries, markdownFiles);
@@ -619,14 +653,20 @@ class ArxivDailyDashboardView extends ItemView {
     this.statsEl.empty();
     this.batchEl.empty();
     this.resultsEl.empty();
-    const visibleRows = this.displayedRows(result.rows);
+    const page = paginateDashboardRows(
+      result.rows,
+      this.currentPage,
+      this.pageSize,
+    );
+    this.currentPage = page.currentPage;
     this.renderStats(this.statsEl, result);
-    this.renderBatchControls(this.batchEl, visibleRows, result.rows.length);
+    this.renderBatchControls(this.batchEl, page);
     if (result.rows.length === 0) {
       this.renderEmptyState(this.resultsEl, result);
       return;
     }
-    this.renderTable(this.resultsEl, visibleRows);
+    this.renderTable(this.resultsEl, page.rows);
+    this.renderPaginationControls(this.resultsEl, page);
   }
 
   private renderEmptyState(
@@ -765,17 +805,19 @@ class ArxivDailyDashboardView extends ItemView {
       tab: this.query.tab ?? "starred",
       ...(this.query.sort ? { sort: this.query.sort } : {}),
     };
+    this.currentPage = 0;
     this.render();
   }
 
   private openSettings(): void {
+    this.plugin.logger.info("dashboard: open settings requested");
     const settings = (this.plugin.app as any).setting;
     if (settings?.open && settings?.openTabById) {
       settings.open();
       settings.openTabById(this.plugin.manifest.id);
       return;
     }
-    new Notice("Open Settings -> Community plugins -> arXiv Daily.");
+    this.notice("Open Settings -> Community plugins -> arXiv Daily.");
   }
 
   private createSettingsButton(parent: HTMLElement): void {
@@ -816,6 +858,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
       button.addEventListener("click", () => {
         this.query = { ...this.query, tab: tab.id };
+        this.currentPage = 0;
         this.render();
       });
     }
@@ -832,6 +875,7 @@ class ArxivDailyDashboardView extends ItemView {
           detailSummary:
             this.query.detailSummary === true ? undefined : true,
         };
+        this.currentPage = 0;
         this.render();
       },
     );
@@ -1191,23 +1235,25 @@ class ArxivDailyDashboardView extends ItemView {
   private async runDateFromCalendar(date: string): Promise<void> {
     const setup = getSetupStatus(this.plugin.settings);
     if (!setup.readyToRun) {
-      new Notice("arXiv Daily: Please complete setup first");
+      logSetupStatus(this.plugin.logger, "dashboard calendar run blocked", setup);
+      this.notice("arXiv Daily: Please complete setup first");
       this.openSettings();
       return;
     }
 
     await this.plugin.recentDates.refresh();
     if (date !== this.todayDate() && !this.plugin.recentDates.hasDate(date)) {
-      new Notice(`arXiv Daily ${date}: arXiv not updated`);
+      this.notice(`arXiv Daily ${date}: arXiv not updated`);
       await this.reloadIndex();
       return;
     }
 
-    new Notice(`arXiv Daily: running for ${date}…`);
+    this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
+    this.notice(`arXiv Daily: running for ${date}…`);
     const result = await this.plugin.scheduler.runForDateNow(date, {
       trigger: "calendar",
     });
-    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
 
     // Refresh dashboard
     await this.reloadIndex();
@@ -1260,6 +1306,7 @@ class ArxivDailyDashboardView extends ItemView {
     search.value = this.query.search ?? "";
     search.addEventListener("input", () => {
       this.query = { ...this.query, search: search.value.trim() || undefined };
+      this.currentPage = 0;
       this.renderCurrentResults();
     });
 
@@ -1280,6 +1327,7 @@ class ArxivDailyDashboardView extends ItemView {
         ...this.query,
         topics: topic.value ? [topic.value] : undefined,
       };
+      this.currentPage = 0;
       this.renderCurrentResults();
     });
 
@@ -1304,6 +1352,7 @@ class ArxivDailyDashboardView extends ItemView {
         ...this.query,
         dateFrom: dateFrom.value || undefined,
       };
+      this.currentPage = 0;
       this.renderCurrentResults();
     });
     dateInputs.createSpan({
@@ -1320,6 +1369,7 @@ class ArxivDailyDashboardView extends ItemView {
         ...this.query,
         dateTo: dateTo.value || undefined,
       };
+      this.currentPage = 0;
       this.renderCurrentResults();
     });
 
@@ -1468,7 +1518,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
       this.createIconButton(actionCell, "external-link", "Open arXiv", (button) => {
         void this.runControlAction(button, async () => {
-          openUrl(row.entry.arxivUrl, "arXiv");
+          openUrl(row.entry.arxivUrl, "arXiv", this.plugin.logger);
         });
       });
       this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
@@ -1484,8 +1534,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private renderBatchControls(
     contentEl: HTMLElement,
-    visibleRows: DashboardRow[],
-    totalRows: number,
+    page: DashboardPage<DashboardRow>,
   ): void {
     const selectedCount = this.selectedIds.size;
     const toolbar = contentEl.createEl("div", {
@@ -1544,36 +1593,14 @@ class ArxivDailyDashboardView extends ItemView {
     });
     controls.createEl("span", {
       cls: "arxiv-daily-dashboard__batch-showing",
-      text: `Showing ${visibleRows.length} of ${totalRows}`,
+      text:
+        page.total === 0
+          ? "Showing 0 of 0 papers"
+          : `Showing ${page.start}-${page.end} of ${page.total} papers`,
     });
-    this.renderDisplayControl(controls);
     this.renderSortControl(controls);
 
-    if (visibleRows.length === 0) toolbar.addClass("is-empty");
-  }
-
-  private renderDisplayControl(parent: HTMLElement): void {
-    const field = parent.createEl("label", {
-      cls: "arxiv-daily-dashboard__batch-display",
-    });
-    field.createSpan({
-      cls: "arxiv-daily-dashboard__batch-display-label",
-      text: "Display",
-    });
-    const display = this.createSelect(
-      field,
-      DISPLAY_OPTIONS.map((option) => ({
-        value: option.value,
-        label: option.label,
-      })),
-      this.displayLimit,
-    );
-    display.addEventListener("change", () => {
-      if (isDashboardDisplayLimit(display.value)) {
-        this.displayLimit = display.value;
-        this.renderCurrentResults();
-      }
-    });
+    if (page.rows.length === 0) toolbar.addClass("is-empty");
   }
 
   private renderSortControl(parent: HTMLElement): void {
@@ -1597,13 +1624,58 @@ class ArxivDailyDashboardView extends ItemView {
         ...this.query,
         sort: sortQuery(sort.value),
       };
+      this.currentPage = 0;
       this.renderCurrentResults();
     });
   }
 
-  private displayedRows(rows: DashboardRow[]): DashboardRow[] {
-    if (this.displayLimit === "all") return rows;
-    return rows.slice(0, Number(this.displayLimit));
+  private renderPaginationControls(
+    contentEl: HTMLElement,
+    page: DashboardPage<DashboardRow>,
+  ): void {
+    const controls = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__pagination",
+    });
+    const prev = controls.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__pagination-button",
+      attr: {
+        type: "button",
+        "aria-label": "Previous page",
+      },
+    }) as HTMLButtonElement;
+    setIcon(prev, "chevron-left");
+    prev.disabled = page.currentPage === 0;
+    prev.addEventListener("click", () => {
+      this.setPage(page.currentPage - 1);
+    });
+
+    controls.createEl("span", {
+      cls: "arxiv-daily-dashboard__pagination-label",
+      text: `Page ${page.currentPage + 1} / ${page.totalPages}`,
+    });
+
+    const next = controls.createEl("button", {
+      cls: "clickable-icon arxiv-daily-dashboard__pagination-button",
+      attr: {
+        type: "button",
+        "aria-label": "Next page",
+      },
+    }) as HTMLButtonElement;
+    setIcon(next, "chevron-right");
+    next.disabled = page.currentPage >= page.totalPages - 1;
+    next.addEventListener("click", () => {
+      this.setPage(page.currentPage + 1);
+    });
+
+    controls.createEl("span", {
+      cls: "arxiv-daily-dashboard__pagination-size",
+      text: `Show ${page.pageSize} per page`,
+    });
+  }
+
+  private setPage(n: number): void {
+    this.currentPage = n;
+    this.renderCurrentResults();
   }
 
   private createStarToggle(
@@ -1666,7 +1738,7 @@ class ArxivDailyDashboardView extends ItemView {
         .onClick(async () => {
           const applied = await this.plugin.setScheduleEnabled(!enabled);
           if (applied) {
-            new Notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
+            this.notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
           }
         }),
     );
@@ -1707,23 +1779,13 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
-    this.addCommandMenuItem(
-      menu,
-      "Show recent run state",
-      "list",
-      "arxiv-daily-show-state",
-    );
-    this.addCommandMenuItem(
-      menu,
-      "Show run history",
-      "history",
-      "arxiv-daily-show-run-history",
-    );
-    this.addCommandMenuItem(
-      menu,
-      "Show diagnostics",
-      "clipboard-list",
-      "arxiv-daily-show-diagnostics",
+    menu.addItem((item) =>
+      item
+        .setTitle("Show logs & history")
+        .setIcon("scroll-text")
+        .onClick(() => {
+          new HubModal(this.plugin.app, this.plugin).open();
+        }),
     );
     this.addCommandMenuItem(
       menu,
@@ -1750,7 +1812,8 @@ class ArxivDailyDashboardView extends ItemView {
         .setDisabled(disabled)
         .onClick(() => {
           void this.runDashboardCommand(commandId, refreshAfter).catch((e) => {
-            new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+            this.plugin.logger.warn(`dashboard command failed: ${commandId}`, e);
+            this.notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
           });
         }),
     );
@@ -1807,16 +1870,25 @@ class ArxivDailyDashboardView extends ItemView {
     try {
       await action();
     } catch (e) {
-      new Notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
+      this.plugin.logger.warn("dashboard control action failed", e);
+      this.notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
     } finally {
       control.disabled = false;
     }
   }
 
+  private notice(message: string, timeoutMs?: number): void {
+    this.plugin.logger.info(message);
+    new Notice(message, timeoutMs);
+  }
+
   private gateFilter(): boolean {
     const validation = validateFilterConfig(this.plugin.settings);
     if (!validation.ok) {
-      new Notice(
+      this.plugin.logger.info(
+        `dashboard: filter validation failed (${validation.reasons.join("; ")})`,
+      );
+      this.notice(
         `arXiv Daily - cannot run:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
         10_000,
       );
@@ -1828,7 +1900,10 @@ class ArxivDailyDashboardView extends ItemView {
   private gateLlm(): boolean {
     const validation = validateLlmConfig(this.plugin.settings);
     if (!validation.ok) {
-      new Notice(
+      this.plugin.logger.info(
+        `dashboard: LLM validation failed (${validation.reasons.join("; ")})`,
+      );
+      this.notice(
         `arXiv Daily - cannot summarize:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
         10_000,
       );
@@ -1841,34 +1916,37 @@ class ArxivDailyDashboardView extends ItemView {
     if (!this.gateFilter()) return;
     await this.plugin.recentDates.refresh();
     const date = this.todayDate();
-    new Notice(`arXiv Daily: running for ${date}...`);
+    this.plugin.logger.info(`dashboard: manual run today requested for ${date}`);
+    this.notice(`arXiv Daily: running for ${date}...`);
     const result = await this.plugin.scheduler.runForDateNow(date);
-    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     await this.reloadIndex();
   }
 
   private async runAllPending(): Promise<void> {
     if (!this.gateFilter()) return;
     await this.plugin.recentDates.refresh();
-    new Notice("arXiv Daily: running all pending in lookback...");
+    this.plugin.logger.info("dashboard: run all pending requested");
+    this.notice("arXiv Daily: running all pending in lookback...");
     const results = await this.plugin.scheduler.runAllPending();
     if (results.length === 0) {
-      new Notice("arXiv Daily: nothing pending in lookback window");
+      this.notice("arXiv Daily: nothing pending in lookback window");
       return;
     }
-    new Notice(`arXiv Daily (lookback):\n${describeRunResults(results)}`, 10_000);
+    this.notice(`arXiv Daily (lookback):\n${describeRunResults(results)}`, 10_000);
     await this.reloadIndex();
   }
 
   private async retryFailedInLookback(): Promise<void> {
     if (!this.gateFilter()) return;
-    new Notice("arXiv Daily: retrying failed dates in lookback...");
+    this.plugin.logger.info("dashboard: retry failed dates requested");
+    this.notice("arXiv Daily: retrying failed dates in lookback...");
     const results = await this.plugin.scheduler.retryFailedInLookback();
     if (results.length === 0) {
-      new Notice("arXiv Daily: no failed dates in lookback window");
+      this.notice("arXiv Daily: no failed dates in lookback window");
       return;
     }
-    new Notice(`arXiv Daily retry:\n${describeRunResults(results)}`, 10_000);
+    this.notice(`arXiv Daily retry:\n${describeRunResults(results)}`, 10_000);
     await this.reloadIndex();
   }
 
@@ -1897,7 +1975,7 @@ class ArxivDailyDashboardView extends ItemView {
       starred ? "high" : "normal",
     );
     if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
-    new Notice(
+    this.notice(
       `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
     );
     await this.reloadIndex();
@@ -1906,7 +1984,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
     const path = this.detailSummaryPaths.get(entry.arxivId);
     if (!path) {
-      new Notice(`arXiv Daily: ${entry.arxivId} has no detail summary`);
+      this.notice(`arXiv Daily: ${entry.arxivId} has no detail summary`);
       return;
     }
     await openMarkdownFileOnce(this.plugin.app, path);
@@ -1916,12 +1994,13 @@ class ArxivDailyDashboardView extends ItemView {
     entry: DashboardRow["entry"],
   ): Promise<void> {
     if (!this.gateLlm()) return;
-    new Notice(`arXiv Daily: summarizing ${entry.arxivId}...`);
+    this.plugin.logger.info(`dashboard: summarize detail requested for ${entry.arxivId}`);
+    this.notice(`arXiv Daily: summarizing ${entry.arxivId}...`);
     const result = await this.plugin.manualFetch.fetchAndSummarize(
       entry.arxivId,
       this.todayDate(),
     );
-    new Notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+    this.notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
     if (result.kind !== "done" && result.kind !== "already_exists") return;
     await this.reloadIndex();
     await openMarkdownFileOnce(this.plugin.app, result.path);
@@ -1930,7 +2009,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async openDailyReport(entry: DashboardRow["entry"]): Promise<void> {
     const path = entry.dailyReports[0];
     if (!path) {
-      new Notice(`arXiv Daily: ${entry.arxivId} has no daily report`);
+      this.notice(`arXiv Daily: ${entry.arxivId} has no daily report`);
       return;
     }
     await openMarkdownFileOnce(this.plugin.app, path);
@@ -1941,16 +2020,20 @@ class ArxivDailyDashboardView extends ItemView {
       await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
       return;
     }
-    openUrl(entry.pdfUrl, "PDF");
+    openUrl(entry.pdfUrl, "PDF", this.plugin.logger);
   }
 
   private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
+    this.plugin.logger.info(`dashboard: PDF download requested for ${entry.arxivId}`);
     const result = await this.plugin.buildPdfService().downloadForEntry(entry);
     if (result.kind !== "done") {
-      new Notice(`arXiv Daily: PDF download failed - ${result.reason}`, 10_000);
+      this.plugin.logger.warn(
+        `dashboard: PDF download failed for ${entry.arxivId}: ${result.reason}`,
+      );
+      this.notice(`arXiv Daily: PDF download failed - ${result.reason}`, 10_000);
       return;
     }
-    new Notice(
+    this.notice(
       `arXiv Daily: downloaded PDF for ${result.arxivId} -> ${result.path}`,
       10_000,
     );
@@ -1980,9 +2063,9 @@ class ArxivDailyDashboardView extends ItemView {
       .map((id) => this.entries.find((entry) => entry.arxivId === id))
       .filter((entry): entry is DashboardRow["entry"] =>
         Boolean(entry && this.detailSummaryPaths.has(entry.arxivId)),
-      );
+    );
     if (entries.length === 0) {
-      new Notice("arXiv Daily: no selected papers have detail summaries");
+      this.notice("arXiv Daily: no selected papers have detail summaries");
       return;
     }
 
@@ -1997,6 +2080,9 @@ class ArxivDailyDashboardView extends ItemView {
     );
     if (choice !== "delete") return;
 
+    this.plugin.logger.info(
+      `dashboard: deleting detail summaries for ${entries.length} selected papers`,
+    );
     const store = this.plugin.buildPaperIndex();
     let deletedFiles = 0;
     for (const path of uniquePaths(
@@ -2025,7 +2111,7 @@ class ArxivDailyDashboardView extends ItemView {
     const removed = await store.removePapers(removeIds);
 
     this.selectedIds.clear();
-    new Notice(
+    this.notice(
       `arXiv Daily: deleted ${deletedFiles} summaries, cleared ${cleared}, removed ${removed} orphan entries`,
       10_000,
     );
@@ -2033,9 +2119,10 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async runBatchAction(action: DashboardAction): Promise<void> {
+    this.plugin.logger.info(`dashboard: batch action requested (${describeDashboardAction(action)})`);
     const plan = planDashboardAction(this.entries, action);
     if (plan.patches.length === 0) {
-      new Notice("arXiv Daily: no selected papers need changes");
+      this.notice("arXiv Daily: no selected papers need changes");
       return;
     }
 
@@ -2047,7 +2134,7 @@ class ArxivDailyDashboardView extends ItemView {
       changed += 1;
     }
     this.selectedIds.clear();
-    new Notice(`arXiv Daily: updated ${changed} papers`);
+    this.notice(`arXiv Daily: updated ${changed} papers`);
     await this.reloadIndex();
   }
 
@@ -2097,16 +2184,29 @@ function sortQuery(value: string): DashboardQuery["sort"] {
   };
 }
 
-function isDashboardDisplayLimit(value: string): value is DashboardDisplayLimit {
-  return DISPLAY_OPTIONS.some((option) => option.value === value);
-}
-
-function openUrl(url: string, label: string): void {
+function openUrl(
+  url: string,
+  label: string,
+  logger: ArxivDailyPlugin["logger"],
+): void {
   if (!url.trim()) {
+    logger.info(`arXiv Daily: no ${label} URL`);
     new Notice(`arXiv Daily: no ${label} URL`);
     return;
   }
+  logger.info(`dashboard: opening ${label} URL ${url}`);
   window.open(url, "_blank", "noopener");
+}
+
+function describeDashboardAction(action: DashboardAction): string {
+  const count = action.arxivIds.length;
+  if (action.type === "set_priority") {
+    return `set_priority:${action.priority}:${count}`;
+  }
+  if (action.type === "set_status") {
+    return `set_status:${action.status}:${count}`;
+  }
+  return `${action.type}:${count}`;
 }
 
 function isStarredEntry(entry: DashboardRow["entry"]): boolean {
@@ -2224,6 +2324,72 @@ function normalizeVaultPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
+export function filterDashboardMarkdownFiles<T extends DashboardMarkdownFile>(
+  files: T[],
+  dailyDir: string,
+  papersDir: string,
+): T[] {
+  const normalizedDailyDir = normalizeVaultPath(dailyDir);
+  const normalizedPapersDir = normalizeVaultPath(papersDir);
+  return files.filter((file) => {
+    const path = normalizeVaultPath(file.path);
+    return (
+      path.startsWith(`${normalizedDailyDir}/`) ||
+      path.startsWith(`${normalizedPapersDir}/`)
+    );
+  });
+}
+
+function dailyFilePathSet(
+  files: DashboardMarkdownFile[],
+  dailyDir: string,
+): Set<string> {
+  const normalizedDailyDir = normalizeVaultPath(dailyDir);
+  return new Set(
+    files
+      .map((file) => normalizeVaultPath(file.path))
+      .filter((path) => path.startsWith(`${normalizedDailyDir}/`)),
+  );
+}
+
+export function shouldSkipDashboardHistorySync(
+  previousDailyPaths: ReadonlySet<string> | null,
+  currentDailyPaths: ReadonlySet<string>,
+  currentEntryCount: number,
+): boolean {
+  if (!previousDailyPaths || currentEntryCount === 0) return false;
+  if (previousDailyPaths.size !== currentDailyPaths.size) return false;
+  for (const path of currentDailyPaths) {
+    if (!previousDailyPaths.has(path)) return false;
+  }
+  return true;
+}
+
+export function paginateDashboardRows<T>(
+  rows: T[],
+  currentPage: number,
+  pageSize: number,
+): DashboardPage<T> {
+  const safePageSize = Math.max(1, Math.floor(pageSize));
+  const total = rows.length;
+  const totalPages = Math.ceil(total / safePageSize) || 1;
+  const clampedPage = Math.max(
+    0,
+    Math.min(Math.floor(currentPage), totalPages - 1),
+  );
+  const offset = clampedPage * safePageSize;
+  const pageRows = rows.slice(offset, offset + safePageSize);
+  return {
+    rows: pageRows,
+    total,
+    totalPages,
+    currentPage: clampedPage,
+    start: pageRows.length === 0 ? 0 : offset + 1,
+    end: offset + pageRows.length,
+    pageSize: safePageSize,
+  };
+}
+
 function markdownPathFromLeaf(leaf: unknown): string | null {
   const candidate = leaf as {
     getViewState?: () => { state?: { file?: unknown } };
@@ -2293,4 +2459,217 @@ function parseCalendarDate(date: string): { y: number; m: number; d: number } | 
     m: Number(match[2]),
     d: Number(match[3]),
   };
+}
+
+type HubModalTab = "logs" | "history" | "state" | "diagnostics";
+
+interface HubPanel {
+  button: HTMLButtonElement;
+  content: HTMLPreElement;
+  text: string;
+}
+
+class HubModal extends Modal {
+  private activeTab: HubModalTab = "logs";
+  private panels = new Map<HubModalTab, HubPanel>();
+
+  constructor(app: App, private plugin: ArxivDailyPlugin) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl, modalEl } = this;
+    modalEl.style.width = "min(90vw, 900px)";
+    contentEl.addClass("arxiv-daily-hub-modal");
+    contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
+
+    const tabs = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__tabs" });
+    const body = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__body" });
+
+    this.createPanel(tabs, body, "logs", "Logs");
+    this.createPanel(tabs, body, "history", "Run History");
+    this.createPanel(tabs, body, "state", "Run State");
+    this.createPanel(tabs, body, "diagnostics", "Diagnostics");
+    this.activateTab("logs");
+    this.refreshActiveTab();
+
+    const footer = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__footer" });
+    footer.createEl("button", {
+      text: "Refresh",
+      attr: { type: "button" },
+    }).onclick = () => {
+      this.refreshActiveTab();
+    };
+
+    footer.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    }).onclick = () => {
+      if (this.activeTab === "logs") {
+        this.plugin.logger.clearBuffer();
+      }
+      this.refreshActiveTab();
+    };
+
+    footer.createEl("button", {
+      text: "Copy",
+      attr: { type: "button" },
+    }).onclick = () => {
+      void this.copyActiveTab();
+    };
+
+    footer.createEl("button", {
+      text: "Close",
+      attr: { type: "button" },
+    }).onclick = () => {
+      this.close();
+    };
+  }
+
+  onClose() {
+    this.panels.clear();
+    this.contentEl.empty();
+  }
+
+  private createPanel(
+    tabs: HTMLElement,
+    body: HTMLElement,
+    tab: HubModalTab,
+    label: string,
+  ): void {
+    const button = tabs.createEl("button", {
+      cls: "arxiv-daily-hub-modal__tab",
+      text: label,
+      attr: {
+        type: "button",
+        "aria-pressed": "false",
+      },
+    }) as HTMLButtonElement;
+    button.addEventListener("click", () => {
+      this.activateTab(tab);
+      this.refreshActiveTab();
+    });
+
+    const content = body.createEl("pre", {
+      cls: "arxiv-daily-hub-modal__panel",
+    }) as HTMLPreElement;
+    content.style.userSelect = "text";
+    content.style.cursor = "text";
+    this.panels.set(tab, { button, content, text: "" });
+  }
+
+  private activateTab(tab: HubModalTab): void {
+    this.activeTab = tab;
+    for (const [id, panel] of this.panels) {
+      const active = id === tab;
+      panel.button.toggleClass("hub-modal-tab-active", active);
+      panel.button.setAttribute("aria-pressed", String(active));
+      panel.content.toggleClass("is-active", active);
+    }
+  }
+
+  private refreshActiveTab(): void {
+    const tab = this.activeTab;
+    if (tab === "logs") {
+      this.setPanelText(tab, this.plugin.logger.getBuffer().join("\n") || "(no log entries)");
+      return;
+    }
+    this.setPanelText(tab, tab === "history" ? "Loading run history..." : tab === "state" ? "Loading run state..." : "Loading diagnostics...");
+    if (tab === "history") {
+      void this.loadRunHistory();
+    } else if (tab === "state") {
+      this.loadRunState();
+    } else {
+      this.loadDiagnostics();
+    }
+  }
+
+  private async loadRunHistory(): Promise<void> {
+    try {
+      const records = await this.plugin.runHistoryStore.readLatest(100);
+      this.setPanelText("history", formatRunHistoryRecords(records));
+    } catch (e) {
+      this.plugin.logger.warn("run history load failed", e);
+      this.setPanelText(
+        "history",
+        `Failed to load run history: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  private loadRunState(): void {
+    try {
+      const snap = this.plugin.stateStore.snapshot();
+      const entries = Object.entries(snap).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+      if (entries.length === 0) {
+        this.setPanelText("state", "No runs yet.");
+        return;
+      }
+      const lines = entries.slice(0, 50).map(([date, e]) => {
+        let line = `${date}: ${e.status} (attempts=${e.attempts}`;
+        if (e.papersWritten != null) line += `, papers=${e.papersWritten}`;
+        if (e.error) line += `, err=${e.error.slice(0, 120)}`;
+        line += ")";
+        return line;
+      });
+      this.setPanelText("state", lines.join("\n"));
+    } catch (e) {
+      this.plugin.logger.warn("run state load failed", e);
+      this.setPanelText("state", `Failed to load run state: ${(e as Error).message}`);
+    }
+  }
+
+  private loadDiagnostics(): void {
+    try {
+      this.setPanelText(
+        "diagnostics",
+        buildDiagnosticsReport({
+          settings: this.plugin.settings,
+          runState: this.plugin.stateStore.snapshot(),
+          version: this.plugin.manifest?.version,
+        }),
+      );
+    } catch (e) {
+      this.plugin.logger.warn("diagnostics load failed", e);
+      this.setPanelText(
+        "diagnostics",
+        `Failed to build diagnostics: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  private setPanelText(tab: HubModalTab, text: string): void {
+    const panel = this.panels.get(tab);
+    if (!panel) return;
+    panel.text = text;
+    panel.content.setText(text);
+    panel.content.scrollTop = panel.content.scrollHeight;
+  }
+
+  private async copyActiveTab(): Promise<void> {
+    const panel = this.panels.get(this.activeTab);
+    const text = panel?.text ?? "";
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else if (panel) {
+        const range = document.createRange();
+        range.selectNodeContents(panel.content);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+        document.execCommand("copy");
+        window.getSelection()?.removeAllRanges();
+      }
+      new Notice("arXiv Daily: copied");
+    } catch (e) {
+      this.plugin.logger.warn("Could not copy hub modal text", e);
+      if (panel) {
+        const range = document.createRange();
+        range.selectNodeContents(panel.content);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+      }
+      new Notice("Could not copy; text is selectable");
+    }
+  }
 }

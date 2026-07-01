@@ -55,17 +55,24 @@ export class StateStore {
 
   async setRunning(date: string): Promise<void> {
     const prev = this.get(date);
+    const att = prev.attempts + 1;
+    if (typeof console !== "undefined") {
+      console.log(`[arxiv-daily] state: ${date} → running (attempt ${att})`);
+    }
     this.state[date] = {
       ...prev,
       status: "running",
       lastAttempt: Date.now(),
-      attempts: prev.attempts + 1,
+      attempts: att,
     };
     await this.saveFn({ runState: this.state });
   }
 
   async setCompleted(date: string, papersWritten: number): Promise<void> {
     const prev = this.get(date);
+    if (typeof console !== "undefined") {
+      console.log(`[arxiv-daily] state: ${date} → completed (${papersWritten} papers)`);
+    }
     this.state[date] = {
       ...prev,
       status: "completed",
@@ -85,6 +92,9 @@ export class StateStore {
     let status: RunStatus = kind === "permanent" ? "failed_permanent" : "failed_transient";
     if (status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS) {
       status = "failed_permanent";
+    }
+    if (typeof console !== "undefined") {
+      console.log(`[arxiv-daily] state: ${date} → ${status}: ${message}`);
     }
     this.state[date] = {
       ...prev,

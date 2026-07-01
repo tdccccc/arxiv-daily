@@ -198,8 +198,14 @@ export class SchedulerService {
   ): Promise<PipelineResult | undefined> {
     const s = this.deps.getSettings();
     const entry = this.deps.store.get(date);
-    if (this.deps.store.isDone(date)) return undefined;
-    if (entry.status === "running") return undefined;
+    if (this.deps.store.isDone(date)) {
+      this.deps.logger.debug(`tickDate: ${date} already done (${entry.status}), skip`);
+      return undefined;
+    }
+    if (entry.status === "running") {
+      this.deps.logger.debug(`tickDate: ${date} currently running, skip`);
+      return undefined;
+    }
 
     if (
       opts.timeGate &&

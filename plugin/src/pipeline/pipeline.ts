@@ -78,6 +78,15 @@ export class ArxivPipeline {
     signal?: AbortSignal,
   ): Promise<PipelineResult> {
     const { fetcher, logger } = this.deps;
+    const t0 = Date.now();
+    const stageStart = (label: string) => {
+      const elapsed = Date.now() - t0;
+      logger.info(`pipeline: [${elapsed}ms] enter stage: ${label}`);
+    };
+    const stageEnd = (label: string, detail = "") => {
+      const elapsed = Date.now() - t0;
+      logger.info(`pipeline: [${elapsed}ms] done stage: ${label}${detail}`);
+    };
     throwIfCancelled(signal);
     logger.info(`pipeline: start for ${dateStr}`);
 
@@ -106,6 +115,7 @@ export class ArxivPipeline {
     }
 
     // 4. Enrich abstracts via Atom API (listings no longer include them)
+    stageStart("enrich-abstract");
     this.progress.setStage("enrich-abstract");
     try {
       const ids = sourcePapers.map((p) => p.id);
@@ -130,8 +140,10 @@ export class ArxivPipeline {
       );
     }
     throwIfCancelled(signal);
+    stageEnd("enrich-abstract");
 
     // 5. LLM filter
+    stageStart("filter");
     this.progress.setStage("filter");
     const filtered = await filterPapers(sourcePapers, {
       llm: this.deps.llm,
@@ -140,6 +152,7 @@ export class ArxivPipeline {
       signal,
     });
     throwIfCancelled(signal);
+    stageEnd("filter", ` (${filtered.length}/${sourcePapers.length} kept)`);
     if (filtered.length === 0) {
       throwIfCancelled(signal);
       // Don't write empty file - show "0" in calendar
@@ -159,6 +172,7 @@ export class ArxivPipeline {
     }
 
     // 6. Fetch content for each filtered paper
+    stageStart("fetch-content");
     const enriched: DailyPaperWithContent[] = [];
     for (let i = 0; i < visiblePapers.length; i++) {
       throwIfCancelled(signal);
@@ -204,9 +218,11 @@ export class ArxivPipeline {
       }
       throwIfCancelled(signal);
     }
+    stageEnd("fetch-content", ` (${enriched.length} papers)`);
 
     // 7. Daily summary
     throwIfCancelled(signal);
+    stageStart("summarize-daily");
     this.progress.setStage("summarize-daily");
     let dailySummary: string;
     try {
@@ -248,8 +264,10 @@ export class ArxivPipeline {
     }
     throwIfCancelled(signal);
     await this.deps.writer.writeDaily(dateStr, dailySummary, { dateWindowNote });
+    stageEnd("summarize-daily", ` (${dailySummary.length} chars)`);
 
     // 8. Detail reports
+    stageStart("write-detail");
     const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
     for (let i = 0; i < detailPapers.length; i++) {
       throwIfCancelled(signal);
@@ -290,8 +308,14 @@ export class ArxivPipeline {
         logger.error(`pipeline: detail failed for ${p.id}`, e);
       }
     }
+    stageEnd("write-detail", ` (${detailPapers.length} detail papers)`);
 
     throwIfCancelled(signal);
+    const totalS = ((Date.now() - t0) / 1000).toFixed(1);
+    logger.info(
+      `pipeline: completed ${dateStr} in ${totalS}s — ` +
+      `${enriched.length} papers, ${detailPapers.length} detail reports`,
+    );
     return { kind: "completed", papersWritten: enriched.length };
   }
 

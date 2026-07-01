@@ -53,6 +53,10 @@ export async function filterPapers(
 
   const userContent = `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n<paper_data>\n${papersText}</paper_data>`;
 
+  logger.info(
+    `paper-filter: sending ${papers.length} papers to LLM for classification`,
+  );
+
   let raw: string;
   try {
     raw = await llm.call(
@@ -110,5 +114,21 @@ export async function filterPapers(
     out.push({ ...meta, category, isDetail });
   }
   logger.info(`paper-filter: kept ${out.length}/${papers.length} papers`);
+
+  // Log per-tag breakdown
+  const tagCounts = new Map<string, number>();
+  const detailCounts = new Map<string, number>();
+  for (const p of out) {
+    tagCounts.set(p.category, (tagCounts.get(p.category) ?? 0) + 1);
+    if (p.isDetail) detailCounts.set(p.category, (detailCounts.get(p.category) ?? 0) + 1);
+  }
+  const breakdown = [...tagCounts.entries()]
+    .map(([tag, count]) => {
+      const details = detailCounts.get(tag) ?? 0;
+      return details > 0 ? `${tag}=${count}(${details} detail)` : `${tag}=${count}`;
+    })
+    .join(", ");
+  const skipped = papers.length - out.length;
+  logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
 }

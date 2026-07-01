@@ -3,8 +3,11 @@ import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   collectIndexedDetailSummaryRefs,
   executeObsidianCommand,
+  filterDashboardMarkdownFiles,
   openDashboardView,
   openMarkdownFileOnce,
+  paginateDashboardRows,
+  shouldSkipDashboardHistorySync,
 } from "../src/dashboard/view";
 import type { PaperIndexEntry } from "../src/services/paper-index";
 
@@ -218,6 +221,94 @@ describe("collectIndexedDetailSummaryRefs", () => {
     expect(refs.paths.get("2606.00001")).toBe("arxiv/papers/2606.00001.md");
     expect(refs.paths.has("2606.00002")).toBe(false);
     expect(refs.paths.has("2606.00003")).toBe(false);
+  });
+});
+
+describe("dashboard reload helpers", () => {
+  it("filters markdown files to configured daily and papers directories", () => {
+    const files = [
+      { path: "arxiv/daily/2026-06-30.md" },
+      { path: "arxiv/daily/nested/ignore.md" },
+      { path: "arxiv/papers/2606.00001.md" },
+      { path: "arxiv-paper-notes/2606.00002.md" },
+      { path: "notes/random.md" },
+    ];
+
+    expect(
+      filterDashboardMarkdownFiles(files, "/arxiv/daily/", "arxiv/papers").map(
+        (file) => file.path,
+      ),
+    ).toEqual([
+      "arxiv/daily/2026-06-30.md",
+      "arxiv/daily/nested/ignore.md",
+      "arxiv/papers/2606.00001.md",
+    ]);
+  });
+
+  it("skips dashboard history sync only when daily paths are unchanged and entries exist", () => {
+    expect(
+      shouldSkipDashboardHistorySync(null, new Set(["arxiv/daily/2026-06-30.md"]), 1),
+    ).toBe(false);
+    expect(
+      shouldSkipDashboardHistorySync(
+        new Set(["arxiv/daily/2026-06-30.md", "arxiv/daily/2026-07-01.md"]),
+        new Set(["arxiv/daily/2026-07-01.md", "arxiv/daily/2026-06-30.md"]),
+        12,
+      ),
+    ).toBe(true);
+    expect(
+      shouldSkipDashboardHistorySync(
+        new Set(["arxiv/daily/2026-06-30.md"]),
+        new Set(["arxiv/daily/2026-06-30.md"]),
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      shouldSkipDashboardHistorySync(
+        new Set(["arxiv/daily/2026-06-30.md"]),
+        new Set(["arxiv/daily/2026-07-01.md"]),
+        12,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("paginateDashboardRows", () => {
+  it("returns a 20-row page summary with one-based visible bounds", () => {
+    const rows = Array.from({ length: 45 }, (_, index) => `row-${index + 1}`);
+
+    const page = paginateDashboardRows(rows, 2, 20);
+
+    expect(page.currentPage).toBe(2);
+    expect(page.totalPages).toBe(3);
+    expect(page.start).toBe(41);
+    expect(page.end).toBe(45);
+    expect(page.rows).toEqual([
+      "row-41",
+      "row-42",
+      "row-43",
+      "row-44",
+      "row-45",
+    ]);
+  });
+
+  it("clamps out-of-range pages and handles empty rows", () => {
+    const rows = Array.from({ length: 21 }, (_, index) => index);
+
+    expect(paginateDashboardRows(rows, 99, 20)).toMatchObject({
+      currentPage: 1,
+      totalPages: 2,
+      start: 21,
+      end: 21,
+      rows: [20],
+    });
+    expect(paginateDashboardRows([], 3, 20)).toMatchObject({
+      currentPage: 0,
+      totalPages: 1,
+      start: 0,
+      end: 0,
+      rows: [],
+    });
   });
 });
 

@@ -112,6 +112,7 @@ export class ArxivFetcher {
 
   private async fetchHtml(url: string, opts: { allow404: boolean }): Promise<string> {
     await this.respectDelay();
+    this.opts.logger.debug(`fetchHtml: GET ${url}`);
     return retry(
       async () => {
         const res = await this.opts.http.request({
@@ -119,7 +120,10 @@ export class ArxivFetcher {
           method: "GET",
           headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
         });
-        if (res.status >= 200 && res.status < 300) return res.bodyText;
+        if (res.status >= 200 && res.status < 300) {
+          this.opts.logger.debug(`fetchHtml: ${url} → ${res.status} (${(res.bodyText ?? "").length} bytes)`);
+          return res.bodyText;
+        }
         if (opts.allow404 && res.status === 404) {
           const e: any = new Error(`HTTP 404: ${url}`);
           e.status = 404;
@@ -144,6 +148,7 @@ export class ArxivFetcher {
     opts: { allow404?: boolean } = {},
   ): Promise<ArrayBuffer> {
     await this.respectDelay();
+    this.opts.logger.debug(`fetchBinary: GET ${url}`);
     return retry(
       async () => {
         const res = await this.opts.http.request({
@@ -160,6 +165,7 @@ export class ArxivFetcher {
         if (!res.bodyBuffer) {
           throw new Error(`empty binary response: ${url}`);
         }
+        this.opts.logger.debug(`fetchBinary: ${url} → ${res.status} (${res.bodyBuffer.byteLength} bytes)`);
         return res.bodyBuffer;
       },
       {

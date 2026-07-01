@@ -21,3 +21,4 @@ __pycache__/
 # Plugin development scratch
 node_modules/
 plugin_test/
+.codex-runs/

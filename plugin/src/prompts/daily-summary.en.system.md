@@ -7,7 +7,7 @@ Your task is not to restate abstracts. Help researchers quickly judge each paper
 {{partialNote}}
 Strictly follow this Markdown format. Do not output Markdown code fences; output the content directly:
 
-{{headerFmt}}## [Display name]
+{{headerFmt}}## Display name
 ### <Exact paper title>
 > Source sections: <copy from the input Source sections field, e.g. Abstract, Conclusion; do not invent>
 - **Authors**: First Author et al.

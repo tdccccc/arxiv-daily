@@ -77,15 +77,19 @@ function buildDailyContent(p: DailyPaperWithContent): string {
   return parts.join("\n\n");
 }
 
-function buildPaperBlock(p: DailyPaperWithContent): string {
+function buildPaperBlock(
+  p: DailyPaperWithContent,
+  tagToName?: Map<string, string>,
+): string {
   const detailMark =
     p.isDetail || p.paperPath ? ` → ${p.detailLink ?? `[[${p.id}]]`}` : "";
   const inboxLine =
     `Inbox: ${p.seenBefore ? "seen_before" : "new"}, ` +
     `status: ${p.inboxStatus ?? "inbox"}, ` +
     `note: ${detailMark ? "local_note" : "arxiv_only"}\n`;
+  const displayCat = tagToName?.get(p.category) ?? p.category;
   return (
-    `=== Paper: ${p.id} [category: ${p.category}]${detailMark} ===\n` +
+    `=== Paper: ${p.id} [${displayCat}]${detailMark} ===\n` +
     `Title: ${p.title}\n` +
     `Authors: ${p.authors}\n` +
     `Source sections: ${paperSourceSections(p)}\n` +
@@ -97,12 +101,13 @@ function buildPaperBlock(p: DailyPaperWithContent): string {
 function splitBatches(
   papers: DailyPaperWithContent[],
   charLimit: number,
+  tagToName?: Map<string, string>,
 ): DailyPaperWithContent[][] {
   const batches: DailyPaperWithContent[][] = [];
   let cur: DailyPaperWithContent[] = [];
   let size = 0;
   for (const p of papers) {
-    const bs = buildPaperBlock(p).length;
+    const bs = buildPaperBlock(p, tagToName).length;
     if (cur.length && size + bs > charLimit) {
       batches.push(cur);
       cur = [];
@@ -122,12 +127,13 @@ async function callDailyLlm(
   nDetail: number,
   isPartial: boolean,
   deps: SummarizerDeps,
+  tagToName: Map<string, string>,
 ): Promise<string> {
   const { llm, arxivSettings } = deps;
   const categoryList = arxivSettings.topics
     .map((t) => `- ${t.tag} → ${t.name}`)
     .join("\n");
-  const papersInfo = papers.map(buildPaperBlock).join("");
+  const papersInfo = papers.map((p) => buildPaperBlock(p, tagToName)).join("");
   const detailLinkTemplate =
     deps.linkStyle === "relative"
       ? `[YYMM.NNNNN](../papers/YYMM.NNNNN.md)`
@@ -154,7 +160,7 @@ async function callDailyLlm(
     injectionGuard,
   });
 
-  return llm.call(
+  const response = await llm.call(
     [
       { role: "system", content: systemPrompt },
       {
@@ -164,6 +170,10 @@ async function callDailyLlm(
     ],
     { signal: deps.signal },
   );
+  deps.logger.info(
+    `callDailyLlm: got ${response.length} chars for ${papers.length} papers`,
+  );
+  return response;
 }
 
 export async function summarizeDaily(
@@ -174,19 +184,19 @@ export async function summarizeDaily(
   throwIfCancelled(deps.signal);
   const nTotal = papers.length;
   const nDetail = papers.filter((p) => p.isDetail || p.paperPath).length;
-  const totalChars = papers.reduce((s, p) => s + buildPaperBlock(p).length, 0);
+  const tagToName = new Map(
+    deps.arxivSettings.topics.map((t) => [t.tag, t.name]),
+  );
+  const totalChars = papers.reduce(
+    (s, p) => s + buildPaperBlock(p, tagToName).length, 0,
+  );
   deps.logger.info(
     `summarizeDaily: ${totalChars} chars (limit ${deps.advanced.dailyCharLimit})`,
   );
 
   if (totalChars <= deps.advanced.dailyCharLimit) {
     const summary = await callDailyLlm(
-      papers,
-      dateStr,
-      nTotal,
-      nDetail,
-      false,
-      deps,
+      papers, dateStr, nTotal, nDetail, false, deps, tagToName,
     );
     const normalized = normalizeDailySummary(
       summary,
@@ -198,7 +208,7 @@ export async function summarizeDaily(
     return normalized;
   }
 
-  const batches = splitBatches(papers, deps.advanced.dailyCharLimit);
+  const batches = splitBatches(papers, deps.advanced.dailyCharLimit, tagToName);
   deps.logger.info(
     `summarizeDaily: batching into ${batches.length} (${batches.map((b) => b.length).join(",")})`,
   );
@@ -210,7 +220,7 @@ export async function summarizeDaily(
     throwIfCancelled(deps.signal);
     deps.logger.info(`summarizeDaily: batch ${i + 1}/${batches.length}`);
     parts.push(
-      await callDailyLlm(batches[i], dateStr, nTotal, nDetail, true, deps),
+      await callDailyLlm(batches[i], dateStr, nTotal, nDetail, true, deps, tagToName),
     );
   }
   throwIfCancelled(deps.signal);
@@ -463,5 +473,8 @@ export async function summarizePaperDetail(
   if (!summary.trim()) {
     throw new Error(`summarizePaperDetail: empty LLM response for ${paper.id}`);
   }
+  deps.logger.info(
+    `summarizePaperDetail: ${paper.id} → ${summary.length} chars`,
+  );
   return summary;
 }
