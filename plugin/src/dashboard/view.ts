@@ -1242,7 +1242,7 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
-    this.notice(`arXiv Daily: checking ${date}…`);
+    this.notice(`arXiv Daily: running for ${date}…`);
     await this.plugin.recentDates.refresh();
     if (date !== this.todayDate() && !this.plugin.recentDates.hasDate(date)) {
       this.notice(`arXiv Daily ${date}: arXiv not updated`);
@@ -1251,7 +1251,6 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
-    this.notice(`arXiv Daily: running for ${date}…`);
     const result = await this.plugin.scheduler.runForDateNow(date, {
       trigger: "calendar",
     });

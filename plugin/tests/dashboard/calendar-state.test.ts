@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
+  ARXIV_DAILY_DASHBOARD_VIEW,
   calendarCellAriaLabel,
   buildCalendarDailyReportMap,
   isCalendarRunWhitelisted,
+  registerDashboardView,
   resolveCalendarEmptyReason,
   resolveCalendarCellState,
   type CalendarCell,
@@ -10,6 +12,7 @@ import {
   type CalendarCellState,
   type CalendarRunWhitelistInput,
 } from "../../src/dashboard/view";
+import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { RunStateEntry } from "../../src/settings/types";
 
 function runState(
@@ -493,16 +496,54 @@ describe("calendarCellAriaLabel", () => {
 });
 
 describe("runDateFromCalendar", () => {
-  it("should check setup status before running", () => {
-    // Verify that setup status is checked before running
-    // This is tested indirectly through the getSetupStatus logic
-    const setupReady = true;
-    expect(setupReady).toBe(true);
-  });
+  it("shows the running notice before refreshing recent dates", async () => {
+    const events: string[] = [];
+    let createView: ((leaf: unknown) => unknown) | undefined;
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      llm: {
+        ...DEFAULT_SETTINGS.llm,
+        apiKey: "test-key",
+      },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ name: "Topic", tag: "topic", description: "Topic description" }],
+      },
+    };
+    const plugin = {
+      app: {},
+      settings,
+      registerView: vi.fn((type: string, viewCreator: (leaf: unknown) => unknown) => {
+        if (type === ARXIV_DAILY_DASHBOARD_VIEW) createView = viewCreator;
+      }),
+      openSettings: vi.fn(),
+      logger: {
+        info: vi.fn((message: string) => events.push(message)),
+        warn: vi.fn(),
+      },
+      recentDates: {
+        refresh: vi.fn(async () => {
+          events.push("refresh");
+        }),
+        hasDate: vi.fn(() => true),
+      },
+      scheduler: {
+        runForDateNow: vi.fn(async () => {
+          events.push("scheduler");
+          throw new Error("stop before reload");
+        }),
+      },
+    };
+    registerDashboardView(plugin as never);
+    const view = createView?.({}) as { runDateFromCalendar(date: string): Promise<void> };
 
-  it("should call scheduler.runForDateNow", () => {
-    // Verify that the scheduler is called with the correct date
-    const date = "2026-06-20";
-    expect(date).toBe("2026-06-20");
+    await expect(view.runDateFromCalendar("2026-06-22")).rejects.toThrow(
+      "stop before reload",
+    );
+
+    expect(events.slice(0, 2)).toEqual([
+      "arXiv Daily: running for 2026-06-22…",
+      "refresh",
+    ]);
   });
 });
