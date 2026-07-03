@@ -458,7 +458,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.attachHelp(
       new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
         t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
-          s.schedule.tickIntervalMin = Number(v) || 20;
+          s.schedule.tickIntervalMin = Math.max(1, Number(v) || 20);
           await this.plugin.saveSettings();
           this.plugin.restartScheduler();
         }),
