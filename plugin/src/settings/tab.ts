@@ -27,6 +27,35 @@ export function modelFetchNoticeMessage(result: ModelFetchNotice): string {
   }
 }
 
+export type LlmHttpWarning =
+  | { kind: "plaintext"; message: string }
+  | { kind: "local"; message: string };
+
+export function llmHttpWarning(baseUrl: string): LlmHttpWarning | null {
+  let url: URL;
+  try {
+    url = new URL(baseUrl.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:") return null;
+  if (isLoopbackHost(url.hostname)) {
+    return {
+      kind: "local",
+      message: "Using a local HTTP LLM endpoint; ensure this is intentional.",
+    };
+  }
+  return {
+    kind: "plaintext",
+    message: "Your LLM endpoint uses HTTP; API keys will be sent in plaintext.",
+  };
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
 
@@ -119,9 +148,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             s.llm.baseUrl = v;
             await this.plugin.saveSettings();
+            renderLlmHttpWarning(v);
             this.refreshSetupGuide();
           });
       });
+    const llmWarningEl = containerEl.createDiv({
+      cls: "arxiv-daily-settings__llm-http-warning",
+    });
+    const renderLlmHttpWarning = (baseUrl: string) => {
+      const warning = llmHttpWarning(baseUrl);
+      llmWarningEl.empty();
+      llmWarningEl.style.display = warning ? "block" : "none";
+      llmWarningEl.style.margin = "0 0 0.75em 0";
+      llmWarningEl.style.border = "1px solid var(--text-warning, var(--text-accent))";
+      llmWarningEl.style.borderRadius = "6px";
+      llmWarningEl.style.padding = "0.5em 0.75em";
+      llmWarningEl.style.background = "var(--background-modifier-warning, var(--background-secondary))";
+      llmWarningEl.style.color = "var(--text-normal)";
+      if (warning) llmWarningEl.setText(warning.message);
+    };
+    renderLlmHttpWarning(s.llm.baseUrl || "https://api.deepseek.com/v1");
 
     // API Key
     new Setting(containerEl)
