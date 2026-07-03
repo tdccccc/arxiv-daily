@@ -913,4 +913,165 @@ describe("SchedulerService", () => {
     expect(results[0].date).toBe("2026-05-12");
     expect(results[0].result.kind).toBe("failed_transient");
   });
+
+  // --- Behavior pinning tests (must stay green through refactor) ---
+
+  it("PIN: tick() skips lookback entirely when today is already done", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    await store.setCompleted("2026-05-11", 5);
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00" },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+      recentDates,
+    });
+    await svc.tick();
+    expect(recentDates.refresh).not.toHaveBeenCalled();
+    expect(runForDate).not.toHaveBeenCalled();
+  });
+
+  it("PIN: tickTodayScheduled() runs today AND refreshes recentDates when inside window", async () => {
+    const store = makeStore();
+    await store.load();
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 2 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00" },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+      recentDates,
+    });
+    await svc.tickTodayScheduled();
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(recentDates.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("PIN: tickTodayScheduled() does NOT run or refresh recentDates when outside window", async () => {
+    const store = makeStore();
+    await store.load();
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 0 });
+    // Settings window 09:00-18:00; "now" 19:01 Shanghai = outside.
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00" },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      // 11:01 UTC = 19:01 Shanghai (Asia/Shanghai UTC+8)
+      now: () => new Date("2026-05-11T11:01:00Z"),
+      recentDates,
+    });
+    const result = await svc.tickTodayScheduled();
+    // Current legacy behavior: tickDate applies the time gate and returns guarded.
+    expect((result as any)?.kind).toBe("skipped");
+    expect((result as any)?.reason).toBe("guarded");
+    expect(runForDate).not.toHaveBeenCalled();
+    expect(recentDates.refresh).not.toHaveBeenCalled();
+  });
+
+  it("PIN: runAllPending() does NOT filter non-today dates when recentDates.hasDate is undefined (CLI path)", async () => {
+    const store = makeStore();
+    await store.load();
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    // recentDates entirely omitted (undefined) - mirrors CLI construction.
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "00:01" },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    const results = await svc.runAllPending();
+    // With lookback 5 and no hasDate filter, all non-weekend prior dates get attempted:
+    expect(results.length).toBeGreaterThan(0);
+    expect(runForDate).toHaveBeenCalled();
+  });
+
+  it("PIN: pending result leaves date not-done and is retried on a subsequent tick", async () => {
+    const store = makeStore();
+    await store.load();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "pending", reason: "arxiv not ready" })
+      .mockResolvedValueOnce({ kind: "completed", papersWritten: 3 });
+    const svc = new SchedulerService({
+      getSettings: () => ({ ...DEFAULT_SETTINGS, schedule: { ...DEFAULT_SETTINGS.schedule } }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    await svc.runForDateNow("2026-05-11");
+    expect(store.get("2026-05-11").status).not.toBe("completed");
+    expect(store.get("2026-05-11").status).toBe("pending");
+    // Second run: date is still pending (not done), so it runs again:
+    await svc.runForDateNow("2026-05-11");
+    expect(store.get("2026-05-11").status).toBe("completed");
+  });
+
+  it("PIN: tick() per-date weekend skip vs tickToday() per-now weekend check are distinct behaviors", async () => {
+    // tick() loops lookback; a weekend DATE in the lookback is skipped even if "now" is a weekday.
+    const store = makeStore();
+    await store.load();
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, runAtLocal: "00:01" },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      // 2026-05-11 is Monday; lookback includes Sat 05-09 and Sun 05-10 (skipped per-date).
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    await svc.tick();
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).not.toHaveBeenCalledWith("2026-05-10");
+    expect(runForDate).not.toHaveBeenCalledWith("2026-05-09");
+
+    // tickToday() checks isWeekend NOW; FF Monday 13:00 Shanghai is a weekday so it runs.
+    const store2 = makeStore();
+    await store2.load();
+    const runForDate2 = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc2 = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true },
+      }),
+      store: store2,
+      lock: new RunLock(),
+      runForDate: runForDate2,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+    await svc2.tickToday();
+    expect(runForDate2).toHaveBeenCalledWith("2026-05-11");
+  });
 });
