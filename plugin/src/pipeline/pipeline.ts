@@ -272,7 +272,6 @@ export class ArxivPipeline {
       }
     }
     throwIfCancelled(signal);
-    await this.deps.writer.writeDaily(dateStr, dailySummary, { dateWindowNote });
     stageEnd("summarize-daily", ` (${dailySummary.length} chars)`);
 
     // 8. Detail reports
@@ -319,6 +318,8 @@ export class ArxivPipeline {
     }
     stageEnd("write-detail", ` (${detailPapers.length} detail papers)`);
 
+    throwIfCancelled(signal);
+    await this.deps.writer.writeDaily(dateStr, dailySummary, { dateWindowNote });
     throwIfCancelled(signal);
     const totalS = ((Date.now() - t0) / 1000).toFixed(1);
     logger.info(

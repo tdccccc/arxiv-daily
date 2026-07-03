@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
+import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -612,6 +613,67 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.writer.writeDaily).toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("does not leave a daily file that makes retry skip unfinished details", async () => {
+    const d = makeDeps();
+    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
+    const arxivId = m[1];
+    let dailyExists = false;
+    let failFirstDetail = true;
+    d.writer.dailyExists = vi.fn(async () => dailyExists);
+    d.writer.writeDaily = vi.fn(async (date: string, content: string) => {
+      dailyExists = true;
+      d.writes[`daily/${date}.md`] = content;
+      return `daily/${date}.md`;
+    });
+    d.writer.writePaperDetail = vi.fn(async (p: any, date: string, content: string) => {
+      if (failFirstDetail) {
+        failFirstDetail = false;
+        throw new RunCancelledError("cancelled during detail");
+      }
+      d.writes[`papers/${p.id}.md`] = content;
+      return `papers/${p.id}.md`;
+    });
+    d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
+      const sys = msgs[0]?.content ?? "";
+      if (sys.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+        });
+      }
+      if (sys.includes("每日论文追踪日报")) {
+        return "## stub daily summary\n";
+      }
+      return "## detail summary\n";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub",
+      fullSections: "## Section\nbody",
+    });
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+    const date = firstDateFromFixture();
+
+    const first = await pipeline.runForDate(date);
+    const second = await pipeline.runForDate(date);
+
+    expect(first).toEqual({
+      kind: "failed_transient",
+      reason: "cancelled during detail",
+    });
+    expect(second.kind).toBe("completed");
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(2);
+    expect(d.writer.writeDaily).toHaveBeenCalledTimes(1);
   });
 
   it("writes detail reports and stores paperPath in the paper index", async () => {
