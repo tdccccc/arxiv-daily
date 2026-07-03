@@ -7,21 +7,17 @@ export class RunCancelledError extends Error {
 
 export class RunCancellationService {
   private controllers = new Map<string, AbortController>();
-  private cancellationRequested = false;
+  private cancelledDates = new Set<string>();
   private cancelReason = "cancelled by user";
 
-  prepareRun(): void {
-    if (this.controllers.size === 0) {
-      this.cancellationRequested = false;
-      this.cancelReason = "cancelled by user";
-    }
-  }
+  prepareRun(): void {}
 
   begin(date: string): AbortSignal {
     const controller = new AbortController();
     this.controllers.set(date, controller);
-    if (this.cancellationRequested) {
+    if (this.cancelledDates.has(date)) {
       controller.abort(this.cancelReason);
+      this.cancelledDates.delete(date);
     }
     return controller.signal;
   }
@@ -33,8 +29,10 @@ export class RunCancellationService {
   cancelAll(reason = "cancelled by user"): string[] {
     const dates = Array.from(this.controllers.keys());
     if (dates.length === 0) return [];
-    this.cancellationRequested = true;
     this.cancelReason = reason;
+    for (const date of dates) {
+      this.cancelledDates.add(date);
+    }
     for (const controller of this.controllers.values()) {
       if (!controller.signal.aborted) controller.abort(reason);
     }
@@ -46,7 +44,7 @@ export class RunCancellationService {
   }
 
   isCancellationRequested(): boolean {
-    return this.cancellationRequested;
+    return this.cancelledDates.size > 0;
   }
 }
 
