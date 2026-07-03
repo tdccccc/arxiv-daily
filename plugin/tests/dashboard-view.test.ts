@@ -4,6 +4,7 @@ import {
   collectIndexedDetailSummaryRefs,
   executeObsidianCommand,
   filterDashboardMarkdownFiles,
+  formatLogEntries,
   openDashboardView,
   openMarkdownFileOnce,
   paginateDashboardRows,
@@ -344,3 +345,46 @@ function indexedPaper(
     ...overrides,
   };
 }
+
+describe("formatLogEntries", () => {
+  it("renders newest-first by default", () => {
+    const buf = [
+      "2026-07-03 09:00:00.000 [INFO] first",
+      "2026-07-03 09:00:01.000 [INFO] second",
+      "2026-07-03 09:00:02.000 [ERROR] boom",
+    ];
+    const out = formatLogEntries(buf);
+    const lines = out.split("\n");
+    expect(lines[0]).toContain("boom");
+    expect(lines[2]).toContain("first");
+  });
+
+  it("filters out levels not in the enabled set", () => {
+    const buf = [
+      "2026-07-03 09:00:00.000 [DEBUG] d",
+      "2026-07-03 09:00:01.000 [INFO] i",
+      "2026-07-03 09:00:02.000 [WARN] w",
+      "2026-07-03 09:00:03.000 [ERROR] e",
+    ];
+    const out = formatLogEntries(buf, { levels: new Set(["info", "warn", "error"]) });
+    const lines = out.split("\n");
+    expect(lines).toHaveLength(3);
+    expect(out).not.toContain("[DEBUG]");
+    expect(lines[0]).toContain("[ERROR] e"); // newest first
+  });
+
+  it("returns a placeholder when buffer is empty", () => {
+    expect(formatLogEntries([])).toBe("(no log entries)");
+  });
+
+  it("keeps lines without a parseable level tag when filter is active (kept, not hidden)", () => {
+    const buf = ["weird line without level", "2026-07-03 09:00:00.000 [INFO] ok"];
+    const out = formatLogEntries(buf, { levels: new Set(["info"]) });
+    const lines = out.split("\n");
+    // Output is reversed newest-first, so the tagged (later) line is first,
+    // the untagged (earlier) line is last — both must survive the filter.
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe("2026-07-03 09:00:00.000 [INFO] ok");
+    expect(lines[1]).toBe("weird line without level");
+  });
+});
