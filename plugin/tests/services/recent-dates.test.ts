@@ -127,6 +127,83 @@ describe("RecentDatesCache", () => {
     expect(cache.hasDate("2026-01-01")).toBe(false);
   });
 
+  it("reuses the ready snapshot for refreshes inside the TTL", async () => {
+    let nowMs = Date.parse("2026-06-23T01:00:00Z");
+    const fetcher = {
+      fetchRecent: vi.fn(async () => recentHtml("2026-06-22", "2606.00001")),
+    };
+    const buildFetcher = vi.fn(() => fetcher);
+    const cache = new RecentDatesCache({
+      getSettings: () => settingsWithCategories(["cs.CL"]),
+      buildFetcher,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      now: () => new Date(nowMs),
+    });
+
+    const first = await cache.refresh();
+    nowMs += 60_000;
+    const second = await cache.refresh();
+
+    expect(second.status).toBe("ready");
+    expect(second.refreshedAt).toBe(first.refreshedAt);
+    expect(second.dates.has("2026-06-22")).toBe(true);
+    expect(buildFetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes ready snapshots after the TTL expires", async () => {
+    let nowMs = Date.parse("2026-06-23T01:00:00Z");
+    const fetcher = {
+      fetchRecent: vi
+        .fn()
+        .mockResolvedValueOnce(recentHtml("2026-06-22", "2606.00001"))
+        .mockResolvedValueOnce(recentHtml("2026-06-23", "2606.00002")),
+    };
+    const buildFetcher = vi.fn(() => fetcher);
+    const cache = new RecentDatesCache({
+      getSettings: () => settingsWithCategories(["cs.CL"]),
+      buildFetcher,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      now: () => new Date(nowMs),
+    });
+
+    await cache.refresh();
+    nowMs += 10 * 60_000 + 1;
+    const snapshot = await cache.refresh();
+
+    expect(snapshot.status).toBe("ready");
+    expect(snapshot.dates.has("2026-06-23")).toBe(true);
+    expect(buildFetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.fetchRecent).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries failed snapshots even inside the TTL", async () => {
+    let nowMs = Date.parse("2026-06-23T01:00:00Z");
+    const fetcher = {
+      fetchRecent: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("arXiv unavailable"))
+        .mockResolvedValueOnce(recentHtml("2026-06-22", "2606.00001")),
+    };
+    const buildFetcher = vi.fn(() => fetcher);
+    const cache = new RecentDatesCache({
+      getSettings: () => settingsWithCategories(["cs.CL"]),
+      buildFetcher,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      now: () => new Date(nowMs),
+    });
+
+    const failed = await cache.refresh();
+    nowMs += 60_000;
+    const recovered = await cache.refresh();
+
+    expect(failed.status).toBe("failed");
+    expect(recovered.status).toBe("ready");
+    expect(recovered.dates.has("2026-06-22")).toBe(true);
+    expect(buildFetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.fetchRecent).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the cached snapshot at the foreground deadline while the refresh continues", async () => {
     vi.useFakeTimers();
     try {
@@ -147,6 +224,7 @@ describe("RecentDatesCache", () => {
         buildFetcher: () => fetcher,
         logger: { debug: vi.fn(), warn: vi.fn() },
         now: () => new Date("2026-06-23T01:00:00Z"),
+        ttlMs: 0,
       });
       await cache.refresh();
       expect(cache.hasDate("2026-06-21")).toBe(true);

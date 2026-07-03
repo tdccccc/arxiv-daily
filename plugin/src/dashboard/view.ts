@@ -33,6 +33,7 @@ import { formatRunHistoryRecords } from "../services/run-history";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
+const DASHBOARD_SEARCH_DEBOUNCE_MS = 250;
 
 const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "all", label: "All" },
@@ -407,6 +408,7 @@ class ArxivDailyDashboardView extends ItemView {
   private resultsEl: HTMLElement | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
+  private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSyncedDailyPaths: Set<string> | null = null;
   private isOpen = false;
 
@@ -436,6 +438,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   async onClose(): Promise<void> {
     this.isOpen = false;
+    this.clearSearchDebounce();
     this.contentEl.empty();
   }
 
@@ -1193,7 +1196,9 @@ class ArxivDailyDashboardView extends ItemView {
 
     // Click handler to run
     button.addEventListener("click", () => {
-      void this.runDateFromCalendar(cell.date!);
+      void this.runControlAction(button, () =>
+        this.runDateFromCalendar(cell.date!),
+      );
     });
   }
 
@@ -1237,6 +1242,7 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
+    this.notice(`arXiv Daily: checking ${date}…`);
     await this.plugin.recentDates.refresh();
     if (date !== this.todayDate() && !this.plugin.recentDates.hasDate(date)) {
       this.notice(`arXiv Daily ${date}: arXiv not updated`);
@@ -1285,6 +1291,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private renderFilters(contentEl: HTMLElement): void {
+    this.clearSearchDebounce();
     const filters = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__filters",
     });
@@ -1301,9 +1308,13 @@ class ArxivDailyDashboardView extends ItemView {
     }) as HTMLInputElement;
     search.value = this.query.search ?? "";
     search.addEventListener("input", () => {
-      this.query = { ...this.query, search: search.value.trim() || undefined };
-      this.currentPage = 0;
-      this.renderCurrentResults();
+      this.clearSearchDebounce();
+      this.searchDebounceTimer = setTimeout(() => {
+        this.searchDebounceTimer = null;
+        this.query = { ...this.query, search: search.value.trim() || undefined };
+        this.currentPage = 0;
+        this.renderCurrentResults();
+      }, DASHBOARD_SEARCH_DEBOUNCE_MS);
     });
 
     const topic = this.createSelect(
@@ -1897,6 +1908,12 @@ class ArxivDailyDashboardView extends ItemView {
   private notice(message: string, timeoutMs?: number): void {
     this.plugin.logger.info(message);
     new Notice(message, timeoutMs);
+  }
+
+  private clearSearchDebounce(): void {
+    if (!this.searchDebounceTimer) return;
+    clearTimeout(this.searchDebounceTimer);
+    this.searchDebounceTimer = null;
   }
 
   private gateFilter(): boolean {

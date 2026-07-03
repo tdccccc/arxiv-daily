@@ -28,7 +28,10 @@ export interface RecentDatesCacheDeps {
   buildFetcher: () => RecentFetcher;
   logger: RecentLogger;
   now?: () => Date;
+  ttlMs?: number;
 }
+
+const DEFAULT_RECENT_DATES_TTL_MS = 10 * 60_000;
 
 export class RecentDatesCache {
   private state: RecentDatesSnapshot = {
@@ -78,6 +81,14 @@ export class RecentDatesCache {
 
   private ensureRefresh(): Promise<RecentDatesSnapshot> {
     if (this.inFlight) return this.inFlight;
+    const now = (this.deps.now ?? (() => new Date()))().getTime();
+    const ttlMs = this.deps.ttlMs ?? DEFAULT_RECENT_DATES_TTL_MS;
+    if (
+      this.state.status === "ready" &&
+      now - this.state.refreshedAt < ttlMs
+    ) {
+      return Promise.resolve(this.snapshot());
+    }
     this.inFlight = this.doRefresh().finally(() => {
       this.inFlight = null;
     });
