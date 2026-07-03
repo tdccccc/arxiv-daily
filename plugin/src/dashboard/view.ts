@@ -1931,10 +1931,10 @@ class ArxivDailyDashboardView extends ItemView {
 
   private async runToday(): Promise<void> {
     if (!this.gateFilter()) return;
-    await this.plugin.recentDates.refresh();
     const date = this.todayDate();
     this.plugin.logger.info(`dashboard: manual run today requested for ${date}`);
     this.notice(`arXiv Daily: running for ${date}...`);
+    await this.plugin.recentDates.refresh();
     const result = await this.plugin.scheduler.runForDateNow(date);
     this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     await this.reloadIndex();
@@ -1942,9 +1942,9 @@ class ArxivDailyDashboardView extends ItemView {
 
   private async runAllPending(): Promise<void> {
     if (!this.gateFilter()) return;
-    await this.plugin.recentDates.refresh();
     this.plugin.logger.info("dashboard: run all pending requested");
     this.notice("arXiv Daily: running all pending in lookback...");
+    await this.plugin.recentDates.refresh();
     const results = await this.plugin.scheduler.runAllPending();
     if (results.length === 0) {
       this.notice("arXiv Daily: nothing pending in lookback window");
