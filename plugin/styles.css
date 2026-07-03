@@ -1136,3 +1136,23 @@
     justify-self: start;
   }
 }
+
+.arxiv-daily-hub-modal__level-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.arxiv-daily-hub-modal__level-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  background: transparent;
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+.arxiv-daily-hub-modal__level-chip.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}

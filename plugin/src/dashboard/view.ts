@@ -2472,6 +2472,8 @@ interface HubPanel {
 class HubModal extends Modal {
   private activeTab: HubModalTab = "logs";
   private panels = new Map<HubModalTab, HubPanel>();
+  private logLevels: Set<string> = new Set(DEFAULT_LOG_LEVELS);
+  private levelRow: HTMLDivElement | null = null;
 
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
@@ -2490,6 +2492,12 @@ class HubModal extends Modal {
     this.createPanel(tabs, body, "history", "Run History");
     this.createPanel(tabs, body, "state", "Run State");
     this.createPanel(tabs, body, "diagnostics", "Diagnostics");
+
+    const levelRow = body.createDiv({ cls: "arxiv-daily-hub-modal__level-filter" });
+    this.levelRow = levelRow;
+    this.renderLevelChips(levelRow);
+    levelRow.style.display = "none"; // shown only when logs tab active
+
     this.activateTab("logs");
     this.refreshActiveTab();
 
@@ -2566,12 +2574,56 @@ class HubModal extends Modal {
       panel.button.setAttribute("aria-pressed", String(active));
       panel.content.toggleClass("is-active", active);
     }
+    this.setLevelRowVisibility();
+  }
+
+  private renderLevelChips(container: HTMLElement): void {
+    container.empty();
+    const order: Array<{ key: string; label: string }> = [
+      { key: "debug", label: "Debug" },
+      { key: "info", label: "Info" },
+      { key: "warn", label: "Warn" },
+      { key: "error", label: "Error" },
+    ];
+    for (const { key, label } of order) {
+      const active = this.logLevels.has(key);
+      const chip = container.createEl("button", {
+        cls: `arxiv-daily-hub-modal__level-chip${active ? " is-active" : ""}`,
+        text: label,
+        attr: { type: "button", "aria-pressed": String(active) },
+      });
+      chip.onclick = () => {
+        if (this.logLevels.has(key)) this.logLevels.delete(key);
+        else this.logLevels.add(key);
+        this.renderLevelChips(container);
+        this.refreshActiveTab();
+      };
+    }
+    const all = container.createEl("button", {
+      cls: "arxiv-daily-hub-modal__level-chip",
+      text: "All",
+      attr: { type: "button" },
+    });
+    all.onclick = () => {
+      this.logLevels = new Set(DEFAULT_LOG_LEVELS);
+      this.renderLevelChips(container);
+      this.refreshActiveTab();
+    };
+  }
+
+  private setLevelRowVisibility(): void {
+    if (this.levelRow) {
+      this.levelRow.style.display = this.activeTab === "logs" ? "" : "none";
+    }
   }
 
   private refreshActiveTab(): void {
     const tab = this.activeTab;
     if (tab === "logs") {
-      this.setPanelText(tab, this.plugin.logger.getBuffer().join("\n") || "(no log entries)");
+      this.setPanelText(
+        tab,
+        formatLogEntries(this.plugin.logger.getBuffer(), { levels: this.logLevels }),
+      );
       return;
     }
     this.setPanelText(tab, tab === "history" ? "Loading run history..." : tab === "state" ? "Loading run state..." : "Loading diagnostics...");
