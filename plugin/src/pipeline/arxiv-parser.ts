@@ -36,6 +36,7 @@ const MONTHS: Record<string, number> = {
   dec: 12,
   december: 12,
 };
+const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/;
 
 function parseHeaderDate(headerText: string): string | null {
   const m = /(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/.exec(headerText);
@@ -90,6 +91,10 @@ function parsePaper(dt: Element, dd: Element): PaperMeta | null {
   if (!absLink) return null;
   const id = (absLink.textContent ?? "").replace("arXiv:", "").trim();
   if (!id) return null;
+  if (!ID_RE.test(id)) {
+    console.warn(`[arxiv-daily] arxiv-parser: invalid arXiv id in listing: ${id}`);
+    return null;
+  }
 
   const titleDiv = dd.querySelector(".list-title");
   const title = (titleDiv?.textContent ?? "")

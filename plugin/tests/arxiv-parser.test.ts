@@ -62,4 +62,32 @@ describe("parseRecent", () => {
     expect(buckets[0].announceDate).toBe("2026-06-10");
     expect(buckets[0].papers[0].id).toBe("2606.11165");
   });
+
+  it("rejects malformed arXiv ids from listing HTML before exposing papers", () => {
+    const paper = (id: string) => `
+      <dt><a title="Abstract" href="/abs/${id}">arXiv:${id}</a></dt>
+      <dd>
+        <div class="list-title">Title: ${id}</div>
+        <div class="list-authors"><a>Jane Doe</a></div>
+      </dd>
+    `;
+    const html = `
+      <dl id="articles">
+        <h3>Wed, 10 Jun 2026 (showing 5 of 5 entries )</h3>
+        ${paper("../../../etc/passwd")}
+        ${paper("foo bar")}
+        ${paper("")}
+        ${paper("2606.12345")}
+        ${paper("2606.12345v2")}
+      </dl>
+    `;
+
+    const buckets = parseRecent(html);
+
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].papers.map((p) => p.id)).toEqual([
+      "2606.12345",
+      "2606.12345v2",
+    ]);
+  });
 });
