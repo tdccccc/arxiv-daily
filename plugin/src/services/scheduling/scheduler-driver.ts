@@ -10,6 +10,7 @@ import {
   todayInTz,
 } from "../../utils/time";
 import type { RunCancellationService } from "../cancellation";
+import { isCancellationError } from "../cancellation";
 import type { Logger } from "../logger";
 import { NoopProgressReporter, type ProgressReporter } from "../progress";
 import type { RunHistoryTrigger } from "../run-history";
@@ -383,6 +384,12 @@ export class SchedulerDriver {
           this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
           await this.deps.history.recordFailed(date, trigger, result.kind, result.reason, now);
         }
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        this.deps.logger.error(
+          `scheduler: failed to persist result for ${date}; continuing batch`,
+          e,
+        );
       } finally {
         this.deps.cancellation?.finish(date);
       }
