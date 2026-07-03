@@ -44,6 +44,22 @@ function makeStorage(initialFiles: Record<string, string> = {}) {
   return { files, dirs, storage };
 }
 
+function makeAppendStorage(initialFiles: Record<string, string> = {}) {
+  const base = makeStorage(initialFiles);
+  const appendText = vi.fn(async (path: string, content: string) => {
+    const normalized = base.storage.normalizePath(path);
+    base.files[normalized] = (base.files[normalized] ?? "") + content;
+  });
+  return {
+    ...base,
+    storage: {
+      ...base.storage,
+      appendText,
+    } satisfies StorageAdapter,
+    appendText,
+  };
+}
+
 function record(overrides: Partial<RunHistoryRecord> = {}): RunHistoryRecord {
   return {
     schemaVersion: 1,
@@ -106,6 +122,47 @@ describe("RunHistoryStore", () => {
     ]);
 
     expect(files["arxiv-daily/.index/run-history.jsonl"].trim().split("\n")).toHaveLength(2);
+  });
+
+  it("uses adapter appendText when available", async () => {
+    const { files, storage, appendText } = makeAppendStorage();
+    const store = RunHistoryStore.fromStorage(storage, DEFAULT_SETTINGS.output);
+
+    await store.append(record({ event: "started", status: "running" }));
+
+    expect(appendText).toHaveBeenCalledTimes(1);
+    expect(files["arxiv-daily/.index/run-history.jsonl"]).toContain(
+      "\"event\":\"started\"",
+    );
+  });
+
+  it("rotates large history files and reads latest records across rotations", async () => {
+    const existing = JSON.stringify(record({
+      at: "2026-06-25T09:00:00.000Z",
+      date: "2026-06-23",
+    })) + "\n";
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-history.jsonl": existing,
+    });
+    const store = RunHistoryStore.fromStorage(
+      storage,
+      DEFAULT_SETTINGS.output,
+      undefined,
+      { maxBytes: existing.length, maxRotations: 2 },
+    );
+
+    await store.append(record({
+      at: "2026-06-25T10:00:00.000Z",
+      date: "2026-06-24",
+    }));
+    const latest = await store.readLatest(10);
+
+    expect(files["arxiv-daily/.index/run-history.jsonl.1"]).toBe(existing);
+    expect(files["arxiv-daily/.index/run-history.jsonl"]).toContain("2026-06-24");
+    expect(latest.map((entry) => entry.date)).toEqual([
+      "2026-06-24",
+      "2026-06-23",
+    ]);
   });
 
   it("reads latest valid records in reverse chronological order", async () => {

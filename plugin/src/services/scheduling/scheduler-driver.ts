@@ -17,11 +17,10 @@ import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
 import type { StateStore } from "../state-store";
 import { lookbackDateStrings, todayDateString } from "./date-selector";
+import { LOOKBACK_DAYS } from "./constants";
 import type { HistoryRecorder } from "./history-recorder";
 import { checkTickGate, isRunning } from "./run-gate";
 import type { TimeGate } from "./types";
-
-const LOOKBACK_DAYS = 5;
 
 export interface SchedulerRunOptions {
   trigger?: RunHistoryTrigger;

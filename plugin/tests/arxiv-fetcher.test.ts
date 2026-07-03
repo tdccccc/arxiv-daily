@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArxivFetcher } from "../src/pipeline/arxiv-fetcher";
 import type { HttpClient, HttpRequest } from "../src/core/adapters";
 import { Logger } from "../src/services/logger";
@@ -13,6 +13,11 @@ function makeFetcher(http: HttpClient): ArxivFetcher {
 }
 
 describe("ArxivFetcher", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("uses the injected HTTP client for arXiv requests", async () => {
     const requests: HttpRequest[] = [];
     const http: HttpClient = {
@@ -105,5 +110,69 @@ describe("ArxivFetcher", () => {
       url: "https://arxiv.org/pdf/2606.12345",
       responseType: "arrayBuffer",
     });
+  });
+
+  it("uses Retry-After seconds for 429 backoff before retrying", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const http: HttpClient = {
+      request: vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 429,
+          headers: { "retry-after": "5" },
+          bodyText: "too many requests",
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: {},
+          bodyText: "<html>recent</html>",
+        }),
+    };
+    const fetcher = new ArxivFetcher({
+      categories: ["astro-ph"],
+      http,
+      logger: logger as any,
+      requestDelayMs: 0,
+    });
+
+    const result = fetcher.fetchRecent("astro-ph");
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(http.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toContain("recent");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("after 5000ms"),
+    );
+  });
+
+  it("shares request throttling across fetcher instances", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-25T10:00:00.000Z"));
+    const http: HttpClient = {
+      request: vi.fn(async () => ({
+        status: 200,
+        headers: {},
+        bodyText: "<html>recent</html>",
+      })),
+    };
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const opts = {
+      categories: ["astro-ph"],
+      http,
+      logger: logger as any,
+      requestDelayMs: 1000,
+    };
+
+    await new ArxivFetcher(opts).fetchRecent("astro-ph");
+    const second = new ArxivFetcher(opts).fetchRecent("cs.CL");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(http.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(second).resolves.toContain("recent");
+    expect(http.request).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import OpenAI from "openai";
 import {
   buildModelUrlCandidates,
+  LLM_STREAM_IDLE_TIMEOUT_MS,
   LlmClient,
+  collectStreamWithIdleTimeout,
   normalizeOpenAiBaseUrl,
 } from "../../src/llm/client";
 
@@ -14,6 +16,14 @@ vi.mock("openai", () => {
 });
 
 describe("Model listing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("tries /models directly when the base URL already includes /v1", () => {
     const candidates = buildModelUrlCandidates("https://api.deepseek.com/v1");
 
@@ -64,5 +74,52 @@ describe("Model listing", () => {
         baseURL: "http://59.64.32.247:5001/v1",
       }),
     );
+  });
+
+  it("does not retry permanent non-429 4xx chat errors", async () => {
+    vi.useFakeTimers();
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Unauthorized"), { status: 401 }),
+    );
+    vi.mocked(OpenAI).mockImplementationOnce(
+      () => ({ chat: { completions: { create } } }) as any,
+    );
+    const client = new LlmClient(
+      {
+        apiKey: "sk-test",
+        provider: "custom",
+        baseUrl: "https://llm.example.com/v1",
+        model: "gpt-test",
+        thinkingMode: false,
+        reasoningEffort: "high",
+      },
+      { warn: vi.fn() } as any,
+    );
+
+    const call = client.call([{ role: "user", content: "hello" }]);
+    const assertion = expect(call).rejects.toThrow("Unauthorized");
+    await vi.runAllTimersAsync();
+
+    await assertion;
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a stream when no chunk arrives before the idle timeout", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    async function* neverYields() {
+      await new Promise(() => undefined);
+    }
+
+    const read = collectStreamWithIdleTimeout(
+      neverYields(),
+      controller,
+      LLM_STREAM_IDLE_TIMEOUT_MS,
+    );
+    const assertion = expect(read).rejects.toThrow("LLM stream idle timeout");
+    await vi.advanceTimersByTimeAsync(LLM_STREAM_IDLE_TIMEOUT_MS);
+
+    await assertion;
+    expect(controller.signal.aborted).toBe(true);
   });
 });

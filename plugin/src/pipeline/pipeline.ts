@@ -11,7 +11,7 @@ import { arxivCategories } from "../settings/categories";
 import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
-import type { LlmClient } from "../llm/client";
+import { isPermanentLlmError, type LlmClient } from "../llm/client";
 import type { PaperIndexEntry, PaperIndexStore } from "../services/paper-index";
 import {
   isCancellationError,
@@ -37,6 +37,11 @@ export type PipelineResult =
   | { kind: "pending"; reason: string }
   | { kind: "failed_transient"; reason: string }
   | { kind: "failed_permanent"; reason: string };
+
+type PipelineFailureResult = Extract<
+  PipelineResult,
+  { kind: "failed_transient" | "failed_permanent" }
+>;
 
 export interface PipelineDeps {
   fetcher: ArxivFetcher;
@@ -156,7 +161,7 @@ export class ArxivPipeline {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       return {
-        kind: "failed_transient",
+        kind: isPermanentLlmError(e) ? "failed_permanent" : "failed_transient",
         reason: `paper filter LLM failed: ${(e as Error).message}`,
       };
     }
@@ -247,7 +252,7 @@ export class ArxivPipeline {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       return {
-        kind: "failed_transient",
+        kind: isPermanentLlmError(e) ? "failed_permanent" : "failed_transient",
         reason: `daily summary LLM failed: ${(e as Error).message}`,
       };
     }
@@ -403,6 +408,8 @@ export class ArxivPipeline {
     const { fetcher, logger } = this.deps;
     const categories = arxivCategories(this.deps.arxiv);
     const byId = new Map<string, SourcePaperMeta>();
+    const succeededCategories: string[] = [];
+    const failures: PipelineFailureResult[] = [];
 
     for (const category of categories) {
       throwIfCancelled(signal);
@@ -411,13 +418,14 @@ export class ArxivPipeline {
         recentHtml = await fetcher.fetchRecent(category);
       } catch (e) {
         if (isCancellationError(e)) throw e;
-        return {
-          kind: "error",
-          result: {
-            kind: "failed_transient",
-            reason: `fetch /recent failed for ${category}: ${(e as Error).message}`,
-          },
-        };
+        failures.push({
+          kind: "failed_transient",
+          reason: `fetch /recent failed for ${category}: ${(e as Error).message}`,
+        });
+        logger.warn(
+          `pipeline: fetch /recent failed for ${category}, continuing with other categories: ${(e as Error).message}`,
+        );
+        continue;
       }
 
       let buckets: DateBucket[];
@@ -425,27 +433,30 @@ export class ArxivPipeline {
         buckets = parseRecent(recentHtml);
       } catch (e) {
         if (isCancellationError(e)) throw e;
-        return {
-          kind: "error",
-          result: {
-            kind: "failed_permanent",
-            reason: `parse failed for ${category}: ${(e as Error).message}`,
-          },
-        };
+        failures.push({
+          kind: "failed_permanent",
+          reason: `parse failed for ${category}: ${(e as Error).message}`,
+        });
+        logger.warn(
+          `pipeline: parse failed for ${category}, continuing with other categories: ${(e as Error).message}`,
+        );
+        continue;
       }
 
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
-        return {
-          kind: "error",
-          result: {
-            kind: "failed_transient",
-            reason: missingRecentDateReason(dateStr, category, buckets, bounds),
-          },
-        };
+        failures.push({
+          kind: "failed_transient",
+          reason: missingRecentDateReason(dateStr, category, buckets, bounds),
+        });
+        logger.warn(
+          `pipeline: ${dateStr} missing in ${category} /recent, continuing with other categories`,
+        );
+        continue;
       }
 
+      succeededCategories.push(category);
       logger.info(
         `pipeline: ${bucket.papers.length} papers for ${dateStr} in ${category}`,
       );
@@ -458,10 +469,17 @@ export class ArxivPipeline {
       }
     }
 
+    if (succeededCategories.length === 0) {
+      return {
+        kind: "error",
+        result: collapseCategoryFailures(failures),
+      };
+    }
+
     return {
       kind: "ok",
       papers: Array.from(byId.values()),
-      categories,
+      categories: succeededCategories,
       dateWindow: "recent",
     };
   }
@@ -533,4 +551,24 @@ function missingRecentDateReason(
   }
   const have = buckets.map((b) => b.announceDate).join(",");
   return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
+}
+
+function collapseCategoryFailures(
+  failures: PipelineFailureResult[],
+): PipelineFailureResult {
+  if (failures.length === 0) {
+    return {
+      kind: "failed_transient",
+      reason: "fetch /recent failed: no arXiv categories succeeded",
+    };
+  }
+  const first = failures[0];
+  const allPermanent = failures.every((failure) => failure.kind === "failed_permanent");
+  return {
+    kind: allPermanent ? "failed_permanent" : "failed_transient",
+    reason:
+      failures.length === 1
+        ? first.reason
+        : `all arXiv categories failed: ${failures.map((failure) => failure.reason).join("; ")}`,
+  };
 }

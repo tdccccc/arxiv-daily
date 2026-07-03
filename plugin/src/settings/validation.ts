@@ -1,5 +1,6 @@
 import type { PluginSettings } from "./types";
 import { arxivCategories } from "./categories";
+import { minutesFromHHMM } from "../utils/time";
 
 export interface ValidationResult {
   ok: boolean;
@@ -65,4 +66,35 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
     if (!topic.description.trim()) reasons.push(`${label} description is empty`);
   });
   return { ok: reasons.length === 0, reasons };
+}
+
+export function validateScheduleConfig(settings: PluginSettings): ValidationResult {
+  const reasons: string[] = [];
+  let start: number | null = null;
+  let end: number | null = null;
+  try {
+    start = minutesFromHHMM(settings.schedule.runAtLocal);
+  } catch {
+    reasons.push(`Invalid run window start: ${settings.schedule.runAtLocal}`);
+  }
+  try {
+    end = minutesFromHHMM(settings.schedule.runUntilLocal);
+  } catch {
+    reasons.push(`Invalid run window end: ${settings.schedule.runUntilLocal}`);
+  }
+  if (start != null && end != null && start > end) {
+    reasons.push(
+      "Run window start must be earlier than or equal to the end; overnight windows are not supported",
+    );
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+export function validateSchedulerConfig(settings: PluginSettings): ValidationResult {
+  const filter = validateFilterConfig(settings);
+  const schedule = validateScheduleConfig(settings);
+  return {
+    ok: filter.ok && schedule.ok,
+    reasons: [...filter.reasons, ...schedule.reasons],
+  };
 }

@@ -21,6 +21,12 @@ export class NodeStorageAdapter implements StorageAdapter {
     await fs.writeFile(this.toFsPath(storagePath), content, "utf8");
   }
 
+  async appendText(storagePath: string, content: string): Promise<void> {
+    const target = this.toFsPath(storagePath);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.appendFile(target, content, "utf8");
+  }
+
   async exists(storagePath: string): Promise<boolean> {
     try {
       await fs.stat(this.toFsPath(storagePath));

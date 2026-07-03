@@ -12,9 +12,15 @@ export interface ArxivFetcherOptions {
   requestDelayMs: number;
 }
 
-export class ArxivFetcher {
-  private lastRequestAt = 0;
+interface HttpStatusError extends Error {
+  status?: number;
+  headers?: Record<string, string>;
+}
 
+let sharedLastRequestAt = 0;
+let sharedDelayQueue: Promise<void> = Promise.resolve();
+
+export class ArxivFetcher {
   constructor(private opts: ArxivFetcherOptions) {}
 
   /** Fetch the /list/<cat>/recent page with show=2000 to capture all 5 days in one shot. */
@@ -125,16 +131,15 @@ export class ArxivFetcher {
           return res.bodyText;
         }
         if (opts.allow404 && res.status === 404) {
-          const e: any = new Error(`HTTP 404: ${url}`);
-          e.status = 404;
-          throw e;
+          throw httpStatusError(res.status, url, res.headers);
         }
-        throw new Error(`HTTP ${res.status}: ${url}`);
+        throw httpStatusError(res.status, url, res.headers);
       },
       {
         maxAttempts: 3,
         baseDelayMs: 2000,
         shouldRetry: (err: any) => err?.status !== 404,
+        delayMs: arxivRetryDelayMs,
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,
@@ -158,9 +163,7 @@ export class ArxivFetcher {
           responseType: "arrayBuffer",
         });
         if (res.status < 200 || res.status >= 300) {
-          const e: any = new Error(`HTTP ${res.status}: ${url}`);
-          e.status = res.status;
-          throw e;
+          throw httpStatusError(res.status, url, res.headers);
         }
         if (!res.bodyBuffer) {
           throw new Error(`empty binary response: ${url}`);
@@ -172,6 +175,7 @@ export class ArxivFetcher {
         maxAttempts: 3,
         baseDelayMs: 2000,
         shouldRetry: (err: any) => !(opts.allow404 && err?.status === 404),
+        delayMs: arxivRetryDelayMs,
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,
@@ -181,13 +185,71 @@ export class ArxivFetcher {
   }
 
   private async respectDelay() {
-    const elapsed = Date.now() - this.lastRequestAt;
-    const wait = this.opts.requestDelayMs - elapsed;
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    this.lastRequestAt = Date.now();
+    const delayMs = Math.max(0, this.opts.requestDelayMs);
+    const next = sharedDelayQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (delayMs > 0) {
+          if (sharedLastRequestAt > Date.now()) sharedLastRequestAt = 0;
+          const elapsed = Math.max(0, Date.now() - sharedLastRequestAt);
+          const wait = delayMs - elapsed;
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        }
+        sharedLastRequestAt = Date.now();
+      });
+    sharedDelayQueue = next.catch(() => undefined);
+    await next;
   }
 
   private primaryCategory(): string {
     return this.opts.categories?.[0] ?? this.opts.category ?? "astro-ph";
   }
+}
+
+function httpStatusError(
+  status: number,
+  url: string,
+  headers: Record<string, string>,
+): HttpStatusError {
+  const error = new Error(`HTTP ${status}: ${url}`) as HttpStatusError;
+  error.status = status;
+  error.headers = headers;
+  return error;
+}
+
+function arxivRetryDelayMs(
+  err: unknown,
+  _attempt: number,
+  defaultWaitMs: number,
+): number {
+  const status = (err as HttpStatusError | undefined)?.status;
+  const headers = (err as HttpStatusError | undefined)?.headers;
+  const retryAfterMs =
+    status === 429 && headers ? parseRetryAfterMs(headers) : null;
+  return jitterDelayMs(retryAfterMs ?? defaultWaitMs);
+}
+
+function parseRetryAfterMs(headers: Record<string, string>): number | null {
+  const value = headerValue(headers, "retry-after")?.trim();
+  if (!value) return null;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return null;
+  return Math.max(0, timestamp - Date.now());
+}
+
+function headerValue(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return undefined;
+}
+
+function jitterDelayMs(delayMs: number): number {
+  const factor = 0.75 + Math.random() * 0.5;
+  return Math.max(0, Math.round(delayMs * factor));
 }

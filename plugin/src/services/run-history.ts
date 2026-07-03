@@ -46,6 +46,14 @@ interface RunHistoryPersistence {
   readLatest(limit: number): Promise<RunHistoryRecord[]>;
 }
 
+export interface RunHistoryStorageOptions {
+  maxBytes?: number;
+  maxRotations?: number;
+}
+
+const DEFAULT_RUN_HISTORY_MAX_BYTES = 512 * 1024;
+const DEFAULT_RUN_HISTORY_MAX_ROTATIONS = 3;
+
 export function deriveRunHistoryStorePaths(
   output: OutputSettings,
   normalizePath: (path: string) => string,
@@ -69,27 +77,51 @@ export class RunHistoryStore {
     storage: StorageAdapter,
     output: OutputSettings,
     logger?: Pick<Logger, "warn">,
+    options: RunHistoryStorageOptions = {},
   ): RunHistoryStore {
     const paths = deriveRunHistoryStorePaths(output, (path) =>
       storage.normalizePath(path),
     );
+    const maxBytes = options.maxBytes ?? DEFAULT_RUN_HISTORY_MAX_BYTES;
+    const maxRotations =
+      options.maxRotations ?? DEFAULT_RUN_HISTORY_MAX_ROTATIONS;
     return new RunHistoryStore(
       {
         append: async (record) => {
           await ensureDirDeep(storage, paths.indexDir);
-          const current = (await storage.exists(paths.runHistoryPath))
+          let current = (await storage.exists(paths.runHistoryPath))
             ? await storage.readText(paths.runHistoryPath)
             : "";
           const prefix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
-          await storage.writeText(
-            paths.runHistoryPath,
-            `${current}${prefix}${JSON.stringify(record)}\n`,
-          );
+          let addition = `${prefix}${JSON.stringify(record)}\n`;
+          if (
+            current.length > 0 &&
+            byteLength(current) + byteLength(addition) > maxBytes
+          ) {
+            await rotateHistoryFiles(
+              storage,
+              paths.runHistoryPath,
+              maxRotations,
+            );
+            current = "";
+            addition = `${JSON.stringify(record)}\n`;
+          }
+          if (storage.appendText) {
+            await storage.appendText(paths.runHistoryPath, addition);
+          } else {
+            await storage.writeText(
+              paths.runHistoryPath,
+              `${current}${addition}`,
+            );
+          }
         },
         readLatest: async (limit) => {
-          if (!(await storage.exists(paths.runHistoryPath))) return [];
-          const raw = await storage.readText(paths.runHistoryPath);
-          return decodeRunHistoryLines(raw)
+          const raw = await readHistoryFiles(
+            storage,
+            paths.runHistoryPath,
+            maxRotations,
+          );
+          return decodeRunHistoryLines(raw.join("\n"))
             .sort((a, b) => b.at.localeCompare(a.at))
             .slice(0, Math.max(0, limit));
         },
@@ -203,4 +235,46 @@ async function ensureDirDeep(
     cur = cur ? `${cur}/${part}` : part;
     if (!(await storage.exists(cur))) await storage.mkdir(cur);
   }
+}
+
+async function readHistoryFiles(
+  storage: StorageAdapter,
+  path: string,
+  maxRotations: number,
+): Promise<string[]> {
+  const raw: string[] = [];
+  if (await storage.exists(path)) raw.push(await storage.readText(path));
+  for (let i = 1; i <= maxRotations; i += 1) {
+    const rotated = `${path}.${i}`;
+    if (await storage.exists(rotated)) raw.push(await storage.readText(rotated));
+  }
+  return raw;
+}
+
+async function rotateHistoryFiles(
+  storage: StorageAdapter,
+  path: string,
+  maxRotations: number,
+): Promise<void> {
+  if (maxRotations <= 0) {
+    await storage.remove(path);
+    return;
+  }
+  await storage.remove(`${path}.${maxRotations}`);
+  for (let i = maxRotations - 1; i >= 1; i -= 1) {
+    const from = `${path}.${i}`;
+    const to = `${path}.${i + 1}`;
+    if (await storage.exists(from)) {
+      await storage.remove(to);
+      await storage.rename(from, to);
+    }
+  }
+  if (await storage.exists(path)) {
+    await storage.remove(`${path}.1`);
+    await storage.rename(path, `${path}.1`);
+  }
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }

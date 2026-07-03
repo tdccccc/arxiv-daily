@@ -296,6 +296,61 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
+  it("returns failed_permanent when the filter LLM call fails with a non-429 4xx", async () => {
+    const d = makeDeps();
+    d.llm.call = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Unauthorized"), { status: 401 }),
+    );
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate(firstDateFromFixture());
+
+    expect(result).toEqual({
+      kind: "failed_permanent",
+      reason: "paper filter LLM failed: Unauthorized",
+    });
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it("continues with papers from successful categories when another category fetch fails", async () => {
+    const d = makeDeps();
+    d.fetcher.fetchRecent = vi.fn(async (category: string) => {
+      if (category === "astro-ph") throw new Error("network down");
+      return recentHtml;
+    });
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: {
+        ...testArxiv,
+        category: "astro-ph",
+        categories: ["astro-ph", "cs.CL"],
+      },
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate(firstDateFromFixture());
+
+    expect(result.kind).toBe("completed");
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("astro-ph");
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("cs.CL");
+  });
+
   it("enriches abstracts and runs filter+summarize for a kept paper", async () => {
     const d = makeDeps();
     const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;

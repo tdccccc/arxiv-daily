@@ -5,6 +5,7 @@ export interface RetryOptions {
   baseDelayMs: number;
   backoff?: number;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
+  delayMs?: (err: unknown, attempt: number, defaultWaitMs: number) => number;
   onRetry?: (err: unknown, attempt: number, waitMs: number) => void;
   signal?: AbortSignal;
 }
@@ -21,7 +22,11 @@ export async function retry<T>(fn: () => Promise<T>, opts: RetryOptions): Promis
       if (isCancellationError(err)) throw err;
       if (attempt >= opts.maxAttempts) break;
       if (opts.shouldRetry && !opts.shouldRetry(err, attempt)) break;
-      const wait = opts.baseDelayMs * Math.pow(backoff, attempt - 1);
+      const defaultWait = opts.baseDelayMs * Math.pow(backoff, attempt - 1);
+      const wait = Math.max(
+        0,
+        opts.delayMs?.(err, attempt, defaultWait) ?? defaultWait,
+      );
       opts.onRetry?.(err, attempt, wait);
       await sleep(wait, opts.signal);
     }

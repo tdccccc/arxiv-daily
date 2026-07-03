@@ -6,6 +6,7 @@ import type { HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
+export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
 
 export interface ChatMessage {
@@ -17,6 +18,10 @@ export interface CallOptions {
   /** Overrides default temperature. Ignored when thinkingMode = true. */
   temperature?: number;
   signal?: AbortSignal;
+}
+
+interface LlmStatusError extends Error {
+  status?: number;
 }
 
 const KNOWN_MODEL_BASE_SUFFIXES = [
@@ -201,23 +206,29 @@ export class LlmClient {
         } else {
           params.temperature = opts.temperature ?? LLM_TEMPERATURE;
         }
-        const stream = await this.client.chat.completions.create(params as any, {
-          signal: opts.signal,
-        } as any);
-        const chunks: string[] = [];
-        for await (const chunk of stream as any) {
+        const abort = createAttemptAbortController(opts.signal);
+        try {
+          const stream = await this.client.chat.completions.create(params as any, {
+            signal: abort.controller.signal,
+          } as any);
+          const content = await collectStreamWithIdleTimeout(
+            stream as unknown as AsyncIterable<unknown>,
+            abort.controller,
+            LLM_STREAM_IDLE_TIMEOUT_MS,
+            opts.signal,
+          );
           throwIfCancelled(opts.signal);
-          const delta = chunk.choices?.[0]?.delta?.content;
-          if (delta) chunks.push(delta);
+          return content;
+        } finally {
+          abort.cleanup();
         }
-        throwIfCancelled(opts.signal);
-        return chunks.join("");
       },
       {
         maxAttempts: 3,
         baseDelayMs: 5000,
         signal: opts.signal,
-        shouldRetry: (err) => !isCancellationError(err),
+        shouldRetry: (err) =>
+          !isCancellationError(err) && !isPermanentLlmError(err),
         onRetry: (err, attempt, wait) =>
           this.logger.warn(
             `LLM retry #${attempt} after ${wait}ms: ${(err as Error).message}`,
@@ -225,4 +236,101 @@ export class LlmClient {
       },
     );
   }
+}
+
+export function isPermanentLlmError(err: unknown): boolean {
+  const status = (err as LlmStatusError | undefined)?.status;
+  return (
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 429
+  );
+}
+
+export async function collectStreamWithIdleTimeout(
+  stream: AsyncIterable<unknown>,
+  controller: AbortController,
+  idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<string> {
+  const chunks: string[] = [];
+  const iterator = stream[Symbol.asyncIterator]();
+  while (true) {
+    throwIfCancelled(signal);
+    const next = await nextStreamChunk(iterator, controller, idleTimeoutMs, signal);
+    if (next.done) break;
+    throwIfCancelled(signal);
+    const delta = streamDeltaContent(next.value);
+    if (delta) chunks.push(delta);
+  }
+  throwIfCancelled(signal);
+  return chunks.join("");
+}
+
+function nextStreamChunk(
+  iterator: AsyncIterator<unknown>,
+  controller: AbortController,
+  idleTimeoutMs: number,
+  signal?: AbortSignal,
+): Promise<IteratorResult<unknown>> {
+  throwIfCancelled(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish();
+      controller.abort("LLM stream idle timeout");
+      reject(new Error("LLM stream idle timeout"));
+    }, idleTimeoutMs);
+    const onAbort = () => {
+      finish();
+      try {
+        throwIfCancelled(signal);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    iterator.next().then(
+      (value) => {
+        finish();
+        resolve(value);
+      },
+      (error) => {
+        finish();
+        reject(error);
+      },
+    );
+  });
+}
+
+function streamDeltaContent(chunk: unknown): string | undefined {
+  const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> })
+    .choices;
+  const content = choices?.[0]?.delta?.content;
+  return typeof content === "string" ? content : undefined;
+}
+
+function createAttemptAbortController(signal?: AbortSignal): {
+  controller: AbortController;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  return {
+    controller,
+    cleanup: () => signal?.removeEventListener("abort", onAbort),
+  };
 }

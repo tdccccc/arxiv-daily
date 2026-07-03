@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { validateLlmConfig, validateFilterConfig } from "../src/settings/validation";
+import {
+  validateLlmConfig,
+  validateFilterConfig,
+  validateScheduleConfig,
+} from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
 
@@ -189,5 +193,20 @@ describe("schedule defaults", () => {
   it("uses a default run window from 09:00 to 18:00", () => {
     expect(DEFAULT_SETTINGS.schedule.runAtLocal).toBe("09:00");
     expect(DEFAULT_SETTINGS.schedule.runUntilLocal).toBe("18:00");
+  });
+
+  it("rejects overnight scheduler windows", () => {
+    const r = validateScheduleConfig(
+      makeSettings({
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          runAtLocal: "22:00",
+          runUntilLocal: "06:00",
+        },
+      }),
+    );
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/run window/i);
   });
 });
