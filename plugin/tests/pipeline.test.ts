@@ -271,6 +271,30 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeEmptyDaily).not.toHaveBeenCalled();
   });
 
+  it("returns failed_transient when the filter LLM call fails", async () => {
+    const d = makeDeps();
+    d.llm.call = vi.fn().mockRejectedValue(new Error("api unavailable"));
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate(firstDateFromFixture());
+
+    expect(result).toEqual({
+      kind: "failed_transient",
+      reason: "paper filter LLM failed: api unavailable",
+    });
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
+  });
+
   it("enriches abstracts and runs filter+summarize for a kept paper", async () => {
     const d = makeDeps();
     const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;

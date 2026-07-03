@@ -206,4 +206,66 @@ describe("StateStore", () => {
     await reloaded.load();
     expect(reloaded.get("2026-06-13").papersWritten).toBe(2);
   });
+
+  it("serializes concurrent storage mutations from separate stores targeting the same path", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": JSON.stringify({
+        schemaVersion: 1,
+        runState: {},
+      }),
+    });
+    const delayedStorage = {
+      ...storage,
+      async readText(path: string) {
+        const content = await storage.readText(path);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return content;
+      },
+    } satisfies StorageAdapter;
+    const storeA = createStorageStateStore(delayedStorage, DEFAULT_SETTINGS.output);
+    const storeB = createStorageStateStore(delayedStorage, DEFAULT_SETTINGS.output);
+
+    await Promise.all([
+      storeA.setRunning("2026-06-13"),
+      storeB.setSkipped("2026-06-14", "user skipped"),
+    ]);
+
+    const saved = JSON.parse(files["arxiv-daily/.index/run-state.json"]);
+    expect(saved.runState["2026-06-13"].status).toBe("running");
+    expect(saved.runState["2026-06-14"].status).toBe("skipped");
+  });
+
+  it("falls back to the backup file when run-state.json is corrupt", async () => {
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": "{not-json",
+      "arxiv-daily/.index/run-state.json.bak": JSON.stringify({
+        runState: {
+          "2026-06-13": {
+            status: "completed",
+            lastAttempt: 1,
+            attempts: 1,
+            papersWritten: 2,
+          },
+        },
+      }),
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.load()).resolves.toBeUndefined();
+
+    expect(store.get("2026-06-13").status).toBe("completed");
+    expect(store.get("2026-06-13").papersWritten).toBe(2);
+  });
+
+  it("falls back to an empty run state when run-state.json and backup are corrupt", async () => {
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": "{not-json",
+      "arxiv-daily/.index/run-state.json.bak": "{also-not-json",
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.load()).resolves.toBeUndefined();
+
+    expect(store.snapshot()).toEqual({});
+  });
 });

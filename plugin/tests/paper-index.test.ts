@@ -297,6 +297,46 @@ describe("PaperIndexStore", () => {
     });
   });
 
+  it("serializes concurrent mutations from separate stores targeting the same path", async () => {
+    const { files, storage } = makeStorage();
+    const seedStore = new PaperIndexStore(
+      storage,
+      DEFAULT_SETTINGS.output,
+      () => new Date("2026-06-11T01:30:00.000Z"),
+    );
+    await seedStore.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+
+    const delayedStorage = {
+      ...storage,
+      async readText(path: string) {
+        const content = await storage.readText(path);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return content;
+      },
+    } satisfies StorageAdapter;
+    const storeA = new PaperIndexStore(delayedStorage, DEFAULT_SETTINGS.output);
+    const storeB = new PaperIndexStore(delayedStorage, DEFAULT_SETTINGS.output);
+
+    await Promise.all([
+      storeA.setPriority("2606.12345", "high"),
+      storeB.setStatus("2606.12345", "saved"),
+    ]);
+
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.papers["2606.12345"]).toMatchObject({
+      priority: "high",
+      status: "saved",
+    });
+  });
+
   it("clears detail metadata without removing the paper entry", async () => {
     const { store } = makeStore();
     await store.upsertFromDailyPaper({

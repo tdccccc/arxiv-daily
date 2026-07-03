@@ -85,6 +85,8 @@ export class PaperIndexError extends Error {
   }
 }
 
+const paperIndexMutationQueues = new Map<string, Promise<unknown>>();
+
 export function derivePaperInboxPaths(
   output: OutputSettings,
   normalizePath: (path: string) => string = normalizeStoragePath,
@@ -164,128 +166,150 @@ export class PaperIndexStore {
     entry: PaperIndexEntry;
     wasNew: boolean;
   }> {
-    const inbox = await this.load();
-    const { entry, wasNew } = upsertEntry(inbox, input);
-    await this.save(inbox);
-    return { entry, wasNew };
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const { entry, wasNew } = upsertEntry(inbox, input);
+      await this.save(inbox);
+      return { entry, wasNew };
+    });
   }
 
   async upsertManyFromDailyPapers(
     inputs: PaperIndexUpsert[],
   ): Promise<Array<{ entry: PaperIndexEntry; wasNew: boolean }>> {
-    const inbox = await this.load();
-    const results = inputs.map((input) => upsertEntry(inbox, input));
-    await this.save(inbox);
-    return results;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const results = inputs.map((input) => upsertEntry(inbox, input));
+      await this.save(inbox);
+      return results;
+    });
   }
 
   async addDailyReports(arxivIds: string[], dailyReport: string): Promise<void> {
-    const inbox = await this.load();
-    for (const arxivId of arxivIds) {
-      const entry = inbox.papers[arxivId];
-      if (!entry) continue;
-      entry.dailyReports = appendUnique(entry.dailyReports, dailyReport);
-    }
-    await this.save(inbox);
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      for (const arxivId of arxivIds) {
+        const entry = inbox.papers[arxivId];
+        if (!entry) continue;
+        entry.dailyReports = appendUnique(entry.dailyReports, dailyReport);
+      }
+      await this.save(inbox);
+    });
   }
 
   async setStatus(arxivId: string, status: PaperStatus): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.status = status;
-    await this.save(inbox);
-    return entry;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return null;
+      entry.status = status;
+      await this.save(inbox);
+      return entry;
+    });
   }
 
   async setPriority(
     arxivId: string,
     priority: PaperPriority,
   ): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.priority = priority;
-    await this.save(inbox);
-    return entry;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return null;
+      entry.priority = priority;
+      await this.save(inbox);
+      return entry;
+    });
   }
 
   async setSummaries(
     summaries: Record<string, PaperSummary>,
   ): Promise<number> {
-    const inbox = await this.load();
-    let changed = 0;
-    for (const [arxivId, summary] of Object.entries(summaries)) {
-      const entry = inbox.papers[arxivId];
-      if (!entry) continue;
-      entry.summary = normalizeSummary(summary);
-      changed += 1;
-    }
-    if (changed > 0) await this.save(inbox);
-    return changed;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      let changed = 0;
+      for (const [arxivId, summary] of Object.entries(summaries)) {
+        const entry = inbox.papers[arxivId];
+        if (!entry) continue;
+        entry.summary = normalizeSummary(summary);
+        changed += 1;
+      }
+      if (changed > 0) await this.save(inbox);
+      return changed;
+    });
   }
 
   async setPaperPath(arxivId: string, paperPath: string): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.paperPath = this.storage.normalizePath(paperPath);
-    entry.detail = true;
-    await this.save(inbox);
-    return entry;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return null;
+      entry.paperPath = this.storage.normalizePath(paperPath);
+      entry.detail = true;
+      await this.save(inbox);
+      return entry;
+    });
   }
 
   async clearPaperDetails(arxivIds: string[]): Promise<number> {
-    const inbox = await this.load();
-    let changed = 0;
-    for (const arxivId of uniqueStrings(arxivIds)) {
-      const entry = inbox.papers[arxivId];
-      if (!entry || (!entry.detail && entry.paperPath == null)) continue;
-      entry.detail = false;
-      entry.paperPath = null;
-      changed += 1;
-    }
-    if (changed > 0) await this.save(inbox);
-    return changed;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      let changed = 0;
+      for (const arxivId of uniqueStrings(arxivIds)) {
+        const entry = inbox.papers[arxivId];
+        if (!entry || (!entry.detail && entry.paperPath == null)) continue;
+        entry.detail = false;
+        entry.paperPath = null;
+        changed += 1;
+      }
+      if (changed > 0) await this.save(inbox);
+      return changed;
+    });
   }
 
   async removePapers(arxivIds: string[]): Promise<number> {
-    const inbox = await this.load();
-    let changed = 0;
-    for (const arxivId of uniqueStrings(arxivIds)) {
-      if (!(arxivId in inbox.papers)) continue;
-      delete inbox.papers[arxivId];
-      changed += 1;
-    }
-    if (changed > 0) await this.save(inbox);
-    return changed;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      let changed = 0;
+      for (const arxivId of uniqueStrings(arxivIds)) {
+        if (!(arxivId in inbox.papers)) continue;
+        delete inbox.papers[arxivId];
+        changed += 1;
+      }
+      if (changed > 0) await this.save(inbox);
+      return changed;
+    });
   }
 
   async setPdfPath(
     arxivId: string,
     pdfPath: string,
   ): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.pdfPath = this.storage.normalizePath(pdfPath);
-    await this.save(inbox);
-    return entry;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return null;
+      entry.pdfPath = this.storage.normalizePath(pdfPath);
+      await this.save(inbox);
+      return entry;
+    });
   }
 
   async addProject(
     arxivId: string,
     projectPath: string,
   ): Promise<PaperIndexEntry | null> {
-    const inbox = await this.load();
-    const entry = inbox.papers[arxivId];
-    if (!entry) return null;
-    entry.projects = appendUnique(
-      entry.projects,
-      normalizeStoragePath(projectPath),
-    );
-    await this.save(inbox);
-    return entry;
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return null;
+      entry.projects = appendUnique(
+        entry.projects,
+        normalizeStoragePath(projectPath),
+      );
+      await this.save(inbox);
+      return entry;
+    });
   }
 
   async get(arxivId: string): Promise<PaperIndexEntry | null> {
@@ -336,6 +360,14 @@ export class PaperIndexStore {
     }
   }
 
+  private enqueueMutation<T>(job: () => Promise<T>): Promise<T> {
+    return enqueuePathMutation(
+      paperIndexMutationQueues,
+      this.paths.papersJsonPath,
+      job,
+    );
+  }
+
   private async writeAtomic(path: string, content: string): Promise<void> {
     const tmp = `${path}.tmp`;
     const bak = `${path}.bak`;
@@ -359,6 +391,18 @@ export class PaperIndexStore {
       throw new PaperIndexError(`failed to save paper index: ${path}`, e);
     }
   }
+}
+
+function enqueuePathMutation<T>(
+  queues: Map<string, Promise<unknown>>,
+  key: string,
+  job: () => Promise<T>,
+): Promise<T> {
+  const next = (queues.get(key) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(job);
+  queues.set(key, next.catch(() => undefined));
+  return next;
 }
 
 function emptyInbox(now: Date): PaperInbox {

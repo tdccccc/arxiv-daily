@@ -145,12 +145,21 @@ export class ArxivPipeline {
     // 5. LLM filter
     stageStart("filter");
     this.progress.setStage("filter");
-    const filtered = await filterPapers(sourcePapers, {
-      llm: this.deps.llm,
-      logger,
-      arxivSettings: this.deps.arxiv,
-      signal,
-    });
+    let filtered: FilteredPaper[];
+    try {
+      filtered = await filterPapers(sourcePapers, {
+        llm: this.deps.llm,
+        logger,
+        arxivSettings: this.deps.arxiv,
+        signal,
+      });
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      return {
+        kind: "failed_transient",
+        reason: `paper filter LLM failed: ${(e as Error).message}`,
+      };
+    }
     throwIfCancelled(signal);
     stageEnd("filter", ` (${filtered.length}/${sourcePapers.length} kept)`);
     if (filtered.length === 0) {

@@ -69,7 +69,7 @@ export async function filterPapers(
   } catch (e) {
     if (isCancellationError(e)) throw e;
     logger.error("paper-filter: LLM call failed", e);
-    return [];
+    throw e;
   }
   throwIfCancelled(deps.signal);
 
