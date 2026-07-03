@@ -159,6 +159,37 @@ describe("SchedulerService", () => {
     expect(recentDates.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("does not refresh recent dates when today is already done", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    await store.setCompleted("2026-05-11", 5);
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const runForDate = vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "09:00",
+          runUntilLocal: "18:00",
+        },
+      }),
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"), // 13:00 Shanghai, inside window
+      recentDates,
+    });
+
+    await svc.tick();
+
+    expect(recentDates.refresh).not.toHaveBeenCalled();
+    expect(runForDate).not.toHaveBeenCalled();
+  });
+
   it("scheduled tick skips weekend dates in the lookback window", async () => {
     const store = makeStore();
     await store.load();

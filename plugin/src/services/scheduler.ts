@@ -105,6 +105,15 @@ export class SchedulerService {
       return;
     }
 
+    // Today's report is already generated (or finalized). Stay idle for the
+    // remainder of the run window to avoid re-querying arxiv on every tick;
+    // lookback dates for prior days are handled by the per-date isDone check
+    // below and are not gated on the recent-dates refresh in this path.
+    if (this.deps.store.isDone(today)) {
+      this.progress.setIdle(this.latestCompleted());
+      return;
+    }
+
     await this.deps.recentDates?.refresh();
 
     for (let i = 0; i < LOOKBACK_DAYS; i++) {
