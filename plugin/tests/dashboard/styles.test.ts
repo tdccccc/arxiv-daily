@@ -45,4 +45,19 @@ describe("dashboard and settings styles", () => {
       /\.arxiv-daily-dashboard__calendar-day\.is-runnable \.arxiv-daily-dashboard__calendar-day-icon svg\s*\{[^}]*width:\s*12px;[^}]*height:\s*12px;/s,
     );
   });
+
+  it("keeps calendar marker text at least 11px and readable", () => {
+    expect(styles).toMatch(
+      /\.arxiv-daily-dashboard__calendar-day\.no-relevant-papers\s*\{[^}]*font-size:\s*11px;[^}]*opacity:\s*0\.85;/s,
+    );
+    expect(styles).toMatch(
+      /\.arxiv-daily-dashboard__calendar-day-count\s*\{[^}]*font-size:\s*11px;/s,
+    );
+  });
+
+  it("does not disable text selection inside dashboard inputs", () => {
+    expect(styles).not.toMatch(
+      /\.arxiv-daily-dashboard button,\s*\.arxiv-daily-dashboard input,\s*\.arxiv-daily-dashboard select\s*\{[^}]*user-select:\s*none;/s,
+    );
+  });
 });

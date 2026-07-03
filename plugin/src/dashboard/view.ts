@@ -30,6 +30,12 @@ import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { buildDiagnosticsReport } from "../services/diagnostics";
 import { formatRunHistoryRecords } from "../services/run-history";
+import { LOOKBACK_DAYS } from "../services/scheduling/constants";
+import {
+  describeManualResult,
+  describeResult,
+  describeRunResults,
+} from "../run-format";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
@@ -173,6 +179,13 @@ export interface CalendarDailyReportMapInput {
   normalizePath: (path: string) => string;
 }
 
+interface AppWithSettingsApi extends App {
+  setting?: {
+    open?: () => void;
+    openTabById?: (id: string) => void;
+  };
+}
+
 export function resolveCalendarEmptyReason(
   input: CalendarEmptyReasonInput,
 ): CalendarEmptyReason {
@@ -216,6 +229,30 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
   }
 
   return undefined;
+}
+
+export function applyEmptyCalendarCellA11y(button: HTMLButtonElement): void {
+  button.disabled = true;
+  button.setAttribute("tabindex", "-1");
+  button.setAttribute("aria-hidden", "true");
+}
+
+export function dashboardHeaderStatusText(input: {
+  isRunning: boolean;
+  lastCompletedDate?: string;
+}): string {
+  if (input.isRunning) return "Running…";
+  return `Last run: ${input.lastCompletedDate ?? "never"}`;
+}
+
+export function latestCompletedRunDate(
+  runState: Record<string, RunStateEntry | undefined>,
+): string | undefined {
+  const completed = Object.entries(runState)
+    .filter(([, entry]) => entry?.status === "completed")
+    .map(([date]) => date)
+    .sort();
+  return completed[completed.length - 1];
 }
 
 export function collectIndexedDetailSummaryRefs(
@@ -594,7 +631,7 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderHeader(contentEl);
     contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__state",
-      text: "Loading...",
+      text: "Loading…",
     });
   }
 
@@ -605,6 +642,7 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderHeader(contentEl);
 
     if (this.error) {
+      this.renderErrorToolbar(contentEl);
       contentEl.createEl("div", {
         cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__state--error",
         text: `Failed to load paper index: ${this.error}`,
@@ -633,7 +671,7 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.batchEl = contentEl.createEl("div");
     this.resultsEl = contentEl.createEl("div");
-    this.renderCurrentResults();
+    this.renderCurrentResults(result);
   }
 
   private renderRecentDatesNotice(contentEl: HTMLElement): void {
@@ -644,11 +682,15 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
-  private renderCurrentResults(): void {
+  private renderCurrentResults(
+    precomputed?: ReturnType<typeof queryDashboard>,
+  ): void {
     if (!this.statsEl || !this.batchEl || !this.resultsEl) return;
-    const result = queryDashboard(this.entries, this.query, {
-      detailSummaryIds: this.detailSummaryIds,
-    });
+    const result =
+      precomputed ??
+      queryDashboard(this.entries, this.query, {
+        detailSummaryIds: this.detailSummaryIds,
+      });
     this.statsEl.empty();
     this.batchEl.empty();
     this.resultsEl.empty();
@@ -810,13 +852,13 @@ class ArxivDailyDashboardView extends ItemView {
 
   private openSettings(): void {
     this.plugin.logger.info("dashboard: open settings requested");
-    const settings = (this.plugin.app as any).setting;
+    const settings = (this.plugin.app as AppWithSettingsApi).setting;
     if (settings?.open && settings?.openTabById) {
       settings.open();
       settings.openTabById(this.plugin.manifest.id);
       return;
     }
-    this.notice("Open Settings -> Community plugins -> arXiv Daily.");
+    this.notice("Open Settings → Community plugins → arXiv Daily.");
   }
 
   private createSettingsButton(parent: HTMLElement): void {
@@ -827,7 +869,38 @@ class ArxivDailyDashboardView extends ItemView {
     const header = contentEl.createEl("div", {
       cls: "arxiv-daily-dashboard__header",
     });
-    header.createEl("h2", { text: "arXiv Daily Dashboard" });
+    const titleGroup = header.createEl("div", {
+      cls: "arxiv-daily-dashboard__header-main",
+    });
+    titleGroup.createEl("h2", { text: "arXiv Daily Dashboard" });
+    titleGroup.createEl("div", {
+      cls: "arxiv-daily-dashboard__status-line",
+      text: dashboardHeaderStatusText({
+        isRunning: this.plugin.scheduler.activeRuns().length > 0,
+        lastCompletedDate: latestCompletedRunDate(
+          this.plugin.stateStore.snapshot(),
+        ),
+      }),
+    });
+  }
+
+  private renderErrorToolbar(contentEl: HTMLElement): void {
+    const toolbar = contentEl.createEl("div", {
+      cls: "arxiv-daily-dashboard__toolbar arxiv-daily-dashboard__toolbar--error",
+    });
+    const actions = toolbar.createEl("div", {
+      cls: "arxiv-daily-dashboard__toolbar-actions",
+    });
+    this.createToolbarButton(
+      actions,
+      "refresh-cw",
+      "Retry",
+      "Retry loading dashboard",
+      (button) => {
+        void this.runControlAction(button, () => this.reloadIndex());
+      },
+    );
+    this.createSettingsButton(actions);
   }
 
   private renderToolbar(
@@ -847,6 +920,7 @@ class ArxivDailyDashboardView extends ItemView {
         attr: {
           type: "button",
           "aria-pressed": String(tab.id === active),
+          "data-tab": tab.id,
         },
       });
       if (tab.id === active) button.addClass("is-active");
@@ -858,7 +932,8 @@ class ArxivDailyDashboardView extends ItemView {
       button.addEventListener("click", () => {
         this.query = { ...this.query, tab: tab.id };
         this.currentPage = 0;
-        this.render();
+        this.updateTabButtonState(tabs);
+        this.renderCurrentResults();
       });
     }
     this.renderToolbarFilter(
@@ -917,6 +992,20 @@ class ArxivDailyDashboardView extends ItemView {
       (_button, evt) => this.showMoreMenu(evt),
     );
     this.createSettingsButton(actions);
+  }
+
+  private updateTabButtonState(tabs: HTMLElement): void {
+    const active = this.query.tab ?? "starred";
+    const buttons = Array.from(
+      tabs.querySelectorAll<HTMLButtonElement>(
+        ".arxiv-daily-dashboard__tab",
+      ),
+    );
+    for (const button of buttons) {
+      const isActive = button.getAttribute("data-tab") === active;
+      button.toggleClass("is-active", isActive);
+      button.setAttribute("aria-pressed", String(isActive));
+    }
   }
 
   private renderDailyCalendar(contentEl: HTMLElement): void {
@@ -1008,7 +1097,7 @@ class ArxivDailyDashboardView extends ItemView {
       if (ariaLabel) button.setAttribute("aria-label", ariaLabel);
 
       if (!cell.date) {
-        button.disabled = true;
+        applyEmptyCalendarCellA11y(button);
         button.addClass("is-empty");
         continue;
       }
@@ -1080,9 +1169,8 @@ class ArxivDailyDashboardView extends ItemView {
   private getLookbackDates(): Set<string> {
     const dates = new Set<string>();
     const today = todayInTz(new Date(), this.plugin.settings.arxiv.timezone);
-    const lookbackDays = 5; // LOOKBACK_DAYS from scheduler.ts
 
-    for (let i = 0; i < lookbackDays; i++) {
+    for (let i = 0; i < LOOKBACK_DAYS; i++) {
       const date = daysBefore(today, i);
       if (!isWeekendDate(date)) {
         dates.add(formatDate(date));
@@ -1435,7 +1523,9 @@ class ArxivDailyDashboardView extends ItemView {
     });
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
-    const selectAllCell = headRow.createEl("th");
+    const selectAllCell = headRow.createEl("th", {
+      attr: { scope: "col" },
+    });
     const selectAll = selectAllCell.createEl("input", {
       attr: {
         type: "checkbox",
@@ -1453,7 +1543,13 @@ class ArxivDailyDashboardView extends ItemView {
         if (selectAll.checked) this.selectedIds.add(id);
         else this.selectedIds.delete(id);
       }
-      this.renderCurrentResults();
+      for (const checkbox of Array.from(
+        tbody.querySelectorAll<HTMLInputElement>("input[type='checkbox']"),
+      )) {
+        checkbox.checked = selectAll.checked;
+      }
+      this.updateVisibleSelectionControls(selectAll, visibleIds);
+      this.refreshBatchControlsForCurrentPage();
     });
 
     for (const label of [
@@ -1463,7 +1559,7 @@ class ArxivDailyDashboardView extends ItemView {
       "Published",
       "Actions",
     ]) {
-      headRow.createEl("th", { text: label });
+      headRow.createEl("th", { text: label, attr: { scope: "col" } });
     }
 
     const tbody = table.createEl("tbody");
@@ -1480,7 +1576,8 @@ class ArxivDailyDashboardView extends ItemView {
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) this.selectedIds.add(row.arxivId);
         else this.selectedIds.delete(row.arxivId);
-        this.renderCurrentResults();
+        this.updateVisibleSelectionControls(selectAll, visibleIds);
+        this.refreshBatchControlsForCurrentPage();
       });
 
       const markCell = tr.createEl("td");
@@ -1536,6 +1633,32 @@ class ArxivDailyDashboardView extends ItemView {
         );
       });
     }
+  }
+
+  private updateVisibleSelectionControls(
+    selectAll: HTMLInputElement,
+    visibleIds: string[],
+  ): void {
+    const selectedVisible = visibleIds.filter((id) => this.selectedIds.has(id));
+    selectAll.checked =
+      visibleIds.length > 0 && selectedVisible.length === visibleIds.length;
+    selectAll.indeterminate =
+      selectedVisible.length > 0 && selectedVisible.length < visibleIds.length;
+  }
+
+  private refreshBatchControlsForCurrentPage(): void {
+    if (!this.batchEl) return;
+    const result = queryDashboard(this.entries, this.query, {
+      detailSummaryIds: this.detailSummaryIds,
+    });
+    const page = paginateDashboardRows(
+      result.rows,
+      this.currentPage,
+      this.pageSize,
+    );
+    this.currentPage = page.currentPage;
+    this.batchEl.empty();
+    this.renderBatchControls(this.batchEl, page);
   }
 
   private renderBatchControls(
@@ -1771,10 +1894,10 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
-    this.addCommandMenuItem(menu, "Run for date...", "calendar", "arxiv-daily-run-for-date");
+    this.addCommandMenuItem(menu, "Run for date…", "calendar", "arxiv-daily-run-for-date");
     this.addCommandMenuItem(
       menu,
-      "Force run for date...",
+      "Force run for date…",
       "rotate-cw",
       "arxiv-daily-force-run-for-date",
     );
@@ -1816,7 +1939,7 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.addCommandMenuItem(
       menu,
-      "Clear run state...",
+      "Clear run state…",
       "trash-2",
       "arxiv-daily-clear-run-state",
     );
@@ -1922,7 +2045,7 @@ class ArxivDailyDashboardView extends ItemView {
         `dashboard: filter validation failed (${validation.reasons.join("; ")})`,
       );
       this.notice(
-        `arXiv Daily - cannot run:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
+        `arXiv Daily — cannot run:\n${validation.reasons.map((reason) => `• ${reason}`).join("\n")}`,
         10_000,
       );
       return false;
@@ -1937,7 +2060,7 @@ class ArxivDailyDashboardView extends ItemView {
         `dashboard: LLM validation failed (${validation.reasons.join("; ")})`,
       );
       this.notice(
-        `arXiv Daily - cannot summarize:\n${validation.reasons.map((reason) => `- ${reason}`).join("\n")}`,
+        `arXiv Daily — cannot summarize:\n${validation.reasons.map((reason) => `• ${reason}`).join("\n")}`,
         10_000,
       );
       return false;
@@ -1949,7 +2072,7 @@ class ArxivDailyDashboardView extends ItemView {
     if (!this.gateFilter()) return;
     const date = this.todayDate();
     this.plugin.logger.info(`dashboard: manual run today requested for ${date}`);
-    this.notice(`arXiv Daily: running for ${date}...`);
+    this.notice(`arXiv Daily: running for ${date}…`);
     await this.plugin.recentDates.refresh();
     const result = await this.plugin.scheduler.runForDateNow(date);
     this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
@@ -1959,7 +2082,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async runAllPending(): Promise<void> {
     if (!this.gateFilter()) return;
     this.plugin.logger.info("dashboard: run all pending requested");
-    this.notice("arXiv Daily: running all pending in lookback...");
+    this.notice("arXiv Daily: running all pending in lookback…");
     await this.plugin.recentDates.refresh();
     const results = await this.plugin.scheduler.runAllPending();
     if (results.length === 0) {
@@ -1973,7 +2096,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async retryFailedInLookback(): Promise<void> {
     if (!this.gateFilter()) return;
     this.plugin.logger.info("dashboard: retry failed dates requested");
-    this.notice("arXiv Daily: retrying failed dates in lookback...");
+    this.notice("arXiv Daily: retrying failed dates in lookback…");
     const results = await this.plugin.scheduler.retryFailedInLookback();
     if (results.length === 0) {
       this.notice("arXiv Daily: no failed dates in lookback window");
@@ -2002,16 +2125,29 @@ class ArxivDailyDashboardView extends ItemView {
     entry: DashboardRow["entry"],
     starred: boolean,
   ): Promise<void> {
+    const previousPriority = entry.priority;
+    entry.priority = starred ? "high" : "normal";
+    this.renderCurrentResults();
     const store = this.plugin.buildPaperIndex();
-    const updated = await store.setPriority(
-      entry.arxivId,
-      starred ? "high" : "normal",
-    );
-    if (!updated) throw new Error(`${entry.arxivId} is not in papers.json`);
+    let updated: DashboardRow["entry"] | null = null;
+    try {
+      updated = await store.setPriority(
+        entry.arxivId,
+        starred ? "high" : "normal",
+      );
+    } catch (e) {
+      entry.priority = previousPriority;
+      this.renderCurrentResults();
+      throw e;
+    }
+    if (!updated) {
+      entry.priority = previousPriority;
+      this.renderCurrentResults();
+      throw new Error(`${entry.arxivId} is not in papers.json`);
+    }
     this.notice(
       `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
     );
-    await this.reloadIndex();
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
@@ -2028,7 +2164,7 @@ class ArxivDailyDashboardView extends ItemView {
   ): Promise<void> {
     if (!this.gateLlm()) return;
     this.plugin.logger.info(`dashboard: summarize detail requested for ${entry.arxivId}`);
-    this.notice(`arXiv Daily: summarizing ${entry.arxivId}...`);
+    this.notice(`arXiv Daily: summarizing ${entry.arxivId}…`);
     const result = await this.plugin.manualFetch.fetchAndSummarize(
       entry.arxivId,
       this.todayDate(),
@@ -2067,7 +2203,7 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
     this.notice(
-      `arXiv Daily: downloaded PDF for ${result.arxivId} -> ${result.path}`,
+      `arXiv Daily: downloaded PDF for ${result.arxivId} → ${result.path}`,
       10_000,
     );
     await this.reloadIndex();
@@ -2300,31 +2436,6 @@ function uniqueCommandIds(ids: string[]): string[] {
   return out;
 }
 
-function describeResult(result: any): string {
-  if (!result) return "no result";
-  if (result.kind === "completed") return `done (${result.papersWritten} papers)`;
-  if (result.kind === "failed_transient") return `transient: ${result.reason}`;
-  if (result.kind === "failed_permanent") return `permanent: ${result.reason}`;
-  if (result.kind === "skipped") return `skipped: ${result.reason}`;
-  return JSON.stringify(result);
-}
-
-function describeManualResult(result: any): string {
-  if (!result) return "no result";
-  if (result.kind === "done") return `done -> ${result.path}`;
-  if (result.kind === "already_exists") return `already exists at ${result.path}`;
-  if (result.kind === "not_found") return `not found: ${result.reason}`;
-  if (result.kind === "no_html") return `no full text: ${result.reason}`;
-  if (result.kind === "error") return `error: ${result.reason}`;
-  return JSON.stringify(result);
-}
-
-function describeRunResults(results: Array<{ date: string; result: any }>): string {
-  return results
-    .map((entry) => `${entry.date}: ${describeResult(entry.result)}`)
-    .join("\n");
-}
-
 function recentDatesFallbackNotice(refreshedAt: number): string {
   if (!refreshedAt) {
     return "arXiv recent dates are still refreshing in the background.";
@@ -2502,6 +2613,7 @@ class HubModal extends Modal {
     contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
 
     const tabs = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__tabs" });
+    tabs.setAttribute("role", "tablist");
     const body = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__body" });
 
     this.createPanel(tabs, body, "logs", "Logs");
@@ -2566,7 +2678,8 @@ class HubModal extends Modal {
       text: label,
       attr: {
         type: "button",
-        "aria-pressed": "false",
+        role: "tab",
+        "aria-selected": "false",
       },
     }) as HTMLButtonElement;
     button.addEventListener("click", () => {
@@ -2577,6 +2690,7 @@ class HubModal extends Modal {
     const content = body.createEl("pre", {
       cls: "arxiv-daily-hub-modal__panel",
     }) as HTMLPreElement;
+    content.setAttribute("role", "tabpanel");
     content.style.userSelect = "text";
     content.style.cursor = "text";
     this.panels.set(tab, { button, content, text: "" });
@@ -2587,7 +2701,7 @@ class HubModal extends Modal {
     for (const [id, panel] of this.panels) {
       const active = id === tab;
       panel.button.toggleClass("hub-modal-tab-active", active);
-      panel.button.setAttribute("aria-pressed", String(active));
+      panel.button.setAttribute("aria-selected", String(active));
       panel.content.toggleClass("is-active", active);
     }
     this.setLevelRowVisibility();
@@ -2642,7 +2756,7 @@ class HubModal extends Modal {
       );
       return;
     }
-    this.setPanelText(tab, tab === "history" ? "Loading run history..." : tab === "state" ? "Loading run state..." : "Loading diagnostics...");
+    this.setPanelText(tab, tab === "history" ? "Loading run history…" : tab === "state" ? "Loading run state…" : "Loading diagnostics…");
     if (tab === "history") {
       void this.loadRunHistory();
     } else if (tab === "state") {

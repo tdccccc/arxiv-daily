@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   appendSettingsButton,
+  applyEmptyCalendarCellA11y,
   calendarCellAriaLabel,
+  dashboardHeaderStatusText,
   type CalendarCell,
   type CalendarCellState,
 } from "../../src/dashboard/view";
@@ -145,5 +147,28 @@ describe("Dashboard Integration", () => {
       report: { date: "2026-06-19", path: "arxiv-daily/daily/2026-06-19.md", papers: 5, starred: 2 },
     };
     expect(calendarCellAriaLabel(cell)).toBe("5 indexed papers, 2 starred");
+  });
+
+  it("should make empty calendar cells unfocusable and hidden from assistive tech", () => {
+    const button = document.createElement("button");
+
+    applyEmptyCalendarCellA11y(button);
+
+    expect(button.getAttribute("tabindex")).toBe("-1");
+    expect(button.getAttribute("aria-hidden")).toBe("true");
+    expect(button.disabled).toBe(true);
+  });
+
+  it("should describe running and last-run dashboard header states", () => {
+    expect(dashboardHeaderStatusText({ isRunning: true })).toBe("Running…");
+    expect(
+      dashboardHeaderStatusText({
+        isRunning: false,
+        lastCompletedDate: "2026-06-24",
+      }),
+    ).toBe("Last run: 2026-06-24");
+    expect(dashboardHeaderStatusText({ isRunning: false })).toBe(
+      "Last run: never",
+    );
   });
 });

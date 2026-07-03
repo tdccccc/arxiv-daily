@@ -96,6 +96,23 @@ describe("StatusBarController", () => {
     expect(panel?.textContent).toContain("detail summary");
   });
 
+  it("sets progressbar aria value attributes as progress changes", async () => {
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+    ctrl.setBatch(1, 1, "2026-05-11");
+    ctrl.setStage("fetch-content", 2, 4);
+
+    const progress = document.body.querySelector(
+      ".arxiv-daily-progress__track",
+    );
+    expect(progress?.getAttribute("role")).toBe("progressbar");
+    expect(progress?.getAttribute("aria-valuemin")).toBe("0");
+    expect(progress?.getAttribute("aria-valuemax")).toBe("100");
+    expect(progress?.getAttribute("aria-valuenow")).toBe("56");
+  });
+
   it("keeps completion panel visible when setIdle follows setComplete", async () => {
     vi.useFakeTimers();
     const store = makeStore();

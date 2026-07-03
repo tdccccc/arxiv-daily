@@ -52,6 +52,7 @@ export class StatusBarController implements ProgressReporter {
   private panelTitle: HTMLElement | null = null;
   private panelDetail: HTMLElement | null = null;
   private panelFill: HTMLElement | null = null;
+  private panelTrack: HTMLElement | null = null;
   private panelPercent: HTMLElement | null = null;
   private panelState: "running" | "complete" | "error" | null = null;
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -208,6 +209,9 @@ export class StatusBarController implements ProgressReporter {
     const normalized = clamp(percent, 0, 100);
     this.panelFill!.style.width = `${normalized}%`;
     this.panelPercent!.textContent = `${normalized}%`;
+    this.panelTrack!.setAttribute("aria-valuemin", "0");
+    this.panelTrack!.setAttribute("aria-valuemax", "100");
+    this.panelTrack!.setAttribute("aria-valuenow", String(normalized));
     panel.classList.remove("is-hidden");
   }
 
@@ -227,6 +231,10 @@ export class StatusBarController implements ProgressReporter {
     const track = document.createElement("div");
     track.className = "arxiv-daily-progress__track";
     track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    track.setAttribute("aria-valuenow", "0");
+    this.panelTrack = track;
     this.panelFill = document.createElement("div");
     this.panelFill.className = "arxiv-daily-progress__fill";
     header.append(this.panelTitle, this.panelPercent);

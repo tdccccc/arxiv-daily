@@ -325,9 +325,7 @@
   user-select: text;
 }
 
-.arxiv-daily-dashboard button,
-.arxiv-daily-dashboard input,
-.arxiv-daily-dashboard select {
+.arxiv-daily-dashboard button {
   user-select: none;
 }
 
@@ -344,6 +342,17 @@
   font-size: 1.25rem;
   font-weight: var(--font-semibold);
   line-height: 1.2;
+}
+
+.arxiv-daily-dashboard__header-main {
+  min-width: 0;
+}
+
+.arxiv-daily-dashboard__status-line {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.25;
 }
 
 .arxiv-daily-dashboard__settings-btn {
@@ -567,8 +576,8 @@
 
 .arxiv-daily-dashboard__calendar-day.no-relevant-papers {
   color: var(--text-muted);
-  font-size: 10px;
-  opacity: 0.7;
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 .arxiv-daily-dashboard__calendar-day.is-today {
@@ -632,7 +641,7 @@
   right: 4px;
   bottom: 2px;
   color: var(--text-accent);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1;
 }
 
