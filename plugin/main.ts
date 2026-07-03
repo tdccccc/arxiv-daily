@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS } from "./src/settings/defaults";
 import type { PluginSettings, RunState } from "./src/settings/types";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { migrateArxivSettings } from "./src/settings/migration";
-import { validateFilterConfig } from "./src/settings/validation";
+import { validateSchedulerConfig } from "./src/settings/validation";
 import { Logger } from "./src/services/logger";
 import { createStorageStateStore, type StateStore } from "./src/services/state-store";
 import { RunHistoryStore } from "./src/services/run-history";
@@ -183,7 +183,7 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled === enabled) return true;
 
     if (enabled) {
-      const v = validateFilterConfig(this.settings);
+      const v = validateSchedulerConfig(this.settings);
       if (!v.ok) {
         new Notice(`Cannot enable arXiv Daily:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
         return false;
@@ -209,7 +209,7 @@ export default class ArxivDailyPlugin extends Plugin {
         this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
       } else {
         const result = await this.scheduler.tickToday();
-        if (result && (result as any).kind === "skipped" && (result as any).reason === "weekend") {
+        if (result?.kind === "skipped" && result.reason === "weekend") {
           this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
         }
       }

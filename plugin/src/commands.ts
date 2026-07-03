@@ -19,6 +19,22 @@ import {
 import { openDashboardView } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
 import { formatRunHistoryRecords } from "./services/run-history";
+import {
+  describeManualResult,
+  describeResult,
+  describeRunResults,
+} from "./run-format";
+
+export function bindEnterToButton(
+  input: HTMLInputElement,
+  button: HTMLButtonElement,
+): void {
+  input.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Enter") return;
+    evt.preventDefault();
+    button.click();
+  });
+}
 
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
@@ -238,7 +254,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "arxiv-daily-run-now",
-    name: "Run now (today)",
+    name: "Run Today",
     callback: runToday,
   });
 
@@ -374,31 +390,6 @@ function stateForMark(mark: PaperMark): {
   return { status: "inbox", priority: "normal" };
 }
 
-function describeResult(r: any): string {
-  if (!r) return "no result";
-  if (r.kind === "completed") return `done (${r.papersWritten} papers)`;
-  if (r.kind === "failed_transient") return `transient: ${r.reason}`;
-  if (r.kind === "failed_permanent") return `permanent: ${r.reason}`;
-  if (r.kind === "skipped") return `skipped: ${r.reason}`;
-  return JSON.stringify(r);
-}
-
-function describeManualResult(r: any): string {
-  if (!r) return "no result";
-  if (r.kind === "done") return `done → ${r.path}`;
-  if (r.kind === "already_exists") return `already exists at ${r.path}`;
-  if (r.kind === "not_found") return `not found: ${r.reason}`;
-  if (r.kind === "no_html") return `no full text: ${r.reason}`;
-  if (r.kind === "error") return `error: ${r.reason}`;
-  return JSON.stringify(r);
-}
-
-function describeRunResults(
-  results: Array<{ date: string; result: any }>,
-): string {
-  return results.map((r) => `${r.date}: ${describeResult(r.result)}`).join("\n");
-}
-
 class DatePickerModal extends Modal {
   private value = "";
   constructor(
@@ -412,15 +403,19 @@ class DatePickerModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: this.opts.title ?? "Run arXiv Daily for date" });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName("Date")
       .setDesc(this.opts.desc ?? "YYYY-MM-DD (within the past 5 days for arXiv /recent)")
-      .addText((t) =>
+      .addText((t) => {
+        inputEl = t.inputEl;
         t.setPlaceholder("2026-05-10").onChange((v) => {
           this.value = v.trim();
-        }),
-      );
-    new Setting(contentEl).addButton((b) =>
+        });
+      });
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
       b
         .setButtonText(this.opts.buttonText ?? "Run")
         .setCta()
@@ -431,8 +426,9 @@ class DatePickerModal extends Modal {
           }
           this.close();
           this.onSubmit(this.value);
-        }),
-    );
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
     this.contentEl.empty();
@@ -451,15 +447,19 @@ class ArxivIdModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: "Summarize paper by arXiv ID" });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName("arXiv ID or URL")
       .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
-      .addText((t) =>
+      .addText((t) => {
+        inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
           this.value = v.trim();
-        }),
-      );
-    new Setting(contentEl).addButton((b) =>
+        });
+      });
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
       b
         .setButtonText("Summarize")
         .setCta()
@@ -470,8 +470,9 @@ class ArxivIdModal extends Modal {
           }
           this.close();
           this.onSubmit(this.value);
-        }),
-    );
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
     this.contentEl.empty();
@@ -493,15 +494,19 @@ class PaperIdModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: this.title });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName(this.fieldName)
       .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
-      .addText((t) =>
+      .addText((t) => {
+        inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
           this.value = v.trim();
-        }),
-      );
-    new Setting(contentEl).addButton((b) =>
+        });
+      });
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
       b
         .setButtonText(this.buttonText)
         .setCta()
@@ -512,8 +517,9 @@ class PaperIdModal extends Modal {
           }
           this.close();
           this.onSubmit(this.value);
-        }),
-    );
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
     this.contentEl.empty();
@@ -533,14 +539,17 @@ class PaperMarkModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: "Set arXiv Daily paper mark" });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName("arXiv ID or URL")
       .setDesc("Paper must already exist in the internal arXiv Daily paper index")
-      .addText((t) =>
+      .addText((t) => {
+        inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
           this.value = v.trim();
-        }),
-      );
+        });
+      });
     new Setting(contentEl)
       .setName("Mark")
       .addDropdown((d) => {
@@ -549,7 +558,8 @@ class PaperMarkModal extends Modal {
           if (isPaperMark(v)) this.mark = v;
         });
       });
-    new Setting(contentEl).addButton((b) =>
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
       b
         .setButtonText("Set mark")
         .setCta()
@@ -560,8 +570,9 @@ class PaperMarkModal extends Modal {
           }
           this.close();
           this.onSubmit(this.value, this.mark);
-        }),
-    );
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
     this.contentEl.empty();
@@ -607,7 +618,7 @@ class RunHistoryModal extends Modal {
     const textarea = contentEl.createEl("textarea", {
       cls: "arxiv-daily-diagnostics-textarea",
     });
-    textarea.value = "Loading run history...";
+    textarea.value = "Loading run history…";
     textarea.readOnly = true;
     let report = textarea.value;
     void this.plugin.runHistoryStore
@@ -658,7 +669,7 @@ class DiagnosticsModal extends Modal {
     const textarea = contentEl.createEl("textarea", {
       cls: "arxiv-daily-diagnostics-textarea",
     });
-    textarea.value = "Loading diagnostics...";
+    textarea.value = "Loading diagnostics…";
     textarea.readOnly = true;
     let report = textarea.value;
     void collectPaperIndexDiagnostics(this.plugin)
@@ -713,10 +724,9 @@ class DiagnosticsModal extends Modal {
 }
 
 function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
-  const app = plugin.app as any;
-  const file = app.workspace?.getActiveFile?.();
+  const file = plugin.app.workspace.getActiveFile();
   const frontmatter = file
-    ? app.metadataCache?.getFileCache?.(file)?.frontmatter
+    ? plugin.app.metadataCache.getFileCache(file)?.frontmatter
     : null;
   const fromFrontmatter = normalizeArxivId(
     String(frontmatter?.arxiv_id ?? frontmatter?.arxiv ?? ""),
@@ -729,6 +739,12 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
       ? file.name.replace(/\.md$/i, "")
       : "";
   return normalizeArxivId(basename);
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function collectPaperIndexDiagnostics(
@@ -747,7 +763,7 @@ async function collectPaperIndexDiagnostics(
   if (!path) return diag;
   try {
     const raw = JSON.parse(await plugin.app.vault.adapter.read(path));
-    const obj = raw && typeof raw === "object" ? (raw as any) : {};
+    const obj = recordOrEmpty(raw);
     const rawSchemaVersion = obj.schemaVersion;
     const schemaVersion =
       typeof rawSchemaVersion === "number" ? rawSchemaVersion : undefined;
@@ -763,7 +779,7 @@ async function collectPaperIndexDiagnostics(
     const noteArxivIdMismatches: string[] = [];
 
     for (const [id, value] of Object.entries(papers)) {
-      const entry = value && typeof value === "object" ? (value as any) : {};
+      const entry = recordOrEmpty(value);
       const arxivId = stringOr(entry.arxivId, id);
       const status = stringOr(entry.status, "");
       const priority = stringOr(entry.priority, "");

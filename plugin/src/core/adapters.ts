@@ -30,6 +30,7 @@ export interface StorageAdapter {
   normalizePath(path: string): string;
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
+  appendText?(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
   remove(path: string): Promise<void>;

@@ -5,7 +5,7 @@ import { ARXIV_CATEGORIES } from "./arxiv-categories";
 import { TOPIC_TEMPLATES } from "./topic-templates";
 import type { Topic } from "./types";
 import { slugify } from "../utils/slugify";
-import { validateFilterConfig } from "./validation";
+import { validateSchedulerConfig } from "./validation";
 import { arxivCategories } from "./categories";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
@@ -111,7 +111,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.renderSetupGuide(containerEl);
 
     // ─── Config-invalid banner (top) ─────────────────
-    const v = validateFilterConfig(s);
+    const v = validateSchedulerConfig(s);
     if (!v.ok) {
       const banner = containerEl.createDiv({
         cls: "arxiv-daily-settings__invalid-banner",
@@ -194,7 +194,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const fetchModelsButton = modelSetting.addButton((b) => {
       b.setButtonText("Get Models");
       b.onClick(async () => {
-        b.setButtonText("Fetching...");
+        b.setButtonText("Fetching…");
         b.setDisabled(true);
         try {
           const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient());

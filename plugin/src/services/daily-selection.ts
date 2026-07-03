@@ -2,6 +2,7 @@ import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { daysBefore, formatDate, todayInTz } from "../utils/time";
 import type { Logger } from "./logger";
+import { LOOKBACK_DAYS } from "./scheduling/constants";
 import type {
   PaperIndexEntry,
   PaperInbox,
@@ -105,6 +106,7 @@ export class DailySelectionSyncService {
     private opts: {
       storage: StorageAdapter;
       getOutput: () => OutputSettings;
+      // Test-only until this sync service is wired into the plugin lifecycle.
       buildPaperIndex: () => PaperIndexStore;
       logger: Logger;
       debounceMs?: number;
@@ -186,7 +188,6 @@ export class DailySelectionSyncService {
   }
 
   private recentDailyPaths(): string[] {
-    const lookbackDays = 5; // LOOKBACK_DAYS constant
     const timezone = this.opts.getTimezone?.() ?? "UTC";
     const now = this.opts.now?.() ?? new Date();
     const today = todayInTz(now, timezone);
@@ -194,7 +195,7 @@ export class DailySelectionSyncService {
       this.opts.getOutput().dailyDir,
     );
     const paths: string[] = [];
-    for (let i = lookbackDays - 1; i >= 0; i--) {
+    for (let i = LOOKBACK_DAYS - 1; i >= 0; i--) {
       paths.push(
         this.opts.storage.normalizePath(
           `${dailyDir}/${formatDate(daysBefore(today, i))}.md`,

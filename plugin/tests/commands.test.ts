@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { registerCommands } from "../src/commands";
+import { bindEnterToButton, registerCommands } from "../src/commands";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 function makePlugin() {
@@ -58,5 +58,18 @@ describe("registerCommands", () => {
         name: "Show run history",
       }),
     );
+  });
+
+  it("binds Enter in a single-field modal input to the submit button", () => {
+    const input = document.createElement("input");
+    const button = document.createElement("button");
+    const click = vi.spyOn(button, "click");
+
+    bindEnterToButton(input, button);
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+
+    expect(click).toHaveBeenCalledTimes(1);
   });
 });
