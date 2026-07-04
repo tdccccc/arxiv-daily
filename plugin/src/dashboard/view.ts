@@ -448,6 +448,7 @@ class ArxivDailyDashboardView extends ItemView {
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSyncedDailyPaths: Set<string> | null = null;
+  private calendarRefreshSeq = 0;
   private isOpen = false;
 
   constructor(
@@ -614,11 +615,30 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async refreshCalendarDailyReports(month: string): Promise<void> {
-    this.calendarDailyReports = await buildCalendarDailyReportMap({
+    this.calendarDailyReports = await this.buildCalendarDailyReports(month);
+  }
+
+  private async buildCalendarDailyReports(month: string): Promise<Map<string, DailyReportDay>> {
+    return await buildCalendarDailyReportMap({
       month,
       scannedReports: this.dailyReports,
       normalizePath: normalizeVaultPath,
     });
+  }
+
+  private refreshCalendarMonth(month: string): void {
+    const token = ++this.calendarRefreshSeq;
+    this.calendarMonth = month;
+    void this.buildCalendarDailyReports(month)
+      .then((reports) => {
+        if (token !== this.calendarRefreshSeq || this.calendarMonth !== month) return;
+        this.calendarDailyReports = reports;
+        this.render();
+      })
+      .catch((e) => {
+        if (token !== this.calendarRefreshSeq || this.calendarMonth !== month) return;
+        this.plugin.logger.warn("dashboard: calendar month refresh failed", e);
+      });
   }
 
   private renderLoading(): void {
@@ -930,6 +950,7 @@ class ArxivDailyDashboardView extends ItemView {
         this.query = { ...this.query, tab: tab.id };
         this.currentPage = 0;
         this.updateTabButtonState(tabs);
+        this.updateToolbarFilterCounts(tabs);
         this.renderCurrentResults();
       });
     }
@@ -1005,6 +1026,18 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
+  private updateToolbarFilterCounts(tabs: HTMLElement): void {
+    const countEl = tabs.querySelector<HTMLElement>(
+      ".arxiv-daily-dashboard__tab--filter .arxiv-daily-dashboard__tab-count",
+    );
+    if (!countEl) return;
+    countEl.textContent = String(
+      this.countToolbarFilter((entry) =>
+        this.detailSummaryIds.has(entry.arxivId),
+      ),
+    );
+  }
+
   private renderDailyCalendar(contentEl: HTMLElement): void {
     const section = contentEl.createEl("section", {
       cls: "arxiv-daily-dashboard__calendar",
@@ -1057,18 +1090,15 @@ class ArxivDailyDashboardView extends ItemView {
 
     todayButton.disabled = month === todayMonth;
     todayButton.addEventListener("click", () => {
-      this.calendarMonth = todayMonth;
-      void this.refreshCalendarDailyReports(todayMonth).then(() => this.render());
+      this.refreshCalendarMonth(todayMonth);
     });
     prev.addEventListener("click", () => {
       const nextMonth = shiftMonth(month, -1);
-      this.calendarMonth = nextMonth;
-      void this.refreshCalendarDailyReports(nextMonth).then(() => this.render());
+      this.refreshCalendarMonth(nextMonth);
     });
     next.addEventListener("click", () => {
       const nextMonth = shiftMonth(month, 1);
-      this.calendarMonth = nextMonth;
-      void this.refreshCalendarDailyReports(nextMonth).then(() => this.render());
+      this.refreshCalendarMonth(nextMonth);
     });
 
     const weekdays = section.createEl("div", {

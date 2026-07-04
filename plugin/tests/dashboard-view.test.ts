@@ -237,6 +237,23 @@ describe("dashboard star controls", () => {
   });
 });
 
+describe("dashboard render regressions", () => {
+  it("guards overlapping calendar month refreshes with a sequence token", () => {
+    expect(dashboardViewSource).toContain("calendarRefreshSeq");
+    expect(dashboardViewSource).toContain("refreshCalendarMonth");
+    expect(dashboardViewSource).toContain("token !== this.calendarRefreshSeq");
+  });
+
+  it("refreshes toolbar filter counts after tab switches", () => {
+    const renderToolbarBody = dashboardViewSource.match(
+      /private renderToolbar\([\s\S]*?\n  private updateTabButtonState/,
+    )?.[0];
+
+    expect(renderToolbarBody).toBeDefined();
+    expect(renderToolbarBody).toContain("updateToolbarFilterCounts");
+  });
+});
+
 describe("HubModal tabs", () => {
   it("links each tabpanel to its tab button", () => {
     expect(dashboardViewSource).toContain('role: "tab"');

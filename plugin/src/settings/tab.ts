@@ -355,12 +355,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.display();
           };
-          if (s.arxiv.topics.length === 0) {
+          const replacesCategories = categoriesWillChange(categories, [tpl.category]);
+          if (s.arxiv.topics.length === 0 && !replacesCategories) {
             await apply();
             return;
           }
           const confirmed = await this.confirmReplace(
-            `Replace your ${s.arxiv.topics.length} topic(s) with the "${tpl.name}" template?`,
+            quickStartTemplateConfirmMessage(
+              s.arxiv.topics.length,
+              tpl.name,
+              replacesCategories,
+            ),
           );
           if (confirmed) await apply();
         });
@@ -939,13 +944,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.plugin.settings.llm.model = models[0]!;
       this.plugin.saveSettings();
     }
-
-    // Update model when selection changes
-    select.addEventListener("change", async () => {
-      this.plugin.settings.llm.model = select.value;
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-    });
   }
 
   private textareaSetting(
@@ -1006,4 +1004,23 @@ function nextCategoryCandidate(existing: string[]): string {
     }
   }
   return "cs.LG";
+}
+
+function categoriesWillChange(current: string[], next: string[]): boolean {
+  if (current.length !== next.length) return true;
+  return current.some((category, index) => category !== next[index]);
+}
+
+function quickStartTemplateConfirmMessage(
+  topicCount: number,
+  templateName: string,
+  replacesCategories: boolean,
+): string {
+  if (topicCount > 0 && replacesCategories) {
+    return `Replace your ${topicCount} topic(s) and arXiv categories with the "${templateName}" template?`;
+  }
+  if (topicCount > 0) {
+    return `Replace your ${topicCount} topic(s) with the "${templateName}" template?`;
+  }
+  return `Replace your arXiv categories with the "${templateName}" template?`;
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { llmHttpWarning, modelFetchNoticeMessage } from "../src/settings/tab";
+
+const settingsTabSource = readFileSync(
+  resolve(process.cwd(), "src/settings/tab.ts"),
+  "utf-8",
+);
 
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
@@ -41,5 +48,20 @@ describe("llmHttpWarning", () => {
   it("does not warn for HTTPS or invalid partial input", () => {
     expect(llmHttpWarning("https://api.deepseek.com/v1")).toBeNull();
     expect(llmHttpWarning("59.64.32.247:5001/v1")).toBeNull();
+  });
+});
+
+describe("settings tab regressions", () => {
+  it("does not register a second change listener when models are fetched", () => {
+    const showModelDropdownBody = settingsTabSource.match(
+      /private showModelDropdown\([\s\S]*?\n  private textareaSetting/,
+    )?.[0];
+
+    expect(showModelDropdownBody).toBeDefined();
+    expect(showModelDropdownBody).not.toContain('select.addEventListener("change"');
+  });
+
+  it("warns that quick-start templates replace categories", () => {
+    expect(settingsTabSource).toContain("and arXiv categories");
   });
 });
