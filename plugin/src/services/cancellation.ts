@@ -38,6 +38,11 @@ export class RunCancellationService {
   }
 
   begin(date: string, batch?: RunCancellationBatch): AbortSignal {
+    const existing = this.controllers.get(date);
+    if (existing && !existing.controller.signal.aborted) {
+      existing.controller.abort("superseded by a new run for the same date");
+    }
+    if (existing) this.controllers.delete(date);
     const controller = new AbortController();
     this.controllers.set(date, { controller, batchId: batch?.id });
     if (batch?.isCancellationRequested()) {

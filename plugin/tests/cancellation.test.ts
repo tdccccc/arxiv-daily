@@ -49,6 +49,20 @@ describe("RunCancellationService", () => {
     expect(future.aborted).toBe(false);
   });
 
+  it("aborts an existing controller when beginning the same date again", () => {
+    const cancellation = new RunCancellationService();
+    const first = cancellation.begin("2026-05-11");
+    const onAbort = vi.fn();
+    first.addEventListener("abort", onAbort);
+
+    const second = cancellation.begin("2026-05-11");
+
+    expect(first.aborted).toBe(true);
+    expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(second.aborted).toBe(false);
+    expect(cancellation.activeDates()).toEqual(["2026-05-11"]);
+  });
+
   it("allows a later scheduler tick after cancelAll stopped an earlier batch", async () => {
     const cancellation = new RunCancellationService();
     const data: any = { runState: {} };

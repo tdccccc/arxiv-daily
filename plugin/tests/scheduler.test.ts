@@ -159,6 +159,63 @@ describe("SchedulerService", () => {
     expect(recentDates.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("skips overlapping scheduled interval ticks while a previous tick is still running", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    await store.setCompleted("2026-06-19", 1);
+    await store.setCompleted("2026-06-18", 1);
+    let resolveFirstRun:
+      | ((result: { kind: "completed"; papersWritten: number }) => void)
+      | undefined;
+    const runForDate = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ kind: "completed"; papersWritten: number }>((resolve) => {
+            resolveFirstRun = resolve;
+          }),
+      )
+      .mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const recentDates = { refresh: vi.fn(async () => undefined) };
+    const lock = new RunLock();
+    const svc = new SchedulerService({
+      getSettings: () => ({
+        ...DEFAULT_SETTINGS,
+        schedule: {
+          ...DEFAULT_SETTINGS.schedule,
+          enabled: true,
+          runAtLocal: "00:00",
+          runUntilLocal: "23:59",
+          tickIntervalMin: 1,
+        },
+        arxiv: { ...DEFAULT_SETTINGS.arxiv, timezone: "UTC" },
+      }),
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-22T10:00:00Z"),
+      recentDates,
+    });
+
+    try {
+      svc.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(recentDates.refresh).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(recentDates.refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      svc.stop();
+      resolveFirstRun?.({ kind: "completed", papersWritten: 1 });
+      for (let i = 0; i < 20 && lock.isHeld("2026-06-22"); i += 1) {
+        await Promise.resolve();
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it("does not refresh recent dates when today is already done", async () => {
     const store = makeStore();
     await store.load();
@@ -387,6 +444,48 @@ describe("SchedulerService", () => {
     });
   });
 
+  it("records a transient failure escalated by attempts as failed_permanent", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.replaceAll({
+      "2026-06-24": {
+        status: "failed_transient",
+        lastAttempt: 0,
+        attempts: 9,
+        error: "previous timeout",
+      },
+    });
+    const history = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => ({
+        kind: "failed_transient",
+        reason: "network timeout",
+      })),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+    });
+
+    const result = await svc.runForDateNow("2026-06-24");
+
+    expect(result).toEqual({
+      kind: "failed_transient",
+      reason: "network timeout",
+    });
+    expect(store.get("2026-06-24").status).toBe("failed_permanent");
+    expect(history.records.at(-1)).toMatchObject({
+      event: "failed",
+      trigger: "manual",
+      date: "2026-06-24",
+      status: "failed_permanent",
+      resultKind: "failed_permanent",
+      reason: "network timeout",
+    });
+  });
+
   it("marks cancelled runs as skipped and records cancelled history without retry state", async () => {
     const store = makeStore();
     await store.load();
@@ -503,6 +602,35 @@ describe("SchedulerService", () => {
     expect(store.get("2026-05-11").error).toBeUndefined();
   });
 
+  it("forceRunForDate leaves existing state intact when the date lock is held", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-11");
+    await store.setFailed("2026-05-11", "permanent", "old");
+    const lock = new RunLock();
+    expect(lock.tryAcquire("2026-05-11")).toBe(true);
+    const runForDate = vi.fn();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+
+    try {
+      const result = await svc.forceRunForDate("2026-05-11");
+
+      expect(result).toEqual({ kind: "skipped", reason: "lock held" });
+      expect(runForDate).not.toHaveBeenCalled();
+      expect(store.get("2026-05-11").status).toBe("failed_permanent");
+      expect(store.get("2026-05-11").error).toBe("old");
+    } finally {
+      lock.release("2026-05-11");
+    }
+  });
+
   it("does nothing when schedule is disabled", async () => {
     const store = makeStore();
     await store.load();
@@ -615,6 +743,37 @@ describe("SchedulerService", () => {
     expect(runForDate).toHaveBeenCalledWith("2026-05-10");
     expect(store.get("2026-05-12").status).toBe("completed");
     expect(store.get("2026-05-10").status).toBe("completed");
+  });
+
+  it("retryFailedInLookback leaves failed state intact when the date lock is held", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.setRunning("2026-05-12");
+    await store.setFailed("2026-05-12", "transient", "network");
+    const lock = new RunLock();
+    expect(lock.tryAcquire("2026-05-12")).toBe(true);
+    const runForDate = vi.fn();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock,
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-12T05:00:00Z"),
+    });
+
+    try {
+      const results = await svc.retryFailedInLookback();
+
+      expect(results).toEqual([
+        { date: "2026-05-12", result: { kind: "skipped", reason: "lock held" } },
+      ]);
+      expect(runForDate).not.toHaveBeenCalled();
+      expect(store.get("2026-05-12").status).toBe("failed_transient");
+      expect(store.get("2026-05-12").error).toBe("network");
+    } finally {
+      lock.release("2026-05-12");
+    }
   });
 
   it("tickToday returns skipped:disabled when schedule disabled", async () => {

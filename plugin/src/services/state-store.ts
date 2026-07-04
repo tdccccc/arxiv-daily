@@ -112,10 +112,11 @@ export class StateStore {
     date: string,
     kind: "transient" | "permanent",
     message: string,
-  ): Promise<void> {
-    await this.enqueueMutation(async () => {
+  ): Promise<Extract<RunStatus, "failed_transient" | "failed_permanent">> {
+    return await this.enqueueMutation(async () => {
       const prev = this.get(date);
-      let status: RunStatus = kind === "permanent" ? "failed_permanent" : "failed_transient";
+      let status: Extract<RunStatus, "failed_transient" | "failed_permanent"> =
+        kind === "permanent" ? "failed_permanent" : "failed_transient";
       if (status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS) {
         status = "failed_permanent";
       }
@@ -129,6 +130,7 @@ export class StateStore {
         error: message,
       };
       await this.saveFn({ runState: this.state });
+      return status;
     });
   }
 

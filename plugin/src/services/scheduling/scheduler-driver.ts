@@ -49,6 +49,7 @@ type SchedulerResult = PipelineResult | { kind: "skipped"; reason: string };
 export class SchedulerDriver {
   private intervalHandle: number | null = null;
   private readonly progress: ProgressReporter;
+  private ticking = false;
 
   constructor(private deps: SchedulerDriverDeps) {
     this.progress = deps.progress ?? new NoopProgressReporter();
@@ -62,7 +63,7 @@ export class SchedulerDriver {
     const min = this.deps.getSettings().schedule.tickIntervalMin;
     this.stop();
     const handle = setInterval(() => {
-      this.tick().catch((e) => this.deps.logger.error("scheduler tick failed", e));
+      this.runScheduledTick().catch((e) => this.deps.logger.error("scheduler tick failed", e));
     }, Math.max(1, min) * 60_000);
     this.intervalHandle = handle as unknown as number;
   }
@@ -223,8 +224,9 @@ export class SchedulerDriver {
       await this.deps.history.recordSkipped(date, "force", "already running", now);
       return { kind: "skipped", reason: "already running" };
     }
-    await this.deps.store.clearDate(date);
-    return this.runForDateNowAt(date, { trigger: "force" }, now);
+    return this.runForDateNowAt(date, { trigger: "force" }, now, {
+      clearDateBeforeRun: true,
+    });
   }
 
   async retryFailedInLookback(): Promise<Array<{ date: string; result: SchedulerResult }>> {
@@ -244,9 +246,10 @@ export class SchedulerDriver {
         if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
           continue;
         }
-        await this.deps.store.clearDate(date);
         this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-        const r = await this.tryRun(date, "retry", now, batch);
+        const r = await this.tryRun(date, "retry", now, batch, {
+          clearDateBeforeRun: true,
+        });
         if (r === undefined) {
           await this.deps.history.recordSkipped(date, "retry", "lock held", now);
           results.push({ date, result: { kind: "skipped", reason: "lock held" } });
@@ -320,6 +323,7 @@ export class SchedulerDriver {
     date: string,
     opts: SchedulerRunOptions,
     now: Date,
+    runOpts: { clearDateBeforeRun?: boolean } = {},
   ): Promise<SchedulerResult> {
     const trigger = opts.trigger ?? "manual";
     if (isRunning(date, this.deps.store)) {
@@ -330,7 +334,7 @@ export class SchedulerDriver {
     const batch = this.beginCancellationBatch();
     let result: PipelineResult | undefined;
     try {
-      result = await this.tryRun(date, trigger, now, batch);
+      result = await this.tryRun(date, trigger, now, batch, runOpts);
     } finally {
       this.finishCancellationBatch(batch);
     }
@@ -375,8 +379,12 @@ export class SchedulerDriver {
     trigger: RunHistoryTrigger,
     now: Date,
     cancellationBatch?: RunCancellationBatch,
+    opts: { clearDateBeforeRun?: boolean } = {},
   ): Promise<PipelineResult | undefined> {
     return this.deps.lock.withLock(date, async () => {
+      if (opts.clearDateBeforeRun) {
+        await this.deps.store.clearDate(date);
+      }
       const previousEntry = this.deps.store.get(date);
       this.deps.cancellation?.prepareRun();
       const signal = this.deps.cancellation?.begin(date, cancellationBatch);
@@ -425,16 +433,16 @@ export class SchedulerDriver {
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordCancelled(date, trigger, result.reason, now);
         } else if (result.kind === "failed_transient") {
-          await this.persistFailed(date, "transient", result.reason);
+          const persistedStatus = await this.persistFailed(date, "transient", result.reason);
           this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
           this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
-          await this.deps.history.recordFailed(date, trigger, result.kind, result.reason, now);
+          await this.deps.history.recordFailed(date, trigger, persistedStatus, result.reason, now);
         } else {
-          await this.persistFailed(date, "permanent", result.reason);
+          const persistedStatus = await this.persistFailed(date, "permanent", result.reason);
           this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
           this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
           this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
-          await this.deps.history.recordFailed(date, trigger, result.kind, result.reason, now);
+          await this.deps.history.recordFailed(date, trigger, persistedStatus, result.reason, now);
         }
       } catch (e) {
         if (isCancellationError(e)) throw e;
@@ -461,19 +469,30 @@ export class SchedulerDriver {
     return batch?.isCancellationRequested() ?? false;
   }
 
+  private async runScheduledTick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.tick();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
   private async persistFailed(
     date: string,
     kind: "transient" | "permanent",
     reason: string,
-  ): Promise<void> {
+  ): Promise<"failed_transient" | "failed_permanent"> {
     try {
-      await this.deps.store.setFailed(date, kind, reason);
+      return await this.deps.store.setFailed(date, kind, reason);
     } catch (e) {
       this.deps.logger.error(
         `scheduler: failed to persist failure for ${date}; clearing running state`,
         e,
       );
       await this.deps.store.clearDate(date);
+      return kind === "permanent" ? "failed_permanent" : "failed_transient";
     }
   }
 
