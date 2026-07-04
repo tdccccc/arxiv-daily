@@ -99,6 +99,41 @@ describe("StateStore", () => {
     expect(store.get("d").status).toBe("failed_permanent");
   });
 
+  it("setPending preserves attempts after a running attempt", async () => {
+    const { store } = makeStore();
+    await store.load();
+    await store.setRunning("d");
+    await store.setPending("d", "no papers yet");
+    expect(store.get("d")).toMatchObject({
+      status: "pending",
+      attempts: 1,
+      error: "no papers yet",
+    });
+  });
+
+  it("recovers stale running dates to permanent failures", async () => {
+    const { store } = makeStore({
+      "2026-06-13": {
+        status: "running",
+        lastAttempt: 1,
+        attempts: 3,
+      },
+      "2026-06-14": {
+        status: "running",
+        lastAttempt: 9_999_999,
+        attempts: 1,
+      },
+    });
+    await store.load();
+
+    await expect(store.recoverStaleRunning(3_700_001, 3_600_000))
+      .resolves.toEqual(["2026-06-13"]);
+
+    expect(store.get("2026-06-13").status).toBe("failed_permanent");
+    expect(store.get("2026-06-13").attempts).toBe(3);
+    expect(store.get("2026-06-14").status).toBe("running");
+  });
+
   it("isDone returns true for completed and failed_permanent", async () => {
     const { store } = makeStore();
     await store.load();
@@ -255,6 +290,75 @@ describe("StateStore", () => {
 
     expect(store.get("2026-06-13").status).toBe("completed");
     expect(store.get("2026-06-13").papersWritten).toBe(2);
+  });
+
+  it("falls back to backup when the primary run-state file is missing", async () => {
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json.bak": JSON.stringify({
+        runState: {
+          "2026-06-13": {
+            status: "completed",
+            lastAttempt: 1,
+            attempts: 1,
+            papersWritten: 2,
+          },
+        },
+      }),
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+
+    await store.load();
+
+    expect(store.get("2026-06-13").status).toBe("completed");
+    expect(store.get("2026-06-13").papersWritten).toBe(2);
+  });
+
+  it("ignores schema-invalid run-state entries with wrong field types", async () => {
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": JSON.stringify({
+        runState: {
+          badStatus: { status: "unknown", lastAttempt: 1, attempts: 1 },
+          badAttempts: { status: "running", lastAttempt: 1, attempts: "1" },
+          good: { status: "pending", lastAttempt: 2, attempts: 3 },
+        },
+      }),
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+
+    await store.load();
+
+    expect(store.snapshot()).toEqual({
+      good: { status: "pending", lastAttempt: 2, attempts: 3 },
+    });
+  });
+
+  it("restores the previous primary file if atomic write fails after backup rename", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": JSON.stringify({
+        runState: {
+          old: { status: "completed", lastAttempt: 1, attempts: 1 },
+        },
+      }),
+    });
+    const flakyStorage = {
+      ...storage,
+      async rename(from: string, to: string) {
+        if (from.endsWith(".tmp") && to.endsWith("run-state.json")) {
+          throw new Error("crash before tmp promote");
+        }
+        await storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = createStorageStateStore(flakyStorage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setRunning("new")).rejects.toThrow("crash before tmp promote");
+
+    expect(files["arxiv-daily/.index/run-state.json"]).toBeDefined();
+    expect(files["arxiv-daily/.index/run-state.json.bak"]).toBeUndefined();
+    const recovered = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+    await recovered.load();
+    expect(recovered.get("old").status).toBe("completed");
+    expect(recovered.get("new").status).toBe("pending");
   });
 
   it("falls back to an empty run state when run-state.json and backup are corrupt", async () => {

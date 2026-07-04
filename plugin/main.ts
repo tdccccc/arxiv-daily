@@ -120,6 +120,9 @@ export default class ArxivDailyPlugin extends Plugin {
       this.progress = new NoopProgressReporter();
     }
     this.host.progress = this.progress;
+    await this.buildMarkdownWriter().cleanupTemporaryFiles().catch((e) =>
+      this.logger.warn("markdown temp cleanup failed", e),
+    );
 
     this.scheduler = new SchedulerService({
       getSettings: () => this.settings,

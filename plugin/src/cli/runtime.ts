@@ -83,6 +83,9 @@ export async function buildCliRuntime(
     arxiv: config.settings.arxiv,
     output: config.settings.output,
   });
+  await writer.cleanupTemporaryFiles().catch((e) =>
+    logger.warn(`markdown temp cleanup failed: ${(e as Error).message}`),
+  );
   const paperIndex = new PaperIndexStore(host.storage, config.settings.output);
   const stateStore = createStorageStateStore(
     host.storage,

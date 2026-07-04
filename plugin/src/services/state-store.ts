@@ -4,6 +4,7 @@ import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "./paper-index";
 
 const MAX_TRANSIENT_ATTEMPTS = 10;
+export const STALE_RUNNING_RECOVERY_MS = 60 * 60 * 1000;
 
 export type StateLoadFn = () => Promise<{ runState: RunState }>;
 export type StateSaveFn = (data: { runState: RunState }) => Promise<void>;
@@ -94,6 +95,19 @@ export class StateStore {
     });
   }
 
+  async setPending(date: string, reason: string): Promise<void> {
+    await this.enqueueMutation(async () => {
+      const prev = this.get(date);
+      this.state[date] = {
+        ...prev,
+        status: "pending",
+        lastAttempt: Date.now(),
+        error: reason,
+      };
+      await this.saveFn({ runState: this.state });
+    });
+  }
+
   async setFailed(
     date: string,
     kind: "transient" | "permanent",
@@ -137,6 +151,30 @@ export class StateStore {
     await this.enqueueMutation(async () => {
       this.state = cloneRunState(runState);
       await this.saveFn({ runState: this.state });
+    });
+  }
+
+  async recoverStaleRunning(
+    now = Date.now(),
+    maxAgeMs = STALE_RUNNING_RECOVERY_MS,
+  ): Promise<string[]> {
+    return await this.enqueueMutation(async () => {
+      const recovered: string[] = [];
+      for (const [date, entry] of Object.entries(this.state)) {
+        if (entry.status !== "running") continue;
+        if (now - entry.lastAttempt < maxAgeMs) continue;
+        this.state[date] = {
+          ...entry,
+          status: "failed_permanent",
+          lastAttempt: now,
+          error: "recovered stale running state after startup",
+        };
+        recovered.push(date);
+      }
+      if (recovered.length > 0) {
+        await this.saveFn({ runState: this.state });
+      }
+      return recovered.sort();
     });
   }
 
@@ -219,14 +257,23 @@ async function loadRunStateWithFallback(
   path: string,
   logger?: StateStoreLogger,
 ): Promise<{ runState: RunState }> {
-  if (!(await storage.exists(path))) return { runState: {} };
+  const backupPath = `${path}.bak`;
+  if (!(await storage.exists(path))) {
+    if (await storage.exists(backupPath)) {
+      try {
+        return parseRunState(await storage.readText(backupPath));
+      } catch (e) {
+        warnRunStateFallback(logger, `failed to read run-state backup, using empty state: ${backupPath}`, e);
+      }
+    }
+    return { runState: {} };
+  }
   try {
     return parseRunState(await storage.readText(path));
   } catch (e) {
     warnRunStateFallback(logger, `failed to read run-state.json, trying backup: ${path}`, e);
   }
 
-  const backupPath = `${path}.bak`;
   if (await storage.exists(backupPath)) {
     try {
       return parseRunState(await storage.readText(backupPath));
@@ -239,12 +286,49 @@ async function loadRunStateWithFallback(
 
 function parseRunState(raw: string): { runState: RunState } {
   const parsed = JSON.parse(raw);
+  const rawState =
+    parsed && typeof parsed === "object" && parsed.runState
+      ? (parsed.runState as Record<string, unknown>)
+      : {};
   return {
-    runState:
-      parsed && typeof parsed === "object" && parsed.runState
-        ? (parsed.runState as RunState)
-        : {},
+    runState: parseRunStateEntries(rawState),
   };
+}
+
+function parseRunStateEntries(rawState: Record<string, unknown>): RunState {
+  const out: RunState = {};
+  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
+    return out;
+  }
+  for (const [date, rawEntry] of Object.entries(rawState)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      continue;
+    }
+    const entry = rawEntry as Partial<RunStateEntry>;
+    if (!isRunStatus(entry.status)) continue;
+    if (typeof entry.lastAttempt !== "number") continue;
+    if (typeof entry.attempts !== "number") continue;
+    out[date] = {
+      status: entry.status,
+      lastAttempt: entry.lastAttempt,
+      attempts: entry.attempts,
+      error: typeof entry.error === "string" ? entry.error : undefined,
+      papersWritten:
+        typeof entry.papersWritten === "number" ? entry.papersWritten : undefined,
+    };
+  }
+  return out;
+}
+
+function isRunStatus(value: unknown): value is RunStatus {
+  return (
+    value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed_transient" ||
+    value === "failed_permanent" ||
+    value === "skipped"
+  );
 }
 
 function warnRunStateFallback(
