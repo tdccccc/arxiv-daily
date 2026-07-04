@@ -19,6 +19,10 @@ function makeStore(overrides: Record<string, unknown> = {}) {
     }),
     setCompleted: vi.fn(async () => {}),
     setFailed: vi.fn(async () => {}),
+    setPending: vi.fn(async (date: string, reason: string) => {
+      entries[date] = { status: "pending", lastAttempt: Date.now(), attempts: entries[date]?.attempts ?? 1 };
+      void reason;
+    }),
     setSkipped: vi.fn(async () => {}),
     clearDate: vi.fn(async () => {}),
     snapshot: vi.fn(() => ({})),
@@ -59,11 +63,15 @@ describe("Scheduler pending result handling", () => {
     expect(deps.store.setFailed).not.toHaveBeenCalled();
   });
 
-  it("should clear date from store so scheduler can retry later", async () => {
+  it("should mark date pending while preserving attempt history", async () => {
     const scheduler = new SchedulerService(deps);
     await scheduler.runForDateNow("2026-06-22");
 
-    expect(deps.store.clearDate).toHaveBeenCalledWith("2026-06-22");
+    expect(deps.store.setPending).toHaveBeenCalledWith(
+      "2026-06-22",
+      "no papers from arXiv",
+    );
+    expect(deps.store.clearDate).not.toHaveBeenCalled();
   });
 
   it("should log info when result is pending", async () => {

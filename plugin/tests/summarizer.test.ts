@@ -65,7 +65,7 @@ describe("summarizeDaily link style", () => {
     );
     expect(systemPrompt).not.toContain("[[YYMM.NNNNN]]");
     expect(userPrompt).toContain(
-      "=== Paper: 2606.12345 [category: topic] → [2606.12345](../papers/2606.12345.md) ===",
+      "=== Paper: 2606.12345 [Topic] → [2606.12345](../papers/2606.12345.md) ===",
     );
   });
 
@@ -294,7 +294,7 @@ describe("summarizeDaily link style", () => {
 
     const sys = calls[0][0].content as string;
     expect(sys).toContain("Write in English");
-    expect(sys).toContain("## [Display name]");
+    expect(sys).toContain("## Display name");
     expect(sys).toContain("- **Research problem**");
     expect(sys).toContain("# arXiv astro-ph Daily Digest 2026-06-13");
     expect(sys).not.toContain("使用中文撰写");

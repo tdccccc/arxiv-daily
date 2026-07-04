@@ -640,8 +640,8 @@ describe("SchedulerService", () => {
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
-          runAtLocal: "23:59",
-  
+          runAtLocal: "09:00",
+          runUntilLocal: "18:00",
         },
       }),
       store,
@@ -666,8 +666,8 @@ describe("SchedulerService", () => {
         schedule: {
           ...DEFAULT_SETTINGS.schedule,
           enabled: true,
-          runAtLocal: "23:59",
-  
+          runAtLocal: "09:00",
+          runUntilLocal: "18:00",
         },
       }),
       store,
