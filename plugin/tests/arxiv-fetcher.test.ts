@@ -43,6 +43,31 @@ describe("ArxivFetcher", () => {
     ]);
   });
 
+  it("passes abort signals to recent and metadata HTTP requests", async () => {
+    const requests: HttpRequest[] = [];
+    const controller = new AbortController();
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        requests.push(req);
+        return {
+          status: 200,
+          headers: {},
+          bodyText: req.url.includes("export.arxiv.org")
+            ? `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`
+            : "<html>recent</html>",
+        };
+      }),
+    };
+    const fetcher = makeFetcher(http);
+
+    await fetcher.fetchRecent("astro-ph", controller.signal);
+    await fetcher.fetchMetadataByIds(["2606.12345"], controller.signal);
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0].signal).toBe(controller.signal);
+    expect(requests[1].signal).toBe(controller.signal);
+  });
+
   it("returns a not-found result for missing HTML papers", async () => {
     const http: HttpClient = {
       request: vi.fn(async () => ({

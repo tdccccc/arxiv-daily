@@ -1,5 +1,6 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
+import { throwIfCancelled } from "../services/cancellation";
 import { parseAtomPapers, type AtomPaperMeta } from "./atom-parser";
 import type { HttpClient } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
@@ -24,9 +25,12 @@ export class ArxivFetcher {
   constructor(private opts: ArxivFetcherOptions) {}
 
   /** Fetch the /list/<cat>/recent page with show=2000 to capture all 5 days in one shot. */
-  async fetchRecent(category = this.primaryCategory()): Promise<string> {
+  async fetchRecent(
+    category = this.primaryCategory(),
+    signal?: AbortSignal,
+  ): Promise<string> {
     const url = `https://arxiv.org/list/${category}/recent?skip=0&show=2000`;
-    return this.fetchHtml(url, { allow404: false });
+    return this.fetchHtml(url, { allow404: false }, signal);
   }
 
   /**
@@ -38,8 +42,11 @@ export class ArxivFetcher {
    *
    * arXiv recommends batches of <=300; we conservatively cap at 200.
    */
-  async fetchAbstractsByIds(ids: string[]): Promise<Map<string, string>> {
-    const metadata = await this.fetchMetadataByIds(ids);
+  async fetchAbstractsByIds(
+    ids: string[],
+    signal?: AbortSignal,
+  ): Promise<Map<string, string>> {
+    const metadata = await this.fetchMetadataByIds(ids, signal);
     const out = new Map<string, string>();
     for (const [id, paper] of metadata) {
       if (paper.abstract) out.set(id, paper.abstract);
@@ -47,14 +54,17 @@ export class ArxivFetcher {
     return out;
   }
 
-  async fetchMetadataByIds(ids: string[]): Promise<Map<string, AtomPaperMeta>> {
+  async fetchMetadataByIds(
+    ids: string[],
+    signal?: AbortSignal,
+  ): Promise<Map<string, AtomPaperMeta>> {
     const out = new Map<string, AtomPaperMeta>();
     const BATCH = 200;
     for (let i = 0; i < ids.length; i += BATCH) {
       const batch = ids.slice(i, i + BATCH);
       if (batch.length === 0) continue;
       const url = `https://export.arxiv.org/api/query?id_list=${batch.join(",")}&max_results=${batch.length}`;
-      const xml = await this.fetchHtml(url, { allow404: false });
+      const xml = await this.fetchHtml(url, { allow404: false }, signal);
       for (const paper of parseAtomPapers(xml)) out.set(paper.id, paper);
     }
     return out;
@@ -116,8 +126,12 @@ export class ArxivFetcher {
     return this.fetchHtml(url, { allow404: false });
   }
 
-  private async fetchHtml(url: string, opts: { allow404: boolean }): Promise<string> {
-    await this.respectDelay();
+  private async fetchHtml(
+    url: string,
+    opts: { allow404: boolean },
+    signal?: AbortSignal,
+  ): Promise<string> {
+    await this.respectDelay(signal);
     this.opts.logger.debug(`fetchHtml: GET ${url}`);
     return retry(
       async () => {
@@ -125,6 +139,7 @@ export class ArxivFetcher {
           url,
           method: "GET",
           headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
+          signal,
         });
         if (res.status >= 200 && res.status < 300) {
           this.opts.logger.debug(`fetchHtml: ${url} → ${res.status} (${(res.bodyText ?? "").length} bytes)`);
@@ -140,6 +155,7 @@ export class ArxivFetcher {
         baseDelayMs: 2000,
         shouldRetry: (err: any) => err?.status !== 404,
         delayMs: arxivRetryDelayMs,
+        signal,
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,
@@ -184,17 +200,19 @@ export class ArxivFetcher {
     );
   }
 
-  private async respectDelay() {
+  private async respectDelay(signal?: AbortSignal) {
     const delayMs = Math.max(0, this.opts.requestDelayMs);
     const next = sharedDelayQueue
       .catch(() => undefined)
       .then(async () => {
+        throwIfCancelled(signal);
         if (delayMs > 0) {
           if (sharedLastRequestAt > Date.now()) sharedLastRequestAt = 0;
           const elapsed = Math.max(0, Date.now() - sharedLastRequestAt);
           const wait = delayMs - elapsed;
-          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          if (wait > 0) await abortableDelay(wait, signal);
         }
+        throwIfCancelled(signal);
         sharedLastRequestAt = Date.now();
       });
     sharedDelayQueue = next.catch(() => undefined);
@@ -204,6 +222,31 @@ export class ArxivFetcher {
   private primaryCategory(): string {
     return this.opts.categories?.[0] ?? this.opts.category ?? "astro-ph";
   }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfCancelled(signal);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(done, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      cleanup();
+      try {
+        throwIfCancelled(signal);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    function done() {
+      cleanup();
+      resolve();
+    }
+    function cleanup() {
+      signal?.removeEventListener("abort", onAbort);
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 function httpStatusError(

@@ -3,9 +3,11 @@ import {
   buildModelUrlCandidates,
   LLM_STREAM_IDLE_TIMEOUT_MS,
   LlmClient,
+  StreamIdleTimeoutError,
   collectStreamWithIdleTimeout,
   normalizeOpenAiBaseUrl,
 } from "../../src/llm/client";
+import { isCancellationError } from "../../src/services/cancellation";
 
 describe("Model listing", () => {
   beforeEach(() => {
@@ -101,6 +103,31 @@ describe("Model listing", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("includes the last endpoint error when model listing fails", async () => {
+    const request = vi.fn(async () => ({
+      status: 401,
+      headers: {},
+      bodyText: JSON.stringify({ error: { message: "bad api key" } }),
+    }));
+    const client = new LlmClient(
+      {
+        apiKey: "sk-test",
+        provider: "custom",
+        baseUrl: "https://llm.example.com/v1",
+        model: "gpt-test",
+        thinkingMode: false,
+        reasoningEffort: "high",
+      },
+      { warn: vi.fn() } as any,
+      { request },
+    );
+
+    await expect(client.fetchModels()).rejects.toThrow(
+      "Failed to fetch models from any endpoint: bad api key",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("collects OpenAI-compatible SSE chat completion chunks", async () => {
     const request = vi.fn(async () => ({
       status: 200,
@@ -127,7 +154,7 @@ describe("Model listing", () => {
       .resolves.toBe("hello");
   });
 
-  it("aborts a stream when no chunk arrives before the idle timeout", async () => {
+  it("rejects stream idle timeouts with a retryable timeout error", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     async function* neverYields() {
@@ -139,10 +166,12 @@ describe("Model listing", () => {
       controller,
       LLM_STREAM_IDLE_TIMEOUT_MS,
     );
-    const assertion = expect(read).rejects.toThrow("LLM stream idle timeout");
+    const caught = read.catch((error) => error);
     await vi.advanceTimersByTimeAsync(LLM_STREAM_IDLE_TIMEOUT_MS);
 
-    await assertion;
+    const error = await caught;
+    expect(error).toBeInstanceOf(StreamIdleTimeoutError);
+    expect(isCancellationError(error)).toBe(false);
     expect(controller.signal.aborted).toBe(true);
   });
 });

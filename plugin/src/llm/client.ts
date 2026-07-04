@@ -8,6 +8,13 @@ const LLM_TIMEOUT_MS = 300_000; // 5 minutes
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
 
+export class StreamIdleTimeoutError extends Error {
+  constructor(message = "LLM stream idle timeout") {
+    super(message);
+    this.name = "StreamIdleTimeoutError";
+  }
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -107,6 +114,7 @@ export class LlmClient {
     }
 
     const candidates = buildModelUrlCandidates(baseUrl);
+    let lastError: unknown;
 
     for (const url of candidates) {
       try {
@@ -124,6 +132,7 @@ export class LlmClient {
             data = JSON.parse(res.bodyText);
             return this.parseModelList(data);
           }
+          throw createStatusError(res.status, res.bodyText);
         } else {
           const response = await fetch(url, {
             method: "GET",
@@ -136,14 +145,20 @@ export class LlmClient {
             data = await response.json();
             return this.parseModelList(data);
           }
+          throw createStatusError(response.status, await response.text());
         }
-      } catch {
+      } catch (e) {
+        lastError = e;
         // Try next candidate
         continue;
       }
     }
 
-    throw new Error("Failed to fetch models from any endpoint");
+    const suffix =
+      lastError instanceof Error && lastError.message
+        ? `: ${lastError.message}`
+        : "";
+    throw new Error(`Failed to fetch models from any endpoint${suffix}`);
   }
 
   private parseModelList(data: unknown): string[] {
@@ -414,9 +429,10 @@ function nextStreamChunk(
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
+      const error = new StreamIdleTimeoutError();
       finish();
-      controller.abort("LLM stream idle timeout");
-      reject(new Error("LLM stream idle timeout"));
+      reject(error);
+      controller.abort(error);
     }, idleTimeoutMs);
     const onAbort = () => {
       finish();

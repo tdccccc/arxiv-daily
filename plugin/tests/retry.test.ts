@@ -74,4 +74,27 @@ describe("retry", () => {
     ).rejects.toThrow("cancelled by test");
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it("caps exponential backoff and applies jitter before sleeping", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const controller = new AbortController();
+    const waits: number[] = [];
+    const fn = vi.fn().mockRejectedValue(new Error("boom"));
+
+    await expect(
+      retry(fn, {
+        maxAttempts: 3,
+        baseDelayMs: Number.MAX_VALUE,
+        backoff: 10,
+        signal: controller.signal,
+        onRetry: (_err, _attempt, wait) => {
+          waits.push(wait);
+          controller.abort("stop after wait capture");
+        },
+      }),
+    ).rejects.toThrow("stop after wait capture");
+
+    expect(waits).toEqual([900_000]);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
 });

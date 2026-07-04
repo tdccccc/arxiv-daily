@@ -1,5 +1,7 @@
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
+const MAX_RETRY_DELAY_MS = 1_800_000;
+
 export interface RetryOptions {
   maxAttempts: number;
   baseDelayMs: number;
@@ -22,16 +24,27 @@ export async function retry<T>(fn: () => Promise<T>, opts: RetryOptions): Promis
       if (isCancellationError(err)) throw err;
       if (attempt >= opts.maxAttempts) break;
       if (opts.shouldRetry && !opts.shouldRetry(err, attempt)) break;
-      const defaultWait = opts.baseDelayMs * Math.pow(backoff, attempt - 1);
+      const rawDefaultWait = opts.baseDelayMs * Math.pow(backoff, attempt - 1);
+      const defaultWait = capDelay(rawDefaultWait);
+      const customWait = opts.delayMs?.(err, attempt, defaultWait);
       const wait = Math.max(
         0,
-        opts.delayMs?.(err, attempt, defaultWait) ?? defaultWait,
+        customWait == null ? jitterDelay(defaultWait) : capDelay(customWait),
       );
       opts.onRetry?.(err, attempt, wait);
       await sleep(wait, opts.signal);
     }
   }
   throw lastError;
+}
+
+function capDelay(ms: number): number {
+  if (!Number.isFinite(ms)) return MAX_RETRY_DELAY_MS;
+  return Math.min(ms, MAX_RETRY_DELAY_MS);
+}
+
+function jitterDelay(ms: number): number {
+  return Math.round(ms * (0.5 + Math.random() * 0.5));
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
