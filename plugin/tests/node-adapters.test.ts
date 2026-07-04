@@ -96,6 +96,16 @@ describe("NodeStorageAdapter", () => {
       .toEqual([1, 2]);
   });
 
+  it("writes text atomically through a temporary file", async () => {
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+
+    await storage.writeTextAtomic("daily/2026-06-13.md", "content");
+
+    expect(await storage.readText("daily/2026-06-13.md")).toBe("content");
+    expect(await storage.exists("daily/2026-06-13.md.tmp")).toBe(false);
+  });
+
   it("lists entries and rejects paths outside the root", async () => {
     const root = await makeTempDir();
     const storage = new NodeStorageAdapter(root);

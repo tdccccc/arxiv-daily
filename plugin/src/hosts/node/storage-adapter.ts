@@ -21,6 +21,23 @@ export class NodeStorageAdapter implements StorageAdapter {
     await fs.writeFile(this.toFsPath(storagePath), content, "utf8");
   }
 
+  async writeTextAtomic(storagePath: string, content: string): Promise<void> {
+    const target = this.toFsPath(storagePath);
+    const tmp = this.toFsPath(`${storagePath}.tmp`);
+    const bak = this.toFsPath(`${storagePath}.bak`);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.rm(tmp, { force: true });
+    await fs.writeFile(tmp, content, "utf8");
+    try {
+      await fs.rename(tmp, target);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+      await fs.copyFile(tmp, target);
+      await fs.rm(tmp, { force: true });
+    }
+    await fs.rm(bak, { force: true });
+  }
+
   async appendText(storagePath: string, content: string): Promise<void> {
     const target = this.toFsPath(storagePath);
     await fs.mkdir(path.dirname(target), { recursive: true });

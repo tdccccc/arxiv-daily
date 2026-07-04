@@ -16,6 +16,33 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     await this.vault.adapter.write(this.normalizePath(path), content);
   }
 
+  async writeTextAtomic(path: string, content: string): Promise<void> {
+    const target = this.normalizePath(path);
+    const tmp = this.normalizePath(`${path}.tmp`);
+    const bak = this.normalizePath(`${path}.bak`);
+    await this.vault.adapter.remove(tmp).catch(() => undefined);
+    await this.vault.adapter.write(tmp, content);
+    try {
+      await this.vault.adapter.rename(tmp, target);
+      await this.vault.adapter.remove(bak).catch(() => undefined);
+      return;
+    } catch (e) {
+      if (!(await this.vault.adapter.exists(target))) throw e;
+    }
+
+    await this.vault.adapter.remove(bak).catch(() => undefined);
+    await this.vault.adapter.rename(target, bak);
+    try {
+      await this.vault.adapter.rename(tmp, target);
+      await this.vault.adapter.remove(bak).catch(() => undefined);
+    } catch (e) {
+      if (await this.vault.adapter.exists(bak)) {
+        await this.vault.adapter.rename(bak, target);
+      }
+      throw e;
+    }
+  }
+
   async exists(path: string): Promise<boolean> {
     return await this.vault.adapter.exists(this.normalizePath(path));
   }

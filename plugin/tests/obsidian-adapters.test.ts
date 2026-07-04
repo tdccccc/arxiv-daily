@@ -65,7 +65,10 @@ describe("Obsidian host adapters", () => {
 
     await host.storage.mkdir("arxiv-daily/daily");
     await host.storage.writeText("arxiv-daily/daily/today.md", "daily");
+    await host.storage.writeTextAtomic?.("arxiv-daily/daily/atomic.md", "atomic");
     expect(files["arxiv-daily/daily/today.md"]).toBe("daily");
+    expect(files["arxiv-daily/daily/atomic.md"]).toBe("atomic");
+    expect(files["arxiv-daily/daily/atomic.md.tmp"]).toBeUndefined();
     expect(await host.storage.exists("arxiv-daily/daily")).toBe(true);
 
     expect(await host.secrets.getSecret("llm.apiKey")).toBe("stored-key");

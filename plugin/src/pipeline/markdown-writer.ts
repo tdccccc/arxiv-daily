@@ -66,7 +66,7 @@ export class MarkdownWriter {
       `weekday: ${weekdayName(dateStr)}\n` +
       `tags: [arxiv, daily]\n` +
       `---\n\n`;
-    await this.opts.storage.writeText(
+    await this.writeMarkdown(
       path,
       frontmatter + dateWindowNote(options.dateWindowNote) + summary,
     );
@@ -99,7 +99,7 @@ export class MarkdownWriter {
       publishedReport,
       tags,
     });
-    await this.opts.storage.writeText(path, fm + summary);
+    await this.writeMarkdown(path, fm + summary);
     this.opts.logger.info(`wrote paper: ${path}`);
     return path;
   }
@@ -129,7 +129,7 @@ export class MarkdownWriter {
         `- **arXiv**: [${entry.arxivId}](${entry.arxivUrl})\n` +
         `- **PDF**: [PDF](${entry.pdfUrl})\n\n` +
         `## Notes\n\n`;
-    await this.opts.storage.writeText(path, fm + noteBody);
+    await this.writeMarkdown(path, fm + noteBody);
     this.opts.logger.info(`wrote paper note: ${path}`);
     return path;
   }
@@ -144,7 +144,7 @@ export class MarkdownWriter {
     const markdown = await this.opts.storage.readText(path);
     const body = stripFrontmatter(markdown).replace(/^\s+/, "");
     const fm = await this.paperFrontmatterForEntry(entry);
-    await this.opts.storage.writeText(path, fm + body);
+    await this.writeMarkdown(path, fm + body);
     this.opts.logger.info(`refreshed paper frontmatter: ${path}`);
     return path;
   }
@@ -169,6 +169,20 @@ export class MarkdownWriter {
     return await this.opts.storage.exists(path);
   }
 
+  async cleanupTemporaryFiles(): Promise<string[]> {
+    const removed: string[] = [];
+    for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
+      const norm = this.opts.storage.normalizePath(dir);
+      const entries = await this.opts.storage.list?.(norm).catch(() => []);
+      for (const entry of entries ?? []) {
+        if (entry.type !== "file" || !entry.path.endsWith(".tmp")) continue;
+        await this.opts.storage.remove(entry.path);
+        removed.push(entry.path);
+      }
+    }
+    return removed.sort();
+  }
+
   private tagsFor(paper: DailyPaperWithContent): string[] {
     const tags = ["arxiv", "paper"];
     const topic = this.opts.arxiv.topics.find((t) => t.tag === paper.category);
@@ -180,6 +194,32 @@ export class MarkdownWriter {
     const norm = this.opts.storage.normalizePath(rel);
     if (!(await this.opts.storage.exists(norm))) {
       await this.opts.storage.mkdir(norm);
+    }
+  }
+
+  private async writeMarkdown(path: string, content: string): Promise<void> {
+    if (this.opts.storage.writeTextAtomic) {
+      await this.opts.storage.writeTextAtomic(path, content);
+      return;
+    }
+    const tmp = `${path}.tmp`;
+    const bak = `${path}.bak`;
+    if (await this.opts.storage.exists(tmp)) await this.opts.storage.remove(tmp);
+    await this.opts.storage.writeText(tmp, content);
+    if (!(await this.opts.storage.exists(path))) {
+      await this.opts.storage.rename(tmp, path);
+      return;
+    }
+    if (await this.opts.storage.exists(bak)) await this.opts.storage.remove(bak);
+    await this.opts.storage.rename(path, bak);
+    try {
+      await this.opts.storage.rename(tmp, path);
+      await this.opts.storage.remove(bak);
+    } catch (e) {
+      if (await this.opts.storage.exists(bak)) {
+        await this.opts.storage.rename(bak, path);
+      }
+      throw e;
     }
   }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { Logger } from "../src/services/logger";
@@ -29,6 +29,11 @@ function makeStorage(initialFiles: Record<string, string> = {}) {
       },
       async remove(path: string) {
         delete files[path];
+      },
+      async list(dir: string) {
+        return Object.keys(files)
+          .filter((path) => path.startsWith(`${dir}/`))
+          .map((path) => ({ path, type: "file" as const }));
       },
     } satisfies StorageAdapter,
   };
@@ -172,6 +177,43 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("weekday: Monday");
     expect(written).toContain("body");
     expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
+  });
+
+  it("writeDaily uses storage writeTextAtomic when available", async () => {
+    const { files, storage } = makeStorage();
+    const writeTextAtomic = vi.fn(async (path: string, content: string) => {
+      files[path] = content;
+    });
+    const writer = new MarkdownWriter({
+      storage: { ...storage, writeTextAtomic },
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      output: DEFAULT_SETTINGS.output,
+    });
+
+    await writer.writeDaily("2026-05-11", "body");
+
+    expect(writeTextAtomic).toHaveBeenCalledWith(
+      "arxiv-daily/daily/2026-05-11.md",
+      expect.stringContaining("body"),
+    );
+  });
+
+  it("cleanupTemporaryFiles removes stale markdown temp files from output dirs", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/daily/2026-05-11.md.tmp": "partial",
+      "arxiv-daily/papers/2605.06587.md.tmp": "partial",
+      "arxiv-daily/daily/2026-05-11.md": "ok",
+    });
+
+    await expect(writer.cleanupTemporaryFiles()).resolves.toEqual([
+      "arxiv-daily/daily/2026-05-11.md.tmp",
+      "arxiv-daily/papers/2605.06587.md.tmp",
+    ]);
+
+    expect(files["arxiv-daily/daily/2026-05-11.md.tmp"]).toBeUndefined();
+    expect(files["arxiv-daily/papers/2605.06587.md.tmp"]).toBeUndefined();
+    expect(files["arxiv-daily/daily/2026-05-11.md"]).toBe("ok");
   });
 
   it("writeDaily includes submitted-date fallback notes", async () => {
