@@ -43,6 +43,8 @@ type PipelineFailureResult = Extract<
   { kind: "failed_transient" | "failed_permanent" }
 >;
 
+const CONTENT_FETCH_CONCURRENCY = 6;
+
 export interface PipelineDeps {
   fetcher: ArxivFetcher;
   paperFetcher: PaperContentFetcher;
@@ -187,49 +189,55 @@ export class ArxivPipeline {
 
     // 6. Fetch content for each filtered paper
     stageStart("fetch-content");
-    const enriched: DailyPaperWithContent[] = [];
-    for (let i = 0; i < visiblePapers.length; i++) {
-      throwIfCancelled(signal);
-      const p = visiblePapers[i];
-      this.progress.setStage("fetch-content", i + 1, visiblePapers.length);
-      try {
-        const c = await this.deps.paperFetcher.fetch(p.id, {
-          // Daily summaries should use any high-value sections we can extract.
-          // The detail flag still only controls whether a separate paper note is written.
-          isDetail: true,
-          sectionCharLimit: this.deps.advanced.sectionCharLimit,
-          paperCharLimit: this.deps.advanced.paperCharLimit,
-        });
-        enriched.push({
-          ...p,
-          abstractConclusion: c.abstractConclusion,
-          fullSections: c.fullSections,
-          inboxStatus: p.indexEntry?.status,
-          seenBefore: p.seenBefore,
-          paperPath: p.indexEntry?.paperPath ?? null,
-          detailLink: this.deps.writer.paperDetailLink(
-            p.id,
-            dateStr,
-            p.indexEntry?.paperPath,
-          ),
-        });
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        logger.error(`pipeline: content fetch failed for ${p.id}`, e);
-        enriched.push({
-          ...p,
-          abstractConclusion: `[获取失败] arXiv ID: ${p.id}`,
-          fullSections: null,
-          inboxStatus: p.indexEntry?.status,
-          seenBefore: p.seenBefore,
-          paperPath: p.indexEntry?.paperPath ?? null,
-          detailLink: this.deps.writer.paperDetailLink(
-            p.id,
-            dateStr,
-            p.indexEntry?.paperPath,
-          ),
-        });
-      }
+    let completedFetches = 0;
+    const enriched = await mapConcurrent(
+      visiblePapers,
+      CONTENT_FETCH_CONCURRENCY,
+      async (p) => {
+        throwIfCancelled(signal);
+        completedFetches += 1;
+        this.progress.setStage("fetch-content", completedFetches, visiblePapers.length);
+        try {
+          const c = await this.deps.paperFetcher.fetch(p.id, {
+            // Daily summaries should use any high-value sections we can extract.
+            // The detail flag still only controls whether a separate paper note is written.
+            isDetail: true,
+            sectionCharLimit: this.deps.advanced.sectionCharLimit,
+            paperCharLimit: this.deps.advanced.paperCharLimit,
+          });
+          return {
+            ...p,
+            abstractConclusion: c.abstractConclusion,
+            fullSections: c.fullSections,
+            inboxStatus: p.indexEntry?.status,
+            seenBefore: p.seenBefore,
+            paperPath: p.indexEntry?.paperPath ?? null,
+            detailLink: this.deps.writer.paperDetailLink(
+              p.id,
+              dateStr,
+              p.indexEntry?.paperPath,
+            ),
+          };
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          logger.error(`pipeline: content fetch failed for ${p.id}`, e);
+          return {
+            ...p,
+            abstractConclusion: `[获取失败] arXiv ID: ${p.id}`,
+            fullSections: null,
+            inboxStatus: p.indexEntry?.status,
+            seenBefore: p.seenBefore,
+            paperPath: p.indexEntry?.paperPath ?? null,
+            detailLink: this.deps.writer.paperDetailLink(
+              p.id,
+              dateStr,
+              p.indexEntry?.paperPath,
+            ),
+          };
+        }
+      },
+    );
+    for (let i = 0; i < enriched.length; i += 1) {
       throwIfCancelled(signal);
     }
     stageEnd("fetch-content", ` (${enriched.length} papers)`);
@@ -258,25 +266,6 @@ export class ArxivPipeline {
     }
     throwIfCancelled(signal);
     const dailyPath = this.deps.writer.dailyPath(dateStr);
-    if (this.deps.paperIndex) {
-      try {
-        throwIfCancelled(signal);
-        await this.deps.paperIndex.addDailyReports(
-          visiblePapers.map((p) => p.id),
-          dailyPath,
-        );
-        await this.deps.paperIndex.setSummaries(
-          extractPaperSummaries(dailySummary),
-        );
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        return {
-          kind: "failed_transient",
-          reason: `paper index daily report update failed: ${(e as Error).message}`,
-        };
-      }
-    }
-    throwIfCancelled(signal);
     stageEnd("summarize-daily", ` (${dailySummary.length} chars)`);
 
     // 8. Detail reports
@@ -325,6 +314,24 @@ export class ArxivPipeline {
 
     throwIfCancelled(signal);
     await this.deps.writer.writeDaily(dateStr, dailySummary, { dateWindowNote });
+    if (this.deps.paperIndex) {
+      try {
+        throwIfCancelled(signal);
+        await this.deps.paperIndex.addDailyReports(
+          visiblePapers.map((p) => p.id),
+          dailyPath,
+        );
+        await this.deps.paperIndex.setSummaries(
+          extractPaperSummaries(dailySummary),
+        );
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        return {
+          kind: "failed_transient",
+          reason: `paper index daily report update failed: ${(e as Error).message}`,
+        };
+      }
+    }
     throwIfCancelled(signal);
     const totalS = ((Date.now() - t0) / 1000).toFixed(1);
     logger.info(
@@ -571,4 +578,25 @@ function collapseCategoryFailures(
         ? first.reason
         : `all arXiv categories failed: ${failures.map((failure) => failure.reason).join("; ")}`,
   };
+}
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, limit), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
 }
