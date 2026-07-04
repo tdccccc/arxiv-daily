@@ -3,7 +3,7 @@ import { SchedulerService } from "../src/services/scheduler";
 import { Logger } from "../src/services/logger";
 import { StateStore } from "../src/services/state-store";
 import { RunLock } from "../src/services/run-lock";
-import { RunCancellationService } from "../src/services/cancellation";
+import { RunCancellationService, RunCancelledError } from "../src/services/cancellation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { RunHistoryRecord } from "../src/services/run-history";
 
@@ -384,6 +384,40 @@ describe("SchedulerService", () => {
       resultKind: "failed_transient",
       reason: "network timeout",
       errorMessage: "network timeout",
+    });
+  });
+
+  it("marks cancelled runs as skipped and records cancelled history without retry state", async () => {
+    const store = makeStore();
+    await store.load();
+    const history = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => {
+        throw new RunCancelledError("cancelled by test");
+      }),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: history.store,
+    });
+
+    const result = await svc.runForDateNow("2026-06-24");
+
+    expect(result).toEqual({ kind: "cancelled", reason: "cancelled by test" });
+    expect(store.get("2026-06-24")).toMatchObject({
+      status: "skipped",
+      error: "cancelled by test",
+    });
+    expect(history.records.at(-1)).toMatchObject({
+      event: "skipped",
+      trigger: "manual",
+      date: "2026-06-24",
+      status: "skipped",
+      resultKind: "cancelled",
+      reason: "cancelled by test",
+      errorMessage: "cancelled by test",
     });
   });
 
@@ -838,7 +872,7 @@ describe("SchedulerService", () => {
     expect(progress.setBatch).not.toHaveBeenCalled();
   });
 
-  it("cancels an active run and records a transient failure", async () => {
+  it("cancels an active run and records a cancelled skipped result", async () => {
     const store = makeStore();
     await store.load();
     const lock = new RunLock();
@@ -852,7 +886,7 @@ describe("SchedulerService", () => {
       return new Promise((resolve) => {
         signal?.addEventListener("abort", () =>
           resolve({
-            kind: "failed_transient",
+            kind: "cancelled",
             reason: String((signal as any).reason ?? "cancelled by user"),
           }),
         );
@@ -877,9 +911,9 @@ describe("SchedulerService", () => {
     expect(svc.cancelCurrentRun()).toEqual(["2026-05-11"]);
 
     const result = await pending;
-    expect((result as any).kind).toBe("failed_transient");
+    expect((result as any).kind).toBe("cancelled");
     expect((result as any).reason).toBe("cancelled by user");
-    expect(store.get("2026-05-11").status).toBe("failed_transient");
+    expect(store.get("2026-05-11").status).toBe("skipped");
     expect(store.get("2026-05-11").error).toBe("cancelled by user");
     expect(svc.activeRuns()).toEqual([]);
   });
@@ -892,7 +926,7 @@ describe("SchedulerService", () => {
     let svc!: SchedulerService;
     const runForDate = vi.fn(async () => {
       svc.cancelCurrentRun();
-      return { kind: "failed_transient", reason: "cancelled by user" };
+      return { kind: "cancelled", reason: "cancelled by user" };
     });
     svc = new SchedulerService({
       getSettings: () => ({
@@ -911,7 +945,7 @@ describe("SchedulerService", () => {
     expect(runForDate).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(1);
     expect(results[0].date).toBe("2026-05-12");
-    expect(results[0].result.kind).toBe("failed_transient");
+    expect(results[0].result.kind).toBe("cancelled");
   });
 
   // --- Behavior pinning tests (must stay green through refactor) ---

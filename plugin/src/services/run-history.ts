@@ -121,7 +121,7 @@ export class RunHistoryStore {
             paths.runHistoryPath,
             maxRotations,
           );
-          return decodeRunHistoryLines(raw.join("\n"))
+          return decodeRunHistoryLines(raw.join("\n"), logger)
             .sort((a, b) => b.at.localeCompare(a.at))
             .slice(0, Math.max(0, limit));
         },
@@ -177,7 +177,10 @@ function formatRunHistoryRecord(record: RunHistoryRecord): string {
   return parts.join(" | ");
 }
 
-function decodeRunHistoryLines(raw: string): RunHistoryRecord[] {
+function decodeRunHistoryLines(
+  raw: string,
+  logger?: Pick<Logger, "warn">,
+): RunHistoryRecord[] {
   const out: RunHistoryRecord[] = [];
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -185,11 +188,19 @@ function decodeRunHistoryLines(raw: string): RunHistoryRecord[] {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       if (isRunHistoryRecord(parsed)) out.push(parsed);
-    } catch {
-      // Ignore malformed audit lines; history is best-effort append-only data.
+    } catch (e) {
+      logger?.warn(
+        "run history: skipped malformed line",
+        truncateHistoryLine(trimmed),
+        e,
+      );
     }
   }
   return out;
+}
+
+function truncateHistoryLine(line: string): string {
+  return line.length > 200 ? `${line.slice(0, 200)}...` : line;
 }
 
 function isRunHistoryRecord(value: unknown): value is RunHistoryRecord {

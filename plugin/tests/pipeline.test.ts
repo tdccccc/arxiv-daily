@@ -152,7 +152,7 @@ function firstBucketPapersFromFixture() {
 }
 
 describe("ArxivPipeline", () => {
-  it("returns failed_transient without fetching when the signal is already cancelled", async () => {
+  it("returns cancelled without fetching when the signal is already cancelled", async () => {
     const d = makeDeps();
     const pipeline = new ArxivPipeline({
       fetcher: d.fetcher as any,
@@ -168,10 +168,34 @@ describe("ArxivPipeline", () => {
     const controller = new AbortController();
     controller.abort("cancelled by test");
     const result = await pipeline.runForDate(firstDateFromFixture(), controller.signal);
-    expect(result.kind).toBe("failed_transient");
+    expect(result.kind).toBe("cancelled");
     expect((result as any).reason).toBe("cancelled by test");
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it("passes the abort signal to recent and metadata fetches", async () => {
+    const d = makeDeps();
+    const controller = new AbortController();
+    const pipeline = new ArxivPipeline({
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    await pipeline.runForDate(firstDateFromFixture(), controller.signal);
+
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("astro-ph", controller.signal);
+    expect(d.fetcher.fetchMetadataByIds).toHaveBeenCalledWith(
+      expect.any(Array),
+      controller.signal,
+    );
   });
 
   it("returns failed_transient when /recent misses the date", async () => {
@@ -723,7 +747,7 @@ describe("ArxivPipeline", () => {
     const second = await pipeline.runForDate(date);
 
     expect(first).toEqual({
-      kind: "failed_transient",
+      kind: "cancelled",
       reason: "cancelled during detail",
     });
     expect(second.kind).toBe("completed");

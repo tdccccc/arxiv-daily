@@ -230,6 +230,7 @@ describe("Pipeline index 0 papers handling", () => {
 describe("Pipeline partial failure consistency", () => {
   function makeOnePaperPipeline(overrides: {
     ids?: string[];
+    detail?: boolean;
     writer?: Record<string, unknown>;
     paperIndex?: Record<string, unknown>;
     paperFetcher?: Record<string, unknown>;
@@ -285,7 +286,11 @@ describe("Pipeline partial failure consistency", () => {
       call: vi
         .fn()
         .mockResolvedValueOnce(JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "test", detail: false })),
+          papers: ids.map((id) => ({
+            id,
+            category: "test",
+            detail: overrides.detail ?? false,
+          })),
         }))
         .mockResolvedValue(
           [
@@ -349,11 +354,117 @@ describe("Pipeline partial failure consistency", () => {
     const result = await pipeline.runForDate("2026-05-11", controller.signal);
 
     expect(result).toEqual({
-      kind: "failed_transient",
+      kind: "cancelled",
       reason: "cancelled after daily write",
     });
     expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
     expect(paperIndex.setSummaries).not.toHaveBeenCalled();
+  });
+
+  it("continues to write the daily report when setPaperPath fails for an existing detail", async () => {
+    const logger = new Logger("error");
+    const logError = vi.spyOn(logger, "error");
+    const { pipeline, writer, paperIndex } = makeOnePaperPipeline({
+      detail: true,
+      writer: {
+        paperDetailExists: vi.fn(async () => true),
+      },
+      paperIndex: {
+        upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
+          papers.map((paper) => ({
+            entry: {
+              arxivId: paper.arxivId,
+              status: "inbox",
+              paperPath: null,
+            },
+            wasNew: true,
+          })),
+        ),
+        setPaperPath: vi.fn(async () => {
+          throw new Error("index write failed");
+        }),
+      },
+      paperFetcher: {
+        fetch: vi.fn(async () => ({
+          abstractConclusion: "abstract and conclusion",
+          fullSections: "detail content",
+        })),
+      },
+    });
+    (pipeline as any).deps.logger = logger;
+
+    const result = await pipeline.runForDate("2026-05-11");
+
+    expect(result).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(writer.writeDaily).toHaveBeenCalled();
+    expect(paperIndex.setPaperPath).toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("pipeline: detail failed for 2605.08080"),
+      expect.any(Error),
+    );
+  });
+
+  it("logs permanent category failures at error level and summarizes partial failures", async () => {
+    const logger = new Logger("debug");
+    const logError = vi.spyOn(logger, "error");
+    const logWarn = vi.spyOn(logger, "warn");
+    const OriginalDOMParser = globalThis.DOMParser;
+    let parseCalls = 0;
+    vi.stubGlobal("DOMParser", class {
+      parseFromString(html: string, mimeType: DOMParserSupportedType) {
+        parseCalls += 1;
+        if (parseCalls === 1) throw new Error("schema drift");
+        return new OriginalDOMParser().parseFromString(html, mimeType);
+      }
+    });
+    const fetcher = {
+      fetchRecent: vi
+        .fn()
+        .mockResolvedValueOnce(recentHtml)
+        .mockResolvedValueOnce(recentHtml),
+      fetchMetadataByIds: vi.fn(async () => new Map()),
+      fetchAbstractsByIds: vi.fn(),
+      fetchBySubmittedDate: vi.fn(),
+      fetchPaperHtml: vi.fn(),
+      fetchPaperAbsPage: vi.fn(),
+    };
+    const writer = {
+      writeDaily: vi.fn(),
+      writePaperDetail: vi.fn(),
+      writeEmptyDaily: vi.fn(),
+      dailyPath: vi.fn(),
+      paperDetailPath: vi.fn(),
+      paperDetailLink: vi.fn(),
+      dailyExists: vi.fn(async () => false),
+      paperDetailExists: vi.fn(async () => false),
+    };
+    const pipeline = new ArxivPipeline({
+      fetcher: fetcher as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      writer: writer as any,
+      llm: { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [] })) } as any,
+      logger,
+      arxiv: { ...testArxiv, categories: ["bad.cat", "astro-ph"] },
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    try {
+      await pipeline.runForDate("2026-05-11");
+    } finally {
+      vi.stubGlobal("DOMParser", OriginalDOMParser);
+    }
+
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("pipeline: parse failed for bad.cat"),
+    );
+    expect(logWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("pipeline: parse failed for bad.cat"),
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      "pipeline: 1/2 categories succeeded, 1 failed",
+    );
   });
 
   it("fetches paper content with bounded concurrency", async () => {

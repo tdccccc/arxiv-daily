@@ -35,6 +35,7 @@ interface SourcePaperMeta extends PaperMeta {
 export type PipelineResult =
   | { kind: "completed"; papersWritten: number }
   | { kind: "pending"; reason: string }
+  | { kind: "cancelled"; reason: string }
   | { kind: "failed_transient"; reason: string }
   | { kind: "failed_permanent"; reason: string };
 
@@ -74,7 +75,7 @@ export class ArxivPipeline {
       return await this.runForDateInner(dateStr, signal);
     } catch (e) {
       if (isCancellationError(e)) {
-        return { kind: "failed_transient", reason: (e as Error).message };
+        return { kind: "cancelled", reason: (e as Error).message };
       }
       throw e;
     }
@@ -126,7 +127,9 @@ export class ArxivPipeline {
     this.progress.setStage("enrich-abstract");
     try {
       const ids = sourcePapers.map((p) => p.id);
-      const metadataMap = await fetcher.fetchMetadataByIds(ids);
+      const metadataMap = signal
+        ? await fetcher.fetchMetadataByIds(ids, signal)
+        : await fetcher.fetchMetadataByIds(ids);
       for (const p of sourcePapers) {
         const meta = metadataMap.get(p.id);
         if (!meta) continue;
@@ -274,13 +277,19 @@ export class ArxivPipeline {
     for (let i = 0; i < detailPapers.length; i++) {
       throwIfCancelled(signal);
       const p = detailPapers[i];
+      if (!p) continue;
       if (await this.deps.writer.paperDetailExists(p.id)) {
         logger.info(`pipeline: detail ${p.id} already exists, skipping`);
-        if (this.deps.paperIndex) {
-          await this.deps.paperIndex.setPaperPath(
-            p.id,
-            this.deps.writer.paperDetailPath(p.id),
-          );
+        try {
+          if (this.deps.paperIndex) {
+            await this.deps.paperIndex.setPaperPath(
+              p.id,
+              this.deps.writer.paperDetailPath(p.id),
+            );
+          }
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          logger.error(`pipeline: detail failed for ${p.id}`, e);
         }
         continue;
       }
@@ -382,12 +391,18 @@ export class ArxivPipeline {
       );
       return {
         kind: "ok",
-        papers: filtered.map((p, i) => ({
-          ...p,
-          indexEntry: results[i].entry,
-          wasNew: results[i].wasNew,
-          seenBefore: !results[i].wasNew,
-        })),
+        papers: filtered.map((p, i) => {
+          const result = results[i];
+          if (!result) {
+            throw new Error(`paper index result missing for ${p.id}`);
+          }
+          return {
+            ...p,
+            indexEntry: result.entry,
+            wasNew: result.wasNew,
+            seenBefore: !result.wasNew,
+          };
+        }),
       };
     } catch (e) {
       return {
@@ -422,7 +437,9 @@ export class ArxivPipeline {
       throwIfCancelled(signal);
       let recentHtml: string;
       try {
-        recentHtml = await fetcher.fetchRecent(category);
+        recentHtml = signal
+          ? await fetcher.fetchRecent(category, signal)
+          : await fetcher.fetchRecent(category);
       } catch (e) {
         if (isCancellationError(e)) throw e;
         failures.push({
@@ -444,7 +461,7 @@ export class ArxivPipeline {
           kind: "failed_permanent",
           reason: `parse failed for ${category}: ${(e as Error).message}`,
         });
-        logger.warn(
+        logger.error(
           `pipeline: parse failed for ${category}, continuing with other categories: ${(e as Error).message}`,
         );
         continue;
@@ -481,6 +498,12 @@ export class ArxivPipeline {
         kind: "error",
         result: collapseCategoryFailures(failures),
       };
+    }
+
+    if (failures.length > 0) {
+      logger.warn(
+        `pipeline: ${succeededCategories.length}/${categories.length} categories succeeded, ${failures.length} failed`,
+      );
     }
 
     return {
@@ -541,7 +564,7 @@ function recentDateBounds(
 ): { oldest: string; newest: string } | null {
   const dates = buckets.map((bucket) => bucket.announceDate).sort();
   if (dates.length === 0) return null;
-  return { oldest: dates[0], newest: dates[dates.length - 1] };
+  return { oldest: dates[0]!, newest: dates[dates.length - 1]! };
 }
 
 function missingRecentDateReason(
@@ -569,7 +592,7 @@ function collapseCategoryFailures(
       reason: "fetch /recent failed: no arXiv categories succeeded",
     };
   }
-  const first = failures[0];
+  const first = failures[0]!;
   const allPermanent = failures.every((failure) => failure.kind === "failed_permanent");
   return {
     kind: allPermanent ? "failed_permanent" : "failed_transient",
@@ -593,7 +616,7 @@ async function mapConcurrent<T, R>(
       while (nextIndex < items.length) {
         const index = nextIndex;
         nextIndex += 1;
-        results[index] = await mapper(items[index], index);
+        results[index] = await mapper(items[index]!, index);
       }
     },
   );

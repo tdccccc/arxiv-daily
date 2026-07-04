@@ -113,11 +113,12 @@ export class SchedulerDriver {
     try {
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
-        const dateObj = daysBefore(todayObj, i);
+        const dateObj = daysBefore(todayObj, i, tz);
         const date = dateStrings[i];
+        if (!date) continue;
         const isToday = date === today;
         this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-        if (isWeekendDate(dateObj)) continue;
+        if (isWeekendDate(dateObj, tz)) continue;
         await this.tickDate(date, {
           now,
           timeGate: isToday ? { scheduledMin, endMin, minutesNow } : undefined,
@@ -238,6 +239,7 @@ export class SchedulerDriver {
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
+        if (!date) continue;
         const entry = this.deps.store.get(date);
         if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
           continue;
@@ -282,6 +284,7 @@ export class SchedulerDriver {
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
+        if (!date) continue;
         if (
           date !== today &&
           this.deps.recentDates?.hasDate &&
@@ -386,10 +389,15 @@ export class SchedulerDriver {
           ? await this.deps.runForDate(date, signal)
           : await this.deps.runForDate(date);
       } catch (e) {
-        result = {
-          kind: "failed_transient",
-          reason: errorMessage(e),
-        };
+        result = isCancellationError(e)
+          ? {
+              kind: "cancelled",
+              reason: errorMessage(e),
+            }
+          : {
+              kind: "failed_transient",
+              reason: errorMessage(e),
+            };
       }
       try {
         if (result.kind === "completed") {
@@ -411,6 +419,11 @@ export class SchedulerDriver {
           this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordPending(date, trigger, result.reason, now);
+        } else if (result.kind === "cancelled") {
+          await this.deps.store.setSkipped(date, result.reason);
+          this.deps.logger.info(`arXiv ${date}: cancelled - ${result.reason}`);
+          this.progress.setIdle(this.latestCompleted());
+          await this.deps.history.recordCancelled(date, trigger, result.reason, now);
         } else if (result.kind === "failed_transient") {
           await this.persistFailed(date, "transient", result.reason);
           this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);

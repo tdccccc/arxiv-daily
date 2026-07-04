@@ -84,6 +84,25 @@ export class HistoryRecorder {
     }, at);
   }
 
+  async recordCancelled(
+    date: string,
+    trigger: RunHistoryTrigger,
+    reason: string,
+    at?: Date,
+  ): Promise<void> {
+    const entry = this.deps.store().get(date);
+    await this.record({
+      date,
+      event: "skipped",
+      trigger,
+      status: entry.status,
+      resultKind: "cancelled",
+      reason,
+      errorMessage: reason,
+      attempts: entry.attempts,
+    }, at);
+  }
+
   async recordSkippedForDate(
     dateObj: { y: number; m: number; d: number },
     trigger: RunHistoryTrigger,

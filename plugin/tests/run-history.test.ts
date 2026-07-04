@@ -183,6 +183,32 @@ describe("RunHistoryStore", () => {
     expect(latest.map((entry) => entry.date)).toEqual(["2026-06-24", "2026-06-23"]);
   });
 
+  it("warns when skipping malformed history lines", async () => {
+    const malformed = `not json ${"x".repeat(240)}`;
+    const existing = [
+      JSON.stringify(record({ at: "2026-06-25T09:00:00.000Z", date: "2026-06-23" })),
+      malformed,
+    ].join("\n");
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-history.jsonl": existing,
+    });
+    const logger = { warn: vi.fn() };
+    const store = RunHistoryStore.fromStorage(
+      storage,
+      DEFAULT_SETTINGS.output,
+      logger,
+    );
+
+    await expect(store.readLatest(10)).resolves.toHaveLength(1);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("run history: skipped malformed line"),
+      expect.stringContaining(malformed.slice(0, 200)),
+      expect.any(Error),
+    );
+    expect(logger.warn.mock.calls[0][1]).toHaveLength(203);
+  });
+
   it("formats error messages for sharing from Dashboard", () => {
     expect(
       formatRunHistoryRecords([
