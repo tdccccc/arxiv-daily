@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -128,6 +128,20 @@ describe("Node env/progress/resource adapters", () => {
     });
     expect(await provider.getSecret("llm.apiKey")).toBe("secret");
     expect(await provider.getSecret("missing")).toBeNull();
+  });
+
+  it("stores CLI-set secrets in memory for the current Node session", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const provider = new EnvSecretProvider({});
+
+    await provider.setSecret("llm.apiKey", "session-secret");
+    expect(await provider.getSecret("llm.apiKey")).toBe("session-secret");
+    expect(warn).toHaveBeenCalledWith(
+      "Node EnvSecretProvider stores secrets in memory only; they will not persist across restarts",
+    );
+
+    await provider.deleteSecret("llm.apiKey");
+    expect(await provider.getSecret("llm.apiKey")).toBeNull();
   });
 
   it("writes progress and resource targets to streams", async () => {

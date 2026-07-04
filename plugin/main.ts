@@ -159,7 +159,9 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   onunload() {
-    void this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW);
+    void Promise.resolve(
+      this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW),
+    ).catch(() => {});
     this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();
   }

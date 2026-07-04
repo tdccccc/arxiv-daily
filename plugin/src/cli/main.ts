@@ -155,6 +155,7 @@ function parseCli(argv: string[]): ParsedCli {
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === undefined) continue;
     if (arg === "--help" || arg === "-h") return { command: { name: "help" } };
     if (arg === "--config") {
       global.configPath = requireValue(argv, ++i, arg);
@@ -213,10 +214,11 @@ function optionValue(argv: string[], option: string): string | undefined {
 
 function pendingDates(config: CliRuntimeConfig, now: Date): string[] {
   const lookbackDays = 5; // LOOKBACK_DAYS constant
-  const today = todayInTz(now, config.settings.arxiv.timezone);
+  const timezone = config.settings.arxiv.timezone;
+  const today = todayInTz(now, timezone);
   const dates: string[] = [];
   for (let i = lookbackDays - 1; i >= 0; i--) {
-    dates.push(formatDate(daysBefore(today, i)));
+    dates.push(formatDate(daysBefore(today, i, timezone)));
   }
   return dates;
 }
@@ -266,7 +268,12 @@ async function defaultBuildRuntime(
 }
 
 if (typeof require !== "undefined" && require.main === module) {
-  void runCli().then((code) => {
-    process.exitCode = code;
-  });
+  void runCli()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }

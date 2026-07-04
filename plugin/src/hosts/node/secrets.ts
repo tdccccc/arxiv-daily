@@ -1,6 +1,11 @@
 import type { SecretProvider } from "../../core/adapters";
 
+const MEMORY_ONLY_WARNING =
+  "Node EnvSecretProvider stores secrets in memory only; they will not persist across restarts";
+
 export class EnvSecretProvider implements SecretProvider {
+  private readonly memory = new Map<string, string>();
+
   constructor(
     private env: Record<string, string | undefined> = process.env,
     private prefix = "ARXIV_DAILY",
@@ -8,10 +13,24 @@ export class EnvSecretProvider implements SecretProvider {
 
   async getSecret(key: string): Promise<string | null> {
     for (const candidate of this.candidates(key)) {
+      const memoryValue = this.memory.get(candidate);
+      if (memoryValue) return memoryValue;
       const value = this.env[candidate];
       if (value) return value;
     }
     return null;
+  }
+
+  async setSecret(key: string, value: string): Promise<void> {
+    console.warn(MEMORY_ONLY_WARNING);
+    this.memory.set(key, value);
+  }
+
+  async deleteSecret(key: string): Promise<void> {
+    for (const candidate of this.candidates(key)) {
+      this.memory.delete(candidate);
+    }
+    this.memory.delete(key);
   }
 
   private candidates(key: string): string[] {
