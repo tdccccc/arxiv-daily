@@ -809,7 +809,7 @@ class ArxivDailyDashboardView extends ItemView {
       const actions = this.createEmptyActions(state);
       this.createEmptyActionButton(actions, "list", "Show All", () => {
         this.query = { ...this.query, tab: "all" };
-        this.render();
+        this.renderCurrentResults();
       });
       return;
     }
@@ -864,7 +864,7 @@ class ArxivDailyDashboardView extends ItemView {
       ...(this.query.sort ? { sort: this.query.sort } : {}),
     };
     this.currentPage = 0;
-    this.render();
+    this.renderCurrentResults();
   }
 
   private openSettings(): void {
@@ -968,7 +968,7 @@ class ArxivDailyDashboardView extends ItemView {
             this.query.detailSummary === true ? undefined : true,
         };
         this.currentPage = 0;
-        this.render();
+        this.renderCurrentResults();
       },
     );
 
