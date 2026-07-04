@@ -7,6 +7,7 @@ import type { PaperMeta } from "./arxiv-parser";
 import { renderPrompt } from "../prompts/render";
 import filterSystemTemplate from "../prompts/paper-filter.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
+import { escapePaperDataFence } from "./prompt-safety";
 
 export interface FilteredPaper extends PaperMeta {
   category: string;
@@ -42,7 +43,12 @@ export async function filterPapers(
   const topicByTag = new Map(topics.map((t) => [t.tag, t] as const));
 
   const papersText = papers
-    .map((p) => `---\nID: ${p.id}\nTitle: ${p.title}\nAbstract: ${p.abstract}\n`)
+    .map(
+      (p) =>
+        `---\nID: ${escapePaperDataFence(p.id)}\n` +
+        `Title: ${escapePaperDataFence(p.title)}\n` +
+        `Abstract: ${escapePaperDataFence(p.abstract)}\n`,
+    )
     .join("");
 
   const systemPrompt = renderPrompt(filterSystemTemplate, {

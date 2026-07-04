@@ -24,6 +24,7 @@ import dailyPartialTemplateEn from "../prompts/daily-summary.partial.en.system.m
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
 import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
+import { escapePaperDataFence } from "./prompt-safety";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -70,9 +71,9 @@ function paperSourceSections(p: DailyPaperWithContent): string {
 }
 
 function buildDailyContent(p: DailyPaperWithContent): string {
-  const parts = [p.abstractConclusion.trim()].filter(Boolean);
+  const parts = [escapePaperDataFence(p.abstractConclusion.trim())].filter(Boolean);
   if (p.fullSections?.trim()) {
-    parts.push(`Full-text excerpts:\n${p.fullSections.trim()}`);
+    parts.push(`Full-text excerpts:\n${escapePaperDataFence(p.fullSections.trim())}`);
   }
   return parts.join("\n\n");
 }
@@ -90,8 +91,8 @@ function buildPaperBlock(
   const displayCat = tagToName?.get(p.category) ?? p.category;
   return (
     `=== Paper: ${p.id} [${displayCat}]${detailMark} ===\n` +
-    `Title: ${p.title}\n` +
-    `Authors: ${p.authors}\n` +
+    `Title: ${escapePaperDataFence(p.title)}\n` +
+    `Authors: ${escapePaperDataFence(p.authors)}\n` +
     `Source sections: ${paperSourceSections(p)}\n` +
     inboxLine +
     `${buildDailyContent(p)}\n\n`
@@ -456,10 +457,10 @@ export async function summarizePaperDetail(
 
   const userContent =
     `<paper_data>\n` +
-    `标题: ${paper.title}\n` +
-    `arXiv: https://arxiv.org/abs/${paper.id}\n` +
-    `作者: ${paper.authors}\n\n` +
-    `以下是论文各章节内容：\n\n${paper.fullSections}\n` +
+    `标题: ${escapePaperDataFence(paper.title)}\n` +
+    `arXiv: https://arxiv.org/abs/${escapePaperDataFence(paper.id)}\n` +
+    `作者: ${escapePaperDataFence(paper.authors)}\n\n` +
+    `以下是论文各章节内容：\n\n${escapePaperDataFence(paper.fullSections)}\n` +
     `</paper_data>`;
 
   const summary = await deps.llm.call(
