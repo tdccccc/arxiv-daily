@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import OpenAI from "openai";
 import {
   buildModelUrlCandidates,
   LLM_STREAM_IDLE_TIMEOUT_MS,
@@ -7,13 +6,6 @@ import {
   collectStreamWithIdleTimeout,
   normalizeOpenAiBaseUrl,
 } from "../../src/llm/client";
-
-vi.mock("openai", () => {
-  const OpenAIMock = vi.fn().mockImplementation(() => ({
-    chat: { completions: { create: vi.fn() } },
-  }));
-  return { default: OpenAIMock };
-});
 
 describe("Model listing", () => {
   beforeEach(() => {
@@ -56,8 +48,13 @@ describe("Model listing", () => {
     );
   });
 
-  it("constructs the OpenAI client with the normalized chat base URL", () => {
-    new LlmClient(
+  it("posts chat calls to the normalized OpenAI-compatible chat URL", async () => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+    }));
+    const client = new LlmClient(
       {
         apiKey: "sk-test",
         provider: "custom",
@@ -67,23 +64,25 @@ describe("Model listing", () => {
         reasoningEffort: "high",
       },
       { warn: vi.fn() } as any,
+      { request },
     );
 
-    expect(OpenAI).toHaveBeenCalledWith(
+    await expect(client.testConnection()).resolves.toEqual({ success: true });
+
+    expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        baseURL: "http://59.64.32.247:5001/v1",
+        url: "http://59.64.32.247:5001/v1/chat/completions",
+        method: "POST",
       }),
     );
   });
 
   it("does not retry permanent non-429 4xx chat errors", async () => {
-    vi.useFakeTimers();
-    const create = vi.fn().mockRejectedValue(
-      Object.assign(new Error("Unauthorized"), { status: 401 }),
-    );
-    vi.mocked(OpenAI).mockImplementationOnce(
-      () => ({ chat: { completions: { create } } }) as any,
-    );
+    const request = vi.fn(async () => ({
+      status: 401,
+      headers: {},
+      bodyText: JSON.stringify({ error: { message: "Unauthorized" } }),
+    }));
     const client = new LlmClient(
       {
         apiKey: "sk-test",
@@ -94,14 +93,38 @@ describe("Model listing", () => {
         reasoningEffort: "high",
       },
       { warn: vi.fn() } as any,
+      { request },
     );
 
-    const call = client.call([{ role: "user", content: "hello" }]);
-    const assertion = expect(call).rejects.toThrow("Unauthorized");
-    await vi.runAllTimersAsync();
+    await expect(client.call([{ role: "user", content: "hello" }]))
+      .rejects.toThrow("Unauthorized");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 
-    await assertion;
-    expect(create).toHaveBeenCalledTimes(1);
+  it("collects OpenAI-compatible SSE chat completion chunks", async () => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText:
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "hel" } }] })}\n\n` +
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "lo" } }] })}\n\n` +
+        "data: [DONE]\n\n",
+    }));
+    const client = new LlmClient(
+      {
+        apiKey: "sk-test",
+        provider: "custom",
+        baseUrl: "https://llm.example.com/v1",
+        model: "gpt-test",
+        thinkingMode: false,
+        reasoningEffort: "high",
+      },
+      { warn: vi.fn() } as any,
+      { request },
+    );
+
+    await expect(client.call([{ role: "user", content: "hello" }]))
+      .resolves.toBe("hello");
   });
 
   it("aborts a stream when no chunk arrives before the idle timeout", async () => {

@@ -12,9 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
-    "openai": "^4.65.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.11.30",
     "builtin-modules": "^4.0.0",

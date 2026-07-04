@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
@@ -80,25 +79,15 @@ export function normalizeOpenAiBaseUrl(baseUrl: string): string {
 }
 
 export class LlmClient {
-  private client: OpenAI;
-
   constructor(
     private settings: LlmSettings,
     private logger: Logger,
     private http?: HttpClient,
-  ) {
-    this.client = new OpenAI({
-      apiKey: settings.apiKey,
-      baseURL: normalizeOpenAiBaseUrl(settings.baseUrl),
-      timeout: LLM_TIMEOUT_MS,
-      maxRetries: 0,
-      dangerouslyAllowBrowser: true,
-    });
-  }
+  ) {}
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
-      await this.client.chat.completions.create({
+      await this.postChatJson({
         model: this.settings.model,
         messages: [{ role: "user", content: "Hello" }],
         max_tokens: 5,
@@ -208,13 +197,9 @@ export class LlmClient {
         }
         const abort = createAttemptAbortController(opts.signal);
         try {
-          const stream = await this.client.chat.completions.create(params as any, {
-            signal: abort.controller.signal,
-          } as any);
-          const content = await collectStreamWithIdleTimeout(
-            stream as unknown as AsyncIterable<unknown>,
+          const content = await this.postChatStream(
+            params,
             abort.controller,
-            LLM_STREAM_IDLE_TIMEOUT_MS,
             opts.signal,
           );
           throwIfCancelled(opts.signal);
@@ -236,6 +221,98 @@ export class LlmClient {
       },
     );
   }
+
+  private async postChatJson(
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const res = await this.requestChat(body, false, signal);
+    return JSON.parse(res);
+  }
+
+  private async postChatStream(
+    body: Record<string, unknown>,
+    controller: AbortController,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const requestBody = { ...body, stream: true };
+    if (this.http) {
+      const raw = await this.requestChat(requestBody, true, signal);
+      return collectStreamWithIdleTimeout(
+        parseSseText(raw),
+        controller,
+        LLM_STREAM_IDLE_TIMEOUT_MS,
+        signal,
+      );
+    }
+
+    const response = await fetch(this.chatCompletionsUrl(), {
+      method: "POST",
+      headers: this.chatHeaders(),
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw createStatusError(response.status, await response.text());
+    }
+    if (!response.body) {
+      return collectStreamWithIdleTimeout(
+        parseSseText(await response.text()),
+        controller,
+        LLM_STREAM_IDLE_TIMEOUT_MS,
+        signal,
+      );
+    }
+    return collectStreamWithIdleTimeout(
+      parseSseReadableStream(response.body),
+      controller,
+      LLM_STREAM_IDLE_TIMEOUT_MS,
+      signal,
+    );
+  }
+
+  private async requestChat(
+    body: Record<string, unknown>,
+    stream: boolean,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const requestBody = { ...body, stream };
+    if (this.http) {
+      const res = await this.http.request({
+        url: this.chatCompletionsUrl(),
+        method: "POST",
+        headers: this.chatHeaders(),
+        body: JSON.stringify(requestBody),
+        timeoutMs: LLM_TIMEOUT_MS,
+        signal,
+      });
+      if (res.status < 200 || res.status >= 300) {
+        throw createStatusError(res.status, res.bodyText);
+      }
+      return res.bodyText;
+    }
+
+    const response = await fetch(this.chatCompletionsUrl(), {
+      method: "POST",
+      headers: this.chatHeaders(),
+      body: JSON.stringify(requestBody),
+      signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw createStatusError(response.status, text);
+    return text;
+  }
+
+  private chatCompletionsUrl(): string {
+    return `${normalizeOpenAiBaseUrl(this.settings.baseUrl)}/chat/completions`;
+  }
+
+  private chatHeaders(): Record<string, string> {
+    return {
+      "Authorization": `Bearer ${this.settings.apiKey}`,
+      "Content-Type": "application/json",
+    };
+  }
 }
 
 export function isPermanentLlmError(err: unknown): boolean {
@@ -246,6 +323,65 @@ export function isPermanentLlmError(err: unknown): boolean {
     status < 500 &&
     status !== 429
   );
+}
+
+function createStatusError(status: number, bodyText: string): LlmStatusError {
+  let message = bodyText.trim();
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
+    message = parsed.error?.message ?? message;
+  } catch {
+    // Use raw response text.
+  }
+  const error = new Error(message || `LLM request failed with HTTP ${status}`) as LlmStatusError;
+  error.status = status;
+  return error;
+}
+
+async function* parseSseText(raw: string): AsyncIterable<unknown> {
+  for (const event of raw.split(/\r?\n\r?\n/)) {
+    const parsed = parseSseEvent(event);
+    if (parsed.done) return;
+    if (parsed.value !== undefined) yield parsed.value;
+  }
+}
+
+async function* parseSseReadableStream(
+  stream: ReadableStream<Uint8Array>,
+): AsyncIterable<unknown> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        const parsed = parseSseEvent(event);
+        if (parsed.done) return;
+        if (parsed.value !== undefined) yield parsed.value;
+      }
+    }
+    buffer += decoder.decode();
+    const parsed = parseSseEvent(buffer);
+    if (!parsed.done && parsed.value !== undefined) yield parsed.value;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseSseEvent(event: string): { done: boolean; value?: unknown } {
+  const data = event
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim())
+    .join("\n");
+  if (!data) return { done: false };
+  if (data === "[DONE]") return { done: true };
+  return { done: false, value: JSON.parse(data) };
 }
 
 export async function collectStreamWithIdleTimeout(
