@@ -404,7 +404,7 @@ const LOG_LEVEL_TAG = /\[(DEBUG|INFO|WARN|ERROR)\]/;
 
 function parseLogLevelTag(line: string): string | null {
   const m = line.match(LOG_LEVEL_TAG);
-  return m ? m[1].toLowerCase() : null;
+  return m?.[1] ? m[1].toLowerCase() : null;
 }
 
 export interface FormatLogEntriesOptions {
@@ -1165,11 +1165,12 @@ class ArxivDailyDashboardView extends ItemView {
 
   private getLookbackDates(): Set<string> {
     const dates = new Set<string>();
-    const today = todayInTz(new Date(), this.plugin.settings.arxiv.timezone);
+    const timezone = this.plugin.settings.arxiv.timezone;
+    const today = todayInTz(new Date(), timezone);
 
     for (let i = 0; i < LOOKBACK_DAYS; i++) {
-      const date = daysBefore(today, i);
-      if (!isWeekendDate(date)) {
+      const date = daysBefore(today, i, timezone);
+      if (!isWeekendDate(date, timezone)) {
         dates.add(formatDate(date));
       }
     }
@@ -1194,7 +1195,7 @@ class ArxivDailyDashboardView extends ItemView {
       runAtLocal: settings.schedule.runAtLocal,
       runUntilLocal: settings.schedule.runUntilLocal,
       inLookback: this.getLookbackDates().has(date),
-      isWeekend: parsed ? isWeekendDate(parsed) : false,
+      isWeekend: parsed ? isWeekendDate(parsed, settings.arxiv.timezone) : false,
       hasDailyReport,
       recentDates: this.plugin.recentDates.snapshot().dates,
       runState,
@@ -2597,13 +2598,33 @@ function latestReportMonth(reports: DailyReportDay[]): string | null {
 }
 
 function shiftMonth(month: string, delta: number): string {
-  const [year, monthIndex] = month.split("-").map(Number);
+  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
+  if (
+    typeof rawYear !== "number" ||
+    typeof rawMonthIndex !== "number" ||
+    !Number.isFinite(rawYear) ||
+    !Number.isFinite(rawMonthIndex)
+  ) {
+    return month;
+  }
+  const year = rawYear;
+  const monthIndex = rawMonthIndex;
   const date = new Date(Date.UTC(year, monthIndex - 1 + delta, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function calendarCells(month: string): Array<{ date: string | null }> {
-  const [year, monthIndex] = month.split("-").map(Number);
+  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
+  if (
+    typeof rawYear !== "number" ||
+    typeof rawMonthIndex !== "number" ||
+    !Number.isFinite(rawYear) ||
+    !Number.isFinite(rawMonthIndex)
+  ) {
+    return [];
+  }
+  const year = rawYear;
+  const monthIndex = rawMonthIndex;
   const first = new Date(Date.UTC(year, monthIndex - 1, 1));
   const daysInMonth = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate();
   const mondayOffset = (first.getUTCDay() + 6) % 7;

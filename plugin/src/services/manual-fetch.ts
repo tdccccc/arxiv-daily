@@ -46,7 +46,7 @@ export function normalizeArxivId(input: string): string | null {
     .replace(/\.pdf$/i, "")
     .trim();
   const m = ID_RE.exec(stripped);
-  return m ? m[1] : null;
+  return m?.[1] ?? null;
 }
 
 export class ManualFetchService {
@@ -319,5 +319,5 @@ function isFrontmatterOnlyNote(markdown: string): boolean {
   const trimmedStart = markdown.trimStart();
   if (!trimmedStart.startsWith("---")) return markdown.trim().length === 0;
   const match = /^---\s*\n[\s\S]*?\n---\s*(?:\n|$)([\s\S]*)$/.exec(trimmedStart);
-  return match ? match[1].trim().length === 0 : markdown.trim().length === 0;
+  return match ? (match[1] ?? "").trim().length === 0 : markdown.trim().length === 0;
 }

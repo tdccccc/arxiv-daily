@@ -35,9 +35,10 @@ export function parseDailySelections(markdown: string): DailyPaperSelection[] {
     /^[ \t]*[-*][ \t]+\[([ xX])\][^\n]*?<!--\s*arxiv-daily:(\d{4}\.\d{4,5}):(?:selection:)?(watch|highlight)\s*-->/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(markdown)) !== null) {
-    const checked = m[1].toLowerCase() === "x";
-    const arxivId = m[2];
-    const kind = m[3] as "watch" | "highlight";
+    const [, rawChecked, arxivId, rawKind] = m;
+    if (!rawChecked || !arxivId || !rawKind) continue;
+    const checked = rawChecked.toLowerCase() === "x";
+    const kind = rawKind as "watch" | "highlight";
     const cur =
       selections.get(arxivId) ?? { arxivId, watch: false, highlight: false };
     if (kind === "watch") cur.watch = checked;
@@ -198,7 +199,7 @@ export class DailySelectionSyncService {
     for (let i = LOOKBACK_DAYS - 1; i >= 0; i--) {
       paths.push(
         this.opts.storage.normalizePath(
-          `${dailyDir}/${formatDate(daysBefore(today, i))}.md`,
+          `${dailyDir}/${formatDate(daysBefore(today, i, timezone))}.md`,
         ),
       );
     }

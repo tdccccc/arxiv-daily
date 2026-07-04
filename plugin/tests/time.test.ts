@@ -129,6 +129,19 @@ describe("time utils", () => {
     expect(daysBefore(tokyoToday, 1)).toEqual({ y: 2026, m: 1, d: 1 });
   });
 
+  it("daysBefore accepts a timezone for local calendar arithmetic across DST", () => {
+    const newYorkToday = todayInTz(
+      new Date("2026-03-09T16:00:00Z"),
+      "America/New_York",
+    );
+    expect(formatDate(newYorkToday)).toBe("2026-03-09");
+    expect(daysBefore(newYorkToday, 1, "America/New_York")).toEqual({
+      y: 2026,
+      m: 3,
+      d: 8,
+    });
+  });
+
   it("isWeekendInTz returns true for Saturday Shanghai", () => {
     const d = new Date("2026-05-09T05:00:00Z"); // 13:00 Shanghai, Sat
     expect(isWeekendInTz(d, "Asia/Shanghai")).toBe(true);
@@ -162,5 +175,10 @@ describe("time utils", () => {
     expect(isWeekendDate({ y: 2026, m: 5, d: 9 })).toBe(true);
     expect(isWeekendDate({ y: 2026, m: 5, d: 10 })).toBe(true);
     expect(isWeekendDate({ y: 2026, m: 5, d: 11 })).toBe(false);
+  });
+
+  it("isWeekendDate accepts a timezone for tz-local calendar dates", () => {
+    expect(isWeekendDate({ y: 2026, m: 5, d: 9 }, "Asia/Shanghai")).toBe(true);
+    expect(isWeekendDate({ y: 2026, m: 5, d: 11 }, "America/New_York")).toBe(false);
   });
 });

@@ -223,7 +223,7 @@ function applyPartialSettings(
       arxivCategories(base.arxiv),
     );
   }
-  next.arxiv.category = arxivCategories(next.arxiv)[0];
+  next.arxiv.category = arxivCategories(next.arxiv)[0] ?? base.arxiv.category;
   return next;
 }
 

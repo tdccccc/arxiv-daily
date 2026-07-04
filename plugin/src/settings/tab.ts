@@ -98,7 +98,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const normalized = normalizeUniqueCategories(categories);
     const next = normalized.length > 0 ? normalized : ["astro-ph"];
     this.plugin.settings.arxiv.categories = next;
-    this.plugin.settings.arxiv.category = next[0];
+    this.plugin.settings.arxiv.category = next[0] ?? "astro-ph";
     await this.plugin.saveSettings();
   }
 
@@ -253,7 +253,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         for (const e of efforts) {
           d.addOption(e, e);
         }
-        d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0])
+        d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0]!)
           .onChange(async (v) => {
             s.llm.reasoningEffort = v;
             await this.plugin.saveSettings();
@@ -280,11 +280,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setHeading();
 
     for (let i = 0; i < categories.length; i++) {
+      const category = categories[i];
+      if (!category) continue;
       new Setting(containerEl)
         .setName(`Category ${i + 1}`)
         .addDropdown((d) => {
-          addCategoryOptions(d.selectEl, categories[i]);
-          d.setValue(categories[i]).onChange(async (v) => {
+          addCategoryOptions(d.selectEl, category);
+          d.setValue(category).onChange(async (v) => {
             const next = [...categories];
             next[i] = v;
             await this.setArxivCategories(next);
@@ -695,6 +697,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
     const topic = topics[index];
+    if (!topic) return;
     const isExpanded = this.expandedTopics.has(topic.id);
 
     const card = container.createDiv({
@@ -932,8 +935,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       select.value = currentModel;
     } else if (models.length > 0) {
       // Select first model if current not in list
-      select.value = models[0];
-      this.plugin.settings.llm.model = models[0];
+      select.value = models[0]!;
+      this.plugin.settings.llm.model = models[0]!;
       this.plugin.saveSettings();
     }
 

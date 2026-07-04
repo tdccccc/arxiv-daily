@@ -13,7 +13,7 @@ export function lookbackDateStrings(tz: string, count: number, now: () => Date):
   const todayObj = todayInTz(now(), tz);
   const out: string[] = [];
   for (let i = 0; i < count; i += 1) {
-    out.push(formatDate(daysBefore(todayObj, i)));
+    out.push(formatDate(daysBefore(todayObj, i, tz)));
   }
   return out;
 }

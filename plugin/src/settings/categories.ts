@@ -22,7 +22,7 @@ export function arxivCategories(arxiv: ArxivSettings): string[] {
 }
 
 export function primaryArxivCategory(arxiv: ArxivSettings): string {
-  return arxivCategories(arxiv)[0];
+  return arxivCategories(arxiv)[0] ?? "astro-ph";
 }
 
 export function formatArxivCategories(arxiv: ArxivSettings): string {

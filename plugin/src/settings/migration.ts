@@ -19,7 +19,7 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
     arxiv.categories,
     normalizeCategoryList(arxiv.category, DEFAULT_SETTINGS.arxiv.categories),
   );
-  const category = categories[0];
+  const category = categories[0] ?? DEFAULT_SETTINGS.arxiv.category;
   const timezone =
     typeof arxiv.timezone === "string" ? arxiv.timezone : DEFAULT_SETTINGS.arxiv.timezone;
 

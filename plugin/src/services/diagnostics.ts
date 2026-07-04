@@ -157,12 +157,12 @@ function getDateContext(now: Date, settings: PluginSettings, runState: RunState)
     const lookbackLines = Array.from(
       { length: 5 }, // LOOKBACK_DAYS
       (_, i) => {
-        const dateObj = daysBefore(today, i);
+        const dateObj = daysBefore(today, i, settings.arxiv.timezone);
         const date = formatDate(dateObj);
         const entry = runState[date];
         const parts = [
           `${date}: state=${entry?.status ?? "pending"}`,
-          `weekend=${isWeekendDate(dateObj) ? "yes" : "no"}`,
+          `weekend=${isWeekendDate(dateObj, settings.arxiv.timezone) ? "yes" : "no"}`,
         ];
         if (entry) parts.push(`attempts=${entry.attempts}`);
         return `  - ${parts.join(", ")}`;

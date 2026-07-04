@@ -245,7 +245,7 @@ function parseDailyCandidates(
     const h2 = /^##\s+(.+?)\s*$/.exec(line);
     if (h2) {
       flush();
-      currentTopic = h2[1].trim();
+      currentTopic = h2[1]?.trim() ?? "";
       currentHeading = "";
       currentBlock = [];
       continue;
@@ -253,7 +253,7 @@ function parseDailyCandidates(
     const h3 = /^###\s+(.+?)\s*$/.exec(line);
     if (h3) {
       flush();
-      currentHeading = h3[1].trim();
+      currentHeading = h3[1]?.trim() ?? "";
       currentBlock = [];
       continue;
     }
@@ -414,10 +414,12 @@ function parseFrontmatter(markdown: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) return {};
   const out: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
+  for (const line of (match[1] ?? "").split(/\r?\n/)) {
     const item = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
     if (!item) continue;
-    out[item[1]] = parseYamlScalar(item[2]);
+    const key = item[1];
+    if (!key) continue;
+    out[key] = parseYamlScalar(item[2] ?? "");
   }
   return out;
 }
@@ -426,10 +428,10 @@ function parseYamlScalar(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
   const quoted = /^"(.*)"$/.exec(trimmed) ?? /^'(.*)'$/.exec(trimmed);
-  if (quoted) return quoted[1].replace(/\\"/g, "\"");
+  if (quoted) return (quoted[1] ?? "").replace(/\\"/g, "\"");
   const inlineArray = /^\[(.*)\]$/.exec(trimmed);
   if (inlineArray) {
-    return inlineArray[1]
+    return (inlineArray[1] ?? "")
       .split(/\s*,\s*/)
       .map((part) => part.replace(/^["']|["']$/g, "").trim())
       .filter(Boolean)
@@ -458,7 +460,7 @@ function dailyReportPathFromLink(value: string | undefined): string | undefined 
   if (!value) return undefined;
   const wiki = /^\[\[([^\]|]+)(?:\|[^\]]+)?\]\]$/.exec(value.trim());
   if (!wiki) return undefined;
-  const path = normalizeVaultPath(wiki[1].trim());
+  const path = normalizeVaultPath((wiki[1] ?? "").trim());
   if (!path) return undefined;
   return path.endsWith(".md") ? path : `${path}.md`;
 }
