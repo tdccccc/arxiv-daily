@@ -46,6 +46,13 @@ const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
   { id: "starred", label: "Starred" },
 ];
 
+const PAGE_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 20, label: "20" },
+  { value: 50, label: "50" },
+  { value: 100, label: "100" },
+  { value: Infinity, label: "All" },
+];
+
 const SORT_LABELS: Record<DashboardSortKey, string> = {
   priority: "Starred first",
   published: "Published",
@@ -1712,12 +1719,10 @@ class ArxivDailyDashboardView extends ItemView {
     });
     controls.createEl("span", {
       cls: "arxiv-daily-dashboard__batch-showing",
-      text:
-        page.total === 0
-          ? "Showing 0 of 0 papers"
-          : `Showing ${page.start}-${page.end} of ${page.total} papers`,
+      text: showingText(page),
     });
     this.renderSortControl(controls);
+    this.renderPageSizeControl(controls);
 
     if (page.rows.length === 0) toolbar.addClass("is-empty");
   }
@@ -1769,6 +1774,32 @@ class ArxivDailyDashboardView extends ItemView {
     });
   }
 
+  private renderPageSizeControl(parent: HTMLElement): void {
+    const field = parent.createEl("label", {
+      cls: "arxiv-daily-dashboard__batch-sort",
+    });
+    field.createSpan({
+      cls: "arxiv-daily-dashboard__batch-sort-label",
+      text: "Per page",
+    });
+    const currentSize = this.pageSize;
+    const select = this.createSelect(
+      field,
+      PAGE_SIZE_OPTIONS.map((opt) => ({
+        value: String(opt.value),
+        label: opt.label,
+      })),
+      String(currentSize),
+    );
+    select.addEventListener("change", () => {
+      const size = Number(select.value);
+      if (size === this.pageSize) return;
+      this.pageSize = size;
+      this.currentPage = 0;
+      this.renderCurrentResults();
+    });
+  }
+
   private renderPaginationControls(
     contentEl: HTMLElement,
     page: DashboardPage<DashboardRow>,
@@ -1809,7 +1840,9 @@ class ArxivDailyDashboardView extends ItemView {
 
     controls.createEl("span", {
       cls: "arxiv-daily-dashboard__pagination-size",
-      text: `Show ${page.pageSize} per page`,
+      text: isFinite(page.pageSize)
+        ? `Show ${page.pageSize} per page`
+        : "",
     });
   }
 
@@ -2483,13 +2516,31 @@ export function shouldSkipDashboardHistorySync(
   return true;
 }
 
+export function showingText(page: DashboardPage<unknown>): string {
+  if (page.total === 0) return "Showing 0 of 0 papers";
+  if (!isFinite(page.pageSize)) return `Showing all ${page.total} papers`;
+  return `Showing ${page.start}-${page.end} of ${page.total} papers`;
+}
+
 export function paginateDashboardRows<T>(
   rows: T[],
   currentPage: number,
   pageSize: number,
 ): DashboardPage<T> {
-  const safePageSize = Math.max(1, Math.floor(pageSize));
   const total = rows.length;
+  // Infinity means "show all" — bypass arithmetic to avoid 0 * Infinity = NaN.
+  if (!isFinite(pageSize)) {
+    return {
+      rows: rows.slice(),
+      total,
+      totalPages: 1,
+      currentPage: 0,
+      start: total === 0 ? 0 : 1,
+      end: total,
+      pageSize,
+    };
+  }
+  const safePageSize = Math.max(1, Math.floor(pageSize));
   const totalPages = Math.ceil(total / safePageSize) || 1;
   const clampedPage = Math.max(
     0,
