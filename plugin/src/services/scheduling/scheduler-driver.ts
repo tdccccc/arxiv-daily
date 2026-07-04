@@ -9,7 +9,7 @@ import {
   minutesSinceMidnight,
   todayInTz,
 } from "../../utils/time";
-import type { RunCancellationService } from "../cancellation";
+import type { RunCancellationBatch, RunCancellationService } from "../cancellation";
 import { isCancellationError } from "../cancellation";
 import type { Logger } from "../logger";
 import { NoopProgressReporter, type ProgressReporter } from "../progress";
@@ -109,19 +109,25 @@ export class SchedulerDriver {
 
     await this.deps.recentDates?.refresh();
 
-    for (let i = 0; i < dateStrings.length; i += 1) {
-      if (this.isCancellationRequested()) break;
-      const dateObj = daysBefore(todayObj, i);
-      const date = dateStrings[i];
-      const isToday = date === today;
-      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-      if (isWeekendDate(dateObj)) continue;
-      await this.tickDate(date, {
-        now,
-        timeGate: isToday ? { scheduledMin, endMin, minutesNow } : undefined,
-        trigger: "scheduler",
-      });
-      if (this.isCancellationRequested()) break;
+    const batch = this.beginCancellationBatch();
+    try {
+      for (let i = 0; i < dateStrings.length; i += 1) {
+        if (this.isCancellationRequested(batch)) break;
+        const dateObj = daysBefore(todayObj, i);
+        const date = dateStrings[i];
+        const isToday = date === today;
+        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
+        if (isWeekendDate(dateObj)) continue;
+        await this.tickDate(date, {
+          now,
+          timeGate: isToday ? { scheduledMin, endMin, minutesNow } : undefined,
+          trigger: "scheduler",
+          cancellationBatch: batch,
+        });
+        if (this.isCancellationRequested(batch)) break;
+      }
+    } finally {
+      this.finishCancellationBatch(batch);
     }
     this.progress.setIdle(this.latestCompleted());
   }
@@ -141,7 +147,17 @@ export class SchedulerDriver {
     }
     const today = todayDateString(tz, () => now);
     this.progress.setBatch(1, 1, today);
-    const result = await this.tickDate(today, { now, trigger: "scheduler" });
+    const batch = this.beginCancellationBatch();
+    let result: PipelineResult | undefined;
+    try {
+      result = await this.tickDate(today, {
+        now,
+        trigger: "scheduler",
+        cancellationBatch: batch,
+      });
+    } finally {
+      this.finishCancellationBatch(batch);
+    }
     this.progress.setIdle(this.latestCompleted());
     if (result === undefined) {
       await this.deps.history.recordSkipped(today, "scheduler", "guarded", now);
@@ -171,11 +187,18 @@ export class SchedulerDriver {
       await this.deps.recentDates?.refresh();
     }
     this.progress.setBatch(1, 1, today);
-    const result = await this.tickDate(today, {
-      now,
-      timeGate: { scheduledMin, endMin, minutesNow },
-      trigger: "scheduler",
-    });
+    const batch = this.beginCancellationBatch();
+    let result: PipelineResult | undefined;
+    try {
+      result = await this.tickDate(today, {
+        now,
+        timeGate: { scheduledMin, endMin, minutesNow },
+        trigger: "scheduler",
+        cancellationBatch: batch,
+      });
+    } finally {
+      this.finishCancellationBatch(batch);
+    }
     this.progress.setIdle(this.latestCompleted());
     if (result === undefined) {
       await this.deps.history.recordSkipped(today, "scheduler", "guarded", now);
@@ -210,23 +233,28 @@ export class SchedulerDriver {
     const dateStrings = lookbackDateStrings(tz, LOOKBACK_DAYS, () => now);
     const results: Array<{ date: string; result: SchedulerResult }> = [];
 
-    for (let i = 0; i < dateStrings.length; i += 1) {
-      if (this.isCancellationRequested()) break;
-      const date = dateStrings[i];
-      const entry = this.deps.store.get(date);
-      if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
-        continue;
+    const batch = this.beginCancellationBatch();
+    try {
+      for (let i = 0; i < dateStrings.length; i += 1) {
+        if (this.isCancellationRequested(batch)) break;
+        const date = dateStrings[i];
+        const entry = this.deps.store.get(date);
+        if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
+          continue;
+        }
+        await this.deps.store.clearDate(date);
+        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
+        const r = await this.tryRun(date, "retry", now, batch);
+        if (r === undefined) {
+          await this.deps.history.recordSkipped(date, "retry", "lock held", now);
+          results.push({ date, result: { kind: "skipped", reason: "lock held" } });
+        } else {
+          results.push({ date, result: r });
+        }
+        if (this.isCancellationRequested(batch)) break;
       }
-      await this.deps.store.clearDate(date);
-      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-      const r = await this.tryRun(date, "retry", now);
-      if (r === undefined) {
-        await this.deps.history.recordSkipped(date, "retry", "lock held", now);
-        results.push({ date, result: { kind: "skipped", reason: "lock held" } });
-      } else {
-        results.push({ date, result: r });
-      }
-      if (this.isCancellationRequested()) break;
+    } finally {
+      this.finishCancellationBatch(batch);
     }
     this.progress.setIdle(this.latestCompleted());
     return results;
@@ -249,32 +277,37 @@ export class SchedulerDriver {
 
     const results: Array<{ date: string; result: SchedulerResult }> = [];
 
-    for (let i = 0; i < dateStrings.length; i += 1) {
-      if (this.isCancellationRequested()) break;
-      const date = dateStrings[i];
-      if (
-        date !== today &&
-        this.deps.recentDates?.hasDate &&
-        !this.deps.recentDates.hasDate(date)
-      ) {
-        continue;
+    const batch = this.beginCancellationBatch();
+    try {
+      for (let i = 0; i < dateStrings.length; i += 1) {
+        if (this.isCancellationRequested(batch)) break;
+        const date = dateStrings[i];
+        if (
+          date !== today &&
+          this.deps.recentDates?.hasDate &&
+          !this.deps.recentDates.hasDate(date)
+        ) {
+          continue;
+        }
+        const entry = this.deps.store.get(date);
+        if (this.deps.store.isDone(date)) continue;
+        if (entry.status === "running") {
+          await this.deps.history.recordSkipped(date, "run-all-pending", "already running", now);
+          results.push({ date, result: { kind: "skipped", reason: "already running" } });
+          continue;
+        }
+        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
+        const r = await this.tryRun(date, "run-all-pending", now, batch);
+        if (r === undefined) {
+          await this.deps.history.recordSkipped(date, "run-all-pending", "lock held", now);
+          results.push({ date, result: { kind: "skipped", reason: "lock held" } });
+        } else {
+          results.push({ date, result: r });
+        }
+        if (this.isCancellationRequested(batch)) break;
       }
-      const entry = this.deps.store.get(date);
-      if (this.deps.store.isDone(date)) continue;
-      if (entry.status === "running") {
-        await this.deps.history.recordSkipped(date, "run-all-pending", "already running", now);
-        results.push({ date, result: { kind: "skipped", reason: "already running" } });
-        continue;
-      }
-      this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-      const r = await this.tryRun(date, "run-all-pending", now);
-      if (r === undefined) {
-        await this.deps.history.recordSkipped(date, "run-all-pending", "lock held", now);
-        results.push({ date, result: { kind: "skipped", reason: "lock held" } });
-      } else {
-        results.push({ date, result: r });
-      }
-      if (this.isCancellationRequested()) break;
+    } finally {
+      this.finishCancellationBatch(batch);
     }
     this.progress.setIdle(this.latestCompleted());
     return results;
@@ -291,7 +324,13 @@ export class SchedulerDriver {
       return { kind: "skipped", reason: "already running" };
     }
     this.progress.setBatch(1, 1, date);
-    const result = await this.tryRun(date, trigger, now);
+    const batch = this.beginCancellationBatch();
+    let result: PipelineResult | undefined;
+    try {
+      result = await this.tryRun(date, trigger, now, batch);
+    } finally {
+      this.finishCancellationBatch(batch);
+    }
     this.progress.setIdle(this.latestCompleted());
     if (result === undefined) {
       await this.deps.history.recordSkipped(date, trigger, "lock held", now);
@@ -306,6 +345,7 @@ export class SchedulerDriver {
       now: Date;
       timeGate?: TimeGate;
       trigger: RunHistoryTrigger;
+      cancellationBatch?: RunCancellationBatch;
     },
   ): Promise<PipelineResult | undefined> {
     const s = this.deps.getSettings();
@@ -324,18 +364,19 @@ export class SchedulerDriver {
       return undefined;
     }
 
-    return await this.tryRun(date, opts.trigger, opts.now);
+    return await this.tryRun(date, opts.trigger, opts.now, opts.cancellationBatch);
   }
 
   private async tryRun(
     date: string,
     trigger: RunHistoryTrigger,
     now: Date,
+    cancellationBatch?: RunCancellationBatch,
   ): Promise<PipelineResult | undefined> {
     return this.deps.lock.withLock(date, async () => {
       const previousEntry = this.deps.store.get(date);
       this.deps.cancellation?.prepareRun();
-      const signal = this.deps.cancellation?.begin(date);
+      const signal = this.deps.cancellation?.begin(date, cancellationBatch);
       let result: PipelineResult;
       try {
         this.progress.setTask("arXiv Daily report", date);
@@ -366,18 +407,17 @@ export class SchedulerDriver {
             preservedPapersWritten,
           }, now);
         } else if (result.kind === "pending") {
-          // Don't mark as completed - clear running state so scheduler can retry later.
-          await this.deps.store.clearDate(date);
+          await this.deps.store.setPending(date, result.reason);
           this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordPending(date, trigger, result.reason, now);
         } else if (result.kind === "failed_transient") {
-          await this.deps.store.setFailed(date, "transient", result.reason);
+          await this.persistFailed(date, "transient", result.reason);
           this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
           this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
           await this.deps.history.recordFailed(date, trigger, result.kind, result.reason, now);
         } else {
-          await this.deps.store.setFailed(date, "permanent", result.reason);
+          await this.persistFailed(date, "permanent", result.reason);
           this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
           this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
           this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
@@ -396,8 +436,32 @@ export class SchedulerDriver {
     });
   }
 
-  private isCancellationRequested(): boolean {
-    return this.deps.cancellation?.isCancellationRequested() ?? false;
+  private beginCancellationBatch(): RunCancellationBatch | undefined {
+    return this.deps.cancellation?.beginBatch();
+  }
+
+  private finishCancellationBatch(batch: RunCancellationBatch | undefined): void {
+    if (batch) this.deps.cancellation?.finishBatch(batch);
+  }
+
+  private isCancellationRequested(batch?: RunCancellationBatch): boolean {
+    return batch?.isCancellationRequested() ?? false;
+  }
+
+  private async persistFailed(
+    date: string,
+    kind: "transient" | "permanent",
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.deps.store.setFailed(date, kind, reason);
+    } catch (e) {
+      this.deps.logger.error(
+        `scheduler: failed to persist failure for ${date}; clearing running state`,
+        e,
+      );
+      await this.deps.store.clearDate(date);
+    }
   }
 
   private latestCompleted(): string | undefined {

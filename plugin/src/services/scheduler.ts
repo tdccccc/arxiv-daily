@@ -61,9 +61,11 @@ export class SchedulerService {
       recentDates: deps.recentDates,
       now: deps.now,
     });
+    void this.recoverStaleRunning();
   }
 
   start(): void {
+    void this.recoverStaleRunning();
     this.driver.start();
   }
 
@@ -117,5 +119,21 @@ export class SchedulerService {
 
   async runAllPending(): Promise<Array<{ date: string; result: SchedulerResult }>> {
     return this.driver.runAllPending();
+  }
+
+  private async recoverStaleRunning(): Promise<void> {
+    try {
+      if (typeof this.store.recoverStaleRunning !== "function") return;
+      const recovered = await this.store.recoverStaleRunning(
+        (this.historyDeps.now?.() ?? new Date()).getTime(),
+      );
+      if (recovered.length > 0) {
+        this.historyDeps.logger?.warn(
+          `scheduler: recovered stale running dates: ${recovered.join(", ")}`,
+        );
+      }
+    } catch (e) {
+      this.historyDeps.logger?.warn("scheduler: stale running recovery failed", e);
+    }
   }
 }

@@ -5,19 +5,43 @@ export class RunCancelledError extends Error {
   }
 }
 
+export interface RunCancellationBatch {
+  readonly id: number;
+  isCancellationRequested(): boolean;
+}
+
+interface ActiveRun {
+  controller: AbortController;
+  batchId?: number;
+}
+
 export class RunCancellationService {
-  private controllers = new Map<string, AbortController>();
-  private cancelledDates = new Set<string>();
+  private controllers = new Map<string, ActiveRun>();
+  private batches = new Map<number, { cancelled: boolean }>();
+  private nextBatchId = 1;
   private cancelReason = "cancelled by user";
 
   prepareRun(): void {}
 
-  begin(date: string): AbortSignal {
+  beginBatch(): RunCancellationBatch {
+    const id = this.nextBatchId++;
+    const state = { cancelled: false };
+    this.batches.set(id, state);
+    return {
+      id,
+      isCancellationRequested: () => state.cancelled,
+    };
+  }
+
+  finishBatch(batch: RunCancellationBatch): void {
+    this.batches.delete(batch.id);
+  }
+
+  begin(date: string, batch?: RunCancellationBatch): AbortSignal {
     const controller = new AbortController();
-    this.controllers.set(date, controller);
-    if (this.cancelledDates.has(date)) {
+    this.controllers.set(date, { controller, batchId: batch?.id });
+    if (batch?.isCancellationRequested()) {
       controller.abort(this.cancelReason);
-      this.cancelledDates.delete(date);
     }
     return controller.signal;
   }
@@ -30,11 +54,12 @@ export class RunCancellationService {
     const dates = Array.from(this.controllers.keys());
     if (dates.length === 0) return [];
     this.cancelReason = reason;
-    for (const date of dates) {
-      this.cancelledDates.add(date);
-    }
-    for (const controller of this.controllers.values()) {
-      if (!controller.signal.aborted) controller.abort(reason);
+    for (const active of this.controllers.values()) {
+      if (active.batchId != null) {
+        const batch = this.batches.get(active.batchId);
+        if (batch) batch.cancelled = true;
+      }
+      if (!active.controller.signal.aborted) active.controller.abort(reason);
     }
     return dates;
   }
@@ -44,7 +69,7 @@ export class RunCancellationService {
   }
 
   isCancellationRequested(): boolean {
-    return this.cancelledDates.size > 0;
+    return Array.from(this.batches.values()).some((batch) => batch.cancelled);
   }
 }
 
