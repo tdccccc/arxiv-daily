@@ -55,7 +55,7 @@ describe("time utils", () => {
     ).toBe(true);
   });
 
-  it("isTimeWithinLocalWindow rejects times outside or invalid same-day windows", () => {
+  it("isTimeWithinLocalWindow rejects times outside same-day windows", () => {
     expect(
       isTimeWithinLocalWindow(
         new Date("2026-06-23T00:30:00Z"),
@@ -72,12 +72,31 @@ describe("time utils", () => {
         "18:00",
       ),
     ).toBe(false);
+  });
+
+  it("isTimeWithinLocalWindow handles cross-midnight windows", () => {
     expect(
       isTimeWithinLocalWindow(
-        new Date("2026-06-23T03:00:00Z"),
+        new Date("2026-06-23T15:30:00Z"), // 23:30 Shanghai
         "Asia/Shanghai",
-        "23:59",
-        "18:00",
+        "23:00",
+        "02:00",
+      ),
+    ).toBe(true);
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T17:30:00Z"), // 01:30 Shanghai next day
+        "Asia/Shanghai",
+        "23:00",
+        "02:00",
+      ),
+    ).toBe(true);
+    expect(
+      isTimeWithinLocalWindow(
+        new Date("2026-06-23T08:00:00Z"), // 16:00 Shanghai
+        "Asia/Shanghai",
+        "23:00",
+        "02:00",
       ),
     ).toBe(false);
   });
@@ -87,6 +106,27 @@ describe("time utils", () => {
     expect(daysBefore(d, 1)).toEqual({ y: 2026, m: 5, d: 10 });
     expect(daysBefore(d, 5)).toEqual({ y: 2026, m: 5, d: 6 });
     expect(daysBefore(d, 11)).toEqual({ y: 2026, m: 4, d: 30 });
+  });
+
+  it("daysBefore handles leap year Feb 29", () => {
+    expect(daysBefore({ y: 2024, m: 3, d: 1 }, 1)).toEqual({
+      y: 2024,
+      m: 2,
+      d: 29,
+    });
+  });
+
+  it("todayInTz handles DST spring-forward and fall-back dates", () => {
+    expect(formatDate(todayInTz(new Date("2026-03-08T07:30:00Z"), "America/New_York")))
+      .toBe("2026-03-08");
+    expect(formatDate(todayInTz(new Date("2026-11-01T06:30:00Z"), "America/New_York")))
+      .toBe("2026-11-01");
+  });
+
+  it("daysBefore works across timezone-derived date boundaries", () => {
+    const tokyoToday = todayInTz(new Date("2026-01-01T15:30:00Z"), "Asia/Tokyo");
+    expect(formatDate(tokyoToday)).toBe("2026-01-02");
+    expect(daysBefore(tokyoToday, 1)).toEqual({ y: 2026, m: 1, d: 1 });
   });
 
   it("isWeekendInTz returns true for Saturday Shanghai", () => {
@@ -110,6 +150,12 @@ describe("time utils", () => {
     expect(isWeekendInTz(d, "Asia/Shanghai")).toBe(true);
     // Same instant is still Sat in UTC
     expect(isWeekendInTz(d, "UTC")).toBe(true);
+  });
+
+  it("isWeekendInTz respects timezone boundary at local midnight", () => {
+    const instant = new Date("2026-05-08T16:30:00Z");
+    expect(isWeekendInTz(instant, "Asia/Shanghai")).toBe(true);
+    expect(isWeekendInTz(instant, "UTC")).toBe(false);
   });
 
   it("isWeekendDate checks calendar dates without timezone conversion", () => {

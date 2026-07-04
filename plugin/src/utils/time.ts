@@ -55,7 +55,9 @@ export function isMinutesWithinWindow(
   startMinutes: number,
   endMinutes: number,
 ): boolean {
-  if (startMinutes > endMinutes) return false;
+  if (startMinutes > endMinutes) {
+    return minutesNow >= startMinutes || minutesNow <= endMinutes;
+  }
   return minutesNow >= startMinutes && minutesNow <= endMinutes;
 }
 

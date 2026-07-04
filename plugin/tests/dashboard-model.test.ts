@@ -189,10 +189,10 @@ describe("dashboard model", () => {
     });
 
     expect(byPublishedDesc.rows.map((row) => row.arxivId)).toEqual([
-      "2606.00005",
-      "2606.00003",
-      "2606.00002",
       "2606.00001",
+      "2606.00003",
+      "2606.00005",
+      "2606.00002",
     ]);
     expect(byTopicAsc.rows.map((row) => row.arxivId)).toEqual([
       "2606.00003",

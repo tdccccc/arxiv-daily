@@ -18,11 +18,17 @@ const markdownAsText = {
 };
 
 export default defineConfig({
+  cacheDir: ".vitest-cache",
   plugins: [markdownAsText],
   test: {
     environment: "happy-dom",
     globals: false,
+    isolate: true,
+    restoreMocks: true,
     include: ["tests/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+    },
     environmentOptions: {
       happyDOM: {
         settings: {

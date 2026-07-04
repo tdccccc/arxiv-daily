@@ -246,13 +246,22 @@ describe("isCalendarRunWhitelisted", () => {
     ).toBe(false);
   });
 
-  it("treats a start time later than the end time as outside the Run window", () => {
+  it("allows cross-midnight Run windows", () => {
     expect(
       isCalendarRunWhitelisted(
         whitelistInput({
-          now: new Date("2026-06-23T03:00:00Z"),
-          runAtLocal: "23:59",
-          runUntilLocal: "18:00",
+          now: new Date("2026-06-23T15:30:00Z"),
+          runAtLocal: "23:00",
+          runUntilLocal: "02:00",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isCalendarRunWhitelisted(
+        whitelistInput({
+          now: new Date("2026-06-23T08:00:00Z"),
+          runAtLocal: "23:00",
+          runUntilLocal: "02:00",
         }),
       ),
     ).toBe(false);

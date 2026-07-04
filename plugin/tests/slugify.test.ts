@@ -22,14 +22,18 @@ describe("slugify", () => {
     expect(slugify("--hello--")).toBe("hello");
   });
 
-  it("drops non-ASCII characters", () => {
-    expect(slugify("Photo-z 相关")).toBe("photo-z");
+  it("preserves CJK letters", () => {
+    expect(slugify("Photo-z 相关")).toBe("photo-z-相关");
   });
 
-  it("returns empty string when input has no ASCII alphanumerics", () => {
-    expect(slugify("光度红移")).toBe("");
+  it("returns non-empty slugs for CJK-only input", () => {
+    expect(slugify("光度红移")).toBe("光度红移");
     expect(slugify("")).toBe("");
     expect(slugify("   ")).toBe("");
+  });
+
+  it("normalizes accents and removes emoji and special symbols", () => {
+    expect(slugify("Café déjà vu 🚀 / test!")).toBe("cafe-deja-vu-test");
   });
 
   it("preserves digits and dots-to-dashes", () => {
