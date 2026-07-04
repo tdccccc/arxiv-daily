@@ -53,7 +53,7 @@ function extractSectionTitles(markdown: string | null | undefined): string[] {
   const re = /^##\s+(.+)$/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(markdown)) !== null) {
-    const title = m[1].trim();
+    const title = m[1]?.trim() ?? "";
     if (title && !titles.includes(title)) titles.push(title);
   }
   return titles;
@@ -220,7 +220,7 @@ export async function summarizeDaily(
     throwIfCancelled(deps.signal);
     deps.logger.info(`summarizeDaily: batch ${i + 1}/${batches.length}`);
     parts.push(
-      await callDailyLlm(batches[i], dateStr, nTotal, nDetail, true, deps, tagToName),
+      await callDailyLlm(batches[i]!, dateStr, nTotal, nDetail, true, deps, tagToName),
     );
   }
   throwIfCancelled(deps.signal);
@@ -343,7 +343,7 @@ function mergeDuplicateCategorySections(
     .filter((index) => index !== -1);
   const counts = new Map<string, number>();
   for (const index of headingIndexes) {
-    const name = lines[index].slice(3).trim();
+    const name = lines[index]!.slice(3).trim();
     if (nameSet.has(name)) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   if (![...counts.values()].some((count) => count > 1)) return markdown;
@@ -356,8 +356,9 @@ function mergeDuplicateCategorySections(
 
   for (let i = 0; i < headingIndexes.length; i++) {
     const start = headingIndexes[i];
+    if (start === undefined) continue;
     const end = headingIndexes[i + 1] ?? lines.length;
-    const name = lines[start].slice(3).trim();
+    const name = lines[start]!.slice(3).trim();
     const content = lines.slice(start + 1, end);
     if (nameSet.has(name)) {
       const blocks = blocksByName.get(name) ?? [];
@@ -419,8 +420,8 @@ function isNoUpdateBlock(lines: string[]): boolean {
 function trimOuterBlank(lines: string[]): string[] {
   let start = 0;
   let end = lines.length;
-  while (start < end && lines[start].trim() === "") start++;
-  while (end > start && lines[end - 1].trim() === "") end--;
+  while (start < end && (lines[start]?.trim() ?? "") === "") start++;
+  while (end > start && (lines[end - 1]?.trim() ?? "") === "") end--;
   return lines.slice(start, end);
 }
 

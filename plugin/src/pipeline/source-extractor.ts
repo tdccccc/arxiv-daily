@@ -231,7 +231,7 @@ function resolveInputPath(
 function latexToMarkdown(input: string): string {
   let text = stripLatexComments(input);
   const body = /\\begin\{document\}([\s\S]*?)\\end\{document\}/.exec(text);
-  if (body) text = body[1];
+  if (body?.[1]) text = body[1];
 
   text = text.replace(/\\begin\{abstract\}/g, "\n## Abstract\n");
   text = text.replace(/\\end\{abstract\}/g, "\n");
@@ -337,7 +337,9 @@ function extractAbstract(input: string): string | null {
   const match = /\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/i.exec(
     stripLatexComments(input),
   );
-  const text = match ? plainLatex(match[1]).replace(/\s+/g, " ").trim() : "";
+  const text = match?.[1]
+    ? plainLatex(match[1]).replace(/\s+/g, " ").trim()
+    : "";
   return text.length > 40 ? text : null;
 }
 
@@ -356,7 +358,7 @@ function parseMarkdownSections(markdown: string): Section[] {
     const heading = /^##\s+(.+?)\s*$/.exec(line);
     if (heading) {
       flush();
-      currentTitle = heading[1].trim();
+      currentTitle = heading[1]?.trim() ?? "";
       currentBody = [];
       continue;
     }

@@ -347,8 +347,10 @@ function dateOnly(value: string | undefined): string | undefined {
 function weekdayName(dateStr: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!m) throw new Error(`Invalid date: ${dateStr}`);
-  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return [
+  const [, year, month, day] = m;
+  if (!year || !month || !day) throw new Error(`Invalid date: ${dateStr}`);
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  const weekdays = [
     "Sunday",
     "Monday",
     "Tuesday",
@@ -356,5 +358,6 @@ function weekdayName(dateStr: string): string {
     "Thursday",
     "Friday",
     "Saturday",
-  ][date.getUTCDay()];
+  ];
+  return weekdays[date.getUTCDay()] ?? "Sunday";
 }

@@ -41,9 +41,11 @@ const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/;
 function parseHeaderDate(headerText: string): string | null {
   const m = /(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/.exec(headerText);
   if (!m) return null;
-  const day = Number(m[1]);
-  const month = MONTHS[m[2].toLowerCase()];
-  const year = Number(m[3]);
+  const [, rawDay, rawMonth, rawYear] = m;
+  if (!rawDay || !rawMonth || !rawYear) return null;
+  const day = Number(rawDay);
+  const month = MONTHS[rawMonth.toLowerCase()];
+  const year = Number(rawYear);
   if (!month) return null;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
@@ -77,7 +79,7 @@ export function parseRecent(html: string): DateBucket[] {
     const pairs = Math.min(dts.length, dds.length);
     const papers: PaperMeta[] = [];
     for (let i = 0; i < pairs; i++) {
-      const p = parsePaper(dts[i], dds[i]);
+      const p = parsePaper(dts[i]!, dds[i]!);
       if (p) papers.push(p);
     }
     buckets.push({ announceDate: date, papers });
@@ -107,7 +109,7 @@ function parsePaper(dt: Element, dd: Element): PaperMeta | null {
   if (authorsDiv) {
     const links = Array.from(authorsDiv.querySelectorAll("a"));
     if (links.length > 0) {
-      const first = (links[0].textContent ?? "").trim();
+      const first = (links[0]!.textContent ?? "").trim();
       authors = links.length > 1 ? `${first} et al.` : first;
     } else {
       authors = (authorsDiv.textContent ?? "").replace(/^\s*Authors:\s*/, "").trim();

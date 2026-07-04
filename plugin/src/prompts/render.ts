@@ -8,7 +8,7 @@ export function renderPrompt(
   vars: Record<string, string>,
 ): string {
   const rendered = template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
-    key in vars ? vars[key] : match,
+    key in vars ? vars[key] ?? match : match,
   );
   const leftover = /\{\{\w+\}\}/.exec(rendered);
   if (leftover) {

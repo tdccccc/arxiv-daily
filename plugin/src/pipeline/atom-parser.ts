@@ -32,6 +32,7 @@ export function parseAtomPapers(xml: string): AtomPaperMeta[] {
     const m = /\/abs\/([^/?#]+?)(v\d+)?$/.exec(fullId);
     if (!m) continue;
     const baseId = m[1];
+    if (!baseId) continue;
     const title = text(entry.querySelector("title"));
     const abstract = text(entry.querySelector("summary"));
     const authors = Array.from(entry.querySelectorAll("author > name"))
@@ -43,7 +44,7 @@ export function parseAtomPapers(xml: string): AtomPaperMeta[] {
         ?.trim() ?? "";
     const categories = Array.from(entry.querySelectorAll("category"))
       .map((el) => el.getAttribute("term")?.trim() ?? "")
-      .filter(Boolean);
+      .filter((category): category is string => Boolean(category));
     out.push({
       id: baseId,
       title,
@@ -64,5 +65,6 @@ function text(el: Element | null): string {
 
 function formatAuthors(authors: string[]): string {
   if (authors.length === 0) return "Unknown";
-  return authors.length > 1 ? `${authors[0]} et al.` : authors[0];
+  const first = authors[0] ?? "Unknown";
+  return authors.length > 1 ? `${first} et al.` : first;
 }
