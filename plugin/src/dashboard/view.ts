@@ -173,9 +173,6 @@ export interface CalendarEmptyReasonInput {
 export interface CalendarDailyReportMapInput {
   month: string;
   scannedReports: DailyReportDay[];
-  runState: Record<string, RunStateEntry | undefined>;
-  dailyPath: (date: string) => string;
-  exists: (path: string) => Promise<boolean>;
   normalizePath: (path: string) => string;
 }
 
@@ -272,35 +269,18 @@ export function collectIndexedDetailSummaryRefs(
 export async function buildCalendarDailyReportMap(
   input: CalendarDailyReportMapInput,
 ): Promise<Map<string, DailyReportDay>> {
-  const scannedByDate = new Map(
-    input.scannedReports.map((report) => [report.date, report]),
-  );
   const out = new Map<string, DailyReportDay>();
+  const monthPrefix = `${input.month}-`;
 
-  for (const cell of calendarCells(input.month)) {
-    if (!cell.date) continue;
-    const path = input.normalizePath(input.dailyPath(cell.date));
-    if (!(await input.exists(path))) continue;
-    const scanned = scannedByDate.get(cell.date);
-    out.set(
-      cell.date,
-      scanned
-        ? { ...scanned, path: input.normalizePath(scanned.path) }
-        : {
-            date: cell.date,
-            path,
-            papers: completedPapersWritten(input.runState[cell.date]) ?? 0,
-            starred: 0,
-          },
-    );
+  for (const report of input.scannedReports) {
+    if (!report.date.startsWith(monthPrefix)) continue;
+    out.set(report.date, {
+      ...report,
+      path: input.normalizePath(report.path),
+    });
   }
 
   return out;
-}
-
-function completedPapersWritten(runState?: RunStateEntry): number | undefined {
-  if (runState?.status !== "completed") return undefined;
-  return runState.papersWritten;
 }
 
 function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
@@ -395,6 +375,20 @@ export function appendSettingsButton(
   button.addEventListener("click", onClick);
   parent.appendChild(button);
   return button;
+}
+
+export function applyStarButtonState(
+  button: HTMLButtonElement,
+  starred: boolean,
+): void {
+  button.classList.toggle("is-starred", starred);
+  button.setAttribute("aria-pressed", String(starred));
+  button.setAttribute(
+    "aria-label",
+    starred ? "Unstar paper" : "Star paper",
+  );
+  button.replaceChildren();
+  setIcon(button, "star");
 }
 
 export const DEFAULT_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
@@ -613,13 +607,9 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async refreshCalendarDailyReports(month: string): Promise<void> {
-    const writer = this.plugin.buildMarkdownWriter();
     this.calendarDailyReports = await buildCalendarDailyReportMap({
       month,
       scannedReports: this.dailyReports,
-      runState: this.plugin.stateStore.snapshot(),
-      dailyPath: (date) => writer.dailyPath(date),
-      exists: (path) => this.plugin.app.vault.adapter.exists(path),
       normalizePath: normalizeVaultPath,
     });
   }
@@ -1833,20 +1823,17 @@ class ArxivDailyDashboardView extends ItemView {
     entry: DashboardRow["entry"],
   ): void {
     const starred = isStarredEntry(entry);
-    const label = starred ? "Unstar paper" : "Star paper";
     const button = parent.createEl("button", {
       cls: "clickable-icon arxiv-daily-dashboard__star",
       attr: {
         type: "button",
-        "aria-label": label,
-        "aria-pressed": String(starred),
       },
     }) as HTMLButtonElement;
-    if (starred) button.addClass("is-starred");
-    setIcon(button, "star");
+    applyStarButtonState(button, starred);
     button.addEventListener("click", () => {
+      const nextStarred = !isStarredEntry(entry);
       void this.runControlAction(button, () =>
-        this.updateStar(entry, !starred),
+        this.updateStar(entry, nextStarred, button),
       );
     });
   }
@@ -2124,10 +2111,12 @@ class ArxivDailyDashboardView extends ItemView {
   private async updateStar(
     entry: DashboardRow["entry"],
     starred: boolean,
+    button: HTMLButtonElement,
   ): Promise<void> {
     const previousPriority = entry.priority;
+    const previousStarred = isStarredEntry(entry);
     entry.priority = starred ? "high" : "normal";
-    this.renderCurrentResults();
+    applyStarButtonState(button, starred);
     const store = this.plugin.buildPaperIndex();
     let updated: DashboardRow["entry"] | null = null;
     try {
@@ -2137,14 +2126,16 @@ class ArxivDailyDashboardView extends ItemView {
       );
     } catch (e) {
       entry.priority = previousPriority;
-      this.renderCurrentResults();
+      applyStarButtonState(button, previousStarred);
       throw e;
     }
     if (!updated) {
       entry.priority = previousPriority;
-      this.renderCurrentResults();
+      applyStarButtonState(button, previousStarred);
       throw new Error(`${entry.arxivId} is not in papers.json`);
     }
+    entry.priority = updated.priority;
+    applyStarButtonState(button, isStarredEntry(entry));
     this.notice(
       `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
     );
@@ -2673,6 +2664,8 @@ class HubModal extends Modal {
     tab: HubModalTab,
     label: string,
   ): void {
+    const tabId = `arxiv-daily-hub-modal-tab-${tab}`;
+    const panelId = `arxiv-daily-hub-modal-panel-${tab}`;
     const button = tabs.createEl("button", {
       cls: "arxiv-daily-hub-modal__tab",
       text: label,
@@ -2680,8 +2673,10 @@ class HubModal extends Modal {
         type: "button",
         role: "tab",
         "aria-selected": "false",
+        "aria-controls": panelId,
       },
     }) as HTMLButtonElement;
+    button.id = tabId;
     button.addEventListener("click", () => {
       this.activateTab(tab);
       this.refreshActiveTab();
@@ -2690,7 +2685,9 @@ class HubModal extends Modal {
     const content = body.createEl("pre", {
       cls: "arxiv-daily-hub-modal__panel",
     }) as HTMLPreElement;
+    content.id = panelId;
     content.setAttribute("role", "tabpanel");
+    content.setAttribute("aria-labelledby", tabId);
     content.style.userSelect = "text";
     content.style.cursor = "text";
     this.panels.set(tab, { button, content, text: "" });

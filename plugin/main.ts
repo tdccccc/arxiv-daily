@@ -42,6 +42,20 @@ interface PersistedData {
   runState?: RunState;
 }
 
+let lastCacheCleanupDate: string | null = null;
+
+export function cacheCleanupDateKey(now: Date, timezone: string): string {
+  return formatDate(todayInTz(now, timezone));
+}
+
+export function shouldRunCacheCleanup(
+  lastCleanupDate: string | null | undefined,
+  now: Date,
+  timezone: string,
+): boolean {
+  return lastCleanupDate !== cacheCleanupDateKey(now, timezone);
+}
+
 export default class ArxivDailyPlugin extends Plugin {
   settings!: PluginSettings;
   logger!: Logger;
@@ -126,9 +140,7 @@ export default class ArxivDailyPlugin extends Plugin {
       fetchAndSummarize: (raw: string, date: string) =>
         this.buildManualFetch().fetchAndSummarize(raw, date),
     };
-    this.cleanupCaches().catch((e) =>
-      this.logger.warn("cache cleanup failed", e),
-    );
+    this.cleanupCachesIfDue();
 
     this.addSettingTab(new ArxivDailySettingTab(this.app, this));
     registerDashboardView(this);
@@ -348,6 +360,25 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private pluginCacheDir(): string {
     return `${this.pluginDir()}/.cache`;
+  }
+
+  private cleanupCachesIfDue(now = new Date()): void {
+    if (
+      !shouldRunCacheCleanup(
+        lastCacheCleanupDate,
+        now,
+        this.settings.arxiv.timezone,
+      )
+    ) {
+      return;
+    }
+    lastCacheCleanupDate = cacheCleanupDateKey(
+      now,
+      this.settings.arxiv.timezone,
+    );
+    this.cleanupCaches().catch((e) =>
+      this.logger.warn("cache cleanup failed", e),
+    );
   }
 
   private async cleanupCaches(): Promise<void> {

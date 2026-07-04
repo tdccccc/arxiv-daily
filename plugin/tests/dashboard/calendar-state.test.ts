@@ -164,16 +164,23 @@ describe("Calendar Cell Builder", () => {
     expect(cell.report!.papers).toBe(0);
   });
 
-  it("uses direct daily path existence when scanned markdown reports miss a file", async () => {
-    const existingPaths = new Set(["arxiv-daily/daily/2026-06-24.md"]);
+  it("builds calendar reports from scanned markdown files without probing storage", async () => {
     const reports = await buildCalendarDailyReportMap({
       month: "2026-06",
-      scannedReports: [],
-      runState: {
-        "2026-06-24": runState("completed", { papersWritten: 10 }),
-      },
-      dailyPath: (date) => `arxiv-daily/daily/${date}.md`,
-      exists: async (path) => existingPaths.has(path),
+      scannedReports: [
+        {
+          date: "2026-06-24",
+          path: "arxiv-daily/daily/2026-06-24.md",
+          papers: 10,
+          starred: 2,
+        },
+        {
+          date: "2026-07-01",
+          path: "arxiv-daily/daily/2026-07-01.md",
+          papers: 1,
+          starred: 0,
+        },
+      ],
       normalizePath: (path) => path,
     });
 
@@ -182,8 +189,9 @@ describe("Calendar Cell Builder", () => {
       date: "2026-06-24",
       path: "arxiv-daily/daily/2026-06-24.md",
       papers: 10,
-      starred: 0,
+      starred: 2,
     });
+    expect(reports.has("2026-07-01")).toBe(false);
 
     expect(
       resolveCalendarCellState({
@@ -199,6 +207,23 @@ describe("Calendar Cell Builder", () => {
         runState: runState("completed", { papersWritten: 10 }),
       }),
     ).toEqual({ state: "has-report" });
+  });
+
+  it("does not synthesize calendar reports from run state when scanned reports miss a file", async () => {
+    const reports = await buildCalendarDailyReportMap({
+      month: "2026-06",
+      scannedReports: [],
+      normalizePath: (path) => path,
+    });
+
+    expect(reports.has("2026-06-24")).toBe(false);
+    expect(
+      resolveCalendarCellState({
+        report: reports.get("2026-06-24"),
+        runnable: false,
+        runState: runState("completed", { papersWritten: 10 }),
+      }),
+    ).toEqual({ state: "empty", emptyReason: "report-missing" });
   });
 });
 

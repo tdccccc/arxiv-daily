@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
+  applyStarButtonState,
   collectIndexedDetailSummaryRefs,
   executeObsidianCommand,
   filterDashboardMarkdownFiles,
@@ -11,6 +14,11 @@ import {
   shouldSkipDashboardHistorySync,
 } from "../src/dashboard/view";
 import type { PaperIndexEntry } from "../src/services/paper-index";
+
+const dashboardViewSource = readFileSync(
+  resolve(process.cwd(), "src/dashboard/view.ts"),
+  "utf-8",
+);
 
 describe("openDashboardView", () => {
   it("reveals an existing dashboard leaf", async () => {
@@ -198,6 +206,45 @@ describe("executeObsidianCommand", () => {
     await expect(
       executeObsidianCommand({ commands: { commands: {} } }, "missing"),
     ).resolves.toBe(false);
+  });
+});
+
+describe("dashboard star controls", () => {
+  it("updates the star button state in place", () => {
+    const button = document.createElement("button");
+
+    applyStarButtonState(button, true);
+
+    expect(button.classList.contains("is-starred")).toBe(true);
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-label")).toBe("Unstar paper");
+
+    applyStarButtonState(button, false);
+
+    expect(button.classList.contains("is-starred")).toBe(false);
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.getAttribute("aria-label")).toBe("Star paper");
+  });
+
+  it("does not rerender the result table when updating a star", () => {
+    const updateStarBody = dashboardViewSource.match(
+      /private async updateStar\([\s\S]*?\n  private async openDetailSummary/,
+    )?.[0];
+
+    expect(updateStarBody).toBeDefined();
+    expect(updateStarBody).toContain("applyStarButtonState");
+    expect(updateStarBody).not.toContain("renderCurrentResults");
+  });
+});
+
+describe("HubModal tabs", () => {
+  it("links each tabpanel to its tab button", () => {
+    expect(dashboardViewSource).toContain('role: "tab"');
+    expect(dashboardViewSource).toContain('"aria-selected": "false"');
+    expect(dashboardViewSource).toContain('content.setAttribute("role", "tabpanel")');
+    expect(dashboardViewSource).toContain('content.setAttribute("aria-labelledby", tabId)');
+    expect(dashboardViewSource).toContain("button.id = tabId");
+    expect(dashboardViewSource).toContain("content.id = panelId");
   });
 });
 
