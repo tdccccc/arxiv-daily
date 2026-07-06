@@ -484,7 +484,7 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
-      this.refreshRecentDatesForForeground();
+      void this.refreshRecentDatesForForeground().catch(() => {});
       const allFiles = this.plugin.app.vault.getMarkdownFiles();
       const dailyDir = normalizeVaultPath(this.plugin.settings.output.dailyDir);
       const papersDir = normalizeVaultPath(this.plugin.settings.output.papersDir);
@@ -999,7 +999,7 @@ class ArxivDailyDashboardView extends ItemView {
       "Summarize by ID",
       "Summarize paper by arXiv ID",
       (_button, evt) => {
-        void this.runDashboardCommand("arxiv-daily-summarize-by-id", false);
+        void this.runDashboardCommand("summarize-by-id", false);
       },
     );
     this.createToolbarButton(
@@ -1945,12 +1945,12 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
-    this.addCommandMenuItem(menu, "Run for date…", "calendar", "arxiv-daily-run-for-date");
+    this.addCommandMenuItem(menu, "Run for date…", "calendar", "run-for-date");
     this.addCommandMenuItem(
       menu,
       "Force run for date…",
       "rotate-cw",
-      "arxiv-daily-force-run-for-date",
+      "force-run-for-date",
     );
     menu.addItem((item) =>
       item
@@ -1964,7 +1964,7 @@ class ArxivDailyDashboardView extends ItemView {
       menu,
       "Cancel current run",
       "circle-stop",
-      "arxiv-daily-cancel-current-run",
+      "cancel-current-run",
       true,
       activeRuns.length === 0,
     );
@@ -1992,7 +1992,7 @@ class ArxivDailyDashboardView extends ItemView {
       menu,
       "Clear run state…",
       "trash-2",
-      "arxiv-daily-clear-run-state",
+      "clear-run-state",
     );
 
     menu.showAtMouseEvent(evt);
@@ -2701,7 +2701,7 @@ class HubModal extends Modal {
 
   onOpen() {
     const { contentEl, modalEl } = this;
-    modalEl.style.width = "min(90vw, 900px)";
+    modalEl.addClass("arxiv-daily-hub-modal");
     contentEl.addClass("arxiv-daily-hub-modal");
     contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
 
@@ -2717,7 +2717,7 @@ class HubModal extends Modal {
     const levelRow = body.createDiv({ cls: "arxiv-daily-hub-modal__level-filter" });
     this.levelRow = levelRow;
     this.renderLevelChips(levelRow);
-    levelRow.style.display = "none"; // shown only when logs tab active
+    levelRow.addClass("arxiv-daily-hub-modal__level-filter--hidden");
 
     this.activateTab("logs");
     this.refreshActiveTab();
@@ -2790,8 +2790,6 @@ class HubModal extends Modal {
     content.id = panelId;
     content.setAttribute("role", "tabpanel");
     content.setAttribute("aria-labelledby", tabId);
-    content.style.userSelect = "text";
-    content.style.cursor = "text";
     this.panels.set(tab, { button, content, text: "" });
   }
 
@@ -2842,7 +2840,10 @@ class HubModal extends Modal {
 
   private setLevelRowVisibility(): void {
     if (this.levelRow) {
-      this.levelRow.style.display = this.activeTab === "logs" ? "" : "none";
+      this.levelRow.toggleClass(
+        "arxiv-daily-hub-modal__level-filter--hidden",
+        this.activeTab !== "logs",
+      );
     }
   }
 

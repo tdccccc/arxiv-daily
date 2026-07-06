@@ -54,7 +54,7 @@ describe("registerCommands", () => {
 
     expect(plugin.addCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: "arxiv-daily-show-run-history",
+        id: "show-run-history",
         name: "Show run history",
       }),
     );

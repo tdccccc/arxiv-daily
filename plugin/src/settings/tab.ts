@@ -158,13 +158,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const renderLlmHttpWarning = (baseUrl: string) => {
       const warning = llmHttpWarning(baseUrl);
       llmWarningEl.empty();
-      llmWarningEl.style.display = warning ? "block" : "none";
-      llmWarningEl.style.margin = "0 0 0.75em 0";
-      llmWarningEl.style.border = "1px solid var(--text-warning, var(--text-accent))";
-      llmWarningEl.style.borderRadius = "6px";
-      llmWarningEl.style.padding = "0.5em 0.75em";
-      llmWarningEl.style.background = "var(--background-modifier-warning, var(--background-secondary))";
-      llmWarningEl.style.color = "var(--text-normal)";
+      llmWarningEl.toggleClass("is-visible", Boolean(warning));
       if (warning) llmWarningEl.setText(warning.message);
     };
     renderLlmHttpWarning(s.llm.baseUrl || "https://api.deepseek.com/v1");
@@ -627,7 +621,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }) as HTMLButtonElement;
     run.disabled = !status.readyToRun;
     run.addEventListener("click", () => {
-      void this.executeCommand("arxiv-daily-run-now");
+      void this.executeCommand("run-now");
     });
 
     const dashboard = actions.createEl("button", {
@@ -942,7 +936,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       // Select first model if current not in list
       select.value = models[0]!;
       this.plugin.settings.llm.model = models[0]!;
-      this.plugin.saveSettings();
+      void this.plugin.saveSettings().catch(() => {});
     }
   }
 

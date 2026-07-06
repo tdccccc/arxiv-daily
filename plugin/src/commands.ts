@@ -253,99 +253,99 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   plugin.addCommand({
-    id: "arxiv-daily-run-now",
+    id: "run-now",
     name: "Run Today",
     callback: runToday,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-run-for-date",
+    id: "run-for-date",
     name: "Run for date…",
     callback: openDatePicker,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-run-all-pending",
+    id: "run-all-pending",
     name: "Run all pending in lookback window",
     callback: runAllPending,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-retry-failed",
+    id: "retry-failed",
     name: "Retry failed dates in lookback window",
     callback: retryFailedInLookback,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-force-run-for-date",
+    id: "force-run-for-date",
     name: "Force run for date…",
     callback: openForceDatePicker,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-clear-run-state",
+    id: "clear-run-state",
     name: "Clear run state…",
     callback: clearRunState,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-cancel-current-run",
+    id: "cancel-current-run",
     name: "Cancel current run",
     callback: cancelCurrentRun,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-summarize-by-id",
+    id: "summarize-by-id",
     name: "Summarize by arXiv ID…",
     callback: openArxivIdPicker,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-set-paper-status",
+    id: "set-paper-status",
     name: "Set paper mark…",
     callback: openSetPaperMarkModal,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-create-paper-note",
+    id: "create-paper-note",
     name: "Create paper note…",
     callback: openCreatePaperNoteModal,
   });
 
   for (const mark of PAPER_MARKS) {
     plugin.addCommand({
-      id: `arxiv-daily-mark-current-${mark.value}`,
+      id: `mark-current-${mark.value}`,
       name: `Mark current paper as ${mark.label}`,
       callback: () => setCurrentPaperMark(mark.value),
     });
   }
 
   plugin.addCommand({
-    id: "arxiv-daily-open-today",
+    id: "open-today",
     name: "Open today's daily report",
     callback: openTodayDaily,
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-open-reading-dashboard",
+    id: "open-reading-dashboard",
     name: "Open reading dashboard",
     callback: () => openDashboardView(plugin),
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-show-state",
+    id: "show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-show-run-history",
+    id: "show-run-history",
     name: "Show run history",
     callback: () => new RunHistoryModal(plugin.app, plugin).open(),
   });
 
   plugin.addCommand({
-    id: "arxiv-daily-show-diagnostics",
+    id: "show-diagnostics",
     name: "Show diagnostics",
     callback: () => new DiagnosticsModal(plugin.app, plugin).open(),
   });
