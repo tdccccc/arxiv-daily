@@ -1,6 +1,6 @@
 {
   "name": "obsidian-arxiv-daily",
-  "version": "0.1.21",
+  "version": "0.2.0",
   "private": true,
   "bin": {
     "arxiv-daily": "./arxiv-daily-cli.cjs"

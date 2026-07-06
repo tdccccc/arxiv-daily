@@ -1,6 +1,6 @@
 # arXiv Daily
 
-> 面向 Obsidian 的每日 arXiv 发现工具：用 LLM 筛选和总结论文，并通过 Dashboard 跨日期回看。
+> 每日 arXiv 论文跟踪器：LLM 筛选摘要、按主题组织日报、Dashboard 含日历搜索筛选、PDF 笔记，支持 CLI。
 
 [新手教程](./getting-started.zh-CN.md) · [English README](../README.md)
 
