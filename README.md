@@ -2,7 +2,7 @@
 
 > Turn daily arXiv feeds into a manageable, searchable reading list — right inside Obsidian.
 
-[Getting Started](./docs/getting-started.md) · [中文说明](./docs/README.zh-CN.md)
+[Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md) · [中文说明](https://github.com/tdccccc/arxiv-daily/blob/main/docs/README.zh-CN.md)
 
 Every day, hundreds of new papers appear on arXiv. arXiv Daily helps you stay on top of the ones that matter: it fetches papers from your chosen categories, uses an LLM to filter and summarize by your research topics, and writes structured Markdown reports into your vault — all on a configurable schedule.
 
@@ -25,7 +25,7 @@ The result is a compact daily reading list you can skim, star, and act on, witho
 5. Add research topics — natural-language descriptions of what you want to track.
 6. Enable the scheduler, or open the Dashboard and click **Run Today**.
 
-For a detailed walkthrough, see [Getting Started](./docs/getting-started.md).
+For a detailed walkthrough, see [Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md).
 
 ## Dashboard
 

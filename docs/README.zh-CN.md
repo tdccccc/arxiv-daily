@@ -2,7 +2,7 @@
 
 > 每日 arXiv 论文跟踪器：LLM 筛选摘要、按主题组织日报、Dashboard 含日历搜索筛选、PDF 笔记，支持 CLI。
 
-[新手教程](./getting-started.zh-CN.md) · [English README](../README.md)
+[新手教程](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.zh-CN.md) · [English README](https://github.com/tdccccc/arxiv-daily/blob/main/README.md)
 
 arXiv Daily 的目标不是替代 Zotero 或 PDF 阅读器，而是把每天新出现的 arXiv 论文稳定地接入 Obsidian：自动抓取、按研究主题筛选、生成 Markdown 日报，并用 **arXiv Daily Dashboard** 回看重点论文。
 
@@ -103,7 +103,7 @@ https://github.com/tdccccc/arxiv-daily/releases/latest
 
 ## 快速开始
 
-第一次使用建议先看 [新手教程](./getting-started.zh-CN.md)。
+第一次使用建议先看 [新手教程](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.zh-CN.md)。
 
 1. 打开 **Settings -> arXiv Daily**。
 2. 选择 LLM provider 并填写 API key。
