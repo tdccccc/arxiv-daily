@@ -21,14 +21,18 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
   );
   const category = categories[0] ?? DEFAULT_SETTINGS.arxiv.category;
   const timezone =
-    typeof arxiv.timezone === "string" ? arxiv.timezone : DEFAULT_SETTINGS.arxiv.timezone;
+    typeof arxiv.timezone === "string" && arxiv.timezone.length > 0
+      ? arxiv.timezone
+      : DEFAULT_SETTINGS.arxiv.timezone;
 
   if (Array.isArray(arxiv.topics) && arxiv.topics.length > 0) {
     return { category, categories, topics: arxiv.topics as Topic[], timezone };
   }
 
   const detailCategories = Array.isArray(arxiv.detailCategories)
-    ? (arxiv.detailCategories as string[])
+    ? (arxiv.detailCategories as unknown[]).filter(
+        (v): v is string => typeof v === "string",
+      )
     : [];
   const displayMap =
     (arxiv.categoryDisplayMap as Record<string, string> | undefined) ?? {};

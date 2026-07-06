@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { migrateArxivSettings } from "../src/settings/migration";
+import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 describe("migrateArxivSettings", () => {
   it("returns the same topics when already in new shape", () => {
@@ -101,5 +102,138 @@ describe("migrateArxivSettings", () => {
     expect(out.category.length).toBeGreaterThan(0);
     expect(out.categories.length).toBeGreaterThan(0);
     expect(out.timezone.length).toBeGreaterThan(0);
+  });
+
+  // ── Corner cases ──
+
+  it("handles null raw input (not just undefined)", () => {
+    const out = migrateArxivSettings(null);
+    expect(out.topics).toEqual([]);
+    expect(out.category).toBe(DEFAULT_SETTINGS.arxiv.category);
+    expect(out.timezone).toBe(DEFAULT_SETTINGS.arxiv.timezone);
+  });
+
+  it("falls back to default timezone when timezone is null or empty", () => {
+    const out1 = migrateArxivSettings({ category: "cs.CL", topics: [], timezone: null });
+    expect(out1.timezone).toBe(DEFAULT_SETTINGS.arxiv.timezone);
+
+    const out2 = migrateArxivSettings({ category: "cs.CL", topics: [], timezone: "" });
+    expect(out2.timezone).toBe(DEFAULT_SETTINGS.arxiv.timezone);
+  });
+
+  it("falls back to default category when category is null or empty", () => {
+    const out1 = migrateArxivSettings({ category: "", timezone: "UTC" });
+    expect(out1.category).toBe(DEFAULT_SETTINGS.arxiv.category);
+
+    const out2 = migrateArxivSettings({ category: null, timezone: "UTC" });
+    expect(out2.category).toBe(DEFAULT_SETTINGS.arxiv.category);
+  });
+
+  it("handles empty categories array", () => {
+    const out = migrateArxivSettings({ category: "cs.LG", categories: [], timezone: "UTC" });
+    expect(out.categories).toEqual(["cs.LG"]);
+  });
+
+  it("handles categories as non-array (old format single string)", () => {
+    const out = migrateArxivSettings({ category: "astro-ph", categories: "astro-ph", timezone: "UTC" });
+    expect(out.categories).toEqual(["astro-ph"]);
+  });
+
+  it("treats non-array topics as missing and falls back to legacy or fresh defaults", () => {
+    const out = migrateArxivSettings({ category: "math", topics: "should-not-crash", timezone: "UTC" });
+    expect(Array.isArray(out.topics)).toBe(true);
+  });
+
+  it("handles topics with some entries missing optional fields", () => {
+    const out = migrateArxivSettings({
+      category: "cs.CL",
+      topics: [
+        { id: "u1", name: "LLM", tag: "llm" }, // no description, no detail
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics).toHaveLength(1);
+    expect(out.topics[0].name).toBe("LLM");
+  });
+
+  it("handles legacy detailCategories that is not an array", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      detailCategories: "photo-z",
+      categoryDisplayMap: {},
+      timezone: "UTC",
+    });
+    // non-Array detailCategories should be treated as missing → fresh defaults (empty)
+    expect(out.topics).toEqual([]);
+  });
+
+  it("filters out non-string entries from legacy detailCategories", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      detailCategories: ["good", 123, null, undefined, true],
+      categoryDisplayMap: {},
+      timezone: "UTC",
+    }) as unknown as Record<string, unknown>;
+    // Non-string entries are filtered out; only "good" survives
+    expect(Array.isArray(out.topics)).toBe(true);
+    expect((out.topics as Array<{ tag: string }>)).toHaveLength(1);
+    expect((out.topics as Array<{ tag: string }>)[0].tag).toBe("good");
+  });
+
+  it("handles categoryDisplayMap that is not an object", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      detailCategories: ["photo-z"],
+      categoryDisplayMap: "not-a-map",
+      timezone: "UTC",
+    });
+    // Falls back to default {} which means title-case fallback
+    expect(out.topics[0].name).toBe("Photo Z");
+  });
+
+  it("handles categoryDisplayMap that is an array (unexpected type)", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      detailCategories: ["photo-z"],
+      categoryDisplayMap: ["a", "b"],
+      timezone: "UTC",
+    });
+    // Array casts to object but with no string keys → title-case fallback
+    expect(out.topics[0].name).toBe("Photo Z");
+  });
+
+  it("prefers new-format topics over legacy detailCategories when both are present", () => {
+    const out = migrateArxivSettings({
+      category: "cs.CL",
+      topics: [
+        { id: "u1", name: "LLM", tag: "llm", description: "", detail: true },
+      ],
+      detailCategories: ["photo-z"],
+      categoryDisplayMap: {},
+      timezone: "UTC",
+    });
+    // Should use topics, not detailCategories
+    expect(out.topics).toHaveLength(1);
+    expect(out.topics[0].tag).toBe("llm");
+  });
+
+  it("ignores topics array that is empty and falls back to legacy detailCategories", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      topics: [],
+      detailCategories: ["photo-z"],
+      categoryDisplayMap: {},
+      timezone: "UTC",
+    });
+    // topics is an empty array → not truthy → falls through to detailCategories
+    expect(out.topics).toHaveLength(1);
+    expect(out.topics[0].tag).toBe("photo-z");
+  });
+
+  it("survives extremely long category names", () => {
+    const long = "x".repeat(500);
+    const out = migrateArxivSettings({ category: long, timezone: "UTC" });
+    expect(out.category).toBe(long);
+    expect(out.categories).toEqual([long]);
   });
 });
