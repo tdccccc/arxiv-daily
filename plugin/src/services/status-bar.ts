@@ -1,5 +1,5 @@
-import type { ProgressReporter, ProgressStage, IdleReason } from "./progress";
-import type { StateStore } from "./state-store";
+import type { ProgressReporter, ProgressStage, IdleReason } from "@arxiv-daily/core";
+import type { StateStore } from "@arxiv-daily/core";
 
 const STAGE_LABELS: Record<ProgressStage, string> = {
   "fetch-metadata": "metadata",

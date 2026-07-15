@@ -1,0 +1,15 @@
+{
+  "name": "@arxiv-daily/node-runtime",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.mts"
+  },
+  "dependencies": {
+    "@arxiv-daily/core": "0.2.1",
+    "linkedom": "^0.18.12"
+  }
+}

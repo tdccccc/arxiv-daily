@@ -13,7 +13,7 @@ import {
   paginateDashboardRows,
   shouldSkipDashboardHistorySync,
 } from "../src/dashboard/view";
-import type { PaperIndexEntry } from "../src/services/paper-index";
+import type { PaperIndexEntry } from "@arxiv-daily/core";
 
 const dashboardViewSource = readFileSync(
   resolve(process.cwd(), "src/dashboard/view.ts"),

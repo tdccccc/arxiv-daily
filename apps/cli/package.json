@@ -1,0 +1,16 @@
+{
+  "name": "@arxiv-daily/cli",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "bin": { "arxiv-daily": "./dist/arxiv-daily-cli.cjs" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.mts",
+    "build": "node esbuild.config.mjs"
+  },
+  "dependencies": {
+    "@arxiv-daily/core": "0.2.1",
+    "@arxiv-daily/node-runtime": "0.2.1"
+  }
+}

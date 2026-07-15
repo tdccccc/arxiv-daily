@@ -18,24 +18,24 @@ import {
   type DashboardSortDirection,
   type DashboardSortKey,
   type DashboardTab,
-} from "./model";
-import { syncDashboardHistory, type DashboardMarkdownFile } from "./history-sync";
+} from "@arxiv-daily/core";
+import { syncDashboardHistory, type DashboardMarkdownFile } from "@arxiv-daily/core";
 import {
   validateFilterConfig,
   validateLlmConfig,
-} from "../settings/validation";
-import type { RunStateEntry } from "../settings/types";
-import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "../utils/time";
+} from "@arxiv-daily/core";
+import type { RunStateEntry } from "@arxiv-daily/core";
+import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
-import { buildDiagnosticsReport } from "../services/diagnostics";
-import { formatRunHistoryRecords } from "../services/run-history";
-import { LOOKBACK_DAYS } from "../services/scheduling/constants";
+import { buildDiagnosticsReport } from "@arxiv-daily/core";
+import { formatRunHistoryRecords } from "@arxiv-daily/core";
+import { LOOKBACK_DAYS } from "@arxiv-daily/core";
 import {
   describeManualResult,
   describeResult,
   describeRunResults,
-} from "../run-format";
+} from "@arxiv-daily/core";
 
 export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
 const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;

@@ -1,5 +1,5 @@
 import { normalizePath, type Vault } from "obsidian";
-import type { StorageAdapter, StorageEntry } from "../../core/adapters";
+import type { StorageAdapter, StorageEntry } from "@arxiv-daily/core";
 
 export class ObsidianStorageAdapter implements StorageAdapter {
   constructor(private vault: Vault) {}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getSetupStatus, shouldRenderSetupGuide } from "../src/onboarding";
-import { DEFAULT_SETTINGS } from "../src/settings/defaults";
-import type { PluginSettings } from "../src/settings/types";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { PluginSettings } from "@arxiv-daily/core";
 
 type SettingsOverrides = Omit<
   Partial<PluginSettings>,

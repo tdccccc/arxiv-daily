@@ -1,15 +1,15 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, setTooltip } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
-import { PROVIDER_PRESETS, type ProviderPreset } from "./providers";
-import { ARXIV_CATEGORIES } from "./arxiv-categories";
-import { TOPIC_TEMPLATES } from "./topic-templates";
-import type { Topic } from "./types";
-import { slugify } from "../utils/slugify";
-import { validateSchedulerConfig } from "./validation";
-import { arxivCategories } from "./categories";
+import { PROVIDER_PRESETS, type ProviderPreset } from "@arxiv-daily/core";
+import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
+import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
+import type { Topic } from "@arxiv-daily/core";
+import { slugify } from "@arxiv-daily/core";
+import { validateSchedulerConfig } from "@arxiv-daily/core";
+import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
-import { LlmClient } from "../llm/client";
+import { LlmClient } from "@arxiv-daily/core";
 
 export type ModelFetchNotice =
   | { kind: "success"; count: number }
@@ -191,7 +191,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         b.setButtonText("Fetching…");
         b.setDisabled(true);
         try {
-          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient());
+          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient()!);
           const models = await client.fetchModels();
           if (models.length > 0) {
             this.showModelDropdown(models, modelSetting.settingEl);

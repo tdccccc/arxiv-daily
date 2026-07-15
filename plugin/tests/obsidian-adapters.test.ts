@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildObsidianHostAdapters } from "../src/hosts/obsidian";
-import { DEFAULT_SETTINGS } from "../src/settings/defaults";
-import type { PluginSettings } from "../src/settings/types";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { PluginSettings } from "@arxiv-daily/core";
 
 function testSettings(): PluginSettings {
   return {

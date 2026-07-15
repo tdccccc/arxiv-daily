@@ -2,7 +2,7 @@ import type { App } from "obsidian";
 import type {
   ResourceOpenOptions,
   ResourceOpener,
-} from "../../core/adapters";
+} from "@arxiv-daily/core";
 
 export class ObsidianResourceOpener implements ResourceOpener {
   constructor(private app: App) {}

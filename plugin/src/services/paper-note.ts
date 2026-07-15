@@ -1,5 +1,5 @@
 import type ArxivDailyPlugin from "../../main";
-import type { PaperIndexEntry } from "./paper-index";
+import type { PaperIndexEntry } from "@arxiv-daily/core";
 
 export async function ensurePaperNote(
   plugin: ArxivDailyPlugin,

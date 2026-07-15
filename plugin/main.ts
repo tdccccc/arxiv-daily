@@ -1,36 +1,36 @@
 import { Notice, Plugin } from "obsidian";
-import { DEFAULT_SETTINGS } from "./src/settings/defaults";
-import type { PluginSettings, RunState } from "./src/settings/types";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { PluginSettings, RunState } from "@arxiv-daily/core";
 import { ArxivDailySettingTab } from "./src/settings/tab";
-import { migrateArxivSettings } from "./src/settings/migration";
-import { validateSchedulerConfig } from "./src/settings/validation";
-import { Logger } from "./src/services/logger";
-import { createStorageStateStore, type StateStore } from "./src/services/state-store";
-import { RunHistoryStore } from "./src/services/run-history";
-import { RunLock } from "./src/services/run-lock";
-import { RunCancellationService } from "./src/services/cancellation";
-import { SchedulerService } from "./src/services/scheduler";
+import { migrateArxivSettings } from "@arxiv-daily/core";
+import { validateSchedulerConfig } from "@arxiv-daily/core";
+import { Logger } from "@arxiv-daily/core";
+import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
+import { RunHistoryStore } from "@arxiv-daily/core";
+import { RunLock } from "@arxiv-daily/core";
+import { RunCancellationService } from "@arxiv-daily/core";
+import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
-import { NoopProgressReporter, type ProgressReporter } from "./src/services/progress";
+import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
 import { chooseModal } from "./src/services/modal";
-import { LlmClient } from "./src/llm/client";
-import { ArxivFetcher } from "./src/pipeline/arxiv-fetcher";
-import { HtmlCache } from "./src/pipeline/html-cache";
+import { LlmClient } from "@arxiv-daily/core";
+import { ArxivFetcher } from "@arxiv-daily/core";
+import { HtmlCache } from "@arxiv-daily/core";
 import {
   cleanupSourceCache,
   PaperContentFetcher,
-} from "./src/pipeline/paper-content";
-import { MarkdownWriter } from "./src/pipeline/markdown-writer";
-import { ArxivPipeline } from "./src/pipeline/pipeline";
-import { ManualFetchService } from "./src/services/manual-fetch";
+} from "@arxiv-daily/core";
+import { MarkdownWriter } from "@arxiv-daily/core";
+import { ArxivPipeline } from "@arxiv-daily/core";
+import { ManualFetchService } from "@arxiv-daily/core";
 import { registerCommands } from "./src/commands";
-import { todayInTz, formatDate } from "./src/utils/time";
-import { PaperIndexStore } from "./src/services/paper-index";
-import { PdfService } from "./src/services/pdf";
-import { ProjectNotesService } from "./src/services/project-notes";
-import { RecentDatesCache } from "./src/services/recent-dates";
-import { arxivCategories } from "./src/settings/categories";
-import type { HostAdapters, HttpClient } from "./src/core/adapters";
+import { todayInTz, formatDate } from "@arxiv-daily/core";
+import { PaperIndexStore } from "@arxiv-daily/core";
+import { PdfService } from "@arxiv-daily/core";
+import { ProjectNotesService } from "@arxiv-daily/core";
+import { RecentDatesCache } from "@arxiv-daily/core";
+import { arxivCategories } from "@arxiv-daily/core";
+import type { HostAdapters, HttpClient } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   registerDashboardView,
@@ -57,7 +57,7 @@ export function shouldRunCacheCleanup(
 }
 
 export default class ArxivDailyPlugin extends Plugin {
-  settings!: PluginSettings;
+  declare settings: PluginSettings;
   logger!: Logger;
   stateStore!: StateStore;
   runHistoryStore!: RunHistoryStore;
@@ -89,6 +89,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
       buildFetcher: () => this.buildArxivFetcher(),
+      markupParser: this.host.markupParser,
       logger: this.logger,
     });
 
@@ -260,6 +261,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
     return new ArxivPipeline({
       fetcher,
+      markupParser: this.host.markupParser,
       paperFetcher,
       writer,
       paperIndex: this.buildPaperIndex(),
@@ -277,6 +279,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
     return new ManualFetchService({
       storage: this.host.storage,
+      markupParser: this.host.markupParser,
       fetcher,
       paperFetcher,
       writer,
@@ -296,6 +299,7 @@ export default class ArxivDailyPlugin extends Plugin {
       category: this.settings.arxiv.category,
       categories: arxivCategories(this.settings.arxiv),
       http: this.host.http,
+      markupParser: this.host.markupParser,
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
     });
@@ -309,7 +313,7 @@ export default class ArxivDailyPlugin extends Plugin {
       expiryDays: this.settings.advanced.cacheExpiryDays,
       storage: this.host.storage,
     });
-    const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger, {
+    const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger, this.host.markupParser, {
       storage: this.host.storage,
       cacheDir: `${this.pluginDir()}/.cache/source`,
       expiryDays: this.settings.advanced.cacheExpiryDays,

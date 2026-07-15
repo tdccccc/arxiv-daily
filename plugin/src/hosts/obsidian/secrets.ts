@@ -1,5 +1,5 @@
-import type { SecretProvider } from "../../core/adapters";
-import type { PluginSettings } from "../../settings/types";
+import type { SecretProvider } from "@arxiv-daily/core";
+import type { PluginSettings } from "@arxiv-daily/core";
 
 export class ObsidianSettingsSecretProvider implements SecretProvider {
   constructor(

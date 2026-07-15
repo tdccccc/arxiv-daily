@@ -12,8 +12,8 @@ import {
   type CalendarCellState,
   type CalendarRunWhitelistInput,
 } from "../../src/dashboard/view";
-import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
-import type { RunStateEntry } from "../../src/settings/types";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { RunStateEntry } from "@arxiv-daily/core";
 
 function runState(
   status: RunStateEntry["status"],

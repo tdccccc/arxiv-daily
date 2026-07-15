@@ -93,8 +93,8 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
 ```bash
 git clone https://github.com/tdccccc/arxiv-daily.git
-cd arxiv-daily/plugin
-npm install
+cd arxiv-daily
+npm ci
 npm run build
 # then copy manifest.json + main.js + styles.css into the vault
 ```
@@ -115,7 +115,7 @@ npm run build
 
 | File | Role |
 |---|---|
-| `src/core/adapters.ts` | Host-neutral contracts for HTTP, storage, secrets, progress, and resource opening |
+| `packages/core/src/core/adapters.ts` | Host-neutral contracts for HTTP, storage, secrets, progress, and resource opening |
 
 ### Host adapters
 
@@ -124,67 +124,67 @@ npm run build
 | `src/hosts/obsidian/http-client.ts` | Obsidian `requestUrl` implementation of the core `HttpClient` contract |
 | `src/hosts/obsidian/storage-adapter.ts` | Obsidian `Vault` implementation of the core `StorageAdapter` contract |
 | `src/hosts/obsidian/*.ts` | Obsidian host adapter assembly for HTTP, vault storage, settings secrets, progress, and workspace resource opening |
-| `src/hosts/node/*.ts` | Node implementations for HTTP, filesystem storage, env secrets, progress, and resource output |
+| `packages/node-runtime/src/*.ts` | Node implementations for HTTP, filesystem storage, env secrets, progress, and resource output |
 
 ### Settings layer
 
 | File | Role |
 |---|---|
-| `src/settings/types.ts` | `Topic`, `ArxivSettings`, `PluginSettings`, `RunStatus` (`"skipped"` added in v0.1.2) |
-| `src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]` by default |
-| `src/settings/migration.ts` | `migrateArxivSettings(raw)` — lossy upgrade from v0.1.x legacy fields |
-| `src/settings/validation.ts` | `validateLlmConfig`, `validateFilterConfig` — gatekeeper for all runs |
-| `src/settings/topic-templates.ts` | `TOPIC_TEMPLATES` — five static presets |
-| `src/settings/tab.ts` | `ArxivDailySettingTab` — full settings UI (topic cards, template loader, validation banner, `attachHelp`, `confirmReplace`) |
-| `src/settings/providers.ts` | LLM provider presets |
-| `src/settings/arxiv-categories.ts` | Grouped arXiv category data |
+| `packages/core/src/settings/types.ts` | `Topic`, `ArxivSettings`, `PluginSettings`, `RunStatus` (`"skipped"` added in v0.1.2) |
+| `packages/core/src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]` by default |
+| `packages/core/src/settings/migration.ts` | `migrateArxivSettings(raw)` — lossy upgrade from v0.1.x legacy fields |
+| `packages/core/src/settings/validation.ts` | `validateLlmConfig`, `validateFilterConfig` — gatekeeper for all runs |
+| `packages/core/src/settings/topic-templates.ts` | `TOPIC_TEMPLATES` — five static presets |
+| `plugin/src/settings/tab.ts` | `ArxivDailySettingTab` — full Obsidian settings UI (topic cards, template loader, validation banner, `attachHelp`, `confirmReplace`) |
+| `packages/core/src/settings/providers.ts` | LLM provider presets |
+| `packages/core/src/settings/arxiv-categories.ts` | Grouped arXiv category data |
 
 ### Pipeline
 
 | File | Role |
 |---|---|
-| `src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent`, export API submittedDate fallback, and `/abs` |
-| `src/pipeline/arxiv-parser.ts` | HTML listing → `PaperMeta[]` |
-| `src/pipeline/atom-parser.ts` | Atom API → abstract enrichment |
-| `src/pipeline/paper-filter.ts` | LLM-call: classifies papers into topics (or `"skip"`); short-circuits when topics is empty |
-| `src/pipeline/paper-content.ts` | Full-text HTML fetch + section extraction |
-| `src/pipeline/section-extractor.ts` | Splits HTML body into named sections |
-| `src/pipeline/summarizer.ts` | Daily summary + per-paper detail LLM prompts |
-| `src/pipeline/markdown-writer.ts` | Writes `.md` files into vault paths; reads tags from `topics` array |
-| `src/pipeline/pipeline.ts` | Orchestrator: fetch → filter → summarize → write |
-| `src/pipeline/html-cache.ts` | Disk cache for paper HTML |
+| `packages/core/src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent`, export API submittedDate fallback, and `/abs` |
+| `packages/core/src/pipeline/arxiv-parser.ts` | HTML listing → `PaperMeta[]` |
+| `packages/core/src/pipeline/atom-parser.ts` | Atom API → abstract enrichment |
+| `packages/core/src/pipeline/paper-filter.ts` | LLM-call: classifies papers into topics (or `"skip"`); short-circuits when topics is empty |
+| `packages/core/src/pipeline/paper-content.ts` | Full-text HTML fetch + section extraction |
+| `packages/core/src/pipeline/section-extractor.ts` | Splits HTML body into named sections |
+| `packages/core/src/pipeline/summarizer.ts` | Daily summary + per-paper detail LLM prompts |
+| `packages/core/src/pipeline/markdown-writer.ts` | Writes `.md` files into vault paths; reads tags from `topics` array |
+| `packages/core/src/pipeline/pipeline.ts` | Orchestrator: fetch → filter → summarize → write |
+| `packages/core/src/pipeline/html-cache.ts` | Disk cache for paper HTML |
 
 ### CLI
 
 | File | Role |
 |---|---|
-| `src/cli/config.ts` | Loads Node CLI runtime config from JSON and environment variables |
-| `src/cli/main.ts` | Minimal Node CLI entrypoint for run, run-pending, and summarize commands |
-| `src/cli/runtime.ts` | Builds Node CLI pipeline dependencies from config and host adapters |
+| `apps/cli/src/config.ts` | Loads Node CLI runtime config from JSON and environment variables |
+| `apps/cli/src/main.ts` | Minimal Node CLI entrypoint for run, run-pending, and summarize commands |
+| `apps/cli/src/runtime.ts` | Builds Node CLI pipeline dependencies from config and host adapters |
 
 ### Dashboard
 
 | File | Role |
 |---|---|
-| `src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view and future VS Code Webview |
+| `packages/core/src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view and future VS Code Webview |
 | `src/dashboard/view.ts` | Obsidian custom view, command/ribbon target, table rendering, filters, row actions, batch operations |
 
 ### Services
 
 | File | Role |
 |---|---|
-| `src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, mark/status/priority/summary/project updates |
+| `packages/core/src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, mark/status/priority/summary/project updates |
 | `src/services/paper-note.ts` | Shared lightweight paper-note creation helper |
-| `src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
-| `src/services/pdf.ts` | Manual arXiv PDF download into vault storage and `pdfPath` updates |
-| `src/services/project-notes.ts` | Project-note append workflow and `projects` field updates |
-| `src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
-| `src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
-| `src/services/run-lock.ts` | Mutex per-date to prevent double-runs |
-| `src/services/logger.ts` | Logging with Obsidian `Notice` integration |
-| `src/services/progress.ts` | `ProgressReporter` interface + `NoopProgressReporter` |
+| `packages/core/src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
+| `packages/core/src/services/pdf.ts` | Manual arXiv PDF download into vault storage and `pdfPath` updates |
+| `packages/core/src/services/project-notes.ts` | Project-note append workflow and `projects` field updates |
+| `packages/core/src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
+| `packages/core/src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
+| `packages/core/src/services/run-lock.ts` | Mutex per-date to prevent double-runs |
+| `packages/core/src/services/logger.ts` | Logging with Obsidian `Notice` integration |
+| `packages/core/src/services/progress.ts` | `ProgressReporter` interface + `NoopProgressReporter` |
 | `src/services/status-bar.ts` | Obsidian status-bar live-progress display |
-| `src/services/manual-fetch.ts` | `Summarize by arXiv ID` pipeline |
+| `packages/core/src/services/manual-fetch.ts` | `Summarize by arXiv ID` pipeline |
 | `src/services/modal.ts` | `chooseModal` — generic multi-button modal (used by enable confirm) |
 
 ### Top-level
@@ -193,9 +193,9 @@ npm run build
 |---|---|
 | `main.ts` | Plugin lifecycle (`onload`, `setScheduleEnabled`, `buildPipeline`) |
 | `src/commands.ts` | Command palette + ribbon menu registrations; config gating on manual commands |
-| `src/utils/slugify.ts` | `slugify` — topic-name → kebab-case ASCII tag |
-| `src/utils/time.ts` | Timezone-aware date utilities |
-| `src/llm/client.ts` | OpenAI-compatible LLM caller |
+| `packages/core/src/utils/slugify.ts` | `slugify` — topic-name → kebab-case ASCII tag |
+| `packages/core/src/utils/time.ts` | Timezone-aware date utilities |
+| `packages/core/src/llm/client.ts` | OpenAI-compatible LLM caller |
 
 ## Data model (schema v2)
 
@@ -333,13 +333,16 @@ The calendar now shows different states:
 
 ## Development
 
+Run all commands from the repository root:
+
 ```bash
-cd plugin
-npm run dev      # watch build
-npm test         # run unit + integration tests (vitest)
-npm test:watch   # vitest watcher
-npm run build    # production build
+npm ci
+npm run check:boundaries
+npm run typecheck
+npm test
+npm run build
 npm run cli -- --help
 ```
 
-Type checks: `npx tsc -noEmit -skipLibCheck -p tsconfig.json`
+`packages/core` is the sole business core; this directory contains only the
+Obsidian host and UI. There is no daemon or protocol layer.

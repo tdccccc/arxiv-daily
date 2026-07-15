@@ -1,7 +1,7 @@
-import type { PluginSettings } from "./settings/types";
-import { arxivCategories } from "./settings/categories";
-import { validateFilterConfig } from "./settings/validation";
-import type { Logger } from "./services/logger";
+import type { PluginSettings } from "@arxiv-daily/core";
+import { arxivCategories } from "@arxiv-daily/core";
+import { validateFilterConfig } from "@arxiv-daily/core";
+import type { Logger } from "@arxiv-daily/core";
 
 export interface SetupStatus {
   llmReady: boolean;

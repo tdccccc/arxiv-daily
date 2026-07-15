@@ -20,5 +20,6 @@ __pycache__/
 
 # Plugin development scratch
 node_modules/
+apps/cli/dist/
 plugin_test/
 .codex-runs/

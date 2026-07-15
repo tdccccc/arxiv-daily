@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeDetailSummary } from "../src/dashboard/detail-summary";
+import { looksLikeDetailSummary } from "@arxiv-daily/core";
 
 const longParagraph =
   "这段内容用于模拟详细总结中的解释、证据、边界和价值判断。" +

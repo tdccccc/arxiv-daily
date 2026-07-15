@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { StatusBarController } from "../src/services/status-bar";
-import { StateStore } from "../src/services/state-store";
-import type { RunState } from "../src/settings/types";
+import { StateStore } from "@arxiv-daily/core";
+import type { RunState } from "@arxiv-daily/core";
 
 function makeEl(): HTMLElement {
   return document.createElement("span");

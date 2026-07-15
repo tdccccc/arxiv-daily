@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { bindEnterToButton, registerCommands } from "../src/commands";
-import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 
 function makePlugin() {
   const commands: Array<{ id: string; name: string; callback?: () => unknown }> = [];

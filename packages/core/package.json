@@ -1,0 +1,14 @@
+{
+  "name": "@arxiv-daily/core",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.mts"
+  },
+  "dependencies": {
+    "pako": "^2.1.0"
+  }
+}

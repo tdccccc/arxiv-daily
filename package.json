@@ -1,0 +1,28 @@
+{
+  "name": "arxiv-daily-workspace",
+  "version": "0.2.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "plugin"
+  ],
+  "scripts": {
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "smoke:build": "node scripts/smoke-build.mjs",
+    "check:release-version": "node scripts/check-release-version.mjs",
+    "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/pako": "^2.0.3",
+    "esbuild": "^0.25.5",
+    "happy-dom": "^20.10.6",
+    "obsidian": "latest",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -3,7 +3,7 @@ import type {
   HttpClient,
   HttpRequest,
   HttpResponse,
-} from "../../core/adapters";
+} from "@arxiv-daily/core";
 
 export class ObsidianHttpClient implements HttpClient {
   async request(req: HttpRequest): Promise<HttpResponse> {

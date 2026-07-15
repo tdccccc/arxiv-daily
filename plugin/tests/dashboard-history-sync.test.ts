@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { syncDashboardHistory } from "../src/dashboard/history-sync";
-import { PaperIndexStore } from "../src/services/paper-index";
-import type { PaperIndexEntry } from "../src/services/paper-index";
-import type { StorageAdapter } from "../src/core/adapters";
-import type { OutputSettings } from "../src/settings/types";
+import { syncDashboardHistory } from "@arxiv-daily/core";
+import { PaperIndexStore } from "@arxiv-daily/core";
+import type { PaperIndexEntry } from "@arxiv-daily/core";
+import type { StorageAdapter } from "@arxiv-daily/core";
+import type { OutputSettings } from "@arxiv-daily/core";
 
 const output: OutputSettings = {
   dailyDir: "arxiv/daily",

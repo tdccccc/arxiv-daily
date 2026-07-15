@@ -125,12 +125,15 @@ Then restart Obsidian and enable **arXiv Daily**.
 The Node CLI is available for cron or server workflows.
 
 ```bash
-cd plugin
-npm install
+npm ci
 npm run build
 
 ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
 ```
+
+The canonical executable is `apps/cli/dist/arxiv-daily-cli.cjs`. The build also
+refreshes `plugin/arxiv-daily-cli.cjs` and keeps `arxiv_daily.py` as a deprecated
+compatibility shim.
 
 With a config file:
 
@@ -142,11 +145,17 @@ npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vaul
 ## Development
 
 ```bash
-cd plugin
-npm install
+npm ci
+npm run check:boundaries
+npm run typecheck
 npm test
 npm run build
 ```
+
+This repository is one npm workspace. `packages/core` is the only business
+core, `packages/node-runtime` contains Node adapters, `apps/cli` is the one-shot
+CLI, and `plugin` contains only the Obsidian host and UI. There is intentionally
+no protocol or daemon layer.
 
 ## License
 

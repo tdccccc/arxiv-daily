@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   planDashboardAction,
   queryDashboard,
-} from "../src/dashboard/model";
-import type { PaperIndexEntry } from "../src/services/paper-index";
+} from "@arxiv-daily/core";
+import type { PaperIndexEntry } from "@arxiv-daily/core";
 
 function paper(
   arxivId: string,

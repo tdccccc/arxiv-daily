@@ -2,8 +2,7 @@ name: Release Obsidian plugin
 
 on:
   push:
-    tags:
-      - "*.*.*"
+    tags: ["*.*.*"]
 
 permissions:
   contents: write
@@ -13,57 +12,27 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: plugin
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: plugin/package-lock.json
-
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci
-
       - name: Verify version matches tag
         run: |
-          tag_version="$GITHUB_REF_NAME"
-          root_manifest_version="$(node -p "require('../manifest.json').version")"
-          manifest_version="$(node -p "require('./manifest.json').version")"
-          package_version="$(node -p "require('./package.json').version")"
-          if [ "$root_manifest_version" != "$tag_version" ]; then
-            echo "root manifest.json version $root_manifest_version does not match tag $GITHUB_REF_NAME"
-            exit 1
-          fi
-          if [ "$manifest_version" != "$tag_version" ]; then
-            echo "plugin manifest.json version $manifest_version does not match tag $GITHUB_REF_NAME"
-            exit 1
-          fi
-          if [ "$package_version" != "$tag_version" ]; then
-            echo "package.json version $package_version does not match tag $GITHUB_REF_NAME"
-            exit 1
-          fi
-          node -e "const versions = require('../versions.json'); process.exit(versions[process.argv[1]] ? 0 : 1)" "$tag_version" || {
-            echo "root versions.json does not contain $tag_version"
-            exit 1
-          }
-          node -e "const versions = require('./versions.json'); process.exit(versions[process.argv[1]] ? 0 : 1)" "$tag_version" || {
-            echo "plugin versions.json does not contain $tag_version"
-            exit 1
-          }
-
-      - name: Run tests
-        run: npm test
-
-      - name: Build plugin
-        run: npm run build
-
+          node scripts/check-release-version.mjs "$GITHUB_REF_NAME"
+      - name: Verify workspace
+        run: |
+          npm run check:boundaries
+          npm run typecheck
+          npm test
+          npm run build
+          npm run smoke:build
       - name: Attest release assets
         uses: actions/attest-build-provenance@v4
         with:
@@ -71,19 +40,12 @@ jobs:
             plugin/manifest.json
             plugin/main.js
             plugin/styles.css
-
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" \
-              manifest.json main.js styles.css \
-              --clobber
+            gh release upload "$GITHUB_REF_NAME" plugin/manifest.json plugin/main.js plugin/styles.css --clobber
           else
-            gh release create "$GITHUB_REF_NAME" \
-              manifest.json main.js styles.css \
-              --verify-tag \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes
+            gh release create "$GITHUB_REF_NAME" plugin/manifest.json plugin/main.js plugin/styles.css --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
           fi

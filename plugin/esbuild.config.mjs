@@ -1,16 +1,15 @@
 import esbuild from "esbuild";
-import process from "process";
-import builtins from "builtin-modules";
+import { resolve } from "node:path";
 
 const prod = process.argv[2] === "production";
-
-const externalBuiltins = [...builtins, ...builtins.map((b) => `node:${b}`)];
-
-const common = {
+const options = {
+  entryPoints: [resolve(import.meta.dirname, "main.ts")],
+  outfile: resolve(import.meta.dirname, "main.js"),
   bundle: true,
   format: "cjs",
-  target: "es2020",
+  target: "es2022",
   platform: "node",
+  external: ["obsidian", "electron"],
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
@@ -18,25 +17,8 @@ const common = {
   loader: { ".md": "text" },
 };
 
-const contexts = await Promise.all([
-  esbuild.context({
-    ...common,
-    entryPoints: ["main.ts"],
-    external: ["obsidian", "electron", ...externalBuiltins],
-    outfile: "main.js",
-  }),
-  esbuild.context({
-    ...common,
-    entryPoints: ["src/cli/main.ts"],
-    external: [...externalBuiltins],
-    outfile: "arxiv-daily-cli.cjs",
-    banner: { js: "#!/usr/bin/env node" },
-  }),
-]);
-
-if (prod) {
-  for (const ctx of contexts) await ctx.rebuild();
-  for (const ctx of contexts) await ctx.dispose();
-} else {
-  for (const ctx of contexts) await ctx.watch();
+if (prod) await esbuild.build(options);
+else {
+  const context = await esbuild.context(options);
+  await context.watch();
 }

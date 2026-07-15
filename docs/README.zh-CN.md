@@ -156,8 +156,8 @@ arXiv Daily 只为抓取和总结论文访问必要服务。
 Node CLI 可用于 cron 或服务器工作流，但它不是主入口。
 
 ```bash
-cd plugin
-npm install
+# 在仓库根目录执行
+npm ci
 npm run build
 
 ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
