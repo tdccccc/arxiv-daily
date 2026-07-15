@@ -36,8 +36,16 @@ try {
 }
 
 const bundle = await readFile(pluginBundle, "utf8");
-for (const forbidden of ["@arxiv-daily/", "linkedom", "canvas"]) {
+for (const forbidden of ["@arxiv-daily/", "linkedom", "canvas", "node:"]) {
   if (bundle.includes(forbidden)) throw new Error(`plugin/main.js contains forbidden text: ${forbidden}`);
+}
+const runtimeRequires = new Set(
+  Array.from(bundle.matchAll(/require\(["']([^"']+)["']\)/g), (match) => match[1]),
+);
+for (const specifier of runtimeRequires) {
+  if (specifier !== "obsidian" && specifier !== "electron") {
+    throw new Error(`plugin/main.js contains unexpected runtime require: ${specifier}`);
+  }
 }
 console.log("Build smoke OK");
 

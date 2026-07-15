@@ -41,6 +41,9 @@ for (const layer of layers) {
       if (layer.dir === "packages/core" && file.includes("/src/") && builtins.has(specifier)) {
         errors.push(`${display}: core imports Node builtin ${specifier}`);
       }
+      if (layer.dir === "plugin" && file.includes("/src/") && builtins.has(specifier)) {
+        errors.push(`${display}: plugin imports Node builtin ${specifier}`);
+      }
     }
   }
 }

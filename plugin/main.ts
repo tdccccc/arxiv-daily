@@ -70,8 +70,9 @@ export default class ArxivDailyPlugin extends Plugin {
   private legacyRunState: RunState = {};
   private host!: HostAdapters;
 
-  getHttpClient(): HttpClient | undefined {
-    return this.host?.http;
+  getHttpClient(): HttpClient {
+    if (!this.host) throw new Error("Obsidian host adapters are not initialized");
+    return this.host.http;
   }
 
   async onload() {

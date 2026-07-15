@@ -61,6 +61,15 @@ describe("HtmlCache", () => {
     expect(await cache.get("2605.08080", "html")).toBe("<html>hi</html>");
   });
 
+  it("keeps the legacy SHA-1 cache key", async () => {
+    const { files, storage } = makeStorage();
+    const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+    await cache.set("2605.08080", "html", "HTML");
+    expect(Object.keys(files)).toEqual([
+      "cache/html/d18a24abe03dd46c244455f5.json",
+    ]);
+  });
+
   it("html and abs are separate namespaces", async () => {
     const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage: makeStorage().storage });
     await cache.set("k", "html", "HTML");

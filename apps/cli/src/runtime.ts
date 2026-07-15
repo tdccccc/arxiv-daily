@@ -60,9 +60,9 @@ export async function buildCliRuntime(
     requestDelayMs: config.settings.advanced.requestDelayMs,
   });
   const cache = new HtmlCache({
-    rootDir: opts.host ? config.cacheDir : "",
+    rootDir: "",
     expiryDays: config.settings.advanced.cacheExpiryDays,
-    storage: opts.host ? host.storage : new NodeStorageAdapter(config.cacheDir),
+    storage: new NodeStorageAdapter(config.cacheDir),
   });
   await cache.cleanupExpired().catch((e) =>
     logger.warn(`cache cleanup failed: ${(e as Error).message}`),

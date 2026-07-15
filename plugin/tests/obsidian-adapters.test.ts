@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildObsidianHostAdapters } from "../src/hosts/obsidian";
+import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type { PluginSettings } from "@arxiv-daily/core";
 
@@ -52,6 +53,20 @@ function testApp() {
 }
 
 describe("Obsidian host adapters", () => {
+  it("uses the host DOMParser for markup parsing", () => {
+    const parseFromString = vi.fn(() => ({}) as Document);
+    const DomParser = vi.fn(function (this: { parseFromString: typeof parseFromString }) {
+      this.parseFromString = parseFromString;
+    });
+    vi.stubGlobal("DOMParser", DomParser);
+
+    new ObsidianMarkupParser().parseFromString("<feed />", "text/xml");
+
+    expect(DomParser).toHaveBeenCalledTimes(1);
+    expect(parseFromString).toHaveBeenCalledWith("<feed />", "text/xml");
+    vi.unstubAllGlobals();
+  });
+
   it("assembles vault storage, settings secrets, and resource opening", async () => {
     const { app, files, workspace } = testApp();
     const settings = testSettings();
