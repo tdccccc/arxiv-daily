@@ -15,11 +15,17 @@ function freshDefaults(): Topic[] {
 export function migrateArxivSettings(raw: unknown): ArxivSettings {
   const arxiv = (raw ?? {}) as Record<string, unknown>;
 
-  const categories = normalizeCategoryList(
-    arxiv.categories,
-    normalizeCategoryList(arxiv.category, DEFAULT_SETTINGS.arxiv.categories),
-  );
-  const category = categories[0] ?? DEFAULT_SETTINGS.arxiv.category;
+  const hasCategories = Array.isArray(arxiv.categories);
+  const categories = hasCategories
+    ? normalizeCategoryList(arxiv.categories, [])
+    : normalizeCategoryList(
+        arxiv.category,
+        DEFAULT_SETTINGS.arxiv.categories,
+      );
+  const category = categories[0]
+    ?? (typeof arxiv.category === "string" && arxiv.category.trim()
+      ? arxiv.category.trim()
+      : DEFAULT_SETTINGS.arxiv.category);
   const timezone =
     typeof arxiv.timezone === "string" && arxiv.timezone.length > 0
       ? arxiv.timezone

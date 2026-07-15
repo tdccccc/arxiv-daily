@@ -19,6 +19,7 @@ const dashboardViewSource = readFileSync(
   resolve(process.cwd(), "src/dashboard/view.ts"),
   "utf-8",
 );
+const pluginStyles = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
 
 describe("openDashboardView", () => {
   it("reveals an existing dashboard leaf", async () => {
@@ -226,14 +227,40 @@ describe("dashboard star controls", () => {
     expect(button.getAttribute("aria-label")).toBe("Star paper");
   });
 
-  it("does not rerender the result table when updating a star", () => {
+  it("rerenders query-dependent results and restores sensible focus", () => {
     const updateStarBody = dashboardViewSource.match(
       /private async updateStar\([\s\S]*?\n  private async openDetailSummary/,
     )?.[0];
 
     expect(updateStarBody).toBeDefined();
-    expect(updateStarBody).toContain("applyStarButtonState");
-    expect(updateStarBody).not.toContain("renderCurrentResults");
+    expect(updateStarBody).toContain("this.dailyReports = this.loadDailyReports");
+    expect(updateStarBody).toContain("refreshCalendarDailyReports");
+    expect(updateStarBody).toContain("this.render()");
+    expect(updateStarBody).toContain("nextButton.focus()");
+    expect(updateStarBody).toContain(".arxiv-daily-dashboard__tab.is-active");
+  });
+
+  it("updates the detail-summary filter button state after toggling", () => {
+    const filterBody = dashboardViewSource.match(
+      /private renderToolbarFilter\([\s\S]*?\n  private countToolbarFilter/,
+    )?.[0];
+
+    expect(filterBody).toBeDefined();
+    expect(filterBody).toContain('button.toggleClass("is-active", isActive)');
+    expect(filterBody).toContain(
+      'button.setAttribute("aria-pressed", String(isActive))',
+    );
+  });
+
+  it("fully resets controls and cancels pending search debounce", () => {
+    const resetBody = dashboardViewSource.match(
+      /private resetFilters\(\)[\s\S]*?\n  private openSettings/,
+    )?.[0];
+
+    expect(resetBody).toBeDefined();
+    expect(resetBody).toContain("clearSearchDebounce");
+    expect(resetBody).toContain("this.render()");
+    expect(resetBody).not.toContain("renderCurrentResults");
   });
 });
 
@@ -262,6 +289,29 @@ describe("HubModal tabs", () => {
     expect(dashboardViewSource).toContain('content.setAttribute("aria-labelledby", tabId)');
     expect(dashboardViewSource).toContain("button.id = tabId");
     expect(dashboardViewSource).toContain("content.id = panelId");
+  });
+
+  it("keeps Clear logs actionable only on the Logs tab", () => {
+    expect(dashboardViewSource).toContain('text: "Clear logs"');
+    expect(dashboardViewSource).toContain('const visible = this.activeTab === "logs"');
+    expect(dashboardViewSource).toContain("this.clearButton.hidden = !visible");
+    expect(dashboardViewSource).toContain("this.clearButton.disabled = !visible");
+  });
+
+  it("uses separate flex sizing classes for short viewports", () => {
+    expect(dashboardViewSource).toContain('contentEl.addClass("arxiv-daily-hub-modal__content")');
+    expect(pluginStyles).toContain(".arxiv-daily-hub-modal__content");
+    expect(pluginStyles).toContain("min-height: 0");
+    expect(pluginStyles).toContain("max-height: min(82vh, 740px)");
+  });
+});
+
+describe("dashboard pane responsiveness", () => {
+  it("uses dashboard container queries for overview, filters, and calendar", () => {
+    expect(pluginStyles).toContain("container-name: arxiv-daily-dashboard");
+    expect(pluginStyles).toContain("container-type: inline-size");
+    expect(pluginStyles).toContain("@container arxiv-daily-dashboard (max-width: 920px)");
+    expect(pluginStyles).toContain("@container arxiv-daily-dashboard (max-width: 520px)");
   });
 });
 

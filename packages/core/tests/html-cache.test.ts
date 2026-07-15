@@ -70,6 +70,30 @@ describe("HtmlCache", () => {
     ]);
   });
 
+  it("reuses and migrates legacy raw html and abs entries", async () => {
+    const { files, storage } = makeStorage();
+    files["cache/html/d18a24abe03dd46c244455f5.html"] = "legacy HTML";
+    files["cache/abs/d18a24abe03dd46c244455f5.html"] = "legacy abstract";
+    const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+
+    expect(await cache.get("2605.08080", "html")).toBe("legacy HTML");
+    expect(await cache.get("2605.08080", "abs")).toBe("legacy abstract");
+    expect(files["cache/html/d18a24abe03dd46c244455f5.html"]).toBe("legacy HTML");
+    expect(files["cache/abs/d18a24abe03dd46c244455f5.html"]).toBe("legacy abstract");
+    expect(JSON.parse(files["cache/html/d18a24abe03dd46c244455f5.json"]!).content).toBe("legacy HTML");
+    expect(JSON.parse(files["cache/abs/d18a24abe03dd46c244455f5.json"]!).content).toBe("legacy abstract");
+  });
+
+  it("preserves legacy raw cache entries during cleanup", async () => {
+    const { files, dirs, storage } = makeStorage();
+    dirs.add("cache/html");
+    files["cache/html/d18a24abe03dd46c244455f5.html"] = "legacy HTML";
+    const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+
+    expect(await cache.cleanupExpired()).toBe(0);
+    expect(files["cache/html/d18a24abe03dd46c244455f5.html"]).toBe("legacy HTML");
+  });
+
   it("html and abs are separate namespaces", async () => {
     const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage: makeStorage().storage });
     await cache.set("k", "html", "HTML");

@@ -28,6 +28,26 @@ for (const file of ["versions.json", "plugin/versions.json"]) {
   const value = JSON.parse(await readFile(resolve(root, file), "utf8"));
   if (!value[expected]) errors.push(`${file} does not contain ${expected}`);
 }
+const lock = JSON.parse(await readFile(resolve(root, "package-lock.json"), "utf8"));
+if (lock.version !== expected) errors.push(`package-lock.json version ${lock.version} does not match ${expected}`);
+for (const [workspacePath, value] of Object.entries(lock.packages ?? {})) {
+  if (
+    (workspacePath === "" ||
+      workspacePath === "plugin" ||
+      workspacePath.startsWith("apps/") ||
+      workspacePath.startsWith("packages/")) &&
+    value.version !== expected
+  ) {
+    errors.push(`package-lock.json packages.${workspacePath || "<root>"}.version ${value.version} does not match ${expected}`);
+  }
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    for (const [name, range] of Object.entries(value[field] ?? {})) {
+      if (name.startsWith("@arxiv-daily/") && range !== expected) {
+        errors.push(`package-lock.json packages.${workspacePath || "<root>"}.${field}.${name} is ${range}, expected ${expected}`);
+      }
+    }
+  }
+}
 for (const [file, value] of parsed) {
   for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
     for (const [name, range] of Object.entries(value[field] ?? {})) {

@@ -1,7 +1,11 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { StatusBarController } from "../src/services/status-bar";
 import { StateStore } from "@arxiv-daily/core";
 import type { RunState } from "@arxiv-daily/core";
+
+const pluginMainSource = readFileSync(resolve(process.cwd(), "main.ts"), "utf-8");
 
 function makeEl(): HTMLElement {
   return document.createElement("span");
@@ -153,5 +157,30 @@ describe("StatusBarController", () => {
     const ctrl = new StatusBarController(el, store, { initiallyEnabled: false });
     ctrl.setIdle("2026-05-11");
     expect(el.textContent).toBe("arXiv: idle · last 2026-05-11");
+  });
+
+  it("dispose clears pending timers and removes the floating panel", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const ctrl = new StatusBarController(makeEl(), store, { initiallyEnabled: true });
+    ctrl.setComplete();
+
+    expect(document.body.querySelector(".arxiv-daily-progress")).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
+
+    ctrl.dispose();
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(document.body.querySelector(".arxiv-daily-progress")).toBeNull();
+  });
+
+  it("disposes the status controller when the plugin unloads", () => {
+    const unloadBody = pluginMainSource.match(
+      /onunload\(\)[\s\S]*?\n  async saveSettings/,
+    )?.[0];
+
+    expect(unloadBody).toContain("this.progress instanceof StatusBarController");
+    expect(unloadBody).toContain("this.progress.dispose()");
   });
 });

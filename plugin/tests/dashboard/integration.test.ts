@@ -128,7 +128,7 @@ describe("Dashboard Integration", () => {
 
   it("should render runnable cells with correct aria labels", () => {
     const cell: CalendarCell = { date: "2026-06-20", state: "runnable" };
-    expect(calendarCellAriaLabel(cell)).toBe("Run daily report");
+    expect(calendarCellAriaLabel(cell)).toBe("2026-06-20: run daily report");
   });
 
   it("should render no-relevant-papers cells with correct aria labels", () => {
@@ -137,7 +137,9 @@ describe("Dashboard Integration", () => {
       state: "no-relevant-papers",
       report: { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 },
     };
-    expect(calendarCellAriaLabel(cell)).toBe("No relevant papers");
+    expect(calendarCellAriaLabel(cell)).toBe(
+      "2026-06-18: open daily report, no relevant papers",
+    );
   });
 
   it("should render has-report cells with correct aria labels", () => {
@@ -146,7 +148,9 @@ describe("Dashboard Integration", () => {
       state: "has-report",
       report: { date: "2026-06-19", path: "arxiv-daily/daily/2026-06-19.md", papers: 5, starred: 2 },
     };
-    expect(calendarCellAriaLabel(cell)).toBe("5 indexed papers, 2 starred");
+    expect(calendarCellAriaLabel(cell)).toBe(
+      "2026-06-19: open daily report, 5 indexed papers, 2 starred",
+    );
   });
 
   it("should make empty calendar cells unfocusable and hidden from assistive tech", () => {

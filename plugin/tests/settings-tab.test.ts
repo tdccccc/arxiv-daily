@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { llmHttpWarning, modelFetchNoticeMessage } from "../src/settings/tab";
+import {
+  isValidLocalTime,
+  llmHttpWarning,
+  modelFetchNoticeMessage,
+  runWindowTimeOptions,
+} from "../src/settings/tab";
 
 const settingsTabSource = readFileSync(
   resolve(process.cwd(), "src/settings/tab.ts"),
@@ -63,5 +68,67 @@ describe("settings tab regressions", () => {
 
   it("warns that quick-start templates replace categories", () => {
     expect(settingsTabSource).toContain("and arXiv categories");
+  });
+
+  it("uses accessible topic disclosure controls and associated field labels", () => {
+    expect(settingsTabSource).toContain('card.createEl("button"');
+    expect(settingsTabSource).toContain('"aria-expanded": String(isExpanded)');
+    expect(settingsTabSource).toContain('"aria-controls": formId');
+    expect(settingsTabSource).toContain("form.hidden = !isExpanded");
+    expect(settingsTabSource).toContain('attr: { for: nameId }');
+    expect(settingsTabSource).toContain('attr: { for: tagId }');
+    expect(settingsTabSource).toContain('attr: { for: descId }');
+    expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
+  });
+
+  it("confirms topic deletion by name before persistence", () => {
+    expect(settingsTabSource).toContain('Delete the research topic "${topicName}"?');
+    expect(settingsTabSource).toContain("if (!confirmed) return");
+    expect(settingsTabSource.indexOf("if (!confirmed) return")).toBeLessThan(
+      settingsTabSource.indexOf("topics.splice(index, 1)"),
+    );
+  });
+
+  it("uses explicit Start and End labels with non-cyclic select controls", () => {
+    expect(settingsTabSource).toContain('"Start"');
+    expect(settingsTabSource).toContain('"End"');
+    expect(settingsTabSource).toContain('field.createEl("select"');
+    expect(settingsTabSource).not.toContain('inputEl.type = "time"');
+  });
+
+  it("does not normalize or persist categories merely while displaying them", () => {
+    expect(settingsTabSource).toContain("const categories = arxivCategories(s.arxiv);");
+    expect(settingsTabSource).toContain(
+      "this.plugin.settings.arxiv.categories = normalized;",
+    );
+    expect(settingsTabSource).toMatch(
+      /const apply = async \(\) => \{[\s\S]*?s\.arxiv\.categories = \[tpl\.category\];/,
+    );
+  });
+});
+
+describe("run window time options", () => {
+  it("renders standard 24-hour quarter-hour values without 24:00", () => {
+    const options = runWindowTimeOptions("09:00");
+    expect(options).toHaveLength(96);
+    expect(options[0]).toMatchObject({ value: "00:00", label: "00:00" });
+    expect(options.at(-1)).toMatchObject({ value: "23:45", label: "23:45" });
+    expect(options.some((option) => option.value === "24:00")).toBe(false);
+  });
+
+  it("preserves arbitrary valid minutes as a selectable value", () => {
+    const options = runWindowTimeOptions("09:07");
+    expect(options).toContainEqual({ value: "09:07", label: "09:07", valid: true });
+    expect(isValidLocalTime("09:07")).toBe(true);
+  });
+
+  it("displays invalid and legacy values without treating them as persistable", () => {
+    expect(runWindowTimeOptions("24:00")).toContainEqual({
+      value: "24:00",
+      label: "24:00 — invalid",
+      valid: false,
+    });
+    expect(isValidLocalTime("24:00")).toBe(false);
+    expect(isValidLocalTime("9:00 AM")).toBe(false);
   });
 });

@@ -13,6 +13,7 @@
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "smoke:build": "node scripts/smoke-build.mjs",
+    "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
   },

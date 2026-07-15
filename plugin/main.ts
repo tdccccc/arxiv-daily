@@ -1,8 +1,7 @@
 import { Notice, Plugin } from "obsidian";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type { PluginSettings, RunState } from "@arxiv-daily/core";
 import { ArxivDailySettingTab } from "./src/settings/tab";
-import { migrateArxivSettings } from "@arxiv-daily/core";
+import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { validateSchedulerConfig } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
@@ -166,6 +165,7 @@ export default class ArxivDailyPlugin extends Plugin {
     ).catch(() => {});
     this.scheduler?.cancelCurrentRun("plugin unloaded");
     this.scheduler?.stop();
+    if (this.progress instanceof StatusBarController) this.progress.dispose();
   }
 
   async saveSettings(): Promise<void> {
@@ -243,14 +243,9 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private async loadSettingsAndState(): Promise<void> {
-    const data = ((await this.loadData()) as PersistedData | null) ?? {
-      settings: DEFAULT_SETTINGS,
-      runState: {},
-    };
-    this.legacyRunState = data.runState ?? {};
-    const merged = mergeSettings(DEFAULT_SETTINGS, data.settings ?? ({} as PluginSettings));
-    merged.arxiv = migrateArxivSettings((data.settings as any)?.arxiv);
-    this.settings = merged;
+    const loaded = settingsAndStateFromPersistedData(await this.loadData());
+    this.legacyRunState = loaded.runState;
+    this.settings = loaded.settings;
   }
 
   private async persistSettings(): Promise<void> {
@@ -409,19 +404,6 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
-}
-
-function mergeSettings(
-  defaults: PluginSettings,
-  partial: Partial<PluginSettings>,
-): PluginSettings {
-  return {
-    llm: { ...defaults.llm, ...(partial.llm ?? {}) },
-    arxiv: { ...defaults.arxiv, ...(partial.arxiv ?? {}) },
-    output: { ...defaults.output, ...(partial.output ?? {}) },
-    schedule: { ...defaults.schedule, ...(partial.schedule ?? {}) },
-    advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },
-  };
 }
 
 function latestCompletedDate(store: StateStore): string | undefined {

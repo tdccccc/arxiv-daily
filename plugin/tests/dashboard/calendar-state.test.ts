@@ -462,7 +462,7 @@ describe("calendarCellAriaLabel", () => {
         state: "empty",
         emptyReason: "arxiv-not-updated",
       }),
-    ).toBe("arXiv not updated");
+    ).toBe("2026-06-20: arXiv not updated");
     expect(
       calendarCellAriaLabel({
         date: null,
@@ -479,14 +479,14 @@ describe("calendarCellAriaLabel", () => {
         state: "empty",
         emptyReason: "future",
       }),
-    ).toBe("Future date");
+    ).toBe("2026-06-25: future date");
     expect(
       calendarCellAriaLabel({
         date: "2026-05-01",
         state: "empty",
         emptyReason: "before-tracking",
       }),
-    ).toBeUndefined();
+    ).toBe("2026-05-01");
   });
 
   it("labels completed dates whose daily report is missing", () => {
@@ -496,7 +496,7 @@ describe("calendarCellAriaLabel", () => {
         state: "empty",
         emptyReason: "report-missing",
       }),
-    ).toBe("Daily report missing");
+    ).toBe("2026-06-24: daily report missing");
   });
 
   it("labels zero-count reports as no relevant papers", () => {
@@ -506,26 +506,26 @@ describe("calendarCellAriaLabel", () => {
         state: "no-relevant-papers",
         report: { date: "2026-06-18", path: "arxiv-daily/daily/2026-06-18.md", papers: 0, starred: 0 },
       }),
-    ).toBe("No relevant papers");
+    ).toBe("2026-06-18: open daily report, no relevant papers");
   });
 
-  it("labels runnable cells without repeating the date", () => {
+  it("labels runnable cells with the full date and action", () => {
     expect(
       calendarCellAriaLabel({
         date: "2026-06-22",
         state: "runnable",
       }),
-    ).toBe("Run daily report");
+    ).toBe("2026-06-22: run daily report");
   });
 
-  it("labels report cells with counts only", () => {
+  it("labels report cells with the full date, action, and counts", () => {
     expect(
       calendarCellAriaLabel({
         date: "2026-06-19",
         state: "has-report",
         report: { date: "2026-06-19", path: "arxiv-daily/daily/2026-06-19.md", papers: 5, starred: 2 },
       }),
-    ).toBe("5 indexed papers, 2 starred");
+    ).toBe("2026-06-19: open daily report, 5 indexed papers, 2 starred");
   });
 });
 

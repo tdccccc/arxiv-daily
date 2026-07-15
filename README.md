@@ -152,6 +152,17 @@ npm test
 npm run build
 ```
 
+For a release, synchronize every workspace package, internal dependency spec,
+Obsidian manifest/version map, and lockfile before validating the release:
+
+```bash
+npm run sync:release-version -- 0.2.2
+npm run check:release-version -- 0.2.2
+```
+
+Review the generated diff before committing. The sync command only updates
+version metadata; it does not publish, commit, tag, or push.
+
 This repository is one npm workspace. `packages/core` is the only business
 core, `packages/node-runtime` contains Node adapters, `apps/cli` is the one-shot
 CLI, and `plugin` contains only the Obsidian host and UI. There is intentionally

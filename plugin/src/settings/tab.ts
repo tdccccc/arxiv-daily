@@ -74,11 +74,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   /** Inline muted hint, used inside topic cards under a label. */
-  private hint(parent: HTMLElement, text: string): void {
-    parent.createEl("div", {
+  private hint(parent: HTMLElement, text: string, id?: string): HTMLElement {
+    const hint = parent.createEl("div", {
       cls: "arxiv-daily-settings__hint",
       text,
     });
+    if (id) hint.id = id;
+    return hint;
   }
 
   private sectionHeading(
@@ -96,9 +98,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   private async setArxivCategories(categories: string[]): Promise<void> {
     const normalized = normalizeUniqueCategories(categories);
-    const next = normalized.length > 0 ? normalized : ["astro-ph"];
-    this.plugin.settings.arxiv.categories = next;
-    this.plugin.settings.arxiv.category = next[0] ?? "astro-ph";
+    this.plugin.settings.arxiv.categories = normalized;
+    if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
     await this.plugin.saveSettings();
   }
 
@@ -480,27 +481,29 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(containerEl)
+    const runWindow = new Setting(containerEl)
       .setName("Run window")
-      .setDesc("Local time window for scheduled polling. Window behavior will be finalized with the dashboard Run rules.")
-      .addText((t) => {
-        t.inputEl.addClass("arxiv-daily-settings__time-input");
-        t.setPlaceholder("09:00")
-          .setValue(s.schedule.runAtLocal)
-          .onChange(async (v) => {
-            s.schedule.runAtLocal = v.trim();
-            await this.plugin.saveSettings();
-          });
-      })
-      .addText((t) => {
-        t.inputEl.addClass("arxiv-daily-settings__time-input");
-        t.setPlaceholder("18:00")
-          .setValue(s.schedule.runUntilLocal)
-          .onChange(async (v) => {
-            s.schedule.runUntilLocal = v.trim();
-            await this.plugin.saveSettings();
-          });
-      });
+      .setDesc("Local 24-hour time window for scheduled polling.");
+    renderRunWindowTimeSelect(
+      runWindow.controlEl,
+      "Start",
+      "arxiv-daily-run-window-start",
+      s.schedule.runAtLocal,
+      async (value) => {
+        s.schedule.runAtLocal = value;
+        await this.plugin.saveSettings();
+      },
+    );
+    renderRunWindowTimeSelect(
+      runWindow.controlEl,
+      "End",
+      "arxiv-daily-run-window-end",
+      s.schedule.runUntilLocal,
+      async (value) => {
+        s.schedule.runUntilLocal = value;
+        await this.plugin.saveSettings();
+      },
+    );
 
     this.attachHelp(
       new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
@@ -698,14 +701,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const topic = topics[index];
     if (!topic) return;
     const isExpanded = this.expandedTopics.has(topic.id);
+    const idPrefix = `arxiv-daily-topic-${stableDomId(topic.id)}`;
+    const formId = `${idPrefix}-form`;
 
     const card = container.createDiv({
       cls: "arxiv-daily-settings__topic-card",
     });
 
     // ─── Header row (always visible, clickable) ────────────
-    const header = card.createDiv({
+    const header = card.createEl("button", {
       cls: "arxiv-daily-settings__topic-header",
+      attr: {
+        type: "button",
+        "aria-expanded": String(isExpanded),
+        "aria-controls": formId,
+      },
     });
 
     const caret = header.createEl("span", {
@@ -740,20 +750,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const form = card.createDiv({
       cls: "arxiv-daily-settings__topic-form",
     });
+    form.id = formId;
+    form.hidden = !isExpanded;
     form.toggleClass("is-collapsed", !isExpanded);
 
     // Name row
     const nameRow = form.createDiv({
       cls: "arxiv-daily-settings__topic-row",
     });
+    const nameId = `${idPrefix}-name`;
+    const nameHintId = `${nameId}-hint`;
     nameRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
       text: "Name",
+      attr: { for: nameId },
     });
-    this.hint(nameRow, "Heading text used as the section title in the daily report.");
+    this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
     const nameInput = nameRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-name-input",
       type: "text",
+      attr: { id: nameId, "aria-describedby": nameHintId },
     });
     nameInput.value = topic.name;
     nameInput.placeholder = "e.g. Photometric Redshift";
@@ -762,14 +778,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const tagRow = form.createDiv({
       cls: "arxiv-daily-settings__topic-row",
     });
+    const tagId = `${idPrefix}-tag`;
+    const tagHintId = `${tagId}-hint`;
     tagRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
       text: "Tag",
+      attr: { for: tagId },
     });
-    this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.");
+    this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
     const tagInput = tagRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-tag-input",
       type: "text",
+      attr: { id: tagId, "aria-describedby": tagHintId },
     });
     tagInput.value = topic.tag;
     tagInput.placeholder = "kebab-case-slug";
@@ -812,13 +832,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const descRow = form.createDiv({
       cls: "arxiv-daily-settings__topic-row",
     });
+    const descId = `${idPrefix}-description`;
+    const descHintId = `${descId}-hint`;
     descRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
       text: "Description",
+      attr: { for: descId },
     });
-    this.hint(descRow, "Plain-language description of what belongs here. The LLM reads this to decide which papers go into this topic.");
+    this.hint(descRow, "Plain-language description of what belongs here. The LLM reads this to decide which papers go into this topic.", descHintId);
     const descArea = descRow.createEl("textarea", {
       cls: "arxiv-daily-settings__topic-description",
+      attr: { id: descId, "aria-describedby": descHintId },
     });
     descArea.value = topic.description;
     descArea.rows = 3;
@@ -860,10 +884,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
     };
 
-    const delBtn = footer.createEl("button", { text: "Delete" });
+    const delBtn = footer.createEl("button", {
+      text: "Delete",
+      attr: { type: "button" },
+    });
     delBtn.classList.add("mod-warning");
     delBtn.onclick = async (e) => {
       e.stopPropagation();
+      const topicName = topic.name.trim() || "(unnamed)";
+      const confirmed = await this.confirmReplace(
+        `Delete the research topic "${topicName}"? This cannot be undone.`,
+        "Delete",
+      );
+      if (!confirmed) return;
       topics.splice(index, 1);
       this.expandedTopics.delete(topic.id);
       await this.plugin.saveSettings();
@@ -872,19 +905,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Toggle expand/collapse on header click
     header.onclick = () => {
-      if (this.expandedTopics.has(topic.id)) {
-        this.expandedTopics.delete(topic.id);
-        form.addClass("is-collapsed");
-        caret.textContent = "▸";
-      } else {
-        this.expandedTopics.add(topic.id);
-        form.removeClass("is-collapsed");
-        caret.textContent = "▾";
-      }
+      const expanded = !this.expandedTopics.has(topic.id);
+      if (expanded) this.expandedTopics.add(topic.id);
+      else this.expandedTopics.delete(topic.id);
+      form.hidden = !expanded;
+      form.toggleClass("is-collapsed", !expanded);
+      header.setAttribute("aria-expanded", String(expanded));
+      caret.textContent = expanded ? "▾" : "▸";
     };
   }
 
-  private confirmReplace(message: string): Promise<boolean> {
+  private confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
     return new Promise((resolve) => {
       const modal = new Modal(this.app);
       modal.titleEl.setText("Confirm");
@@ -893,7 +924,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         cls: "arxiv-daily-modal-button-row",
       });
       const cancel = btns.createEl("button", { text: "Cancel" });
-      const ok = btns.createEl("button", { text: "Replace" });
+      const ok = btns.createEl("button", { text: confirmLabel });
       ok.classList.add("mod-warning");
       let settled = false;
       const finish = (value: boolean) => {
@@ -956,6 +987,74 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.inputEl.addClass("arxiv-daily-settings__textarea");
       });
   }
+}
+
+function stableDomId(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9_-]/g, "-");
+  return normalized || "unnamed";
+}
+
+export function isValidLocalTime(value: string): boolean {
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+export interface RunWindowTimeOption {
+  value: string;
+  label: string;
+  valid: boolean;
+}
+
+export function runWindowTimeOptions(current: string): RunWindowTimeOption[] {
+  const values: RunWindowTimeOption[] = [];
+  for (let hour = 0; hour < 24; hour += 1) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      values.push({ value, label: value, valid: true });
+    }
+  }
+
+  if (!values.some((option) => option.value === current)) {
+    const valid = isValidLocalTime(current);
+    values.push({
+      value: current,
+      label: valid ? current : `${current || "(empty)"} — invalid`,
+      valid,
+    });
+  }
+  return values.sort((a, b) => a.value.localeCompare(b.value));
+}
+
+function renderRunWindowTimeSelect(
+  parent: HTMLElement,
+  labelText: string,
+  id: string,
+  current: string,
+  onChange: (value: string) => Promise<void>,
+): void {
+  const field = parent.createDiv({
+    cls: "arxiv-daily-settings__time-field",
+  });
+  field.createEl("label", {
+    cls: "arxiv-daily-settings__time-label",
+    text: labelText,
+    attr: { for: id },
+  });
+  const select = field.createEl("select", {
+    cls: "dropdown arxiv-daily-settings__time-select",
+    attr: { id },
+  });
+  for (const option of runWindowTimeOptions(current)) {
+    const optionEl = select.createEl("option", {
+      value: option.value,
+      text: option.label,
+    });
+    optionEl.disabled = !option.valid;
+  }
+  select.value = current;
+  select.addEventListener("change", () => {
+    if (!isValidLocalTime(select.value)) return;
+    void onChange(select.value);
+  });
 }
 
 function addCategoryOptions(

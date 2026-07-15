@@ -132,6 +132,18 @@ export class StatusBarController implements ProgressReporter {
     this.hidePanel();
   }
 
+  dispose(): void {
+    this.clearHideTimer();
+    this.panel?.remove();
+    this.panel = null;
+    this.panelTitle = null;
+    this.panelDetail = null;
+    this.panelFill = null;
+    this.panelTrack = null;
+    this.panelPercent = null;
+    this.panelState = null;
+  }
+
   private render(): void {
     this.el.textContent = this.computeText();
     if (this.disabled || (!this.task && !this.batch && !this.stage)) return;

@@ -21,6 +21,14 @@
 
 .arxiv-daily-hub-modal {
   width: min(90vw, 900px);
+  max-height: min(90vh, 800px);
+}
+
+.arxiv-daily-hub-modal__content {
+  display: flex;
+  min-height: 0;
+  max-height: min(82vh, 740px);
+  flex-direction: column;
 }
 
 .arxiv-daily-hub-modal__tabs {
@@ -42,9 +50,9 @@
 }
 
 .arxiv-daily-hub-modal__body {
-  height: 65vh;
-  min-height: 300px;
-  max-height: 700px;
+  min-height: 0;
+  max-height: 65vh;
+  flex: 1 1 360px;
   overflow: auto;
 }
 
@@ -120,8 +128,22 @@
   min-width: 160px;
 }
 
-.arxiv-daily-settings__time-input {
-  width: 72px;
+.arxiv-daily-settings__time-field {
+  display: flex;
+  min-width: 116px;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.arxiv-daily-settings__time-label {
+  flex: 0 0 auto;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.arxiv-daily-settings__time-select {
+  min-width: 76px;
+  font-variant-numeric: tabular-nums;
 }
 
 .arxiv-daily-settings__invalid-banner {
@@ -154,8 +176,17 @@
 
 .arxiv-daily-settings__topic-header {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.5em;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
@@ -166,7 +197,10 @@
 }
 
 .arxiv-daily-settings__topic-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-weight: 600;
+  text-align: left;
 }
 
 .arxiv-daily-settings__topic-title.is-muted {
@@ -339,6 +373,8 @@
 
 .arxiv-daily-dashboard {
   --arxiv-daily-table-min-width: 780px;
+  container-name: arxiv-daily-dashboard;
+  container-type: inline-size;
   height: 100%;
   padding: 16px;
   overflow: auto;
@@ -576,11 +612,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-.arxiv-daily-dashboard__calendar-day:disabled {
+.arxiv-daily-dashboard__calendar-day:disabled,
+span.arxiv-daily-dashboard__calendar-day {
   opacity: 0.5;
 }
 
-.arxiv-daily-dashboard__calendar-day.is-today:disabled {
+.arxiv-daily-dashboard__calendar-day.is-today:disabled,
+span.arxiv-daily-dashboard__calendar-day.is-today {
   opacity: 1;
 }
 
@@ -1125,7 +1163,7 @@
   background: var(--text-error);
 }
 
-@media (max-width: 920px) {
+@container arxiv-daily-dashboard (max-width: 920px) {
   .arxiv-daily-dashboard__toolbar {
     align-items: flex-start;
     flex-direction: column;
@@ -1151,7 +1189,7 @@
   }
 }
 
-@media (max-width: 520px) {
+@container arxiv-daily-dashboard (max-width: 520px) {
   .arxiv-daily-dashboard__filters {
     grid-template-areas:
       "search"
@@ -1163,6 +1201,31 @@
 
   .arxiv-daily-dashboard__filter-reset-wrap {
     justify-self: start;
+  }
+
+  .arxiv-daily-dashboard__calendar-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .arxiv-daily-dashboard__calendar-weekdays,
+  .arxiv-daily-dashboard__calendar-grid {
+    grid-template-columns: repeat(7, minmax(24px, 1fr));
+  }
+}
+
+@supports not (container-type: inline-size) {
+  @media (max-width: 920px) {
+    .arxiv-daily-dashboard__overview {
+      grid-template-columns: 1fr;
+    }
+
+    .arxiv-daily-dashboard__calendar {
+      border-left: 0;
+      border-top: 1px solid var(--background-modifier-border);
+      padding-top: 10px;
+      padding-left: 0;
+    }
   }
 }
 

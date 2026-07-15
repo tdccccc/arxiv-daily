@@ -129,9 +129,10 @@ describe("migrateArxivSettings", () => {
     expect(out2.category).toBe(DEFAULT_SETTINGS.arxiv.category);
   });
 
-  it("handles empty categories array", () => {
+  it("preserves an explicitly empty categories array", () => {
     const out = migrateArxivSettings({ category: "cs.LG", categories: [], timezone: "UTC" });
-    expect(out.categories).toEqual(["cs.LG"]);
+    expect(out.categories).toEqual([]);
+    expect(out.category).toBe("cs.LG");
   });
 
   it("handles categories as non-array (old format single string)", () => {

@@ -204,35 +204,34 @@ export function resolveCalendarEmptyReason(
 }
 
 export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
-  if (!cell.date) {
-    return undefined;
-  }
+  if (!cell.date) return undefined;
+  const date = cell.date;
 
   if (cell.state === "has-report" && cell.report) {
-    return `${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
+    return `${date}: open daily report, ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
   }
 
   if (cell.state === "no-relevant-papers") {
-    return "No relevant papers";
+    return `${date}: open daily report, no relevant papers`;
   }
 
   if (cell.state === "runnable") {
-    return "Run daily report";
+    return `${date}: run daily report`;
   }
 
   if (cell.emptyReason === "arxiv-not-updated") {
-    return "arXiv not updated";
+    return `${date}: arXiv not updated`;
   }
 
   if (cell.emptyReason === "report-missing") {
-    return "Daily report missing";
+    return `${date}: daily report missing`;
   }
 
   if (cell.emptyReason === "future") {
-    return "Future date";
+    return `${date}: future date`;
   }
 
-  return undefined;
+  return date;
 }
 
 export function applyEmptyCalendarCellA11y(button: HTMLButtonElement): void {
@@ -859,12 +858,13 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private resetFilters(): void {
+    this.clearSearchDebounce();
     this.query = {
       tab: this.query.tab ?? "starred",
       ...(this.query.sort ? { sort: this.query.sort } : {}),
     };
     this.currentPage = 0;
-    this.renderCurrentResults();
+    this.render();
   }
 
   private openSettings(): void {
@@ -969,6 +969,7 @@ class ArxivDailyDashboardView extends ItemView {
         };
         this.currentPage = 0;
         this.renderCurrentResults();
+        return this.query.detailSummary === true;
       },
     );
 
@@ -1114,40 +1115,40 @@ class ArxivDailyDashboardView extends ItemView {
 
     // Use the new buildCalendarCells method
     for (const cell of this.buildCalendarCells(month)) {
-      const button = grid.createEl("button", {
+      const interactive =
+        cell.state === "runnable" ||
+        ((cell.state === "has-report" || cell.state === "no-relevant-papers") &&
+          Boolean(cell.report));
+      const day = grid.createEl(interactive ? "button" : "span", {
         cls: this.getCalendarCellClasses(cell),
-        attr: {
-          type: "button",
-        },
-      }) as HTMLButtonElement;
+      });
+      if (interactive) day.setAttribute("type", "button");
       const ariaLabel = this.getCalendarCellAriaLabel(cell);
-      if (ariaLabel) button.setAttribute("aria-label", ariaLabel);
+      if (ariaLabel) day.setAttribute("aria-label", ariaLabel);
 
       if (!cell.date) {
-        applyEmptyCalendarCellA11y(button);
-        button.addClass("is-empty");
+        day.setAttribute("aria-hidden", "true");
+        day.addClass("is-empty");
         continue;
       }
 
-      // Date number
-      button.createSpan({
+      day.createSpan({
         cls: "arxiv-daily-dashboard__calendar-day-number",
         text: String(Number(cell.date.slice(-2))),
       });
 
-      // Today indicator
-      if (cell.date === today) button.addClass("is-today");
+      if (cell.date === today) day.addClass("is-today");
 
-      // State-specific rendering
+      if (!(day instanceof HTMLButtonElement)) continue;
       switch (cell.state) {
         case "has-report":
-          this.renderReportCell(button, cell);
+          this.renderReportCell(day, cell);
           break;
         case "no-relevant-papers":
-          this.renderNoRelevantPapersCell(button, cell);
+          this.renderNoRelevantPapersCell(day, cell);
           break;
         case "runnable":
-          this.renderRunnableCell(button, cell);
+          this.renderRunnableCell(day, cell);
           break;
       }
     }
@@ -1158,7 +1159,7 @@ class ArxivDailyDashboardView extends ItemView {
     label: string,
     active: boolean,
     count: number,
-    onClick: () => void,
+    onClick: () => boolean,
   ): void {
     const button = parent.createEl("button", {
       cls: "arxiv-daily-dashboard__tab arxiv-daily-dashboard__tab--filter",
@@ -1173,7 +1174,11 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__tab-count",
       text: String(count),
     });
-    button.addEventListener("click", onClick);
+    button.addEventListener("click", () => {
+      const isActive = onClick();
+      button.toggleClass("is-active", isActive);
+      button.setAttribute("aria-pressed", String(isActive));
+    });
   }
 
   private countToolbarFilter(
@@ -1891,6 +1896,7 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "clickable-icon arxiv-daily-dashboard__star",
       attr: {
         type: "button",
+        "data-arxiv-id": entry.arxivId,
       },
     }) as HTMLButtonElement;
     applyStarButtonState(button, starred);
@@ -2199,7 +2205,21 @@ class ArxivDailyDashboardView extends ItemView {
       throw new Error(`${entry.arxivId} is not in papers.json`);
     }
     entry.priority = updated.priority;
-    applyStarButtonState(button, isStarredEntry(entry));
+    this.dailyReports = this.loadDailyReports(this.entries);
+    await this.refreshCalendarDailyReports(
+      this.calendarMonth ?? this.todayDate().slice(0, 7),
+    );
+    this.render();
+    const nextButton = this.contentEl.querySelector<HTMLButtonElement>(
+      `.arxiv-daily-dashboard__star[data-arxiv-id="${entry.arxivId}"]`,
+    );
+    if (nextButton) {
+      nextButton.focus();
+    } else {
+      this.contentEl
+        .querySelector<HTMLButtonElement>(".arxiv-daily-dashboard__tab.is-active")
+        ?.focus();
+    }
     this.notice(
       `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
     );
@@ -2694,6 +2714,7 @@ class HubModal extends Modal {
   private panels = new Map<HubModalTab, HubPanel>();
   private logLevels: Set<string> = new Set(DEFAULT_LOG_LEVELS);
   private levelRow: HTMLDivElement | null = null;
+  private clearButton: HTMLButtonElement | null = null;
 
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
@@ -2702,7 +2723,7 @@ class HubModal extends Modal {
   onOpen() {
     const { contentEl, modalEl } = this;
     modalEl.addClass("arxiv-daily-hub-modal");
-    contentEl.addClass("arxiv-daily-hub-modal");
+    contentEl.addClass("arxiv-daily-hub-modal__content");
     contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
 
     const tabs = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__tabs" });
@@ -2730,15 +2751,15 @@ class HubModal extends Modal {
       this.refreshActiveTab();
     };
 
-    footer.createEl("button", {
-      text: "Clear",
+    this.clearButton = footer.createEl("button", {
+      text: "Clear logs",
       attr: { type: "button" },
-    }).onclick = () => {
-      if (this.activeTab === "logs") {
-        this.plugin.logger.clearBuffer();
-      }
+    }) as HTMLButtonElement;
+    this.clearButton.onclick = () => {
+      this.plugin.logger.clearBuffer();
       this.refreshActiveTab();
     };
+    this.updateClearButton();
 
     footer.createEl("button", {
       text: "Copy",
@@ -2802,6 +2823,14 @@ class HubModal extends Modal {
       panel.content.toggleClass("is-active", active);
     }
     this.setLevelRowVisibility();
+    this.updateClearButton();
+  }
+
+  private updateClearButton(): void {
+    if (!this.clearButton) return;
+    const visible = this.activeTab === "logs";
+    this.clearButton.hidden = !visible;
+    this.clearButton.disabled = !visible;
   }
 
   private renderLevelChips(container: HTMLElement): void {

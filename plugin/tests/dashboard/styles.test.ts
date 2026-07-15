@@ -18,9 +18,20 @@ describe("dashboard and settings styles", () => {
   it("renders the schedule run window controls", () => {
     expect(settingsTab).toContain('.setName("Run window")');
     expect(settingsTab).toContain("runUntilLocal");
-    expect(settingsTab).toContain('setPlaceholder("09:00")');
-    expect(settingsTab).toContain('setPlaceholder("18:00")');
+    expect(settingsTab).toContain('field.createEl("select"');
+    expect(settingsTab).toContain('"Start"');
+    expect(settingsTab).toContain('"End"');
+    expect(settingsTab).not.toContain('inputEl.type = "time"');
     expect(settingsTab).not.toContain('.setName("Run time (HH:MM)")');
+  });
+
+  it("left-aligns the actual topic disclosure button and title", () => {
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__topic-header\s*\{[^}]*justify-content:\s*flex-start;[^}]*text-align:\s*left;/s,
+    );
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__topic-title\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*text-align:\s*left;/s,
+    );
   });
 
   it("does not render a custom calendar hover tooltip from aria-label", () => {

@@ -18,13 +18,20 @@ export class HtmlCache {
   async get(key: string, kind: "html" | "abs"): Promise<string | null> {
     const path = this.pathFor(key, kind);
     try {
-      if (!(await this.opts.storage.exists(path))) return null;
-      const envelope = parseEnvelope(await this.opts.storage.readText(path));
-      if (!envelope || isExpired(envelope.cachedAt, this.opts.expiryDays)) {
-        await this.opts.storage.remove(path).catch(() => {});
-        return null;
+      if (await this.opts.storage.exists(path)) {
+        const envelope = parseEnvelope(await this.opts.storage.readText(path));
+        if (!envelope || isExpired(envelope.cachedAt, this.opts.expiryDays)) {
+          await this.opts.storage.remove(path).catch(() => {});
+        } else {
+          return envelope.content;
+        }
       }
-      return envelope.content;
+
+      const legacyPath = this.legacyPathFor(key, kind);
+      if (!(await this.opts.storage.exists(legacyPath))) return null;
+      const content = await this.opts.storage.readText(legacyPath);
+      await this.set(key, kind, content).catch(() => {});
+      return content;
     } catch {
       return null;
     }
@@ -49,7 +56,7 @@ export class HtmlCache {
       const dir = storage.normalizePath(`${this.opts.rootDir}/${kind}`);
       if (!(await storage.exists(dir))) continue;
       for (const entry of await storage.list(dir)) {
-        if (entry.type !== "file") continue;
+        if (entry.type !== "file" || !entry.path.endsWith(".json")) continue;
         try {
           const envelope = parseEnvelope(await storage.readText(entry.path));
           if (!envelope || isExpired(envelope.cachedAt, this.opts.expiryDays)) {
@@ -68,6 +75,12 @@ export class HtmlCache {
   private pathFor(key: string, kind: "html" | "abs"): string {
     return this.opts.storage.normalizePath(
       `${this.opts.rootDir}/${kind}/${stableHash(key)}.json`,
+    );
+  }
+
+  private legacyPathFor(key: string, kind: "html" | "abs"): string {
+    return this.opts.storage.normalizePath(
+      `${this.opts.rootDir}/${kind}/${stableHash(key)}.html`,
     );
   }
 }

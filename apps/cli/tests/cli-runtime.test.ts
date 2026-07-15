@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
@@ -66,5 +66,28 @@ describe("CLI runtime", () => {
     expect(await host.storage.exists("arxiv-daily/.index/run-state.json")).toBe(
       true,
     );
+  });
+
+  it("preserves legacy raw HTML cache files during runtime cleanup", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      cwd: root,
+      env: { ARXIV_DAILY_API_KEY: "test-key" },
+      readText: async () => {
+        const err = new Error("missing") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      },
+    });
+    const legacyDir = join(config.cacheDir, "html");
+    const legacyPath = join(legacyDir, "d18a24abe03dd46c244455f5.html");
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(legacyPath, "legacy HTML");
+
+    await buildCliRuntime(config, {
+      host: buildNodeHostAdapters({ rootDir: config.vaultRoot }),
+    });
+
+    await expect(access(legacyPath)).resolves.toBeUndefined();
   });
 });

@@ -15,10 +15,10 @@ export function normalizeCategoryList(
 }
 
 export function arxivCategories(arxiv: ArxivSettings): string[] {
-  return normalizeCategoryList(
-    arxiv.categories,
-    normalizeCategoryList(arxiv.category, ["astro-ph"]),
-  );
+  if (Array.isArray(arxiv.categories)) {
+    return normalizeCategoryList(arxiv.categories, []);
+  }
+  return normalizeCategoryList(arxiv.category, ["astro-ph"]);
 }
 
 export function primaryArxivCategory(arxiv: ArxivSettings): string {

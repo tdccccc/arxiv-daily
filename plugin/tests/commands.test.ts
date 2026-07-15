@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindEnterToButton, registerCommands } from "../src/commands";
+import {
+  bindEnterToButton,
+  isValidCalendarDate,
+  registerCommands,
+} from "../src/commands";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 
 function makePlugin() {
@@ -45,6 +49,16 @@ function makePlugin() {
     addRibbonIcon: vi.fn(() => ({ addClass: vi.fn() })),
   };
 }
+
+describe("isValidCalendarDate", () => {
+  it("accepts real dates and rejects overflow dates", () => {
+    expect(isValidCalendarDate("2024-02-29")).toBe(true);
+    expect(isValidCalendarDate("2026-02-29")).toBe(false);
+    expect(isValidCalendarDate("2026-04-31")).toBe(false);
+    expect(isValidCalendarDate("2026-13-01")).toBe(false);
+    expect(isValidCalendarDate("2026-7-01")).toBe(false);
+  });
+});
 
 describe("registerCommands", () => {
   it("registers the run history viewer command", () => {
