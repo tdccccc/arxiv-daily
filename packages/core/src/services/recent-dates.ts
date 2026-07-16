@@ -4,6 +4,7 @@ import { parseRecent } from "../pipeline/arxiv-parser";
 import { arxivCategories } from "../settings/categories";
 import type { PluginSettings } from "../settings/types";
 import type { Logger } from "./logger";
+import { RunCancelledError, throwIfCancelled } from "./cancellation";
 
 type RecentFetcher = Pick<ArxivFetcher, "fetchRecent">;
 type RecentLogger = Pick<Logger, "debug" | "warn">;
@@ -53,32 +54,44 @@ export class RecentDatesCache {
     return this.state.dates.has(date);
   }
 
-  async refresh(): Promise<RecentDatesSnapshot> {
-    return this.ensureRefresh();
+  async refresh(signal?: AbortSignal): Promise<RecentDatesSnapshot> {
+    const caller = callerWait(this.ensureRefresh(), signal);
+    try {
+      return await caller.promise;
+    } finally {
+      caller.dispose();
+    }
   }
 
-  async refreshWithin(timeoutMs: number): Promise<RecentDatesRefreshResult> {
-    const refresh = this.ensureRefresh();
+  async refreshWithin(timeoutMs: number, signal?: AbortSignal): Promise<RecentDatesRefreshResult> {
+    const underlyingRefresh = this.ensureRefresh();
+    const caller = callerWait(underlyingRefresh, signal);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), Math.max(0, timeoutMs));
+      timeoutHandle = setTimeout(() => resolve("timeout"), Math.max(0, timeoutMs));
     });
-    const result = await Promise.race([refresh, timeout]);
+    try {
+      const result = await Promise.race([caller.promise, timeout]);
 
-    if (result === "timeout") {
+      if (result === "timeout") {
+        return {
+          snapshot: this.snapshot(),
+          refresh: underlyingRefresh,
+          completed: false,
+          timedOut: true,
+        };
+      }
+
       return {
-        snapshot: this.snapshot(),
-        refresh,
-        completed: false,
-        timedOut: true,
+        snapshot: cloneSnapshot(result),
+        refresh: underlyingRefresh,
+        completed: true,
+        timedOut: false,
       };
+    } finally {
+      caller.dispose();
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
-
-    return {
-      snapshot: cloneSnapshot(result),
-      refresh,
-      completed: true,
-      timedOut: false,
-    };
   }
 
   private ensureRefresh(): Promise<RecentDatesSnapshot> {
@@ -91,10 +104,14 @@ export class RecentDatesCache {
     ) {
       return Promise.resolve(this.snapshot());
     }
-    this.inFlight = this.doRefresh().finally(() => {
-      this.inFlight = null;
+    const refresh = this.doRefresh().finally(() => {
+      if (this.inFlight === refresh) this.inFlight = null;
     });
-    return this.inFlight;
+    this.inFlight = refresh;
+    // A caller may stop waiting after cancellation while the host request keeps
+    // running. Keep the shared refresh observed until another caller joins it.
+    void refresh.catch(() => undefined);
+    return refresh;
   }
 
   private async doRefresh(): Promise<RecentDatesSnapshot> {
@@ -106,6 +123,8 @@ export class RecentDatesCache {
 
     for (const category of categories) {
       try {
+        // Obsidian requestUrl cannot be interrupted. The shared refresh remains
+        // independent from any one caller and may complete after callers cancel.
         const html = await fetcher.fetchRecent(category);
         const buckets = parseRecent(html, this.deps.markupParser);
         for (const bucket of buckets) dates.add(bucket.announceDate);
@@ -139,6 +158,58 @@ export class RecentDatesCache {
     );
     return this.snapshot();
   }
+}
+
+function callerWait<T>(
+  shared: Promise<T>,
+  signal?: AbortSignal,
+): { promise: Promise<T>; dispose(): void } {
+  throwIfCancelled(signal);
+  if (!signal) return { promise: shared, dispose: () => undefined };
+  let settled = false;
+  let rejectWait: (error: unknown) => void = () => undefined;
+  const cleanup = () => signal.removeEventListener("abort", onAbort);
+  const onAbort = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+    rejectWait(
+      new RunCancelledError(
+        typeof reason === "string" && reason ? reason : "cancelled by user",
+      ),
+    );
+  };
+  const promise = new Promise<T>((resolve, reject) => {
+    rejectWait = reject;
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    shared.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+  return {
+    promise,
+    dispose: () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    },
+  };
 }
 
 function cloneSnapshot(snapshot: RecentDatesSnapshot): RecentDatesSnapshot {

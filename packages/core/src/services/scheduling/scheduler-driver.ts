@@ -27,7 +27,7 @@ export interface SchedulerRunOptions {
 }
 
 export interface SchedulerRecentDates {
-  refresh: () => Promise<unknown>;
+  refresh: (signal?: AbortSignal) => Promise<unknown>;
   hasDate?: (date: string) => boolean;
 }
 
@@ -108,10 +108,9 @@ export class SchedulerDriver {
       return;
     }
 
-    await this.deps.recentDates?.refresh();
-
     const batch = this.beginCancellationBatch();
     try {
+      await this.deps.recentDates?.refresh(batch?.signal);
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const dateObj = daysBefore(todayObj, i, tz);
@@ -152,6 +151,7 @@ export class SchedulerDriver {
     const batch = this.beginCancellationBatch();
     let result: PipelineResult | undefined;
     try {
+      await this.deps.recentDates?.refresh(batch?.signal);
       result = await this.tickDate(today, {
         now,
         trigger: "scheduler",
@@ -185,13 +185,13 @@ export class SchedulerDriver {
     const minutesNow = minutesSinceMidnight(now, tz);
     const scheduledMin = minutesFromHHMM(s.schedule.runAtLocal);
     const endMin = minutesFromHHMM(s.schedule.runUntilLocal);
-    if (isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
-      await this.deps.recentDates?.refresh();
-    }
     this.progress.setBatch(1, 1, today);
     const batch = this.beginCancellationBatch();
     let result: PipelineResult | undefined;
     try {
+      if (isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
+        await this.deps.recentDates?.refresh(batch?.signal);
+      }
       result = await this.tickDate(today, {
         now,
         timeGate: { scheduledMin, endMin, minutesNow },
@@ -278,12 +278,11 @@ export class SchedulerDriver {
     const today = todayDateString(tz, () => now);
     const dateStrings = lookbackDateStrings(tz, LOOKBACK_DAYS, () => now);
 
-    await this.deps.recentDates?.refresh();
-
     const results: Array<{ date: string; result: SchedulerResult }> = [];
 
     const batch = this.beginCancellationBatch();
     try {
+      await this.deps.recentDates?.refresh(batch?.signal);
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
@@ -334,6 +333,7 @@ export class SchedulerDriver {
     const batch = this.beginCancellationBatch();
     let result: PipelineResult | undefined;
     try {
+      await this.deps.recentDates?.refresh(batch?.signal);
       result = await this.tryRun(date, trigger, now, batch, runOpts);
     } finally {
       this.finishCancellationBatch(batch);
@@ -428,7 +428,7 @@ export class SchedulerDriver {
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordPending(date, trigger, result.reason, now);
         } else if (result.kind === "cancelled") {
-          await this.deps.store.setSkipped(date, result.reason);
+          await this.deps.store.setPending(date, result.reason);
           this.deps.logger.info(`arXiv ${date}: cancelled - ${result.reason}`);
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordCancelled(date, trigger, result.reason, now);

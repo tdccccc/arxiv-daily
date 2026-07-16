@@ -1,4 +1,5 @@
 import type { PaperSummary } from "../services/paper-index";
+import { stripGenerationMetrics } from "../metrics/generation";
 
 const FIELD_LABELS: Array<[keyof PaperSummary, string[]]> = [
   ["coreProblem", ["研究问题", "核心问题", "Research problem"]],
@@ -12,7 +13,7 @@ export function extractPaperSummaries(
   markdown: string,
 ): Record<string, PaperSummary> {
   const summaries: Record<string, PaperSummary> = {};
-  const blocks = markdown.split(/^###\s+/m).slice(1);
+  const blocks = stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1);
 
   for (const block of blocks) {
     const id = extractArxivId(block);

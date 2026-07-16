@@ -191,10 +191,49 @@ describe("ManualFetchService", () => {
     expect(r.kind).toBe("done");
     expect(d.paperFetcher.fetch).toHaveBeenCalled();
     expect(d.llm.call).toHaveBeenCalled();
-    expect(d.vault.adapter.remove).toHaveBeenCalledWith(
+    expect(d.vault.adapter.remove).not.toHaveBeenCalledWith(
       "arxiv-daily/papers/2605.08080.md",
     );
-    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    expect(d.writer.writePaperDetail).toHaveBeenCalledWith(
+      expect.anything(),
+      "2026-05-12",
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ replaceExisting: true }),
+    );
+  });
+
+  it("keeps frontmatter-only replacement coherent when cancellation races the commit", async () => {
+    const d = makeDeps();
+    const target = "arxiv-daily/papers/2605.08080.md";
+    const original = ["---", 'arxiv_id: "2605.08080"', "---", ""].join("\n");
+    d.files[target] = original;
+    const controller = new AbortController();
+    d.writer.writePaperDetail.mockImplementationOnce(async (_paper: any, _date: string, _summary: string, _entry: any, options: any) => {
+      expect(options.replaceExisting).toBe(true);
+      controller.abort("cancelled during replacement commit");
+      d.files[target] = "---\narxiv_id: 2605.08080\n---\n\n# Summary\n";
+      return target;
+    });
+    const svc = new ManualFetchService({
+      markupParser,
+      storage: d.storage,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await svc.fetchAndSummarize("2605.08080", "2026-05-12", controller.signal);
+
+    expect(result).toEqual({ kind: "done", path: target });
+    expect(d.vault.adapter.remove).not.toHaveBeenCalledWith(target);
+    expect(d.files[target]).toContain("# Summary");
   });
 
   it("refreshes the paper index when the target file already exists", async () => {

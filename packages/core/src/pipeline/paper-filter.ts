@@ -8,6 +8,7 @@ import { renderPrompt } from "../prompts/render";
 import filterSystemTemplate from "../prompts/paper-filter.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
 import { escapePaperDataFence } from "./prompt-safety";
+import type { MetricsObserver } from "../metrics/generation";
 
 export interface FilteredPaper extends PaperMeta {
   category: string;
@@ -19,6 +20,7 @@ export interface PaperFilterDeps {
   logger: Logger;
   arxivSettings: ArxivSettings;
   signal?: AbortSignal;
+  onMetrics?: MetricsObserver;
 }
 
 export async function filterPapers(
@@ -70,7 +72,7 @@ export async function filterPapers(
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
-      { temperature: 0, signal: deps.signal },
+      { temperature: 0, signal: deps.signal, onMetrics: deps.onMetrics },
     );
   } catch (e) {
     if (isCancellationError(e)) throw e;

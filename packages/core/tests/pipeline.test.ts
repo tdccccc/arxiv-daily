@@ -84,6 +84,7 @@ function makeDeps() {
     paperDetailPath: vi.fn((id: string) => `papers/${id}.md`),
     paperDetailLink: vi.fn((id: string) => `[[${id}]]`),
     dailyExists: vi.fn(async () => false),
+    readDaily: vi.fn(async (date: string) => writes[`daily/${date}.md`] ?? ""),
     paperDetailExists: vi.fn(async () => false),
   };
   const llm = {
@@ -632,7 +633,100 @@ describe("ArxivPipeline", () => {
     expect(json.papers[arxivId].seenDates).toContain(date);
   });
 
-  it("short-circuits with completed when daily file already exists", async () => {
+  it("repairs daily-report links and summaries when a daily file already exists", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const markdown = [
+      "## Topic",
+      "### Existing paper",
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      "- **核心问题**: Repaired problem.",
+    ].join("\n");
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(markdown);
+    const paperIndex = {
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await pipeline.runForDate("2026-05-11");
+
+    expect(result).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      [id],
+      "daily/2026-05-11.md",
+    );
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({
+      [id]: { coreProblem: "Repaired problem." },
+    });
+    expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+  });
+
+  it.each(["addDailyReports", "setSummaries"] as const)(
+    "retries a failed %s repair until the full daily index is synchronized",
+    async (failedMethod) => {
+      const d = makeDeps();
+      const id = "2607.00001";
+      d.writer.dailyExists.mockResolvedValue(true);
+      d.writer.readDaily.mockResolvedValue(
+        `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})\n- **核心问题**: Problem.`,
+      );
+      let fail = true;
+      const paperIndex = {
+        addDailyReports: vi.fn(async () => {
+          if (failedMethod === "addDailyReports" && fail) {
+            fail = false;
+            throw new Error("daily link write failed");
+          }
+        }),
+        setSummaries: vi.fn(async () => {
+          if (failedMethod === "setSummaries" && fail) {
+            fail = false;
+            throw new Error("summary write failed");
+          }
+          return 1;
+        }),
+      };
+      const pipeline = new ArxivPipeline({
+        markupParser,
+        fetcher: d.fetcher as any,
+        paperFetcher: d.paperFetcher as any,
+        writer: d.writer as any,
+        paperIndex: paperIndex as any,
+        llm: d.llm as any,
+        logger: d.logger,
+        arxiv: testArxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        output: DEFAULT_SETTINGS.output,
+        llmSettings: DEFAULT_SETTINGS.llm,
+      });
+
+      expect((await pipeline.runForDate("2026-05-11")).kind).toBe("failed_transient");
+      expect(await pipeline.runForDate("2026-05-11")).toEqual({
+        kind: "completed",
+        papersWritten: 1,
+      });
+      expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(2);
+      expect(paperIndex.setSummaries).toHaveBeenCalledTimes(
+        failedMethod === "addDailyReports" ? 1 : 2,
+      );
+    },
+  );
+
+  it("short-circuits with completed when daily file already exists without an index", async () => {
     const d = makeDeps();
     (d.writer as any).dailyExists = vi.fn().mockResolvedValue(true);
     (d.writer as any).paperDetailExists = vi.fn().mockResolvedValue(false);
@@ -702,6 +796,71 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.writer.writeDaily).toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("repairs the full index on retry after cancellation immediately after writeDaily", async () => {
+    const d = makeDeps();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    const controller = new AbortController();
+    let dailyExists = false;
+    const summary = [
+      "### Paper",
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      "- **核心问题**: Problem.",
+    ].join("\n");
+    d.writer.dailyExists = vi.fn(async () => dailyExists);
+    d.writer.readDaily = vi.fn(async () => summary);
+    d.writer.writeDaily = vi.fn(async () => {
+      dailyExists = true;
+      controller.abort("cancelled after daily write");
+      return "daily/report.md";
+    });
+    d.llm.call = vi.fn().mockImplementation(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("选择最匹配的主题")) {
+        return JSON.stringify({ papers: [{ id, category: "photo-z", detail: false }] });
+      }
+      return summary;
+    });
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
+        inputs.map((input) => ({
+          wasNew: true,
+          entry: { status: "inbox", paperPath: null, ...input },
+        })),
+      ),
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    expect(await pipeline.runForDate(firstDateFromFixture(), controller.signal)).toEqual({
+      kind: "cancelled",
+      reason: "cancelled after daily write",
+    });
+    expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
+
+    expect(await pipeline.runForDate(firstDateFromFixture())).toEqual({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      [id],
+      `daily/${firstDateFromFixture()}.md`,
+    );
+    expect(paperIndex.setSummaries).toHaveBeenCalledTimes(1);
   });
 
   it("does not leave a daily file that makes retry skip unfinished details", async () => {

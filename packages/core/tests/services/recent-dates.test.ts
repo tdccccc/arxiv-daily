@@ -259,6 +259,56 @@ describe("RecentDatesCache", () => {
     }
   });
 
+  it("lets a later cancellable caller stop waiting for an uncancellable first refresh", async () => {
+    let resolveFetch: (html: string) => void = () => {};
+    const fetcher = {
+      fetchRecent: vi.fn(
+        () => new Promise<string>((resolve) => { resolveFetch = resolve; }),
+      ),
+    };
+    const cache = new RecentDatesCache({
+      markupParser,
+      getSettings: () => settingsWithCategories(["cs.CL"]),
+      buildFetcher: () => fetcher,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+    });
+    const first = cache.refresh();
+    const controller = new AbortController();
+    const second = cache.refresh(controller.signal);
+
+    controller.abort("second caller cancelled");
+    await expect(second).rejects.toThrow("second caller cancelled");
+    expect(fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+
+    resolveFetch(recentHtml("2026-06-22", "2606.00001"));
+    await expect(first).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("does not cancel an unrelated later caller when the first caller cancels", async () => {
+    let resolveFetch: (html: string) => void = () => {};
+    const fetcher = {
+      fetchRecent: vi.fn(
+        () => new Promise<string>((resolve) => { resolveFetch = resolve; }),
+      ),
+    };
+    const cache = new RecentDatesCache({
+      markupParser,
+      getSettings: () => settingsWithCategories(["cs.CL"]),
+      buildFetcher: () => fetcher,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+    });
+    const controller = new AbortController();
+    const first = cache.refresh(controller.signal);
+    const second = cache.refresh();
+
+    controller.abort("first caller cancelled");
+    await expect(first).rejects.toThrow("first caller cancelled");
+    expect(fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+
+    resolveFetch(recentHtml("2026-06-22", "2606.00001"));
+    await expect(second).resolves.toMatchObject({ status: "ready" });
+  });
+
   it("reuses an in-flight refresh for concurrent foreground waits", async () => {
     vi.useFakeTimers();
     try {

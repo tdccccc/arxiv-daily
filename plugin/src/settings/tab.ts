@@ -9,21 +9,26 @@ import { validateSchedulerConfig } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
-import { LlmClient } from "@arxiv-daily/core";
+import { LlmClient, redactText } from "@arxiv-daily/core";
+
+export const API_KEY_CONFIGURED_SENTINEL = "Configured";
 
 export type ModelFetchNotice =
   | { kind: "success"; count: number }
   | { kind: "empty" }
   | { kind: "error"; message: string };
 
-export function modelFetchNoticeMessage(result: ModelFetchNotice): string {
+export function modelFetchNoticeMessage(
+  result: ModelFetchNotice,
+  secrets: readonly string[] = [],
+): string {
   switch (result.kind) {
     case "success":
       return `API connection successful. Found ${result.count} models.`;
     case "empty":
       return "API connection successful, but no available models were found.";
     case "error":
-      return `API connection failed: ${result.message}`;
+      return `API connection failed: ${redactText(result.message, { secrets })}`;
   }
 }
 
@@ -164,21 +169,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
     renderLlmHttpWarning(s.llm.baseUrl || "https://api.deepseek.com/v1");
 
-    // API Key
-    new Setting(containerEl)
-      .setName("API Key")
-      .setDesc("Required. Your LLM provider's API key. Stored locally in data.json.")
-      .addText((t) => {
-        t.inputEl.type = "password";
-        t.inputEl.addClass("arxiv-daily-settings__llm-input");
-        t.setPlaceholder("sk-...")
-          .setValue(s.llm.apiKey)
-          .onChange(async (v) => {
-            s.llm.apiKey = v;
-            await this.plugin.saveSettings();
-            this.refreshSetupGuide();
-          });
-      });
+    this.renderApiKeySetting(containerEl);
 
     // Model — Get Models button + dropdown
     const modelSetting = new Setting(containerEl)
@@ -201,7 +192,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             new Notice(modelFetchNoticeMessage({ kind: "empty" }));
           }
         } catch (e) {
-          new Notice(modelFetchNoticeMessage({ kind: "error", message: (e as Error).message }));
+          new Notice(modelFetchNoticeMessage(
+            { kind: "error", message: e instanceof Error ? e.message : String(e) },
+            [this.plugin.settings.llm.apiKey],
+          ));
         } finally {
           b.setButtonText("Get Models");
           b.setDisabled(false);
@@ -535,6 +529,93 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       ),
       "Console log verbosity. 'debug' is noisy; 'info' is the default.",
     );
+  }
+
+  private renderApiKeySetting(containerEl: HTMLElement): void {
+    const configured = Boolean(this.plugin.settings.llm.apiKey.trim());
+    const setting = new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("Stored locally in data.json. Saved keys are never rendered into this page.");
+    let editing = !configured;
+    let draft = "";
+    const input = document.createElement("input");
+    input.type = editing ? "password" : "text";
+    input.classList.add("arxiv-daily-settings__llm-input");
+    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+    input.placeholder = "Enter API key";
+    input.readOnly = !editing;
+    setting.controlEl.appendChild(input);
+
+    const replace = setting.controlEl.createEl("button", {
+      text: configured ? "Replace" : "Save",
+      attr: { type: "button" },
+    });
+    const cancel = setting.controlEl.createEl("button", {
+      text: "Cancel",
+      attr: { type: "button" },
+    });
+    cancel.hidden = !configured;
+    const clear = setting.controlEl.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    });
+    clear.hidden = !configured;
+
+    const enterEdit = () => {
+      editing = true;
+      draft = "";
+      input.type = "password";
+      input.readOnly = false;
+      input.value = "";
+      replace.textContent = "Save";
+      cancel.hidden = false;
+      input.focus();
+    };
+    const reset = () => {
+      editing = false;
+      draft = "";
+      input.type = "text";
+      input.readOnly = true;
+      input.value = API_KEY_CONFIGURED_SENTINEL;
+      replace.textContent = "Replace";
+      cancel.hidden = true;
+    };
+    input.addEventListener("input", () => {
+      if (editing) draft = input.value;
+    });
+    replace.addEventListener("click", async () => {
+      if (!editing) {
+        enterEdit();
+        return;
+      }
+      const next = draft.trim();
+      if (!next) return;
+      this.plugin.settings.llm.apiKey = next;
+      this.plugin.logger.setSensitiveValues([next]);
+      await this.plugin.saveSettings();
+      this.refreshSetupGuide();
+      reset();
+      clear.hidden = false;
+    });
+    cancel.addEventListener("click", () => {
+      if (configured || this.plugin.settings.llm.apiKey.trim()) reset();
+      else {
+        draft = "";
+        input.value = "";
+      }
+    });
+    clear.addEventListener("click", async () => {
+      const confirmed = await this.confirmReplace(
+        "Clear the saved API key? LLM operations will stop until a replacement is saved.",
+        "Clear",
+      );
+      if (!confirmed) return;
+      this.plugin.settings.llm.apiKey = "";
+      this.plugin.logger.setSensitiveValues([]);
+      await this.plugin.saveSettings();
+      this.refreshSetupGuide();
+      this.display();
+    });
   }
 
   private renderSetupGuide(containerEl: HTMLElement): void {

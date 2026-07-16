@@ -3,6 +3,14 @@ import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
 import type { HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { redactError, redactText } from "../utils/redaction";
+import {
+  parseTokenUsage,
+  usageIsComplete,
+  type LlmCallMetrics,
+  type MetricsObserver,
+  type TokenUsage,
+} from "../metrics/generation";
 
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
@@ -24,6 +32,12 @@ export interface CallOptions {
   /** Overrides default temperature. Ignored when thinkingMode = true. */
   temperature?: number;
   signal?: AbortSignal;
+  onMetrics?: MetricsObserver;
+}
+
+interface StreamResult {
+  content: string;
+  usage?: TokenUsage;
 }
 
 interface LlmStatusError extends Error {
@@ -90,7 +104,9 @@ export class LlmClient {
     private settings: LlmSettings,
     private logger: Logger,
     private http: HttpClient,
-  ) {}
+  ) {
+    this.logger.setSensitiveValues?.([settings.apiKey]);
+  }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
@@ -101,7 +117,7 @@ export class LlmClient {
       });
       return { success: true };
     } catch (e) {
-      return { success: false, error: (e as Error).message };
+      return { success: false, error: this.safeError(e).message };
     }
   }
 
@@ -129,7 +145,7 @@ export class LlmClient {
         if (res.status >= 200 && res.status < 300) {
           return this.parseModelList(JSON.parse(res.bodyText));
         }
-        throw createStatusError(res.status, res.bodyText);
+        throw createStatusError(res.status, res.bodyText, [apiKey]);
       } catch (e) {
         lastError = e;
         // Try next candidate
@@ -137,10 +153,8 @@ export class LlmClient {
       }
     }
 
-    const suffix =
-      lastError instanceof Error && lastError.message
-        ? `: ${lastError.message}`
-        : "";
+    const safeLastError = this.safeError(lastError);
+    const suffix = safeLastError.message ? `: ${safeLastError.message}` : "";
     throw new Error(`Failed to fetch models from any endpoint${suffix}`);
   }
 
@@ -164,60 +178,78 @@ export class LlmClient {
   }
 
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
-    return retry(
-      async () => {
-        throwIfCancelled(opts.signal);
-        const params: Record<string, unknown> = {
-          model: this.settings.model,
-          messages,
-          stream: true,
-        };
-        if (this.settings.thinkingMode) {
-          if (this.settings.provider === "anthropic") {
-            // Anthropic extended thinking via OpenAI-compat proxy
-            const budgets: Record<string, number> = {
-              low: 2048,
-              medium: 8192,
-              high: 16384,
-            };
-            (params as any).extra_body = {
-              thinking: {
-                type: "enabled",
-                budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192,
-              },
-            };
-          } else {
-            params.reasoning_effort = this.settings.reasoningEffort;
-            (params as any).extra_body = { thinking: { type: "enabled" } };
-          }
-        } else {
-          params.temperature = opts.temperature ?? LLM_TEMPERATURE;
-        }
-        const abort = createAttemptAbortController(opts.signal);
-        try {
-          const content = await this.postChatStream(
-            params,
-            abort.controller,
-            opts.signal,
-          );
+    const started = Date.now();
+    let attempts = 0;
+    let finalUsage: TokenUsage | undefined;
+    let hadRetriedGenerationFailure = false;
+    try {
+      const content = await retry(
+        async () => {
+          attempts += 1;
           throwIfCancelled(opts.signal);
-          return content;
-        } finally {
-          abort.cleanup();
-        }
-      },
-      {
-        maxAttempts: 3,
-        baseDelayMs: 5000,
-        signal: opts.signal,
-        shouldRetry: (err) =>
-          !isCancellationError(err) && !isPermanentLlmError(err),
-        onRetry: (err, attempt, wait) =>
-          this.logger.warn(
-            `LLM retry #${attempt} after ${wait}ms: ${(err as Error).message}`,
-          ),
-      },
-    );
+          const params: Record<string, unknown> = {
+            model: this.settings.model,
+            messages,
+            stream: true,
+            stream_options: { include_usage: true },
+          };
+          if (this.settings.thinkingMode) {
+            if (this.settings.provider === "anthropic") {
+              const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+              params.extra_body = { thinking: { type: "enabled", budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192 } };
+            } else {
+              params.reasoning_effort = this.settings.reasoningEffort;
+              params.extra_body = { thinking: { type: "enabled" } };
+            }
+          } else {
+            params.temperature = opts.temperature ?? LLM_TEMPERATURE;
+          }
+          const abort = createAttemptAbortController(opts.signal);
+          try {
+            const result = await this.postChatStream(params, abort.controller, opts.signal);
+            finalUsage = result.usage;
+            throwIfCancelled(opts.signal);
+            return result.content;
+          } catch (error) {
+            if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
+            attempts += 1;
+            const fallback = { ...params };
+            delete fallback.stream_options;
+            try {
+              const result = await this.postChatStream(fallback, abort.controller, opts.signal);
+              finalUsage = result.usage;
+              return result.content;
+            } catch (fallbackError) {
+              throw this.safeError(fallbackError);
+            }
+          } finally {
+            abort.cleanup();
+          }
+        },
+        {
+          maxAttempts: 3,
+          baseDelayMs: 5000,
+          signal: opts.signal,
+          shouldRetry: (err) => !isCancellationError(err) && !isPermanentLlmError(err),
+          onRetry: (err, attempt, wait) => {
+            hadRetriedGenerationFailure = true;
+            this.logger.warn(
+              `LLM retry #${attempt} after ${wait}ms: ${this.safeError(err).message}`,
+            );
+          },
+        },
+      );
+      return content;
+    } finally {
+      const metrics: LlmCallMetrics = {
+        logicalCalls: 1,
+        attempts,
+        elapsedMs: Date.now() - started,
+        usageComplete: usageIsComplete(finalUsage) && !hadRetriedGenerationFailure,
+        ...finalUsage,
+      };
+      opts.onMetrics?.(metrics);
+    }
   }
 
   private async postChatJson(
@@ -232,9 +264,9 @@ export class LlmClient {
     body: Record<string, unknown>,
     controller: AbortController,
     signal?: AbortSignal,
-  ): Promise<string> {
+  ): Promise<StreamResult> {
     const raw = await this.requestChat({ ...body, stream: true }, true, signal);
-    return collectStreamWithIdleTimeout(
+    return collectStreamResultWithIdleTimeout(
       parseSseText(raw),
       controller,
       LLM_STREAM_IDLE_TIMEOUT_MS,
@@ -257,7 +289,7 @@ export class LlmClient {
       signal,
     });
     if (res.status < 200 || res.status >= 300) {
-      throw createStatusError(res.status, res.bodyText);
+      throw createStatusError(res.status, res.bodyText, [this.settings.apiKey]);
     }
     return res.bodyText;
   }
@@ -272,6 +304,18 @@ export class LlmClient {
       "Content-Type": "application/json",
     };
   }
+
+  private safeError(error: unknown): Error {
+    return redactError(error, { secrets: [this.settings.apiKey] });
+  }
+}
+
+export function isUnsupportedStreamOptionsError(err: unknown): boolean {
+  const status = (err as LlmStatusError | undefined)?.status;
+  if (status !== 400 && status !== 422) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return /stream[_ -]?options|include[_ -]?usage/i.test(message) &&
+    /unsupported|unknown|unrecognized|not (?:allowed|supported)|extra fields?|invalid/i.test(message);
 }
 
 export function isPermanentLlmError(err: unknown): boolean {
@@ -284,7 +328,11 @@ export function isPermanentLlmError(err: unknown): boolean {
   );
 }
 
-function createStatusError(status: number, bodyText: string): LlmStatusError {
+function createStatusError(
+  status: number,
+  bodyText: string,
+  secrets: readonly string[] = [],
+): LlmStatusError {
   let message = bodyText.trim();
   try {
     const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
@@ -292,7 +340,9 @@ function createStatusError(status: number, bodyText: string): LlmStatusError {
   } catch {
     // Use raw response text.
   }
-  const error = new Error(message || `LLM request failed with HTTP ${status}`) as LlmStatusError;
+  const error = new Error(
+    redactText(message || `LLM request failed with HTTP ${status}`, { secrets }),
+  ) as LlmStatusError;
   error.status = status;
   return error;
 }
@@ -322,7 +372,19 @@ export async function collectStreamWithIdleTimeout(
   idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
   signal?: AbortSignal,
 ): Promise<string> {
+  return (await collectStreamResultWithIdleTimeout(
+    stream, controller, idleTimeoutMs, signal,
+  )).content;
+}
+
+export async function collectStreamResultWithIdleTimeout(
+  stream: AsyncIterable<unknown>,
+  controller: AbortController,
+  idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<StreamResult> {
   const chunks: string[] = [];
+  let usage: TokenUsage | undefined;
   const iterator = stream[Symbol.asyncIterator]();
   while (true) {
     throwIfCancelled(signal);
@@ -331,9 +393,10 @@ export async function collectStreamWithIdleTimeout(
     throwIfCancelled(signal);
     const delta = streamDeltaContent(next.value);
     if (delta) chunks.push(delta);
+    usage = parseTokenUsage(next.value) ?? usage;
   }
   throwIfCancelled(signal);
-  return chunks.join("");
+  return { content: chunks.join(""), usage };
 }
 
 function nextStreamChunk(

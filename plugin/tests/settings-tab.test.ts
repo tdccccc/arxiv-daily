@@ -57,6 +57,21 @@ describe("llmHttpWarning", () => {
 });
 
 describe("settings tab regressions", () => {
+  it("never renders the saved API key and requires explicit replace/save/cancel/clear actions", () => {
+    const apiKeyBody = settingsTabSource.match(
+      /private renderApiKeySetting\([\s\S]*?\n  private renderSetupGuide/,
+    )?.[0];
+    expect(apiKeyBody).toBeDefined();
+    expect(apiKeyBody).not.toContain("input.value = this.plugin.settings.llm.apiKey");
+    expect(apiKeyBody).not.toContain("setValue(s.llm.apiKey)");
+    expect(apiKeyBody).toContain("API_KEY_CONFIGURED_SENTINEL");
+    expect(apiKeyBody).toContain('text: configured ? "Replace" : "Save"');
+    expect(apiKeyBody).toContain('text: "Cancel"');
+    expect(apiKeyBody).toContain('text: "Clear"');
+    expect(apiKeyBody).toContain("this.plugin.logger.setSensitiveValues([next])");
+    expect(apiKeyBody).toContain("this.plugin.logger.setSensitiveValues([])");
+  });
+
   it("does not register a second change listener when models are fetched", () => {
     const showModelDropdownBody = settingsTabSource.match(
       /private showModelDropdown\([\s\S]*?\n  private textareaSetting/,

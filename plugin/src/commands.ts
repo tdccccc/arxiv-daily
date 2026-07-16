@@ -5,6 +5,7 @@ import { validateFilterConfig, validateLlmConfig } from "@arxiv-daily/core";
 import { chooseModal } from "./services/modal";
 import {
   buildDiagnosticsReport,
+  redactText,
   type PaperIndexDiagnostics,
 } from "@arxiv-daily/core";
 import { normalizeArxivId } from "@arxiv-daily/core";
@@ -160,13 +161,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   function cancelCurrentRun() {
-    const active = plugin.scheduler.activeRuns();
+    const active = plugin.operations.snapshot();
     if (active.length === 0) {
-      notice("arXiv Daily: no active run to cancel");
+      notice("arXiv Daily: no active tasks to cancel");
       return;
     }
-    const cancelled = plugin.scheduler.cancelCurrentRun();
-    notice(`arXiv Daily: cancellation requested for ${cancelled.join(", ")}`);
+    plugin.operations.cancelAll();
+    notice(`arXiv Daily: cancellation requested for ${active.length} active task${active.length === 1 ? "" : "s"}`);
   }
 
   function openSetPaperMarkModal() {
@@ -304,7 +305,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "cancel-current-run",
-    name: "Cancel current run",
+    name: "Cancel active tasks",
     callback: cancelCurrentRun,
   });
 
@@ -719,7 +720,9 @@ class DiagnosticsModal extends Modal {
           paperIndex: {
             path: this.plugin.buildPaperIndex().paths.papersJsonPath,
             exists: false,
-            error: (e as Error).message,
+            error: redactText(e instanceof Error ? e.message : e, {
+              secrets: [this.plugin.settings.llm.apiKey],
+            }),
           },
         });
         textarea.value = report;

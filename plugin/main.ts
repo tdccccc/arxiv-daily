@@ -7,7 +7,7 @@ import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
-import { RunCancellationService } from "@arxiv-daily/core";
+import { OperationRegistry, RunCancellationService, normalizeArxivId } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
@@ -64,8 +64,11 @@ export default class ArxivDailyPlugin extends Plugin {
   recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
+  readonly operations = new OperationRegistry();
   private runLock = new RunLock();
-  private runCancellation = new RunCancellationService();
+  private runCancellation = new RunCancellationService(this.operations);
+  private unloading = false;
+  private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
   private host!: HostAdapters;
 
@@ -81,6 +84,7 @@ export default class ArxivDailyPlugin extends Plugin {
       (message, timeoutMs) => new Notice(message, timeoutMs),
       this.settings.arxiv.timezone,
     );
+    this.logger.setSensitiveValues([this.settings.llm.apiKey]);
     this.host = buildObsidianHostAdapters({
       app: this.app,
       getSettings: () => this.settings,
@@ -121,6 +125,12 @@ export default class ArxivDailyPlugin extends Plugin {
       this.progress = new NoopProgressReporter();
     }
     this.host.progress = this.progress;
+    this.unsubscribeOperations = this.operations.subscribe((active) => {
+      if (this.unloading || !(this.progress instanceof StatusBarController)) return;
+      if (active.length > 0 && active.every((operation) => operation.cancellationRequested)) {
+        this.progress.setTask("Cancelling active tasks", `${active.length} unwinding`);
+      }
+    });
     await this.buildMarkdownWriter().cleanupTemporaryFiles().catch((e) =>
       this.logger.warn("markdown temp cleanup failed", e),
     );
@@ -141,8 +151,19 @@ export default class ArxivDailyPlugin extends Plugin {
     // Wrap in an object that rebuilds dependencies on every call so settings
     // changes (model, key, paths) always take effect without needing to reload.
     this.manualFetch = {
-      fetchAndSummarize: (raw: string, date: string) =>
-        this.buildManualFetch().fetchAndSummarize(raw, date),
+      fetchAndSummarize: async (raw: string, date: string) => {
+        const id = normalizeArxivId(raw);
+        const key = id ?? raw.trim();
+        if (this.operations.find("detail-summary", key)) {
+          return { kind: "error", reason: `detail summary already active for ${key}` };
+        }
+        const operation = this.operations.begin("detail-summary", `Detail summary: ${key}`, key);
+        try {
+          return await this.buildManualFetch().fetchAndSummarize(raw, date, operation.signal);
+        } finally {
+          operation.finish();
+        }
+      },
     };
     this.cleanupCachesIfDue();
 
@@ -160,12 +181,19 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   onunload() {
+    this.unloading = true;
+    this.scheduler?.stop();
+    this.operations.cancelAll("plugin unloaded");
+    this.unsubscribeOperations?.();
+    this.unsubscribeOperations = undefined;
     void Promise.resolve(
       this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW),
     ).catch(() => {});
-    this.scheduler?.cancelCurrentRun("plugin unloaded");
-    this.scheduler?.stop();
     if (this.progress instanceof StatusBarController) this.progress.dispose();
+  }
+
+  isUnloading(): boolean {
+    return this.unloading;
   }
 
   async saveSettings(): Promise<void> {
@@ -348,6 +376,19 @@ export default class ArxivDailyPlugin extends Plugin {
       output: this.settings.output,
       logger: this.logger,
     });
+  }
+
+  async downloadPdf(entry: Parameters<PdfService["downloadForEntry"]>[0]) {
+    const key = entry.arxivId;
+    if (this.operations.find("pdf-download", key)) {
+      return { kind: "fetch_error" as const, reason: `PDF download already active for ${key}` };
+    }
+    const operation = this.operations.begin("pdf-download", `PDF download: ${key}`, key);
+    try {
+      return await this.buildPdfService().downloadForEntry(entry, operation.signal);
+    } finally {
+      operation.finish();
+    }
   }
 
   buildProjectNotesService(): ProjectNotesService {

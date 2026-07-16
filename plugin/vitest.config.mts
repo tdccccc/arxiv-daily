@@ -26,5 +26,8 @@ export default defineConfig({
       disableCSSFileLoading: true,
     } } },
   },
-  resolve: { alias: { obsidian: resolve(here, "tests/__mocks__/obsidian.ts") } },
+  resolve: { alias: {
+    obsidian: resolve(here, "tests/__mocks__/obsidian.ts"),
+    "@arxiv-daily/core": resolve(here, "../packages/core/src/index.ts"),
+  } },
 });

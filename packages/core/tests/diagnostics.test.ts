@@ -75,6 +75,24 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("failedDates:\n  - 2026-06-11");
   });
 
+  it("redacts secrets embedded in URLs and diagnostic errors", () => {
+    const secret = "sk-complete-secret-value";
+    const report = buildDiagnosticsReport({
+      settings: makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: secret, baseUrl: `https://example.test/v1?api_key=${secret}` },
+      }),
+      runState: {
+        "2026-07-16": {
+          status: "failed_transient", attempts: 1, lastAttempt: 1,
+          error: `provider echoed Bearer ${secret}`,
+        },
+      },
+      paperIndex: { path: `index?token=${secret}`, exists: false, error: secret },
+    });
+    expect(report).not.toContain(secret);
+    expect(report).not.toContain("sk-complete");
+  });
+
   it("includes validation reasons for incomplete topic settings", () => {
     const settings = makeSettings({
       llm: { ...DEFAULT_SETTINGS.llm, apiKey: "" },

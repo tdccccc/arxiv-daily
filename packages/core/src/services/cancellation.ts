@@ -5,8 +5,11 @@ export class RunCancelledError extends Error {
   }
 }
 
+import { OperationRegistry, type OperationHandle } from "./operations";
+
 export interface RunCancellationBatch {
   readonly id: number;
+  readonly signal: AbortSignal;
   isCancellationRequested(): boolean;
 }
 
@@ -15,26 +18,41 @@ interface ActiveRun {
   batchId?: number;
 }
 
+interface BatchState {
+  cancelled: boolean;
+  operation: OperationHandle;
+}
+
 export class RunCancellationService {
   private controllers = new Map<string, ActiveRun>();
-  private batches = new Map<number, { cancelled: boolean }>();
+  private batches = new Map<number, BatchState>();
   private nextBatchId = 1;
   private cancelReason = "cancelled by user";
 
+  constructor(private readonly operations = new OperationRegistry()) {}
+
   prepareRun(): void {}
 
-  beginBatch(): RunCancellationBatch {
+  beginBatch(label = "Daily run"): RunCancellationBatch {
     const id = this.nextBatchId++;
-    const state = { cancelled: false };
+    const operation = this.operations.begin("daily-run", label);
+    const state: BatchState = { cancelled: false, operation };
+    operation.signal.addEventListener("abort", () => {
+      state.cancelled = true;
+      this.cancelBatchRuns(id, cancelReason(operation.signal));
+    }, { once: true });
     this.batches.set(id, state);
     return {
       id,
-      isCancellationRequested: () => state.cancelled,
+      signal: operation.signal,
+      isCancellationRequested: () => state.cancelled || operation.signal.aborted,
     };
   }
 
   finishBatch(batch: RunCancellationBatch): void {
+    const state = this.batches.get(batch.id);
     this.batches.delete(batch.id);
+    state?.operation.finish();
   }
 
   begin(date: string, batch?: RunCancellationBatch): AbortSignal {
@@ -57,13 +75,12 @@ export class RunCancellationService {
 
   cancelAll(reason = "cancelled by user"): string[] {
     const dates = Array.from(this.controllers.keys());
-    if (dates.length === 0) return [];
     this.cancelReason = reason;
+    for (const batch of this.batches.values()) {
+      batch.cancelled = true;
+      this.operations.cancel(batch.operation.id, reason);
+    }
     for (const active of this.controllers.values()) {
-      if (active.batchId != null) {
-        const batch = this.batches.get(active.batchId);
-        if (batch) batch.cancelled = true;
-      }
       if (!active.controller.signal.aborted) active.controller.abort(reason);
     }
     return dates;
@@ -75,6 +92,14 @@ export class RunCancellationService {
 
   isCancellationRequested(): boolean {
     return Array.from(this.batches.values()).some((batch) => batch.cancelled);
+  }
+
+  private cancelBatchRuns(batchId: number, reason: string): void {
+    for (const active of this.controllers.values()) {
+      if (active.batchId === batchId && !active.controller.signal.aborted) {
+        active.controller.abort(reason);
+      }
+    }
   }
 }
 

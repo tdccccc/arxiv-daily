@@ -58,6 +58,7 @@ export class StatusBarController implements ProgressReporter {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
   private lastCompletedDate: string | undefined;
   private idleReason: IdleReason | undefined;
+  private disposed = false;
 
   constructor(
     private readonly el: HTMLElement,
@@ -70,6 +71,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setTask(title: string, detail?: string): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.task = { title, detail };
     this.idleReason = undefined;
@@ -78,6 +80,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setBatch(currentDay: number, totalDays: number, date: string): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.idleReason = undefined;
     this.batch = { currentDay, totalDays, date };
@@ -86,6 +89,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setStage(stage: ProgressStage, current?: number, total?: number): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.idleReason = undefined;
     this.stage = { stage, current, total };
@@ -94,6 +98,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setComplete(message = "Complete"): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.stage = null;
     this.el.textContent = "arXiv: complete";
@@ -102,6 +107,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setError(message: string): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.stage = null;
     this.el.textContent = "arXiv: failed";
@@ -110,6 +116,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setIdle(lastCompletedDate?: string, reason?: IdleReason): void {
+    if (this.disposed) return;
     this.disabled = false;
     this.batch = null;
     this.stage = null;
@@ -123,6 +130,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   setDisabled(): void {
+    if (this.disposed) return;
     this.disabled = true;
     this.batch = null;
     this.stage = null;
@@ -133,6 +141,7 @@ export class StatusBarController implements ProgressReporter {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.clearHideTimer();
     this.panel?.remove();
     this.panel = null;

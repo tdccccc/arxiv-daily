@@ -8,6 +8,10 @@ import {
 } from "../settings/summary-language";
 import type { DailyPaperWithContent } from "./summarizer";
 import type { PaperIndexEntry } from "../services/paper-index";
+import {
+  appendGenerationMetrics,
+  type GenerationMetrics,
+} from "../metrics/generation";
 
 export interface MarkdownWriterOpts {
   storage: StorageAdapter;
@@ -18,6 +22,12 @@ export interface MarkdownWriterOpts {
 
 export interface WriteDailyOptions {
   dateWindowNote?: string;
+  metrics?: GenerationMetrics;
+}
+
+export interface WritePaperDetailOptions {
+  metrics?: GenerationMetrics;
+  replaceExisting?: boolean;
 }
 
 export class MarkdownWriter {
@@ -68,7 +78,10 @@ export class MarkdownWriter {
       `---\n\n`;
     await this.writeMarkdown(
       path,
-      frontmatter + dateWindowNote(options.dateWindowNote) + summary,
+      appendGenerationMetrics(
+        frontmatter + dateWindowNote(options.dateWindowNote) + summary,
+        options.metrics,
+      ),
     );
     this.opts.logger.info(`wrote daily: ${path}`);
     return path;
@@ -79,10 +92,11 @@ export class MarkdownWriter {
     _dateStr: string,
     summary: string,
     indexEntry?: PaperIndexEntry,
+    options: WritePaperDetailOptions = {},
   ): Promise<string> {
     const path = this.paperDetailPath(paper.id);
     await this.ensureDir(this.opts.output.papersDir);
-    if (await this.opts.storage.exists(path)) {
+    if ((await this.opts.storage.exists(path)) && !options.replaceExisting) {
       throw new Error(`paper already exists: ${path}`);
     }
     const tags = this.tagsFor(paper);
@@ -99,7 +113,7 @@ export class MarkdownWriter {
       publishedReport,
       tags,
     });
-    await this.writeMarkdown(path, fm + summary);
+    await this.writeMarkdown(path, appendGenerationMetrics(fm + summary, options.metrics));
     this.opts.logger.info(`wrote paper: ${path}`);
     return path;
   }
@@ -162,6 +176,10 @@ export class MarkdownWriter {
   async dailyExists(dateStr: string): Promise<boolean> {
     const path = this.dailyPath(dateStr);
     return await this.opts.storage.exists(path);
+  }
+
+  async readDaily(dateStr: string): Promise<string> {
+    return this.opts.storage.readText(this.dailyPath(dateStr));
   }
 
   async paperDetailExists(id: string): Promise<boolean> {

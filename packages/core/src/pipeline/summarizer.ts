@@ -25,6 +25,7 @@ import detailSystemTemplate from "../prompts/paper-detail.system.md";
 import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
 import injectionGuard from "../prompts/injection-guard.md";
 import { escapePaperDataFence } from "./prompt-safety";
+import type { MetricsObserver } from "../metrics/generation";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -46,6 +47,7 @@ export interface SummarizerDeps {
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
   signal?: AbortSignal;
+  onMetrics?: MetricsObserver;
 }
 
 function extractSectionTitles(markdown: string | null | undefined): string[] {
@@ -169,7 +171,7 @@ async function callDailyLlm(
         content: `以下是今日筛选出的论文：\n\n<paper_data>\n${papersInfo}</paper_data>`,
       },
     ],
-    { signal: deps.signal },
+    { signal: deps.signal, onMetrics: deps.onMetrics },
   );
   deps.logger.info(
     `callDailyLlm: got ${response.length} chars for ${papers.length} papers`,
@@ -470,6 +472,7 @@ export async function summarizePaperDetail(
     ],
     {
       signal: deps.signal,
+      onMetrics: deps.onMetrics,
     },
   );
   if (!summary.trim()) {

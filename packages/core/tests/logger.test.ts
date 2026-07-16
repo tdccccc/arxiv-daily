@@ -20,6 +20,29 @@ describe("Logger", () => {
     spy.mockRestore();
   });
 
+  it("redacts sensitive values from console, notices, errors, and the buffer", () => {
+    const sink = vi.fn();
+    const logger = new Logger("debug", sink);
+    const secret = "sk-complete-secret-value";
+    logger.setSensitiveValues([secret]);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    logger.error(`failed ${secret}`, new Error(`Bearer ${secret}`));
+    logger.notice(`notice ${secret}`);
+
+    expect(JSON.stringify(spy.mock.calls)).not.toContain(secret);
+    expect(logger.getBuffer().join("\n")).not.toContain(secret);
+    expect(JSON.stringify(sink.mock.calls)).not.toContain(secret);
+  });
+
+  it("re-sanitizes existing buffered entries when sensitive values change", () => {
+    const logger = new Logger("info");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    logger.info("new-secret-value");
+    logger.setSensitiveValues(["new-secret-value"]);
+    expect(logger.getBuffer().join("\n")).not.toContain("new-secret-value");
+  });
+
   it("keeps the latest 5000 buffered log entries", () => {
     const logger = new Logger("info");
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});

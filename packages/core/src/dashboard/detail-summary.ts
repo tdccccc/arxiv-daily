@@ -1,3 +1,5 @@
+import { stripGenerationMetrics } from "../metrics/generation";
+
 const MIN_DETAIL_SUMMARY_BODY_CHARS = 400;
 const DETAIL_SUMMARY_HEADINGS = [
   "研究问题",
@@ -10,7 +12,7 @@ const DETAIL_SUMMARY_HEADINGS = [
 ];
 
 export function looksLikeDetailSummary(markdown: string): boolean {
-  const body = stripYamlFrontmatter(markdown).trim();
+  const body = stripGenerationMetrics(stripYamlFrontmatter(markdown)).trim();
   if (body.length < MIN_DETAIL_SUMMARY_BODY_CHARS) return false;
   if (!/^#\s+\S.+$/m.test(body)) return false;
 

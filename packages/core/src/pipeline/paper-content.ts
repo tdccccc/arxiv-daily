@@ -8,6 +8,7 @@ import {
   type ExtractSectionsOpts,
 } from "./section-extractor";
 import { extractLatexSource } from "./source-extractor";
+import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 export interface PaperContent {
   abstractConclusion: string;
@@ -42,12 +43,13 @@ export class PaperContentFetcher {
     private sourceCache?: PaperContentSourceCache,
   ) {}
 
-  async fetch(arxivId: string, opts: PaperContentOpts): Promise<PaperContent> {
+  async fetch(arxivId: string, opts: PaperContentOpts, signal?: AbortSignal): Promise<PaperContent> {
+    throwIfCancelled(signal);
     // 1. Try the rendered HTML version (cached on hit)
     const htmlKey = `html/${arxivId}`;
     let html = await this.cache.get(htmlKey, "html");
     if (!html) {
-      const res = await this.fetcher.fetchPaperHtml(arxivId);
+      const res = await this.fetcher.fetchPaperHtml(arxivId, signal);
       if (res.ok) {
         html = res.body;
         await this.cache.set(htmlKey, "html", html);
@@ -98,13 +100,13 @@ export class PaperContentFetcher {
     // 2. Fallback to arXiv source when full text sections are needed.
     let sourceFailure: string | undefined;
     if (opts.isDetail) {
-      const source = await this.fetchSourceContent(arxivId, opts);
+      const source = await this.fetchSourceContent(arxivId, opts, signal);
       if (source.fullSections) {
         return {
           abstractConclusion:
             source.abstractConclusion ??
             htmlContent?.abstractConclusion ??
-            (await this.fetchAbsAbstract(arxivId)),
+            (await this.fetchAbsAbstract(arxivId, signal)),
           fullSections: source.fullSections,
           fullTextSource: "arxiv-source",
         };
@@ -119,7 +121,7 @@ export class PaperContentFetcher {
     );
     return {
       abstractConclusion:
-        htmlContent?.abstractConclusion ?? (await this.fetchAbsAbstract(arxivId)),
+        htmlContent?.abstractConclusion ?? (await this.fetchAbsAbstract(arxivId, signal)),
       fullSections: null,
       fullTextFailure:
         sourceFailure ??
@@ -127,14 +129,15 @@ export class PaperContentFetcher {
     };
   }
 
-  private async fetchAbsAbstract(arxivId: string): Promise<string> {
+  private async fetchAbsAbstract(arxivId: string, signal?: AbortSignal): Promise<string> {
     const absKey = `abs/${arxivId}`;
     let abs = await this.cache.get(absKey, "abs");
     if (!abs) {
       try {
-        abs = await this.fetcher.fetchPaperAbsPage(arxivId);
+        abs = await this.fetcher.fetchPaperAbsPage(arxivId, signal);
         await this.cache.set(absKey, "abs", abs);
       } catch (e) {
+        if (isCancellationError(e)) throw e;
         this.logger.error(`paper-content: abs fetch failed ${arxivId}`, e);
         return `[获取失败] arXiv ID: ${arxivId}`;
       }
@@ -149,6 +152,7 @@ export class PaperContentFetcher {
   private async fetchSourceContent(
     arxivId: string,
     opts: PaperContentOpts,
+    signal?: AbortSignal,
   ): Promise<{
     abstractConclusion: string | null;
     fullSections: string | null;
@@ -158,7 +162,7 @@ export class PaperContentFetcher {
     try {
       source = await this.readCachedSource(arxivId);
       if (!source) {
-        const fetched = await this.fetcher.fetchSource(arxivId);
+        const fetched = await this.fetcher.fetchSource(arxivId, signal);
         if (!fetched.ok) {
           return {
             abstractConclusion: null,
@@ -170,6 +174,7 @@ export class PaperContentFetcher {
         await this.writeCachedSource(arxivId, source);
       }
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       this.logger.warn(`paper-content: source fetch failed ${arxivId}`, e);
       return {
         abstractConclusion: null,

@@ -2,6 +2,7 @@ import type { PluginSettings, RunState, RunStateEntry } from "../settings/types"
 import { formatArxivCategories } from "../settings/categories";
 import { validateFilterConfig, validateLlmConfig } from "../settings/validation";
 import { daysBefore, formatDate, isWeekendDate, todayInTz } from "../utils/time";
+import { redactText, redactUrl } from "../utils/redaction";
 
 export interface DiagnosticsInput {
   settings: PluginSettings;
@@ -59,7 +60,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     "",
     "llm:",
     `  provider: ${settings.llm.provider}`,
-    `  baseUrl: ${settings.llm.baseUrl}`,
+    `  baseUrl: ${redactUrl(settings.llm.baseUrl, { secrets: [settings.llm.apiKey] })}`,
     `  model: ${settings.llm.model}`,
     `  apiKeySet: ${settings.llm.apiKey.trim() ? "yes" : "no"}`,
     `  thinkingMode: ${settings.llm.thinkingMode}`,
@@ -107,7 +108,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
     ...formatPaperIndex(input.paperIndex),
   ];
 
-  return `${lines.join("\n")}\n`;
+  return `${redactText(lines.join("\n"), { secrets: [settings.llm.apiKey] })}\n`;
 }
 
 function formatReasons(label: string, reasons: string[]): string[] {

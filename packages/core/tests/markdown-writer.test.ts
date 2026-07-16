@@ -145,6 +145,33 @@ describe("MarkdownWriter strictness on existing files", () => {
       .rejects.toThrow(/already exists/);
   });
 
+  it("atomically replaces an existing paper only when explicitly requested", async () => {
+    const path = "arxiv-daily/papers/2605.06587.md";
+    const { files, writer } = makeWriter({ [path]: "original" });
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+    };
+
+    await writer.writePaperDetail(
+      paper as any,
+      "2026-05-11",
+      "replacement",
+      undefined,
+      { replaceExisting: true },
+    );
+
+    expect(files[path]).toContain("replacement");
+    expect(files[`${path}.tmp`]).toBeUndefined();
+    expect(files[`${path}.bak`]).toBeUndefined();
+  });
+
   it("writeEmptyDaily throws if file already exists", async () => {
     const { writer } = makeWriter({
       "arxiv-daily/daily/2026-05-11.md": "x",
@@ -177,6 +204,43 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("weekday: Monday");
     expect(written).toContain("body");
     expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
+  });
+
+  it("appends folded generation metrics at the absolute end without changing frontmatter", async () => {
+    const { files, writer } = makeWriter();
+    await writer.writeDaily("2026-05-11", "body", {
+      metrics: {
+        logicalCalls: 2,
+        attempts: 3,
+        elapsedMs: 2500,
+        pipelineElapsedMs: 5000,
+        usageComplete: true,
+        inputTokens: 100,
+        outputTokens: 25,
+        totalTokens: 125,
+      },
+    });
+    const written = files["arxiv-daily/daily/2026-05-11.md"]!;
+    expect(written).toContain("date: 2026-05-11\nweekday: Monday\ntags: [arxiv, daily]");
+    expect(written).toMatch(/<!-- arxiv-daily:generation-metrics -->\n> \[!info\]- Generation metrics/);
+    expect(written).toMatch(/Provider token usage: 100 input \/ 25 output \/ 125 total\n$/);
+  });
+
+  it("writePaperDetail appends only supplied detail-call metrics", async () => {
+    const { files, writer } = makeWriter();
+    const paper = {
+      id: "2605.06587", title: "T", authors: "A", abstract: "", category: "photo-z",
+      isDetail: true, abstractConclusion: "", fullSections: "sections",
+    };
+    await writer.writePaperDetail(paper as any, "2026-05-11", "detail", undefined, {
+      metrics: {
+        logicalCalls: 1, attempts: 2, elapsedMs: 800, usageComplete: false,
+      },
+    });
+    const written = files["arxiv-daily/papers/2605.06587.md"]!;
+    expect(written).toContain("LLM calls: 1 logical, 2 HTTP attempts");
+    expect(written).not.toContain("Pipeline wall time");
+    expect(written).toMatch(/Provider token usage: unavailable or incomplete\n$/);
   });
 
   it("writeDaily uses storage writeTextAtomic when available", async () => {

@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [{
@@ -12,6 +16,9 @@ export default defineConfig({
         : null;
     },
   }],
+  resolve: {
+    alias: { "@arxiv-daily/core": resolve(here, "../../packages/core/src/index.ts") },
+  },
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],

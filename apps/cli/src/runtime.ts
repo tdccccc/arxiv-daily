@@ -10,7 +10,7 @@ import {
 } from "@arxiv-daily/core";
 import { ArxivPipeline } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
-import { RunCancellationService } from "@arxiv-daily/core";
+import { OperationRegistry, RunCancellationService } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
 import { ManualFetchService } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
@@ -36,6 +36,7 @@ export interface CliRuntime {
   llm: LlmClient;
   pipeline: ArxivPipeline;
   manualFetch: ManualFetchService;
+  operations: OperationRegistry;
 }
 
 export interface BuildCliRuntimeOptions {
@@ -50,6 +51,7 @@ export async function buildCliRuntime(
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
     opts.logger ?? new Logger(config.settings.advanced.logLevel, undefined, config.settings.arxiv.timezone);
+  logger.setSensitiveValues([config.settings.llm.apiKey]);
   const llm = new LlmClient(config.settings.llm, logger, host.http);
   const fetcher = new ArxivFetcher({
     category: config.settings.arxiv.category,
@@ -127,6 +129,7 @@ export async function buildCliRuntime(
     output: config.settings.output,
     llmSettings: config.settings.llm,
   });
+  const operations = new OperationRegistry();
   const scheduler = new SchedulerService({
     getSettings: () => config.settings,
     store: stateStore,
@@ -134,7 +137,7 @@ export async function buildCliRuntime(
     runForDate: (date, signal) => pipeline.runForDate(date, signal),
     logger,
     progress: host.progress,
-    cancellation: new RunCancellationService(),
+    cancellation: new RunCancellationService(operations),
     runHistory: runHistoryStore,
     dailyPathForDate: (date) => writer.dailyPath(date),
   });
@@ -152,5 +155,6 @@ export async function buildCliRuntime(
     llm,
     pipeline,
     manualFetch,
+    operations,
   };
 }

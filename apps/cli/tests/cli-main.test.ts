@@ -174,6 +174,27 @@ describe("CLI main", () => {
     expect(io.stdout.join("")).toContain("summarize: wrote");
   });
 
+  it("redacts the configured key from runtime errors and result presentation", async () => {
+    const io = captureIo();
+    const secret = "sk-complete-secret-value";
+    const runtime = fakeRuntime();
+    runtime.pipeline.runForDate = vi.fn(async () => ({
+      kind: "failed_transient" as const,
+      reason: `provider echoed Bearer ${secret}`,
+    }));
+
+    const code = await runCli({
+      argv: ["run", "--date", "2026-06-13"],
+      io: io.io,
+      loadConfig: vi.fn(async () => testConfig({ llm: { apiKey: secret } })),
+      buildRuntime: () => runtime,
+    });
+
+    expect(code).toBe(1);
+    expect(io.stderr.join("")).not.toContain(secret);
+    expect(io.stderr.join("")).toContain("[REDACTED]");
+  });
+
   it("returns usage errors for invalid config", async () => {
     const io = captureIo();
 

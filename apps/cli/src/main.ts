@@ -1,11 +1,11 @@
 import { CliConfigError, loadCliConfig, type CliRuntimeConfig } from "./config";
-import type { PipelineResult } from "@arxiv-daily/core";
+import type { OperationRegistry, PipelineResult } from "@arxiv-daily/core";
 import type { ManualFetchResult } from "@arxiv-daily/core";
 import {
   validateFilterConfig,
   validateLlmConfig,
 } from "@arxiv-daily/core";
-import { daysBefore, formatDate, todayInTz } from "@arxiv-daily/core";
+import { daysBefore, formatDate, redactText, todayInTz } from "@arxiv-daily/core";
 
 type CliRunResult = PipelineResult | { kind: "skipped"; reason: string };
 
@@ -27,8 +27,9 @@ export interface CliCommandRuntime {
     runAllPending(): Promise<Array<{ date: string; result: CliRunResult }>>;
   };
   manualFetch: {
-    fetchAndSummarize(id: string, date: string): Promise<ManualFetchResult>;
+    fetchAndSummarize(id: string, date: string, signal?: AbortSignal): Promise<ManualFetchResult>;
   };
+  operations?: OperationRegistry;
 }
 
 export interface RunCliOptions {
@@ -70,8 +71,15 @@ Options:
 
 export async function runCli(opts: RunCliOptions = {}): Promise<number> {
   const argv = opts.argv ?? process.argv.slice(2);
-  const io = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
+  const rawIo = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
+  let secrets: string[] = [];
+  const io: CliIo = {
+    stdout: { write: (chunk) => rawIo.stdout.write(redactText(String(chunk), { secrets })) },
+    stderr: { write: (chunk) => rawIo.stderr.write(redactText(String(chunk), { secrets })) },
+  };
   const env = { ...(opts.env ?? process.env) };
+  secrets = [env.ARXIV_DAILY_API_KEY, env.ARXIV_DAILY_LLM_API_KEY]
+    .filter((value): value is string => Boolean(value));
   const loadConfig = opts.loadConfig ?? loadCliConfig;
   const buildRuntime = opts.buildRuntime ?? defaultBuildRuntime;
   const now = opts.now ?? (() => new Date());
@@ -99,6 +107,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       configPath: parsed.configPath,
       env,
     });
+    secrets = [config.settings.llm.apiKey];
     const validation =
       parsed.command.name === "summarize"
         ? validateLlmConfig(config.settings)
@@ -109,6 +118,8 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     }
 
     const runtime = await buildRuntime(config);
+    const removeSignalHandlers = installSignalHandlers(runtime.operations, io);
+    try {
     if (parsed.command.name === "run") {
       if (!parsed.command.date) throw new Error("run requires --date");
       const result = runtime.scheduler
@@ -139,11 +150,26 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     const date =
       parsed.command.date ??
       formatDate(todayInTz(now(), config.settings.arxiv.timezone));
-    const result = await runtime.manualFetch.fetchAndSummarize(
+    const operation = runtime.operations?.begin(
+      "detail-summary",
+      `Detail summary: ${parsed.command.id}`,
       parsed.command.id,
-      date,
     );
-    return writeManualFetchResult(io, result);
+    try {
+      const result = operation
+        ? await runtime.manualFetch.fetchAndSummarize(
+            parsed.command.id,
+            date,
+            operation.signal,
+          )
+        : await runtime.manualFetch.fetchAndSummarize(parsed.command.id, date);
+      return writeManualFetchResult(io, result);
+    } finally {
+      operation?.finish();
+    }
+    } finally {
+      removeSignalHandlers();
+    }
   } catch (e) {
     writeLine(io.stderr, (e as Error).message);
     return e instanceof CliConfigError ? 2 : 1;
@@ -258,6 +284,30 @@ function writeManualFetchResult(io: CliIo, result: ManualFetchResult): number {
 
 function writeLine(stream: WritableTextStream, line: string): void {
   stream.write(`${line}\n`);
+}
+
+function installSignalHandlers(
+  operations: OperationRegistry | undefined,
+  io: CliIo,
+): () => void {
+  if (!operations || typeof process === "undefined" || !process.on) return () => {};
+  let signalCount = 0;
+  const handler = (signal: NodeJS.Signals) => {
+    signalCount += 1;
+    if (signalCount === 1) {
+      const active = operations.snapshot();
+      operations.cancelAll(`cancelled by ${signal}`);
+      writeLine(io.stderr, `arxiv-daily: ${signal} received; cancelling ${active.length} active task${active.length === 1 ? "" : "s"} and waiting`);
+      return;
+    }
+    process.exit(128 + (signal === "SIGINT" ? 2 : 15));
+  };
+  process.on("SIGINT", handler);
+  process.on("SIGTERM", handler);
+  return () => {
+    process.off("SIGINT", handler);
+    process.off("SIGTERM", handler);
+  };
 }
 
 async function defaultBuildRuntime(

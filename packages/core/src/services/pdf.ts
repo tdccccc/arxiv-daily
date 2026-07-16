@@ -8,6 +8,7 @@ import {
 } from "./paper-index";
 import { normalizeArxivId } from "./manual-fetch";
 import type { Logger } from "./logger";
+import { isCancellationError, throwIfCancelled } from "./cancellation";
 
 export type PdfDownloadResult =
   | {
@@ -34,11 +35,12 @@ export class PdfService {
 
   async downloadForEntry(
     entry: Pick<PaperIndexEntry, "arxivId">,
+    signal?: AbortSignal,
   ): Promise<PdfDownloadResult> {
-    return this.downloadById(entry.arxivId);
+    return this.downloadById(entry.arxivId, signal);
   }
 
-  async downloadById(rawId: string): Promise<PdfDownloadResult> {
+  async downloadById(rawId: string, signal?: AbortSignal): Promise<PdfDownloadResult> {
     const arxivId = normalizeArxivId(rawId);
     if (!arxivId) {
       return { kind: "invalid_id", reason: `invalid arXiv id: ${rawId}` };
@@ -50,14 +52,17 @@ export class PdfService {
       };
     }
 
+    throwIfCancelled(signal);
     let pdf: ArrayBuffer;
     try {
-      pdf = await this.deps.fetcher.fetchPdf(arxivId);
+      pdf = await this.deps.fetcher.fetchPdf(arxivId, signal);
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       this.deps.logger.error(`pdf: fetch failed for ${arxivId}`, e);
       return { kind: "fetch_error", reason: (e as Error).message };
     }
 
+    throwIfCancelled(signal);
     const path = this.deps.storage.normalizePath(
       `${derivePaperInboxPaths(this.deps.output).rootDir || "arxiv-daily"}/pdfs/${arxivId}.pdf`,
     );

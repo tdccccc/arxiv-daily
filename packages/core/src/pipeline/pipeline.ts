@@ -26,6 +26,7 @@ import {
   type DailyPaperWithContent,
 } from "./summarizer";
 import { extractPaperSummaries } from "./daily-summary-parser";
+import { GenerationMetricsCollector } from "../metrics/generation";
 
 interface SourcePaperMeta extends PaperMeta {
   arxivCategories: string[];
@@ -89,6 +90,7 @@ export class ArxivPipeline {
   ): Promise<PipelineResult> {
     const { fetcher, logger } = this.deps;
     const t0 = Date.now();
+    const runMetrics = new GenerationMetricsCollector();
     const stageStart = (label: string) => {
       const elapsed = Date.now() - t0;
       logger.info(`pipeline: [${elapsed}ms] enter stage: ${label}`);
@@ -100,10 +102,12 @@ export class ArxivPipeline {
     throwIfCancelled(signal);
     logger.info(`pipeline: start for ${dateStr}`);
 
-    // 0. Skip if daily already exists.
+    // 0. An existing daily note is the durable Markdown commit. Repair the
+    // derived Paper Index idempotently before reporting completion; this also
+    // supports notes written by older versions without a separate marker.
     if (await this.deps.writer.dailyExists(dateStr)) {
-      logger.info(`pipeline: daily ${dateStr} already exists, skipping`);
-      return { kind: "completed", papersWritten: 0 };
+      logger.info(`pipeline: daily ${dateStr} already exists, repairing index`);
+      return await this.repairExistingDaily(dateStr, signal);
     }
     throwIfCancelled(signal);
 
@@ -164,6 +168,7 @@ export class ArxivPipeline {
         logger,
         arxivSettings: this.deps.arxiv,
         signal,
+        onMetrics: (metrics) => runMetrics.record(metrics),
       });
     } catch (e) {
       if (isCancellationError(e)) throw e;
@@ -203,13 +208,16 @@ export class ArxivPipeline {
         completedFetches += 1;
         this.progress.setStage("fetch-content", completedFetches, visiblePapers.length);
         try {
-          const c = await this.deps.paperFetcher.fetch(p.id, {
+          const contentOptions = {
             // Daily summaries should use any high-value sections we can extract.
             // The detail flag still only controls whether a separate paper note is written.
             isDetail: true,
             sectionCharLimit: this.deps.advanced.sectionCharLimit,
             paperCharLimit: this.deps.advanced.paperCharLimit,
-          });
+          };
+          const c = signal
+            ? await this.deps.paperFetcher.fetch(p.id, contentOptions, signal)
+            : await this.deps.paperFetcher.fetch(p.id, contentOptions);
           return {
             ...p,
             abstractConclusion: c.abstractConclusion,
@@ -261,6 +269,7 @@ export class ArxivPipeline {
         linkStyle: this.deps.output.linkStyle ?? "wikilink",
         summaryLanguage: this.deps.output.summaryLanguage,
         signal,
+        onMetrics: (metrics) => runMetrics.record(metrics),
       });
     } catch (e) {
       if (isCancellationError(e)) throw e;
@@ -298,6 +307,7 @@ export class ArxivPipeline {
       this.progress.setStage("write-detail", i + 1, detailPapers.length);
       logger.info(`pipeline: detail report for ${p.id}`);
       try {
+        const detailMetrics = new GenerationMetricsCollector();
         const detail = await summarizePaperDetail(p, {
           llm: this.deps.llm,
           logger,
@@ -305,6 +315,10 @@ export class ArxivPipeline {
           advanced: this.deps.advanced,
           summaryLanguage: this.deps.output.summaryLanguage,
           signal,
+          onMetrics: (metrics) => {
+            detailMetrics.record(metrics);
+            runMetrics.record(metrics);
+          },
         });
         throwIfCancelled(signal);
         const path = await this.deps.writer.writePaperDetail(
@@ -312,6 +326,7 @@ export class ArxivPipeline {
           dateStr,
           detail,
           p.indexEntry,
+          { metrics: detailMetrics.snapshot() },
         );
         if (this.deps.paperIndex) {
           await this.deps.paperIndex.setPaperPath(p.id, path);
@@ -324,7 +339,11 @@ export class ArxivPipeline {
     stageEnd("write-detail", ` (${detailPapers.length} detail papers)`);
 
     throwIfCancelled(signal);
-    await this.deps.writer.writeDaily(dateStr, dailySummary, { dateWindowNote });
+    runMetrics.setPipelineElapsedMs(Date.now() - t0);
+    await this.deps.writer.writeDaily(dateStr, dailySummary, {
+      dateWindowNote,
+      metrics: runMetrics.snapshot(),
+    });
     if (this.deps.paperIndex) {
       try {
         throwIfCancelled(signal);
@@ -350,6 +369,38 @@ export class ArxivPipeline {
       `${enriched.length} papers, ${detailPapers.length} detail reports`,
     );
     return { kind: "completed", papersWritten: enriched.length };
+  }
+
+  private async repairExistingDaily(
+    dateStr: string,
+    signal?: AbortSignal,
+  ): Promise<PipelineResult> {
+    if (!this.deps.paperIndex) {
+      return { kind: "completed", papersWritten: 0 };
+    }
+    try {
+      throwIfCancelled(signal);
+      const markdown = await this.deps.writer.readDaily(dateStr);
+      throwIfCancelled(signal);
+      const summaries = extractPaperSummaries(markdown);
+      const arxivIds = Array.from(
+        new Set([...extractDailyArxivIds(markdown), ...Object.keys(summaries)]),
+      );
+      const dailyPath = this.deps.writer.dailyPath(dateStr);
+      await this.deps.paperIndex.addDailyReports(arxivIds, dailyPath);
+      await this.deps.paperIndex.setSummaries(summaries);
+      throwIfCancelled(signal);
+      this.deps.logger.info(
+        `pipeline: repaired daily index for ${dateStr} (${arxivIds.length} papers)`,
+      );
+      return { kind: "completed", papersWritten: arxivIds.length };
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      return {
+        kind: "failed_transient",
+        reason: `paper index daily report repair failed: ${(e as Error).message}`,
+      };
+    }
   }
 
   private async indexFilteredPapers(
@@ -515,6 +566,20 @@ export class ArxivPipeline {
       dateWindow: "recent",
     };
   }
+}
+
+function extractDailyArxivIds(markdown: string): string[] {
+  const ids = new Set<string>();
+  const patterns = [
+    /arxiv-daily:(\d{4}\.\d{4,5}):(?:watch|highlight)/gi,
+    /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of markdown.matchAll(pattern)) {
+      if (match[1]) ids.add(match[1]);
+    }
+  }
+  return Array.from(ids);
 }
 
 function sourceCategories(paper: PaperMeta, fallbackCategory?: string): string[] {

@@ -486,7 +486,7 @@ describe("SchedulerService", () => {
     });
   });
 
-  it("marks cancelled runs as skipped and records cancelled history without retry state", async () => {
+  it("restores cancelled runs to pending and records distinct cancelled history", async () => {
     const store = makeStore();
     await store.load();
     const history = makeHistory();
@@ -506,14 +506,14 @@ describe("SchedulerService", () => {
 
     expect(result).toEqual({ kind: "cancelled", reason: "cancelled by test" });
     expect(store.get("2026-06-24")).toMatchObject({
-      status: "skipped",
+      status: "pending",
       error: "cancelled by test",
     });
     expect(history.records.at(-1)).toMatchObject({
-      event: "skipped",
+      event: "pending",
       trigger: "manual",
       date: "2026-06-24",
-      status: "skipped",
+      status: "pending",
       resultKind: "cancelled",
       reason: "cancelled by test",
       errorMessage: "cancelled by test",
@@ -1072,9 +1072,34 @@ describe("SchedulerService", () => {
     const result = await pending;
     expect((result as any).kind).toBe("cancelled");
     expect((result as any).reason).toBe("cancelled by user");
-    expect(store.get("2026-05-11").status).toBe("skipped");
+    expect(store.get("2026-05-11").status).toBe("pending");
     expect(store.get("2026-05-11").error).toBe("cancelled by user");
     expect(svc.activeRuns()).toEqual([]);
+  });
+
+  it("allows a normal manual retry after cancellation", async () => {
+    const store = makeStore();
+    await store.load();
+    const runForDate = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "cancelled", reason: "cancelled by user" })
+      .mockResolvedValueOnce({ kind: "completed", papersWritten: 2 });
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+      now: () => new Date("2026-05-11T05:00:00Z"),
+    });
+
+    await svc.runForDateNow("2026-05-11");
+    expect(store.get("2026-05-11").status).toBe("pending");
+
+    const retry = await svc.runForDateNow("2026-05-11");
+    expect(retry).toEqual({ kind: "completed", papersWritten: 2 });
+    expect(store.get("2026-05-11").status).toBe("completed");
+    expect(runForDate).toHaveBeenCalledTimes(2);
   });
 
   it("stops runAllPending after cancellation is requested", async () => {

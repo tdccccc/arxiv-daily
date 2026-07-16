@@ -93,7 +93,7 @@ export class HistoryRecorder {
     const entry = this.deps.store().get(date);
     await this.record({
       date,
-      event: "skipped",
+      event: "pending",
       trigger,
       status: entry.status,
       resultKind: "cancelled",

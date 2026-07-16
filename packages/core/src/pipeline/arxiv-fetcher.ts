@@ -76,23 +76,25 @@ export class ArxivFetcher {
   async fetchBySubmittedDate(
     category: string,
     dateStr: string,
+    signal?: AbortSignal,
   ): Promise<PaperMeta[]> {
     const day = dateStr.replace(/-/g, "");
     const query = `cat:${category} AND submittedDate:[${day}0000 TO ${day}2359]`;
     const url =
       `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}` +
       `&start=0&max_results=2000&sortBy=submittedDate&sortOrder=ascending`;
-    const xml = await this.fetchHtml(url, { allow404: false });
+    const xml = await this.fetchHtml(url, { allow404: false }, signal);
     return parseAtomPapers(xml, this.opts.markupParser);
   }
 
   /** Fetch /html/<id> for full paper rendering. Returns ok:false on 404. */
   async fetchPaperHtml(
     arxivId: string,
+    signal?: AbortSignal,
   ): Promise<{ ok: true; body: string } | { ok: false; status: number }> {
     const url = `https://arxiv.org/html/${arxivId}`;
     try {
-      const body = await this.fetchHtml(url, { allow404: true });
+      const body = await this.fetchHtml(url, { allow404: true }, signal);
       return { ok: true, body };
     } catch (err: any) {
       if (err?.status === 404) return { ok: false, status: 404 };
@@ -100,22 +102,23 @@ export class ArxivFetcher {
     }
   }
 
-  async fetchPaperAbsPage(arxivId: string): Promise<string> {
+  async fetchPaperAbsPage(arxivId: string, signal?: AbortSignal): Promise<string> {
     const url = `https://arxiv.org/abs/${arxivId}`;
-    return this.fetchHtml(url, { allow404: false });
+    return this.fetchHtml(url, { allow404: false }, signal);
   }
 
-  async fetchPdf(arxivId: string): Promise<ArrayBuffer> {
+  async fetchPdf(arxivId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
     const url = `https://arxiv.org/pdf/${arxivId}`;
-    return this.fetchBinary(url);
+    return this.fetchBinary(url, {}, signal);
   }
 
   async fetchSource(
     arxivId: string,
+    signal?: AbortSignal,
   ): Promise<{ ok: true; body: ArrayBuffer } | { ok: false; status: number }> {
     const url = `https://arxiv.org/e-print/${arxivId}`;
     try {
-      const body = await this.fetchBinary(url, { allow404: true });
+      const body = await this.fetchBinary(url, { allow404: true }, signal);
       return { ok: true, body };
     } catch (err: any) {
       if (err?.status === 404) return { ok: false, status: 404 };
@@ -124,9 +127,9 @@ export class ArxivFetcher {
   }
 
   /** Fetch the raw Atom XML for a single id (for manual lookup with full metadata). */
-  async fetchAtomEntry(arxivId: string): Promise<string> {
+  async fetchAtomEntry(arxivId: string, signal?: AbortSignal): Promise<string> {
     const url = `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`;
-    return this.fetchHtml(url, { allow404: false });
+    return this.fetchHtml(url, { allow404: false }, signal);
   }
 
   private async fetchHtml(
@@ -170,8 +173,9 @@ export class ArxivFetcher {
   private async fetchBinary(
     url: string,
     opts: { allow404?: boolean } = {},
+    signal?: AbortSignal,
   ): Promise<ArrayBuffer> {
-    await this.respectDelay();
+    await this.respectDelay(signal);
     this.opts.logger.debug(`fetchBinary: GET ${url}`);
     return retry(
       async () => {
@@ -180,6 +184,7 @@ export class ArxivFetcher {
           method: "GET",
           headers: { "User-Agent": "obsidian-arxiv-daily/0.1" },
           responseType: "arrayBuffer",
+          signal,
         });
         if (res.status < 200 || res.status >= 300) {
           throw httpStatusError(res.status, url, res.headers);
@@ -195,6 +200,7 @@ export class ArxivFetcher {
         baseDelayMs: 2000,
         shouldRetry: (err: any) => !(opts.allow404 && err?.status === 404),
         delayMs: arxivRetryDelayMs,
+        signal,
         onRetry: (err, attempt, wait) =>
           this.opts.logger.warn(
             `fetch retry #${attempt} after ${wait}ms: ${url}: ${(err as Error).message}`,

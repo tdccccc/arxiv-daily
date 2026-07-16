@@ -14,7 +14,7 @@ export interface SchedulerRunOptions {
 }
 
 export interface SchedulerRecentDates {
-  refresh: () => Promise<unknown>;
+  refresh: (signal?: AbortSignal) => Promise<unknown>;
   hasDate?: (date: string) => boolean;
 }
 

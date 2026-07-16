@@ -10,6 +10,8 @@ import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } fro
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
 import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
 import { parseAtomPapers, type AtomPaperMeta } from "../pipeline/atom-parser";
+import { GenerationMetricsCollector } from "../metrics/generation";
+import { isCancellationError, throwIfCancelled } from "./cancellation";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
@@ -57,8 +59,9 @@ export class ManualFetchService {
     this.progress = deps.progress ?? new NoopProgressReporter();
   }
 
-  async fetchAndSummarize(rawId: string, dateStr: string): Promise<ManualFetchResult> {
+  async fetchAndSummarize(rawId: string, dateStr: string, signal?: AbortSignal): Promise<ManualFetchResult> {
     const { storage, output, logger } = this.deps;
+    throwIfCancelled(signal);
 
     logger.info(`manual-fetch: requested detail summary for ${rawId} on ${dateStr}`);
     const id = normalizeArxivId(rawId);
@@ -84,7 +87,7 @@ export class ManualFetchService {
         );
       } else {
         logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
-        const entry = await this.syncExistingIndexEntry(id, dateStr, targetPath);
+        const entry = await this.syncExistingIndexEntry(id, dateStr, targetPath, signal);
         if (entry) {
           await this.deps.writer.refreshPaperNoteFrontmatter(entry, targetPath);
         }
@@ -102,7 +105,7 @@ export class ManualFetchService {
     let categories: string[] = [];
     let abstract = "";
     try {
-      const meta = await this.fetchAtomMetadata(id);
+      const meta = await this.fetchAtomMetadata(id, signal);
       if (!meta) {
         logger.warn(`manual-fetch: arXiv has no entry for ${id}`);
         this.progress.setError(`arXiv has no entry for ${id}`);
@@ -117,6 +120,7 @@ export class ManualFetchService {
       categories = meta.categories;
       abstract = meta.abstract;
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       logger.error(`manual-fetch: atom metadata failed for ${id}`, e);
       this.progress.setError(`Metadata failed: ${(e as Error).message}`);
       return { kind: "error", reason: `atom metadata: ${(e as Error).message}` };
@@ -134,8 +138,9 @@ export class ManualFetchService {
         isDetail: true,
         sectionCharLimit: this.deps.advanced.sectionCharLimit,
         paperCharLimit: this.deps.advanced.paperCharLimit,
-      });
+      }, signal);
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       logger.error(`manual-fetch: content fetch failed for ${id}`, e);
       this.progress.setError(`Content fetch failed: ${(e as Error).message}`);
       return { kind: "error", reason: `content fetch: ${(e as Error).message}` };
@@ -169,6 +174,7 @@ export class ManualFetchService {
       updated,
     };
     let summary: string;
+    const detailMetrics = new GenerationMetricsCollector();
     try {
       this.progress.setStage("summarize-detail");
       summary = await summarizePaperDetail(paper, {
@@ -177,14 +183,18 @@ export class ManualFetchService {
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,
         summaryLanguage: this.deps.output.summaryLanguage,
+        signal,
+        onMetrics: (metrics) => detailMetrics.record(metrics),
       });
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       logger.error(`manual-fetch: LLM summary failed for ${id}`, e);
       this.progress.setError(`Summary failed: ${(e as Error).message}`);
       return { kind: "error", reason: `LLM summary: ${(e as Error).message}` };
     }
 
     // 5. Index + write
+    throwIfCancelled(signal);
     this.progress.setStage("write-detail");
     let indexEntry: PaperIndexEntry | undefined;
     if (this.deps.paperIndex) {
@@ -222,16 +232,21 @@ export class ManualFetchService {
       }
     }
 
-    if (replaceEmptyExistingNote) {
-      logger.info(`manual-fetch: removing empty existing note ${targetPath}`);
-      await storage.remove(targetPath);
-    }
-    logger.info(`manual-fetch: writing detail note for ${id}`);
+    // Final cancellation boundary. The following atomic replacement/write and
+    // paper-path synchronization are a coherent, non-interruptible commit.
+    throwIfCancelled(signal);
+    logger.info(
+      `manual-fetch: ${replaceEmptyExistingNote ? "replacing" : "writing"} detail note for ${id}`,
+    );
     const path = await this.deps.writer.writePaperDetail(
       paper,
       dateStr,
       summary,
       indexEntry,
+      {
+        metrics: detailMetrics.snapshot(),
+        replaceExisting: replaceEmptyExistingNote,
+      },
     );
     if (this.deps.paperIndex) {
       try {
@@ -250,11 +265,12 @@ export class ManualFetchService {
     id: string,
     dateStr: string,
     targetPath: string,
+    signal?: AbortSignal,
   ): Promise<PaperIndexEntry | undefined> {
     const { paperIndex, logger } = this.deps;
     if (!paperIndex) return undefined;
     try {
-      const meta = await this.fetchAtomMetadata(id);
+      const meta = await this.fetchAtomMetadata(id, signal);
       if (!meta) return undefined;
       const existing = await paperIndex.get(id);
       const displayDate = displayDateFromIndexEntry(existing);
@@ -276,6 +292,7 @@ export class ManualFetchService {
       }
       return indexed.entry;
     } catch (e) {
+      if (isCancellationError(e)) throw e;
       logger.warn(
         `manual-fetch: failed to refresh existing index entry for ${id}: ${(e as Error).message}`,
       );
@@ -284,8 +301,8 @@ export class ManualFetchService {
   }
 
   /** Returns Atom metadata for one id, or null if not found. */
-  private async fetchAtomMetadata(id: string): Promise<AtomPaperMeta | null> {
-    const xml = await this.deps.fetcher.fetchAtomEntry(id);
+  private async fetchAtomMetadata(id: string, signal?: AbortSignal): Promise<AtomPaperMeta | null> {
+    const xml = await this.deps.fetcher.fetchAtomEntry(id, signal);
     const paper = parseAtomPapers(xml, this.deps.markupParser).find(
       (candidate) => candidate.id === id,
     );
