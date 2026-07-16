@@ -22,8 +22,15 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Simplified reading workflow** — one-click stars mark high-priority papers;
   unstarred papers stay neutral. Dashboard filters cover search, topic,
   first-seen date range, note presence, and detail availability.
-- **Dashboard sorting** — sort visible papers by starred first, recently seen,
-  published date, topic, or title.
+- **Local relevance search** — BM25F-style ranking over arXiv ID, title,
+  authors, topics, categories, and structured summary fields, with exact modern
+  arXiv-ID priority plus deterministic English technical-token and Chinese
+  bigram tokenization. Non-empty searches default to relevance; an explicitly
+  selected starred/published/topic/title sort remains primary.
+- **Similar Papers** — deterministic local lexical retrieval over non-ignored
+  Paper Index entries, with match reasons and actions for detail, daily report,
+  arXiv, and PDF. It makes no network or LLM request and uses no embedding or
+  database.
 - **First-run onboarding** — Settings includes a Getting Started checklist, and
   Dashboard empty states point users to setup, Run Today, Run Pending, or All.
 - **Safer arXiv date handling** — current or scheduled dates newer than the
@@ -54,6 +61,18 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Config validation** — `validateLlmConfig` / `validateFilterConfig`
   gate scheduled and manual runs. Settings panel renders a red banner
   listing missing required fields.
+- **Secret-safe settings and output** — a saved API key renders only as
+  `Configured`, with explicit Replace and Clear actions. The compatible
+  `llm.apiKey` value remains plaintext in local plugin `data.json`; there is no
+  keyring or encryption. Logs, diagnostics, and presented errors are redacted.
+- **Generation metrics** — generated daily and detail Markdown ends with a
+  folded callout reporting pipeline elapsed time when available, LLM elapsed
+  time, logical calls, HTTP attempts, and provider-reported tokens. Missing or
+  retry-incomplete usage is not treated as zero, and no cost is estimated.
+- **Unified cancellation** — `Cancel active tasks` covers scheduled and manual
+  daily runs, manual detail summaries, and PDF downloads, but not Get Models.
+  Obsidian `requestUrl` remains cooperative: already-issued requests may finish
+  while later work unwinds.
 - **First-enable modal** — `chooseModal` asks Run today / Skip today /
   Cancel on every OFF→ON transition. "Skip today" marks the current
   date as `skipped` in runState so interval ticks leave it alone.
@@ -104,7 +123,7 @@ npm run build
 | Section | Fields |
 |---|---|
 | **Enable** | Toggle, shows Running / Paused status |
-| **LLM** | Provider dropdown, API Key, Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
+| **LLM** | Provider dropdown, API Key (`Configured` sentinel with Replace/Clear), Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
 | **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail toggle), Load Template dropdown, + Add Topic button, Timezone |
 | **Output & Schedule** | Daily / Papers paths, Link style, Run time, Tick interval, Lookback days (≤ 5) |
 | **Advanced** | Request delay, cache TTL, char limits, skip / priority sections, log level |
@@ -166,8 +185,10 @@ npm run build
 
 | File | Role |
 |---|---|
-| `packages/core/src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view and future VS Code Webview |
+| `packages/core/src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view |
+| `packages/core/src/dashboard/paper-search-index.ts` | Derived in-memory BM25-style index shared by Dashboard search and Similar Papers; no persistence/schema migration |
 | `src/dashboard/view.ts` | Obsidian custom view, command/ribbon target, table rendering, filters, row actions, batch operations |
+| `src/dashboard/similar-papers-modal.ts` | Local Similar Papers results, deterministic reasons, and existing paper actions |
 
 ### Services
 
@@ -176,7 +197,8 @@ npm run build
 | `packages/core/src/services/paper-index.ts` | Hidden `.index/papers.json` store, schema migration, mark/status/priority/summary/project updates |
 | `src/services/paper-note.ts` | Shared lightweight paper-note creation helper |
 | `packages/core/src/services/daily-selection.ts` | Daily markdown checkbox parser and sync service |
-| `packages/core/src/services/pdf.ts` | Manual arXiv PDF download into vault storage and `pdfPath` updates |
+| `packages/core/src/services/pdf.ts` | Cancellable manual arXiv PDF download into vault storage and `pdfPath` updates |
+| `packages/core/src/services/operations.ts` | Shared registry for daily runs, manual detail summaries, and PDF downloads |
 | `packages/core/src/services/project-notes.ts` | Project-note append workflow and `projects` field updates |
 | `packages/core/src/services/scheduler.ts` | Tick-loop scheduler; `tickToday`, `runForDateNow`, `runAllPending` |
 | `packages/core/src/services/state-store.ts` | Per-date `RunStatus` persistence in `.index/run-state.json`; `isDone` includes `"skipped"` |
@@ -195,7 +217,9 @@ npm run build
 | `src/commands.ts` | Command palette + ribbon menu registrations; config gating on manual commands |
 | `packages/core/src/utils/slugify.ts` | `slugify` — topic-name → kebab-case ASCII tag |
 | `packages/core/src/utils/time.ts` | Timezone-aware date utilities |
-| `packages/core/src/llm/client.ts` | OpenAI-compatible LLM caller |
+| `packages/core/src/llm/client.ts` | OpenAI-compatible LLM caller with retry-aware provider usage collection |
+| `packages/core/src/metrics/generation.ts` | Generation timing/call/token aggregation and folded Markdown callout |
+| `packages/core/src/utils/redaction.ts` | Secret redaction for text, URLs, values, and errors |
 
 ## Data model (schema v2)
 
@@ -256,6 +280,7 @@ the filter demotes `isDetail` to `false`.
 | `arXiv Daily: Retry failed dates in lookback window` | Clears failed state for recent failed dates and reruns them |
 | `arXiv Daily: Force run for date…` | Clears stored state for one date and runs it without schedule guards |
 | `arXiv Daily: Clear run state…` | Clears persisted completed/failed/skipped state without deleting notes |
+| `arXiv Daily: Cancel active tasks` | Cooperatively cancels active daily runs, manual detail summaries, and PDF downloads; Get Models is excluded |
 | `arXiv Daily: Summarize by arXiv ID…` | Summarize a single paper by ID |
 | `arXiv Daily: Set paper mark…` | Updates one indexed paper to Unmarked / Watch / Highlight / Saved / Ignored |
 | `arXiv Daily: Create paper note…` | Creates a lightweight note for an indexed paper |
@@ -294,6 +319,17 @@ Dashboard treats `priority=high` as `Starred`. The star button only toggles
 that priority, so unstarred papers stay neutral in the dashboard. The older
 `status` values remain in `papers.json` for compatibility with daily checkbox
 sync, saved notes, and existing indexes.
+
+Search and Similar Papers derive one in-memory index from these existing
+entries. They do not change the Paper Index schema or persistence, so old
+settings, Paper Index files, and Markdown reports remain usable without a
+migration.
+
+Generated daily reports and detail notes append a folded `Generation metrics`
+callout. Daily reports include total pipeline wall time; both report types show
+LLM duration, logical calls, HTTP attempts, and only usage returned by the
+provider. Missing usage and retry-incomplete usage are shown as unavailable or
+incomplete, never as zero. There is no model-price or cost estimate.
 
 ## Scheduling
 

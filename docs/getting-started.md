@@ -11,7 +11,7 @@ You need:
 - One or more arXiv categories, such as `astro-ph`, `cs.LG`, or `hep-th`.
 - A short description of the research topics you want to track.
 
-arXiv Daily stores generated files in your vault. API keys are saved in Obsidian plugin settings.
+arXiv Daily stores generated files in your vault. API keys are saved as plaintext in the plugin's local `data.json` for compatibility; this is not keyring or encrypted storage. After saving, Settings shows only **Configured**, with explicit **Replace** and **Clear** actions. Logs, diagnostics, and presented errors are redacted.
 
 ## 1. Open The Plugin Settings
 
@@ -32,7 +32,7 @@ Buttons in the checklist jump to the missing section.
 
 ## 2. Configure The LLM
 
-Choose a provider, then enter the API key. The provider preset fills the base URL and model, but both remain editable.
+Choose a provider, then enter and save the API key. A saved key is replaced by the **Configured** sentinel rather than rendered back into the page; use **Replace** or **Clear** when needed. The provider preset fills the base URL and model, but both remain editable.
 
 For a first run, keep the default temperature, timeout, and reasoning settings unless your provider requires different values.
 
@@ -90,11 +90,15 @@ The Dashboard is the normal entry point after setup.
 
 - **Starred** shows papers you marked as important.
 - **All** shows every indexed paper that is not ignored.
-- Search and filters narrow the list by keyword, topic, date, note, or detail status.
+- Search is local and relevance-ranked across arXiv ID, title, authors, topics, categories, and structured summary fields. It recognizes exact modern arXiv IDs and tokenizes English technical terms and Chinese text; a non-empty search defaults to relevance, while an explicit starred/published/topic/title sort remains primary.
+- **Similar Papers** (the **Find similar papers** row action) uses local BM25-style lexical retrieval over non-ignored Paper Index entries. It shows deterministic match reasons and uses no network, LLM, embedding, or database.
 - The calendar opens daily reports by date.
-- Row actions open or create a paper note, open the source daily report, open arXiv, open the PDF, or download the PDF.
+- Row actions open or create a paper note, find similar papers, open the source daily report, open arXiv, open the PDF, or download the PDF. Similar-paper results can open the detail, daily report, arXiv page, or PDF.
+- **Dashboard -> More -> Cancel active tasks** cooperatively cancels scheduled or manual daily runs, manual detail summaries, and PDF downloads. **Get Models** is excluded; an already-issued Obsidian `requestUrl` call may finish before later work stops.
 
 For the intended Zotero workflow, open the arXiv page from the Dashboard and import the paper with the Zotero browser extension.
+
+Generated daily reports and detail notes end with a folded **Generation metrics** callout. It shows total pipeline elapsed time when available, LLM elapsed time, logical calls, HTTP attempts, and provider-reported tokens. Missing or retry-incomplete usage is labeled unavailable/incomplete rather than zero, and no cost is estimated. Existing settings, Paper Index files, and Markdown remain usable; no Paper Index schema migration is required.
 
 ## 7. Enable Scheduling
 

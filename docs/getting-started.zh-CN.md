@@ -11,7 +11,7 @@
 - 一个或多个 arXiv 分类，例如 `astro-ph`、`cs.LG`、`hep-th`。
 - 你希望跟踪的研究主题描述。
 
-arXiv Daily 会把生成内容写入你的 vault。API key 保存在 Obsidian 插件设置中。
+arXiv Daily 会把生成内容写入你的 vault。为保持兼容，API key 以明文保存在插件本地 `data.json`，不是 keyring 或加密存储。保存后设置页只显示 **Configured**，修改或删除需显式使用 **Replace** / **Clear**；日志、诊断和展示给用户的错误会做脱敏。
 
 ## 1. 打开插件设置
 
@@ -32,7 +32,7 @@ Checklist 里的按钮会跳转到还没配置好的部分。
 
 ## 2. 配置 LLM
 
-先选择 provider，然后填写 API key。Provider preset 会自动填入 base URL 和 model，但这两个字段仍然可以手动修改。
+先选择 provider，然后填写并保存 API key。保存后的 key 不会重新渲染到页面，而是显示 **Configured** sentinel；需要修改或删除时使用 **Replace** 或 **Clear**。Provider preset 会自动填入 base URL 和 model，但这两个字段仍然可以手动修改。
 
 第一次运行时，temperature、timeout、reasoning 等高级设置可以先保持默认，除非你的 provider 明确要求修改。
 
@@ -90,11 +90,15 @@ arxiv-daily/daily/YYYY-MM-DD.md
 
 - **Starred**：显示你标记为重点的论文。
 - **All**：显示所有未忽略的历史论文。
-- Search 和筛选项可以按关键词、topic、日期、是否有 note、是否有 detail 过滤。
+- Search 完全在本地进行，按相关度检索 arXiv ID、标题、作者、topic、分类和结构化摘要字段；支持精确现代 arXiv ID、英文技术词和中文切词。有搜索词时默认按相关度排序，显式选择星标/发表日期/topic/标题排序后则保持该主排序。
+- **Similar Papers**（论文行的 **Find similar papers** 操作）在未忽略的 Paper Index 条目上做本地 BM25 风格词法检索，显示确定性的匹配原因，不使用网络、LLM、embedding 或数据库。
 - 右侧日历可以按日期打开日报。
-- 每行操作可以打开/创建论文笔记、打开来源日报、打开 arXiv、打开 PDF、下载 PDF。
+- 每行操作可以打开/创建论文笔记、查找相似论文、打开来源日报、打开 arXiv、打开 PDF、下载 PDF；相似论文结果可打开 detail、日报、arXiv 页面或 PDF。
+- **Dashboard -> More -> Cancel active tasks** 会协作式取消自动/手动日报运行、手动 detail 总结和 PDF 下载。**Get Models** 不在范围内；已经发出的 Obsidian `requestUrl` 请求可能先完成，后续工作才停止。
 
 如果某篇论文要进入正式文献库，建议从 Dashboard 打开 arXiv 页面，然后用 Zotero 浏览器插件导入。
+
+生成的日报和 detail 笔记末尾会有折叠的 **Generation metrics** callout，显示可用的 pipeline 总耗时、LLM 耗时、逻辑调用数、HTTP attempts 和 provider 报告的 tokens。缺失或因重试而不完整的 usage 会显示 unavailable/incomplete，不会记为 0；插件不估算费用。已有设置、Paper Index 和 Markdown 仍可使用，不需要 Paper Index schema migration。
 
 ## 7. 启用自动运行
 
