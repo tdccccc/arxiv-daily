@@ -307,6 +307,12 @@ describe("HubModal tabs", () => {
 });
 
 describe("dashboard pane responsiveness", () => {
+  it("styles compact search explanations and narrow similar-paper content", () => {
+    expect(pluginStyles).toContain(".arxiv-daily-dashboard__match-reason");
+    expect(pluginStyles).toContain(".arxiv-daily-similar-modal__actions");
+    expect(pluginStyles).toContain("@media (max-width: 520px)");
+  });
+
   it("uses dashboard container queries for overview, filters, and calendar", () => {
     expect(pluginStyles).toContain("container-name: arxiv-daily-dashboard");
     expect(pluginStyles).toContain("container-type: inline-size");

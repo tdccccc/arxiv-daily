@@ -4,10 +4,16 @@ import type {
   PaperStatus,
   PaperSummary,
 } from "../services/paper-index";
+import {
+  PaperSearchIndex,
+  type PaperSearchReason,
+  type PaperSearchResult,
+} from "./paper-search-index";
 
 export type DashboardTab = "starred" | "all";
 
 export type DashboardSortKey =
+  | "relevance"
   | "priority"
   | "title"
   | "topic"
@@ -38,6 +44,8 @@ export interface DashboardRow {
   topic: string;
   firstSeen: string;
   hasDetailSummary: boolean;
+  relevanceScore?: number;
+  matchReasons?: PaperSearchReason[];
 }
 
 export interface DashboardStats {
@@ -58,6 +66,7 @@ export interface DashboardResult {
 export interface DashboardQueryOptions {
   now?: Date;
   detailSummaryIds?: ReadonlySet<string>;
+  searchIndex?: PaperSearchIndex | null;
 }
 
 export type DashboardAction =
@@ -102,12 +111,18 @@ export function queryDashboard(
   query: DashboardQuery = {},
   opts: DashboardQueryOptions = {},
 ): DashboardResult {
+  const search = query.search?.trim() ?? "";
+  const searchResults = search ? runIndexedSearch(entries, search, opts.searchIndex) : null;
+  const byId = searchResults
+    ? new Map(searchResults.map((result) => [result.entry.arxivId, result]))
+    : null;
   const filtered = entries.filter((entry) =>
-    matchesDashboardQuery(entry, query, opts),
+    matchesDashboardQuery(entry, query, opts, byId),
   );
   const rows = sortRows(
-    filtered.map((entry) => toDashboardRow(entry, opts)),
+    filtered.map((entry) => toDashboardRow(entry, opts, byId?.get(entry.arxivId))),
     query.sort,
+    Boolean(search),
   );
   return {
     rows,
@@ -120,9 +135,16 @@ export function matchesDashboardQuery(
   entry: PaperIndexEntry,
   query: DashboardQuery = {},
   opts: DashboardQueryOptions = {},
+  indexedResults?: ReadonlyMap<string, PaperSearchResult> | null,
 ): boolean {
   if (!matchesDashboardTab(entry, query.tab ?? DEFAULT_TAB)) return false;
-  if (!matchesSearch(entry, query.search ?? "")) return false;
+  if (
+    indexedResults
+      ? !indexedResults.has(entry.arxivId)
+      : !matchesSearch(entry, query.search ?? "")
+  ) {
+    return false;
+  }
   if (!matchesTopic(entry, query.topics ?? [])) return false;
   if (!matchesAny(entry.status, query.statuses ?? [])) return false;
   if (!matchesAny(entry.priority, query.priorities ?? [])) return false;
@@ -237,6 +259,7 @@ export function planDashboardAction(
 function toDashboardRow(
   entry: PaperIndexEntry,
   opts: DashboardQueryOptions,
+  searchResult?: PaperSearchResult,
 ): DashboardRow {
   return {
     entry,
@@ -246,6 +269,9 @@ function toDashboardRow(
     topic: displayTopic(entry),
     firstSeen: firstSeenDate(entry),
     hasDetailSummary: hasDetailSummary(entry, opts),
+    ...(searchResult
+      ? { relevanceScore: searchResult.score, matchReasons: searchResult.reasons }
+      : {}),
   };
 }
 
@@ -259,13 +285,17 @@ function hasDetailSummary(
 function sortRows(
   rows: DashboardRow[],
   sort: DashboardQuery["sort"],
+  hasSearch: boolean,
 ): DashboardRow[] {
-  const key = sort?.key ?? "priority";
-  const direction = sort?.direction ?? "asc";
+  const key = sort?.key ?? (hasSearch ? "relevance" : "priority");
+  const direction = sort?.direction ?? (key === "relevance" ? "desc" : "asc");
   const dir = direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const primary = compareBySortKey(a, b, key);
     if (primary !== 0) return primary * dir;
+    if (key === "relevance") {
+      return a.arxivId < b.arxivId ? -1 : a.arxivId > b.arxivId ? 1 : 0;
+    }
     return compareDefault(a, b);
   });
 }
@@ -276,6 +306,8 @@ function compareBySortKey(
   key: DashboardSortKey,
 ): number {
   switch (key) {
+    case "relevance":
+      return (a.relevanceScore ?? 0) - (b.relevanceScore ?? 0);
     case "priority":
       return PRIORITY_ORDER[a.entry.priority] - PRIORITY_ORDER[b.entry.priority];
     case "title":
@@ -294,6 +326,21 @@ function compareDefault(a: DashboardRow, b: DashboardRow): number {
   const published = b.entry.published.localeCompare(a.entry.published);
   if (published !== 0) return published;
   return a.title.localeCompare(b.title);
+}
+
+function runIndexedSearch(
+  entries: PaperIndexEntry[],
+  search: string,
+  cachedIndex?: PaperSearchIndex | null,
+): PaperSearchResult[] | null {
+  if (cachedIndex === null) return null;
+  try {
+    return (cachedIndex ?? new PaperSearchIndex(entries)).search(search);
+  } catch {
+    // Host integrations can still render using the legacy substring matcher if
+    // derived-index construction or querying fails for unexpected input.
+    return null;
+  }
 }
 
 function matchesSearch(entry: PaperIndexEntry, search: string): boolean {

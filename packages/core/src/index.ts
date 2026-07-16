@@ -4,6 +4,7 @@ export * from "./core/adapters";
 export * from "./dashboard/detail-summary";
 export * from "./dashboard/history-sync";
 export * from "./dashboard/model";
+export * from "./dashboard/paper-search-index";
 export * from "./llm/client";
 export * from "./metrics/generation";
 export * from "./pipeline/arxiv-fetcher";

@@ -9,6 +9,7 @@ import {
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
+  PaperSearchIndex,
   planDashboardAction,
   queryDashboard,
   type DashboardAction,
@@ -28,7 +29,8 @@ import type { RunStateEntry } from "@arxiv-daily/core";
 import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
-import { buildDiagnosticsReport } from "@arxiv-daily/core";
+import { SimilarPapersModal } from "./similar-papers-modal";
+import { buildDiagnosticsReport, redactText } from "@arxiv-daily/core";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
 import { LOOKBACK_DAYS } from "@arxiv-daily/core";
 import {
@@ -54,6 +56,7 @@ const PAGE_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
 ];
 
 const SORT_LABELS: Record<DashboardSortKey, string> = {
+  relevance: "Relevance",
   priority: "Starred first",
   published: "Published",
   topic: "Topic",
@@ -430,6 +433,7 @@ export function formatLogEntries(
 
 class ArxivDailyDashboardView extends ItemView {
   private entries: DashboardRow["entry"][] = [];
+  private searchIndex: PaperSearchIndex | null = null;
   private dailyReports: DailyReportDay[] = [];
   private calendarDailyReports = new Map<string, DailyReportDay>();
   private detailSummaryIds = new Set<string>();
@@ -521,6 +525,12 @@ class ArxivDailyDashboardView extends ItemView {
       });
       this.lastSyncedDailyPaths = dailyPaths;
       this.entries = Object.values(index.papers);
+      try {
+        this.searchIndex = new PaperSearchIndex(this.entries);
+      } catch (e) {
+        this.searchIndex = null;
+        this.plugin.logger.warn("dashboard: local search index construction failed; using substring fallback", e);
+      }
       this.loadDetailSummaries(this.entries);
       this.dailyReports = this.loadDailyReports(this.entries, markdownFiles);
       this.calendarMonth ??= this.todayDate().slice(0, 7);
@@ -530,6 +540,7 @@ class ArxivDailyDashboardView extends ItemView {
       this.error = null;
     } catch (e) {
       this.entries = [];
+      this.searchIndex = null;
       this.dailyReports = [];
       this.calendarDailyReports = new Map();
       this.detailSummaryIds = new Set();
@@ -668,6 +679,7 @@ class ArxivDailyDashboardView extends ItemView {
 
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
+      searchIndex: this.searchIndex,
     });
     this.renderToolbar(contentEl, result);
     this.renderRecentDatesNotice(contentEl);
@@ -706,6 +718,7 @@ class ArxivDailyDashboardView extends ItemView {
       precomputed ??
       queryDashboard(this.entries, this.query, {
         detailSummaryIds: this.detailSummaryIds,
+        searchIndex: this.searchIndex,
       });
     this.statsEl.empty();
     this.batchEl.empty();
@@ -893,7 +906,7 @@ class ArxivDailyDashboardView extends ItemView {
     titleGroup.createEl("div", {
       cls: "arxiv-daily-dashboard__status-line",
       text: dashboardHeaderStatusText({
-        isRunning: this.plugin.scheduler.activeRuns().length > 0,
+        isRunning: this.plugin.operations.snapshot().length > 0,
         lastCompletedDate: latestCompletedRunDate(
           this.plugin.stateStore.snapshot(),
         ),
@@ -1627,11 +1640,20 @@ class ArxivDailyDashboardView extends ItemView {
         cls: "arxiv-daily-dashboard__meta",
         text: `${row.arxivId} · ${row.authors || "Unknown authors"}`,
       });
+      if (this.isActiveRelevanceSearch() && row.matchReasons?.length) {
+        titleCell.createEl("div", {
+          cls: "arxiv-daily-dashboard__match-reason",
+          text: row.matchReasons.slice(0, 2).map((reason) => reason.text).join(" · "),
+        });
+      }
 
       tr.createEl("td", { text: row.topic });
       tr.createEl("td", { text: row.entry.published || "-" });
       const actionCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__actions",
+      });
+      this.createIconButton(actionCell, "scan-search", "Find similar papers", () => {
+        this.openSimilarPapers(row.entry);
       });
       this.createIconButton(
         actionCell,
@@ -1683,6 +1705,7 @@ class ArxivDailyDashboardView extends ItemView {
     if (!this.batchEl) return;
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
+      searchIndex: this.searchIndex,
     });
     const page = paginateDashboardRows(
       result.rows,
@@ -1771,8 +1794,8 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__batch-sort-label",
       text: "Sort",
     });
-    const currentKey = this.query.sort?.key ?? DEFAULT_SORT_KEY;
-    const currentDir = this.query.sort?.direction ?? "asc";
+    const currentKey = this.query.sort?.key ?? ((this.query.search?.trim() ? "relevance" : DEFAULT_SORT_KEY));
+    const currentDir = this.query.sort?.direction ?? (currentKey === "relevance" ? "desc" : "asc");
 
     const keySelect = this.createSelect(
       field,
@@ -1930,7 +1953,7 @@ class ArxivDailyDashboardView extends ItemView {
   private showMoreMenu(evt: MouseEvent): void {
     const menu = new Menu();
     const enabled = this.plugin.settings.schedule.enabled;
-    const activeRuns = this.plugin.scheduler.activeRuns();
+    const activeRuns = this.plugin.operations.snapshot();
 
     menu.addItem((item) =>
       item
@@ -1968,7 +1991,7 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.addCommandMenuItem(
       menu,
-      "Cancel current run",
+      "Cancel active tasks",
       "circle-stop",
       "cancel-current-run",
       true,
@@ -2130,7 +2153,6 @@ class ArxivDailyDashboardView extends ItemView {
     const date = this.todayDate();
     this.plugin.logger.info(`dashboard: manual run today requested for ${date}`);
     this.notice(`arXiv Daily: running for ${date}…`);
-    await this.plugin.recentDates.refresh();
     const result = await this.plugin.scheduler.runForDateNow(date);
     this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     await this.reloadIndex();
@@ -2140,7 +2162,6 @@ class ArxivDailyDashboardView extends ItemView {
     if (!this.gateFilter()) return;
     this.plugin.logger.info("dashboard: run all pending requested");
     this.notice("arXiv Daily: running all pending in lookback…");
-    await this.plugin.recentDates.refresh();
     const results = await this.plugin.scheduler.runAllPending();
     if (results.length === 0) {
       this.notice("arXiv Daily: nothing pending in lookback window");
@@ -2225,6 +2246,39 @@ class ArxivDailyDashboardView extends ItemView {
     );
   }
 
+  private isActiveRelevanceSearch(): boolean {
+    return Boolean(this.query.search?.trim()) && (!this.query.sort || this.query.sort.key === "relevance");
+  }
+
+  private openSimilarPapers(entry: DashboardRow["entry"]): void {
+    let index = this.searchIndex;
+    if (!index) {
+      try {
+        index = new PaperSearchIndex(this.entries);
+      } catch (e) {
+        this.plugin.logger.warn("dashboard: similar-paper index construction failed", e);
+        this.notice("arXiv Daily: local similarity search is unavailable");
+        return;
+      }
+    }
+    const results = index.similar(entry, { limit: 10 });
+    new SimilarPapersModal(this.plugin.app, {
+      source: entry,
+      results,
+      openDetail: (candidate) => this.openDetailSummary(candidate),
+      openDaily: (candidate) => this.openDailyReport(candidate),
+      openArxiv: (candidate) => openUrl(candidate.arxivUrl, "arXiv", this.plugin.logger),
+      openPdf: (candidate) => this.openPdf(candidate),
+      onActionError: (error, action, candidate) => {
+        this.plugin.logger.error(
+          `dashboard: similar papers ${action.toLowerCase()} failed for ${candidate.arxivId}`,
+          error,
+        );
+        this.notice(`arXiv Daily: ${action} failed`);
+      },
+    }).open();
+  }
+
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
     const path = this.detailSummaryPaths.get(entry.arxivId);
     if (!path) {
@@ -2269,7 +2323,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
     this.plugin.logger.info(`dashboard: PDF download requested for ${entry.arxivId}`);
-    const result = await this.plugin.buildPdfService().downloadForEntry(entry);
+    const result = await this.plugin.downloadPdf(entry);
     if (result.kind !== "done") {
       this.plugin.logger.warn(
         `dashboard: PDF download failed for ${entry.arxivId}: ${result.reason}`,
@@ -2375,11 +2429,20 @@ class ArxivDailyDashboardView extends ItemView {
     for (const patch of plan.patches) {
       const entry = await this.applyBatchPatch(store, patch);
       if (!entry) continue;
+      const local = this.entries.find((candidate) => candidate.arxivId === entry.arxivId);
+      if (local) {
+        local.status = entry.status;
+        local.priority = entry.priority;
+      }
       changed += 1;
     }
     this.selectedIds.clear();
+    this.dailyReports = this.loadDailyReports(this.entries);
+    await this.refreshCalendarDailyReports(
+      this.calendarMonth ?? this.todayDate().slice(0, 7),
+    );
     this.notice(`arXiv Daily: updated ${changed} papers`);
-    await this.reloadIndex();
+    this.render();
   }
 
   private async applyBatchPatch(
@@ -2944,7 +3007,9 @@ class HubModal extends Modal {
       this.plugin.logger.warn("diagnostics load failed", e);
       this.setPanelText(
         "diagnostics",
-        `Failed to build diagnostics: ${(e as Error).message}`,
+        `Failed to build diagnostics: ${redactText(e instanceof Error ? e.message : e, {
+          secrets: [this.plugin.settings.llm.apiKey],
+        })}`,
       );
     }
   }

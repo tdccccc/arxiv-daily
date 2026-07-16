@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PaperSearchIndex,
   planDashboardAction,
   queryDashboard,
 } from "@arxiv-daily/core";
@@ -114,6 +115,43 @@ describe("dashboard model", () => {
     expect(byTitleAndPriority.rows.map((row) => row.arxivId)).toEqual([
       "2606.00002",
     ]);
+  });
+
+  it("auto-sorts nonblank indexed searches by relevance with explanations", () => {
+    const entries = fixtures();
+    const result = queryDashboard(
+      entries,
+      { tab: "all", search: "transformer" },
+      { searchIndex: new PaperSearchIndex(entries) },
+    );
+
+    expect(result.rows.map((row) => row.arxivId)).toEqual(["2606.00002"]);
+    expect(result.rows[0].relevanceScore).toBeGreaterThan(0);
+    expect(result.rows[0].matchReasons?.[0].text).toContain("title");
+  });
+
+  it("keeps explicit sorts primary during searches", () => {
+    const entries = [
+      paper("2606.10001", { title: "Transformer methods", published: "2026-06-01" }),
+      paper("2606.10002", { title: "Methods", published: "2026-06-02", summary: { keyMethod: "transformer" } }),
+    ];
+    const index = new PaperSearchIndex(entries);
+    const relevance = queryDashboard(entries, { tab: "all", search: "transformer" }, { searchIndex: index });
+    const published = queryDashboard(entries, {
+      tab: "all",
+      search: "transformer",
+      sort: { key: "published", direction: "desc" },
+    }, { searchIndex: index });
+
+    expect(relevance.rows[0].arxivId).toBe("2606.10001");
+    expect(published.rows[0].arxivId).toBe("2606.10002");
+  });
+
+  it("falls back to legacy substring matching when index querying fails", () => {
+    const broken = { search: () => { throw new Error("broken"); } } as unknown as PaperSearchIndex;
+    const result = queryDashboard(fixtures(), { tab: "all", search: "redshifts" }, { searchIndex: broken });
+    expect(result.rows.map((row) => row.arxivId)).toEqual(["2606.00001"]);
+    expect(result.rows[0].relevanceScore).toBeUndefined();
   });
 
   it("filters by date range and detail summary existence", () => {

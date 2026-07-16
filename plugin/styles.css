@@ -1014,6 +1014,16 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   color: var(--text-faint);
 }
 
+.arxiv-daily-dashboard__match-reason {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .arxiv-daily-dashboard__star {
   color: var(--text-faint);
 }
@@ -1086,6 +1096,66 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-dashboard__state--error {
   color: var(--text-error);
   border-color: var(--background-modifier-error);
+}
+
+.arxiv-daily-similar-modal {
+  max-height: min(82vh, 760px);
+  overflow-y: auto;
+}
+
+.arxiv-daily-similar-modal__source,
+.arxiv-daily-similar-modal__meta,
+.arxiv-daily-similar-modal__reason,
+.arxiv-daily-similar-modal__empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-similar-modal__list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.arxiv-daily-similar-modal__item {
+  min-width: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.arxiv-daily-similar-modal__title {
+  overflow-wrap: anywhere;
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-similar-modal__meta,
+.arxiv-daily-similar-modal__reason {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-similar-modal__reason {
+  color: var(--text-accent);
+}
+
+.arxiv-daily-similar-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+@media (max-width: 520px) {
+  .arxiv-daily-similar-modal {
+    padding-inline: 12px;
+  }
+
+  .arxiv-daily-similar-modal__item {
+    padding: 8px;
+  }
 }
 
 .arxiv-daily-progress {
