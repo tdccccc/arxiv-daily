@@ -4,6 +4,7 @@ import { throwIfCancelled } from "../services/cancellation";
 import { parseAtomPapers, type AtomPaperMeta } from "./atom-parser";
 import type { HttpClient, MarkupParser } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
+import { modernArxivResources } from "../utils/arxiv";
 
 export interface ArxivFetcherOptions {
   category?: string;
@@ -92,7 +93,7 @@ export class ArxivFetcher {
     arxivId: string,
     signal?: AbortSignal,
   ): Promise<{ ok: true; body: string } | { ok: false; status: number }> {
-    const url = `https://arxiv.org/html/${arxivId}`;
+    const url = requireArxivResources(arxivId).htmlUrl;
     try {
       const body = await this.fetchHtml(url, { allow404: true }, signal);
       return { ok: true, body };
@@ -103,12 +104,12 @@ export class ArxivFetcher {
   }
 
   async fetchPaperAbsPage(arxivId: string, signal?: AbortSignal): Promise<string> {
-    const url = `https://arxiv.org/abs/${arxivId}`;
+    const url = requireArxivResources(arxivId).absUrl;
     return this.fetchHtml(url, { allow404: false }, signal);
   }
 
   async fetchPdf(arxivId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-    const url = `https://arxiv.org/pdf/${arxivId}`;
+    const url = requireArxivResources(arxivId).pdfUrl;
     return this.fetchBinary(url, {}, signal);
   }
 
@@ -116,7 +117,7 @@ export class ArxivFetcher {
     arxivId: string,
     signal?: AbortSignal,
   ): Promise<{ ok: true; body: ArrayBuffer } | { ok: false; status: number }> {
-    const url = `https://arxiv.org/e-print/${arxivId}`;
+    const url = requireArxivResources(arxivId).sourceUrl;
     try {
       const body = await this.fetchBinary(url, { allow404: true }, signal);
       return { ok: true, body };
@@ -128,7 +129,7 @@ export class ArxivFetcher {
 
   /** Fetch the raw Atom XML for a single id (for manual lookup with full metadata). */
   async fetchAtomEntry(arxivId: string, signal?: AbortSignal): Promise<string> {
-    const url = `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`;
+    const url = requireArxivResources(arxivId).atomUrl;
     return this.fetchHtml(url, { allow404: false }, signal);
   }
 
@@ -304,4 +305,10 @@ function headerValue(
 function jitterDelayMs(delayMs: number): number {
   const factor = 0.75 + Math.random() * 0.5;
   return Math.max(0, Math.round(delayMs * factor));
+}
+
+function requireArxivResources(input: string) {
+  const resources = modernArxivResources(input);
+  if (!resources) throw new Error(`invalid arXiv ID: ${input}`);
+  return resources;
 }

@@ -52,6 +52,7 @@ export * from "./settings/summary-language";
 export * from "./settings/topic-templates";
 export * from "./settings/types";
 export * from "./settings/validation";
+export * from "./utils/arxiv";
 export * from "./utils/redaction";
 export * from "./utils/retry";
 export * from "./utils/slugify";

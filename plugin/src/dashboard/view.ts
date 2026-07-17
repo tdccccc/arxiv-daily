@@ -4,14 +4,19 @@ import {
   Modal,
   Notice,
   setIcon,
+  TFile,
   type App,
   type WorkspaceLeaf,
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
+  looksLikeDetailSummary,
+  modernArxivResources,
+  normalizeArxivId,
   planDashboardAction,
   queryDashboard,
+  validateVaultRelativeDirectory,
   type DashboardAction,
   type DashboardPatch,
   type DashboardQuery,
@@ -273,6 +278,34 @@ export function collectIndexedDetailSummaryRefs(
     paths.set(entry.arxivId, path);
   }
   return { ids, paths };
+}
+
+export function expectedDetailSummaryPath(
+  papersDir: string,
+  rawArxivId: string,
+): string | null {
+  const canonicalId = normalizeArxivId(rawArxivId);
+  const directory = validateVaultRelativeDirectory(papersDir);
+  if (!canonicalId || !directory.ok || !directory.value) return null;
+  return `${directory.value}/${canonicalId}.md`;
+}
+
+export function isExpectedGeneratedDetailSummary(
+  markdown: string,
+  canonicalArxivId: string,
+): boolean {
+  const expectedId = normalizeArxivId(canonicalArxivId);
+  if (!expectedId || !looksLikeDetailSummary(markdown)) return false;
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\s|$)/.exec(markdown)?.[1];
+  if (frontmatter == null) return false;
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const item = /^arxiv_id:\s*(.*?)\s*$/.exec(line);
+    if (!item) continue;
+    const raw = (item[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim();
+    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(raw)) return false;
+    return normalizeArxivId(raw) === expectedId;
+  }
+  return false;
 }
 
 export async function buildCalendarDailyReportMap(
@@ -784,10 +817,10 @@ class ArxivDailyDashboardView extends ItemView {
         text: "Run today or run pending dates to create daily reports and populate this Dashboard.",
       });
       const actions = this.createEmptyActions(state);
-      this.createEmptyActionButton(actions, "play", "Run Today", (button) => {
+      this.createEmptyActionButton(actions, "play", "Run today", (button) => {
         void this.runControlAction(button, () => this.runToday());
       });
-      this.createEmptyActionButton(actions, "layers", "Run Pending", (button) => {
+      this.createEmptyActionButton(actions, "layers", "Run pending", (button) => {
         void this.runControlAction(button, () => this.runAllPending());
       });
       return;
@@ -1001,7 +1034,7 @@ class ArxivDailyDashboardView extends ItemView {
     this.createToolbarButton(
       actions,
       "play",
-      "Run Today",
+      "Run today",
       "Run today",
       (button) => {
         void this.runControlAction(button, () => this.runToday());
@@ -1676,7 +1709,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
       this.createIconButton(actionCell, "external-link", "Open arXiv", (button) => {
         void this.runControlAction(button, async () => {
-          openUrl(row.entry.arxivUrl, "arXiv", this.plugin.logger);
+          openArxivResource(row.entry.arxivId, "abs", this.plugin.logger);
         });
       });
       this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
@@ -2001,7 +2034,7 @@ class ArxivDailyDashboardView extends ItemView {
     menu.addSeparator();
     menu.addItem((item) =>
       item
-        .setTitle("Run Pending")
+        .setTitle("Run pending")
         .setIcon("layers")
         .onClick(() => {
           void this.runAllPending();
@@ -2267,7 +2300,8 @@ class ArxivDailyDashboardView extends ItemView {
       results,
       openDetail: (candidate) => this.openDetailSummary(candidate),
       openDaily: (candidate) => this.openDailyReport(candidate),
-      openArxiv: (candidate) => openUrl(candidate.arxivUrl, "arXiv", this.plugin.logger),
+      openArxiv: (candidate) =>
+        openArxivResource(candidate.arxivId, "abs", this.plugin.logger),
       openPdf: (candidate) => this.openPdf(candidate),
       onActionError: (error, action, candidate) => {
         this.plugin.logger.error(
@@ -2318,7 +2352,7 @@ class ArxivDailyDashboardView extends ItemView {
       await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
       return;
     }
-    openUrl(entry.pdfUrl, "PDF", this.plugin.logger);
+    openArxivResource(entry.arxivId, "pdf", this.plugin.logger);
   }
 
   private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
@@ -2343,9 +2377,23 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private selectedDetailSummaryCount(): number {
-    return this.selectedArxivIds().filter((id) =>
-      this.detailSummaryIds.has(id),
-    ).length;
+    return this.selectedArxivIds().filter((id) => {
+      const entry = this.entries.find((candidate) => candidate.arxivId === id);
+      return Boolean(entry && this.hasDeletableDetailSummary(entry));
+    }).length;
+  }
+
+  private hasDeletableDetailSummary(entry: DashboardRow["entry"]): boolean {
+    const expectedPath = expectedDetailSummaryPath(
+      this.plugin.settings.output.papersDir,
+      entry.arxivId,
+    );
+    const indexedPath = normalizeVaultPath(entry.paperPath ?? "");
+    return Boolean(
+      entry.detail &&
+        expectedPath &&
+        indexedPath === normalizeVaultPath(expectedPath),
+    );
   }
 
   private async runBatchStar(starred: boolean): Promise<void> {
@@ -2360,8 +2408,8 @@ class ArxivDailyDashboardView extends ItemView {
     const entries = this.selectedArxivIds()
       .map((id) => this.entries.find((entry) => entry.arxivId === id))
       .filter((entry): entry is DashboardRow["entry"] =>
-        Boolean(entry && this.detailSummaryPaths.has(entry.arxivId)),
-    );
+        Boolean(entry && this.hasDeletableDetailSummary(entry)),
+      );
     if (entries.length === 0) {
       this.notice("arXiv Daily: no selected papers have detail summaries");
       return;
@@ -2382,37 +2430,73 @@ class ArxivDailyDashboardView extends ItemView {
       `dashboard: deleting detail summaries for ${entries.length} selected papers`,
     );
     const store = this.plugin.buildPaperIndex();
-    let deletedFiles = 0;
-    for (const path of uniquePaths(
-      entries.map((entry) => this.detailSummaryPaths.get(entry.arxivId)),
-    )) {
+    let trashedFiles = 0;
+    let updatedEntries = 0;
+    let indexFailures = 0;
+    let refused = 0;
+    for (const entry of entries) {
+      const canonicalId = normalizeArxivId(entry.arxivId);
+      const path = expectedDetailSummaryPath(
+        this.plugin.settings.output.papersDir,
+        entry.arxivId,
+      );
       try {
-        if (!(await this.plugin.app.vault.adapter.exists(path))) continue;
-        await this.plugin.app.vault.adapter.remove(path);
-        deletedFiles += 1;
+        if (!canonicalId || !path) {
+          throw new Error(`invalid arXiv ID: ${entry.arxivId}`);
+        }
+        const result = await store.removePaperDetailsAtPath(
+          canonicalId,
+          path,
+          async () => {
+            const abstractFile = this.plugin.app.vault.getAbstractFileByPath(path);
+            if (!(abstractFile instanceof TFile)) {
+              throw new Error(`expected detail summary does not exist: ${path}`);
+            }
+            const markdown = await this.plugin.app.vault.read(abstractFile);
+            if (!isExpectedGeneratedDetailSummary(markdown, canonicalId)) {
+              throw new Error(`file is not a generated detail summary for ${canonicalId}`);
+            }
+            await this.plugin.app.vault.trash(abstractFile, true);
+            trashedFiles += 1;
+          },
+        );
+        if (result.kind === "path_mismatch") {
+          throw new Error(
+            `indexed detail path does not match expected path: ${String(result.actualPath)}`,
+          );
+        }
+        if (result.kind === "missing") {
+          throw new Error(`paper index entry no longer exists: ${canonicalId}`);
+        }
+        if (result.kind === "index_failed") {
+          indexFailures += 1;
+          this.selectedIds.delete(entry.arxivId);
+          this.plugin.logger.warn(
+            `dashboard: trashed detail summary but failed to update index for ${canonicalId}`,
+            result.error,
+          );
+          continue;
+        }
+        updatedEntries += 1;
+        this.selectedIds.delete(entry.arxivId);
       } catch (e) {
+        refused += 1;
         this.plugin.logger.warn(
-          `dashboard: failed to delete detail summary ${path}`,
+          `dashboard: refused or failed before trashing detail summary for ${entry.arxivId}`,
           e,
         );
-        throw new Error(`failed to delete ${path}: ${(e as Error).message}`);
       }
     }
 
-    const clearIds = entries
-      .filter((entry) => entry.dailyReports.length > 0)
-      .map((entry) => entry.arxivId);
-    const removeIds = entries
-      .filter((entry) => entry.dailyReports.length === 0)
-      .map((entry) => entry.arxivId);
-    const cleared = await store.clearPaperDetails(clearIds);
-    const removed = await store.removePapers(removeIds);
-
-    this.selectedIds.clear();
     this.notice(
-      `arXiv Daily: deleted ${deletedFiles} summaries, cleared ${cleared}, removed ${removed} orphan entries`,
+      `arXiv Daily: trashed ${trashedFiles} summaries; updated ${updatedEntries} index entries${indexFailures ? `; ${indexFailures} trashed but index update failed` : ""}${refused ? `; ${refused} refused or failed before trash` : ""}`,
       10_000,
     );
+    if (indexFailures > 0) {
+      // Force history reconciliation: the file is already in trash, so a fresh
+      // scan is the safest way to clear or remove its stale index entry.
+      this.lastSyncedDailyPaths = null;
+    }
     await this.reloadIndex();
   }
 
@@ -2474,16 +2558,19 @@ function topicOptions(entries: DashboardRow["entry"][]): string[] {
   return [...topics].sort((a, b) => a.localeCompare(b));
 }
 
-function openUrl(
-  url: string,
-  label: string,
+function openArxivResource(
+  rawArxivId: string,
+  kind: "abs" | "pdf",
   logger: ArxivDailyPlugin["logger"],
 ): void {
-  if (!url.trim()) {
-    logger.info(`arXiv Daily: no ${label} URL`);
-    new Notice(`arXiv Daily: no ${label} URL`);
+  const resources = modernArxivResources(rawArxivId);
+  const label = kind === "pdf" ? "PDF" : "arXiv";
+  if (!resources) {
+    logger.warn(`dashboard: refused invalid arXiv ID for ${label}`);
+    new Notice(`arXiv Daily: invalid arXiv ID; ${label} was not opened`);
     return;
   }
+  const url = kind === "pdf" ? resources.pdfUrl : resources.absUrl;
   logger.info(`dashboard: opening ${label} URL ${url}`);
   window.open(url, "_blank", "noopener");
 }
@@ -2682,18 +2769,6 @@ function markdownPathFromLeaf(leaf: unknown): string | null {
   if (typeof stateFile === "string") return stateFile;
   const viewPath = candidate.view?.file?.path;
   return typeof viewPath === "string" ? viewPath : null;
-}
-
-function uniquePaths(paths: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const path of paths) {
-    const normalized = normalizeVaultPath(path ?? "");
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
 }
 
 function dailyDateFromPath(path: string, dailyDir: string): string | null {

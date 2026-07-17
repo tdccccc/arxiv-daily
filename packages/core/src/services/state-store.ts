@@ -65,9 +65,6 @@ export class StateStore {
     await this.enqueueMutation(async () => {
       const prev = this.get(date);
       const att = prev.attempts + 1;
-      if (typeof console !== "undefined") {
-        console.log(`[arxiv-daily] state: ${date} → running (attempt ${att})`);
-      }
       this.state[date] = {
         ...prev,
         status: "running",
@@ -81,9 +78,6 @@ export class StateStore {
   async setCompleted(date: string, papersWritten: number): Promise<void> {
     await this.enqueueMutation(async () => {
       const prev = this.get(date);
-      if (typeof console !== "undefined") {
-        console.log(`[arxiv-daily] state: ${date} → completed (${papersWritten} papers)`);
-      }
       this.state[date] = {
         ...prev,
         status: "completed",
@@ -119,9 +113,6 @@ export class StateStore {
         kind === "permanent" ? "failed_permanent" : "failed_transient";
       if (status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS) {
         status = "failed_permanent";
-      }
-      if (typeof console !== "undefined") {
-        console.log(`[arxiv-daily] state: ${date} → ${status}: ${message}`);
       }
       this.state[date] = {
         ...prev,

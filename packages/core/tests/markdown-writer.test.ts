@@ -53,6 +53,15 @@ function makeWriter(
   return { files, writer };
 }
 
+describe("MarkdownWriter output boundaries", () => {
+  it("rejects portable output directory collisions", () => {
+    expect(() => makeWriter({}, {
+      dailyDir: "Café/Notes",
+      papersDir: "CAFE\u0301/notes",
+    })).toThrow(/must be different/);
+  });
+});
+
 describe("MarkdownWriter existence checks", () => {
   it("dailyExists returns false when daily missing", async () => {
     const { writer } = makeWriter();
@@ -457,8 +466,8 @@ describe("MarkdownWriter strictness on existing files", () => {
       seenDates: ["2026-06-10"],
       dailyReports: ["arxiv-daily/daily/2026-06-10.md"],
       paperPath: null,
-      arxivUrl: "https://arxiv.org/abs/2605.06587",
-      pdfUrl: "https://arxiv.org/pdf/2605.06587",
+      arxivUrl: "javascript:alert(1)",
+      pdfUrl: "https://evil.test/file.pdf",
       pdfPath: "",
       zoteroKey: "",
       zoteroUri: "",
@@ -467,6 +476,10 @@ describe("MarkdownWriter strictness on existing files", () => {
     });
     const written = files["arxiv-daily/papers/2605.06587.md"];
     expect(written).toContain("published: 2026-06-10");
+    expect(written).toContain("https://arxiv.org/abs/2605.06587");
+    expect(written).toContain("https://arxiv.org/pdf/2605.06587");
+    expect(written).not.toContain("evil.test");
+    expect(written).not.toContain("javascript:");
     expect(written).not.toContain("daily_report:");
     expect(written).not.toContain("status: saved");
     expect(written).not.toContain("priority: normal");

@@ -1,4 +1,5 @@
 import type { MarkupParser } from "../core/adapters";
+import { modernArxivResources } from "../utils/arxiv";
 export interface PaperMeta {
   id: string;
   title: string;
@@ -37,8 +38,6 @@ const MONTHS: Record<string, number> = {
   dec: 12,
   december: 12,
 };
-const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/;
-
 function parseHeaderDate(headerText: string): string | null {
   const m = /(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/.exec(headerText);
   if (!m) return null;
@@ -92,12 +91,15 @@ export function parseRecent(html: string, markupParser: MarkupParser): DateBucke
 function parsePaper(dt: Element, dd: Element): PaperMeta | null {
   const absLink = dt.querySelector('a[title="Abstract"]');
   if (!absLink) return null;
-  const id = (absLink.textContent ?? "").replace("arXiv:", "").trim();
-  if (!id) return null;
-  if (!ID_RE.test(id)) {
-    console.warn(`[arxiv-daily] arxiv-parser: invalid arXiv id in listing: ${id}`);
+  const rawId = (absLink.textContent ?? "").replace("arXiv:", "").trim();
+  if (!rawId) return null;
+  if (!modernArxivResources(rawId)) {
+    console.warn(`[arxiv-daily] arxiv-parser: invalid arXiv id in listing: ${rawId}`);
     return null;
   }
+  // Preserve an explicit version in listing metadata for compatibility; callers
+  // use the shared helper when they need a canonical index key or resource URL.
+  const id = rawId;
 
   const titleDiv = dd.querySelector(".list-title");
   const title = (titleDiv?.textContent ?? "")

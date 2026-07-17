@@ -6,6 +6,7 @@ import {
   llmHttpWarning,
   modelFetchNoticeMessage,
   runWindowTimeOptions,
+  validateOutputDirectoryDraft,
 } from "../src/settings/tab";
 
 const settingsTabSource = readFileSync(
@@ -119,6 +120,42 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toMatch(
       /const apply = async \(\) => \{[\s\S]*?s\.arxiv\.categories = \[tpl\.category\];/,
     );
+  });
+});
+
+describe("output path drafts", () => {
+  it("normalizes safe vault-relative directories", () => {
+    expect(validateOutputDirectoryDraft(" arxiv\\papers/details ")).toEqual({
+      ok: true,
+      value: "arxiv/papers/details",
+    });
+  });
+
+  it("rejects a sibling directory collision portably", () => {
+    expect(validateOutputDirectoryDraft("cafe\u0301/NOTES", "Café/notes")).toEqual({
+      ok: false,
+      reason: "Daily and papers directories must be different",
+    });
+  });
+
+  it("rejects empty, absolute, traversal, and configuration paths", () => {
+    expect(validateOutputDirectoryDraft("").ok).toBe(false);
+    expect(validateOutputDirectoryDraft("/tmp/papers").ok).toBe(false);
+    expect(validateOutputDirectoryDraft("C:/papers").ok).toBe(false);
+    expect(validateOutputDirectoryDraft("arxiv/../notes").ok).toBe(false);
+    expect(validateOutputDirectoryDraft(".obsidian/plugins").ok).toBe(false);
+  });
+
+  it("reloads before persistence and restores the prior value on failure", () => {
+    const body = settingsTabSource.match(
+      /private async applyOutputDirectoryDraft[\s\S]*?\n  display\(\): void/,
+    )?.[0];
+    expect(body).toBeDefined();
+    expect(body!.indexOf("reloadStateStoreForOutputPaths()")).toBeLessThan(
+      body!.indexOf("saveSettings()"),
+    );
+    expect(body).toContain("this.plugin.settings.output[key] = previous");
+    expect(body).toContain("await this.plugin.reloadStateStoreForOutputPaths()");
   });
 });
 

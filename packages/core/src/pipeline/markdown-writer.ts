@@ -9,6 +9,11 @@ import {
 import type { DailyPaperWithContent } from "./summarizer";
 import type { PaperIndexEntry } from "../services/paper-index";
 import {
+  validateVaultRelativeDirectory,
+  vaultRelativeDirectoriesCollide,
+} from "../settings/validation";
+import { modernArxivResources } from "../utils/arxiv";
+import {
   appendGenerationMetrics,
   type GenerationMetrics,
 } from "../metrics/generation";
@@ -31,17 +36,30 @@ export interface WritePaperDetailOptions {
 }
 
 export class MarkdownWriter {
-  constructor(private opts: MarkdownWriterOpts) {}
+  constructor(private opts: MarkdownWriterOpts) {
+    const dailyDir = requireOutputDirectory("dailyDir", opts.output.dailyDir);
+    const papersDir = requireOutputDirectory("papersDir", opts.output.papersDir);
+    if (vaultRelativeDirectoriesCollide(dailyDir, papersDir)) {
+      throw new Error("dailyDir and papersDir must be different");
+    }
+    opts.output.dailyDir = dailyDir;
+    opts.output.papersDir = papersDir;
+  }
 
   dailyPath(dateStr: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      throw new Error(`Invalid date: ${dateStr}`);
+    }
     return this.opts.storage.normalizePath(
       `${this.opts.output.dailyDir}/${dateStr}.md`,
     );
   }
 
   paperDetailPath(id: string): string {
+    const arxivId = modernArxivResources(id)?.id;
+    if (!arxivId) throw new Error(`Invalid arXiv ID: ${id}`);
     return this.opts.storage.normalizePath(
-      `${this.opts.output.papersDir}/${id}.md`,
+      `${this.opts.output.papersDir}/${arxivId}.md`,
     );
   }
 
@@ -137,11 +155,13 @@ export class MarkdownWriter {
       ),
       tags,
     });
+    const resources = modernArxivResources(entry.arxivId);
+    if (!resources) throw new Error(`Invalid arXiv ID: ${entry.arxivId}`);
     const noteBody =
       body ??
       `# ${entry.title}\n\n` +
-        `- **arXiv**: [${entry.arxivId}](${entry.arxivUrl})\n` +
-        `- **PDF**: [PDF](${entry.pdfUrl})\n\n` +
+        `- **arXiv**: [${resources.id}](${resources.absUrl})\n` +
+        `- **PDF**: [PDF](${resources.pdfUrl})\n\n` +
         `## Notes\n\n`;
     await this.writeMarkdown(path, fm + noteBody);
     this.opts.logger.info(`wrote paper note: ${path}`);
@@ -266,6 +286,14 @@ export class MarkdownWriter {
     });
   }
 
+}
+
+function requireOutputDirectory(name: string, input: unknown): string {
+  const result = validateVaultRelativeDirectory(input);
+  if (!result.ok || !result.value) {
+    throw new Error(`Invalid ${name}: ${result.reason}`);
+  }
+  return result.value;
 }
 
 function dateWindowNote(note: string | undefined): string {

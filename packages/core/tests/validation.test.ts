@@ -3,6 +3,7 @@ import {
   validateLlmConfig,
   validateFilterConfig,
   validateScheduleConfig,
+  validateVaultRelativeDirectory,
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
@@ -16,6 +17,41 @@ function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
     output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
   };
 }
+
+describe("validateVaultRelativeDirectory", () => {
+  it("trims and canonicalizes safe Unicode nested paths", () => {
+    expect(validateVaultRelativeDirectory("  研究 资料\\每日论文  ")).toEqual({
+      ok: true,
+      value: "研究 资料/每日论文",
+    });
+  });
+
+  it("normalizes canonically equivalent Unicode paths to NFC", () => {
+    expect(validateVaultRelativeDirectory("Cafe\u0301/papers")).toEqual({
+      ok: true,
+      value: "Café/papers",
+    });
+  });
+
+  it.each([
+    "",
+    "../papers",
+    "daily/./papers",
+    "/tmp/papers",
+    "C:\\papers",
+    "\\\\server\\share",
+    "file:papers",
+    ".obsidian/plugins",
+    "papers?bad",
+    "papers\u0000bad",
+    "CON",
+    "aux.txt/papers",
+    "papers/COM1",
+    "papers/lpt9.md",
+  ])("rejects unsafe path %j", (value) => {
+    expect(validateVaultRelativeDirectory(value).ok).toBe(false);
+  });
+});
 
 describe("validateLlmConfig", () => {
   it("flags empty API key", () => {
@@ -110,6 +146,20 @@ describe("validateFilterConfig", () => {
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/arXiv category is empty/);
     expect(r.reasons.join("; ")).toMatch(/Duplicate arXiv category: astro-ph/);
+  });
+
+  it("flags output directories that collide portably", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        output: {
+          ...DEFAULT_SETTINGS.output,
+          dailyDir: "Café/Notes",
+          papersDir: "CAFE\u0301/notes",
+        },
+      }),
+    );
+    expect(r.reasons.join("; ")).toMatch(/must be different/i);
   });
 
   it("flags invalid link style", () => {

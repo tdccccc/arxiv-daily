@@ -1,5 +1,11 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
+import {
+  portablePathCollisionKey,
+  validateVaultRelativeDirectory,
+  vaultRelativeDirectoriesCollide,
+} from "../settings/validation";
+import { modernArxivResources } from "../utils/arxiv";
 
 export const PAPER_INBOX_SCHEMA_VERSION = 2;
 
@@ -78,6 +84,18 @@ export interface PaperIndexUpsert {
   paperPath?: string | null;
 }
 
+export type PaperDetailsRemovalResult =
+  | { kind: "cleared"; entry: PaperIndexEntry }
+  | { kind: "removed"; entry: PaperIndexEntry }
+  | { kind: "missing" }
+  | { kind: "path_mismatch"; actualPath: string | null }
+  | {
+      kind: "index_failed";
+      action: "cleared" | "removed";
+      entry: PaperIndexEntry;
+      error: unknown;
+    };
+
 export class PaperIndexError extends Error {
   constructor(message: string, readonly cause?: unknown) {
     super(message);
@@ -91,10 +109,16 @@ export function derivePaperInboxPaths(
   output: OutputSettings,
   normalizePath: (path: string) => string = normalizeStoragePath,
 ): PaperInboxPaths {
-  const dailyParent = parentDir(output.dailyDir, normalizePath);
-  const papersParent = parentDir(output.papersDir, normalizePath);
+  const dailyDir = requireOutputDirectory("dailyDir", output.dailyDir);
+  const papersDir = requireOutputDirectory("papersDir", output.papersDir);
+  if (vaultRelativeDirectoriesCollide(dailyDir, papersDir)) {
+    throw new PaperIndexError("dailyDir and papersDir must be different");
+  }
+  const dailyParent = parentDir(dailyDir, normalizePath);
+  const papersParent = parentDir(papersDir, normalizePath);
   const root =
-    dailyParent && dailyParent === papersParent
+    dailyParent &&
+    portablePathCollisionKey(dailyParent) === portablePathCollisionKey(papersParent)
       ? dailyParent
       : dailyParent || papersParent || "arxiv-daily";
   const rootDir = normalizePath(root);
@@ -142,7 +166,7 @@ export class PaperIndexStore {
       return normalizeInbox(JSON.parse(raw), this.now());
     } catch (e) {
       throw new PaperIndexError(
-        `failed to parse paper index: ${path}`,
+        `failed to parse paper index: ${path}: ${(e as Error).message}`,
         e,
       );
     }
@@ -264,6 +288,42 @@ export class PaperIndexStore {
       }
       if (changed > 0) await this.save(inbox);
       return changed;
+    });
+  }
+
+  async removePaperDetailsAtPath(
+    arxivId: string,
+    expectedPaperPath: string,
+    beforeMutation?: (entry: PaperIndexEntry) => Promise<void>,
+  ): Promise<PaperDetailsRemovalResult> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const entry = inbox.papers[arxivId];
+      if (!entry) return { kind: "missing" };
+
+      const expectedPath = this.storage.normalizePath(expectedPaperPath);
+      const actualPath = entry.paperPath == null
+        ? null
+        : this.storage.normalizePath(entry.paperPath);
+      if (actualPath !== expectedPath) {
+        return { kind: "path_mismatch", actualPath };
+      }
+
+      const snapshot = { ...entry };
+      const action = entry.dailyReports.length > 0 ? "cleared" : "removed";
+      await beforeMutation?.(snapshot);
+      if (action === "cleared") {
+        entry.detail = false;
+        entry.paperPath = null;
+      } else {
+        delete inbox.papers[arxivId];
+      }
+      try {
+        await this.save(inbox);
+      } catch (error) {
+        return { kind: "index_failed", action, entry: snapshot, error };
+      }
+      return { kind: action, entry: snapshot };
     });
   }
 
@@ -417,7 +477,9 @@ function upsertEntry(
   inbox: PaperInbox,
   input: PaperIndexUpsert,
 ): { entry: PaperIndexEntry; wasNew: boolean } {
-  const arxivId = input.arxivId.trim();
+  const resources = modernArxivResources(input.arxivId);
+  if (!resources) throw new PaperIndexError(`invalid arXiv ID: ${input.arxivId}`);
+  const arxivId = resources.id;
   const existing = inbox.papers[arxivId];
   const wasNew = !existing;
   const authors = normalizeAuthors(input.authors);
@@ -460,8 +522,8 @@ function upsertEntry(
       ? appendUnique(existing?.dailyReports ?? [], input.dailyReport)
       : existing?.dailyReports ?? [],
     paperPath,
-    arxivUrl: `https://arxiv.org/abs/${arxivId}`,
-    pdfUrl: `https://arxiv.org/pdf/${arxivId}`,
+    arxivUrl: resources.absUrl,
+    pdfUrl: resources.pdfUrl,
     pdfPath: existing?.pdfPath ?? "",
     zoteroKey: existing?.zoteroKey ?? "",
     zoteroUri: existing?.zoteroUri ?? "",
@@ -480,7 +542,8 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   }
   const papers: Record<string, PaperIndexEntry> = {};
   for (const [id, value] of Object.entries(obj.papers ?? {})) {
-    papers[id] = normalizeEntry(id, value);
+    const entry = normalizeEntry(id, value);
+    papers[entry.arxivId] = entry;
   }
   return {
     schemaVersion: PAPER_INBOX_SCHEMA_VERSION,
@@ -494,7 +557,17 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
 
 function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
   const obj = (raw && typeof raw === "object" ? raw : {}) as any;
-  const arxivId = stringOr(obj.arxivId, id);
+  const keyResources = modernArxivResources(id);
+  const entryResources = modernArxivResources(stringOr(obj.arxivId, id));
+  if (!keyResources || !entryResources) {
+    throw new Error(`invalid arXiv paper index key or entry: ${id}`);
+  }
+  if (keyResources.id !== entryResources.id) {
+    throw new Error(
+      `arXiv paper index key/entry mismatch: ${id} != ${String(obj.arxivId)}`,
+    );
+  }
+  const arxivId = keyResources.id;
   const status = isPaperStatus(obj.status) ? obj.status : "inbox";
   const priority = isPaperPriority(obj.priority) ? obj.priority : "normal";
   return {
@@ -518,14 +591,22 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     seenDates: stringArray(obj.seenDates),
     dailyReports: stringArray(obj.dailyReports),
     paperPath: obj.paperPath ? normalizeStoragePath(String(obj.paperPath)) : null,
-    arxivUrl: stringOr(obj.arxivUrl, `https://arxiv.org/abs/${arxivId}`),
-    pdfUrl: stringOr(obj.pdfUrl, `https://arxiv.org/pdf/${arxivId}`),
+    arxivUrl: keyResources.absUrl,
+    pdfUrl: keyResources.pdfUrl,
     pdfPath: stringOr(obj.pdfPath, ""),
     zoteroKey: stringOr(obj.zoteroKey, ""),
     zoteroUri: stringOr(obj.zoteroUri, ""),
     citationKey: stringOr(obj.citationKey, ""),
     projects: stringArray(obj.projects),
   };
+}
+
+function requireOutputDirectory(name: string, input: unknown): string {
+  const result = validateVaultRelativeDirectory(input);
+  if (!result.ok || !result.value) {
+    throw new PaperIndexError(`invalid ${name}: ${result.reason}`);
+  }
+  return result.value;
 }
 
 function parentDir(

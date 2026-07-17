@@ -7,6 +7,62 @@ export interface ValidationResult {
   reasons: string[];
 }
 
+export interface VaultRelativeDirectoryValidation {
+  ok: boolean;
+  value?: string;
+  reason?: string;
+}
+
+const WINDOWS_RESERVED_DEVICE_NAME_RE =
+  /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
+
+/** A portable equality key for already-canonical vault-relative paths. */
+export function portablePathCollisionKey(path: string): string {
+  return path.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
+}
+
+/** Return whether two paths collide on portable, case-insensitive filesystems. */
+export function vaultRelativeDirectoriesCollide(a: string, b: string): boolean {
+  return portablePathCollisionKey(a) === portablePathCollisionKey(b);
+}
+
+/** Canonicalize and validate a portable, vault-relative directory setting. */
+export function validateVaultRelativeDirectory(
+  input: unknown,
+): VaultRelativeDirectoryValidation {
+  if (typeof input !== "string") {
+    return { ok: false, reason: "must be a string" };
+  }
+  const value = input.trim().replace(/\\/g, "/").normalize("NFC");
+  if (!value) return { ok: false, reason: "must not be empty" };
+  if (/[\u0000-\u001f\u007f]/u.test(value)) {
+    return { ok: false, reason: "must not contain control characters" };
+  }
+  if (/^(?:\/|[a-z]:|\/\/)/i.test(value)) {
+    return { ok: false, reason: "must be vault-relative" };
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    return { ok: false, reason: "must not be a URL or URI" };
+  }
+  if (/[<>:"|?*]/u.test(value)) {
+    return { ok: false, reason: "contains characters invalid on portable filesystems" };
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    return { ok: false, reason: "must not contain empty or dot path segments" };
+  }
+  if (segments.some((segment) => segment.toLowerCase() === ".obsidian")) {
+    return { ok: false, reason: "must not target the .obsidian directory" };
+  }
+  if (segments.some((segment) => /[. ]$/u.test(segment))) {
+    return { ok: false, reason: "path segments must not end in a dot or space" };
+  }
+  if (segments.some((segment) => WINDOWS_RESERVED_DEVICE_NAME_RE.test(segment))) {
+    return { ok: false, reason: "must not contain Windows reserved device names" };
+  }
+  return { ok: true, value: segments.join("/") };
+}
+
 export function validateLlmConfig(settings: PluginSettings): ValidationResult {
   const reasons: string[] = [];
   if (!settings.llm.apiKey.trim()) reasons.push("LLM API Key is empty");
@@ -35,6 +91,19 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
     settings.output.summaryLanguage !== "en"
   ) {
     reasons.push(`Invalid summary language: ${settings.output.summaryLanguage}`);
+  }
+  const dailyDir = validateVaultRelativeDirectory(settings.output.dailyDir);
+  const papersDir = validateVaultRelativeDirectory(settings.output.papersDir);
+  if (!dailyDir.ok) reasons.push(`Invalid daily directory: ${dailyDir.reason}`);
+  if (!papersDir.ok) reasons.push(`Invalid papers directory: ${papersDir.reason}`);
+  if (
+    dailyDir.ok &&
+    papersDir.ok &&
+    dailyDir.value &&
+    papersDir.value &&
+    vaultRelativeDirectoriesCollide(dailyDir.value, papersDir.value)
+  ) {
+    reasons.push("Daily and papers directories must be different");
   }
   const seenCategories = new Set<string>();
   for (const category of settings.arxiv.categories ?? []) {

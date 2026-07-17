@@ -30,10 +30,7 @@ import { ProjectNotesService } from "@arxiv-daily/core";
 import { RecentDatesCache } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import type { HostAdapters, HttpClient } from "@arxiv-daily/core";
-import {
-  ARXIV_DAILY_DASHBOARD_VIEW,
-  registerDashboardView,
-} from "./src/dashboard/view";
+import { registerDashboardView } from "./src/dashboard/view";
 import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
 
 interface PersistedData {
@@ -78,13 +75,16 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async onload() {
-    await this.loadSettingsAndState();
+    const settingsWarnings = await this.loadSettingsAndState();
     this.logger = new Logger(
       this.settings.advanced.logLevel,
       (message, timeoutMs) => new Notice(message, timeoutMs),
       this.settings.arxiv.timezone,
     );
     this.logger.setSensitiveValues([this.settings.llm.apiKey]);
+    for (const warning of settingsWarnings) {
+      this.logger.warn(`settings: ${warning}`);
+    }
     this.host = buildObsidianHostAdapters({
       app: this.app,
       getSettings: () => this.settings,
@@ -100,6 +100,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.stateStore = createStorageStateStore(
       this.host.storage,
       this.settings.output,
+      this.logger,
     );
     this.runHistoryStore = RunHistoryStore.fromStorage(
       this.host.storage,
@@ -186,9 +187,6 @@ export default class ArxivDailyPlugin extends Plugin {
     this.operations.cancelAll("plugin unloaded");
     this.unsubscribeOperations?.();
     this.unsubscribeOperations = undefined;
-    void Promise.resolve(
-      this.app.workspace.detachLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW),
-    ).catch(() => {});
     if (this.progress instanceof StatusBarController) this.progress.dispose();
   }
 
@@ -209,6 +207,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const nextStore = createStorageStateStore(
       this.host.storage,
       this.settings.output,
+      this.logger,
     );
     await nextStore.load();
     this.stateStore = nextStore;
@@ -270,10 +269,11 @@ export default class ArxivDailyPlugin extends Plugin {
     return true;
   }
 
-  private async loadSettingsAndState(): Promise<void> {
+  private async loadSettingsAndState(): Promise<string[]> {
     const loaded = settingsAndStateFromPersistedData(await this.loadData());
     this.legacyRunState = loaded.runState;
     this.settings = loaded.settings;
+    return loaded.warnings;
   }
 
   private async persistSettings(): Promise<void> {

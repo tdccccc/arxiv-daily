@@ -120,6 +120,34 @@ describe("CLI config loader", () => {
     expect(cfg.settings.output.dailyDir).toBe("env-daily");
   });
 
+  it("canonicalizes output directories", async () => {
+    const cfg = await loadCliConfig({
+      cwd: "/workspace",
+      configPath: "config.json",
+      env: {},
+      readText: async () => JSON.stringify({
+        output: { dailyDir: " 研究\\日报 ", papersDir: " 研究\\论文 " },
+      }),
+    });
+    expect(cfg.settings.output.dailyDir).toBe("研究/日报");
+    expect(cfg.settings.output.papersDir).toBe("研究/论文");
+  });
+
+  it.each([
+    { dailyDir: "../escape", papersDir: "papers" },
+    { dailyDir: ".obsidian/cache", papersDir: "papers" },
+    { dailyDir: "CON/reports", papersDir: "papers" },
+    { dailyDir: "same", papersDir: "same" },
+    { dailyDir: "Café/Notes", papersDir: "CAFE\u0301/notes" },
+  ])("rejects unsafe output configuration %#", async (output) => {
+    await expect(loadCliConfig({
+      cwd: "/workspace",
+      configPath: "config.json",
+      env: {},
+      readText: async () => JSON.stringify({ output }),
+    })).rejects.toBeInstanceOf(CliConfigError);
+  });
+
   it("throws typed errors for invalid config", async () => {
     await expect(
       loadCliConfig({

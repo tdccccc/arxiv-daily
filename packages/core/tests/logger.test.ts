@@ -11,13 +11,27 @@ describe("Logger", () => {
     expect(sink).toHaveBeenCalledWith("hello", 1000);
   });
 
-  it("falls back to info logging without a notice sink", () => {
+  it("falls back to buffered info logging without a notice sink", () => {
     const logger = new Logger("info");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     logger.notice("hello");
-    expect(spy).toHaveBeenCalledWith("[arxiv-daily]", "hello");
+    expect(logger.getBuffer().join("\n")).toContain("[INFO] hello");
+    expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  it("keeps the default production console at warn/error while buffering info", () => {
+    const logger = new Logger("info");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    logger.info("operational detail");
+    logger.warn("actionable warning");
+
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[arxiv-daily]", "actionable warning");
+    expect(logger.getBuffer().join("\n")).toContain("[INFO] operational detail");
   });
 
   it("redacts sensitive values from console, notices, errors, and the buffer", () => {

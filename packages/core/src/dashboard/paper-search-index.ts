@@ -1,4 +1,5 @@
 import type { PaperIndexEntry } from "../services/paper-index";
+import { modernArxivResources } from "../utils/arxiv";
 
 export const PAPER_SEARCH_FIELD_WEIGHTS = {
   title: 5,
@@ -61,7 +62,6 @@ const FIELD_LABELS: Record<SearchField, string> = {
 const SEARCH_FIELDS = Object.keys(PAPER_SEARCH_FIELD_WEIGHTS) as SearchField[];
 const HAN_RE = /\p{Script=Han}/u;
 const TOKEN_PART_RE = /[\p{Script=Han}]+|[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*/gu;
-const MODERN_ARXIV_ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/i;
 
 /** Deterministic, locale-independent tokenization for English technical text and Han text. */
 export function tokenizePaperSearchText(value: string): string[] {
@@ -87,19 +87,7 @@ export function tokenizePaperSearchText(value: string): string[] {
 
 /** Extract a canonical modern arXiv ID, stripping prefixes, URL forms, PDF suffixes and versions. */
 export function normalizeArxivSearchId(value: string): string | null {
-  let candidate = value.normalize("NFKC").trim().toLowerCase();
-  candidate = candidate.replace(/^arxiv\s*:\s*/i, "");
-  try {
-    const url = new URL(candidate);
-    if (url.hostname === "arxiv.org" || url.hostname.endsWith(".arxiv.org")) {
-      candidate = url.pathname.replace(/^\/(?:abs|pdf)\//i, "");
-    }
-  } catch {
-    candidate = candidate.replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, "");
-  }
-  candidate = (candidate.split(/[?#]/, 1)[0] ?? "").replace(/\.pdf$/i, "").replace(/^\/+|\/+$/g, "");
-  const match = MODERN_ARXIV_ID_RE.exec(candidate);
-  return match?.[1] ?? null;
+  return modernArxivResources(value)?.id ?? null;
 }
 
 export class PaperSearchIndex {

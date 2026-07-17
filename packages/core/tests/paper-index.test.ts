@@ -76,6 +76,20 @@ describe("derivePaperInboxPaths", () => {
     });
   });
 
+  it("rejects portable collisions at the final derivation boundary", () => {
+    expect(() => derivePaperInboxPaths({
+      dailyDir: "Café/Notes",
+      papersDir: "CAFE\u0301/notes",
+    })).toThrow(/must be different/);
+  });
+
+  it("uses the canonical daily parent when parent paths collide portably", () => {
+    expect(derivePaperInboxPaths({
+      dailyDir: "Café/daily",
+      papersDir: "CAFE\u0301/papers",
+    }).rootDir).toBe("Café");
+  });
+
   it("uses arxiv-daily when output dirs have no parent", () => {
     expect(
       derivePaperInboxPaths({
@@ -94,6 +108,39 @@ describe("PaperIndexStore", () => {
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
     });
+  });
+
+  it("rejects a persisted key/entry arXiv ID mismatch", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-06-11T00:00:00.000Z",
+        papers: {
+          "2606.12345": { arxivId: "2606.54321", title: "mismatch" },
+        },
+      }),
+    });
+    await expect(store.load()).rejects.toThrow(/key\/entry mismatch/);
+  });
+
+  it("ignores persisted arXiv URLs and derives canonical links", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-06-11T00:00:00.000Z",
+        papers: {
+          "2606.12345": {
+            arxivId: "2606.12345v2",
+            title: "safe",
+            arxivUrl: "javascript:alert(1)",
+            pdfUrl: "https://evil.test/file.pdf",
+          },
+        },
+      }),
+    });
+    const entry = (await store.load()).papers["2606.12345"];
+    expect(entry.arxivUrl).toBe("https://arxiv.org/abs/2606.12345");
+    expect(entry.pdfUrl).toBe("https://arxiv.org/pdf/2606.12345");
   });
 
   it("creates papers.json on first upsert", async () => {
@@ -358,6 +405,102 @@ describe("PaperIndexStore", () => {
       detail: false,
       paperPath: null,
     });
+  });
+
+  it("refuses detail removal when the current indexed path mismatches", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+      paperPath: "other/place/2606.12345.md",
+    });
+    let prepared = false;
+
+    const result = await store.removePaperDetailsAtPath(
+      "2606.12345",
+      "arxiv-daily/papers/2606.12345.md",
+      async () => { prepared = true; },
+    );
+
+    expect(result).toEqual({
+      kind: "path_mismatch",
+      actualPath: "other/place/2606.12345.md",
+    });
+    expect(prepared).toBe(false);
+    expect(await store.get("2606.12345")).not.toBeNull();
+  });
+
+  it("uses current daily-report state to clear rather than remove", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+      paperPath: "arxiv-daily/papers/2606.12345.md",
+    });
+    await store.addDailyReports(
+      ["2606.12345"],
+      "arxiv-daily/daily/2026-06-12.md",
+    );
+
+    const result = await store.removePaperDetailsAtPath(
+      "2606.12345",
+      "arxiv-daily/papers/2606.12345.md",
+    );
+
+    expect(result.kind).toBe("cleared");
+    expect(await store.get("2606.12345")).toMatchObject({
+      detail: false,
+      paperPath: null,
+      dailyReports: ["arxiv-daily/daily/2026-06-12.md"],
+    });
+  });
+
+  it("reports an index failure after the pre-mutation action succeeds", async () => {
+    const base = makeStorage();
+    const seed = new PaperIndexStore(base.storage, DEFAULT_SETTINGS.output);
+    await seed.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+      paperPath: "arxiv-daily/papers/2606.12345.md",
+    });
+    let failWrites = true;
+    const failingStorage = {
+      ...base.storage,
+      async writeText(path: string, content: string) {
+        if (failWrites && path.endsWith("papers.json.tmp")) {
+          throw new Error("index write failed");
+        }
+        await base.storage.writeText(path, content);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(failingStorage, DEFAULT_SETTINGS.output);
+    let trashed = false;
+
+    const result = await store.removePaperDetailsAtPath(
+      "2606.12345",
+      "arxiv-daily/papers/2606.12345.md",
+      async () => { trashed = true; },
+    );
+
+    expect(trashed).toBe(true);
+    expect(result).toMatchObject({ kind: "index_failed", action: "removed" });
+    failWrites = false;
+    expect(await store.get("2606.12345")).not.toBeNull();
   });
 
   it("removes paper entries explicitly", async () => {

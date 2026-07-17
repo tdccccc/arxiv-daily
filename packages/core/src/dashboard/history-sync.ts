@@ -1,6 +1,7 @@
 import type { PaperInbox, PaperIndexStore, PaperIndexUpsert } from "../services/paper-index";
 import type { OutputSettings, Topic } from "../settings/types";
 import { looksLikeDetailSummary } from "./detail-summary";
+import { modernArxivResources } from "../utils/arxiv";
 
 export interface DashboardMarkdownFile {
   path: string;
@@ -515,7 +516,7 @@ function stripFrontmatter(markdown: string): string {
 }
 
 function normalizeArxivId(value: string | undefined): string {
-  return /([0-9]{4}\.[0-9]{4,5})(?:v\d+)?/.exec(value ?? "")?.[1] ?? "";
+  return value ? modernArxivResources(value)?.id ?? "" : "";
 }
 
 function basenameWithoutExtension(path: string): string {

@@ -16,22 +16,11 @@ export class RunLock {
   }
 
   async withLock<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
-    if (!this.tryAcquire(key)) {
-      if (typeof console !== "undefined") {
-        console.log(`[arxiv-daily] lock: ${key} already held, skipping`);
-      }
-      return undefined;
-    }
-    if (typeof console !== "undefined") {
-      console.log(`[arxiv-daily] lock: ${key} acquired`);
-    }
+    if (!this.tryAcquire(key)) return undefined;
     try {
       return await fn();
     } finally {
       this.release(key);
-      if (typeof console !== "undefined") {
-        console.log(`[arxiv-daily] lock: ${key} released`);
-      }
     }
   }
 }

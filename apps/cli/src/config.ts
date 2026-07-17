@@ -10,6 +10,8 @@ import type {
 import {
   arxivCategories,
   normalizeCategoryList,
+  validateVaultRelativeDirectory,
+  vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 
 export type { LinkStyle } from "@arxiv-daily/core";
@@ -75,6 +77,20 @@ export async function loadCliConfig(
   settings.output.summaryLanguage = normalizeSummaryLanguageSetting(
     settings.output.summaryLanguage ?? "zh",
   );
+  settings.output.dailyDir = normalizeOutputDirectory(
+    "dailyDir",
+    settings.output.dailyDir,
+  );
+  settings.output.papersDir = normalizeOutputDirectory(
+    "papersDir",
+    settings.output.papersDir,
+  );
+  if (vaultRelativeDirectoriesCollide(
+    settings.output.dailyDir,
+    settings.output.papersDir,
+  )) {
+    throw new CliConfigError("dailyDir and papersDir must be different");
+  }
 
   return {
     settings,
@@ -225,6 +241,14 @@ function applyPartialSettings(
   }
   next.arxiv.category = arxivCategories(next.arxiv)[0] ?? base.arxiv.category;
   return next;
+}
+
+function normalizeOutputDirectory(name: string, value: unknown): string {
+  const result = validateVaultRelativeDirectory(value);
+  if (!result.ok || !result.value) {
+    throw new CliConfigError(`invalid ${name}: ${result.reason}`);
+  }
+  return result.value;
 }
 
 function normalizeLinkStyle(value: string): LinkStyle {

@@ -95,7 +95,11 @@ export class Logger {
   }
   info(msg: string, ...rest: unknown[]) {
     if (this.allowed("info")) {
-      console.log("[arxiv-daily]", this.sanitizeText(msg), ...this.sanitizeRest(rest));
+      // Keep operational detail available in the diagnostics buffer without
+      // flooding the production console at the default info level.
+      if (this.level === "debug") {
+        console.info("[arxiv-daily]", this.sanitizeText(msg), ...this.sanitizeRest(rest));
+      }
       this.push("info", msg, ...rest);
     }
   }

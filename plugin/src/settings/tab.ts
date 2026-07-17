@@ -5,13 +5,36 @@ import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
 import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
 import { slugify } from "@arxiv-daily/core";
-import { validateSchedulerConfig } from "@arxiv-daily/core";
+import {
+  validateSchedulerConfig,
+  validateVaultRelativeDirectory,
+  vaultRelativeDirectoriesCollide,
+} from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
 import { LlmClient, redactText } from "@arxiv-daily/core";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
+
+export function validateOutputDirectoryDraft(
+  draft: string,
+  siblingDirectory?: string,
+) {
+  const validation = validateVaultRelativeDirectory(draft);
+  if (
+    validation.ok &&
+    validation.value &&
+    siblingDirectory &&
+    vaultRelativeDirectoriesCollide(validation.value, siblingDirectory)
+  ) {
+    return {
+      ok: false as const,
+      reason: "Daily and papers directories must be different",
+    };
+  }
+  return validation;
+}
 
 export type ModelFetchNotice =
   | { kind: "success"; count: number }
@@ -108,6 +131,42 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
   }
 
+  private async applyOutputDirectoryDraft(
+    key: "dailyDir" | "papersDir",
+    draft: string,
+    input: HTMLInputElement,
+  ): Promise<void> {
+    const siblingKey = key === "dailyDir" ? "papersDir" : "dailyDir";
+    const validation = validateOutputDirectoryDraft(
+      draft,
+      this.plugin.settings.output[siblingKey],
+    );
+    input.setCustomValidity(validation.ok ? "" : (validation.reason ?? "Invalid path."));
+    input.toggleClass("is-invalid", !validation.ok);
+    if (!validation.ok || !validation.value) return;
+
+    const previous = this.plugin.settings.output[key];
+    if (validation.value === previous) return;
+    this.plugin.settings.output[key] = validation.value;
+    try {
+      await this.plugin.reloadStateStoreForOutputPaths();
+      await this.plugin.saveSettings();
+      input.value = validation.value;
+    } catch (error) {
+      this.plugin.settings.output[key] = previous;
+      input.value = previous;
+      input.setCustomValidity("");
+      input.removeClass("is-invalid");
+      try {
+        await this.plugin.reloadStateStoreForOutputPaths();
+      } catch (rollbackError) {
+        this.plugin.logger.error("settings: failed to restore output stores after rollback", rollbackError);
+      }
+      this.plugin.logger.error(`settings: rejected ${key} after store reload failed`, error);
+      new Notice(`arXiv Daily: output path was not changed: ${(error as Error).message}`, 10_000);
+    }
+  }
+
   display(): void {
     const { containerEl } = this;
     const s = this.plugin.settings;
@@ -174,11 +233,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Model — Get Models button + dropdown
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Click Get Models to fetch available models from API.");
+      .setDesc("Click Get models to fetch available models from API.");
 
-    // Get Models button
+    // Get models button
     const fetchModelsButton = modelSetting.addButton((b) => {
-      b.setButtonText("Get Models");
+      b.setButtonText("Get models");
       b.onClick(async () => {
         b.setButtonText("Fetching…");
         b.setDisabled(true);
@@ -197,13 +256,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             [this.plugin.settings.llm.apiKey],
           ));
         } finally {
-          b.setButtonText("Get Models");
+          b.setButtonText("Get models");
           b.setDisabled(false);
         }
       });
     });
 
-    // Model dropdown (empty by default, populated by Get Models)
+    // Model dropdown (empty by default, populated by Get models)
     modelSetting.addDropdown((d) => {
       d.selectEl.addClass("arxiv-daily-settings__model-select");
       if (s.llm.model) {
@@ -328,7 +387,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Quick start")
       .setDesc("Load a preset bundle of topics or add one manually.")
       .addDropdown((d) => {
-        d.addOption("", "Load Template…");
+        d.addOption("", "Load template…");
         for (const tpl of TOPIC_TEMPLATES) {
           d.addOption(tpl.id, tpl.name);
         }
@@ -360,7 +419,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       })
       .addButton((b) => {
-        b.setButtonText("+ Add Topic").onClick(async () => {
+        b.setButtonText("+ Add topic").onClick(async () => {
           const newId = crypto.randomUUID();
           s.arxiv.topics.push({
             id: newId,
@@ -382,7 +441,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createEl("div", {
-        text: "Pick a template above or click + Add Topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
+        text: "Pick a template above or click + Add topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
       });
     }
     for (let i = 0; i < s.arxiv.topics.length; i++) {
@@ -428,24 +487,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Daily path")
       .setDesc("Relative path in vault")
-      .addText((t) =>
-        t.setValue(s.output.dailyDir).onChange(async (v) => {
-          s.output.dailyDir = v.trim();
-          await this.plugin.saveSettings();
-          await this.plugin.reloadStateStoreForOutputPaths();
-        }),
-      );
+      .addText((t) => {
+        t.setValue(s.output.dailyDir);
+        t.inputEl.addEventListener("input", () => {
+          const validation = validateOutputDirectoryDraft(t.inputEl.value);
+          t.inputEl.setCustomValidity(validation.ok ? "" : (validation.reason ?? "Invalid path."));
+          t.inputEl.toggleClass("is-invalid", !validation.ok);
+        });
+        t.inputEl.addEventListener("change", () => {
+          void this.applyOutputDirectoryDraft("dailyDir", t.inputEl.value, t.inputEl);
+        });
+      });
 
     new Setting(containerEl)
       .setName("Papers path")
       .setDesc("Relative path in vault")
-      .addText((t) =>
-        t.setValue(s.output.papersDir).onChange(async (v) => {
-          s.output.papersDir = v.trim();
-          await this.plugin.saveSettings();
-          await this.plugin.reloadStateStoreForOutputPaths();
-        }),
-      );
+      .addText((t) => {
+        t.setValue(s.output.papersDir);
+        t.inputEl.addEventListener("input", () => {
+          const validation = validateOutputDirectoryDraft(t.inputEl.value);
+          t.inputEl.setCustomValidity(validation.ok ? "" : (validation.reason ?? "Invalid path."));
+          t.inputEl.toggleClass("is-invalid", !validation.ok);
+        });
+        t.inputEl.addEventListener("change", () => {
+          void this.applyOutputDirectoryDraft("papersDir", t.inputEl.value, t.inputEl);
+        });
+      });
 
     new Setting(containerEl)
       .setName("Link style")
@@ -648,7 +715,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     header.createEl("div", {
       cls: "arxiv-daily-setup__title",
-      text: "Getting Started",
+      text: "Getting started",
     });
     header.createEl("div", {
       cls: "arxiv-daily-setup__subtitle",
@@ -700,7 +767,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       cls: "arxiv-daily-setup__actions",
     });
     const run = actions.createEl("button", {
-      text: "Run Today",
+      text: "Run today",
       attr: { type: "button" },
     }) as HTMLButtonElement;
     run.disabled = !status.readyToRun;
@@ -709,7 +776,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
 
     const dashboard = actions.createEl("button", {
-      text: "Open Dashboard",
+      text: "Open dashboard",
       attr: { type: "button" },
     });
     dashboard.addEventListener("click", () => {
@@ -1029,8 +1096,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const select = modelSetting.querySelector("select") as HTMLSelectElement;
     if (!select) return;
 
-    // Clear existing options
-    select.innerHTML = "";
+    // Clear existing options without parsing HTML.
+    select.replaceChildren();
 
     // Add new options
     for (const model of models) {

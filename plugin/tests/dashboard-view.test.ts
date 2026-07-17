@@ -6,8 +6,10 @@ import {
   applyStarButtonState,
   collectIndexedDetailSummaryRefs,
   executeObsidianCommand,
+  expectedDetailSummaryPath,
   filterDashboardMarkdownFiles,
   formatLogEntries,
+  isExpectedGeneratedDetailSummary,
   openDashboardView,
   openMarkdownFileOnce,
   paginateDashboardRows,
@@ -318,6 +320,79 @@ describe("dashboard pane responsiveness", () => {
     expect(pluginStyles).toContain("container-type: inline-size");
     expect(pluginStyles).toContain("@container arxiv-daily-dashboard (max-width: 920px)");
     expect(pluginStyles).toContain("@container arxiv-daily-dashboard (max-width: 520px)");
+  });
+});
+
+describe("detail-summary deletion boundaries", () => {
+  const generated = [
+    "---",
+    'arxiv_id: "2606.12345v2"',
+    "---",
+    "# Verified paper",
+    "",
+    "- **arXiv**: [2606.12345v2](https://arxiv.org/abs/2606.12345v2)",
+    "",
+    "## Research question",
+    "A".repeat(150),
+    "## Method",
+    "B".repeat(150),
+    "## Evidence",
+    "C".repeat(150),
+    "## Limitations",
+    "D".repeat(150),
+  ].join("\n");
+
+  it("derives only the canonical configured papers path", () => {
+    expect(expectedDetailSummaryPath("arxiv/papers", "2606.12345v7")).toBe(
+      "arxiv/papers/2606.12345.md",
+    );
+    expect(expectedDetailSummaryPath("/arxiv/papers", "2606.12345")).toBeNull();
+    expect(expectedDetailSummaryPath("arxiv/papers", "../../notes")).toBeNull();
+  });
+
+  it("requires generated detail content with exact matching frontmatter arxiv_id", () => {
+    expect(isExpectedGeneratedDetailSummary(generated, "2606.12345")).toBe(true);
+    expect(isExpectedGeneratedDetailSummary(generated, "2606.54321")).toBe(false);
+    const spoofedBodyUrl = generated
+      .replace(/^---[\s\S]*?---\n/, "")
+      .replace("# Verified paper", "# https://arxiv.org/abs/2606.12345");
+    expect(isExpectedGeneratedDetailSummary(spoofedBodyUrl, "2606.12345")).toBe(false);
+    expect(
+      isExpectedGeneratedDetailSummary(
+        generated.replace(
+          'arxiv_id: "2606.12345v2"',
+          'arxiv_id: "https://arxiv.org/abs/2606.12345"',
+        ),
+        "2606.12345",
+      ),
+    ).toBe(false);
+    expect(
+      isExpectedGeneratedDetailSummary(
+        "---\narxiv_id: '2606.12345'\n---\n# Paper\n\nToo short",
+        "2606.12345",
+      ),
+    ).toBe(false);
+  });
+
+  it("requires the indexed path to equal the expected configured path", () => {
+    const deletionBody = dashboardViewSource.match(
+      /private async runBatchDeleteSummary\(\)[\s\S]*?\n  private async runBatchAction/,
+    )?.[0];
+    expect(deletionBody).toContain("this.hasDeletableDetailSummary(entry)");
+    expect(deletionBody).toContain("removePaperDetailsAtPath(");
+    expect(deletionBody).not.toContain("this.detailSummaryPaths.get");
+  });
+
+  it("uses Vault trash and never adapter removal in batch deletion", () => {
+    const deletionBody = dashboardViewSource.match(
+      /private async runBatchDeleteSummary\(\)[\s\S]*?\n  private async runBatchAction/,
+    )?.[0];
+    expect(deletionBody).toBeDefined();
+    expect(deletionBody).toContain("vault.read(abstractFile)");
+    expect(deletionBody).toContain("vault.trash(abstractFile, true)");
+    expect(deletionBody).toContain("trashed but index update failed");
+    expect(deletionBody).toContain("this.lastSyncedDailyPaths = null");
+    expect(deletionBody).not.toContain("adapter.remove");
   });
 });
 

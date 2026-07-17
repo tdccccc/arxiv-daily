@@ -9,6 +9,10 @@ export function normalizePath(p: string): string {
 
 export function setIcon(_parent: HTMLElement, _iconId: string): void {}
 
+export class TFile {
+  constructor(readonly path: string = "") {}
+}
+
 export interface Vault {
   adapter: {
     read(path: string): Promise<string>;

@@ -12,6 +12,8 @@ import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
 import { parseAtomPapers, type AtomPaperMeta } from "../pipeline/atom-parser";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import { isCancellationError, throwIfCancelled } from "./cancellation";
+import { modernArxivResources } from "../utils/arxiv";
+import { validateVaultRelativeDirectory } from "../settings/validation";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
@@ -36,20 +38,9 @@ export interface ManualFetchDeps {
   progress?: ProgressReporter;
 }
 
-const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/;
-
 /** Normalize various user inputs (URL, "arXiv:xxx", plain id with/without version) into a base id. */
 export function normalizeArxivId(input: string): string | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  // Strip URL prefix
-  const stripped = trimmed
-    .replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf|html)\//i, "")
-    .replace(/^arxiv:\s*/i, "")
-    .replace(/\.pdf$/i, "")
-    .trim();
-  const m = ID_RE.exec(stripped);
-  return m?.[1] ?? null;
+  return modernArxivResources(input)?.id ?? null;
 }
 
 export class ManualFetchService {
@@ -73,7 +64,11 @@ export class ManualFetchService {
     this.progress.setStage("fetch-metadata");
 
     // 1. Duplicate check
-    const targetPath = storage.normalizePath(`${output.papersDir}/${id}.md`);
+    const papersDir = validateVaultRelativeDirectory(output.papersDir);
+    if (!papersDir.ok || !papersDir.value) {
+      return { kind: "error", reason: `invalid papersDir: ${papersDir.reason}` };
+    }
+    const targetPath = storage.normalizePath(`${papersDir.value}/${id}.md`);
     let replaceEmptyExistingNote = false;
     if (await storage.exists(targetPath)) {
       const existing = await storage.readText(targetPath).catch((e) => {
