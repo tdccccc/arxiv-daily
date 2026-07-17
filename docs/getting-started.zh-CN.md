@@ -11,7 +11,7 @@
 - 一个或多个 arXiv 分类，例如 `astro-ph`、`cs.LG`、`hep-th`。
 - 你希望跟踪的研究主题描述。
 
-arXiv Daily 会把生成内容写入你的 vault。为保持兼容，API key 以明文保存在插件本地 `data.json`，不是 keyring 或加密存储。保存后设置页只显示 **Configured**，修改或删除需显式使用 **Replace** / **Clear**；日志、诊断和展示给用户的错误会做脱敏。
+arXiv Daily 会把生成内容写入你的 vault。为保持兼容，API key 以明文保存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/data.json`，不是 keyring 或加密存储；vault 同步或备份工具可能复制该文件。保存后设置页只显示 **Configured**，修改或删除需显式使用 **Replace** / **Clear**；日志、诊断和展示给用户的错误会做脱敏。抓取的 source 内容会按设置的保留时间（默认 7 天）缓存在相邻的 `.cache/` 目录；如需清除，请先禁用插件再删除该目录。
 
 ## 1. 打开插件设置
 

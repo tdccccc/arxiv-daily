@@ -11,7 +11,7 @@ You need:
 - One or more arXiv categories, such as `astro-ph`, `cs.LG`, or `hep-th`.
 - A short description of the research topics you want to track.
 
-arXiv Daily stores generated files in your vault. API keys are saved as plaintext in the plugin's local `data.json` for compatibility; this is not keyring or encrypted storage. After saving, Settings shows only **Configured**, with explicit **Replace** and **Clear** actions. Logs, diagnostics, and presented errors are redacted.
+arXiv Daily stores generated files in your vault. API keys are saved as plaintext in `<your-vault>/.obsidian/plugins/arxiv-daily/data.json` for compatibility; this is not keyring or encrypted storage, and vault sync/backup tools may copy it. After saving, Settings shows only **Configured**, with explicit **Replace** and **Clear** actions. Logs, diagnostics, and presented errors are redacted. Fetched source content is cached locally under the adjacent `.cache/` directory for the configured retention period (seven days by default); disable the plugin and delete that directory to clear it.
 
 ## 1. Open The Plugin Settings
 

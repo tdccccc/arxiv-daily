@@ -3,7 +3,7 @@
 Native TypeScript Obsidian plugin. Replaces `arxiv_daily.py` with an
 in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 
-## Features (v0.1.11)
+## Features
 
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
@@ -63,8 +63,11 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   listing missing required fields.
 - **Secret-safe settings and output** — a saved API key renders only as
   `Configured`, with explicit Replace and Clear actions. The compatible
-  `llm.apiKey` value remains plaintext in local plugin `data.json`; there is no
-  keyring or encryption. Logs, diagnostics, and presented errors are redacted.
+  `llm.apiKey` value remains plaintext in
+  `<vault>/.obsidian/plugins/arxiv-daily/data.json`; vault sync/backup tools may
+  copy it, and there is no keyring or encryption. Fetched source content is
+  cached in the adjacent `.cache/` directory for the configured retention
+  period. Logs, diagnostics, and presented errors are redacted.
 - **Generation metrics** — generated daily and detail Markdown ends with a
   folded callout reporting pipeline elapsed time when available, LLM elapsed
   time, logical calls, HTTP attempts, and provider-reported tokens. Missing or
@@ -104,9 +107,10 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 ### Option B — manual install
 
 1. Download `manifest.json`, `main.js`, and `styles.css` from the
-   [latest release](https://github.com/tdccccc/arxiv-daily/releases).
-2. Drop them into `<vault>/.obsidian/plugins/arxiv-daily/`.
-3. Enable the plugin in Obsidian.
+   [latest release](https://github.com/tdccccc/arxiv-daily/releases/latest).
+2. Create `<your-vault>/.obsidian/plugins/arxiv-daily/` if needed and put the
+   three files directly inside it, with no nested release/repository folder.
+3. Restart Obsidian and enable the plugin under **Settings → Community plugins**.
 
 ### Option C — build from source
 

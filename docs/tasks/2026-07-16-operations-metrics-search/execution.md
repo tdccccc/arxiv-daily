@@ -76,7 +76,7 @@ None recorded.
 
 ## Validation
 
-Phase 1/2 validation only (full project validation remains pending):
+Phase 1/2 validation:
 
 - Core full suite: 46 files, 395 tests passed.
 - Focused Core safety/metrics/parser/writer/pipeline/manual-fetch suite: 9 files, 78 tests passed; final safety/metrics subset: 6 files, 42 tests passed.
@@ -102,7 +102,7 @@ Phase 4 validation:
 - All workspace TypeScript checks and `check:boundaries` passed.
 - `git diff --check` passed; no generated bundle or VS Code files changed.
 
-Integration-review fix validation (Phase 5 completion remains intentionally unchecked):
+Integration-review fix validation:
 
 - Focused Core scheduler/pipeline/manual-fetch/recent-dates/writer suite: 5 files, 117 tests passed; final pipeline/recent-dates rerun: 2 files, 34 tests passed.
 - Focused Similar Papers modal suite: 1 file, 3 tests passed.

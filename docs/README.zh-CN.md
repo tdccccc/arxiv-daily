@@ -97,13 +97,16 @@ tdccccc/arxiv-daily
 
 https://github.com/tdccccc/arxiv-daily/releases/latest
 
-放到：
+在 vault 中创建隐藏的插件目录（若尚不存在），并把三个文件直接放入该目录：
 
 ```text
-<vault>/.obsidian/plugins/arxiv-daily/
+<你的-vault>/.obsidian/plugins/arxiv-daily/
+  manifest.json
+  main.js
+  styles.css
 ```
 
-然后重启 Obsidian 并启用 **arXiv Daily**。
+不要保留额外的 release 或仓库子目录。重启 Obsidian，然后在 **Settings → Community plugins** 中启用 **arXiv Daily**。
 
 ## 快速开始
 
@@ -154,14 +157,15 @@ arXiv Daily 只为抓取和总结论文访问必要服务。
 
 - 访问 `arxiv.org` 和 `export.arxiv.org`，用于获取论文列表、摘要、HTML 页面和用户手动下载的 PDF。
 - 访问你在设置中配置的 LLM provider endpoint。发送内容可能包括论文标题、作者、摘要和用于筛选/总结的正文片段。
-- 已保存的 API key 在设置页只显示 **Configured**；修改或删除必须显式使用 **Replace** / **Clear**。为保持兼容，key 仍以明文保存在插件本地 `data.json`，不宣称使用 keyring 或加密；日志、诊断和展示给用户的错误会做脱敏。
-- 插件不包含客户端 telemetry。
-- 插件不会把 vault 内容发送到 arXiv 和你配置的 LLM provider 之外的服务。
-- 默认只在 vault 内的 `arxiv-daily/` 路径写入生成内容。
+- 已保存的 API key 在设置页只显示 **Configured**；修改或删除必须显式使用 **Replace** / **Clear**。为保持兼容，key 仍以明文保存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/data.json`；Obsidian Sync 或其他 vault 备份可能复制该文件。这里不使用 keyring，也不提供加密存储。请限制 vault 及备份的访问权限，并用 **Clear** 删除已保存的 key。日志、诊断和展示给用户的错误会做脱敏。
+- 抓取的 arXiv HTML/source 内容会缓存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/.cache/`，保留时间由设置决定（默认 7 天）。要清除缓存，请先禁用插件再删除该目录；后续使用时会自动重建。
+- CLI 从 `ARXIV_DAILY_API_KEY` 或用户提供的配置文件读取 key；抓取缓存默认位于当前工作目录下的 `.arxiv-daily/cache/`，可用 `--cache-dir` 或 `ARXIV_DAILY_CACHE_DIR` 修改。请按运行环境保护或删除这些本地文件。
+- 插件不包含客户端 telemetry，也不会把 vault 内容发送到 arXiv 和你配置的 LLM provider 之外的服务。
+- 日报、论文笔记、PDF、索引和运行状态默认写入 vault 内的 `arxiv-daily/`；修改输出配置后实际位置也会变化。
 
 ## CLI 简要说明
 
-Node CLI 可用于 cron 或服务器工作流，但它不是主入口。
+Node CLI 可用于 cron 或服务器工作流，但它不是主入口；需要 Node.js 20.11.0 或更高版本。
 
 ```bash
 # 在仓库根目录执行

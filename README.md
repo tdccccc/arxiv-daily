@@ -99,13 +99,16 @@ arXiv Daily is desktop-only.
 
 ### Manual Install
 
-Download `manifest.json`, `main.js`, and `styles.css` from the [latest release](https://github.com/tdccccc/arxiv-daily/releases/latest) and place them in:
+Download `manifest.json`, `main.js`, and `styles.css` from the [latest release](https://github.com/tdccccc/arxiv-daily/releases/latest). In your vault, create the hidden plugin directory if needed and place all three files directly in it:
 
 ```text
-<vault>/.obsidian/plugins/arxiv-daily/
+<your-vault>/.obsidian/plugins/arxiv-daily/
+  manifest.json
+  main.js
+  styles.css
 ```
 
-Then restart Obsidian and enable **arXiv Daily**.
+Do not leave the files inside a nested release or repository folder. Restart Obsidian, then enable **arXiv Daily** under **Settings → Community plugins**.
 
 ## Commands
 
@@ -125,13 +128,14 @@ Then restart Obsidian and enable **arXiv Daily**.
 
 - Connects to `arxiv.org` and `export.arxiv.org` to fetch listings, abstracts, and PDFs.
 - Connects to your configured LLM provider. Sent content includes paper titles, abstracts, and selected text snippets needed for filtering and summarization.
-- A saved API key is displayed only as **Configured** in Settings; use explicit **Replace** or **Clear** actions to change it. The key remains plaintext in the plugin's local `data.json` for compatibility—there is no keyring or encryption claim. Logs, diagnostics, and presented errors are redacted.
-- No client-side telemetry.
-- Generated files are written only under `arxiv-daily/` in your vault.
+- A saved API key is displayed only as **Configured** in Settings; use explicit **Replace** or **Clear** actions to change it. The key remains plaintext in `<your-vault>/.obsidian/plugins/arxiv-daily/data.json` for compatibility—Obsidian Sync or another vault backup may copy that file. There is no keyring or encryption claim. Restrict access to the vault and its backups, and use **Clear** to remove the saved key. Logs, diagnostics, and presented errors are redacted.
+- Fetched arXiv HTML/source content is cached in `<your-vault>/.obsidian/plugins/arxiv-daily/.cache/` for the configured retention period (seven days by default). Delete that directory while the plugin is disabled to clear it; it will be recreated as needed.
+- The CLI reads its key from `ARXIV_DAILY_API_KEY` or a user-supplied config file and caches fetched content in `.arxiv-daily/cache/` relative to the working directory unless `--cache-dir` or `ARXIV_DAILY_CACHE_DIR` overrides it. Protect or delete those local files according to your environment.
+- No client-side telemetry. Generated reports, paper notes, PDFs, indexes, and run state are written under `arxiv-daily/` in the vault by default; configured output paths may change that location.
 
 ## CLI Usage
 
-The Node CLI is available for cron or server workflows.
+The Node CLI is available for cron or server workflows and requires Node.js 20.11.0 or newer.
 
 ```bash
 npm ci
@@ -165,8 +169,8 @@ For a release, synchronize every workspace package, internal dependency spec,
 Obsidian manifest/version map, and lockfile before validating the release:
 
 ```bash
-npm run sync:release-version -- 0.2.2
-npm run check:release-version -- 0.2.2
+npm run sync:release-version -- 0.3.0
+npm run check:release-version -- 0.3.0
 ```
 
 Review the generated diff before committing. The sync command only updates
@@ -179,4 +183,4 @@ no protocol or daemon layer.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE). Bundled dependency notices are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

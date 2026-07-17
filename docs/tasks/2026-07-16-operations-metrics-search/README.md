@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress on `feat/operations-metrics-search`.
+Completed and merged into the release preparation baseline.
 
 ## Context
 
