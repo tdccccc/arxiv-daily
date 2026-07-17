@@ -1,12 +1,26 @@
 {
   "name": "obsidian-arxiv-daily",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
+  "description": "Obsidian host and user interface for arXiv Daily",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdccccc/arxiv-daily.git",
+    "directory": "plugin"
+  },
+  "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
+  "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts"
   },
-  "dependencies": { "@arxiv-daily/core": "0.2.1" }
+  "dependencies": {
+    "@arxiv-daily/core": "0.3.0"
+  }
 }

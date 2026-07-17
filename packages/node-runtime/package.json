@@ -1,15 +1,29 @@
 {
   "name": "@arxiv-daily/node-runtime",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
+  "description": "Node host adapters for the arXiv Daily core",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdccccc/arxiv-daily.git",
+    "directory": "packages/node-runtime"
+  },
+  "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
+  "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.2.1",
+    "@arxiv-daily/core": "0.3.0",
     "linkedom": "^0.18.12"
   }
 }

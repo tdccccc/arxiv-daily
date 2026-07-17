@@ -1,7 +1,9 @@
 import esbuild from "esbuild";
 import { resolve } from "node:path";
+import { noticeBanner, readPakoNotice } from "../scripts/release-utils.mjs";
 
 const prod = process.argv[2] === "production";
+const thirdPartyBanner = noticeBanner(await readPakoNotice());
 const options = {
   entryPoints: [resolve(import.meta.dirname, "main.ts")],
   outfile: resolve(import.meta.dirname, "main.js"),
@@ -15,6 +17,8 @@ const options = {
   treeShaking: true,
   minify: prod,
   loader: { ".md": "text" },
+  banner: { js: thirdPartyBanner },
+  legalComments: "inline",
 };
 
 if (prod) await esbuild.build(options);

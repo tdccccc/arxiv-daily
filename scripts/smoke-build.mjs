@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { noticeBanner, readPakoNotice } from "./release-utils.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const cli = resolve(root, "apps/cli/dist/arxiv-daily-cli.cjs");
@@ -33,6 +34,22 @@ try {
   }
 } finally {
   await rm(temp, { recursive: true, force: true });
+}
+
+const expectedNotice = noticeBanner(await readPakoNotice());
+for (const path of [pluginBundle, cli, pluginCli]) {
+  const built = await readFile(path, "utf8");
+  const count = built.split(expectedNotice).length - 1;
+  if (count !== 1) {
+    throw new Error(`${path} must contain exactly one complete locked pako notice; found ${count}`);
+  }
+  for (const required of [
+    "Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn",
+    "The above copyright notice and this permission notice shall be included in",
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN",
+  ]) {
+    if (!built.includes(required)) throw new Error(`${path} contains a truncated pako notice`);
+  }
 }
 
 const bundle = await readFile(pluginBundle, "utf8");

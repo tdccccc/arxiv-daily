@@ -1,16 +1,30 @@
 {
   "name": "@arxiv-daily/cli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
+  "description": "Node CLI for arXiv Daily discovery and summarization workflows",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdccccc/arxiv-daily.git",
+    "directory": "apps/cli"
+  },
+  "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
+  "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "type": "module",
-  "bin": { "arxiv-daily": "./dist/arxiv-daily-cli.cjs" },
+  "bin": {
+    "arxiv-daily": "./dist/arxiv-daily-cli.cjs"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts",
     "build": "node esbuild.config.mjs"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.2.1",
-    "@arxiv-daily/node-runtime": "0.2.1"
+    "@arxiv-daily/core": "0.3.0",
+    "@arxiv-daily/node-runtime": "0.3.0"
   }
 }

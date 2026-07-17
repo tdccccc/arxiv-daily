@@ -1,7 +1,18 @@
 {
   "name": "arxiv-daily-workspace",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
+  "description": "Workspace for the arXiv Daily Obsidian plugin and Node CLI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdccccc/arxiv-daily.git"
+  },
+  "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
+  "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "workspaces": [
     "packages/*",
     "apps/*",
@@ -13,6 +24,7 @@
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "smoke:build": "node scripts/smoke-build.mjs",
+    "test:release-tools": "node --test scripts/tests/*.test.mjs",
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
