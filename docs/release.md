@@ -1,6 +1,6 @@
 # Release checklist
 
-Pushing a stable SemVer tag such as `0.3.0` runs
+Pushing a stable SemVer tag such as `0.3.1` runs
 `.github/workflows/release.yml`. Tags must not have a `v` prefix, prerelease
 suffix, or build metadata. The workflow is serialized per tag, refuses to
 replace an existing GitHub release, uploads without `--clobber`, and uses the
@@ -21,7 +21,7 @@ Use Node.js 20.11.0 or newer from a clean checkout. Create the curated notes
 before tagging, then synchronize metadata with the repository tool:
 
 ```bash
-export VERSION=0.3.0
+export VERSION=0.3.1
 npm ci
 npm run sync:release-version -- "$VERSION"
 npm run check:release-version -- "$VERSION"

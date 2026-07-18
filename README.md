@@ -187,8 +187,8 @@ For a release, synchronize every workspace package, internal dependency spec,
 Obsidian manifest/version map, and lockfile before validating the release:
 
 ```bash
-npm run sync:release-version -- 0.3.0
-npm run check:release-version -- 0.3.0
+npm run sync:release-version -- 0.3.1
+npm run check:release-version -- 0.3.1
 ```
 
 Review the generated diff before committing. The sync command only updates

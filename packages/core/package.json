@@ -1,6 +1,6 @@
 {
   "name": "@arxiv-daily/core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Host-neutral business core for arXiv Daily",
   "license": "MIT",

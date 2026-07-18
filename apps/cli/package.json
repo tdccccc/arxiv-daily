@@ -1,6 +1,6 @@
 {
   "name": "@arxiv-daily/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Node CLI for arXiv Daily discovery and summarization workflows",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "build": "node esbuild.config.mjs"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.3.0",
-    "@arxiv-daily/node-runtime": "0.3.0"
+    "@arxiv-daily/core": "0.3.1",
+    "@arxiv-daily/node-runtime": "0.3.1"
   }
 }
