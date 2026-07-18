@@ -270,6 +270,17 @@ describe("dashboard star controls", () => {
 });
 
 describe("dashboard render regressions", () => {
+  it("points missing configuration to the Settings onboarding steps", () => {
+    expect(dashboardViewSource).toContain('text: "Finish setup in Settings"');
+    expect(dashboardViewSource).toContain(
+      'text: "Connect AI, choose paper sources, and describe your research interests, then generate your first report."',
+    );
+    expect(dashboardViewSource).toContain('"Open Settings"');
+    expect(dashboardViewSource).not.toContain(
+      "Add your LLM settings and at least one research topic",
+    );
+  });
+
   it("guards overlapping calendar month refreshes with a sequence token", () => {
     expect(dashboardViewSource).toContain("calendarRefreshSeq");
     expect(dashboardViewSource).toContain("refreshCalendarMonth");

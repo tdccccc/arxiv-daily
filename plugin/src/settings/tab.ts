@@ -1,26 +1,23 @@
 import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
-  DETAIL_SELECTION_PRESETS,
-  PROVIDER_PRESETS,
+  describeResult,
   detailSelectionPreset,
-  sanitizeDetailSelection,
-  type DetailSelectionSettings,
+  formatDate,
+  todayInTz,
   type LogLevel,
-  type ProviderPreset,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
 import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
 import { slugify } from "@arxiv-daily/core";
 import {
-  validateSchedulerConfig,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
-import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
+import { openDashboardView } from "../dashboard/view";
 import { LlmClient, redactText } from "@arxiv-daily/core";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
@@ -228,19 +225,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     containerEl.addClass("arxiv-daily-settings");
 
     this.renderSetupGuide(containerEl);
-
-    // ─── Config-invalid banner (top) ─────────────────
-    const v = validateSchedulerConfig(s);
-    if (!v.ok) {
-      const banner = containerEl.createDiv({
-        cls: "arxiv-daily-settings__invalid-banner",
-      });
-      banner.createEl("strong", { text: "Configuration incomplete" });
-      const ul = banner.createEl("ul", {
-        cls: "arxiv-daily-settings__invalid-list",
-      });
-      for (const r of v.reasons) ul.createEl("li", { text: r });
-    }
 
     // ─── Enable toggle (top) ─────────────────────────
     new Setting(containerEl)
@@ -503,46 +487,28 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl)
-      .setName("Automatic deep-dive selection")
+      .setName("Automatic detail notes")
       .setDesc(
-        "Topic Detail report checkboxes enable eligibility. This global policy controls automatic selection only; manual summarize is unaffected.",
+        "Choose how selective automatic detail-note creation should be. Only topics with Detail report enabled are eligible. Manual summaries are unaffected.",
       )
       .addDropdown((d) => {
-        d.addOption("conservative", "Conservative")
-          .addOption("balanced", "Balanced")
-          .addOption("broad", "Broad")
-          .addOption("custom", "Custom")
-          .setValue(s.detailSelection.profile)
-          .onChange(async (profile) => {
-            s.detailSelection = profile === "custom"
-              ? sanitizeDetailSelection({ ...s.detailSelection, profile })
-              : detailSelectionPreset(profile as keyof typeof DETAIL_SELECTION_PRESETS);
-            await this.plugin.saveSettings();
-            this.display();
-          });
+        d.addOption("conservative", "Fewer")
+          .addOption("balanced", "Recommended")
+          .addOption("broad", "More");
+        if (s.detailSelection.profile === "custom") {
+          d.addOption("custom", "Custom (current values)");
+        }
+        d.setValue(s.detailSelection.profile).onChange(async (profile) => {
+          if (
+            profile !== "conservative" &&
+            profile !== "balanced" &&
+            profile !== "broad"
+          ) return;
+          s.detailSelection = detailSelectionPreset(profile);
+          await this.plugin.saveSettings();
+          this.display();
+        });
       });
-
-    this.renderDetailSelectionNumber(
-      containerEl,
-      "Normal threshold",
-      "Minimum score for normal automatic selection (0–100).",
-      "normalThreshold",
-      100,
-    );
-    this.renderDetailSelectionNumber(
-      containerEl,
-      "Exceptional threshold",
-      "Score that permits selection beyond the soft limit (0–100).",
-      "exceptionalThreshold",
-      100,
-    );
-    this.renderDetailSelectionNumber(
-      containerEl,
-      "Soft limit",
-      "Preferred maximum automatic deep dives per run (0–20).",
-      "softLimit",
-      20,
-    );
 
     new Setting(containerEl)
       .setName("Timezone")
@@ -691,40 +657,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
-  private renderDetailSelectionNumber(
-    containerEl: HTMLElement,
-    name: string,
-    description: string,
-    key: keyof Pick<
-      DetailSelectionSettings,
-      "normalThreshold" | "exceptionalThreshold" | "softLimit"
-    >,
-    max: number,
-  ): void {
-    new Setting(containerEl)
-      .setName(name)
-      .setDesc(description)
-      .addText((t) => {
-        t.inputEl.type = "number";
-        t.inputEl.min = "0";
-        t.inputEl.max = String(max);
-        t.inputEl.step = key === "softLimit" ? "1" : "any";
-        t.inputEl.addClass("arxiv-daily-settings__detail-selection-number");
-        t.setValue(String(this.plugin.settings.detailSelection[key]));
-        t.inputEl.addEventListener("change", () => {
-          const current = this.plugin.settings.detailSelection;
-          const next = sanitizeDetailSelection({
-            ...current,
-            profile: "custom",
-            [key]: Number(t.inputEl.value),
-          });
-          this.plugin.settings.detailSelection = next;
-          t.inputEl.value = String(next[key]);
-          this.runAction("save detail selection", () => this.plugin.saveSettings());
-        });
-      });
-  }
-
   private renderApiKeySetting(containerEl: HTMLElement): void {
     const configured = Boolean(this.plugin.settings.llm.apiKey.trim());
     const setting = new Setting(containerEl)
@@ -841,79 +773,171 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private createSetupGuide(): HTMLElement | null {
-    const status = getSetupStatus(this.plugin.settings);
-    if (!shouldRenderSetupGuide(status)) return null;
-
+  private createSetupGuide(): HTMLElement {
+    const status = getSetupStatus(
+      this.plugin.settings,
+      this.plugin.stateStore.snapshot(),
+    );
     const guide = this.containerEl.createEl("section", {
       cls: "arxiv-daily-setup",
+      attr: { "aria-labelledby": "arxiv-daily-setup-title" },
     });
     guide.detach();
-    const header = guide.createEl("div", {
+
+    if (!shouldRenderSetupGuide(status)) {
+      guide.addClass("arxiv-daily-setup--complete");
+      const summary = guide.createDiv({
+        cls: "arxiv-daily-setup__complete-summary",
+      });
+      summary.createDiv({
+        cls: "arxiv-daily-setup__title",
+        text: "Setup complete",
+        attr: {
+          id: "arxiv-daily-setup-title",
+          role: "heading",
+          "aria-level": "2",
+        },
+      });
+      summary.createDiv({
+        cls: "arxiv-daily-setup__complete-date",
+        text: `Latest completed report: ${status.latestCompletedReportDate ?? "Unknown"}`,
+      });
+      this.renderConfigurationDetails(guide, status.schedulerReasons);
+      this.renderDashboardAction(guide);
+      return guide;
+    }
+
+    const header = guide.createDiv({
       cls: "arxiv-daily-setup__header",
     });
-    header.createEl("div", {
+    header.createDiv({
       cls: "arxiv-daily-setup__title",
       text: "Getting started",
+      attr: {
+        id: "arxiv-daily-setup-title",
+        role: "heading",
+        "aria-level": "2",
+      },
     });
-    header.createEl("div", {
-      cls: "arxiv-daily-setup__subtitle",
-      text: "Complete these items before the first run.",
+    const completedCount = [
+      status.llmReady,
+      status.categoriesReady,
+      status.topicsReady,
+      status.firstReportComplete,
+    ].filter(Boolean).length;
+    header.createDiv({
+      cls: "arxiv-daily-setup__progress-summary",
+      text: `${completedCount} of 4 complete`,
+      attr: { "aria-live": "polite" },
     });
+    const progress = guide.createEl("progress", {
+      cls: "arxiv-daily-setup__progress",
+      attr: {
+        max: "4",
+        value: String(completedCount),
+        "aria-label": "Setup progress",
+      },
+    });
+    progress.setAttribute("value", String(completedCount));
 
-    const list = guide.createEl("div", {
+    const list = guide.createEl("ol", {
       cls: "arxiv-daily-setup__list",
     });
     this.renderSetupItem(
       list,
       status.llmReady,
-      "LLM API key, base URL, and model",
-      "Configure LLM",
+      "Connect AI",
+      "Add an API key, base URL, and model in the existing LLM settings.",
+      "Connect AI",
       () => this.scrollToSection("llm"),
     );
     this.renderSetupItem(
       list,
       status.categoriesReady,
-      "At least one arXiv category",
-      "Choose categories",
+      "Choose paper sources",
+      "Select at least one arXiv category in the existing arXiv settings.",
+      "Choose sources",
       () => this.scrollToSection("arxiv"),
     );
     this.renderSetupItem(
       list,
       status.topicsReady,
-      "At least one complete research topic",
-      "Set topics",
+      "Describe your research interests",
+      "Add at least one complete research topic using the existing topic form.",
+      "Describe interests",
       () => this.scrollToSection("topics"),
     );
     this.renderSetupItem(
       list,
-      status.readyToRun,
-      "Ready to run",
-      "Review missing items",
-      () => this.scrollToFirstMissingSection(status),
+      status.firstReportComplete,
+      "Generate your first report",
+      status.readyToRun
+        ? "Your configuration is ready. Generate a report to finish setup."
+        : "Complete the earlier configuration steps before generating a report.",
+      status.readyToRun ? "Generate first report" : undefined,
+      status.readyToRun
+        ? () => {
+            this.runAction("generate first report", () => this.generateFirstReport());
+          }
+        : undefined,
     );
 
-    if (!status.readyToRun && status.reasons.length > 0) {
-      const details = guide.createEl("details", {
-        cls: "arxiv-daily-setup__details",
-      });
-      details.createEl("summary", { text: "Show missing configuration" });
-      const ul = details.createEl("ul");
-      for (const reason of status.reasons) ul.createEl("li", { text: reason });
-    }
+    this.renderConfigurationDetails(guide, status.schedulerReasons);
+    this.renderDashboardAction(guide);
+    return guide;
+  }
 
-    const actions = guide.createEl("div", {
+  private renderSetupItem(
+    parent: HTMLElement,
+    done: boolean,
+    title: string,
+    description: string,
+    actionLabel?: string,
+    onAction?: () => void,
+  ): void {
+    const item = parent.createEl("li", {
+      cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
+    });
+    const body = item.createDiv({ cls: "arxiv-daily-setup__item-body" });
+    body.createDiv({
+      cls: "arxiv-daily-setup__label",
+      text: title,
+    });
+    body.createDiv({
+      cls: "arxiv-daily-setup__description",
+      text: description,
+    });
+    item.createSpan({
+      cls: "arxiv-daily-setup__status",
+      text: done ? "Complete" : "Next",
+    });
+    if (!done && actionLabel && onAction) {
+      const action = item.createEl("button", {
+        cls: "arxiv-daily-setup__link",
+        text: actionLabel,
+        attr: { type: "button" },
+      });
+      action.addEventListener("click", onAction);
+    }
+  }
+
+  private renderConfigurationDetails(
+    parent: HTMLElement,
+    reasons: readonly string[],
+  ): void {
+    if (reasons.length === 0) return;
+    const details = parent.createEl("details", {
+      cls: "arxiv-daily-setup__details",
+    });
+    details.createEl("summary", { text: "Configuration details" });
+    const list = details.createEl("ul");
+    for (const reason of reasons) list.createEl("li", { text: reason });
+  }
+
+  private renderDashboardAction(parent: HTMLElement): void {
+    const actions = parent.createDiv({
       cls: "arxiv-daily-setup__actions",
     });
-    const run = actions.createEl("button", {
-      text: "Run today",
-      attr: { type: "button" },
-    });
-    run.disabled = !status.readyToRun;
-    run.addEventListener("click", () => {
-      this.runAction("run now", () => this.executeCommand("run-now"));
-    });
-
     const dashboard = actions.createEl("button", {
       text: "Open dashboard",
       attr: { type: "button" },
@@ -921,67 +945,33 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     dashboard.addEventListener("click", () => {
       this.runAction("open dashboard", () => openDashboardView(this.plugin));
     });
-
-    return guide;
-  }
-
-  private renderSetupItem(
-    parent: HTMLElement,
-    done: boolean,
-    label: string,
-    actionLabel: string,
-    onAction: () => void,
-  ): void {
-    const item = parent.createEl("div", {
-      cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
-    });
-    item.createEl("span", {
-      cls: "arxiv-daily-setup__check",
-      text: done ? "✓" : "•",
-    });
-    item.createEl("span", {
-      cls: "arxiv-daily-setup__label",
-      text: label,
-    });
-    const action = item.createEl("button", {
-      cls: "arxiv-daily-setup__link",
-      text: done ? "Done" : actionLabel,
-      attr: { type: "button" },
-    });
-    action.disabled = done;
-    action.addEventListener("click", onAction);
-  }
-
-  private scrollToFirstMissingSection(status: ReturnType<typeof getSetupStatus>): void {
-    if (!status.llmReady) {
-      this.scrollToSection("llm");
-      return;
-    }
-    if (!status.categoriesReady) {
-      this.scrollToSection("arxiv");
-      return;
-    }
-    if (!status.topicsReady) {
-      this.scrollToSection("topics");
-      return;
-    }
   }
 
   private scrollToSection(section: "llm" | "arxiv" | "topics" | "schedule" | "advanced"): void {
     const target = this.containerEl.querySelector(
       `[data-arxiv-daily-section="${section}"]`,
     );
-    if (target instanceof HTMLElement) {
-      target.scrollIntoView({ block: "start", behavior: "smooth" });
-    }
+    if (!target) return;
+    const targetEl = target as HTMLElement;
+    const view = targetEl.ownerDocument.defaultView;
+    const reduceMotion = view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (!targetEl.hasAttribute("tabindex")) targetEl.setAttribute("tabindex", "-1");
+    targetEl.scrollIntoView({
+      block: "start",
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+    targetEl.focus({ preventScroll: true });
   }
 
-  private async executeCommand(commandId: string): Promise<void> {
-    await executeObsidianCommand(
-      this.plugin.app,
-      commandId,
-      this.plugin.manifest.id,
+  private async generateFirstReport(): Promise<void> {
+    const date = formatDate(
+      todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
     );
+    this.plugin.logger.info(`settings: first report requested for ${date}`);
+    new Notice(`arXiv Daily: running for ${date}…`);
+    const result = await this.plugin.scheduler.runForDateNow(date);
+    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    this.refreshSetupGuide();
   }
 
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {

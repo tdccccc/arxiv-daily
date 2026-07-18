@@ -25,6 +25,19 @@ describe("dashboard and settings styles", () => {
     expect(settingsTab).not.toContain('.setName("Run time (HH:MM)")');
   });
 
+  it("styles semantic setup progress, statuses, completion, and focus", () => {
+    expect(settingsTab).toContain('createEl("ol"');
+    expect(settingsTab).toContain('parent.createEl("li"');
+    expect(styles).toContain(".arxiv-daily-setup__progress-summary");
+    expect(styles).toContain(".arxiv-daily-setup__progress");
+    expect(styles).toContain(".arxiv-daily-setup__description");
+    expect(styles).toContain(".arxiv-daily-setup__status");
+    expect(styles).toContain(".arxiv-daily-setup--complete");
+    expect(styles).toContain(":focus-visible");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styles).not.toContain(".arxiv-daily-settings__invalid-banner");
+  });
+
   it("left-aligns the actual topic disclosure button and title", () => {
     expect(styles).toMatch(
       /\.arxiv-daily-settings__topic-header\s*\{[^}]*justify-content:\s*flex-start;[^}]*text-align:\s*left;/s,

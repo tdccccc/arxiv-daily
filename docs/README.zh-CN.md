@@ -8,11 +8,12 @@ arXiv Daily 的目标不是替代 Zotero 或 PDF 阅读器，而是把每天新�
 
 ## 核心流程
 
-1. 配置 arXiv 分类、研究主题和 LLM provider。
-2. 插件按计划自动运行，或从 Dashboard 手动运行。
-3. 阅读当天 Markdown 日报，对重要论文点星标或勾选“重点”。
-4. 之后通过 Dashboard 搜索、筛选、打开日报、论文笔记、arXiv 页面或 PDF。
-5. 真正要进入文献库时，打开 arXiv 页面，用 Zotero 浏览器插件导入。
+1. 在 Settings 顶部按四步引导完成 **Connect AI**、**Choose paper sources**、**Describe your research interests** 和 **Generate your first report**。
+2. 引导会复用现有设置表单，并在第一份报告完成前持续显示；报告完成且配置有效后改为带最近报告日期的紧凑 **Setup complete**，配置失效时完整引导会重新出现。
+3. 插件按计划自动运行，或从 Dashboard 手动运行。
+4. 阅读当天 Markdown 日报，对重要论文点星标或勾选“重点”。
+5. 之后通过 Dashboard 搜索、筛选、打开日报、论文笔记、arXiv 页面或 PDF。
+6. 真正要进入文献库时，打开 arXiv 页面，用 Zotero 浏览器插件导入。
 
 Zotero 仍然负责 citation key、BibTeX 和正式文献库管理。
 
@@ -143,7 +144,7 @@ https://github.com/tdccccc/arxiv-daily/releases/latest
 
 自动 deep-dive 选择现在是正文抓取完成后的独立 LLM 评分步骤。只有归入已启用 **Detail report** 的 topic、存在可用全文且尚无 paper 文件的论文才有资格。存在 eligible candidates 时，所有候选合并到额外的一次 LLM 调用中评分；没有候选时不会产生这次调用。
 
-全局设置提供 **Conservative**、**Balanced**、**Broad** 和 **Custom** profile。默认 **Balanced** 的 normal threshold 为 **75**、exceptional threshold 为 **92**、soft limit 为 **3**。Soft limit 不是硬上限：达到 exceptional threshold 的论文可以让本次自动 deep dive 数量超过 3。Custom 可直接控制三个数值；每个 topic 的 **Detail report** toggle 则独立控制候选资格。
+全局 **Automatic detail notes** 设置只需选择 **Fewer（更少）**、**Recommended（推荐）** 或 **More（更多）**；默认是 **Recommended**。每个 topic 的 **Detail report** toggle 独立控制候选资格。已有 Custom 策略会继续生效，直到用户主动选择其他选项；高级自定义阈值仍可通过持久化配置或 CLI 设置。
 
 如果评分调用失败或返回无效结果，系统会保守地不创建任何新的自动 deep dive，但仍继续生成日报，daily run 可以成功。手动 **Summarize by arXiv ID** 是独立流程，不受该策略影响。
 

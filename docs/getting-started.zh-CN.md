@@ -21,14 +21,16 @@ arXiv Daily 会把生成内容写入你的 vault。为保持兼容，API key 以
 Settings -> arXiv Daily
 ```
 
-设置页顶部有 **Getting Started** checklist。第一次配置时按这里走：
+设置页顶部有一个无障碍的四步 **Getting started** 引导：
 
-- **LLM API key, base URL, and model**
-- **At least one arXiv category**
-- **At least one complete research topic**
-- **Ready to run**
+1. **Connect AI（连接 AI）**
+2. **Choose paper sources（选择论文来源）**
+3. **Describe your research interests（描述研究兴趣）**
+4. **Generate your first report（生成第一份报告）**
 
-Checklist 里的按钮会跳转到还没配置好的部分。
+引导会显示四步中已完成的数量。只有待完成且可操作的步骤才显示按钮；按钮会跳转到现有的设置表单，不会重复创建 provider、分类或 topic 输入。配置有效后，最后一步会调用现有的 run-now 命令。详细校验原因保留在可展开的 **Configuration details** 中。
+
+在第一份报告完成前，完整引导会一直显示。报告完成且配置有效后，设置页改为紧凑的 **Setup complete** 摘要，显示最近完成的报告日期和 **Open dashboard**。如果之后配置失效，完整引导会重新出现。
 
 ## 2. 配置 LLM
 
@@ -68,13 +70,11 @@ Description: Methods, benchmarks, uncertainty calibration, catalog construction,
 
 每个 topic 还有一个 **Detail report** toggle。它不影响相关论文是否进入日报并获得结构化总结，只决定该 topic 下的论文是否有资格自动生成 `papers/` 中的独立 deep dive。
 
-Topic 列表下方的 **Automatic deep-dive selection** 提供 Conservative、Balanced、Broad 和 Custom profile。默认 **Balanced** 使用 normal threshold **75**、exceptional threshold **92**、soft limit **3**。达到 exceptional threshold 的论文可以超过这个 soft limit；选择 **Custom** 后可直接调整三个控制项。
+Topic 列表下方的 **Automatic detail notes** 用于控制自动生成独立详细笔记的严格程度，只需选择 **Fewer（更少）**、**Recommended（推荐）** 或 **More（更多）**；默认是 **Recommended**。已有 Custom 策略会继续生效，直到你主动选择其他选项；高级自定义阈值仍可通过持久化配置或 CLI 设置。
 
 ## 5. 第一次运行
 
-从左侧 ribbon 图标或命令面板打开 **arXiv Daily Dashboard**。
-
-点击 **Run Today**。插件会依次做这些事：
+在设置引导中点击 **Generate first report**。也可以从左侧 ribbon 图标或命令面板打开 **arXiv Daily Dashboard**，再点击 **Run Today**。插件会依次做这些事：
 
 1. 按配置的分类抓取 arXiv 近期论文。
 2. 根据你的 topic 筛选相关论文。

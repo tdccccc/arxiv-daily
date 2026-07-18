@@ -19,13 +19,13 @@ The result is a compact daily reading list you can skim, star, and act on, witho
 ## Quick Start
 
 1. Install and enable the plugin.
-2. Open **Settings → arXiv Daily**.
-3. Choose an LLM provider and enter an API key.
-4. Select one or more arXiv categories (e.g. `cs.CL`, `astro-ph`, `stat.ML`).
-5. Add research topics — natural-language descriptions of what you want to track.
-6. Enable the scheduler, or open the Dashboard and click **Run Today**.
+2. Open **Settings → arXiv Daily** and follow the four-step guide.
+3. **Connect AI** with an API key, base URL, and model.
+4. **Choose paper sources** by selecting one or more arXiv categories.
+5. **Describe your research interests** with at least one complete topic.
+6. **Generate your first report** from the guide. It remains visible until a report completes; afterward Settings shows a compact completion summary and the latest report date. If configuration later becomes invalid, the full guide returns.
 
-For a detailed walkthrough, see [Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md).
+The guide links to the existing Settings forms rather than duplicating provider or topic inputs. For a detailed walkthrough, see [Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md).
 
 ## Dashboard
 
@@ -62,7 +62,7 @@ The structured entries in `daily/YYYY-MM-DD.md` are the complete daily discovery
 
 Automatic deep-dive selection now runs as a separate scoring step after full text has been fetched. Only papers assigned to a topic whose **Detail report** toggle is enabled, with usable full text and no existing paper file, are eligible. When eligible candidates exist, they are scored together in exactly one additional LLM call; otherwise there is no selector call.
 
-Settings offers **Conservative**, **Balanced**, **Broad**, and **Custom** policies. The default **Balanced** policy uses a normal threshold of **75**, an exceptional threshold of **92**, and a soft limit of **3** deep dives per daily run. The limit is intentionally soft: qualifying papers at or above the exceptional threshold may exceed it. Custom exposes all three controls; topic toggles control eligibility independently of the global policy.
+The **Automatic detail notes** setting offers **Fewer**, **Recommended**, and **More**. **Recommended** is the default. Topic toggles control eligibility independently of this setting. Existing custom policies remain active until another option is selected; advanced custom thresholds remain available through persisted or CLI configuration.
 
 If selector scoring fails or returns an invalid result, selection is conservative: no new automatic deep dives are created, while daily summarization continues and the daily run can still succeed. **Summarize by arXiv ID** is a separate manual workflow and is unaffected by this policy.
 

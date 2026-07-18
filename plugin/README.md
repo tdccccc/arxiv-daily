@@ -31,8 +31,11 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   match reasons, metadata, resource availability, and actions for detail, daily
   report, arXiv, and PDF. Query time makes no network or LLM request and uses no
   embedding or database.
-- **First-run onboarding** — Settings includes a Getting Started checklist, and
-  Dashboard empty states point users to setup, Run Today, Run Pending, or All.
+- **Guided first-run onboarding** — Settings presents four accessible steps:
+  Connect AI, choose paper sources, describe research interests, and generate the
+  first report. It links to existing forms, tracks first-report completion from
+  run state, collapses to a latest-report summary after success, and reappears if
+  configuration becomes invalid. Dashboard only points missing setup to Settings.
 - **Safer arXiv date handling** — current or scheduled dates newer than the
   latest `/recent` announce bucket stay retryable until the announce page is
   available.
@@ -60,11 +63,11 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Separate automatic deep-dive scoring** — after full-text retrieval, eligible
   papers are scored together by one extra LLM call. Eligibility requires the
   assigned topic's Detail report toggle, usable full text, and no existing paper
-  file. With no eligible candidates there is no extra call. The default Balanced
-  policy uses normal threshold 75, exceptional threshold 92, and soft limit 3;
-  exceptional papers may exceed the limit. Conservative, Broad, and Custom
-  profiles are also exposed. Selector failure creates no new automatic deep
-  dives but does not fail daily summarization; manual summarize is unaffected.
+  file. With no eligible candidates there is no extra call. The user-facing
+  **Automatic detail notes** setting offers Fewer, Recommended, and More;
+  Recommended is the default. Existing custom policies remain active until a
+  named option is selected. Selector failure creates no new automatic deep dives
+  but does not fail daily summarization; manual summarize is unaffected.
 - **Template presets** — Blank, Astrophysics + ML, NLP / LLMs,
   Computer Vision, Bioinformatics. Load Template dropdown with
   confirm-before-replace for non-empty lists.
@@ -138,7 +141,7 @@ npm run build
 |---|---|
 | **Enable** | Toggle, shows Running / Paused status |
 | **LLM** | Provider dropdown, API Key (`Configured` sentinel with Replace/Clear), Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
-| **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail eligibility toggle), Load Template dropdown, + Add Topic button, automatic deep-dive policy profile and threshold/soft-limit controls, Timezone |
+| **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail eligibility toggle), Load Template dropdown, + Add Topic button, Automatic detail notes dropdown, Timezone |
 | **Output & Schedule** | Daily / Papers paths, Link style, Run time, Tick interval, Lookback days (≤ 5) |
 | **Advanced** | Request delay, cache TTL, char limits, skip / priority sections, log level |
 
@@ -164,8 +167,8 @@ npm run build
 | File | Role |
 |---|---|
 | `packages/core/src/settings/types.ts` | `Topic`, `ArxivSettings`, `PluginSettings`, `RunStatus` (`"skipped"` added in v0.1.2) |
-| `packages/core/src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]`; automatic deep-dive selection defaults to Balanced |
-| `packages/core/src/settings/detail-selection.ts` | Deep-dive policy profiles, preset values, and persisted-value sanitization |
+| `packages/core/src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]`; automatic detail notes defaults to Recommended (the Balanced policy) |
+| `packages/core/src/settings/detail-selection.ts` | Internal detail-note policy profiles, preset values, and persisted-value sanitization |
 | `packages/core/src/settings/migration.ts` | `migrateArxivSettings(raw)` — lossy upgrade from v0.1.x legacy fields |
 | `packages/core/src/settings/validation.ts` | `validateLlmConfig`, `validateFilterConfig` — gatekeeper for all runs |
 | `packages/core/src/settings/topic-templates.ts` | `TOPIC_TEMPLATES` — five static presets |

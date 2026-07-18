@@ -121,10 +121,67 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain("new Notice(`arXiv Daily: ${action} failed:");
     expect(settingsTabSource).not.toContain(".catch(() => {})");
     expect(settingsTabSource).toContain('this.runAction("update daily path"');
-    expect(settingsTabSource).toContain('this.runAction("run now"');
+    expect(settingsTabSource).toContain('this.runAction("generate first report"');
     expect(settingsTabSource).toContain('this.runAction("open dashboard"');
     expect(settingsTabSource).toContain('this.runAction("save selected model"');
     expect(settingsTabSource).toContain('this.reportActionError("save run window"');
+  });
+
+  it("renders an accessible four-step first-report guide without duplicate inputs", () => {
+    const guideBody = settingsTabSource.match(
+      /private createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
+    )?.[0];
+    expect(guideBody).toBeDefined();
+    expect(guideBody).toContain('createEl("ol"');
+    expect(settingsTabSource).toContain('parent.createEl("li"');
+    expect(guideBody).toContain('text: `${completedCount} of 4 complete`');
+    expect(guideBody).toContain('"Connect AI"');
+    expect(guideBody).toContain('"Choose paper sources"');
+    expect(guideBody).toContain('"Describe your research interests"');
+    expect(guideBody).toContain('"Generate your first report"');
+    expect(settingsTabSource).toContain('text: done ? "Complete" : "Next"');
+    expect(settingsTabSource).not.toContain('text: done ? "Done"');
+    expect(guideBody).not.toContain("new Setting(");
+    expect(guideBody).not.toContain("PROVIDER_PRESETS");
+  });
+
+  it("uses run-state completion, awaits the first report, and renders compact completion", () => {
+    const guideBody = settingsTabSource.match(
+      /private createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
+    )?.[0];
+    const firstReportBody = settingsTabSource.match(
+      /private async generateFirstReport\(\)[\s\S]*?\n  private renderTopicCard/,
+    )?.[0];
+    expect(guideBody).toContain("this.plugin.stateStore.snapshot()");
+    expect(guideBody).toContain("status.firstReportComplete");
+    expect(guideBody).toContain("status.readyToRun ? \"Generate first report\" : undefined");
+    expect(guideBody).toContain('this.runAction("generate first report"');
+    expect(firstReportBody).toContain("await this.plugin.scheduler.runForDateNow(date)");
+    expect(firstReportBody).toContain("this.refreshSetupGuide()");
+    expect(settingsTabSource).not.toContain('this.executeCommand("run-now")');
+    expect(guideBody).toContain('guide.addClass("arxiv-daily-setup--complete")');
+    expect(guideBody).toContain('text: "Setup complete"');
+    expect(guideBody).toContain("status.latestCompletedReportDate");
+    expect(settingsTabSource).toContain('text: "Open dashboard"');
+  });
+
+  it("keeps validation reasons in guide details and removes the duplicate banner", () => {
+    expect(settingsTabSource).toContain('details.createEl("summary", { text: "Configuration details" })');
+    expect(settingsTabSource).toContain("status.schedulerReasons");
+    expect(settingsTabSource).toContain("for (const reason of reasons)");
+    expect(settingsTabSource).not.toContain('text: "Configuration incomplete"');
+    expect(settingsTabSource).not.toContain("arxiv-daily-settings__invalid-banner");
+  });
+
+  it("focuses setup targets and respects reduced motion through ownerDocument", () => {
+    const scrollBody = settingsTabSource.match(
+      /private scrollToSection\([\s\S]*?\n  private async generateFirstReport/,
+    )?.[0];
+    expect(scrollBody).toContain("targetEl.ownerDocument.defaultView");
+    expect(scrollBody).toContain('matchMedia?.("(prefers-reduced-motion: reduce)")');
+    expect(scrollBody).toContain('targetEl.setAttribute("tabindex", "-1")');
+    expect(scrollBody).toContain('behavior: reduceMotion ? "auto" : "smooth"');
+    expect(scrollBody).toContain("targetEl.focus({ preventScroll: true })");
   });
 
   it("uses clear sentence-case labels", () => {
@@ -183,28 +240,29 @@ describe("settings tab regressions", () => {
     );
   });
 
-  it("renders automatic detail policy near topics without changing manual summarize", () => {
+  it("renders one understandable automatic detail-note setting near topics", () => {
     const headingIndex = settingsTabSource.indexOf('"Research topics"');
-    const policyIndex = settingsTabSource.indexOf('"Automatic deep-dive selection"');
+    const policyIndex = settingsTabSource.indexOf('"Automatic detail notes"');
     const timezoneIndex = settingsTabSource.indexOf('.setName("Timezone")');
     expect(policyIndex).toBeGreaterThan(headingIndex);
     expect(policyIndex).toBeLessThan(timezoneIndex);
-    expect(settingsTabSource).toContain("Topic Detail report checkboxes enable eligibility");
-    expect(settingsTabSource).toContain("automatic selection only; manual summarize is unaffected");
-    expect(settingsTabSource).toContain('.addOption("conservative", "Conservative")');
-    expect(settingsTabSource).toContain('.addOption("balanced", "Balanced")');
-    expect(settingsTabSource).toContain('.addOption("broad", "Broad")');
-    expect(settingsTabSource).toContain('profile: "custom"');
-    expect(settingsTabSource).toContain("sanitizeDetailSelection");
+    expect(settingsTabSource).toContain("Only topics with Detail report enabled are eligible");
+    expect(settingsTabSource).toContain("Manual summaries are unaffected");
+    expect(settingsTabSource).toContain('.addOption("conservative", "Fewer")');
+    expect(settingsTabSource).toContain('.addOption("balanced", "Recommended")');
+    expect(settingsTabSource).toContain('.addOption("broad", "More")');
+    expect(settingsTabSource).toContain('d.addOption("custom", "Custom (current values)")');
+    expect(settingsTabSource).toContain('s.detailSelection.profile === "custom"');
+    expect(settingsTabSource).toContain("detailSelectionPreset(profile)");
     expect(settingsTabSource).toContain("await this.plugin.saveSettings()");
   });
 
-  it("uses numeric limits for all editable automatic detail controls", () => {
-    expect(settingsTabSource).toContain('t.inputEl.type = "number"');
-    expect(settingsTabSource).toContain('t.inputEl.min = "0"');
-    expect(settingsTabSource).toContain('"normalThreshold"');
-    expect(settingsTabSource).toContain('"exceptionalThreshold"');
-    expect(settingsTabSource).toContain('"softLimit"');
+  it("does not expose automatic detail thresholds or numeric controls", () => {
+    expect(settingsTabSource).not.toContain('"Normal threshold"');
+    expect(settingsTabSource).not.toContain('"Exceptional threshold"');
+    expect(settingsTabSource).not.toContain('"Soft limit"');
+    expect(settingsTabSource).not.toContain("renderDetailSelectionNumber");
+    expect(settingsTabSource).not.toContain("detail-selection-number");
   });
 
   it("uses explicit Start and End labels with non-cyclic select controls", () => {

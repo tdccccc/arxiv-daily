@@ -830,11 +830,11 @@ class ArxivDailyDashboardView extends ItemView {
     if (!setup.readyToRun && this.entries.length === 0) {
       state.createEl("div", {
         cls: "arxiv-daily-dashboard__empty-title",
-        text: "Finish setup before running arXiv Daily",
+        text: "Finish setup in Settings",
       });
       state.createEl("div", {
         cls: "arxiv-daily-dashboard__empty-desc",
-        text: "Add your LLM settings and at least one research topic, then run today from the Dashboard.",
+        text: "Connect AI, choose paper sources, and describe your research interests, then generate your first report.",
       });
       if (setup.reasons.length > 0) {
         const reasons = state.createEl("ul", {

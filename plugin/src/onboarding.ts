@@ -1,6 +1,6 @@
-import type { PluginSettings } from "@arxiv-daily/core";
+import type { PluginSettings, RunState } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
-import { validateFilterConfig } from "@arxiv-daily/core";
+import { validateFilterConfig, validateSchedulerConfig } from "@arxiv-daily/core";
 import type { Logger } from "@arxiv-daily/core";
 
 export interface SetupStatus {
@@ -8,14 +8,22 @@ export interface SetupStatus {
   categoriesReady: boolean;
   topicsReady: boolean;
   readyToRun: boolean;
+  firstReportComplete: boolean;
+  latestCompletedReportDate?: string;
   reasons: string[];
+  schedulerReasons: string[];
 }
 
-export function shouldRenderSetupGuide(status: Pick<SetupStatus, "readyToRun">): boolean {
-  return !status.readyToRun;
+export function shouldRenderSetupGuide(
+  status: Pick<SetupStatus, "readyToRun" | "firstReportComplete">,
+): boolean {
+  return !status.readyToRun || !status.firstReportComplete;
 }
 
-export function getSetupStatus(settings: PluginSettings): SetupStatus {
+export function getSetupStatus(
+  settings: PluginSettings,
+  runState: RunState = {},
+): SetupStatus {
   const llmReady = Boolean(
     settings.llm.apiKey.trim() &&
       settings.llm.baseUrl.trim() &&
@@ -31,13 +39,22 @@ export function getSetupStatus(settings: PluginSettings): SetupStatus {
         topic.description.trim(),
     );
   const validation = validateFilterConfig(settings);
+  const schedulerValidation = validateSchedulerConfig(settings);
+  const latestCompletedReportDate = Object.entries(runState)
+    .filter(([, entry]) => entry?.status === "completed")
+    .map(([date]) => date)
+    .sort()
+    .at(-1);
 
   return {
     llmReady,
     categoriesReady,
     topicsReady,
     readyToRun: validation.ok,
+    firstReportComplete: latestCompletedReportDate !== undefined,
+    latestCompletedReportDate,
     reasons: validation.reasons,
+    schedulerReasons: schedulerValidation.reasons,
   };
 }
 

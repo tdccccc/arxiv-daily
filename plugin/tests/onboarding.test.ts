@@ -63,27 +63,43 @@ describe("getSetupStatus", () => {
     expect(status.reasons).toEqual([]);
   });
 
-  it("renders the setup guide only while setup is incomplete", () => {
-    const incomplete = getSetupStatus(makeSettings());
-    const complete = getSetupStatus(
-      makeSettings({
-        llm: { apiKey: "sk-test" },
-        arxiv: {
-          topics: [
-            {
-              id: "topic",
-              name: "Compact objects",
-              tag: "compact-objects",
-              description: "Neutron stars and black holes",
-              detail: false,
-            },
-          ],
-        },
-      }),
-    );
+  it("keeps the guide until a first report completes", () => {
+    const settings = makeSettings({
+      llm: { apiKey: "sk-test" },
+      arxiv: {
+        topics: [
+          {
+            id: "topic",
+            name: "Compact objects",
+            tag: "compact-objects",
+            description: "Neutron stars and black holes",
+            detail: false,
+          },
+        ],
+      },
+    });
+    const beforeFirstReport = getSetupStatus(settings);
+    const afterFirstReport = getSetupStatus(settings, {
+      "2026-07-15": { status: "completed", lastAttempt: 1, attempts: 1 },
+      "2026-07-16": { status: "failed_transient", lastAttempt: 2, attempts: 1 },
+      "2026-07-14": { status: "completed", lastAttempt: 3, attempts: 1 },
+    });
 
-    expect(shouldRenderSetupGuide(incomplete)).toBe(true);
-    expect(shouldRenderSetupGuide(complete)).toBe(false);
+    expect(beforeFirstReport.firstReportComplete).toBe(false);
+    expect(shouldRenderSetupGuide(beforeFirstReport)).toBe(true);
+    expect(afterFirstReport.firstReportComplete).toBe(true);
+    expect(afterFirstReport.latestCompletedReportDate).toBe("2026-07-15");
+    expect(shouldRenderSetupGuide(afterFirstReport)).toBe(false);
+  });
+
+  it("returns the guide when configuration becomes invalid after a report", () => {
+    const status = getSetupStatus(makeSettings(), {
+      "2026-07-15": { status: "completed", lastAttempt: 1, attempts: 1 },
+    });
+
+    expect(status.firstReportComplete).toBe(true);
+    expect(status.readyToRun).toBe(false);
+    expect(shouldRenderSetupGuide(status)).toBe(true);
   });
 
   it("keeps incomplete topics actionable", () => {

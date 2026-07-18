@@ -21,14 +21,16 @@ After installing and enabling the plugin, open:
 Settings -> arXiv Daily
 ```
 
-The top of the settings page has a **Getting Started** checklist. Use it as the first-run guide:
+The top of the settings page has an accessible four-step **Getting started** guide:
 
-- **LLM API key, base URL, and model**
-- **At least one arXiv category**
-- **At least one complete research topic**
-- **Ready to run**
+1. **Connect AI**
+2. **Choose paper sources**
+3. **Describe your research interests**
+4. **Generate your first report**
 
-Buttons in the checklist jump to the missing section.
+It shows how many of the four steps are complete. Action buttons appear only for pending steps and jump to the existing Settings forms; the guide does not duplicate provider, category, or topic inputs. The final action becomes available when configuration is valid and runs the existing run-now command. Detailed validation reasons remain available under **Configuration details**.
+
+The full guide stays visible until the first report completes. With a completed report and valid configuration, it becomes a compact **Setup complete** summary with the latest completed report date and **Open dashboard**. If configuration later becomes invalid, the full guide returns.
 
 ## 2. Configure The LLM
 
@@ -68,13 +70,11 @@ Use a template if one matches your field, then edit the topics to match your act
 
 Each topic also has a **Detail report** toggle. It does not change whether relevant papers receive structured summaries in the daily report; it only makes papers assigned to that topic eligible for automatic standalone deep dives under `papers/`.
 
-Below the topics, **Automatic deep-dive selection** offers Conservative, Balanced, Broad, and Custom profiles. The default **Balanced** profile uses a normal score threshold of **75**, an exceptional threshold of **92**, and a soft limit of **3** automatic deep dives per run. Exceptional papers may exceed that soft limit. Choose **Custom** to edit the thresholds and limit directly.
+Below the topics, **Automatic detail notes** controls how selective automatic standalone note creation should be: choose **Fewer**, **Recommended**, or **More**. **Recommended** is the default. Existing custom policies remain active until you select another option; advanced custom thresholds remain available through persisted or CLI configuration.
 
 ## 5. Run The First Daily Report
 
-Open the **arXiv Daily Dashboard** from the ribbon icon or command palette.
-
-Click **Run Today**. The plugin will:
+Use **Generate first report** in the Settings guide. You can also open the **arXiv Daily Dashboard** from the ribbon icon or command palette and click **Run Today**. The plugin will:
 
 1. Fetch recent arXiv papers for the configured categories.
 2. Filter papers against your topics.
