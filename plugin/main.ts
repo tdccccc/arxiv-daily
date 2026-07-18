@@ -2,7 +2,7 @@ import { Notice, Plugin } from "obsidian";
 import type { PluginSettings, RunState } from "@arxiv-daily/core";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
-import { validateSchedulerConfig } from "@arxiv-daily/core";
+import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
@@ -195,6 +195,9 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
+    this.settings.detailSelection = sanitizeDetailSelection(
+      this.settings.detailSelection,
+    );
     await this.persistSettings();
   }
 
@@ -295,6 +298,7 @@ export default class ArxivDailyPlugin extends Plugin {
       advanced: this.settings.advanced,
       output: this.settings.output,
       llmSettings: this.settings.llm,
+      detailSelection: this.settings.detailSelection,
       progress: this.progress,
     });
   }

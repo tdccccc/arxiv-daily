@@ -18,6 +18,12 @@ const recentHtml = readFileSync(
   "utf8",
 );
 
+const testDetailSelection = {
+  normalThreshold: 70,
+  exceptionalThreshold: 90,
+  softLimit: 2,
+};
+
 const testArxiv = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
@@ -160,6 +166,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const controller = new AbortController();
     controller.abort("cancelled by test");
@@ -184,6 +191,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     await pipeline.runForDate(firstDateFromFixture(), controller.signal);
@@ -209,6 +217,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const result = await pipeline.runForDate("1999-01-01");
     expect(result.kind).toBe("failed_transient");
@@ -235,6 +244,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-06-13");
@@ -265,6 +275,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-06-11");
@@ -288,6 +299,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const date = firstDateFromFixture();
     const result = await pipeline.runForDate(date);
@@ -311,6 +323,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate(firstDateFromFixture());
@@ -338,6 +351,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate(firstDateFromFixture());
@@ -370,6 +384,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate(firstDateFromFixture());
@@ -388,7 +403,7 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -411,6 +426,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const date = firstDateFromFixture();
     const result = await pipeline.runForDate(date);
@@ -438,7 +454,7 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -469,6 +485,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const date = firstDateFromFixture();
     const result = await pipeline.runForDate(date);
@@ -510,7 +527,7 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -535,6 +552,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate(firstDateFromFixture());
@@ -574,6 +592,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-06-09");
@@ -604,7 +623,7 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
       }
       throw new Error("daily summarizer should not be called");
@@ -622,6 +641,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
@@ -645,6 +665,7 @@ describe("ArxivPipeline", () => {
     d.writer.dailyExists.mockResolvedValue(true);
     d.writer.readDaily.mockResolvedValue(markdown);
     const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
     };
@@ -660,11 +681,13 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-05-11");
 
     expect(result).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(paperIndex.reconcilePaperDetails).toHaveBeenCalledWith({ [id]: null });
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [id],
       "daily/2026-05-11.md",
@@ -673,6 +696,144 @@ describe("ArxivPipeline", () => {
       [id]: { coreProblem: "Repaired problem." },
     });
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+  });
+
+  it("repairs a missing indexed paperPath from a real canonical detail file", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const id = "2607.00001";
+    await store.upsertFromDailyPaper({
+      arxivId: id,
+      title: "Existing detail",
+      authors: "A",
+      date: "2026-05-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    d.writer.paperDetailExists.mockImplementation(async (candidate: string) => candidate === id);
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(await store.get(id)).toMatchObject({
+      detail: true,
+      paperPath: `papers/${id}.md`,
+    });
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("clears a stale indexed detail path when the canonical file is absent", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const id = "2607.00001";
+    await store.upsertFromDailyPaper({
+      arxivId: id,
+      title: "Missing detail",
+      authors: "A",
+      date: "2026-05-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+      paperPath: `papers/${id}.md`,
+    });
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    d.writer.paperDetailExists.mockResolvedValue(false);
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect((await pipeline.runForDate("2026-05-11")).kind).toBe("completed");
+    expect(await store.get(id)).toMatchObject({ detail: false, paperPath: null });
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("retries canonical detail reconciliation after an index write failure", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const canonicalPath = `papers/${id}.md`;
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    d.writer.paperDetailExists.mockResolvedValue(true);
+    let failWrite = true;
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => {
+        if (failWrite) {
+          failWrite = false;
+          throw new Error("index write failed");
+        }
+        return 1;
+      }),
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "failed_transient",
+      reason: "paper index repair failed: index write failed",
+    });
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(paperIndex.reconcilePaperDetails).toHaveBeenCalledTimes(2);
+    expect(paperIndex.reconcilePaperDetails).toHaveBeenNthCalledWith(1, {
+      [id]: canonicalPath,
+    });
+    expect(paperIndex.reconcilePaperDetails).toHaveBeenNthCalledWith(2, {
+      [id]: canonicalPath,
+    });
+    expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(1);
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
   });
 
   it.each(["addDailyReports", "setSummaries"] as const)(
@@ -686,6 +847,7 @@ describe("ArxivPipeline", () => {
       );
       let fail = true;
       const paperIndex = {
+        reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => {
           if (failedMethod === "addDailyReports" && fail) {
             fail = false;
@@ -712,6 +874,7 @@ describe("ArxivPipeline", () => {
         advanced: DEFAULT_SETTINGS.advanced,
         output: DEFAULT_SETTINGS.output,
         llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
       });
 
       expect((await pipeline.runForDate("2026-05-11")).kind).toBe("failed_transient");
@@ -742,6 +905,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const result = await pipeline.runForDate("2026-05-11");
     expect(result.kind).toBe("completed");
@@ -756,15 +920,28 @@ describe("ArxivPipeline", () => {
     const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
     const arxivId = m[1];
 
-    (d.writer as any).paperDetailExists = vi.fn(async (id: string) =>
-      id === arxivId,
-    );
+    const existingPath = `papers/${arxivId}.md`;
+    d.writer.paperDetailExists = vi.fn(async (id: string) => id === arxivId);
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async () => [{
+        entry: { status: "inbox", detail: true, paperPath: existingPath },
+        wasNew: false,
+      }]),
+      addDailyReports: vi.fn(),
+      setSummaries: vi.fn(),
+      setPaperPath: vi.fn(),
+    };
+    let selectorCalls = 0;
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
+      }
+      if (sys.includes("strict research-paper evaluator")) {
+        selectorCalls += 1;
+        return JSON.stringify({ papers: [] });
       }
       if (sys.includes("每日论文追踪日报")) {
         return "## stub daily summary\n";
@@ -784,18 +961,102 @@ describe("ArxivPipeline", () => {
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
       writer: d.writer as any,
+      paperIndex: paperIndex as any,
       llm: d.llm as any,
       logger: d.logger,
       arxiv: testArxiv,
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const date = firstDateFromFixture();
     const result = await pipeline.runForDate(date);
     expect(result.kind).toBe("completed");
+    expect(d.writer.paperDetailLink).toHaveBeenCalledWith(arxivId, date, existingPath);
+    expect(selectorCalls).toBe(0);
     expect(d.writer.writeDaily).toHaveBeenCalled();
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("detects canonical details missing from the index before selector scoring and repairs their paths", async () => {
+    const d = makeDeps();
+    const [existingId, candidateId] = firstBucketPapersFromFixture()
+      .slice(0, 2)
+      .map((paper) => paper.id);
+    const canonicalPath = `papers/${existingId}.md`;
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
+        papers.map((paper) => ({
+          entry: { status: "inbox", detail: false, paperPath: null },
+          wasNew: false,
+        }))),
+      addDailyReports: vi.fn(),
+      setSummaries: vi.fn(),
+      setPaperPath: vi.fn(),
+    };
+    d.writer.paperDetailExists = vi.fn(async (id: string) => id === existingId);
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("选择最匹配的主题")) {
+        return JSON.stringify({
+          papers: [
+            { id: existingId, category: "photo-z" },
+            { id: candidateId, category: "photo-z" },
+          ],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        const selectorInput = messages[1]?.content ?? "";
+        expect(selectorInput).not.toContain(existingId);
+        expect(selectorInput).toContain(candidateId);
+        return JSON.stringify({
+          papers: [{ id: candidateId, score: 40, reason: "not selected" }],
+        });
+      }
+      if (system.includes("每日论文追踪日报")) {
+        expect(system).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
+        const dailyInput = messages[1]?.content ?? "";
+        expect(dailyInput).toContain(`Paper: ${existingId}`);
+        expect(dailyInput).toContain(`→ [[${existingId}]]`);
+        expect(dailyInput).toContain(`Paper: ${candidateId}`);
+        expect(dailyInput).not.toContain(`→ [[${candidateId}]]`);
+        return [
+          "# arXiv astro-ph Daily",
+          "共 2 篇相关论文，其中 1 篇详细收录。",
+          `## Photo-z\n### Existing → [[${existingId}]]`,
+          `### Candidate\n- **arXiv**: [${candidateId}](https://arxiv.org/abs/${candidateId})`,
+        ].join("\n");
+      }
+      return "";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub",
+      fullSections: "## Section\nbody",
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: { ...testDetailSelection, softLimit: 1 },
+    });
+
+    expect((await pipeline.runForDate(firstDateFromFixture())).kind).toBe("completed");
+    expect(d.writer.paperDetailExists).toHaveBeenCalledTimes(2);
+    expect(paperIndex.setPaperPath).toHaveBeenCalledWith(existingId, canonicalPath);
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+    const daily = d.writer.writeDaily.mock.calls[0]?.[1] as string;
+    expect(daily).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
+    expect(daily).toContain(`→ [[${existingId}]]`);
+    expect(daily).not.toContain(`→ [[${candidateId}]]`);
   });
 
   it("repairs the full index on retry after cancellation immediately after writeDaily", async () => {
@@ -818,7 +1079,7 @@ describe("ArxivPipeline", () => {
     d.llm.call = vi.fn().mockImplementation(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
       if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z", detail: false }] });
+        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
       }
       return summary;
     });
@@ -829,6 +1090,7 @@ describe("ArxivPipeline", () => {
           entry: { status: "inbox", paperPath: null, ...input },
         })),
       ),
+      reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
     };
@@ -844,6 +1106,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     expect(await pipeline.runForDate(firstDateFromFixture(), controller.signal)).toEqual({
@@ -887,7 +1150,12 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+          papers: [{ id: arxivId, category: "photo-z" }],
+        });
+      }
+      if (sys.includes("strict research-paper evaluator")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, score: 85, reason: "strong direct contribution" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -910,6 +1178,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     const date = firstDateFromFixture();
 
@@ -934,11 +1203,21 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: true }],
+          papers: [{ id: arxivId, category: "photo-z" }],
+        });
+      }
+      if (sys.includes("strict research-paper evaluator")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, score: 85, reason: "strong direct contribution" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
-        return "## stub daily summary\n";
+        expect(sys).toContain("共 1 篇相关论文，其中 1 篇详细收录。");
+        expect(msgs[1]?.content).toContain(`→ [[${arxivId}]]`);
+        return [
+          "共 1 篇相关论文，其中 1 篇详细收录。",
+          `## Photo-z\n### Generated detail → [[${arxivId}]]`,
+        ].join("\n");
       }
       return "## detail summary\n";
     });
@@ -959,11 +1238,120 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     await pipeline.runForDate(firstDateFromFixture());
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(json.papers[arxivId].paperPath).toBe(`papers/${arxivId}.md`);
+    expect(json.schemaVersion).toBe(3);
+    expect(json.papers[arxivId]).toMatchObject({
+      abstract: "atom abstract",
+      paperPath: `papers/${arxivId}.md`,
+    });
+  });
+
+  it("selects a mixed candidate set once and only deep-dives selected IDs", async () => {
+    const d = makeDeps();
+    const [selectedId, unselectedId] = firstBucketPapersFromFixture().slice(0, 2).map((p) => p.id);
+    let selectorCalls = 0;
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("选择最匹配的主题")) return JSON.stringify({ papers: [
+        { id: selectedId, category: "photo-z" },
+        { id: unselectedId, category: "photo-z" },
+      ] });
+      if (system.includes("strict research-paper evaluator")) {
+        selectorCalls += 1;
+        return JSON.stringify({ papers: [
+          { id: selectedId, score: 85, reason: "direct contribution" },
+          { id: unselectedId, score: 40, reason: "limited contribution" },
+        ] });
+      }
+      if (system.includes("每日论文追踪日报")) return "## stub daily summary\n";
+      return "## detail summary\n";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub",
+      fullSections: "## Section\nbody",
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, llm: d.llm as any, logger: d.logger, arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced, output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm, detailSelection: testDetailSelection,
+    });
+
+    expect((await pipeline.runForDate(firstDateFromFixture())).kind).toBe("completed");
+    expect(selectorCalls).toBe(1);
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    expect(d.writer.writePaperDetail.mock.calls[0]?.[0].id).toBe(selectedId);
+  });
+
+  it("continues daily generation with no deep dives when selector transport fails", async () => {
+    const d = makeDeps();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("选择最匹配的主题")) {
+        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
+      }
+      if (system.includes("strict research-paper evaluator")) throw new Error("selector unavailable");
+      return "## daily still generated\n";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub", fullSections: "## Section\nbody",
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, llm: d.llm as any, logger: d.logger, arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced, output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm, detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(firstDateFromFixture())).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(d.writer.writeDaily).toHaveBeenCalledTimes(1);
+    expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
+  });
+
+  it("does not persist fake detail state when selected detail generation fails", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    d.writer.writePaperDetail = vi.fn(async () => { throw new Error("detail write failed"); });
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("选择最匹配的主题")) {
+        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({ papers: [{ id, score: 85, reason: "direct contribution" }] });
+      }
+      if (system.includes("每日论文追踪日报")) {
+        expect(system).toContain("共 1 篇相关论文，其中 0 篇详细收录。");
+        const dailyInput = messages[1]?.content ?? "";
+        expect(dailyInput).toContain(`Paper: ${id}`);
+        expect(dailyInput).not.toContain(`→ [[${id}]]`);
+        return [
+          "# Daily",
+          "共 1 篇相关论文，其中 0 篇详细收录。",
+          `## Photo-z\n### Failed detail\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+        ].join("\n");
+      }
+      return "## detail summary\n";
+    });
+    d.paperFetcher.fetch = vi.fn().mockResolvedValue({
+      abstractConclusion: "## Abstract\nstub", fullSections: "## Section\nbody",
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: store, llm: d.llm as any, logger: d.logger,
+      arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced, output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm, detailSelection: testDetailSelection,
+    });
+
+    expect((await pipeline.runForDate(firstDateFromFixture())).kind).toBe("completed");
+    const entry = JSON.parse(files["arxiv-daily/.index/papers.json"]).papers[id];
+    expect(entry).toMatchObject({ abstract: "atom abstract", detail: false, paperPath: null });
   });
 
   it("emits progress stages in order", async () => {
@@ -974,7 +1362,7 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", detail: false }],
+          papers: [{ id: arxivId, category: "photo-z" }],
         });
       }
       if (sys.includes("每日论文追踪日报")) {
@@ -1007,6 +1395,7 @@ describe("ArxivPipeline", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
       progress: progress as any,
     });
     await pipeline.runForDate(firstDateFromFixture());

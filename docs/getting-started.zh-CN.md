@@ -66,6 +66,10 @@ Description: Methods, benchmarks, uncertainty calibration, catalog construction,
 
 如果模板里有接近你方向的配置，可以先加载模板，再按自己的研究方向修改。
 
+每个 topic 还有一个 **Detail report** toggle。它不影响相关论文是否进入日报并获得结构化总结，只决定该 topic 下的论文是否有资格自动生成 `papers/` 中的独立 deep dive。
+
+Topic 列表下方的 **Automatic deep-dive selection** 提供 Conservative、Balanced、Broad 和 Custom profile。默认 **Balanced** 使用 normal threshold **75**、exceptional threshold **92**、soft limit **3**。达到 exceptional threshold 的论文可以超过这个 soft limit；选择 **Custom** 后可直接调整三个控制项。
+
 ## 5. 第一次运行
 
 从左侧 ribbon 图标或命令面板打开 **arXiv Daily Dashboard**。
@@ -74,15 +78,23 @@ Description: Methods, benchmarks, uncertainty calibration, catalog construction,
 
 1. 按配置的分类抓取 arXiv 近期论文。
 2. 根据你的 topic 筛选相关论文。
-3. 用配置的 LLM 总结入选论文。
-4. 写入 Markdown 日报。
-5. 更新 Dashboard 索引。
+3. 抓取可用全文；仅在存在 eligible deep-dive candidates 时，额外调用一次 LLM 对它们统一评分。
+4. 为所有入选论文生成结构化 Markdown 日报总结。
+5. 为自动选中的论文创建独立的 `papers/<arxiv_id>.md` deep dive。
+6. 更新 Dashboard 索引。
 
 生成的日报默认在：
 
 ```text
 arxiv-daily/daily/YYYY-MM-DD.md
 ```
+
+需要区分两种输出：
+
+- `daily/YYYY-MM-DD.md` 包含当天每篇入选论文的结构化总结，是完整的每日阅读清单。
+- `papers/<arxiv_id>.md` 是可选的单篇全文 deep dive，与日报短总结相互独立。
+
+Deep-dive 评分发生在全文抓取之后。论文只有在所属 topic 启用了 **Detail report**、存在可用全文且尚无 paper 文件时才 eligible。没有候选时不会多出 selector 调用。如果评分调用失败或返回无效结果，系统不会创建新的自动 deep dive，但会继续日报总结，daily run 仍可成功。手动 **Summarize by arXiv ID** 不受影响。
 
 ## 6. 使用 Dashboard
 
@@ -91,14 +103,16 @@ arxiv-daily/daily/YYYY-MM-DD.md
 - **Starred**：显示你标记为重点的论文。
 - **All**：显示所有未忽略的历史论文。
 - Search 完全在本地进行，按相关度检索 arXiv ID、标题、作者、topic、分类和结构化摘要字段；支持精确现代 arXiv ID、英文技术词和中文切词。有搜索词时默认按相关度排序，显式选择星标/发表日期/topic/标题排序后则保持该主排序。
-- **Similar Papers**（论文行的 **Find similar papers** 操作）在未忽略的 Paper Index 条目上做本地 BM25 风格词法检索，显示确定性的匹配原因，不使用网络、LLM、embedding 或数据库。
+- **Similar Papers**（论文行的 **Find similar papers** 操作）使用已持久化的 abstract 和从历史日报恢复的结构化总结，进行加权的多概念、跨字段词法匹配，并抑制弱匹配和仅作者匹配。结果会显示匹配原因、元数据、资源可用性和相应打开操作；查询本身完全在本地进行，不使用网络、LLM、embedding 或数据库。
 - 右侧日历可以按日期打开日报。
 - 每行操作可以打开/创建论文笔记、查找相似论文、打开来源日报、打开 arXiv、打开 PDF、下载 PDF；相似论文结果可打开 detail、日报、arXiv 页面或 PDF。
 - **Dashboard -> More -> Cancel active tasks** 会协作式取消自动/手动日报运行、手动 detail 总结和 PDF 下载。**Get Models** 不在范围内；已经发出的 Obsidian `requestUrl` 请求可能先完成，后续工作才停止。
 
 如果某篇论文要进入正式文献库，建议从 Dashboard 打开 arXiv 页面，然后用 Zotero 浏览器插件导入。
 
-生成的日报和 detail 笔记末尾会有折叠的 **Generation metrics** callout，显示可用的 pipeline 总耗时、LLM 耗时、逻辑调用数、HTTP attempts 和 provider 报告的 tokens。缺失或因重试而不完整的 usage 会显示 unavailable/incomplete，不会记为 0；插件不估算费用。已有设置、Paper Index 和 Markdown 仍可使用，不需要 Paper Index schema migration。
+生成的日报和 detail 笔记末尾会有折叠的 **Generation metrics** callout，显示可用的 pipeline 总耗时、LLM 耗时、逻辑调用数、HTTP attempts 和 provider 报告的 tokens。缺失或因重试而不完整的 usage 会显示 unavailable/incomplete，不会记为 0；插件不估算费用。
+
+Paper Index schema 3 会持久化 abstract，并可读取已有 schema 1/2 文件。旧条目会在后续日报再次遇到相应论文时惰性补齐 abstract，不会为了迁移而联网，也无需批量重写；已有 Markdown 仍可继续使用。
 
 ## 7. 启用自动运行
 

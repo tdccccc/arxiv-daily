@@ -7,7 +7,7 @@ import {
 } from "../settings/validation";
 import { modernArxivResources } from "../utils/arxiv";
 
-export const PAPER_INBOX_SCHEMA_VERSION = 2;
+export const PAPER_INBOX_SCHEMA_VERSION = 3;
 
 export type PaperStatus =
   | "inbox"
@@ -43,6 +43,7 @@ export interface PaperIndexEntry {
   updated: string;
   category: string;
   categories?: string[];
+  abstract?: string;
   summary?: PaperSummary;
   topics: string[];
   primaryTopic: string;
@@ -78,6 +79,7 @@ export interface PaperIndexUpsert {
   updated?: string;
   arxivCategory: string;
   arxivCategories?: string[];
+  abstract?: string;
   primaryTopic: string;
   detail: boolean;
   dailyReport?: string;
@@ -175,6 +177,7 @@ export class PaperIndexStore {
   async save(inbox: PaperInbox): Promise<void> {
     const next: PaperInbox = {
       ...inbox,
+      schemaVersion: PAPER_INBOX_SCHEMA_VERSION,
       updatedAt: this.now().toISOString(),
       papers: { ...inbox.papers },
     };
@@ -255,7 +258,9 @@ export class PaperIndexStore {
       for (const [arxivId, summary] of Object.entries(summaries)) {
         const entry = inbox.papers[arxivId];
         if (!entry) continue;
-        entry.summary = normalizeSummary(summary);
+        const next = mergeSummaries(entry.summary, summary);
+        if (sameSummary(entry.summary, next)) continue;
+        entry.summary = next;
         changed += 1;
       }
       if (changed > 0) await this.save(inbox);
@@ -272,6 +277,29 @@ export class PaperIndexStore {
       entry.detail = true;
       await this.save(inbox);
       return entry;
+    });
+  }
+
+  async reconcilePaperDetails(
+    paperPaths: Record<string, string | null>,
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      let changed = 0;
+      for (const [arxivId, paperPath] of Object.entries(paperPaths)) {
+        const entry = inbox.papers[arxivId];
+        if (!entry) continue;
+        const normalizedPath = paperPath == null
+          ? null
+          : this.storage.normalizePath(paperPath);
+        const detail = normalizedPath != null;
+        if (entry.paperPath === normalizedPath && entry.detail === detail) continue;
+        entry.paperPath = normalizedPath;
+        entry.detail = detail;
+        changed += 1;
+      }
+      if (changed > 0) await this.save(inbox);
+      return changed;
     });
   }
 
@@ -511,6 +539,7 @@ function upsertEntry(
     updated,
     category: inputCategories[0] || existing?.category || categories[0] || "",
     categories,
+    abstract: stringOr(input.abstract, existing?.abstract ?? "") || undefined,
     summary: existing?.summary,
     topics: appendUnique(existing?.topics ?? [], topic),
     primaryTopic: topic || existing?.primaryTopic || "",
@@ -537,7 +566,11 @@ function upsertEntry(
 function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   if (!raw || typeof raw !== "object") return emptyInbox(now);
   const obj = raw as any;
-  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
+  if (
+    obj.schemaVersion !== 1 &&
+    obj.schemaVersion !== 2 &&
+    obj.schemaVersion !== PAPER_INBOX_SCHEMA_VERSION
+  ) {
     throw new Error(`unsupported schemaVersion: ${obj.schemaVersion}`);
   }
   const papers: Record<string, PaperIndexEntry> = {};
@@ -582,6 +615,7 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
       ...stringArray(obj.categories),
       stringOr(obj.category, ""),
     ]),
+    abstract: stringOr(obj.abstract, "") || undefined,
     summary: normalizeSummary(obj.summary),
     topics: stringArray(obj.topics),
     primaryTopic: stringOr(obj.primaryTopic, ""),
@@ -677,6 +711,28 @@ function normalizeSummary(value: unknown): PaperSummary | undefined {
     if (!summary[key]) delete summary[key];
   }
   return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+function mergeSummaries(
+  existing: PaperSummary | undefined,
+  incoming: PaperSummary,
+): PaperSummary | undefined {
+  return normalizeSummary({ ...existing, ...normalizeSummary(incoming) });
+}
+
+function sameSummary(
+  a: PaperSummary | undefined,
+  b: PaperSummary | undefined,
+): boolean {
+  const keys: Array<keyof PaperSummary> = [
+    "sourceSections",
+    "coreProblem",
+    "keyMethod",
+    "mainResult",
+    "whyRelevant",
+    "limitations",
+  ];
+  return keys.every((key) => a?.[key] === b?.[key]);
 }
 
 function normalizeAuthors(value: string | string[] | unknown): string[] {

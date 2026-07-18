@@ -112,7 +112,7 @@ function indexJson(
     out[id] = indexedPaper(id, overrides);
   }
   return JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: "2026-06-13T00:00:00.000Z",
     papers: out,
   });
@@ -232,6 +232,87 @@ describe("syncDashboardHistory", () => {
       paperPath: "arxiv/papers/2606.00003.md",
       dailyReports: [],
     });
+  });
+
+  it("backfills structured summaries with newer non-empty fields winning", async () => {
+    const daily = (id: string, fields: string[]) => [
+      "# Daily",
+      "",
+      "## Photo-z",
+      "### Summary Paper",
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      ...fields,
+    ].join("\n");
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.40000": {
+          seenDates: ["2026-06-10", "2026-06-11"],
+          dailyReports: [
+            "arxiv/daily/2026-06-10.md",
+            "arxiv/daily/2026-06-11.md",
+          ],
+          summary: { limitations: "Existing limitation." },
+        },
+      }),
+      "arxiv/daily/2026-06-11.md": daily("2606.40000", [
+        "- **核心问题**: New problem.",
+        "- **核心结果**: New result.",
+      ]),
+      "arxiv/daily/2026-06-10.md": daily("2606.40000", [
+        "- **核心问题**: Old problem.",
+        "- **方法设计**: Old method.",
+      ]),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.40000"]?.summary).toEqual({
+      coreProblem: "New problem.",
+      keyMethod: "Old method.",
+      mainResult: "New result.",
+      limitations: "Existing limitation.",
+    });
+  });
+
+  it("does not persist when historical summaries already match", async () => {
+    const markdown = [
+      "# Daily",
+      "",
+      "## Photo-z",
+      "### Summary Paper",
+      "- **arXiv**: [2606.40001](https://arxiv.org/abs/2606.40001)",
+      "- **核心问题**: Same problem.",
+    ].join("\n");
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        "2606.40001": {
+          seenDates: ["2026-06-10"],
+          dailyReports: ["arxiv/daily/2026-06-10.md"],
+          summary: { coreProblem: "Same problem." },
+        },
+      }),
+      "arxiv/daily/2026-06-10.md": markdown,
+    });
+    const store = new PaperIndexStore(storage, output);
+    const write = vi.spyOn(storage, "writeText");
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["2606.40001"]?.summary).toEqual({
+      coreProblem: "Same problem.",
+    });
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("clears deleted detail summaries while keeping daily report papers", async () => {

@@ -104,9 +104,33 @@ describe("PaperIndexStore", () => {
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
+    });
+  });
+
+  it.each([1, 2, 3])("reads paper index schema %i", async (schemaVersion) => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": JSON.stringify({
+        schemaVersion,
+        updatedAt: "2026-06-11T00:00:00.000Z",
+        papers: {
+          "2606.12345": {
+            arxivId: "2606.12345",
+            title: `Schema ${schemaVersion}`,
+            abstract: schemaVersion === 3 ? "  Persisted abstract.  " : undefined,
+          },
+        },
+      }),
+    });
+
+    const inbox = await store.load();
+
+    expect(inbox.schemaVersion).toBe(3);
+    expect(inbox.papers["2606.12345"]).toMatchObject({
+      title: `Schema ${schemaVersion}`,
+      ...(schemaVersion === 3 ? { abstract: "Persisted abstract." } : {}),
     });
   });
 
@@ -162,8 +186,35 @@ describe("PaperIndexStore", () => {
     expect(dirs.has("arxiv-daily")).toBe(true);
     expect(dirs.has("arxiv-daily/.index")).toBe(true);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.schemaVersion).toBe(2);
+    expect(saved.schemaVersion).toBe(3);
     expect(saved.papers["2606.12345"].title).toBe("A paper");
+  });
+
+  it("normalizes and preserves abstracts during upsert", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      abstract: "  Enriched abstract.  ",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345",
+      title: "A paper",
+      authors: "A. Author",
+      date: "2026-06-12",
+      arxivCategory: "astro-ph",
+      abstract: "   ",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+
+    expect(entry.abstract).toBe("Enriched abstract.");
   });
 
   it("stores arXiv publish dates separately from local seen dates", async () => {
@@ -224,7 +275,7 @@ describe("PaperIndexStore", () => {
 
     expect(files["arxiv-daily/index/papers.json"]).toBeUndefined();
     const migrated = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.schemaVersion).toBe(3);
     expect(migrated.papers["2606.12345"].status).toBe("saved");
     expect(migrated.papers["2606.12345"].priority).toBe("high");
   });
@@ -341,6 +392,18 @@ describe("PaperIndexStore", () => {
     expect(entry?.summary).toEqual({
       coreProblem: "Problem",
       keyMethod: "Method",
+    });
+
+    await expect(store.setSummaries({
+      "2606.12345": { coreProblem: "Problem" },
+    })).resolves.toBe(0);
+    await expect(store.setSummaries({
+      "2606.12345": { mainResult: "Result" },
+    })).resolves.toBe(1);
+    expect((await store.get("2606.12345"))?.summary).toEqual({
+      coreProblem: "Problem",
+      keyMethod: "Method",
+      mainResult: "Result",
     });
   });
 

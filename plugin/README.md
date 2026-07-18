@@ -8,9 +8,6 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - **Shared core + Node CLI** — the fetch/filter/summarize/write pipeline is
   host-neutral and reused by Obsidian and the Node CLI (`run`, `run-pending`,
   `summarize`).
-- **Submitted-date catch-up fallback** — manual date runs outside arXiv
-  `/recent` use the export API `submittedDate` day window and annotate daily
-  reports with the approximate date semantics.
 - **Configurable markdown links** — daily reports can use Obsidian wikilinks
   or standard relative Markdown links for CLI / VS Code-friendly output.
 - **arXiv Daily Dashboard as the primary entry** — the Obsidian ribbon opens
@@ -27,24 +24,29 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   arXiv-ID priority plus deterministic English technical-token and Chinese
   bigram tokenization. Non-empty searches default to relevance; an explicitly
   selected starred/published/topic/title sort remains primary.
-- **Similar Papers** — deterministic local lexical retrieval over non-ignored
-  Paper Index entries, with match reasons and actions for detail, daily report,
-  arXiv, and PDF. It makes no network or LLM request and uses no embedding or
-  database.
+- **Similar Papers** — deterministic local weighted lexical retrieval over
+  non-ignored Paper Index entries, using persisted abstracts and structured
+  summaries recovered from daily Markdown. It rewards multi-concept and
+  multi-field overlap, suppresses weak and author-only matches, and presents
+  match reasons, metadata, resource availability, and actions for detail, daily
+  report, arXiv, and PDF. Query time makes no network or LLM request and uses no
+  embedding or database.
 - **First-run onboarding** — Settings includes a Getting Started checklist, and
   Dashboard empty states point users to setup, Run Today, Run Pending, or All.
 - **Safer arXiv date handling** — current or scheduled dates newer than the
-  latest `/recent` announce bucket stay retryable instead of using the
-  submitted-date fallback.
+  latest `/recent` announce bucket stay retryable until the announce page is
+  available.
 - **Focused row actions** — open/create the paper note, open the source daily
   report, open arXiv, open the PDF, or download the PDF. Paper titles,
   authors, and summaries are selectable for copying.
 - **Research workflow handoff** — arXiv Daily handles discovery, review,
   local notes, and optional PDF downloads. Zotero remains the external source
   of truth for citation keys and BibTeX.
-- **Paper index schema v2** — stores structured daily summary fields
-  (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
-  `sourceSections`) for Dashboard search and review.
+- **Paper index schema v3** — stores abstracts plus structured daily summary
+  fields (`coreProblem`, `keyMethod`, `mainResult`, `whyRelevant`, `limitations`,
+  `sourceSections`) for Dashboard search and Similar Papers. The loader accepts
+  schema 1 and 2; later daily upserts lazily add abstracts, without a network
+  migration or bulk rewrite.
 - **Workflow quick wins** — startup sync for daily checkbox selections,
   missed-paper fallback lists, and multiple arXiv categories.
 - **arXiv date parsing fix** — accepts abbreviated month names in listing
@@ -54,7 +56,15 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
   (`researchInterests` / `detailCriteria` / `detailCategories` /
   `categoryTagMap` / `categoryDisplayMap`). Each topic owns `name`
   (daily-report heading), `tag` (slug, auto-derived on creation),
-  `description` (LLM filter input), and a per-topic `detail` toggle.
+  `description` (LLM filter input), and a per-topic `detail` eligibility toggle.
+- **Separate automatic deep-dive scoring** — after full-text retrieval, eligible
+  papers are scored together by one extra LLM call. Eligibility requires the
+  assigned topic's Detail report toggle, usable full text, and no existing paper
+  file. With no eligible candidates there is no extra call. The default Balanced
+  policy uses normal threshold 75, exceptional threshold 92, and soft limit 3;
+  exceptional papers may exceed the limit. Conservative, Broad, and Custom
+  profiles are also exposed. Selector failure creates no new automatic deep
+  dives but does not fail daily summarization; manual summarize is unaffected.
 - **Template presets** — Blank, Astrophysics + ML, NLP / LLMs,
   Computer Vision, Bioinformatics. Load Template dropdown with
   confirm-before-replace for non-empty lists.
@@ -128,7 +138,7 @@ npm run build
 |---|---|
 | **Enable** | Toggle, shows Running / Paused status |
 | **LLM** | Provider dropdown, API Key (`Configured` sentinel with Replace/Clear), Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
-| **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail toggle), Load Template dropdown, + Add Topic button, Timezone |
+| **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail eligibility toggle), Load Template dropdown, + Add Topic button, automatic deep-dive policy profile and threshold/soft-limit controls, Timezone |
 | **Output & Schedule** | Daily / Papers paths, Link style, Run time, Tick interval, Lookback days (≤ 5) |
 | **Advanced** | Request delay, cache TTL, char limits, skip / priority sections, log level |
 
@@ -154,7 +164,8 @@ npm run build
 | File | Role |
 |---|---|
 | `packages/core/src/settings/types.ts` | `Topic`, `ArxivSettings`, `PluginSettings`, `RunStatus` (`"skipped"` added in v0.1.2) |
-| `packages/core/src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]` by default |
+| `packages/core/src/settings/defaults.ts` | `DEFAULT_SETTINGS` — topics is `[]`; automatic deep-dive selection defaults to Balanced |
+| `packages/core/src/settings/detail-selection.ts` | Deep-dive policy profiles, preset values, and persisted-value sanitization |
 | `packages/core/src/settings/migration.ts` | `migrateArxivSettings(raw)` — lossy upgrade from v0.1.x legacy fields |
 | `packages/core/src/settings/validation.ts` | `validateLlmConfig`, `validateFilterConfig` — gatekeeper for all runs |
 | `packages/core/src/settings/topic-templates.ts` | `TOPIC_TEMPLATES` — five static presets |
@@ -166,10 +177,11 @@ npm run build
 
 | File | Role |
 |---|---|
-| `packages/core/src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent`, export API submittedDate fallback, and `/abs` |
+| `packages/core/src/pipeline/arxiv-fetcher.ts` | HTTP fetcher for `/recent`, metadata/abstract enrichment, and `/abs` |
 | `packages/core/src/pipeline/arxiv-parser.ts` | HTML listing → `PaperMeta[]` |
 | `packages/core/src/pipeline/atom-parser.ts` | Atom API → abstract enrichment |
 | `packages/core/src/pipeline/paper-filter.ts` | LLM-call: classifies papers into topics (or `"skip"`); short-circuits when topics is empty |
+| `packages/core/src/pipeline/detail-selector.ts` | Post-full-text automatic deep-dive candidate scoring and deterministic threshold/soft-limit selection |
 | `packages/core/src/pipeline/paper-content.ts` | Full-text HTML fetch + section extraction |
 | `packages/core/src/pipeline/section-extractor.ts` | Splits HTML body into named sections |
 | `packages/core/src/pipeline/summarizer.ts` | Daily summary + per-paper detail LLM prompts |
@@ -190,7 +202,7 @@ npm run build
 | File | Role |
 |---|---|
 | `packages/core/src/dashboard/model.ts` | Host-neutral query/filter/sort/stat/action model reused by the Obsidian view |
-| `packages/core/src/dashboard/paper-search-index.ts` | Derived in-memory BM25-style index shared by Dashboard search and Similar Papers; no persistence/schema migration |
+| `packages/core/src/dashboard/paper-search-index.ts` | Derived in-memory weighted lexical index shared by Dashboard search and Similar Papers; consumes persisted abstracts/recovered summaries and performs no query-time I/O |
 | `src/dashboard/view.ts` | Obsidian custom view, command/ribbon target, table rendering, filters, row actions, batch operations |
 | `src/dashboard/similar-papers-modal.ts` | Local Similar Papers results, deterministic reasons, and existing paper actions |
 
@@ -225,7 +237,7 @@ npm run build
 | `packages/core/src/metrics/generation.ts` | Generation timing/call/token aggregation and folded Markdown callout |
 | `packages/core/src/utils/redaction.ts` | Secret redaction for text, URLs, values, and errors |
 
-## Data model (schema v2)
+## Data model (Paper Index schema v3)
 
 ```ts
 interface Topic {
@@ -233,7 +245,7 @@ interface Topic {
   name: string;        // display name, e.g. "Photo-z", daily report heading
   tag: string;         // kebab-case slug, auto-derived from name, Obsidian YAML #tag
   description: string; // natural language, sent to the filter LLM
-  detail: boolean;     // generate deep-dive report for primary contributions
+  detail: boolean;     // make papers in this topic eligible for auto deep dives
 }
 
 interface ArxivSettings {
@@ -241,6 +253,13 @@ interface ArxivSettings {
   categories: string[]; // e.g. ["astro-ph", "cs.LG"]
   topics: Topic[];
   timezone: string;
+}
+
+interface DetailSelectionSettings {
+  profile: "conservative" | "balanced" | "broad" | "custom";
+  normalThreshold: number;
+  exceptionalThreshold: number;
+  softLimit: number;
 }
 
 type RunStatus = "pending" | "running" | "completed"
@@ -257,9 +276,16 @@ interface PaperSummary {
 }
 ```
 
-The `topic.detail` flag replaces v0.1.1's separate `detailCategories` list.
-When `detail` is off, even if the LLM says a paper is a primary contribution,
-the filter demotes `isDetail` to `false`.
+The `topic.detail` flag replaces v0.1.1's separate `detailCategories` list, but
+it is now only an eligibility gate. Daily filtering always classifies relevance
+and topic; after full text is available, `detail-selector.ts` scores eligible
+papers in a separate call and applies the global policy. Daily structured
+summaries and standalone `papers/*.md` deep dives are therefore distinct outputs.
+
+Paper Index entries additionally have an optional persisted `abstract`. Schema 3
+normalization accepts schema 1 and 2 files. A normal later daily upsert adds an
+available abstract to an old entry; loading the index does not fetch anything or
+perform a network migration.
 
 ## Migration (v0.1.1 → v0.1.2)
 
@@ -278,7 +304,7 @@ the filter demotes `isDetail` to `false`.
 
 | Command | Action |
 |---|---|
-| `arXiv Daily: Run now` | Pulls today, writes daily + papers |
+| `arXiv Daily: Run now` | Pulls today, writes the daily report, and optionally writes selected standalone deep dives |
 | `arXiv Daily: Run for date…` | Pulls a specific date within the last 5 days |
 | `arXiv Daily: Run all pending in lookback window` | Runs every pending date |
 | `arXiv Daily: Retry failed dates in lookback window` | Clears failed state for recent failed dates and reruns them |
@@ -324,10 +350,16 @@ that priority, so unstarred papers stay neutral in the dashboard. The older
 `status` values remain in `papers.json` for compatibility with daily checkbox
 sync, saved notes, and existing indexes.
 
-Search and Similar Papers derive one in-memory index from these existing
-entries. They do not change the Paper Index schema or persistence, so old
-settings, Paper Index files, and Markdown reports remain usable without a
-migration.
+Search and Similar Papers derive one in-memory index from these entries. Similar
+Papers uses persisted abstracts and structured summaries that startup history
+sync can recover from daily Markdown. Its weighted matching favors multiple
+shared concepts and fields, suppresses weak/author-only results, and reports
+metadata plus detail/daily/PDF resource availability. It performs no LLM,
+network, embedding, or database operation when queried.
+
+Paper Index schema 3 reads old schema 1 and 2 files. Abstracts are added lazily
+when ordinary daily processing later sees those papers; there is no network
+migration or mandatory bulk rewrite.
 
 Generated daily reports and detail notes append a folded `Generation metrics`
 callout. Daily reports include total pipeline wall time; both report types show

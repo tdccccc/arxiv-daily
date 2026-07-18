@@ -6,6 +6,7 @@ export const PAPER_SEARCH_FIELD_WEIGHTS = {
   topics: 4,
   categories: 2.5,
   authors: 2,
+  abstract: 1.6,
   coreProblem: 1.8,
   keyMethod: 1.8,
   mainResult: 1.7,
@@ -46,11 +47,25 @@ interface QueryClause {
   tokens: string[];
 }
 
+interface SimilarityTerm {
+  token: string;
+  weight: number;
+  sourceFields: Set<SearchField>;
+}
+
+interface SimilarityCandidate {
+  result: PaperSearchResult;
+  semanticMatchedTermCount: number;
+  authorOnly: boolean;
+  sharedAuthors: number;
+}
+
 const FIELD_LABELS: Record<SearchField, string> = {
   title: "title",
   topics: "topic",
   categories: "category",
   authors: "author",
+  abstract: "abstract",
   coreProblem: "core problem",
   keyMethod: "method",
   mainResult: "result",
@@ -137,33 +152,105 @@ export class PaperSearchIndex {
       : this.documents.find((document) => document.entry === source || document.canonicalId === normalizeArxivSearchId(source.arxivId));
     if (!sourceDocument) return [];
 
-    const terms = this.similarityTerms(sourceDocument, 16);
-    const results: PaperSearchResult[] = [];
+    const limit = Math.max(0, options.limit ?? 10);
+    if (limit === 0) return [];
+    const terms = this.similarityTerms(sourceDocument, 24);
+    const totalTermWeight = terms.reduce((sum, term) => sum + term.weight, 0);
+    const candidates: SimilarityCandidate[] = [];
     for (const document of this.documents) {
       if (document === sourceDocument || document.canonicalId === sourceDocument.canonicalId) continue;
       if (!options.includeIgnored && document.entry.status === "ignored") continue;
-      const matchedTerms = terms.filter((term) => document.allTokens.has(term));
+      const matchedTerms = terms.filter((term) => document.allTokens.has(term.token));
       if (matchedTerms.length === 0) continue;
-      results.push(this.scoreDocument(document, matchedTerms, 0));
+      candidates.push(this.scoreSimilarDocument(sourceDocument, document, matchedTerms, totalTermWeight));
     }
-    return sortResults(results).slice(0, Math.max(0, options.limit ?? 10));
+
+    candidates.sort(compareSimilarityCandidates);
+    const semantic = candidates.filter((candidate) => !candidate.authorOnly);
+    const strong = semantic.filter((candidate) => candidate.semanticMatchedTermCount >= 2);
+    const minimumUsefulCoverage = Math.min(limit, 3);
+    const primary = strong.length >= minimumUsefulCoverage ? strong : semantic;
+    // Pure-author matches are sparse-index fallback only. Once the index has
+    // enough semantic candidates, author-only matches are excluded rather than
+    // filling slots left by weak-match suppression.
+    const ranked = semantic.length < minimumUsefulCoverage
+      ? [...primary, ...candidates.filter((candidate) => candidate.authorOnly)]
+      : primary;
+    return applyAuthorQuota(ranked, sourceDocument, limit).map((candidate) => candidate.result);
   }
 
-  private similarityTerms(source: IndexedDocument, limit: number): string[] {
-    const candidates = new Map<string, number>();
+  private similarityTerms(source: IndexedDocument, limit: number): SimilarityTerm[] {
+    const candidates = new Map<string, SimilarityTerm>();
     for (const field of SEARCH_FIELDS) {
       if (field === "limitations" || field === "sourceSections") continue;
       for (const [token, frequency] of source.fields[field]) {
         if (token.length < 2 || /^\d+$/.test(token)) continue;
         const rarity = inverseDocumentFrequency(this.documents.length, this.documentFrequency.get(token) ?? 0);
         const value = PAPER_SEARCH_FIELD_WEIGHTS[field] * rarity * (1 + Math.log(frequency));
-        candidates.set(token, Math.max(candidates.get(token) ?? 0, value));
+        const current = candidates.get(token);
+        if (current) {
+          current.weight = Math.max(current.weight, value);
+          current.sourceFields.add(field);
+        } else {
+          candidates.set(token, { token, weight: value, sourceFields: new Set([field]) });
+        }
       }
     }
-    return [...candidates]
-      .sort((a, b) => b[1] - a[1] || compareText(a[0], b[0]))
-      .slice(0, limit)
-      .map(([token]) => token);
+    const ranked = [...candidates.values()]
+      .sort((a, b) => b.weight - a.weight || compareText(a.token, b.token));
+    const selected: SimilarityTerm[] = [];
+    let authorOnlyTerms = 0;
+    for (const term of ranked) {
+      const authorOnly = term.sourceFields.size === 1 && term.sourceFields.has("authors");
+      if (authorOnly && authorOnlyTerms >= 3) continue;
+      selected.push(term);
+      if (authorOnly) authorOnlyTerms += 1;
+      if (selected.length >= limit) break;
+    }
+    return selected;
+  }
+
+  private scoreSimilarDocument(
+    source: IndexedDocument,
+    document: IndexedDocument,
+    matchedTerms: SimilarityTerm[],
+    totalTermWeight: number,
+  ): SimilarityCandidate {
+    const result = this.scoreDocument(document, matchedTerms.map((term) => term.token), 0);
+    const semanticTerms = matchedTerms.filter(
+      (term) => !isAuthorOnlyTerm(term) && hasNonAuthorMatch(document, term.token),
+    );
+    const authorOnly = semanticTerms.length === 0;
+    const totalWeight = matchedTerms.reduce((sum, term) => sum + term.weight, 0);
+    const sourceWeight = matchedTerms.reduce(
+      (sum, term) => sum + term.weight * (1 + 0.12 * (term.sourceFields.size - 1)),
+      0,
+    );
+    const candidateFields = new Set<SearchField>();
+    for (const term of matchedTerms) {
+      for (const field of SEARCH_FIELDS) {
+        if (document.fields[field].has(term.token)) candidateFields.add(field);
+      }
+    }
+    const coverage = totalWeight / Math.max(1, totalTermWeight);
+    const multiTermBonus = matchedTerms.length > 1 ? 1 + Math.min(0.45, 0.12 * (matchedTerms.length - 1)) : 0.35;
+    const multiFieldBonus = 1 + Math.min(0.3, 0.08 * Math.max(0, candidateFields.size - 1));
+    result.score = roundScore(
+      (result.score + sourceWeight)
+      * (0.55 + coverage)
+      * multiTermBonus
+      * multiFieldBonus
+      * (authorOnly ? 0.08 : 1),
+    );
+    const sourceAuthors = normalizedAuthors(source.entry.authors);
+    const sharedAuthors = [...normalizedAuthors(document.entry.authors)]
+      .filter((author) => sourceAuthors.has(author)).length;
+    return {
+      result,
+      semanticMatchedTermCount: new Set(semanticTerms.map((term) => term.token)).size,
+      authorOnly,
+      sharedAuthors,
+    };
   }
 
   private scoreDocument(document: IndexedDocument, terms: string[], idRank: number): PaperSearchResult {
@@ -209,6 +296,7 @@ function indexDocument(entry: PaperIndexEntry): IndexedDocument {
     topics,
     categories,
     authors: entry.authors,
+    abstract: [entry.abstract ?? ""],
     coreProblem: [entry.summary?.coreProblem ?? ""],
     keyMethod: [entry.summary?.keyMethod ?? ""],
     mainResult: [entry.summary?.mainResult ?? ""],
@@ -265,6 +353,57 @@ function inverseDocumentFrequency(total: number, frequency: number): number {
   return Math.log(1 + (total - frequency + 0.5) / (frequency + 0.5));
 }
 
+function isAuthorOnlyTerm(term: SimilarityTerm): boolean {
+  return term.sourceFields.size === 1 && term.sourceFields.has("authors");
+}
+
+function hasNonAuthorMatch(document: IndexedDocument, token: string): boolean {
+  return SEARCH_FIELDS.some(
+    (field) => field !== "authors" && document.fields[field].has(token),
+  );
+}
+
+function compareSimilarityCandidates(
+  left: SimilarityCandidate,
+  right: SimilarityCandidate,
+): number {
+  return Number(left.authorOnly) - Number(right.authorOnly)
+    || right.result.score - left.result.score
+    || compareText(left.result.entry.arxivId, right.result.entry.arxivId);
+}
+
+function applyAuthorQuota(
+  candidates: SimilarityCandidate[],
+  source: IndexedDocument,
+  limit: number,
+): SimilarityCandidate[] {
+  const sourceAuthors = normalizedAuthors(source.entry.authors);
+  if (sourceAuthors.size === 0) return candidates.slice(0, limit);
+  const outputSize = Math.min(limit, candidates.length);
+  const authorCap = Math.max(1, Math.ceil(outputSize * 0.4));
+  const selected: SimilarityCandidate[] = [];
+  const deferred: SimilarityCandidate[] = [];
+  let sharedAuthorCount = 0;
+  for (const candidate of candidates) {
+    if (candidate.sharedAuthors > 0 && sharedAuthorCount >= authorCap) {
+      deferred.push(candidate);
+      continue;
+    }
+    selected.push(candidate);
+    if (candidate.sharedAuthors > 0) sharedAuthorCount += 1;
+    if (selected.length >= limit) return selected;
+  }
+  for (const candidate of deferred) {
+    selected.push(candidate);
+    if (selected.length >= limit) break;
+  }
+  return selected;
+}
+
+function normalizedAuthors(authors: readonly string[]): Set<string> {
+  return new Set(authors.map((author) => author.normalize("NFKC").trim().toLowerCase()).filter(Boolean));
+}
+
 function sortResults(results: PaperSearchResult[]): PaperSearchResult[] {
   return results.sort((a, b) => b.score - a.score || compareText(a.entry.arxivId, b.entry.arxivId));
 }
@@ -294,6 +433,7 @@ function emptyFieldNumbers(): Record<SearchField, number> {
     topics: 0,
     categories: 0,
     authors: 0,
+    abstract: 0,
     coreProblem: 0,
     keyMethod: 0,
     mainResult: 0,

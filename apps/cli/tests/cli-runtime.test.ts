@@ -68,6 +68,29 @@ describe("CLI runtime", () => {
     );
   });
 
+  it("passes configured detail selection policy to the pipeline", async () => {
+    const root = await makeTempDir();
+    const configuredPolicy = {
+      profile: "custom" as const,
+      normalThreshold: 81,
+      exceptionalThreshold: 96,
+      softLimit: 7,
+    };
+    const config = await loadCliConfig({
+      cwd: root,
+      env: { ARXIV_DAILY_API_KEY: "test-key" },
+      readText: async () => JSON.stringify({ detailSelection: configuredPolicy }),
+    });
+    const host = buildNodeHostAdapters({ rootDir: config.vaultRoot });
+
+    const runtime = await buildCliRuntime(config, { host });
+
+    expect((runtime.pipeline as any).deps.detailSelection).toEqual(configuredPolicy);
+    expect((runtime.pipeline as any).deps.detailSelection).toBe(
+      config.settings.detailSelection,
+    );
+  });
+
   it("preserves legacy raw HTML cache files during runtime cleanup", async () => {
     const root = await makeTempDir();
     const config = await loadCliConfig({

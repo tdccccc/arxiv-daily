@@ -36,10 +36,10 @@ describe("filterPapers", () => {
     expect(llm.call).not.toHaveBeenCalled();
   });
 
-  it("includes topic list with [DETAIL] markers in the system prompt", async () => {
+  it("includes the topic list without detail hints in the system prompt", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", detail: true }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z" }] }),
       ),
     };
     await filterPapers([samplePaper], {
@@ -48,16 +48,16 @@ describe("filterPapers", () => {
       arxivSettings: makeArxiv(makeTopics()),
     });
     const sys = llm.call.mock.calls[0][0][0].content as string;
-    expect(sys).toContain("- photo-z [DETAIL]: photo-z methods");
-    expect(sys).toContain("- galaxy-cluster [DETAIL]: cluster surveys");
+    expect(sys).toContain("- photo-z: photo-z methods");
+    expect(sys).toContain("- galaxy-cluster: cluster surveys");
     expect(sys).toContain("- ml-astro: ML/DL in astro");
     expect(sys).toContain("photo-z|galaxy-cluster|ml-astro|skip");
   });
 
-  it("keeps papers with valid tag and respects detail flag", async () => {
+  it("keeps papers with a valid tag and starts them as non-detail", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", detail: true }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z" }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -67,29 +67,14 @@ describe("filterPapers", () => {
     });
     expect(out).toHaveLength(1);
     expect(out[0].category).toBe("photo-z");
-    expect(out[0].isDetail).toBe(true);
-  });
-
-  it("demotes detail=true when the chosen topic has detail=false", async () => {
-    const llm = {
-      call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "ml-astro", detail: true }] }),
-      ),
-    };
-    const out = await filterPapers([samplePaper], {
-      llm: llm as any,
-      logger: new Logger("error"),
-      arxivSettings: makeArxiv(makeTopics()),
-    });
-    expect(out).toHaveLength(1);
-    expect(out[0].category).toBe("ml-astro");
     expect(out[0].isDetail).toBe(false);
   });
+
 
   it("drops papers with category 'skip'", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "skip", detail: false }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "skip" }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -100,12 +85,39 @@ describe("filterPapers", () => {
     expect(out).toEqual([]);
   });
 
-  it("drops papers with an unknown tag", async () => {
+  it("drops all papers for an unknown tag", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "nope", detail: false }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "nope" }] }),
       ),
     };
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+    });
+    expect(out).toEqual([]);
+  });
+
+  it.each([
+    ["non-JSON", "not JSON"],
+    ["markdown-wrapped JSON", '```json\n{"papers":[]}\n```'],
+    ["array root", JSON.stringify([])],
+    ["extra root key", JSON.stringify({ papers: [], extra: true })],
+    ["missing papers", JSON.stringify({})],
+    ["papers not array", JSON.stringify({ papers: {} })],
+    ["non-record paper", JSON.stringify({ papers: [null] })],
+    ["missing record key", JSON.stringify({ papers: [{ id: samplePaper.id }] })],
+    ["extra detail key", JSON.stringify({ papers: [{ id: samplePaper.id, category: "photo-z", detail: true }] })],
+    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z" }] })],
+    ["duplicate ID", JSON.stringify({ papers: [
+      { id: samplePaper.id, category: "photo-z" },
+      { id: samplePaper.id, category: "skip" },
+    ] })],
+    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z" }] })],
+    ["non-string category", JSON.stringify({ papers: [{ id: samplePaper.id, category: null }] })],
+  ])("rejects %s conservatively", async (_label, raw) => {
+    const llm = { call: vi.fn().mockResolvedValue(raw) };
     const out = await filterPapers([samplePaper], {
       llm: llm as any,
       logger: new Logger("error"),

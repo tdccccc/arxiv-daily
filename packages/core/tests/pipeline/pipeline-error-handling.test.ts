@@ -15,6 +15,12 @@ const recentHtml = readFileSync(
   "utf8",
 );
 
+const testDetailSelection = {
+  normalThreshold: 70,
+  exceptionalThreshold: 90,
+  softLimit: 2,
+};
+
 const testArxiv = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
@@ -72,6 +78,7 @@ describe("Pipeline arXiv 0 papers handling", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-06-22");
@@ -129,6 +136,7 @@ describe("Pipeline LLM 0 papers handling", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-05-11");
@@ -178,7 +186,7 @@ describe("Pipeline index 0 papers handling", () => {
       call: vi.fn().mockResolvedValue(
         JSON.stringify({
           papers: [
-            { id: "2605.00001", category: "photo-z", detail: false },
+            { id: "2605.00001", category: "photo-z" },
           ],
         }),
       ),
@@ -211,6 +219,7 @@ describe("Pipeline index 0 papers handling", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     const result = await pipeline.runForDate("2026-05-11");
@@ -280,21 +289,27 @@ describe("Pipeline partial failure consistency", () => {
       ...overrides.paperIndex,
     };
     const llm = {
-      call: vi
-        .fn()
-        .mockResolvedValueOnce(JSON.stringify({
-          papers: ids.map((id) => ({
-            id,
-            category: "test",
-            detail: overrides.detail ?? false,
-          })),
-        }))
-        .mockResolvedValue(
-          [
-            "## Test Topic",
-            ...ids.map((id) => `### [${id}]\n- **研究问题**: test`),
-          ].join("\n\n"),
-        ),
+      call: vi.fn(async (messages: any[]) => {
+        const system = messages[0]?.content ?? "";
+        if (system.includes("选择最匹配的主题")) {
+          return JSON.stringify({
+            papers: ids.map((id) => ({ id, category: "test" })),
+          });
+        }
+        if (system.includes("strict research-paper evaluator")) {
+          return JSON.stringify({
+            papers: ids.map((id) => ({
+              id,
+              score: overrides.detail ? 80 : 0,
+              reason: overrides.detail ? "strong contribution" : "not selected",
+            })),
+          });
+        }
+        return [
+          "## Test Topic",
+          ...ids.map((id) => `### [${id}]\n- **研究问题**: test`),
+        ].join("\n\n");
+      }),
     };
     const paperFetcher = {
       fetch: vi.fn(async () => ({
@@ -315,6 +330,7 @@ describe("Pipeline partial failure consistency", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
     return { pipeline, writer, paperIndex, paperFetcher };
   }
@@ -397,7 +413,7 @@ describe("Pipeline partial failure consistency", () => {
     expect(writer.writeDaily).toHaveBeenCalled();
     expect(paperIndex.setPaperPath).toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith(
-      expect.stringContaining("pipeline: detail failed for 2605.08080"),
+      expect.stringContaining("pipeline: detail index repair failed for 2605.08080"),
       expect.any(Error),
     );
   });
@@ -438,6 +454,7 @@ describe("Pipeline partial failure consistency", () => {
       advanced: DEFAULT_SETTINGS.advanced,
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
     });
 
     await pipeline.runForDate("2026-05-11");

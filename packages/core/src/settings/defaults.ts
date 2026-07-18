@@ -1,4 +1,5 @@
 import type { PluginSettings } from "./types";
+import { detailSelectionPreset } from "./detail-selection";
 
 export const DEFAULT_SETTINGS: PluginSettings = {
   llm: {
@@ -15,6 +16,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     topics: [],
     timezone: "Asia/Shanghai",
   },
+  detailSelection: detailSelectionPreset("balanced"),
   output: {
     dailyDir: "arxiv-daily/daily",
     papersDir: "arxiv-daily/papers",

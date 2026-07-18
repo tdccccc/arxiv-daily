@@ -22,7 +22,7 @@ Zotero 仍然负责 citation key、BibTeX 和正式文献库管理。
 - **Starred / All 工作流**：只给重要论文点星标，未星标论文保持中性。
 - **日报日历**：有日报的日期会标出，今天会高亮，点击日期即可打开对应日报。
 - **本地相关度搜索**：覆盖 arXiv ID、标题、作者、topic、分类和结构化摘要字段；支持英文技术词及中文双字切词，并优先精确匹配现代 arXiv ID（含 URL/version 形式）。有搜索词时默认按相关度排序；显式选择星标、发表日期、topic 或标题后，该排序保持为主排序。
-- **Similar Papers**：在未忽略的 Paper Index 条目上进行本地 BM25 风格词法检索，显示确定性的匹配原因，并可打开 detail、来源日报、arXiv 或 PDF；不使用网络、LLM、embedding 或数据库。
+- **Similar Papers**：在未忽略的 Paper Index 条目上进行本地加权词法匹配，使用已持久化的摘要和从历史日报恢复的结构化总结；优先多概念、跨字段重合，抑制弱匹配和仅作者匹配。结果显示匹配原因、元数据、可用资源，并可打开 detail、来源日报、arXiv 或 PDF；查询时不使用网络、LLM、embedding 或数据库。
 - **聚焦阅读动作**：打开/创建论文笔记、打开来源日报、打开 arXiv、打开 PDF、下载 PDF。
 - **统一取消**：**Cancel active tasks** 协作式取消自动/手动日报运行、手动 detail 总结和 PDF 下载；**Get Models** 不在取消范围内。Obsidian 已经发出的 `requestUrl` 请求可能先完成，但后续工作会停止。
 - **Markdown 原生输出**：日报和论文笔记都是普通 Markdown 文件。
@@ -59,13 +59,13 @@ arxiv-daily/
     run-state.json
 ```
 
-- `daily/YYYY-MM-DD.md`：按 topic 分组的每日发现日报。
-- `papers/<arxiv_id>.md`：detail 论文或手动创建的论文笔记。
+- `daily/YYYY-MM-DD.md`：按 topic 分组的每日发现日报，每篇入选论文都有结构化短总结。
+- `papers/<arxiv_id>.md`：独立的全文 deep dive 或手动创建的论文笔记；它与日报中的结构化总结不是同一种输出。
 - `pdfs/<arxiv_id>.pdf`：手动下载的 arXiv PDF。
-- `.index/papers.json`：Dashboard 使用的本地论文索引；搜索和 Similar Papers 只构建派生的内存索引，不修改其 schema。
+- `.index/papers.json`：Dashboard、搜索和 Similar Papers 使用的本地 Paper Index。
 - `.index/run-state.json`：调度器和 CLI 共用的运行状态。
 
-这些功能不需要 Paper Index schema migration；已有设置、Paper Index 和 Markdown 文件仍可继续使用。
+Paper Index schema 3 会在原有元数据和结构化总结之外持久化 abstract，并可直接读取旧 schema 1/2。旧条目会在之后的日报流程再次遇到论文时惰性补齐 abstract，不会为了迁移而联网或批量重写。
 
 ## 安装
 
@@ -136,6 +136,16 @@ https://github.com/tdccccc/arxiv-daily/releases/latest
 在日报里勾选“重点”会映射为 Dashboard 里的星标。
 
 日报和生成的 detail 笔记末尾会附加折叠的 **Generation metrics** callout：在可用时显示 pipeline 总耗时，并显示 LLM 耗时、逻辑调用数、HTTP attempts 和 provider 实际报告的 token usage。缺失 usage 会显示 unavailable/incomplete，而不是记为 0；重试时若失败 attempt 的 usage 不可得，也会标为 incomplete。插件不估算费用。旧 Markdown 无需重写，仍可使用。
+
+### 自动 deep dive
+
+`daily/YYYY-MM-DD.md` 里的结构化条目是完整的每日发现结果；`papers/<arxiv_id>.md` 则是针对单篇论文的独立全文 deep dive，不是日报短总结的另一种显示形式。
+
+自动 deep-dive 选择现在是正文抓取完成后的独立 LLM 评分步骤。只有归入已启用 **Detail report** 的 topic、存在可用全文且尚无 paper 文件的论文才有资格。存在 eligible candidates 时，所有候选合并到额外的一次 LLM 调用中评分；没有候选时不会产生这次调用。
+
+全局设置提供 **Conservative**、**Balanced**、**Broad** 和 **Custom** profile。默认 **Balanced** 的 normal threshold 为 **75**、exceptional threshold 为 **92**、soft limit 为 **3**。Soft limit 不是硬上限：达到 exceptional threshold 的论文可以让本次自动 deep dive 数量超过 3。Custom 可直接控制三个数值；每个 topic 的 **Detail report** toggle 则独立控制候选资格。
+
+如果评分调用失败或返回无效结果，系统会保守地不创建任何新的自动 deep dive，但仍继续生成日报，daily run 可以成功。手动 **Summarize by arXiv ID** 是独立流程，不受该策略影响。
 
 ## 常用操作
 

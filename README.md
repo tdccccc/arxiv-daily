@@ -10,10 +10,10 @@ The result is a compact daily reading list you can skim, star, and act on, witho
 
 ## Why arXiv Daily?
 
-- **Save time**: let the LLM filter hundreds of papers down to the handful relevant to your topics, with structured summaries (core problem, method, result, relevance, limitations).
-- **Stay organized**: daily reports, paper notes, and PDFs all live as plain Markdown in your vault — searchable, linkable, and future-proof.
+- **Save time**: let the LLM filter hundreds of papers down to the handful relevant to your topics, with structured daily summaries (core problem, method, result, relevance, limitations).
+- **Stay organized**: daily reports, standalone deep dives, paper notes, and PDFs all live as plain Markdown in your vault — searchable, linkable, and future-proof.
 - **Review across days**: the Dashboard gives you a calendar view, local relevance-ranked search, topic/date/status filters, and sorting to revisit papers across dates.
-- **Works with your workflow**: star important papers, open arXiv or PDF links, create detailed notes for papers you want to dig into. When a paper is ready for your formal library, import it into Zotero as usual.
+- **Works with your workflow**: star important papers, open arXiv or PDF links, and create or automatically select detailed notes for papers worth a deeper look. When a paper is ready for your formal library, import it into Zotero as usual.
 - **Set and forget**: configure once — categories, topics, LLM provider, schedule — and the plugin runs daily. Missed days are caught up automatically.
 
 ## Quick Start
@@ -35,7 +35,7 @@ The Dashboard is the main entry point after setup.
 - **Calendar**: dates with reports are marked; today is highlighted; click any date to open its report.
 - **Search & filters**: local relevance-ranked search covers arXiv ID, title, authors, topics, categories, and structured summary fields, with English technical-token and Chinese bigram tokenization. Exact modern arXiv IDs (including URL/version forms) are prioritized.
 - **Sort**: a non-empty search defaults to relevance; choosing starred, published date, topic, or title keeps that explicit sort as the primary order.
-- **Similar Papers**: local BM25-style lexical matches over non-ignored Paper Index entries, with deterministic match reasons and actions to open the detail, daily report, arXiv page, or PDF. It uses no network request, LLM, embedding, or database.
+- **Similar Papers**: local weighted lexical matching over non-ignored Paper Index entries, using persisted abstracts plus structured summaries recovered from daily reports. Multi-concept and multi-field overlap is favored, while weak and author-only matches are suppressed; results show match reasons, metadata, available resources, and actions for detail, daily report, arXiv, or PDF. Querying uses no network, LLM, embedding, or database.
 - **Paper actions**: from each row, open or create a paper note, open the daily report, open the arXiv page, open or download a PDF.
 - **Batch operations**: run today, run pending lookback dates, or run a specific date. **Cancel active tasks** cooperatively cancels automatic or manual daily runs, manual detail summaries, and PDF downloads; **Get Models** is excluded. An Obsidian `requestUrl` call that was already issued may finish before cancellation takes effect, while later work is stopped.
 
@@ -56,6 +56,16 @@ Daily reports and generated detail notes end with a folded **Generation metrics*
 
 Existing Markdown remains usable; adding this callout does not require rewriting older reports.
 
+### Automatic deep dives
+
+The structured entries in `daily/YYYY-MM-DD.md` are the complete daily discovery output. A file in `papers/<arxiv_id>.md` is different: it is a standalone, full-text deep dive for one paper, not the paper's daily summary.
+
+Automatic deep-dive selection now runs as a separate scoring step after full text has been fetched. Only papers assigned to a topic whose **Detail report** toggle is enabled, with usable full text and no existing paper file, are eligible. When eligible candidates exist, they are scored together in exactly one additional LLM call; otherwise there is no selector call.
+
+Settings offers **Conservative**, **Balanced**, **Broad**, and **Custom** policies. The default **Balanced** policy uses a normal threshold of **75**, an exceptional threshold of **92**, and a soft limit of **3** deep dives per daily run. The limit is intentionally soft: qualifying papers at or above the exceptional threshold may exceed it. Custom exposes all three controls; topic toggles control eligibility independently of the global policy.
+
+If selector scoring fails or returns an invalid result, selection is conservative: no new automatic deep dives are created, while daily summarization continues and the daily run can still succeed. **Summarize by arXiv ID** is a separate manual workflow and is unaffected by this policy.
+
 ## Output Layout
 
 Files are organized under `arxiv-daily/` in your vault:
@@ -73,13 +83,13 @@ arxiv-daily/
     run-state.json
 ```
 
-- `daily/YYYY-MM-DD.md` — daily discovery report grouped by topic
-- `papers/<arxiv_id>.md` — detailed paper notes
+- `daily/YYYY-MM-DD.md` — daily discovery report grouped by topic, with a structured summary for every selected paper
+- `papers/<arxiv_id>.md` — standalone deep dives and manually created paper notes; these are separate from daily summaries
 - `pdfs/<arxiv_id>.pdf` — downloaded PDFs
-- `.index/papers.json` — local paper index (read by the Dashboard); search and Similar Papers build a derived in-memory index without changing its schema
+- `.index/papers.json` — local Paper Index used by the Dashboard, search, and Similar Papers
 - `.index/run-state.json` — scheduler run state
 
-Existing settings, Paper Index files, and Markdown reports remain usable; no Paper Index schema migration is required for these features.
+Paper Index schema 3 persists abstracts alongside the existing metadata and structured summary fields. It reads schema 1 and 2 indexes directly; older entries gain abstracts lazily when a later daily run sees them, with no network migration or bulk rewrite required.
 
 ## Installation
 

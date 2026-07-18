@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import ArxivDailyPlugin from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 
 const pluginMainSource = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
@@ -22,6 +24,49 @@ function persistedData(categories: string[]) {
 }
 
 describe("plugin settings reload lifecycle", () => {
+  it("sanitizes detail selection immediately before saving", () => {
+    const saveBody = pluginMainSource.match(
+      /async saveSettings\(\): Promise<void> \{[\s\S]*?\n  \}/,
+    )?.[0];
+    expect(saveBody).toBeDefined();
+    expect(saveBody!.indexOf("sanitizeDetailSelection")).toBeLessThan(
+      saveBody!.indexOf("persistSettings"),
+    );
+  });
+
+  it("passes configured detail selection policy to the production pipeline", () => {
+    const configuredPolicy = {
+      profile: "custom" as const,
+      normalThreshold: 82,
+      exceptionalThreshold: 97,
+      softLimit: 6,
+    };
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    Object.assign(plugin, {
+      settings: {
+        ...DEFAULT_SETTINGS,
+        detailSelection: configuredPolicy,
+      },
+      logger: {},
+      progress: {},
+      host: { markupParser: {} },
+      buildSharedDeps: () => ({
+        llm: {},
+        fetcher: {},
+        paperFetcher: {},
+        writer: {},
+      }),
+      buildPaperIndex: () => ({}),
+    });
+
+    const pipeline = (plugin as any).buildPipeline();
+
+    expect((pipeline as any).deps.detailSelection).toEqual(configuredPolicy);
+    expect((pipeline as any).deps.detailSelection).toBe(
+      plugin.settings.detailSelection,
+    );
+  });
+
   it("logs persisted sanitation warnings after logger initialization", () => {
     const loggerInit = pluginMainSource.indexOf("this.logger = new Logger(");
     const warningLoop = pluginMainSource.indexOf("for (const warning of settingsWarnings)");
@@ -64,6 +109,61 @@ describe("plugin settings reload lifecycle", () => {
     });
 
     expect(loaded.settings.arxiv.categories).toEqual(["hep-th"]);
+  });
+
+  it("adds balanced detail selection settings to old persisted configs", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: { arxiv: persistedData(["cs.CL"]).settings.arxiv },
+    });
+
+    expect(loaded.settings.detailSelection).toEqual({
+      profile: "balanced",
+      normalThreshold: 75,
+      exceptionalThreshold: 92,
+      softLimit: 3,
+    });
+  });
+
+  it("canonicalizes conflicting persisted values under a named profile", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        detailSelection: {
+          profile: "conservative",
+          normalThreshold: 12,
+          exceptionalThreshold: 13,
+          softLimit: 20,
+        },
+      },
+    });
+
+    expect(loaded.settings.detailSelection).toEqual({
+      profile: "conservative",
+      normalThreshold: 85,
+      exceptionalThreshold: 95,
+      softLimit: 1,
+    });
+  });
+
+  it("sanitizes detail selection settings across save and reload", () => {
+    const firstLoad = settingsAndStateFromPersistedData({
+      settings: {
+        detailSelection: {
+          profile: "custom",
+          normalThreshold: 101,
+          exceptionalThreshold: 20,
+          softLimit: 4.6,
+        },
+      },
+    });
+    const reloaded = settingsAndStateFromPersistedData({ settings: firstLoad.settings });
+
+    expect(firstLoad.settings.detailSelection).toEqual({
+      profile: "custom",
+      normalThreshold: 100,
+      exceptionalThreshold: 100,
+      softLimit: 5,
+    });
+    expect(reloaded.settings.detailSelection).toEqual(firstLoad.settings.detailSelection);
   });
 
   it("preserves canonical and arbitrary-minute run-window values on reload", () => {

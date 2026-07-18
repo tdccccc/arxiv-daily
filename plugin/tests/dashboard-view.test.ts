@@ -5,6 +5,7 @@ import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   applyStarButtonState,
   collectIndexedDetailSummaryRefs,
+  dashboardHistoryPathSet,
   executeObsidianCommand,
   expectedDetailSummaryPath,
   filterDashboardMarkdownFiles,
@@ -13,6 +14,7 @@ import {
   openDashboardView,
   openMarkdownFileOnce,
   paginateDashboardRows,
+  shouldForceDashboardHistorySyncAfterDetailDeletion,
   shouldSkipDashboardHistorySync,
 } from "../src/dashboard/view";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
@@ -350,7 +352,7 @@ describe("detail-summary deletion boundaries", () => {
     expect(expectedDetailSummaryPath("arxiv/papers", "../../notes")).toBeNull();
   });
 
-  it("requires generated detail content with exact matching frontmatter arxiv_id", () => {
+  it("requires generated detail content with exact matching frontmatter arxiv ID", () => {
     expect(isExpectedGeneratedDetailSummary(generated, "2606.12345")).toBe(true);
     expect(isExpectedGeneratedDetailSummary(generated, "2606.54321")).toBe(false);
     const spoofedBodyUrl = generated
@@ -374,6 +376,27 @@ describe("detail-summary deletion boundaries", () => {
     ).toBe(false);
   });
 
+  it("accepts matching legacy arxiv frontmatter", () => {
+    const legacy = generated.replace("arxiv_id:", "arxiv:");
+
+    expect(isExpectedGeneratedDetailSummary(legacy, "2606.12345")).toBe(true);
+    expect(isExpectedGeneratedDetailSummary(legacy, "2606.54321")).toBe(false);
+  });
+
+  it("rejects conflicting or invalid frontmatter arxiv IDs", () => {
+    const conflicting = generated.replace(
+      'arxiv_id: "2606.12345v2"',
+      'arxiv_id: "2606.12345v2"\narxiv: "2606.54321"',
+    );
+    const invalidLegacy = generated.replace(
+      'arxiv_id: "2606.12345v2"',
+      'arxiv: "https://arxiv.org/abs/2606.12345"',
+    );
+
+    expect(isExpectedGeneratedDetailSummary(conflicting, "2606.12345")).toBe(false);
+    expect(isExpectedGeneratedDetailSummary(invalidLegacy, "2606.12345")).toBe(false);
+  });
+
   it("requires the indexed path to equal the expected configured path", () => {
     const deletionBody = dashboardViewSource.match(
       /private async runBatchDeleteSummary\(\)[\s\S]*?\n  private async runBatchAction/,
@@ -391,7 +414,7 @@ describe("detail-summary deletion boundaries", () => {
     expect(deletionBody).toContain("vault.read(abstractFile)");
     expect(deletionBody).toContain("vault.trash(abstractFile, true)");
     expect(deletionBody).toContain("trashed but index update failed");
-    expect(deletionBody).toContain("this.lastSyncedDailyPaths = null");
+    expect(deletionBody).toContain("this.lastSyncedHistoryPaths = null");
     expect(deletionBody).not.toContain("adapter.remove");
   });
 });
@@ -421,6 +444,13 @@ describe("collectIndexedDetailSummaryRefs", () => {
 });
 
 describe("dashboard reload helpers", () => {
+  it("forces history sync after detail storage or index state changes", () => {
+    expect(shouldForceDashboardHistorySyncAfterDetailDeletion(0, 0)).toBe(false);
+    expect(shouldForceDashboardHistorySyncAfterDetailDeletion(1, 0)).toBe(true);
+    expect(shouldForceDashboardHistorySyncAfterDetailDeletion(0, 1)).toBe(true);
+    expect(shouldForceDashboardHistorySyncAfterDetailDeletion(1, 1)).toBe(true);
+  });
+
   it("filters markdown files to configured daily and papers directories", () => {
     const files = [
       { path: "arxiv/daily/2026-06-30.md" },
@@ -441,31 +471,90 @@ describe("dashboard reload helpers", () => {
     ]);
   });
 
-  it("skips dashboard history sync only when daily paths are unchanged and entries exist", () => {
+  it("fingerprints daily paths and direct-child paper Markdown paths", () => {
+    const files = [
+      { path: "notes/random.md" },
+      { path: "arxiv\\papers\\2606.00002.MD" },
+      { path: "arxiv/papers/nested/2606.00003.md" },
+      { path: "arxiv/daily/2026-07-01.md" },
+      { path: "arxiv/papers/2606.00001.md" },
+      { path: "arxiv/papers/attachment.pdf" },
+      { path: "arxiv/daily/nested/managed.md" },
+    ];
+
     expect(
-      shouldSkipDashboardHistorySync(null, new Set(["arxiv/daily/2026-06-30.md"]), 1),
+      dashboardHistoryPathSet(files, "/arxiv/daily/", "/arxiv/papers/"),
+    ).toEqual(
+      new Set([
+        "arxiv/daily/2026-07-01.md",
+        "arxiv/daily/nested/managed.md",
+        "arxiv/papers/2606.00001.md",
+        "arxiv/papers/2606.00002.MD",
+      ]),
+    );
+  });
+
+  it("skips only when the complete managed history path set is unchanged", () => {
+    const daily = "arxiv/daily/2026-06-30.md";
+    const paper = "arxiv/papers/2606.00001.md";
+    expect(
+      shouldSkipDashboardHistorySync(null, new Set([daily, paper]), 1),
     ).toBe(false);
     expect(
       shouldSkipDashboardHistorySync(
-        new Set(["arxiv/daily/2026-06-30.md", "arxiv/daily/2026-07-01.md"]),
-        new Set(["arxiv/daily/2026-07-01.md", "arxiv/daily/2026-06-30.md"]),
+        new Set([daily, paper]),
+        new Set([paper, daily]),
         12,
       ),
     ).toBe(true);
     expect(
       shouldSkipDashboardHistorySync(
-        new Set(["arxiv/daily/2026-06-30.md"]),
-        new Set(["arxiv/daily/2026-06-30.md"]),
+        new Set([daily, paper]),
+        new Set([paper, daily]),
         0,
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    {
+      change: "creates a paper",
+      before: ["arxiv/daily/2026-06-30.md"],
+      after: [
+        "arxiv/daily/2026-06-30.md",
+        "arxiv/papers/2606.00001.md",
+      ],
+    },
+    {
+      change: "deletes a paper",
+      before: [
+        "arxiv/daily/2026-06-30.md",
+        "arxiv/papers/2606.00001.md",
+      ],
+      after: ["arxiv/daily/2026-06-30.md"],
+    },
+    {
+      change: "renames a paper",
+      before: [
+        "arxiv/daily/2026-06-30.md",
+        "arxiv/papers/2606.00001.md",
+      ],
+      after: [
+        "arxiv/papers/2606.00002.md",
+        "arxiv/daily/2026-06-30.md",
+      ],
+    },
+  ])("does not skip when an external change $change", ({ before, after }) => {
     expect(
-      shouldSkipDashboardHistorySync(
-        new Set(["arxiv/daily/2026-06-30.md"]),
-        new Set(["arxiv/daily/2026-07-01.md"]),
-        12,
-      ),
+      shouldSkipDashboardHistorySync(new Set(before), new Set(after), 12),
     ).toBe(false);
+  });
+
+  it("logs cache hits as unchanged managed history files", () => {
+    expect(dashboardViewSource).toContain(
+      "unchanged managed history files",
+    );
+    expect(dashboardViewSource).not.toContain("unchanged daily files");
   });
 });
 

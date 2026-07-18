@@ -6,14 +6,15 @@
 ## 输出格式
 请只输出一个 JSON 对象，不要输出任何其他内容：
 {"papers": [
-  {"id": "YYMM.NNNNN", "category": "{{tagOptions}}", "detail": true/false},
+  {"id": "YYMM.NNNNN", "category": "{{tagOptions}}"},
   ...
 ]}
 
 规则：
+- 根对象只能包含 papers，papers 必须是数组
+- 每条记录只能包含 id 和 category，不要添加其他字段
+- 每个 id 最多出现一次，且必须来自输入论文
 - category 选择最匹配的主题 tag；若与所有主题都不相关，返回 "skip"
-- detail 仅在带 [DETAIL] 标记的主题上有意义；当且仅当该论文是该主题的核心贡献时设为 true，其余设为 false
-- detail 判定从严：宁可漏选也不要错选——不确定时设为 false
 - 如果没有任何相关论文，返回 {"papers": []}
 
 {{injectionGuard}}

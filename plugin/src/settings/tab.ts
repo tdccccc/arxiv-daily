@@ -1,6 +1,13 @@
 import { App, Modal, Notice, PluginSettingTab, Setting, setTooltip } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
-import { PROVIDER_PRESETS, type ProviderPreset } from "@arxiv-daily/core";
+import {
+  DETAIL_SELECTION_PRESETS,
+  PROVIDER_PRESETS,
+  detailSelectionPreset,
+  sanitizeDetailSelection,
+  type DetailSelectionSettings,
+  type ProviderPreset,
+} from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
 import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
@@ -449,6 +456,48 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl)
+      .setName("Automatic deep-dive selection")
+      .setDesc(
+        "Topic Detail report checkboxes enable eligibility. This global policy controls automatic selection only; manual summarize is unaffected.",
+      )
+      .addDropdown((d) => {
+        d.addOption("conservative", "Conservative")
+          .addOption("balanced", "Balanced")
+          .addOption("broad", "Broad")
+          .addOption("custom", "Custom")
+          .setValue(s.detailSelection.profile)
+          .onChange(async (profile) => {
+            s.detailSelection = profile === "custom"
+              ? sanitizeDetailSelection({ ...s.detailSelection, profile })
+              : detailSelectionPreset(profile as keyof typeof DETAIL_SELECTION_PRESETS);
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    this.renderDetailSelectionNumber(
+      containerEl,
+      "Normal threshold",
+      "Minimum score for normal automatic selection (0–100).",
+      "normalThreshold",
+      100,
+    );
+    this.renderDetailSelectionNumber(
+      containerEl,
+      "Exceptional threshold",
+      "Score that permits selection beyond the soft limit (0–100).",
+      "exceptionalThreshold",
+      100,
+    );
+    this.renderDetailSelectionNumber(
+      containerEl,
+      "Soft limit",
+      "Preferred maximum automatic deep dives per run (0–20).",
+      "softLimit",
+      20,
+    );
+
+    new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
         const zones = [
@@ -596,6 +645,40 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       ),
       "Console log verbosity. 'debug' is noisy; 'info' is the default.",
     );
+  }
+
+  private renderDetailSelectionNumber(
+    containerEl: HTMLElement,
+    name: string,
+    description: string,
+    key: keyof Pick<
+      DetailSelectionSettings,
+      "normalThreshold" | "exceptionalThreshold" | "softLimit"
+    >,
+    max: number,
+  ): void {
+    new Setting(containerEl)
+      .setName(name)
+      .setDesc(description)
+      .addText((t) => {
+        t.inputEl.type = "number";
+        t.inputEl.min = "0";
+        t.inputEl.max = String(max);
+        t.inputEl.step = key === "softLimit" ? "1" : "any";
+        t.inputEl.addClass("arxiv-daily-settings__detail-selection-number");
+        t.setValue(String(this.plugin.settings.detailSelection[key]));
+        t.inputEl.addEventListener("change", () => {
+          const current = this.plugin.settings.detailSelection;
+          const next = sanitizeDetailSelection({
+            ...current,
+            profile: "custom",
+            [key]: Number(t.inputEl.value),
+          });
+          this.plugin.settings.detailSelection = next;
+          t.inputEl.value = String(next[key]);
+          void this.plugin.saveSettings();
+        });
+      });
   }
 
   private renderApiKeySetting(containerEl: HTMLElement): void {

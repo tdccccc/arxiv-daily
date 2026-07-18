@@ -38,11 +38,10 @@ export async function filterPapers(
   }
 
   const topicLines = topics
-    .map((t) => `- ${t.tag}${t.detail ? " [DETAIL]" : ""}: ${t.description}`)
+    .map((t) => `- ${t.tag}: ${t.description}`)
     .join("\n");
   const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
   const validTags = new Set(topics.map((t) => t.tag));
-  const topicByTag = new Map(topics.map((t) => [t.tag, t] as const));
 
   const papersText = papers
     .map(
@@ -81,45 +80,26 @@ export async function filterPapers(
   }
   throwIfCancelled(deps.signal);
 
-  let parsed: { papers?: Array<{ id?: string; category?: string; detail?: boolean }> };
+  let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    const m = /\{[\s\S]*\}/.exec(raw);
-    if (!m) {
-      logger.error("paper-filter: no JSON in LLM response", raw.slice(0, 200));
-      return [];
-    }
-    try {
-      parsed = JSON.parse(m[0]);
-    } catch (e) {
-      logger.error("paper-filter: JSON parse failed", e);
-      return [];
-    }
+  } catch (e) {
+    logger.error("paper-filter: response is not strict JSON", e);
+    return [];
   }
 
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
+  const records = parseFilterRecords(parsed, new Set(idMap.keys()), validTags);
+  if (!records.ok) {
+    logger.warn(`paper-filter: invalid LLM response (${records.reason}); keeping no papers`);
+    return [];
+  }
+
   const out: FilteredPaper[] = [];
-  for (const item of parsed.papers ?? []) {
-    const id = item.id ?? "";
-    const meta = idMap.get(id);
-    if (!meta) {
-      logger.warn(`paper-filter: unknown id ${id}, skipping`);
-      continue;
-    }
-    const category = item.category ?? "";
-    if (category === "skip") continue;
-    if (!validTags.has(category)) {
-      logger.info(`paper-filter: unknown tag '${category}' for ${id}, dropping`);
-      continue;
-    }
-    const topic = topicByTag.get(category)!;
-    let isDetail = Boolean(item.detail);
-    if (isDetail && !topic.detail) {
-      isDetail = false;
-      logger.info(`paper-filter: demote detail for ${id} (topic ${category} has detail=false)`);
-    }
-    out.push({ ...meta, category, isDetail });
+  for (const item of records.value) {
+    if (item.category === "skip") continue;
+    const meta = idMap.get(item.id)!;
+    out.push({ ...meta, category: item.category, isDetail: false });
   }
   logger.info(`paper-filter: kept ${out.length}/${papers.length} papers`);
 
@@ -139,4 +119,55 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+interface FilterRecord {
+  id: string;
+  category: string;
+}
+
+function parseFilterRecords(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+  validTags: ReadonlySet<string>,
+): { ok: true; value: FilterRecord[] } | { ok: false; reason: string } {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["papers"]) || !Array.isArray(value.papers)) {
+    return { ok: false, reason: "root must be exactly {papers:[...]}" };
+  }
+
+  const seen = new Set<string>();
+  const records: FilterRecord[] = [];
+  for (const record of value.papers) {
+    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category"])) {
+      return { ok: false, reason: "paper record has an invalid shape" };
+    }
+    if (typeof record.id !== "string" || !knownIds.has(record.id)) {
+      return { ok: false, reason: "paper record has an unknown id" };
+    }
+    if (seen.has(record.id)) {
+      return { ok: false, reason: "paper record has a duplicate id" };
+    }
+    if (
+      typeof record.category !== "string" ||
+      (record.category !== "skip" && !validTags.has(record.category))
+    ) {
+      return { ok: false, reason: `paper ${record.id} has an invalid category` };
+    }
+    seen.add(record.id);
+    records.push({ id: record.id, category: record.category });
+  }
+  return { ok: true, value: records };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
 }

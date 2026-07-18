@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   bindEnterToButton,
+  isSupportedPaperIndexSchemaVersion,
   isValidCalendarDate,
   registerCommands,
 } from "../src/commands";
@@ -58,6 +59,19 @@ describe("isValidCalendarDate", () => {
     expect(isValidCalendarDate("2026-13-01")).toBe(false);
     expect(isValidCalendarDate("2026-7-01")).toBe(false);
   });
+});
+
+describe("isSupportedPaperIndexSchemaVersion", () => {
+  it.each([1, 2, 3])("accepts paper index schema %i", (schemaVersion) => {
+    expect(isSupportedPaperIndexSchemaVersion(schemaVersion)).toBe(true);
+  });
+
+  it.each([0, 4, -1, 2.5, "3", undefined])(
+    "rejects unsupported paper index schema %s",
+    (schemaVersion) => {
+      expect(isSupportedPaperIndexSchemaVersion(schemaVersion)).toBe(false);
+    },
+  );
 });
 
 describe("registerCommands", () => {

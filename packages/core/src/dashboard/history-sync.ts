@@ -1,5 +1,11 @@
-import type { PaperInbox, PaperIndexStore, PaperIndexUpsert } from "../services/paper-index";
+import type {
+  PaperInbox,
+  PaperIndexStore,
+  PaperIndexUpsert,
+  PaperSummary,
+} from "../services/paper-index";
 import type { OutputSettings, Topic } from "../settings/types";
+import { extractPaperSummaries } from "../pipeline/daily-summary-parser";
 import { looksLikeDetailSummary } from "./detail-summary";
 import { modernArxivResources } from "../utils/arxiv";
 
@@ -45,6 +51,7 @@ interface DailyCandidateCollection {
   candidates: DailyCandidate[];
   paperIdsByReport: Map<string, Set<string>>;
   parsedReports: Set<string>;
+  summaries: Record<string, PaperSummary>;
 }
 
 export async function syncDashboardHistory(
@@ -75,6 +82,14 @@ export async function syncDashboardHistory(
   if (inputs.length > 0) {
     await deps.store.upsertManyFromDailyPapers(inputs);
     deps.logger?.info(`dashboard: synced ${inputs.length} historical papers`);
+    index = await deps.store.load();
+  }
+
+  const summariesChanged = await deps.store.setSummaries(dailyCollection.summaries);
+  if (summariesChanged > 0) {
+    deps.logger?.info(
+      `dashboard: backfilled summaries for ${summariesChanged} historical papers`,
+    );
     index = await deps.store.load();
   }
 
@@ -176,13 +191,18 @@ async function collectDailyCandidates(
   const candidates: DailyCandidate[] = [];
   const paperIdsByReport = new Map<string, Set<string>>();
   const parsedReports = new Set<string>();
+  const summaries: Record<string, PaperSummary> = {};
   const seen = new Set<string>();
-  for (const file of markdownFiles) {
-    const path = normalizeVaultPath(file.path);
+  const dailyFiles = markdownFiles
+    .map((file) => ({ file, path: normalizeVaultPath(file.path) }))
+    .filter(({ path }) => dailyDateFromPath(path, dailyDir))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  for (const { path } of dailyFiles) {
     const date = dailyDateFromPath(path, dailyDir);
     if (!date) continue;
     try {
       const markdown = await deps.vault.adapter.read(path);
+      mergePaperSummaries(summaries, extractPaperSummaries(markdown));
       const parsed = parseDailyCandidates(
         markdown,
         path,
@@ -204,7 +224,16 @@ async function collectDailyCandidates(
       deps.logger?.warn(`dashboard: failed to inspect daily file ${path}`, e);
     }
   }
-  return { candidates, paperIdsByReport, parsedReports };
+  return { candidates, paperIdsByReport, parsedReports, summaries };
+}
+
+function mergePaperSummaries(
+  target: Record<string, PaperSummary>,
+  incoming: Record<string, PaperSummary>,
+): void {
+  for (const [arxivId, summary] of Object.entries(incoming)) {
+    target[arxivId] = { ...target[arxivId], ...summary };
+  }
 }
 
 function parseDailyCandidates(

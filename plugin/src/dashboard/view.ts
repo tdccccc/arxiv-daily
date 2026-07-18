@@ -298,14 +298,27 @@ export function isExpectedGeneratedDetailSummary(
   if (!expectedId || !looksLikeDetailSummary(markdown)) return false;
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\s|$)/.exec(markdown)?.[1];
   if (frontmatter == null) return false;
+  const frontmatterIds: string[] = [];
   for (const line of frontmatter.split(/\r?\n/)) {
-    const item = /^arxiv_id:\s*(.*?)\s*$/.exec(line);
+    const item = /^(?:arxiv_id|arxiv):\s*(.*?)\s*$/.exec(line);
     if (!item) continue;
     const raw = (item[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim();
     if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(raw)) return false;
-    return normalizeArxivId(raw) === expectedId;
+    const normalized = normalizeArxivId(raw);
+    if (!normalized) return false;
+    frontmatterIds.push(normalized);
   }
-  return false;
+  return (
+    frontmatterIds.length > 0 &&
+    frontmatterIds.every((arxivId) => arxivId === expectedId)
+  );
+}
+
+export function shouldForceDashboardHistorySyncAfterDetailDeletion(
+  trashedFiles: number,
+  updatedEntries: number,
+): boolean {
+  return trashedFiles > 0 || updatedEntries > 0;
 }
 
 export async function buildCalendarDailyReportMap(
@@ -483,7 +496,7 @@ class ArxivDailyDashboardView extends ItemView {
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastSyncedDailyPaths: Set<string> | null = null;
+  private lastSyncedHistoryPaths: Set<string> | null = null;
   private calendarRefreshSeq = 0;
   private isOpen = false;
 
@@ -532,17 +545,21 @@ class ArxivDailyDashboardView extends ItemView {
       this.plugin.logger.info(
         `dashboard: scanning ${markdownFiles.length}/${allFiles.length} files (${dailyDir}, ${papersDir})`,
       );
-      const dailyPaths = dailyFilePathSet(markdownFiles, dailyDir);
+      const historyPaths = dashboardHistoryPathSet(
+        markdownFiles,
+        dailyDir,
+        papersDir,
+      );
       if (
         shouldSkipDashboardHistorySync(
-          this.lastSyncedDailyPaths,
-          dailyPaths,
+          this.lastSyncedHistoryPaths,
+          historyPaths,
           this.entries.length,
         )
       ) {
         this.error = null;
         this.plugin.logger.info(
-          `dashboard: skipped history sync for ${dailyPaths.size} unchanged daily files`,
+          `dashboard: skipped history sync for ${historyPaths.size} unchanged managed history files`,
         );
         this.render();
         return;
@@ -556,7 +573,7 @@ class ArxivDailyDashboardView extends ItemView {
         markdownFiles,
         logger: this.plugin.logger,
       });
-      this.lastSyncedDailyPaths = dailyPaths;
+      this.lastSyncedHistoryPaths = historyPaths;
       this.entries = Object.values(index.papers);
       try {
         this.searchIndex = new PaperSearchIndex(this.entries);
@@ -2492,10 +2509,15 @@ class ArxivDailyDashboardView extends ItemView {
       `arXiv Daily: trashed ${trashedFiles} summaries; updated ${updatedEntries} index entries${indexFailures ? `; ${indexFailures} trashed but index update failed` : ""}${refused ? `; ${refused} refused or failed before trash` : ""}`,
       10_000,
     );
-    if (indexFailures > 0) {
-      // Force history reconciliation: the file is already in trash, so a fresh
-      // scan is the safest way to clear or remove its stale index entry.
-      this.lastSyncedDailyPaths = null;
+    if (
+      shouldForceDashboardHistorySyncAfterDetailDeletion(
+        trashedFiles,
+        updatedEntries,
+      )
+    ) {
+      // Always bypass the reload shortcut after a successful deletion so the
+      // vault and index receive a full reconciliation, even if paths appear unchanged.
+      this.lastSyncedHistoryPaths = null;
     }
     await this.reloadIndex();
   }
@@ -2692,29 +2714,41 @@ export function filterDashboardMarkdownFiles<T extends DashboardMarkdownFile>(
   });
 }
 
-function dailyFilePathSet(
+export function dashboardHistoryPathSet(
   files: DashboardMarkdownFile[],
   dailyDir: string,
+  papersDir: string,
 ): Set<string> {
   const normalizedDailyDir = normalizeVaultPath(dailyDir);
+  const normalizedPapersDir = normalizeVaultPath(papersDir);
   return new Set(
     files
       .map((file) => normalizeVaultPath(file.path))
-      .filter((path) => path.startsWith(`${normalizedDailyDir}/`)),
+      .filter(
+        (path) =>
+          path.startsWith(`${normalizedDailyDir}/`) ||
+          isDirectChildMarkdown(path, normalizedPapersDir),
+      ),
   );
 }
 
 export function shouldSkipDashboardHistorySync(
-  previousDailyPaths: ReadonlySet<string> | null,
-  currentDailyPaths: ReadonlySet<string>,
+  previousHistoryPaths: ReadonlySet<string> | null,
+  currentHistoryPaths: ReadonlySet<string>,
   currentEntryCount: number,
 ): boolean {
-  if (!previousDailyPaths || currentEntryCount === 0) return false;
-  if (previousDailyPaths.size !== currentDailyPaths.size) return false;
-  for (const path of currentDailyPaths) {
-    if (!previousDailyPaths.has(path)) return false;
+  if (!previousHistoryPaths || currentEntryCount === 0) return false;
+  if (previousHistoryPaths.size !== currentHistoryPaths.size) return false;
+  for (const path of currentHistoryPaths) {
+    if (!previousHistoryPaths.has(path)) return false;
   }
   return true;
+}
+
+function isDirectChildMarkdown(path: string, dir: string): boolean {
+  const prefix = `${dir}/`;
+  if (!path.startsWith(prefix) || !/\.md$/i.test(path)) return false;
+  return !path.slice(prefix.length).includes("/");
 }
 
 export function showingText(page: DashboardPage<unknown>): string {

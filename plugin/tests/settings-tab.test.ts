@@ -105,6 +105,30 @@ describe("settings tab regressions", () => {
     );
   });
 
+  it("renders automatic detail policy near topics without changing manual summarize", () => {
+    const headingIndex = settingsTabSource.indexOf('"Research Topics"');
+    const policyIndex = settingsTabSource.indexOf('"Automatic deep-dive selection"');
+    const timezoneIndex = settingsTabSource.indexOf('.setName("Timezone")');
+    expect(policyIndex).toBeGreaterThan(headingIndex);
+    expect(policyIndex).toBeLessThan(timezoneIndex);
+    expect(settingsTabSource).toContain("Topic Detail report checkboxes enable eligibility");
+    expect(settingsTabSource).toContain("automatic selection only; manual summarize is unaffected");
+    expect(settingsTabSource).toContain('.addOption("conservative", "Conservative")');
+    expect(settingsTabSource).toContain('.addOption("balanced", "Balanced")');
+    expect(settingsTabSource).toContain('.addOption("broad", "Broad")');
+    expect(settingsTabSource).toContain('profile: "custom"');
+    expect(settingsTabSource).toContain("sanitizeDetailSelection");
+    expect(settingsTabSource).toContain("await this.plugin.saveSettings()");
+  });
+
+  it("uses numeric limits for all editable automatic detail controls", () => {
+    expect(settingsTabSource).toContain('t.inputEl.type = "number"');
+    expect(settingsTabSource).toContain('t.inputEl.min = "0"');
+    expect(settingsTabSource).toContain('"normalThreshold"');
+    expect(settingsTabSource).toContain('"exceptionalThreshold"');
+    expect(settingsTabSource).toContain('"softLimit"');
+  });
+
   it("uses explicit Start and End labels with non-cyclic select controls", () => {
     expect(settingsTabSource).toContain('"Start"');
     expect(settingsTabSource).toContain('"End"');

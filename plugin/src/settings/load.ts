@@ -1,6 +1,7 @@
 import {
   DEFAULT_SETTINGS,
   migrateArxivSettings,
+  sanitizeDetailSelection,
   type PluginSettings,
   type RunState,
   validateVaultRelativeDirectory,
@@ -33,6 +34,7 @@ function mergeSettings(
   return {
     llm: { ...defaults.llm, ...(partial.llm ?? {}) },
     arxiv: { ...defaults.arxiv, ...(partial.arxiv ?? {}) },
+    detailSelection: sanitizeDetailSelection(partial.detailSelection),
     output: { ...defaults.output, ...(partial.output ?? {}) },
     schedule: { ...defaults.schedule, ...(partial.schedule ?? {}) },
     advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },

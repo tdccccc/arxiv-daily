@@ -778,6 +778,17 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
+export function isSupportedPaperIndexSchemaVersion(
+  value: unknown,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= PAPER_INBOX_SCHEMA_VERSION
+  );
+}
+
 async function collectPaperIndexDiagnostics(
   plugin: ArxivDailyPlugin,
 ): Promise<PaperIndexDiagnostics> {
@@ -848,10 +859,11 @@ async function collectPaperIndexDiagnostics(
     return {
       ...diag,
       schemaVersion,
-      unsupportedSchemaVersion:
-        rawSchemaVersion !== 1 && rawSchemaVersion !== PAPER_INBOX_SCHEMA_VERSION
-          ? String(rawSchemaVersion)
-          : undefined,
+      unsupportedSchemaVersion: isSupportedPaperIndexSchemaVersion(
+        rawSchemaVersion,
+      )
+        ? undefined
+        : String(rawSchemaVersion),
       total: Object.keys(papers).length,
       statusCounts,
       invalidStatuses,

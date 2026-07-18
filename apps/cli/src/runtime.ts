@@ -113,6 +113,7 @@ export async function buildCliRuntime(
     advanced: config.settings.advanced,
     output: config.settings.output,
     llmSettings: config.settings.llm,
+    detailSelection: config.settings.detailSelection,
     progress: host.progress,
   });
   const manualFetch = new ManualFetchService({

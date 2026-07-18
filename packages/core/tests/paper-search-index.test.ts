@@ -131,4 +131,141 @@ describe("PaperSearchIndex", () => {
     expect(similar.map((result) => result.entry.arxivId)).not.toContain("2607.00004");
     expect(similar[0].reasons.length).toBeGreaterThan(0);
   });
+
+  it("indexes abstracts and favors weighted coverage across multiple fields", () => {
+    const source = paper("2607.10000", {
+      title: "Neural retrieval calibration",
+      authors: ["Source Author"],
+      primaryTopic: "robust retrieval",
+      topics: ["robust retrieval"],
+      summary: { keyMethod: "contrastive calibration" },
+      abstract: "dense embeddings for robust search",
+    });
+    const broad = paper("2607.10001", {
+      title: "Neural retrieval for robust search",
+      authors: ["Other Author"],
+      primaryTopic: "robust retrieval",
+      topics: ["robust retrieval"],
+      summary: { keyMethod: "contrastive calibration" },
+    });
+    const narrow = paper("2607.10002", {
+      title: "Neural retrieval calibration",
+      authors: ["Other Author"],
+      primaryTopic: "unrelated",
+      topics: ["unrelated"],
+    });
+    const abstractOnly = paper("2607.10003", {
+      title: "A different application",
+      authors: ["Other Author"],
+      abstract: "dense embeddings robust search",
+    });
+    const index = new PaperSearchIndex([source, narrow, abstractOnly, broad]);
+
+    expect(index.search("embeddings search").map((result) => result.entry.arxivId)).toContain("2607.10000");
+    expect(index.similar(source).map((result) => result.entry.arxivId)).toEqual([
+      "2607.10001", "2607.10002", "2607.10003",
+    ]);
+  });
+
+  it("suppresses weak one-token matches when enough covered candidates exist but falls back for sparse indexes", () => {
+    const source = paper("2607.20000", {
+      title: "Quantum graph retrieval",
+      authors: ["Unique Source"],
+      topics: ["spectral methods"], primaryTopic: "spectral methods",
+      category: "quant-ph", categories: ["quant-ph"],
+    });
+    const strong = [1, 2, 3].map((value) => paper(`2607.2000${value}`, {
+      title: `Quantum graph study ${value}`,
+      authors: [`Author ${value}`],
+      category: "quant-ph", categories: ["quant-ph"],
+    }));
+    const weak = paper("2607.20004", {
+      title: "Quantum biology", authors: ["Other"], category: "q-bio.NC", categories: ["q-bio.NC"],
+      topics: ["biology"], primaryTopic: "biology",
+    });
+    expect(new PaperSearchIndex([source, ...strong, weak]).similar(source, { limit: 4 })
+      .map((result) => result.entry.arxivId)).not.toContain(weak.arxivId);
+
+    expect(new PaperSearchIndex([source, weak]).similar(source, { limit: 4 })
+      .map((result) => result.entry.arxivId)).toEqual([weak.arxivId]);
+  });
+
+  it("keeps author-only matches behind semantic candidates and uses them only as sparse fallback", () => {
+    const source = paper("2607.25000", {
+      title: "Quasar tomography",
+      authors: ["Alice Unique"],
+      topics: ["intergalactic mapping"], primaryTopic: "intergalactic mapping",
+      category: "astro-ph.CO", categories: ["astro-ph.CO"],
+    });
+    const authorOnly = paper("2607.25001", {
+      title: "Unrelated compiler verification",
+      authors: ["Alice Unique"],
+      topics: ["program analysis"], primaryTopic: "program analysis",
+      category: "cs.PL", categories: ["cs.PL"],
+    });
+    const semantic = paper("2607.25002", {
+      title: "Quasar census",
+      authors: ["Bob Independent"],
+      topics: ["active galaxies"], primaryTopic: "active galaxies",
+      category: "astro-ph.GA", categories: ["astro-ph.GA"],
+    });
+
+    const ranked = new PaperSearchIndex([source, authorOnly, semantic])
+      .similar(source, { limit: 2 });
+    expect(ranked.map((result) => result.entry.arxivId)).toEqual([
+      semantic.arxivId,
+      authorOnly.arxivId,
+    ]);
+    expect(ranked[1].score).toBeLessThan(ranked[0].score * 0.5);
+    expect(new PaperSearchIndex([source, authorOnly]).similar(source))
+      .toEqual([expect.objectContaining({ entry: authorOnly })]);
+  });
+
+  it("does not count author-only source terms toward strong semantic coverage", () => {
+    const source = paper("2607.26000", {
+      title: "Quantum graph retrieval",
+      authors: ["Alice Smith"],
+      topics: ["spectral methods"], primaryTopic: "spectral methods",
+      category: "quant-ph", categories: ["quant-ph"],
+    });
+    const strong = [1, 2, 3].map((value) => paper(`2607.2600${value}`, {
+      title: `Quantum graph analysis ${value}`,
+      authors: [`Independent ${value}`],
+      category: "quant-ph", categories: ["quant-ph"],
+    }));
+    const authorPlusOneSemantic = paper("2607.26004", {
+      title: "Quantum chemistry",
+      authors: ["Alice Smith"],
+      topics: ["molecules"], primaryTopic: "molecules",
+      category: "cs.PL", categories: ["cs.PL"],
+    });
+
+    expect(new PaperSearchIndex([source, ...strong, authorPlusOneSemantic])
+      .similar(source, { limit: 4 }).map((result) => result.entry.arxivId))
+      .not.toContain(authorPlusOneSemantic.arxivId);
+  });
+
+  it("caps shared-author domination, backfills when needed, and ties by arXiv ID", () => {
+    const source = paper("2607.30000", {
+      title: "Graph retrieval calibration",
+      authors: ["Alice Smith"],
+      topics: ["graph retrieval"], primaryTopic: "graph retrieval",
+    });
+    const collaborators = [5, 4, 3].map((value) => paper(`2607.3000${value}`, {
+      title: `Graph retrieval calibration ${value}`,
+      authors: ["Alice Smith"],
+    }));
+    const independent = [2, 1].map((value) => paper(`2607.3000${value}`, {
+      title: "Graph retrieval calibration",
+      authors: [`Independent ${value}`],
+    }));
+    const results = new PaperSearchIndex([source, ...collaborators, ...independent])
+      .similar(source, { limit: 5 });
+    expect(results.slice(0, 4).filter((result) => result.entry.authors.includes("Alice Smith"))).toHaveLength(2);
+    expect(results).toHaveLength(5);
+
+    const tied = new PaperSearchIndex([source, independent[0], independent[1]])
+      .similar(source).map((result) => result.entry.arxivId);
+    expect(tied).toEqual(["2607.30001", "2607.30002"]);
+  });
 });

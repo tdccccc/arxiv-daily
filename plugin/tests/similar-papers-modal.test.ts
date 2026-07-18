@@ -80,6 +80,48 @@ describe("Similar Papers modal", () => {
     expect(callbacks.openPdf).toHaveBeenCalledWith(candidate);
   });
 
+  it("shows topic, date, and resource availability while disabling missing local actions", () => {
+    const source = paper("2607.00001");
+    const candidate = paper("2607.00002");
+    candidate.detail = false;
+    candidate.paperPath = null;
+    candidate.dailyReports = [];
+    candidate.pdfPath = "arxiv-daily/pdfs/2607.00002.pdf";
+    const callbacks = {
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    };
+    const content = document.createElement("div");
+
+    renderSimilarPapersModal(content, {
+      source,
+      results: [{ entry: candidate, score: 1, reasons: [] }],
+      ...callbacks,
+    });
+
+    expect(content.textContent).toContain("retrieval · 2026-07-01");
+    expect(content.textContent).toContain("No detail · No daily report · PDF saved");
+    const detail = content.querySelector<HTMLButtonElement>('button[aria-label="Open detail unavailable"]');
+    const daily = content.querySelector<HTMLButtonElement>('button[aria-label="Open daily report unavailable"]');
+    expect(detail?.disabled).toBe(true);
+    expect(daily?.disabled).toBe(true);
+    detail?.click();
+    daily?.click();
+    expect(callbacks.openDetail).not.toHaveBeenCalled();
+    expect(callbacks.openDaily).not.toHaveBeenCalled();
+  });
+
+  it("limits rendering to ten local results", () => {
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: Array.from({ length: 12 }, (_, index) => ({
+        entry: paper(`2607.${String(index + 2).padStart(5, "0")}`), score: 12 - index, reasons: [],
+      })),
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    expect(content.querySelectorAll("li")).toHaveLength(10);
+  });
+
   it("routes rejecting action callbacks to the safe error handler", async () => {
     const source = paper("2607.00001");
     const candidate = paper("2607.00002");
@@ -101,6 +143,21 @@ describe("Similar Papers modal", () => {
     await Promise.resolve();
 
     expect(onActionError).toHaveBeenCalledWith(error, "Open detail", candidate);
+  });
+
+  it("contains synchronous callback and error-handler failures", () => {
+    const candidate = paper("2607.00002");
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [{ entry: candidate, score: 1, reasons: [] }],
+      openDetail: () => { throw new Error("sync failure"); },
+      openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+      onActionError: () => { throw new Error("handler failure"); },
+    });
+
+    expect(() => content.querySelector<HTMLButtonElement>('button[aria-label="Open detail"]')?.click())
+      .not.toThrow();
   });
 
   it("renders an explicit empty local result", () => {

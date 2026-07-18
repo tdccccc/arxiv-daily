@@ -27,6 +27,10 @@ import {
 } from "./summarizer";
 import { extractPaperSummaries } from "./daily-summary-parser";
 import { GenerationMetricsCollector } from "../metrics/generation";
+import {
+  selectDetailPapers,
+  type DetailSelectionPolicy,
+} from "./detail-selector";
 
 interface SourcePaperMeta extends PaperMeta {
   arxivCategories: string[];
@@ -60,6 +64,7 @@ export interface PipelineDeps {
   advanced: AdvancedSettings;
   output: OutputSettings;
   llmSettings: LlmSettings;
+  detailSelection: DetailSelectionPolicy;
   progress?: ProgressReporter;
 }
 
@@ -200,7 +205,7 @@ export class ArxivPipeline {
     // 6. Fetch content for each filtered paper
     stageStart("fetch-content");
     let completedFetches = 0;
-    const enriched = await mapConcurrent(
+    let enriched = await mapConcurrent(
       visiblePapers,
       CONTENT_FETCH_CONCURRENCY,
       async (p) => {
@@ -255,7 +260,107 @@ export class ArxivPipeline {
     }
     stageEnd("fetch-content", ` (${enriched.length} papers)`);
 
-    // 7. Daily summary
+    // Discover canonical detail notes that exist on disk even when an older or
+    // incomplete index entry has no paperPath. This must happen before scoring:
+    // existing notes neither reach the selector nor consume its soft quota.
+    enriched = await mapConcurrent(
+      enriched,
+      CONTENT_FETCH_CONCURRENCY,
+      async (paper) => {
+        throwIfCancelled(signal);
+        const exists = await this.deps.writer.paperDetailExists(paper.id);
+        if (!exists) {
+          return { ...paper, paperPath: null };
+        }
+        const path = this.deps.writer.paperDetailPath(paper.id);
+        if (paper.paperPath !== path) {
+          await this.repairPaperPath(paper.id, path, signal);
+        }
+        return {
+          ...paper,
+          paperPath: path,
+          detailLink: this.deps.writer.paperDetailLink(paper.id, dateStr, path),
+        };
+      },
+    );
+
+    // Existing detail notes remain linked but are excluded by the selector.
+    const selection = await selectDetailPapers(
+      enriched,
+      this.deps.arxiv.topics ?? [],
+      this.deps.detailSelection,
+      {
+        llm: this.deps.llm,
+        logger,
+        signal,
+        onMetrics: (metrics) => runMetrics.record(metrics),
+      },
+    );
+    const selectedIds = new Set(selection.selected.map(({ id }) => id));
+
+    // 7. Detail reports. Only confirm isDetail/paperPath after a note exists,
+    // so a failed selected detail cannot inflate or leave a dangling daily link.
+    stageStart("write-detail");
+    const detailCandidates = enriched.filter(
+      (paper) => selectedIds.has(paper.id) && paper.fullSections,
+    );
+    for (let i = 0; i < detailCandidates.length; i++) {
+      throwIfCancelled(signal);
+      const paper = detailCandidates[i];
+      if (!paper) continue;
+      this.progress.setStage("write-detail", i + 1, detailCandidates.length);
+      logger.info(`pipeline: detail report for ${paper.id}`);
+      let confirmedPath: string | null = null;
+      try {
+        const detailMetrics = new GenerationMetricsCollector();
+        const detail = await summarizePaperDetail(paper, {
+          llm: this.deps.llm,
+          logger,
+          arxivSettings: this.deps.arxiv,
+          advanced: this.deps.advanced,
+          summaryLanguage: this.deps.output.summaryLanguage,
+          signal,
+          onMetrics: (metrics) => {
+            detailMetrics.record(metrics);
+            runMetrics.record(metrics);
+          },
+        });
+        throwIfCancelled(signal);
+        confirmedPath = await this.deps.writer.writePaperDetail(
+          paper,
+          dateStr,
+          detail,
+          paper.indexEntry,
+          { metrics: detailMetrics.snapshot() },
+        );
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        logger.error(`pipeline: detail failed for ${paper.id}`, e);
+        // Handle a note created between the initial existence check and write.
+        if (await this.deps.writer.paperDetailExists(paper.id)) {
+          confirmedPath = this.deps.writer.paperDetailPath(paper.id);
+        }
+      }
+      if (!confirmedPath) continue;
+      await this.repairPaperPath(paper.id, confirmedPath, signal);
+      enriched = enriched.map((candidate) =>
+        candidate.id === paper.id
+          ? {
+              ...candidate,
+              isDetail: true,
+              paperPath: confirmedPath,
+              detailLink: this.deps.writer.paperDetailLink(
+                candidate.id,
+                dateStr,
+                confirmedPath,
+              ),
+            }
+          : candidate,
+      );
+    }
+    stageEnd("write-detail", ` (${detailCandidates.length} selected papers)`);
+
+    // 8. Daily summary, after detail attempts have established which links are real.
     throwIfCancelled(signal);
     stageStart("summarize-daily");
     this.progress.setStage("summarize-daily");
@@ -281,62 +386,6 @@ export class ArxivPipeline {
     throwIfCancelled(signal);
     const dailyPath = this.deps.writer.dailyPath(dateStr);
     stageEnd("summarize-daily", ` (${dailySummary.length} chars)`);
-
-    // 8. Detail reports
-    stageStart("write-detail");
-    const detailPapers = enriched.filter((p) => p.isDetail && p.fullSections);
-    for (let i = 0; i < detailPapers.length; i++) {
-      throwIfCancelled(signal);
-      const p = detailPapers[i];
-      if (!p) continue;
-      if (await this.deps.writer.paperDetailExists(p.id)) {
-        logger.info(`pipeline: detail ${p.id} already exists, skipping`);
-        try {
-          if (this.deps.paperIndex) {
-            await this.deps.paperIndex.setPaperPath(
-              p.id,
-              this.deps.writer.paperDetailPath(p.id),
-            );
-          }
-        } catch (e) {
-          if (isCancellationError(e)) throw e;
-          logger.error(`pipeline: detail failed for ${p.id}`, e);
-        }
-        continue;
-      }
-      this.progress.setStage("write-detail", i + 1, detailPapers.length);
-      logger.info(`pipeline: detail report for ${p.id}`);
-      try {
-        const detailMetrics = new GenerationMetricsCollector();
-        const detail = await summarizePaperDetail(p, {
-          llm: this.deps.llm,
-          logger,
-          arxivSettings: this.deps.arxiv,
-          advanced: this.deps.advanced,
-          summaryLanguage: this.deps.output.summaryLanguage,
-          signal,
-          onMetrics: (metrics) => {
-            detailMetrics.record(metrics);
-            runMetrics.record(metrics);
-          },
-        });
-        throwIfCancelled(signal);
-        const path = await this.deps.writer.writePaperDetail(
-          p,
-          dateStr,
-          detail,
-          p.indexEntry,
-          { metrics: detailMetrics.snapshot() },
-        );
-        if (this.deps.paperIndex) {
-          await this.deps.paperIndex.setPaperPath(p.id, path);
-        }
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        logger.error(`pipeline: detail failed for ${p.id}`, e);
-      }
-    }
-    stageEnd("write-detail", ` (${detailPapers.length} detail papers)`);
 
     throwIfCancelled(signal);
     runMetrics.setPipelineElapsedMs(Date.now() - t0);
@@ -366,9 +415,25 @@ export class ArxivPipeline {
     const totalS = ((Date.now() - t0) / 1000).toFixed(1);
     logger.info(
       `pipeline: completed ${dateStr} in ${totalS}s — ` +
-      `${enriched.length} papers, ${detailPapers.length} detail reports`,
+      `${enriched.length} papers, ${enriched.filter((paper) => paper.paperPath).length} detail reports`,
     );
     return { kind: "completed", papersWritten: enriched.length };
+  }
+
+  private async repairPaperPath(
+    arxivId: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.deps.paperIndex) return;
+    try {
+      throwIfCancelled(signal);
+      await this.deps.paperIndex.setPaperPath(arxivId, path);
+      throwIfCancelled(signal);
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      this.deps.logger.error(`pipeline: detail index repair failed for ${arxivId}`, e);
+    }
   }
 
   private async repairExistingDaily(
@@ -387,18 +452,27 @@ export class ArxivPipeline {
         new Set([...extractDailyArxivIds(markdown), ...Object.keys(summaries)]),
       );
       const dailyPath = this.deps.writer.dailyPath(dateStr);
+      const canonicalDetailPaths: Record<string, string | null> = {};
+      for (const arxivId of arxivIds) {
+        throwIfCancelled(signal);
+        canonicalDetailPaths[arxivId] = await this.deps.writer.paperDetailExists(arxivId)
+          ? this.deps.writer.paperDetailPath(arxivId)
+          : null;
+      }
+      throwIfCancelled(signal);
+      await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);
       await this.deps.paperIndex.addDailyReports(arxivIds, dailyPath);
       await this.deps.paperIndex.setSummaries(summaries);
       throwIfCancelled(signal);
       this.deps.logger.info(
-        `pipeline: repaired daily index for ${dateStr} (${arxivIds.length} papers)`,
+        `pipeline: repaired daily and detail index for ${dateStr} (${arxivIds.length} papers)`,
       );
       return { kind: "completed", papersWritten: arxivIds.length };
     } catch (e) {
       if (isCancellationError(e)) throw e;
       return {
         kind: "failed_transient",
-        reason: `paper index daily report repair failed: ${(e as Error).message}`,
+        reason: `paper index repair failed: ${(e as Error).message}`,
       };
     }
   }
@@ -438,8 +512,11 @@ export class ArxivPipeline {
           updated: paperUpdatedDate(p),
           arxivCategory: sourceCategories(p)[0] ?? this.deps.arxiv.category,
           arxivCategories: sourceCategories(p),
+          abstract: p.abstract,
           primaryTopic: p.category,
-          detail: p.isDetail,
+          // Selection is only a candidate decision. The index becomes detail=true
+          // after a real paper path is confirmed by setPaperPath.
+          detail: false,
         })),
       );
       return {

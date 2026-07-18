@@ -1,3 +1,5 @@
+import type { DetailSelectionSettings } from "./detail-selection";
+
 export interface LlmSettings {
   apiKey: string;
   provider: string;
@@ -51,6 +53,7 @@ export interface AdvancedSettings {
 export interface PluginSettings {
   llm: LlmSettings;
   arxiv: ArxivSettings;
+  detailSelection: DetailSelectionSettings;
   output: OutputSettings;
   schedule: ScheduleSettings;
   advanced: AdvancedSettings;
