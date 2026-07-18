@@ -6,6 +6,36 @@ import { StateStore } from "@arxiv-daily/core";
 import type { RunState } from "@arxiv-daily/core";
 
 const pluginMainSource = readFileSync(resolve(process.cwd(), "main.ts"), "utf-8");
+const statusBarSource = readFileSync(
+  resolve(process.cwd(), "src/services/status-bar.ts"),
+  "utf-8",
+);
+
+function installCreateEl(parent: HTMLElement): void {
+  const create = function (
+    this: HTMLElement,
+    tag: string,
+    options?: { cls?: string; attr?: Record<string, string> },
+  ): HTMLElement {
+    const child = this.ownerDocument.createElement(tag);
+    if (options?.cls) child.className = options.cls;
+    for (const [name, value] of Object.entries(options?.attr ?? {})) {
+      child.setAttribute(name, value);
+    }
+    installCreateEl(child);
+    this.append(child);
+    return child;
+  };
+  (parent as any).createEl = create;
+  (parent as any).createDiv = function (
+    this: HTMLElement,
+    options?: { cls?: string; attr?: Record<string, string> },
+  ): HTMLElement {
+    return create.call(this, "div", options);
+  };
+}
+
+installCreateEl(document.body);
 
 function makeEl(): HTMLElement {
   return document.createElement("span");
@@ -25,6 +55,11 @@ describe("StatusBarController", () => {
   afterEach(() => {
     vi.useRealTimers();
     document.body.innerHTML = "";
+  });
+
+  it("uses Obsidian scoped element creation in production code", () => {
+    expect(statusBarSource).not.toContain(".createElement(");
+    expect(statusBarSource).toContain("this.el.ownerDocument.body.createDiv");
   });
 
   it("renders 'arXiv: disabled' when constructed with disabled state", async () => {
@@ -98,6 +133,33 @@ describe("StatusBarController", () => {
     expect(panel?.textContent).toContain("arXiv Daily detail");
     expect(panel?.textContent).toContain("2606.12938");
     expect(panel?.textContent).toContain("detail summary");
+  });
+
+  it("uses the status element document and window for the panel and timer", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const secondaryDocument = frame.contentDocument!;
+    installCreateEl(secondaryDocument.body);
+    const secondaryWindow = frame.contentWindow!;
+    const setTimeoutSpy = vi.spyOn(secondaryWindow, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(secondaryWindow, "clearTimeout");
+    const el = secondaryDocument.createElement("span");
+    secondaryDocument.body.append(el);
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+
+    ctrl.setComplete();
+
+    expect(secondaryDocument.body.querySelector(".arxiv-daily-progress")).not.toBeNull();
+    expect(document.body.querySelector(":scope > .arxiv-daily-progress")).toBeNull();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 4_000);
+
+    ctrl.dispose();
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(secondaryDocument.body.querySelector(".arxiv-daily-progress")).toBeNull();
   });
 
   it("sets progressbar aria value attributes as progress changes", async () => {

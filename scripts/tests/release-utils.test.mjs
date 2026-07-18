@@ -45,6 +45,7 @@ test("the release workflow runs the release-tool tests during verification", asy
   const verifyWorkspace = workflow.match(/- name: Verify workspace\n\s+run: \|\n(?<commands>(?:\s{10}.+\n)+)/);
   assert.ok(verifyWorkspace, "release workflow must define the workspace verification step");
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run test:release-tools$/m);
+  assert.match(verifyWorkspace.groups.commands, /^\s+npm run lint$/m);
 });
 
 test("the bundle banner contains the complete locked pako license exactly once", async () => {

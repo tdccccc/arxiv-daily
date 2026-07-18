@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   isValidLocalTime,
   llmHttpWarning,
   modelFetchNoticeMessage,
+  persistApiKeyChange,
   runWindowTimeOptions,
   validateOutputDirectoryDraft,
 } from "../src/settings/tab";
@@ -57,7 +58,83 @@ describe("llmHttpWarning", () => {
   });
 });
 
+describe("API key persistence", () => {
+  it("keeps a saved replacement and updates redaction", async () => {
+    const settings = { llm: { apiKey: "old-secret" } };
+    const logger = { setSensitiveValues: vi.fn() };
+    const saveSettings = vi.fn().mockResolvedValue(undefined);
+
+    await persistApiKeyChange(settings, logger, saveSettings, "new-secret");
+
+    expect(settings.llm.apiKey).toBe("new-secret");
+    expect(logger.setSensitiveValues).toHaveBeenCalledTimes(1);
+    expect(logger.setSensitiveValues).toHaveBeenCalledWith(["new-secret"]);
+  });
+
+  it("restores the previous replacement and redaction when saving fails", async () => {
+    const settings = { llm: { apiKey: "old-secret" } };
+    const logger = { setSensitiveValues: vi.fn() };
+    const failure = new Error("disk full");
+
+    await expect(
+      persistApiKeyChange(settings, logger, async () => Promise.reject(failure), "new-secret"),
+    ).rejects.toBe(failure);
+
+    expect(settings.llm.apiKey).toBe("old-secret");
+    expect(logger.setSensitiveValues.mock.calls).toEqual([
+      [["new-secret"]],
+      [["old-secret"]],
+    ]);
+  });
+
+  it("restores a cleared key and redaction when saving fails", async () => {
+    const settings = { llm: { apiKey: "old-secret" } };
+    const logger = { setSensitiveValues: vi.fn() };
+
+    await expect(
+      persistApiKeyChange(settings, logger, async () => Promise.reject(new Error("read only")), ""),
+    ).rejects.toThrow("read only");
+
+    expect(settings.llm.apiKey).toBe("old-secret");
+    expect(logger.setSensitiveValues.mock.calls).toEqual([
+      [[]],
+      [["old-secret"]],
+    ]);
+  });
+});
+
 describe("settings tab regressions", () => {
+  it("uses Obsidian 1.4-compatible title and ARIA help text", () => {
+    const attachHelpBody = settingsTabSource.match(
+      /private attachHelp[\s\S]*?\n  private reportActionError/,
+    )?.[0];
+    expect(attachHelpBody).toContain('title: text, "aria-label": text');
+    expect(settingsTabSource).not.toContain("setTooltip");
+  });
+
+  it("uses scoped element creation in production settings code", () => {
+    expect(settingsTabSource).not.toContain("document.createElement");
+  });
+
+  it("reports focused fire-and-forget failures instead of swallowing them", () => {
+    expect(settingsTabSource).toContain("this.plugin.logger.error(`settings: ${action} failed`");
+    expect(settingsTabSource).toContain("new Notice(`arXiv Daily: ${action} failed:");
+    expect(settingsTabSource).not.toContain(".catch(() => {})");
+    expect(settingsTabSource).toContain('this.runAction("update daily path"');
+    expect(settingsTabSource).toContain('this.runAction("run now"');
+    expect(settingsTabSource).toContain('this.runAction("open dashboard"');
+    expect(settingsTabSource).toContain('this.runAction("save selected model"');
+    expect(settingsTabSource).toContain('this.reportActionError("save run window"');
+  });
+
+  it("uses clear sentence-case labels", () => {
+    expect(settingsTabSource).toContain('"arXiv categories"');
+    expect(settingsTabSource).toContain('"Research topics"');
+    expect(settingsTabSource).toContain('"Output & schedule"');
+    expect(settingsTabSource).toContain('"API key"');
+    expect(settingsTabSource).not.toContain('"+ Add Category"');
+  });
+
   it("never renders the saved API key and requires explicit replace/save/cancel/clear actions", () => {
     const apiKeyBody = settingsTabSource.match(
       /private renderApiKeySetting\([\s\S]*?\n  private renderSetupGuide/,
@@ -69,8 +146,9 @@ describe("settings tab regressions", () => {
     expect(apiKeyBody).toContain('text: configured ? "Replace" : "Save"');
     expect(apiKeyBody).toContain('text: "Cancel"');
     expect(apiKeyBody).toContain('text: "Clear"');
-    expect(apiKeyBody).toContain("this.plugin.logger.setSensitiveValues([next])");
-    expect(apiKeyBody).toContain("this.plugin.logger.setSensitiveValues([])");
+    expect(apiKeyBody).toContain("await persistApiKeyChange(");
+    expect(apiKeyBody).toContain("next,");
+    expect(apiKeyBody).toContain('          "",');
   });
 
   it("does not register a second change listener when models are fetched", () => {
@@ -106,7 +184,7 @@ describe("settings tab regressions", () => {
   });
 
   it("renders automatic detail policy near topics without changing manual summarize", () => {
-    const headingIndex = settingsTabSource.indexOf('"Research Topics"');
+    const headingIndex = settingsTabSource.indexOf('"Research topics"');
     const policyIndex = settingsTabSource.indexOf('"Automatic deep-dive selection"');
     const timezoneIndex = settingsTabSource.indexOf('.setName("Timezone")');
     expect(policyIndex).toBeGreaterThan(headingIndex);

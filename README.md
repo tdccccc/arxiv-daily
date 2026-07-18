@@ -170,10 +170,18 @@ npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vaul
 ```bash
 npm ci
 npm run check:boundaries
+npm run lint
 npm run typecheck
 npm test
 npm run build
 ```
+
+`npm run lint` runs `eslint-plugin-obsidianmd`'s recommended flat config against
+production Obsidian plugin TypeScript plus the root `manifest.json` and
+`LICENSE`. Tests, generated bundles, and non-plugin workspaces are intentionally
+out of scope. This public ESLint plugin approximates Obsidian's source scanner;
+it does not reproduce the complete hosted review, including its CSS and release
+asset checks.
 
 For a release, synchronize every workspace package, internal dependency spec,
 Obsidian manifest/version map, and lockfile before validating the release:

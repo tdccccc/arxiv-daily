@@ -13,7 +13,6 @@ import {
   PAPER_INBOX_SCHEMA_VERSION,
   isPaperPriority,
   isPaperStatus,
-  type PaperIndexEntry,
   type PaperPriority,
   type PaperStatus,
 } from "@arxiv-daily/core";
@@ -57,6 +56,15 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   const notice: CommandNotice = (message, timeoutMs) => {
     plugin.logger.info(message);
     new Notice(message, timeoutMs);
+  };
+  const runDetached = (promise: Promise<unknown>, action: string): void => {
+    void promise.catch((error: unknown) => {
+      plugin.logger.error(`commands: failed to ${action}`, error);
+      notice(
+        `arXiv Daily: failed to ${action}: ${errorMessage(error)}`,
+        10_000,
+      );
+    });
   };
 
   function gateFilter(): boolean {
@@ -114,11 +122,16 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     if (!gateFilter()) return;
     new DatePickerModal(
       plugin.app,
-      async (date) => {
+      (date) => {
         if (!date) return;
-        notice(`arXiv Daily: running for ${date}…`);
-        const result = await plugin.scheduler.runForDateNow(date);
-        notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+        runDetached(
+          (async () => {
+            notice(`arXiv Daily: running for ${date}…`);
+            const result = await plugin.scheduler.runForDateNow(date);
+            notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+          })(),
+          `run for ${date}`,
+        );
       },
       {},
       notice,
@@ -129,11 +142,16 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     if (!gateFilter()) return;
     new DatePickerModal(
       plugin.app,
-      async (date) => {
+      (date) => {
         if (!date) return;
-        notice(`arXiv Daily: force running for ${date}…`);
-        const result = await plugin.scheduler.forceRunForDate(date);
-        notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+        runDetached(
+          (async () => {
+            notice(`arXiv Daily: force running for ${date}…`);
+            const result = await plugin.scheduler.forceRunForDate(date);
+            notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+          })(),
+          `force run for ${date}`,
+        );
       },
       {
         title: "Force run arXiv Daily for date",
@@ -171,9 +189,9 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   function openSetPaperMarkModal() {
-    new PaperMarkModal(plugin.app, async (id, mark) => {
+    new PaperMarkModal(plugin.app, (id, mark) => {
       if (!id || !mark) return;
-      await setPaperMark(id, mark);
+      runDetached(setPaperMark(id, mark), `mark ${id}`);
     }, notice).open();
   }
 
@@ -183,14 +201,14 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       "Create arXiv Daily paper note",
       "arXiv ID or URL",
       "Create note",
-      async (raw) => {
+      (raw) => {
         if (!raw) return;
         const id = normalizeArxivId(raw);
         if (!id) {
           notice("Invalid arXiv ID");
           return;
         }
-        await createPaperNote(id);
+        runDetached(createPaperNote(id), `create paper note for ${id}`);
       },
       notice,
     ).open();
@@ -248,12 +266,17 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   function openArxivIdPicker() {
     if (!gateLlm()) return;
-    new ArxivIdModal(plugin.app, async (raw) => {
+    new ArxivIdModal(plugin.app, (raw) => {
       if (!raw) return;
-      notice(`arXiv Daily: summarizing ${raw}…`);
-      const today = formatDate(todayInTz(new Date(), tz()));
-      const result = await plugin.manualFetch.fetchAndSummarize(raw, today);
-      notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+      runDetached(
+        (async () => {
+          notice(`arXiv Daily: summarizing ${raw}…`);
+          const today = formatDate(todayInTz(new Date(), tz()));
+          const result = await plugin.manualFetch.fetchAndSummarize(raw, today);
+          notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+        })(),
+        `summarize ${raw}`,
+      );
     }, notice).open();
   }
 
@@ -270,7 +293,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   plugin.addCommand({
     id: "run-now",
     name: "Run Today",
-    callback: runToday,
+    callback: () => runDetached(runToday(), "run today"),
   });
 
   plugin.addCommand({
@@ -282,13 +305,14 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   plugin.addCommand({
     id: "run-all-pending",
     name: "Run all pending in lookback window",
-    callback: runAllPending,
+    callback: () => runDetached(runAllPending(), "run pending dates"),
   });
 
   plugin.addCommand({
     id: "retry-failed",
     name: "Retry failed dates in lookback window",
-    callback: retryFailedInLookback,
+    callback: () =>
+      runDetached(retryFailedInLookback(), "retry failed dates"),
   });
 
   plugin.addCommand({
@@ -300,7 +324,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   plugin.addCommand({
     id: "clear-run-state",
     name: "Clear run state…",
-    callback: clearRunState,
+    callback: () => runDetached(clearRunState(), "clear run state"),
   });
 
   plugin.addCommand({
@@ -331,20 +355,21 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     plugin.addCommand({
       id: `mark-current-${mark.value}`,
       name: `Mark current paper as ${mark.label}`,
-      callback: () => setCurrentPaperMark(mark.value),
+      callback: () =>
+        runDetached(setCurrentPaperMark(mark.value), `mark current paper ${mark.value}`),
     });
   }
 
   plugin.addCommand({
     id: "open-today",
     name: "Open today's daily report",
-    callback: openTodayDaily,
+    callback: () => runDetached(openTodayDaily(), "open today's daily report"),
   });
 
   plugin.addCommand({
     id: "open-reading-dashboard",
     name: "Open reading dashboard",
-    callback: () => openDashboardView(plugin),
+    callback: () => runDetached(openDashboardView(plugin), "open dashboard"),
   });
 
   plugin.addCommand({
@@ -369,7 +394,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     "book-open-check",
     "arXiv Daily Dashboard",
     () => {
-      void openDashboardView(plugin);
+      runDetached(openDashboardView(plugin), "open dashboard from ribbon");
     },
   );
   dashboardRibbonIcon.addClass("arxiv-daily-ribbon-dashboard");
@@ -667,11 +692,13 @@ class RunHistoryModal extends Modal {
         .setCta()
         .onClick(async () => {
           try {
-            if (navigator.clipboard?.writeText) {
-              await navigator.clipboard.writeText(report);
+            const ownerDocument = textarea.ownerDocument;
+            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
+            if (clipboard?.writeText) {
+              await clipboard.writeText(report);
             } else {
               textarea.select();
-              document.execCommand("copy");
+              ownerDocument.execCommand("copy");
             }
             this.plugin.logger.info("arXiv Daily: run history copied");
             new Notice("arXiv Daily: run history copied");
@@ -733,11 +760,13 @@ class DiagnosticsModal extends Modal {
         .setCta()
         .onClick(async () => {
           try {
-            if (navigator.clipboard?.writeText) {
-              await navigator.clipboard.writeText(report);
+            const ownerDocument = textarea.ownerDocument;
+            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
+            if (clipboard?.writeText) {
+              await clipboard.writeText(report);
             } else {
               textarea.select();
-              document.execCommand("copy");
+              ownerDocument.execCommand("copy");
             }
             this.plugin.logger.info("arXiv Daily: diagnostics copied");
             new Notice("arXiv Daily: diagnostics copied");
@@ -804,7 +833,9 @@ async function collectPaperIndexDiagnostics(
   };
   if (!path) return diag;
   try {
-    const raw = JSON.parse(await plugin.app.vault.adapter.read(path));
+    const raw: unknown = JSON.parse(
+      await plugin.app.vault.adapter.read(path),
+    ) as unknown;
     const obj = recordOrEmpty(raw);
     const rawSchemaVersion = obj.schemaVersion;
     const schemaVersion =
@@ -899,4 +930,9 @@ async function readNoteArxivId(
 
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
 }

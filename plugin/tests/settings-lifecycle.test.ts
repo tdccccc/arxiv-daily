@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
-import ArxivDailyPlugin from "../main.ts";
+import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 
 const pluginMainSource = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
@@ -22,6 +22,20 @@ function persistedData(categories: string[]) {
     runState: {},
   };
 }
+
+describe("plugin directory resolution", () => {
+  it("prioritizes the manifest directory", () => {
+    expect(resolvePluginDir("custom/plugin", ".config", "arxiv-daily")).toBe(
+      "custom/plugin",
+    );
+  });
+
+  it("falls back to the vault configuration directory", () => {
+    expect(resolvePluginDir(undefined, ".vault-config", "arxiv-daily")).toBe(
+      ".vault-config/plugins/arxiv-daily",
+    );
+  });
+});
 
 describe("plugin settings reload lifecycle", () => {
   it("sanitizes detail selection immediately before saving", () => {

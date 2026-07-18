@@ -43,11 +43,18 @@ npm ci
 npm run test:release-tools
 npm run check:release-version -- "$VERSION"
 npm run check:boundaries
+npm run lint
 npm run typecheck
 npm test
 npm run build
 npm run smoke:build
 ```
+
+`npm run lint` applies `eslint-plugin-obsidianmd`'s recommended flat config to
+the production Obsidian plugin TypeScript and the root `manifest.json` and
+`LICENSE`; it excludes tests, generated bundles, and non-plugin workspaces. The
+public ESLint rules approximate Obsidian's source scanner, but they are not the
+complete hosted review and do not replace its CSS or release asset checks.
 
 `smoke:build` exercises the canonical CLI, the copied plugin CLI, the Python
 compatibility shim, and the production plugin bundle. It also requires the
@@ -75,5 +82,15 @@ target, version metadata, curated-note presence, tests, build, smoke checks, and
 provenance before creating the GitHub release.
 
 After CI succeeds, verify that the release notes are the curated file, the
-three assets are present, and their provenance attestations are available. No
-`obsidian-releases` pull request is needed for an already-listed plugin.
+three assets are present, and their provenance attestations are available.
+
+arXiv Daily is listed through Obsidian's Community directory. The current new
+plugin flow is to sign in at `community.obsidian.md`, link the repository owner's
+GitHub account, choose **Plugins → New plugin**, provide the repository URL,
+accept the policies and support commitment, and submit. The directory reads the
+root `manifest.json` from the default branch and reviews the matching GitHub
+release; automated feedback is resolved by committing fixes and publishing a
+new, incremented release. This replaces the former `obsidian-releases` pull
+request submission flow. An already-listed plugin needs no resubmission or
+`obsidian-releases` pull request: Obsidian obtains later versions from matching
+GitHub releases.

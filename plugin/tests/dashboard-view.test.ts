@@ -16,6 +16,7 @@ import {
   paginateDashboardRows,
   shouldForceDashboardHistorySyncAfterDetailDeletion,
   shouldSkipDashboardHistorySync,
+  trashFileWithUserPreference,
 } from "../src/dashboard/view";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
 
@@ -26,12 +27,12 @@ const dashboardViewSource = readFileSync(
 const pluginStyles = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
 
 describe("openDashboardView", () => {
-  it("reveals an existing dashboard leaf", async () => {
+  it("activates an existing dashboard leaf with the Obsidian 1.4 API", async () => {
     const leaf = { setViewState: vi.fn() };
     const workspace = {
       getLeavesOfType: vi.fn().mockReturnValue([leaf]),
       getLeaf: vi.fn(),
-      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      setActiveLeaf: vi.fn(),
     };
 
     await openDashboardView({ app: { workspace } } as any);
@@ -39,7 +40,7 @@ describe("openDashboardView", () => {
     expect(workspace.getLeavesOfType).toHaveBeenCalledWith(
       ARXIV_DAILY_DASHBOARD_VIEW,
     );
-    expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+    expect(workspace.setActiveLeaf).toHaveBeenCalledWith(leaf, { focus: true });
     expect(workspace.getLeaf).not.toHaveBeenCalled();
     expect(leaf.setViewState).not.toHaveBeenCalled();
   });
@@ -49,7 +50,7 @@ describe("openDashboardView", () => {
     const workspace = {
       getLeavesOfType: vi.fn().mockReturnValue([]),
       getLeaf: vi.fn().mockReturnValue(leaf),
-      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      setActiveLeaf: vi.fn(),
     };
 
     await openDashboardView({ app: { workspace } } as any);
@@ -59,12 +60,12 @@ describe("openDashboardView", () => {
       type: ARXIV_DAILY_DASHBOARD_VIEW,
       active: true,
     });
-    expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+    expect(workspace.setActiveLeaf).toHaveBeenCalledWith(leaf, { focus: true });
   });
 });
 
 describe("openMarkdownFileOnce", () => {
-  it("reveals an already open markdown file", async () => {
+  it("activates an already open markdown file with the Obsidian 1.4 API", async () => {
     const leaf = {
       getViewState: vi.fn().mockReturnValue({
         state: { file: "arxiv-daily/papers/2606.12345.md" },
@@ -72,7 +73,7 @@ describe("openMarkdownFileOnce", () => {
     };
     const workspace = {
       getLeavesOfType: vi.fn().mockReturnValue([leaf]),
-      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      setActiveLeaf: vi.fn(),
       openLinkText: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -82,7 +83,7 @@ describe("openMarkdownFileOnce", () => {
     );
 
     expect(workspace.getLeavesOfType).toHaveBeenCalledWith("markdown");
-    expect(workspace.revealLeaf).toHaveBeenCalledWith(leaf);
+    expect(workspace.setActiveLeaf).toHaveBeenCalledWith(leaf, { focus: true });
     expect(workspace.openLinkText).not.toHaveBeenCalled();
   });
 
@@ -91,7 +92,7 @@ describe("openMarkdownFileOnce", () => {
       getLeavesOfType: vi.fn().mockReturnValue([
         { view: { file: { path: "arxiv-daily/papers/2606.54321.md" } } },
       ]),
-      revealLeaf: vi.fn().mockResolvedValue(undefined),
+      setActiveLeaf: vi.fn(),
       openLinkText: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -100,7 +101,7 @@ describe("openMarkdownFileOnce", () => {
       "arxiv-daily/papers/2606.12345.md",
     );
 
-    expect(workspace.revealLeaf).not.toHaveBeenCalled();
+    expect(workspace.setActiveLeaf).not.toHaveBeenCalled();
     expect(workspace.openLinkText).toHaveBeenCalledWith(
       "arxiv-daily/papers/2606.12345.md",
       "",
@@ -406,16 +407,43 @@ describe("detail-summary deletion boundaries", () => {
     expect(deletionBody).not.toContain("this.detailSummaryPaths.get");
   });
 
-  it("uses Vault trash and never adapter removal in batch deletion", () => {
+  it("uses FileManager.trashFile when the API is available", async () => {
+    const file = { path: "arxiv/papers/2606.12345.md" };
+    const trashFile = vi.fn().mockResolvedValue(undefined);
+    const vaultTrash = vi.fn();
+    const adapterRemove = vi.fn();
+
+    await trashFileWithUserPreference(
+      { fileManager: { trashFile }, vault: { trash: vaultTrash } } as any,
+      file as any,
+    );
+
+    expect(trashFile).toHaveBeenCalledWith(file);
+    expect(vaultTrash).not.toHaveBeenCalled();
+    expect(adapterRemove).not.toHaveBeenCalled();
+
     const deletionBody = dashboardViewSource.match(
       /private async runBatchDeleteSummary\(\)[\s\S]*?\n  private async runBatchAction/,
     )?.[0];
     expect(deletionBody).toBeDefined();
     expect(deletionBody).toContain("vault.read(abstractFile)");
-    expect(deletionBody).toContain("vault.trash(abstractFile, true)");
+    expect(deletionBody).toContain("trashFileWithUserPreference(");
     expect(deletionBody).toContain("trashed but index update failed");
     expect(deletionBody).toContain("this.lastSyncedHistoryPaths = null");
+    expect(deletionBody).not.toContain("vault.trash");
     expect(deletionBody).not.toContain("adapter.remove");
+  });
+
+  it("uses non-destructive Vault trash on Obsidian before 1.6.6", async () => {
+    const file = { path: "arxiv/papers/2606.12345.md" };
+    const vaultTrash = vi.fn().mockResolvedValue(undefined);
+
+    await trashFileWithUserPreference(
+      { fileManager: {}, vault: { trash: vaultTrash } } as any,
+      file as any,
+    );
+
+    expect(vaultTrash).toHaveBeenCalledWith(file, true);
   });
 });
 

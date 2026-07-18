@@ -1,4 +1,4 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, setTooltip } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
   DETAIL_SELECTION_PRESETS,
@@ -6,6 +6,7 @@ import {
   detailSelectionPreset,
   sanitizeDetailSelection,
   type DetailSelectionSettings,
+  type LogLevel,
   type ProviderPreset,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
@@ -23,6 +24,24 @@ import { executeObsidianCommand, openDashboardView } from "../dashboard/view";
 import { LlmClient, redactText } from "@arxiv-daily/core";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
+
+export async function persistApiKeyChange(
+  settings: { llm: { apiKey: string } },
+  logger: { setSensitiveValues(values: readonly string[]): void },
+  saveSettings: () => Promise<void>,
+  nextApiKey: string,
+): Promise<void> {
+  const previousApiKey = settings.llm.apiKey;
+  settings.llm.apiKey = nextApiKey;
+  logger.setSensitiveValues(nextApiKey ? [nextApiKey] : []);
+  try {
+    await saveSettings();
+  } catch (error) {
+    settings.llm.apiKey = previousApiKey;
+    logger.setSensitiveValues(previousApiKey ? [previousApiKey] : []);
+    throw error;
+  }
+}
 
 export function validateOutputDirectoryDraft(
   draft: string,
@@ -91,6 +110,10 @@ function isLoopbackHost(hostname: string): boolean {
   return host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 
+function isLogLevel(value: string): value is LogLevel {
+  return value === "debug" || value === "info" || value === "warn" || value === "error";
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
 
@@ -98,14 +121,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  /** Append a circled "?" to a Setting's name with an Obsidian-styled tooltip. */
+  /** Append an accessible circled "?" to a setting name. */
   private attachHelp(setting: Setting, text: string): Setting {
-    const q = setting.nameEl.createEl("span", {
+    setting.nameEl.createEl("span", {
       cls: "arxiv-daily-settings__help",
       text: "?",
+      attr: { title: text, "aria-label": text },
     });
-    setTooltip(q, text, { placement: "top" });
     return setting;
+  }
+
+  private reportActionError(action: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.plugin.logger.error(`settings: ${action} failed`, error);
+    new Notice(`arXiv Daily: ${action} failed: ${message}`, 10_000);
+  }
+
+  private runAction(action: string, operation: () => Promise<unknown>): void {
+    void operation().catch((error) => this.reportActionError(action, error));
   }
 
   /** Inline muted hint, used inside topic cards under a label. */
@@ -136,6 +169,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.plugin.settings.arxiv.categories = normalized;
     if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
     await this.plugin.saveSettings();
+  }
+
+  private async saveRunWindowTime(
+    key: "runAtLocal" | "runUntilLocal",
+    value: string,
+  ): Promise<void> {
+    const previous = this.plugin.settings.schedule[key];
+    this.plugin.settings.schedule[key] = value;
+    try {
+      await this.plugin.saveSettings();
+    } catch (error) {
+      this.plugin.settings.schedule[key] = previous;
+      this.reportActionError("save run window", error);
+    }
   }
 
   private async applyOutputDirectoryDraft(
@@ -330,7 +377,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
-      .setName("arXiv Categories")
+      .setName("arXiv categories")
       .setDesc("Fetch one or more arXiv categories; duplicate papers are merged by arXiv ID.")
       .setHeading();
 
@@ -373,7 +420,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl).addButton((b) =>
-      b.setButtonText("+ Add Category").onClick(async () => {
+      b.setButtonText("+ Add category").onClick(async () => {
         await this.setArxivCategories([
           ...categories,
           nextCategoryCandidate(categories),
@@ -385,7 +432,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── Research Topics ─────────────────────────────
     this.sectionHeading(
       containerEl,
-      "Research Topics",
+      "Research topics",
       "topics",
       "Each topic becomes one section in the daily report.",
     );
@@ -531,7 +578,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── Output & Schedule ────────────────────────────
-    this.sectionHeading(containerEl, "Output & Schedule", "schedule");
+    this.sectionHeading(containerEl, "Output & schedule", "schedule");
 
     new Setting(containerEl)
       .setName("Daily path")
@@ -544,7 +591,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.inputEl.toggleClass("is-invalid", !validation.ok);
         });
         t.inputEl.addEventListener("change", () => {
-          void this.applyOutputDirectoryDraft("dailyDir", t.inputEl.value, t.inputEl);
+          this.runAction("update daily path", () =>
+            this.applyOutputDirectoryDraft("dailyDir", t.inputEl.value, t.inputEl));
         });
       });
 
@@ -559,7 +607,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.inputEl.toggleClass("is-invalid", !validation.ok);
         });
         t.inputEl.addEventListener("change", () => {
-          void this.applyOutputDirectoryDraft("papersDir", t.inputEl.value, t.inputEl);
+          this.runAction("update papers path", () =>
+            this.applyOutputDirectoryDraft("papersDir", t.inputEl.value, t.inputEl));
         });
       });
 
@@ -599,20 +648,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Start",
       "arxiv-daily-run-window-start",
       s.schedule.runAtLocal,
-      async (value) => {
-        s.schedule.runAtLocal = value;
-        await this.plugin.saveSettings();
-      },
+      (value) => this.saveRunWindowTime("runAtLocal", value),
     );
     renderRunWindowTimeSelect(
       runWindow.controlEl,
       "End",
       "arxiv-daily-run-window-end",
       s.schedule.runUntilLocal,
-      async (value) => {
-        s.schedule.runUntilLocal = value;
-        await this.plugin.saveSettings();
-      },
+      (value) => this.saveRunWindowTime("runUntilLocal", value),
     );
 
     this.attachHelp(
@@ -637,10 +680,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .addOption("warn", "warn")
           .addOption("error", "error")
           .setValue(s.advanced.logLevel)
-          .onChange(async (v) => {
-            s.advanced.logLevel = v as any;
+          .onChange(async (value) => {
+            if (!isLogLevel(value)) return;
+            s.advanced.logLevel = value;
             await this.plugin.saveSettings();
-            this.plugin.logger.setLevel(v as any);
+            this.plugin.logger.setLevel(value);
           }),
       ),
       "Console log verbosity. 'debug' is noisy; 'info' is the default.",
@@ -676,7 +720,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
           this.plugin.settings.detailSelection = next;
           t.inputEl.value = String(next[key]);
-          void this.plugin.saveSettings();
+          this.runAction("save detail selection", () => this.plugin.saveSettings());
         });
       });
   }
@@ -684,17 +728,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private renderApiKeySetting(containerEl: HTMLElement): void {
     const configured = Boolean(this.plugin.settings.llm.apiKey.trim());
     const setting = new Setting(containerEl)
-      .setName("API Key")
+      .setName("API key")
       .setDesc("Stored locally in data.json. Saved keys are never rendered into this page.");
     let editing = !configured;
     let draft = "";
-    const input = document.createElement("input");
-    input.type = editing ? "password" : "text";
-    input.classList.add("arxiv-daily-settings__llm-input");
+    const input = setting.controlEl.createEl("input", {
+      cls: "arxiv-daily-settings__llm-input",
+      type: editing ? "password" : "text",
+      attr: { placeholder: "Enter API key" },
+    });
     input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
-    input.placeholder = "Enter API key";
     input.readOnly = !editing;
-    setting.controlEl.appendChild(input);
 
     const replace = setting.controlEl.createEl("button", {
       text: configured ? "Replace" : "Save",
@@ -733,19 +777,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     input.addEventListener("input", () => {
       if (editing) draft = input.value;
     });
-    replace.addEventListener("click", async () => {
+    replace.addEventListener("click", () => {
       if (!editing) {
         enterEdit();
         return;
       }
       const next = draft.trim();
       if (!next) return;
-      this.plugin.settings.llm.apiKey = next;
-      this.plugin.logger.setSensitiveValues([next]);
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-      reset();
-      clear.hidden = false;
+      this.runAction("save API key", async () => {
+        await persistApiKeyChange(
+          this.plugin.settings,
+          this.plugin.logger,
+          () => this.plugin.saveSettings(),
+          next,
+        );
+        this.refreshSetupGuide();
+        reset();
+        clear.hidden = false;
+      });
     });
     cancel.addEventListener("click", () => {
       if (configured || this.plugin.settings.llm.apiKey.trim()) reset();
@@ -754,17 +803,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         input.value = "";
       }
     });
-    clear.addEventListener("click", async () => {
-      const confirmed = await this.confirmReplace(
-        "Clear the saved API key? LLM operations will stop until a replacement is saved.",
-        "Clear",
-      );
-      if (!confirmed) return;
-      this.plugin.settings.llm.apiKey = "";
-      this.plugin.logger.setSensitiveValues([]);
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-      this.display();
+    clear.addEventListener("click", () => {
+      this.runAction("clear API key", async () => {
+        const confirmed = await this.confirmReplace(
+          "Clear the saved API key? LLM operations will stop until a replacement is saved.",
+          "Clear",
+        );
+        if (!confirmed) return;
+        await persistApiKeyChange(
+          this.plugin.settings,
+          this.plugin.logger,
+          () => this.plugin.saveSettings(),
+          "",
+        );
+        this.refreshSetupGuide();
+        this.display();
+      });
     });
   }
 
@@ -791,8 +845,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const status = getSetupStatus(this.plugin.settings);
     if (!shouldRenderSetupGuide(status)) return null;
 
-    const guide = document.createElement("section");
-    guide.addClass("arxiv-daily-setup");
+    const guide = this.containerEl.createEl("section", {
+      cls: "arxiv-daily-setup",
+    });
+    guide.detach();
     const header = guide.createEl("div", {
       cls: "arxiv-daily-setup__header",
     });
@@ -852,10 +908,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const run = actions.createEl("button", {
       text: "Run today",
       attr: { type: "button" },
-    }) as HTMLButtonElement;
+    });
     run.disabled = !status.readyToRun;
     run.addEventListener("click", () => {
-      void this.executeCommand("run-now");
+      this.runAction("run now", () => this.executeCommand("run-now"));
     });
 
     const dashboard = actions.createEl("button", {
@@ -863,7 +919,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       attr: { type: "button" },
     });
     dashboard.addEventListener("click", () => {
-      void openDashboardView(this.plugin);
+      this.runAction("open dashboard", () => openDashboardView(this.plugin));
     });
 
     return guide;
@@ -891,7 +947,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       cls: "arxiv-daily-setup__link",
       text: done ? "Done" : actionLabel,
       attr: { type: "button" },
-    }) as HTMLButtonElement;
+    });
     action.disabled = done;
     action.addEventListener("click", onAction);
   }
@@ -1105,13 +1161,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       star?.remove();
       star = null;
       if (topic.detail) {
-        star = document.createElement("span");
-        star.addClass("arxiv-daily-settings__topic-star");
-        star.textContent = "★";
-        star.setAttribute("title", "Detail report enabled");
-        // Insert after the title (second child).
+        star = header.createEl("span", {
+          cls: "arxiv-daily-settings__topic-star",
+          text: "★",
+          attr: { title: "Detail report enabled" },
+        });
+        // Keep the detail indicator before the tag chip.
         if (tagChip) header.insertBefore(star, tagChip);
-        else header.appendChild(star);
       }
     };
 
@@ -1184,10 +1240,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Add new options
     for (const model of models) {
-      const option = document.createElement("option");
-      option.value = model;
-      option.textContent = model;
-      select.appendChild(option);
+      select.createEl("option", { value: model, text: model });
     }
 
     // Pre-select current model if in list
@@ -1198,7 +1251,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       // Select first model if current not in list
       select.value = models[0]!;
       this.plugin.settings.llm.model = models[0]!;
-      void this.plugin.saveSettings().catch(() => {});
+      this.runAction("save selected model", () => this.plugin.saveSettings());
     }
   }
 

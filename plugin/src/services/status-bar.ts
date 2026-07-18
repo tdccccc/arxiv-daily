@@ -55,7 +55,8 @@ export class StatusBarController implements ProgressReporter {
   private panelTrack: HTMLElement | null = null;
   private panelPercent: HTMLElement | null = null;
   private panelState: "running" | "complete" | "error" | null = null;
-  private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private hideTimer: number | null = null;
+  private hideTimerView: Window | null = null;
   private lastCompletedDate: string | undefined;
   private idleReason: IdleReason | undefined;
   private disposed = false;
@@ -238,42 +239,53 @@ export class StatusBarController implements ProgressReporter {
 
   private ensurePanel(): HTMLElement {
     if (this.panel) return this.panel;
-    const panel = document.createElement("div");
-    panel.className = "arxiv-daily-progress";
-    panel.setAttribute("aria-live", "polite");
-    const header = document.createElement("div");
-    header.className = "arxiv-daily-progress__header";
-    this.panelTitle = document.createElement("div");
-    this.panelTitle.className = "arxiv-daily-progress__title";
-    this.panelPercent = document.createElement("div");
-    this.panelPercent.className = "arxiv-daily-progress__percent";
-    this.panelDetail = document.createElement("div");
-    this.panelDetail.className = "arxiv-daily-progress__detail";
-    const track = document.createElement("div");
-    track.className = "arxiv-daily-progress__track";
-    track.setAttribute("role", "progressbar");
-    track.setAttribute("aria-valuemin", "0");
-    track.setAttribute("aria-valuemax", "100");
-    track.setAttribute("aria-valuenow", "0");
+    const panel = this.el.ownerDocument.body.createDiv({
+      cls: "arxiv-daily-progress",
+      attr: { "aria-live": "polite" },
+    });
+    const header = panel.createDiv({
+      cls: "arxiv-daily-progress__header",
+    });
+    this.panelTitle = header.createDiv({
+      cls: "arxiv-daily-progress__title",
+    });
+    this.panelPercent = header.createDiv({
+      cls: "arxiv-daily-progress__percent",
+    });
+    this.panelDetail = panel.createDiv({
+      cls: "arxiv-daily-progress__detail",
+    });
+    const track = panel.createDiv({
+      cls: "arxiv-daily-progress__track",
+      attr: {
+        role: "progressbar",
+        "aria-valuemin": "0",
+        "aria-valuemax": "100",
+        "aria-valuenow": "0",
+      },
+    });
     this.panelTrack = track;
-    this.panelFill = document.createElement("div");
-    this.panelFill.className = "arxiv-daily-progress__fill";
-    header.append(this.panelTitle, this.panelPercent);
-    track.append(this.panelFill);
-    panel.append(header, this.panelDetail, track);
-    document.body.append(panel);
+    this.panelFill = track.createDiv({
+      cls: "arxiv-daily-progress__fill",
+    });
     this.panel = panel;
     return panel;
   }
 
   private scheduleHide(delayMs: number): void {
     this.clearHideTimer();
-    this.hideTimer = setTimeout(() => this.hidePanel(), delayMs);
+    const view = this.el.ownerDocument.defaultView;
+    if (!view) return;
+    this.hideTimerView = view;
+    this.hideTimer = view.setTimeout(() => this.hidePanel(), delayMs);
   }
 
   private clearHideTimer(): void {
-    if (this.hideTimer) clearTimeout(this.hideTimer);
+    if (this.hideTimer != null && this.hideTimerView) {
+      this.hideTimerView.clearTimeout(this.hideTimer);
+    }
     this.hideTimer = null;
+    this.hideTimerView = null;
   }
 
   private hidePanel(): void {

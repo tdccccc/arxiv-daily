@@ -6,6 +6,7 @@ import {
   registerCommands,
 } from "../src/commands";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { Notice } from "obsidian";
 
 function makePlugin() {
   const commands: Array<{ id: string; name: string; callback?: () => unknown }> = [];
@@ -33,7 +34,7 @@ function makePlugin() {
     stateStore: { clearAll: vi.fn(), snapshot: vi.fn(() => ({})) },
     runHistoryStore: { readLatest: vi.fn(async () => []) },
     progress: { setIdle: vi.fn() },
-    logger: { warn: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     manualFetch: { fetchAndSummarize: vi.fn() },
     buildPaperIndex: vi.fn(() => ({
       paths: {
@@ -85,6 +86,36 @@ describe("registerCommands", () => {
         id: "show-run-history",
         name: "Show run history",
       }),
+    );
+  });
+
+  it("logs and notices rejected ribbon dashboard opens", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    const failure = new Error("leaf unavailable");
+    plugin.app.workspace = {
+      openLinkText: vi.fn(),
+      getLeavesOfType: vi.fn(() => {
+        throw failure;
+      }),
+    } as any;
+    let ribbonCallback: (() => void) | undefined;
+    plugin.addRibbonIcon.mockImplementation((_icon, _title, callback) => {
+      ribbonCallback = callback;
+      return { addClass: vi.fn() };
+    });
+
+    registerCommands(plugin as any);
+    ribbonCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(plugin.logger.error).toHaveBeenCalledWith(
+      "commands: failed to open dashboard from ribbon",
+      failure,
+    );
+    expect(Notice.calls.at(-1)?.message).toContain(
+      "failed to open dashboard from ribbon: leaf unavailable",
     );
   });
 

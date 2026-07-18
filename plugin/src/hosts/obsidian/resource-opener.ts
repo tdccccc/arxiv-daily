@@ -19,8 +19,7 @@ export class ObsidianResourceOpener implements ResourceOpener {
   }
 
   async openUrl(url: string): Promise<void> {
-    const open = (globalThis as { open?: Window["open"] }).open;
-    open?.(url, "_blank", "noopener");
+    window.activeWindow.open(url, "_blank", "noopener");
   }
 
   private async openMarkdownPath(

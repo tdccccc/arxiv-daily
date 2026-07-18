@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { buildObsidianHostAdapters } from "../src/hosts/obsidian";
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type { PluginSettings } from "@arxiv-daily/core";
+
+const resourceOpenerSource = readFileSync(
+  resolve(process.cwd(), "src/hosts/obsidian/resource-opener.ts"),
+  "utf-8",
+);
 
 function testSettings(): PluginSettings {
   return {
@@ -53,6 +60,11 @@ function testApp() {
 }
 
 describe("Obsidian host adapters", () => {
+  it("uses Obsidian's active window without globalThis", () => {
+    expect(resourceOpenerSource).toContain("window.activeWindow.open");
+    expect(resourceOpenerSource).not.toContain("globalThis");
+  });
+
   it("uses the host DOMParser for markup parsing", () => {
     const parseFromString = vi.fn(() => ({}) as Document);
     const DomParser = vi.fn(function (this: { parseFromString: typeof parseFromString }) {
@@ -101,10 +113,14 @@ describe("Obsidian host adapters", () => {
     );
   });
 
-  it("opens URLs through the host window", async () => {
+  it("opens URLs through Obsidian's active window", async () => {
     const { app } = testApp();
-    const open = vi.fn();
-    vi.stubGlobal("open", open);
+    const activeWindow = { open: vi.fn(() => null) } as unknown as Window;
+    Object.defineProperty(window, "activeWindow", {
+      configurable: true,
+      value: activeWindow,
+    });
+    const open = activeWindow.open as ReturnType<typeof vi.fn>;
     const host = buildObsidianHostAdapters({
       app: app as any,
       getSettings: testSettings,
@@ -117,6 +133,5 @@ describe("Obsidian host adapters", () => {
       "_blank",
       "noopener",
     );
-    vi.unstubAllGlobals();
   });
 });

@@ -19,7 +19,7 @@ export class ObsidianHttpClient implements HttpClient {
     throwIfCancelled(req.signal);
     return {
       status: res.status,
-      headers: (res.headers ?? {}) as Record<string, string>,
+      headers: res.headers ?? {},
       bodyText: res.text,
       bodyBuffer:
         req.responseType === "arrayBuffer"

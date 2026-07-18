@@ -1,6 +1,11 @@
 /* Test-only stub for the `obsidian` package. Mirrors the runtime surface we use. */
+
 export class Notice {
-  constructor(_message: string, _timeoutMs?: number) {}
+  static calls: Array<{ message: string; timeoutMs?: number }> = [];
+
+  constructor(message: string, timeoutMs?: number) {
+    Notice.calls.push({ message, timeoutMs });
+  }
 }
 
 export function normalizePath(p: string): string {
@@ -33,6 +38,7 @@ export interface WorkspaceLeaf {
 export interface Workspace {
   getLeavesOfType(type: string): WorkspaceLeaf[];
   getLeaf(newLeaf?: boolean): WorkspaceLeaf | null;
+  setActiveLeaf(leaf: WorkspaceLeaf, options?: { focus?: boolean }): void;
   revealLeaf(leaf: WorkspaceLeaf): Promise<void>;
   detachLeavesOfType(type: string): Promise<void>;
   openLinkText(path: string, sourcePath: string, newLeaf?: boolean): Promise<void>;

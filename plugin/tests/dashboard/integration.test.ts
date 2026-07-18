@@ -4,14 +4,38 @@ import {
   applyEmptyCalendarCellA11y,
   calendarCellAriaLabel,
   dashboardHeaderStatusText,
+  isButtonElement,
   type CalendarCell,
   type CalendarCellState,
 } from "../../src/dashboard/view";
 
+function createSettingsParent(): HTMLElement {
+  const parent = document.createElement("div");
+  (parent as any).createEl = (
+    tag: string,
+    options: { cls?: string; attr?: Record<string, string> } = {},
+  ) => {
+    const child = parent.ownerDocument.createElement(tag);
+    if (options.cls) child.className = options.cls;
+    for (const [name, value] of Object.entries(options.attr ?? {})) {
+      child.setAttribute(name, value);
+    }
+    (child as any).createSpan = ({ text }: { text: string }) => {
+      const span = child.ownerDocument.createElement("span");
+      span.textContent = text;
+      child.append(span);
+      return span;
+    };
+    parent.append(child);
+    return child;
+  };
+  return parent;
+}
+
 describe("Dashboard Integration", () => {
   it("should render settings button and calendar with runnable dates", () => {
     // Verify settings button renders correctly in a parent container
-    const parent = document.createElement("div");
+    const parent = createSettingsParent();
     appendSettingsButton(parent, () => {});
     const button = parent.querySelector("button.arxiv-daily-dashboard__settings-btn");
     expect(button).not.toBeNull();
@@ -105,7 +129,7 @@ describe("Dashboard Integration", () => {
   });
 
   it("should invoke onClick handler for settings button", () => {
-    const parent = document.createElement("div");
+    const parent = createSettingsParent();
     const onClick = vi.fn();
     appendSettingsButton(parent, onClick);
     const button = parent.querySelector("button")!;
@@ -151,6 +175,16 @@ describe("Dashboard Integration", () => {
     expect(calendarCellAriaLabel(cell)).toBe(
       "2026-06-19: open daily report, 5 indexed papers, 2 starred",
     );
+  });
+
+  it("should recognize calendar buttons from a secondary document", () => {
+    const secondaryDocument = document.implementation.createHTMLDocument("popout");
+    const button = secondaryDocument.createElement("button");
+    const div = secondaryDocument.createElement("div");
+
+    expect(button.ownerDocument).toBe(secondaryDocument);
+    expect(isButtonElement(button)).toBe(true);
+    expect(isButtonElement(div)).toBe(false);
   });
 
   it("should make empty calendar cells unfocusable and hidden from assistive tech", () => {

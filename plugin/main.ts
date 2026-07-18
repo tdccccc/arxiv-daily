@@ -52,6 +52,14 @@ export function shouldRunCacheCleanup(
   return lastCleanupDate !== cacheCleanupDateKey(now, timezone);
 }
 
+export function resolvePluginDir(
+  manifestDir: string | undefined,
+  configDir: string,
+  pluginId: string,
+): string {
+  return manifestDir ?? `${configDir}/plugins/${pluginId}`;
+}
+
 export default class ArxivDailyPlugin extends Plugin {
   declare settings: PluginSettings;
   logger!: Logger;
@@ -405,7 +413,11 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private pluginDir(): string {
-    return this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
+    return resolvePluginDir(
+      this.manifest.dir,
+      this.app.vault.configDir,
+      this.manifest.id,
+    );
   }
 
   private pluginCacheDir(): string {

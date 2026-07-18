@@ -78,10 +78,18 @@ export function renderSimilarPapersModal(
       cls: "arxiv-daily-similar-modal__actions",
       attr: { "aria-label": `Actions for ${result.entry.arxivId}` },
     });
-    addAction(actions, "file-text", "Open detail", result.entry, options.openDetail, options.onActionError, Boolean(result.entry.detail && result.entry.paperPath));
-    addAction(actions, "calendar", "Open daily report", result.entry, options.openDaily, options.onActionError, result.entry.dailyReports.length > 0);
-    addAction(actions, "external-link", "Open arXiv", result.entry, options.openArxiv, options.onActionError);
-    addAction(actions, "file-down", "Open PDF", result.entry, options.openPdf, options.onActionError);
+    const openDetail = (entry: PaperIndexEntry) => options.openDetail(entry);
+    const openDaily = (entry: PaperIndexEntry) => options.openDaily(entry);
+    const openArxiv = (entry: PaperIndexEntry) => options.openArxiv(entry);
+    const openPdf = (entry: PaperIndexEntry) => options.openPdf(entry);
+    const onActionError = options.onActionError
+      ? (error: unknown, action: string, entry: PaperIndexEntry) =>
+          options.onActionError?.(error, action, entry)
+      : undefined;
+    addAction(actions, "file-text", "Open detail", result.entry, openDetail, onActionError, Boolean(result.entry.detail && result.entry.paperPath));
+    addAction(actions, "calendar", "Open daily report", result.entry, openDaily, onActionError, result.entry.dailyReports.length > 0);
+    addAction(actions, "external-link", "Open arXiv", result.entry, openArxiv, onActionError);
+    addAction(actions, "file-down", "Open PDF", result.entry, openPdf, onActionError);
   }
 }
 

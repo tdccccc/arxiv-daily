@@ -8,6 +8,7 @@ import {
   type App,
   type WorkspaceLeaf,
 } from "obsidian";
+import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
@@ -248,6 +249,10 @@ export function applyEmptyCalendarCellA11y(button: HTMLButtonElement): void {
   button.setAttribute("aria-hidden", "true");
 }
 
+export function isButtonElement(element: HTMLElement): element is HTMLButtonElement {
+  return element.tagName === "BUTTON";
+}
+
 export function dashboardHeaderStatusText(input: {
   isRunning: boolean;
   lastCompletedDate?: string;
@@ -321,6 +326,27 @@ export function shouldForceDashboardHistorySyncAfterDetailDeletion(
   return trashedFiles > 0 || updatedEntries > 0;
 }
 
+export async function trashFileWithUserPreference(
+  app: Pick<App, "fileManager" | "vault">,
+  file: TFile,
+): Promise<void> {
+  const fileManager = app.fileManager as unknown as {
+    trashFile?: (target: TFile) => Promise<void>;
+  };
+  if (typeof fileManager.trashFile === "function") {
+    await fileManager.trashFile(file);
+    return;
+  }
+
+  // Obsidian before 1.6.6 does not expose the user's trash preference.
+  // Prefer system trash; Vault.trash falls back to the local .trash folder.
+  const legacyTrash = Reflect.get(app.vault, "trash");
+  if (typeof legacyTrash !== "function") {
+    throw new Error("No compatible Obsidian trash API is available");
+  }
+  await Reflect.apply(legacyTrash, app.vault, [file, true]);
+}
+
 export async function buildCalendarDailyReportMap(
   input: CalendarDailyReportMapInput,
 ): Promise<Map<string, DailyReportDay>> {
@@ -372,7 +398,7 @@ export async function openDashboardView(
   const workspace = plugin.app.workspace;
   const existing = workspace.getLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW)[0];
   if (existing) {
-    await workspace.revealLeaf(existing);
+    workspace.setActiveLeaf(existing, { focus: true });
     return;
   }
 
@@ -386,14 +412,14 @@ export async function openDashboardView(
     type: ARXIV_DAILY_DASHBOARD_VIEW,
     active: true,
   });
-  await workspace.revealLeaf(leaf);
+  workspace.setActiveLeaf(leaf, { focus: true });
 }
 
 export async function openMarkdownFileOnce(
   app: {
     workspace: {
       getLeavesOfType?(type: string): unknown[];
-      revealLeaf?(leaf: unknown): Promise<void>;
+      setActiveLeaf?(leaf: unknown, options?: { focus?: boolean }): void;
       openLinkText(path: string, sourcePath: string, newLeaf?: boolean): Promise<void>;
     };
   },
@@ -404,8 +430,8 @@ export async function openMarkdownFileOnce(
   for (const leaf of leaves) {
     const leafPath = markdownPathFromLeaf(leaf);
     if (leafPath && normalizeVaultPath(leafPath) === target) {
-      if (app.workspace.revealLeaf) {
-        await app.workspace.revealLeaf(leaf);
+      if (app.workspace.setActiveLeaf) {
+        app.workspace.setActiveLeaf(leaf, { focus: true });
       } else {
         await app.workspace.openLinkText(path, "", false);
       }
@@ -419,16 +445,16 @@ export function appendSettingsButton(
   parent: HTMLElement,
   onClick: () => void,
 ): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.className = "arxiv-daily-dashboard__settings-btn";
-  button.type = "button";
-  button.setAttribute("aria-label", "Open arXiv Daily settings");
+  const button = parent.createEl("button", {
+    cls: "arxiv-daily-dashboard__settings-btn",
+    attr: {
+      type: "button",
+      "aria-label": "Open arXiv Daily settings",
+    },
+  });
   setIcon(button, "settings");
-  const label = document.createElement("span");
-  label.textContent = "Settings";
-  button.appendChild(label);
+  button.createSpan({ text: "Settings" });
   button.addEventListener("click", onClick);
-  parent.appendChild(button);
   return button;
 }
 
@@ -533,7 +559,10 @@ class ArxivDailyDashboardView extends ItemView {
   private async reloadIndex(): Promise<void> {
     this.renderLoading();
     try {
-      void this.refreshRecentDatesForForeground().catch(() => {});
+      this.runDetached(
+        this.refreshRecentDatesForForeground(),
+        "refresh recent arXiv dates",
+      );
       const allFiles = this.plugin.app.vault.getMarkdownFiles();
       const dailyDir = normalizeVaultPath(this.plugin.settings.output.dailyDir);
       const papersDir = normalizeVaultPath(this.plugin.settings.output.papersDir);
@@ -901,7 +930,7 @@ class ArxivDailyDashboardView extends ItemView {
     const button = parent.createEl("button", {
       cls: "arxiv-daily-dashboard__empty-action",
       attr: { type: "button" },
-    }) as HTMLButtonElement;
+    });
     setIcon(button, icon);
     button.createSpan({ text: label });
     button.addEventListener("click", () => onClick(button));
@@ -1062,8 +1091,11 @@ class ArxivDailyDashboardView extends ItemView {
       "file-text",
       "Summarize by ID",
       "Summarize paper by arXiv ID",
-      (_button, evt) => {
-        void this.runDashboardCommand("summarize-by-id", false);
+      () => {
+        this.runDetached(
+          this.runDashboardCommand("summarize-by-id", false),
+          "open summarize-by-ID command",
+        );
       },
     );
     this.createToolbarButton(
@@ -1125,11 +1157,11 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": "Go to current month",
       },
-    }) as HTMLButtonElement;
+    });
     const prev = controls.createEl("button", {
       cls: "clickable-icon",
       attr: { type: "button", "aria-label": "Previous month" },
-    }) as HTMLButtonElement;
+    });
     setIcon(prev, "chevron-left");
     controls.createEl("span", {
       cls: "arxiv-daily-dashboard__calendar-month",
@@ -1138,7 +1170,7 @@ class ArxivDailyDashboardView extends ItemView {
     const next = controls.createEl("button", {
       cls: "clickable-icon",
       attr: { type: "button", "aria-label": "Next month" },
-    }) as HTMLButtonElement;
+    });
     setIcon(next, "chevron-right");
 
     if (!month) {
@@ -1202,7 +1234,7 @@ class ArxivDailyDashboardView extends ItemView {
 
       if (cell.date === today) day.addClass("is-today");
 
-      if (!(day instanceof HTMLButtonElement)) continue;
+      if (!isButtonElement(day)) continue;
       switch (cell.state) {
         case "has-report":
           this.renderReportCell(day, cell);
@@ -1399,7 +1431,10 @@ class ArxivDailyDashboardView extends ItemView {
     // Click handler to open the report
     if (cell.report) {
       button.addEventListener("click", () => {
-        void openMarkdownFileOnce(this.plugin.app, cell.report!.path);
+        this.runDetached(
+          openMarkdownFileOnce(this.plugin.app, cell.report!.path),
+          "open daily report",
+        );
       });
     }
   }
@@ -1413,7 +1448,10 @@ class ArxivDailyDashboardView extends ItemView {
       text: String(cell.report.papers),
     });
     button.addEventListener("click", () => {
-      void openMarkdownFileOnce(this.plugin.app, cell.report!.path);
+      this.runDetached(
+        openMarkdownFileOnce(this.plugin.app, cell.report!.path),
+        "open daily report",
+      );
     });
   }
 
@@ -1488,7 +1526,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "search",
         placeholder: "ID, title, author, topic, summary",
       },
-    }) as HTMLInputElement;
+    });
     search.value = this.query.search ?? "";
     search.addEventListener("input", () => {
       this.clearSearchDebounce();
@@ -1535,7 +1573,7 @@ class ArxivDailyDashboardView extends ItemView {
     });
     const dateFrom = dateInputs.createEl("input", {
       attr: { type: "date", "aria-label": "Date from" },
-    }) as HTMLInputElement;
+    });
     dateFrom.value = this.query.dateFrom ?? "";
     dateFrom.addEventListener("change", () => {
       this.query = {
@@ -1552,7 +1590,7 @@ class ArxivDailyDashboardView extends ItemView {
 
     const dateTo = dateInputs.createEl("input", {
       attr: { type: "date", "aria-label": "Date to" },
-    }) as HTMLInputElement;
+    });
     dateTo.value = this.query.dateTo ?? "";
     dateTo.addEventListener("change", () => {
       this.query = {
@@ -1601,7 +1639,7 @@ class ArxivDailyDashboardView extends ItemView {
     options: Array<{ value: string; label: string }>,
     selected: string,
   ): HTMLSelectElement {
-    const select = parent.createEl("select") as HTMLSelectElement;
+    const select = parent.createEl("select");
     for (const option of options) {
       const el = select.createEl("option", { text: option.label });
       el.value = option.value;
@@ -1627,7 +1665,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "checkbox",
         "aria-label": "Select visible papers",
       },
-    }) as HTMLInputElement;
+    });
     const visibleIds = rows.map((row) => row.arxivId);
     const selectedVisible = visibleIds.filter((id) => this.selectedIds.has(id));
     selectAll.checked =
@@ -1667,7 +1705,7 @@ class ArxivDailyDashboardView extends ItemView {
           type: "checkbox",
           "aria-label": `Select ${row.arxivId}`,
         },
-      }) as HTMLInputElement;
+      });
       checkbox.checked = this.selectedIds.has(row.arxivId);
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) this.selectedIds.add(row.arxivId);
@@ -1725,9 +1763,9 @@ class ArxivDailyDashboardView extends ItemView {
         );
       });
       this.createIconButton(actionCell, "external-link", "Open arXiv", (button) => {
-        void this.runControlAction(button, async () => {
-          openArxivResource(row.entry.arxivId, "abs", this.plugin.logger);
-        });
+        void this.runControlAction(button, () =>
+          openArxivResource(row.entry.arxivId, "abs", this.plugin),
+        );
       });
       this.createIconButton(actionCell, "file-down", "Open PDF", (button) => {
         void this.runControlAction(button, () => this.openPdf(row.entry));
@@ -1815,7 +1853,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": "Clear selection",
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(clear, "x");
     clear.disabled = selectedCount === 0;
     clear.addEventListener("click", () => {
@@ -1870,7 +1908,7 @@ class ArxivDailyDashboardView extends ItemView {
     const dirButton = field.createEl("button", {
       cls: "clickable-icon",
       attr: { type: "button", "aria-label": "Toggle sort direction" },
-    }) as HTMLButtonElement;
+    });
     setIcon(dirButton, dirIcon);
     dirButton.addEventListener("click", () => {
       const newDir: DashboardSortDirection = currentDir === "asc" ? "desc" : "asc";
@@ -1922,7 +1960,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": "Previous page",
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(prev, "chevron-left");
     prev.disabled = page.currentPage === 0;
     prev.addEventListener("click", () => {
@@ -1940,7 +1978,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": "Next page",
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(next, "chevron-right");
     next.disabled = page.currentPage >= page.totalPages - 1;
     next.addEventListener("click", () => {
@@ -1971,7 +2009,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "data-arxiv-id": entry.arxivId,
       },
-    }) as HTMLButtonElement;
+    });
     applyStarButtonState(button, starred);
     button.addEventListener("click", () => {
       const nextStarred = !isStarredEntry(entry);
@@ -1994,7 +2032,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": title,
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(button, icon);
     button.createSpan({ text: label });
     button.addEventListener("click", (evt) => onClick(button, evt));
@@ -2036,7 +2074,10 @@ class ArxivDailyDashboardView extends ItemView {
         .setTitle("Retry failed dates")
         .setIcon("refresh-cw")
         .onClick(() => {
-          void this.retryFailedInLookback();
+          this.runDetached(
+            this.retryFailedInLookback(),
+            "retry failed dates",
+          );
         }),
     );
     this.addCommandMenuItem(
@@ -2054,7 +2095,7 @@ class ArxivDailyDashboardView extends ItemView {
         .setTitle("Run pending")
         .setIcon("layers")
         .onClick(() => {
-          void this.runAllPending();
+          this.runDetached(this.runAllPending(), "run pending dates");
         }),
     );
 
@@ -2091,10 +2132,10 @@ class ArxivDailyDashboardView extends ItemView {
         .setIcon(icon)
         .setDisabled(disabled)
         .onClick(() => {
-          void this.runDashboardCommand(commandId, refreshAfter).catch((e) => {
-            this.plugin.logger.warn(`dashboard command failed: ${commandId}`, e);
-            this.notice(`arXiv Daily: ${(e as Error).message}`, 10_000);
-          });
+          this.runDetached(
+            this.runDashboardCommand(commandId, refreshAfter),
+            `run ${commandId} command`,
+          );
         }),
     );
   }
@@ -2112,7 +2153,7 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": label,
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(button, icon);
     button.disabled = disabled;
     button.addEventListener("click", () => onClick(button));
@@ -2132,13 +2173,23 @@ class ArxivDailyDashboardView extends ItemView {
         type: "button",
         "aria-label": label,
       },
-    }) as HTMLButtonElement;
+    });
     setIcon(button, icon);
     button.createSpan({ text: label });
     if (options.warning) button.addClass("mod-warning");
     button.disabled = selectedCount === 0;
     button.addEventListener("click", () => {
       void this.runControlAction(button, action);
+    });
+  }
+
+  private runDetached(promise: Promise<unknown>, action: string): void {
+    void promise.catch((error) => {
+      this.plugin.logger.error(`dashboard: failed to ${action}`, error);
+      this.notice(
+        `arXiv Daily: failed to ${action}: ${errorMessage(error)}`,
+        10_000,
+      );
     });
   }
 
@@ -2318,7 +2369,7 @@ class ArxivDailyDashboardView extends ItemView {
       openDetail: (candidate) => this.openDetailSummary(candidate),
       openDaily: (candidate) => this.openDailyReport(candidate),
       openArxiv: (candidate) =>
-        openArxivResource(candidate.arxivId, "abs", this.plugin.logger),
+        openArxivResource(candidate.arxivId, "abs", this.plugin),
       openPdf: (candidate) => this.openPdf(candidate),
       onActionError: (error, action, candidate) => {
         this.plugin.logger.error(
@@ -2369,7 +2420,7 @@ class ArxivDailyDashboardView extends ItemView {
       await this.plugin.app.workspace.openLinkText(entry.pdfPath, "", false);
       return;
     }
-    openArxivResource(entry.arxivId, "pdf", this.plugin.logger);
+    await openArxivResource(entry.arxivId, "pdf", this.plugin);
   }
 
   private async downloadPdf(entry: DashboardRow["entry"]): Promise<void> {
@@ -2473,7 +2524,7 @@ class ArxivDailyDashboardView extends ItemView {
             if (!isExpectedGeneratedDetailSummary(markdown, canonicalId)) {
               throw new Error(`file is not a generated detail summary for ${canonicalId}`);
             }
-            await this.plugin.app.vault.trash(abstractFile, true);
+            await trashFileWithUserPreference(this.plugin.app, abstractFile);
             trashedFiles += 1;
           },
         );
@@ -2580,21 +2631,26 @@ function topicOptions(entries: DashboardRow["entry"][]): string[] {
   return [...topics].sort((a, b) => a.localeCompare(b));
 }
 
-function openArxivResource(
+async function openArxivResource(
   rawArxivId: string,
   kind: "abs" | "pdf",
-  logger: ArxivDailyPlugin["logger"],
-): void {
+  plugin: ArxivDailyPlugin,
+): Promise<void> {
   const resources = modernArxivResources(rawArxivId);
   const label = kind === "pdf" ? "PDF" : "arXiv";
   if (!resources) {
-    logger.warn(`dashboard: refused invalid arXiv ID for ${label}`);
+    plugin.logger.warn(`dashboard: refused invalid arXiv ID for ${label}`);
     new Notice(`arXiv Daily: invalid arXiv ID; ${label} was not opened`);
     return;
   }
   const url = kind === "pdf" ? resources.pdfUrl : resources.absUrl;
-  logger.info(`dashboard: opening ${label} URL ${url}`);
-  window.open(url, "_blank", "noopener");
+  plugin.logger.info(`dashboard: opening ${label} URL ${url}`);
+  await new ObsidianResourceOpener(plugin.app).openUrl(url);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
 }
 
 function describeDashboardAction(action: DashboardAction): string {
@@ -2926,7 +2982,7 @@ class HubModal extends Modal {
     this.clearButton = footer.createEl("button", {
       text: "Clear logs",
       attr: { type: "button" },
-    }) as HTMLButtonElement;
+    });
     this.clearButton.onclick = () => {
       this.plugin.logger.clearBuffer();
       this.refreshActiveTab();
@@ -2937,7 +2993,13 @@ class HubModal extends Modal {
       text: "Copy",
       attr: { type: "button" },
     }).onclick = () => {
-      void this.copyActiveTab();
+      void this.copyActiveTab().catch((error: unknown) => {
+        this.plugin.logger.error("dashboard: failed to copy hub text", error);
+        new Notice(
+          `arXiv Daily: failed to copy hub text: ${errorMessage(error)}`,
+          10_000,
+        );
+      });
     };
 
     footer.createEl("button", {
@@ -2970,7 +3032,7 @@ class HubModal extends Modal {
         "aria-selected": "false",
         "aria-controls": panelId,
       },
-    }) as HTMLButtonElement;
+    });
     button.id = tabId;
     button.addEventListener("click", () => {
       this.activateTab(tab);
@@ -2979,7 +3041,7 @@ class HubModal extends Modal {
 
     const content = body.createEl("pre", {
       cls: "arxiv-daily-hub-modal__panel",
-    }) as HTMLPreElement;
+    });
     content.id = panelId;
     content.setAttribute("role", "tabpanel");
     content.setAttribute("aria-labelledby", tabId);
@@ -3134,25 +3196,30 @@ class HubModal extends Modal {
   private async copyActiveTab(): Promise<void> {
     const panel = this.panels.get(this.activeTab);
     const text = panel?.text ?? "";
+    const ownerDocument = this.contentEl.ownerDocument;
+    const ownerWindow = ownerDocument.defaultView;
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
+      const clipboard = ownerWindow?.navigator.clipboard;
+      if (clipboard?.writeText) {
+        await clipboard.writeText(text);
       } else if (panel) {
-        const range = document.createRange();
+        const range = ownerDocument.createRange();
         range.selectNodeContents(panel.content);
-        window.getSelection()?.removeAllRanges();
-        window.getSelection()?.addRange(range);
-        document.execCommand("copy");
-        window.getSelection()?.removeAllRanges();
+        const selection = ownerWindow?.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        ownerDocument.execCommand("copy");
+        selection?.removeAllRanges();
       }
       new Notice("arXiv Daily: copied");
     } catch (e) {
       this.plugin.logger.warn("Could not copy hub modal text", e);
       if (panel) {
-        const range = document.createRange();
+        const range = ownerDocument.createRange();
         range.selectNodeContents(panel.content);
-        window.getSelection()?.removeAllRanges();
-        window.getSelection()?.addRange(range);
+        const selection = ownerWindow?.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
       }
       new Notice("Could not copy; text is selectable");
     }
