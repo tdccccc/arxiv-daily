@@ -116,7 +116,12 @@ describe("summarizeDaily link style", () => {
       },
     );
 
-    expect(out).toBe(dailyMarkdown);
+    expect(out).toBe(
+      dailyMarkdown.replace(
+        "## Topic",
+        "共 1 篇相关论文，其中 0 篇详细收录。\n\n## Topic",
+      ),
+    );
     expect(out).not.toContain("arxiv-daily:2606.12345:watch");
     expect(out).not.toContain("关注");
     expect(out).not.toContain("重点");
@@ -467,7 +472,7 @@ describe("summarizeDaily link style", () => {
       abstractConclusion: "## Abstract\na",
       fullSections: null,
     };
-    await summarizeDaily(
+    const out = await summarizeDaily(
       [
         { ...base, id: "2606.11111", title: "Kept" },
         { ...base, id: "2606.22222", title: "Dropped" },
@@ -486,7 +491,95 @@ describe("summarizeDaily link style", () => {
         
       },
     );
+    expect(out).toContain("共 1 篇相关论文，其中 0 篇详细收录。");
     expect(warnSpy.mock.calls.flat().join(" ")).toContain("2606.22222");
+    expect(warnSpy.mock.calls.flat().join(" ")).not.toContain("duplicated");
+  });
+
+  it("uses rendered paper blocks for the count in batched summaries", async () => {
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const user = messages[1].content as string;
+        return user.includes("2606.11111")
+          ? "## Topic\n### Kept\n- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)"
+          : "## Topic\n今日无相关论文更新。";
+      }),
+    };
+    const base = {
+      authors: "A",
+      abstract: "a",
+      category: "topic",
+      isDetail: false,
+      abstractConclusion: "## Abstract\na",
+      fullSections: null,
+    };
+
+    const out = await summarizeDaily(
+      [
+        { ...base, id: "2606.11111", title: "Kept" },
+        { ...base, id: "2606.22222", title: "Dropped" },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger: new Logger("error"),
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "topic", name: "Topic", tag: "topic", description: "t", detail: false },
+          ],
+        },
+        advanced: { ...DEFAULT_SETTINGS.advanced, dailyCharLimit: 1 },
+      },
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    expect(out).toContain("共 1 篇相关论文，其中 0 篇详细收录。");
+  });
+
+  it("warns only when an arXiv id appears in multiple paper blocks", async () => {
+    const logger = new Logger("error");
+    const warnSpy = vi.spyOn(logger, "warn");
+    const llm = {
+      call: vi.fn(async () =>
+        [
+          "## Topic",
+          "### First",
+          "- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+          "### Duplicate",
+          "- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+        ].join("\n"),
+      ),
+    };
+    const out = await summarizeDaily(
+      [
+        {
+          id: "2606.11111",
+          title: "First",
+          authors: "A",
+          abstract: "a",
+          category: "topic",
+          isDetail: false,
+          abstractConclusion: "## Abstract\na",
+          fullSections: null,
+        },
+      ],
+      "2026-06-13",
+      {
+        llm: llm as any,
+        logger,
+        arxivSettings: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [
+            { id: "topic", name: "Topic", tag: "topic", description: "t", detail: false },
+          ],
+        },
+        advanced: DEFAULT_SETTINGS.advanced,
+      },
+    );
+
+    expect(out).toContain("共 1 篇相关论文，其中 0 篇详细收录。");
+    expect(warnSpy.mock.calls.flat().join(" ")).toContain("duplicated");
   });
 
   it("ensures every configured category appears even if the model omits one", async () => {

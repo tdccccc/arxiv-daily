@@ -90,10 +90,19 @@ describe("Calendar Cell Builder", () => {
     ).toEqual({ state: "empty", emptyReason: "arxiv-not-updated" });
   });
 
-  it("uses completed non-zero run state as a non-runnable missing-report fallback", () => {
+  it("makes a missing completed report runnable when the date is eligible", () => {
     expect(
       resolveCalendarCellState({
         runnable: true,
+        runState: runState("completed", { papersWritten: 10 }),
+      }),
+    ).toEqual({ state: "runnable" });
+  });
+
+  it("keeps a missing completed report gray when the date is not eligible", () => {
+    expect(
+      resolveCalendarCellState({
+        runnable: false,
         runState: runState("completed", { papersWritten: 10 }),
       }),
     ).toEqual({ state: "empty", emptyReason: "report-missing" });
@@ -301,13 +310,12 @@ describe("isCalendarRunWhitelisted", () => {
     ).toBe(false);
   });
 
-  it("blocks terminal and running states but allows transient failures", () => {
+  it("blocks no-update terminal and running states but allows deleted completed reports", () => {
     for (const state of [
       runState("running"),
       runState("skipped"),
       runState("failed_permanent"),
       runState("completed", { papersWritten: 0 }),
-      runState("completed", { papersWritten: 10 }),
     ]) {
       expect(
         isCalendarRunWhitelisted(
@@ -321,16 +329,21 @@ describe("isCalendarRunWhitelisted", () => {
       ).toBe(false);
     }
 
-    expect(
-      isCalendarRunWhitelisted(
-        whitelistInput({
-          date: "2026-06-22",
-          today: "2026-06-23",
-          recentDates: new Set(["2026-06-22"]),
-          runState: runState("failed_transient"),
-        }),
-      ),
-    ).toBe(true);
+    for (const state of [
+      runState("failed_transient"),
+      runState("completed", { papersWritten: 10 }),
+    ]) {
+      expect(
+        isCalendarRunWhitelisted(
+          whitelistInput({
+            date: "2026-06-22",
+            today: "2026-06-23",
+            recentDates: new Set(["2026-06-22"]),
+            runState: state,
+          }),
+        ),
+      ).toBe(true);
+    }
   });
 });
 

@@ -207,8 +207,15 @@ export async function summarizeDaily(
       deps.arxivSettings,
       deps.summaryLanguage,
     );
-    warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
-    return normalized;
+    const canonical = canonicalizeDailyMetadata(
+      normalized,
+      papers,
+      dateStr,
+      deps.arxivSettings,
+      deps.summaryLanguage,
+    );
+    warnOnMissingOrDuplicateIds(canonical, papers, deps.logger);
+    return canonical;
   }
 
   const batches = splitBatches(papers, deps.advanced.dailyCharLimit, tagToName);
@@ -233,8 +240,15 @@ export async function summarizeDaily(
     deps.arxivSettings,
     deps.summaryLanguage,
   );
-  warnOnMissingOrDuplicateIds(normalized, papers, deps.logger);
-  return normalized;
+  const canonical = canonicalizeDailyMetadata(
+    normalized,
+    papers,
+    dateStr,
+    deps.arxivSettings,
+    deps.summaryLanguage,
+  );
+  warnOnMissingOrDuplicateIds(canonical, papers, deps.logger);
+  return canonical;
 }
 
 function normalizeDailySummary(
@@ -275,17 +289,72 @@ function ensureAllCategorySections(
   return `${markdown.replace(/\s+$/, "")}\n\n${additions}`;
 }
 
+function canonicalizeDailyMetadata(
+  markdown: string,
+  papers: DailyPaperWithContent[],
+  dateStr: string,
+  arxivSettings: ArxivSettings,
+  summaryLanguage?: SummaryLanguage,
+): string {
+  const renderedIds = unique(extractRenderedPaperIds(markdown));
+  const detailIds = new Set(
+    papers
+      .filter((paper) => paper.isDetail || paper.paperPath)
+      .map((paper) => paper.id),
+  );
+  const summaryLanguageNormalized = normalizeSummaryLanguage(summaryLanguage);
+  const header = dailyHeader(
+    summaryLanguageNormalized,
+    formatArxivCategories(arxivSettings),
+    dateStr,
+  );
+  const count = dailyCountLine(
+    summaryLanguageNormalized,
+    renderedIds.length,
+    renderedIds.filter((id) => detailIds.has(id)).length,
+  );
+  const body = stripDailyMetadata(markdown);
+  return `${header}\n${count}${body ? `\n\n${body}` : ""}`;
+}
+
+function stripDailyMetadata(markdown: string): string {
+  const lines = markdown.trim().split("\n");
+  if (lines[0]?.startsWith("# ")) lines.shift();
+  while (lines[0]?.trim() === "") lines.shift();
+  if (isDailyCountLine(lines[0] ?? "")) lines.shift();
+  return lines.join("\n").trim();
+}
+
+function isDailyCountLine(line: string): boolean {
+  return (
+    /^共 \d+ 篇相关论文，其中 \d+ 篇详细收录。$/.test(line.trim()) ||
+    /^\d+ relevant papers?, including \d+ with detail notes?\.$/.test(line.trim())
+  );
+}
+
+function extractRenderedPaperIds(markdown: string): string[] {
+  return markdown
+    .split(/^###\s+/m)
+    .slice(1)
+    .map((block) =>
+      /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(block)?.[1] ??
+      /\[(\d{4}\.\d{4,5})\]/.exec(block)?.[1] ??
+      null,
+    )
+    .filter((id): id is string => Boolean(id));
+}
+
 function warnOnMissingOrDuplicateIds(
   markdown: string,
   papers: DailyPaperWithContent[],
   logger: Logger,
 ): void {
-  const outputIds = markdown.match(/\b\d{4}\.\d{4,5}\b/g) ?? [];
+  const outputIds = extractRenderedPaperIds(markdown);
   const counts = new Map<string, number>();
   for (const id of outputIds) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const inputIds = papers.map((p) => p.id);
+  const inputIds = unique(papers.map((p) => p.id));
   const missing = inputIds.filter((id) => !counts.has(id));
-  const duplicated = unique(inputIds.filter((id) => (counts.get(id) ?? 0) > 1));
+  const duplicated = inputIds.filter((id) => (counts.get(id) ?? 0) > 1);
   if (missing.length) {
     logger.warn(
       `summarizeDaily: ${missing.length} paper(s) missing from output: ${missing.join(", ")}`,

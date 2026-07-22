@@ -35,6 +35,7 @@ import type { RunStateEntry } from "@arxiv-daily/core";
 import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
+import { openDatePickerModal } from "../date-picker-modal";
 import { SimilarPapersModal } from "./similar-papers-modal";
 import { buildDiagnosticsReport, redactText } from "@arxiv-daily/core";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
@@ -148,11 +149,11 @@ export function resolveCalendarCellState({
     return { state: "empty", emptyReason: "arxiv-not-updated" };
   }
 
+  if (runnable) return { state: "runnable" };
+
   if (isCompletedRunState(runState)) {
     return { state: "empty", emptyReason: "report-missing" };
   }
-
-  if (runnable) return { state: "runnable" };
 
   return emptyReason
     ? { state: "empty", emptyReason }
@@ -377,7 +378,7 @@ function isRunStateBlockedForCalendarRun(runState?: RunStateEntry): boolean {
     runState?.status === "running" ||
     runState?.status === "skipped" ||
     runState?.status === "failed_permanent" ||
-    runState?.status === "completed"
+    (runState?.status === "completed" && runState.papersWritten === 0)
   );
 }
 
@@ -2062,12 +2063,11 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
-    this.addCommandMenuItem(menu, "Run for date…", "calendar", "run-for-date");
-    this.addCommandMenuItem(
-      menu,
-      "Force run for date…",
-      "rotate-cw",
-      "force-run-for-date",
+    this.addDeferredMenuItem(menu, "Run for date…", "calendar", () =>
+      this.openRunForDatePicker(false),
+    );
+    this.addDeferredMenuItem(menu, "Force run for date…", "rotate-cw", () =>
+      this.openRunForDatePicker(true),
     );
     menu.addItem((item) =>
       item
@@ -2116,6 +2116,22 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.showAtMouseEvent(evt);
+  }
+
+  private addDeferredMenuItem(
+    menu: Menu,
+    label: string,
+    icon: string,
+    action: () => void,
+  ): void {
+    menu.addItem((item) =>
+      item
+        .setTitle(label)
+        .setIcon(icon)
+        .onClick(() => {
+          deferDashboardAction(action);
+        }),
+    );
   }
 
   private addCommandMenuItem(
@@ -2247,6 +2263,45 @@ class ArxivDailyDashboardView extends ItemView {
       return false;
     }
     return true;
+  }
+
+  private openRunForDatePicker(force: boolean): void {
+    if (!this.gateFilter()) return;
+    openDatePickerModal(
+      this.plugin.app,
+      (date) => {
+        void this.runSelectedDate(date, force).catch((error) => {
+          this.plugin.logger.warn(
+            `dashboard: ${force ? "force " : ""}run failed for ${date}`,
+            error,
+          );
+          this.notice(`arXiv Daily ${date}: ${(error as Error).message}`, 10_000);
+        });
+      },
+      force
+        ? {
+            title: "Force run arXiv Daily for date",
+            desc: "YYYY-MM-DD. Clears stored run state for this date before running; existing daily files are still not overwritten.",
+            buttonText: "Force run",
+          }
+        : {},
+      (message, timeoutMs) => this.notice(message, timeoutMs),
+    );
+  }
+
+  private async runSelectedDate(date: string, force: boolean): Promise<void> {
+    this.plugin.logger.info(
+      `dashboard: manual ${force ? "force " : ""}run requested for ${date}`,
+    );
+    this.notice(`arXiv Daily: ${force ? "force " : ""}running for ${date}…`);
+    try {
+      const result = force
+        ? await this.plugin.scheduler.forceRunForDate(date)
+        : await this.plugin.scheduler.runForDateNow(date);
+      this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    } finally {
+      await this.reloadIndex();
+    }
   }
 
   private async runToday(): Promise<void> {
@@ -2666,6 +2721,10 @@ function describeDashboardAction(action: DashboardAction): string {
 
 function isStarredEntry(entry: DashboardRow["entry"]): boolean {
   return entry.status !== "ignored" && entry.priority === "high";
+}
+
+export function deferDashboardAction(action: () => void): void {
+  window.setTimeout(action, 0);
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {

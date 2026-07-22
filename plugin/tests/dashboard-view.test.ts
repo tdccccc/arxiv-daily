@@ -6,6 +6,7 @@ import {
   applyStarButtonState,
   collectIndexedDetailSummaryRefs,
   dashboardHistoryPathSet,
+  deferDashboardAction,
   executeObsidianCommand,
   expectedDetailSummaryPath,
   filterDashboardMarkdownFiles,
@@ -107,6 +108,20 @@ describe("openMarkdownFileOnce", () => {
       "",
       false,
     );
+  });
+});
+
+describe("deferDashboardAction", () => {
+  it("runs modal-opening menu actions after the current event loop", () => {
+    vi.useFakeTimers();
+    const action = vi.fn();
+
+    deferDashboardAction(action);
+
+    expect(action).not.toHaveBeenCalled();
+    vi.runAllTimers();
+    expect(action).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });
 
@@ -212,6 +227,19 @@ describe("executeObsidianCommand", () => {
     await expect(
       executeObsidianCommand({ commands: { commands: {} } }, "missing"),
     ).resolves.toBe(false);
+  });
+});
+
+describe("dashboard date-run controls", () => {
+  it("runs the selected scheduler path and always refreshes the dashboard", () => {
+    const body = dashboardViewSource.match(
+      /private async runSelectedDate\([\s\S]*?\n  private async runToday/,
+    )?.[0];
+
+    expect(body).toBeDefined();
+    expect(body).toContain("forceRunForDate(date)");
+    expect(body).toContain("runForDateNow(date)");
+    expect(body).toMatch(/finally \{\s*await this\.reloadIndex\(\);/);
   });
 });
 
