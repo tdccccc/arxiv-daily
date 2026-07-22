@@ -1,4 +1,7 @@
-import type { LlmClient } from "../llm/client";
+import {
+  isLlmTransientExhaustedError,
+  type LlmClient,
+} from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
 import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
@@ -16,13 +19,22 @@ import type {
 } from "../settings/types";
 import {
   derivePaperSourceSections,
-  summarizeDailyPaper,
+  summarizeDailyPaperWithValidationRetry,
 } from "./daily-paper-summary";
 import {
   assembleDailySummary,
+  assembleEmergencyDailySummary,
+  isDailySummaryAssemblyRuntimeError,
+  type DailyPaperSlot,
+  type DailySummaryAssemblyInput,
   type DailySummaryAssemblyPaper,
-  type StructuredPaperSummary,
+  preflightDailySummaryAssembly,
+  preflightDailySummaryPapers,
 } from "./daily-summary-assembler";
+import {
+  isDailySummaryRescueExhaustedError,
+  rescueDailySummary,
+} from "./daily-summary-rescue";
 import type { FilteredPaper } from "./paper-filter";
 import { escapePaperDataFence } from "./prompt-safety";
 
@@ -48,6 +60,10 @@ export interface SummarizerDeps {
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
+  /** Lower-level renderer injected behind the production assembler preflight boundary. */
+  dailyRenderer?: (input: DailySummaryAssemblyInput) => string;
+  rescueDaily?: typeof rescueDailySummary;
+  assembleEmergencyDaily?: (input: DailySummaryAssemblyInput) => string;
 }
 
 export async function summarizeDaily(
@@ -56,44 +72,91 @@ export async function summarizeDaily(
   deps: SummarizerDeps,
 ): Promise<string> {
   throwIfCancelled(deps.signal);
-  const summaries: StructuredPaperSummary[] = [];
-  const assemblyPapers: DailySummaryAssemblyPaper[] = [];
+  const assemblyPapers: DailySummaryAssemblyPaper[] = papers.map((paper) => ({
+    id: paper.id,
+    title: paper.title,
+    authors: paper.authors,
+    category: paper.category,
+    sourceSections: derivePaperSourceSections(paper),
+    isDetail: paper.isDetail,
+    paperPath: paper.paperPath,
+    detailLink: paper.detailLink,
+  }));
+  preflightDailySummaryPapers(assemblyPapers, deps.arxivSettings);
 
+  const slots: DailyPaperSlot[] = [];
+  let fallbackCount = 0;
   for (let i = 0; i < papers.length; i += 1) {
     throwIfCancelled(deps.signal);
     const paper = papers[i]!;
-    const sourceSections = derivePaperSourceSections(paper);
-    const summary = await summarizeDailyPaper(paper, {
+    const result = await summarizeDailyPaperWithValidationRetry(paper, {
       llm: deps.llm,
       summaryLanguage: deps.summaryLanguage,
       signal: deps.signal,
       onMetrics: deps.onMetrics,
     });
     throwIfCancelled(deps.signal);
-    summaries.push(summary);
-    assemblyPapers.push({
-      id: paper.id,
-      title: paper.title,
-      authors: paper.authors,
-      category: paper.category,
-      sourceSections,
-      isDetail: paper.isDetail,
-      paperPath: paper.paperPath,
-      detailLink: paper.detailLink,
+    if (result.kind === "fallback") {
+      fallbackCount += 1;
+      deps.logger.warn(
+        `summarizeDaily: fallback for ${paper.id} reason=${result.reasonCode} attempts=${result.attempts}`,
+      );
+    }
+    slots.push({
+      paper: assemblyPapers[i]!,
+      result,
     });
     deps.onDailyPaperProgress?.(i + 1, papers.length);
   }
 
   throwIfCancelled(deps.signal);
-  const markdown = assembleDailySummary({
-    papers: assemblyPapers,
-    summaries,
+  const assemblyInput: DailySummaryAssemblyInput = {
+    slots,
     dateStr,
     arxivSettings: deps.arxivSettings,
     summaryLanguage: deps.summaryLanguage,
-  });
+  };
+  preflightDailySummaryAssembly(assemblyInput);
+
+  let markdown: string;
+  try {
+    markdown = assembleDailySummary(
+      assemblyInput,
+      deps.dailyRenderer ? { renderer: deps.dailyRenderer } : {},
+    );
+  } catch (error) {
+    if (!isDailySummaryAssemblyRuntimeError(error)) throw error;
+    deps.logger.warn(
+      `summarizeDaily: deterministic assembly runtime failure slots=${slots.length}`,
+    );
+    try {
+      markdown = await (deps.rescueDaily ?? rescueDailySummary)(assemblyInput, {
+        llm: deps.llm,
+        logger: deps.logger,
+        signal: deps.signal,
+        onMetrics: deps.onMetrics,
+      });
+    } catch (rescueError) {
+      if (
+        !isDailySummaryRescueExhaustedError(rescueError) &&
+        !isLlmTransientExhaustedError(rescueError)
+      ) {
+        throw rescueError;
+      }
+      const cause = isDailySummaryRescueExhaustedError(rescueError)
+        ? "validation-exhausted"
+        : "transport-exhausted";
+      deps.logger.warn(
+        `summarizeDaily: degraded emergency report cause=${cause} slots=${slots.length} fallback=${fallbackCount}`,
+      );
+      markdown = (deps.assembleEmergencyDaily ?? assembleEmergencyDailySummary)(
+        assemblyInput,
+      );
+    }
+  }
   deps.logger.info(
-    `summarizeDaily: assembled ${papers.length} sequential paper summaries`,
+    `summarizeDaily: assembled ${papers.length} sequential paper summaries` +
+      (fallbackCount > 0 ? ` (${fallbackCount} fallback)` : ""),
   );
   return markdown;
 }

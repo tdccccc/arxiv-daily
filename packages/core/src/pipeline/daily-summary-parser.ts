@@ -1,5 +1,16 @@
 import type { PaperSummary } from "../services/paper-index";
 import { stripGenerationMetrics } from "../metrics/generation";
+import {
+  DAILY_SUMMARY_ABSTRACT_ABSENT_MARKER_PREFIX,
+  DAILY_SUMMARY_EMERGENCY_MARKER,
+} from "./daily-summary-rendering";
+import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
+
+export { DAILY_SUMMARY_EMERGENCY_MARKER };
+
+const FALLBACK_MARKER_RE =
+  /^<!-- arxiv-daily-fallback:(\d{4}\.\d{4,5}) -->$/m;
+const ARXIV_BULLET_RE = /^[\t ]*[-*][\t ]+\*\*arXiv\*\*[:：]/im;
 
 const FIELD_LABELS: Array<[keyof PaperSummary, string[]]> = [
   ["coreProblem", ["研究问题", "核心问题", "Research problem"]],
@@ -13,9 +24,10 @@ export function extractPaperSummaries(
   markdown: string,
 ): Record<string, PaperSummary> {
   const summaries: Record<string, PaperSummary> = {};
-  const blocks = stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1);
+  const blocks = paperBlocks(markdown);
 
   for (const block of blocks) {
+    if (extractFallbackId(block)) continue;
     const id = extractArxivId(block);
     if (!id) continue;
 
@@ -36,13 +48,69 @@ export function extractPaperSummaries(
   return summaries;
 }
 
-function extractArxivId(block: string): string | null {
-  return (
-    /arxiv-daily:(\d{4}\.\d{4,5}):(?:watch|highlight)/.exec(block)?.[1] ??
-    /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(block)?.[1] ??
-    /\[(\d{4}\.\d{4,5})\]/.exec(block)?.[1] ??
-    null
+export function hasEmergencyDailySummaryMarker(markdown: string): boolean {
+  return standaloneLineRegExp(DAILY_SUMMARY_EMERGENCY_MARKER).test(
+    stripGenerationMetrics(markdown),
   );
+}
+
+export function extractFallbackPaperIds(markdown: string): string[] {
+  const ids: string[] = [];
+  for (const block of paperBlocks(markdown)) {
+    const id = extractFallbackId(block);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/** Extract localized original abstracts only from marker-confirmed fallback blocks. */
+export function extractFallbackAbstracts(markdown: string): Record<string, string> {
+  const abstracts: Record<string, string> = {};
+  for (const block of paperBlocks(markdown)) {
+    const id = extractFallbackId(block);
+    if (!id || id in abstracts) continue;
+    if (hasAbsentAbstractMarker(block, id)) continue;
+    const value = extractAnyBulletField(block, ["原始摘要", "Original abstract"]);
+    if (value) abstracts[id] = value;
+  }
+  return abstracts;
+}
+
+function paperBlocks(markdown: string): string[] {
+  return stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1);
+}
+
+function extractFallbackId(block: string): string | null {
+  const marker = FALLBACK_MARKER_RE.exec(block);
+  const arxivBulletIndex = block.search(ARXIV_BULLET_RE);
+  if (!marker || arxivBulletIndex < 0 || marker.index > arxivBulletIndex) {
+    return null;
+  }
+  const paperId = extractArxivId(block);
+  return marker[1] === paperId ? marker[1]! : null;
+}
+
+function hasAbsentAbstractMarker(block: string, id: string): boolean {
+  const escapedId = escapeRegExp(id);
+  return new RegExp(
+    `^<!-- ${DAILY_SUMMARY_ABSTRACT_ABSENT_MARKER_PREFIX}:${escapedId} -->$`,
+    "m",
+  ).test(block);
+}
+
+function extractArxivId(block: string): string | null {
+  const firstHeadingLine = block.split(/\r?\n/, 1)[0] ?? "";
+  return (
+    dailySelectionMarkerRegExp("m").exec(block)?.[2] ??
+    /^[\t ]*[-*][\t ]+\*\*arXiv\*\*[:：][^\r\n]*?arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/im.exec(block)?.[1] ??
+    extractLegacyHeadingId(firstHeadingLine)
+  );
+}
+
+function extractLegacyHeadingId(headingLine: string): string | null {
+  return /(?:^|[\t ])\[(\d{4}\.\d{4,5})\](?=[\t ]*(?:$|→|[-—–|:：]))/.exec(
+    headingLine,
+  )?.[1] ?? null;
 }
 
 function extractSourceSections(block: string): string {
@@ -73,6 +141,10 @@ function extractAnyBulletField(block: string, labels: string[]): string {
 
 function compact(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function standaloneLineRegExp(value: string): RegExp {
+  return new RegExp(`^${escapeRegExp(value)}$`, "m");
 }
 
 function escapeRegExp(value: string): string {

@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { LlmClient, isUnsupportedStreamOptionsError } from "../../src/llm/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  LlmClient,
+  LlmTransientExhaustedError,
+  isUnsupportedStreamOptionsError,
+} from "../../src/llm/client";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { HttpClient, HttpRequest, HttpResponse } from "../../src/core/adapters";
@@ -21,6 +25,8 @@ function client(request: (req: HttpRequest) => Promise<HttpResponse>) {
 }
 
 describe("LLM stream metrics", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("requests streamed usage and reports provider aliases", async () => {
     const request = vi.fn(async (req: HttpRequest) => response(200, sse([
       { choices: [{ delta: { content: "hello" } }] },
@@ -53,6 +59,25 @@ describe("LLM stream metrics", () => {
     expect(metrics).toHaveBeenCalledWith(expect.objectContaining({
       logicalCalls: 1, attempts: 2, usageComplete: false,
     }));
+  });
+
+  it("types exhausted transient retries at the LLM client boundary", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => response(503, "provider unavailable"));
+    const metrics = vi.fn();
+
+    const call = client(request)
+      .call([{ role: "user", content: "x" }], { onMetrics: metrics })
+      .catch((error) => error);
+    await vi.runAllTimersAsync();
+
+    const error = await call;
+    expect(error).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(error).toMatchObject({ message: "provider unavailable" });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(metrics).toHaveBeenCalledWith(
+      expect.objectContaining({ logicalCalls: 1, attempts: 3 }),
+    );
   });
 
   it("does not treat generic client errors as unsupported options and sanitizes provider errors", async () => {

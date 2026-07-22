@@ -66,6 +66,7 @@ export interface PipelineDeps {
   llmSettings: LlmSettings;
   detailSelection: DetailSelectionPolicy;
   progress?: ProgressReporter;
+  summarizeDaily?: typeof summarizeDaily;
 }
 
 export class ArxivPipeline {
@@ -366,7 +367,7 @@ export class ArxivPipeline {
     this.progress.setStage("summarize-daily");
     let dailySummary: string;
     try {
-      dailySummary = await summarizeDaily(enriched, dateStr, {
+      dailySummary = await (this.deps.summarizeDaily ?? summarizeDaily)(enriched, dateStr, {
         llm: this.deps.llm,
         logger,
         arxivSettings: this.deps.arxiv,
@@ -380,9 +381,10 @@ export class ArxivPipeline {
       });
     } catch (e) {
       if (isCancellationError(e)) throw e;
+      const permanentLlmFailure = isPermanentLlmError(e);
       return {
-        kind: isPermanentLlmError(e) ? "failed_permanent" : "failed_transient",
-        reason: `daily summary LLM failed: ${(e as Error).message}`,
+        kind: permanentLlmFailure ? "failed_permanent" : "failed_transient",
+        reason: `${permanentLlmFailure ? "daily summary LLM failed" : "daily summary failed"}: ${(e as Error).message}`,
       };
     }
     throwIfCancelled(signal);

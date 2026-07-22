@@ -23,6 +23,39 @@ export class StreamIdleTimeoutError extends Error {
   }
 }
 
+export const LLM_TRANSIENT_EXHAUSTED_ERROR_CODE =
+  "ARXIV_LLM_TRANSIENT_EXHAUSTED" as const;
+
+/** A logical LLM call exhausted the client's internal transient retries. */
+export class LlmTransientExhaustedError extends Error {
+  readonly code = LLM_TRANSIENT_EXHAUSTED_ERROR_CODE;
+  readonly cause: Error;
+
+  constructor(cause: Error) {
+    super(cause.message);
+    this.name = "LlmTransientExhaustedError";
+    this.cause = cause;
+  }
+}
+
+export function isLlmTransientExhaustedError(
+  error: unknown,
+): error is LlmTransientExhaustedError {
+  if (error instanceof LlmTransientExhaustedError) return true;
+  if (!isErrorLike(error) ||
+      error.name !== "LlmTransientExhaustedError" ||
+      error.code !== LLM_TRANSIENT_EXHAUSTED_ERROR_CODE) return false;
+  return isErrorLike(error.cause);
+}
+
+function isErrorLike(value: unknown): value is Error & Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.name === "string" &&
+    typeof candidate.message === "string" &&
+    typeof candidate.stack === "string";
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -183,63 +216,67 @@ export class LlmClient {
     let finalUsage: TokenUsage | undefined;
     let hadRetriedGenerationFailure = false;
     try {
-      const content = await retry(
-        async () => {
-          attempts += 1;
-          throwIfCancelled(opts.signal);
-          const params: Record<string, unknown> = {
-            model: this.settings.model,
-            messages,
-            stream: true,
-            stream_options: { include_usage: true },
-          };
-          if (this.settings.thinkingMode) {
-            if (this.settings.provider === "anthropic") {
-              const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
-              params.extra_body = { thinking: { type: "enabled", budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192 } };
-            } else {
-              params.reasoning_effort = this.settings.reasoningEffort;
-              params.extra_body = { thinking: { type: "enabled" } };
-            }
-          } else {
-            params.temperature = opts.temperature ?? LLM_TEMPERATURE;
-          }
-          const abort = createAttemptAbortController(opts.signal);
-          try {
-            const result = await this.postChatStream(params, abort.controller, opts.signal);
-            finalUsage = result.usage;
-            throwIfCancelled(opts.signal);
-            return result.content;
-          } catch (error) {
-            if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
+      try {
+        return await retry(
+          async () => {
             attempts += 1;
-            const fallback = { ...params };
-            delete fallback.stream_options;
-            try {
-              const result = await this.postChatStream(fallback, abort.controller, opts.signal);
-              finalUsage = result.usage;
-              return result.content;
-            } catch (fallbackError) {
-              throw this.safeError(fallbackError);
+            throwIfCancelled(opts.signal);
+            const params: Record<string, unknown> = {
+              model: this.settings.model,
+              messages,
+              stream: true,
+              stream_options: { include_usage: true },
+            };
+            if (this.settings.thinkingMode) {
+              if (this.settings.provider === "anthropic") {
+                const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+                params.extra_body = { thinking: { type: "enabled", budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192 } };
+              } else {
+                params.reasoning_effort = this.settings.reasoningEffort;
+                params.extra_body = { thinking: { type: "enabled" } };
+              }
+            } else {
+              params.temperature = opts.temperature ?? LLM_TEMPERATURE;
             }
-          } finally {
-            abort.cleanup();
-          }
-        },
-        {
-          maxAttempts: 3,
-          baseDelayMs: 5000,
-          signal: opts.signal,
-          shouldRetry: (err) => !isCancellationError(err) && !isPermanentLlmError(err),
-          onRetry: (err, attempt, wait) => {
-            hadRetriedGenerationFailure = true;
-            this.logger.warn(
-              `LLM retry #${attempt} after ${wait}ms: ${this.safeError(err).message}`,
-            );
+            const abort = createAttemptAbortController(opts.signal);
+            try {
+              const result = await this.postChatStream(params, abort.controller, opts.signal);
+              finalUsage = result.usage;
+              throwIfCancelled(opts.signal);
+              return result.content;
+            } catch (error) {
+              if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
+              attempts += 1;
+              const fallback = { ...params };
+              delete fallback.stream_options;
+              try {
+                const result = await this.postChatStream(fallback, abort.controller, opts.signal);
+                finalUsage = result.usage;
+                return result.content;
+              } catch (fallbackError) {
+                throw this.safeError(fallbackError);
+              }
+            } finally {
+              abort.cleanup();
+            }
           },
-        },
-      );
-      return content;
+          {
+            maxAttempts: 3,
+            baseDelayMs: 5000,
+            signal: opts.signal,
+            shouldRetry: (err) => !isCancellationError(err) && !isPermanentLlmError(err),
+            onRetry: (err, attempt, wait) => {
+              hadRetriedGenerationFailure = true;
+              this.logger.warn(
+                `LLM retry #${attempt} after ${wait}ms: ${this.safeError(err).message}`,
+              );
+            },
+          },
+        );
+      } catch (error) {
+        if (isCancellationError(error) || isPermanentLlmError(error)) throw error;
+        throw new LlmTransientExhaustedError(this.safeError(error));
+      }
     } finally {
       const metrics: LlmCallMetrics = {
         logicalCalls: 1,

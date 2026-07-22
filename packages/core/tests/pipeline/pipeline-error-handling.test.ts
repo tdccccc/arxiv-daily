@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { LlmTransientExhaustedError } from "../../src/llm/client";
 import type { PipelineResult } from "../../src/pipeline/pipeline";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { Logger } from "../../src/services/logger";
@@ -260,6 +261,7 @@ describe("Pipeline partial failure consistency", () => {
     writer?: Record<string, unknown>;
     paperIndex?: Record<string, unknown>;
     paperFetcher?: Record<string, unknown>;
+    summarizeDaily?: (...args: any[]) => Promise<string>;
   } = {}) {
     const ids = overrides.ids ?? ["2605.08080"];
     const fetcher = {
@@ -353,13 +355,14 @@ describe("Pipeline partial failure consistency", () => {
       output: DEFAULT_SETTINGS.output,
       llmSettings: DEFAULT_SETTINGS.llm,
       detailSelection: testDetailSelection,
+      summarizeDaily: overrides.summarizeDaily,
     });
     return { pipeline, writer, paperIndex, paperFetcher, llm };
   }
 
-  it("does not write a daily report when the second structured summary fails", async () => {
+  it("writes a daily report with fallback when the second structured summary fails", async () => {
     const ids = ["2605.08080", "2605.08068"];
-    const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
+    const { pipeline, writer, paperIndex, llm } = makeOnePaperPipeline({ ids });
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
       if (system.includes("选择最匹配的主题")) {
@@ -371,20 +374,67 @@ describe("Pipeline partial failure consistency", () => {
         return JSON.stringify({ papers: [] });
       }
       const id = /ID: (\d{4}\.\d{4,5})/.exec(messages[1]?.content ?? "")?.[1];
-      if (id === ids[1]) throw new Error("second paper unavailable");
+      if (id === ids[1]) {
+        throw new LlmTransientExhaustedError(
+          new Error("second paper unavailable"),
+        );
+      }
       return structuredDailyResponse(messages) ?? "";
     });
 
     expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "failed_transient",
-      reason: "daily summary LLM failed: second paper unavailable",
+      kind: "completed",
+      papersWritten: 2,
     });
-    expect(writer.writeDaily).not.toHaveBeenCalled();
+    expect(writer.writeDaily).toHaveBeenCalledTimes(1);
+    const dailyMarkdown = writer.writeDaily.mock.calls[0]?.[1] as string;
+    expect(dailyMarkdown).toContain("<!-- arxiv-daily-fallback:2605.08068 -->");
+    expect(dailyMarkdown).toContain("其中 1 篇使用回退内容。");
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith(
+      expect.not.objectContaining({ "2605.08068": expect.anything() }),
+    );
   });
 
-  it("keeps strict structured-validation failures transient and does not write", async () => {
+  it("commits mixed emergency output and indexes all IDs but only structured summaries", async () => {
+    const ids = ["2605.08080", "2605.08068"];
+    const emergency = [
+      "<!-- arxiv-daily-emergency-report:v1 -->",
+      "> **降级应急报告。**",
+      "## Test Topic",
+      `### Structured\n> 信息来源： Abstract\n- **作者**: A\n- **arXiv**: [${ids[0]}](https://arxiv.org/abs/${ids[0]})\n- **研究问题**: Trusted problem`,
+      `### Fallback\n> **自动摘要不可用。**\n<!-- arxiv-daily-fallback:${ids[1]} -->\n> 信息来源： Abstract\n- **作者**: B\n- **arXiv**: [${ids[1]}](https://arxiv.org/abs/${ids[1]})\n- **原始摘要**: Original abstract`,
+    ].join("\n");
+    const summarizeDaily = vi.fn(async (papers: any[]) => {
+      expect(papers.map((paper) => paper.id)).toEqual(ids);
+      expect(papers.map((paper) => paper.abstract)).toEqual(["abstract", "abstract"]);
+      return emergency;
+    });
+    const { pipeline, writer, paperIndex } = makeOnePaperPipeline({
+      ids,
+      summarizeDaily,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 2,
+    });
+    expect(writer.writeDaily).toHaveBeenCalledWith(
+      "2026-05-11",
+      emergency,
+      expect.any(Object),
+    );
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      ids,
+      "arxiv-daily/daily/2026-05-11.md",
+    );
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({
+      [ids[0]]: { sourceSections: "Abstract", coreProblem: "Trusted problem" },
+    });
+  });
+
+  it("writes a fallback daily report after three strict structured-validation failures", async () => {
     const ids = ["2605.08080"];
-    const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
+    const { pipeline, writer, paperIndex, llm } = makeOnePaperPipeline({ ids });
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
       if (system.includes("选择最匹配的主题")) {
@@ -397,33 +447,56 @@ describe("Pipeline partial failure consistency", () => {
     });
 
     expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "failed_transient",
-      reason:
-        "daily summary LLM failed: summarizeDailyPaper: response for 2605.08080 is not strict JSON",
+      kind: "completed",
+      papersWritten: 1,
     });
-    expect(writer.writeDaily).not.toHaveBeenCalled();
+    // filter + 3 daily validation attempts (detail selection is skipped)
+    expect(llm.call).toHaveBeenCalledTimes(4);
+    expect(writer.writeDaily).toHaveBeenCalledTimes(1);
+    const dailyMarkdown = writer.writeDaily.mock.calls[0]?.[1] as string;
+    expect(dailyMarkdown).toContain("<!-- arxiv-daily-fallback:2605.08080 -->");
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({});
   });
 
-  it("keeps provider non-429 4xx daily failures permanent and does not write", async () => {
-    const ids = ["2605.08080"];
-    const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
-    llm.call = vi.fn(async (messages: any[]) => {
-      const system = messages[0]?.content ?? "";
-      if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id: ids[0], category: "test" }] });
-      }
-      if (system.includes("strict research-paper evaluator")) {
-        return JSON.stringify({ papers: [] });
-      }
-      throw Object.assign(new Error("daily request forbidden"), { status: 403 });
+  it("labels unrelated daily assembly failures without claiming an LLM failure", async () => {
+    const { pipeline, writer } = makeOnePaperPipeline({
+      summarizeDaily: vi.fn(async () => {
+        throw new TypeError("assembler invariant broke");
+      }),
     });
 
     expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "failed_permanent",
-      reason: "daily summary LLM failed: daily request forbidden",
+      kind: "failed_transient",
+      reason: "daily summary failed: assembler invariant broke",
     });
     expect(writer.writeDaily).not.toHaveBeenCalled();
   });
+
+  it.each([401, 403])(
+    "keeps provider %i daily failures permanent and does not write",
+    async (status) => {
+      const ids = ["2605.08080"];
+      const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
+      llm.call = vi.fn(async (messages: any[]) => {
+        const system = messages[0]?.content ?? "";
+        if (system.includes("选择最匹配的主题")) {
+          return JSON.stringify({ papers: [{ id: ids[0], category: "test" }] });
+        }
+        if (system.includes("strict research-paper evaluator")) {
+          return JSON.stringify({ papers: [] });
+        }
+        throw Object.assign(new Error(`daily request failed with ${status}`), {
+          status,
+        });
+      });
+
+      expect(await pipeline.runForDate("2026-05-11")).toEqual({
+        kind: "failed_permanent",
+        reason: `daily summary LLM failed: daily request failed with ${status}`,
+      });
+      expect(writer.writeDaily).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not write a partial daily report when cancelled between papers", async () => {
     const ids = ["2605.08080", "2605.08068"];
