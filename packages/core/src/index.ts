@@ -21,6 +21,7 @@ export * from "./pipeline/paper-content";
 export * from "./pipeline/paper-filter";
 export * from "./pipeline/pipeline";
 export * from "./pipeline/prompt-safety";
+export * from "./pipeline/scientific-markdown-math";
 export * from "./pipeline/section-extractor";
 export * from "./pipeline/source-extractor";
 export * from "./pipeline/summarizer";

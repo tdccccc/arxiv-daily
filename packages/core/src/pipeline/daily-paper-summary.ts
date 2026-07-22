@@ -18,6 +18,11 @@ import type {
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
 import { escapePaperDataFence } from "./prompt-safety";
+import {
+  canonicalizeScientificMarkdownMath,
+  SCIENTIFIC_MARKDOWN_MATH_ISSUE_CODES,
+  type ScientificMarkdownMathIssue,
+} from "./scientific-markdown-math";
 
 export interface DailyPaperSummaryInput {
   id: string;
@@ -39,6 +44,12 @@ export interface DailyPaperSummaryDeps {
 export const DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE =
   "ARXIV_DAILY_PAPER_SUMMARY_VALIDATION" as const;
 
+export interface DailyPaperSummaryMathValidationIssue {
+  code: ScientificMarkdownMathIssue["code"];
+  offset: number;
+  length: number;
+}
+
 export type DailyPaperSummaryValidationReasonCode =
   | "invalid-json"
   | "invalid-root"
@@ -46,7 +57,8 @@ export type DailyPaperSummaryValidationReasonCode =
   | "invalid-id-type"
   | "mismatched-id"
   | "invalid-field-type"
-  | "empty-field";
+  | "empty-field"
+  | "invalid-math";
 
 export class DailyPaperSummaryValidationError extends Error {
   readonly name = "DailyPaperSummaryValidationError";
@@ -54,6 +66,7 @@ export class DailyPaperSummaryValidationError extends Error {
   readonly paperId: string;
   readonly reasonCode?: DailyPaperSummaryValidationReasonCode;
   readonly fieldKey?: keyof Omit<StructuredPaperSummary, "id">;
+  readonly issues?: readonly DailyPaperSummaryMathValidationIssue[];
 
   constructor(
     paperId: string,
@@ -61,12 +74,14 @@ export class DailyPaperSummaryValidationError extends Error {
     details: {
       reasonCode?: DailyPaperSummaryValidationReasonCode;
       fieldKey?: keyof Omit<StructuredPaperSummary, "id">;
+      issues?: readonly DailyPaperSummaryMathValidationIssue[];
     } = {},
   ) {
     super(message);
     this.paperId = paperId;
     this.reasonCode = details.reasonCode;
     this.fieldKey = details.fieldKey;
+    this.issues = details.issues;
   }
 }
 
@@ -94,6 +109,9 @@ const SUMMARY_KEYS = [
 
 const SEMANTIC_KEYS = SUMMARY_KEYS.filter(
   (key): key is Exclude<(typeof SUMMARY_KEYS)[number], "id"> => key !== "id",
+);
+const TRUSTED_MATH_ISSUE_CODES = new Set<string>(
+  Object.values(SCIENTIFIC_MARKDOWN_MATH_ISSUE_CODES),
 );
 export async function summarizeDailyPaper(
   paper: DailyPaperSummaryInput,
@@ -227,6 +245,7 @@ function buildCorrectionGuidance(
       `Return only strict JSON with exactly these keys: ${keys}.\n` +
       `The id field must equal the ID in paper_data.\n` +
       `Every string field must be non-empty after trimming.\n` +
+      `In semantic fields, use Obsidian inline math $...$ only. Do not use \\(...\\), \\[...\\], or $$...$$; put every TeX command inside math delimiters. Never split a single formula into multiple adjacent $...$ spans; genuinely separate formulas may use separate spans. For ensemble-average or expectation angle brackets use \\langle … \\rangle (or \\left< … \\right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine.\n` +
       `Do not wrap the JSON in Markdown fences or add any other text.`
     );
   }
@@ -235,6 +254,7 @@ function buildCorrectionGuidance(
     `只返回严格 JSON，且恰好包含这些键：${keys}。\n` +
     `id 字段必须等于 paper_data 中的 ID。\n` +
     `每个字符串字段在 trim 后都必须非空。\n` +
+    `语义字段中的数学公式只能使用 Obsidian 行内格式 $...$。禁止使用 \\(...\\)、\\[...\\] 或 $$...$$；所有 TeX 命令都必须位于数学定界符内。绝不能把一个公式拆成多个相邻的 $...$ 片段；真正彼此独立的公式可以分别使用独立片段。表示系综平均或期望的尖括号必须使用 \\langle … \\rangle（或 \\left< … \\right>）；禁止在数学中直接写形如 <x> 的裸尖括号，它会被当作 HTML 标签而无法正确渲染。普通不等号 <、>（如 $a<b$、$z<0.5$）照常使用。\n` +
     `不要用 Markdown 代码块包裹 JSON，也不要附加其他文本。`
   );
 }
@@ -249,6 +269,12 @@ function trustedCorrectionReason(
   const field = error.fieldKey && SEMANTIC_KEYS.includes(error.fieldKey)
     ? error.fieldKey
     : undefined;
+  const issueCodes = error.issues
+    ?.slice(0, 8)
+    .map(({ code }) => code)
+    .filter((code) => TRUSTED_MATH_ISSUE_CODES.has(code))
+    .filter((code, index, values) => values.indexOf(code) === index)
+    .join(", ");
   if (language === "en") {
     switch (error.reasonCode) {
       case "invalid-json": return "the response was not strict JSON";
@@ -258,6 +284,9 @@ function trustedCorrectionReason(
       case "mismatched-id": return "the id field did not match the requested paper";
       case "invalid-field-type": return field ? `${field} was not a string` : "a semantic field was not a string";
       case "empty-field": return field ? `${field} was empty` : "a semantic field was empty";
+      case "invalid-math": return field && issueCodes
+        ? `${field} contained invalid scientific math (${issueCodes})`
+        : "a semantic field contained invalid scientific math";
       default: return "the response was invalid";
     }
   }
@@ -269,6 +298,9 @@ function trustedCorrectionReason(
     case "mismatched-id": return "id 字段与请求的论文不匹配";
     case "invalid-field-type": return field ? `${field} 不是字符串` : "某个语义字段不是字符串";
     case "empty-field": return field ? `${field} 为空` : "某个语义字段为空";
+    case "invalid-math": return field && issueCodes
+      ? `${field} 包含无效科学公式（${issueCodes}）`
+      : "某个语义字段包含无效科学公式";
     default: return "响应格式或内容无效";
   }
 }
@@ -334,7 +366,23 @@ function parseDailyPaperSummary(
         { reasonCode: "empty-field", fieldKey: key },
       );
     }
-    summary[key] = trimmed;
+    const math = canonicalizeScientificMarkdownMath(trimmed);
+    if (!math.ok) {
+      const issues = math.issues.map(({ code, offset, length }) => ({
+        code,
+        offset,
+        length,
+      }));
+      const locations = issues
+        .map(({ code, offset, length }) => `${code}@${offset}:${length}`)
+        .join(", ");
+      throw new DailyPaperSummaryValidationError(
+        expectedId,
+        `summarizeDailyPaper: ${key} for ${expectedId} has invalid scientific math (${locations})`,
+        { reasonCode: "invalid-math", fieldKey: key, issues },
+      );
+    }
+    summary[key] = math.value;
   }
   return summary;
 }

@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import { LlmTransientExhaustedError } from "../src/llm/client";
 import { GenerationMetricsCollector } from "../src/metrics/generation";
-import { extractPaperSummaries } from "../src/pipeline/daily-summary-parser";
+import {
+  DailySummaryRescueExhaustedError,
+  DailySummaryRescueValidationError,
+  renderDailySummaryRescueMarkdown,
+} from "../src/pipeline/daily-summary-rescue";
+import {
+  extractFallbackPaperIds,
+  extractPaperSummaries,
+  hasEmergencyDailySummaryMarker,
+} from "../src/pipeline/daily-summary-parser";
 import { summarizeDaily, summarizePaperDetail } from "../src/pipeline/summarizer";
+import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
@@ -22,10 +33,10 @@ function paper(
     id,
     title: `Title ${id}`,
     authors: `Author ${id}`,
-    abstract: "abstract",
+    abstract: `abstract ${id}`,
     category,
     isDetail: false,
-    abstractConclusion: "## Abstract\nabstract evidence",
+    abstractConclusion: `## Abstract\nabstract evidence ${id}`,
     fullSections: "## Results\nresult evidence",
     ...overrides,
   };
@@ -53,6 +64,19 @@ function deps(llm: unknown, overrides: Record<string, unknown> = {}) {
 }
 
 describe("summarizeDaily", () => {
+  it("runs assembly preflight before the first LLM call", async () => {
+    const llm = { call: vi.fn() };
+
+    await expect(
+      summarizeDaily(
+        [paper("2607.00001", "unknown")],
+        "2026-07-22",
+        deps(llm),
+      ),
+    ).rejects.toThrow("paper 2607.00001 has unknown category tag: unknown");
+    expect(llm.call).not.toHaveBeenCalled();
+  });
+
   it("calls every paper exactly once in input order with maximum concurrency one", async () => {
     const ids = ["2607.00003", "2607.00001", "2607.00002"];
     const callOrder: string[] = [];
@@ -113,6 +137,32 @@ describe("summarizeDaily", () => {
         limitations: `${id} limits`,
       });
     }
+  });
+
+  it("canonicalizes and emits scientific Markdown without reversible escaping", async () => {
+    const scientific = String.raw`For $z<0.1$, \(E = mc^2 + \alpha_i^{2}\), A & B | C is 50% and z>3.5.`;
+    const canonical = String.raw`For $z<0.1$, $E = mc^2 + \alpha_i^{2}$, A & B | C is 50% and z>3.5.`;
+    const llm = {
+      call: vi.fn(async () => JSON.stringify({
+        id: "2607.00001",
+        coreProblem: scientific,
+        keyMethod: scientific,
+        mainResult: scientific,
+        whyRelevant: scientific,
+        limitations: scientific,
+      })),
+    };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm),
+    );
+
+    expect(output).toContain(`- **研究问题**: ${canonical}`);
+    expect(output).not.toContain("&amp;");
+    expect(output).not.toContain("\\$");
+    expect(extractPaperSummaries(output)["2607.00001"]?.coreProblem).toBe(canonical);
   });
 
   it("reports successful progress and forwards metrics for every paper", async () => {
@@ -180,24 +230,288 @@ describe("summarizeDaily", () => {
     expect(llm.call).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores dailyCharLimit and rejects a later invalid structured response", async () => {
+  it("retries invalid structured responses up to three total calls then falls back", async () => {
+    const progress = vi.fn();
+    const warn = vi.fn();
+    const collector = new GenerationMetricsCollector();
+    const onMetrics = vi.fn((metrics) => collector.record(metrics));
+    const responses = [
+      structured("2607.00001"),
+      "not json",
+      "still not json",
+      "final not json",
+      structured("2607.00003"),
+    ];
+    const llm = {
+      call: vi.fn(async (_messages: unknown, options: any) => {
+        options.onMetrics?.({
+          logicalCalls: 1,
+          attempts: 1,
+          elapsedMs: 2,
+          usageComplete: false,
+        });
+        return responses.shift()!;
+      }),
+    };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
+      "2026-07-22",
+      deps(llm, {
+        advanced: { ...DEFAULT_SETTINGS.advanced, dailyCharLimit: 1 },
+        onDailyPaperProgress: progress,
+        onMetrics,
+        logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+      }),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(5);
+    expect(progress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
+    expect(onMetrics).toHaveBeenCalledTimes(5);
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
+    expect(extractPaperSummaries(output)["2607.00002"]).toBeUndefined();
+    expect(output).toContain("其中 1 篇使用回退内容。");
+    expect(output).toContain("- **原始摘要**: abstract 2607.00002");
+    expect(warn).toHaveBeenCalledWith(
+      "summarizeDaily: fallback for 2607.00002 reason=validation-exhausted attempts=3",
+    );
+    expect(Object.keys(extractPaperSummaries(output)).sort()).toEqual([
+      "2607.00001",
+      "2607.00003",
+    ]);
+  });
+
+  it("contains three invalid-math attempts to one paper and preserves neighboring summaries", async () => {
+    const invalidMath = (id: string) => JSON.stringify({
+      ...JSON.parse(structured(id)),
+      mainResult: String.raw`Bare \alpha outside math.`,
+    });
+    const responses = [
+      structured("2607.00001"),
+      invalidMath("2607.00002"),
+      invalidMath("2607.00002"),
+      invalidMath("2607.00002"),
+      structured("2607.00003"),
+    ];
+    const llm = { call: vi.fn(async () => responses.shift()!) };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
+      "2026-07-22",
+      deps(llm),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(5);
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
+    expect(Object.keys(extractPaperSummaries(output)).sort()).toEqual([
+      "2607.00001",
+      "2607.00003",
+    ]);
+    expect(output).toContain("- **原始摘要**: abstract 2607.00002");
+  });
+
+  it("succeeds on the third validation attempt with correction guidance", async () => {
     const llm = {
       call: vi
         .fn()
-        .mockResolvedValueOnce(structured("2607.00001"))
-        .mockResolvedValueOnce("not json"),
+        .mockResolvedValueOnce("not json")
+        .mockResolvedValueOnce("still not json")
+        .mockResolvedValueOnce(structured("2607.00001")),
+    };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(3);
+    expect(extractFallbackPaperIds(output)).toEqual([]);
+    expect(extractPaperSummaries(output)["2607.00001"]?.coreProblem).toBe(
+      "2607.00001 problem",
+    );
+    const secondUser = llm.call.mock.calls[1]![0][1].content as string;
+    const thirdUser = llm.call.mock.calls[2]![0][1].content as string;
+    expect(secondUser).toContain("上一次响应未通过校验");
+    expect(secondUser).toContain("响应不是严格 JSON");
+    expect(secondUser).toContain("恰好包含这些键");
+    expect(thirdUser).toContain("上一次响应未通过校验");
+  });
+
+  it("falls back immediately on exhausted transient transport without extra app retries", async () => {
+    const llm = {
+      call: vi
+        .fn()
+        .mockRejectedValue(
+          new LlmTransientExhaustedError(new Error("socket hang up")),
+        ),
+    };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00001"]);
+    expect(output).toContain("其中 1 篇使用回退内容。");
+  });
+
+  it("propagates permanent provider errors without fallback", async () => {
+    const llm = {
+      call: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error("daily request forbidden"), { status: 403 }),
+        ),
+    };
+
+    await expect(
+      summarizeDaily([paper("2607.00001")], "2026-07-22", deps(llm)),
+    ).rejects.toThrow("daily request forbidden");
+    expect(llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates cancellation during a paper without fallback", async () => {
+    const controller = new AbortController();
+    const llm = {
+      call: vi.fn(async () => {
+        controller.abort("cancelled mid paper");
+        return structured("2607.00001");
+      }),
     };
 
     await expect(
       summarizeDaily(
-        [paper("2607.00001"), paper("2607.00002")],
+        [paper("2607.00001")],
+        "2026-07-22",
+        deps(llm, { signal: controller.signal }),
+      ),
+    ).rejects.toThrow("cancelled mid paper");
+    expect(llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses rescue only after a typed deterministic rendering failure and forwards rescue metrics", async () => {
+    const onMetrics = vi.fn();
+    const progress = vi.fn();
+    const llm = {
+      call: vi.fn(async (messages: any[], options: any) => {
+        options.onMetrics?.({ logicalCalls: 1, attempts: 1, elapsedMs: 1, usageComplete: false });
+        const user = messages[1].content as string;
+        const rescueMatch = /<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(user);
+        if (rescueMatch) return renderDailySummaryRescueMarkdown(JSON.parse(rescueMatch[1]!));
+        const id = /ID: (\d{4}\.\d{5})/.exec(user)![1]!;
+        return structured(id);
+      }),
+    };
+
+    const output = await summarizeDaily(
+      [paper("2607.00001", "a", {
+        abstractConclusion: "## Abstract\nDISTINCTIVE_RESCUE_EXCLUDED_CONCLUSION",
+        fullSections: "## Results\nDISTINCTIVE_RESCUE_EXCLUDED_FULL_SECTIONS",
+      })],
+      "2026-07-22",
+      deps(llm, {
+        onMetrics,
+        onDailyPaperProgress: progress,
+        dailyRenderer: () => {
+          throw new Error("render broke");
+        },
+      }),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    expect(onMetrics).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenCalledTimes(1);
+    const rescuePayload = llm.call.mock.calls[1]![0][1].content as string;
+    expect(rescuePayload).not.toContain("DISTINCTIVE_RESCUE_EXCLUDED_CONCLUSION");
+    expect(rescuePayload).not.toContain("DISTINCTIVE_RESCUE_EXCLUDED_FULL_SECTIONS");
+    expect(output).toContain("<!-- arxiv-daily-rescue-report:start -->");
+    expect(extractPaperSummaries(output)["2607.00001"]?.coreProblem).toBe(
+      "2607.00001 problem",
+    );
+  });
+
+  it.each([
+    {
+      name: "rescue validation exhaustion",
+      error: new DailySummaryRescueExhaustedError(
+        new DailySummaryRescueValidationError("wrong markdown"),
+      ),
+      cause: "validation-exhausted",
+    },
+    {
+      name: "rescue transport exhaustion",
+      error: new LlmTransientExhaustedError(new Error("rescue unavailable")),
+      cause: "transport-exhausted",
+    },
+  ])("uses deterministic emergency output after $name without another metric event", async ({ error, cause }) => {
+    const onMetrics = vi.fn();
+    const warn = vi.fn();
+    const llm = {
+      call: vi.fn(async (messages: any[], options: any) => {
+        options.onMetrics?.({ logicalCalls: 1, attempts: 1, elapsedMs: 1, usageComplete: false });
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        return id === "2607.00002" ? "not json" : structured(id);
+      }),
+    };
+    const rescueDaily = vi.fn(async () => {
+      throw error;
+    });
+
+    const output = await summarizeDaily(
+      [
+        paper("2607.00001", "b", { detailLink: "[[2607.00001]]", isDetail: true }),
+        paper("2607.00002", "a"),
+      ],
+      "2026-07-22",
+      deps(llm, {
+        onMetrics,
+        logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+        dailyRenderer: () => {
+          throw new Error("render broke");
+        },
+        rescueDaily,
+      }),
+    );
+
+    expect(rescueDaily).toHaveBeenCalledTimes(1);
+    expect(hasEmergencyDailySummaryMarker(output)).toBe(true);
+    expect(output.match(/^### /gm)).toHaveLength(2);
+    expect(output).toContain("### Title 2607.00001 → [[2607.00001]]");
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
+    expect(Object.keys(extractPaperSummaries(output))).toEqual(["2607.00001"]);
+    expect(onMetrics).toHaveBeenCalledTimes(4);
+    expect(warn).toHaveBeenCalledWith(
+      `summarizeDaily: degraded emergency report cause=${cause} slots=2 fallback=1`,
+    );
+  });
+
+  it.each([
+    ["cancellation", new RunCancelledError("cancel rescue")],
+    ["permanent provider error", Object.assign(new Error("forbidden"), { status: 403 })],
+    ["unrelated error", new TypeError("rescue bug")],
+  ])("does not use emergency output for %s", async (_name, rescueError) => {
+    const emergency = vi.fn(() => "must not render");
+    const llm = { call: vi.fn().mockResolvedValue(structured("2607.00001")) };
+
+    await expect(
+      summarizeDaily(
+        [paper("2607.00001")],
         "2026-07-22",
         deps(llm, {
-          advanced: { ...DEFAULT_SETTINGS.advanced, dailyCharLimit: 1 },
+          dailyRenderer: () => {
+            throw new Error("render broke");
+          },
+          rescueDaily: vi.fn(async () => {
+            throw rescueError;
+          }),
+          assembleEmergencyDaily: emergency,
         }),
       ),
-    ).rejects.toThrow("2607.00002 is not strict JSON");
-    expect(llm.call).toHaveBeenCalledTimes(2);
+    ).rejects.toBe(rescueError);
+    expect(emergency).not.toHaveBeenCalled();
   });
 });
 
