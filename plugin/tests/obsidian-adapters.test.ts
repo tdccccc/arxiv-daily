@@ -113,6 +113,22 @@ describe("Obsidian host adapters", () => {
     );
   });
 
+  it("atomically preserves scientific Markdown bytes without touching plugin data", async () => {
+    const { app, files } = testApp();
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: testSettings,
+    });
+    const body = String.raw`- **Core results**: $\mathrm{NMAD}$ and $\eta$ hold for \(r_{\rm cut}/R_{\rm vir}\), z<0.1, z>3.5, and A & B.`;
+
+    await host.storage.writeTextAtomic?.("arxiv-daily/daily/science.md", body);
+
+    expect(files["arxiv-daily/daily/science.md"]).toBe(body);
+    expect(files["arxiv-daily/daily/science.md.tmp"]).toBeUndefined();
+    expect(files["arxiv-daily/daily/science.md.bak"]).toBeUndefined();
+    expect(Object.keys(files)).toEqual(["arxiv-daily/daily/science.md"]);
+  });
+
   it("opens URLs through Obsidian's active window", async () => {
     const { app } = testApp();
     const activeWindow = { open: vi.fn(() => null) } as unknown as Window;

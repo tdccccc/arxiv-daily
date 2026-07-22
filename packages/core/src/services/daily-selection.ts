@@ -2,6 +2,7 @@ import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { daysBefore, formatDate, todayInTz } from "../utils/time";
 import type { Logger } from "./logger";
+import { dailySelectionMarkerRegExp } from "./daily-selection-marker";
 import { LOOKBACK_DAYS } from "./scheduling/constants";
 import type {
   PaperIndexEntry,
@@ -31,8 +32,7 @@ export interface DailySelectionStartupSyncResult
 
 export function parseDailySelections(markdown: string): DailyPaperSelection[] {
   const selections = new Map<string, DailyPaperSelection>();
-  const re =
-    /^[ \t]*[-*][ \t]+\[([ xX])\][^\n]*?<!--\s*arxiv-daily:(\d{4}\.\d{4,5}):(?:selection:)?(watch|highlight)\s*-->/gm;
+  const re = dailySelectionMarkerRegExp();
   let m: RegExpExecArray | null;
   while ((m = re.exec(markdown)) !== null) {
     const [, rawChecked, arxivId, rawKind] = m;

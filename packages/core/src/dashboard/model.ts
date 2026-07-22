@@ -363,6 +363,7 @@ function searchableText(entry: PaperIndexEntry): string {
     ...entry.topics,
     entry.category,
     ...(entry.categories ?? []),
+    entry.abstract,
     ...summaryText(entry.summary),
   ]
     .join(" ")

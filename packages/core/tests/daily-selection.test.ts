@@ -78,6 +78,41 @@ describe("daily selection", () => {
     ]);
   });
 
+  it("keeps standalone legacy controls compatible and ignores inline fake marker prose", () => {
+    const selections = parseDailySelections([
+      "- [x] Watch <!-- arxiv-daily:2606.10001:watch -->",
+      "* [X] Highlight <!-- arxiv-daily:2606.10002:highlight -->",
+      "- [x] Watch <!-- arxiv-daily:2606.10003:selection:watch -->",
+      "- **Research problem**: prose <!-- arxiv-daily:2606.19999:watch -->",
+      "prefix - [x] Watch <!-- arxiv-daily:2606.19998:watch --> suffix",
+    ].join("\n"));
+
+    expect(selections).toEqual([
+      { arxivId: "2606.10001", watch: true, highlight: false },
+      { arxivId: "2606.10002", watch: false, highlight: true },
+      { arxivId: "2606.10003", watch: true, highlight: false },
+    ]);
+  });
+
+  it("accepts historical marker whitespace, both namespaces, and CRLF while retaining strict checkbox lines", () => {
+    const markdown = [
+      "- [x] Watch <!--arxiv-daily:2606.11001:watch-->",
+      "* [X] Highlight <!--  arxiv-daily:2606.11002:highlight  -->",
+      "- [ ] Watch <!--\tarxiv-daily:2606.11003:selection:watch\t-->",
+      "- [x] Highlight <!-- arxiv-daily:2606.11003:selection:highlight -->",
+      "- [x] Watch <!-- arxiv-daily:2606.11004:watch -->",
+      "prefix - [x] Watch <!--  arxiv-daily:2606.11998:watch  -->",
+      "- **Research problem**: fake <!-- arxiv-daily:2606.11999:highlight -->",
+    ].join("\r\n");
+
+    expect(parseDailySelections(markdown)).toEqual([
+      { arxivId: "2606.11001", watch: true, highlight: false },
+      { arxivId: "2606.11002", watch: false, highlight: true },
+      { arxivId: "2606.11003", watch: false, highlight: true },
+      { arxivId: "2606.11004", watch: true, highlight: false },
+    ]);
+  });
+
   it("applies selections as to_read priorities and can clear plugin to_read state", () => {
     const data = index([
       entry("2606.12345"),

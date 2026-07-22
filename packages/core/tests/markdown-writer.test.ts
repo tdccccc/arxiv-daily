@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
+import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { OutputSettings } from "../src/settings/types";
@@ -213,6 +214,64 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("weekday: Monday");
     expect(written).toContain("body");
     expect(files["arxiv-daily/daily/2026-05-11.bak.md"]).toBeUndefined();
+  });
+
+  it("persists assembled scientific Markdown exactly between frontmatter and metrics", async () => {
+    const { files, writer } = makeWriter();
+    const scientific = {
+      id: "2607.12345",
+      coreProblem: String.raw`Measure $\mathrm{NMAD}$ and $\eta$ for PS1+WISE at z<0.1 and z>3.5.`,
+      keyMethod: String.raw`Use \(r_{\rm cut}/R_{\rm vir}\) with M_\odot and \left|x\right|.`,
+      mainResult: "A & B remain distinguishable.",
+      whyRelevant: String.raw`The $\mathrm{NMAD}$ trend survives.`,
+      limitations: "PS1+WISE coverage is finite.",
+    };
+    const body = assembleDailySummary({
+      dateStr: "2026-05-11",
+      arxivSettings: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "science", name: "Science", tag: "science", description: "", detail: false }],
+      },
+      summaryLanguage: "en",
+      slots: [{
+        paper: {
+          id: scientific.id,
+          title: "Scientific report",
+          authors: "A & B",
+          category: "science",
+          sourceSections: "Abstract, Results",
+          isDetail: false,
+        },
+        result: { kind: "structured", summary: scientific },
+      }],
+    });
+
+    await writer.writeDaily("2026-05-11", body, {
+      metrics: { logicalCalls: 1, attempts: 1, elapsedMs: 25, usageComplete: false },
+    });
+
+    const path = "arxiv-daily/daily/2026-05-11.md";
+    const written = files[path]!;
+    const frontmatter = "---\ndate: 2026-05-11\nweekday: Monday\ntags: [arxiv, daily]\n---\n\n";
+    const metricsStart = written.indexOf("\n\n<!-- arxiv-daily:generation-metrics -->");
+    expect(metricsStart).toBeGreaterThan(0);
+    expect(written.slice(frontmatter.length, metricsStart)).toBe(body);
+    for (const exact of [
+      String.raw`$\mathrm{NMAD}$`,
+      String.raw`$\eta$`,
+      String.raw`\(r_{\rm cut}/R_{\rm vir}\)`,
+      String.raw`M_\odot`,
+      String.raw`\left|x\right|`,
+      "PS1+WISE",
+      "z<0.1",
+      "z>3.5",
+      "A & B",
+    ]) expect(written).toContain(exact);
+    for (const corruption of ["\\\\mathrm", "\\\\eta", "&lt;0.1", "&gt;3.5", "&amp; B"]) {
+      expect(written).not.toContain(corruption);
+    }
+    expect(files[`${path}.tmp`]).toBeUndefined();
+    expect(files[`${path}.bak`]).toBeUndefined();
   });
 
   it("appends folded generation metrics at the absolute end without changing frontmatter", async () => {

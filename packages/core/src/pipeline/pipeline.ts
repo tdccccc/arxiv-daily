@@ -26,6 +26,7 @@ import {
   type DailyPaperWithContent,
 } from "./summarizer";
 import { extractPaperSummaries } from "./daily-summary-parser";
+import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import {
   selectDetailPapers,
@@ -651,14 +652,13 @@ export class ArxivPipeline {
 
 function extractDailyArxivIds(markdown: string): string[] {
   const ids = new Set<string>();
-  const patterns = [
-    /arxiv-daily:(\d{4}\.\d{4,5}):(?:watch|highlight)/gi,
-    /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/gi,
-  ];
-  for (const pattern of patterns) {
-    for (const match of markdown.matchAll(pattern)) {
-      if (match[1]) ids.add(match[1]);
-    }
+  for (const match of markdown.matchAll(dailySelectionMarkerRegExp("gmi"))) {
+    if (match[2]) ids.add(match[2]);
+  }
+  const arxivBullet =
+    /^[ \t]*[-*][ \t]+\*\*arXiv\*\*[:：][^\r\n]*?arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?[^\r\n]*\r?$/gmi;
+  for (const match of markdown.matchAll(arxivBullet)) {
+    if (match[1]) ids.add(match[1]);
   }
   return Array.from(ids);
 }

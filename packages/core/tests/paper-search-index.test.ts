@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PaperSearchIndex,
   normalizeArxivSearchId,
+  queryDashboard,
   tokenizePaperSearchText,
   type PaperIndexEntry,
 } from "../src";
@@ -66,6 +67,25 @@ describe("arXiv ID normalization", () => {
 });
 
 describe("PaperSearchIndex", () => {
+  it("finds a fallback paper through its separately stored abstract in indexed and legacy modes", () => {
+    const fallback = paper("2607.00999", {
+      title: "Unrelated title",
+      abstract: "Distinctive emergency fallback quasar tomography evidence",
+      summary: undefined,
+    });
+    const query = { tab: "all" as const, search: "tomography evidence" };
+
+    expect(queryDashboard([fallback], query).rows.map((row) => row.arxivId)).toEqual([
+      fallback.arxivId,
+    ]);
+    expect(
+      queryDashboard([fallback], query, { searchIndex: null }).rows.map(
+        (row) => row.arxivId,
+      ),
+    ).toEqual([fallback.arxivId]);
+    expect(fallback.summary).toBeUndefined();
+  });
+
   const entries = [
     paper("2607.00001", {
       title: "Photometric-redshift calibration with transformer",

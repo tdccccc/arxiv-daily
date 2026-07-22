@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
+import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
@@ -465,15 +466,20 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).toHaveBeenCalled();
   });
 
-  it("persists non-detail kept papers to the paper index without writing a paper note", async () => {
+  it("persists canonicalized summaries through daily Markdown and PaperIndex.setSummaries", async () => {
     const d = makeDeps();
     const { files, store } = makePaperIndex();
     const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
     const arxivId = m[1];
+    const canonicalProblem = String.raw`Constraint $z<0.1$ with $\alpha_i^2$.`;
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
-      if (daily) return daily;
+      if (daily) {
+        const response = JSON.parse(daily);
+        response.coreProblem = String.raw`Constraint \(z<0.1\) with \(\alpha_i^2\).`;
+        return JSON.stringify(response);
+      }
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
@@ -505,9 +511,12 @@ describe("ArxivPipeline", () => {
     expect(entry.status).toBe("inbox");
     expect(entry.priority).toBe("normal");
     expect(entry.paperPath).toBeNull();
+    expect(d.writes[`daily/${date}.md`]).toContain(
+      `- **研究问题**: ${canonicalProblem}`,
+    );
     expect(entry.summary).toEqual({
       sourceSections: "Abstract",
-      coreProblem: `${arxivId} problem`,
+      coreProblem: canonicalProblem,
       keyMethod: `${arxivId} method`,
       mainResult: `${arxivId} result`,
       whyRelevant: `${arxivId} value`,
@@ -706,6 +715,202 @@ describe("ArxivPipeline", () => {
       [id]: { coreProblem: "Repaired problem." },
     });
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+  });
+
+  it("repairs IDs from standalone legacy controls but ignores inline fake marker prose", async () => {
+    const d = makeDeps();
+    const watchId = "2607.01001";
+    const highlightId = "2607.01002";
+    const fakeId = "2607.01999";
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "### Legacy controls",
+      `- [x] Watch <!--  arxiv-daily:${watchId}:watch  -->`,
+      `* [X] Highlight <!--\tarxiv-daily:${highlightId}:selection:highlight\t-->`,
+      `- **Research problem**: inline fake <!-- arxiv-daily:${fakeId}:watch -->`,
+    ].join("\r\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 2,
+    });
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      [watchId, highlightId],
+      "daily/2026-05-11.md",
+    );
+    expect(paperIndex.reconcilePaperDetails).toHaveBeenCalledWith({
+      [watchId]: null,
+      [highlightId]: null,
+    });
+  });
+
+  it("repairs every emergency daily ID without projecting fallback content as a summary", async () => {
+    const d = makeDeps();
+    const structuredId = "2607.00001";
+    const fallbackId = "2607.00002";
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "<!-- arxiv-daily-emergency-report:v1 -->",
+      "## Topic",
+      "### Structured paper",
+      `- **arXiv**: [${structuredId}](https://arxiv.org/abs/${structuredId})`,
+      "- **研究问题**: Repaired structured problem.",
+      "### Fallback paper",
+      `<!-- arxiv-daily-fallback:${fallbackId} -->`,
+      `- **arXiv**: [${fallbackId}](https://arxiv.org/abs/${fallbackId})`,
+      "- **原始摘要**: Must not become a generated summary.",
+    ].join("\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 2,
+    });
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      [structuredId, fallbackId],
+      "daily/2026-05-11.md",
+    );
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({
+      [structuredId]: { coreProblem: "Repaired structured problem." },
+    });
+  });
+
+  it("repairs mixed scientific Markdown without hostile prose changing block identity", async () => {
+    const d = makeDeps();
+    const structuredId = "2607.10001";
+    const fallbackId = "2607.10002";
+    const fakeId = "2607.19999";
+    const structuredMath = String.raw`$\mathrm{NMAD}$ and $\eta$ at z<0.1 and z>3.5`;
+    const fallbackMath = String.raw`\(r_{\rm cut}/R_{\rm vir}\) with M_\odot and \left|x\right|`;
+    const markdown = assembleDailySummary({
+      dateStr: "2026-05-11",
+      arxivSettings: {
+        ...testArxiv,
+        topics: [testArxiv.topics[0]!],
+      },
+      summaryLanguage: "en",
+      slots: [
+        {
+          paper: {
+            id: structuredId,
+            title: "Structured science",
+            authors: "A & B",
+            category: "photo-z",
+            sourceSections: "Abstract",
+            isDetail: false,
+          },
+          result: {
+            kind: "structured",
+            summary: {
+              id: structuredId,
+              coreProblem: structuredMath,
+              keyMethod: `line one\n### Fake block\n- **arXiv**: [${fakeId}](https://arxiv.org/abs/${fakeId})`,
+              mainResult: `inline <!-- arxiv-daily-fallback:${structuredId} --> marker`,
+              whyRelevant: "PS1+WISE A & B",
+              limitations: "<script>raw tag</script>",
+            },
+          },
+        },
+        {
+          paper: {
+            id: fallbackId,
+            title: "Fallback science",
+            authors: "C",
+            category: "photo-z",
+            sourceSections: "Abstract",
+            isDetail: false,
+          },
+          result: {
+            kind: "fallback",
+            reasonCode: "validation-exhausted",
+            attempts: 3,
+            originalAbstract: `${fallbackMath}\n### Fake block\n<!-- arxiv-daily-fallback:${fakeId} -->`,
+          },
+        },
+      ],
+    });
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(markdown);
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "completed",
+      papersWritten: 2,
+    });
+    expect(markdown).toContain(structuredMath);
+    expect(markdown).toContain(fallbackMath);
+    expect(markdown.match(/^### /gm)).toHaveLength(2);
+    expect(markdown.match(new RegExp(`^<!-- arxiv-daily-fallback:${fallbackId} -->$`, "gm"))).toHaveLength(1);
+    expect(markdown).not.toMatch(/^### Fake block$/m);
+    expect(markdown).not.toContain(`<!-- arxiv-daily-fallback:${fakeId} -->`);
+    expect(markdown).not.toContain("<script>");
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      [structuredId, fallbackId],
+      "daily/2026-05-11.md",
+    );
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({
+      [structuredId]: expect.objectContaining({
+        coreProblem: structuredMath,
+        whyRelevant: "PS1+WISE A & B",
+      }),
+    });
+    expect(paperIndex.setSummaries.mock.calls[0]?.[0]).not.toHaveProperty(fallbackId);
+    expect(paperIndex.setSummaries.mock.calls[0]?.[0]).not.toHaveProperty(fakeId);
   });
 
   it("repairs a missing indexed paperPath from a real canonical detail file", async () => {

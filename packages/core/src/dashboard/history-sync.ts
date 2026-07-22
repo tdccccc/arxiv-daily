@@ -5,7 +5,10 @@ import type {
   PaperSummary,
 } from "../services/paper-index";
 import type { OutputSettings, Topic } from "../settings/types";
-import { extractPaperSummaries } from "../pipeline/daily-summary-parser";
+import {
+  extractFallbackAbstracts,
+  extractPaperSummaries,
+} from "../pipeline/daily-summary-parser";
 import { looksLikeDetailSummary } from "./detail-summary";
 import { modernArxivResources } from "../utils/arxiv";
 
@@ -41,6 +44,7 @@ interface PaperCandidate {
   path?: string;
   detail: boolean;
   dailyReport?: string;
+  abstract?: string;
 }
 
 interface DailyCandidate extends PaperCandidate {
@@ -203,12 +207,14 @@ async function collectDailyCandidates(
     try {
       const markdown = await deps.vault.adapter.read(path);
       mergePaperSummaries(summaries, extractPaperSummaries(markdown));
+      const fallbackAbstracts = extractFallbackAbstracts(markdown);
       const parsed = parseDailyCandidates(
         markdown,
         path,
         date,
         deps.topics,
         paperCandidates,
+        fallbackAbstracts,
       );
       parsedReports.add(path);
       const ids = paperIdsByReport.get(path) ?? new Set<string>();
@@ -242,6 +248,7 @@ function parseDailyCandidates(
   date: string,
   topics: Topic[],
   paperCandidates: Map<string, PaperCandidate>,
+  fallbackAbstracts: Record<string, string>,
 ): DailyCandidate[] {
   const out: DailyCandidate[] = [];
   let currentTopic = "";
@@ -267,6 +274,7 @@ function parseDailyCandidates(
         dailyReport,
         detail: Boolean(paper?.detail),
         path: paper?.detail ? paper.path : undefined,
+        abstract: fallbackAbstracts[arxivId],
       });
     }
   };
@@ -300,6 +308,11 @@ function buildSyncInputs(
 ): PaperIndexUpsert[] {
   const inputs: PaperIndexUpsert[] = [];
   const seenInputs = new Set<string>();
+  const resolvedAbstracts = new Map(
+    Object.entries(inbox.papers)
+      .map(([arxivId, entry]) => [arxivId, meaningfulAbstract(entry.abstract)] as const)
+      .filter((item): item is readonly [string, string] => Boolean(item[1])),
+  );
   for (const candidate of candidates) {
     const existing = inbox.papers[candidate.arxivId];
     const dailyReport = candidate.dailyReport;
@@ -312,7 +325,18 @@ function buildSyncInputs(
     ].join("\t");
     if (seenInputs.has(key)) continue;
     seenInputs.add(key);
-    if (!needsSync(existing, candidate, dailyReport, paperPath)) continue;
+    // Report abstracts are normalized display fallbacks, not canonical Atom data.
+    // The first confirmed fallback may repair a missing value, but no report may
+    // replace an existing or already-recovered meaningful abstract.
+    const fallbackAbstract = resolvedAbstracts.has(candidate.arxivId)
+      ? undefined
+      : meaningfulAbstract(candidate.abstract);
+    if (fallbackAbstract) {
+      resolvedAbstracts.set(candidate.arxivId, fallbackAbstract);
+    }
+    if (!needsSync(existing, candidate, dailyReport, paperPath, fallbackAbstract)) {
+      continue;
+    }
     inputs.push({
       arxivId: candidate.arxivId,
       title: candidate.title,
@@ -321,6 +345,7 @@ function buildSyncInputs(
       arxivCategory: candidate.topic,
       primaryTopic: candidate.topic,
       detail: candidate.detail,
+      ...(fallbackAbstract ? { abstract: fallbackAbstract } : {}),
       ...(dailyReport ? { dailyReport } : {}),
       ...(paperPath ? { paperPath } : {}),
     });
@@ -333,6 +358,7 @@ function needsSync(
   candidate: PaperCandidate,
   dailyReport: string | undefined,
   paperPath: string | undefined,
+  fallbackAbstract: string | undefined,
 ): boolean {
   if (!existing) return true;
   if (dailyReport && !existing.dailyReports.includes(dailyReport)) return true;
@@ -345,7 +371,12 @@ function needsSync(
     return true;
   }
   if (candidate.topic && !existing.topics.includes(candidate.topic)) return true;
+  if (fallbackAbstract && !meaningfulAbstract(existing.abstract)) return true;
   return false;
+}
+
+function meaningfulAbstract(value: string | null | undefined): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function staleDetailActions(

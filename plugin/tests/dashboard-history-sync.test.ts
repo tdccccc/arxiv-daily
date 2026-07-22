@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { syncDashboardHistory } from "@arxiv-daily/core";
+import {
+  PaperSearchIndex,
+  queryDashboard,
+  syncDashboardHistory,
+} from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
 import type { StorageAdapter } from "@arxiv-daily/core";
@@ -232,6 +236,232 @@ describe("syncDashboardHistory", () => {
       paperPath: "arxiv/papers/2606.00003.md",
       dailyReports: [],
     });
+  });
+
+  it("re-scans persisted mixed scientific reports without decoding or fallback misclassification", async () => {
+    const structuredId = "2606.30001";
+    const fallbackId = "2606.30002";
+    const structuredMath = String.raw`$\mathrm{NMAD}$ and $\eta$ at z<0.1`;
+    const fallbackMath = String.raw`\(r_{\rm cut}/R_{\rm vir}\) with M_\odot and \left|x\right| at z>3.5`;
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "<!-- arxiv-daily-emergency-report:v1 -->",
+        "## Photo-z",
+        "### Structured Paper",
+        `- **arXiv**: [${structuredId}](https://arxiv.org/abs/${structuredId})`,
+        `- **研究问题**: ${structuredMath}; PS1+WISE A & B.`,
+        "### Fallback Paper",
+        `<!-- arxiv-daily-fallback:${fallbackId} -->`,
+        `- **arXiv**: [${fallbackId}](https://arxiv.org/abs/${fallbackId})`,
+        `- **原始摘要**: ${fallbackMath}; Trusted original abstract.`,
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(Object.keys(index.papers)).toEqual([structuredId, fallbackId]);
+    expect(index.papers[structuredId]?.summary).toEqual({
+      coreProblem: `${structuredMath}; PS1+WISE A & B.`,
+    });
+    expect(index.papers[fallbackId]?.summary).toBeUndefined();
+    expect(index.papers[fallbackId]?.abstract).toBe(
+      `${fallbackMath}; Trusted original abstract.`,
+    );
+    expect(index.papers[fallbackId]?.dailyReports).toEqual([
+      "arxiv/daily/2026-06-10.md",
+    ]);
+
+    const entries = Object.values(index.papers);
+    expect(queryDashboard(entries, {
+      tab: "all",
+      search: "Trusted original abstract",
+    }, {
+      searchIndex: new PaperSearchIndex(entries),
+    }).rows.map((row) => row.arxivId)).toEqual([fallbackId]);
+    expect(queryDashboard(entries, {
+      tab: "all",
+      search: "Trusted original abstract",
+    }, {
+      searchIndex: null,
+    }).rows.map((row) => row.arxivId)).toEqual([fallbackId]);
+    for (const searchIndex of [new PaperSearchIndex(entries), null]) {
+      expect(queryDashboard(entries, {
+        tab: "all",
+        search: String.raw`r_{\rm cut}`,
+      }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([fallbackId]);
+      expect(queryDashboard(entries, {
+        tab: "all",
+        search: String.raw`\mathrm{NMAD}`,
+      }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([structuredId]);
+    }
+    expect(index.papers[structuredId]?.summary?.coreProblem).not.toContain("&lt;");
+    expect(index.papers[fallbackId]?.abstract).not.toContain("\\\\");
+  });
+
+  it("fills only missing abstracts from the earliest fallback without downgrading canonical data", async () => {
+    const canonicalId = "2606.30501";
+    const englishId = "2606.30502";
+    const chineseId = "2606.30503";
+    const canonicalAbstract = [
+      "Canonical first line from Atom.",
+      "Second line keeps <b>raw HTML</b> and <!-- upstream comment --> exactly.",
+    ].join("\n");
+    const englishRecovered = "English fallback with distinctive lensing tomography evidence.";
+    const chineseRecovered = "中文回退摘要包含独特的星系团透镜证据。";
+    const daily = (
+      date: string,
+      papers: Array<{ id: string; title: string; label: string; abstract: string }>,
+    ) => [
+      `# Daily ${date}`,
+      "",
+      "## Photo-z",
+      ...papers.flatMap((paper) => [
+        `### ${paper.title}`,
+        `<!-- arxiv-daily-fallback:${paper.id} -->`,
+        `- **arXiv**: [${paper.id}](https://arxiv.org/abs/${paper.id})`,
+        `- **${paper.label}**: ${paper.abstract}`,
+      ]),
+    ].join("\n");
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [canonicalId]: {
+          abstract: canonicalAbstract,
+          dailyReports: [],
+        },
+        [englishId]: {
+          abstract: undefined,
+          dailyReports: [],
+        },
+        [chineseId]: {
+          abstract: "  \t  ",
+          dailyReports: [],
+        },
+      }),
+      "arxiv/daily/2026-06-10.md": daily("2026-06-10", [
+        {
+          id: canonicalId,
+          title: "Canonical Paper",
+          label: "Original abstract",
+          abstract: "Normalized display fallback with &lt;b>neutralized HTML&lt;/b>.",
+        },
+        {
+          id: englishId,
+          title: "English Recovered",
+          label: "Original abstract",
+          abstract: englishRecovered,
+        },
+        {
+          id: chineseId,
+          title: "Chinese Recovered",
+          label: "原始摘要",
+          abstract: chineseRecovered,
+        },
+      ]),
+      "arxiv/daily/2026-06-11.md": daily("2026-06-11", [
+        {
+          id: englishId,
+          title: "English Recovered Again",
+          label: "Original abstract",
+          abstract: "Later shorter fallback must not replace recovered text.",
+        },
+        {
+          id: chineseId,
+          title: "Chinese Recovered Again",
+          label: "原始摘要",
+          abstract: "后续回退摘要不得覆盖先前恢复的内容。",
+        },
+      ]),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[canonicalId]?.abstract).toBe(canonicalAbstract);
+    expect(index.papers[englishId]?.abstract).toBe(englishRecovered);
+    expect(index.papers[chineseId]?.abstract).toBe(chineseRecovered);
+    expect(index.papers[canonicalId]?.summary).toBeUndefined();
+    expect(index.papers[englishId]?.summary).toBeUndefined();
+    expect(index.papers[chineseId]?.summary).toBeUndefined();
+
+    const entries = Object.values(index.papers);
+    for (const searchIndex of [new PaperSearchIndex(entries), null]) {
+      expect(queryDashboard(entries, {
+        tab: "all",
+        search: "lensing tomography",
+      }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([englishId]);
+      expect(queryDashboard(entries, {
+        tab: "all",
+        search: "星系团透镜",
+      }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([chineseId]);
+      expect(queryDashboard(entries, {
+        tab: "all",
+        search: "upstream comment",
+      }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([canonicalId]);
+    }
+  });
+
+  it("does not persist or search localized unavailable abstract placeholders", async () => {
+    const englishId = "2606.31001";
+    const chineseId = "2606.31002";
+    const realId = "2606.31003";
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "## Photo-z",
+        "### English Missing",
+        `<!-- arxiv-daily-fallback:${englishId} -->`,
+        `<!-- arxiv-daily-fallback-abstract-absent:${englishId} -->`,
+        `- **arXiv**: [${englishId}](https://arxiv.org/abs/${englishId})`,
+        "- **Original abstract**: Unavailable.",
+        "### Chinese Missing",
+        `<!-- arxiv-daily-fallback:${chineseId} -->`,
+        `<!-- arxiv-daily-fallback-abstract-absent:${chineseId} -->`,
+        `- **arXiv**: [${chineseId}](https://arxiv.org/abs/${chineseId})`,
+        "- **原始摘要**: 不可用。",
+        "### Real Similar Prose",
+        `<!-- arxiv-daily-fallback:${realId} -->`,
+        `- **arXiv**: [${realId}](https://arxiv.org/abs/${realId})`,
+        "- **Original abstract**: Availability is unavailable for one instrument; this is real prose.",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[englishId]?.abstract).toBeUndefined();
+    expect(index.papers[chineseId]?.abstract).toBeUndefined();
+    expect(index.papers[realId]?.abstract).toBe(
+      "Availability is unavailable for one instrument; this is real prose.",
+    );
+    const entries = Object.values(index.papers);
+    for (const searchIndex of [new PaperSearchIndex(entries), null]) {
+      const englishMatches = queryDashboard(entries, {
+        tab: "all",
+        search: "Unavailable.",
+      }, { searchIndex }).rows.map((row) => row.arxivId);
+      expect(englishMatches).not.toContain(englishId);
+      expect(englishMatches).not.toContain(chineseId);
+      expect(queryDashboard(entries, { tab: "all", search: "不可用。" }, {
+        searchIndex,
+      }).rows).toEqual([]);
+    }
+    expect(queryDashboard(entries, { tab: "all", search: "one instrument" }, {
+      searchIndex: new PaperSearchIndex(entries),
+    }).rows.map((row) => row.arxivId)).toEqual([realId]);
   });
 
   it("backfills structured summaries with newer non-empty fields winning", async () => {
