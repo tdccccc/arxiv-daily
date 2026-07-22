@@ -52,6 +52,27 @@ function baseAtomMeta(id: string) {
   };
 }
 
+function structuredDailyResponse(messages: any[]): string | null {
+  const system = messages[0]?.content ?? "";
+  if (
+    !system.includes("严格 JSON 对象") &&
+    !system.includes("strict JSON object")
+  ) {
+    return null;
+  }
+  const user = messages[1]?.content ?? "";
+  const id = /ID: (\d{4}\.\d{4,5})/.exec(user)?.[1];
+  if (!id) throw new Error("daily summary test input is missing an ID");
+  return JSON.stringify({
+    id,
+    coreProblem: `${id} problem`,
+    keyMethod: `${id} method`,
+    mainResult: `${id} result`,
+    whyRelevant: `${id} value`,
+    limitations: `${id} limits`,
+  });
+}
+
 function makeDeps() {
   const writes: Record<string, string> = {};
   const fetcher = {
@@ -401,13 +422,12 @@ describe("ArxivPipeline", () => {
     // Override LLM call sequence: filter returns 1 paper, then daily summary returns markdown
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
         });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return "## Photo-z 相关\n### Stub title\n- summary\n";
       }
       return "";
     });
@@ -452,23 +472,12 @@ describe("ArxivPipeline", () => {
     const arxivId = m[1];
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
         });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return [
-          "## Photo-z",
-          "### Stub",
-          "> 信息来源：Abstract",
-          `- **arXiv**: [${arxivId}](https://arxiv.org/abs/${arxivId})`,
-          "- **核心问题**: Problem.",
-          "- **关键方法**: Method.",
-          "- **主要结果**: Result.",
-          "- **为什么值得看**: Relevant.",
-          "- **局限或边界**: Limits.",
-        ].join("\n");
       }
       return "";
     });
@@ -498,11 +507,11 @@ describe("ArxivPipeline", () => {
     expect(entry.paperPath).toBeNull();
     expect(entry.summary).toEqual({
       sourceSections: "Abstract",
-      coreProblem: "Problem.",
-      keyMethod: "Method.",
-      mainResult: "Result.",
-      whyRelevant: "Relevant.",
-      limitations: "Limits.",
+      coreProblem: `${arxivId} problem`,
+      keyMethod: `${arxivId} method`,
+      mainResult: `${arxivId} result`,
+      whyRelevant: `${arxivId} value`,
+      limitations: `${arxivId} limits`,
     });
     expect(entry.seenDates).toEqual([date]);
     expect(entry.published).toBe(date);
@@ -525,13 +534,12 @@ describe("ArxivPipeline", () => {
     );
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
         });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return "## Photo-z\n### Stub\n";
       }
       return "";
     });
@@ -621,6 +629,8 @@ describe("ArxivPipeline", () => {
     await store.setStatus(arxivId, "ignored");
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
@@ -934,6 +944,8 @@ describe("ArxivPipeline", () => {
     let selectorCalls = 0;
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
@@ -942,9 +954,6 @@ describe("ArxivPipeline", () => {
       if (sys.includes("strict research-paper evaluator")) {
         selectorCalls += 1;
         return JSON.stringify({ papers: [] });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return "## stub daily summary\n";
       }
       return "## detail summary\n";
     });
@@ -998,6 +1007,8 @@ describe("ArxivPipeline", () => {
     d.writer.paperDetailExists = vi.fn(async (id: string) => id === existingId);
     d.llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
       if (system.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [
@@ -1013,20 +1024,6 @@ describe("ArxivPipeline", () => {
         return JSON.stringify({
           papers: [{ id: candidateId, score: 40, reason: "not selected" }],
         });
-      }
-      if (system.includes("每日论文追踪日报")) {
-        expect(system).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
-        const dailyInput = messages[1]?.content ?? "";
-        expect(dailyInput).toContain(`Paper: ${existingId}`);
-        expect(dailyInput).toContain(`→ [[${existingId}]]`);
-        expect(dailyInput).toContain(`Paper: ${candidateId}`);
-        expect(dailyInput).not.toContain(`→ [[${candidateId}]]`);
-        return [
-          "# arXiv astro-ph Daily",
-          "共 2 篇相关论文，其中 1 篇详细收录。",
-          `## Photo-z\n### Existing → [[${existingId}]]`,
-          `### Candidate\n- **arXiv**: [${candidateId}](https://arxiv.org/abs/${candidateId})`,
-        ].join("\n");
       }
       return "";
     });
@@ -1078,6 +1075,8 @@ describe("ArxivPipeline", () => {
     });
     d.llm.call = vi.fn().mockImplementation(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
       if (system.includes("选择最匹配的主题")) {
         return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
       }
@@ -1148,6 +1147,8 @@ describe("ArxivPipeline", () => {
     });
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
@@ -1157,9 +1158,6 @@ describe("ArxivPipeline", () => {
         return JSON.stringify({
           papers: [{ id: arxivId, score: 85, reason: "strong direct contribution" }],
         });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        return "## stub daily summary\n";
       }
       return "## detail summary\n";
     });
@@ -1201,6 +1199,8 @@ describe("ArxivPipeline", () => {
     const arxivId = m[1];
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
           papers: [{ id: arxivId, category: "photo-z" }],
@@ -1210,14 +1210,6 @@ describe("ArxivPipeline", () => {
         return JSON.stringify({
           papers: [{ id: arxivId, score: 85, reason: "strong direct contribution" }],
         });
-      }
-      if (sys.includes("每日论文追踪日报")) {
-        expect(sys).toContain("共 1 篇相关论文，其中 1 篇详细收录。");
-        expect(msgs[1]?.content).toContain(`→ [[${arxivId}]]`);
-        return [
-          "共 1 篇相关论文，其中 1 篇详细收录。",
-          `## Photo-z\n### Generated detail → [[${arxivId}]]`,
-        ].join("\n");
       }
       return "## detail summary\n";
     });
@@ -1256,6 +1248,8 @@ describe("ArxivPipeline", () => {
     let selectorCalls = 0;
     d.llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
       if (system.includes("选择最匹配的主题")) return JSON.stringify({ papers: [
         { id: selectedId, category: "photo-z" },
         { id: unselectedId, category: "photo-z" },
@@ -1267,7 +1261,6 @@ describe("ArxivPipeline", () => {
           { id: unselectedId, score: 40, reason: "limited contribution" },
         ] });
       }
-      if (system.includes("每日论文追踪日报")) return "## stub daily summary\n";
       return "## detail summary\n";
     });
     d.paperFetcher.fetch = vi.fn().mockResolvedValue({
@@ -1292,6 +1285,8 @@ describe("ArxivPipeline", () => {
     const id = firstBucketPapersFromFixture()[0]!.id;
     d.llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
       if (system.includes("选择最匹配的主题")) {
         return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
       }
@@ -1320,22 +1315,13 @@ describe("ArxivPipeline", () => {
     d.writer.writePaperDetail = vi.fn(async () => { throw new Error("detail write failed"); });
     d.llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
       if (system.includes("选择最匹配的主题")) {
         return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
       }
       if (system.includes("strict research-paper evaluator")) {
         return JSON.stringify({ papers: [{ id, score: 85, reason: "direct contribution" }] });
-      }
-      if (system.includes("每日论文追踪日报")) {
-        expect(system).toContain("共 1 篇相关论文，其中 0 篇详细收录。");
-        const dailyInput = messages[1]?.content ?? "";
-        expect(dailyInput).toContain(`Paper: ${id}`);
-        expect(dailyInput).not.toContain(`→ [[${id}]]`);
-        return [
-          "# Daily",
-          "共 1 篇相关论文，其中 0 篇详细收录。",
-          `## Photo-z\n### Failed detail\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
-        ].join("\n");
       }
       return "## detail summary\n";
     });
@@ -1354,25 +1340,26 @@ describe("ArxivPipeline", () => {
     expect(entry).toMatchObject({ abstract: "atom abstract", detail: false, paperPath: null });
   });
 
-  it("emits progress stages in order", async () => {
+  it("emits summarize-daily progress from 1/N through N/N", async () => {
     const d = makeDeps();
-    const m = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)!;
-    const arxivId = m[1];
+    const ids = firstBucketPapersFromFixture().slice(0, 2).map((paper) => paper.id);
     d.llm.call = vi.fn().mockImplementation(async (msgs: any[]) => {
       const sys = msgs[0]?.content ?? "";
+      const daily = structuredDailyResponse(msgs);
+      if (daily) return daily;
       if (sys.includes("选择最匹配的主题")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: ids.map((id) => ({ id, category: "photo-z" })),
         });
       }
-      if (sys.includes("每日论文追踪日报")) {
-        return "## stub\n";
+      if (sys.includes("strict research-paper evaluator")) {
+        return JSON.stringify({ papers: [] });
       }
       return "";
     });
-    d.fetcher.fetchMetadataByIds = vi
-      .fn()
-      .mockResolvedValue(new Map([[arxivId, atomMeta(arxivId)]]));
+    d.fetcher.fetchMetadataByIds = vi.fn().mockResolvedValue(
+      new Map(ids.map((id) => [id, atomMeta(id)])),
+    );
 
     const calls: Array<[string, number?, number?]> = [];
     const progress = {
@@ -1406,5 +1393,10 @@ describe("ArxivPipeline", () => {
     expect(stages).toContain("filter");
     expect(stages).toContain("fetch-content");
     expect(stages).toContain("summarize-daily");
+    expect(calls.filter(([stage]) => stage === "summarize-daily")).toEqual([
+      ["summarize-daily", undefined, undefined],
+      ["summarize-daily", 1, 2],
+      ["summarize-daily", 2, 2],
+    ]);
   });
 });

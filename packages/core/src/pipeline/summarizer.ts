@@ -1,31 +1,30 @@
 import type { LlmClient } from "../llm/client";
-import type { Logger } from "../services/logger";
+import type { MetricsObserver } from "../metrics/generation";
+import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
+import detailSystemTemplate from "../prompts/paper-detail.system.md";
+import injectionGuard from "../prompts/injection-guard.md";
+import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
+import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
+import type { Logger } from "../services/logger";
+import { normalizeSummaryLanguage } from "../settings/summary-language";
 import type {
   AdvancedSettings,
   ArxivSettings,
   LinkStyle,
   SummaryLanguage,
 } from "../settings/types";
-import { formatArxivCategories } from "../settings/categories";
 import {
-  dailyCountLine,
-  dailyHeader,
-  noCategoryPapersText,
-  normalizeSummaryLanguage,
-} from "../settings/summary-language";
-import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
+  derivePaperSourceSections,
+  summarizeDailyPaper,
+} from "./daily-paper-summary";
+import {
+  assembleDailySummary,
+  type DailySummaryAssemblyPaper,
+  type StructuredPaperSummary,
+} from "./daily-summary-assembler";
 import type { FilteredPaper } from "./paper-filter";
-import { renderPrompt } from "../prompts/render";
-import dailySystemTemplate from "../prompts/daily-summary.system.md";
-import dailySystemTemplateEn from "../prompts/daily-summary.en.system.md";
-import dailyPartialTemplate from "../prompts/daily-summary.partial.system.md";
-import dailyPartialTemplateEn from "../prompts/daily-summary.partial.en.system.md";
-import detailSystemTemplate from "../prompts/paper-detail.system.md";
-import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
-import injectionGuard from "../prompts/injection-guard.md";
 import { escapePaperDataFence } from "./prompt-safety";
-import type { MetricsObserver } from "../metrics/generation";
 
 export interface DailyPaperWithContent extends FilteredPaper {
   abstractConclusion: string;
@@ -48,135 +47,7 @@ export interface SummarizerDeps {
   summaryLanguage?: SummaryLanguage;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
-}
-
-function extractSectionTitles(markdown: string | null | undefined): string[] {
-  if (!markdown) return [];
-  const titles: string[] = [];
-  const re = /^##\s+(.+)$/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(markdown)) !== null) {
-    const title = m[1]?.trim() ?? "";
-    if (title && !titles.includes(title)) titles.push(title);
-  }
-  return titles;
-}
-
-function paperSourceSections(p: DailyPaperWithContent): string {
-  const titles = [
-    ...extractSectionTitles(p.abstractConclusion),
-    ...extractSectionTitles(p.fullSections),
-  ].filter((title, i, arr) => arr.indexOf(title) === i);
-  if (titles.length) return titles.join(", ");
-  if (p.abstractConclusion.startsWith("[获取失败]")) return "获取失败";
-  return "正文摘录";
-}
-
-function buildDailyContent(p: DailyPaperWithContent): string {
-  const parts = [escapePaperDataFence(p.abstractConclusion.trim())].filter(Boolean);
-  if (p.fullSections?.trim()) {
-    parts.push(`Full-text excerpts:\n${escapePaperDataFence(p.fullSections.trim())}`);
-  }
-  return parts.join("\n\n");
-}
-
-function buildPaperBlock(
-  p: DailyPaperWithContent,
-  tagToName?: Map<string, string>,
-): string {
-  const detailMark =
-    p.isDetail || p.paperPath ? ` → ${p.detailLink ?? `[[${p.id}]]`}` : "";
-  const inboxLine =
-    `Inbox: ${p.seenBefore ? "seen_before" : "new"}, ` +
-    `status: ${p.inboxStatus ?? "inbox"}, ` +
-    `note: ${detailMark ? "local_note" : "arxiv_only"}\n`;
-  const displayCat = tagToName?.get(p.category) ?? p.category;
-  return (
-    `=== Paper: ${p.id} [${displayCat}]${detailMark} ===\n` +
-    `Title: ${escapePaperDataFence(p.title)}\n` +
-    `Authors: ${escapePaperDataFence(p.authors)}\n` +
-    `Source sections: ${paperSourceSections(p)}\n` +
-    inboxLine +
-    `${buildDailyContent(p)}\n\n`
-  );
-}
-
-function splitBatches(
-  papers: DailyPaperWithContent[],
-  charLimit: number,
-  tagToName?: Map<string, string>,
-): DailyPaperWithContent[][] {
-  const batches: DailyPaperWithContent[][] = [];
-  let cur: DailyPaperWithContent[] = [];
-  let size = 0;
-  for (const p of papers) {
-    const bs = buildPaperBlock(p, tagToName).length;
-    if (cur.length && size + bs > charLimit) {
-      batches.push(cur);
-      cur = [];
-      size = 0;
-    }
-    cur.push(p);
-    size += bs;
-  }
-  if (cur.length) batches.push(cur);
-  return batches;
-}
-
-async function callDailyLlm(
-  papers: DailyPaperWithContent[],
-  dateStr: string,
-  nTotal: number,
-  nDetail: number,
-  isPartial: boolean,
-  deps: SummarizerDeps,
-  tagToName: Map<string, string>,
-): Promise<string> {
-  const { llm, arxivSettings } = deps;
-  const categoryList = arxivSettings.topics
-    .map((t) => `- ${t.tag} → ${t.name}`)
-    .join("\n");
-  const papersInfo = papers.map((p) => buildPaperBlock(p, tagToName)).join("");
-  const detailLinkTemplate =
-    deps.linkStyle === "relative"
-      ? `[YYMM.NNNNN](../papers/YYMM.NNNNN.md)`
-      : `[[YYMM.NNNNN]]`;
-  const summaryLanguage = normalizeSummaryLanguage(deps.summaryLanguage);
-  const partialNote = isPartial
-    ? renderPrompt(
-        summaryLanguage === "en" ? dailyPartialTemplateEn : dailyPartialTemplate,
-        { paperCount: String(papers.length) },
-      )
-    : "";
-  const headerFmt = isPartial
-    ? ""
-    : `${dailyHeader(summaryLanguage, formatArxivCategories(arxivSettings), dateStr)}\n` +
-      `${dailyCountLine(summaryLanguage, nTotal, nDetail)}\n\n`;
-
-  const systemTemplate =
-    summaryLanguage === "en" ? dailySystemTemplateEn : dailySystemTemplate;
-  const systemPrompt = renderPrompt(systemTemplate, {
-    categoryList,
-    partialNote,
-    headerFmt,
-    detailLinkTemplate,
-    injectionGuard,
-  });
-
-  const response = await llm.call(
-    [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: `以下是今日筛选出的论文：\n\n<paper_data>\n${papersInfo}</paper_data>`,
-      },
-    ],
-    { signal: deps.signal, onMetrics: deps.onMetrics },
-  );
-  deps.logger.info(
-    `callDailyLlm: got ${response.length} chars for ${papers.length} papers`,
-  );
-  return response;
+  onDailyPaperProgress?: (completed: number, total: number) => void;
 }
 
 export async function summarizeDaily(
@@ -185,324 +56,46 @@ export async function summarizeDaily(
   deps: SummarizerDeps,
 ): Promise<string> {
   throwIfCancelled(deps.signal);
-  const nTotal = papers.length;
-  const nDetail = papers.filter((p) => p.isDetail || p.paperPath).length;
-  const tagToName = new Map(
-    deps.arxivSettings.topics.map((t) => [t.tag, t.name]),
-  );
-  const totalChars = papers.reduce(
-    (s, p) => s + buildPaperBlock(p, tagToName).length, 0,
-  );
-  deps.logger.info(
-    `summarizeDaily: ${totalChars} chars (limit ${deps.advanced.dailyCharLimit})`,
-  );
+  const summaries: StructuredPaperSummary[] = [];
+  const assemblyPapers: DailySummaryAssemblyPaper[] = [];
 
-  if (totalChars <= deps.advanced.dailyCharLimit) {
-    const summary = await callDailyLlm(
-      papers, dateStr, nTotal, nDetail, false, deps, tagToName,
-    );
-    const normalized = normalizeDailySummary(
-      summary,
-      papers,
-      deps.arxivSettings,
-      deps.summaryLanguage,
-    );
-    const canonical = canonicalizeDailyMetadata(
-      normalized,
-      papers,
-      dateStr,
-      deps.arxivSettings,
-      deps.summaryLanguage,
-    );
-    warnOnMissingOrDuplicateIds(canonical, papers, deps.logger);
-    return canonical;
-  }
-
-  const batches = splitBatches(papers, deps.advanced.dailyCharLimit, tagToName);
-  deps.logger.info(
-    `summarizeDaily: batching into ${batches.length} (${batches.map((b) => b.length).join(",")})`,
-  );
-  const header =
-    `${dailyHeader(deps.summaryLanguage, formatArxivCategories(deps.arxivSettings), dateStr)}\n` +
-    `${dailyCountLine(deps.summaryLanguage, nTotal, nDetail)}\n`;
-  const parts: string[] = [header];
-  for (let i = 0; i < batches.length; i++) {
+  for (let i = 0; i < papers.length; i += 1) {
     throwIfCancelled(deps.signal);
-    deps.logger.info(`summarizeDaily: batch ${i + 1}/${batches.length}`);
-    parts.push(
-      await callDailyLlm(batches[i]!, dateStr, nTotal, nDetail, true, deps, tagToName),
-    );
+    const paper = papers[i]!;
+    const sourceSections = derivePaperSourceSections(paper);
+    const summary = await summarizeDailyPaper(paper, {
+      llm: deps.llm,
+      summaryLanguage: deps.summaryLanguage,
+      signal: deps.signal,
+      onMetrics: deps.onMetrics,
+    });
+    throwIfCancelled(deps.signal);
+    summaries.push(summary);
+    assemblyPapers.push({
+      id: paper.id,
+      title: paper.title,
+      authors: paper.authors,
+      category: paper.category,
+      sourceSections,
+      isDetail: paper.isDetail,
+      paperPath: paper.paperPath,
+      detailLink: paper.detailLink,
+    });
+    deps.onDailyPaperProgress?.(i + 1, papers.length);
   }
+
   throwIfCancelled(deps.signal);
-  const normalized = normalizeDailySummary(
-    parts.join("\n\n"),
-    papers,
-    deps.arxivSettings,
-    deps.summaryLanguage,
-  );
-  const canonical = canonicalizeDailyMetadata(
-    normalized,
-    papers,
+  const markdown = assembleDailySummary({
+    papers: assemblyPapers,
+    summaries,
     dateStr,
-    deps.arxivSettings,
-    deps.summaryLanguage,
+    arxivSettings: deps.arxivSettings,
+    summaryLanguage: deps.summaryLanguage,
+  });
+  deps.logger.info(
+    `summarizeDaily: assembled ${papers.length} sequential paper summaries`,
   );
-  warnOnMissingOrDuplicateIds(canonical, papers, deps.logger);
-  return canonical;
-}
-
-function normalizeDailySummary(
-  markdown: string,
-  papers: DailyPaperWithContent[],
-  arxivSettings: ArxivSettings,
-  summaryLanguage?: SummaryLanguage,
-): string {
-  const names = arxivSettings.topics.map((topic) => topic.name);
-  return ensureAllCategorySections(
-    mergeDuplicateCategorySections(
-      canonicalizeDetailHeadingLinks(markdown, papers),
-      names,
-      summaryLanguage,
-    ),
-    names,
-    summaryLanguage,
-  );
-}
-
-function ensureAllCategorySections(
-  markdown: string,
-  categoryNames: string[],
-  summaryLanguage?: SummaryLanguage,
-): string {
-  const names = unique(categoryNames);
-  const present = new Set(
-    markdown
-      .split("\n")
-      .filter((line) => line.startsWith("## "))
-      .map((line) => line.slice(3).trim()),
-  );
-  const missing = names.filter((name) => !present.has(name));
-  if (missing.length === 0) return markdown;
-  const additions = missing
-    .map((name) => `## ${name}\n${noCategoryPapersText(summaryLanguage)}`)
-    .join("\n\n");
-  return `${markdown.replace(/\s+$/, "")}\n\n${additions}`;
-}
-
-function canonicalizeDailyMetadata(
-  markdown: string,
-  papers: DailyPaperWithContent[],
-  dateStr: string,
-  arxivSettings: ArxivSettings,
-  summaryLanguage?: SummaryLanguage,
-): string {
-  const renderedIds = unique(extractRenderedPaperIds(markdown));
-  const detailIds = new Set(
-    papers
-      .filter((paper) => paper.isDetail || paper.paperPath)
-      .map((paper) => paper.id),
-  );
-  const summaryLanguageNormalized = normalizeSummaryLanguage(summaryLanguage);
-  const header = dailyHeader(
-    summaryLanguageNormalized,
-    formatArxivCategories(arxivSettings),
-    dateStr,
-  );
-  const count = dailyCountLine(
-    summaryLanguageNormalized,
-    renderedIds.length,
-    renderedIds.filter((id) => detailIds.has(id)).length,
-  );
-  const body = stripDailyMetadata(markdown);
-  return `${header}\n${count}${body ? `\n\n${body}` : ""}`;
-}
-
-function stripDailyMetadata(markdown: string): string {
-  const lines = markdown.trim().split("\n");
-  if (lines[0]?.startsWith("# ")) lines.shift();
-  while (lines[0]?.trim() === "") lines.shift();
-  if (isDailyCountLine(lines[0] ?? "")) lines.shift();
-  return lines.join("\n").trim();
-}
-
-function isDailyCountLine(line: string): boolean {
-  return (
-    /^共 \d+ 篇相关论文，其中 \d+ 篇详细收录。$/.test(line.trim()) ||
-    /^\d+ relevant papers?, including \d+ with detail notes?\.$/.test(line.trim())
-  );
-}
-
-function extractRenderedPaperIds(markdown: string): string[] {
-  return markdown
-    .split(/^###\s+/m)
-    .slice(1)
-    .map((block) =>
-      /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/i.exec(block)?.[1] ??
-      /\[(\d{4}\.\d{4,5})\]/.exec(block)?.[1] ??
-      null,
-    )
-    .filter((id): id is string => Boolean(id));
-}
-
-function warnOnMissingOrDuplicateIds(
-  markdown: string,
-  papers: DailyPaperWithContent[],
-  logger: Logger,
-): void {
-  const outputIds = extractRenderedPaperIds(markdown);
-  const counts = new Map<string, number>();
-  for (const id of outputIds) counts.set(id, (counts.get(id) ?? 0) + 1);
-  const inputIds = unique(papers.map((p) => p.id));
-  const missing = inputIds.filter((id) => !counts.has(id));
-  const duplicated = inputIds.filter((id) => (counts.get(id) ?? 0) > 1);
-  if (missing.length) {
-    logger.warn(
-      `summarizeDaily: ${missing.length} paper(s) missing from output: ${missing.join(", ")}`,
-    );
-  }
-  if (duplicated.length) {
-    logger.warn(
-      `summarizeDaily: ${duplicated.length} paper(s) duplicated in output: ${duplicated.join(", ")}`,
-    );
-  }
-}
-
-function canonicalizeDetailHeadingLinks(
-  markdown: string,
-  papers: DailyPaperWithContent[],
-): string {
-  const detailLinks = new Map(
-    papers
-      .filter((paper) => paper.isDetail || paper.paperPath)
-      .map((paper) => [paper.id, paper.detailLink ?? `[[${paper.id}]]`]),
-  );
-  return markdown
-    .split("\n")
-    .map((line) => canonicalizeDetailHeadingLink(line, detailLinks))
-    .join("\n");
-}
-
-function canonicalizeDetailHeadingLink(
-  line: string,
-  detailLinks: Map<string, string>,
-): string {
-  if (!line.startsWith("### ")) return line;
-  const arrow = line.lastIndexOf(" → ");
-  if (arrow === -1) return line;
-  const suffix = line.slice(arrow + 3).trim();
-  const id = /\b\d{4}\.\d{4,5}\b/.exec(suffix)?.[0];
-  const looksLikeLink =
-    suffix.includes("[[") || /\[[^\]]+\]\([^)]+\)/.test(suffix);
-  if (!id) return looksLikeLink ? line.slice(0, arrow).trimEnd() : line;
-  const detailLink = detailLinks.get(id);
-  return detailLink
-    ? `${line.slice(0, arrow).trimEnd()} → ${detailLink}`
-    : line.slice(0, arrow).trimEnd();
-}
-
-function mergeDuplicateCategorySections(
-  markdown: string,
-  categoryNames: string[],
-  summaryLanguage?: SummaryLanguage,
-): string {
-  const names = unique(categoryNames);
-  const nameSet = new Set(names);
-  if (nameSet.size === 0) return markdown;
-
-  const lines = markdown.split("\n");
-  const headingIndexes = lines
-    .map((line, index) => (line.startsWith("## ") ? index : -1))
-    .filter((index) => index !== -1);
-  const counts = new Map<string, number>();
-  for (const index of headingIndexes) {
-    const name = lines[index]!.slice(3).trim();
-    if (nameSet.has(name)) counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  if (![...counts.values()].some((count) => count > 1)) return markdown;
-
-  const firstHeading = headingIndexes[0];
-  const prelude =
-    firstHeading === undefined ? lines : lines.slice(0, firstHeading);
-  const blocksByName = new Map<string, string[][]>();
-  const unknownBlocks: string[][] = [];
-
-  for (let i = 0; i < headingIndexes.length; i++) {
-    const start = headingIndexes[i];
-    if (start === undefined) continue;
-    const end = headingIndexes[i + 1] ?? lines.length;
-    const name = lines[start]!.slice(3).trim();
-    const content = lines.slice(start + 1, end);
-    if (nameSet.has(name)) {
-      const blocks = blocksByName.get(name) ?? [];
-      blocks.push(content);
-      blocksByName.set(name, blocks);
-    } else {
-      unknownBlocks.push(lines.slice(start, end));
-    }
-  }
-
-  const out = trimOuterBlank(prelude);
-  for (const name of names) {
-    const blocks = blocksByName.get(name);
-    if (!blocks) continue;
-    appendBlank(out);
-    out.push(`## ${name}`);
-    out.push(...mergeCategoryContentBlocks(blocks, summaryLanguage));
-  }
-  for (const block of unknownBlocks) {
-    appendBlank(out);
-    out.push(...trimOuterBlank(block));
-  }
-  return out.join("\n");
-}
-
-function mergeCategoryContentBlocks(
-  blocks: string[][],
-  summaryLanguage?: SummaryLanguage,
-): string[] {
-  const cleaned = blocks.map(trimOuterBlank);
-  const substantial = cleaned.filter((block) => !isNoUpdateBlock(block));
-  const selected = substantial.length
-    ? substantial
-    : [
-        cleaned.find((block) => block.length > 0) ?? [
-          noCategoryPapersText(summaryLanguage),
-        ],
-      ];
-  const out: string[] = [];
-  for (const block of selected) {
-    appendBlank(out);
-    out.push(...block);
-  }
-  return out;
-}
-
-function isNoUpdateBlock(lines: string[]): boolean {
-  const body = trimOuterBlank(lines);
-  return (
-    body.length === 0 ||
-    body.every((line) =>
-      ["今日无相关论文更新。", "No relevant paper updates today."].includes(
-        line.trim(),
-      ),
-    )
-  );
-}
-
-function trimOuterBlank(lines: string[]): string[] {
-  let start = 0;
-  let end = lines.length;
-  while (start < end && (lines[start]?.trim() ?? "") === "") start++;
-  while (end > start && (lines[end - 1]?.trim() ?? "") === "") end--;
-  return lines.slice(start, end);
-}
-
-function appendBlank(lines: string[]): void {
-  if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
-}
-
-function unique(values: string[]): string[] {
-  return values.filter((value, index) => values.indexOf(value) === index);
+  return markdown;
 }
 
 export async function summarizePaperDetail(
@@ -544,6 +137,7 @@ export async function summarizePaperDetail(
       onMetrics: deps.onMetrics,
     },
   );
+  throwIfCancelled(deps.signal);
   if (!summary.trim()) {
     throw new Error(`summarizePaperDetail: empty LLM response for ${paper.id}`);
   }

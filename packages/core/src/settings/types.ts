@@ -46,6 +46,7 @@ export interface AdvancedSettings {
   cacheExpiryDays: number;
   sectionCharLimit: number;
   paperCharLimit: number;
+  /** Retained for settings compatibility; sequential daily summarization does not batch by this limit. */
   dailyCharLimit: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }

@@ -375,6 +375,8 @@ export class ArxivPipeline {
         summaryLanguage: this.deps.output.summaryLanguage,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
+        onDailyPaperProgress: (completed, total) =>
+          this.progress.setStage("summarize-daily", completed, total),
       });
     } catch (e) {
       if (isCancellationError(e)) throw e;
