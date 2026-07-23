@@ -5,7 +5,8 @@ import {
 import type { MetricsObserver } from "../metrics/generation";
 import dailyPaperSummaryTemplateEn from "../prompts/daily-paper-summary.en.system.md";
 import dailyPaperSummaryTemplate from "../prompts/daily-paper-summary.system.md";
-import injectionGuard from "../prompts/injection-guard.md";
+import injectionGuardEn from "../prompts/injection-guard.en.md";
+import injectionGuardZh from "../prompts/injection-guard.md";
 import { renderPrompt } from "../prompts/render";
 import {
   isCancellationError,
@@ -121,7 +122,7 @@ export async function summarizeDailyPaper(
   const language = normalizeSummaryLanguage(deps.summaryLanguage);
   const systemPrompt = renderPrompt(
     language === "en" ? dailyPaperSummaryTemplateEn : dailyPaperSummaryTemplate,
-    { injectionGuard },
+    { injectionGuard: language === "en" ? injectionGuardEn : injectionGuardZh },
   );
   const userContent = [
     buildPaperData(paper, language),
@@ -245,7 +246,14 @@ function buildCorrectionGuidance(
       `Return only strict JSON with exactly these keys: ${keys}.\n` +
       `The id field must equal the ID in paper_data.\n` +
       `Every string field must be non-empty after trimming.\n` +
-      `In semantic fields, use Obsidian inline math $...$ only. Do not use \\(...\\), \\[...\\], or $$...$$; put every TeX command inside math delimiters. Never split a single formula into multiple adjacent $...$ spans; genuinely separate formulas may use separate spans. For ensemble-average or expectation angle brackets use \\langle … \\rangle (or \\left< … \\right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine.\n` +
+      `Math rules for semantic fields:\n` +
+      `- In semantic fields, use Obsidian inline math $...$ only.\n` +
+      `- Do not use \\(...\\), \\[...\\], or $$...$$.\n` +
+      `- Keep every TeX command inside math delimiters.\n` +
+      `- Never split a single formula into multiple adjacent $...$ spans; genuinely separate formulas may use separate spans.\n` +
+      `- For ensemble-average or expectation angle brackets use \\langle … \\rangle (or \\left< … \\right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine.\n` +
+      `Good: $\\langle \\rho \\rangle$, $z<0.5$, $M_{*}=10^{10}\\,M_{\\odot}$, $a<b$.\n` +
+      `Bad: $<\\rho>$, bare \\alpha, $M_{*}$ $=10^{10}$ (split formula), \\(\\alpha\\), $$\\alpha$$.\n` +
       `Do not wrap the JSON in Markdown fences or add any other text.`
     );
   }
@@ -254,7 +262,14 @@ function buildCorrectionGuidance(
     `只返回严格 JSON，且恰好包含这些键：${keys}。\n` +
     `id 字段必须等于 paper_data 中的 ID。\n` +
     `每个字符串字段在 trim 后都必须非空。\n` +
-    `语义字段中的数学公式只能使用 Obsidian 行内格式 $...$。禁止使用 \\(...\\)、\\[...\\] 或 $$...$$；所有 TeX 命令都必须位于数学定界符内。绝不能把一个公式拆成多个相邻的 $...$ 片段；真正彼此独立的公式可以分别使用独立片段。表示系综平均或期望的尖括号必须使用 \\langle … \\rangle（或 \\left< … \\right>）；禁止在数学中直接写形如 <x> 的裸尖括号，它会被当作 HTML 标签而无法正确渲染。普通不等号 <、>（如 $a<b$、$z<0.5$）照常使用。\n` +
+    `语义字段数学规则：\n` +
+    `- 语义字段中的数学公式只能使用 Obsidian 行内格式 $...$。\n` +
+    `- 禁止使用 \\(...\\)、\\[...\\] 或 $$...$$。\n` +
+    `- 所有 TeX 命令都必须位于数学定界符内。\n` +
+    `- 绝不能把一个公式拆成多个相邻的 $...$ 片段；真正彼此独立的公式可以分别使用独立片段。\n` +
+    `- 表示系综平均或期望的尖括号必须使用 \\langle … \\rangle（或 \\left< … \\right>）；禁止在数学中直接写形如 <x> 的裸尖括号，它会被当作 HTML 标签而无法正确渲染。普通不等号 <、>（如 $a<b$、$z<0.5$）照常使用。\n` +
+    `正例：$\\langle \\rho \\rangle$、$z<0.5$、$M_{*}=10^{10}\\,M_{\\odot}$、$a<b$。\n` +
+    `反例：$<\\rho>$、裸 \\alpha、$M_{*}$ $=10^{10}$（拆成相邻片段）、\\(\\alpha\\)、$$\\alpha$$。\n` +
     `不要用 Markdown 代码块包裹 JSON，也不要附加其他文本。`
   );
 }

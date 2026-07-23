@@ -1,38 +1,48 @@
 # Scientific math validation
 
-status: active
-updated: 2026-07-22
+status: done
+updated: 2026-07-23
 
 ## Intent
 
-Ensure every accepted per-paper daily-summary field uses Obsidian-compatible, structurally valid inline mathematics before it reaches report assembly or the paper index. Canonicalize unambiguous delimiters and use the existing validation retry/fallback boundary for malformed or ambiguous TeX.
+Make the LLM emit Obsidian-renderable scientific formulas on the first pass through a clear prompt contract. Keep the script as a thin acceptance net: reject unsafe or malformed math, apply only a few unambiguous normalizations, and use the existing per-paper retry/fallback only when acceptance fails.
 
 ## Success criteria
 
-- [x] A conservative single-line scanner preserves valid `$...$`, canonicalizes unambiguous `\(...\)` and `\[...\]`, and rejects malformed or bare TeX without corrupting currency, code spans, links, autolinks, or escaped dollars.
-- [x] Per-paper validation and bilingual prompts enforce the math contract; invalid responses use the existing maximum-three validation retries and per-paper fallback.
-- [x] Canonical values remain consistent through deterministic/rescue assembly, Markdown persistence, parser projection, and PaperIndex storage.
-- [ ] Full repository verification and an independent audit pass, and only the three approved plugin assets are deployed to the isolated test Vault.
+- [x] Bilingual daily-summary system and correction prompts use short rules plus concrete good/bad formula examples so first-pass `$...$` is the intended happy path (not scanner-driven teaching).
+- [x] The acceptance boundary is thin and explicit: valid `$...$` stays byte-stable; only agreed unambiguous rewrites run; everything else is reject-with-diagnostics (no boundary guessing, no thick auto-repair).
+- [x] Retry (max 3) and per-paper fallback remain the only recovery path, fire only on real acceptance failures, and correction text stays short trusted guidance rather than a dump of scanner internals.
+- [x] Tests (and lightweight attempt/fallback signals where already available) show the design is prompt-primary: invalid-math is rare relative to first-pass accept, and over-rejection is preferred to silent mis-rewrite.
+- [x] Full core verification passes; only `main.js`, `manifest.json`, and `styles.css` are deployed to the isolated test Vault when this initiative is closed.
 
 ## Non-goals
 
+- Growing the scanner with open-ended edge-case issue codes as the primary quality strategy.
 - Rewriting existing Vault reports or guessing math boundaries around bare TeX.
-- Changing the scientific Markdown renderer, fallback abstracts, detail summaries, canonical IDs, links, concurrency, transport retries, or assembly architecture.
-- Modifying closed Helm initiatives.
+- Changing the scientific Markdown renderer contract, assembler architecture, concurrency, transport retries, detail-note display-math allowance (`$$...$$`), canonical IDs, links, or closed Helm initiatives.
+- Replacing the existing three-attempt validation / per-paper fallback boundary with a new recovery system.
 
 ## Constraints
 
-- Work only in the existing feature worktree; preserve all prior uncommitted work and do not commit or push.
-- Validation must fail as `DailyPaperSummaryValidationError` so permanent provider/configuration errors and cancellation retain their current behavior.
-- Do not read or overwrite test-Vault `data.json`, `.cache/`, indexes, notes, or daily reports; deploy only `main.js`, `manifest.json`, and `styles.css` after verification.
-- Use subagents for substantial implementation and independent review.
+- Work only in the existing feature worktree (`sequential-daily-summaries`); preserve unrelated uncommitted work; do not commit or push unless explicitly asked.
+- Validation failures must remain `DailyPaperSummaryValidationError` so permanent provider/configuration errors and cancellation keep current behavior.
+- Do not read or overwrite test-Vault `data.json`, `.cache/`, indexes, notes, or daily reports; deploy only the three approved plugin assets after verification.
+- Prefer prompt and contract changes over new scanner heuristics; any scanner change must shrink or clarify responsibility, not expand “smart” repair.
+- Use subagents for substantial implementation and independent review when execution starts.
 
 ## Phases
 
-1. P1 — A tested conservative single-line scientific-math canonicalization and validation contract exists — status: done
-2. P2 — Per-paper prompts, retries, assembly, and persistence enforce and preserve the canonical contract — status: done
-3. P3 — The complete change is independently audited, fully verified, and deployed to the isolated test Vault — status: active
+1. P1 — A tested conservative single-line scientific-math scanner exists as the acceptance primitive — status: done
+2. P2 — Per-paper parse boundary, retries, assembly, and persistence enforce and preserve accepted math — status: done
+3. P3 — Thick scanner-audit-as-quality-path and deploy under the old primary strategy — status: superseded
+4. P4 — Prompt-primary generation: short bilingual rules + concrete good/bad examples drive first-pass renderable math — status: done
+5. P5 — Thin script fallback: documented accept-or-reject policy, minimal unambiguous rewrites, short trusted correction — status: done
+6. P6 — Measure, independently audit, fully verify, and deploy the three approved plugin assets — status: done
 
 ## Current focus
 
-P3
+Done
+
+## Open questions
+
+- None. Rewrite policy remains: only explicitly delimited `\(...\)` and simple one-line `\[...\]` → `$...$`; daily semantic fields inline-only; detail `$$...$$` out of daily scanner.

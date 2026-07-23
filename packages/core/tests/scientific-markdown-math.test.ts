@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeScientificMarkdownMath,
+  SCIENTIFIC_MARKDOWN_MATH_POLICY,
   type ScientificMarkdownMathIssueCode,
 } from "../src/pipeline/scientific-markdown-math";
 import { normalizeMarkdownLine } from "../src/pipeline/daily-summary-rendering";
@@ -18,6 +19,62 @@ function issueCodes(input: string): ScientificMarkdownMathIssueCode[] {
   expect(result.ok).toBe(false);
   return result.issues.map(({ code }) => code);
 }
+
+describe("thin scientific math acceptance policy", () => {
+  it("documents prompt-primary role and the only allowed rewrite class", () => {
+    expect(SCIENTIFIC_MARKDOWN_MATH_POLICY).toEqual({
+      role: "thin-acceptance-net",
+      happyPath: "prompt-primary-$...$",
+      allowedRewrites: ["\\(...\\)->$...$", "simple-one-line-\\[...\\]->$...$"],
+      onFailure: "reject-with-diagnostics-then-retry-or-fallback",
+    });
+  });
+
+  it("keeps accepted dollar math byte-stable", () => {
+    const input = "Radius $r=800\\,\\mathrm{kpc}$ and uncertainty $24\\pm2$.";
+    const result = canonicalizeScientificMarkdownMath(input);
+    expect(result).toEqual({ ok: true, value: input, issues: [] });
+  });
+
+  it("rewrites only explicitly delimited parentheses and simple one-line brackets", () => {
+    expectValid(
+      "Radius \\(r=800\\,\\mathrm{kpc}\\), error \\(24\\pm2\\), and \\(\\sigma_{\\rm DM}/m=0\\).",
+      "Radius $r=800\\,\\mathrm{kpc}$, error $24\\pm2$, and $\\sigma_{\\rm DM}/m=0$.",
+    );
+    expectValid("Result \\[x^2+y^2=z^2\\] follows.", "Result $x^2+y^2=z^2$ follows.");
+  });
+
+  it("never rewrites rejected input and returns original bytes", () => {
+    const samples = [
+      "Bare \\alpha outside math.",
+      "before $$x=1$$ after",
+      "Mass $(0.8$—$0.95)\\times10^{12}\\,M_\\odot$.",
+      "Mean redshift $<z>$ is high.",
+    ];
+    for (const input of samples) {
+      const result = canonicalizeScientificMarkdownMath(input);
+      expect(result.ok).toBe(false);
+      expect(result.value).toBe(input);
+    }
+  });
+
+  it("is idempotent over accepted values", () => {
+    const accepted = [
+      "Radius $r=800\\,\\mathrm{kpc}$ and uncertainty $24\\pm2$.",
+      "Use $5 x$.",
+      "Mean redshift $\\langle z\\rangle$ is high.",
+      "Constraint $z<0.5$ and $M>10^{12}$ hold.",
+    ];
+    for (const input of accepted) {
+      const first = canonicalizeScientificMarkdownMath(input);
+      expect(first.ok).toBe(true);
+      if (!first.ok) continue;
+      const second = canonicalizeScientificMarkdownMath(first.value);
+      expect(second).toEqual(first);
+      expect(second.value).toBe(first.value);
+    }
+  });
+});
 
 describe("scientific Markdown math canonicalization", () => {
   it("preserves valid dollar-delimited inline math", () => {

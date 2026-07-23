@@ -38,7 +38,15 @@ Based only on the paper-provided material, objectively assess the paper's academ
 Notes:
 - Write in English
 - Preserve key technical terms, proper nouns, variables, and model names in their original form when appropriate
-- Mathematical formulas, physical quantities, and symbols must use LaTeX format: inline formulas with $...$, standalone formulas with $$...$$
+- Mathematical formulas, physical quantities, and symbols must use LaTeX format
+- Use `$...$` for inline formulas
+- Use `$$...$$` for standalone formulas
+- Do not use `\(...\)` or `\[...\]`
+- Keep every TeX command inside math delimiters
+- Never split a single formula into multiple adjacent `$...$` spans. Genuinely separate formulas may use separate spans
+- For ensemble-average or expectation angle brackets use \langle … \rangle (or \left< … \right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine
+- Good: `$\langle \rho \rangle$`, `$z<0.5$`, `$M_{*}=10^{10}\,M_{\odot}$`
+- Bad: `$<\rho>$`, bare `\alpha`, `$M_{*}$` `$=10^{10}$`
 - Answer only from the input content. Do not introduce external knowledge or fill in data, experiments, metrics, or conclusions not present in the input
 - If a required item is not specified in the input, write "Not specified in the source text"
 - "Contributions and Novelty" must be based only on how the source text positions the paper. If the source text does not compare with prior work, write "Not specified in the source text" and do not invent prior work

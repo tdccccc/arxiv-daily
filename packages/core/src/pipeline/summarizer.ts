@@ -5,7 +5,8 @@ import {
 import type { MetricsObserver } from "../metrics/generation";
 import detailSystemTemplateEn from "../prompts/paper-detail.en.system.md";
 import detailSystemTemplate from "../prompts/paper-detail.system.md";
-import injectionGuard from "../prompts/injection-guard.md";
+import injectionGuardEn from "../prompts/injection-guard.en.md";
+import injectionGuardZh from "../prompts/injection-guard.md";
 import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
@@ -179,7 +180,8 @@ export async function summarizePaperDetail(
     summaryLanguage === "en" ? detailSystemTemplateEn : detailSystemTemplate;
   const systemPrompt = renderPrompt(systemTemplate, {
     topicName,
-    injectionGuard,
+    injectionGuard:
+      summaryLanguage === "en" ? injectionGuardEn : injectionGuardZh,
   });
 
   const userContent =

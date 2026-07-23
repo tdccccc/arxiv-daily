@@ -13,6 +13,12 @@ Requirements:
 - All six values must be non-empty strings. Use only the supplied content; do not add external knowledge or guesses.
 - Distinguish results supported by data, experiments, or theoretical derivation from claims merely made by the authors. When evidence details are insufficient, say "The authors claim".
 - When information for any field is missing, use the exact text "Not specified in the source text" for that field.
-- Write the semantic fields in English. Mathematical expressions must use Obsidian inline `$...$` only. Do not use `\(...\)`, `\[...\]`, or `$$...$$`; put every TeX command inside math delimiters. Never split a single formula into multiple adjacent `$...$` spans; genuinely separate formulas may use separate spans. For ensemble-average or expectation angle brackets use \langle … \rangle (or \left< … \right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine.
+- Write the semantic fields in English. Mathematical expressions must use Obsidian inline `$...$` only.
+- Do not use `\(...\)`, `\[...\]`, or `$$...$$`.
+- Keep every TeX command inside math delimiters.
+- Never split a single formula into multiple adjacent `$...$` spans; genuinely separate formulas may use separate spans.
+- For ensemble-average or expectation angle brackets use \langle … \rangle (or \left< … \right>); never write bare angle brackets shaped like <x> in math, as they are treated as HTML tags and will not render. Ordinary comparison operators < and > (e.g. $a<b$, $z<0.5$) remain fine.
+- Good: `$\langle \rho \rangle$`, `$z<0.5$`, `$M_{*}=10^{10}\,M_{\odot}$`, `$a<b$`.
+- Bad: `$<\rho>$`, bare `\alpha`, `$M_{*}$` `$=10^{10}$` (split formula), `\(\alpha\)`, `$$\alpha$$`.
 
 {{injectionGuard}}

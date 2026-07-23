@@ -1,5 +1,24 @@
 import { containsRawHtmlConstruct } from "./raw-html";
 
+/**
+ * Thin acceptance policy for structured daily-summary semantic fields.
+ *
+ * Prompt-primary generation is responsible for first-pass `$...$`. This module
+ * is only a safety net:
+ * - Accept: already-valid single-line `$...$` (byte-stable) and fields with no math.
+ * - Rewrite (only agreed class): explicitly delimited `\(...\)` and simple one-line
+ *   `\[...\]` → `$...$`. No other auto-repair, no bare-TeX wrapping, no boundary guessing.
+ * - Reject: malformed, ambiguous, display, multiline, bare TeX, raw-HTML-shaped
+ *   angle brackets in math, or any other unsafe form — return original bytes with
+ *   diagnostics so the existing per-paper retry/fallback path can run.
+ */
+export const SCIENTIFIC_MARKDOWN_MATH_POLICY = {
+  role: "thin-acceptance-net",
+  happyPath: "prompt-primary-$...$",
+  allowedRewrites: ["\\(...\\)->$...$", "simple-one-line-\\[...\\]->$...$"] as const,
+  onFailure: "reject-with-diagnostics-then-retry-or-fallback",
+} as const;
+
 export const SCIENTIFIC_MARKDOWN_MATH_ISSUE_CODES = {
   BARE_TEX: "bare-tex",
   DISPLAY_ENVIRONMENT: "display-environment",
@@ -347,8 +366,12 @@ function isSuspiciousInnerDollar(value: string, offset: number): boolean {
 }
 
 /**
- * Canonicalize inline scientific Markdown math without guessing missing math boundaries.
- * Invalid input is returned byte-for-byte with stable, positional diagnostics.
+ * Thin accept-or-reject net for single-line scientific Markdown math.
+ *
+ * Valid `$...$` is re-emitted unchanged. The only rewrite class is explicitly
+ * delimited `\(...\)` and simple one-line `\[...\]` → `$...$`. Invalid input is
+ * returned byte-for-byte with stable, positional diagnostics — never repaired by
+ * guessing missing math boundaries (see {@link SCIENTIFIC_MARKDOWN_MATH_POLICY}).
  */
 export function canonicalizeScientificMarkdownMath(value: string): ScientificMarkdownMathResult {
   const protectedMask = protectedMarkdownMask(value);

@@ -1,6 +1,6 @@
 import type { LlmClient } from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
-import injectionGuard from "../prompts/injection-guard.md";
+import injectionGuardEn from "../prompts/injection-guard.en.md";
 import detailSelectorSystemTemplate from "../prompts/detail-selector.system.md";
 import { renderPrompt } from "../prompts/render";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
@@ -49,7 +49,9 @@ const EMPTY_RESULT: DetailSelectionResult = {
 };
 
 export function buildDetailSelectorSystemPrompt(): string {
-  return renderPrompt(detailSelectorSystemTemplate, { injectionGuard });
+  return renderPrompt(detailSelectorSystemTemplate, {
+    injectionGuard: injectionGuardEn,
+  });
 }
 
 export async function selectDetailPapers(

@@ -1,7 +1,7 @@
 # P3 — audit, verify, and deploy
 
 goal_ref: ../goal.md
-status: active
+status: superseded
 
 ## Outcome
 
@@ -52,3 +52,7 @@ Close P3 when no Blocker-severity finding survives — not when no edge case exi
 - If audit evidence shows the P1 scanner or P2 acceptance boundary is unsound, stop deployment and reshape the relevant implementation before proceeding.
 - If the isolated Vault destination cannot be identified without accessing forbidden Vault data, stop and report the blocker rather than guessing.
 - If deployment would modify anything beyond the three approved assets, stop before copying files.
+
+## Superseded reason
+
+2026-07-23 L3 steer: destination changed from thick scanner-primary quality + audit/deploy to prompt-primary generation with a thin script net. Remaining verify/deploy work moves to P6 after prompt and thin-fallback phases; do not continue open-ended scanner edge-case hunting under this phase.

@@ -6,7 +6,7 @@ import { formatArxivCategories } from "../settings/categories";
 import type { PaperMeta } from "./arxiv-parser";
 import { renderPrompt } from "../prompts/render";
 import filterSystemTemplate from "../prompts/paper-filter.system.md";
-import injectionGuard from "../prompts/injection-guard.md";
+import injectionGuardZh from "../prompts/injection-guard.md";
 import { escapePaperDataFence } from "./prompt-safety";
 import type { MetricsObserver } from "../metrics/generation";
 
@@ -55,7 +55,7 @@ export async function filterPapers(
   const systemPrompt = renderPrompt(filterSystemTemplate, {
     topicLines,
     tagOptions,
-    injectionGuard,
+    injectionGuard: injectionGuardZh,
   });
 
   const userContent = `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n<paper_data>\n${papersText}</paper_data>`;
