@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=134",
+    "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=60",
     "lint": "npm run lint:obsidian",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

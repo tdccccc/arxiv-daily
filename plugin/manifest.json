@@ -5,5 +5,6 @@
   "minAppVersion": "1.4.0",
   "description": "Daily arXiv paper tracker: LLM-filtered summaries, topic-organized daily reports, Dashboard with calendar/search/filters, PDF notes, and CLI support. Full scheduler with catch-up for missed days.",
   "author": "Da-Chuan Tian",
+  "authorUrl": "https://github.com/tdccccc/arxiv-daily",
   "isDesktopOnly": true
 }

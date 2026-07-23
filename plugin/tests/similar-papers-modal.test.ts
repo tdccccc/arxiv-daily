@@ -3,10 +3,13 @@ import type { PaperIndexEntry, PaperSearchResult } from "@arxiv-daily/core";
 import { renderSimilarPapersModal } from "../src/dashboard/similar-papers-modal";
 
 beforeAll(() => {
+  type CreateOptions = { cls?: string; text?: string; attr?: Record<string, string> };
   const proto = HTMLElement.prototype as HTMLElement & {
     empty?: () => void;
     addClass?: (...classes: string[]) => void;
-    createEl?: (tag: string, options?: { cls?: string; text?: string; attr?: Record<string, string> }) => HTMLElement;
+    createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
+    createDiv?: (options?: CreateOptions) => HTMLElement;
+    createSpan?: (options?: CreateOptions) => HTMLElement;
   };
   proto.empty ??= function () { this.replaceChildren(); };
   proto.addClass ??= function (...classes: string[]) { this.classList.add(...classes); };
@@ -17,6 +20,12 @@ beforeAll(() => {
     for (const [key, value] of Object.entries(options.attr ?? {})) element.setAttribute(key, value);
     this.appendChild(element);
     return element;
+  };
+  proto.createDiv ??= function (options = {}) {
+    return this.createEl!("div", options);
+  };
+  proto.createSpan ??= function (options = {}) {
+    return this.createEl!("span", options);
   };
 });
 

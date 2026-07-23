@@ -37,6 +37,12 @@ import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
 import { SimilarPapersModal } from "./similar-papers-modal";
+import {
+  ARXIV_DAILY_DOCS_URL,
+  ARXIV_DAILY_REPO_URL,
+  buildBugReportUrl,
+  buildFeatureRequestUrl,
+} from "../feedback";
 import { buildDiagnosticsReport, redactText } from "@arxiv-daily/core";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
 import { LOOKBACK_DAYS } from "@arxiv-daily/core";
@@ -522,7 +528,7 @@ class ArxivDailyDashboardView extends ItemView {
   private resultsEl: HTMLElement | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
-  private searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private searchDebounceTimer: number | null = null;
   private lastSyncedHistoryPaths: Set<string> | null = null;
   private calendarRefreshSeq = 0;
   private isOpen = false;
@@ -736,7 +742,7 @@ class ArxivDailyDashboardView extends ItemView {
     contentEl.empty();
     contentEl.addClass("arxiv-daily-dashboard");
     this.renderHeader(contentEl);
-    contentEl.createEl("div", {
+    contentEl.createDiv({
       cls: "arxiv-daily-dashboard__state",
       text: "Loading…",
     });
@@ -750,7 +756,7 @@ class ArxivDailyDashboardView extends ItemView {
 
     if (this.error) {
       this.renderErrorToolbar(contentEl);
-      contentEl.createEl("div", {
+      contentEl.createDiv({
         cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__state--error",
         text: `Failed to load paper index: ${this.error}`,
       });
@@ -764,27 +770,27 @@ class ArxivDailyDashboardView extends ItemView {
     this.renderToolbar(contentEl, result);
     this.renderRecentDatesNotice(contentEl);
 
-    const overview = contentEl.createEl("div", {
+    const overview = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__overview",
     });
-    const filterPanel = overview.createEl("div", {
+    const filterPanel = overview.createDiv({
       cls: "arxiv-daily-dashboard__overview-main",
     });
-    const calendarPanel = overview.createEl("div", {
+    const calendarPanel = overview.createDiv({
       cls: "arxiv-daily-dashboard__overview-calendar",
     });
     this.renderFilters(filterPanel);
-    this.statsEl = filterPanel.createEl("div");
+    this.statsEl = filterPanel.createDiv();
     this.renderDailyCalendar(calendarPanel);
 
-    this.batchEl = contentEl.createEl("div");
-    this.resultsEl = contentEl.createEl("div");
+    this.batchEl = contentEl.createDiv();
+    this.resultsEl = contentEl.createDiv();
     this.renderCurrentResults(result);
   }
 
   private renderRecentDatesNotice(contentEl: HTMLElement): void {
     if (!this.recentDatesNotice) return;
-    contentEl.createEl("div", {
+    contentEl.createDiv({
       cls: "arxiv-daily-dashboard__notice",
       text: this.recentDatesNotice,
     });
@@ -824,16 +830,16 @@ class ArxivDailyDashboardView extends ItemView {
     result: ReturnType<typeof queryDashboard>,
   ): void {
     const setup = getSetupStatus(this.plugin.settings);
-    const state = contentEl.createEl("div", {
+    const state = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__empty",
     });
 
     if (!setup.readyToRun && this.entries.length === 0) {
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-title",
         text: "Finish setup in Settings",
       });
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-desc",
         text: "Connect AI, choose paper sources, and describe your research interests, then generate your first report.",
       });
@@ -855,11 +861,11 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     if (this.entries.length === 0) {
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-title",
         text: "No papers indexed yet",
       });
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-desc",
         text: "Run today or run pending dates to create daily reports and populate this Dashboard.",
       });
@@ -874,11 +880,11 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     if (this.hasActiveFilters()) {
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-title",
         text: "No papers match these filters",
       });
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-desc",
         text: "Reset filters to return to the current reading list.",
       });
@@ -890,11 +896,11 @@ class ArxivDailyDashboardView extends ItemView {
     }
 
     if ((this.query.tab ?? "starred") === "starred" && result.tabCounts.all > 0) {
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-title",
         text: "No starred papers yet",
       });
-      state.createEl("div", {
+      state.createDiv({
         cls: "arxiv-daily-dashboard__empty-desc",
         text: "Star the papers worth returning to. Use All to browse everything already indexed.",
       });
@@ -906,18 +912,18 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
-    state.createEl("div", {
+    state.createDiv({
       cls: "arxiv-daily-dashboard__empty-title",
       text: "No papers in this view",
     });
-    state.createEl("div", {
+    state.createDiv({
       cls: "arxiv-daily-dashboard__empty-desc",
       text: "Run arXiv Daily again or adjust your topic settings if this looks unexpected.",
     });
   }
 
   private createEmptyActions(parent: HTMLElement): HTMLElement {
-    return parent.createEl("div", {
+    return parent.createDiv({
       cls: "arxiv-daily-dashboard__empty-actions",
     });
   }
@@ -976,14 +982,14 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private renderHeader(contentEl: HTMLElement): void {
-    const header = contentEl.createEl("div", {
+    const header = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__header",
     });
-    const titleGroup = header.createEl("div", {
+    const titleGroup = header.createDiv({
       cls: "arxiv-daily-dashboard__header-main",
     });
     titleGroup.createEl("h2", { text: "arXiv Daily Dashboard" });
-    titleGroup.createEl("div", {
+    titleGroup.createDiv({
       cls: "arxiv-daily-dashboard__status-line",
       text: dashboardHeaderStatusText({
         isRunning: this.plugin.operations.snapshot().length > 0,
@@ -995,10 +1001,10 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private renderErrorToolbar(contentEl: HTMLElement): void {
-    const toolbar = contentEl.createEl("div", {
+    const toolbar = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__toolbar arxiv-daily-dashboard__toolbar--error",
     });
-    const actions = toolbar.createEl("div", {
+    const actions = toolbar.createDiv({
       cls: "arxiv-daily-dashboard__toolbar-actions",
     });
     this.createToolbarButton(
@@ -1017,10 +1023,10 @@ class ArxivDailyDashboardView extends ItemView {
     contentEl: HTMLElement,
     result: ReturnType<typeof queryDashboard>,
   ): void {
-    const toolbar = contentEl.createEl("div", {
+    const toolbar = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__toolbar",
     });
-    const tabs = toolbar.createEl("div", {
+    const tabs = toolbar.createDiv({
       cls: "arxiv-daily-dashboard__tabs",
     });
     const active = this.query.tab ?? "starred";
@@ -1066,7 +1072,7 @@ class ArxivDailyDashboardView extends ItemView {
       },
     );
 
-    const actions = toolbar.createEl("div", {
+    const actions = toolbar.createDiv({
       cls: "arxiv-daily-dashboard__toolbar-actions",
     });
     this.createToolbarButton(
@@ -1139,12 +1145,12 @@ class ArxivDailyDashboardView extends ItemView {
     const section = contentEl.createEl("section", {
       cls: "arxiv-daily-dashboard__calendar",
     });
-    const header = section.createEl("div", {
+    const header = section.createDiv({
       cls: "arxiv-daily-dashboard__calendar-header",
     });
     header.createEl("h3", { text: "Daily reports" });
 
-    const controls = header.createEl("div", {
+    const controls = header.createDiv({
       cls: "arxiv-daily-dashboard__calendar-controls",
     });
     const today = this.todayDate();
@@ -1164,7 +1170,7 @@ class ArxivDailyDashboardView extends ItemView {
       attr: { type: "button", "aria-label": "Previous month" },
     });
     setIcon(prev, "chevron-left");
-    controls.createEl("span", {
+    controls.createSpan({
       cls: "arxiv-daily-dashboard__calendar-month",
       text: month || "No reports",
     });
@@ -1178,7 +1184,7 @@ class ArxivDailyDashboardView extends ItemView {
       todayButton.disabled = true;
       prev.disabled = true;
       next.disabled = true;
-      section.createEl("div", {
+      section.createDiv({
         cls: "arxiv-daily-dashboard__state",
         text: "No daily reports found.",
       });
@@ -1198,14 +1204,14 @@ class ArxivDailyDashboardView extends ItemView {
       this.refreshCalendarMonth(nextMonth);
     });
 
-    const weekdays = section.createEl("div", {
+    const weekdays = section.createDiv({
       cls: "arxiv-daily-dashboard__calendar-weekdays",
     });
     for (const label of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) {
       weekdays.createSpan({ text: label });
     }
 
-    const grid = section.createEl("div", {
+    const grid = section.createDiv({
       cls: "arxiv-daily-dashboard__calendar-grid",
     });
 
@@ -1487,7 +1493,7 @@ class ArxivDailyDashboardView extends ItemView {
     contentEl: HTMLElement,
     result: ReturnType<typeof queryDashboard>,
   ): void {
-    const stats = contentEl.createEl("div", {
+    const stats = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__stats",
     });
     const items = [
@@ -1498,14 +1504,14 @@ class ArxivDailyDashboardView extends ItemView {
     ] as const;
 
     for (const [label, value] of items) {
-      const item = stats.createEl("div", {
+      const item = stats.createDiv({
         cls: "arxiv-daily-dashboard__stat",
       });
-      item.createEl("span", {
+      item.createSpan({
         cls: "arxiv-daily-dashboard__stat-value",
         text: String(value),
       });
-      item.createEl("span", {
+      item.createSpan({
         cls: "arxiv-daily-dashboard__stat-label",
         text: label,
       });
@@ -1514,7 +1520,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private renderFilters(contentEl: HTMLElement): void {
     this.clearSearchDebounce();
-    const filters = contentEl.createEl("div", {
+    const filters = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__filters",
     });
 
@@ -1531,7 +1537,7 @@ class ArxivDailyDashboardView extends ItemView {
     search.value = this.query.search ?? "";
     search.addEventListener("input", () => {
       this.clearSearchDebounce();
-      this.searchDebounceTimer = setTimeout(() => {
+      this.searchDebounceTimer = window.setTimeout(() => {
         this.searchDebounceTimer = null;
         this.query = { ...this.query, search: search.value.trim() || undefined };
         this.currentPage = 0;
@@ -1565,7 +1571,7 @@ class ArxivDailyDashboardView extends ItemView {
       "Date",
       "arxiv-daily-dashboard__filter--date-range",
     );
-    const dateInputs = dateField.createEl("div", {
+    const dateInputs = dateField.createDiv({
       cls: "arxiv-daily-dashboard__date-range",
     });
     dateInputs.createSpan({
@@ -1602,7 +1608,7 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const resetWrap = filters.createEl("div", {
+    const resetWrap = filters.createDiv({
       cls: "arxiv-daily-dashboard__filter-reset-wrap",
     });
     const reset = resetWrap.createEl("button", {
@@ -1628,7 +1634,7 @@ class ArxivDailyDashboardView extends ItemView {
         ? `arxiv-daily-dashboard__filter ${cls}`
         : "arxiv-daily-dashboard__filter",
     });
-    field.createEl("span", {
+    field.createSpan({
       cls: "arxiv-daily-dashboard__filter-label",
       text: label,
     });
@@ -1650,7 +1656,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private renderTable(contentEl: HTMLElement, rows: DashboardRow[]): void {
-    const scroller = contentEl.createEl("div", {
+    const scroller = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__table-wrap",
     });
     const table = scroller.createEl("table", {
@@ -1721,16 +1727,16 @@ class ArxivDailyDashboardView extends ItemView {
       const titleCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__title-cell",
       });
-      titleCell.createEl("div", {
+      titleCell.createDiv({
         cls: "arxiv-daily-dashboard__title",
         text: row.title,
       });
-      titleCell.createEl("div", {
+      titleCell.createDiv({
         cls: "arxiv-daily-dashboard__meta",
         text: `${row.arxivId} · ${row.authors || "Unknown authors"}`,
       });
       if (this.isActiveRelevanceSearch() && row.matchReasons?.length) {
-        titleCell.createEl("div", {
+        titleCell.createDiv({
           cls: "arxiv-daily-dashboard__match-reason",
           text: row.matchReasons.slice(0, 2).map((reason) => reason.text).join(" · "),
         });
@@ -1811,13 +1817,13 @@ class ArxivDailyDashboardView extends ItemView {
     page: DashboardPage<DashboardRow>,
   ): void {
     const selectedCount = this.selectedIds.size;
-    const toolbar = contentEl.createEl("div", {
+    const toolbar = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__batch",
     });
-    const actions = toolbar.createEl("div", {
+    const actions = toolbar.createDiv({
       cls: "arxiv-daily-dashboard__batch-actions",
     });
-    actions.createEl("span", {
+    actions.createSpan({
       cls: "arxiv-daily-dashboard__batch-count",
       text: `${selectedCount} selected`,
     });
@@ -1862,10 +1868,10 @@ class ArxivDailyDashboardView extends ItemView {
       this.renderCurrentResults();
     });
 
-    const controls = toolbar.createEl("div", {
+    const controls = toolbar.createDiv({
       cls: "arxiv-daily-dashboard__batch-controls",
     });
-    controls.createEl("span", {
+    controls.createSpan({
       cls: "arxiv-daily-dashboard__batch-showing",
       text: showingText(page),
     });
@@ -1952,7 +1958,7 @@ class ArxivDailyDashboardView extends ItemView {
     contentEl: HTMLElement,
     page: DashboardPage<DashboardRow>,
   ): void {
-    const controls = contentEl.createEl("div", {
+    const controls = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__pagination",
     });
     const prev = controls.createEl("button", {
@@ -1968,7 +1974,7 @@ class ArxivDailyDashboardView extends ItemView {
       this.setPage(page.currentPage - 1);
     });
 
-    controls.createEl("span", {
+    controls.createSpan({
       cls: "arxiv-daily-dashboard__pagination-label",
       text: `Page ${page.currentPage + 1} / ${page.totalPages}`,
     });
@@ -1986,7 +1992,7 @@ class ArxivDailyDashboardView extends ItemView {
       this.setPage(page.currentPage + 1);
     });
 
-    controls.createEl("span", {
+    controls.createSpan({
       cls: "arxiv-daily-dashboard__pagination-size",
       text: isFinite(page.pageSize)
         ? `Show ${page.pageSize} per page`
@@ -2115,7 +2121,58 @@ class ArxivDailyDashboardView extends ItemView {
       "clear-run-state",
     );
 
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Report a bug")
+        .setIcon("bug")
+        .onClick(() => {
+          this.runDetached(this.openBugReport(), "open bug report");
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Request a feature")
+        .setIcon("lightbulb")
+        .onClick(() => {
+          this.runDetached(
+            this.openExternalUrl(buildFeatureRequestUrl()),
+            "open feature request",
+          );
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Open documentation")
+        .setIcon("book-open")
+        .onClick(() => {
+          this.runDetached(
+            this.openExternalUrl(ARXIV_DAILY_DOCS_URL),
+            "open docs",
+          );
+        }),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Open repository")
+        .setIcon("github")
+        .onClick(() => {
+          this.runDetached(
+            this.openExternalUrl(ARXIV_DAILY_REPO_URL),
+            "open repository",
+          );
+        }),
+    );
+
     menu.showAtMouseEvent(evt);
+  }
+
+  private async openBugReport(): Promise<void> {
+    await this.openExternalUrl(buildBugReportUrl(this.plugin.manifest.version));
+  }
+
+  private async openExternalUrl(url: string): Promise<void> {
+    await new ObsidianResourceOpener(this.plugin.app).openUrl(url);
   }
 
   private addDeferredMenuItem(
@@ -2231,7 +2288,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private clearSearchDebounce(): void {
     if (!this.searchDebounceTimer) return;
-    clearTimeout(this.searchDebounceTimer);
+    window.clearTimeout(this.searchDebounceTimer);
     this.searchDebounceTimer = null;
   }
 

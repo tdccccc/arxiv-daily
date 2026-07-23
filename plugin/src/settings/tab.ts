@@ -19,6 +19,13 @@ import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { openDashboardView } from "../dashboard/view";
 import { LlmClient, redactText } from "@arxiv-daily/core";
+import {
+  ARXIV_DAILY_DOCS_URL,
+  ARXIV_DAILY_REPO_URL,
+  buildBugReportUrl,
+  buildFeatureRequestUrl,
+} from "../feedback";
+import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
 
@@ -120,7 +127,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Append an accessible circled "?" to a setting name. */
   private attachHelp(setting: Setting, text: string): Setting {
-    setting.nameEl.createEl("span", {
+    setting.nameEl.createSpan({
       cls: "arxiv-daily-settings__help",
       text: "?",
       attr: { title: text, "aria-label": text },
@@ -140,7 +147,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Inline muted hint, used inside topic cards under a label. */
   private hint(parent: HTMLElement, text: string, id?: string): HTMLElement {
-    const hint = parent.createEl("div", {
+    const hint = parent.createDiv({
       cls: "arxiv-daily-settings__hint",
       text,
     });
@@ -478,7 +485,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         cls: "arxiv-daily-settings__empty-topics",
       });
       empty.createEl("strong", { text: "No topics yet." });
-      empty.createEl("div", {
+      empty.createDiv({
         text: "Pick a template above or click + Add topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
       });
     }
@@ -655,6 +662,66 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       ),
       "Console log verbosity. 'debug' is noisy; 'info' is the default.",
     );
+
+    // ─── Help & feedback ──────────────────────────────
+    this.sectionHeading(
+      containerEl,
+      "Help & feedback",
+      "advanced",
+      "Documentation and GitHub issues. A short note is enough; do not paste API keys.",
+    );
+
+    new Setting(containerEl)
+      .setName("Report a bug")
+      .setDesc("Opens a blank GitHub issue with the plugin version. A short description is enough.")
+      .addButton((b) =>
+        b.setButtonText("Open bug report").onClick(() => {
+          this.runAction("open bug report", async () => {
+            await this.openExternalUrl(this.bugReportUrl());
+          });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Request a feature")
+      .setDesc("Opens a blank GitHub issue. Write freely.")
+      .addButton((b) =>
+        b.setButtonText("Open feature request").onClick(() => {
+          this.runAction("open feature request", async () => {
+            await this.openExternalUrl(buildFeatureRequestUrl());
+          });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Documentation")
+      .setDesc("Getting started guide on GitHub.")
+      .addButton((b) =>
+        b.setButtonText("Open docs").onClick(() => {
+          this.runAction("open docs", async () => {
+            await this.openExternalUrl(ARXIV_DAILY_DOCS_URL);
+          });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Repository")
+      .setDesc(ARXIV_DAILY_REPO_URL)
+      .addButton((b) =>
+        b.setButtonText("Open repository").onClick(() => {
+          this.runAction("open repository", async () => {
+            await this.openExternalUrl(ARXIV_DAILY_REPO_URL);
+          });
+        }),
+      );
+  }
+
+  private bugReportUrl(): string {
+    return buildBugReportUrl(this.plugin.manifest.version);
+  }
+
+  private async openExternalUrl(url: string): Promise<void> {
+    await new ObsidianResourceOpener(this.app).openUrl(url);
   }
 
   private renderApiKeySetting(containerEl: HTMLElement): void {
@@ -995,12 +1062,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       },
     });
 
-    const caret = header.createEl("span", {
+    const caret = header.createSpan({
       cls: "arxiv-daily-settings__topic-caret",
       text: isExpanded ? "▾" : "▸",
     });
 
-    const titleSpan = header.createEl("span", {
+    const titleSpan = header.createSpan({
       cls: "arxiv-daily-settings__topic-title",
       text: topic.name.trim() || "(unnamed)",
     });
@@ -1008,7 +1075,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     let star: HTMLElement | null = null;
     if (topic.detail) {
-      star = header.createEl("span", {
+      star = header.createSpan({
         cls: "arxiv-daily-settings__topic-star",
         text: "★",
         attr: { title: "Detail report enabled" },
@@ -1017,7 +1084,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     let tagChip: HTMLElement | null = null;
     if (topic.tag) {
-      tagChip = header.createEl("span", {
+      tagChip = header.createSpan({
         cls: "arxiv-daily-settings__topic-tag",
         text: "#" + topic.tag,
       });
@@ -1070,7 +1137,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     tagInput.value = topic.tag;
     tagInput.placeholder = "kebab-case-slug";
-    const autoBadge = tagRow.createEl("span", {
+    const autoBadge = tagRow.createSpan({
       cls: "arxiv-daily-settings__topic-auto",
       text: "Auto",
     });
@@ -1151,7 +1218,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       star?.remove();
       star = null;
       if (topic.detail) {
-        star = header.createEl("span", {
+        star = header.createSpan({
           cls: "arxiv-daily-settings__topic-star",
           text: "★",
           attr: { title: "Detail report enabled" },

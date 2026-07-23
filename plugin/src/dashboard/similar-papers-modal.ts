@@ -53,15 +53,15 @@ export function renderSimilarPapersModal(
   });
   for (const result of options.results.slice(0, 10)) {
     const item = list.createEl("li", { cls: "arxiv-daily-similar-modal__item" });
-    item.createEl("div", {
+    item.createDiv({
       cls: "arxiv-daily-similar-modal__title",
       text: result.entry.title,
     });
-    item.createEl("div", {
+    item.createDiv({
       cls: "arxiv-daily-similar-modal__meta",
       text: `${result.entry.arxivId} · ${result.entry.authors.join(", ") || "Unknown authors"}`,
     });
-    item.createEl("div", {
+    item.createDiv({
       cls: "arxiv-daily-similar-modal__context",
       text: [
         result.entry.primaryTopic || result.entry.category || "Uncategorized",
@@ -70,11 +70,11 @@ export function renderSimilarPapersModal(
       ].join(" · "),
     });
     const reason = result.reasons.slice(0, 2).map((value) => value.text).join(" · ");
-    item.createEl("div", {
+    item.createDiv({
       cls: "arxiv-daily-similar-modal__reason",
       text: reason || "Shared indexed terms",
     });
-    const actions = item.createEl("div", {
+    const actions = item.createDiv({
       cls: "arxiv-daily-similar-modal__actions",
       attr: { "aria-label": `Actions for ${result.entry.arxivId}` },
     });

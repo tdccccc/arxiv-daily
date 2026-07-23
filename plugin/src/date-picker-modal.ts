@@ -71,7 +71,7 @@ class DatePickerModal extends Modal {
           refreshValidation();
         });
       });
-    const errorEl = dateSetting.descEl.createEl("div", {
+    const errorEl = dateSetting.descEl.createDiv({
       attr: { id: "arxiv-daily-date-error", "aria-live": "polite" },
     });
     const refreshValidation = () => {
