@@ -272,10 +272,10 @@ describe("ManualFetchService", () => {
       "arxiv-daily/papers/2605.08080.md",
     );
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
-    expect(index.papers["2605.08080"].published).toBe("2026-02-02");
-    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
-    expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
-    expect(index.papers["2605.08080"].paperPath).toBe(
+    expect(index.papers["arxiv:2605.08080"].published).toBe("2026-02-02");
+    expect(index.papers["arxiv:2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["arxiv:2605.08080"].seenDates).toEqual(["2026-05-12"]);
+    expect(index.papers["arxiv:2605.08080"].paperPath).toBe(
       "arxiv-daily/papers/2605.08080.md",
     );
   });
@@ -326,7 +326,7 @@ describe("ManualFetchService", () => {
       "arxiv-daily/papers/2605.08080.md",
     );
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
-    expect(index.papers["2605.08080"].published).toBe("2026-06-12");
+    expect(index.papers["arxiv:2605.08080"].published).toBe("2026-06-12");
   });
 
   it("returns not_found when Atom has no entry", async () => {
@@ -383,12 +383,12 @@ describe("ManualFetchService", () => {
     const r = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
     expect(r.kind).toBe("done");
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
-    expect(index.papers["2605.08080"].status).toBe("saved");
-    expect(index.papers["2605.08080"].detail).toBe(true);
-    expect(index.papers["2605.08080"].paperPath).toBe("papers/2605.08080.md");
-    expect(index.papers["2605.08080"].published).toBe("2026-02-02");
-    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
-    expect(index.papers["2605.08080"].seenDates).toEqual(["2026-05-12"]);
+    expect(index.papers["arxiv:2605.08080"].status).toBe("saved");
+    expect(index.papers["arxiv:2605.08080"].detail).toBe(true);
+    expect(index.papers["arxiv:2605.08080"].paperPath).toBe("papers/2605.08080.md");
+    expect(index.papers["arxiv:2605.08080"].published).toBe("2026-02-02");
+    expect(index.papers["arxiv:2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["arxiv:2605.08080"].seenDates).toEqual(["2026-05-12"]);
   });
 
   it("uses an existing daily report date over a stale Atom published date", async () => {
@@ -429,13 +429,13 @@ describe("ManualFetchService", () => {
 
     expect(r.kind).toBe("done");
     const index = JSON.parse(d.files["arxiv-daily/.index/papers.json"]);
-    expect(index.papers["2605.08080"].published).toBe("2026-06-12");
-    expect(index.papers["2605.08080"].updated).toBe("2026-06-15");
-    expect(index.papers["2605.08080"].seenDates).toEqual([
+    expect(index.papers["arxiv:2605.08080"].published).toBe("2026-06-12");
+    expect(index.papers["arxiv:2605.08080"].updated).toBe("2026-06-15");
+    expect(index.papers["arxiv:2605.08080"].seenDates).toEqual([
       "2026-06-12",
       "2026-06-17",
     ]);
-    expect(index.papers["2605.08080"].dailyReports).toEqual([
+    expect(index.papers["arxiv:2605.08080"].dailyReports).toEqual([
       "arxiv-daily/daily/2026-06-12.md",
     ]);
   });

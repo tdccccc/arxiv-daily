@@ -9,8 +9,10 @@ import {
 
 function paper(id: string, overrides: Partial<PaperIndexEntry> = {}): PaperIndexEntry {
   return {
-    arxivId: id,
+    paperKey: `arxiv:${id}`,
     source: "arxiv",
+    externalId: id,
+    arxivId: id,
     title: `Paper ${id}`,
     authors: ["A. Author"],
     published: "2026-07-01",

@@ -15,6 +15,7 @@ function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
     llm: { ...DEFAULT_SETTINGS.llm, ...(overrides.llm ?? {}) },
     arxiv: { ...DEFAULT_SETTINGS.arxiv, ...(overrides.arxiv ?? {}) },
     output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
+    email: { ...DEFAULT_SETTINGS.email, ...(overrides.email ?? {}) },
   };
 }
 

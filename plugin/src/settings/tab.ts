@@ -158,7 +158,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "arxiv" | "topics" | "schedule" | "advanced",
+    section: "llm" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -642,6 +642,111 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "How often the scheduler interval wakes up to check pending dates. Default 20 minutes.",
     );
 
+    // ─── Email (Resend) ───────────────────────────────
+    this.sectionHeading(
+      containerEl,
+      "Email delivery",
+      "email",
+      "Bring your own Resend account. Quick path: recipient + API key → test → then enable daily auto-send. No project server; keys stay on your machine.",
+    );
+
+    if (!s.email) {
+      s.email = {
+        enabled: false,
+        to: "",
+        fromEmail: "",
+        fromName: "arXiv Daily",
+        apiKey: "",
+      };
+    }
+
+    const emailHelp = containerEl.createDiv({
+      cls: "setting-item-description arxiv-daily-settings__email-help",
+    });
+    emailHelp.createEl("div", {
+      text: "Quick setup (no domain required)",
+      cls: "arxiv-daily-settings__email-help-title",
+    });
+    const steps = emailHelp.createEl("ol");
+    for (const line of [
+      "Open resend.com → sign up → API Keys → Create → copy re_…",
+      "Paste the key below and set To to your own inbox (often the same email as your Resend account).",
+      "Click Send test email and check inbox/spam.",
+      "Only after a successful test, turn on Daily auto-send.",
+    ]) {
+      steps.createEl("li", { text: line });
+    }
+    emailHelp.createEl("p", {
+      text: "From is optional. When empty, the plugin uses Resend’s test sender onboarding@resend.dev (usually only delivers to your Resend account email). Custom From needs a domain you verified in Resend.",
+    });
+
+    new Setting(containerEl)
+      .setName("To")
+      .setDesc("Your personal inbox (required)")
+      .addText((t) => {
+        t.setPlaceholder("you@example.com")
+          .setValue(s.email.to)
+          .onChange(async (v) => {
+            s.email.to = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    this.renderEmailApiKeySetting(containerEl);
+
+    new Setting(containerEl)
+      .setName("Send test email")
+      .setDesc(
+        "Sends a sample digest now (does not require Daily auto-send). Uses To + API key; empty From → onboarding@resend.dev.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Send test").setCta().onClick(() => {
+          this.runAction("send test email", async () => {
+            const message = await this.plugin.sendTestEmail();
+            new Notice(message, 10_000);
+          });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Daily auto-send")
+      .setDesc(
+        "After a successful test, enable to send the real daily digest when a pipeline run completes. Failures never fail the daily run.",
+      )
+      .addToggle((t) =>
+        t.setValue(s.email.enabled).onChange(async (v) => {
+          s.email.enabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    // Advanced From (collapsed-style: lower on page with clear “optional” copy)
+    new Setting(containerEl)
+      .setName("From email (optional)")
+      .setDesc(
+        "Leave empty for quick setup (onboarding@resend.dev). Set only after verifying your own domain in Resend.",
+      )
+      .addText((t) => {
+        t.setPlaceholder("leave empty, or daily@your-domain.com")
+          .setValue(s.email.fromEmail)
+          .onChange(async (v) => {
+            s.email.fromEmail = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("From name (optional)")
+      .setDesc('Display name; default "arXiv Daily" when empty')
+      .addText((t) => {
+        t.setPlaceholder("arXiv Daily")
+          .setValue(s.email.fromName ?? "")
+          .onChange(async (v) => {
+            s.email.fromName = v;
+            await this.plugin.saveSettings();
+          });
+      });
+
     // ─── Advanced ─────────────────────────────────────
     this.sectionHeading(containerEl, "Advanced", "advanced");
 
@@ -722,6 +827,93 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   private async openExternalUrl(url: string): Promise<void> {
     await new ObsidianResourceOpener(this.app).openUrl(url);
+  }
+
+  private renderEmailApiKeySetting(containerEl: HTMLElement): void {
+    const configured = Boolean(this.plugin.settings.email.apiKey?.trim());
+    const setting = new Setting(containerEl)
+      .setName("Resend API key")
+      .setDesc("Stored locally in data.json like the LLM key. Never rendered into this page.");
+    let editing = !configured;
+    let draft = "";
+    const input = setting.controlEl.createEl("input", {
+      cls: "arxiv-daily-settings__llm-input",
+      type: editing ? "password" : "text",
+      attr: { placeholder: "re_..." },
+    });
+    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+    input.readOnly = !editing;
+
+    const replace = setting.controlEl.createEl("button", {
+      text: configured ? "Replace" : "Save",
+      attr: { type: "button" },
+    });
+    const cancel = setting.controlEl.createEl("button", {
+      text: "Cancel",
+      attr: { type: "button" },
+    });
+    cancel.hidden = !configured;
+    const clear = setting.controlEl.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    });
+    clear.hidden = !configured;
+
+    const enterEdit = () => {
+      editing = true;
+      draft = "";
+      input.type = "password";
+      input.readOnly = false;
+      input.value = "";
+      replace.textContent = "Save";
+      cancel.hidden = false;
+      input.focus();
+    };
+    const reset = () => {
+      editing = false;
+      draft = "";
+      input.type = "text";
+      input.readOnly = true;
+      input.value = API_KEY_CONFIGURED_SENTINEL;
+      replace.textContent = "Replace";
+      cancel.hidden = true;
+    };
+    input.addEventListener("input", () => {
+      if (editing) draft = input.value;
+    });
+    replace.addEventListener("click", () => {
+      if (!editing) {
+        enterEdit();
+        return;
+      }
+      const next = draft.trim();
+      if (!next) return;
+      this.runAction("save Resend API key", async () => {
+        this.plugin.settings.email.apiKey = next;
+        await this.plugin.saveSettings();
+        reset();
+        clear.hidden = false;
+      });
+    });
+    cancel.addEventListener("click", () => {
+      if (configured || this.plugin.settings.email.apiKey?.trim()) reset();
+      else {
+        draft = "";
+        input.value = "";
+      }
+    });
+    clear.addEventListener("click", () => {
+      this.runAction("clear Resend API key", async () => {
+        const confirmed = await this.confirmReplace(
+          "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
+          "Clear",
+        );
+        if (!confirmed) return;
+        this.plugin.settings.email.apiKey = "";
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
   }
 
   private renderApiKeySetting(containerEl: HTMLElement): void {

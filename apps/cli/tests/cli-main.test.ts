@@ -52,6 +52,7 @@ function testConfig(
       output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
       schedule: { ...DEFAULT_SETTINGS.schedule, ...(overrides.schedule ?? {}) },
       advanced: { ...DEFAULT_SETTINGS.advanced, ...(overrides.advanced ?? {}) },
+      email: { ...DEFAULT_SETTINGS.email, ...(overrides.email ?? {}) },
     },
     vaultRoot: "/vault",
     cacheDir: "/cache",

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { migrateArxivSettings } from "../src/settings/migration";
+import { migrateArxivSettings, migrateEmailSettings } from "../src/settings/migration";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 describe("migrateArxivSettings", () => {
@@ -236,5 +236,25 @@ describe("migrateArxivSettings", () => {
     const out = migrateArxivSettings({ category: long, timezone: "UTC" });
     expect(out.category).toBe(long);
     expect(out.categories).toEqual([long]);
+  });
+});
+
+describe("migrateEmailSettings", () => {
+  it("returns defaults when raw is missing", () => {
+    expect(migrateEmailSettings(undefined)).toEqual(DEFAULT_SETTINGS.email);
+    expect(migrateEmailSettings(null)).toEqual(DEFAULT_SETTINGS.email);
+  });
+
+  it("merges partial email settings", () => {
+    const out = migrateEmailSettings({
+      enabled: true,
+      to: "you@example.com",
+      fromEmail: "from@example.com",
+    });
+    expect(out.enabled).toBe(true);
+    expect(out.to).toBe("you@example.com");
+    expect(out.fromEmail).toBe("from@example.com");
+    expect(out.fromName).toBe(DEFAULT_SETTINGS.email.fromName);
+    expect(out.apiKey).toBe(DEFAULT_SETTINGS.email.apiKey);
   });
 });

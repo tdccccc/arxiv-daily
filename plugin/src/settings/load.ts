@@ -1,6 +1,7 @@
 import {
   DEFAULT_SETTINGS,
   migrateArxivSettings,
+  migrateEmailSettings,
   sanitizeDetailSelection,
   type PluginSettings,
   type RunState,
@@ -19,6 +20,7 @@ export function settingsAndStateFromPersistedData(raw: unknown): {
     : {};
   const merged = mergeSettings(DEFAULT_SETTINGS, partial);
   merged.arxiv = migrateArxivSettings(partial.arxiv);
+  merged.email = migrateEmailSettings(partial.email);
   const warnings = sanitizePersistedOutputDirectories(merged);
   return {
     settings: merged,
@@ -38,6 +40,7 @@ function mergeSettings(
     output: { ...defaults.output, ...(partial.output ?? {}) },
     schedule: { ...defaults.schedule, ...(partial.schedule ?? {}) },
     advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },
+    email: migrateEmailSettings(partial.email ?? defaults.email),
   };
 }
 

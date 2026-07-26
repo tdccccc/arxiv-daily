@@ -118,7 +118,8 @@ describe("summarizeDaily", () => {
       }),
     };
 
-    const output = await summarizeDaily(papers, "2026-07-22", deps(llm));
+    const dailyResult = await summarizeDaily(papers, "2026-07-22", deps(llm));
+    const output = dailyResult.markdown;
     const parsed = extractPaperSummaries(output);
 
     expect(output).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
@@ -153,11 +154,12 @@ describe("summarizeDaily", () => {
       })),
     };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001")],
       "2026-07-22",
       deps(llm),
     );
+    const output = dailyResult.markdown;
 
     expect(output).toContain(`- **研究问题**: ${canonical}`);
     expect(output).not.toContain("&amp;");
@@ -254,7 +256,7 @@ describe("summarizeDaily", () => {
       }),
     };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
       "2026-07-22",
       deps(llm, {
@@ -264,6 +266,7 @@ describe("summarizeDaily", () => {
         logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
       }),
     );
+    const output = dailyResult.markdown;
 
     expect(llm.call).toHaveBeenCalledTimes(5);
     expect(progress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
@@ -295,11 +298,12 @@ describe("summarizeDaily", () => {
     ];
     const llm = { call: vi.fn(async () => responses.shift()!) };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
       "2026-07-22",
       deps(llm),
     );
+    const output = dailyResult.markdown;
 
     expect(llm.call).toHaveBeenCalledTimes(5);
     expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
@@ -319,11 +323,12 @@ describe("summarizeDaily", () => {
         .mockResolvedValueOnce(structured("2607.00001")),
     };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001")],
       "2026-07-22",
       deps(llm),
     );
+    const output = dailyResult.markdown;
 
     expect(llm.call).toHaveBeenCalledTimes(3);
     expect(extractFallbackPaperIds(output)).toEqual([]);
@@ -347,11 +352,12 @@ describe("summarizeDaily", () => {
         ),
     };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001")],
       "2026-07-22",
       deps(llm),
     );
+    const output = dailyResult.markdown;
 
     expect(llm.call).toHaveBeenCalledTimes(1);
     expect(extractFallbackPaperIds(output)).toEqual(["2607.00001"]);
@@ -406,7 +412,7 @@ describe("summarizeDaily", () => {
       }),
     };
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [paper("2607.00001", "a", {
         abstractConclusion: "## Abstract\nDISTINCTIVE_RESCUE_EXCLUDED_CONCLUSION",
         fullSections: "## Results\nDISTINCTIVE_RESCUE_EXCLUDED_FULL_SECTIONS",
@@ -420,6 +426,7 @@ describe("summarizeDaily", () => {
         },
       }),
     );
+    const output = dailyResult.markdown;
 
     expect(llm.call).toHaveBeenCalledTimes(2);
     expect(onMetrics).toHaveBeenCalledTimes(2);
@@ -460,7 +467,7 @@ describe("summarizeDaily", () => {
       throw error;
     });
 
-    const output = await summarizeDaily(
+    const dailyResult = await summarizeDaily(
       [
         paper("2607.00001", "b", { detailLink: "[[2607.00001]]", isDetail: true }),
         paper("2607.00002", "a"),
@@ -475,6 +482,7 @@ describe("summarizeDaily", () => {
         rescueDaily,
       }),
     );
+    const output = dailyResult.markdown;
 
     expect(rescueDaily).toHaveBeenCalledTimes(1);
     expect(hasEmergencyDailySummaryMarker(output)).toBe(true);

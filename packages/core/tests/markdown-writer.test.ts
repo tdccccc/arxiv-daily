@@ -431,6 +431,8 @@ describe("MarkdownWriter strictness on existing files", () => {
     };
     await writer.writePaperDetail(paper as any, "2026-06-16", "detail", {
       arxivId: "2606.12938",
+      paperKey: "arxiv:2606.12938",
+      externalId: "2606.12938",
       source: "arxiv",
       title: "Cluster Mass Inference from Galaxy Kinematics",
       authors: ["Bonny Y. Wang et al."],
@@ -474,6 +476,8 @@ describe("MarkdownWriter strictness on existing files", () => {
     };
     await writer.writePaperDetail(paper as any, "2026-06-10", "detail", {
       arxivId: "2605.06587",
+      paperKey: "arxiv:2605.06587",
+      externalId: "2605.06587",
       source: "arxiv",
       title: "T",
       authors: ["A"],
@@ -511,6 +515,8 @@ describe("MarkdownWriter strictness on existing files", () => {
     const { files, writer } = makeWriter();
     await writer.writePaperNote({
       arxivId: "2605.06587",
+      paperKey: "arxiv:2605.06587",
+      externalId: "2605.06587",
       source: "arxiv",
       title: "T",
       authors: ["A"],
@@ -562,6 +568,8 @@ describe("MarkdownWriter strictness on existing files", () => {
 
     await writer.refreshPaperNoteFrontmatter({
       arxivId: "2606.12938",
+      paperKey: "arxiv:2606.12938",
+      externalId: "2606.12938",
       source: "arxiv",
       title: "Cluster Mass Inference from Galaxy Kinematics",
       authors: ["Bonny Y. Wang et al."],

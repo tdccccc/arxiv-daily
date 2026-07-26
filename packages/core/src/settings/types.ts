@@ -51,6 +51,25 @@ export interface AdvancedSettings {
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
+export interface EmailSettings {
+  /**
+   * When true, auto-send after pipeline `completed`.
+   * Quick setup: leave false until test-send succeeds.
+   */
+  enabled: boolean;
+  /** Personal recipient (required). */
+  to: string;
+  /**
+   * Optional custom From. Empty uses Resend quick sender
+   * (`onboarding@resend.dev`) — fine for personal inbox testing.
+   */
+  fromEmail: string;
+  /** Optional display name; defaults to "arXiv Daily" when empty. */
+  fromName?: string;
+  /** Plugin-local secret storage; CLI prefers ARXIV_DAILY_RESEND_API_KEY. */
+  apiKey?: string;
+}
+
 export interface PluginSettings {
   llm: LlmSettings;
   arxiv: ArxivSettings;
@@ -58,6 +77,7 @@ export interface PluginSettings {
   output: OutputSettings;
   schedule: ScheduleSettings;
   advanced: AdvancedSettings;
+  email: EmailSettings;
 }
 
 export type RunStatus =

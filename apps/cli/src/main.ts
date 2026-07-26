@@ -2,10 +2,14 @@ import { CliConfigError, loadCliConfig, type CliRuntimeConfig } from "./config";
 import type { OperationRegistry, PipelineResult } from "@arxiv-daily/core";
 import type { ManualFetchResult } from "@arxiv-daily/core";
 import {
+  deliverDailyEmailIfEnabled,
+  resolveResendApiKey,
+  sampleDailyDigest,
   validateFilterConfig,
   validateLlmConfig,
 } from "@arxiv-daily/core";
 import { daysBefore, formatDate, redactText, todayInTz } from "@arxiv-daily/core";
+import type { HostAdapters } from "@arxiv-daily/core";
 
 type CliRunResult = PipelineResult | { kind: "skipped"; reason: string };
 
@@ -30,6 +34,8 @@ export interface CliCommandRuntime {
     fetchAndSummarize(id: string, date: string, signal?: AbortSignal): Promise<ManualFetchResult>;
   };
   operations?: OperationRegistry;
+  host?: HostAdapters;
+  settings?: CliRuntimeConfig["settings"];
 }
 
 export interface RunCliOptions {
@@ -48,7 +54,8 @@ type CliCommand =
   | { name: "help" }
   | { name: "run"; date?: string }
   | { name: "run-pending" }
-  | { name: "summarize"; id?: string; date?: string };
+  | { name: "summarize"; id?: string; date?: string }
+  | { name: "email-test"; date?: string };
 
 interface ParsedCli {
   command: CliCommand;
@@ -61,12 +68,17 @@ const USAGE = `Usage:
   arxiv-daily run --date YYYY-MM-DD [--config path] [--vault-root path]
   arxiv-daily run-pending [--config path] [--vault-root path]
   arxiv-daily summarize --id ARXIV_ID [--date YYYY-MM-DD]
+  arxiv-daily email-test [--date YYYY-MM-DD]
 
 Options:
   --config path       JSON config file (default: arxiv-daily.config.json)
   --vault-root path   Workspace/vault root for generated files
   --cache-dir path    HTML cache directory
   --help              Show this help
+
+Email:
+  ARXIV_DAILY_RESEND_API_KEY   Resend API key (preferred over settings.email.apiKey)
+  settings.email.enabled/to/fromEmail/fromName in config JSON
 `;
 
 export async function runCli(opts: RunCliOptions = {}): Promise<number> {
@@ -78,8 +90,11 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     stderr: { write: (chunk) => rawIo.stderr.write(redactText(String(chunk), { secrets })) },
   };
   const env = { ...(opts.env ?? process.env) };
-  secrets = [env.ARXIV_DAILY_API_KEY, env.ARXIV_DAILY_LLM_API_KEY]
-    .filter((value): value is string => Boolean(value));
+  secrets = [
+    env.ARXIV_DAILY_API_KEY,
+    env.ARXIV_DAILY_LLM_API_KEY,
+    env.ARXIV_DAILY_RESEND_API_KEY,
+  ].filter((value): value is string => Boolean(value));
   const loadConfig = opts.loadConfig ?? loadCliConfig;
   const buildRuntime = opts.buildRuntime ?? defaultBuildRuntime;
   const now = opts.now ?? (() => new Date());
@@ -107,11 +122,17 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       configPath: parsed.configPath,
       env,
     });
-    secrets = [config.settings.llm.apiKey];
+    secrets = [
+      config.settings.llm.apiKey,
+      config.settings.email.apiKey,
+      env.ARXIV_DAILY_RESEND_API_KEY,
+    ].filter((value): value is string => Boolean(value));
     const validation =
       parsed.command.name === "summarize"
         ? validateLlmConfig(config.settings)
-        : validateFilterConfig(config.settings);
+        : parsed.command.name === "email-test"
+          ? { ok: true as const, reasons: [] as string[] }
+          : validateFilterConfig(config.settings);
     if (!validation.ok) {
       writeLine(io.stderr, `Invalid config:\n${validation.reasons.join("\n")}`);
       return 2;
@@ -125,6 +146,20 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       const result = runtime.scheduler
         ? await runtime.scheduler.runForDateNow(parsed.command.date)
         : await runtime.pipeline.runForDate(parsed.command.date);
+      if (
+        !runtime.scheduler &&
+        result.kind === "completed" &&
+        result.digest &&
+        runtime.host
+      ) {
+        await deliverDailyEmailIfEnabled(result.digest, {
+          storage: runtime.host.storage,
+          http: runtime.host.http,
+          output: config.settings.output,
+          email: config.settings.email,
+          apiKey: resolveResendApiKey(config.settings.email, env),
+        });
+      }
       return writeRunResult(io, parsed.command.date, result);
     }
     if (parsed.command.name === "run-pending") {
@@ -141,10 +176,57 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       let failed = false;
       for (const date of dates) {
         const result = await runtime.pipeline.runForDate(date);
+        if (result.kind === "completed" && result.digest && runtime.host) {
+          await deliverDailyEmailIfEnabled(result.digest, {
+            storage: runtime.host.storage,
+            http: runtime.host.http,
+            output: config.settings.output,
+            email: config.settings.email,
+            apiKey: resolveResendApiKey(config.settings.email, env),
+          });
+        }
         const code = writeRunResult(io, date, result);
         if (code !== 0) failed = true;
       }
       return failed ? 1 : 0;
+    }
+    if (parsed.command.name === "email-test") {
+      if (!runtime.host) {
+        writeLine(io.stderr, "email-test requires host adapters (storage + http)");
+        return 1;
+      }
+      const date =
+        parsed.command.date ??
+        formatDate(todayInTz(now(), config.settings.arxiv.timezone));
+      const digest = sampleDailyDigest({
+        date,
+        language: config.settings.output.summaryLanguage,
+        categories: config.settings.arxiv.categories.join(", "),
+        dailyPath: `${config.settings.output.dailyDir}/${date}.md`,
+      });
+      // Force send for test path even if already delivered.
+      const email = {
+        ...config.settings.email,
+        enabled: true,
+      };
+      const result = await deliverDailyEmailIfEnabled(digest, {
+        storage: runtime.host.storage,
+        http: runtime.host.http,
+        output: config.settings.output,
+        email,
+        apiKey: resolveResendApiKey(config.settings.email, env),
+        force: true,
+      });
+      if (result.kind === "delivered") {
+        writeLine(
+          io.stdout,
+          `email-test: delivered to ${email.to}` +
+            (result.providerMessageId ? ` id=${result.providerMessageId}` : ""),
+        );
+        return 0;
+      }
+      writeLine(io.stderr, `email-test: ${result.kind} (${result.reason})`);
+      return 1;
     }
     if (!parsed.command.id) throw new Error("summarize requires --id");
     const date =
@@ -217,6 +299,15 @@ function parseCli(argv: string[]): ParsedCli {
       command: {
         name: "summarize",
         id: optionValue(commandArgs, "--id"),
+        date: optionValue(commandArgs, "--date"),
+      },
+    };
+  }
+  if (commandName === "email-test") {
+    return {
+      ...global,
+      command: {
+        name: "email-test",
         date: optionValue(commandArgs, "--date"),
       },
     };

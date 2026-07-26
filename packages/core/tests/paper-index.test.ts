@@ -104,33 +104,50 @@ describe("PaperIndexStore", () => {
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
     });
   });
 
-  it.each([1, 2, 3])("reads paper index schema %i", async (schemaVersion) => {
+  it.each([1, 2, 3, 4])("reads paper index schema %i", async (schemaVersion) => {
+    const bareOrKey =
+      schemaVersion === 4
+        ? {
+            "arxiv:2606.12345": {
+              paperKey: "arxiv:2606.12345",
+              source: "arxiv",
+              externalId: "2606.12345",
+              arxivId: "2606.12345",
+              title: `Schema ${schemaVersion}`,
+              abstract: "  Persisted abstract.  ",
+            },
+          }
+        : {
+            "2606.12345": {
+              arxivId: "2606.12345",
+              title: `Schema ${schemaVersion}`,
+              abstract: schemaVersion === 3 ? "  Persisted abstract.  " : undefined,
+            },
+          };
     const { store } = makeStore({
       "arxiv-daily/.index/papers.json": JSON.stringify({
         schemaVersion,
         updatedAt: "2026-06-11T00:00:00.000Z",
-        papers: {
-          "2606.12345": {
-            arxivId: "2606.12345",
-            title: `Schema ${schemaVersion}`,
-            abstract: schemaVersion === 3 ? "  Persisted abstract.  " : undefined,
-          },
-        },
+        papers: bareOrKey,
       }),
     });
 
     const inbox = await store.load();
 
-    expect(inbox.schemaVersion).toBe(3);
-    expect(inbox.papers["2606.12345"]).toMatchObject({
+    expect(inbox.schemaVersion).toBe(4);
+    expect(inbox.papers["arxiv:2606.12345"]).toMatchObject({
+      paperKey: "arxiv:2606.12345",
+      source: "arxiv",
+      externalId: "2606.12345",
+      arxivId: "2606.12345",
       title: `Schema ${schemaVersion}`,
-      ...(schemaVersion === 3 ? { abstract: "Persisted abstract." } : {}),
+      ...(schemaVersion >= 3 ? { abstract: "Persisted abstract." } : {}),
     });
   });
 
@@ -162,7 +179,7 @@ describe("PaperIndexStore", () => {
         },
       }),
     });
-    const entry = (await store.load()).papers["2606.12345"];
+    const entry = (await store.load()).papers["arxiv:2606.12345"];
     expect(entry.arxivUrl).toBe("https://arxiv.org/abs/2606.12345");
     expect(entry.pdfUrl).toBe("https://arxiv.org/pdf/2606.12345");
   });
@@ -186,8 +203,15 @@ describe("PaperIndexStore", () => {
     expect(dirs.has("arxiv-daily")).toBe(true);
     expect(dirs.has("arxiv-daily/.index")).toBe(true);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.schemaVersion).toBe(3);
-    expect(saved.papers["2606.12345"].title).toBe("A paper");
+    expect(saved.schemaVersion).toBe(4);
+    expect(saved.papers["arxiv:2606.12345"].title).toBe("A paper");
+    expect(saved.papers["arxiv:2606.12345"]).toMatchObject({
+      paperKey: "arxiv:2606.12345",
+      source: "arxiv",
+      externalId: "2606.12345",
+      arxivId: "2606.12345",
+    });
+    expect(saved.papers["2606.12345"]).toBeUndefined();
   });
 
   it("normalizes and preserves abstracts during upsert", async () => {
@@ -275,9 +299,14 @@ describe("PaperIndexStore", () => {
 
     expect(files["arxiv-daily/index/papers.json"]).toBeUndefined();
     const migrated = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(migrated.schemaVersion).toBe(3);
-    expect(migrated.papers["2606.12345"].status).toBe("saved");
-    expect(migrated.papers["2606.12345"].priority).toBe("high");
+    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.papers["arxiv:2606.12345"].status).toBe("saved");
+    expect(migrated.papers["arxiv:2606.12345"].priority).toBe("high");
+    expect(migrated.papers["arxiv:2606.12345"]).toMatchObject({
+      paperKey: "arxiv:2606.12345",
+      externalId: "2606.12345",
+      arxivId: "2606.12345",
+    });
   });
 
   it("merges repeated papers without overwriting user fields", async () => {
@@ -441,9 +470,10 @@ describe("PaperIndexStore", () => {
     ]);
 
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.papers["2606.12345"]).toMatchObject({
+    expect(saved.papers["arxiv:2606.12345"]).toMatchObject({
       priority: "high",
       status: "saved",
+      paperKey: "arxiv:2606.12345",
     });
   });
 
@@ -645,5 +675,43 @@ describe("PaperIndexStore", () => {
       "2606.00002",
       "2606.00001",
     ]);
+  });
+
+  it("looks up by bare arXiv id or paperKey after schema-4 normalize", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": JSON.stringify({
+        schemaVersion: 3,
+        updatedAt: "2026-06-11T00:00:00.000Z",
+        papers: {
+          "2606.12345": {
+            arxivId: "2606.12345",
+            title: "Legacy",
+            paperPath: "arxiv-daily/papers/2606.12345.md",
+          },
+        },
+      }),
+    });
+
+    await expect(store.get("2606.12345")).resolves.toMatchObject({
+      paperKey: "arxiv:2606.12345",
+      externalId: "2606.12345",
+      arxivId: "2606.12345",
+      title: "Legacy",
+      paperPath: "arxiv-daily/papers/2606.12345.md",
+    });
+    await expect(store.get("arxiv:2606.12345")).resolves.toMatchObject({
+      title: "Legacy",
+    });
+
+    await store.setStatus("arxiv:2606.12345", "saved");
+    const reloaded = await store.load();
+    expect(Object.keys(reloaded.papers)).toEqual(["arxiv:2606.12345"]);
+    expect(reloaded.papers["arxiv:2606.12345"]?.status).toBe("saved");
+    expect(reloaded.papers["arxiv:2606.12345"]?.paperPath).toBe(
+      "arxiv-daily/papers/2606.12345.md",
+    );
+    expect(reloaded.papers["arxiv:2606.12345"]?.paperPath).not.toContain(
+      "arxiv:",
+    );
   });
 });

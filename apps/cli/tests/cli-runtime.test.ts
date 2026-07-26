@@ -59,7 +59,7 @@ describe("CLI runtime", () => {
     const saved = JSON.parse(
       await host.storage.readText("arxiv-daily/.index/papers.json"),
     );
-    expect(saved.papers["2606.12345"].title).toBe("Runtime paper");
+    expect(saved.papers["arxiv:2606.12345"].title).toBe("Runtime paper");
 
     await runtime.stateStore.setRunning("2026-06-13");
     await runtime.stateStore.setCompleted("2026-06-13", 2);

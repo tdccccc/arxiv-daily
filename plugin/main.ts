@@ -1,5 +1,5 @@
 import { Notice, Plugin } from "obsidian";
-import type { PluginSettings, RunState } from "@arxiv-daily/core";
+import type { PipelineResult, PluginSettings, RunState } from "@arxiv-daily/core";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
@@ -30,6 +30,11 @@ import { ProjectNotesService } from "@arxiv-daily/core";
 import { RecentDatesCache } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import type { HostAdapters, HttpClient } from "@arxiv-daily/core";
+import {
+  deliverDailyEmailIfEnabled,
+  resolveResendApiKey,
+  sampleDailyDigest,
+} from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
 import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
 
@@ -89,7 +94,7 @@ export default class ArxivDailyPlugin extends Plugin {
       (message, timeoutMs) => new Notice(message, timeoutMs),
       this.settings.arxiv.timezone,
     );
-    this.logger.setSensitiveValues([this.settings.llm.apiKey]);
+    this.refreshSensitiveValues();
     for (const warning of settingsWarnings) {
       this.logger.warn(`settings: ${warning}`);
     }
@@ -155,6 +160,7 @@ export default class ArxivDailyPlugin extends Plugin {
       recentDates: this.recentDates,
       runHistory: this.runHistoryStore,
       dailyPathForDate: (date) => this.buildMarkdownWriter().dailyPath(date),
+      onDailyCompleted: (date, result) => this.deliverCompletedDigest(date, result),
     });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
@@ -206,6 +212,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.settings.detailSelection = sanitizeDetailSelection(
       this.settings.detailSelection,
     );
+    this.refreshSensitiveValues();
     await this.persistSettings();
   }
 
@@ -290,6 +297,60 @@ export default class ArxivDailyPlugin extends Plugin {
   private async persistSettings(): Promise<void> {
     const data: PersistedData = { settings: this.settings };
     await this.saveData(data);
+  }
+
+  refreshSensitiveValues(): void {
+    this.logger?.setSensitiveValues(
+      [
+        this.settings.llm.apiKey,
+        this.settings.email?.apiKey ?? "",
+      ].filter(Boolean),
+    );
+  }
+
+  async deliverCompletedDigest(
+    date: string,
+    result: Extract<PipelineResult, { kind: "completed" }>,
+  ): Promise<void> {
+    if (!result.digest) {
+      this.logger.debug(`email: no digest for ${date}; skip auto-send (repair path)`);
+      return;
+    }
+    await deliverDailyEmailIfEnabled(result.digest, {
+      storage: this.host.storage,
+      http: this.host.http,
+      output: this.settings.output,
+      email: this.settings.email,
+      apiKey: resolveResendApiKey(this.settings.email),
+      logger: this.logger,
+    });
+  }
+
+  async sendTestEmail(date?: string): Promise<string> {
+    const day =
+      date ??
+      formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
+    const digest = sampleDailyDigest({
+      date: day,
+      language: this.settings.output.summaryLanguage,
+      categories: arxivCategories(this.settings.arxiv).join(", "),
+      dailyPath: `${this.settings.output.dailyDir}/${day}.md`,
+    });
+    const email = { ...this.settings.email, enabled: true };
+    const result = await deliverDailyEmailIfEnabled(digest, {
+      storage: this.host.storage,
+      http: this.host.http,
+      output: this.settings.output,
+      email,
+      apiKey: resolveResendApiKey(this.settings.email),
+      logger: this.logger,
+      force: true,
+    });
+    if (result.kind === "delivered") {
+      return `Test email delivered to ${email.to}` +
+        (result.providerMessageId ? ` (${result.providerMessageId})` : "");
+    }
+    throw new Error(`${result.kind}: ${result.reason}`);
   }
 
   private buildPipeline(): ArxivPipeline {

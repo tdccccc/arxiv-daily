@@ -43,6 +43,7 @@ type PartialPluginSettings = {
   output?: Partial<PluginSettings["output"]>;
   schedule?: Partial<PluginSettings["schedule"]>;
   advanced?: Partial<PluginSettings["advanced"]>;
+  email?: Partial<PluginSettings["email"]>;
 };
 
 export class CliConfigError extends Error {
@@ -116,6 +117,7 @@ interface RawCliConfig {
   output?: unknown;
   schedule?: unknown;
   advanced?: unknown;
+  email?: unknown;
   vaultRoot?: unknown;
   cacheDir?: unknown;
   linkStyle?: unknown;
@@ -172,6 +174,7 @@ function settingsObject(file: RawCliConfig): PartialPluginSettings {
     ...(isRecord(file.output) ? { output: file.output } : {}),
     ...(isRecord(file.schedule) ? { schedule: file.schedule } : {}),
     ...(isRecord(file.advanced) ? { advanced: file.advanced } : {}),
+    ...(isRecord(file.email) ? { email: file.email } : {}),
   } as PartialPluginSettings;
 }
 
@@ -182,6 +185,7 @@ function configFromEnv(env: Record<string, string | undefined>): EnvCliConfig {
   const detailSelection: Record<string, unknown> = {};
   const output: Record<string, unknown> = {};
   const advanced: Record<string, unknown> = {};
+  const email: Record<string, unknown> = {};
 
   setString(llm, "apiKey", firstEnv(env, "ARXIV_DAILY_API_KEY", "ARXIV_DAILY_LLM_API_KEY"));
   setString(llm, "provider", env.ARXIV_DAILY_PROVIDER);
@@ -223,6 +227,12 @@ function configFromEnv(env: Record<string, string | undefined>): EnvCliConfig {
   setString(output, "summaryLanguage", env.ARXIV_DAILY_SUMMARY_LANGUAGE);
   setString(advanced, "logLevel", env.ARXIV_DAILY_LOG_LEVEL);
 
+  setBoolean(email, "enabled", env.ARXIV_DAILY_EMAIL_ENABLED);
+  setString(email, "to", env.ARXIV_DAILY_EMAIL_TO);
+  setString(email, "fromEmail", env.ARXIV_DAILY_EMAIL_FROM);
+  setString(email, "fromName", env.ARXIV_DAILY_EMAIL_FROM_NAME);
+  setString(email, "apiKey", env.ARXIV_DAILY_RESEND_API_KEY);
+
   if (Object.keys(llm).length > 0) settings.llm = llm;
   if (Object.keys(arxiv).length > 0) {
     settings.arxiv = arxiv;
@@ -235,6 +245,9 @@ function configFromEnv(env: Record<string, string | undefined>): EnvCliConfig {
   }
   if (Object.keys(advanced).length > 0) {
     settings.advanced = advanced;
+  }
+  if (Object.keys(email).length > 0) {
+    settings.email = email;
   }
 
   return {
@@ -256,6 +269,7 @@ function applyPartialSettings(
     output: { ...base.output, ...(partial.output ?? {}) },
     schedule: { ...base.schedule, ...(partial.schedule ?? {}) },
     advanced: { ...base.advanced, ...(partial.advanced ?? {}) },
+    email: { ...base.email, ...(partial.email ?? {}) },
   };
   const rawArxiv = partial.arxiv as Record<string, unknown> | undefined;
   if (rawArxiv && Object.prototype.hasOwnProperty.call(rawArxiv, "categories")) {
