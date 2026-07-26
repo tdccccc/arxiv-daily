@@ -173,3 +173,10 @@ Contracts: `./email-content-format.md`, `./email-delivery.md`.
 - change: getting-started EN/中文 §8; settings tab copy; email-delivery.md audience note.
 - disposition: Commit as docs+copy follow-up on feature branch.
 - next: Optional rebuild plugin for vault copy of settings strings.
+
+## 2026-07-27 — note (email dual-mode docs alignment)
+
+- evidence: User adopted dual-mode product (自己发送 default + 官方代发 optional). Chose docs+naming only for now; cross-mode idempotency date+to; hosted verification = magic link.
+- change: Added `email-dual-mode.md`; amended email-delivery B4/state; goal resolved dual-mode; getting-started EN/中文 mode table; settings Delivery mode dropdown (hosted snaps back to self + Notice).
+- disposition: No hosted API. Runtime `shouldSend` still channel-keyed until hosted ships — single live channel today so behavior matches “one success per day” in practice.
+- next: Implement 官方代发 in a dedicated initiative when domain+Worker ready; optional tighten shouldSend to date+to before then.

@@ -120,9 +120,18 @@ Paper Index schema 3 会持久化 abstract，并可读取已有 schema 1/2 文�
 
 Scheduler 只会在 Obsidian 打开时运行。lookback 窗口内漏掉的工作日会在之后补跑。
 
-## 8. 可选：邮件日报（Resend，自备 API Key）
+## 8. 可选：邮件日报
 
-邮件是**可选**功能。插件**不会**替你运营邮局：你在 [Resend](https://resend.com) 注册并粘贴**自己的** API key；日报 pipeline **completed** 后，插件用你的 key 发到**你的个人邮箱**。发信失败**不会**把当天日报标成失败。
+邮件是**可选**功能。产品规划为**双模式**（详见 helm `email-dual-mode.md`）：
+
+| 模式 | 状态 | 你要做什么 |
+|---|---|---|
+| **自己发送** | **现已可用** | 自备 [Resend](https://resend.com) API Key，发到个人邮箱 |
+| **官方代发** | **规划中** | 验证邮箱后由项目代发，用户无需 API Key — **尚未上线** |
+
+默认是 **自己发送**，不依赖项目服务器。发信失败**不会**把当天日报标成失败。
+
+### 自己发送（Resend，自备 API Key）
 
 ### 重要限制（快速配置 / 测试发件）
 

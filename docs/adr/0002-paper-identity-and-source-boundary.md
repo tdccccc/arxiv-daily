@@ -45,6 +45,10 @@ The paper index and pipeline are arXiv-shaped: `papers.json` keys are bare moder
 - Dual-host email implies shared digest rendering in core (or a shared package) and host-only secret + HTTP wiring; provider API keys use existing secret ports.
 - A second delivery state file must stay coherent with multi-device vault sync the same way `run-state.json` does.
 
+## Email dual-mode (2026-07-27)
+
+Product: **自己发送** (user Resend BYOK, default, shipped) and **官方代发** (project relay after magic-link verification, planned). Shared digest + cross-mode idempotency on `date + recipient`. Details: `docs/helm/2026-07-25-paper-identity-source-boundary/email-dual-mode.md`.
+
 ## Non-decisions
 
 - Exact Resend env var / settings field identifiers (implementer).

@@ -1,11 +1,11 @@
 # Paper identity and source boundary
 
 status: active
-updated: 2026-07-26
+updated: 2026-07-27
 
 ## Intent
 
-Give arXiv Daily a stable paper identity and a source-adapter boundary so the pipeline is not permanently hard-coded to bare arXiv IDs, then ship **email delivery of the daily digest** as the next user-visible capability. Real multi-source discovery is **parked** for now; the adapter exists for cleanliness and future optionality, not as a near-term product expansion.
+Give arXiv Daily a stable paper identity and a source-adapter boundary so the pipeline is not permanently hard-coded to bare arXiv IDs, then ship **email delivery of the daily digest**. Email product is **dual-mode**: default **自己发送** (user Resend BYOK, shipped); optional **官方代发** (project relay, planned). Real multi-source discovery remains **parked**.
 
 ## Success criteria
 
@@ -48,10 +48,11 @@ Give arXiv Daily a stable paper identity and a source-adapter boundary so the pi
 
 ## Current focus
 
-Initiative complete for planned phases (P1–P3). Optional later: Fake-source hygiene, real multi-source, agent tooling.
+P1–P3 code complete (**自己发送**). Docs aligned for dual-mode product (2026-07-27). **官方代发** not implemented — separate future work. Optional later: Fake-source hygiene, real multi-source, agent tooling.
 
 ## Open questions
 
+- Hosted service host (Worker/Vercel/…), quotas, and ops when 官方代发 is built.
 - Agent tool surface later: CLI subcommands vs MCP (out of this initiative unless promoted).
 
 ### Resolved (identity — P1)
@@ -67,13 +68,21 @@ Initiative complete for planned phases (P1–P3). Optional later: Fake-source hy
 
 ### Resolved (email product/engineering — P3)
 
-- B1 Resend; B2 To/From settings + API key secret; B3 in-run 2–3 retries then failed, retry on later completed if not delivered; B4 idempotency only; B5 auto + test send; B6 zero-day lead + per-topic empties.
-- Contracts: `email-content-format.md`, `email-delivery.md`.
+- B1 Resend; B2 To/From settings + API key secret; B3 in-run 2–3 retries then failed, retry on later completed if not delivered; B4 idempotency; B5 auto + test send; B6 zero-day lead + per-topic empties.
+- Contracts: `email-content-format.md`, `email-delivery.md`, **`email-dual-mode.md`**.
 - Resend API key: settings `email.apiKey`; CLI env `ARXIV_DAILY_RESEND_API_KEY` (also `ARXIV_DAILY_EMAIL_*` for enable/to/from).
 - Option A: `PipelineResult.completed.digest?: DailyDigest` built in `runForDateInner`; repair-only skips email.
+
+### Resolved (email dual-mode — 2026-07-27)
+
+- Modes: **自己发送** (default, shipped) + **官方代发** (optional, planned).
+- Docs-only alignment now; no hosted implementation in this pass.
+- Idempotency: **date + recipient** success once **across modes**.
+- 官方代发 verification: **magic link** in email (when built).
+- Only one mode active; project send keys never in plugin.
 
 ### Resolved (scope steer 2026-07-26)
 
 - No real second source for now (including ADS as daily source).
 - Fake second-source test phase dropped from this initiative’s critical path.
-- Email is the next implementation phase (P3).
+- Email implemented as P3 (自己发送).

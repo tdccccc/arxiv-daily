@@ -647,7 +647,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       containerEl,
       "Email delivery",
       "email",
-      "Bring your own Resend account. Quick path: recipient + API key → test → then enable daily auto-send. No project server; keys stay on your machine.",
+      "Two modes planned: 自己发送 (Send yourself) is available now; 官方代发 (Official delivery) is coming later. Default: send yourself with your Resend key — no project server.",
     );
 
     if (!s.email) {
@@ -664,7 +664,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       cls: "setting-item-description arxiv-daily-settings__email-help",
     });
     emailHelp.createEl("div", {
-      text: "Quick setup — personal inbox only (no domain required)",
+      text: "自己发送 / Send yourself — quick setup (personal inbox only)",
       cls: "arxiv-daily-settings__email-help-title",
     });
     const steps = emailHelp.createEl("ol");
@@ -678,8 +678,27 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       steps.createEl("li", { text: line });
     }
     emailHelp.createEl("p", {
-      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). This is intentional: email is a personal channel. To send elsewhere, verify your own domain in Resend and set From (advanced). See docs/getting-started.md §8.",
+      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). This is intentional: 自己发送 is a personal channel. To send elsewhere, verify your own domain in Resend and set From (advanced). 官方代发 (project sends for you after email verification) is planned and not available yet. See docs/getting-started.md §8.",
     });
+
+    new Setting(containerEl)
+      .setName("Delivery mode")
+      .setDesc(
+        "自己发送: your Resend API key. 官方代发: verify email, project sends (not available yet).",
+      )
+      .addDropdown((d) => {
+        d.addOption("self", "自己发送 — Send yourself (Resend)");
+        d.addOption("hosted", "官方代发 — Official delivery (coming soon)");
+        d.setValue("self");
+        d.onChange(() => {
+          // Hosted not implemented; keep selection on self.
+          d.setValue("self");
+          new Notice(
+            "官方代发 is not available yet. Use 自己发送 with your Resend API key.",
+            6_000,
+          );
+        });
+      });
 
     new Setting(containerEl)
       .setName("To")

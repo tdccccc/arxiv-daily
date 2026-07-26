@@ -120,9 +120,18 @@ If the first manual run works, return to **Settings -> arXiv Daily** and enable 
 
 The scheduler runs while Obsidian is open. Missed weekdays in the lookback window are retried later.
 
-## 8. Optional: Email Digest (Resend, Bring Your Own Key)
+## 8. Optional: Email Digest
 
-Email is optional. The plugin does **not** host a mail server for you. You create a free [Resend](https://resend.com) account, paste your own API key, and the plugin sends **to your personal inbox** after a daily run **completes**. Delivery failures never fail the daily pipeline.
+Email is optional. The product plan is **two modes** (see helm `email-dual-mode.md`):
+
+| Mode | Status | What you do |
+|---|---|---|
+| **Send yourself** (自己发送) | **Available now** | Your [Resend](https://resend.com) API key; personal inbox |
+| **Official delivery** (官方代发) | **Planned** | Verify email with the project; no user API key — not shipped yet |
+
+Default is **Send yourself**. The plugin does **not** require a project server for that path. Delivery failures never fail the daily pipeline.
+
+### Send yourself (Resend, bring your own key)
 
 ### Important limit (quick setup)
 
