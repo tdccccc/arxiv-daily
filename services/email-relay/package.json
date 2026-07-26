@@ -1,0 +1,19 @@
+{
+  "name": "@arxiv-daily/email-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker: Official delivery (Beta) for arXiv Daily digests",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250525.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.7",
+    "wrangler": "^3.114.0"
+  }
+}

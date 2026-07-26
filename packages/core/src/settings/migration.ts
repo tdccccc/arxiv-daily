@@ -83,5 +83,9 @@ export function migrateEmailSettings(raw: unknown): EmailSettings {
       typeof email.hostedToken === "string"
         ? email.hostedToken
         : defaults.hostedToken ?? "",
+    hostedBaseUrl:
+      typeof email.hostedBaseUrl === "string"
+        ? email.hostedBaseUrl
+        : defaults.hostedBaseUrl ?? "",
   };
 }

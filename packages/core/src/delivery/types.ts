@@ -13,10 +13,11 @@ export type EmailDeliveryChannel =
 export type EmailDeliveryMode = "self" | "hosted";
 
 /**
- * Hosted (官方代发) is product-complete in docs but not online yet.
- * Flip when the project relay accepts traffic; keep UI labeled Beta.
+ * Official delivery (Beta) client path is enabled in the plugin.
+ * The Cloudflare Worker must be deployed for requests to succeed.
+ * Keep UI labeled Beta until you are ready for wider users.
  */
-export const OFFICIAL_DELIVERY_AVAILABLE = false;
+export const OFFICIAL_DELIVERY_AVAILABLE = true;
 
 export type DigestPaperKind = "structured" | "fallback";
 

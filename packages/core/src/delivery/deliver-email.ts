@@ -180,6 +180,7 @@ export async function deliverDailyEmailIfEnabled(
         });
         sent = await sendViaHosted({
           http: deps.http,
+          baseUrl: email.hostedBaseUrl,
           token: email.hostedToken ?? "",
           request: hostedReq,
           signal: deps.signal,

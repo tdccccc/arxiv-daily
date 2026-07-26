@@ -5,9 +5,9 @@ import {
   type ResendEmailPayload,
 } from "./types";
 
-/** Default project relay base URL when Official delivery (Beta) goes live. Override via settings later. */
+/** Default project relay base URL (Cloudflare Worker custom domain). */
 export const DEFAULT_HOSTED_DELIVERY_BASE_URL =
-  "https://email.arxiv-daily.example";
+  "https://email.arxiv-daily.top";
 
 export class HostedDeliveryError extends Error {
   constructor(
@@ -39,6 +39,45 @@ export interface HostedDeliverResult {
  * POST digest to the project relay. Offline until OFFICIAL_DELIVERY_AVAILABLE.
  * Server holds the send API key; plugin only sends auth token + payload.
  */
+export function resolveHostedBaseUrl(baseUrl?: string): string {
+  return (baseUrl?.trim() || DEFAULT_HOSTED_DELIVERY_BASE_URL).replace(
+    /\/$/,
+    "",
+  );
+}
+
+/** Request a magic-link verification email for Official delivery (Beta). */
+export async function startHostedEmailVerification(opts: {
+  http: HttpClient;
+  baseUrl?: string;
+  email: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (!OFFICIAL_DELIVERY_AVAILABLE) {
+    throw new HostedDeliveryError(
+      "Official delivery (Beta) client support is disabled in this build.",
+    );
+  }
+  const email = opts.email.trim();
+  if (!email) {
+    throw new HostedDeliveryError("email is required");
+  }
+  const base = resolveHostedBaseUrl(opts.baseUrl);
+  const res = await opts.http.request({
+    url: `${base}/v1/verify/start`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+    signal: opts.signal,
+  });
+  if (res.status < 200 || res.status >= 300) {
+    throw new HostedDeliveryError(
+      `Verify start HTTP ${res.status}: ${res.bodyText.slice(0, 300)}`,
+      res.status,
+    );
+  }
+}
+
 export async function sendViaHosted(opts: {
   http: HttpClient;
   baseUrl?: string;
@@ -52,10 +91,7 @@ export async function sendViaHosted(opts: {
     );
   }
 
-  const base = (opts.baseUrl ?? DEFAULT_HOSTED_DELIVERY_BASE_URL).replace(
-    /\/$/,
-    "",
-  );
+  const base = resolveHostedBaseUrl(opts.baseUrl);
   const token = opts.token.trim();
   if (!token) {
     throw new HostedDeliveryError("hosted delivery token is missing");

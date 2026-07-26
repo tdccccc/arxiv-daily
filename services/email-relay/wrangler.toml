@@ -1,0 +1,27 @@
+name = "arxiv-daily-email-relay"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+
+# After first deploy, attach a custom domain in Cloudflare dashboard:
+#   email.arxiv-daily.top → this worker
+# Or uncomment routes when zone is on Cloudflare:
+# routes = [{ pattern = "email.arxiv-daily.top/*", zone_name = "arxiv-daily.top" }]
+
+[[kv_namespaces]]
+binding = "STORE"
+id = "00000000000000000000000000000000"
+preview_id = "00000000000000000000000000000000"
+
+# Create KV: npx wrangler kv namespace create STORE
+# Then replace id / preview_id above.
+
+[vars]
+# Non-secret defaults (override in dashboard if needed)
+PUBLIC_BASE_URL = "https://email.arxiv-daily.top"
+FROM_EMAIL = "daily@mail.arxiv-daily.top"
+FROM_NAME = "arXiv Daily"
+DAILY_QUOTA = "2"
+
+# Secrets (set via CLI, never commit):
+#   npx wrangler secret put RESEND_API_KEY
+#   npx wrangler secret put TOKEN_SECRET

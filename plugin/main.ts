@@ -34,6 +34,7 @@ import {
   deliverDailyEmailIfEnabled,
   resolveResendApiKey,
   sampleDailyDigest,
+  startHostedEmailVerification,
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
 import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
@@ -304,6 +305,7 @@ export default class ArxivDailyPlugin extends Plugin {
       [
         this.settings.llm.apiKey,
         this.settings.email?.apiKey ?? "",
+        this.settings.email?.hostedToken ?? "",
       ].filter(Boolean),
     );
   }
@@ -351,6 +353,17 @@ export default class ArxivDailyPlugin extends Plugin {
         (result.providerMessageId ? ` (${result.providerMessageId})` : "");
     }
     throw new Error(`${result.kind}: ${result.reason}`);
+  }
+
+  async sendHostedVerificationEmail(): Promise<string> {
+    const to = this.settings.email.to?.trim() ?? "";
+    if (!to) throw new Error("Set To before sending a verification email");
+    await startHostedEmailVerification({
+      http: this.host.http,
+      baseUrl: this.settings.email.hostedBaseUrl,
+      email: to,
+    });
+    return `Verification email sent to ${to}. Open the link and paste the device token into Hosted token.`;
   }
 
   private buildPipeline(): ArxivPipeline {

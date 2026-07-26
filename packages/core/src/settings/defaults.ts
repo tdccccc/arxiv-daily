@@ -46,5 +46,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     fromName: "arXiv Daily",
     apiKey: "",
     hostedToken: "",
+    hostedBaseUrl: "",
   },
 };

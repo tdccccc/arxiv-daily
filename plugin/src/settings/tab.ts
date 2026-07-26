@@ -647,7 +647,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       containerEl,
       "Email delivery",
       "email",
-      "Two modes: Send yourself (available now) and Official delivery (Beta, not online yet). Default: your Resend key — no project server.",
+      "Send yourself (default, your Resend key) or Official delivery (Beta, project relay after email verification). Failures never fail the daily run.",
     );
 
     if (!s.email) {
@@ -659,68 +659,39 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         fromName: "arXiv Daily",
         apiKey: "",
         hostedToken: "",
+        hostedBaseUrl: "",
       };
     }
     if (s.email.mode !== "self" && s.email.mode !== "hosted") {
       s.email.mode = "self";
     }
-
-    const emailHelp = containerEl.createDiv({
-      cls: "setting-item-description arxiv-daily-settings__email-help",
-    });
-    emailHelp.createEl("div", {
-      text: "Send yourself — quick setup (personal inbox only)",
-      cls: "arxiv-daily-settings__email-help-title",
-    });
-    const steps = emailHelp.createEl("ol");
-    for (const line of [
-      "Open resend.com → sign up → API Keys → Create → copy re_…",
-      "Set To to YOUR Resend account email only (GitHub login → usually GitHub primary email, not every linked address).",
-      "Paste the API key below. Leave From empty.",
-      "Click Send test → check that account’s inbox/spam.",
-      "Only after a successful test, turn on Daily auto-send.",
-    ]) {
-      steps.createEl("li", { text: line });
-    }
-    emailHelp.createEl("p", {
-      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). Official delivery (Beta) is not online yet (magic-link verification later). See docs/getting-started.md §8.",
-    });
+    const hostedMode = s.email.mode === "hosted";
 
     new Setting(containerEl)
       .setName("Delivery mode")
       .setDesc(
-        "Send yourself: your Resend API key (default). Official delivery (Beta): project sends after email verification — not online yet.",
+        "Send yourself: Resend API key on this device. Official delivery (Beta): verify email, project sends via arxiv-daily.top.",
       )
       .addDropdown((d) => {
         d.addOption("self", "Send yourself (Resend)");
-        d.addOption(
-          "hosted",
-          "Official delivery (Beta) — not online yet",
-        );
-        d.setValue(s.email.mode === "hosted" ? "hosted" : "self");
+        d.addOption("hosted", "Official delivery (Beta)");
+        d.setValue(hostedMode ? "hosted" : "self");
         d.onChange(async (value) => {
-          if (value === "hosted") {
-            // Keep preference visible but refuse until OFFICIAL_DELIVERY_AVAILABLE.
-            s.email.mode = "self";
-            d.setValue("self");
-            await this.plugin.saveSettings();
-            new Notice(
-              "Official delivery (Beta) is not online yet. Use Send yourself with your Resend API key.",
-              7_000,
-            );
-            return;
-          }
-          s.email.mode = "self";
+          s.email.mode = value === "hosted" ? "hosted" : "self";
           await this.plugin.saveSettings();
+          this.display();
         });
       });
+
     new Setting(containerEl)
       .setName("To")
       .setDesc(
-        "Required. Quick setup: must be your Resend account email (often GitHub primary). Not a team list.",
+        hostedMode
+          ? "Inbox to verify and receive digests (Official delivery Beta)."
+          : "Required. Quick setup: Resend account email (often GitHub primary). Not a team list.",
       )
       .addText((t) => {
-        t.setPlaceholder("your-resend-account@example.com")
+        t.setPlaceholder("you@example.com")
           .setValue(s.email.to)
           .onChange(async (v) => {
             s.email.to = v.trim();
@@ -728,12 +699,120 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       });
 
-    this.renderEmailApiKeySetting(containerEl);
+    if (hostedMode) {
+      const help = containerEl.createDiv({
+        cls: "setting-item-description arxiv-daily-settings__email-help",
+      });
+      help.createEl("div", {
+        text: "Official delivery (Beta) — setup",
+        cls: "arxiv-daily-settings__email-help-title",
+      });
+      const steps = help.createEl("ol");
+      for (const line of [
+        "Enter To (your inbox) and click Send verification email.",
+        "Open the magic link in that inbox; copy the device token from the page.",
+        "Paste the token below, then Send test.",
+        "After a successful test, turn on Daily auto-send.",
+      ]) {
+        steps.createEl("li", { text: line });
+      }
+      help.createEl("p", {
+        text: "Requires the project relay at email.arxiv-daily.top (or your Hosted base URL). Project send keys never leave the server. See services/email-relay/README.md.",
+      });
+
+      new Setting(containerEl)
+        .setName("Send verification email")
+        .setDesc("Sends a magic link to To via the project relay (Resend on the server).")
+        .addButton((b) =>
+          b.setButtonText("Send verification email").onClick(() => {
+            this.runAction("send verification email", async () => {
+              const message = await this.plugin.sendHostedVerificationEmail();
+              new Notice(message, 10_000);
+            });
+          }),
+        );
+
+      new Setting(containerEl)
+        .setName("Hosted token")
+        .setDesc("Paste the device token from the verification page (not your Resend API key).")
+        .addText((t) => {
+          t.setPlaceholder("token from magic-link page")
+            .setValue(s.email.hostedToken ?? "")
+            .onChange(async (v) => {
+              s.email.hostedToken = v.trim();
+              await this.plugin.saveSettings();
+              this.plugin.refreshSensitiveValues();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Hosted base URL (optional)")
+        .setDesc("Default https://email.arxiv-daily.top — override for local wrangler dev.")
+        .addText((t) => {
+          t.setPlaceholder("https://email.arxiv-daily.top")
+            .setValue(s.email.hostedBaseUrl ?? "")
+            .onChange(async (v) => {
+              s.email.hostedBaseUrl = v.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+    } else {
+      const help = containerEl.createDiv({
+        cls: "setting-item-description arxiv-daily-settings__email-help",
+      });
+      help.createEl("div", {
+        text: "Send yourself — quick setup (personal inbox only)",
+        cls: "arxiv-daily-settings__email-help-title",
+      });
+      const steps = help.createEl("ol");
+      for (const line of [
+        "Open resend.com → sign up → API Keys → Create → copy re_…",
+        "Set To to YOUR Resend account email only (GitHub login → usually GitHub primary).",
+        "Paste the API key below. Leave From empty (or use your verified domain From).",
+        "Click Send test → check inbox/spam.",
+        "Only after a successful test, turn on Daily auto-send.",
+      ]) {
+        steps.createEl("li", { text: line });
+      }
+      help.createEl("p", {
+        text: "Empty From uses onboarding@resend.dev and usually only delivers to your Resend account email. See docs/getting-started.md §8.",
+      });
+
+      this.renderEmailApiKeySetting(containerEl);
+
+      new Setting(containerEl)
+        .setName("From email (optional)")
+        .setDesc(
+          "Leave empty for quick setup (onboarding@resend.dev). Set only after verifying your own domain in Resend.",
+        )
+        .addText((t) => {
+          t.setPlaceholder("leave empty, or daily@your-domain.com")
+            .setValue(s.email.fromEmail)
+            .onChange(async (v) => {
+              s.email.fromEmail = v.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("From name (optional)")
+        .setDesc('Display name; default "arXiv Daily" when empty')
+        .addText((t) => {
+          t.setPlaceholder("arXiv Daily")
+            .setValue(s.email.fromName ?? "")
+            .onChange(async (v) => {
+              s.email.fromName = v;
+              await this.plugin.saveSettings();
+            });
+        });
+    }
 
     new Setting(containerEl)
       .setName("Send test email")
       .setDesc(
-        "Sends a sample digest now (does not require Daily auto-send). Uses To + API key; empty From → onboarding@resend.dev.",
+        hostedMode
+          ? "Sample digest via Official delivery (Beta). Requires To + hosted token."
+          : "Sample digest via Send yourself. Uses To + API key; empty From → onboarding@resend.dev.",
       )
       .addButton((b) =>
         b.setButtonText("Send test").setCta().onClick(() => {
@@ -747,7 +826,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Daily auto-send")
       .setDesc(
-        "After a successful test, enable to send the real daily digest when a pipeline run completes. Failures never fail the daily run.",
+        "After a successful test, enable to send the real daily digest when a pipeline run completes.",
       )
       .addToggle((t) =>
         t.setValue(s.email.enabled).onChange(async (v) => {
@@ -755,33 +834,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }),
       );
-
-    // Advanced From (collapsed-style: lower on page with clear “optional” copy)
-    new Setting(containerEl)
-      .setName("From email (optional)")
-      .setDesc(
-        "Leave empty for quick setup (onboarding@resend.dev). Set only after verifying your own domain in Resend.",
-      )
-      .addText((t) => {
-        t.setPlaceholder("leave empty, or daily@your-domain.com")
-          .setValue(s.email.fromEmail)
-          .onChange(async (v) => {
-            s.email.fromEmail = v.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-
-    new Setting(containerEl)
-      .setName("From name (optional)")
-      .setDesc('Display name; default "arXiv Daily" when empty')
-      .addText((t) => {
-        t.setPlaceholder("arXiv Daily")
-          .setValue(s.email.fromName ?? "")
-          .onChange(async (v) => {
-            s.email.fromName = v;
-            await this.plugin.saveSettings();
-          });
-      });
 
     // ─── Advanced ─────────────────────────────────────
     this.sectionHeading(containerEl, "Advanced", "advanced");

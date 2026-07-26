@@ -76,10 +76,14 @@ export interface EmailSettings {
   /** Plugin-local secret storage; CLI prefers ARXIV_DAILY_RESEND_API_KEY. */
   apiKey?: string;
   /**
-   * Future: token after magic-link verification for 官方代发.
-   * Unused while hosted is offline.
+   * Device token after magic-link verification (Official delivery Beta).
    */
   hostedToken?: string;
+  /**
+   * Optional override for the project relay base URL.
+   * Default: https://email.arxiv-daily.top
+   */
+  hostedBaseUrl?: string;
 }
 
 export interface PluginSettings {
