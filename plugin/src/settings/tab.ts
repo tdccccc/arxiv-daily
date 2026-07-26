@@ -647,7 +647,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       containerEl,
       "Email delivery",
       "email",
-      "Two modes planned: 自己发送 (Send yourself) is available now; 官方代发 (Official delivery) is coming later. Default: send yourself with your Resend key — no project server.",
+      "Two modes: Send yourself (available now) and Official delivery (Beta, not online yet). Default: your Resend key — no project server.",
     );
 
     if (!s.email) {
@@ -669,7 +669,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       cls: "setting-item-description arxiv-daily-settings__email-help",
     });
     emailHelp.createEl("div", {
-      text: "自己发送 / Send yourself — quick setup (personal inbox only)",
+      text: "Send yourself — quick setup (personal inbox only)",
       cls: "arxiv-daily-settings__email-help-title",
     });
     const steps = emailHelp.createEl("ol");
@@ -683,19 +683,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       steps.createEl("li", { text: line });
     }
     emailHelp.createEl("p", {
-      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). 官方代发 is Beta and not online yet (magic-link verification later). See docs/getting-started.md §8.",
+      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). Official delivery (Beta) is not online yet (magic-link verification later). See docs/getting-started.md §8.",
     });
 
     new Setting(containerEl)
       .setName("Delivery mode")
       .setDesc(
-        "自己发送: your Resend API key (default). 官方代发 (Beta): project sends after email verification — not online yet.",
+        "Send yourself: your Resend API key (default). Official delivery (Beta): project sends after email verification — not online yet.",
       )
       .addDropdown((d) => {
-        d.addOption("self", "自己发送 — Send yourself (Resend)");
+        d.addOption("self", "Send yourself (Resend)");
         d.addOption(
           "hosted",
-          "官方代发 (Beta) — Official delivery (not online yet)",
+          "Official delivery (Beta) — not online yet",
         );
         d.setValue(s.email.mode === "hosted" ? "hosted" : "self");
         d.onChange(async (value) => {
@@ -705,7 +705,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             d.setValue("self");
             await this.plugin.saveSettings();
             new Notice(
-              "官方代发 (Beta) is not online yet. Use 自己发送 with your Resend API key.",
+              "Official delivery (Beta) is not online yet. Use Send yourself with your Resend API key.",
               7_000,
             );
             return;

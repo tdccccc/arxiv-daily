@@ -5,7 +5,7 @@ import {
   type ResendEmailPayload,
 } from "./types";
 
-/** Default project relay base URL when 官方代发 (Beta) goes live. Override via settings later. */
+/** Default project relay base URL when Official delivery (Beta) goes live. Override via settings later. */
 export const DEFAULT_HOSTED_DELIVERY_BASE_URL =
   "https://email.arxiv-daily.example";
 
@@ -48,7 +48,7 @@ export async function sendViaHosted(opts: {
 }): Promise<HostedDeliverResult> {
   if (!OFFICIAL_DELIVERY_AVAILABLE) {
     throw new HostedDeliveryError(
-      "官方代发 (Beta) is not online yet. Use 自己发送 with your Resend API key, or wait for the hosted service.",
+      "Official delivery (Beta) is not online yet. Use Send yourself with your Resend API key, or wait for the hosted service.",
     );
   }
 

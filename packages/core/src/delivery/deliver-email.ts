@@ -107,7 +107,7 @@ export function isEmailCredentialsReady(
       return {
         ok: false,
         reason:
-          "官方代发 (Beta) is not online yet; switch to 自己发送 or wait for the service",
+          "Official delivery (Beta) is not online yet; switch to Send yourself or wait for the service",
       };
     }
     if (!email.hostedToken?.trim()) {
