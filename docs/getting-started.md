@@ -120,6 +120,43 @@ If the first manual run works, return to **Settings -> arXiv Daily** and enable 
 
 The scheduler runs while Obsidian is open. Missed weekdays in the lookback window are retried later.
 
+## 8. Optional: Email Digest (Resend, Bring Your Own Key)
+
+Email is optional. The plugin does **not** host a mail server for you. You create a free [Resend](https://resend.com) account, paste your own API key, and the plugin sends **to your personal inbox** after a daily run **completes**. Delivery failures never fail the daily pipeline.
+
+### Important limit (quick setup)
+
+With the default test sender (`onboarding@resend.dev`, used when **From email** is left empty):
+
+- You can usually send **only to the email address on your Resend account**.
+- If you signed up with GitHub, that is typically your **GitHub primary email**, not every address linked to GitHub.
+- Sending to any other address returns an error until you **verify your own domain** in Resend and set a custom From.
+
+Treat email as a **personal** reminder channel, not a team broadcast tool, unless you complete domain verification.
+
+### Quick setup (recommended)
+
+1. Open [resend.com](https://resend.com) → sign up (GitHub is fine).
+2. **API Keys → Create** → copy the `re_…` key (shown once).
+3. In Obsidian: **Settings → arXiv Daily → Email delivery**:
+   - **To**: the **same** address as your Resend account email (see limit above).
+   - **Resend API key**: paste `re_…` and save.
+   - **From email**: leave **empty** for quick setup.
+4. Click **Send test**. Check inbox and spam for that account address.
+5. Only after a successful test, turn on **Daily auto-send**.
+
+API keys are stored in the same local `data.json` style as the LLM key (plaintext on disk; not rendered back into the settings page after save).
+
+### After a real daily run
+
+When **Daily auto-send** is on, a successful **completed** daily run may send one digest for that date. The same date is not resent by default (see vault `arxiv-daily/.index/delivery-state.json`). Repair-only completions do not send mail.
+
+### Advanced: send to other addresses
+
+1. In Resend, add and verify a domain you control (DNS SPF/DKIM).
+2. Set **From email** to an address on that domain.
+3. **To** may then be any inbox you choose (within Resend’s rules and quota).
+
 ## Troubleshooting
 
 If **Run Today** is disabled, finish the checklist in **Settings -> arXiv Daily**.
@@ -129,3 +166,5 @@ If the Dashboard says there are no indexed papers, run today or run pending date
 If a run fails, use **Dashboard -> More -> Show diagnostics** to inspect settings, date context, and recent run state.
 
 If too many papers are selected, narrow your arXiv categories or make topic descriptions more specific.
+
+If **Send test email** fails with HTTP **403** and a message about “only send testing emails to your own email address”, set **To** exactly to the address named in that error (your Resend account email). Do not use a secondary GitHub email unless it is the account email. Leave **From** empty until you verify a domain.

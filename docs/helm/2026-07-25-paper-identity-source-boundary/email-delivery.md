@@ -36,6 +36,9 @@ Secret: Resend API key in plugin settings / CLI env (`ARXIV_DAILY_RESEND_API_KEY
 | Resend API key | Plugin `email.apiKey` (local data.json, like LLM key); CLI env `ARXIV_DAILY_RESEND_API_KEY` |
 | Not allowed v1 | API key in vault Markdown or committed config; project-hosted relay |
 | UX order | To + API key → **Send test** → enable Daily auto-send |
+| Audience | **Personal only** in quick setup: To must be the Resend account email; document in getting-started §8 (EN/中文) |
+
+User-facing guides: `docs/getting-started.md` §8, `docs/getting-started.zh-CN.md` §8.
 
 ## B3 — Failure and retry
 

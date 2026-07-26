@@ -664,27 +664,30 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       cls: "setting-item-description arxiv-daily-settings__email-help",
     });
     emailHelp.createEl("div", {
-      text: "Quick setup (no domain required)",
+      text: "Quick setup — personal inbox only (no domain required)",
       cls: "arxiv-daily-settings__email-help-title",
     });
     const steps = emailHelp.createEl("ol");
     for (const line of [
       "Open resend.com → sign up → API Keys → Create → copy re_…",
-      "Paste the key below and set To to your own inbox (often the same email as your Resend account).",
-      "Click Send test email and check inbox/spam.",
+      "Set To to YOUR Resend account email only (GitHub login → usually GitHub primary email, not every linked address).",
+      "Paste the API key below. Leave From empty.",
+      "Click Send test → check that account’s inbox/spam.",
       "Only after a successful test, turn on Daily auto-send.",
     ]) {
       steps.createEl("li", { text: line });
     }
     emailHelp.createEl("p", {
-      text: "From is optional. When empty, the plugin uses Resend’s test sender onboarding@resend.dev (usually only delivers to your Resend account email). Custom From needs a domain you verified in Resend.",
+      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). This is intentional: email is a personal channel. To send elsewhere, verify your own domain in Resend and set From (advanced). See docs/getting-started.md §8.",
     });
 
     new Setting(containerEl)
       .setName("To")
-      .setDesc("Your personal inbox (required)")
+      .setDesc(
+        "Required. Quick setup: must be your Resend account email (often GitHub primary). Not a team list.",
+      )
       .addText((t) => {
-        t.setPlaceholder("you@example.com")
+        t.setPlaceholder("your-resend-account@example.com")
           .setValue(s.email.to)
           .onChange(async (v) => {
             s.email.to = v.trim();

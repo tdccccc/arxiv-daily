@@ -116,16 +116,56 @@ Paper Index schema 3 会持久化 abstract，并可读取已有 schema 1/2 文�
 
 ## 7. 启用自动运行
 
-确认第一次手动运行成功后，回到 **Settings -> arXiv Daily**，启用 scheduler。
+确认第一次手动运行成功后，回到 **Settings → arXiv Daily**，启用 scheduler。
 
 Scheduler 只会在 Obsidian 打开时运行。lookback 窗口内漏掉的工作日会在之后补跑。
 
+## 8. 可选：邮件日报（Resend，自备 API Key）
+
+邮件是**可选**功能。插件**不会**替你运营邮局：你在 [Resend](https://resend.com) 注册并粘贴**自己的** API key；日报 pipeline **completed** 后，插件用你的 key 发到**你的个人邮箱**。发信失败**不会**把当天日报标成失败。
+
+### 重要限制（快速配置 / 测试发件）
+
+**From email 留空**时，插件使用 Resend 测试发件地址 `onboarding@resend.dev`：
+
+- **To 几乎只能填 Resend 账号绑定的那个邮箱**（「本人邮箱」）。
+- 若用 **GitHub 登录** Resend，通常是 GitHub 的**主邮箱（Primary）**，不是 GitHub 上挂的每一个邮箱。
+- 发给其它地址会 403，直到你在 Resend **验证自己的域名**并填写自定义 From。
+
+请把邮件当成**给自己的提醒通道**，不要默认当成群发/通知多人，除非完成域名验证。
+
+### 快速配置（推荐）
+
+1. 打开 [resend.com](https://resend.com) 注册（可用 GitHub）。
+2. **API Keys → Create**，复制一次性显示的 `re_…`。
+3. Obsidian：**Settings → arXiv Daily → Email delivery**：
+   - **To**：填与 Resend 账号**相同**的邮箱（见上限制）。
+   - **Resend API key**：粘贴并保存。
+   - **From email**：**留空**。
+4. 点 **Send test**，在该账号邮箱的收件箱/垃圾箱查看。
+5. **测试成功后**，再打开 **Daily auto-send（每日自动发送）**。
+
+API key 与 LLM key 一样保存在本地 `data.json`（磁盘明文；保存后设置页不再回显完整 key）。
+
+### 真·日报跑完之后
+
+开启 **Daily auto-send** 后，某日 run **completed** 才可能发一封真日报；默认同一天不重复发（见 vault 内 `arxiv-daily/.index/delivery-state.json`）。仅 repair 索引的完成**不会**发信。
+
+### 进阶：发给其它收件地址
+
+1. 在 Resend 添加并验证你拥有的域名（DNS 配置 SPF/DKIM）。
+2. **From email** 填该域名下的地址。
+3. 之后 **To** 才可改为任意邮箱（仍受 Resend 规则与配额约束）。
+
 ## 常见问题
 
-如果 **Run Today** 是 disabled，先完成 **Settings -> arXiv Daily** 顶部 checklist。
+如果 **Run Today** 是 disabled，先完成 **Settings → arXiv Daily** 顶部 checklist。
 
 如果 Dashboard 显示还没有 indexed papers，先运行今天或运行 pending dates。
 
-如果运行失败，用 **Dashboard -> More -> Show diagnostics** 查看设置、日期上下文和最近运行状态。
+如果运行失败，用 **Dashboard → More → Show diagnostics** 查看设置、日期上下文和最近运行状态。
 
 如果入选论文太多，缩小 arXiv 分类，或者把 topic description 写得更具体。
+
+如果 **Send test** 报 HTTP **403**，且提示只能发给自己的邮箱：把 **To** 改成报错信息里写出的那个地址（Resend 账号邮箱）；不要用未绑定的次要 GitHub 邮箱；在验证域名之前 **From 保持留空**。
+

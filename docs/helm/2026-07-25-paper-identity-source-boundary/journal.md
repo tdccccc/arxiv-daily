@@ -166,3 +166,10 @@ Contracts: `./email-content-format.md`, `./email-delivery.md`.
 - change: Core `resolveResendFromEmail` / credentials helpers; defaults fromName; settings tab reordered with wizard copy; email-delivery.md quick-setup table; force test-send no longer requires enabled or custom From.
 - disposition: Still uncommitted on feat branch with P1–P3.
 - next: Commit full branch after tests green; rebuild plugin for vault hand-test.
+
+## 2026-07-26 — note (email docs: personal-only BYOK)
+
+- evidence: User confirmed Resend test path works only for account email (GitHub primary). Chose to stay on BYOK Resend; document setup and stress personal-only To; no MCP/webhook required for v1.
+- change: getting-started EN/中文 §8; settings tab copy; email-delivery.md audience note.
+- disposition: Commit as docs+copy follow-up on feature branch.
+- next: Optional rebuild plugin for vault copy of settings strings.
