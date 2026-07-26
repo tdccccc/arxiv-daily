@@ -134,6 +134,7 @@ describe("deliverDailyEmailIfEnabled", () => {
     }));
     const email = {
       enabled: true,
+      mode: "self" as const,
       to: "you@example.com",
       fromEmail: "",
       fromName: "",
@@ -185,6 +186,7 @@ describe("deliverDailyEmailIfEnabled", () => {
       });
     const email = {
       enabled: true,
+      mode: "self" as const,
       to: "you@example.com",
       fromEmail: "from@example.com",
       apiKey: "re_key",

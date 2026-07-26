@@ -6,7 +6,10 @@ import {
   markFailed,
   shouldSendEmail,
 } from "../../src/delivery/delivery-state";
-import { EMAIL_DELIVERY_CHANNEL } from "../../src/delivery/types";
+import {
+  EMAIL_DELIVERY_CHANNEL,
+  EMAIL_HOSTED_CHANNEL,
+} from "../../src/delivery/types";
 
 describe("delivery-state", () => {
   it("builds stable keys with lowercased recipient", () => {
@@ -46,5 +49,21 @@ describe("delivery-state", () => {
       providerMessageId: "msg_1",
       attempts: 1,
     });
+  });
+
+  it("skips cross-mode once date+recipient is delivered", () => {
+    let state = emptyDeliveryState(new Date("2026-07-26T00:00:00.000Z"));
+    state = markDelivered(state, {
+      date: "2026-07-26",
+      recipient: "a@b.com",
+      channel: EMAIL_DELIVERY_CHANNEL,
+      attempts: 1,
+      now: new Date("2026-07-26T02:00:00.000Z"),
+    });
+    // Same day/to via hosted channel must not auto-send again.
+    expect(
+      shouldSendEmail(state, "2026-07-26", "a@b.com", EMAIL_HOSTED_CHANNEL),
+    ).toBe(false);
+    expect(shouldSendEmail(state, "2026-07-27", "a@b.com")).toBe(true);
   });
 });

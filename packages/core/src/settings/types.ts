@@ -51,12 +51,19 @@ export interface AdvancedSettings {
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
+export type EmailDeliveryModeSetting = "self" | "hosted";
+
 export interface EmailSettings {
   /**
    * When true, auto-send after pipeline `completed`.
    * Quick setup: leave false until test-send succeeds.
    */
   enabled: boolean;
+  /**
+   * 自己发送 (`self`, default) vs 官方代发 (`hosted`, Beta — not online until
+   * OFFICIAL_DELIVERY_AVAILABLE).
+   */
+  mode: EmailDeliveryModeSetting;
   /** Personal recipient (required). */
   to: string;
   /**
@@ -68,6 +75,11 @@ export interface EmailSettings {
   fromName?: string;
   /** Plugin-local secret storage; CLI prefers ARXIV_DAILY_RESEND_API_KEY. */
   apiKey?: string;
+  /**
+   * Future: token after magic-link verification for 官方代发.
+   * Unused while hosted is offline.
+   */
+  hostedToken?: string;
 }
 
 export interface PluginSettings {

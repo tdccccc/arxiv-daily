@@ -180,3 +180,10 @@ Contracts: `./email-content-format.md`, `./email-delivery.md`.
 - change: Added `email-dual-mode.md`; amended email-delivery B4/state; goal resolved dual-mode; getting-started EN/中文 mode table; settings Delivery mode dropdown (hosted snaps back to self + Notice).
 - disposition: No hosted API. Runtime `shouldSend` still channel-keyed until hosted ships — single live channel today so behavior matches “one success per day” in practice.
 - next: Implement 官方代发 in a dedicated initiative when domain+Worker ready; optional tighten shouldSend to date+to before then.
+
+## 2026-07-27 — note (execute dual-mode: Beta label + scaffold)
+
+- evidence: User: mark 官方代发 Beta when online; proceed with doc plan.
+- change: `email.mode` + migration; cross-mode `shouldSend` on date+to; `hosted.ts` offline stub; UI Delivery mode with Beta label; OFFICIAL_DELIVERY_AVAILABLE=false.
+- disposition: Self-send path unchanged for users. Hosted cannot send until flag flipped + server exists.
+- next: Build magic-link relay service in a dedicated initiative when ready.

@@ -1,7 +1,22 @@
 import type { SummaryLanguage } from "../settings/types";
 
+/** Self-send via user Resend API key (自己发送). */
 export const EMAIL_DELIVERY_CHANNEL = "email:resend" as const;
-export type EmailDeliveryChannel = typeof EMAIL_DELIVERY_CHANNEL;
+/** Hosted project relay (官方代发, Beta when shipped). */
+export const EMAIL_HOSTED_CHANNEL = "email:hosted" as const;
+
+export type EmailDeliveryChannel =
+  | typeof EMAIL_DELIVERY_CHANNEL
+  | typeof EMAIL_HOSTED_CHANNEL;
+
+/** Settings: which exit path to use. Default self. */
+export type EmailDeliveryMode = "self" | "hosted";
+
+/**
+ * Hosted (官方代发) is product-complete in docs but not online yet.
+ * Flip when the project relay accepts traffic; keep UI labeled Beta.
+ */
+export const OFFICIAL_DELIVERY_AVAILABLE = false;
 
 export type DigestPaperKind = "structured" | "fallback";
 

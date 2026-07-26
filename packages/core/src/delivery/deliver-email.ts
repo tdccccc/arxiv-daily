@@ -9,6 +9,11 @@ import {
   shouldSendEmail,
 } from "./delivery-state";
 import {
+  HostedDeliveryError,
+  hostedPayloadFromRendered,
+  sendViaHosted,
+} from "./hosted";
+import {
   formatResendFrom,
   ResendSendError,
   sendViaResend,
@@ -19,8 +24,12 @@ import {
   renderEmailSubject,
   renderEmailText,
 } from "./email-render";
-import type { DailyDigest, DeliverEmailResult } from "./types";
-import { EMAIL_DELIVERY_CHANNEL } from "./types";
+import type { DailyDigest, DeliverEmailResult, EmailDeliveryChannel } from "./types";
+import {
+  EMAIL_DELIVERY_CHANNEL,
+  EMAIL_HOSTED_CHANNEL,
+  OFFICIAL_DELIVERY_AVAILABLE,
+} from "./types";
 
 export const RESEND_API_KEY_ENV = "ARXIV_DAILY_RESEND_API_KEY";
 
@@ -74,9 +83,16 @@ export function resolveResendFromName(
   return custom || RESEND_DEFAULT_FROM_NAME;
 }
 
+export function resolveEmailDeliveryMode(
+  email: EmailSettings | undefined,
+): "self" | "hosted" {
+  return email?.mode === "hosted" ? "hosted" : "self";
+}
+
 /**
- * Credentials for a send (test or auto): recipient + API key.
- * From is optional — falls back to RESEND_QUICK_FROM_EMAIL.
+ * Credentials for a send (test or auto).
+ * Self: To + Resend API key (From optional).
+ * Hosted: To + token; service must be online (Beta).
  */
 export function isEmailCredentialsReady(
   email: EmailSettings | undefined,
@@ -85,13 +101,27 @@ export function isEmailCredentialsReady(
   if (!email?.to?.trim()) {
     return { ok: false, reason: "email.to is empty" };
   }
+  const mode = resolveEmailDeliveryMode(email);
+  if (mode === "hosted") {
+    if (!OFFICIAL_DELIVERY_AVAILABLE) {
+      return {
+        ok: false,
+        reason:
+          "官方代发 (Beta) is not online yet; switch to 自己发送 or wait for the service",
+      };
+    }
+    if (!email.hostedToken?.trim()) {
+      return { ok: false, reason: "hosted delivery token is missing" };
+    }
+    return { ok: true };
+  }
   if (!(apiKey ?? email.apiKey)?.trim()) {
     return { ok: false, reason: "Resend API key is missing" };
   }
   return { ok: true };
 }
 
-/** Auto-send path: enabled flag + credentials. */
+/** Auto-send path: enabled flag + credentials for active mode. */
 export function isEmailDeliveryConfigured(
   email: EmailSettings | undefined,
   apiKey?: string,
@@ -136,32 +166,50 @@ export async function deliverDailyEmailIfEnabled(
     const subject = renderEmailSubject(digest);
     const html = renderEmailHtml(digest);
     const text = renderEmailText(digest);
-    const from = formatResendFrom(
-      resolveResendFromEmail(email),
-      resolveResendFromName(email),
-    );
+    const mode = resolveEmailDeliveryMode(email);
+    const channel: EmailDeliveryChannel =
+      mode === "hosted" ? EMAIL_HOSTED_CHANNEL : EMAIL_DELIVERY_CHANNEL;
 
     try {
-      const sent = await sendViaResend({
-        http: deps.http,
-        apiKey,
-        payload: { from, to: recipient, subject, html, text },
-        maxAttempts: deps.maxAttempts,
-        baseDelayMs: deps.baseDelayMs,
-        sleep: deps.sleep,
-        signal: deps.signal,
-      });
+      let sent: { providerMessageId?: string; attempts: number };
+      if (mode === "hosted") {
+        const hostedReq = hostedPayloadFromRendered(recipient, digest, {
+          subject,
+          html,
+          text,
+        });
+        sent = await sendViaHosted({
+          http: deps.http,
+          token: email.hostedToken ?? "",
+          request: hostedReq,
+          signal: deps.signal,
+        });
+      } else {
+        const from = formatResendFrom(
+          resolveResendFromEmail(email),
+          resolveResendFromName(email),
+        );
+        sent = await sendViaResend({
+          http: deps.http,
+          apiKey,
+          payload: { from, to: recipient, subject, html, text },
+          maxAttempts: deps.maxAttempts,
+          baseDelayMs: deps.baseDelayMs,
+          sleep: deps.sleep,
+          signal: deps.signal,
+        });
+      }
       state = markDelivered(state, {
         date: digest.date,
         recipient,
-        channel: EMAIL_DELIVERY_CHANNEL,
+        channel,
         attempts: sent.attempts,
         providerMessageId: sent.providerMessageId,
         now: now(),
       });
       await saveDeliveryState(deps.storage, deps.output, state, now());
       deps.logger?.info(
-        `email: delivered ${digest.date} → ${recipient}` +
+        `email: delivered ${digest.date} → ${recipient} via ${channel}` +
           (sent.providerMessageId ? ` id=${sent.providerMessageId}` : ""),
       );
       return {
@@ -171,13 +219,17 @@ export async function deliverDailyEmailIfEnabled(
       };
     } catch (error) {
       const attempts =
-        error instanceof ResendSendError ? error.attempts : deps.maxAttempts ?? 3;
+        error instanceof ResendSendError
+          ? error.attempts
+          : error instanceof HostedDeliveryError
+            ? 1
+            : deps.maxAttempts ?? 3;
       const reason =
         error instanceof Error ? error.message : String(error);
       state = markFailed(state, {
         date: digest.date,
         recipient,
-        channel: EMAIL_DELIVERY_CHANNEL,
+        channel,
         attempts,
         lastError: reason,
         now: now(),

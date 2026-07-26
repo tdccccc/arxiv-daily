@@ -127,7 +127,7 @@ Email is optional. The product plan is **two modes** (see helm `email-dual-mode.
 | Mode | Status | What you do |
 |---|---|---|
 | **Send yourself** (自己发送) | **Available now** | Your [Resend](https://resend.com) API key; personal inbox |
-| **Official delivery** (官方代发) | **Planned** | Verify email with the project; no user API key — not shipped yet |
+| **Official delivery (Beta)** (官方代发) | **Planned** | Verify email with the project; no user API key — not shipped yet |
 
 Default is **Send yourself**. The plugin does **not** require a project server for that path. Delivery failures never fail the daily pipeline.
 

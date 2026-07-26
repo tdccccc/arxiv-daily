@@ -64,8 +64,13 @@ export function migrateEmailSettings(raw: unknown): EmailSettings {
     return { ...defaults };
   }
   const email = raw as Record<string, unknown>;
+  const mode =
+    email.mode === "hosted" || email.mode === "self"
+      ? email.mode
+      : defaults.mode;
   return {
     enabled: typeof email.enabled === "boolean" ? email.enabled : defaults.enabled,
+    mode,
     to: typeof email.to === "string" ? email.to : defaults.to,
     fromEmail: typeof email.fromEmail === "string" ? email.fromEmail : defaults.fromEmail,
     fromName:
@@ -74,5 +79,9 @@ export function migrateEmailSettings(raw: unknown): EmailSettings {
         : defaults.fromName ?? "",
     apiKey:
       typeof email.apiKey === "string" ? email.apiKey : defaults.apiKey ?? "",
+    hostedToken:
+      typeof email.hostedToken === "string"
+        ? email.hostedToken
+        : defaults.hostedToken ?? "",
   };
 }

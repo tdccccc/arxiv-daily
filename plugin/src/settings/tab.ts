@@ -653,11 +653,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (!s.email) {
       s.email = {
         enabled: false,
+        mode: "self",
         to: "",
         fromEmail: "",
         fromName: "arXiv Daily",
         apiKey: "",
+        hostedToken: "",
       };
+    }
+    if (s.email.mode !== "self" && s.email.mode !== "hosted") {
+      s.email.mode = "self";
     }
 
     const emailHelp = containerEl.createDiv({
@@ -678,28 +683,37 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       steps.createEl("li", { text: line });
     }
     emailHelp.createEl("p", {
-      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). This is intentional: 自己发送 is a personal channel. To send elsewhere, verify your own domain in Resend and set From (advanced). 官方代发 (project sends for you after email verification) is planned and not available yet. See docs/getting-started.md §8.",
+      text: "With empty From, Resend’s test sender (onboarding@resend.dev) is used and typically rejects any To other than the account email (HTTP 403). 官方代发 is Beta and not online yet (magic-link verification later). See docs/getting-started.md §8.",
     });
 
     new Setting(containerEl)
       .setName("Delivery mode")
       .setDesc(
-        "自己发送: your Resend API key. 官方代发: verify email, project sends (not available yet).",
+        "自己发送: your Resend API key (default). 官方代发 (Beta): project sends after email verification — not online yet.",
       )
       .addDropdown((d) => {
         d.addOption("self", "自己发送 — Send yourself (Resend)");
-        d.addOption("hosted", "官方代发 — Official delivery (coming soon)");
-        d.setValue("self");
-        d.onChange(() => {
-          // Hosted not implemented; keep selection on self.
-          d.setValue("self");
-          new Notice(
-            "官方代发 is not available yet. Use 自己发送 with your Resend API key.",
-            6_000,
-          );
+        d.addOption(
+          "hosted",
+          "官方代发 (Beta) — Official delivery (not online yet)",
+        );
+        d.setValue(s.email.mode === "hosted" ? "hosted" : "self");
+        d.onChange(async (value) => {
+          if (value === "hosted") {
+            // Keep preference visible but refuse until OFFICIAL_DELIVERY_AVAILABLE.
+            s.email.mode = "self";
+            d.setValue("self");
+            await this.plugin.saveSettings();
+            new Notice(
+              "官方代发 (Beta) is not online yet. Use 自己发送 with your Resend API key.",
+              7_000,
+            );
+            return;
+          }
+          s.email.mode = "self";
+          await this.plugin.saveSettings();
         });
       });
-
     new Setting(containerEl)
       .setName("To")
       .setDesc(

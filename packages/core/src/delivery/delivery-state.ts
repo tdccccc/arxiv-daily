@@ -3,12 +3,18 @@ import { derivePaperInboxPaths } from "../services/paper-index";
 import type { OutputSettings } from "../settings/types";
 import {
   EMAIL_DELIVERY_CHANNEL,
+  EMAIL_HOSTED_CHANNEL,
   type DeliveryRecord,
   type DeliveryStateFile,
   type EmailDeliveryChannel,
 } from "./types";
 
 export const DELIVERY_STATE_SCHEMA_VERSION = 1 as const;
+
+const KNOWN_CHANNELS = new Set<string>([
+  EMAIL_DELIVERY_CHANNEL,
+  EMAIL_HOSTED_CHANNEL,
+]);
 
 export function deliveryRecordKey(
   date: string,
@@ -34,14 +40,28 @@ export function emptyDeliveryState(now: Date = new Date()): DeliveryStateFile {
   };
 }
 
+/**
+ * Auto-send gate: skip if this date+recipient already has any successful
+ * delivery (cross-mode: self Resend vs hosted).
+ */
 export function shouldSendEmail(
   state: DeliveryStateFile,
   date: string,
   recipient: string,
-  channel: EmailDeliveryChannel = EMAIL_DELIVERY_CHANNEL,
+  _channel?: EmailDeliveryChannel,
 ): boolean {
-  const record = state.records[deliveryRecordKey(date, recipient, channel)];
-  return record?.status !== "delivered";
+  const to = recipient.trim().toLowerCase();
+  if (!date || !to) return true;
+  for (const record of Object.values(state.records)) {
+    if (
+      record.date === date &&
+      record.recipient.trim().toLowerCase() === to &&
+      record.status === "delivered"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function markDelivered(
@@ -160,12 +180,14 @@ function normalizeRecord(raw: unknown): DeliveryRecord | null {
   if (!isRecord(raw)) return null;
   if (typeof raw.date !== "string" || !raw.date) return null;
   if (typeof raw.recipient !== "string" || !raw.recipient.trim()) return null;
-  if (raw.channel !== EMAIL_DELIVERY_CHANNEL) return null;
+  if (typeof raw.channel !== "string" || !KNOWN_CHANNELS.has(raw.channel)) {
+    return null;
+  }
   if (raw.status !== "delivered" && raw.status !== "failed") return null;
   return {
     date: raw.date,
     recipient: raw.recipient.trim(),
-    channel: EMAIL_DELIVERY_CHANNEL,
+    channel: raw.channel as EmailDeliveryChannel,
     status: raw.status,
     updatedAt:
       typeof raw.updatedAt === "string" && raw.updatedAt

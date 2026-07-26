@@ -252,9 +252,11 @@ describe("migrateEmailSettings", () => {
       fromEmail: "from@example.com",
     });
     expect(out.enabled).toBe(true);
+    expect(out.mode).toBe("self");
     expect(out.to).toBe("you@example.com");
     expect(out.fromEmail).toBe("from@example.com");
     expect(out.fromName).toBe(DEFAULT_SETTINGS.email.fromName);
     expect(out.apiKey).toBe(DEFAULT_SETTINGS.email.apiKey);
+    expect(out.hostedToken).toBe(DEFAULT_SETTINGS.email.hostedToken);
   });
 });
