@@ -137,6 +137,14 @@ describe("email render", () => {
     expect(emailProse("scale $N_{\\rm side}=2048$")).toContain("N_side=2048");
     expect(emailProse("ratio $\\frac{a}{b}$")).toContain("(a)/(b)");
     expect(emailProse("angle $\\theta \\leq \\pi$")).toMatch(/θ.*≤.*π/);
+    // \b must not block commands before underscore
+    expect(emailProse("$\\Omega_m$")).toBe("Ω_m");
+    expect(emailProse("$\\sum_i x_i$")).toMatch(/∑_i x_i/);
+    expect(
+      emailProse("$H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$"),
+    ).toMatch(/H_0≃ 70 km s\^-1 Mpc\^-1/);
+    expect(emailProse("$\\Delta\\chi^2$")).toMatch(/Δχ\^2/);
+    expect(emailProse("$\\alpha\\approx 0.3$")).toMatch(/α≈\s*0\.3/);
   });
 
   it("escapeHtml encodes markup-sensitive characters", () => {

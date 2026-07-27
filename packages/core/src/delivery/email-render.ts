@@ -173,6 +173,9 @@ function renderPaperText(paper: DigestPaper, language: SummaryLanguage): string[
 /**
  * Make summary prose more readable in plain email clients:
  * strip TeX delimiters and simplify common LaTeX (no MathJax in mail).
+ *
+ * Prefer this deterministic path over asking the LLM for a second "email math"
+ * summary (extra cost, drift from vault, harder to validate).
  */
 export function emailProse(value: string): string {
   if (!value) return "";
@@ -182,19 +185,41 @@ export function emailProse(value: string): string {
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, body: string) => simplifyLatex(body));
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, body: string) => simplifyLatex(body));
   s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, body: string) => simplifyLatex(body));
-  // Inline $...$ (avoid matching empty or multi-line greedily)
+  // Inline $...$ (single line)
   s = s.replace(/\$([^$\n]+?)\$/g, (_, body: string) => simplifyLatex(body));
 
   // Any remaining TeX-ish fragments outside delimiters
   s = simplifyLatex(s);
 
-  return s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim();
+  return s
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([([])\s+/g, "$1")
+    .replace(/\s+([)\]])/g, "$1")
+    .trim();
+}
+
+/** End of a TeX control word: not another letter (underscore may follow: \Omega_m). */
+const TEX_END = "(?![A-Za-z])";
+
+function texCmd(name: string): RegExp {
+  return new RegExp(`\\\\${name}${TEX_END}`, "g");
 }
 
 function simplifyLatex(raw: string): string {
   let s = raw;
 
-  // \frac{a}{b} → (a)/(b) (repeat for nesting depth ~3)
+  // Spaces first so content inside \mathrm{km\,s} becomes "km s" before unwrap.
+  s = s.replace(/\\[,;]/g, " ");
+  s = s.replace(/\\!/g, "");
+  s = s.replace(/\\(?:quad|qquad)(?![A-Za-z])/g, " ");
+
+  // Unwrap \mathrm{...} / \text{...} even when the body still has ^ / _ / spaces.
+  // (Simple [^{}]* fails on nested braces; balanced scan handles one level deep.)
+  s = unwrapLatexGroups(s);
+
   for (let i = 0; i < 3; i += 1) {
     s = s.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
   }
@@ -203,81 +228,140 @@ function simplifyLatex(raw: string): string {
   s = s.replace(/\\(?:rm|it|bf|cal|tt)\s+/g, "");
   s = s.replace(/\\(?:rm|it|bf|cal|tt)(?=[A-Za-z])/g, "");
 
-  // \text{...}, \mathrm{...}, etc.
-  s = s.replace(
-    /\\(?:text|mathrm|mathbf|mathit|textrm|textit|textbf|operatorname)\s*\{([^{}]*)\}/gi,
-    "$1",
-  );
-
-  // Common symbols
+  // Common symbols — use (?![A-Za-z]) so \Omega_m / \sum_i match
   const symbols: Array<[RegExp, string]> = [
-    [/\\leq\b/g, "≤"],
-    [/\\geq\b/g, "≥"],
-    [/\\neq\b/g, "≠"],
-    [/\\approx\b/g, "≈"],
-    [/\\sim\b/g, "~"],
-    [/\\times\b/g, "×"],
-    [/\\cdot\b/g, "·"],
-    [/\\pm\b/g, "±"],
-    [/\\infty\b/g, "∞"],
-    [/\\propto\b/g, "∝"],
-    [/\\rightarrow\b/g, "→"],
-    [/\\to\b/g, "→"],
-    [/\\leftarrow\b/g, "←"],
-    [/\\leftrightarrow\b/g, "↔"],
-    [/\\subseteq\b/g, "⊆"],
-    [/\\subset\b/g, "⊂"],
-    [/\\in\b/g, "∈"],
-    [/\\sum\b/g, "∑"],
-    [/\\prod\b/g, "∏"],
-    [/\\int\b/g, "∫"],
-    [/\\alpha\b/g, "α"],
-    [/\\beta\b/g, "β"],
-    [/\\gamma\b/g, "γ"],
-    [/\\delta\b/g, "δ"],
-    [/\\epsilon\b/g, "ε"],
-    [/\\varepsilon\b/g, "ε"],
-    [/\\theta\b/g, "θ"],
-    [/\\lambda\b/g, "λ"],
-    [/\\mu\b/g, "μ"],
-    [/\\nu\b/g, "ν"],
-    [/\\pi\b/g, "π"],
-    [/\\rho\b/g, "ρ"],
-    [/\\sigma\b/g, "σ"],
-    [/\\tau\b/g, "τ"],
-    [/\\phi\b/g, "φ"],
-    [/\\varphi\b/g, "φ"],
-    [/\\chi\b/g, "χ"],
-    [/\\psi\b/g, "ψ"],
-    [/\\omega\b/g, "ω"],
-    [/\\Gamma\b/g, "Γ"],
-    [/\\Delta\b/g, "Δ"],
-    [/\\Theta\b/g, "Θ"],
-    [/\\Lambda\b/g, "Λ"],
-    [/\\Sigma\b/g, "Σ"],
-    [/\\Phi\b/g, "Φ"],
-    [/\\Omega\b/g, "Ω"],
-    [/\\ell\b/g, "ℓ"],
-    [/\\hbar\b/g, "ℏ"],
-    [/\\partial\b/g, "∂"],
-    [/\\nabla\b/g, "∇"],
-    [/\\ldots\b/g, "…"],
-    [/\\dots\b/g, "…"],
-    [/\\,|\\;|\\!|\\quad|\\qquad/g, " "],
+    [texCmd("leqslant"), "≤"],
+    [texCmd("geqq"), "≥"],
+    [texCmd("leq"), "≤"],
+    [texCmd("geq"), "≥"],
+    [texCmd("neq"), "≠"],
+    [texCmd("approx"), "≈"],
+    [texCmd("simeq"), "≃"],
+    [texCmd("sim"), "~"],
+    [texCmd("lesssim"), "≲"],
+    [texCmd("gtrsim"), "≳"],
+    [texCmd("times"), "×"],
+    [texCmd("cdot"), "·"],
+    [texCmd("pm"), "±"],
+    [texCmd("mp"), "∓"],
+    [texCmd("infty"), "∞"],
+    [texCmd("propto"), "∝"],
+    [texCmd("rightarrow"), "→"],
+    [texCmd("leftarrow"), "←"],
+    [texCmd("leftrightarrow"), "↔"],
+    [texCmd("to"), "→"],
+    [texCmd("subseteq"), "⊆"],
+    [texCmd("subset"), "⊂"],
+    [texCmd("in"), "∈"],
+    [texCmd("sum"), "∑"],
+    [texCmd("prod"), "∏"],
+    [texCmd("int"), "∫"],
+    [texCmd("alpha"), "α"],
+    [texCmd("beta"), "β"],
+    [texCmd("gamma"), "γ"],
+    [texCmd("delta"), "δ"],
+    [texCmd("epsilon"), "ε"],
+    [texCmd("varepsilon"), "ε"],
+    [texCmd("zeta"), "ζ"],
+    [texCmd("eta"), "η"],
+    [texCmd("theta"), "θ"],
+    [texCmd("vartheta"), "ϑ"],
+    [texCmd("iota"), "ι"],
+    [texCmd("kappa"), "κ"],
+    [texCmd("lambda"), "λ"],
+    [texCmd("mu"), "μ"],
+    [texCmd("nu"), "ν"],
+    [texCmd("xi"), "ξ"],
+    [texCmd("pi"), "π"],
+    [texCmd("varpi"), "ϖ"],
+    [texCmd("rho"), "ρ"],
+    [texCmd("sigma"), "σ"],
+    [texCmd("tau"), "τ"],
+    [texCmd("upsilon"), "υ"],
+    [texCmd("phi"), "φ"],
+    [texCmd("varphi"), "φ"],
+    [texCmd("chi"), "χ"],
+    [texCmd("psi"), "ψ"],
+    [texCmd("omega"), "ω"],
+    [texCmd("Gamma"), "Γ"],
+    [texCmd("Delta"), "Δ"],
+    [texCmd("Theta"), "Θ"],
+    [texCmd("Lambda"), "Λ"],
+    [texCmd("Xi"), "Ξ"],
+    [texCmd("Pi"), "Π"],
+    [texCmd("Sigma"), "Σ"],
+    [texCmd("Phi"), "Φ"],
+    [texCmd("Psi"), "Ψ"],
+    [texCmd("Omega"), "Ω"],
+    [texCmd("ell"), "ℓ"],
+    [texCmd("hbar"), "ℏ"],
+    [texCmd("partial"), "∂"],
+    [texCmd("nabla"), "∇"],
+    [texCmd("ldots"), "…"],
+    [texCmd("cdots"), "⋯"],
+    [texCmd("dots"), "…"],
   ];
   for (const [re, rep] of symbols) s = s.replace(re, rep);
 
-  // _{...} / ^{...} and bare _x ^x
+  // _{...} / ^{...}
   s = s.replace(/_\{([^{}]+)\}/g, "_$1");
   s = s.replace(/\^\{([^{}]+)\}/g, "^$1");
+  // bare _i ^2 (single token)
+  s = s.replace(/_([A-Za-z0-9+-]+)/g, "_$1");
+  s = s.replace(/\^([A-Za-z0-9+-]+)/g, "^$1");
 
-  // Drop remaining \commands
-  s = s.replace(/\\([a-zA-Z]+)\s*/g, "$1 ");
+  // Drop remaining \commands (not letter-boundary; leave following _ attached)
+  s = s.replace(/\\([a-zA-Z]+)/g, "$1");
   // Stray braces and backslashes
   s = s.replace(/[{}]/g, "");
   s = s.replace(/\\/g, "");
 
+  // "Omega _m" / "sum _i" style gaps from older partial transforms
+  s = s.replace(/\s+(_[A-Za-z0-9+-]+)/g, "$1");
+  s = s.replace(/\s+(\^[A-Za-z0-9+-]+)/g, "$1");
+
   return s.replace(/\s+/g, " ").trim();
+}
+
+const GROUP_CMD_OPEN =
+  /^\\(?:text|mathrm|mathbf|mathit|textrm|textit|textbf|operatorname|mathsf|mathtt)\s*\{/i;
+
+/** Replace \mathrm{...} / \text{...} with inner text (balanced braces). */
+function unwrapLatexGroups(input: string): string {
+  let s = input;
+  for (let pass = 0; pass < 8; pass += 1) {
+    let out = "";
+    let i = 0;
+    let changed = false;
+    while (i < s.length) {
+      const rest = s.slice(i);
+      const m = GROUP_CMD_OPEN.exec(rest);
+      if (!m) {
+        out += s[i];
+        i += 1;
+        continue;
+      }
+      const openEnd = i + m[0].length;
+      let depth = 1;
+      let j = openEnd;
+      while (j < s.length && depth > 0) {
+        if (s[j] === "{") depth += 1;
+        else if (s[j] === "}") depth -= 1;
+        j += 1;
+      }
+      if (depth !== 0) {
+        out += s[i];
+        i += 1;
+        continue;
+      }
+      out += s.slice(openEnd, j - 1);
+      i = j;
+      changed = true;
+    }
+    s = out;
+    if (!changed) break;
+  }
+  return s;
 }
 
 /** Escape prose for email HTML after emailProse normalization. */

@@ -286,11 +286,11 @@ export function sampleDailyDigest(input: {
           coreProblem:
             "Can mail clients read summaries with inline math such as $\\alpha\\approx 0.3$ and $\\Omega_m$?",
           keyMethod:
-            "Normalize TeX before send: strip $...$, simplify $\\frac{a}{b}$, $\\leq$, $\\geq$, $\\sim$.",
+            "Deterministic emailProse (not a second LLM pass): strip math delimiters; simplify $\\frac{a}{b}$, $\\leq$, $\\simeq$.",
           mainResult:
-            "Expect readable text like α≈0.3, (a)/(b), θ≤π — not raw $ delimiters or \\commands.",
+            "Expect α≈0.3, Ω_m, (a)/(b), θ≤π — not raw $…$ or leftover command names.",
           whyRelevant:
-            "Stress-test emailProse on $\\Delta\\chi^2$, $H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$, and $\\sum_i x_i$.",
+            "Probes: $\\Delta\\chi^2$, $H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$, $\\sum_i x_i$.",
           limitations:
             "No MathJax in mail; complex layouts stay imperfect. Vault daily keeps full Markdown math.",
         }
@@ -298,11 +298,11 @@ export function sampleDailyDigest(input: {
           coreProblem:
             "邮件客户端能否读懂含公式的摘要，例如 $\\alpha\\approx 0.3$ 与 $\\Omega_m$？",
           keyMethod:
-            "发送前规范化 TeX：去掉 $...$，简化 $\\frac{a}{b}$、$\\leq$、$\\geq$、$\\sim$ 等。",
+            "确定性 emailProse（不另调模型）：去掉数学定界符，简化 $\\frac{a}{b}$、$\\leq$、$\\simeq$ 等。",
           mainResult:
-            "期望看到接近 α≈0.3、(a)/(b)、θ≤π 的文本，而不是满屏 $ 定界符或 \\命令。",
+            "期望 α≈0.3、Ω_m、(a)/(b)、θ≤π，而不是残留 $…$ 或 mathrm/simeq 字样。",
           whyRelevant:
-            "用 $\\Delta\\chi^2$、$H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$、$\\sum_i x_i$ 等探测 emailProse。",
+            "探测项：$\\Delta\\chi^2$、$H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$、$\\sum_i x_i$。",
           limitations:
             "邮件无 MathJax，复杂排版仍会打折；vault 日报仍保留完整科学 Markdown 公式。",
         };
