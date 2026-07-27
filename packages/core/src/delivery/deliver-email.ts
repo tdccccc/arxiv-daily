@@ -181,7 +181,7 @@ export async function deliverDailyEmailIfEnabled(
         sent = await sendViaHosted({
           http: deps.http,
           baseUrl: email.hostedBaseUrl,
-          token: email.hostedToken ?? "",
+          token: (email.hostedToken ?? "").replace(/\s+/g, ""),
           request: hostedReq,
           signal: deps.signal,
         });

@@ -108,33 +108,55 @@ export async function sendViaHosted(opts: {
   }
 
   const base = resolveHostedBaseUrl(opts.baseUrl);
-  const token = opts.token.trim();
+  // Strip all whitespace — paste from HTML <pre> often includes newlines.
+  const token = opts.token.replace(/\s+/g, "").trim();
   if (!token) {
     throw new HostedDeliveryError("hosted delivery token is missing");
   }
 
-  const res = await opts.http.request({
-    url: `${base}/v1/deliver`,
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "Idempotency-Key": opts.request.idempotencyKey,
-    },
-    body: JSON.stringify({
-      to: opts.request.to,
-      date: opts.request.digest.date,
-      subject: opts.request.subject,
-      html: opts.request.html,
-      text: opts.request.text,
-      digest: opts.request.digest,
-    }),
-    signal: opts.signal,
-  });
+  let res;
+  try {
+    res = await opts.http.request({
+      url: `${base}/v1/deliver`,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": opts.request.idempotencyKey,
+      },
+      body: JSON.stringify({
+        to: opts.request.to,
+        date: opts.request.digest.date,
+        subject: opts.request.subject,
+        html: opts.request.html,
+        text: opts.request.text,
+        digest: opts.request.digest,
+      }),
+      signal: opts.signal,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new HostedDeliveryError(
+      `Cannot reach Official delivery relay at ${base} (${msg}).`,
+      undefined,
+      e,
+    );
+  }
 
   if (res.status < 200 || res.status >= 300) {
+    const body = res.bodyText.slice(0, 400);
+    let hint = "";
+    if (res.status === 401) {
+      hint =
+        " Token invalid/revoked: re-run Send verification email, open the NEW magic link, paste the long device token from the success page (not the link’s ?token=).";
+    } else if (res.status === 403) {
+      hint =
+        " To must exactly match the email you verified (same address as in the verification mail).";
+    } else if (res.status === 429) {
+      hint = " Daily quota exceeded for this verified inbox.";
+    }
     throw new HostedDeliveryError(
-      `Hosted delivery HTTP ${res.status}: ${res.bodyText.slice(0, 300)}`,
+      `Hosted delivery HTTP ${res.status}: ${body}.${hint}`,
       res.status,
     );
   }

@@ -734,12 +734,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("Hosted token")
-        .setDesc("Paste the device token from the verification page (not your Resend API key).")
+        .setDesc(
+          "Paste the LONG device token from the success page after you open the magic link (hex string). Not the short ?token= in the URL, and not your Resend API key. To must match the verified email.",
+        )
         .addText((t) => {
-          t.setPlaceholder("token from magic-link page")
+          t.setPlaceholder("long hex token from success page")
             .setValue(s.email.hostedToken ?? "")
             .onChange(async (v) => {
-              s.email.hostedToken = v.trim();
+              // Strip whitespace/newlines from HTML paste.
+              s.email.hostedToken = v.replace(/\s+/g, "").trim();
               await this.plugin.saveSettings();
               this.plugin.refreshSensitiveValues();
             });
