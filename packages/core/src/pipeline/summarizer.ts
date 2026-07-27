@@ -67,11 +67,16 @@ export interface SummarizerDeps {
   assembleEmergencyDaily?: (input: DailySummaryAssemblyInput) => string;
 }
 
+export interface SummarizeDailyResult {
+  markdown: string;
+  slots: DailyPaperSlot[];
+}
+
 export async function summarizeDaily(
   papers: DailyPaperWithContent[],
   dateStr: string,
   deps: SummarizerDeps,
-): Promise<string> {
+): Promise<SummarizeDailyResult> {
   throwIfCancelled(deps.signal);
   const assemblyPapers: DailySummaryAssemblyPaper[] = papers.map((paper) => ({
     id: paper.id,
@@ -159,7 +164,7 @@ export async function summarizeDaily(
     `summarizeDaily: assembled ${papers.length} sequential paper summaries` +
       (fallbackCount > 0 ? ` (${fallbackCount} fallback)` : ""),
   );
-  return markdown;
+  return { markdown, slots };
 }
 
 export async function summarizePaperDetail(

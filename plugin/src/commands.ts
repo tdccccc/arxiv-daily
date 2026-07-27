@@ -343,6 +343,20 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "send-test-email",
+    name: "Send test email",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: sending test email…");
+          const message = await plugin.sendTestEmail();
+          notice(message, 8_000);
+        })(),
+        "send test email",
+      ),
+  });
+
+  plugin.addCommand({
     id: "open-reading-dashboard",
     name: "Open reading dashboard",
     callback: () => runDetached(openDashboardView(plugin), "open dashboard"),

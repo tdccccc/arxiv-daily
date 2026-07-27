@@ -30,6 +30,10 @@ export interface SchedulerDeps {
   recentDates?: SchedulerRecentDates;
   runHistory?: Pick<RunHistoryStore, "safeAppend">;
   dailyPathForDate?: (date: string) => string;
+  onDailyCompleted?: (
+    date: string,
+    result: Extract<PipelineResult, { kind: "completed" }>,
+  ) => Promise<void>;
 }
 
 type SchedulerResult = PipelineResult | { kind: "skipped"; reason: string };
@@ -60,6 +64,7 @@ export class SchedulerService {
       history,
       recentDates: deps.recentDates,
       now: deps.now,
+      onDailyCompleted: deps.onDailyCompleted,
     });
     void this.recoverStaleRunning();
   }

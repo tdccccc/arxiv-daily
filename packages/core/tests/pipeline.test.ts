@@ -507,7 +507,7 @@ describe("ArxivPipeline", () => {
     expect(result.kind).toBe("completed");
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    const entry = json.papers[arxivId];
+    const entry = json.papers[`arxiv:${arxivId}`];
     expect(entry.status).toBe("inbox");
     expect(entry.priority).toBe("normal");
     expect(entry.paperPath).toBeNull();
@@ -585,8 +585,8 @@ describe("ArxivPipeline", () => {
       filterUserPrompt.match(new RegExp(arxivId.replace(".", "\\."), "g")),
     ).toHaveLength(1);
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(json.papers[arxivId].category).toBe("astro-ph");
-    expect(json.papers[arxivId].categories).toEqual(["astro-ph", "cs.LG"]);
+    expect(json.papers[`arxiv:${arxivId}`].category).toBe("astro-ph");
+    expect(json.papers[`arxiv:${arxivId}`].categories).toEqual(["astro-ph", "cs.LG"]);
   });
 
   it("does not use submittedDate export API when date is outside recent", async () => {
@@ -668,8 +668,8 @@ describe("ArxivPipeline", () => {
     // Should NOT write empty file - calendar shows "0" instead
     expect(d.writer.writeEmptyDaily).not.toHaveBeenCalled();
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(json.papers[arxivId].status).toBe("ignored");
-    expect(json.papers[arxivId].seenDates).toContain(date);
+    expect(json.papers[`arxiv:${arxivId}`].status).toBe("ignored");
+    expect(json.papers[`arxiv:${arxivId}`].seenDates).toContain(date);
   });
 
   it("repairs daily-report links and summaries when a daily file already exists", async () => {
@@ -705,7 +705,7 @@ describe("ArxivPipeline", () => {
 
     const result = await pipeline.runForDate("2026-05-11");
 
-    expect(result).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 1 });
     expect(paperIndex.reconcilePaperDetails).toHaveBeenCalledWith({ [id]: null });
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [id],
@@ -749,9 +749,7 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 2,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 2,
     });
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [watchId, highlightId],
@@ -799,9 +797,7 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 2,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 2,
     });
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [structuredId, fallbackId],
@@ -888,9 +884,7 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 2,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 2,
     });
     expect(markdown).toContain(structuredMath);
     expect(markdown).toContain(fallbackMath);
@@ -946,9 +940,7 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 1,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 1,
     });
     expect(await store.get(id)).toMatchObject({
       detail: true,
@@ -1036,9 +1028,7 @@ describe("ArxivPipeline", () => {
       kind: "failed_transient",
       reason: "paper index repair failed: index write failed",
     });
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 1,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 1,
     });
     expect(paperIndex.reconcilePaperDetails).toHaveBeenCalledTimes(2);
     expect(paperIndex.reconcilePaperDetails).toHaveBeenNthCalledWith(1, {
@@ -1093,9 +1083,7 @@ describe("ArxivPipeline", () => {
       });
 
       expect((await pipeline.runForDate("2026-05-11")).kind).toBe("failed_transient");
-      expect(await pipeline.runForDate("2026-05-11")).toEqual({
-        kind: "completed",
-        papersWritten: 1,
+      expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 1,
       });
       expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(2);
       expect(paperIndex.setSummaries).toHaveBeenCalledTimes(
@@ -1319,9 +1307,7 @@ describe("ArxivPipeline", () => {
     });
     expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
 
-    expect(await pipeline.runForDate(firstDateFromFixture())).toEqual({
-      kind: "completed",
-      papersWritten: 1,
+    expect(await pipeline.runForDate(firstDateFromFixture())).toMatchObject({ kind: "completed", papersWritten: 1,
     });
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [id],
@@ -1440,8 +1426,8 @@ describe("ArxivPipeline", () => {
     await pipeline.runForDate(firstDateFromFixture());
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(json.schemaVersion).toBe(3);
-    expect(json.papers[arxivId]).toMatchObject({
+    expect(json.schemaVersion).toBe(4);
+    expect(json.papers[`arxiv:${arxivId}`]).toMatchObject({
       abstract: "atom abstract",
       paperPath: `papers/${arxivId}.md`,
     });
@@ -1508,7 +1494,7 @@ describe("ArxivPipeline", () => {
       llmSettings: DEFAULT_SETTINGS.llm, detailSelection: testDetailSelection,
     });
 
-    expect(await pipeline.runForDate(firstDateFromFixture())).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(await pipeline.runForDate(firstDateFromFixture())).toMatchObject({ kind: "completed", papersWritten: 1 });
     expect(d.writer.writeDaily).toHaveBeenCalledTimes(1);
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
   });
@@ -1541,7 +1527,7 @@ describe("ArxivPipeline", () => {
     });
 
     expect((await pipeline.runForDate(firstDateFromFixture())).kind).toBe("completed");
-    const entry = JSON.parse(files["arxiv-daily/.index/papers.json"]).papers[id];
+    const entry = JSON.parse(files["arxiv-daily/.index/papers.json"]).papers[`arxiv:${id}`];
     expect(entry).toMatchObject({ abstract: "atom abstract", detail: false, paperPath: null });
   });
 

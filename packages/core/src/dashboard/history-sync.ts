@@ -4,6 +4,7 @@ import type {
   PaperIndexUpsert,
   PaperSummary,
 } from "../services/paper-index";
+import { paperKeyFromArxivId } from "../services/paper-key";
 import type { OutputSettings, Topic } from "../settings/types";
 import {
   extractFallbackAbstracts,
@@ -309,12 +310,13 @@ function buildSyncInputs(
   const inputs: PaperIndexUpsert[] = [];
   const seenInputs = new Set<string>();
   const resolvedAbstracts = new Map(
-    Object.entries(inbox.papers)
-      .map(([arxivId, entry]) => [arxivId, meaningfulAbstract(entry.abstract)] as const)
+    Object.values(inbox.papers)
+      .map((entry) => [entry.arxivId, meaningfulAbstract(entry.abstract)] as const)
       .filter((item): item is readonly [string, string] => Boolean(item[1])),
   );
   for (const candidate of candidates) {
-    const existing = inbox.papers[candidate.arxivId];
+    const paperKey = paperKeyFromArxivId(candidate.arxivId);
+    const existing = inbox.papers[paperKey];
     const dailyReport = candidate.dailyReport;
     const paperPath = candidate.detail ? candidate.path : undefined;
     const key = [
@@ -420,7 +422,7 @@ function pruneStaleDailyReports(
   let changed = 0;
   let removed = 0;
 
-  for (const [arxivId, entry] of Object.entries({ ...inbox.papers })) {
+  for (const entry of Object.values({ ...inbox.papers })) {
     const removedDates = new Set<string>();
     const dailyReports = entry.dailyReports
       .map(normalizeVaultPath)
@@ -463,7 +465,7 @@ function pruneStaleDailyReports(
       !entry.detail &&
       !entry.paperPath
     ) {
-      delete inbox.papers[arxivId];
+      delete inbox.papers[entry.paperKey];
       removed += 1;
     }
   }

@@ -39,14 +39,16 @@ describe("llmHttpWarning", () => {
   it("warns without blocking for non-loopback HTTP endpoints", () => {
     expect(llmHttpWarning("http://59.64.32.247:5001/v1")).toEqual({
       kind: "plaintext",
-      message: "Your LLM endpoint uses HTTP; API keys will be sent in plaintext.",
+      message:
+        "This address uses plain HTTP. Your API key would be sent without encryption—prefer HTTPS.",
     });
   });
 
   it("uses a softer warning for local HTTP endpoints", () => {
     expect(llmHttpWarning("http://localhost:5001/v1")).toEqual({
       kind: "local",
-      message: "Using a local HTTP LLM endpoint; ensure this is intentional.",
+      message:
+        "This address uses plain HTTP on this computer. Only continue if you meant to use a local AI service.",
     });
     expect(llmHttpWarning("http://127.12.0.1:5001/v1")?.kind).toBe("local");
     expect(llmHttpWarning("http://[::1]:5001/v1")?.kind).toBe("local");
@@ -246,8 +248,12 @@ describe("settings tab regressions", () => {
     const timezoneIndex = settingsTabSource.indexOf('.setName("Timezone")');
     expect(policyIndex).toBeGreaterThan(headingIndex);
     expect(policyIndex).toBeLessThan(timezoneIndex);
-    expect(settingsTabSource).toContain("Only topics with Detail report enabled are eligible");
-    expect(settingsTabSource).toContain("Manual summaries are unaffected");
+    expect(settingsTabSource).toContain(
+      "Only topics with Detail report turned on are considered",
+    );
+    expect(settingsTabSource).toContain(
+      'Manual “summarize paper” is unchanged',
+    );
     expect(settingsTabSource).toContain('.addOption("conservative", "Fewer")');
     expect(settingsTabSource).toContain('.addOption("balanced", "Recommended")');
     expect(settingsTabSource).toContain('.addOption("broad", "More")');

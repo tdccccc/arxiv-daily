@@ -37,4 +37,15 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     dailyCharLimit: 400_000,
     logLevel: "info",
   },
+  email: {
+    enabled: false,
+    mode: "self",
+    to: "",
+    // Empty = use Resend quick sender (onboarding@resend.dev) at send time.
+    fromEmail: "",
+    fromName: "arXiv Daily",
+    apiKey: "",
+    hostedToken: "",
+    hostedBaseUrl: "",
+  },
 };

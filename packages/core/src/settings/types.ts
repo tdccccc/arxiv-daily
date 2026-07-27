@@ -51,6 +51,41 @@ export interface AdvancedSettings {
   logLevel: "debug" | "info" | "warn" | "error";
 }
 
+export type EmailDeliveryModeSetting = "self" | "hosted";
+
+export interface EmailSettings {
+  /**
+   * When true, auto-send after pipeline `completed`.
+   * Quick setup: leave false until test-send succeeds.
+   */
+  enabled: boolean;
+  /**
+   * 自己发送 (`self`, default) vs 官方代发 (`hosted`, Beta — not online until
+   * OFFICIAL_DELIVERY_AVAILABLE).
+   */
+  mode: EmailDeliveryModeSetting;
+  /** Personal recipient (required). */
+  to: string;
+  /**
+   * Optional custom From. Empty uses Resend quick sender
+   * (`onboarding@resend.dev`) — fine for personal inbox testing.
+   */
+  fromEmail: string;
+  /** Optional display name; defaults to "arXiv Daily" when empty. */
+  fromName?: string;
+  /** Plugin-local secret storage; CLI prefers ARXIV_DAILY_RESEND_API_KEY. */
+  apiKey?: string;
+  /**
+   * Device token after magic-link verification (Official delivery Beta).
+   */
+  hostedToken?: string;
+  /**
+   * Optional override for the project relay base URL.
+   * Default: https://email.arxiv-daily.top
+   */
+  hostedBaseUrl?: string;
+}
+
 export interface PluginSettings {
   llm: LlmSettings;
   arxiv: ArxivSettings;
@@ -58,6 +93,7 @@ export interface PluginSettings {
   output: OutputSettings;
   schedule: ScheduleSettings;
   advanced: AdvancedSettings;
+  email: EmailSettings;
 }
 
 export type RunStatus =

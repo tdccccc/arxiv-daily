@@ -38,8 +38,10 @@ function makeStorage(initialFiles: Record<string, string> = {}) {
 
 function entry(overrides: Partial<PaperIndexEntry> = {}): PaperIndexEntry {
   return {
-    arxivId: "2606.12345",
+    paperKey: "arxiv:2606.12345",
     source: "arxiv",
+    externalId: "2606.12345",
+    arxivId: "2606.12345",
     title: "A project paper",
     authors: ["A"],
     published: "2026-06-13",
@@ -110,7 +112,7 @@ describe("ProjectNotesService", () => {
     );
     expect(files["Projects/photo-z.md"].match(/arxiv-daily-project/g)).toHaveLength(1);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.papers["2606.12345"].projects).toEqual(["Projects/photo-z.md"]);
+    expect(saved.papers["arxiv:2606.12345"].projects).toEqual(["Projects/photo-z.md"]);
   });
 
   it("uses relative markdown links when configured", async () => {

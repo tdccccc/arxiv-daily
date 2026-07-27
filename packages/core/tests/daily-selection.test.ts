@@ -15,8 +15,10 @@ function entry(
   priority: PaperIndexEntry["priority"] = "normal",
 ): PaperIndexEntry {
   return {
-    arxivId: id,
+    paperKey: `arxiv:${id}`,
     source: "arxiv",
+    externalId: id,
+    arxivId: id,
     title: `Paper ${id}`,
     authors: ["A"],
     published: "2026-06-12",
@@ -42,9 +44,9 @@ function entry(
 
 function index(entries: PaperIndexEntry[]): PaperInbox {
   return {
-    schemaVersion: 1,
+    schemaVersion: 4,
     updatedAt: "2026-06-12T00:00:00.000Z",
-    papers: Object.fromEntries(entries.map((e) => [e.arxivId, e])),
+    papers: Object.fromEntries(entries.map((e) => [e.paperKey, e])),
   };
 }
 
@@ -131,18 +133,18 @@ describe("daily selection", () => {
       { arxivId: "2606.66666", watch: true, highlight: true },
     ]);
     expect(result.changed).toBe(3);
-    expect(data.papers["2606.12345"].status).toBe("to_read");
-    expect(data.papers["2606.12345"].priority).toBe("normal");
-    expect(data.papers["2606.54321"].status).toBe("to_read");
-    expect(data.papers["2606.54321"].priority).toBe("high");
-    expect(data.papers["2606.99999"].status).toBe("inbox");
-    expect(data.papers["2606.99999"].priority).toBe("normal");
-    expect(data.papers["2606.88888"].status).toBe("saved");
-    expect(data.papers["2606.88888"].priority).toBe("high");
-    expect(data.papers["2606.77777"].status).toBe("read");
-    expect(data.papers["2606.77777"].priority).toBe("normal");
-    expect(data.papers["2606.66666"].status).toBe("ignored");
-    expect(data.papers["2606.66666"].priority).toBe("normal");
+    expect(data.papers["arxiv:2606.12345"].status).toBe("to_read");
+    expect(data.papers["arxiv:2606.12345"].priority).toBe("normal");
+    expect(data.papers["arxiv:2606.54321"].status).toBe("to_read");
+    expect(data.papers["arxiv:2606.54321"].priority).toBe("high");
+    expect(data.papers["arxiv:2606.99999"].status).toBe("inbox");
+    expect(data.papers["arxiv:2606.99999"].priority).toBe("normal");
+    expect(data.papers["arxiv:2606.88888"].status).toBe("saved");
+    expect(data.papers["arxiv:2606.88888"].priority).toBe("high");
+    expect(data.papers["arxiv:2606.77777"].status).toBe("read");
+    expect(data.papers["arxiv:2606.77777"].priority).toBe("normal");
+    expect(data.papers["arxiv:2606.66666"].status).toBe("ignored");
+    expect(data.papers["arxiv:2606.66666"].priority).toBe("normal");
   });
 
   it("syncs a daily file into papers.json", async () => {
@@ -201,8 +203,8 @@ describe("daily selection", () => {
     const result = await sync.syncPath("arxiv-daily/daily/2026-06-12.md");
     expect(result?.changed).toBe(1);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.papers["2606.12345"].status).toBe("to_read");
-    expect(saved.papers["2606.12345"].priority).toBe("high");
+    expect(saved.papers["arxiv:2606.12345"].status).toBe("to_read");
+    expect(saved.papers["arxiv:2606.12345"].priority).toBe("high");
   });
 
   it("syncs recent daily files on startup without clearing saved papers", async () => {
@@ -302,19 +304,19 @@ describe("daily selection", () => {
     ]);
     expect(result.changed).toBe(2);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.papers["2606.12345"].status).toBe("to_read");
-    expect(saved.papers["2606.12345"].priority).toBe("normal");
-    expect(saved.papers["2606.54321"].status).toBe("to_read");
-    expect(saved.papers["2606.54321"].priority).toBe("high");
-    expect(saved.papers["2606.77777"].status).toBe("saved");
-    expect(saved.papers["2606.77777"].priority).toBe("high");
+    expect(saved.papers["arxiv:2606.12345"].status).toBe("to_read");
+    expect(saved.papers["arxiv:2606.12345"].priority).toBe("normal");
+    expect(saved.papers["arxiv:2606.54321"].status).toBe("to_read");
+    expect(saved.papers["arxiv:2606.54321"].priority).toBe("high");
+    expect(saved.papers["arxiv:2606.77777"].status).toBe("saved");
+    expect(saved.papers["arxiv:2606.77777"].priority).toBe("high");
 
     const second = await sync.syncRecentDailyFiles();
 
     expect(second.changed).toBe(0);
     const savedAgain = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(savedAgain.papers["2606.77777"].status).toBe("saved");
-    expect(savedAgain.papers["2606.77777"].priority).toBe("high");
+    expect(savedAgain.papers["arxiv:2606.77777"].status).toBe("saved");
+    expect(savedAgain.papers["arxiv:2606.77777"].priority).toBe("high");
   });
 
   it("startup sync is a no-op without recent daily files or an index", async () => {

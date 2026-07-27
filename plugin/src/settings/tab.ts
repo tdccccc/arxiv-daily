@@ -100,12 +100,12 @@ export function llmHttpWarning(baseUrl: string): LlmHttpWarning | null {
   if (isLoopbackHost(url.hostname)) {
     return {
       kind: "local",
-      message: "Using a local HTTP LLM endpoint; ensure this is intentional.",
+      message: "This address uses plain HTTP on this computer. Only continue if you meant to use a local AI service.",
     };
   }
   return {
     kind: "plaintext",
-    message: "Your LLM endpoint uses HTTP; API keys will be sent in plaintext.",
+    message: "This address uses plain HTTP. Your API key would be sent without encryption—prefer HTTPS.",
   };
 }
 
@@ -158,14 +158,36 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "arxiv" | "topics" | "schedule" | "advanced",
+    section: "llm" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
     if (desc) heading.setDesc(desc);
     heading.settingEl.addClass("arxiv-daily-settings__section");
     heading.settingEl.setAttribute("data-arxiv-daily-section", section);
+    // Ensure heading name is easy to scan in long settings pages.
+    heading.nameEl?.addClass("arxiv-daily-settings__section-title");
     return heading;
+  }
+
+  /** Full-width guide block aligned with Setting name column (not indented desc). */
+  private emailGuide(
+    containerEl: HTMLElement,
+    opts: { title: string; lines: string[] },
+  ): void {
+    const wrap = containerEl.createDiv({
+      cls: "arxiv-daily-settings__email-guide",
+    });
+    wrap.createDiv({
+      cls: "arxiv-daily-settings__email-guide-title",
+      text: opts.title,
+    });
+    for (const line of opts.lines) {
+      wrap.createDiv({
+        cls: "arxiv-daily-settings__email-guide-line",
+        text: line,
+      });
+    }
   }
 
   private async setArxivCategories(categories: string[]): Promise<void> {
@@ -236,7 +258,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // ─── Enable toggle (top) ─────────────────────────
     new Setting(containerEl)
       .setName(`Enable · ${s.schedule.enabled ? "Running" : "Paused"}`)
-      .setDesc("Auto-summarize arXiv papers on schedule (skips weekends)")
+      .setDesc("When on, daily reports run automatically on weekdays (weekends are skipped).")
       .addToggle((t) =>
         t.setValue(s.schedule.enabled).onChange(async (v) => {
           await this.plugin.setScheduleEnabled(v);
@@ -245,12 +267,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    this.sectionHeading(containerEl, "LLM", "llm");
+    this.sectionHeading(containerEl, "AI model", "llm");
 
     // Base URL — always editable, default to DeepSeek
     new Setting(containerEl)
-      .setName("Base URL")
-      .setDesc("LLM endpoint base. Default is DeepSeek. Override for other providers.")
+      .setName("API base URL")
+      .setDesc("Where chat requests are sent. Default is DeepSeek; change only if you use another provider.")
       .addText((t) => {
         t.inputEl.addClass("arxiv-daily-settings__llm-input");
         t.setPlaceholder("https://api.deepseek.com/v1")
@@ -278,7 +300,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Model — Get Models button + dropdown
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Click Get models to fetch available models from API.");
+      .setDesc("Choose a model, or click Get models to load the list from your provider.");
 
     // Get models button
     const fetchModelsButton = modelSetting.addButton((b) => {
@@ -322,10 +344,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
-      ? "Enable Anthropic Extended Thinking"
+      ? "Let the model spend extra effort on harder questions (Anthropic)."
       : s.llm.provider === "deepseek"
-        ? "Enable reasoning mode (DeepSeek V4)"
-        : "Enable reasoning/thinking mode";
+        ? "Let the model spend extra effort on harder questions (DeepSeek reasoning)."
+        : "Let the model spend extra effort on harder questions when the provider supports it.";
 
     new Setting(containerEl)
       .setName("Thinking mode")
@@ -341,7 +363,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const efforts = ["low", "medium", "high"];
     new Setting(containerEl)
       .setName("Reasoning effort")
-      .setDesc(s.llm.provider === "anthropic" ? "Maps to thinking budget tier" : "Reasoning strength")
+      .setDesc("How hard the model tries when thinking mode is on. Higher may be slower and cost more.")
       .addDropdown((d) => {
         for (const e of efforts) {
           d.addOption(e, e);
@@ -369,7 +391,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
       .setName("arXiv categories")
-      .setDesc("Fetch one or more arXiv categories; duplicate papers are merged by arXiv ID.")
+      .setDesc("Which arXiv subject areas to watch. You can add several; the same paper is only kept once.")
       .setHeading();
 
     for (let i = 0; i < categories.length; i++) {
@@ -486,7 +508,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createDiv({
-        text: "Pick a template above or click + Add topic to define what to track. The plugin will not call the LLM until at least one topic exists.",
+        text: "Pick a template above or click + Add topic to define what to track. Daily reports need at least one topic before AI runs.",
       });
     }
     for (let i = 0; i < s.arxiv.topics.length; i++) {
@@ -496,7 +518,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Automatic detail notes")
       .setDesc(
-        "Choose how selective automatic detail-note creation should be. Only topics with Detail report enabled are eligible. Manual summaries are unaffected.",
+        "How often the plugin writes a longer note for a paper. Only topics with Detail report turned on are considered. Manual “summarize paper” is unchanged.",
       )
       .addDropdown((d) => {
         d.addOption("conservative", "Fewer")
@@ -554,8 +576,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.sectionHeading(containerEl, "Output & schedule", "schedule");
 
     new Setting(containerEl)
-      .setName("Daily path")
-      .setDesc("Relative path in vault")
+      .setName("Daily reports folder")
+      .setDesc("Folder in this vault for daily report notes (relative path).")
       .addText((t) => {
         t.setValue(s.output.dailyDir);
         t.inputEl.addEventListener("input", () => {
@@ -570,8 +592,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("Papers path")
-      .setDesc("Relative path in vault")
+      .setName("Paper notes folder")
+      .setDesc("Folder in this vault for per-paper notes (relative path).")
       .addText((t) => {
         t.setValue(s.output.papersDir);
         t.inputEl.addEventListener("input", () => {
@@ -587,7 +609,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Link style")
-      .setDesc("Markdown links generated in daily reports")
+      .setDesc("How links between notes are written in daily reports.")
       .addDropdown((d) =>
         d
           .addOption("wikilink", "Obsidian wikilink")
@@ -601,7 +623,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Summary language")
-      .setDesc("Language used for daily and detail summaries")
+      .setDesc("Language for daily reports and paper notes.")
       .addDropdown((d) =>
         d
           .addOption("zh", "Chinese")
@@ -615,7 +637,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const runWindow = new Setting(containerEl)
       .setName("Run window")
-      .setDesc("Local 24-hour time window for scheduled polling.");
+      .setDesc("Local times when automatic runs may start (24-hour clock).");
     renderRunWindowTimeSelect(
       runWindow.controlEl,
       "Start",
@@ -632,15 +654,167 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     this.attachHelp(
-      new Setting(containerEl).setName("Tick interval (min)").addText((t) =>
+      new Setting(containerEl).setName("Check every (minutes)").addText((t) =>
         t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
           s.schedule.tickIntervalMin = Math.max(1, Number(v) || 20);
           await this.plugin.saveSettings();
           this.plugin.restartScheduler();
         }),
       ),
-      "How often the scheduler interval wakes up to check pending dates. Default 20 minutes.",
+      "How often the plugin looks for a day that still needs a report. Default is 20 minutes.",
     );
+
+    // ─── Email ───────────────────────────────────────────
+    this.sectionHeading(containerEl, "Email delivery", "email");
+
+    if (!s.email) {
+      s.email = {
+        enabled: false,
+        mode: "self",
+        to: "",
+        fromEmail: "",
+        fromName: "arXiv Daily",
+        apiKey: "",
+        hostedToken: "",
+        hostedBaseUrl: "",
+      };
+    }
+    if (s.email.mode !== "self" && s.email.mode !== "hosted") {
+      s.email.mode = "self";
+    }
+    const hostedMode = s.email.mode === "hosted";
+
+    this.emailGuide(containerEl, {
+      title: hostedMode ? "Official delivery (Beta)" : "Send yourself",
+      lines: hostedMode
+        ? [
+            "1. Enter your email, then send a verification message.",
+            "2. Open the link in that email and copy the code shown on the page.",
+            "3. Paste the code below, send a test email, then turn on daily auto-send.",
+          ]
+        : [
+            "1. Create a free Resend account and an API key at resend.com.",
+            "2. Paste the key below. For a quick start, put your Resend account email in Your email and leave From email empty.",
+            "3. Send a test email, then turn on daily auto-send when it works.",
+          ],
+    });
+
+    new Setting(containerEl)
+      .setName("How to send")
+      .setDesc(
+        "Send yourself uses your own Resend account. Official delivery (Beta) verifies your email and sends through arXiv Daily.",
+      )
+      .addDropdown((d) => {
+        d.addOption("self", "Send yourself");
+        d.addOption("hosted", "Official delivery (Beta)");
+        d.setValue(hostedMode ? "hosted" : "self");
+        d.onChange(async (value) => {
+          s.email.mode = value === "hosted" ? "hosted" : "self";
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Your email")
+      .setDesc(
+        hostedMode
+          ? "Where verification and daily digests are sent."
+          : "Where digests are delivered. With From empty, use the email on your Resend account.",
+      )
+      .addText((t) => {
+        t.setPlaceholder("you@example.com")
+          .setValue(s.email.to)
+          .onChange(async (v) => {
+            s.email.to = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    if (hostedMode) {
+      new Setting(containerEl)
+        .setName("Send verification email")
+        .setDesc("Sends a one-time link to confirm this address is yours.")
+        .addButton((b) =>
+          b.setButtonText("Send verification email").onClick(() => {
+            this.runAction("send verification email", async () => {
+              const message = await this.plugin.sendHostedVerificationEmail();
+              new Notice(message, 10_000);
+            });
+          }),
+        );
+
+      this.renderHostedTokenSetting(containerEl);
+
+      // Advanced: only for people who need a non-default service URL
+      new Setting(containerEl)
+        .setName("Service URL")
+        .setDesc("Leave blank unless support asks you to change it.")
+        .addText((t) => {
+          t.setPlaceholder("Default service (recommended)")
+            .setValue(s.email.hostedBaseUrl ?? "")
+            .onChange(async (v) => {
+              s.email.hostedBaseUrl = v.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+    } else {
+      this.renderEmailApiKeySetting(containerEl);
+
+      new Setting(containerEl)
+        .setName("From email")
+        .setDesc(
+          "Optional. Leave blank for the simplest setup (mail may only go to your Resend account email). Use an address on a domain you verified in Resend to send more freely.",
+        )
+        .addText((t) => {
+          t.setPlaceholder("Leave blank for simplest setup")
+            .setValue(s.email.fromEmail)
+            .onChange(async (v) => {
+              s.email.fromEmail = v.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("From name")
+        .setDesc('Optional name shown as the sender. Default is "arXiv Daily".')
+        .addText((t) => {
+          t.setPlaceholder("arXiv Daily")
+            .setValue(s.email.fromName ?? "")
+            .onChange(async (v) => {
+              s.email.fromName = v;
+              await this.plugin.saveSettings();
+            });
+        });
+    }
+
+    new Setting(containerEl)
+      .setName("Send test email")
+      .setDesc(
+        hostedMode
+          ? "Sends a sample digest now. Needs your email and verification code."
+          : "Sends a sample digest now. Needs your email and Resend API key.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Send test").setCta().onClick(() => {
+          this.runAction("send test email", async () => {
+            const message = await this.plugin.sendTestEmail();
+            new Notice(message, 10_000);
+          });
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Daily auto-send")
+      .setDesc(
+        "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
+      )
+      .addToggle((t) =>
+        t.setValue(s.email.enabled).onChange(async (v) => {
+          s.email.enabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
 
     // ─── Advanced ─────────────────────────────────────
     this.sectionHeading(containerEl, "Advanced", "advanced");
@@ -660,7 +834,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             this.plugin.logger.setLevel(value);
           }),
       ),
-      "Console log verbosity. 'debug' is noisy; 'info' is the default.",
+      "How much detail appears in the developer console. Use debug only when troubleshooting; info is the default.",
     );
 
     // ─── Help & feedback ──────────────────────────────
@@ -724,11 +898,193 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     await new ObsidianResourceOpener(this.app).openUrl(url);
   }
 
+  private renderEmailApiKeySetting(containerEl: HTMLElement): void {
+    const configured = Boolean(this.plugin.settings.email.apiKey?.trim());
+    const setting = new Setting(containerEl)
+      .setName("Resend API key")
+      .setDesc(
+        "From your Resend account. Saved only on this device; not shown again after you save.",
+      );
+    let editing = !configured;
+    let draft = "";
+    const input = setting.controlEl.createEl("input", {
+      cls: "arxiv-daily-settings__llm-input",
+      type: editing ? "password" : "text",
+      attr: { placeholder: "Paste your Resend API key" },
+    });
+    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+    input.readOnly = !editing;
+
+    const replace = setting.controlEl.createEl("button", {
+      text: configured ? "Replace" : "Save",
+      attr: { type: "button" },
+    });
+    const cancel = setting.controlEl.createEl("button", {
+      text: "Cancel",
+      attr: { type: "button" },
+    });
+    cancel.hidden = !configured;
+    const clear = setting.controlEl.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    });
+    clear.hidden = !configured;
+
+    const enterEdit = () => {
+      editing = true;
+      draft = "";
+      input.type = "password";
+      input.readOnly = false;
+      input.value = "";
+      replace.textContent = "Save";
+      cancel.hidden = false;
+      input.focus();
+    };
+    const reset = () => {
+      editing = false;
+      draft = "";
+      input.type = "text";
+      input.readOnly = true;
+      input.value = API_KEY_CONFIGURED_SENTINEL;
+      replace.textContent = "Replace";
+      cancel.hidden = true;
+    };
+    input.addEventListener("input", () => {
+      if (editing) draft = input.value;
+    });
+    replace.addEventListener("click", () => {
+      if (!editing) {
+        enterEdit();
+        return;
+      }
+      const next = draft.trim();
+      if (!next) return;
+      this.runAction("save Resend API key", async () => {
+        this.plugin.settings.email.apiKey = next;
+        await this.plugin.saveSettings();
+        reset();
+        clear.hidden = false;
+      });
+    });
+    cancel.addEventListener("click", () => {
+      if (configured || this.plugin.settings.email.apiKey?.trim()) reset();
+      else {
+        draft = "";
+        input.value = "";
+      }
+    });
+    clear.addEventListener("click", () => {
+      this.runAction("clear Resend API key", async () => {
+        const confirmed = await this.confirmReplace(
+          "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
+          "Clear",
+        );
+        if (!confirmed) return;
+        this.plugin.settings.email.apiKey = "";
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+  }
+
+  private renderHostedTokenSetting(containerEl: HTMLElement): void {
+    const configured = Boolean(this.plugin.settings.email.hostedToken?.trim());
+    const setting = new Setting(containerEl)
+      .setName("Verification code")
+      .setDesc(
+        "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above.",
+      );
+    let editing = !configured;
+    let draft = "";
+    const input = setting.controlEl.createEl("input", {
+      cls: "arxiv-daily-settings__llm-input",
+      type: editing ? "password" : "text",
+      attr: { placeholder: "Paste the code from the verification page" },
+    });
+    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+    input.readOnly = !editing;
+
+    const replace = setting.controlEl.createEl("button", {
+      text: configured ? "Replace" : "Save",
+      attr: { type: "button" },
+    });
+    const cancel = setting.controlEl.createEl("button", {
+      text: "Cancel",
+      attr: { type: "button" },
+    });
+    cancel.hidden = !configured;
+    const clear = setting.controlEl.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    });
+    clear.hidden = !configured;
+
+    const enterEdit = () => {
+      editing = true;
+      draft = "";
+      input.type = "password";
+      input.readOnly = false;
+      input.value = "";
+      replace.textContent = "Save";
+      cancel.hidden = false;
+      input.focus();
+    };
+    const reset = () => {
+      editing = false;
+      draft = "";
+      input.type = "text";
+      input.readOnly = true;
+      input.value = API_KEY_CONFIGURED_SENTINEL;
+      replace.textContent = "Replace";
+      cancel.hidden = true;
+    };
+    input.addEventListener("input", () => {
+      if (editing) draft = input.value;
+    });
+    replace.addEventListener("click", () => {
+      if (!editing) {
+        enterEdit();
+        return;
+      }
+      this.runAction("save verification code", async () => {
+        const next = draft.replace(/\s+/g, "").trim();
+        if (!next) {
+          new Notice("Paste the verification code before saving.");
+          return;
+        }
+        this.plugin.settings.email.hostedToken = next;
+        await this.plugin.saveSettings();
+        this.plugin.refreshSensitiveValues();
+        this.display();
+      });
+    });
+    cancel.addEventListener("click", () => {
+      if (configured || this.plugin.settings.email.hostedToken?.trim()) reset();
+      else {
+        draft = "";
+        input.value = "";
+      }
+    });
+    clear.addEventListener("click", () => {
+      this.runAction("clear verification code", async () => {
+        const confirmed = await this.confirmReplace(
+          "Clear the verification code? You will need to verify your email again for Official delivery.",
+          "Clear",
+        );
+        if (!confirmed) return;
+        this.plugin.settings.email.hostedToken = "";
+        await this.plugin.saveSettings();
+        this.plugin.refreshSensitiveValues();
+        this.display();
+      });
+    });
+  }
+
   private renderApiKeySetting(containerEl: HTMLElement): void {
     const configured = Boolean(this.plugin.settings.llm.apiKey.trim());
     const setting = new Setting(containerEl)
       .setName("API key")
-      .setDesc("Stored locally in data.json. Saved keys are never rendered into this page.");
+      .setDesc("Saved only on this device. After saving, the key is hidden.");
     let editing = !configured;
     let draft = "";
     const input = setting.controlEl.createEl("input", {
@@ -805,7 +1161,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     clear.addEventListener("click", () => {
       this.runAction("clear API key", async () => {
         const confirmed = await this.confirmReplace(
-          "Clear the saved API key? LLM operations will stop until a replacement is saved.",
+          "Clear the saved API key? AI features will stop until you save a new key.",
           "Clear",
         );
         if (!confirmed) return;
@@ -914,7 +1270,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.llmReady,
       "Connect AI",
-      "Add an API key, base URL, and model in the existing LLM settings.",
+      "Add an API key, API base URL, and model under AI model.",
       "Connect AI",
       () => this.scrollToSection("llm"),
     );
@@ -922,7 +1278,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.categoriesReady,
       "Choose paper sources",
-      "Select at least one arXiv category in the existing arXiv settings.",
+      "Select at least one arXiv category under arXiv.",
       "Choose sources",
       () => this.scrollToSection("arxiv"),
     );
@@ -930,7 +1286,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.topicsReady,
       "Describe your research interests",
-      "Add at least one complete research topic using the existing topic form.",
+      "Add at least one complete research topic under Research topics.",
       "Describe interests",
       () => this.scrollToSection("topics"),
     );
@@ -1183,7 +1539,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Description",
       attr: { for: descId },
     });
-    this.hint(descRow, "Plain-language description of what belongs here. The LLM reads this to decide which papers go into this topic.", descHintId);
+    this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
     const descArea = descRow.createEl("textarea", {
       cls: "arxiv-daily-settings__topic-description",
       attr: { id: descId, "aria-describedby": descHintId },

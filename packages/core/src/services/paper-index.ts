@@ -6,8 +6,16 @@ import {
   vaultRelativeDirectoriesCollide,
 } from "../settings/validation";
 import { modernArxivResources } from "../utils/arxiv";
+import {
+  formatPaperKey,
+  paperKeyFromArxivId,
+  parsePaperKey,
+  resolvePaperLookupKey,
+  tryParsePaperKey,
+} from "./paper-key";
 
-export const PAPER_INBOX_SCHEMA_VERSION = 3;
+/** On-disk schema: map keys are paperKey (`source:externalId`). */
+export const PAPER_INBOX_SCHEMA_VERSION = 4;
 
 export type PaperStatus =
   | "inbox"
@@ -35,8 +43,17 @@ export interface PaperSummary {
 }
 
 export interface PaperIndexEntry {
+  /** Stable identity: `source:externalId` (e.g. `arxiv:2606.12345`). */
+  paperKey: string;
+  /** Source namespace, lowercase `[a-z0-9_]+`. */
+  source: string;
+  /** Source-local id; also used as short path stem (never embed paperKey in paths). */
+  externalId: string;
+  /**
+   * Compatibility alias for arXiv: same as externalId when source is arXiv.
+   * Prefer paperKey / externalId for new code.
+   */
   arxivId: string;
-  source: "arxiv";
   title: string;
   authors: string[];
   published: string;
@@ -52,9 +69,11 @@ export interface PaperIndexEntry {
   priority: PaperPriority;
   seenDates: string[];
   dailyReports: string[];
+  /** Vault-relative note path; stem is externalId, not paperKey. */
   paperPath: string | null;
   arxivUrl: string;
   pdfUrl: string;
+  /** Vault-relative PDF path; stem is externalId, not paperKey. */
   pdfPath: string;
   zoteroKey: string;
   zoteroUri: string;
@@ -212,11 +231,11 @@ export class PaperIndexStore {
     });
   }
 
-  async addDailyReports(arxivIds: string[], dailyReport: string): Promise<void> {
+  async addDailyReports(ids: string[], dailyReport: string): Promise<void> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      for (const arxivId of arxivIds) {
-        const entry = inbox.papers[arxivId];
+      for (const id of ids) {
+        const entry = findEntry(inbox, id);
         if (!entry) continue;
         entry.dailyReports = appendUnique(entry.dailyReports, dailyReport);
       }
@@ -224,10 +243,10 @@ export class PaperIndexStore {
     });
   }
 
-  async setStatus(arxivId: string, status: PaperStatus): Promise<PaperIndexEntry | null> {
+  async setStatus(id: string, status: PaperStatus): Promise<PaperIndexEntry | null> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.status = status;
       await this.save(inbox);
@@ -236,12 +255,12 @@ export class PaperIndexStore {
   }
 
   async setPriority(
-    arxivId: string,
+    id: string,
     priority: PaperPriority,
   ): Promise<PaperIndexEntry | null> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.priority = priority;
       await this.save(inbox);
@@ -255,8 +274,8 @@ export class PaperIndexStore {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       let changed = 0;
-      for (const [arxivId, summary] of Object.entries(summaries)) {
-        const entry = inbox.papers[arxivId];
+      for (const [id, summary] of Object.entries(summaries)) {
+        const entry = findEntry(inbox, id);
         if (!entry) continue;
         const next = mergeSummaries(entry.summary, summary);
         if (sameSummary(entry.summary, next)) continue;
@@ -268,10 +287,10 @@ export class PaperIndexStore {
     });
   }
 
-  async setPaperPath(arxivId: string, paperPath: string): Promise<PaperIndexEntry | null> {
+  async setPaperPath(id: string, paperPath: string): Promise<PaperIndexEntry | null> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.paperPath = this.storage.normalizePath(paperPath);
       entry.detail = true;
@@ -286,8 +305,8 @@ export class PaperIndexStore {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       let changed = 0;
-      for (const [arxivId, paperPath] of Object.entries(paperPaths)) {
-        const entry = inbox.papers[arxivId];
+      for (const [id, paperPath] of Object.entries(paperPaths)) {
+        const entry = findEntry(inbox, id);
         if (!entry) continue;
         const normalizedPath = paperPath == null
           ? null
@@ -303,12 +322,12 @@ export class PaperIndexStore {
     });
   }
 
-  async clearPaperDetails(arxivIds: string[]): Promise<number> {
+  async clearPaperDetails(ids: string[]): Promise<number> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       let changed = 0;
-      for (const arxivId of uniqueStrings(arxivIds)) {
-        const entry = inbox.papers[arxivId];
+      for (const id of uniqueStrings(ids)) {
+        const entry = findEntry(inbox, id);
         if (!entry || (!entry.detail && entry.paperPath == null)) continue;
         entry.detail = false;
         entry.paperPath = null;
@@ -320,13 +339,13 @@ export class PaperIndexStore {
   }
 
   async removePaperDetailsAtPath(
-    arxivId: string,
+    id: string,
     expectedPaperPath: string,
     beforeMutation?: (entry: PaperIndexEntry) => Promise<void>,
   ): Promise<PaperDetailsRemovalResult> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return { kind: "missing" };
 
       const expectedPath = this.storage.normalizePath(expectedPaperPath);
@@ -344,7 +363,7 @@ export class PaperIndexStore {
         entry.detail = false;
         entry.paperPath = null;
       } else {
-        delete inbox.papers[arxivId];
+        delete inbox.papers[entry.paperKey];
       }
       try {
         await this.save(inbox);
@@ -355,13 +374,14 @@ export class PaperIndexStore {
     });
   }
 
-  async removePapers(arxivIds: string[]): Promise<number> {
+  async removePapers(ids: string[]): Promise<number> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       let changed = 0;
-      for (const arxivId of uniqueStrings(arxivIds)) {
-        if (!(arxivId in inbox.papers)) continue;
-        delete inbox.papers[arxivId];
+      for (const id of uniqueStrings(ids)) {
+        const entry = findEntry(inbox, id);
+        if (!entry) continue;
+        delete inbox.papers[entry.paperKey];
         changed += 1;
       }
       if (changed > 0) await this.save(inbox);
@@ -370,12 +390,12 @@ export class PaperIndexStore {
   }
 
   async setPdfPath(
-    arxivId: string,
+    id: string,
     pdfPath: string,
   ): Promise<PaperIndexEntry | null> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.pdfPath = this.storage.normalizePath(pdfPath);
       await this.save(inbox);
@@ -384,12 +404,12 @@ export class PaperIndexStore {
   }
 
   async addProject(
-    arxivId: string,
+    id: string,
     projectPath: string,
   ): Promise<PaperIndexEntry | null> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      const entry = inbox.papers[arxivId];
+      const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.projects = appendUnique(
         entry.projects,
@@ -400,9 +420,10 @@ export class PaperIndexStore {
     });
   }
 
-  async get(arxivId: string): Promise<PaperIndexEntry | null> {
+  /** Lookup by paperKey or bare arXiv id (compat). */
+  async get(id: string): Promise<PaperIndexEntry | null> {
     const inbox = await this.load();
-    return inbox.papers[arxivId] ?? null;
+    return findEntry(inbox, id);
   }
 
   async listByStatus(status: PaperStatus): Promise<PaperIndexEntry[]> {
@@ -507,8 +528,9 @@ function upsertEntry(
 ): { entry: PaperIndexEntry; wasNew: boolean } {
   const resources = modernArxivResources(input.arxivId);
   if (!resources) throw new PaperIndexError(`invalid arXiv ID: ${input.arxivId}`);
-  const arxivId = resources.id;
-  const existing = inbox.papers[arxivId];
+  const externalId = resources.id;
+  const paperKey = formatPaperKey("arxiv", externalId);
+  const existing = inbox.papers[paperKey];
   const wasNew = !existing;
   const authors = normalizeAuthors(input.authors);
   const topic = input.primaryTopic.trim();
@@ -531,9 +553,11 @@ function upsertEntry(
         : null;
 
   const entry: PaperIndexEntry = {
-    arxivId,
+    paperKey,
     source: "arxiv",
-    title: input.title.trim() || existing?.title || arxivId,
+    externalId,
+    arxivId: externalId,
+    title: input.title.trim() || existing?.title || externalId,
     authors: authors.length ? authors : existing?.authors ?? [],
     published,
     updated,
@@ -559,7 +583,7 @@ function upsertEntry(
     citationKey: existing?.citationKey ?? "",
     projects: existing?.projects ?? [],
   };
-  inbox.papers[arxivId] = entry;
+  inbox.papers[paperKey] = entry;
   return { entry, wasNew };
 }
 
@@ -569,6 +593,7 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   if (
     obj.schemaVersion !== 1 &&
     obj.schemaVersion !== 2 &&
+    obj.schemaVersion !== 3 &&
     obj.schemaVersion !== PAPER_INBOX_SCHEMA_VERSION
   ) {
     throw new Error(`unsupported schemaVersion: ${obj.schemaVersion}`);
@@ -576,7 +601,7 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   const papers: Record<string, PaperIndexEntry> = {};
   for (const [id, value] of Object.entries(obj.papers ?? {})) {
     const entry = normalizeEntry(id, value);
-    papers[entry.arxivId] = entry;
+    papers[entry.paperKey] = entry;
   }
   return {
     schemaVersion: PAPER_INBOX_SCHEMA_VERSION,
@@ -588,25 +613,22 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   };
 }
 
+/**
+ * Normalize one on-disk entry. Map keys may be:
+ * - bare modern arXiv id (schema ≤3) → rekeyed to `arxiv:<id>`
+ * - already-normalized paperKey (`arxiv:…` or future sources)
+ */
 function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
   const obj = (raw && typeof raw === "object" ? raw : {}) as any;
-  const keyResources = modernArxivResources(id);
-  const entryResources = modernArxivResources(stringOr(obj.arxivId, id));
-  if (!keyResources || !entryResources) {
-    throw new Error(`invalid arXiv paper index key or entry: ${id}`);
-  }
-  if (keyResources.id !== entryResources.id) {
-    throw new Error(
-      `arXiv paper index key/entry mismatch: ${id} != ${String(obj.arxivId)}`,
-    );
-  }
-  const arxivId = keyResources.id;
+  const { paperKey, source, externalId, resources } = resolveEntryIdentity(id, obj);
   const status = isPaperStatus(obj.status) ? obj.status : "inbox";
   const priority = isPaperPriority(obj.priority) ? obj.priority : "normal";
   return {
-    arxivId,
-    source: "arxiv",
-    title: stringOr(obj.title, arxivId),
+    paperKey,
+    source,
+    externalId,
+    arxivId: source === "arxiv" ? externalId : stringOr(obj.arxivId, externalId),
+    title: stringOr(obj.title, externalId),
     authors: normalizeAuthors(obj.authors),
     published: stringOr(obj.published, ""),
     updated: stringOr(obj.updated, ""),
@@ -625,14 +647,105 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     seenDates: stringArray(obj.seenDates),
     dailyReports: stringArray(obj.dailyReports),
     paperPath: obj.paperPath ? normalizeStoragePath(String(obj.paperPath)) : null,
-    arxivUrl: keyResources.absUrl,
-    pdfUrl: keyResources.pdfUrl,
+    arxivUrl: resources?.absUrl ?? stringOr(obj.arxivUrl, ""),
+    pdfUrl: resources?.pdfUrl ?? stringOr(obj.pdfUrl, ""),
     pdfPath: stringOr(obj.pdfPath, ""),
     zoteroKey: stringOr(obj.zoteroKey, ""),
     zoteroUri: stringOr(obj.zoteroUri, ""),
     citationKey: stringOr(obj.citationKey, ""),
     projects: stringArray(obj.projects),
   };
+}
+
+function resolveEntryIdentity(
+  mapKey: string,
+  obj: Record<string, unknown>,
+): {
+  paperKey: string;
+  source: string;
+  externalId: string;
+  resources: ReturnType<typeof modernArxivResources>;
+} {
+  const parsedKey = tryParsePaperKey(mapKey);
+  if (parsedKey) {
+    if (parsedKey.source === "arxiv") {
+      const keyResources = modernArxivResources(parsedKey.externalId);
+      if (!keyResources) {
+        throw new Error(`invalid arXiv paper index key: ${mapKey}`);
+      }
+      const entryIdHint =
+        stringOr(obj.externalId, "") ||
+        stringOr(obj.arxivId, "") ||
+        keyResources.id;
+      const entryResources = modernArxivResources(entryIdHint);
+      if (!entryResources || entryResources.id !== keyResources.id) {
+        throw new Error(
+          `arXiv paper index key/entry mismatch: ${mapKey} != ${String(obj.arxivId ?? obj.externalId ?? "")}`,
+        );
+      }
+      return {
+        paperKey: formatPaperKey("arxiv", keyResources.id),
+        source: "arxiv",
+        externalId: keyResources.id,
+        resources: keyResources,
+      };
+    }
+
+    const entryPaperKey = stringOr(obj.paperKey, mapKey);
+    const entryParsed = tryParsePaperKey(entryPaperKey);
+    if (
+      entryParsed &&
+      (entryParsed.source !== parsedKey.source ||
+        entryParsed.externalId !== parsedKey.externalId)
+    ) {
+      throw new Error(
+        `paper index key/entry mismatch: ${mapKey} != ${entryPaperKey}`,
+      );
+    }
+    const externalId =
+      stringOr(obj.externalId, "") || parsedKey.externalId;
+    if (externalId !== parsedKey.externalId) {
+      throw new Error(
+        `paper index key/entry externalId mismatch: ${mapKey} != ${externalId}`,
+      );
+    }
+    return {
+      paperKey: formatPaperKey(parsedKey.source, parsedKey.externalId),
+      source: parsedKey.source,
+      externalId: parsedKey.externalId,
+      resources: null,
+    };
+  }
+
+  // Legacy schema ≤3: bare modern arXiv id as map key.
+  const keyResources = modernArxivResources(mapKey);
+  const entryResources = modernArxivResources(
+    stringOr(obj.arxivId, "") || stringOr(obj.externalId, "") || mapKey,
+  );
+  if (!keyResources || !entryResources) {
+    throw new Error(`invalid arXiv paper index key or entry: ${mapKey}`);
+  }
+  if (keyResources.id !== entryResources.id) {
+    throw new Error(
+      `arXiv paper index key/entry mismatch: ${mapKey} != ${String(obj.arxivId)}`,
+    );
+  }
+  return {
+    paperKey: formatPaperKey("arxiv", keyResources.id),
+    source: "arxiv",
+    externalId: keyResources.id,
+    resources: keyResources,
+  };
+}
+
+/** Resolve paperKey or bare arXiv id against an in-memory (normalized) inbox. */
+function findEntry(inbox: PaperInbox, id: string): PaperIndexEntry | null {
+  try {
+    const paperKey = resolvePaperLookupKey(id);
+    return inbox.papers[paperKey] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function requireOutputDirectory(name: string, input: unknown): string {

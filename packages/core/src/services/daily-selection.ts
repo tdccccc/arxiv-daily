@@ -11,6 +11,7 @@ import type {
   PaperStatus,
   PaperIndexStore,
 } from "./paper-index";
+import { paperKeyFromArxivId } from "./paper-key";
 
 export interface DailyPaperSelection {
   arxivId: string;
@@ -65,7 +66,7 @@ export function applySelectionsToIndex(
   let changed = 0;
   const missing: string[] = [];
   for (const selection of selections) {
-    const entry = index.papers[selection.arxivId];
+    const entry = index.papers[paperKeyFromArxivId(selection.arxivId)];
     if (!entry) {
       missing.push(selection.arxivId);
       continue;

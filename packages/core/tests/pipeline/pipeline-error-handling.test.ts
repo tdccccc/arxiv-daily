@@ -261,7 +261,7 @@ describe("Pipeline partial failure consistency", () => {
     writer?: Record<string, unknown>;
     paperIndex?: Record<string, unknown>;
     paperFetcher?: Record<string, unknown>;
-    summarizeDaily?: (...args: any[]) => Promise<string>;
+    summarizeDaily?: (...args: any[]) => Promise<{ markdown: string; slots: any[] }>;
   } = {}) {
     const ids = overrides.ids ?? ["2605.08080"];
     const fetcher = {
@@ -382,9 +382,7 @@ describe("Pipeline partial failure consistency", () => {
       return structuredDailyResponse(messages) ?? "";
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 2,
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed", papersWritten: 2,
     });
     expect(writer.writeDaily).toHaveBeenCalledTimes(1);
     const dailyMarkdown = writer.writeDaily.mock.calls[0]?.[1] as string;
@@ -407,17 +405,19 @@ describe("Pipeline partial failure consistency", () => {
     const summarizeDaily = vi.fn(async (papers: any[]) => {
       expect(papers.map((paper) => paper.id)).toEqual(ids);
       expect(papers.map((paper) => paper.abstract)).toEqual(["abstract", "abstract"]);
-      return emergency;
+      return { markdown: emergency, slots: [] };
     });
     const { pipeline, writer, paperIndex } = makeOnePaperPipeline({
       ids,
       summarizeDaily,
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 2,
-    });
+    const completed = await pipeline.runForDate("2026-05-11");
+    expect(completed.kind).toBe("completed");
+    if (completed.kind === "completed") {
+      expect(completed.papersWritten).toBe(2);
+      expect(completed.digest).toBeDefined();
+    }
     expect(writer.writeDaily).toHaveBeenCalledWith(
       "2026-05-11",
       emergency,
@@ -446,10 +446,12 @@ describe("Pipeline partial failure consistency", () => {
       return "not json";
     });
 
-    expect(await pipeline.runForDate("2026-05-11")).toEqual({
-      kind: "completed",
-      papersWritten: 1,
-    });
+    const completed = await pipeline.runForDate("2026-05-11");
+    expect(completed.kind).toBe("completed");
+    if (completed.kind === "completed") {
+      expect(completed.papersWritten).toBe(1);
+      expect(completed.digest).toBeDefined();
+    }
     // filter + 3 daily validation attempts (detail selection is skipped)
     expect(llm.call).toHaveBeenCalledTimes(4);
     expect(writer.writeDaily).toHaveBeenCalledTimes(1);
@@ -599,7 +601,7 @@ describe("Pipeline partial failure consistency", () => {
 
     const result = await pipeline.runForDate("2026-05-11");
 
-    expect(result).toEqual({ kind: "completed", papersWritten: 1 });
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 1 });
     expect(writer.writeDaily).toHaveBeenCalled();
     expect(paperIndex.setPaperPath).toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith(
@@ -650,13 +652,13 @@ describe("Pipeline partial failure consistency", () => {
     await pipeline.runForDate("2026-05-11");
 
     expect(logError).toHaveBeenCalledWith(
-      expect.stringContaining("pipeline: parse failed for bad.cat"),
+      expect.stringContaining("arxiv-source: parse failed for bad.cat"),
     );
     expect(logWarn).not.toHaveBeenCalledWith(
-      expect.stringContaining("pipeline: parse failed for bad.cat"),
+      expect.stringContaining("parse failed for bad.cat"),
     );
     expect(logWarn).toHaveBeenCalledWith(
-      "pipeline: 1/2 categories succeeded, 1 failed",
+      "arxiv-source: 1/2 categories succeeded, 1 failed",
     );
   });
 
@@ -691,7 +693,7 @@ describe("Pipeline partial failure consistency", () => {
 
     const result = await pipeline.runForDate("2026-05-11");
 
-    expect(result).toEqual({ kind: "completed", papersWritten: ids.length });
+    expect(result).toMatchObject({ kind: "completed", papersWritten: ids.length });
     expect(paperFetcher.fetch).toHaveBeenCalledTimes(ids.length);
     expect(maxActive).toBeGreaterThan(1);
     expect(maxActive).toBeLessThanOrEqual(6);

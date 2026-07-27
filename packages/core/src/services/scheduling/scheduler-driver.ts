@@ -42,6 +42,14 @@ export interface SchedulerDriverDeps {
   history: HistoryRecorder;
   recentDates?: SchedulerRecentDates;
   now?: () => Date;
+  /**
+   * Optional post-completion hook (e.g. email delivery). Failures must be
+   * swallowed by the callback — they must not rewrite pipeline run-state.
+   */
+  onDailyCompleted?: (
+    date: string,
+    result: Extract<PipelineResult, { kind: "completed" }>,
+  ) => Promise<void>;
 }
 
 type SchedulerResult = PipelineResult | { kind: "skipped"; reason: string };
@@ -422,6 +430,16 @@ export class SchedulerDriver {
             requestedPapersWritten: result.papersWritten,
             preservedPapersWritten,
           }, now);
+          if (this.deps.onDailyCompleted) {
+            try {
+              await this.deps.onDailyCompleted(date, result);
+            } catch (e) {
+              this.deps.logger.error(
+                `scheduler: onDailyCompleted failed for ${date}; pipeline remains completed`,
+                e,
+              );
+            }
+          }
         } else if (result.kind === "pending") {
           await this.deps.store.setPending(date, result.reason);
           this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);

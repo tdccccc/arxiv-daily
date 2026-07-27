@@ -1,25 +1,24 @@
-.env
-PLAN.md
-__pycache__/
-*.pyc
-.cache/
-*.log
-.venv/
-.worktree/
 
-# Ignore hidden local files/directories by default.
 .*
-
-# Keep project files that affect setup, release, or packaging tracked.
-!.gitignore
+apps/cli/dist/
+.cache/
+.codex-runs/
+.env
 !/.env.example
-!/.python-version
+!extensions/vscode-arxiv-daily/.vscodeignore
 !/.github/
 !/.github/**
-!extensions/vscode-arxiv-daily/.vscodeignore
-
-# Plugin development scratch
+!.gitignore
+# Ignore hidden local files/directories by default.
+# Keep project files that affect setup, release, or packaging tracked.
+*.log
 node_modules/
-apps/cli/dist/
+PLAN.md
+# Plugin development scratch
 plugin_test/
-.codex-runs/
+*.pyc
+__pycache__/
+!/.python-version
+services/**/node_modules/
+.venv/
+.worktree/

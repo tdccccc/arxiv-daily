@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS } from "./defaults";
-import type { ArxivSettings, Topic } from "./types";
+import type { ArxivSettings, EmailSettings, Topic } from "./types";
 import { normalizeCategoryList } from "./categories";
 
 function titleCase(slug: string): string {
@@ -55,4 +55,37 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
       : freshDefaults();
 
   return { category, categories, topics, timezone };
+}
+
+/** Soft-merge email settings so older data.json without `email` still loads. */
+export function migrateEmailSettings(raw: unknown): EmailSettings {
+  const defaults = DEFAULT_SETTINGS.email;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...defaults };
+  }
+  const email = raw as Record<string, unknown>;
+  const mode =
+    email.mode === "hosted" || email.mode === "self"
+      ? email.mode
+      : defaults.mode;
+  return {
+    enabled: typeof email.enabled === "boolean" ? email.enabled : defaults.enabled,
+    mode,
+    to: typeof email.to === "string" ? email.to : defaults.to,
+    fromEmail: typeof email.fromEmail === "string" ? email.fromEmail : defaults.fromEmail,
+    fromName:
+      typeof email.fromName === "string"
+        ? email.fromName
+        : defaults.fromName ?? "",
+    apiKey:
+      typeof email.apiKey === "string" ? email.apiKey : defaults.apiKey ?? "",
+    hostedToken:
+      typeof email.hostedToken === "string"
+        ? email.hostedToken
+        : defaults.hostedToken ?? "",
+    hostedBaseUrl:
+      typeof email.hostedBaseUrl === "string"
+        ? email.hostedBaseUrl
+        : defaults.hostedBaseUrl ?? "",
+  };
 }

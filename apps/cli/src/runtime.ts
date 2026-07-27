@@ -1,4 +1,4 @@
-import type { HostAdapters } from "@arxiv-daily/core";
+import type { HostAdapters, PipelineResult } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { LlmClient } from "@arxiv-daily/core";
 import { ArxivFetcher } from "@arxiv-daily/core";
@@ -21,6 +21,10 @@ import {
   createStorageStateStore,
   type StateStore,
 } from "@arxiv-daily/core";
+import {
+  deliverDailyEmailIfEnabled,
+  resolveResendApiKey,
+} from "@arxiv-daily/core";
 import type { CliRuntimeConfig } from "./config";
 
 export interface CliRuntime {
@@ -37,6 +41,7 @@ export interface CliRuntime {
   pipeline: ArxivPipeline;
   manualFetch: ManualFetchService;
   operations: OperationRegistry;
+  settings: CliRuntimeConfig["settings"];
 }
 
 export interface BuildCliRuntimeOptions {
@@ -51,7 +56,12 @@ export async function buildCliRuntime(
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
     opts.logger ?? new Logger(config.settings.advanced.logLevel, undefined, config.settings.arxiv.timezone);
-  logger.setSensitiveValues([config.settings.llm.apiKey]);
+  const resendApiKey = resolveResendApiKey(config.settings.email, process.env);
+  logger.setSensitiveValues(
+    [config.settings.llm.apiKey, resendApiKey, config.settings.email.apiKey ?? ""].filter(
+      Boolean,
+    ),
+  );
   const llm = new LlmClient(config.settings.llm, logger, host.http);
   const fetcher = new ArxivFetcher({
     category: config.settings.arxiv.category,
@@ -131,6 +141,24 @@ export async function buildCliRuntime(
     llmSettings: config.settings.llm,
   });
   const operations = new OperationRegistry();
+  const onDailyCompleted = async (
+    date: string,
+    result: Extract<PipelineResult, { kind: "completed" }>,
+  ): Promise<void> => {
+    if (!result.digest) {
+      logger.debug(`email: no digest for ${date}; skip auto-send`);
+      return;
+    }
+    await deliverDailyEmailIfEnabled(result.digest, {
+      storage: host.storage,
+      http: host.http,
+      output: config.settings.output,
+      email: config.settings.email,
+      apiKey: resolveResendApiKey(config.settings.email, process.env),
+      logger,
+    });
+  };
+
   const scheduler = new SchedulerService({
     getSettings: () => config.settings,
     store: stateStore,
@@ -141,6 +169,7 @@ export async function buildCliRuntime(
     cancellation: new RunCancellationService(operations),
     runHistory: runHistoryStore,
     dailyPathForDate: (date) => writer.dailyPath(date),
+    onDailyCompleted,
   });
 
   return {
@@ -157,5 +186,6 @@ export async function buildCliRuntime(
     pipeline,
     manualFetch,
     operations,
+    settings: config.settings,
   };
 }

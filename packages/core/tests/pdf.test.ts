@@ -85,7 +85,7 @@ describe("PdfService", () => {
       3,
     ]);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.papers["2606.12345"].pdfPath).toBe(
+    expect(saved.papers["arxiv:2606.12345"].pdfPath).toBe(
       "arxiv-daily/pdfs/2606.12345.pdf",
     );
   });

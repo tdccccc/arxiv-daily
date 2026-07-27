@@ -79,8 +79,60 @@
   margin-top: 12px;
 }
 
-.arxiv-daily-settings .arxiv-daily-settings__section {
-  scroll-margin-top: 24px;
+/* ── Settings page layout ───────────────────────────── */
+.arxiv-daily-settings {
+  /* Extra air between setting rows inside a section */
+  --arxiv-daily-section-gap: 1.35rem;
+}
+
+.arxiv-daily-settings > .setting-item:not(.arxiv-daily-settings__section):not(.setting-item-heading) {
+  padding-top: 0.7em;
+  padding-bottom: 0.7em;
+}
+
+/*
+ * Section headings: larger title, top rule + spacing so LLM / arXiv / Topics /
+ * Output & schedule / Email / Advanced read as separate cards of content.
+ */
+.arxiv-daily-settings .arxiv-daily-settings__section.setting-item {
+  scroll-margin-top: 28px;
+  margin-top: 1.75rem;
+  margin-bottom: 0.35rem;
+  padding-top: 1.1rem;
+  padding-bottom: 0.55rem;
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: none;
+  background: transparent;
+}
+
+/* First section after enable toggle / setup guide: less top gap, still a rule */
+.arxiv-daily-settings > .arxiv-daily-settings__section.setting-item:first-of-type,
+.arxiv-daily-settings > .setting-item:not(.setting-item-heading) + .arxiv-daily-settings__section.setting-item {
+  /* keep top border for separation from enable toggle */
+}
+
+.arxiv-daily-settings .arxiv-daily-settings__section .setting-item-info {
+  gap: 0.15em;
+}
+
+.arxiv-daily-settings .arxiv-daily-settings__section .setting-item-name {
+  color: var(--text-normal);
+  font-size: 1.12em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.3;
+}
+
+.arxiv-daily-settings .arxiv-daily-settings__section .setting-item-description {
+  margin-top: 0.2em;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+/* Soft block under each section title (groups following rows visually) */
+.arxiv-daily-settings .arxiv-daily-settings__section.setting-item + .setting-item {
+  border-top: none;
 }
 
 .arxiv-daily-settings__help {
@@ -102,6 +154,42 @@
   margin-bottom: 0.4em;
   opacity: 0.65;
   font-size: 0.82em;
+}
+
+/* Email section: full-width tips aligned with setting names (not control column) */
+.arxiv-daily-settings__email-guide {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0.15em 0 0.95em;
+  padding: 0.7em 0.9em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+}
+
+.arxiv-daily-settings__email-guide-title {
+  margin: 0 0 0.4em;
+  color: var(--text-normal);
+  font-size: 0.95em;
+  font-weight: 600;
+}
+
+.arxiv-daily-settings__email-guide-line {
+  margin: 0.25em 0 0;
+}
+
+.arxiv-daily-settings__email-guide-line + .arxiv-daily-settings__email-guide-line {
+  margin-top: 0.2em;
+}
+
+/* Setup guide card sits above sections — keep clear gap before LLM */
+.arxiv-daily-settings > .arxiv-daily-setup,
+.arxiv-daily-settings > .arxiv-daily-setup--complete {
+  margin-bottom: 0.5rem;
 }
 
 .arxiv-daily-settings__llm-input {
