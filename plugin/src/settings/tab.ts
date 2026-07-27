@@ -165,6 +165,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (desc) heading.setDesc(desc);
     heading.settingEl.addClass("arxiv-daily-settings__section");
     heading.settingEl.setAttribute("data-arxiv-daily-section", section);
+    // Ensure heading name is easy to scan in long settings pages.
+    heading.nameEl?.addClass("arxiv-daily-settings__section-title");
     return heading;
   }
 
