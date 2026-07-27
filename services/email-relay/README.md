@@ -36,15 +36,16 @@ Vars in `wrangler.toml` (or dashboard):
 
 | Var | Example |
 |---|---|
-| `PUBLIC_BASE_URL` | `https://email.arxiv-daily.top` |
+| `PUBLIC_BASE_URL` | `https://mail.arxiv-daily.top` |
 | `FROM_EMAIL` | `daily@mail.arxiv-daily.top` |
 | `FROM_NAME` | `arXiv Daily` |
 | `DAILY_QUOTA` | `2` |
 
-DNS:
+DNS / domain:
 
-- Point `email.arxiv-daily.top` to this Worker (Cloudflare custom domain / CNAME per CF docs).  
-- If the zone stays on Huawei Cloud DNS only, use a Worker route after adding the domain to Cloudflare, or a CNAME target Cloudflare gives you.
+- Worker **Custom domain**: `mail.arxiv-daily.top` (same host as the Resend sending subdomain is fine).
+- Plugin default hosted base URL: `https://mail.arxiv-daily.top`
+- Magic links use `PUBLIC_BASE_URL` — keep it aligned with the custom domain.
 
 Deploy:
 

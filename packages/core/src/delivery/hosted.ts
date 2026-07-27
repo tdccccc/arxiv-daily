@@ -7,12 +7,10 @@ import {
 
 /**
  * Default project relay base URL.
- * Prefer the workers.dev URL until the custom domain email.arxiv-daily.top
- * has working HTTPS (Cloudflare custom domain + DNS). Override via
- * settings.email.hostedBaseUrl when the custom domain is ready.
+ * Must match the Worker custom domain (currently mail.arxiv-daily.top).
+ * Override via settings.email.hostedBaseUrl if needed.
  */
-export const DEFAULT_HOSTED_DELIVERY_BASE_URL =
-  "https://arxiv-daily-email-relay.202431101065.workers.dev";
+export const DEFAULT_HOSTED_DELIVERY_BASE_URL = "https://mail.arxiv-daily.top";
 
 export class HostedDeliveryError extends Error {
   constructor(

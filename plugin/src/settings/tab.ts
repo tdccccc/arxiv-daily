@@ -717,7 +717,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         steps.createEl("li", { text: line });
       }
       help.createEl("p", {
-        text: "Requires the project relay at email.arxiv-daily.top (or your Hosted base URL). Project send keys never leave the server. See services/email-relay/README.md.",
+        text: "Requires the project relay at mail.arxiv-daily.top (or your Hosted base URL). Project send keys never leave the server. See services/email-relay/README.md.",
       });
 
       new Setting(containerEl)
@@ -748,12 +748,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("Hosted base URL")
         .setDesc(
-          "Relay API origin. Leave empty for the built-in default (workers.dev until email.arxiv-daily.top HTTPS works). Required if the default cannot be reached.",
+          "Relay API origin. Leave empty for the default https://mail.arxiv-daily.top (Worker custom domain).",
         )
         .addText((t) => {
-          t.setPlaceholder(
-            "https://arxiv-daily-email-relay.202431101065.workers.dev",
-          )
+          t.setPlaceholder("https://mail.arxiv-daily.top")
             .setValue(s.email.hostedBaseUrl ?? "")
             .onChange(async (v) => {
               s.email.hostedBaseUrl = v.trim();
