@@ -97,8 +97,19 @@ npm test
 npm run typecheck
 ```
 
+## Concurrency (KV has no CAS)
+
+Cloudflare KV cannot do compare-and-swap. This Worker:
+
+1. **Reserves** an idempotency key in KV (`pending:…` → `done:…`) before calling Resend.
+2. Routes **`POST /v1/deliver`** through a **Durable Object** (`DeliverGate`) keyed by
+   Idempotency-Key so concurrent requests for the same logical send are **single-threaded**.
+
+Deploy requires the Durable Object migration in `wrangler.toml` (first deploy may take longer).
+
 ## Security notes
 
-- Rate-limit is basic (daily quota per verified email). Tighten before wide public use.
+- Verify-start is rate-limited (per email + per IP). Still not a full anti-abuse stack.
+- Daily quota per verified email (`DAILY_QUOTA`).
 - Do not log full digests in production if avoidable.
 - Rotate `TOKEN_SECRET` invalidates all device tokens.

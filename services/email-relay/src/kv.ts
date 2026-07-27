@@ -2,6 +2,8 @@ import { normalizeEmail, sha256Hex, utcDateKey } from "./crypto";
 
 export interface Env {
   STORE: KVNamespace;
+  /** Durable Object namespace: serializes deliver per idempotency key (KV has no CAS). */
+  DELIVER_GATE?: DurableObjectNamespace;
   RESEND_API_KEY: string;
   TOKEN_SECRET: string;
   PUBLIC_BASE_URL: string;

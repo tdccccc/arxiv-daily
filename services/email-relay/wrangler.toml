@@ -3,20 +3,28 @@ main = "src/index.ts"
 compatibility_date = "2025-05-01"
 
 # Custom domain (Cloudflare Workers → Domains): mail.arxiv-daily.top
-# Same host can serve the API; Resend From still uses daily@mail.arxiv-daily.top
 
 [[kv_namespaces]]
 binding = "STORE"
 id = "0064f89528ac4aba9ac7b3ac4644220d"
 preview_id = "8213e1636f1949a4be4c0d3e7774d25c"
 
+[durable_objects]
+bindings = [
+  { name = "DELIVER_GATE", class_name = "DeliverGate" },
+]
+
+# Free plan requires SQLite-backed Durable Objects
+[[migrations]]
+tag = "v1-deliver-gate"
+new_sqlite_classes = ["DeliverGate"]
+
 [vars]
-# Non-secret defaults (override in dashboard if needed)
 PUBLIC_BASE_URL = "https://mail.arxiv-daily.top"
 FROM_EMAIL = "daily@mail.arxiv-daily.top"
 FROM_NAME = "arXiv Daily"
 DAILY_QUOTA = "20"
 
-# Secrets (set via CLI, never commit):
+# Secrets (never commit):
 #   npx wrangler secret put RESEND_API_KEY
 #   npx wrangler secret put TOKEN_SECRET

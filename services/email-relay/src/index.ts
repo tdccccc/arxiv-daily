@@ -1,21 +1,16 @@
-import { isPlausibleEmail, normalizeEmail, randomToken } from "./crypto";
+import { isPlausibleEmail, normalizeEmail, randomToken, sha256Hex } from "./crypto";
 import {
   checkAndIncrRateLimit,
-  clearIdempotent,
-  completeIdempotent,
-  dailyQuotaLimit,
-  getDevice,
-  getQuotaCount,
-  incrementQuota,
   putDevice,
   putPending,
-  reserveIdempotent,
   takePending,
   type Env,
 } from "./kv";
 import { sendResendEmail } from "./resend";
+import { runDeliver, type DeliverBody } from "./deliver-logic";
 
 export type { Env };
+export { DeliverGate } from "./deliver-gate";
 
 /** Verify-start limits (per rolling TTL window on the KV key). */
 const VERIFY_EMAIL_LIMIT = 3;
@@ -23,8 +18,6 @@ const VERIFY_EMAIL_WINDOW_SEC = 3600;
 const VERIFY_IP_LIMIT = 10;
 const VERIFY_IP_WINDOW_SEC = 3600;
 
-// CORS: plugin uses Obsidian requestUrl (no browser CORS). Keep minimal OPTIONS
-// for local curl/debug only — do not reflect arbitrary origins for credentialed use.
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
@@ -65,7 +58,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
     return verifyComplete(url, env);
   }
   if (request.method === "POST" && path === "/v1/deliver") {
-    return deliver(request, env);
+    return deliverViaGate(request, env);
   }
 
   return json({ error: "not found" }, 404);
@@ -95,7 +88,6 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
     VERIFY_EMAIL_WINDOW_SEC,
   );
   if (!emailRl.ok) {
-    // Generic message — do not confirm whether email exists / was sent.
     return json({ ok: true, message: "verification email sent" });
   }
   const ipRl = await checkAndIncrRateLimit(
@@ -163,98 +155,65 @@ async function verifyComplete(url: URL, env: Env): Promise<Response> {
   );
 }
 
-async function deliver(request: Request, env: Env): Promise<Response> {
+/**
+ * Route deliver through a Durable Object keyed by Idempotency-Key (or token),
+ * so concurrent sends for the same logical mail are single-threaded.
+ */
+async function deliverViaGate(request: Request, env: Env): Promise<Response> {
   assertSecrets(env);
-  const auth = request.headers.get("Authorization") ?? "";
-  const m = /^Bearer\s+(.+)$/i.exec(auth);
-  const deviceToken = m?.[1]?.trim() ?? "";
-  if (!deviceToken) {
-    return json({ error: "missing bearer token" }, 401);
-  }
 
-  const device = await getDevice(env, deviceToken);
-  if (!device) {
-    return json({ error: "invalid or revoked token" }, 401);
-  }
-
-  let body: {
-    to?: string;
-    date?: string;
-    subject?: string;
-    html?: string;
-    text?: string;
-  };
+  // Clone body for possible fallback; DO gets a new Request.
+  const auth = request.headers.get("Authorization");
+  const idemp = request.headers.get("Idempotency-Key");
+  let bodyText: string;
   try {
-    body = (await request.json()) as typeof body;
+    bodyText = await request.text();
+  } catch {
+    return json({ error: "invalid body" }, 400);
+  }
+
+  let parsed: DeliverBody = {};
+  try {
+    parsed = JSON.parse(bodyText) as DeliverBody;
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
 
-  const to = typeof body.to === "string" ? normalizeEmail(body.to) : "";
-  if (!to || to !== device.email) {
-    return json(
-      { error: "to must match the verified email bound to this token" },
-      403,
-    );
-  }
-
-  const subject = typeof body.subject === "string" ? body.subject.trim() : "";
-  const html = typeof body.html === "string" ? body.html : "";
-  const text = typeof body.text === "string" ? body.text : "";
-  if (!subject || (!html && !text)) {
-    return json({ error: "subject and html or text required" }, 400);
-  }
-
-  const idempotency =
-    request.headers.get("Idempotency-Key")?.trim() ||
-    `${typeof body.date === "string" ? body.date : ""}|${to}`;
-
-  const claim = randomToken(16);
-  if (idempotency) {
-    const reserved = await reserveIdempotent(env, idempotency, claim);
-    if (reserved.status === "done") {
-      return json({ ok: true, id: reserved.id, deduped: true });
-    }
-    if (reserved.status === "pending_other") {
-      return json(
-        { error: "delivery already in progress for this idempotency key" },
-        409,
-      );
-    }
-  }
-
-  const limit = dailyQuotaLimit(env);
-  const used = await getQuotaCount(env, to);
-  if (used >= limit) {
-    if (idempotency) await clearIdempotent(env, idempotency);
-    return json(
-      { error: `daily quota exceeded (${limit} per UTC day)`, quota: used },
-      429,
-    );
-  }
-
-  let sent: { id?: string };
-  try {
-    sent = await sendResendEmail(env, {
-      to,
-      subject,
-      html: html || `<pre>${escapeHtml(text)}</pre>`,
-      text: text || stripTags(html),
+  const gate = env.DELIVER_GATE;
+  if (gate) {
+    const keyMaterial =
+      idemp?.trim() ||
+      `${typeof parsed.date === "string" ? parsed.date : ""}|${typeof parsed.to === "string" ? parsed.to : ""}|${auth ?? ""}`;
+    const objectId = gate.idFromName(await sha256Hex(keyMaterial || "default"));
+    const stub = gate.get(objectId);
+    const doReq = new Request("https://deliver-gate/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(auth ? { Authorization: auth } : {}),
+        ...(idemp ? { "Idempotency-Key": idemp } : {}),
+      },
+      body: bodyText,
     });
-  } catch (e) {
-    if (idempotency) await clearIdempotent(env, idempotency);
-    const message = e instanceof Error ? e.message : String(e);
-    return json({ error: message }, 502);
+    const res = await stub.fetch(doReq);
+    const text = await res.text();
+    return new Response(text, {
+      status: res.status,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        ...CORS_HEADERS,
+      },
+    });
   }
 
-  await incrementQuota(env, to);
-  // Always store a stable id so retries dedupe even if Resend omits id.
-  const messageId = sent.id?.trim() || `local:${claim}`;
-  if (idempotency) {
-    await completeIdempotent(env, idempotency, messageId);
-  }
-
-  return json({ ok: true, id: messageId });
+  // Fallback if DO binding missing (local misconfig): still run logic (weaker).
+  const outcome = await runDeliver({
+    env,
+    authorizationHeader: auth,
+    idempotencyHeader: idemp,
+    body: parsed,
+  });
+  return json(outcome.body, outcome.status);
 }
 
 function clientIp(request: Request): string {
@@ -313,10 +272,3 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
-
-// Re-export for tests that import handler pieces via default fetch
-export { handle as handleRequest };
