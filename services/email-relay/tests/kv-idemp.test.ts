@@ -30,7 +30,7 @@ function envWith(kv: ReturnType<typeof memoryKv>): Env {
     PUBLIC_BASE_URL: "https://example.com",
     FROM_EMAIL: "daily@mail.arxiv-daily.top",
     FROM_NAME: "arXiv Daily",
-    DAILY_QUOTA: "20",
+    DAILY_QUOTA: "5",
   };
 }
 

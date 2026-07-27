@@ -39,7 +39,7 @@ Vars in `wrangler.toml` (or dashboard):
 | `PUBLIC_BASE_URL` | `https://mail.arxiv-daily.top` |
 | `FROM_EMAIL` | `daily@mail.arxiv-daily.top` |
 | `FROM_NAME` | `arXiv Daily` |
-| `DAILY_QUOTA` | `2` |
+| `DAILY_QUOTA` | `5` (public Beta; raise only for private debugging) |
 
 DNS / domain:
 

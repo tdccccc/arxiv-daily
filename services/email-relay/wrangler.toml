@@ -23,7 +23,9 @@ new_sqlite_classes = ["DeliverGate"]
 PUBLIC_BASE_URL = "https://mail.arxiv-daily.top"
 FROM_EMAIL = "daily@mail.arxiv-daily.top"
 FROM_NAME = "arXiv Daily"
-DAILY_QUOTA = "20"
+# Public Beta: 1 formal daily + a few tests/retries per verified inbox (UTC day).
+# Was briefly 20 during private debugging; do not ship that to the marketplace.
+DAILY_QUOTA = "5"
 
 # Secrets (never commit):
 #   npx wrangler secret put RESEND_API_KEY

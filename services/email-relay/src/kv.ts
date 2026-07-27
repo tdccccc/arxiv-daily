@@ -239,8 +239,8 @@ export async function checkAndIncrRateLimit(
 }
 
 export function dailyQuotaLimit(env: Env): number {
-  const n = Number(env.DAILY_QUOTA || "2");
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 2;
+  const n = Number(env.DAILY_QUOTA || "5");
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
 
 // --- legacy aliases used by older tests (if any) ---
