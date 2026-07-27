@@ -275,6 +275,37 @@ export function sampleDailyDigest(input: {
   toName?: string;
 }): DailyDigest {
   const language = input.language === "en" ? "en" : "zh";
+  // Intentional TeX-like strings so Send test exercises emailProse math softening.
+  const mathTitle =
+    language === "en"
+      ? "Math probe: $E=mc^2$, $N_{\\rm side}=2048$, $\\theta\\leq\\pi$"
+      : "公式显示探测：$E=mc^2$，$N_{\\rm side}=2048$，$\\theta\\leq\\pi$";
+  const fields =
+    language === "en"
+      ? {
+          coreProblem:
+            "Can mail clients read summaries with inline math such as $\\alpha\\approx 0.3$ and $\\Omega_m$?",
+          keyMethod:
+            "Normalize TeX before send: strip $...$, simplify $\\frac{a}{b}$, $\\leq$, $\\geq$, $\\sim$.",
+          mainResult:
+            "Expect readable text like α≈0.3, (a)/(b), θ≤π — not raw $ delimiters or \\commands.",
+          whyRelevant:
+            "Stress-test emailProse on $\\Delta\\chi^2$, $H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$, and $\\sum_i x_i$.",
+          limitations:
+            "No MathJax in mail; complex layouts stay imperfect. Vault daily keeps full Markdown math.",
+        }
+      : {
+          coreProblem:
+            "邮件客户端能否读懂含公式的摘要，例如 $\\alpha\\approx 0.3$ 与 $\\Omega_m$？",
+          keyMethod:
+            "发送前规范化 TeX：去掉 $...$，简化 $\\frac{a}{b}$、$\\leq$、$\\geq$、$\\sim$ 等。",
+          mainResult:
+            "期望看到接近 α≈0.3、(a)/(b)、θ≤π 的文本，而不是满屏 $ 定界符或 \\命令。",
+          whyRelevant:
+            "用 $\\Delta\\chi^2$、$H_0\\simeq 70\\,\\mathrm{km\\,s^{-1}\\,Mpc^{-1}}$、$\\sum_i x_i$ 等探测 emailProse。",
+          limitations:
+            "邮件无 MathJax，复杂排版仍会打折；vault 日报仍保留完整科学 Markdown 公式。",
+        };
   return {
     date: input.date,
     summaryLanguage: language,
@@ -284,41 +315,27 @@ export function sampleDailyDigest(input: {
     topics: [
       {
         tag: "sample",
-        name: language === "en" ? "Sample topic" : "示例主题",
+        name: language === "en" ? "Sample topic (math probe)" : "示例主题（公式探测）",
         papers: [
           {
             id: "2601.00001",
-            title:
-              language === "en"
-                ? "arXiv Daily test email ($E=mc^2$)"
-                : "arXiv Daily 测试邮件（$E=mc^2$）",
+            title: mathTitle,
             authors: input.toName?.trim() || "arXiv Daily",
             topicTag: "sample",
-            sourceSections: language === "en" ? "Abstract" : "摘要",
+            // Intentionally long; email renderer must omit this block.
+            sourceSections:
+              language === "en"
+                ? "Abstract, 1 Introduction, 2 Methods, 2.1 Setup, 3 Results, 4 Conclusions"
+                : "摘要, 1 引言, 2 方法, 2.1 设置, 3 结果, 4 结论",
             absUrl: "https://arxiv.org/abs/2601.00001",
             pdfUrl: "https://arxiv.org/pdf/2601.00001",
             kind: "structured",
             fields: {
-              coreProblem:
-                language === "en"
-                  ? "Verify Resend delivery path."
-                  : "验证 Resend 投递通路。",
-              keyMethod:
-                language === "en"
-                  ? "Send one sample HTML+text message."
-                  : "发送一封示例 HTML+text 邮件。",
-              mainResult:
-                language === "en"
-                  ? "Inbox receives a readable digest."
-                  : "收件箱收到可读日报。",
-              whyRelevant:
-                language === "en"
-                  ? "Confirms settings and API key."
-                  : "确认设置与 API key。",
-              limitations:
-                language === "en"
-                  ? "Not a real paper summary."
-                  : "非真实论文摘要。",
+              coreProblem: fields.coreProblem,
+              keyMethod: fields.keyMethod,
+              mainResult: fields.mainResult,
+              whyRelevant: fields.whyRelevant,
+              limitations: fields.limitations,
             },
           },
         ],
