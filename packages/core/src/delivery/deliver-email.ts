@@ -99,7 +99,7 @@ export function isEmailCredentialsReady(
   apiKey?: string,
 ): { ok: true } | { ok: false; reason: string } {
   if (!email?.to?.trim()) {
-    return { ok: false, reason: "email.to is empty" };
+    return { ok: false, reason: "Your email is empty" };
   }
   const mode = resolveEmailDeliveryMode(email);
   if (mode === "hosted") {
@@ -107,11 +107,14 @@ export function isEmailCredentialsReady(
       return {
         ok: false,
         reason:
-          "Official delivery (Beta) is not online yet; switch to Send yourself or wait for the service",
+          "Official delivery (Beta) is not available yet; choose Send yourself or try again later",
       };
     }
     if (!email.hostedToken?.trim()) {
-      return { ok: false, reason: "hosted delivery token is missing" };
+      return {
+        ok: false,
+        reason: "Verification code is missing",
+      };
     }
     return { ok: true };
   }

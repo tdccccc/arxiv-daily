@@ -357,13 +357,13 @@ export default class ArxivDailyPlugin extends Plugin {
 
   async sendHostedVerificationEmail(): Promise<string> {
     const to = this.settings.email.to?.trim() ?? "";
-    if (!to) throw new Error("Set To before sending a verification email");
+    if (!to) throw new Error("Enter your email before sending a verification message");
     await startHostedEmailVerification({
       http: this.host.http,
       baseUrl: this.settings.email.hostedBaseUrl,
       email: to,
     });
-    return `Verification email sent to ${to}. Open the link and paste the device token into Hosted token.`;
+    return `Verification email sent to ${to}. Open the link, then paste the code from that page into Verification code.`;
   }
 
   private buildPipeline(): ArxivPipeline {

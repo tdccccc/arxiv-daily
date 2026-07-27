@@ -109,7 +109,7 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     });
     expect(result.kind).toBe("disabled");
     if (result.kind === "disabled") {
-      expect(result.reason).toMatch(/token/i);
+      expect(result.reason).toMatch(/verification code/i);
     }
   });
 });

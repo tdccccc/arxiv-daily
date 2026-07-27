@@ -63,7 +63,7 @@ export async function startHostedEmailVerification(opts: {
   }
   const email = opts.email.trim();
   if (!email) {
-    throw new HostedDeliveryError("email is required");
+    throw new HostedDeliveryError("Enter your email address first.");
   }
   const base = resolveHostedBaseUrl(opts.baseUrl);
   const url = `${base}/v1/verify/start`;
@@ -79,16 +79,15 @@ export async function startHostedEmailVerification(opts: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new HostedDeliveryError(
-      `Cannot reach Official delivery relay at ${base} (${msg}). ` +
-        `Set Hosted base URL to your working Worker URL ` +
-        `(e.g. https://….workers.dev) if the custom domain is not ready.`,
+      `Cannot reach Official delivery at ${base} (${msg}). ` +
+        `Check your network, or leave Service URL blank to use the default.`,
       undefined,
       e,
     );
   }
   if (res.status < 200 || res.status >= 300) {
     throw new HostedDeliveryError(
-      `Verify start HTTP ${res.status}: ${res.bodyText.slice(0, 300)}`,
+      `Could not send verification email (HTTP ${res.status}): ${res.bodyText.slice(0, 300)}`,
       res.status,
     );
   }
@@ -111,7 +110,9 @@ export async function sendViaHosted(opts: {
   // Strip all whitespace — paste from HTML <pre> often includes newlines.
   const token = opts.token.replace(/\s+/g, "").trim();
   if (!token) {
-    throw new HostedDeliveryError("hosted delivery token is missing");
+    throw new HostedDeliveryError(
+      "Verification code is missing. Send a verification email and paste the code from the page.",
+    );
   }
 
   let res;
@@ -137,7 +138,7 @@ export async function sendViaHosted(opts: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new HostedDeliveryError(
-      `Cannot reach Official delivery relay at ${base} (${msg}).`,
+      `Cannot reach Official delivery at ${base} (${msg}).`,
       undefined,
       e,
     );
@@ -148,15 +149,15 @@ export async function sendViaHosted(opts: {
     let hint = "";
     if (res.status === 401) {
       hint =
-        " Token invalid/revoked: re-run Send verification email, open the NEW magic link, paste the long device token from the success page (not the link’s ?token=).";
+        " Verification code is invalid or expired. Send a new verification email, open the latest link, and paste the long code shown on the web page (not the short code in the email link).";
     } else if (res.status === 403) {
       hint =
-        " To must exactly match the email you verified (same address as in the verification mail).";
+        " Your email must exactly match the address you verified.";
     } else if (res.status === 429) {
-      hint = " Daily quota exceeded for this verified inbox.";
+      hint = " Daily send limit reached for this verified inbox. Try again tomorrow.";
     }
     throw new HostedDeliveryError(
-      `Hosted delivery HTTP ${res.status}: ${body}.${hint}`,
+      `Official delivery failed (HTTP ${res.status}): ${body}.${hint}`,
       res.status,
     );
   }
