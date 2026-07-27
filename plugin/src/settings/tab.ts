@@ -746,10 +746,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
 
       new Setting(containerEl)
-        .setName("Hosted base URL (optional)")
-        .setDesc("Default https://email.arxiv-daily.top — override for local wrangler dev.")
+        .setName("Hosted base URL")
+        .setDesc(
+          "Relay API origin. Leave empty for the built-in default (workers.dev until email.arxiv-daily.top HTTPS works). Required if the default cannot be reached.",
+        )
         .addText((t) => {
-          t.setPlaceholder("https://email.arxiv-daily.top")
+          t.setPlaceholder(
+            "https://arxiv-daily-email-relay.202431101065.workers.dev",
+          )
             .setValue(s.email.hostedBaseUrl ?? "")
             .onChange(async (v) => {
               s.email.hostedBaseUrl = v.trim();

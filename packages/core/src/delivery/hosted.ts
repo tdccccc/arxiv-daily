@@ -5,9 +5,14 @@ import {
   type ResendEmailPayload,
 } from "./types";
 
-/** Default project relay base URL (Cloudflare Worker custom domain). */
+/**
+ * Default project relay base URL.
+ * Prefer the workers.dev URL until the custom domain email.arxiv-daily.top
+ * has working HTTPS (Cloudflare custom domain + DNS). Override via
+ * settings.email.hostedBaseUrl when the custom domain is ready.
+ */
 export const DEFAULT_HOSTED_DELIVERY_BASE_URL =
-  "https://email.arxiv-daily.top";
+  "https://arxiv-daily-email-relay.202431101065.workers.dev";
 
 export class HostedDeliveryError extends Error {
   constructor(
@@ -63,13 +68,26 @@ export async function startHostedEmailVerification(opts: {
     throw new HostedDeliveryError("email is required");
   }
   const base = resolveHostedBaseUrl(opts.baseUrl);
-  const res = await opts.http.request({
-    url: `${base}/v1/verify/start`,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-    signal: opts.signal,
-  });
+  const url = `${base}/v1/verify/start`;
+  let res;
+  try {
+    res = await opts.http.request({
+      url,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+      signal: opts.signal,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new HostedDeliveryError(
+      `Cannot reach Official delivery relay at ${base} (${msg}). ` +
+        `Set Hosted base URL to your working Worker URL ` +
+        `(e.g. https://….workers.dev) if the custom domain is not ready.`,
+      undefined,
+      e,
+    );
+  }
   if (res.status < 200 || res.status >= 300) {
     throw new HostedDeliveryError(
       `Verify start HTTP ${res.status}: ${res.bodyText.slice(0, 300)}`,

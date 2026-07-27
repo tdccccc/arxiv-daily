@@ -9,11 +9,8 @@ compatibility_date = "2025-05-01"
 
 [[kv_namespaces]]
 binding = "STORE"
-id = "00000000000000000000000000000000"
-preview_id = "00000000000000000000000000000000"
-
-# Create KV: npx wrangler kv namespace create STORE
-# Then replace id / preview_id above.
+id = "0064f89528ac4aba9ac7b3ac4644220d"
+preview_id = "8213e1636f1949a4be4c0d3e7774d25c"
 
 [vars]
 # Non-secret defaults (override in dashboard if needed)
