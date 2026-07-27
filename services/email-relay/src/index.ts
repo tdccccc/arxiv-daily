@@ -1,13 +1,15 @@
 import { isPlausibleEmail, normalizeEmail, randomToken } from "./crypto";
 import {
+  checkAndIncrRateLimit,
+  clearIdempotent,
+  completeIdempotent,
   dailyQuotaLimit,
   getDevice,
-  getIdempotent,
   getQuotaCount,
   incrementQuota,
   putDevice,
-  putIdempotent,
   putPending,
+  reserveIdempotent,
   takePending,
   type Env,
 } from "./kv";
@@ -15,8 +17,15 @@ import { sendResendEmail } from "./resend";
 
 export type { Env };
 
+/** Verify-start limits (per rolling TTL window on the KV key). */
+const VERIFY_EMAIL_LIMIT = 3;
+const VERIFY_EMAIL_WINDOW_SEC = 3600;
+const VERIFY_IP_LIMIT = 10;
+const VERIFY_IP_WINDOW_SEC = 3600;
+
+// CORS: plugin uses Obsidian requestUrl (no browser CORS). Keep minimal OPTIONS
+// for local curl/debug only — do not reflect arbitrary origins for credentialed use.
 const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, Idempotency-Key",
@@ -75,23 +84,53 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
     return json({ error: "invalid email" }, 400);
   }
 
+  const emailNorm = normalizeEmail(email);
+  const ip = clientIp(request);
+
+  const emailRl = await checkAndIncrRateLimit(
+    env,
+    "verify-email",
+    emailNorm,
+    VERIFY_EMAIL_LIMIT,
+    VERIFY_EMAIL_WINDOW_SEC,
+  );
+  if (!emailRl.ok) {
+    // Generic message — do not confirm whether email exists / was sent.
+    return json({ ok: true, message: "verification email sent" });
+  }
+  const ipRl = await checkAndIncrRateLimit(
+    env,
+    "verify-ip",
+    ip,
+    VERIFY_IP_LIMIT,
+    VERIFY_IP_WINDOW_SEC,
+  );
+  if (!ipRl.ok) {
+    return json({ ok: true, message: "verification email sent" });
+  }
+
   const token = randomToken(24);
   await putPending(env, token, email, 3600);
   const link = `${env.PUBLIC_BASE_URL.replace(/\/$/, "")}/v1/verify?token=${token}`;
 
-  await sendResendEmail(env, {
-    to: normalizeEmail(email),
-    subject: "Verify your arXiv Daily email (Beta)",
-    text:
-      `Confirm this address for Official delivery (Beta).\n\n` +
-      `Open this link within 1 hour:\n${link}\n\n` +
-      `If you did not request this, ignore this email.`,
-    html:
-      `<p>Confirm this address for <strong>arXiv Daily Official delivery (Beta)</strong>.</p>` +
-      `<p><a href="${escapeHtml(link)}">Verify email</a></p>` +
-      `<p>Or copy: <code>${escapeHtml(link)}</code></p>` +
-      `<p>Link expires in 1 hour. If you did not request this, ignore this email.</p>`,
-  });
+  try {
+    await sendResendEmail(env, {
+      to: emailNorm,
+      subject: "Verify your arXiv Daily email (Beta)",
+      text:
+        `Confirm this address for Official delivery (Beta).\n\n` +
+        `Open this link within 1 hour:\n${link}\n\n` +
+        `If you did not request this, ignore this email.`,
+      html:
+        `<p>Confirm this address for <strong>arXiv Daily Official delivery (Beta)</strong>.</p>` +
+        `<p><a href="${escapeHtml(link)}">Verify email</a></p>` +
+        `<p>Or copy: <code>${escapeHtml(link)}</code></p>` +
+        `<p>Link expires in 1 hour. If you did not request this, ignore this email.</p>`,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return json({ error: message }, 500);
+  }
 
   return json({ ok: true, message: "verification email sent" });
 }
@@ -170,35 +209,60 @@ async function deliver(request: Request, env: Env): Promise<Response> {
     request.headers.get("Idempotency-Key")?.trim() ||
     `${typeof body.date === "string" ? body.date : ""}|${to}`;
 
+  const claim = randomToken(16);
   if (idempotency) {
-    const existing = await getIdempotent(env, idempotency);
-    if (existing) {
-      return json({ ok: true, id: existing, deduped: true });
+    const reserved = await reserveIdempotent(env, idempotency, claim);
+    if (reserved.status === "done") {
+      return json({ ok: true, id: reserved.id, deduped: true });
+    }
+    if (reserved.status === "pending_other") {
+      return json(
+        { error: "delivery already in progress for this idempotency key" },
+        409,
+      );
     }
   }
 
   const limit = dailyQuotaLimit(env);
   const used = await getQuotaCount(env, to);
   if (used >= limit) {
+    if (idempotency) await clearIdempotent(env, idempotency);
     return json(
       { error: `daily quota exceeded (${limit} per UTC day)`, quota: used },
       429,
     );
   }
 
-  const sent = await sendResendEmail(env, {
-    to,
-    subject,
-    html: html || `<pre>${escapeHtml(text)}</pre>`,
-    text: text || stripTags(html),
-  });
-
-  await incrementQuota(env, to);
-  if (idempotency && sent.id) {
-    await putIdempotent(env, idempotency, sent.id);
+  let sent: { id?: string };
+  try {
+    sent = await sendResendEmail(env, {
+      to,
+      subject,
+      html: html || `<pre>${escapeHtml(text)}</pre>`,
+      text: text || stripTags(html),
+    });
+  } catch (e) {
+    if (idempotency) await clearIdempotent(env, idempotency);
+    const message = e instanceof Error ? e.message : String(e);
+    return json({ error: message }, 502);
   }
 
-  return json({ ok: true, id: sent.id ?? null });
+  await incrementQuota(env, to);
+  // Always store a stable id so retries dedupe even if Resend omits id.
+  const messageId = sent.id?.trim() || `local:${claim}`;
+  if (idempotency) {
+    await completeIdempotent(env, idempotency, messageId);
+  }
+
+  return json({ ok: true, id: messageId });
+}
+
+function clientIp(request: Request): string {
+  return (
+    request.headers.get("CF-Connecting-IP") ||
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "unknown"
+  );
 }
 
 function assertSecrets(env: Env): void {
@@ -253,3 +317,6 @@ function escapeHtml(value: string): string {
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
+
+// Re-export for tests that import handler pieces via default fetch
+export { handle as handleRequest };

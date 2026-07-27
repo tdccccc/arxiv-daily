@@ -63,11 +63,11 @@ describe("isValidCalendarDate", () => {
 });
 
 describe("isSupportedPaperIndexSchemaVersion", () => {
-  it.each([1, 2, 3])("accepts paper index schema %i", (schemaVersion) => {
+  it.each([1, 2, 3, 4])("accepts paper index schema %i", (schemaVersion) => {
     expect(isSupportedPaperIndexSchemaVersion(schemaVersion)).toBe(true);
   });
 
-  it.each([0, 4, -1, 2.5, "3", undefined])(
+  it.each([0, 5, -1, 2.5, "3", undefined])(
     "rejects unsupported paper index schema %s",
     (schemaVersion) => {
       expect(isSupportedPaperIndexSchemaVersion(schemaVersion)).toBe(false);

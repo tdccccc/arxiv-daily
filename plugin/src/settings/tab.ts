@@ -732,22 +732,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           }),
         );
 
-      new Setting(containerEl)
-        .setName("Hosted token")
-        .setDesc(
-          "Paste the LONG device token from the success page after you open the magic link (hex string). Not the short ?token= in the URL, and not your Resend API key. To must match the verified email.",
-        )
-        .addText((t) => {
-          t.setPlaceholder("long hex token from success page")
-            .setValue(s.email.hostedToken ?? "")
-            .onChange(async (v) => {
-              // Strip whitespace/newlines from HTML paste.
-              s.email.hostedToken = v.replace(/\s+/g, "").trim();
-              await this.plugin.saveSettings();
-              this.plugin.refreshSensitiveValues();
-            });
-        });
-
+      this.renderHostedTokenSetting(containerEl);
       new Setting(containerEl)
         .setName("Hosted base URL")
         .setDesc(
@@ -1004,6 +989,99 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         if (!confirmed) return;
         this.plugin.settings.email.apiKey = "";
         await this.plugin.saveSettings();
+        this.display();
+      });
+    });
+  }
+
+  private renderHostedTokenSetting(containerEl: HTMLElement): void {
+    const configured = Boolean(this.plugin.settings.email.hostedToken?.trim());
+    const setting = new Setting(containerEl)
+      .setName("Hosted token")
+      .setDesc(
+        "Long device token from the verification success page (not the ?token= in the magic-link URL). Stored like other secrets; not shown after save. To must match the verified email.",
+      );
+    let editing = !configured;
+    let draft = "";
+    const input = setting.controlEl.createEl("input", {
+      cls: "arxiv-daily-settings__llm-input",
+      type: editing ? "password" : "text",
+      attr: { placeholder: "long hex token from success page" },
+    });
+    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+    input.readOnly = !editing;
+
+    const replace = setting.controlEl.createEl("button", {
+      text: configured ? "Replace" : "Save",
+      attr: { type: "button" },
+    });
+    const cancel = setting.controlEl.createEl("button", {
+      text: "Cancel",
+      attr: { type: "button" },
+    });
+    cancel.hidden = !configured;
+    const clear = setting.controlEl.createEl("button", {
+      text: "Clear",
+      attr: { type: "button" },
+    });
+    clear.hidden = !configured;
+
+    const enterEdit = () => {
+      editing = true;
+      draft = "";
+      input.type = "password";
+      input.readOnly = false;
+      input.value = "";
+      replace.textContent = "Save";
+      cancel.hidden = false;
+      input.focus();
+    };
+    const reset = () => {
+      editing = false;
+      draft = "";
+      input.type = "text";
+      input.readOnly = true;
+      input.value = API_KEY_CONFIGURED_SENTINEL;
+      replace.textContent = "Replace";
+      cancel.hidden = true;
+    };
+    input.addEventListener("input", () => {
+      if (editing) draft = input.value;
+    });
+    replace.addEventListener("click", () => {
+      if (!editing) {
+        enterEdit();
+        return;
+      }
+      this.runAction("save hosted token", async () => {
+        const next = draft.replace(/\s+/g, "").trim();
+        if (!next) {
+          new Notice("Paste the device token before saving.");
+          return;
+        }
+        this.plugin.settings.email.hostedToken = next;
+        await this.plugin.saveSettings();
+        this.plugin.refreshSensitiveValues();
+        this.display();
+      });
+    });
+    cancel.addEventListener("click", () => {
+      if (configured || this.plugin.settings.email.hostedToken?.trim()) reset();
+      else {
+        draft = "";
+        input.value = "";
+      }
+    });
+    clear.addEventListener("click", () => {
+      this.runAction("clear hosted token", async () => {
+        const confirmed = await this.confirmReplace(
+          "Clear the hosted device token? Official delivery will stop until you verify again.",
+          "Clear",
+        );
+        if (!confirmed) return;
+        this.plugin.settings.email.hostedToken = "";
+        await this.plugin.saveSettings();
+        this.plugin.refreshSensitiveValues();
         this.display();
       });
     });

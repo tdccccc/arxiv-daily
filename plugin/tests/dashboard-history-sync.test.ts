@@ -210,11 +210,11 @@ describe("syncDashboardHistory", () => {
     });
 
     expect(Object.keys(index.papers).sort()).toEqual([
-      "2606.00001",
-      "2606.00002",
-      "2606.00003",
+      "arxiv:2606.00001",
+      "arxiv:2606.00002",
+      "arxiv:2606.00003",
     ]);
-    expect(index.papers["2606.00001"]).toMatchObject({
+    expect(index.papers["arxiv:2606.00001"]).toMatchObject({
       title: "Detail Paper",
       authors: ["A. Author et al."],
       primaryTopic: "photo-z",
@@ -222,7 +222,7 @@ describe("syncDashboardHistory", () => {
       paperPath: "arxiv/papers/2606.00001.md",
       dailyReports: ["arxiv/daily/2026-06-10.md"],
     });
-    expect(index.papers["2606.00002"]).toMatchObject({
+    expect(index.papers["arxiv:2606.00002"]).toMatchObject({
       title: "Daily Only Paper",
       authors: ["B. Author"],
       primaryTopic: "photo-z",
@@ -230,7 +230,7 @@ describe("syncDashboardHistory", () => {
       paperPath: null,
       dailyReports: ["arxiv/daily/2026-06-10.md"],
     });
-    expect(index.papers["2606.00003"]).toMatchObject({
+    expect(index.papers["arxiv:2606.00003"]).toMatchObject({
       title: "Orphan Detail Paper",
       detail: true,
       paperPath: "arxiv/papers/2606.00003.md",
@@ -265,15 +265,15 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(Object.keys(index.papers)).toEqual([structuredId, fallbackId]);
-    expect(index.papers[structuredId]?.summary).toEqual({
+    expect(Object.keys(index.papers).sort()).toEqual([`arxiv:${structuredId}`, `arxiv:${fallbackId}`].sort());
+    expect(index.papers[`arxiv:${structuredId}`]?.summary).toEqual({
       coreProblem: `${structuredMath}; PS1+WISE A & B.`,
     });
-    expect(index.papers[fallbackId]?.summary).toBeUndefined();
-    expect(index.papers[fallbackId]?.abstract).toBe(
+    expect(index.papers[`arxiv:${fallbackId}`]?.summary).toBeUndefined();
+    expect(index.papers[`arxiv:${fallbackId}`]?.abstract).toBe(
       `${fallbackMath}; Trusted original abstract.`,
     );
-    expect(index.papers[fallbackId]?.dailyReports).toEqual([
+    expect(index.papers[`arxiv:${fallbackId}`]?.dailyReports).toEqual([
       "arxiv/daily/2026-06-10.md",
     ]);
 
@@ -300,8 +300,8 @@ describe("syncDashboardHistory", () => {
         search: String.raw`\mathrm{NMAD}`,
       }, { searchIndex }).rows.map((row) => row.arxivId)).toEqual([structuredId]);
     }
-    expect(index.papers[structuredId]?.summary?.coreProblem).not.toContain("&lt;");
-    expect(index.papers[fallbackId]?.abstract).not.toContain("\\\\");
+    expect(index.papers[`arxiv:${structuredId}`]?.summary?.coreProblem).not.toContain("&lt;");
+    expect(index.papers[`arxiv:${fallbackId}`]?.abstract).not.toContain("\\\\");
   });
 
   it("fills only missing abstracts from the earliest fallback without downgrading canonical data", async () => {
@@ -387,12 +387,12 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers[canonicalId]?.abstract).toBe(canonicalAbstract);
-    expect(index.papers[englishId]?.abstract).toBe(englishRecovered);
-    expect(index.papers[chineseId]?.abstract).toBe(chineseRecovered);
-    expect(index.papers[canonicalId]?.summary).toBeUndefined();
-    expect(index.papers[englishId]?.summary).toBeUndefined();
-    expect(index.papers[chineseId]?.summary).toBeUndefined();
+    expect(index.papers[`arxiv:${canonicalId}`]?.abstract).toBe(canonicalAbstract);
+    expect(index.papers[`arxiv:${englishId}`]?.abstract).toBe(englishRecovered);
+    expect(index.papers[`arxiv:${chineseId}`]?.abstract).toBe(chineseRecovered);
+    expect(index.papers[`arxiv:${canonicalId}`]?.summary).toBeUndefined();
+    expect(index.papers[`arxiv:${englishId}`]?.summary).toBeUndefined();
+    expect(index.papers[`arxiv:${chineseId}`]?.summary).toBeUndefined();
 
     const entries = Object.values(index.papers);
     for (const searchIndex of [new PaperSearchIndex(entries), null]) {
@@ -442,9 +442,9 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers[englishId]?.abstract).toBeUndefined();
-    expect(index.papers[chineseId]?.abstract).toBeUndefined();
-    expect(index.papers[realId]?.abstract).toBe(
+    expect(index.papers[`arxiv:${englishId}`]?.abstract).toBeUndefined();
+    expect(index.papers[`arxiv:${chineseId}`]?.abstract).toBeUndefined();
+    expect(index.papers[`arxiv:${realId}`]?.abstract).toBe(
       "Availability is unavailable for one instrument; this is real prose.",
     );
     const entries = Object.values(index.papers);
@@ -502,7 +502,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.40000"]?.summary).toEqual({
+    expect(index.papers["arxiv:2606.40000"]?.summary).toEqual({
       coreProblem: "New problem.",
       keyMethod: "Old method.",
       mainResult: "New result.",
@@ -539,7 +539,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.40001"]?.summary).toEqual({
+    expect(index.papers["arxiv:2606.40001"]?.summary).toEqual({
       coreProblem: "Same problem.",
     });
     expect(write).not.toHaveBeenCalled();
@@ -576,7 +576,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.00001"]).toMatchObject({
+    expect(index.papers["arxiv:2606.00001"]).toMatchObject({
       detail: false,
       paperPath: null,
       dailyReports: ["arxiv/daily/2026-06-10.md"],
@@ -607,7 +607,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.00003"]).toBeUndefined();
+    expect(index.papers["arxiv:2606.00003"]).toBeUndefined();
   });
 
   it("prunes deleted daily report references from the paper index", async () => {
@@ -654,9 +654,9 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.10000"]).toBeUndefined();
-    expect(index.papers["2606.10002"]).toBeUndefined();
-    expect(index.papers["2606.10001"]).toMatchObject({
+    expect(index.papers["arxiv:2606.10000"]).toBeUndefined();
+    expect(index.papers["arxiv:2606.10002"]).toBeUndefined();
+    expect(index.papers["arxiv:2606.10001"]).toMatchObject({
       seenDates: ["2026-06-14"],
       dailyReports: ["arxiv/daily/2026-06-14.md"],
     });
@@ -693,7 +693,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.15000"]).toMatchObject({
+    expect(index.papers["arxiv:2606.15000"]).toMatchObject({
       seenDates: ["2026-06-15"],
       dailyReports: ["arxiv/daily/2026-06-15.md"],
     });
@@ -719,7 +719,7 @@ describe("syncDashboardHistory", () => {
       topics,
     });
 
-    expect(index.papers["2606.20000"]).toMatchObject({
+    expect(index.papers["arxiv:2606.20000"]).toMatchObject({
       detail: true,
       paperPath: "arxiv/papers/2606.20000.md",
       dailyReports: [],
@@ -762,8 +762,8 @@ describe("syncDashboardHistory", () => {
 
     expect(vault.getMarkdownFiles).not.toHaveBeenCalled();
     expect(Object.keys(index.papers).sort()).toEqual([
-      "2606.30000",
-      "2606.30001",
+      "arxiv:2606.30000",
+      "arxiv:2606.30001",
     ]);
   });
 });
