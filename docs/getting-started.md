@@ -122,14 +122,23 @@ The scheduler runs while Obsidian is open. Missed weekdays in the lookback windo
 
 ## 8. Optional: Email Digest
 
-Email is optional. The product plan is **two modes** (see helm `email-dual-mode.md`):
+Email is optional. There are **two modes**:
 
 | Mode | Status | What you do |
 |---|---|---|
-| **Send yourself** (自己发送) | **Available now** | Your [Resend](https://resend.com) API key; personal inbox |
-| **Official delivery (Beta)** (官方代发) | **Planned** | Verify email with the project; no user API key — requires deployed Worker at email.arxiv-daily.top |
+| **Send yourself** | **Recommended default** | Your [Resend](https://resend.com) API key; personal inbox; no project quota |
+| **Official delivery (Beta)** | **Available (limited)** | Verify your email once; arXiv Daily sends for you — **shared free capacity, not for heavy use** |
 
-Default is **Send yourself**. The plugin does **not** require a project server for that path. Delivery failures never fail the daily pipeline.
+Default is **Send yourself**. Delivery failures never fail the daily report.
+
+### Official delivery (Beta) — capacity
+
+Official delivery is a **shared free Beta**. Capacity is intentionally small so the service can stay free:
+
+- Only a **few messages per verified inbox per UTC day** (tests count toward the limit).
+- It is meant for light personal use (one formal daily plus occasional tests).
+- If you need many sends, reliable high volume, or team delivery, use **Send yourself** with your own Resend account.
+- The service may be rate-limited, paused, or changed without notice while it remains Beta.
 
 ### Send yourself (Resend, bring your own key)
 
@@ -143,28 +152,37 @@ With the default test sender (`onboarding@resend.dev`, used when **From email** 
 
 Treat email as a **personal** reminder channel, not a team broadcast tool, unless you complete domain verification.
 
-### Quick setup (recommended)
+### Quick setup — Send yourself (recommended)
 
 1. Open [resend.com](https://resend.com) → sign up (GitHub is fine).
 2. **API Keys → Create** → copy the `re_…` key (shown once).
 3. In Obsidian: **Settings → arXiv Daily → Email delivery**:
-   - **To**: the **same** address as your Resend account email (see limit above).
-   - **Resend API key**: paste `re_…` and save.
+   - **How to send**: Send yourself.
+   - **Your email**: the **same** address as your Resend account email (see limit above).
+   - **Resend API key**: paste and save.
    - **From email**: leave **empty** for quick setup.
 4. Click **Send test**. Check inbox and spam for that account address.
 5. Only after a successful test, turn on **Daily auto-send**.
 
-API keys are stored in the same local `data.json` style as the LLM key (plaintext on disk; not rendered back into the settings page after save).
+API keys are saved only on this device (not shown again after save).
+
+### Quick setup — Official delivery (Beta)
+
+1. **How to send**: Official delivery (Beta).
+2. Enter **Your email** → **Send verification email**.
+3. Open the link, copy the **long code** from the web page (not the short code in the email link), paste under **Verification code**.
+4. **Send test**, then enable **Daily auto-send** if the test arrives.
+5. If you hit the daily limit, wait until the next UTC day or switch to **Send yourself**.
 
 ### After a real daily run
 
-When **Daily auto-send** is on, a successful **completed** daily run may send one digest for that date. The same date is not resent by default (see vault `arxiv-daily/.index/delivery-state.json`). Repair-only completions do not send mail.
+When **Daily auto-send** is on, a successful **completed** daily run may send one digest for that date. The same date is not resent by default. Repair-only completions do not send mail. **Send test** does not block the real daily for that day.
 
-### Advanced: send to other addresses
+### Advanced: send to other addresses (Send yourself)
 
 1. In Resend, add and verify a domain you control (DNS SPF/DKIM).
 2. Set **From email** to an address on that domain.
-3. **To** may then be any inbox you choose (within Resend’s rules and quota).
+3. **Your email** may then be any inbox you choose (within Resend’s rules and quota).
 
 ## Troubleshooting
 

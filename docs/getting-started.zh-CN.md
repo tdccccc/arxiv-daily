@@ -122,14 +122,23 @@ Scheduler 只会在 Obsidian 打开时运行。lookback 窗口内漏掉的工作
 
 ## 8. 可选：邮件日报
 
-邮件是**可选**功能。产品规划为**双模式**（详见 helm `email-dual-mode.md`）：
+邮件是**可选**功能，有两种模式：
 
 | 模式 | 状态 | 你要做什么 |
 |---|---|---|
-| **自己发送** | **现已可用** | 自备 [Resend](https://resend.com) API Key，发到个人邮箱 |
-| **官方代发 (Beta)** | **Beta（需先部署中继）** | 验证邮箱后由项目代发，用户无需 API Key — **需先部署 Worker（email.arxiv-daily.top）** |
+| **自己发送** | **推荐默认** | 自备 [Resend](https://resend.com) API Key；无项目配额限制 |
+| **官方代发 (Beta)** | **可用（额度有限）** | 验证邮箱后由 arXiv Daily 代发 — **共享免费容量，不适合大量发送** |
 
-默认是 **自己发送**，不依赖项目服务器。发信失败**不会**把当天日报标成失败。
+默认是 **自己发送**。发信失败**不会**把当天日报标成失败。
+
+### 官方代发 (Beta) — 容量说明
+
+官方代发是**共享免费 Beta**，额度故意偏小，以便服务能继续免费提供：
+
+- **每个已验证邮箱每个 UTC 日仅少量消息**（测试邮件也计入额度）。
+- 面向轻量个人使用（大致：一封正式日报 + 少量测试）。
+- 若需要大量发送、更稳定的高容量或多人通知，请改用 **自己发送**（自备 Resend）。
+- Beta 期间服务可能限流、暂停或调整，恕不另行承诺 SLA。
 
 ### 自己发送（Resend，自备 API Key）
 
@@ -137,34 +146,43 @@ Scheduler 只会在 Obsidian 打开时运行。lookback 窗口内漏掉的工作
 
 **From email 留空**时，插件使用 Resend 测试发件地址 `onboarding@resend.dev`：
 
-- **To 几乎只能填 Resend 账号绑定的那个邮箱**（「本人邮箱」）。
+- **收件邮箱几乎只能填 Resend 账号绑定的那个邮箱**（「本人邮箱」）。
 - 若用 **GitHub 登录** Resend，通常是 GitHub 的**主邮箱（Primary）**，不是 GitHub 上挂的每一个邮箱。
 - 发给其它地址会 403，直到你在 Resend **验证自己的域名**并填写自定义 From。
 
 请把邮件当成**给自己的提醒通道**，不要默认当成群发/通知多人，除非完成域名验证。
 
-### 快速配置（推荐）
+### 快速配置 — 自己发送（推荐）
 
 1. 打开 [resend.com](https://resend.com) 注册（可用 GitHub）。
-2. **API Keys → Create**，复制一次性显示的 `re_…`。
+2. **API Keys → Create**，复制一次性显示的 key。
 3. Obsidian：**Settings → arXiv Daily → Email delivery**：
-   - **To**：填与 Resend 账号**相同**的邮箱（见上限制）。
+   - **How to send**：Send yourself。
+   - **Your email**：与 Resend 账号**相同**的邮箱（见上限制）。
    - **Resend API key**：粘贴并保存。
    - **From email**：**留空**。
 4. 点 **Send test**，在该账号邮箱的收件箱/垃圾箱查看。
 5. **测试成功后**，再打开 **Daily auto-send（每日自动发送）**。
 
-API key 与 LLM key 一样保存在本地 `data.json`（磁盘明文；保存后设置页不再回显完整 key）。
+API key 仅保存在本机（保存后设置页不再回显完整 key）。
+
+### 快速配置 — 官方代发 (Beta)
+
+1. **How to send**：Official delivery (Beta)。
+2. 填写 **Your email** → **Send verification email**。
+3. 打开邮件中的链接，复制网页上显示的**长验证码**（不是链接里的短参数），粘贴到 **Verification code**。
+4. **Send test**，成功后再打开 **Daily auto-send**。
+5. 若触达当日额度，等到下一个 UTC 日，或改用 **自己发送**。
 
 ### 真·日报跑完之后
 
-开启 **Daily auto-send** 后，某日 run **completed** 才可能发一封真日报；默认同一天不重复发（见 vault 内 `arxiv-daily/.index/delivery-state.json`）。仅 repair 索引的完成**不会**发信。
+开启 **Daily auto-send** 后，某日 run **completed** 才可能发一封真日报；默认同一天不重复发。仅 repair 索引的完成**不会**发信。**Send test** 不会占用「当天已正式送达」状态。
 
-### 进阶：发给其它收件地址
+### 进阶：发给其它收件地址（自己发送）
 
 1. 在 Resend 添加并验证你拥有的域名（DNS 配置 SPF/DKIM）。
 2. **From email** 填该域名下的地址。
-3. 之后 **To** 才可改为任意邮箱（仍受 Resend 规则与配额约束）。
+3. 之后 **Your email** 才可改为任意邮箱（仍受 Resend 规则与配额约束）。
 
 ## 常见问题
 
