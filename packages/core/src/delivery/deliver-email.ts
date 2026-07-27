@@ -178,6 +178,11 @@ export async function deliverDailyEmailIfEnabled(
           html,
           text,
         });
+        // Test-send must not reuse the same Idempotency-Key as a real daily
+        // (date|to), or the Worker would dedupe and skip a later real digest.
+        if (deps.force) {
+          hostedReq.idempotencyKey = `test|${digest.date}|${recipient.trim().toLowerCase()}|${now().toISOString()}`;
+        }
         sent = await sendViaHosted({
           http: deps.http,
           baseUrl: email.hostedBaseUrl,
@@ -200,17 +205,22 @@ export async function deliverDailyEmailIfEnabled(
           signal: deps.signal,
         });
       }
-      state = markDelivered(state, {
-        date: digest.date,
-        recipient,
-        channel,
-        attempts: sent.attempts,
-        providerMessageId: sent.providerMessageId,
-        now: now(),
-      });
-      await saveDeliveryState(deps.storage, deps.output, state, now());
+      // force (test-send): deliver mail but do NOT mark the calendar day as
+      // delivered — otherwise a sample test blocks the real daily auto-send.
+      if (!deps.force) {
+        state = markDelivered(state, {
+          date: digest.date,
+          recipient,
+          channel,
+          attempts: sent.attempts,
+          providerMessageId: sent.providerMessageId,
+          now: now(),
+        });
+        await saveDeliveryState(deps.storage, deps.output, state, now());
+      }
       deps.logger?.info(
         `email: delivered ${digest.date} → ${recipient} via ${channel}` +
+          (deps.force ? " (test-send, not recorded as daily delivery)" : "") +
           (sent.providerMessageId ? ` id=${sent.providerMessageId}` : ""),
       );
       return {
@@ -227,19 +237,25 @@ export async function deliverDailyEmailIfEnabled(
             : deps.maxAttempts ?? 3;
       const reason =
         error instanceof Error ? error.message : String(error);
-      state = markFailed(state, {
-        date: digest.date,
-        recipient,
-        channel,
-        attempts,
-        lastError: reason,
-        now: now(),
-      });
-      await saveDeliveryState(deps.storage, deps.output, state, now()).catch(
-        (saveError) => {
-          deps.logger?.error("email: failed to persist delivery failure state", saveError);
-        },
-      );
+      // Do not persist failed test-sends into daily delivery-state either.
+      if (!deps.force) {
+        state = markFailed(state, {
+          date: digest.date,
+          recipient,
+          channel,
+          attempts,
+          lastError: reason,
+          now: now(),
+        });
+        await saveDeliveryState(deps.storage, deps.output, state, now()).catch(
+          (saveError) => {
+            deps.logger?.error(
+              "email: failed to persist delivery failure state",
+              saveError,
+            );
+          },
+        );
+      }
       deps.logger?.warn(`email: delivery failed for ${digest.date}: ${reason}`);
       return { kind: "failed", reason, attempts };
     }

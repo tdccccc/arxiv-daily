@@ -172,6 +172,46 @@ describe("deliverDailyEmailIfEnabled", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("force test-send does not mark the day delivered for auto-send skip", async () => {
+    const storage = memoryStorage();
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ id: "msg_test" }),
+    }));
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "you@example.com",
+      fromEmail: "",
+      apiKey: "re_key",
+    };
+
+    const testSend = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+      force: true,
+      sleep: async () => {},
+    });
+    expect(testSend.kind).toBe("delivered");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    const state = await loadDeliveryState(storage, output);
+    expect(shouldSendEmail(state, digest.date, email.to)).toBe(true);
+
+    const auto = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+      sleep: async () => {},
+    });
+    expect(auto.kind).toBe("delivered");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("marks failed after 500 retries and allows later retry", async () => {
     const storage = memoryStorage();
     const request = vi
