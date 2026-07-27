@@ -79,8 +79,7 @@ export async function startHostedEmailVerification(opts: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new HostedDeliveryError(
-      `Cannot reach Official delivery at ${base} (${msg}). ` +
-        `Check your network, or leave Service URL blank to use the default.`,
+      `Cannot reach Official delivery at ${base} (${msg}). Check your network and try again later.`,
       undefined,
       e,
     );

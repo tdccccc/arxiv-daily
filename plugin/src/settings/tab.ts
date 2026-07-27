@@ -748,19 +748,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         );
 
       this.renderHostedTokenSetting(containerEl);
-
-      // Advanced: only for people who need a non-default service URL
-      new Setting(containerEl)
-        .setName("Service URL")
-        .setDesc("Leave blank unless support asks you to change it.")
-        .addText((t) => {
-          t.setPlaceholder("Default service (recommended)")
-            .setValue(s.email.hostedBaseUrl ?? "")
-            .onChange(async (v) => {
-              s.email.hostedBaseUrl = v.trim();
-              await this.plugin.saveSettings();
-            });
-        });
     } else {
       this.renderEmailApiKeySetting(containerEl);
 
