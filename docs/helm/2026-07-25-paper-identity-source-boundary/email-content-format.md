@@ -75,7 +75,7 @@ arXiv Daily YYYY-MM-DD · N 篇
 Aligned with vault fields from `daily-summary-rendering` / sample dailies:
 
 1. **Title** (plain text heading; no vault detail wikilink)
-2. **Source sections** — one line when present (`信息来源：` / `Source sections:`), same spirit as vault blockquote
+2. **Source sections** — **omitted in email** (often very long section lists; vault daily still has them)
 3. **Authors**
 4. **Links:** `arXiv` abs **and** `PDF` as absolute `https://` URLs only  
    - arXiv: `https://arxiv.org/abs/<id>`  
@@ -104,10 +104,11 @@ If structured summary is unavailable (vault fallback path):
 
 | Decision | Detail |
 |---|---|
-| v1 | **Keep** `$...$`, `\(...\)`, and similar TeX delimiters as **plain text** in HTML and text parts |
-| Not v1 | Rasterize formulas to images; aggressive Unicode-only rewrite; strip all math |
+| Email body | **Soft-normalize** for mail clients: strip `$...$` / `\(...\)` / `\[...\]` delimiters; simplify common macros (`\frac`, Greek, `\leq`, …) to Unicode or plain text via `emailProse` |
+| Vault daily | Unchanged (still full scientific Markdown / MathJax-oriented) |
+| Not in email | Rasterize formulas to images; full MathJax |
 
-HTML must still escape properly so TeX braces/angles do not break markup (escape HTML entities; do not interpret MathJax).
+HTML still escapes markup-sensitive characters after prose normalization.
 
 ## Plain-text alternative
 

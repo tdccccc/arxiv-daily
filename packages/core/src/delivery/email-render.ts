@@ -100,16 +100,13 @@ function footerLine(digest: DailyDigest, language: SummaryLanguage): string {
 function renderPaperHtml(paper: DigestPaper, language: SummaryLanguage): string {
   const chunks: string[] = [];
   chunks.push(`<section style="margin:0 0 1.25rem;">`);
-  chunks.push(`<h3 style="font-size:1rem;margin:0 0 0.35rem;">${escapeHtml(paper.title)}</h3>`);
-  if (paper.sourceSections) {
-    const label = language === "en" ? "Source sections:" : "信息来源：";
-    chunks.push(
-      `<p style="margin:0 0 0.35rem;color:#555;"><em>${escapeHtml(label)} ${escapeHtml(paper.sourceSections)}</em></p>`,
-    );
-  }
+  // Omit source-sections noise (section lists are long and vault-oriented).
+  chunks.push(
+    `<h3 style="font-size:1rem;margin:0 0 0.35rem;">${escapeHtml(emailProse(paper.title))}</h3>`,
+  );
   const authorLabel = language === "en" ? "Authors" : "作者";
   chunks.push(
-    `<p style="margin:0 0 0.35rem;">${escapeHtml(authorLabel)}: ${escapeHtml(paper.authors)}</p>`,
+    `<p style="margin:0 0 0.35rem;">${escapeHtml(authorLabel)}: ${escapeHtml(emailProse(paper.authors))}</p>`,
   );
   chunks.push(
     `<p style="margin:0 0 0.5rem;">` +
@@ -122,7 +119,7 @@ function renderPaperHtml(paper: DigestPaper, language: SummaryLanguage): string 
   if (paper.kind === "structured" && paper.fields) {
     chunks.push(`<ul style="margin:0;padding-left:1.2rem;">`);
     for (const [key, label] of DAILY_SUMMARY_FIELD_LABELS[language]) {
-      const value = paper.fields[key];
+      const value = emailProse(paper.fields[key]);
       chunks.push(
         `<li style="margin:0 0 0.25rem;"><strong>${escapeHtml(label)}</strong>: ${escapeHtml(value)}</li>`,
       );
@@ -136,7 +133,7 @@ function renderPaperHtml(paper: DigestPaper, language: SummaryLanguage): string 
     chunks.push(`<p style="margin:0 0 0.35rem;"><strong>${escapeHtml(warning)}</strong></p>`);
     const abstractLabel = language === "en" ? "Original abstract" : "原始摘要";
     const abstract =
-      paper.abstract?.trim() ||
+      emailProse(paper.abstract ?? "") ||
       (language === "en" ? "Unavailable." : "不可用。");
     chunks.push(
       `<p style="margin:0;"><strong>${escapeHtml(abstractLabel)}</strong>: ${escapeHtml(abstract)}</p>`,
@@ -149,18 +146,14 @@ function renderPaperHtml(paper: DigestPaper, language: SummaryLanguage): string 
 
 function renderPaperText(paper: DigestPaper, language: SummaryLanguage): string[] {
   const lines: string[] = [];
-  lines.push(`### ${paper.title}`);
-  if (paper.sourceSections) {
-    const label = language === "en" ? "Source sections:" : "信息来源：";
-    lines.push(`${label} ${paper.sourceSections}`);
-  }
+  lines.push(`### ${emailProse(paper.title)}`);
   const authorLabel = language === "en" ? "Authors" : "作者";
-  lines.push(`${authorLabel}: ${paper.authors}`);
+  lines.push(`${authorLabel}: ${emailProse(paper.authors)}`);
   lines.push(`arXiv: ${paper.absUrl}`);
   lines.push(`PDF: ${paper.pdfUrl}`);
   if (paper.kind === "structured" && paper.fields) {
     for (const [key, label] of DAILY_SUMMARY_FIELD_LABELS[language]) {
-      lines.push(`- ${label}: ${paper.fields[key]}`);
+      lines.push(`- ${label}: ${emailProse(paper.fields[key])}`);
     }
   } else {
     const warning =
@@ -170,14 +163,124 @@ function renderPaperText(paper: DigestPaper, language: SummaryLanguage): string[
     lines.push(warning);
     const abstractLabel = language === "en" ? "Original abstract" : "原始摘要";
     const abstract =
-      paper.abstract?.trim() ||
+      emailProse(paper.abstract ?? "") ||
       (language === "en" ? "Unavailable." : "不可用。");
     lines.push(`- ${abstractLabel}: ${abstract}`);
   }
   return lines;
 }
 
-/** Escape prose for email HTML; keep TeX `$...$` as literal text. */
+/**
+ * Make summary prose more readable in plain email clients:
+ * strip TeX delimiters and simplify common LaTeX (no MathJax in mail).
+ */
+export function emailProse(value: string): string {
+  if (!value) return "";
+  let s = value;
+
+  // Display / block math delimiters → simplified body
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, body: string) => simplifyLatex(body));
+  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, body: string) => simplifyLatex(body));
+  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, body: string) => simplifyLatex(body));
+  // Inline $...$ (avoid matching empty or multi-line greedily)
+  s = s.replace(/\$([^$\n]+?)\$/g, (_, body: string) => simplifyLatex(body));
+
+  // Any remaining TeX-ish fragments outside delimiters
+  s = simplifyLatex(s);
+
+  return s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim();
+}
+
+function simplifyLatex(raw: string): string {
+  let s = raw;
+
+  // \frac{a}{b} → (a)/(b) (repeat for nesting depth ~3)
+  for (let i = 0; i < 3; i += 1) {
+    s = s.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+  }
+
+  // \rm / \it / \bf as font switches (common in N_{\rm side})
+  s = s.replace(/\\(?:rm|it|bf|cal|tt)\s+/g, "");
+  s = s.replace(/\\(?:rm|it|bf|cal|tt)(?=[A-Za-z])/g, "");
+
+  // \text{...}, \mathrm{...}, etc.
+  s = s.replace(
+    /\\(?:text|mathrm|mathbf|mathit|textrm|textit|textbf|operatorname)\s*\{([^{}]*)\}/gi,
+    "$1",
+  );
+
+  // Common symbols
+  const symbols: Array<[RegExp, string]> = [
+    [/\\leq\b/g, "≤"],
+    [/\\geq\b/g, "≥"],
+    [/\\neq\b/g, "≠"],
+    [/\\approx\b/g, "≈"],
+    [/\\sim\b/g, "~"],
+    [/\\times\b/g, "×"],
+    [/\\cdot\b/g, "·"],
+    [/\\pm\b/g, "±"],
+    [/\\infty\b/g, "∞"],
+    [/\\propto\b/g, "∝"],
+    [/\\rightarrow\b/g, "→"],
+    [/\\to\b/g, "→"],
+    [/\\leftarrow\b/g, "←"],
+    [/\\leftrightarrow\b/g, "↔"],
+    [/\\subseteq\b/g, "⊆"],
+    [/\\subset\b/g, "⊂"],
+    [/\\in\b/g, "∈"],
+    [/\\sum\b/g, "∑"],
+    [/\\prod\b/g, "∏"],
+    [/\\int\b/g, "∫"],
+    [/\\alpha\b/g, "α"],
+    [/\\beta\b/g, "β"],
+    [/\\gamma\b/g, "γ"],
+    [/\\delta\b/g, "δ"],
+    [/\\epsilon\b/g, "ε"],
+    [/\\varepsilon\b/g, "ε"],
+    [/\\theta\b/g, "θ"],
+    [/\\lambda\b/g, "λ"],
+    [/\\mu\b/g, "μ"],
+    [/\\nu\b/g, "ν"],
+    [/\\pi\b/g, "π"],
+    [/\\rho\b/g, "ρ"],
+    [/\\sigma\b/g, "σ"],
+    [/\\tau\b/g, "τ"],
+    [/\\phi\b/g, "φ"],
+    [/\\varphi\b/g, "φ"],
+    [/\\chi\b/g, "χ"],
+    [/\\psi\b/g, "ψ"],
+    [/\\omega\b/g, "ω"],
+    [/\\Gamma\b/g, "Γ"],
+    [/\\Delta\b/g, "Δ"],
+    [/\\Theta\b/g, "Θ"],
+    [/\\Lambda\b/g, "Λ"],
+    [/\\Sigma\b/g, "Σ"],
+    [/\\Phi\b/g, "Φ"],
+    [/\\Omega\b/g, "Ω"],
+    [/\\ell\b/g, "ℓ"],
+    [/\\hbar\b/g, "ℏ"],
+    [/\\partial\b/g, "∂"],
+    [/\\nabla\b/g, "∇"],
+    [/\\ldots\b/g, "…"],
+    [/\\dots\b/g, "…"],
+    [/\\,|\\;|\\!|\\quad|\\qquad/g, " "],
+  ];
+  for (const [re, rep] of symbols) s = s.replace(re, rep);
+
+  // _{...} / ^{...} and bare _x ^x
+  s = s.replace(/_\{([^{}]+)\}/g, "_$1");
+  s = s.replace(/\^\{([^{}]+)\}/g, "^$1");
+
+  // Drop remaining \commands
+  s = s.replace(/\\([a-zA-Z]+)\s*/g, "$1 ");
+  // Stray braces and backslashes
+  s = s.replace(/[{}]/g, "");
+  s = s.replace(/\\/g, "");
+
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Escape prose for email HTML after emailProse normalization. */
 export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")

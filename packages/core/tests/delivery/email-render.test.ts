@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildDailyDigest } from "../../src/delivery/digest";
 import {
+  emailProse,
   escapeHtml,
   renderEmailHtml,
   renderEmailSubject,
@@ -98,7 +99,7 @@ describe("email render", () => {
     expect(text).toContain("今日无相关论文更新。");
   });
 
-  it("renders five fields, abs+pdf links, and HTML-escapes prose", () => {
+  it("renders five fields, abs+pdf links, omits source sections, and softens math", () => {
     const digest = buildDailyDigest({
       date: "2026-07-26",
       arxiv,
@@ -117,13 +118,25 @@ describe("email render", () => {
     expect(html).toContain("适用边界");
     expect(html).toContain('href="https://arxiv.org/abs/2607.12345"');
     expect(html).toContain('href="https://arxiv.org/pdf/2607.12345"');
-    expect(html).toContain("$E=mc^2$");
+    // Source-section lists are vault noise — omit from mail.
+    expect(html).not.toContain("信息来源");
+    expect(html).not.toContain("Source sections");
+    expect(text).not.toContain("信息来源");
+    // Math delimiters stripped for email readability.
+    expect(html).toContain("E=mc^2");
+    expect(html).not.toContain("$E=mc^2$");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;script&gt;");
     expect(html).toContain("A &amp; B");
     expect(text).toContain("arXiv: https://arxiv.org/abs/2607.12345");
     expect(text).toContain("PDF: https://arxiv.org/pdf/2607.12345");
-    expect(text).toContain("研究问题: problem $E=mc^2$ for 2607.12345");
+    expect(text).toContain("研究问题: problem E=mc^2 for 2607.12345");
+  });
+
+  it("emailProse simplifies common LaTeX for mail clients", () => {
+    expect(emailProse("scale $N_{\\rm side}=2048$")).toContain("N_side=2048");
+    expect(emailProse("ratio $\\frac{a}{b}$")).toContain("(a)/(b)");
+    expect(emailProse("angle $\\theta \\leq \\pi$")).toMatch(/θ.*≤.*π/);
   });
 
   it("escapeHtml encodes markup-sensitive characters", () => {
