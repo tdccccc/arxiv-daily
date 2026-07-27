@@ -303,7 +303,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Choose a model, or click Get models to load the list from your provider.");
 
     // Get models button
-    const fetchModelsButton = modelSetting.addButton((b) => {
+    modelSetting.addButton((b) => {
       b.setButtonText("Get models");
       b.onClick(async () => {
         b.setButtonText("Fetching…");
@@ -375,7 +375,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       })
       .addText((t) => {
-        t.setPlaceholder("or enter custom value")
+        t.setPlaceholder("Or enter custom value")
           .setValue("")
           .onChange(async (v) => {
             if (v.trim()) {
@@ -409,7 +409,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
         })
         .addText((t) => {
-          t.setPlaceholder("or enter custom category")
+          t.setPlaceholder("Or enter custom category")
             .setValue("")
             .onChange(async (v) => {
               if (v.trim()) {
@@ -433,7 +433,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl).addButton((b) =>
-      b.setButtonText("+ Add category").onClick(async () => {
+      b.setButtonText("Add category").onClick(async () => {
         await this.setArxivCategories([
           ...categories,
           nextCategoryCandidate(categories),
@@ -486,7 +486,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       })
       .addButton((b) => {
-        b.setButtonText("+ Add topic").onClick(async () => {
+        b.setButtonText("Add topic").onClick(async () => {
           const newId = crypto.randomUUID();
           s.arxiv.topics.push({
             id: newId,
@@ -508,7 +508,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createDiv({
-        text: "Pick a template above or click + Add topic to define what to track. Daily reports need at least one topic before AI runs.",
+        text: "Pick a template above or click Add topic to define what to track. Daily reports need at least one topic before AI runs.",
       });
     }
     for (let i = 0; i < s.arxiv.topics.length; i++) {
@@ -562,7 +562,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       })
       .addText((t) => {
-        t.setPlaceholder("or enter custom timezone")
+        t.setPlaceholder("Or enter custom timezone")
           .setValue("")
           .onChange(async (v) => {
             if (v.trim()) {
@@ -691,6 +691,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             "1. Enter your email, then send a verification message.",
             "2. Open the link in that email and copy the code shown on the page.",
             "3. Paste the code below, send a test email, then turn on daily auto-send.",
+            "Capacity is limited: only a few messages per inbox per day (tests count). For heavier use, switch to Send yourself.",
           ]
         : [
             "1. Create a free Resend account and an API key at resend.com.",
@@ -702,7 +703,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("How to send")
       .setDesc(
-        "Send yourself uses your own Resend account. Official delivery (Beta) verifies your email and sends through arXiv Daily.",
+        hostedMode
+          ? "Official delivery (Beta) is a shared free service with a small daily limit. Prefer Send yourself if you need many messages or reliable high volume."
+          : "Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.",
       )
       .addDropdown((d) => {
         d.addOption("self", "Send yourself");
@@ -792,7 +795,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Send test email")
       .setDesc(
         hostedMode
-          ? "Sends a sample digest now. Needs your email and verification code."
+          ? "Sends a sample digest now. Needs your email and verification code. Tests count toward the daily limit."
           : "Sends a sample digest now. Needs your email and Resend API key.",
       )
       .addButton((b) =>
@@ -807,7 +810,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Daily auto-send")
       .setDesc(
-        "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
+        hostedMode
+          ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
+          : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
       )
       .addToggle((t) =>
         t.setValue(s.email.enabled).onChange(async (v) => {
@@ -822,10 +827,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.attachHelp(
       new Setting(containerEl).setName("Log level").addDropdown((d) =>
         d
-          .addOption("debug", "debug")
-          .addOption("info", "info")
-          .addOption("warn", "warn")
-          .addOption("error", "error")
+          .addOption("debug", "Debug")
+          .addOption("info", "Info")
+          .addOption("warn", "Warn")
+          .addOption("error", "Error")
           .setValue(s.advanced.logLevel)
           .onChange(async (value) => {
             if (!isLogLevel(value)) return;
@@ -1472,7 +1477,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       attr: { id: nameId, "aria-describedby": nameHintId },
     });
     nameInput.value = topic.name;
-    nameInput.placeholder = "e.g. Photometric Redshift";
+    nameInput.placeholder = "E.g. Photometric redshift";
 
     // Tag row
     const tagRow = form.createDiv({
@@ -1492,7 +1497,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       attr: { id: tagId, "aria-describedby": tagHintId },
     });
     tagInput.value = topic.tag;
-    tagInput.placeholder = "kebab-case-slug";
+    tagInput.placeholder = "Kebab-case-slug";
     const autoBadge = tagRow.createSpan({
       cls: "arxiv-daily-settings__topic-auto",
       text: "Auto",
@@ -1547,7 +1552,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     descArea.value = topic.description;
     descArea.rows = 3;
     descArea.placeholder =
-      "What kinds of papers should be grouped under this topic? (natural language)";
+      "What kinds of papers should be grouped under this topic? (Natural language)";
     descArea.oninput = async () => {
       topic.description = descArea.value;
       await this.plugin.saveSettings();
