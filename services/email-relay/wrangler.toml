@@ -15,7 +15,7 @@ preview_id = "8213e1636f1949a4be4c0d3e7774d25c"
 PUBLIC_BASE_URL = "https://mail.arxiv-daily.top"
 FROM_EMAIL = "daily@mail.arxiv-daily.top"
 FROM_NAME = "arXiv Daily"
-DAILY_QUOTA = "2"
+DAILY_QUOTA = "20"
 
 # Secrets (set via CLI, never commit):
 #   npx wrangler secret put RESEND_API_KEY
