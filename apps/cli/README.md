@@ -28,11 +28,16 @@ arxiv-daily init
 arxiv-daily run --today
 ```
 
-`init` is a TUI wizard (↑/↓, Space to multi-select, Enter to confirm, Ctrl+C to cancel):
-provider → API base URL → API key → optional connection test / model list → model,
-then email, arXiv categories, timezone, language, and a starter topic. Official
-delivery can send a verification email so you only paste the long code from the
-browser. Config file comments are in English.
+`init` is a TUI wizard:
+
+- **↑/↓** move · **Space** multi-select · **Enter** confirm  
+- **← Back** (last menu item) or **Esc / Ctrl+C** → previous step (exits only on the first step)  
+- **PageUp / PageDown** are not used (`@clack/prompts` does not bind them for wizard steps)
+
+Flow: provider → API base URL → API key → optional connection test / model list →
+model → email → categories → timezone → language → topic. Official delivery can
+send a verification email so you only paste the long code from the browser.
+Config file comments are in English.
 
 Config path:
 

@@ -39,15 +39,15 @@ describe("CLI init template", () => {
   it("runs non-TUI wizard: provider → url → key → models → rest", async () => {
     const answers = [
       "/tmp/vault-test",
-      "1",
+      "1", // provider
       "https://api.example.com/v1",
       "sk-test-key",
-      "y",
-      "1",
-      "1",
-      "1",
+      "y", // fetch models
+      "1", // first remote model
+      "1", // email skip
+      "1", // first category
       "UTC",
-      "2",
+      "2", // en
       "Photo-z",
       "photo-z",
       "photo-z methods",
