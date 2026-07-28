@@ -1,169 +1,117 @@
 # arXiv Daily
 
-> Turn daily arXiv feeds into a manageable, searchable reading list — right inside Obsidian.
+Turn new arXiv papers into a daily reading list in Obsidian—or on a server with the CLI.
 
-[Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md) · [中文说明](https://github.com/tdccccc/arxiv-daily/blob/main/docs/README.zh-CN.md)
+[Getting Started](docs/getting-started.md) · [中文说明](docs/README.zh-CN.md)
 
-Every day, hundreds of new papers appear on arXiv. arXiv Daily helps you stay on top of the ones that matter: it fetches papers from your chosen categories, uses an LLM to filter and summarize by your research topics, and writes structured Markdown reports into your vault — all on a configurable schedule.
+Every day, arXiv publishes more papers than anyone can skim. **arXiv Daily** fetches the categories you care about, uses an LLM to keep the ones that match your research topics, and writes **Markdown you can search and link**—as a **daily report**, optional **paper notes**, and a simple **Dashboard** to revisit them.
 
-The result is a compact daily reading list you can skim, star, and act on, without leaving Obsidian.
+## What it does
 
-## Why arXiv Daily?
+- **Filters the flood** — hundreds of listings down to papers relevant to *your* topics
+- **Writes a daily report** — one Markdown file per day, grouped by topic, with a short structured summary per paper
+- **Can add paper notes** — longer per-paper notes when you want more depth (automatic or by arXiv ID)
+- **Helps you review** — Dashboard with calendar, search, topics, and stars
+- **Runs on a schedule** — in Obsidian while the app is open, or via CLI on a machine that stays online
+- **Optional email** — a short digest after a successful day (your Resend key, or Official delivery Beta)
 
-- **Save time**: let the LLM filter hundreds of papers down to the handful relevant to your topics, with structured daily summaries (core problem, method, result, relevance, limitations).
-- **Stay organized**: daily reports, standalone deep dives, paper notes, and PDFs all live as plain Markdown in your vault — searchable, linkable, and future-proof.
-- **Review across days**: the Dashboard gives you a calendar view, local relevance-ranked search, topic/date/status filters, and sorting to revisit papers across dates.
-- **Works with your workflow**: star important papers, open arXiv or PDF links, and create or automatically select detailed notes for papers worth a deeper look. When a paper is ready for your formal library, import it into Zotero as usual.
-- **Set and forget**: configure once — categories, topics, LLM provider, schedule — and the plugin runs daily. Missed days are caught up automatically.
+## What you get
 
-## Quick Start
-
-1. Install and enable the plugin.
-2. Open **Settings → arXiv Daily** and follow the four-step guide.
-3. **Connect AI** with an API key, base URL, and model.
-4. **Choose paper sources** by selecting one or more arXiv categories.
-5. **Describe your research interests** with at least one complete topic.
-6. **Generate your first report** from the guide. It remains visible until a report completes; afterward Settings shows a compact completion summary and the latest report date. If configuration later becomes invalid, the full guide returns.
-
-The guide links to the existing Settings forms rather than duplicating provider or topic inputs. For a detailed walkthrough, see [Getting Started](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md).
-
-## Dashboard
-
-The Dashboard is the main entry point after setup.
-
-- **Starred / All tabs**: star the papers that matter; unstarred papers stay neutral.
-- **Calendar**: dates with reports are marked; today is highlighted; click any date to open its report.
-- **Search & filters**: local relevance-ranked search covers arXiv ID, title, authors, topics, categories, and structured summary fields, with English technical-token and Chinese bigram tokenization. Exact modern arXiv IDs (including URL/version forms) are prioritized.
-- **Sort**: a non-empty search defaults to relevance; choosing starred, published date, topic, or title keeps that explicit sort as the primary order.
-- **Similar Papers**: local weighted lexical matching over non-ignored Paper Index entries, using persisted abstracts plus structured summaries recovered from daily reports. Multi-concept and multi-field overlap is favored, while weak and author-only matches are suppressed; results show match reasons, metadata, available resources, and actions for detail, daily report, arXiv, or PDF. Querying uses no network, LLM, embedding, or database.
-- **Paper actions**: from each row, open or create a paper note, open the daily report, open the arXiv page, open or download a PDF.
-- **Batch operations**: run today, run pending lookback dates, or run a specific date. **Cancel active tasks** cooperatively cancels automatic or manual daily runs, manual detail summaries, and PDF downloads; **Get Models** is excluded. An Obsidian `requestUrl` call that was already issued may finish before cancellation takes effect, while later work is stopped.
-
-## Daily Reports
-
-Each daily report is a Markdown file. Selected papers include:
-
-- Authors and arXiv link
-- Source sections used for summarization
-- Core problem, key method, main result
-- Why it is relevant to your topics
-- Limitations or boundaries
-- Watch/highlight checkboxes
-
-Highlighting a paper in the daily report maps to a Dashboard star.
-
-Daily reports and generated detail notes end with a folded **Generation metrics** callout. It reports total pipeline elapsed time when available, LLM elapsed time, logical calls, HTTP attempts, and only token usage reported by the provider. Missing usage is shown as unavailable or incomplete rather than zero; retries make usage incomplete when failed-attempt usage is unavailable. No cost estimate is calculated.
-
-Existing Markdown remains usable; adding this callout does not require rewriting older reports.
-
-### Automatic deep dives
-
-The structured entries in `daily/YYYY-MM-DD.md` are the complete daily discovery output. A file in `papers/<arxiv_id>.md` is different: it is a standalone, full-text deep dive for one paper, not the paper's daily summary.
-
-Automatic deep-dive selection now runs as a separate scoring step after full text has been fetched. Only papers assigned to a topic whose **Detail report** toggle is enabled, with usable full text and no existing paper file, are eligible. When eligible candidates exist, they are scored together in exactly one additional LLM call; otherwise there is no selector call.
-
-The **Automatic detail notes** setting offers **Fewer**, **Recommended**, and **More**. **Recommended** is the default. Topic toggles control eligibility independently of this setting. Existing custom policies remain active until another option is selected; advanced custom thresholds remain available through persisted or CLI configuration.
-
-If selector scoring fails or returns an invalid result, selection is conservative: no new automatic deep dives are created, while daily summarization continues and the daily run can still succeed. **Summarize by arXiv ID** is a separate manual workflow and is unaffected by this policy.
-
-## Output Layout
-
-Files are organized under `arxiv-daily/` in your vault:
+| Output | Where | What it is |
+|---|---|---|
+| **Daily report** | `arxiv-daily/daily/YYYY-MM-DD.md` | That day’s reading list: topics, selected papers, structured short summaries |
+| **Paper note** | `arxiv-daily/papers/<arxiv_id>.md` | A longer note for one paper (not the same as the daily entry) |
+| **Dashboard** | In Obsidian | Calendar, search, filters, stars, open report / note / arXiv / PDF |
 
 ```text
 arxiv-daily/
-  daily/
-    2026-06-13.md
-  papers/
-    2606.12345.md
-  pdfs/
-    2606.12345.pdf
-  .index/
-    papers.json
-    run-state.json
+  daily/          # daily reports
+  papers/         # paper notes
+  pdfs/           # optional downloads
+  .index/         # local index & run state
 ```
 
-- `daily/YYYY-MM-DD.md` — daily discovery report grouped by topic, with a structured summary for every selected paper
-- `papers/<arxiv_id>.md` — standalone deep dives and manually created paper notes; these are separate from daily summaries
-- `pdfs/<arxiv_id>.pdf` — downloaded PDFs
-- `.index/papers.json` — local Paper Index used by the Dashboard, search, and Similar Papers
-- `.index/run-state.json` — scheduler run state
+## Two ways to use it
 
-Paper Index schema 3 persists abstracts alongside the existing metadata and structured summary fields. It reads schema 1 and 2 indexes directly; older entries gain abstracts lazily when a later daily run sees them, with no network migration or bulk rewrite required.
+| | **Obsidian plugin** | **CLI** |
+|---|---|---|
+| Best for | Daily use in your vault, UI, Dashboard | Servers, cron, always-on machines (e.g. VPN) |
+| Config | Plugin settings in Obsidian | `~/.config/arxiv-daily/config.toml` (`init`) |
+| Schedule | While Obsidian is open | System cron → `run --today` (or WSL on Windows) |
+| Shared | Same core pipeline; same vault layout if you point at the same folder | |
 
-## Installation
+Most people start with the **plugin**. Use the **CLI** when you want reports generated without keeping Obsidian open.
 
-arXiv Daily is desktop-only.
+---
 
-### Community Plugins
+## Obsidian plugin
 
-1. Open **Settings → Community plugins → Browse**.
-2. Search for **arXiv Daily**.
-3. Install and enable it.
+### Install
 
-### BRAT (Beta)
+Desktop Obsidian only.
 
-1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat).
-2. Open **BRAT settings → Add Beta plugin**.
-3. Enter: `tdccccc/arxiv-daily`
-
-### Manual Install
-
-Download `manifest.json`, `main.js`, and `styles.css` from the [latest release](https://github.com/tdccccc/arxiv-daily/releases/latest). In your vault, create the hidden plugin directory if needed and place all three files directly in it:
+1. **Community plugins** — Settings → Community plugins → Browse → **arXiv Daily**
+2. **BRAT** — add `tdccccc/arxiv-daily`
+3. **Manual** — put `manifest.json`, `main.js`, and `styles.css` from the [latest release](https://github.com/tdccccc/arxiv-daily/releases/latest) in:
 
 ```text
-<your-vault>/.obsidian/plugins/arxiv-daily/
-  manifest.json
-  main.js
-  styles.css
+<vault>/.obsidian/plugins/arxiv-daily/
 ```
 
-Do not leave the files inside a nested release or repository folder. Restart Obsidian, then enable **arXiv Daily** under **Settings → Community plugins**.
+Enable the plugin, then open **Settings → arXiv Daily**.
 
-## Commands
+### Quick start
 
-| Action | Where |
-|---|---|
-| Open Dashboard | Ribbon icon or command palette |
-| Run today | Dashboard toolbar |
-| Run pending lookback dates | Dashboard toolbar |
-| Run a specific date | Dashboard **More** menu or command palette |
-| Summarize by arXiv ID | Dashboard **More** menu or command palette |
-| Cancel active tasks | Dashboard **More** menu or command palette |
-| Find similar papers | Paper-row **Find similar papers** action |
-| Open a daily report | Dashboard calendar |
-| Star a paper | Dashboard star button or daily report highlight checkbox |
+1. **Connect AI** — API key, base URL, model  
+2. **Choose paper sources** — one or more arXiv categories  
+3. **Describe your research interests** — at least one topic (name, tag, description)  
+4. **Generate your first report** — from the settings guide or Dashboard **Run Today**
 
-## Network & Privacy
+The guide stays until a report completes. Details: [Getting Started](docs/getting-started.md).
 
-- Connects to `arxiv.org` and `export.arxiv.org` to fetch listings, abstracts, and PDFs.
-- Connects to your configured LLM provider. Sent content includes paper titles, abstracts, and selected text snippets needed for filtering and summarization.
-- A saved API key is displayed only as **Configured** in Settings; use explicit **Replace** or **Clear** actions to change it. The key remains plaintext in `<your-vault>/.obsidian/plugins/arxiv-daily/data.json` for compatibility—Obsidian Sync or another vault backup may copy that file. There is no keyring or encryption claim. Restrict access to the vault and its backups, and use **Clear** to remove the saved key. Logs, diagnostics, and presented errors are redacted.
-- Fetched arXiv HTML/source content is cached in `<your-vault>/.obsidian/plugins/arxiv-daily/.cache/` for the configured retention period (seven days by default). Delete that directory while the plugin is disabled to clear it; it will be recreated as needed.
-- The CLI reads its key from `ARXIV_DAILY_API_KEY` or a user-supplied config file and caches fetched content in `.arxiv-daily/cache/` relative to the working directory unless `--cache-dir` or `ARXIV_DAILY_CACHE_DIR` overrides it. Protect or delete those local files according to your environment.
-- No client-side telemetry. Generated reports, paper notes, PDFs, indexes, and run state are written under `arxiv-daily/` in the vault by default; configured output paths may change that location.
+### Day to day
 
-## CLI Usage
+- Open the **Dashboard** (ribbon or command palette)
+- **Run Today** or let the scheduler run on weekdays while Obsidian is open
+- Read the **daily report**; star papers that matter
+- Open or create a **paper note** when you want more depth
+- Optional: enable **email** after a successful test send
 
-The Node CLI is available for cron or server workflows and requires Node.js 20.11.0 or newer.
+---
+
+## CLI
+
+For cron or a machine that stays online. Requires Node.js 20.11.0+.
+
+Config lives only at **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root` flags.
 
 ```bash
 npm ci
 npm run build
 
-ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
+npm run cli -- init
+# edit topics (and secrets) in ~/.config/arxiv-daily/config.toml
+npm run cli -- run --today
+npm run cli -- run --date 2026-06-13
+npm run cli -- run --id 2606.12345
+npm run cli -- email test
+# set [schedule] enabled = true, then:
+npm run cli -- schedule install
 ```
 
-The canonical executable is `apps/cli/dist/arxiv-daily-cli.cjs`. The build also
-refreshes `plugin/arxiv-daily-cli.cjs` and keeps `arxiv_daily.py` as a deprecated
-compatibility shim.
+On **Windows**, prefer **WSL** for CLI + cron, or use the **Obsidian plugin** for desktop scheduling. `schedule install` is not wired to Task Scheduler.
 
-With a config file:
+Executable: `apps/cli/dist/arxiv-daily-cli.cjs`. Design notes: [CLI product docs](docs/helm/2026-07-28-cli-product-config-and-data-portability/).
 
-```bash
-npm run cli -- run --date 2026-06-13 --config arxiv-daily.config.json --vault-root /path/to/vault
-npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vault-root /path/to/vault
-```
+---
+
+## More
+
+| Doc | For |
+|---|---|
+| [Getting Started](docs/getting-started.md) | First successful plugin run, email, troubleshooting |
+| [中文说明](docs/README.zh-CN.md) | Chinese overview |
+| [Getting Started 中文](docs/getting-started.zh-CN.md) | Chinese walkthrough |
 
 ## Development
 
@@ -176,29 +124,4 @@ npm test
 npm run build
 ```
 
-`npm run lint` runs `eslint-plugin-obsidianmd`'s recommended flat config against
-production Obsidian plugin TypeScript plus the root `manifest.json` and
-`LICENSE`. Tests, generated bundles, and non-plugin workspaces are intentionally
-out of scope. This public ESLint plugin approximates Obsidian's source scanner;
-it does not reproduce the complete hosted review, including its CSS and release
-asset checks.
-
-For a release, synchronize every workspace package, internal dependency spec,
-Obsidian manifest/version map, and lockfile before validating the release:
-
-```bash
-npm run sync:release-version -- 0.3.1
-npm run check:release-version -- 0.3.1
-```
-
-Review the generated diff before committing. The sync command only updates
-version metadata; it does not publish, commit, tag, or push.
-
-This repository is one npm workspace. `packages/core` is the only business
-core, `packages/node-runtime` contains Node adapters, `apps/cli` is the one-shot
-CLI, and `plugin` contains only the Obsidian host and UI. There is intentionally
-no protocol or daemon layer.
-
-## License
-
-[MIT](./LICENSE). Bundled dependency notices are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+One npm workspace: `packages/core` (pipeline), `packages/node-runtime`, `apps/cli`, `plugin` (Obsidian UI). Release version sync: `npm run sync:release-version -- <ver>`.

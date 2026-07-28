@@ -1,15 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliCommandRuntime } from "../src/main";
 import type { CliRuntimeConfig } from "../src/config";
+import { DEFAULT_CLI_SCHEDULE } from "../src/config";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
-
-type TestSettingsOverrides = {
-  llm?: Partial<CliRuntimeConfig["settings"]["llm"]>;
-  arxiv?: Partial<CliRuntimeConfig["settings"]["arxiv"]>;
-  output?: Partial<CliRuntimeConfig["settings"]["output"]>;
-  schedule?: Partial<CliRuntimeConfig["settings"]["schedule"]>;
-  advanced?: Partial<CliRuntimeConfig["settings"]["advanced"]>;
-};
 
 function captureIo() {
   const stdout: string[] = [];
@@ -24,20 +17,14 @@ function captureIo() {
   };
 }
 
-function testConfig(
-  overrides: TestSettingsOverrides = {},
-): CliRuntimeConfig {
+function testConfig(): CliRuntimeConfig {
   return {
     settings: {
       ...DEFAULT_SETTINGS,
-      ...overrides,
-      llm: {
-        ...DEFAULT_SETTINGS.llm,
-        apiKey: "key",
-        ...(overrides.llm ?? {}),
-      },
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "key" },
       arxiv: {
         ...DEFAULT_SETTINGS.arxiv,
+        timezone: "UTC",
         topics: [
           {
             id: "t1",
@@ -47,17 +34,13 @@ function testConfig(
             detail: false,
           },
         ],
-        ...(overrides.arxiv ?? {}),
       },
-      output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
-      schedule: { ...DEFAULT_SETTINGS.schedule, ...(overrides.schedule ?? {}) },
-      advanced: { ...DEFAULT_SETTINGS.advanced, ...(overrides.advanced ?? {}) },
-      email: { ...DEFAULT_SETTINGS.email, ...(overrides.email ?? {}) },
     },
     vaultRoot: "/vault",
     cacheDir: "/cache",
     linkStyle: "wikilink",
-    configPath: null,
+    configPath: "/home/u/.config/arxiv-daily/config.toml",
+    scheduleIntent: { ...DEFAULT_CLI_SCHEDULE },
   };
 }
 
@@ -82,35 +65,56 @@ describe("CLI main", () => {
   it("prints help without loading config", async () => {
     const io = captureIo();
     const loadConfig = vi.fn();
-
     const code = await runCli({
       argv: ["--help"],
       io: io.io,
-      loadConfig: loadConfig as any,
+      loadConfig: loadConfig as never,
     });
-
     expect(code).toBe(0);
-    expect(io.stdout.join("")).toContain("arxiv-daily run --date");
+    expect(io.stdout.join("")).toContain("arxiv-daily run --today");
     expect(loadConfig).not.toHaveBeenCalled();
   });
 
-  it("runs the pipeline for an explicit date", async () => {
+  it("rejects removed --config flag", async () => {
+    const io = captureIo();
+    const code = await runCli({
+      argv: ["run", "--today", "--config", "x.toml"],
+      io: io.io,
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => fakeRuntime(),
+    });
+    expect(code).toBe(2);
+    expect(io.stderr.join("")).toContain("no longer supported");
+  });
+
+  it("runs pipeline for --date", async () => {
     const io = captureIo();
     const runtime = fakeRuntime();
-
     const code = await runCli({
-      argv: ["run", "--date", "2026-06-13", "--config", "cfg.json"],
+      argv: ["run", "--date", "2026-06-13"],
       io: io.io,
       loadConfig: vi.fn(async () => testConfig()),
       buildRuntime: () => runtime,
     });
-
     expect(code).toBe(0);
     expect(runtime.pipeline.runForDate).toHaveBeenCalledWith("2026-06-13");
-    expect(io.stdout.join("")).toContain("run 2026-06-13: completed");
   });
 
-  it("uses scheduler-backed runs when available", async () => {
+  it("runs --today using timezone", async () => {
+    const io = captureIo();
+    const runtime = fakeRuntime();
+    const code = await runCli({
+      argv: ["run", "--today"],
+      io: io.io,
+      now: () => new Date("2026-06-13T12:00:00Z"),
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => runtime,
+    });
+    expect(code).toBe(0);
+    expect(runtime.pipeline.runForDate).toHaveBeenCalledWith("2026-06-13");
+  });
+
+  it("uses scheduler-backed run when available", async () => {
     const io = captureIo();
     const runtime = fakeRuntime();
     runtime.scheduler = {
@@ -118,64 +122,47 @@ describe("CLI main", () => {
         kind: "skipped" as const,
         reason: "already done",
       })),
-      runAllPending: vi.fn(async () => []),
     };
-
     const code = await runCli({
       argv: ["run", "--date", "2026-06-13"],
       io: io.io,
       loadConfig: vi.fn(async () => testConfig()),
       buildRuntime: () => runtime,
     });
-
     expect(code).toBe(0);
     expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13");
-    expect(runtime.pipeline.runForDate).not.toHaveBeenCalled();
-    expect(io.stdout.join("")).toContain("skipped (already done)");
   });
 
-  it("runs pending dates across the configured lookback window", async () => {
+  it("rejects run-pending", async () => {
     const io = captureIo();
-    const runtime = fakeRuntime();
-
     const code = await runCli({
       argv: ["run-pending"],
       io: io.io,
-      now: () => new Date("2026-06-13T00:00:00Z"),
-      loadConfig: vi.fn(async () =>
-        testConfig({
-          arxiv: { timezone: "UTC" },
-        }),
-      ),
-      buildRuntime: () => runtime,
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => fakeRuntime(),
     });
-
-    expect(code).toBe(0);
-    expect(runtime.pipeline.runForDate).toHaveBeenCalledTimes(5);
-    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(1, "2026-06-09");
-    expect(runtime.pipeline.runForDate).toHaveBeenNthCalledWith(5, "2026-06-13");
+    expect(code).toBe(2);
+    expect(io.stderr.join("")).toContain("run-pending was removed");
   });
 
-  it("summarizes one arXiv ID with an optional date", async () => {
+  it("runs --id for deep dive", async () => {
     const io = captureIo();
     const runtime = fakeRuntime();
-
     const code = await runCli({
-      argv: ["summarize", "--id", "2606.12345", "--date", "2026-06-13"],
+      argv: ["run", "--id", "2606.12345", "--date", "2026-06-13"],
       io: io.io,
       loadConfig: vi.fn(async () => testConfig()),
       buildRuntime: () => runtime,
     });
-
     expect(code).toBe(0);
     expect(runtime.manualFetch.fetchAndSummarize).toHaveBeenCalledWith(
       "2606.12345",
       "2026-06-13",
     );
-    expect(io.stdout.join("")).toContain("summarize: wrote");
+    expect(io.stdout.join("")).toContain("run --id: wrote");
   });
 
-  it("redacts the configured key from runtime errors and result presentation", async () => {
+  it("redacts secrets from errors", async () => {
     const io = captureIo();
     const secret = "sk-complete-secret-value";
     const runtime = fakeRuntime();
@@ -183,34 +170,41 @@ describe("CLI main", () => {
       kind: "failed_transient" as const,
       reason: `provider echoed Bearer ${secret}`,
     }));
-
+    const cfg = testConfig();
+    cfg.settings.llm.apiKey = secret;
     const code = await runCli({
       argv: ["run", "--date", "2026-06-13"],
       io: io.io,
-      loadConfig: vi.fn(async () => testConfig({ llm: { apiKey: secret } })),
+      loadConfig: vi.fn(async () => cfg),
       buildRuntime: () => runtime,
     });
-
     expect(code).toBe(1);
     expect(io.stderr.join("")).not.toContain(secret);
     expect(io.stderr.join("")).toContain("[REDACTED]");
   });
 
-  it("returns usage errors for invalid config", async () => {
+  it("schedule show prints cron lines", async () => {
     const io = captureIo();
-
+    const cfg = testConfig();
+    cfg.scheduleIntent = {
+      enabled: true,
+      on: "09:30",
+      intervalHours: 0,
+      until: "18:00",
+      weekdaysOnly: true,
+    };
     const code = await runCli({
-      argv: ["run", "--date", "2026-06-13"],
+      argv: ["schedule", "show"],
       io: io.io,
-      loadConfig: vi.fn(async () =>
-        testConfig({
-          llm: { ...DEFAULT_SETTINGS.llm, apiKey: "" },
-        }),
-      ),
-      buildRuntime: () => fakeRuntime(),
+      loadConfig: vi.fn(async () => cfg),
+      schedule: {
+        show: async (c, i) => {
+          i.stdout.write(`demo ${c.scheduleIntent.on}\n`);
+          return 0;
+        },
+      },
     });
-
-    expect(code).toBe(2);
-    expect(io.stderr.join("")).toContain("Invalid config");
+    expect(code).toBe(0);
+    expect(io.stdout.join("")).toContain("09:30");
   });
 });

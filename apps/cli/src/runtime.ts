@@ -56,11 +56,14 @@ export async function buildCliRuntime(
   const host = opts.host ?? buildNodeHostAdapters({ rootDir: config.vaultRoot });
   const logger =
     opts.logger ?? new Logger(config.settings.advanced.logLevel, undefined, config.settings.arxiv.timezone);
-  const resendApiKey = resolveResendApiKey(config.settings.email, process.env);
+  const resendApiKey = resolveResendApiKey(config.settings.email, {});
   logger.setSensitiveValues(
-    [config.settings.llm.apiKey, resendApiKey, config.settings.email.apiKey ?? ""].filter(
-      Boolean,
-    ),
+    [
+      config.settings.llm.apiKey,
+      resendApiKey,
+      config.settings.email.apiKey ?? "",
+      config.settings.email.hostedToken ?? "",
+    ].filter(Boolean),
   );
   const llm = new LlmClient(config.settings.llm, logger, host.http);
   const fetcher = new ArxivFetcher({
@@ -154,7 +157,7 @@ export async function buildCliRuntime(
       http: host.http,
       output: config.settings.output,
       email: config.settings.email,
-      apiKey: resolveResendApiKey(config.settings.email, process.env),
+      apiKey: resolveResendApiKey(config.settings.email, {}),
       logger,
     });
   };
