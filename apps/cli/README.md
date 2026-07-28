@@ -17,14 +17,16 @@ npm install -g arxiv-daily
 Or without a global install:
 
 ```bash
-npx arxiv-daily --help
+npx arxiv-daily@latest help
 ```
+
+Package page: https://www.npmjs.com/package/arxiv-daily
 
 ## Quick start
 
 ```bash
 arxiv-daily init
-# guided setup: vault path, LLM provider/model, optional email, arXiv categories, topic
+# guided TUI: vault, LLM, optional email, categories, topic, …
 arxiv-daily run --today
 ```
 
@@ -32,19 +34,33 @@ arxiv-daily run --today
 
 - **↑/↓** move · **Space** multi-select · **Enter** confirm (keep default when shown)
 - **← Go back** (last item in menus) → previous step  
-- **Ctrl+C** (or **Esc**) → exit the wizard  
+- **Ctrl+C** (or **Esc**) → **exit** the wizard (not “back”)  
 - Defaults appear in prompts — press **Enter** to accept without retyping  
 
 Flow: vault → provider → URL → API key → optional model fetch → model → email →
-categories → timezone → language → topic → optional advanced defaults.
-Config file comments are in English; `schema_version` is at the bottom (do not edit).
+categories → timezone → language → topic → optional paper-note / schedule flags.
+`link_style` and `log_level` are not asked (fixed defaults: wikilink / info).
+Config comments are English; **`schema_version` is at the bottom — leave it alone**.
 
 Config path:
 
 - Linux/macOS: `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`)
 - Windows: `%APPDATA%\arxiv-daily\config.toml`
 
-There are no settings environment variables and no `--config` / `--vault-root` flags.
+Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags.
+
+## Uninstall
+
+```bash
+npm uninstall -g arxiv-daily
+```
+
+This removes the global command only. It does **not** delete:
+
+- `~/.config/arxiv-daily/` (config, secrets)
+- your vault / output folder (for example `~/arxiv-daily`)
+
+Remove those yourself if you want a full cleanup.
 
 ## Commands
 

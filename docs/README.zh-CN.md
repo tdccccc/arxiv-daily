@@ -85,16 +85,17 @@ arxiv-daily/
 
 ### 安装（npm）
 
+需要 Node.js 20.11+。
+
 ```bash
 npm install -g arxiv-daily
-arxiv-daily init
-# 编辑 ~/.config/arxiv-daily/config.toml
+arxiv-daily init          # 交互向导；直接 Enter 可保留默认值
 arxiv-daily run --today
 ```
 
-也可：`npx arxiv-daily --help`。
+不装全局也可用：`npx arxiv-daily@latest help`。
 
-配置**只**在 **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`**（默认 `~/.config/arxiv-daily/config.toml`）。不再使用配置类环境变量，也没有 `--config` / `--vault-root`。
+配置**只**在 **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`**（默认 `~/.config/arxiv-daily/config.toml`）。没有配置类环境变量，也没有 `--config` / `--vault-root`。init 之后可再手改 topics。
 
 ```bash
 arxiv-daily run --date 2026-06-13
@@ -104,7 +105,16 @@ arxiv-daily email test
 arxiv-daily schedule install
 ```
 
-**Windows** 上请用 **WSL** 跑 CLI + cron，或桌面直接用 **Obsidian 插件** 做定时。
+卸载 CLI 包（**不会**删除配置和 vault 数据）：
+
+```bash
+npm uninstall -g arxiv-daily
+# 可选：rm -rf ~/.config/arxiv-daily
+```
+
+**Windows** 上请用 **WSL** 跑 CLI + cron，或桌面用 **Obsidian 插件** 做定时。
+
+更多：[apps/cli/README.md](../apps/cli/README.md) · [0.3.4 更新说明](releases/0.3.4.md) · [CLI 设计说明](helm/2026-07-28-cli-product-config-and-data-portability/)。
 
 ### 从本仓库开发
 
@@ -112,8 +122,6 @@ arxiv-daily schedule install
 npm ci && npm run build
 npm run cli -- run --today    # 运行 apps/cli/dist/arxiv-daily-cli.cjs
 ```
-
-更多：[apps/cli/README.md](../apps/cli/README.md) · [CLI 设计说明](helm/2026-07-28-cli-product-config-and-data-portability/)。
 
 ---
 

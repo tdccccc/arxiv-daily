@@ -85,16 +85,17 @@ For cron or a machine that stays online. Requires Node.js 20.11.0+.
 
 ### Install (npm)
 
+Requires Node.js 20.11+.
+
 ```bash
 npm install -g arxiv-daily
-arxiv-daily init
-# edit ~/.config/arxiv-daily/config.toml
+arxiv-daily init          # guided TUI; Enter keeps defaults
 arxiv-daily run --today
 ```
 
-Or one-off: `npx arxiv-daily --help`.
+Or without a global install: `npx arxiv-daily@latest help`.
 
-Config lives only at **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root` flags.
+Config is only **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root`. After init you can hand-edit topics in that file.
 
 ```bash
 arxiv-daily run --date 2026-06-13
@@ -104,7 +105,16 @@ arxiv-daily email test
 arxiv-daily schedule install
 ```
 
-On **Windows**, prefer **WSL** for CLI + cron, or use the **Obsidian plugin** for desktop scheduling.
+Uninstall the CLI package (does **not** delete config or vault data):
+
+```bash
+npm uninstall -g arxiv-daily
+# optional: rm -rf ~/.config/arxiv-daily
+```
+
+On **Windows**, prefer **WSL** for CLI + cron, or the **Obsidian plugin** for desktop scheduling.
+
+More: [apps/cli/README.md](apps/cli/README.md) · [0.3.4 release notes](docs/releases/0.3.4.md) · [CLI design notes](docs/helm/2026-07-28-cli-product-config-and-data-portability/).
 
 ### From this repository (developers)
 
@@ -112,8 +122,6 @@ On **Windows**, prefer **WSL** for CLI + cron, or use the **Obsidian plugin** fo
 npm ci && npm run build
 npm run cli -- run --today    # runs apps/cli/dist/arxiv-daily-cli.cjs
 ```
-
-More: [apps/cli/README.md](apps/cli/README.md) · [CLI design notes](docs/helm/2026-07-28-cli-product-config-and-data-portability/).
 
 ---
 

@@ -153,12 +153,12 @@ Beta 额度偏小（每个已验证邮箱每个 UTC 日仅少量消息，测试�
 
 ## CLI（可选）
 
-若希望不打开 Obsidian 也能出日报：
+若希望不打开 Obsidian 也能出日报（Node.js 20.11+）：
 
 ```bash
 npm install -g arxiv-daily
-arxiv-daily init
+arxiv-daily init          # 交互向导；Enter 保留默认值
 arxiv-daily run --today
 ```
 
-配置在 `~/.config/arxiv-daily/config.toml`。Windows 上定时建议用 **WSL**，或继续用插件。详见 [CLI README](../apps/cli/README.md)。
+配置在 `~/.config/arxiv-daily/config.toml`。卸载：`npm uninstall -g arxiv-daily`（配置和 vault 不会自动删）。Windows 上定时建议用 **WSL**，或继续用插件。详见 [CLI README](../apps/cli/README.md) · [0.3.4 说明](releases/0.3.4.md)。

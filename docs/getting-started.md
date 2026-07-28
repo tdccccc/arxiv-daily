@@ -153,12 +153,12 @@ With auto-send on, a **completed** daily run may email one digest for that date.
 
 ## CLI (optional)
 
-If you want reports without keeping Obsidian open:
+If you want reports without keeping Obsidian open (Node.js 20.11+):
 
 ```bash
 npm install -g arxiv-daily
-arxiv-daily init
+arxiv-daily init          # interactive setup; Enter keeps defaults
 arxiv-daily run --today
 ```
 
-Config: `~/.config/arxiv-daily/config.toml`. On Windows, prefer **WSL** for CLI scheduling, or stay on the plugin. Details: [CLI README](../apps/cli/README.md).
+Config: `~/.config/arxiv-daily/config.toml`. Uninstall: `npm uninstall -g arxiv-daily` (config/vault kept). On Windows, prefer **WSL** for CLI scheduling, or stay on the plugin. Details: [CLI README](../apps/cli/README.md) · [0.3.4 notes](releases/0.3.4.md).
