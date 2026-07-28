@@ -153,4 +153,12 @@ With auto-send on, a **completed** daily run may email one digest for that date.
 
 ## CLI (optional)
 
-If you want reports without keeping Obsidian open, see the [CLI section in the README](../README.md#cli): `init`, then `run --today`, config at `~/.config/arxiv-daily/config.toml`. On Windows, prefer **WSL** for CLI scheduling, or stay on the plugin.
+If you want reports without keeping Obsidian open:
+
+```bash
+npm install -g arxiv-daily
+arxiv-daily init
+arxiv-daily run --today
+```
+
+Config: `~/.config/arxiv-daily/config.toml`. On Windows, prefer **WSL** for CLI scheduling, or stay on the plugin. Details: [CLI README](../apps/cli/README.md).

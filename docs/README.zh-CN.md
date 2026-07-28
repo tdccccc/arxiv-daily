@@ -83,25 +83,37 @@ arxiv-daily/
 
 适合 cron 或长期在线的机器。需要 Node.js 20.11.0+。
 
+### 安装（npm）
+
+```bash
+npm install -g arxiv-daily
+arxiv-daily init
+# 编辑 ~/.config/arxiv-daily/config.toml
+arxiv-daily run --today
+```
+
+也可：`npx arxiv-daily --help`。
+
 配置**只**在 **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`**（默认 `~/.config/arxiv-daily/config.toml`）。不再使用配置类环境变量，也没有 `--config` / `--vault-root`。
 
 ```bash
-npm ci
-npm run build
-
-npm run cli -- init
-# 编辑 ~/.config/arxiv-daily/config.toml 中的 topics 与密钥
-npm run cli -- run --today
-npm run cli -- run --date 2026-06-13
-npm run cli -- run --id 2606.12345
-npm run cli -- email test
+arxiv-daily run --date 2026-06-13
+arxiv-daily run --id 2606.12345
+arxiv-daily email test
 # [schedule] 里 enabled = true 后：
-npm run cli -- schedule install
+arxiv-daily schedule install
 ```
 
 **Windows** 上请用 **WSL** 跑 CLI + cron，或桌面直接用 **Obsidian 插件** 做定时。
 
-可执行文件：`apps/cli/dist/arxiv-daily-cli.cjs`。设计说明：[CLI 文档](helm/2026-07-28-cli-product-config-and-data-portability/)。
+### 从本仓库开发
+
+```bash
+npm ci && npm run build
+npm run cli -- run --today    # 运行 apps/cli/dist/arxiv-daily-cli.cjs
+```
+
+更多：[apps/cli/README.md](../apps/cli/README.md) · [CLI 设计说明](helm/2026-07-28-cli-product-config-and-data-portability/)。
 
 ---
 

@@ -153,4 +153,12 @@ Beta 额度偏小（每个已验证邮箱每个 UTC 日仅少量消息，测试�
 
 ## CLI（可选）
 
-若希望不打开 Obsidian 也能出日报，见 [中文说明里的 CLI 一节](README.zh-CN.md#cli)：先 `init`，再 `run --today`，配置在 `~/.config/arxiv-daily/config.toml`。Windows 上定时建议用 **WSL**，或继续用插件。
+若希望不打开 Obsidian 也能出日报：
+
+```bash
+npm install -g arxiv-daily
+arxiv-daily init
+arxiv-daily run --today
+```
+
+配置在 `~/.config/arxiv-daily/config.toml`。Windows 上定时建议用 **WSL**，或继续用插件。详见 [CLI README](../apps/cli/README.md)。

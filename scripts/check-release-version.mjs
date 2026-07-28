@@ -35,9 +35,16 @@ if (rootPackage.name !== "arxiv-daily-workspace" || rootPackage.private !== true
 if (JSON.stringify(rootPackage.workspaces) !== JSON.stringify(["packages/*", "apps/*", "plugin"])) {
   errors.push("package.json workspaces must be packages/*, apps/*, plugin in canonical order");
 }
+const publishablePackages = new Set(["apps/cli/package.json"]);
 for (const file of packageFiles) {
   const value = parsed.get(file);
-  if (value.private !== true) errors.push(`${file} must be private`);
+  if (publishablePackages.has(file)) {
+    if (value.private === true) {
+      errors.push(`${file} must be publishable (private must not be true)`);
+    }
+  } else if (value.private !== true) {
+    errors.push(`${file} must be private`);
+  }
   if (value.license !== "MIT") errors.push(`${file} license must be MIT`);
   if (value.engines?.node !== ">=20.11.0") errors.push(`${file} engines.node must be >=20.11.0`);
   if (value.repository?.type !== "git" || value.repository?.url !== "git+https://github.com/tdccccc/arxiv-daily.git") {
@@ -50,6 +57,18 @@ for (const file of packageFiles) {
       }
     }
   }
+}
+
+const cliPackage = parsed.get("apps/cli/package.json");
+if (cliPackage.name !== "arxiv-daily") {
+  errors.push('apps/cli/package.json name must be "arxiv-daily"');
+}
+if (cliPackage.bin?.["arxiv-daily"] !== "./dist/arxiv-daily-cli.cjs") {
+  errors.push("apps/cli/package.json bin.arxiv-daily must point at ./dist/arxiv-daily-cli.cjs");
+}
+const cliFiles = cliPackage.files ?? [];
+if (!cliFiles.includes("dist/arxiv-daily-cli.cjs")) {
+  errors.push("apps/cli/package.json files must include dist/arxiv-daily-cli.cjs");
 }
 
 const rootManifest = parsed.get("manifest.json");

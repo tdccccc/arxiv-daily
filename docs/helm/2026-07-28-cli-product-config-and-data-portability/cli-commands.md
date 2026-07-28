@@ -5,7 +5,10 @@ decision_ref: `docs/adr/0003-two-products-cli-config-and-data-portability.md`
 schema_ref: `./cli-toml-schema.md`  
 goal_ref: `./goal.md`
 
-Binary name: **`arxiv-daily`**.
+Binary name: **`arxiv-daily`** (npm package name: **`arxiv-daily`**).
+
+Install for users: `npm install -g arxiv-daily` then `arxiv-daily …`.  
+Developers in this monorepo may use `npm run cli -- …` (runs the local dist).
 
 Config: only `$XDG_CONFIG_HOME/arxiv-daily/config.toml`.  
 **No** `--config` / `--vault-root` / `--cache-dir` / `ARXIV_DAILY_*` settings env.
