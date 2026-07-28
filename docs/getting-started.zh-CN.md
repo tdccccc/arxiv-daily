@@ -61,8 +61,8 @@ and systematics for photometric redshift estimation.
 
 可先用模板，再改成你的方向。
 
-**论文笔记（可选加深）：**  
-每个 topic 的 **Detail report** 表示：该主题下的论文是否有机会生成 `papers/` 里更长的 **论文笔记**（不只是日报里的短条目）。列表下方的 **Automatic detail notes**（Fewer / Recommended / More）控制自动写笔记的频率。之后仍可手动生成（例如 **Summarize by arXiv ID**）。
+**论文总结（可选加深）：**  
+每个 topic 的 **Detail report** 表示：该主题下的论文是否有机会生成 `papers/` 里更长的 **论文总结**（不只是日报里的短条目）。列表下方的 **Automatic detail notes**（Fewer / Recommended / More）控制自动写总结的频率。之后仍可手动生成（例如 **Summarize by arXiv ID**）。
 
 ## 5. 生成第一份日报
 
@@ -73,7 +73,7 @@ and systematics for photometric redshift estimation.
 1. 按分类抓取近期论文  
 2. 按主题筛出相关论文  
 3. 写入 **日报**：每篇入选论文一段结构化短摘要  
-4. 在允许时为少量论文生成 **论文笔记**  
+4. 在允许时为少量论文生成 **论文总结**  
 5. 更新 Dashboard  
 
 日报路径：
@@ -85,9 +85,9 @@ arxiv-daily/daily/YYYY-MM-DD.md
 | 产出 | 路径 | 作用 |
 |---|---|---|
 | **日报** | `daily/YYYY-MM-DD.md` | 当天的阅读列表（主要结果） |
-| **论文笔记** | `papers/<arxiv_id>.md` | 单篇更长的笔记 |
+| **论文总结** | `papers/<arxiv_id>.md` | 单篇更长的总结 |
 
-自动论文笔记失败或跳过时，日报仍可成功。
+自动论文总结失败或跳过时，日报仍可成功。
 
 ## 6. 使用 Dashboard
 
@@ -96,7 +96,7 @@ arxiv-daily/daily/YYYY-MM-DD.md
 - **Starred** / **All** — 关注你标星的论文  
 - **日历** — 按日期打开日报  
 - **搜索与筛选** — 在本地索引里找论文  
-- **行操作** — 打开日报、论文笔记、arXiv、PDF；加星  
+- **行操作** — 打开日报、论文总结、arXiv、PDF；加星  
 
 需要进正式文献库时，可从行内打开 arXiv，再用 Zotero 等工具导入。
 

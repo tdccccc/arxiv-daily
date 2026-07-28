@@ -35,7 +35,7 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | Term | Meaning |
 |---|---|
 | **Daily report** | The day’s Markdown file under `daily/` — multi-topic reading list with a short structured summary per selected paper. Prefer this over “daily summary” for the whole file. |
-| **Paper note** | A longer per-paper Markdown file under `papers/`. Prefer this over “deep dive” in user-facing docs. Not the same object as a daily-report entry. |
+| **Paper note** | A longer per-paper Markdown file under `papers/`. Prefer this over “deep dive” in user-facing docs. Not the same object as a daily-report entry. Chinese user docs: **论文总结** (not 论文笔记). |
 | **Structured summary** | The short fields for one paper *inside* a daily report (problem, method, result, …). Not a separate file. |
 
 UI/settings may still say “detail note” or “Detail report”; new user docs should prefer **paper note**.

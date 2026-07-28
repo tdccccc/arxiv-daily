@@ -4,13 +4,13 @@
 
 [新手教程](getting-started.zh-CN.md) · [English README](../README.md)
 
-arXiv 每天更新的论文远超人工扫读。**arXiv Daily** 按你关心的分类抓取，用 LLM 按研究主题筛选，并写成可搜索、可双向链接的 **Markdown**：**日报（Daily report）**、可选的 **论文笔记（Paper note）**，以及用于回看的 **Dashboard**。
+arXiv 每天更新的论文远超人工扫读。**arXiv Daily** 按你关心的分类抓取，用 LLM 按研究主题筛选，并写成可搜索、可双向链接的 **Markdown**：**日报（Daily report）**、可选的 **论文总结（Paper note）**，以及用于回看的 **Dashboard**。
 
 ## 它能帮你做什么
 
 - **过滤信息过载** — 从大量列表里留下与你主题相关的论文  
 - **生成日报** — 每天一个 Markdown 文件，按主题分组，每篇有结构化短摘要  
-- **论文笔记** — 需要对单篇写更深时，生成更长的笔记（可自动或按 arXiv ID）  
+- **论文总结** — 需要对单篇写更深时，生成更长的总结（可自动或按 arXiv ID）  
 - **方便回看** — Dashboard：日历、搜索、主题、星标  
 - **定时运行** — Obsidian 打开时用插件调度，或在长期开机的机器上用 CLI  
 - **可选邮件** — 日报成功后发一封简短摘要（自备 Resend，或官方代发 Beta）
@@ -20,13 +20,13 @@ arXiv 每天更新的论文远超人工扫读。**arXiv Daily** 按你关心的�
 | 产出 | 位置 | 说明 |
 |---|---|---|
 | **日报** | `arxiv-daily/daily/YYYY-MM-DD.md` | 当天的阅读列表：主题、入选论文、结构化短摘要 |
-| **论文笔记** | `arxiv-daily/papers/<arxiv_id>.md` | 单篇更长的笔记（与日报里的条目不是同一份文件） |
-| **Dashboard** | Obsidian 内 | 日历、搜索、筛选、星标，打开日报 / 笔记 / arXiv / PDF |
+| **论文总结** | `arxiv-daily/papers/<arxiv_id>.md` | 单篇更长的总结（与日报里的条目不是同一份文件） |
+| **Dashboard** | Obsidian 内 | 日历、搜索、筛选、星标，打开日报 / 论文总结 / arXiv / PDF |
 
 ```text
 arxiv-daily/
   daily/          # 日报
-  papers/         # 论文笔记
+  papers/         # 论文总结
   pdfs/           # 可选 PDF
   .index/         # 本地索引与运行状态
 ```
@@ -74,7 +74,7 @@ arxiv-daily/
 - 打开 **Dashboard**（侧栏图标或命令面板）  
 - **Run Today**，或在 Obsidian 打开时让调度自动跑工作日  
 - 读 **日报**，给重要论文加星  
-- 需要更深时打开或创建 **论文笔记**  
+- 需要更深时打开或创建 **论文总结**  
 - 可选：测试邮件成功后打开邮件自动发送  
 
 ---
