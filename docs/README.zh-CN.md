@@ -1,10 +1,10 @@
 # arXiv Daily
 
-把每天的 arXiv 新论文变成 Obsidian 里的阅读列表——也可以在服务器上用 CLI 跑。
+按主题筛选 arXiv 新论文，生成 Markdown 日报与论文总结；支持 Obsidian 插件与 CLI。
 
-[新手教程](getting-started.zh-CN.md) · [English README](../README.md)
+[新手教程](getting-started.zh-CN.md) · [English README](../README.md) · [Getting Started](getting-started.md)
 
-arXiv 每天更新的论文远超人工扫读。**arXiv Daily** 按你关心的分类抓取，用 LLM 按研究主题筛选，并写成可搜索、可双向链接的 **Markdown**：**日报（Daily report）**、可选的 **论文总结（Paper note）**，以及用于回看的 **Dashboard**。
+**arXiv Daily** 按你关心的分类抓取 arXiv，用 LLM 按研究主题筛选，并写成可搜索、可双向链接的 **Markdown**：**日报（Daily report）**、可选的 **论文总结（Paper note）**，以及用于回看的 **Dashboard**。
 
 ## 它能帮你做什么
 
@@ -99,19 +99,11 @@ npm run cli -- email test
 npm run cli -- schedule install
 ```
 
-**Windows** 上请用 **WSL** 跑 CLI + cron，或桌面直接用 **Obsidian 插件** 做定时。`schedule install` 未对接「任务计划程序」。
+**Windows** 上请用 **WSL** 跑 CLI + cron，或桌面直接用 **Obsidian 插件** 做定时。
 
 可执行文件：`apps/cli/dist/arxiv-daily-cli.cjs`。设计说明：[CLI 文档](helm/2026-07-28-cli-product-config-and-data-portability/)。
 
 ---
-
-## 更多文档
-
-| 文档 | 用途 |
-|---|---|
-| [新手教程](getting-started.zh-CN.md) | 第一次跑通插件、邮件、排错 |
-| [English README](../README.md) | 英文总览 |
-| [Getting Started](getting-started.md) | 英文教程 |
 
 ## 开发
 

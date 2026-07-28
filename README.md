@@ -1,14 +1,14 @@
 # arXiv Daily
 
-Turn new arXiv papers into a daily reading list in Obsidian—or on a server with the CLI.
+Filter new arXiv papers by your research topics and write Markdown daily reports—via the Obsidian plugin or the CLI.
 
-[Getting Started](docs/getting-started.md) · [中文说明](docs/README.zh-CN.md)
+[Getting Started](docs/getting-started.md) · [中文说明](docs/README.zh-CN.md) · [新手教程](docs/getting-started.zh-CN.md)
 
-Every day, arXiv publishes more papers than anyone can skim. **arXiv Daily** fetches the categories you care about, uses an LLM to keep the ones that match your research topics, and writes **Markdown you can search and link**—as a **daily report**, optional **paper notes**, and a simple **Dashboard** to revisit them.
+**arXiv Daily** fetches the categories you care about, uses an LLM to keep papers that match your topics, and writes **Markdown you can search and link**: a **daily report**, optional **paper notes**, and a **Dashboard** to revisit them.
 
 ## What it does
 
-- **Filters the flood** — hundreds of listings down to papers relevant to *your* topics
+- **Filters the flood** — listings down to papers relevant to *your* topics
 - **Writes a daily report** — one Markdown file per day, grouped by topic, with a short structured summary per paper
 - **Can add paper notes** — longer per-paper notes when you want more depth (automatic or by arXiv ID)
 - **Helps you review** — Dashboard with calendar, search, topics, and stars
@@ -40,7 +40,7 @@ arxiv-daily/
 | Schedule | While Obsidian is open | System cron → `run --today` (or WSL on Windows) |
 | Shared | Same core pipeline; same vault layout if you point at the same folder | |
 
-Most people start with the **plugin**. Use the **CLI** when you want reports generated without keeping Obsidian open.
+Most people start with the **plugin**. Use the **CLI** when you want reports without keeping Obsidian open.
 
 ---
 
@@ -99,19 +99,11 @@ npm run cli -- email test
 npm run cli -- schedule install
 ```
 
-On **Windows**, prefer **WSL** for CLI + cron, or use the **Obsidian plugin** for desktop scheduling. `schedule install` is not wired to Task Scheduler.
+On **Windows**, prefer **WSL** for CLI + cron, or use the **Obsidian plugin** for desktop scheduling.
 
 Executable: `apps/cli/dist/arxiv-daily-cli.cjs`. Design notes: [CLI product docs](docs/helm/2026-07-28-cli-product-config-and-data-portability/).
 
 ---
-
-## More
-
-| Doc | For |
-|---|---|
-| [Getting Started](docs/getting-started.md) | First successful plugin run, email, troubleshooting |
-| [中文说明](docs/README.zh-CN.md) | Chinese overview |
-| [Getting Started 中文](docs/getting-started.zh-CN.md) | Chinese walkthrough |
 
 ## Development
 
