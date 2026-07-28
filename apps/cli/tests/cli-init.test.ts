@@ -60,7 +60,8 @@ describe("CLI init template", () => {
       "Photo-z",
       "photo-z",
       "photo-z methods",
-      "y", // keep recommended defaults
+      "n", // auto paper notes off
+      "n", // schedule off
     ];
     let i = 0;
     const written: { path: string; body: string }[] = [];
@@ -94,5 +95,6 @@ describe("CLI init template", () => {
     expect(written[0]!.body.trimEnd().endsWith("schema_version = 1")).toBe(
       true,
     );
+    expect(written[0]!.body).toContain("detail = false");
   });
 });
