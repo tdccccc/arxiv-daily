@@ -30,14 +30,14 @@ arxiv-daily run --today
 
 `init` is a TUI wizard:
 
-- **↑/↓** move · **Space** multi-select · **Enter** confirm  
-- **← Back** (last menu item) or **Esc / Ctrl+C** → previous step (exits only on the first step)  
-- **PageUp / PageDown** are not used (`@clack/prompts` does not bind them for wizard steps)
+- **↑/↓** move · **Space** multi-select · **Enter** confirm (keep default when shown)
+- **← Go back** (last item in menus) → previous step  
+- **Ctrl+C** (or **Esc**) → exit the wizard  
+- Defaults appear in prompts — press **Enter** to accept without retyping  
 
-Flow: provider → API base URL → API key → optional connection test / model list →
-model → email → categories → timezone → language → topic. Official delivery can
-send a verification email so you only paste the long code from the browser.
-Config file comments are in English.
+Flow: vault → provider → URL → API key → optional model fetch → model → email →
+categories → timezone → language → topic → optional advanced defaults.
+Config file comments are in English; `schema_version` is at the bottom (do not edit).
 
 Config path:
 

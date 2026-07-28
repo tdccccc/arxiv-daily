@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderInitToml, runInit } from "../src/init";
 
 describe("CLI init template", () => {
-  it("writes English comments including schema_version note", () => {
+  it("writes English comments with schema_version at the end", () => {
     const body = renderInitToml({
       vaultRoot: "/vault",
       cacheDir: "/vault/.cache/arxiv-daily",
@@ -18,6 +18,7 @@ describe("CLI init template", () => {
         name: "ML",
         tag: "ml",
         description: "machine learning papers",
+        detail: true,
       },
       email: {
         enabled: false,
@@ -26,11 +27,19 @@ describe("CLI init template", () => {
         apiKey: "re_x",
         hostedToken: "",
       },
+      linkStyle: "wikilink",
+      logLevel: "info",
+      schedule: {
+        enabled: false,
+        on: "09:30",
+        intervalHours: 0,
+        until: "18:00",
+        weekdaysOnly: true,
+      },
     });
     expect(body).toContain("arXiv Daily — CLI config");
-    expect(body).toContain(
-      "schema_version: integer for future config format migrations",
-    );
+    expect(body).toContain("Do not change unless a release note tells you to");
+    expect(body.trimEnd().endsWith("schema_version = 1")).toBe(true);
     expect(body).not.toContain("可含密钥");
     expect(body).toContain('categories = ["cs.LG", "cs.AI"]');
     expect(body).toContain('provider = "openai"');
@@ -51,6 +60,7 @@ describe("CLI init template", () => {
       "Photo-z",
       "photo-z",
       "photo-z methods",
+      "y", // keep recommended defaults
     ];
     let i = 0;
     const written: { path: string; body: string }[] = [];
@@ -81,6 +91,8 @@ describe("CLI init template", () => {
     expect(written[0]!.body).toContain("model-a");
     expect(written[0]!.body).toContain("photo-z");
     expect(written[0]!.body).toContain("https://api.example.com/v1");
+    expect(written[0]!.body.trimEnd().endsWith("schema_version = 1")).toBe(
+      true,
+    );
   });
 });
-

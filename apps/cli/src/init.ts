@@ -63,6 +63,7 @@ type StepId =
   | "timezone"
   | "language"
   | "topic"
+  | "defaults"
   | "write";
 
 const STEP_ORDER: StepId[] = [
@@ -77,6 +78,7 @@ const STEP_ORDER: StepId[] = [
   "timezone",
   "language",
   "topic",
+  "defaults",
   "write",
 ];
 
@@ -100,6 +102,14 @@ interface WizardState {
   topicName: string;
   topicTag: string;
   topicDescription: string;
+  topicDetail: boolean;
+  linkStyle: "wikilink" | "relative";
+  logLevel: "debug" | "info" | "warn" | "error";
+  scheduleEnabled: boolean;
+  scheduleOn: string;
+  scheduleIntervalHours: number;
+  scheduleUntil: string;
+  scheduleWeekdaysOnly: boolean;
 }
 
 type Nav = "next" | "back" | "abort";
@@ -119,11 +129,11 @@ function nextStep(id: StepId): StepId | null {
 }
 
 /**
- * Key bindings (clack limitation):
- * - ↑/↓ move, Space multi-select, Enter confirm
- * - Explicit "← Back" option on select menus (after first step)
- * - Esc / Ctrl+C: go back one step (not exit), except on the first step → abort
- * - PageUp/PageDn are NOT handled by @clack/prompts for wizard navigation
+ * Key bindings (@clack/prompts):
+ * - ↑/↓ move, Space multi-select, Enter confirm / accept default
+ * - "← Go back" menu item → previous step
+ * - Ctrl+C / Esc → exit wizard (same cancel signal; not used for back)
+ * - PageUp/PageDn are not used for navigation
  */
 export async function runInit(opts: InitOptions = {}): Promise<number> {
   const env = opts.env ?? process.env;
@@ -154,16 +164,19 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     p.intro("arXiv Daily CLI setup");
     p.note(
       [
-        `Config file: ${configPath}`,
+        `Config: ${configPath}`,
         "",
-        "Navigation:",
-        "  ↑/↓     move   ·  Space  multi-select  ·  Enter  confirm",
-        "  ← Back  menu item (when available)",
-        "  Esc or Ctrl+C  go to previous step (exit only on first step)",
+        "Keys",
+        "  ↑/↓     move",
+        "  Space   multi-select",
+        "  Enter   confirm / keep default",
+        "  ← Back  previous step (last item in menus)",
+        "  Ctrl+C  exit wizard",
+        "  Esc     same as Ctrl+C in this TUI (cannot go back)",
         "",
-        "Note: PageUp/PageDown are not used — @clack/prompts does not support them.",
+        "Defaults are shown in [brackets] or as the highlighted option — press Enter to accept.",
       ].join("\n"),
-      "Keys",
+      "Setup",
     );
   } else {
     writeLine(stdout, "arXiv Daily CLI setup");
@@ -217,6 +230,14 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     topicTag: "my-research",
     topicDescription:
       "Describe in natural language what papers belong in this topic (problems, methods, objects; what to exclude).",
+    topicDetail: true,
+    linkStyle: "wikilink",
+    logLevel: "info",
+    scheduleEnabled: false,
+    scheduleOn: "09:30",
+    scheduleIntervalHours: 0,
+    scheduleUntil: "18:00",
+    scheduleWeekdaysOnly: true,
   };
 
   let step: StepId = "vault";
@@ -253,6 +274,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       name: state.topicName,
       tag: state.topicTag,
       description: state.topicDescription,
+      detail: state.topicDetail,
     },
     email: {
       enabled: state.emailEnabled,
@@ -260,6 +282,15 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       to: state.emailTo,
       apiKey: state.emailApiKey,
       hostedToken: state.hostedToken,
+    },
+    linkStyle: state.linkStyle,
+    logLevel: state.logLevel,
+    schedule: {
+      enabled: state.scheduleEnabled,
+      on: state.scheduleOn,
+      intervalHours: state.scheduleIntervalHours,
+      until: state.scheduleUntil,
+      weekdaysOnly: state.scheduleWeekdaysOnly,
     },
   });
 
@@ -280,7 +311,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     "  Optional: arxiv-daily email test  then set email.enabled = true",
     "  Optional: [schedule] enabled = true → arxiv-daily schedule install",
     "",
-    "schema_version = 1 is for future config migrations (leave it alone).",
+    "Tip: schema_version at the bottom of the file is for migrations — leave it alone.",
   ].join("\n");
 
   if (useClack) p.outro(nextSteps);
@@ -302,7 +333,7 @@ async function runStep(
     case "vault": {
       const homeDefault = path.join(os.homedir(), "arxiv-daily");
       const v = await askText(opts, {
-        message: "Vault root path (where daily/ and papers/ are written)",
+        message: `Vault root path (default: ${homeDefault})`,
         placeholder: "~/arxiv-daily",
         initialValue: state.vaultRoot || homeDefault,
         validate: (s) =>
@@ -316,7 +347,7 @@ async function runStep(
     case "provider": {
       const keys = Object.keys(PROVIDER_PRESETS);
       const pick = await askSelect(opts, {
-        message: "LLM provider",
+        message: `LLM provider (default: ${DEFAULT_SETTINGS.llm.provider})`,
         options: keys.map((key) => ({
           value: key,
           label: PROVIDER_PRESETS[key]!.name,
@@ -368,7 +399,7 @@ async function runStep(
     }
     case "fetchModels": {
       const conf = await askConfirm(opts, {
-        message: "Test connection and load model list from the provider?",
+        message: "Test connection and load model list? (default: Yes)",
         initialValue: state.tryFetch,
         allowBack: canBack,
       });
@@ -469,7 +500,7 @@ async function runStep(
     }
     case "email": {
       const choice = await askSelect(opts, {
-        message: "Email digests after a successful daily run?",
+        message: "Email digests after a successful daily run? (default: Skip)",
         options: [
           { value: "skip", label: "Skip for now", hint: "local files only" },
           {
@@ -614,7 +645,7 @@ async function runStep(
           "arXiv categories (Space toggle, Enter confirm; select only ← Back to go back)",
         options: [
           ...flatCats,
-          { value: BACK, label: "← Back", hint: "previous step" },
+          { value: BACK, label: "← Go back", hint: "previous step" },
         ],
         initialValues: state.categories.filter((id) =>
           flatCats.some((c) => c.value === id),
@@ -630,7 +661,7 @@ async function runStep(
     }
     case "timezone": {
       const pick = await askSelect(opts, {
-        message: "Timezone for “today”",
+        message: `Timezone for “today” (default: ${state.timezone})`,
         options: [
           ...COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz })),
           { value: "__other__", label: "Other IANA name…" },
@@ -655,7 +686,7 @@ async function runStep(
     }
     case "language": {
       const pick = await askSelect(opts, {
-        message: "Summary language for reports",
+        message: `Summary language (default: ${state.summaryLanguage})`,
         options: [
           { value: "zh", label: "Chinese (zh)" },
           { value: "en", label: "English (en)" },
@@ -675,21 +706,21 @@ async function runStep(
         );
       }
       const name = await askText(opts, {
-        message: "Topic display name",
+        message: `Topic display name (default: ${state.topicName})`,
         initialValue: state.topicName,
         allowBack: canBack,
       });
       if (name.nav !== "next") return name.nav;
       state.topicName = name.value.trim() || "My research (edit me)";
       const tag = await askText(opts, {
-        message: "Topic tag slug",
+        message: `Topic tag slug (default: ${state.topicTag})`,
         initialValue: state.topicTag,
         allowBack: true,
       });
       if (tag.nav !== "next") return tag.nav;
       state.topicTag = tag.value.trim() || "my-research";
       const desc = await askText(opts, {
-        message: "Topic description (what papers belong here)",
+        message: "Topic description (default placeholder is fine to edit later)",
         initialValue: state.topicDescription,
         allowBack: true,
       });
@@ -697,6 +728,102 @@ async function runStep(
       state.topicDescription =
         desc.value.trim() ||
         "Describe in natural language what papers belong in this topic.";
+      return "next";
+    }
+    case "defaults": {
+      if (useClack) {
+        p.note(
+          [
+            "Recommended defaults (safe to keep):",
+            `  schedule.enabled = ${state.scheduleEnabled}`,
+            `  schedule.on = ${state.scheduleOn}  interval_hours = ${state.scheduleIntervalHours}`,
+            `  schedule.weekdays_only = ${state.scheduleWeekdaysOnly}`,
+            `  output.link_style = ${state.linkStyle}`,
+            `  advanced.log_level = ${state.logLevel}`,
+            `  topic detail notes eligible = ${state.topicDetail}`,
+            "",
+            "You can change these later in config.toml.",
+          ].join("\n"),
+          "Optional settings",
+        );
+      } else {
+        writeLine(
+          stdout,
+          "Optional settings — defaults are fine for most users.",
+        );
+      }
+      const keep = await askConfirm(opts, {
+        message: "Keep all recommended defaults above?",
+        initialValue: true,
+        allowBack: canBack,
+      });
+      if (keep.nav !== "next") return keep.nav;
+      if (keep.value) return "next";
+
+      const detail = await askConfirm(opts, {
+        message: "Allow automatic longer paper notes for this topic? (default: Yes)",
+        initialValue: state.topicDetail,
+        allowBack: true,
+      });
+      if (detail.nav !== "next") return detail.nav;
+      state.topicDetail = detail.value;
+
+      const link = await askSelect(opts, {
+        message: `Link style in reports (default: ${state.linkStyle})`,
+        options: [
+          { value: "wikilink", label: "wikilink", hint: "Obsidian [[links]]" },
+          { value: "relative", label: "relative", hint: "Markdown relative links" },
+        ],
+        initialValue: state.linkStyle,
+        allowBack: true,
+      });
+      if (link.nav !== "next") return link.nav;
+      state.linkStyle = link.value === "relative" ? "relative" : "wikilink";
+
+      const log = await askSelect(opts, {
+        message: `Log level (default: ${state.logLevel})`,
+        options: [
+          { value: "info", label: "info" },
+          { value: "debug", label: "debug" },
+          { value: "warn", label: "warn" },
+          { value: "error", label: "error" },
+        ],
+        initialValue: state.logLevel,
+        allowBack: true,
+      });
+      if (log.nav !== "next") return log.nav;
+      if (
+        log.value === "debug" ||
+        log.value === "info" ||
+        log.value === "warn" ||
+        log.value === "error"
+      ) {
+        state.logLevel = log.value;
+      }
+
+      const schedEn = await askConfirm(opts, {
+        message: "Enable OS schedule install intent now? (default: No — run manually first)",
+        initialValue: state.scheduleEnabled,
+        allowBack: true,
+      });
+      if (schedEn.nav !== "next") return schedEn.nav;
+      state.scheduleEnabled = schedEn.value;
+      if (state.scheduleEnabled) {
+        const on = await askText(opts, {
+          message: `Daily run time HH:MM (default: ${state.scheduleOn})`,
+          initialValue: state.scheduleOn,
+          allowBack: true,
+        });
+        if (on.nav !== "next") return on.nav;
+        if (on.value.trim()) state.scheduleOn = on.value.trim();
+        const wd = await askConfirm(opts, {
+          message: "Weekdays only? (default: Yes)",
+          initialValue: state.scheduleWeekdaysOnly,
+          allowBack: true,
+        });
+        if (wd.nav !== "next") return wd.nav;
+        state.scheduleWeekdaysOnly = wd.value;
+      }
       return "next";
     }
     default:
@@ -752,15 +879,16 @@ function withBack<T extends { value: string; label: string; hint?: string }>(
   // Put Back last so numbered choices stay stable (1 = first real option).
   return [
     ...options,
-    { value: BACK, label: "← Back", hint: "previous step" } as T,
+    { value: BACK, label: "← Go back", hint: "previous step" } as T,
   ];
 }
 
 /**
- * Map cancel (Esc/Ctrl+C) to back when allowBack, else abort.
+ * Ctrl+C / Esc both surface as isCancel in @clack/prompts — always exit.
+ * Use the "← Back" menu item to go to the previous step.
  */
-function mapCancel(allowBack: boolean): "back" | "abort" {
-  return allowBack ? "back" : "abort";
+function mapCancel(_allowBack: boolean): "back" | "abort" {
+  return "abort";
 }
 
 async function askText(
@@ -790,11 +918,7 @@ async function askText(
       writeLine(opts.stderr ?? process.stderr, `  ${err}`);
     }
   }
-  // clack text: cancel → back/abort; no native Back option on text fields
-  // Prepend note when back is available
-  if (allowBack) {
-    p.log.message("Esc / Ctrl+C = previous step");
-  }
+  // Navigation tips are only in the intro note — keep the prompt line clean.
   const result = await p.text({
     message: args.message,
     placeholder: args.placeholder,
@@ -828,7 +952,6 @@ async function askPassword(
       writeLine(opts.stderr ?? process.stderr, `  ${err}`);
     }
   }
-  if (allowBack) p.log.message("Esc / Ctrl+C = previous step");
   const result = await p.password({
     message: args.message,
     validate: args.validate
@@ -994,7 +1117,7 @@ async function askMultiSelect(
     initialValues: args.initialValues,
     required: args.required,
   });
-  if (cancelled(result)) return { nav: "back" };
+  if (cancelled(result)) return { nav: "abort" };
   const arr = result as string[];
   if (arr.length === 1 && arr[0] === BACK) return { nav: "back" };
   return {
@@ -1031,13 +1154,22 @@ export function renderInitToml(input: {
   categories: string[];
   timezone: string;
   summaryLanguage: string;
-  topic: { name: string; tag: string; description: string };
+  topic: { name: string; tag: string; description: string; detail: boolean };
   email: {
     enabled: boolean;
     mode: "self" | "hosted";
     to: string;
     apiKey: string;
     hostedToken: string;
+  };
+  linkStyle: "wikilink" | "relative";
+  logLevel: "debug" | "info" | "warn" | "error";
+  schedule: {
+    enabled: boolean;
+    on: string;
+    intervalHours: number;
+    until: string;
+    weekdaysOnly: boolean;
   };
 }): string {
   const cats = input.categories.map((c) => tomlString(c)).join(", ");
@@ -1046,17 +1178,12 @@ export function renderInitToml(input: {
 # Path: ~/.config/arxiv-daily/config.toml  (or $XDG_CONFIG_HOME/...)
 # May contain secrets — do not commit or share this file publicly.
 #
-# schema_version: integer for future config format migrations.
-#   Current value is 1. Leave it unless release notes tell you to change it.
-#
 # Editing tips (or hand to an agent):
 #   - Research focus: [arxiv].categories and [[arxiv.topics]]
 #   - Do not invent service URLs; do not add hosted_base_url
 #   - Keep key names; only replace secret values
 # Run: arxiv-daily run --today
 # =============================================================================
-
-schema_version = 1
 
 # Folder where daily/ and papers/ are written (absolute path recommended)
 vault_root = ${tomlString(input.vaultRoot)}
@@ -1085,14 +1212,15 @@ name = ${tomlString(input.topic.name)}
 tag = ${tomlString(input.topic.tag)}
 description = ${tomlString(input.topic.description)}
 # true = this topic may get longer paper notes under papers/
-detail = true
+detail = ${input.topic.detail}
 
 [output]
 # "zh" or "en"
 summary_language = ${tomlString(input.summaryLanguage)}
 daily_dir = "arxiv-daily/daily"
 papers_dir = "arxiv-daily/papers"
-link_style = "wikilink"
+# "wikilink" (Obsidian) or "relative"
+link_style = ${tomlString(input.linkStyle)}
 
 [email]
 # true = email a digest after a successful daily run (failures never fail the report)
@@ -1109,18 +1237,22 @@ api_key = ${tomlString(input.email.apiKey)}
 hosted_token = ${tomlString(input.email.hostedToken)}
 
 [schedule]
-# Defaults only; init does not ask. Set enabled = true then: arxiv-daily schedule install
-enabled = false
+# Used by: arxiv-daily schedule install  (does not run a daemon by itself)
+enabled = ${input.schedule.enabled}
 # First daily fire (machine local time HH:MM)
-on = "09:30"
+on = ${tomlString(input.schedule.on)}
 # 0 = once per day at on; e.g. 4 = every 4 hours from on until until
-interval_hours = 0
-until = "18:00"
-weekdays_only = true
+interval_hours = ${input.schedule.intervalHours}
+until = ${tomlString(input.schedule.until)}
+weekdays_only = ${input.schedule.weekdaysOnly}
 
 [advanced]
 # debug | info | warn | error
-log_level = "info"
+log_level = ${tomlString(input.logLevel)}
+
+# Do not change unless a release note tells you to.
+# Used only for future config format migrations.
+schema_version = 1
 `;
 }
 
