@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderInitToml, runInit } from "../src/init";
 
 describe("CLI init template", () => {
-  it("writes English comments and selected fields", () => {
+  it("writes English comments including schema_version note", () => {
     const body = renderInitToml({
       vaultRoot: "/vault",
       cacheDir: "/vault/.cache/arxiv-daily",
@@ -28,35 +28,32 @@ describe("CLI init template", () => {
       },
     });
     expect(body).toContain("arXiv Daily — CLI config");
-    expect(body).toContain("May contain secrets");
+    expect(body).toContain(
+      "schema_version: integer for future config format migrations",
+    );
     expect(body).not.toContain("可含密钥");
     expect(body).toContain('categories = ["cs.LG", "cs.AI"]');
     expect(body).toContain('provider = "openai"');
-    expect(body).toContain('name = "ML"');
-    expect(body).toContain("machine learning papers");
   });
 
-  it("runs wizard with injected answers", async () => {
+  it("runs non-TUI wizard: provider → url → key → models → rest", async () => {
     const answers = [
       "/tmp/vault-test",
-      "1", // deepseek often first - use number; provider list order
+      "1",
+      "https://api.example.com/v1",
       "sk-test-key",
-      "1", // model
-      "", // base url default
-      "1", // skip email
-      "1", // physics group
-      "1", // first category
-      "11", // UTC often 11th - or type UTC
-      "2", // en
+      "y",
+      "1",
+      "1",
+      "1",
+      "UTC",
+      "2",
       "Photo-z",
       "photo-z",
       "photo-z methods",
     ];
-    // Fix timezone to explicit UTC string to avoid index drift
-    answers[8] = "UTC";
     let i = 0;
     const written: { path: string; body: string }[] = [];
-    const stdout: string[] = [];
     const code = await runInit({
       isTTY: true,
       configPath: "/tmp/arxiv-daily-init-test.toml",
@@ -65,8 +62,9 @@ describe("CLI init template", () => {
         i += 1;
         return v;
       },
-      writeFile: async (p, body) => {
-        written.push({ path: p, body });
+      fetchModels: async () => ["model-a", "model-b"],
+      writeFile: async (filePath, body) => {
+        written.push({ path: filePath, body });
       },
       readFile: async () => {
         const err = new Error("missing") as NodeJS.ErrnoException;
@@ -74,14 +72,15 @@ describe("CLI init template", () => {
         throw err;
       },
       mkdir: async () => undefined,
-      stdout: { write: (c) => stdout.push(String(c)) },
+      stdout: { write: () => undefined },
       stderr: { write: () => undefined },
     });
     expect(code).toBe(0);
     expect(written).toHaveLength(1);
     expect(written[0]!.body).toContain("sk-test-key");
+    expect(written[0]!.body).toContain("model-a");
     expect(written[0]!.body).toContain("photo-z");
-    expect(written[0]!.body).toContain("CLI config");
-    expect(stdout.join("")).toContain("Next steps");
+    expect(written[0]!.body).toContain("https://api.example.com/v1");
   });
 });
+

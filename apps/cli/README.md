@@ -28,9 +28,11 @@ arxiv-daily init
 arxiv-daily run --today
 ```
 
-`init` is interactive: it explains each step, lets you pick an LLM provider and arXiv
-category groups from lists, and can send an Official delivery verification email so
-you only paste the long code from the browser. Config file comments are in English.
+`init` is a TUI wizard (↑/↓, Space to multi-select, Enter to confirm, Ctrl+C to cancel):
+provider → API base URL → API key → optional connection test / model list → model,
+then email, arXiv categories, timezone, language, and a starter topic. Official
+delivery can send a verification email so you only paste the long code from the
+browser. Config file comments are in English.
 
 Config path:
 

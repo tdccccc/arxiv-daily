@@ -42,6 +42,7 @@
   "devDependencies": {
     "@arxiv-daily/core": "0.3.3",
     "@arxiv-daily/node-runtime": "0.3.3",
+    "@clack/prompts": "^1.7.0",
     "jszip": "^3.10.1",
     "smol-toml": "^1.7.1"
   }

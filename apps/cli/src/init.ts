@@ -2,9 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import * as p from "@clack/prompts";
 import {
   ARXIV_CATEGORIES,
   DEFAULT_SETTINGS,
+  LlmClient,
+  Logger,
   PROVIDER_PRESETS,
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
@@ -16,7 +19,10 @@ export interface InitOptions {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   configPath?: string;
-  /** Injected answers for tests: async (prompt) => line */
+  /**
+   * Non-TUI answers for tests (prompt string → reply).
+   * When set, uses plain questions instead of @clack/prompts.
+   */
   ask?: (prompt: string) => Promise<string>;
   writeFile?: (path: string, body: string) => Promise<void>;
   readFile?: (path: string) => Promise<string>;
@@ -24,8 +30,12 @@ export interface InitOptions {
   stdout?: WritableTextStream;
   stderr?: WritableTextStream;
   isTTY?: boolean;
-  /** Injected for tests; defaults to real hosted verify call. */
   startHostedVerify?: (email: string) => Promise<void>;
+  /** Inject model list / connection test for unit tests. */
+  fetchModels?: (input: {
+    apiKey: string;
+    baseUrl: string;
+  }) => Promise<string[]>;
 }
 
 const COMMON_TIMEZONES = [
@@ -42,20 +52,27 @@ const COMMON_TIMEZONES = [
   "UTC",
 ] as const;
 
+type CancelToken = symbol;
+
+function cancelled(value: unknown): value is CancelToken {
+  return p.isCancel(value);
+}
+
 export async function runInit(opts: InitOptions = {}): Promise<number> {
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
   const configPath = opts.configPath ?? resolveCliConfigPath(env, platform);
   const write =
     opts.writeFile ??
-    ((p: string, body: string) => fs.writeFile(p, body, "utf8"));
+    ((filePath: string, body: string) => fs.writeFile(filePath, body, "utf8"));
   const read =
-    opts.readFile ?? ((p: string) => fs.readFile(p, "utf8"));
+    opts.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf8"));
   const mkdir =
     opts.mkdir ??
-    ((p: string) => fs.mkdir(p, { recursive: true }).then(() => undefined));
+    ((dir: string) => fs.mkdir(dir, { recursive: true }).then(() => undefined));
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
+  const useClack = !opts.ask;
   const tty =
     opts.isTTY ??
     (Boolean((input as NodeJS.ReadStream).isTTY) &&
@@ -66,14 +83,22 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     return 2;
   }
 
-  writeLine(stdout, "");
-  writeLine(stdout, "arXiv Daily CLI setup");
-  writeLine(stdout, `Config file: ${configPath}`);
-  writeLine(
-    stdout,
-    "Press Enter to accept values in [brackets]. Type ? on some steps for more help.",
-  );
-  writeLine(stdout, "");
+  if (useClack) {
+    p.intro("arXiv Daily CLI setup");
+    p.note(
+      [
+        `Config will be written to:`,
+        configPath,
+        "",
+        "Use ↑/↓ to move, Space to toggle multi-select, Enter to confirm.",
+        "Ctrl+C cancels.",
+      ].join("\n"),
+      "About this wizard",
+    );
+  } else {
+    writeLine(stdout, "arXiv Daily CLI setup");
+    writeLine(stdout, `Config file: ${configPath}`);
+  }
 
   let existing: string | null = null;
   try {
@@ -84,103 +109,198 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
 
   let mode: "write" | "merge" | "cancel" = "write";
   if (existing !== null) {
-    writeLine(stdout, `A config already exists at:\n  ${configPath}`);
-    const choice = (
-      await prompt(
-        opts,
-        "  [o]verwrite all  [m]erge (keep existing file)  [c]ancel [o]: ",
-      )
-    )
-      .trim()
-      .toLowerCase();
-    if (choice === "c" || choice === "cancel") {
-      writeLine(stdout, "init cancelled");
+    const choice = await askSelect(opts, {
+      message: `Config already exists at ${configPath}`,
+      options: [
+        { value: "o", label: "Overwrite", hint: "replace entire file" },
+        { value: "m", label: "Keep existing", hint: "do not rewrite" },
+        { value: "c", label: "Cancel" },
+      ],
+      initialValue: "o",
+    });
+    if (cancelled(choice) || choice === "c") {
+      if (useClack) p.cancel("init cancelled");
+      else writeLine(stdout, "init cancelled");
       return 0;
     }
-    if (choice === "m" || choice === "merge") mode = "merge";
-    else mode = "write";
-    writeLine(stdout, "");
+    if (choice === "m") mode = "merge";
   }
 
   // --- Paths ---
-  writeLine(stdout, "── Paths ──");
-  writeLine(
-    stdout,
-    "Vault root = folder where daily reports are written (Obsidian vault root, or any directory).",
-  );
-  const vaultRoot = (
-    await promptUntil(
-      opts,
-      `Vault root path (absolute, e.g. /home/you/Notes) []: `,
-      (v) => (v.trim() ? null : "Path is required."),
-    )
-  ).trim();
-
-  // --- LLM ---
-  writeLine(stdout, "");
-  writeLine(stdout, "── AI / LLM ──");
-  writeLine(
-    stdout,
-    "Used to filter and summarize papers. Need an API key from your provider.",
-  );
-  const providerKeys = Object.keys(PROVIDER_PRESETS);
-  writeLine(stdout, "Providers:");
-  providerKeys.forEach((key, i) => {
-    const p = PROVIDER_PRESETS[key]!;
-    writeLine(stdout, `  ${i + 1}) ${p.name}  (${key})`);
+  const vaultRootRaw = await askText(opts, {
+    message: "Vault root path",
+    placeholder: "/home/you/Notes",
+    initialValue: "",
+    validate: (v) => (v.trim() ? undefined : "Required — absolute path to your notes folder"),
   });
-  const providerAns = (
-    await prompt(
-      opts,
-      `Choose provider 1–${providerKeys.length} or id [${DEFAULT_SETTINGS.llm.provider}]: `,
-    )
-  ).trim();
-  const providerId = resolveProviderId(providerAns, providerKeys);
+  if (cancelled(vaultRootRaw)) return cancelInit(useClack);
+  const vaultRoot = vaultRootRaw.trim();
+
+  // --- LLM: provider → URL → key → test/fetch models → model ---
+  const providerKeys = Object.keys(PROVIDER_PRESETS);
+  const providerPick = await askSelect(opts, {
+    message: "LLM provider",
+    options: providerKeys.map((key) => ({
+      value: key,
+      label: PROVIDER_PRESETS[key]!.name,
+      hint: key,
+    })),
+    initialValue: DEFAULT_SETTINGS.llm.provider,
+  });
+  if (cancelled(providerPick)) return cancelInit(useClack);
+  const providerId = providerPick;
   const preset = PROVIDER_PRESETS[providerId] ?? PROVIDER_PRESETS.custom!;
   const baseUrlDefault = preset.baseUrl || DEFAULT_SETTINGS.llm.baseUrl;
-  const modelDefault =
+
+  const baseUrlRaw = await askText(opts, {
+    message: "API base URL",
+    initialValue: baseUrlDefault,
+    placeholder: baseUrlDefault,
+    validate: (v) => (v.trim() ? undefined : "Base URL is required"),
+  });
+  if (cancelled(baseUrlRaw)) return cancelInit(useClack);
+  const baseUrl = baseUrlRaw.trim();
+
+  const apiKeyRaw = await askPassword(opts, {
+    message: "LLM API key (stored in config file; do not commit it)",
+    validate: (v) => (v.trim() ? undefined : "API key is required"),
+  });
+  if (cancelled(apiKeyRaw)) return cancelInit(useClack);
+  const apiKey = apiKeyRaw.trim();
+
+  let remoteModels: string[] = [];
+  let modelDefault =
     preset.models[0]?.value || DEFAULT_SETTINGS.llm.model;
 
-  writeLine(
-    stdout,
-    "API key is stored in the config file (plaintext). Do not commit this file.",
-  );
-  const apiKey = (
-    await promptUntil(
-      opts,
-      "LLM API key []: ",
-      (v) => (v.trim() ? null : "API key is required for run commands."),
-    )
-  ).trim();
+  const tryFetch = await askConfirm(opts, {
+    message: "Test connection and load model list from the provider?",
+    initialValue: true,
+  });
+  if (cancelled(tryFetch)) return cancelInit(useClack);
 
-  if (preset.models.length > 0 && providerId !== "custom") {
-    writeLine(stdout, "Models for this provider:");
-    preset.models.forEach((m, i) => {
-      writeLine(stdout, `  ${i + 1}) ${m.label}  →  ${m.value}`);
-    });
+  if (tryFetch) {
+    const spin = useClack ? p.spinner() : null;
+    spin?.start("Calling provider /models …");
+    try {
+      const models = opts.fetchModels
+        ? await opts.fetchModels({ apiKey, baseUrl })
+        : await defaultFetchModels(apiKey, baseUrl);
+      remoteModels = models;
+      spin?.stop(
+        models.length > 0
+          ? `Connected — ${models.length} model(s) listed`
+          : "Connected — empty model list; you can type a model id",
+      );
+      if (!useClack) {
+        writeLine(
+          stdout,
+          models.length > 0
+            ? `Connected — ${models.length} model(s)`
+            : "Connected — no models returned",
+        );
+      }
+      if (models[0]) modelDefault = models[0];
+    } catch (e) {
+      const msg = (e as Error).message;
+      spin?.stop(`Could not list models: ${msg}`);
+      if (!useClack) writeLine(stderr, `Could not list models: ${msg}`);
+      if (useClack) {
+        p.log.warn("You can still enter a model id manually.");
+      } else {
+        writeLine(stdout, "You can still enter a model id manually.");
+      }
+    }
   }
-  const modelAns = (
-    await prompt(opts, `Model name or number [${modelDefault}]: `)
-  ).trim();
-  const model = resolveModel(modelAns, preset.models, modelDefault);
 
-  const baseUrl = (
-    await prompt(opts, `API base URL [${baseUrlDefault}]: `)
-  ).trim() || baseUrlDefault;
+  let model: string;
+  if (remoteModels.length > 0) {
+    const options = remoteModels.slice(0, 40).map((id) => ({
+      value: id,
+      label: id,
+    }));
+    if (remoteModels.length > 40) {
+      options.push({
+        value: "__other__",
+        label: "Other… (type model id)",
+      });
+    }
+    const picked = await askSelect(opts, {
+      message: "Model",
+      options,
+      initialValue: options.some((o) => o.value === modelDefault)
+        ? modelDefault
+        : options[0]!.value,
+    });
+    if (cancelled(picked)) return cancelInit(useClack);
+    if (picked === "__other__") {
+      const typed = await askText(opts, {
+        message: "Model id",
+        initialValue: modelDefault,
+        validate: (v) => (v.trim() ? undefined : "Required"),
+      });
+      if (cancelled(typed)) return cancelInit(useClack);
+      model = typed.trim();
+    } else {
+      model = picked;
+    }
+  } else if (preset.models.length > 0 && providerId !== "custom") {
+    const picked = await askSelect(opts, {
+      message: "Model (preset list — connection test skipped or failed)",
+      options: [
+        ...preset.models.map((m) => ({
+          value: m.value,
+          label: m.label,
+          hint: m.value,
+        })),
+        { value: "__other__", label: "Other… (type model id)" },
+      ],
+      initialValue: modelDefault,
+    });
+    if (cancelled(picked)) return cancelInit(useClack);
+    if (picked === "__other__") {
+      const typed = await askText(opts, {
+        message: "Model id",
+        initialValue: modelDefault,
+        validate: (v) => (v.trim() ? undefined : "Required"),
+      });
+      if (cancelled(typed)) return cancelInit(useClack);
+      model = typed.trim();
+    } else {
+      model = picked;
+    }
+  } else {
+    const typed = await askText(opts, {
+      message: "Model id",
+      initialValue: modelDefault,
+      validate: (v) => (v.trim() ? undefined : "Required"),
+    });
+    if (cancelled(typed)) return cancelInit(useClack);
+    model = typed.trim();
+  }
 
-  // --- Email (optional) ---
-  writeLine(stdout, "");
-  writeLine(stdout, "── Email (optional) ──");
-  writeLine(
-    stdout,
-    "After a successful daily run, send a short digest. Skip if you only want local files.",
-  );
-  writeLine(stdout, "  1) Skip for now (default)");
-  writeLine(stdout, "  2) Send yourself (your Resend API key)");
-  writeLine(stdout, "  3) Official delivery Beta (verify email; shared quota)");
-  const emailChoice = (
-    await prompt(opts, "Email setup [1]: ")
-  ).trim() || "1";
+  // --- Email ---
+  const emailChoice = await askSelect(opts, {
+    message: "Email digests after a successful daily run?",
+    options: [
+      {
+        value: "skip",
+        label: "Skip for now",
+        hint: "local files only",
+      },
+      {
+        value: "self",
+        label: "Send yourself",
+        hint: "your Resend API key",
+      },
+      {
+        value: "hosted",
+        label: "Official delivery (Beta)",
+        hint: "verify email; shared free quota",
+      },
+    ],
+    initialValue: "skip",
+  });
+  if (cancelled(emailChoice)) return cancelInit(useClack);
 
   let emailEnabled = false;
   let emailMode: "self" | "hosted" = "self";
@@ -188,175 +308,180 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   let emailApiKey = "";
   let hostedToken = "";
 
-  if (emailChoice === "2") {
+  if (emailChoice === "self") {
     emailMode = "self";
-    writeLine(
-      stdout,
-      "Create a key at https://resend.com — free tier is fine for personal digests.",
-    );
-    writeLine(
-      stdout,
-      "With From empty, you can usually only send TO your Resend account email.",
-    );
-    emailTo = (
-      await promptUntil(
-        opts,
-        "Your inbox (To) []: ",
-        (v) => (v.trim() ? null : "Email address required."),
-      )
-    ).trim();
-    emailApiKey = (
-      await promptUntil(
-        opts,
-        "Resend API key (re_…) []: ",
-        (v) => (v.trim() ? null : "Resend API key required for Send yourself."),
-      )
-    ).trim();
-    const enableNow = (
-      await prompt(
-        opts,
-        "Turn on daily auto-send after runs? (test first recommended) [y/N]: ",
-      )
-    )
-      .trim()
-      .toLowerCase();
-    emailEnabled = enableNow === "y" || enableNow === "yes";
-  } else if (emailChoice === "3") {
+    if (useClack) {
+      p.note(
+        "Create a key at https://resend.com\nWith From empty, you can usually only send TO your Resend account email.",
+        "Send yourself",
+      );
+    }
+    const to = await askText(opts, {
+      message: "Your inbox (To)",
+      validate: (v) => (v.trim() ? undefined : "Required"),
+    });
+    if (cancelled(to)) return cancelInit(useClack);
+    emailTo = to.trim();
+    const reKey = await askPassword(opts, {
+      message: "Resend API key (re_…)",
+      validate: (v) => (v.trim() ? undefined : "Required"),
+    });
+    if (cancelled(reKey)) return cancelInit(useClack);
+    emailApiKey = reKey.trim();
+    const enable = await askConfirm(opts, {
+      message: "Enable daily auto-send now? (prefer email test first)",
+      initialValue: false,
+    });
+    if (cancelled(enable)) return cancelInit(useClack);
+    emailEnabled = enable;
+  } else if (emailChoice === "hosted") {
     emailMode = "hosted";
-    writeLine(
-      stdout,
-      "Official delivery: we email you a link; open it, copy the LONG code from the web page,",
-    );
-    writeLine(
-      stdout,
-      "then paste it here. Shared free Beta — a few messages per inbox per UTC day.",
-    );
-    emailTo = (
-      await promptUntil(
-        opts,
-        "Email to verify (To) []: ",
-        (v) => (v.trim() ? null : "Email address required."),
-      )
-    ).trim();
+    if (useClack) {
+      p.note(
+        [
+          "We email you a link. Open it, copy the LONG code from the web page",
+          "(not the short code in the link), then paste it here.",
+          "Shared free Beta — a few messages per inbox per UTC day.",
+        ].join("\n"),
+        "Official delivery",
+      );
+    }
+    const to = await askText(opts, {
+      message: "Email to verify (To)",
+      validate: (v) => (v.trim() ? undefined : "Required"),
+    });
+    if (cancelled(to)) return cancelInit(useClack);
+    emailTo = to.trim();
 
-    const sendNow = (
-      await prompt(opts, "Send verification email now? [Y/n]: ")
-    )
-      .trim()
-      .toLowerCase();
-    if (sendNow !== "n" && sendNow !== "no") {
+    const sendNow = await askConfirm(opts, {
+      message: "Send verification email now?",
+      initialValue: true,
+    });
+    if (cancelled(sendNow)) return cancelInit(useClack);
+    if (sendNow) {
+      const spin = useClack ? p.spinner() : null;
+      spin?.start("Sending verification email…");
       try {
         const start =
           opts.startHostedVerify ??
           (async (email: string) => {
             const host = buildNodeHostAdapters({ rootDir: process.cwd() });
-            await startHostedEmailVerification({
-              http: host.http,
-              email,
-            });
+            await startHostedEmailVerification({ http: host.http, email });
           });
         await start(emailTo);
-        writeLine(
-          stdout,
-          `Sent. Check ${emailTo} (and spam). Open the link, copy the long code from the page.`,
-        );
+        spin?.stop(`Sent to ${emailTo} — open the link, copy the long code`);
+        if (!useClack) {
+          writeLine(stdout, `Sent to ${emailTo}`);
+        }
       } catch (e) {
-        writeLine(
-          stderr,
-          `Could not send verification email: ${(e as Error).message}`,
-        );
-        writeLine(
-          stdout,
-          "You can finish later: arxiv-daily email verify-start",
-        );
+        spin?.stop(`Send failed: ${(e as Error).message}`);
+        if (!useClack) {
+          writeLine(stderr, `Send failed: ${(e as Error).message}`);
+        }
+        if (useClack) {
+          p.log.warn("Later: arxiv-daily email verify-start");
+        }
       }
-    } else {
-      writeLine(
-        stdout,
-        "Skipped send. Later: arxiv-daily email verify-start",
-      );
     }
-    hostedToken = (
-      await prompt(
-        opts,
-        "Paste verification code (long token), or Enter to fill later: ",
-      )
-    )
-      .trim()
-      .replace(/\s+/g, "");
+
+    const tokenRaw = await askText(opts, {
+      message: "Paste verification code (long token), or leave empty",
+      placeholder: "leave empty to fill later",
+    });
+    if (cancelled(tokenRaw)) return cancelInit(useClack);
+    hostedToken = tokenRaw.trim().replace(/\s+/g, "");
     if (hostedToken) {
-      const enableNow = (
-        await prompt(
-          opts,
-          "Turn on daily auto-send after runs? (test first recommended) [y/N]: ",
-        )
-      )
-        .trim()
-        .toLowerCase();
-      emailEnabled = enableNow === "y" || enableNow === "yes";
-    } else {
-      writeLine(
-        stdout,
-        "Token empty — set email.hosted_token in config after verify, then email test.",
+      const enable = await askConfirm(opts, {
+        message: "Enable daily auto-send now? (prefer email test first)",
+        initialValue: false,
+      });
+      if (cancelled(enable)) return cancelInit(useClack);
+      emailEnabled = enable;
+    } else if (useClack) {
+      p.log.info(
+        "Set email.hosted_token in config after verify, then: arxiv-daily email test",
       );
     }
   }
 
-  // --- arXiv ---
-  writeLine(stdout, "");
-  writeLine(stdout, "── arXiv sources ──");
-  writeLine(
-    stdout,
-    "Categories = which arXiv boards to fetch. You can pick from the list or type ids.",
+  // --- Categories (multi-select TUI) ---
+  const flatCats = ARXIV_CATEGORIES.flatMap((g) =>
+    g.categories.map((c) => ({
+      value: c.id,
+      label: `${c.id}`,
+      hint: `${g.label} · ${c.name}`,
+    })),
   );
-  const categories = await pickCategories(opts, stdout);
-  writeLine(stdout, `Selected: ${categories.join(", ")}`);
-
-  writeLine(stdout, "");
-  writeLine(stdout, "Timezone for “today” and schedule dates (IANA name).");
-  COMMON_TIMEZONES.forEach((tz, i) => {
-    writeLine(stdout, `  ${i + 1}) ${tz}`);
+  const defaultCats = DEFAULT_SETTINGS.arxiv.categories.filter((id) =>
+    flatCats.some((c) => c.value === id),
+  );
+  const catPick = await askMultiSelect(opts, {
+    message: "arXiv categories (Space toggle, Enter confirm)",
+    options: flatCats,
+    initialValues:
+      defaultCats.length > 0 ? defaultCats : [flatCats[0]!.value],
+    required: true,
   });
-  const tzAns = (
-    await prompt(
-      opts,
-      `Timezone number or name [${DEFAULT_SETTINGS.arxiv.timezone}]: `,
-    )
-  ).trim();
-  const timezone = resolveTimezone(tzAns);
+  if (cancelled(catPick)) return cancelInit(useClack);
+  const categories =
+    catPick.length > 0 ? catPick : [...DEFAULT_SETTINGS.arxiv.categories];
 
-  writeLine(stdout, "");
-  writeLine(stdout, "Language for daily reports and paper notes.");
-  writeLine(stdout, "  1) zh (Chinese)");
-  writeLine(stdout, "  2) en (English)");
-  const langAns = (await prompt(opts, "Language [1]: ")).trim() || "1";
-  const summaryLanguage =
-    langAns === "2" || langAns.toLowerCase() === "en" ? "en" : "zh";
+  // --- Timezone ---
+  const tzPick = await askSelect(opts, {
+    message: "Timezone for “today”",
+    options: [
+      ...COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz })),
+      { value: "__other__", label: "Other IANA name…" },
+    ],
+    initialValue: DEFAULT_SETTINGS.arxiv.timezone,
+  });
+  if (cancelled(tzPick)) return cancelInit(useClack);
+  let timezone = tzPick;
+  if (tzPick === "__other__") {
+    const typed = await askText(opts, {
+      message: "IANA timezone",
+      initialValue: DEFAULT_SETTINGS.arxiv.timezone,
+      validate: (v) => (v.trim() ? undefined : "Required"),
+    });
+    if (cancelled(typed)) return cancelInit(useClack);
+    timezone = typed.trim();
+  }
 
-  // --- Topic placeholder ---
-  writeLine(stdout, "");
-  writeLine(stdout, "── Research topic (placeholder) ──");
-  writeLine(
-    stdout,
-    "Daily reports group papers by topic. Edit [[arxiv.topics]] in the config anytime",
-  );
-  writeLine(
-    stdout,
-    "(name / tag / description). Description quality matters most for filtering.",
-  );
-  const topicName = (
-    await prompt(opts, 'Topic display name [My research (edit me)]: ')
-  ).trim() || "My research (edit me)";
-  const topicTag = (
-    await prompt(opts, "Topic tag slug [my-research]: ")
-  ).trim() || "my-research";
-  const topicDescription = (
-    await prompt(
-      opts,
-      "Topic description (what papers belong here; Enter for placeholder): ",
-    )
-  ).trim() ||
-    "Describe in natural language what papers belong in this topic (problems, methods, objects; what to exclude).";
+  // --- Language ---
+  const langPick = await askSelect(opts, {
+    message: "Summary language for reports",
+    options: [
+      { value: "zh", label: "Chinese (zh)" },
+      { value: "en", label: "English (en)" },
+    ],
+    initialValue: "zh",
+  });
+  if (cancelled(langPick)) return cancelInit(useClack);
+  const summaryLanguage = langPick === "en" ? "en" : "zh";
+
+  // --- Topic ---
+  if (useClack) {
+    p.note(
+      "Topics control filtering. You can add more later under [[arxiv.topics]] in the config.",
+      "Research topic",
+    );
+  }
+  const topicNameRaw = await askText(opts, {
+    message: "Topic display name",
+    initialValue: "My research (edit me)",
+  });
+  if (cancelled(topicNameRaw)) return cancelInit(useClack);
+  const topicTagRaw = await askText(opts, {
+    message: "Topic tag slug",
+    initialValue: "my-research",
+  });
+  if (cancelled(topicTagRaw)) return cancelInit(useClack);
+  const topicDescRaw = await askText(opts, {
+    message: "Topic description (what papers belong here)",
+    initialValue:
+      "Describe in natural language what papers belong in this topic (problems, methods, objects; what to exclude).",
+  });
+  if (cancelled(topicDescRaw)) return cancelInit(useClack);
 
   const cacheDir = path.join(vaultRoot, ".cache", "arxiv-daily");
   const body = renderInitToml({
@@ -371,9 +496,11 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     timezone,
     summaryLanguage,
     topic: {
-      name: topicName,
-      tag: topicTag,
-      description: topicDescription,
+      name: topicNameRaw.trim() || "My research (edit me)",
+      tag: topicTagRaw.trim() || "my-research",
+      description:
+        topicDescRaw.trim() ||
+        "Describe in natural language what papers belong in this topic.",
     },
     email: {
       enabled: emailEnabled,
@@ -392,163 +519,207 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   await mkdir(path.dirname(configPath));
   await write(configPath, finalBody);
 
-  writeLine(stdout, "");
-  writeLine(stdout, `Wrote ${configPath}`);
-  writeLine(stdout, "");
-  writeLine(stdout, "Next steps:");
-  writeLine(
-    stdout,
-    "  1. Edit [[arxiv.topics]] description if the placeholder is still generic.",
-  );
-  writeLine(stdout, "  2. arxiv-daily run --today");
-  if (emailTo && !emailEnabled) {
-    writeLine(
-      stdout,
-      "  3. Optional: arxiv-daily email test   then set email.enabled = true",
-    );
+  const nextSteps = [
+    `Wrote ${configPath}`,
+    "",
+    "Next:",
+    "  arxiv-daily run --today",
+    "  Optional: refine [[arxiv.topics]] in the config",
+    "  Optional: arxiv-daily email test  then set email.enabled = true",
+    "  Optional: [schedule] enabled = true → arxiv-daily schedule install",
+    "",
+    "schema_version = 1 is for future config migrations (leave it alone).",
+  ].join("\n");
+
+  if (useClack) {
+    p.outro(nextSteps);
+  } else {
+    writeLine(stdout, nextSteps);
   }
-  writeLine(
-    stdout,
-    "  Optional: set [schedule] enabled = true → arxiv-daily schedule install",
-  );
-  writeLine(stdout, "");
   return 0;
 }
 
-async function pickCategories(
-  opts: InitOptions,
-  stdout: WritableTextStream,
-): Promise<string[]> {
-  writeLine(stdout, "Category groups:");
-  ARXIV_CATEGORIES.forEach((g, i) => {
-    writeLine(stdout, `  ${i + 1}) ${g.label}  (${g.categories.length} ids)`);
-  });
-  writeLine(stdout, "  0) Type category ids myself (e.g. cs.LG, astro-ph)");
-  const groupAns = (
-    await prompt(
-      opts,
-      `Group number(s), comma-separated, or 0 [1]: `,
-    )
-  ).trim() || "1";
+function cancelInit(useClack: boolean): number {
+  if (useClack) p.cancel("init cancelled");
+  return 0;
+}
 
-  if (groupAns === "0") {
-    const raw = (
-      await prompt(
+async function defaultFetchModels(
+  apiKey: string,
+  baseUrl: string,
+): Promise<string[]> {
+  const logger = new Logger("warn");
+  const host = buildNodeHostAdapters({ rootDir: process.cwd() });
+  const client = new LlmClient(
+    {
+      ...DEFAULT_SETTINGS.llm,
+      apiKey,
+      baseUrl,
+      model: DEFAULT_SETTINGS.llm.model,
+    },
+    logger,
+    host.http,
+  );
+  return client.fetchModels();
+}
+
+// --- UI adapters (clack vs injected ask) ---
+
+async function askText(
+  opts: InitOptions,
+  args: {
+    message: string;
+    placeholder?: string;
+    initialValue?: string;
+    validate?: (value: string) => string | undefined;
+  },
+): Promise<string | CancelToken> {
+  if (opts.ask) {
+    for (;;) {
+      const v = await plainPrompt(
         opts,
-        `Category ids (comma-separated) [${DEFAULT_SETTINGS.arxiv.categories.join(", ")}]: `,
+        `${args.message}${args.initialValue ? ` [${args.initialValue}]` : ""}: `,
+      );
+      const value = v.trim() ? v : (args.initialValue ?? "");
+      const err = args.validate?.(value);
+      if (!err) return value;
+      writeLine(opts.stderr ?? process.stderr, `  ${err}`);
+    }
+  }
+  return p.text({
+    message: args.message,
+    placeholder: args.placeholder,
+    initialValue: args.initialValue,
+    validate: args.validate
+      ? (value) => args.validate!(value ?? "")
+      : undefined,
+  });
+}
+
+async function askPassword(
+  opts: InitOptions,
+  args: {
+    message: string;
+    validate?: (value: string) => string | undefined;
+  },
+): Promise<string | CancelToken> {
+  if (opts.ask) {
+    for (;;) {
+      const v = await plainPrompt(opts, `${args.message}: `);
+      const err = args.validate?.(v);
+      if (!err) return v;
+      writeLine(opts.stderr ?? process.stderr, `  ${err}`);
+    }
+  }
+  return p.password({
+    message: args.message,
+    validate: args.validate
+      ? (value) => args.validate!(value ?? "")
+      : undefined,
+  });
+}
+
+async function askConfirm(
+  opts: InitOptions,
+  args: { message: string; initialValue?: boolean },
+): Promise<boolean | CancelToken> {
+  if (opts.ask) {
+    const def = args.initialValue ? "Y/n" : "y/N";
+    const v = (
+      await plainPrompt(opts, `${args.message} [${def}]: `)
+    )
+      .trim()
+      .toLowerCase();
+    if (!v) return Boolean(args.initialValue);
+    return v === "y" || v === "yes";
+  }
+  return p.confirm({
+    message: args.message,
+    initialValue: args.initialValue,
+  });
+}
+
+async function askSelect(
+  opts: InitOptions,
+  args: {
+    message: string;
+    options: Array<{ value: string; label: string; hint?: string }>;
+    initialValue?: string;
+  },
+): Promise<string | CancelToken> {
+  if (opts.ask) {
+    const lines = args.options
+      .map((o, i) => `  ${i + 1}) ${o.label}${o.hint ? ` (${o.hint})` : ""}`)
+      .join("\n");
+    writeLine(opts.stdout ?? process.stdout, lines);
+    const raw = (
+      await plainPrompt(
+        opts,
+        `${args.message} [default ${args.initialValue ?? "1"}]: `,
       )
     ).trim();
-    return raw
-      ? raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)
-      : [...DEFAULT_SETTINGS.arxiv.categories];
-  }
-
-  const groupIndexes = parseIndexList(groupAns, ARXIV_CATEGORIES.length);
-  const pool: Array<{ id: string; name: string; group: string }> = [];
-  for (const gi of groupIndexes) {
-    const g = ARXIV_CATEGORIES[gi - 1];
-    if (!g) continue;
-    for (const c of g.categories) {
-      pool.push({ id: c.id, name: c.name, group: g.label });
+    if (!raw) {
+      return args.initialValue ?? args.options[0]!.value;
     }
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 1 && n <= args.options.length) {
+      return args.options[n - 1]!.value;
+    }
+    const byValue = args.options.find((o) => o.value === raw);
+    if (byValue) return byValue.value;
+    return args.initialValue ?? args.options[0]!.value;
   }
-  if (pool.length === 0) {
-    return [...DEFAULT_SETTINGS.arxiv.categories];
-  }
-
-  writeLine(stdout, "Categories in selected group(s):");
-  pool.forEach((c, i) => {
-    writeLine(stdout, `  ${i + 1}) ${c.id.padEnd(14)} ${c.name}`);
+  return p.select({
+    message: args.message,
+    options: args.options,
+    initialValue: args.initialValue,
   });
-  writeLine(
-    stdout,
-    "Enter numbers (e.g. 1,3,5), a single id, or Enter for first item only.",
-  );
-  const pickAns = (
-    await prompt(opts, `Select [1]: `)
-  ).trim() || "1";
-
-  // Free-form id(s) without numbers?
-  if (/[a-z]/i.test(pickAns) && !/^\d/.test(pickAns)) {
-    return pickAns.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-  }
-  const indexes = parseIndexList(pickAns, pool.length);
-  const selected = indexes
-    .map((i) => pool[i - 1]?.id)
-    .filter((id): id is string => Boolean(id));
-  return selected.length > 0
-    ? [...new Set(selected)]
-    : [...DEFAULT_SETTINGS.arxiv.categories];
 }
 
-function parseIndexList(raw: string, max: number): number[] {
-  const parts = raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-  const out: number[] = [];
-  for (const p of parts) {
-    const n = Number(p);
-    if (Number.isInteger(n) && n >= 1 && n <= max && !out.includes(n)) {
-      out.push(n);
-    }
-  }
-  return out;
-}
-
-function resolveProviderId(ans: string, keys: string[]): string {
-  if (!ans) return DEFAULT_SETTINGS.llm.provider;
-  const asNum = Number(ans);
-  if (Number.isInteger(asNum) && asNum >= 1 && asNum <= keys.length) {
-    return keys[asNum - 1]!;
-  }
-  const lower = ans.toLowerCase();
-  if (keys.includes(lower)) return lower;
-  if (keys.includes(ans)) return ans;
-  return DEFAULT_SETTINGS.llm.provider;
-}
-
-function resolveModel(
-  ans: string,
-  models: Array<{ label: string; value: string }>,
-  fallback: string,
-): string {
-  if (!ans) return fallback;
-  const asNum = Number(ans);
-  if (
-    Number.isInteger(asNum) &&
-    asNum >= 1 &&
-    asNum <= models.length
-  ) {
-    return models[asNum - 1]!.value;
-  }
-  return ans;
-}
-
-function resolveTimezone(ans: string): string {
-  if (!ans) return DEFAULT_SETTINGS.arxiv.timezone;
-  const asNum = Number(ans);
-  if (
-    Number.isInteger(asNum) &&
-    asNum >= 1 &&
-    asNum <= COMMON_TIMEZONES.length
-  ) {
-    return COMMON_TIMEZONES[asNum - 1]!;
-  }
-  return ans;
-}
-
-async function promptUntil(
+async function askMultiSelect(
   opts: InitOptions,
-  message: string,
-  validate: (value: string) => string | null,
-): Promise<string> {
-  for (;;) {
-    const value = await prompt(opts, message);
-    const err = validate(value);
-    if (!err) return value;
-    writeLine(opts.stderr ?? process.stderr, `  ${err}`);
+  args: {
+    message: string;
+    options: Array<{ value: string; label: string; hint?: string }>;
+    initialValues?: string[];
+    required?: boolean;
+  },
+): Promise<string[] | CancelToken> {
+  if (opts.ask) {
+    // Test / non-clack: accept comma numbers or ids
+    const lines = args.options
+      .slice(0, 30)
+      .map((o, i) => `  ${i + 1}) ${o.label}${o.hint ? ` — ${o.hint}` : ""}`)
+      .join("\n");
+    writeLine(opts.stdout ?? process.stdout, lines);
+    const raw = (
+      await plainPrompt(
+        opts,
+        `${args.message} (numbers or ids) [${(args.initialValues ?? []).join(",") || "1"}]: `,
+      )
+    ).trim();
+    if (!raw) return args.initialValues ?? [args.options[0]!.value];
+    if (/[a-z]/i.test(raw) && !/^\d/.test(raw)) {
+      return raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    }
+    const indexes = raw
+      .split(/[,\s]+/)
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 1 && n <= args.options.length);
+    const picked = indexes.map((i) => args.options[i - 1]!.value);
+    return picked.length > 0
+      ? [...new Set(picked)]
+      : (args.initialValues ?? [args.options[0]!.value]);
   }
+  return p.multiselect({
+    message: args.message,
+    options: args.options,
+    initialValues: args.initialValues,
+    required: args.required,
+  });
 }
 
-async function prompt(
+async function plainPrompt(
   opts: InitOptions,
   message: string,
 ): Promise<string> {
@@ -590,6 +761,9 @@ export function renderInitToml(input: {
 # arXiv Daily — CLI config
 # Path: ~/.config/arxiv-daily/config.toml  (or $XDG_CONFIG_HOME/...)
 # May contain secrets — do not commit or share this file publicly.
+#
+# schema_version: integer for future config format migrations.
+#   Current value is 1. Leave it unless release notes tell you to change it.
 #
 # Editing tips (or hand to an agent):
 #   - Research focus: [arxiv].categories and [[arxiv.topics]]
