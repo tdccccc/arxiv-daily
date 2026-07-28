@@ -1,198 +1,156 @@
 # 新手教程
 
-这份教程用于完成 arXiv Daily 在 Obsidian 里的第一次成功运行。
+在 Obsidian 里跑通第一份 **日报（Daily report）**，再按需打开定时与邮件。
 
-## 开始前
+产品总览（插件 + CLI）见 [中文说明](README.zh-CN.md)。本页只讲 **Obsidian 插件**。
 
-你需要准备：
+## 你需要准备
 
-- Obsidian 桌面端。
-- 一个 LLM provider 的 API key。
-- 一个或多个 arXiv 分类，例如 `astro-ph`、`cs.LG`、`hep-th`。
-- 你希望跟踪的研究主题描述。
+- Obsidian **桌面版**
+- LLM 的 API key（以及需要时的 Base URL / 模型）
+- 一个或多个 arXiv 分类（如 `astro-ph`、`cs.LG`、`hep-th`）
+- 每个研究主题的简短描述
 
-arXiv Daily 会把生成内容写入你的 vault。为保持兼容，API key 以明文保存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/data.json`，不是 keyring 或加密存储；vault 同步或备份工具可能复制该文件。保存后设置页只显示 **Configured**，修改或删除需显式使用 **Replace** / **Clear**；日志、诊断和展示给用户的错误会做脱敏。抓取的 source 内容会按设置的保留时间（默认 7 天）缓存在相邻的 `.cache/` 目录；如需清除，请先禁用插件再删除该目录。
+生成内容默认写在 vault 的 `arxiv-daily/` 下。API key 保存在本机插件数据里；保存后显示 **Configured**，修改用 **Replace** / **Clear**。
 
-## 1. 打开插件设置
+## 1. 打开设置
 
-安装并启用插件后，打开：
+安装并启用 **arXiv Daily** 后打开：
 
 ```text
-Settings -> arXiv Daily
+Settings → arXiv Daily
 ```
 
-设置页顶部有一个无障碍的四步 **Getting started** 引导：
+顶部有四步引导：
 
-1. **Connect AI（连接 AI）**
-2. **Choose paper sources（选择论文来源）**
-3. **Describe your research interests（描述研究兴趣）**
-4. **Generate your first report（生成第一份报告）**
+1. **Connect AI（连接 AI）**  
+2. **Choose paper sources（选择论文来源）**  
+3. **Describe your research interests（描述研究兴趣）**  
+4. **Generate your first report（生成第一份报告）**  
 
-引导会显示四步中已完成的数量。只有待完成且可操作的步骤才显示按钮；按钮会跳转到现有的设置表单，不会重复创建 provider、分类或 topic 输入。配置有效后，最后一步会调用现有的 run-now 命令。详细校验原因保留在可展开的 **Configuration details** 中。
+按钮会跳到对应表单。第一份报告完成前会显示完整引导；完成后变成简短的「设置完成」（配置失效时完整引导会回来）。
 
-在第一份报告完成前，完整引导会一直显示。报告完成且配置有效后，设置页改为紧凑的 **Setup complete** 摘要，显示最近完成的报告日期和 **Open dashboard**。如果之后配置失效，完整引导会重新出现。
+## 2. 连接 AI
 
-## 2. 配置 LLM
-
-先选择 provider，然后填写并保存 API key。保存后的 key 不会重新渲染到页面，而是显示 **Configured** sentinel；需要修改或删除时使用 **Replace** 或 **Clear**。Provider preset 会自动填入 base URL 和 model，但这两个字段仍然可以手动修改。
-
-第一次运行时，temperature、timeout、reasoning 等高级设置可以先保持默认，除非你的 provider 明确要求修改。
+选择 provider，填写并保存 API key。按需改 Base URL 和模型。第一次可先用默认高级选项。
 
 ## 3. 选择 arXiv 分类
 
-选择你要抓取的 arXiv 分类。可以选多个分类，重复论文会按 arXiv ID 合并。
+勾选要抓取的分类，可多选；同一篇论文只会保留一份。
 
-例子：
-
-- `astro-ph`：天体物理。
-- `astro-ph.CO`：宇宙学。
-- `cs.LG`：机器学习。
+例子：`astro-ph`、`astro-ph.CO`、`cs.LG`。
 
 ## 4. 添加研究主题
 
-每个 topic 会变成日报里的一个章节。
+每个 topic 对应 **日报里的一个章节**。
 
-一个 topic 需要：
+每个 topic 需要：
 
-- **Name**：日报里的章节标题。
-- **Tag**：短的 Obsidian tag slug。
-- **Description**：自然语言描述，说明什么论文应该归到这个 topic。
+- **Name** — 章节标题  
+- **Tag** — 短标签  
+- **Description** — 用自然语言说明哪些论文算这个主题  
 
 例子：
 
 ```text
 Name: Photometric Redshift
 Tag: photo-z
-Description: Methods, benchmarks, uncertainty calibration, catalog construction, and systematics for photometric redshift estimation.
+Description: Methods, benchmarks, uncertainty calibration, catalog construction,
+and systematics for photometric redshift estimation.
 ```
 
-如果模板里有接近你方向的配置，可以先加载模板，再按自己的研究方向修改。
+可先用模板，再改成你的方向。
 
-每个 topic 还有一个 **Detail report** toggle。它不影响相关论文是否进入日报并获得结构化总结，只决定该 topic 下的论文是否有资格自动生成 `papers/` 中的独立 deep dive。
+**论文笔记（可选加深）：**  
+每个 topic 的 **Detail report** 表示：该主题下的论文是否有机会生成 `papers/` 里更长的 **论文笔记**（不只是日报里的短条目）。列表下方的 **Automatic detail notes**（Fewer / Recommended / More）控制自动写笔记的频率。之后仍可手动生成（例如 **Summarize by arXiv ID**）。
 
-Topic 列表下方的 **Automatic detail notes** 用于控制自动生成独立详细笔记的严格程度，只需选择 **Fewer（更少）**、**Recommended（推荐）** 或 **More（更多）**；默认是 **Recommended**。已有 Custom 策略会继续生效，直到你主动选择其他选项；高级自定义阈值仍可通过持久化配置或 CLI 设置。
+## 5. 生成第一份日报
 
-## 5. 第一次运行
+在引导里点 **Generate first report**，或打开 **Dashboard** 点 **Run Today**。
 
-在设置引导中点击 **Generate first report**。也可以从左侧 ribbon 图标或命令面板打开 **arXiv Daily Dashboard**，再点击 **Run Today**。插件会依次做这些事：
+插件会：
 
-1. 按配置的分类抓取 arXiv 近期论文。
-2. 根据你的 topic 筛选相关论文。
-3. 抓取可用全文；仅在存在 eligible deep-dive candidates 时，额外调用一次 LLM 对它们统一评分。
-4. 为所有入选论文生成结构化 Markdown 日报总结。
-5. 为自动选中的论文创建独立的 `papers/<arxiv_id>.md` deep dive。
-6. 更新 Dashboard 索引。
+1. 按分类抓取近期论文  
+2. 按主题筛出相关论文  
+3. 写入 **日报**：每篇入选论文一段结构化短摘要  
+4. 在允许时为少量论文生成 **论文笔记**  
+5. 更新 Dashboard  
 
-生成的日报默认在：
+日报路径：
 
 ```text
 arxiv-daily/daily/YYYY-MM-DD.md
 ```
 
-需要区分两种输出：
+| 产出 | 路径 | 作用 |
+|---|---|---|
+| **日报** | `daily/YYYY-MM-DD.md` | 当天的阅读列表（主要结果） |
+| **论文笔记** | `papers/<arxiv_id>.md` | 单篇更长的笔记 |
 
-- `daily/YYYY-MM-DD.md` 包含当天每篇入选论文的结构化总结，是完整的每日阅读清单。
-- `papers/<arxiv_id>.md` 是可选的单篇全文 deep dive，与日报短总结相互独立。
-
-Deep-dive 评分发生在全文抓取之后。论文只有在所属 topic 启用了 **Detail report**、存在可用全文且尚无 paper 文件时才 eligible。没有候选时不会多出 selector 调用。如果评分调用失败或返回无效结果，系统不会创建新的自动 deep dive，但会继续日报总结，daily run 仍可成功。手动 **Summarize by arXiv ID** 不受影响。
+自动论文笔记失败或跳过时，日报仍可成功。
 
 ## 6. 使用 Dashboard
 
-设置完成后，Dashboard 就是主要入口。
+设置完成后，日常从 Dashboard 进入：
 
-- **Starred**：显示你标记为重点的论文。
-- **All**：显示所有未忽略的历史论文。
-- Search 完全在本地进行，按相关度检索 arXiv ID、标题、作者、topic、分类和结构化摘要字段；支持精确现代 arXiv ID、英文技术词和中文切词。有搜索词时默认按相关度排序，显式选择星标/发表日期/topic/标题排序后则保持该主排序。
-- **Similar Papers**（论文行的 **Find similar papers** 操作）使用已持久化的 abstract 和从历史日报恢复的结构化总结，进行加权的多概念、跨字段词法匹配，并抑制弱匹配和仅作者匹配。结果会显示匹配原因、元数据、资源可用性和相应打开操作；查询本身完全在本地进行，不使用网络、LLM、embedding 或数据库。
-- 右侧日历可以按日期打开日报。
-- 每行操作可以打开/创建论文笔记、查找相似论文、打开来源日报、打开 arXiv、打开 PDF、下载 PDF；相似论文结果可打开 detail、日报、arXiv 页面或 PDF。
-- **Dashboard -> More -> Cancel active tasks** 会协作式取消自动/手动日报运行、手动 detail 总结和 PDF 下载。**Get Models** 不在范围内；已经发出的 Obsidian `requestUrl` 请求可能先完成，后续工作才停止。
+- **Starred** / **All** — 关注你标星的论文  
+- **日历** — 按日期打开日报  
+- **搜索与筛选** — 在本地索引里找论文  
+- **行操作** — 打开日报、论文笔记、arXiv、PDF；加星  
 
-如果某篇论文要进入正式文献库，建议从 Dashboard 打开 arXiv 页面，然后用 Zotero 浏览器插件导入。
+需要进正式文献库时，可从行内打开 arXiv，再用 Zotero 等工具导入。
 
-生成的日报和 detail 笔记末尾会有折叠的 **Generation metrics** callout，显示可用的 pipeline 总耗时、LLM 耗时、逻辑调用数、HTTP attempts 和 provider 报告的 tokens。缺失或因重试而不完整的 usage 会显示 unavailable/incomplete，不会记为 0；插件不估算费用。
+## 7. 打开定时
 
-Paper Index schema 3 会持久化 abstract，并可读取已有 schema 1/2 文件。旧条目会在后续日报再次遇到相应论文时惰性补齐 abstract，不会为了迁移而联网，也无需批量重写；已有 Markdown 仍可继续使用。
+手动跑通后，在 **Settings → arXiv Daily** 启用 scheduler。
 
-## 7. 启用自动运行
+只在 **Obsidian 打开时**、按你配置的工作日时间窗口运行；漏掉的工作日之后还可能补上。
 
-确认第一次手动运行成功后，回到 **Settings → arXiv Daily**，启用 scheduler。
+## 8. 可选：邮件
 
-Scheduler 只会在 Obsidian 打开时运行。lookback 窗口内漏掉的工作日会在之后补跑。
+邮件是可选的。发信失败**不会**导致日报失败。
 
-## 8. 可选：邮件日报
+| 模式 | 你要做什么 |
+|---|---|
+| **自己发送**（默认） | 自备 [Resend](https://resend.com) API Key，无项目配额 |
+| **官方代发 (Beta)** | 验证邮箱后由项目代发；共享免费额度，仅适合轻度个人使用 |
 
-邮件是**可选**功能，有两种模式：
+### 自己发送（快速）
 
-| 模式 | 状态 | 你要做什么 |
-|---|---|---|
-| **自己发送** | **推荐默认** | 自备 [Resend](https://resend.com) API Key；无项目配额限制 |
-| **官方代发 (Beta)** | **可用（额度有限）** | 验证邮箱后由 arXiv Daily 代发 — **共享免费容量，不适合大量发送** |
+1. 注册 Resend 并创建 API Key（`re_…`）。  
+2. **Settings → arXiv Daily → Email delivery**  
+   - How to send：**Send yourself**  
+   - **Your email**：一般与 Resend **账号邮箱相同**  
+   - 粘贴 API Key；**From email 留空**最简单  
+3. **Send test**，检查收件箱/垃圾箱。  
+4. 测试成功后再打开 **Daily auto-send**。
 
-默认是 **自己发送**。发信失败**不会**把当天日报标成失败。
+From 留空时，测试发件地址通常**只能发到 Resend 账号邮箱**（GitHub 登录多为 GitHub **主邮箱**）。要发给其它地址，需在 Resend 验证域名并填写自定义 From。
 
-### 官方代发 (Beta) — 容量说明
+### 官方代发 (Beta)
 
-官方代发是**共享免费 Beta**，额度故意偏小，以便服务能继续免费提供：
+1. 选择 **Official delivery (Beta)**。  
+2. 填写邮箱 → **Send verification email**。  
+3. 打开链接，粘贴网页上的**长验证码**（不是链接里的短参数）。  
+4. **Send test**，成功后再开 **Daily auto-send**。  
+5. 触达当日额度则等下一个 UTC 日，或改用自己发送。
 
-- **每个已验证邮箱每个 UTC 日仅少量消息**（测试邮件也计入额度）。
-- 面向轻量个人使用（大致：一封正式日报 + 少量测试）。
-- 若需要大量发送、更稳定的高容量或多人通知，请改用 **自己发送**（自备 Resend）。
-- Beta 期间服务可能限流、暂停或调整，恕不另行承诺 SLA。
+Beta 额度偏小（每个已验证邮箱每个 UTC 日仅少量消息，测试也计入）。量大请用自己发送。
 
-### 自己发送（Resend，自备 API Key）
+### 真·日报之后
 
-### 重要限制（快速配置 / 测试发件）
-
-**From email 留空**时，插件使用 Resend 测试发件地址 `onboarding@resend.dev`：
-
-- **收件邮箱几乎只能填 Resend 账号绑定的那个邮箱**（「本人邮箱」）。
-- 若用 **GitHub 登录** Resend，通常是 GitHub 的**主邮箱（Primary）**，不是 GitHub 上挂的每一个邮箱。
-- 发给其它地址会 403，直到你在 Resend **验证自己的域名**并填写自定义 From。
-
-请把邮件当成**给自己的提醒通道**，不要默认当成群发/通知多人，除非完成域名验证。
-
-### 快速配置 — 自己发送（推荐）
-
-1. 打开 [resend.com](https://resend.com) 注册（可用 GitHub）。
-2. **API Keys → Create**，复制一次性显示的 key。
-3. Obsidian：**Settings → arXiv Daily → Email delivery**：
-   - **How to send**：Send yourself。
-   - **Your email**：与 Resend 账号**相同**的邮箱（见上限制）。
-   - **Resend API key**：粘贴并保存。
-   - **From email**：**留空**。
-4. 点 **Send test**，在该账号邮箱的收件箱/垃圾箱查看。
-5. **测试成功后**，再打开 **Daily auto-send（每日自动发送）**。
-
-API key 仅保存在本机（保存后设置页不再回显完整 key）。
-
-### 快速配置 — 官方代发 (Beta)
-
-1. **How to send**：Official delivery (Beta)。
-2. 填写 **Your email** → **Send verification email**。
-3. 打开邮件中的链接，复制网页上显示的**长验证码**（不是链接里的短参数），粘贴到 **Verification code**。
-4. **Send test**，成功后再打开 **Daily auto-send**。
-5. 若触达当日额度，等到下一个 UTC 日，或改用 **自己发送**。
-
-### 真·日报跑完之后
-
-开启 **Daily auto-send** 后，某日 run **completed** 才可能发一封真日报；默认同一天不重复发。仅 repair 索引的完成**不会**发信。**Send test** 不会占用「当天已正式送达」状态。
-
-### 进阶：发给其它收件地址（自己发送）
-
-1. 在 Resend 添加并验证你拥有的域名（DNS 配置 SPF/DKIM）。
-2. **From email** 填该域名下的地址。
-3. 之后 **Your email** 才可改为任意邮箱（仍受 Resend 规则与配额约束）。
+打开自动发送后，某日 run **completed** 才可能发一封摘要；默认同一天不重发。**Send test** 不会挡住当天的正式日报邮件。
 
 ## 常见问题
 
-如果 **Run Today** 是 disabled，先完成 **Settings → arXiv Daily** 顶部 checklist。
+| 情况 | 可尝试 |
+|---|---|
+| **Run Today** 不可用 | 完成 Settings → arXiv Daily 顶部清单 |
+| Dashboard 没有论文 | 先成功跑一次今天（或其它日期） |
+| 运行失败 | Dashboard → More → Show diagnostics |
+| 入选论文太多 | 减少分类，或把 topic 描述写得更具体 |
+| 测试邮件 HTTP **403** | **Your email** 改成报错里的 Resend 账号邮箱；验证域名前 From 留空 |
 
-如果 Dashboard 显示还没有 indexed papers，先运行今天或运行 pending dates。
+## CLI（可选）
 
-如果运行失败，用 **Dashboard → More → Show diagnostics** 查看设置、日期上下文和最近运行状态。
-
-如果入选论文太多，缩小 arXiv 分类，或者把 topic description 写得更具体。
-
-如果 **Send test** 报 HTTP **403**，且提示只能发给自己的邮箱：把 **To** 改成报错信息里写出的那个地址（Resend 账号邮箱）；不要用未绑定的次要 GitHub 邮箱；在验证域名之前 **From 保持留空**。
-
+若希望不打开 Obsidian 也能出日报，见 [中文说明里的 CLI 一节](README.zh-CN.md#cli)：先 `init`，再 `run --today`，配置在 `~/.config/arxiv-daily/config.toml`。Windows 上定时建议用 **WSL**，或继续用插件。

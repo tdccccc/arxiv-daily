@@ -67,3 +67,10 @@
 - change: Rewrote `README.md` and `docs/README.zh-CN.md`; glossary in `CONTEXT.md` for Daily report / Paper note / structured summary.
 - disposition: Overview only; getting-started still has older deep-dive wording (follow-up if desired).
 - next: Optional align getting-started terminology; commit when user asks.
+
+## 2026-07-28 — note (getting-started user rewrite)
+
+- evidence: User: commit first, then unify getting-started in user voice + Daily report / Paper note terms.
+- change: Rewrote `docs/getting-started.md` and `getting-started.zh-CN.md` — shorter, user steps, drop schema/algorithm/requestUrl; paper notes not “deep dive” hero; CLI pointer only.
+- disposition: Keep; commit as docs follow-up.
+- next: User may want another commit.
