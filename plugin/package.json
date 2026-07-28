@@ -1,6 +1,6 @@
 {
   "name": "obsidian-arxiv-daily",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Obsidian host and user interface for arXiv Daily",
   "license": "MIT",
@@ -21,6 +21,6 @@
     "test": "vitest run --config vitest.config.mts"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.3.4"
+    "@arxiv-daily/core": "0.3.5"
   }
 }

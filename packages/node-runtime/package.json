@@ -1,6 +1,6 @@
 {
   "name": "@arxiv-daily/node-runtime",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Node host adapters for the arXiv Daily core",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "test": "vitest run --config vitest.config.mts"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.3.4",
+    "@arxiv-daily/core": "0.3.5",
     "linkedom": "^0.18.12"
   }
 }
