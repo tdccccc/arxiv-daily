@@ -77,7 +77,7 @@ If a key is omitted in the file, load **core defaults** (`DEFAULT_SETTINGS` + de
 
 Comments are the primary help; we do not require a separate schema website for v1.
 
-Suggested languages: **中文为主** in comments (user audience), keys remain English snake_case (stable for agents/tools).
+**Language:** comments written by `init` are **English**. Keys remain English snake_case (stable for agents/tools).
 
 ---
 

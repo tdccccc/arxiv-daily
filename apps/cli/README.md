@@ -24,9 +24,13 @@ npx arxiv-daily --help
 
 ```bash
 arxiv-daily init
-# edit ~/.config/arxiv-daily/config.toml  (topics, API keys, vault_root)
+# guided setup: vault path, LLM provider/model, optional email, arXiv categories, topic
 arxiv-daily run --today
 ```
+
+`init` is interactive: it explains each step, lets you pick an LLM provider and arXiv
+category groups from lists, and can send an Official delivery verification email so
+you only paste the long code from the browser. Config file comments are in English.
 
 Config path:
 

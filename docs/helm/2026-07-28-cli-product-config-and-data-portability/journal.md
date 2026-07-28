@@ -74,3 +74,10 @@
 - change: Rewrote `docs/getting-started.md` and `getting-started.zh-CN.md` — shorter, user steps, drop schema/algorithm/requestUrl; paper notes not “deep dive” hero; CLI pointer only.
 - disposition: Keep; commit as docs follow-up.
 - next: User may want another commit.
+
+## 2026-07-28 — note (init UX: guided lists + English toml)
+
+- evidence: User: init too harsh for first-time users — need field explanations, category picker, interactive hosted verify; config.toml comments in English.
+- change: Rewrote `apps/cli/src/init.ts` — section help, provider/model pickers, category group+list, email menu with optional verify-start + paste token, timezone list; `renderInitToml` English comments; tests in cli-init.test.ts.
+- disposition: Keep on branch feat/cli-init-ux; bump npm version when publishing again.
+- next: Commit / PR; local try `arxiv-daily init` after build.
