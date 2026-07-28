@@ -1,8 +1,8 @@
 {
-  "name": "@arxiv-daily/cli",
+  "name": "arxiv-daily",
   "version": "0.3.3",
-  "private": true,
-  "description": "Node CLI for arXiv Daily discovery and summarization workflows",
+  "private": false,
+  "description": "CLI for arXiv Daily: filter papers by research topics and write Markdown daily reports",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,6 +11,13 @@
   },
   "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
   "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "keywords": [
+    "arxiv",
+    "obsidian",
+    "cli",
+    "research",
+    "llm"
+  ],
   "engines": {
     "node": ">=20.11.0"
   },
@@ -18,13 +25,24 @@
   "bin": {
     "arxiv-daily": "./dist/arxiv-daily-cli.cjs"
   },
+  "files": [
+    "dist/arxiv-daily-cli.cjs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts",
-    "build": "node esbuild.config.mjs"
+    "build": "node esbuild.config.mjs",
+    "prepack": "npm run build"
   },
-  "dependencies": {
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
     "@arxiv-daily/core": "0.3.3",
-    "@arxiv-daily/node-runtime": "0.3.3"
+    "@arxiv-daily/node-runtime": "0.3.3",
+    "jszip": "^3.10.1",
+    "smol-toml": "^1.7.1"
   }
 }

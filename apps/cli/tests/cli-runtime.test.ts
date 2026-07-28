@@ -21,17 +21,42 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+function tomlForVault(vaultRoot: string, cacheDir: string): string {
+  return `
+schema_version = 1
+vault_root = ${JSON.stringify(vaultRoot)}
+cache_dir = ${JSON.stringify(cacheDir)}
+
+[llm]
+api_key = "test-key"
+base_url = "https://api.example.com/v1"
+model = "m"
+
+[arxiv]
+categories = ["astro-ph"]
+timezone = "UTC"
+
+[[arxiv.topics]]
+name = "T"
+tag = "t"
+description = "topic"
+detail = true
+
+[output]
+daily_dir = "arxiv-daily/daily"
+papers_dir = "arxiv-daily/papers"
+summary_language = "zh"
+link_style = "wikilink"
+`;
+}
+
 describe("CLI runtime", () => {
   it("builds pipeline dependencies on top of Node host adapters", async () => {
     const root = await makeTempDir();
+    const cacheDir = join(root, ".cache");
     const config = await loadCliConfig({
-      cwd: root,
-      env: { ARXIV_DAILY_API_KEY: "test-key" },
-      readText: async () => {
-        const err = new Error("missing") as NodeJS.ErrnoException;
-        err.code = "ENOENT";
-        throw err;
-      },
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, cacheDir),
     });
     const host = buildNodeHostAdapters({
       rootDir: config.vaultRoot,
@@ -68,39 +93,28 @@ describe("CLI runtime", () => {
     );
   });
 
-  it("passes configured detail selection policy to the pipeline", async () => {
+  it("uses balanced detail selection (no profile surface in TOML)", async () => {
     const root = await makeTempDir();
-    const configuredPolicy = {
-      profile: "custom" as const,
-      normalThreshold: 81,
-      exceptionalThreshold: 96,
-      softLimit: 7,
-    };
+    const cacheDir = join(root, ".cache");
     const config = await loadCliConfig({
-      cwd: root,
-      env: { ARXIV_DAILY_API_KEY: "test-key" },
-      readText: async () => JSON.stringify({ detailSelection: configuredPolicy }),
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, cacheDir),
     });
     const host = buildNodeHostAdapters({ rootDir: config.vaultRoot });
-
     const runtime = await buildCliRuntime(config, { host });
 
-    expect((runtime.pipeline as any).deps.detailSelection).toEqual(configuredPolicy);
-    expect((runtime.pipeline as any).deps.detailSelection).toBe(
+    expect(config.settings.detailSelection.profile).toBe("balanced");
+    expect((runtime.pipeline as { deps: { detailSelection: unknown } }).deps.detailSelection).toEqual(
       config.settings.detailSelection,
     );
   });
 
   it("preserves legacy raw HTML cache files during runtime cleanup", async () => {
     const root = await makeTempDir();
+    const cacheDir = join(root, ".cache");
     const config = await loadCliConfig({
-      cwd: root,
-      env: { ARXIV_DAILY_API_KEY: "test-key" },
-      readText: async () => {
-        const err = new Error("missing") as NodeJS.ErrnoException;
-        err.code = "ENOENT";
-        throw err;
-      },
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, cacheDir),
     });
     const legacyDir = join(config.cacheDir, "html");
     const legacyPath = join(legacyDir, "d18a24abe03dd46c244455f5.html");

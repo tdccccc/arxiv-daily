@@ -1,211 +1,131 @@
 # arXiv Daily
 
-> 每日 arXiv 论文跟踪器：LLM 筛选摘要、按主题组织日报、Dashboard 含日历搜索筛选、PDF 笔记，支持 CLI。
+按主题筛选 arXiv 新论文，生成 Markdown 日报与论文总结；支持 Obsidian 插件与 CLI。
 
-[新手教程](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.zh-CN.md) · [English README](https://github.com/tdccccc/arxiv-daily/blob/main/README.md)
+[新手教程](getting-started.zh-CN.md) · [English README](../README.md) · [Getting Started](getting-started.md)
 
-arXiv Daily 的目标不是替代 Zotero 或 PDF 阅读器，而是把每天新出现的 arXiv 论文稳定地接入 Obsidian：自动抓取、按研究主题筛选、生成 Markdown 日报，并用 **arXiv Daily Dashboard** 回看重点论文。
+**arXiv Daily** 按你关心的分类抓取 arXiv，用 LLM 按研究主题筛选，并写成可搜索、可双向链接的 **Markdown**：**日报（Daily report）**、可选的 **论文总结（Paper note）**，以及用于回看的 **Dashboard**。
 
-## 核心流程
+## 它能帮你做什么
 
-1. 在 Settings 顶部按四步引导完成 **Connect AI**、**Choose paper sources**、**Describe your research interests** 和 **Generate your first report**。
-2. 引导会复用现有设置表单，并在第一份报告完成前持续显示；报告完成且配置有效后改为带最近报告日期的紧凑 **Setup complete**，配置失效时完整引导会重新出现。
-3. 插件按计划自动运行，或从 Dashboard 手动运行。
-4. 阅读当天 Markdown 日报，对重要论文点星标或勾选“重点”。
-5. 之后通过 Dashboard 搜索、筛选、打开日报、论文笔记、arXiv 页面或 PDF。
-6. 真正要进入文献库时，打开 arXiv 页面，用 Zotero 浏览器插件导入。
+- **过滤信息过载** — 从大量列表里留下与你主题相关的论文  
+- **生成日报** — 每天一个 Markdown 文件，按主题分组，每篇有结构化短摘要  
+- **论文总结** — 需要对单篇写更深时，生成更长的总结（可自动或按 arXiv ID）  
+- **方便回看** — Dashboard：日历、搜索、主题、星标  
+- **定时运行** — Obsidian 打开时用插件调度，或在长期开机的机器上用 CLI  
+- **可选邮件** — 日报成功后发一封简短摘要（自备 Resend，或官方代发 Beta）
 
-Zotero 仍然负责 citation key、BibTeX 和正式文献库管理。
+## 你会得到什么
 
-## 主要功能
-
-- **Dashboard 作为主入口**：左侧 ribbon 图标单击直接打开 Dashboard。
-- **Starred / All 工作流**：只给重要论文点星标，未星标论文保持中性。
-- **日报日历**：有日报的日期会标出，今天会高亮，点击日期即可打开对应日报。
-- **本地相关度搜索**：覆盖 arXiv ID、标题、作者、topic、分类和结构化摘要字段；支持英文技术词及中文双字切词，并优先精确匹配现代 arXiv ID（含 URL/version 形式）。有搜索词时默认按相关度排序；显式选择星标、发表日期、topic 或标题后，该排序保持为主排序。
-- **Similar Papers**：在未忽略的 Paper Index 条目上进行本地加权词法匹配，使用已持久化的摘要和从历史日报恢复的结构化总结；优先多概念、跨字段重合，抑制弱匹配和仅作者匹配。结果显示匹配原因、元数据、可用资源，并可打开 detail、来源日报、arXiv 或 PDF；查询时不使用网络、LLM、embedding 或数据库。
-- **聚焦阅读动作**：打开/创建论文笔记、打开来源日报、打开 arXiv、打开 PDF、下载 PDF。
-- **统一取消**：**Cancel active tasks** 协作式取消自动/手动日报运行、手动 detail 总结和 PDF 下载；**Get Models** 不在取消范围内。Obsidian 已经发出的 `requestUrl` 请求可能先完成，但后续工作会停止。
-- **Markdown 原生输出**：日报和论文笔记都是普通 Markdown 文件。
-- **自动补跑**：Obsidian 打开时会补跑 lookback 窗口内漏掉的工作日。
-- **共享 core + CLI**：Obsidian 插件和 Node CLI 复用同一套 pipeline。
-
-## Dashboard
-
-Dashboard 是设置完成后的主要入口。
-
-- **Starred**：显示你标记为重点的论文。
-- **All**：显示所有未忽略的历史论文。
-- 左侧提供 Search、Topic、From、To、Note、Detail 和汇总数字；Search 使用上述本地相关度索引，并在相关度排序时显示匹配字段原因。
-- Sort 控件可以按相关度、星标优先、发表日期、topic 或标题切换列表顺序；用户显式选择的排序不会被搜索覆盖。
-- 右侧日历可以直接打开某一天的日报。
-- 每行论文保留标题、作者、摘要和常用操作。
-
-Dashboard 读取 `arxiv-daily/.index/papers.json`。它不替代 Markdown 编辑器；日报和论文笔记仍然用 Obsidian 原生编辑器打开。
-
-## 输出目录
-
-默认写入 vault 内的 `arxiv-daily/`：
+| 产出 | 位置 | 说明 |
+|---|---|---|
+| **日报** | `arxiv-daily/daily/YYYY-MM-DD.md` | 当天的阅读列表：主题、入选论文、结构化短摘要 |
+| **论文总结** | `arxiv-daily/papers/<arxiv_id>.md` | 单篇更长的总结（与日报里的条目不是同一份文件） |
+| **Dashboard** | Obsidian 内 | 日历、搜索、筛选、星标，打开日报 / 论文总结 / arXiv / PDF |
 
 ```text
 arxiv-daily/
-  daily/
-    2026-06-13.md
-  papers/
-    2606.12345.md
-  pdfs/
-    2606.12345.pdf
-  .index/
-    papers.json
-    run-state.json
+  daily/          # 日报
+  papers/         # 论文总结
+  pdfs/           # 可选 PDF
+  .index/         # 本地索引与运行状态
 ```
 
-- `daily/YYYY-MM-DD.md`：按 topic 分组的每日发现日报，每篇入选论文都有结构化短总结。
-- `papers/<arxiv_id>.md`：独立的全文 deep dive 或手动创建的论文笔记；它与日报中的结构化总结不是同一种输出。
-- `pdfs/<arxiv_id>.pdf`：手动下载的 arXiv PDF。
-- `.index/papers.json`：Dashboard、搜索和 Similar Papers 使用的本地 Paper Index。
-- `.index/run-state.json`：调度器和 CLI 共用的运行状态。
+## 两种使用方式
 
-Paper Index schema 3 会在原有元数据和结构化总结之外持久化 abstract，并可直接读取旧 schema 1/2。旧条目会在之后的日报流程再次遇到论文时惰性补齐 abstract，不会为了迁移而联网或批量重写。
+| | **Obsidian 插件** | **CLI** |
+|---|---|---|
+| 适合 | 日常在库里读、用界面和 Dashboard | 服务器、cron、长期开机（例如要 VPN） |
+| 配置 | Obsidian 插件设置 | `~/.config/arxiv-daily/config.toml`（先 `init`） |
+| 定时 | Obsidian 打开时 | 系统 cron → `run --today`（Windows 建议 WSL） |
+| 共通 | 同一套核心流程；指向同一 vault 时目录结构一致 | |
 
-## 安装
+多数人从 **插件** 开始；需要不打开 Obsidian 也能出日报时用 **CLI**。
 
-arXiv Daily 仅支持 Obsidian 桌面端。
+---
 
-### Community Plugins
+## Obsidian 插件
 
-插件通过 Obsidian 社区审核后：
+### 安装
 
-1. 打开 **Settings -> Community plugins -> Browse**。
-2. 搜索 **arXiv Daily**。
-3. 安装并启用。
+仅桌面版 Obsidian。
 
-### BRAT Beta
-
-社区列表完全可用前，可以用 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 安装：
-
-1. 安装并启用 BRAT。
-2. 打开 **BRAT settings -> Add Beta plugin**。
-3. 输入：
+1. **社区插件** — 设置 → 第三方插件 → 浏览 → **arXiv Daily**  
+2. **BRAT** — 添加 `tdccccc/arxiv-daily`  
+3. **手动** — 从 [最新 Release](https://github.com/tdccccc/arxiv-daily/releases/latest) 将 `manifest.json`、`main.js`、`styles.css` 放入：
 
 ```text
-tdccccc/arxiv-daily
+<vault>/.obsidian/plugins/arxiv-daily/
 ```
 
-### 手动安装
+启用插件后打开 **设置 → arXiv Daily**。
 
-从最新 release 下载 `manifest.json`、`main.js`、`styles.css`：
+### 快速开始
 
-https://github.com/tdccccc/arxiv-daily/releases/latest
+1. **连接 AI** — API key、Base URL、模型  
+2. **选择论文来源** — 一个或多个 arXiv 分类  
+3. **描述研究兴趣** — 至少一个主题（名称、标签、描述）  
+4. **生成第一份日报** — 设置引导或 Dashboard 的 **Run Today**
 
-在 vault 中创建隐藏的插件目录（若尚不存在），并把三个文件直接放入该目录：
+第一份报告完成前引导会保留。细节见 [新手教程](getting-started.zh-CN.md)。
 
-```text
-<你的-vault>/.obsidian/plugins/arxiv-daily/
-  manifest.json
-  main.js
-  styles.css
-```
+### 日常使用
 
-不要保留额外的 release 或仓库子目录。重启 Obsidian，然后在 **Settings → Community plugins** 中启用 **arXiv Daily**。
+- 打开 **Dashboard**（侧栏图标或命令面板）  
+- **Run Today**，或在 Obsidian 打开时让调度自动跑工作日  
+- 读 **日报**，给重要论文加星  
+- 需要更深时打开或创建 **论文总结**  
+- 可选：测试邮件成功后打开邮件自动发送  
 
-## 快速开始
+---
 
-第一次使用建议先看 [新手教程](https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.zh-CN.md)。
+## CLI
 
-1. 打开 **Settings -> arXiv Daily**。
-2. 选择 LLM provider 并填写 API key。
-3. 选择一个或多个 arXiv 分类。
-4. 添加至少一个研究主题。
-5. 启用调度器，或打开 Dashboard 点击 **Run Today**。
+适合 cron 或长期在线的机器。需要 Node.js 20.11.0+。
 
-研究主题是自然语言描述，例如“photo-z 方法、目录构建、系统误差校正”。LLM 会根据这些主题判断论文是否相关以及应该归到哪个 topic。
-
-## 日报
-
-日报是普通 Markdown 文件。每篇入选论文包含：
-
-- 作者和 arXiv 链接
-- 用于总结的信息来源章节
-- 核心问题
-- 关键方法
-- 主要结果
-- 为什么值得看
-- 局限或边界
-- 用于 Markdown triage 的“关注 / 重点”checkbox
-
-在日报里勾选“重点”会映射为 Dashboard 里的星标。
-
-日报和生成的 detail 笔记末尾会附加折叠的 **Generation metrics** callout：在可用时显示 pipeline 总耗时，并显示 LLM 耗时、逻辑调用数、HTTP attempts 和 provider 实际报告的 token usage。缺失 usage 会显示 unavailable/incomplete，而不是记为 0；重试时若失败 attempt 的 usage 不可得，也会标为 incomplete。插件不估算费用。旧 Markdown 无需重写，仍可使用。
-
-### 自动 deep dive
-
-`daily/YYYY-MM-DD.md` 里的结构化条目是完整的每日发现结果；`papers/<arxiv_id>.md` 则是针对单篇论文的独立全文 deep dive，不是日报短总结的另一种显示形式。
-
-自动 deep-dive 选择现在是正文抓取完成后的独立 LLM 评分步骤。只有归入已启用 **Detail report** 的 topic、存在可用全文且尚无 paper 文件的论文才有资格。存在 eligible candidates 时，所有候选合并到额外的一次 LLM 调用中评分；没有候选时不会产生这次调用。
-
-全局 **Automatic detail notes** 设置只需选择 **Fewer（更少）**、**Recommended（推荐）** 或 **More（更多）**；默认是 **Recommended**。每个 topic 的 **Detail report** toggle 独立控制候选资格。已有 Custom 策略会继续生效，直到用户主动选择其他选项；高级自定义阈值仍可通过持久化配置或 CLI 设置。
-
-如果评分调用失败或返回无效结果，系统会保守地不创建任何新的自动 deep dive，但仍继续生成日报，daily run 可以成功。手动 **Summarize by arXiv ID** 是独立流程，不受该策略影响。
-
-## 常用操作
-
-| 操作 | 入口 |
-|---|---|
-| 打开 Dashboard | 左侧 ribbon 图标或命令面板 |
-| 运行今天 | Dashboard 顶部 |
-| 补跑 lookback 日期 | Dashboard 顶部 |
-| 指定日期运行 | Dashboard **More** 菜单或命令面板 |
-| 按 arXiv ID 生成单篇总结 | Dashboard **More** 菜单或命令面板 |
-| 取消 active tasks | Dashboard **More** 菜单或命令面板 |
-| 查找相似论文 | 论文行的 **Find similar papers** 操作 |
-| 打开某天日报 | Dashboard 日历 |
-| 标记重点论文 | Dashboard 星标按钮或日报“重点”checkbox |
-
-## 网络与隐私
-
-arXiv Daily 只为抓取和总结论文访问必要服务。
-
-- 访问 `arxiv.org` 和 `export.arxiv.org`，用于获取论文列表、摘要、HTML 页面和用户手动下载的 PDF。
-- 访问你在设置中配置的 LLM provider endpoint。发送内容可能包括论文标题、作者、摘要和用于筛选/总结的正文片段。
-- 已保存的 API key 在设置页只显示 **Configured**；修改或删除必须显式使用 **Replace** / **Clear**。为保持兼容，key 仍以明文保存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/data.json`；Obsidian Sync 或其他 vault 备份可能复制该文件。这里不使用 keyring，也不提供加密存储。请限制 vault 及备份的访问权限，并用 **Clear** 删除已保存的 key。日志、诊断和展示给用户的错误会做脱敏。
-- 抓取的 arXiv HTML/source 内容会缓存在 `<你的-vault>/.obsidian/plugins/arxiv-daily/.cache/`，保留时间由设置决定（默认 7 天）。要清除缓存，请先禁用插件再删除该目录；后续使用时会自动重建。
-- CLI 从 `ARXIV_DAILY_API_KEY` 或用户提供的配置文件读取 key；抓取缓存默认位于当前工作目录下的 `.arxiv-daily/cache/`，可用 `--cache-dir` 或 `ARXIV_DAILY_CACHE_DIR` 修改。请按运行环境保护或删除这些本地文件。
-- 插件不包含客户端 telemetry，也不会把 vault 内容发送到 arXiv 和你配置的 LLM provider 之外的服务。
-- 日报、论文笔记、PDF、索引和运行状态默认写入 vault 内的 `arxiv-daily/`；修改输出配置后实际位置也会变化。
-
-## CLI 简要说明
-
-Node CLI 可用于 cron 或服务器工作流，但它不是主入口；需要 Node.js 20.11.0 或更高版本。
+### 安装（npm）
 
 ```bash
-# 在仓库根目录执行
-npm ci
-npm run build
-
-ARXIV_DAILY_API_KEY=sk-... npm run cli -- run-pending --vault-root /path/to/vault
+npm install -g arxiv-daily
+arxiv-daily init
+# 编辑 ~/.config/arxiv-daily/config.toml
+arxiv-daily run --today
 ```
 
-使用配置文件：
+也可：`npx arxiv-daily --help`。
+
+配置**只**在 **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`**（默认 `~/.config/arxiv-daily/config.toml`）。不再使用配置类环境变量，也没有 `--config` / `--vault-root`。
 
 ```bash
-npm run cli -- run --date 2026-06-13 --config arxiv-daily.config.json --vault-root /path/to/vault
-npm run cli -- summarize --id 2606.12345 --config arxiv-daily.config.json --vault-root /path/to/vault
+arxiv-daily run --date 2026-06-13
+arxiv-daily run --id 2606.12345
+arxiv-daily email test
+# [schedule] 里 enabled = true 后：
+arxiv-daily schedule install
 ```
 
-根目录的 `arxiv_daily.py` 只是兼容 shim，会转发到 Node CLI，不再维护独立 Python pipeline。
+**Windows** 上请用 **WSL** 跑 CLI + cron，或桌面直接用 **Obsidian 插件** 做定时。
+
+### 从本仓库开发
+
+```bash
+npm ci && npm run build
+npm run cli -- run --today    # 运行 apps/cli/dist/arxiv-daily-cli.cjs
+```
+
+更多：[apps/cli/README.md](../apps/cli/README.md) · [CLI 设计说明](helm/2026-07-28-cli-product-config-and-data-portability/)。
+
+---
 
 ## 开发
 
-实现细节和开发文档见 [plugin/README.md](../plugin/README.md)。
-
 ```bash
-cd plugin
-npm install
+npm ci
+npm run check:boundaries
+npm run lint
+npm run typecheck
 npm test
 npm run build
 ```
 
-## License
-
-[MIT](../LICENSE)
+单一 npm workspace：`packages/core`、`packages/node-runtime`、`apps/cli`、`plugin`。发版版本同步：`npm run sync:release-version -- <ver>`。

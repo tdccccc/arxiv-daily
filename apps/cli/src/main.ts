@@ -4,23 +4,26 @@ import type { ManualFetchResult } from "@arxiv-daily/core";
 import {
   deliverDailyEmailIfEnabled,
   resolveResendApiKey,
-  sampleDailyDigest,
   validateFilterConfig,
   validateLlmConfig,
+  formatDate,
+  todayInTz,
+  redactText,
 } from "@arxiv-daily/core";
-import { daysBefore, formatDate, redactText, todayInTz } from "@arxiv-daily/core";
 import type { HostAdapters } from "@arxiv-daily/core";
+import type { CliIo, WritableTextStream } from "./main-types";
+import { runInit } from "./init";
+import { emailStatus, emailTest, emailVerifyStart } from "./email-cmd";
+import {
+  scheduleInstall,
+  scheduleShow,
+  scheduleUninstall,
+} from "./schedule-cmd";
+import { dataExport, dataImport } from "./data-cmd";
+
+export type { CliIo, WritableTextStream } from "./main-types";
 
 type CliRunResult = PipelineResult | { kind: "skipped"; reason: string };
-
-export interface WritableTextStream {
-  write(chunk: string): unknown;
-}
-
-export interface CliIo {
-  stdout: WritableTextStream;
-  stderr: WritableTextStream;
-}
 
 export interface CliCommandRuntime {
   pipeline: {
@@ -28,7 +31,6 @@ export interface CliCommandRuntime {
   };
   scheduler?: {
     runForDateNow(date: string): Promise<CliRunResult>;
-    runAllPending(): Promise<Array<{ date: string; result: CliRunResult }>>;
   };
   manualFetch: {
     fetchAndSummarize(id: string, date: string, signal?: AbortSignal): Promise<ManualFetchResult>;
@@ -40,7 +42,6 @@ export interface CliCommandRuntime {
 
 export interface RunCliOptions {
   argv?: string[];
-  cwd?: string;
   env?: Record<string, string | undefined>;
   io?: CliIo;
   now?: () => Date;
@@ -48,37 +49,45 @@ export interface RunCliOptions {
   buildRuntime?: (
     config: CliRuntimeConfig,
   ) => CliCommandRuntime | Promise<CliCommandRuntime>;
+  /** Test hooks for init / schedule / data */
+  init?: typeof runInit;
+  schedule?: {
+    show?: typeof scheduleShow;
+    install?: typeof scheduleInstall;
+    uninstall?: typeof scheduleUninstall;
+  };
+  data?: {
+    export?: typeof dataExport;
+    import?: typeof dataImport;
+  };
+  isTTY?: boolean;
 }
 
 type CliCommand =
   | { name: "help" }
-  | { name: "run"; date?: string }
-  | { name: "run-pending" }
-  | { name: "summarize"; id?: string; date?: string }
-  | { name: "email-test"; date?: string };
-
-interface ParsedCli {
-  command: CliCommand;
-  configPath?: string;
-  vaultRoot?: string;
-  cacheDir?: string;
-}
+  | { name: "init" }
+  | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
+  | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
+  | { name: "schedule"; sub: "show" | "install" | "uninstall" }
+  | { name: "data"; sub: "export"; out?: string }
+  | { name: "data"; sub: "import"; zip?: string; yes?: boolean };
 
 const USAGE = `Usage:
-  arxiv-daily run --date YYYY-MM-DD [--config path] [--vault-root path]
-  arxiv-daily run-pending [--config path] [--vault-root path]
-  arxiv-daily summarize --id ARXIV_ID [--date YYYY-MM-DD]
-  arxiv-daily email-test [--date YYYY-MM-DD]
+  arxiv-daily init
+  arxiv-daily run --today
+  arxiv-daily run --date YYYY-MM-DD
+  arxiv-daily run --id ARXIV_ID [--date YYYY-MM-DD]
+  arxiv-daily email test [--date YYYY-MM-DD]
+  arxiv-daily email status
+  arxiv-daily email verify-start
+  arxiv-daily schedule show
+  arxiv-daily schedule install
+  arxiv-daily schedule uninstall
+  arxiv-daily data export --out PATH.zip
+  arxiv-daily data import PATH.zip [--yes]
+  arxiv-daily help
 
-Options:
-  --config path       JSON config file (default: arxiv-daily.config.json)
-  --vault-root path   Workspace/vault root for generated files
-  --cache-dir path    HTML cache directory
-  --help              Show this help
-
-Email:
-  ARXIV_DAILY_RESEND_API_KEY   Resend API key (preferred over settings.email.apiKey)
-  settings.email.enabled/to/fromEmail/fromName in config JSON
+Config: $XDG_CONFIG_HOME/arxiv-daily/config.toml (run init first)
 `;
 
 export async function runCli(opts: RunCliOptions = {}): Promise<number> {
@@ -90,16 +99,11 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     stderr: { write: (chunk) => rawIo.stderr.write(redactText(String(chunk), { secrets })) },
   };
   const env = { ...(opts.env ?? process.env) };
-  secrets = [
-    env.ARXIV_DAILY_API_KEY,
-    env.ARXIV_DAILY_LLM_API_KEY,
-    env.ARXIV_DAILY_RESEND_API_KEY,
-  ].filter((value): value is string => Boolean(value));
   const loadConfig = opts.loadConfig ?? loadCliConfig;
   const buildRuntime = opts.buildRuntime ?? defaultBuildRuntime;
   const now = opts.now ?? (() => new Date());
 
-  let parsed: ParsedCli;
+  let parsed: CliCommand;
   try {
     parsed = parseCli(argv);
   } catch (e) {
@@ -108,29 +112,60 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     return 2;
   }
 
-  if (parsed.command.name === "help") {
+  if (parsed.name === "help") {
     writeLine(io.stdout, USAGE.trimEnd());
     return 0;
   }
 
-  if (parsed.vaultRoot) env.ARXIV_DAILY_VAULT_ROOT = parsed.vaultRoot;
-  if (parsed.cacheDir) env.ARXIV_DAILY_CACHE_DIR = parsed.cacheDir;
+  if (parsed.name === "init") {
+    const initFn = opts.init ?? runInit;
+    return initFn({ env, stdout: io.stdout, stderr: io.stderr, isTTY: opts.isTTY });
+  }
 
   try {
-    const config = await loadConfig({
-      cwd: opts.cwd,
-      configPath: parsed.configPath,
-      env,
-    });
+    const config = await loadConfig({ env });
     secrets = [
       config.settings.llm.apiKey,
       config.settings.email.apiKey,
-      env.ARXIV_DAILY_RESEND_API_KEY,
+      config.settings.email.hostedToken,
     ].filter((value): value is string => Boolean(value));
+
+    if (parsed.name === "schedule") {
+      if (parsed.sub === "show") {
+        return (opts.schedule?.show ?? scheduleShow)(config, io);
+      }
+      if (parsed.sub === "install") {
+        return (opts.schedule?.install ?? scheduleInstall)(config, io);
+      }
+      return (opts.schedule?.uninstall ?? scheduleUninstall)(config, io);
+    }
+
+    if (parsed.name === "data") {
+      if (parsed.sub === "export") {
+        if (!parsed.out) {
+          writeLine(io.stderr, "data export requires --out PATH.zip");
+          return 2;
+        }
+        return (opts.data?.export ?? dataExport)(config, io, parsed.out);
+      }
+      if (!parsed.zip) {
+        writeLine(io.stderr, "data import requires PATH.zip");
+        return 2;
+      }
+      return (opts.data?.import ?? dataImport)(config, io, parsed.zip, {
+        yes: parsed.yes,
+        isTTY: opts.isTTY ?? Boolean(process.stdin.isTTY),
+      });
+    }
+
+    if (parsed.name === "email" && parsed.sub === "status") {
+      return emailStatus(config, io);
+    }
+
     const validation =
-      parsed.command.name === "summarize"
+      parsed.name === "run" && parsed.mode === "id"
         ? validateLlmConfig(config.settings)
-        : parsed.command.name === "email-test"
+        : parsed.name === "email"
           ? { ok: true as const, reasons: [] as string[] }
           : validateFilterConfig(config.settings);
     if (!validation.ok) {
@@ -141,114 +176,67 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     const runtime = await buildRuntime(config);
     const removeSignalHandlers = installSignalHandlers(runtime.operations, io);
     try {
-    if (parsed.command.name === "run") {
-      if (!parsed.command.date) throw new Error("run requires --date");
-      const result = runtime.scheduler
-        ? await runtime.scheduler.runForDateNow(parsed.command.date)
-        : await runtime.pipeline.runForDate(parsed.command.date);
-      if (
-        !runtime.scheduler &&
-        result.kind === "completed" &&
-        result.digest &&
-        runtime.host
-      ) {
-        await deliverDailyEmailIfEnabled(result.digest, {
-          storage: runtime.host.storage,
-          http: runtime.host.http,
-          output: config.settings.output,
-          email: config.settings.email,
-          apiKey: resolveResendApiKey(config.settings.email, env),
-        });
-      }
-      return writeRunResult(io, parsed.command.date, result);
-    }
-    if (parsed.command.name === "run-pending") {
-      if (runtime.scheduler) {
-        const results = await runtime.scheduler.runAllPending();
-        let failed = false;
-        for (const { date, result } of results) {
-          const code = writeRunResult(io, date, result);
-          if (code !== 0) failed = true;
+      if (parsed.name === "email") {
+        if (!runtime.host) {
+          writeLine(io.stderr, "email commands require host adapters");
+          return 1;
         }
-        return failed ? 1 : 0;
+        if (parsed.sub === "test") {
+          return emailTest(config, runtime.host, io, parsed.date, now);
+        }
+        return emailVerifyStart(config, runtime.host, io);
       }
-      const dates = pendingDates(config, now());
-      let failed = false;
-      for (const date of dates) {
-        const result = await runtime.pipeline.runForDate(date);
-        if (result.kind === "completed" && result.digest && runtime.host) {
+
+      if (parsed.name === "run") {
+        if (parsed.mode === "id") {
+          if (!parsed.id) throw new Error("run --id requires an arXiv id");
+          const date =
+            parsed.date ??
+            formatDate(todayInTz(now(), config.settings.arxiv.timezone));
+          const operation = runtime.operations?.begin(
+            "detail-summary",
+            `Detail summary: ${parsed.id}`,
+            parsed.id,
+          );
+          try {
+            const result = operation
+              ? await runtime.manualFetch.fetchAndSummarize(
+                  parsed.id,
+                  date,
+                  operation.signal,
+                )
+              : await runtime.manualFetch.fetchAndSummarize(parsed.id, date);
+            return writeManualFetchResult(io, result);
+          } finally {
+            operation?.finish();
+          }
+        }
+
+        const date =
+          parsed.mode === "today"
+            ? formatDate(todayInTz(now(), config.settings.arxiv.timezone))
+            : parsed.date;
+        if (!date) throw new Error("run requires --today or --date");
+
+        const result = runtime.scheduler
+          ? await runtime.scheduler.runForDateNow(date)
+          : await runtime.pipeline.runForDate(date);
+        if (
+          !runtime.scheduler &&
+          result.kind === "completed" &&
+          result.digest &&
+          runtime.host
+        ) {
           await deliverDailyEmailIfEnabled(result.digest, {
             storage: runtime.host.storage,
             http: runtime.host.http,
             output: config.settings.output,
             email: config.settings.email,
-            apiKey: resolveResendApiKey(config.settings.email, env),
+            apiKey: resolveResendApiKey(config.settings.email, {}),
           });
         }
-        const code = writeRunResult(io, date, result);
-        if (code !== 0) failed = true;
+        return writeRunResult(io, date, result);
       }
-      return failed ? 1 : 0;
-    }
-    if (parsed.command.name === "email-test") {
-      if (!runtime.host) {
-        writeLine(io.stderr, "email-test requires host adapters (storage + http)");
-        return 1;
-      }
-      const date =
-        parsed.command.date ??
-        formatDate(todayInTz(now(), config.settings.arxiv.timezone));
-      const digest = sampleDailyDigest({
-        date,
-        language: config.settings.output.summaryLanguage,
-        categories: config.settings.arxiv.categories.join(", "),
-        dailyPath: `${config.settings.output.dailyDir}/${date}.md`,
-      });
-      // Force send for test path even if already delivered.
-      const email = {
-        ...config.settings.email,
-        enabled: true,
-      };
-      const result = await deliverDailyEmailIfEnabled(digest, {
-        storage: runtime.host.storage,
-        http: runtime.host.http,
-        output: config.settings.output,
-        email,
-        apiKey: resolveResendApiKey(config.settings.email, env),
-        force: true,
-      });
-      if (result.kind === "delivered") {
-        writeLine(
-          io.stdout,
-          `email-test: delivered to ${email.to}` +
-            (result.providerMessageId ? ` id=${result.providerMessageId}` : ""),
-        );
-        return 0;
-      }
-      writeLine(io.stderr, `email-test: ${result.kind} (${result.reason})`);
-      return 1;
-    }
-    if (!parsed.command.id) throw new Error("summarize requires --id");
-    const date =
-      parsed.command.date ??
-      formatDate(todayInTz(now(), config.settings.arxiv.timezone));
-    const operation = runtime.operations?.begin(
-      "detail-summary",
-      `Detail summary: ${parsed.command.id}`,
-      parsed.command.id,
-    );
-    try {
-      const result = operation
-        ? await runtime.manualFetch.fetchAndSummarize(
-            parsed.command.id,
-            date,
-            operation.signal,
-          )
-        : await runtime.manualFetch.fetchAndSummarize(parsed.command.id, date);
-      return writeManualFetchResult(io, result);
-    } finally {
-      operation?.finish();
-    }
     } finally {
       removeSignalHandlers();
     }
@@ -256,95 +244,114 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     writeLine(io.stderr, (e as Error).message);
     return e instanceof CliConfigError ? 2 : 1;
   }
+
+  writeLine(io.stderr, "internal: unhandled command");
+  return 1;
 }
 
-function parseCli(argv: string[]): ParsedCli {
-  const global: Omit<ParsedCli, "command"> = {};
+function parseCli(argv: string[]): CliCommand {
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === undefined) continue;
-    if (arg === "--help" || arg === "-h") return { command: { name: "help" } };
-    if (arg === "--config") {
-      global.configPath = requireValue(argv, ++i, arg);
-      continue;
-    }
-    if (arg === "--vault-root") {
-      global.vaultRoot = requireValue(argv, ++i, arg);
-      continue;
-    }
-    if (arg === "--cache-dir") {
-      global.cacheDir = requireValue(argv, ++i, arg);
-      continue;
+    if (arg === "--help" || arg === "-h") return { name: "help" };
+    if (arg === "--config" || arg === "--vault-root" || arg === "--cache-dir") {
+      throw new Error(
+        `${arg} is no longer supported; use ~/.config/arxiv-daily/config.toml (arxiv-daily init)`,
+      );
     }
     rest.push(arg);
   }
 
   const [commandName, ...commandArgs] = rest;
-  if (!commandName || commandName === "help") {
-    return { ...global, command: { name: "help" } };
-  }
+  if (!commandName || commandName === "help") return { name: "help" };
+  if (commandName === "init") return { name: "init" };
+
   if (commandName === "run") {
-    return {
-      ...global,
-      command: { name: "run", date: optionValue(commandArgs, "--date") },
-    };
+    const today = commandArgs.includes("--today");
+    const date = optionValue(commandArgs, "--date");
+    const id = optionValue(commandArgs, "--id");
+    // --id may also take --date for note dating
+    if (id) {
+      if (today) throw new Error("run --id cannot be combined with --today");
+      return { name: "run", mode: "id", id, date };
+    }
+    if (today && date) throw new Error("run --today cannot be combined with --date");
+    if (today) return { name: "run", mode: "today" };
+    if (date) return { name: "run", mode: "date", date };
+    throw new Error("run requires --today, --date YYYY-MM-DD, or --id ARXIV_ID");
   }
+
+  if (commandName === "email" || commandName === "email-test") {
+    if (commandName === "email-test") {
+      return {
+        name: "email",
+        sub: "test",
+        date: optionValue(commandArgs, "--date"),
+      };
+    }
+    const sub = commandArgs[0];
+    if (sub === "test") {
+      return {
+        name: "email",
+        sub: "test",
+        date: optionValue(commandArgs.slice(1), "--date"),
+      };
+    }
+    if (sub === "status") return { name: "email", sub: "status" };
+    if (sub === "verify-start") return { name: "email", sub: "verify-start" };
+    throw new Error('email requires subcommand: test | status | verify-start');
+  }
+
+  if (commandName === "schedule") {
+    const sub = commandArgs[0];
+    if (sub === "show" || sub === "install" || sub === "uninstall") {
+      return { name: "schedule", sub };
+    }
+    throw new Error("schedule requires subcommand: show | install | uninstall");
+  }
+
+  if (commandName === "data") {
+    const sub = commandArgs[0];
+    if (sub === "export") {
+      return {
+        name: "data",
+        sub: "export",
+        out: optionValue(commandArgs.slice(1), "--out"),
+      };
+    }
+    if (sub === "import") {
+      const args = commandArgs.slice(1);
+      const yes = args.includes("--yes");
+      const zip = args.find((a) => !a.startsWith("--"));
+      return { name: "data", sub: "import", zip, yes };
+    }
+    throw new Error("data requires subcommand: export | import");
+  }
+
   if (commandName === "run-pending") {
-    return { ...global, command: { name: "run-pending" } };
+    throw new Error(
+      "run-pending was removed; use: arxiv-daily run --today (or run --date YYYY-MM-DD)",
+    );
   }
   if (commandName === "summarize") {
-    return {
-      ...global,
-      command: {
-        name: "summarize",
-        id: optionValue(commandArgs, "--id"),
-        date: optionValue(commandArgs, "--date"),
-      },
-    };
+    throw new Error("summarize was removed; use: arxiv-daily run --id ARXIV_ID");
   }
-  if (commandName === "email-test") {
-    return {
-      ...global,
-      command: {
-        name: "email-test",
-        date: optionValue(commandArgs, "--date"),
-      },
-    };
-  }
+
   throw new Error(`Unknown command: ${commandName}`);
 }
 
-function requireValue(argv: string[], index: number, option: string): string {
-  const value = argv[index];
+function optionValue(argv: string[], option: string): string | undefined {
+  const index = argv.indexOf(option);
+  if (index < 0) return undefined;
+  const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
     throw new Error(`${option} requires a value`);
   }
   return value;
 }
 
-function optionValue(argv: string[], option: string): string | undefined {
-  const index = argv.indexOf(option);
-  if (index < 0) return undefined;
-  return requireValue(argv, index + 1, option);
-}
-
-function pendingDates(config: CliRuntimeConfig, now: Date): string[] {
-  const lookbackDays = 5; // LOOKBACK_DAYS constant
-  const timezone = config.settings.arxiv.timezone;
-  const today = todayInTz(now, timezone);
-  const dates: string[] = [];
-  for (let i = lookbackDays - 1; i >= 0; i--) {
-    dates.push(formatDate(daysBefore(today, i, timezone)));
-  }
-  return dates;
-}
-
-function writeRunResult(
-  io: CliIo,
-  date: string,
-  result: CliRunResult,
-): number {
+function writeRunResult(io: CliIo, date: string, result: CliRunResult): number {
   if (result.kind === "completed") {
     writeLine(
       io.stdout,
@@ -362,14 +369,14 @@ function writeRunResult(
 
 function writeManualFetchResult(io: CliIo, result: ManualFetchResult): number {
   if (result.kind === "done") {
-    writeLine(io.stdout, `summarize: wrote ${result.path}`);
+    writeLine(io.stdout, `run --id: wrote ${result.path}`);
     return 0;
   }
   if (result.kind === "already_exists") {
-    writeLine(io.stdout, `summarize: already exists ${result.path}`);
+    writeLine(io.stdout, `run --id: already exists ${result.path}`);
     return 0;
   }
-  writeLine(io.stderr, `summarize: ${result.kind} (${result.reason})`);
+  writeLine(io.stderr, `run --id: ${result.kind} (${result.reason})`);
   return 1;
 }
 
@@ -388,7 +395,10 @@ function installSignalHandlers(
     if (signalCount === 1) {
       const active = operations.snapshot();
       operations.cancelAll(`cancelled by ${signal}`);
-      writeLine(io.stderr, `arxiv-daily: ${signal} received; cancelling ${active.length} active task${active.length === 1 ? "" : "s"} and waiting`);
+      writeLine(
+        io.stderr,
+        `arxiv-daily: ${signal} received; cancelling ${active.length} active task${active.length === 1 ? "" : "s"} and waiting`,
+      );
       return;
     }
     process.exit(128 + (signal === "SIGINT" ? 2 : 15));

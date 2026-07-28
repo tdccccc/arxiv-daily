@@ -1,10 +1,14 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { parse as parseToml } from "smol-toml";
 import {
   DEFAULT_SETTINGS,
-  detailSelectionPreset,
-  isDetailSelectionProfile,
+  arxivCategories,
+  normalizeCategoryList,
   sanitizeDetailSelection,
+  validateVaultRelativeDirectory,
+  vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import type {
   LinkStyle,
@@ -12,39 +16,46 @@ import type {
   SummaryLanguage,
   Topic,
 } from "@arxiv-daily/core";
-import {
-  arxivCategories,
-  normalizeCategoryList,
-  validateVaultRelativeDirectory,
-  vaultRelativeDirectoriesCollide,
-} from "@arxiv-daily/core";
+import { resolveCliConfigPath } from "./config-path";
 
 export type { LinkStyle } from "@arxiv-daily/core";
+
+/** CLI-only schedule intent for OS timer install (not plugin in-process tick). */
+export interface CliScheduleIntent {
+  enabled: boolean;
+  /** First daily fire HH:MM (machine local for cron). */
+  on: string;
+  /** 0 = once at `on`; >0 = every N hours from on while <= until. */
+  intervalHours: number;
+  until: string;
+  weekdaysOnly: boolean;
+}
+
+export const DEFAULT_CLI_SCHEDULE: CliScheduleIntent = {
+  enabled: false,
+  on: "09:30",
+  intervalHours: 0,
+  until: "18:00",
+  weekdaysOnly: true,
+};
 
 export interface CliRuntimeConfig {
   settings: PluginSettings;
   vaultRoot: string;
   cacheDir: string;
   linkStyle: LinkStyle;
-  configPath: string | null;
+  configPath: string;
+  scheduleIntent: CliScheduleIntent;
 }
 
 export interface LoadCliConfigOptions {
-  cwd?: string;
+  /** Override fixed config path (tests only). */
   configPath?: string;
   env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
   readText?: (path: string) => Promise<string>;
+  homedir?: () => string;
 }
-
-type PartialPluginSettings = {
-  llm?: Partial<PluginSettings["llm"]>;
-  arxiv?: Partial<PluginSettings["arxiv"]>;
-  detailSelection?: Partial<PluginSettings["detailSelection"]>;
-  output?: Partial<PluginSettings["output"]>;
-  schedule?: Partial<PluginSettings["schedule"]>;
-  advanced?: Partial<PluginSettings["advanced"]>;
-  email?: Partial<PluginSettings["email"]>;
-};
 
 export class CliConfigError extends Error {
   constructor(message: string, readonly cause?: unknown) {
@@ -53,275 +64,238 @@ export class CliConfigError extends Error {
   }
 }
 
-const DEFAULT_CONFIG_FILE = "arxiv-daily.config.json";
-
 export async function loadCliConfig(
   opts: LoadCliConfigOptions = {},
 ): Promise<CliRuntimeConfig> {
-  const cwd = path.resolve(opts.cwd ?? process.cwd());
   const env = opts.env ?? process.env;
-  const file = await readConfigObject(opts, cwd);
-  const envConfig = configFromEnv(env);
-  const fileSettings = settingsObject(file);
-
-  const settings = applyPartialSettings(
-    applyPartialSettings(DEFAULT_SETTINGS, fileSettings),
-    envConfig.settings,
-  );
-  settings.detailSelection = sanitizeDetailSelection(settings.detailSelection);
-  const vaultRoot = path.resolve(
-    cwd,
-    envConfig.vaultRoot ?? stringOr(file.vaultRoot, "."),
-  );
-  const cacheDir = path.resolve(
-    cwd,
-    envConfig.cacheDir ?? stringOr(file.cacheDir, ".arxiv-daily/cache"),
-  );
-  const linkStyle = normalizeLinkStyle(
-    envConfig.linkStyle ??
-      stringOr(file.linkStyle, settings.output.linkStyle ?? "wikilink"),
-  );
-  settings.output.linkStyle = linkStyle;
-  settings.output.summaryLanguage = normalizeSummaryLanguageSetting(
-    settings.output.summaryLanguage ?? "zh",
-  );
-  settings.output.dailyDir = normalizeOutputDirectory(
-    "dailyDir",
-    settings.output.dailyDir,
-  );
-  settings.output.papersDir = normalizeOutputDirectory(
-    "papersDir",
-    settings.output.papersDir,
-  );
-  if (vaultRelativeDirectoriesCollide(
-    settings.output.dailyDir,
-    settings.output.papersDir,
-  )) {
-    throw new CliConfigError("dailyDir and papersDir must be different");
-  }
-
-  return {
-    settings,
-    vaultRoot,
-    cacheDir,
-    linkStyle,
-    configPath: file.__configPath ?? null,
-  };
-}
-
-interface RawCliConfig {
-  settings?: unknown;
-  llm?: unknown;
-  arxiv?: unknown;
-  detailSelection?: unknown;
-  output?: unknown;
-  schedule?: unknown;
-  advanced?: unknown;
-  email?: unknown;
-  vaultRoot?: unknown;
-  cacheDir?: unknown;
-  linkStyle?: unknown;
-  __configPath?: string;
-}
-
-interface EnvCliConfig {
-  settings: PartialPluginSettings;
-  vaultRoot?: string;
-  cacheDir?: string;
-  linkStyle?: string;
-}
-
-async function readConfigObject(
-  opts: LoadCliConfigOptions,
-  cwd: string,
-): Promise<RawCliConfig> {
-  const configPath = opts.configPath
-    ? path.resolve(cwd, opts.configPath)
-    : path.join(cwd, DEFAULT_CONFIG_FILE);
-  const explicit = Boolean(opts.configPath);
+  const platform = opts.platform ?? process.platform;
+  const configPath = opts.configPath ?? resolveCliConfigPath(env, platform);
   const readText = opts.readText ?? ((p: string) => fs.readFile(p, "utf8"));
 
   let raw: string;
   try {
     raw = await readText(configPath);
   } catch (e) {
-    if (!explicit && (e as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new CliConfigError(
+        `CLI config not found: ${configPath}\nRun: arxiv-daily init`,
+      );
     }
     throw new CliConfigError(`failed to read CLI config: ${configPath}`, e);
   }
 
+  let parsed: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(raw);
-    if (!isRecord(parsed)) {
-      throw new Error("config root must be an object");
+    const value = parseToml(raw);
+    if (!isRecord(value)) {
+      throw new Error("config root must be a table");
     }
-    return { ...parsed, __configPath: configPath };
+    parsed = value;
   } catch (e) {
     throw new CliConfigError(`failed to parse CLI config: ${configPath}`, e);
   }
-}
 
-function settingsObject(file: RawCliConfig): PartialPluginSettings {
-  const nested = isRecord(file.settings) ? file.settings : {};
-  return {
-    ...(nested as Partial<PluginSettings>),
-    ...(isRecord(file.llm) ? { llm: file.llm } : {}),
-    ...(isRecord(file.arxiv) ? { arxiv: file.arxiv } : {}),
-    ...(isRecord(file.detailSelection)
-      ? { detailSelection: file.detailSelection }
-      : {}),
-    ...(isRecord(file.output) ? { output: file.output } : {}),
-    ...(isRecord(file.schedule) ? { schedule: file.schedule } : {}),
-    ...(isRecord(file.advanced) ? { advanced: file.advanced } : {}),
-    ...(isRecord(file.email) ? { email: file.email } : {}),
-  } as PartialPluginSettings;
-}
-
-function configFromEnv(env: Record<string, string | undefined>): EnvCliConfig {
-  const settings: PartialPluginSettings = {};
-  const llm: Record<string, unknown> = {};
-  const arxiv: Record<string, unknown> = {};
-  const detailSelection: Record<string, unknown> = {};
-  const output: Record<string, unknown> = {};
-  const advanced: Record<string, unknown> = {};
-  const email: Record<string, unknown> = {};
-
-  setString(llm, "apiKey", firstEnv(env, "ARXIV_DAILY_API_KEY", "ARXIV_DAILY_LLM_API_KEY"));
-  setString(llm, "provider", env.ARXIV_DAILY_PROVIDER);
-  setString(llm, "baseUrl", env.ARXIV_DAILY_BASE_URL);
-  setString(llm, "model", env.ARXIV_DAILY_MODEL);
-  setNumber(llm, "temperature", env.ARXIV_DAILY_TEMPERATURE);
-  setNumber(llm, "timeoutMs", env.ARXIV_DAILY_TIMEOUT_MS);
-  setBoolean(llm, "thinkingMode", env.ARXIV_DAILY_THINKING_MODE);
-  setString(llm, "reasoningEffort", env.ARXIV_DAILY_REASONING_EFFORT);
-
-  setString(arxiv, "category", env.ARXIV_DAILY_CATEGORY);
-  if (env.ARXIV_DAILY_CATEGORIES) {
-    arxiv.categories = env.ARXIV_DAILY_CATEGORIES.split(",");
-  }
-  setString(arxiv, "timezone", env.ARXIV_DAILY_TIMEZONE);
-  if (env.ARXIV_DAILY_TOPICS_JSON) {
-    arxiv.topics = parseTopicsJson(env.ARXIV_DAILY_TOPICS_JSON);
-  }
-
-  setString(detailSelection, "profile", env.ARXIV_DAILY_DETAIL_PROFILE);
-  setSanitizedNumber(
-    detailSelection,
-    "normalThreshold",
-    env.ARXIV_DAILY_DETAIL_NORMAL_THRESHOLD,
-  );
-  setSanitizedNumber(
-    detailSelection,
-    "exceptionalThreshold",
-    env.ARXIV_DAILY_DETAIL_EXCEPTIONAL_THRESHOLD,
-  );
-  setSanitizedNumber(
-    detailSelection,
-    "softLimit",
-    env.ARXIV_DAILY_DETAIL_SOFT_LIMIT,
+  const settings = mapTomlToSettings(parsed);
+  settings.detailSelection = sanitizeDetailSelection(
+    detailSelectionPresetBalanced(),
   );
 
-  setString(output, "dailyDir", env.ARXIV_DAILY_DAILY_DIR);
-  setString(output, "papersDir", env.ARXIV_DAILY_PAPERS_DIR);
-  setString(output, "summaryLanguage", env.ARXIV_DAILY_SUMMARY_LANGUAGE);
-  setString(advanced, "logLevel", env.ARXIV_DAILY_LOG_LEVEL);
+  const home = opts.homedir?.() ?? os.homedir();
+  const vaultRoot = resolveUserPath(
+    requireString(parsed.vault_root, "vault_root"),
+    home,
+  );
+  const cacheRaw =
+    typeof parsed.cache_dir === "string" && parsed.cache_dir.trim()
+      ? parsed.cache_dir.trim()
+      : path.join(vaultRoot, ".cache", "arxiv-daily");
+  const cacheDir = resolveUserPath(cacheRaw, home);
 
-  setBoolean(email, "enabled", env.ARXIV_DAILY_EMAIL_ENABLED);
-  setString(email, "to", env.ARXIV_DAILY_EMAIL_TO);
-  setString(email, "fromEmail", env.ARXIV_DAILY_EMAIL_FROM);
-  setString(email, "fromName", env.ARXIV_DAILY_EMAIL_FROM_NAME);
-  setString(email, "apiKey", env.ARXIV_DAILY_RESEND_API_KEY);
+  settings.output.dailyDir = normalizeOutputDirectory(
+    "daily_dir",
+    settings.output.dailyDir,
+  );
+  settings.output.papersDir = normalizeOutputDirectory(
+    "papers_dir",
+    settings.output.papersDir,
+  );
+  if (
+    vaultRelativeDirectoriesCollide(
+      settings.output.dailyDir,
+      settings.output.papersDir,
+    )
+  ) {
+    throw new CliConfigError("daily_dir and papers_dir must be different");
+  }
 
-  if (Object.keys(llm).length > 0) settings.llm = llm;
-  if (Object.keys(arxiv).length > 0) {
-    settings.arxiv = arxiv;
-  }
-  if (Object.keys(detailSelection).length > 0) {
-    settings.detailSelection = detailSelection;
-  }
-  if (Object.keys(output).length > 0) {
-    settings.output = output;
-  }
-  if (Object.keys(advanced).length > 0) {
-    settings.advanced = advanced;
-  }
-  if (Object.keys(email).length > 0) {
-    settings.email = email;
-  }
+  const linkStyle = settings.output.linkStyle ?? "wikilink";
+  settings.output.linkStyle = linkStyle;
+  settings.output.summaryLanguage = normalizeSummaryLanguage(
+    settings.output.summaryLanguage ?? "zh",
+  );
 
   return {
     settings,
-    vaultRoot: env.ARXIV_DAILY_VAULT_ROOT,
-    cacheDir: env.ARXIV_DAILY_CACHE_DIR,
-    linkStyle: env.ARXIV_DAILY_LINK_STYLE,
+    vaultRoot,
+    cacheDir,
+    linkStyle,
+    configPath,
+    scheduleIntent: mapScheduleIntent(parsed.schedule),
   };
 }
 
-function applyPartialSettings(
-  base: PluginSettings,
-  partial: PartialPluginSettings,
-): PluginSettings {
-  const next: PluginSettings = {
-    llm: { ...base.llm, ...(partial.llm ?? {}) },
-    arxiv: { ...base.arxiv, ...(partial.arxiv ?? {}) },
-    detailSelection: mergeDetailSelection(base.detailSelection, partial.detailSelection),
-    output: { ...base.output, ...(partial.output ?? {}) },
-    schedule: { ...base.schedule, ...(partial.schedule ?? {}) },
-    advanced: { ...base.advanced, ...(partial.advanced ?? {}) },
-    email: { ...base.email, ...(partial.email ?? {}) },
-  };
-  const rawArxiv = partial.arxiv as Record<string, unknown> | undefined;
-  if (rawArxiv && Object.prototype.hasOwnProperty.call(rawArxiv, "categories")) {
-    next.arxiv.categories = normalizeCategoryList(
-      rawArxiv.categories,
-      arxivCategories(base.arxiv),
-    );
-  } else if (
-    rawArxiv &&
-    Object.prototype.hasOwnProperty.call(rawArxiv, "category")
-  ) {
-    next.arxiv.categories = normalizeCategoryList(
-      rawArxiv.category,
-      arxivCategories(base.arxiv),
-    );
-  }
-  next.arxiv.category = arxivCategories(next.arxiv)[0] ?? base.arxiv.category;
-  return next;
+function detailSelectionPresetBalanced(): PluginSettings["detailSelection"] {
+  return sanitizeDetailSelection({ profile: "balanced" });
 }
 
-function mergeDetailSelection(
-  base: PluginSettings["detailSelection"],
-  partial: Partial<PluginSettings["detailSelection"]> | undefined,
-): PluginSettings["detailSelection"] {
-  if (!partial || !isRecord(partial)) return sanitizeDetailSelection(base);
-  const hasProfile = Object.prototype.hasOwnProperty.call(partial, "profile");
-  if (hasProfile && !isDetailSelectionProfile(partial.profile)) {
-    return sanitizeDetailSelection(partial);
+function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
+  const base = structuredClone(DEFAULT_SETTINGS);
+  base.detailSelection = detailSelectionPresetBalanced();
+
+  const llm = asTable(root.llm);
+  if (llm) {
+    base.llm.apiKey = stringField(llm, "api_key", base.llm.apiKey);
+    base.llm.provider = stringField(llm, "provider", base.llm.provider);
+    base.llm.baseUrl = stringField(llm, "base_url", base.llm.baseUrl);
+    base.llm.model = stringField(llm, "model", base.llm.model);
+    if (typeof llm.thinking_mode === "boolean") {
+      base.llm.thinkingMode = llm.thinking_mode;
+    }
+    base.llm.reasoningEffort = stringField(
+      llm,
+      "reasoning_effort",
+      base.llm.reasoningEffort,
+    );
   }
 
-  const hasNumericOverride = [
-    "normalThreshold",
-    "exceptionalThreshold",
-    "softLimit",
-  ].some((key) => Object.prototype.hasOwnProperty.call(partial, key));
-  const requestedProfile = hasProfile ? partial.profile! : base.profile;
+  const arxiv = asTable(root.arxiv);
+  if (arxiv) {
+    if (Array.isArray(arxiv.categories)) {
+      base.arxiv.categories = normalizeCategoryList(
+        arxiv.categories,
+        base.arxiv.categories,
+      );
+    }
+    base.arxiv.timezone = stringField(arxiv, "timezone", base.arxiv.timezone);
+    if (Array.isArray(arxiv.topics)) {
+      base.arxiv.topics = arxiv.topics.map((item, index) =>
+        mapTopic(item, index),
+      );
+    }
+  }
+  base.arxiv.category =
+    arxivCategories(base.arxiv)[0] ?? base.arxiv.category;
 
-  // A profile-only layer explicitly selects its exact preset. Any layer with a
-  // numeric field is an override and therefore becomes custom, even when its
-  // values happen to equal a preset. This makes file/env precedence explicit.
-  if (hasProfile && requestedProfile !== "custom" && !hasNumericOverride) {
-    return detailSelectionPreset(requestedProfile);
+  const output = asTable(root.output);
+  if (output) {
+    base.output.dailyDir = stringField(output, "daily_dir", base.output.dailyDir);
+    base.output.papersDir = stringField(
+      output,
+      "papers_dir",
+      base.output.papersDir,
+    );
+    const link = stringField(output, "link_style", base.output.linkStyle ?? "wikilink");
+    if (link !== "wikilink" && link !== "relative") {
+      throw new CliConfigError(`invalid link_style: ${link}`);
+    }
+    base.output.linkStyle = link;
+    base.output.summaryLanguage = normalizeSummaryLanguage(
+      stringField(output, "summary_language", base.output.summaryLanguage ?? "zh"),
+    );
   }
 
-  const profileBase = hasProfile && requestedProfile !== "custom"
-    ? detailSelectionPreset(requestedProfile)
-    : base;
-  return sanitizeDetailSelection({
-    ...profileBase,
-    ...partial,
-    profile: hasNumericOverride ? "custom" : requestedProfile,
-  });
+  const email = asTable(root.email);
+  if (email) {
+    if (typeof email.enabled === "boolean") base.email.enabled = email.enabled;
+    const mode = stringField(email, "mode", base.email.mode);
+    if (mode !== "self" && mode !== "hosted") {
+      throw new CliConfigError(`invalid email.mode: ${mode}`);
+    }
+    base.email.mode = mode;
+    base.email.to = stringField(email, "to", base.email.to);
+    base.email.fromEmail = stringField(email, "from_email", base.email.fromEmail);
+    base.email.fromName = stringField(
+      email,
+      "from_name",
+      base.email.fromName ?? "arXiv Daily",
+    );
+    base.email.apiKey = stringField(email, "api_key", base.email.apiKey ?? "");
+    base.email.hostedToken = stringField(
+      email,
+      "hosted_token",
+      base.email.hostedToken ?? "",
+    );
+    // hosted_base_url intentionally ignored if present
+  }
+
+  const advanced = asTable(root.advanced);
+  if (advanced) {
+    const level = stringField(advanced, "log_level", base.advanced.logLevel);
+    if (
+      level !== "debug" &&
+      level !== "info" &&
+      level !== "warn" &&
+      level !== "error"
+    ) {
+      throw new CliConfigError(`invalid log_level: ${level}`);
+    }
+    base.advanced.logLevel = level;
+    if (typeof advanced.request_delay_ms === "number") {
+      base.advanced.requestDelayMs = advanced.request_delay_ms;
+    }
+    if (typeof advanced.cache_expiry_days === "number") {
+      base.advanced.cacheExpiryDays = advanced.cache_expiry_days;
+    }
+    if (typeof advanced.section_char_limit === "number") {
+      base.advanced.sectionCharLimit = advanced.section_char_limit;
+    }
+    if (typeof advanced.paper_char_limit === "number") {
+      base.advanced.paperCharLimit = advanced.paper_char_limit;
+    }
+    if (typeof advanced.daily_char_limit === "number") {
+      base.advanced.dailyCharLimit = advanced.daily_char_limit;
+    }
+  }
+
+  // Plugin schedule table ignored for CLI runtime; scheduleIntent is separate.
+  base.schedule = { ...DEFAULT_SETTINGS.schedule, enabled: false };
+
+  return base;
+}
+
+function mapTopic(raw: unknown, index: number): Topic {
+  if (!isRecord(raw)) {
+    throw new CliConfigError(`arxiv.topics[${index}] must be a table`);
+  }
+  const name = stringField(raw, "name", "");
+  const tag = stringField(raw, "tag", "");
+  const description = stringField(raw, "description", "");
+  const detail =
+    typeof raw.detail === "boolean" ? raw.detail : true;
+  const id =
+    typeof raw.id === "string" && raw.id.trim()
+      ? raw.id.trim()
+      : `topic-${index + 1}`;
+  return { id, name, tag, description, detail };
+}
+
+function mapScheduleIntent(raw: unknown): CliScheduleIntent {
+  const d = { ...DEFAULT_CLI_SCHEDULE };
+  if (!isRecord(raw)) return d;
+  if (typeof raw.enabled === "boolean") d.enabled = raw.enabled;
+  d.on = stringField(raw, "on", d.on);
+  if (typeof raw.interval_hours === "number" && Number.isFinite(raw.interval_hours)) {
+    d.intervalHours = Math.max(0, Math.floor(raw.interval_hours));
+  }
+  d.until = stringField(raw, "until", d.until);
+  if (typeof raw.weekdays_only === "boolean") d.weekdaysOnly = raw.weekdays_only;
+  if (!/^\d{1,2}:\d{2}$/.test(d.on)) {
+    throw new CliConfigError(`invalid schedule.on: ${d.on} (use HH:MM)`);
+  }
+  if (!/^\d{1,2}:\d{2}$/.test(d.until)) {
+    throw new CliConfigError(`invalid schedule.until: ${d.until} (use HH:MM)`);
+  }
+  return d;
 }
 
 function normalizeOutputDirectory(name: string, value: unknown): string {
@@ -332,77 +306,78 @@ function normalizeOutputDirectory(name: string, value: unknown): string {
   return result.value;
 }
 
-function normalizeLinkStyle(value: string): LinkStyle {
-  if (value === "wikilink" || value === "relative") return value;
-  throw new CliConfigError(`invalid linkStyle: ${value}`);
-}
-
-function normalizeSummaryLanguageSetting(value: unknown): SummaryLanguage {
+function normalizeSummaryLanguage(value: unknown): SummaryLanguage {
   if (value === "zh" || value === undefined) return "zh";
   if (value === "en") return "en";
-  throw new CliConfigError(`invalid summaryLanguage: ${String(value)}`);
+  throw new CliConfigError(`invalid summary_language: ${String(value)}`);
 }
 
-function parseTopicsJson(value: string): Topic[] {
-  try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) throw new Error("topics must be an array");
-    return parsed as Topic[];
-  } catch (e) {
-    throw new CliConfigError("failed to parse ARXIV_DAILY_TOPICS_JSON", e);
+function resolveUserPath(input: string, home: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) throw new CliConfigError("path must not be empty");
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.resolve(home, trimmed.slice(2));
   }
+  return path.resolve(trimmed);
 }
 
-function setString(
-  target: Record<string, unknown>,
-  key: string,
-  value: string | undefined,
-): void {
-  if (value !== undefined && value !== "") target[key] = value;
-}
-
-function setNumber(
-  target: Record<string, unknown>,
-  key: string,
-  value: string | undefined,
-): void {
-  if (value === undefined || value === "") return;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new CliConfigError(`invalid numeric env value for ${key}: ${value}`);
+function requireString(value: unknown, key: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new CliConfigError(`missing required ${key}`);
   }
-  target[key] = parsed;
+  return value.trim();
 }
 
-function setSanitizedNumber(
-  target: Record<string, unknown>,
+function stringField(
+  table: Record<string, unknown>,
   key: string,
-  value: string | undefined,
-): void {
-  if (value === undefined || value === "") return;
-  target[key] = Number(value);
+  fallback: string,
+): string {
+  const value = table[key];
+  if (typeof value === "string") return value;
+  return fallback;
 }
 
-function setBoolean(
-  target: Record<string, unknown>,
-  key: string,
-  value: string | undefined,
-): void {
-  if (value === undefined || value === "") return;
-  target[key] = /^(1|true|yes|on)$/i.test(value);
-}
-
-function firstEnv(
-  env: Record<string, string | undefined>,
-  ...keys: string[]
-): string | undefined {
-  return keys.map((key) => env[key]).find((value) => value);
-}
-
-function stringOr(value: unknown, fallback: string): string {
-  return typeof value === "string" && value ? value : fallback;
+function asTable(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+/** Expand HH:MM schedule slots for cron generation. */
+export function scheduleFireSlots(intent: CliScheduleIntent): string[] {
+  const start = parseHm(intent.on);
+  const end = parseHm(intent.until);
+  if (intent.intervalHours <= 0) {
+    return [formatHm(start.h, start.m)];
+  }
+  const slots: string[] = [];
+  let minutes = start.h * 60 + start.m;
+  const endMin = end.h * 60 + end.m;
+  const step = intent.intervalHours * 60;
+  while (minutes <= endMin) {
+    const h = Math.floor(minutes / 60) % 24;
+    const m = minutes % 60;
+    slots.push(formatHm(h, m));
+    minutes += step;
+    if (slots.length > 48) break;
+  }
+  return slots;
+}
+
+function parseHm(value: string): { h: number; m: number } {
+  const [hs, ms] = value.split(":");
+  const h = Number(hs);
+  const m = Number(ms);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    throw new CliConfigError(`invalid time ${value}`);
+  }
+  return { h, m };
+}
+
+function formatHm(h: number, m: number): string {
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
