@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -194,8 +195,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     if (choice.value === "m") fileMode = "merge";
   }
 
+  const defaultVault = path.join(os.homedir(), "arxiv-daily");
   const state: WizardState = {
-    vaultRoot: "",
+    vaultRoot: defaultVault,
     providerId: DEFAULT_SETTINGS.llm.provider,
     baseUrl: DEFAULT_SETTINGS.llm.baseUrl,
     apiKey: "",
@@ -298,16 +300,17 @@ async function runStep(
 
   switch (step) {
     case "vault": {
+      const homeDefault = path.join(os.homedir(), "arxiv-daily");
       const v = await askText(opts, {
-        message: "Vault root path",
-        placeholder: "/home/you/Notes",
-        initialValue: state.vaultRoot,
+        message: "Vault root path (where daily/ and papers/ are written)",
+        placeholder: "~/arxiv-daily",
+        initialValue: state.vaultRoot || homeDefault,
         validate: (s) =>
-          s.trim() ? undefined : "Required — absolute path to your notes folder",
+          s.trim() ? undefined : "Required — path to your notes folder",
         allowBack: false,
       });
       if (v.nav !== "next") return v.nav;
-      state.vaultRoot = v.value.trim();
+      state.vaultRoot = expandUserPath(v.value.trim());
       return "next";
     }
     case "provider": {
@@ -325,13 +328,10 @@ async function runStep(
       if (pick.nav !== "next") return pick.nav;
       state.providerId = pick.value;
       const preset = PROVIDER_PRESETS[state.providerId] ?? PROVIDER_PRESETS.custom!;
-      if (!state.baseUrl || state.baseUrl === DEFAULT_SETTINGS.llm.baseUrl) {
-        state.baseUrl = preset.baseUrl || DEFAULT_SETTINGS.llm.baseUrl;
-      } else if (preset.baseUrl) {
-        // Prefer new provider default when provider changes
-        state.baseUrl = preset.baseUrl;
-      }
-      if (preset.models[0] && !state.remoteModels.length) {
+      // Use the preset URL as default (Custom → empty string on purpose).
+      state.baseUrl = preset.baseUrl ?? "";
+      state.remoteModels = [];
+      if (preset.models[0]) {
         state.model = preset.models[0].value;
       }
       return "next";
@@ -339,11 +339,16 @@ async function runStep(
     case "baseUrl": {
       const preset =
         PROVIDER_PRESETS[state.providerId] ?? PROVIDER_PRESETS.custom!;
-      const def = preset.baseUrl || DEFAULT_SETTINGS.llm.baseUrl;
+      // Custom preset has baseUrl ""; do not substitute DeepSeek default.
+      const def = preset.baseUrl;
       const v = await askText(opts, {
-        message: "API base URL",
-        initialValue: state.baseUrl || def,
-        placeholder: def,
+        message:
+          state.providerId === "custom"
+            ? "API base URL (required for Custom, e.g. https://api.example.com/v1)"
+            : "API base URL",
+        initialValue: state.baseUrl,
+        placeholder:
+          def || "https://api.example.com/v1",
         validate: (s) => (s.trim() ? undefined : "Base URL is required"),
         allowBack: canBack,
       });
@@ -697,6 +702,17 @@ async function runStep(
     default:
       return "next";
   }
+}
+
+
+function expandUserPath(inputPath: string): string {
+  const trimmed = inputPath.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed === "~") return os.homedir();
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.resolve(os.homedir(), trimmed.slice(2));
+  }
+  return path.resolve(trimmed);
 }
 
 function finishCancel(useClack: boolean): number {
