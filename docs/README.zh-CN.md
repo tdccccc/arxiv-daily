@@ -98,6 +98,8 @@ arxiv-daily run --today
 配置**只**在 **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`**（默认 `~/.config/arxiv-daily/config.toml`）。没有配置类环境变量，也没有 `--config` / `--vault-root`。init 之后可再手改 topics。
 
 ```bash
+arxiv-daily update              # 有新版本时升级全局安装
+arxiv-daily update --check      # 只查看当前版本与 npm 最新版
 arxiv-daily run --date 2026-06-13
 arxiv-daily run --id 2606.12345
 arxiv-daily email test

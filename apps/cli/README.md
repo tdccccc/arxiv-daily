@@ -66,6 +66,7 @@ Remove those yourself if you want a full cleanup.
 
 ```text
 arxiv-daily init
+arxiv-daily update [--check] [--yes]
 arxiv-daily run --today
 arxiv-daily run --date YYYY-MM-DD
 arxiv-daily run --id ARXIV_ID [--date YYYY-MM-DD]
@@ -76,6 +77,7 @@ arxiv-daily data import PATH.zip [--yes]
 arxiv-daily help
 ```
 
+- **`update`** — check npm for a newer `arxiv-daily` and optionally `npm install -g` it. Config is not touched. `--check` only reports; `--yes` skips the confirm prompt.
 - **`run --today`** — one day only (typical cron entry). Missed days: `run --date …`.
 - **`schedule install`** — writes managed user crontab lines (Linux/macOS/WSL). Not supported on native Windows Task Scheduler; use WSL or the Obsidian plugin for desktop scheduling.
 

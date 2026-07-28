@@ -20,6 +20,8 @@ import {
   scheduleUninstall,
 } from "./schedule-cmd";
 import { dataExport, dataImport } from "./data-cmd";
+import { runUpdate } from "./update-cmd";
+import { getCliVersion } from "./version";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -60,12 +62,14 @@ export interface RunCliOptions {
     export?: typeof dataExport;
     import?: typeof dataImport;
   };
+  update?: typeof runUpdate;
   isTTY?: boolean;
 }
 
 type CliCommand =
   | { name: "help" }
   | { name: "init" }
+  | { name: "update"; checkOnly?: boolean; yes?: boolean }
   | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
   | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
   | { name: "schedule"; sub: "show" | "install" | "uninstall" }
@@ -74,6 +78,7 @@ type CliCommand =
 
 const USAGE = `Usage:
   arxiv-daily init
+  arxiv-daily update [--check] [--yes]
   arxiv-daily run --today
   arxiv-daily run --date YYYY-MM-DD
   arxiv-daily run --id ARXIV_ID [--date YYYY-MM-DD]
@@ -114,12 +119,22 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
 
   if (parsed.name === "help") {
     writeLine(io.stdout, USAGE.trimEnd());
+    writeLine(io.stdout, `Version: ${getCliVersion()}`);
     return 0;
   }
 
   if (parsed.name === "init") {
     const initFn = opts.init ?? runInit;
     return initFn({ env, stdout: io.stdout, stderr: io.stderr, isTTY: opts.isTTY });
+  }
+
+  if (parsed.name === "update") {
+    const updateFn = opts.update ?? runUpdate;
+    return updateFn(io, {
+      checkOnly: parsed.checkOnly,
+      yes: parsed.yes,
+      isTTY: opts.isTTY ?? Boolean(process.stdin.isTTY),
+    });
   }
 
   try {
@@ -266,6 +281,14 @@ function parseCli(argv: string[]): CliCommand {
   const [commandName, ...commandArgs] = rest;
   if (!commandName || commandName === "help") return { name: "help" };
   if (commandName === "init") return { name: "init" };
+
+  if (commandName === "update") {
+    return {
+      name: "update",
+      checkOnly: commandArgs.includes("--check"),
+      yes: commandArgs.includes("--yes") || commandArgs.includes("-y"),
+    };
+  }
 
   if (commandName === "run") {
     const today = commandArgs.includes("--today");

@@ -98,6 +98,8 @@ Or without a global install: `npx arxiv-daily@latest help`.
 Config is only **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root`. After init you can hand-edit topics in that file.
 
 ```bash
+arxiv-daily update              # upgrade global install when a newer npm release exists
+arxiv-daily update --check      # only print current vs latest
 arxiv-daily run --date 2026-06-13
 arxiv-daily run --id 2606.12345
 arxiv-daily email test
