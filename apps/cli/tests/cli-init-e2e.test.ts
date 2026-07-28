@@ -12,20 +12,22 @@ describe("init e2e", () => {
     const vault = path.join(dir, "vault");
     const answers = [
       vault,
-      "1",
+      "1", // provider
       "https://api.example.com/v1",
       "sk-test-key",
-      "n",
-      "1",
-      "1",
-      "1",
+      "n", // skip fetch
+      "1", // model preset
+      "y", // thinking on
+      "3", // high
+      "1", // email skip
+      "1", // category
       "UTC",
-      "2",
+      "2", // en
       "Photo-z",
       "photo-z",
       "photo-z methods",
-      "n",
-      "n",
+      "n", // paper notes off
+      "n", // schedule off
     ];
     let i = 0;
     const code = await runInit({
@@ -62,5 +64,7 @@ describe("init e2e", () => {
     expect(cfg.settings.output.linkStyle).toBe("wikilink");
     expect(cfg.settings.advanced.logLevel).toBe("info");
     expect(cfg.scheduleIntent.enabled).toBe(false);
+    expect(cfg.settings.llm.thinkingMode).toBe(true);
+    expect(cfg.settings.llm.reasoningEffort).toBe("high");
   });
 });

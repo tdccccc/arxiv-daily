@@ -58,6 +58,7 @@ type StepId =
   | "apiKey"
   | "fetchModels"
   | "model"
+  | "thinking"
   | "email"
   | "categories"
   | "timezone"
@@ -73,6 +74,7 @@ const STEP_ORDER: StepId[] = [
   "apiKey",
   "fetchModels",
   "model",
+  "thinking",
   "email",
   "categories",
   "timezone",
@@ -90,6 +92,8 @@ interface WizardState {
   tryFetch: boolean;
   remoteModels: string[];
   model: string;
+  thinkingMode: boolean;
+  reasoningEffort: string;
   emailChoice: "skip" | "self" | "hosted";
   emailEnabled: boolean;
   emailMode: "self" | "hosted";
@@ -217,6 +221,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     tryFetch: true,
     remoteModels: [],
     model: DEFAULT_SETTINGS.llm.model,
+    thinkingMode: true,
+    reasoningEffort: DEFAULT_SETTINGS.llm.reasoningEffort || "high",
     emailChoice: "skip",
     emailEnabled: false,
     emailMode: "self",
@@ -266,7 +272,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     baseUrl: state.baseUrl,
     model: state.model,
     provider: state.providerId,
-    thinkingMode: preset.thinkingMode,
+    thinkingMode: state.thinkingMode,
+    reasoningEffort: state.reasoningEffort,
     categories: state.categories,
     timezone: state.timezone,
     summaryLanguage: state.summaryLanguage,
@@ -496,6 +503,47 @@ async function runStep(
       } else {
         state.model = picked.value;
       }
+      return "next";
+    }
+    case "thinking": {
+      if (useClack) {
+        p.note(
+          [
+            "Thinking mode asks the model to reason more carefully before answering.",
+            "Recommended for better filtering and summaries. Uses more tokens/latency.",
+            "Default: ON, effort high.",
+          ].join("\n"),
+          "Thinking",
+        );
+      }
+      const on = await askConfirm(opts, {
+        message: "Enable thinking mode? (default: Yes)",
+        initialValue: state.thinkingMode,
+        allowBack: canBack,
+      });
+      if (on.nav !== "next") return on.nav;
+      state.thinkingMode = on.value;
+      if (!state.thinkingMode) {
+        // keep reasoningEffort in config for later; no need to ask
+        return "next";
+      }
+      const effort = await askSelect(opts, {
+        message: `Reasoning effort (default: ${state.reasoningEffort})`,
+        options: [
+          { value: "low", label: "low", hint: "faster, cheaper" },
+          { value: "medium", label: "medium" },
+          { value: "high", label: "high", hint: "recommended" },
+        ],
+        initialValue:
+          state.reasoningEffort === "low" ||
+          state.reasoningEffort === "medium" ||
+          state.reasoningEffort === "high"
+            ? state.reasoningEffort
+            : "high",
+        allowBack: true,
+      });
+      if (effort.nav !== "next") return effort.nav;
+      state.reasoningEffort = effort.value;
       return "next";
     }
     case "email": {
@@ -1111,6 +1159,7 @@ export function renderInitToml(input: {
   model: string;
   provider: string;
   thinkingMode: boolean;
+  reasoningEffort: string;
   categories: string[];
   timezone: string;
   summaryLanguage: string;
@@ -1156,8 +1205,10 @@ base_url = ${tomlString(input.baseUrl)}
 model = ${tomlString(input.model)}
 # Preset id (deepseek, openai, anthropic, zhipu, custom, ...)
 provider = ${tomlString(input.provider)}
+# Prefer true for better filter/summarize quality (more tokens/latency)
 thinking_mode = ${input.thinkingMode}
-reasoning_effort = ${tomlString(DEFAULT_SETTINGS.llm.reasoningEffort)}
+# Used when thinking_mode is true: low | medium | high
+reasoning_effort = ${tomlString(input.reasoningEffort)}
 
 [arxiv]
 # arXiv category ids, e.g. ["astro-ph"], ["cs.LG", "cs.AI"]

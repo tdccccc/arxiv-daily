@@ -10,7 +10,8 @@ describe("CLI init template", () => {
       baseUrl: "https://api.example.com/v1",
       model: "m1",
       provider: "openai",
-      thinkingMode: false,
+      thinkingMode: true,
+      reasoningEffort: "high",
       categories: ["cs.LG", "cs.AI"],
       timezone: "UTC",
       summaryLanguage: "en",
@@ -53,6 +54,8 @@ describe("CLI init template", () => {
       "sk-test-key",
       "y", // fetch models
       "1", // first remote model
+      "y", // thinking on
+      "3", // high effort (1 low 2 medium 3 high)
       "1", // email skip
       "1", // first category
       "UTC",
@@ -96,5 +99,7 @@ describe("CLI init template", () => {
       true,
     );
     expect(written[0]!.body).toContain("detail = false");
+    expect(written[0]!.body).toContain("thinking_mode = true");
+    expect(written[0]!.body).toContain('reasoning_effort = "high"');
   });
 });
