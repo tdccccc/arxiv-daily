@@ -230,7 +230,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     topicTag: "my-research",
     topicDescription:
       "Describe in natural language what papers belong in this topic (problems, methods, objects; what to exclude).",
-    topicDetail: true,
+    topicDetail: false,
     linkStyle: "wikilink",
     logLevel: "info",
     scheduleEnabled: false,
@@ -734,75 +734,35 @@ async function runStep(
       if (useClack) {
         p.note(
           [
-            "Recommended defaults (safe to keep):",
-            `  schedule.enabled = ${state.scheduleEnabled}`,
-            `  schedule.on = ${state.scheduleOn}  interval_hours = ${state.scheduleIntervalHours}`,
-            `  schedule.weekdays_only = ${state.scheduleWeekdaysOnly}`,
-            `  output.link_style = ${state.linkStyle}`,
-            `  advanced.log_level = ${state.logLevel}`,
-            `  topic detail notes eligible = ${state.topicDetail}`,
+            "Paper note = longer per-paper summary under papers/",
+            "(not the short structured entry inside the daily report).",
             "",
-            "You can change these later in config.toml.",
+            "By default this is OFF: the daily report always runs;",
+            "paper notes are only created when you enable them or run",
+            "arxiv-daily run --id …",
           ].join("\n"),
-          "Optional settings",
+          "Paper notes",
         );
       } else {
         writeLine(
           stdout,
-          "Optional settings — defaults are fine for most users.",
+          "Paper notes (longer per-paper summaries) default OFF.",
         );
       }
-      const keep = await askConfirm(opts, {
-        message: "Keep all recommended defaults above?",
-        initialValue: true,
-        allowBack: canBack,
-      });
-      if (keep.nav !== "next") return keep.nav;
-      if (keep.value) return "next";
-
       const detail = await askConfirm(opts, {
-        message: "Allow automatic longer paper notes for this topic? (default: Yes)",
-        initialValue: state.topicDetail,
-        allowBack: true,
+        message:
+          "Auto-generate paper notes for relevant papers? (default: No)",
+        initialValue: false,
+        allowBack: canBack,
       });
       if (detail.nav !== "next") return detail.nav;
       state.topicDetail = detail.value;
 
-      const link = await askSelect(opts, {
-        message: `Link style in reports (default: ${state.linkStyle})`,
-        options: [
-          { value: "wikilink", label: "wikilink", hint: "Obsidian [[links]]" },
-          { value: "relative", label: "relative", hint: "Markdown relative links" },
-        ],
-        initialValue: state.linkStyle,
-        allowBack: true,
-      });
-      if (link.nav !== "next") return link.nav;
-      state.linkStyle = link.value === "relative" ? "relative" : "wikilink";
-
-      const log = await askSelect(opts, {
-        message: `Log level (default: ${state.logLevel})`,
-        options: [
-          { value: "info", label: "info" },
-          { value: "debug", label: "debug" },
-          { value: "warn", label: "warn" },
-          { value: "error", label: "error" },
-        ],
-        initialValue: state.logLevel,
-        allowBack: true,
-      });
-      if (log.nav !== "next") return log.nav;
-      if (
-        log.value === "debug" ||
-        log.value === "info" ||
-        log.value === "warn" ||
-        log.value === "error"
-      ) {
-        state.logLevel = log.value;
-      }
+      // link_style + log_level: always built-in defaults (not asked)
 
       const schedEn = await askConfirm(opts, {
-        message: "Enable OS schedule install intent now? (default: No — run manually first)",
+        message:
+          "Prepare OS schedule (schedule.enabled)? (default: No — run manually first)",
         initialValue: state.scheduleEnabled,
         allowBack: true,
       });
@@ -1211,7 +1171,7 @@ timezone = ${tomlString(input.timezone)}
 name = ${tomlString(input.topic.name)}
 tag = ${tomlString(input.topic.tag)}
 description = ${tomlString(input.topic.description)}
-# true = this topic may get longer paper notes under papers/
+# true = auto-generate paper notes (longer per-paper summaries) for this topic
 detail = ${input.topic.detail}
 
 [output]
