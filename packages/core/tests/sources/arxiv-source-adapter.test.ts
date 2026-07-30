@@ -12,6 +12,7 @@ import type { SourcePaperMeta } from "../../src/sources";
 import { Logger } from "../../src/services/logger";
 import { markupParser } from "../markup-parser";
 import { parseRecent } from "../../src/pipeline/arxiv-parser";
+import { ArxivHttpError } from "../../src/pipeline/arxiv-fetcher";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const recentHtml = readFileSync(
@@ -186,6 +187,32 @@ describe("ArxivSourceAdapter", () => {
       expect(result.failureKind).toBe("failed_transient");
       expect(result.reason).toContain("all arXiv categories failed");
     }
+  });
+
+  it.each([
+    [429, "failed_transient", "rate-limiting"],
+    [503, "failed_transient", "temporarily unavailable"],
+    [404, "failed_permanent", "rejected the request"],
+  ])("classifies and formats typed HTTP %i failures", async (status, failureKind, text) => {
+    const fetcher = {
+      fetchRecent: vi.fn().mockRejectedValue(
+        new ArxivHttpError(status, "https://arxiv.org/list/astro-ph/recent?skip=0"),
+      ),
+      fetchMetadataByIds: vi.fn(),
+    };
+    const adapter = new ArxivSourceAdapter({
+      fetcher: fetcher as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["astro-ph"],
+    });
+
+    const result = await adapter.listForDate("2026-05-11");
+
+    expect(result).toMatchObject({ kind: "error", failureKind });
+    expect(result.kind === "error" ? result.reason : "").toContain(text);
+    expect(result.kind === "error" ? result.reason : "").not.toContain("skip=0");
   });
 
   it("rejects invalid externalId in fetchContent as unavailable", async () => {

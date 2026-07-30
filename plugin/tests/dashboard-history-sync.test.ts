@@ -238,6 +238,26 @@ describe("syncDashboardHistory", () => {
     });
   });
 
+  it("does not index a detail file whose frontmatter identity mismatches its managed path", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/papers/2606.00010.md": detailMarkdown(
+        "2606.99999",
+        "Mismatched Detail Paper",
+      ),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["arxiv:2606.00010"]).toBeUndefined();
+    expect(index.papers["arxiv:2606.99999"]).toBeUndefined();
+  });
+
   it("re-scans persisted mixed scientific reports without decoding or fallback misclassification", async () => {
     const structuredId = "2606.30001";
     const fallbackId = "2606.30002";

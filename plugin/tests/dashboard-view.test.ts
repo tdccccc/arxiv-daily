@@ -15,6 +15,7 @@ import {
   openDashboardView,
   openMarkdownFileOnce,
   paginateDashboardRows,
+  refreshOpenDashboardViews,
   shouldForceDashboardHistorySyncAfterDetailDeletion,
   shouldSkipDashboardHistorySync,
   trashFileWithUserPreference,
@@ -230,6 +231,38 @@ describe("executeObsidianCommand", () => {
   });
 });
 
+describe("dashboard manual summaries", () => {
+  it("refreshes every open dashboard view from the vault", async () => {
+    const refreshA = vi.fn().mockResolvedValue(undefined);
+    const refreshB = vi.fn().mockResolvedValue(undefined);
+    const plugin = {
+      app: {
+        workspace: {
+          getLeavesOfType: vi.fn(() => [
+            { view: { refreshFromVault: refreshA } },
+            { view: { refreshFromVault: refreshB } },
+          ]),
+        },
+      },
+    };
+
+    await refreshOpenDashboardViews(plugin as any);
+
+    expect(refreshA).toHaveBeenCalledTimes(1);
+    expect(refreshB).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens only successful results and forces history refresh before opening", () => {
+    const body = dashboardViewSource.match(
+      /private async summarizeDetailById\([\s\S]*?\n  private async openDailyReport/,
+    )?.[0];
+    expect(body).toContain('result.kind !== "done" && result.kind !== "already_exists"');
+    expect(body).toContain("this.lastSyncedHistoryPaths = null");
+    expect(body).toContain("await this.reloadIndex()");
+    expect(body).toContain("openMarkdownFileOnce");
+  });
+});
+
 describe("dashboard date-run controls", () => {
   it("runs the selected scheduler path and always refreshes the dashboard", () => {
     const body = dashboardViewSource.match(
@@ -435,6 +468,13 @@ describe("detail-summary deletion boundaries", () => {
 
     expect(isExpectedGeneratedDetailSummary(conflicting, "2606.12345")).toBe(false);
     expect(isExpectedGeneratedDetailSummary(invalidLegacy, "2606.12345")).toBe(false);
+  });
+
+  it("reuses the core classifier for deletion validation", () => {
+    const validatorBody = dashboardViewSource.match(
+      /export function isExpectedGeneratedDetailSummary\([\s\S]*?\n}/,
+    )?.[0];
+    expect(validatorBody).toContain("classifyPaperNote(markdown, canonicalArxivId)");
   });
 
   it("requires the indexed path to equal the expected configured path", () => {

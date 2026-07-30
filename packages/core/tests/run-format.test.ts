@@ -28,6 +28,11 @@ describe("run-format", () => {
     expect(describeManualResult({ kind: "no_html", reason: "404" })).toBe(
       "no full text: 404",
     );
+    expect(describeManualResult({
+      kind: "note_conflict",
+      path: "papers/2606.12345.md",
+      reason: "protected handwritten note",
+    })).toBe("note conflict at papers/2606.12345.md: protected handwritten note");
   });
 
   it("formats batched run results line by line", () => {

@@ -3,7 +3,12 @@ import type { Logger } from "../services/logger";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { formatPaperKey } from "../services/paper-key";
 import { modernArxivResources } from "../utils/arxiv";
-import type { ArxivFetcher } from "../pipeline/arxiv-fetcher";
+import {
+  formatArxivHttpError,
+  isArxivHttpError,
+  isRetryableArxivError,
+  type ArxivFetcher,
+} from "../pipeline/arxiv-fetcher";
 import {
   parseRecent,
   type DateBucket,
@@ -65,12 +70,13 @@ export class ArxivSourceAdapter implements SourceAdapter {
           : await fetcher.fetchRecent(category);
       } catch (e) {
         if (isCancellationError(e)) throw e;
+        const message = formatArxivHttpError(e);
         failures.push({
-          kind: "failed_transient",
-          reason: `fetch /recent failed for ${category}: ${(e as Error).message}`,
+          kind: classifyArxivSourceFailure(e),
+          reason: `fetch /recent failed for ${category}: ${message}`,
         });
         logger.warn(
-          `arxiv-source: fetch /recent failed for ${category}, continuing: ${(e as Error).message}`,
+          `arxiv-source: fetch /recent failed for ${category}, continuing: ${message}`,
         );
         continue;
       }
@@ -199,7 +205,7 @@ export class ArxivSourceAdapter implements SourceAdapter {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       logger.warn(
-        `arxiv-source: abstract enrichment failed, continuing with titles only: ${(e as Error).message}`,
+        `arxiv-source: abstract enrichment failed, continuing with titles only: ${formatArxivHttpError(e)}`,
       );
     }
   }
@@ -410,6 +416,11 @@ function missingRecentDateReason(
   }
   const have = buckets.map((b) => b.announceDate).join(",");
   return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
+}
+
+function classifyArxivSourceFailure(error: unknown): FailureKind {
+  if (!isArxivHttpError(error)) return "failed_transient";
+  return isRetryableArxivError(error) ? "failed_transient" : "failed_permanent";
 }
 
 function collapseFailureKind(

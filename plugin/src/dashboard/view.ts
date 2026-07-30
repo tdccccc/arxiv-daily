@@ -12,7 +12,7 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
-  looksLikeDetailSummary,
+  classifyPaperNote,
   modernArxivResources,
   normalizeArxivId,
   planDashboardAction,
@@ -306,24 +306,7 @@ export function isExpectedGeneratedDetailSummary(
   markdown: string,
   canonicalArxivId: string,
 ): boolean {
-  const expectedId = normalizeArxivId(canonicalArxivId);
-  if (!expectedId || !looksLikeDetailSummary(markdown)) return false;
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\s|$)/.exec(markdown)?.[1];
-  if (frontmatter == null) return false;
-  const frontmatterIds: string[] = [];
-  for (const line of frontmatter.split(/\r?\n/)) {
-    const item = /^(?:arxiv_id|arxiv):\s*(.*?)\s*$/.exec(line);
-    if (!item) continue;
-    const raw = (item[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim();
-    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(raw)) return false;
-    const normalized = normalizeArxivId(raw);
-    if (!normalized) return false;
-    frontmatterIds.push(normalized);
-  }
-  return (
-    frontmatterIds.length > 0 &&
-    frontmatterIds.every((arxivId) => arxivId === expectedId)
-  );
+  return classifyPaperNote(markdown, canonicalArxivId).kind === "verified_detail";
 }
 
 export function shouldForceDashboardHistorySyncAfterDetailDeletion(
@@ -396,6 +379,20 @@ export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   plugin.registerView(
     ARXIV_DAILY_DASHBOARD_VIEW,
     (leaf) => new ArxivDailyDashboardView(leaf, plugin),
+  );
+}
+
+export async function refreshOpenDashboardViews(
+  plugin: ArxivDailyPlugin,
+): Promise<void> {
+  const leaves = plugin.app.workspace.getLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW);
+  await Promise.all(
+    leaves.map(async (leaf) => {
+      const view = leaf.view as unknown as {
+        refreshFromVault?: () => Promise<void>;
+      };
+      await view.refreshFromVault?.();
+    }),
   );
 }
 
@@ -561,6 +558,11 @@ class ArxivDailyDashboardView extends ItemView {
     this.isOpen = false;
     this.clearSearchDebounce();
     this.contentEl.empty();
+  }
+
+  async refreshFromVault(): Promise<void> {
+    this.lastSyncedHistoryPaths = null;
+    await this.reloadIndex();
   }
 
   private async reloadIndex(): Promise<void> {
@@ -2514,6 +2516,7 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
     if (result.kind !== "done" && result.kind !== "already_exists") return;
+    this.lastSyncedHistoryPaths = null;
     await this.reloadIndex();
     await openMarkdownFileOnce(this.plugin.app, result.path);
   }

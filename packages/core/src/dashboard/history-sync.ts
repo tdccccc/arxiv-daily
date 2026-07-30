@@ -10,7 +10,7 @@ import {
   extractFallbackAbstracts,
   extractPaperSummaries,
 } from "../pipeline/daily-summary-parser";
-import { looksLikeDetailSummary } from "./detail-summary";
+import { classifyPaperNote } from "./paper-note-classifier";
 import { modernArxivResources } from "../utils/arxiv";
 
 export interface DashboardMarkdownFile {
@@ -141,12 +141,13 @@ async function collectPaperCandidates(
     try {
       const markdown = await deps.vault.adapter.read(path);
       const frontmatter = parseFrontmatter(markdown);
-      const arxivId =
+      const pathArxivId = normalizeArxivId(basenameWithoutExtension(path));
+      const frontmatterArxivId =
         normalizeArxivId(frontmatter.arxiv_id) ||
-        normalizeArxivId(frontmatter.arxiv) ||
-        normalizeArxivId(basenameWithoutExtension(path));
+        normalizeArxivId(frontmatter.arxiv);
+      const arxivId = pathArxivId || frontmatterArxivId;
       if (!arxivId) continue;
-      const detail = looksLikeDetailSummary(markdown);
+      const detail = classifyPaperNote(markdown, arxivId).kind === "verified_detail";
       const topic = topicFromPaper(frontmatter, deps.topics);
       const dailyReport = dailyReportPathFromLink(frontmatter.daily_report);
       const existingDailyReport =
