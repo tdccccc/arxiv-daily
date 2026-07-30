@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -23,14 +23,17 @@ for (const command of [
 
 const temp = await mkdtemp(resolve(tmpdir(), "arxiv-daily-smoke-"));
 try {
-  const badConfig = resolve(temp, "bad.json");
-  await writeFile(badConfig, "{not-json}\n");
-  const result = spawnSync(process.execPath, [cli, "run", "--date", "2026-07-15", "--config", badConfig], {
+  const configHome = resolve(temp, "config");
+  const badConfig = resolve(configHome, "arxiv-daily/config.toml");
+  await mkdir(resolve(configHome, "arxiv-daily"), { recursive: true });
+  await writeFile(badConfig, "{not-toml}\n");
+  const result = spawnSync(process.execPath, [cli, "run", "--date", "2026-07-15"], {
     cwd: temp,
     encoding: "utf8",
+    env: { ...process.env, XDG_CONFIG_HOME: configHome },
   });
   if (result.status !== 2 || !result.stderr.includes("failed to parse CLI config")) {
-    fail("CLI did not cross help and return exit 2 for controlled config error", result);
+    fail("CLI did not return exit 2 for a controlled fixed-path TOML config error", result);
   }
 } finally {
   await rm(temp, { recursive: true, force: true });
