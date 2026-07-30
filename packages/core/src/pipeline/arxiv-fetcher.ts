@@ -5,6 +5,7 @@ import { parseAtomPapers, type AtomPaperMeta } from "./atom-parser";
 import type { HttpClient, MarkupParser } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
 import { modernArxivResources } from "../utils/arxiv";
+import { isAtomPaperMeta, type AtomMetadataCache } from "./atom-metadata-cache";
 
 export interface ArxivFetcherOptions {
   category?: string;
@@ -13,15 +14,66 @@ export interface ArxivFetcherOptions {
   markupParser: MarkupParser;
   logger: Logger;
   requestDelayMs: number;
+  metadataCache?: AtomMetadataCache;
 }
 
-interface HttpStatusError extends Error {
-  status?: number;
-  headers?: Record<string, string>;
+const MIN_ARXIV_REQUEST_DELAY_MS = 3_000;
+// Keep server-directed waits bounded to the same practical retry horizon.
+const MAX_ARXIV_RETRY_AFTER_MS = 30 * 60 * 1000;
+const ARXIV_HTTP_ERROR_NAME = "ArxivHttpError";
+
+export class ArxivHttpError extends Error {
+  readonly status: number;
+  readonly url: string;
+  readonly headers: Record<string, string>;
+
+  constructor(status: number, url: string, headers: Record<string, string> = {}) {
+    super(`HTTP ${status}: ${url}`);
+    this.name = ARXIV_HTTP_ERROR_NAME;
+    this.status = status;
+    this.url = url;
+    this.headers = headers;
+  }
 }
 
-let sharedLastRequestAt = 0;
-let sharedDelayQueue: Promise<void> = Promise.resolve();
+export function isArxivHttpError(error: unknown): error is ArxivHttpError {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as Partial<ArxivHttpError>;
+  return (
+    candidate.name === ARXIV_HTTP_ERROR_NAME &&
+    typeof candidate.message === "string" &&
+    typeof candidate.status === "number" &&
+    Number.isInteger(candidate.status) &&
+    typeof candidate.url === "string" &&
+    isStringRecord(candidate.headers)
+  );
+}
+
+export function formatArxivHttpError(error: unknown): string {
+  if (!isArxivHttpError(error)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (error.status === 429) {
+    return "arXiv is rate-limiting requests (HTTP 429). Please wait and try again.";
+  }
+  if (error.status === 503) {
+    return "arXiv is temporarily unavailable (HTTP 503). Please try again later.";
+  }
+  if (error.status === 408) {
+    return "The arXiv request timed out (HTTP 408). Please try again.";
+  }
+  if (error.status >= 500) {
+    return `arXiv is temporarily unavailable (HTTP ${error.status}). Please try again later.`;
+  }
+  if (error.status >= 400) {
+    return `arXiv rejected the request (HTTP ${error.status}). Check the arXiv ID or request and try again.`;
+  }
+  return error.message;
+}
+
+let sharedLastAttemptStartedAt = Number.NEGATIVE_INFINITY;
+let sharedCooldownUntil = 0;
+let sharedAttemptQueue: Promise<void> = Promise.resolve();
 
 export class ArxivFetcher {
   constructor(private opts: ArxivFetcherOptions) {}
@@ -60,15 +112,33 @@ export class ArxivFetcher {
     ids: string[],
     signal?: AbortSignal,
   ): Promise<Map<string, AtomPaperMeta>> {
+    const canonicalIds = Array.from(new Set(ids.flatMap((id) => {
+      const canonical = modernArxivResources(id)?.id;
+      return canonical ? [canonical] : [];
+    })));
     const out = new Map<string, AtomPaperMeta>();
+    const misses: string[] = [];
+    for (const id of canonicalIds) {
+      throwIfCancelled(signal);
+      const cached = await this.opts.metadataCache?.get(id);
+      if (cached) out.set(id, cached);
+      else misses.push(id);
+    }
+
     const BATCH = 200;
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const batch = ids.slice(i, i + BATCH);
-      if (batch.length === 0) continue;
+    for (let i = 0; i < misses.length; i += BATCH) {
+      const batch = misses.slice(i, i + BATCH);
+      const requested = new Set(batch);
       const url = `https://export.arxiv.org/api/query?id_list=${batch.join(",")}&max_results=${batch.length}`;
       const xml = await this.fetchHtml(url, { allow404: false }, signal);
       for (const paper of parseAtomPapers(xml, this.opts.markupParser)) {
-        out.set(paper.id, paper);
+        if (!requested.has(paper.id)) continue;
+        const normalized = normalizeAtomPaperMeta(paper);
+        if (!normalized) continue;
+        out.set(normalized.id, normalized);
+        await this.opts.metadataCache?.set(normalized.id, normalized).catch((error) =>
+          this.opts.logger.warn(`Atom metadata cache write failed for ${normalized.id}`, error),
+        );
       }
     }
     return out;
@@ -135,13 +205,12 @@ export class ArxivFetcher {
 
   private async fetchHtml(
     url: string,
-    opts: { allow404: boolean },
+    _opts: { allow404: boolean },
     signal?: AbortSignal,
   ): Promise<string> {
-    await this.respectDelay(signal);
     this.opts.logger.debug(`fetchHtml: GET ${url}`);
     return retry(
-      async () => {
+      async () => this.coordinateAttempt(async () => {
         const res = await this.opts.http.request({
           url,
           method: "GET",
@@ -152,15 +221,12 @@ export class ArxivFetcher {
           this.opts.logger.debug(`fetchHtml: ${url} → ${res.status} (${(res.bodyText ?? "").length} bytes)`);
           return res.bodyText;
         }
-        if (opts.allow404 && res.status === 404) {
-          throw httpStatusError(res.status, url, res.headers);
-        }
-        throw httpStatusError(res.status, url, res.headers);
-      },
+        throw new ArxivHttpError(res.status, url, res.headers);
+      }, signal),
       {
         maxAttempts: 3,
         baseDelayMs: 2000,
-        shouldRetry: (err: any) => err?.status !== 404,
+        shouldRetry: isRetryableArxivError,
         delayMs: arxivRetryDelayMs,
         signal,
         onRetry: (err, attempt, wait) =>
@@ -173,13 +239,12 @@ export class ArxivFetcher {
 
   private async fetchBinary(
     url: string,
-    opts: { allow404?: boolean } = {},
+    _opts: { allow404?: boolean } = {},
     signal?: AbortSignal,
   ): Promise<ArrayBuffer> {
-    await this.respectDelay(signal);
     this.opts.logger.debug(`fetchBinary: GET ${url}`);
     return retry(
-      async () => {
+      async () => this.coordinateAttempt(async () => {
         const res = await this.opts.http.request({
           url,
           method: "GET",
@@ -188,18 +253,18 @@ export class ArxivFetcher {
           signal,
         });
         if (res.status < 200 || res.status >= 300) {
-          throw httpStatusError(res.status, url, res.headers);
+          throw new ArxivHttpError(res.status, url, res.headers);
         }
         if (!res.bodyBuffer) {
           throw new Error(`empty binary response: ${url}`);
         }
         this.opts.logger.debug(`fetchBinary: ${url} → ${res.status} (${res.bodyBuffer.byteLength} bytes)`);
         return res.bodyBuffer;
-      },
+      }, signal),
       {
         maxAttempts: 3,
         baseDelayMs: 2000,
-        shouldRetry: (err: any) => !(opts.allow404 && err?.status === 404),
+        shouldRetry: isRetryableArxivError,
         delayMs: arxivRetryDelayMs,
         signal,
         onRetry: (err, attempt, wait) =>
@@ -210,28 +275,72 @@ export class ArxivFetcher {
     );
   }
 
-  private async respectDelay(signal?: AbortSignal) {
-    const delayMs = Math.max(0, this.opts.requestDelayMs);
-    const next = sharedDelayQueue
+  private coordinateAttempt<T>(
+    attempt: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const configuredDelay = Number.isFinite(this.opts.requestDelayMs)
+      ? this.opts.requestDelayMs
+      : MIN_ARXIV_REQUEST_DELAY_MS;
+    const delayMs = Math.max(MIN_ARXIV_REQUEST_DELAY_MS, configuredDelay);
+    const coordinated = sharedAttemptQueue
       .catch(() => undefined)
       .then(async () => {
         throwIfCancelled(signal);
-        if (delayMs > 0) {
-          if (sharedLastRequestAt > Date.now()) sharedLastRequestAt = 0;
-          const elapsed = Math.max(0, Date.now() - sharedLastRequestAt);
-          const wait = delayMs - elapsed;
-          if (wait > 0) await abortableDelay(wait, signal);
-        }
+        const now = Date.now();
+        const spacingUntil = sharedLastAttemptStartedAt + delayMs;
+        const waitUntil = Math.max(spacingUntil, sharedCooldownUntil);
+        if (waitUntil > now) await abortableDelay(waitUntil - now, signal);
         throwIfCancelled(signal);
-        sharedLastRequestAt = Date.now();
+        sharedLastAttemptStartedAt = Date.now();
+        try {
+          return await attempt();
+        } catch (error) {
+          recordSharedCooldown(error);
+          throw error;
+        }
       });
-    sharedDelayQueue = next.catch(() => undefined);
-    await next;
+    sharedAttemptQueue = coordinated.then(
+      () => undefined,
+      () => undefined,
+    );
+    return abortablePromise(coordinated, signal);
   }
 
   private primaryCategory(): string {
     return this.opts.categories?.[0] ?? this.opts.category ?? "astro-ph";
   }
+}
+
+function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfCancelled(signal);
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      try {
+        throwIfCancelled(signal);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -259,15 +368,21 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function httpStatusError(
-  status: number,
-  url: string,
-  headers: Record<string, string>,
-): HttpStatusError {
-  const error = new Error(`HTTP ${status}: ${url}`) as HttpStatusError;
-  error.status = status;
-  error.headers = headers;
-  return error;
+export function isRetryableArxivError(error: unknown): boolean {
+  if (!isArxivHttpError(error)) return true;
+  return (
+    error.status === 408 ||
+    error.status === 429 ||
+    (error.status >= 500 && error.status <= 599)
+  );
+}
+
+function recordSharedCooldown(error: unknown): void {
+  if (!isArxivHttpError(error)) return;
+  if (error.status !== 429 && error.status !== 503) return;
+  const retryAfterMs = parseRetryAfterMs(error.headers);
+  if (retryAfterMs == null) return;
+  sharedCooldownUntil = Math.max(sharedCooldownUntil, Date.now() + retryAfterMs);
 }
 
 function arxivRetryDelayMs(
@@ -275,20 +390,28 @@ function arxivRetryDelayMs(
   _attempt: number,
   defaultWaitMs: number,
 ): number {
-  const status = (err as HttpStatusError | undefined)?.status;
-  const headers = (err as HttpStatusError | undefined)?.headers;
   const retryAfterMs =
-    status === 429 && headers ? parseRetryAfterMs(headers) : null;
-  return jitterDelayMs(retryAfterMs ?? defaultWaitMs);
+    isArxivHttpError(err) && (err.status === 429 || err.status === 503)
+      ? parseRetryAfterMs(err.headers)
+      : null;
+  return retryAfterMs == null
+    ? jitterDelayMs(defaultWaitMs)
+    : Math.max(retryAfterMs, jitterDelayMs(defaultWaitMs));
 }
 
 function parseRetryAfterMs(headers: Record<string, string>): number | null {
   const value = headerValue(headers, "retry-after")?.trim();
   if (!value) return null;
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return MAX_ARXIV_RETRY_AFTER_MS;
+    return Math.min(MAX_ARXIV_RETRY_AFTER_MS, seconds * 1000);
+  }
   const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return null;
-  return Math.max(0, timestamp - Date.now());
+  if (!Number.isFinite(timestamp)) return null;
+  const delayMs = timestamp - Date.now();
+  if (!Number.isFinite(delayMs)) return null;
+  return Math.min(MAX_ARXIV_RETRY_AFTER_MS, Math.max(0, delayMs));
 }
 
 function headerValue(
@@ -305,6 +428,37 @@ function headerValue(
 function jitterDelayMs(delayMs: number): number {
   const factor = 0.75 + Math.random() * 0.5;
   return Math.max(0, Math.round(delayMs * factor));
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every(
+      (entry) => typeof entry === "string",
+    )
+  );
+}
+
+function normalizeAtomPaperMeta(paper: AtomPaperMeta): AtomPaperMeta | null {
+  const primaryCategory = paper.primaryCategory || paper.categories[0] || "";
+  const normalized = {
+    ...paper,
+    primaryCategory,
+    categories: primaryCategory && !paper.categories.includes(primaryCategory)
+      ? [...paper.categories, primaryCategory]
+      : paper.categories,
+  };
+  return isAtomPaperMeta(normalized) ? normalized : null;
+}
+
+/** Reset shared request state between tests. Not intended for runtime use. */
+export async function resetArxivRequestCoordinatorForTests(): Promise<void> {
+  await sharedAttemptQueue.catch(() => undefined);
+  sharedLastAttemptStartedAt = Number.NEGATIVE_INFINITY;
+  sharedCooldownUntil = 0;
+  sharedAttemptQueue = Promise.resolve();
 }
 
 function requireArxivResources(input: string) {

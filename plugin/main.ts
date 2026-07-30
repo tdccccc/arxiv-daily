@@ -14,7 +14,7 @@ import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
 import { chooseModal } from "./src/services/modal";
 import { LlmClient } from "@arxiv-daily/core";
 import { ArxivFetcher } from "@arxiv-daily/core";
-import { HtmlCache } from "@arxiv-daily/core";
+import { AtomMetadataCache, HtmlCache } from "@arxiv-daily/core";
 import {
   cleanupSourceCache,
   PaperContentFetcher,
@@ -412,6 +412,11 @@ export default class ArxivDailyPlugin extends Plugin {
       markupParser: this.host.markupParser,
       logger: this.logger,
       requestDelayMs: this.settings.advanced.requestDelayMs,
+      metadataCache: new AtomMetadataCache({
+        rootDir: this.pluginCacheDir(),
+        expiryDays: this.settings.advanced.cacheExpiryDays,
+        storage: this.host.storage,
+      }),
     });
   }
 
@@ -524,14 +529,19 @@ export default class ArxivDailyPlugin extends Plugin {
       storage: this.host.storage,
     });
     const textRemoved = await cache.cleanupExpired();
+    const metadataRemoved = await new AtomMetadataCache({
+      rootDir: this.pluginCacheDir(),
+      expiryDays: this.settings.advanced.cacheExpiryDays,
+      storage: this.host.storage,
+    }).cleanupExpired();
     const sourceRemoved = await cleanupSourceCache({
       storage: this.host.storage,
       cacheDir: `${this.pluginDir()}/.cache/source`,
       expiryDays: this.settings.advanced.cacheExpiryDays,
     });
-    if (textRemoved || sourceRemoved) {
+    if (textRemoved || metadataRemoved || sourceRemoved) {
       this.logger.info(
-        `cache cleanup: removed ${textRemoved} html/abs files and ${sourceRemoved} source files`,
+        `cache cleanup: removed ${textRemoved} html/abs files, ${metadataRemoved} Atom metadata files, and ${sourceRemoved} source files`,
       );
     }
   }

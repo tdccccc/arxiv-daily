@@ -11,6 +11,13 @@ describe("cache cleanup startup gate", () => {
     );
   });
 
+  it("wires the persistent Atom metadata cache into fetchers and cleanup", () => {
+    expect(mainSource).toContain("metadataCache: new AtomMetadataCache({");
+    expect(mainSource).toContain("rootDir: this.pluginCacheDir(),");
+    expect(mainSource).toContain("const metadataRemoved = await new AtomMetadataCache({");
+    expect(mainSource).toContain("}).cleanupExpired();");
+  });
+
   it("gates startup cleanup before invoking the expensive scan", () => {
     expect(mainSource).toContain("let lastCacheCleanupDate: string | null = null;");
     expect(mainSource).toContain("this.cleanupCachesIfDue();");

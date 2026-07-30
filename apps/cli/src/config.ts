@@ -240,8 +240,17 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
       throw new CliConfigError(`invalid log_level: ${level}`);
     }
     base.advanced.logLevel = level;
-    if (typeof advanced.request_delay_ms === "number") {
-      base.advanced.requestDelayMs = advanced.request_delay_ms;
+    if (advanced.request_delay_ms !== undefined) {
+      if (
+        typeof advanced.request_delay_ms !== "number" ||
+        !Number.isFinite(advanced.request_delay_ms) ||
+        advanced.request_delay_ms < 0
+      ) {
+        throw new CliConfigError(
+          "invalid advanced.request_delay_ms: expected a non-negative finite number",
+        );
+      }
+      base.advanced.requestDelayMs = Math.max(3_000, advanced.request_delay_ms);
     }
     if (typeof advanced.cache_expiry_days === "number") {
       base.advanced.cacheExpiryDays = advanced.cache_expiry_days;
