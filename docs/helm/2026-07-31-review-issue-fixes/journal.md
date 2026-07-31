@@ -41,3 +41,15 @@
 - change: goal P3 → done, resolved section added
 - disposition: config.ts hard-coding balanced matches the schema; keep
 - next: P2 blocked on the two fix branches; nothing else pending
+
+## 2026-07-31 — note (P2 unblocked; all merge work done)
+
+- evidence: fix/arxiv-failure-recovery reviewed (helm 2026-07-30 goal done,
+  journal verification reproduced: 1139 tests + typecheck/lint/boundaries
+  green), committed as 1657069, merged into main be4c705; request-resilience
+  and cli-smoke-build contained the same commits and merged implicitly
+- change: P2 → pending (gate cleared); PR #3 merged 1d24600, PR #2 merged 52c74ae
+- disposition: keep — remaining unmerged branches (personalized-literature-agent,
+  ui-polish, rust-standalone) are unrelated/stale, left untouched
+- next: start P2 (split dashboard view.ts; settings getSettingDefinitions
+  migration) when the user confirms
