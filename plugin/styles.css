@@ -198,6 +198,27 @@
   max-width: 100%;
 }
 
+.arxiv-daily-settings__llm-url-control {
+  flex-wrap: wrap;
+}
+
+.arxiv-daily-settings__llm-url-input {
+  box-sizing: border-box;
+  width: 380px;
+  max-width: 100%;
+}
+
+.arxiv-daily-settings__reveal-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arxiv-daily-settings__reveal-key svg {
+  width: 16px;
+  height: 16px;
+}
+
 .arxiv-daily-settings__llm-http-warning {
   display: none;
   margin: 0 0 0.75em 0;
@@ -209,6 +230,18 @@
 }
 
 .arxiv-daily-settings__llm-http-warning.is-visible {
+  display: block;
+}
+
+.arxiv-daily-settings__llm-inline-warning {
+  display: none;
+  flex: 1 1 100%;
+  max-width: 380px;
+  color: var(--text-warning, var(--text-accent));
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-settings__llm-inline-warning.is-visible {
   display: block;
 }
 
@@ -375,11 +408,17 @@
 
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-form {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  column-gap: 1em;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75em 1em;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-form[hidden],
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-form.is-collapsed {
+  display: none;
 }
 
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-row {
+  min-width: 0;
   margin-bottom: 0;
 }
 
@@ -397,6 +436,19 @@
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
   justify-content: flex-end;
   gap: 1em;
+  padding-top: 0.15em;
+}
+
+@media (max-width: 600px) {
+  .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .arxiv-daily-settings__topic-host
+    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+  .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
+    grid-column: 1;
+  }
 }
 
 .arxiv-daily-setup {

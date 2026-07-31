@@ -76,9 +76,13 @@ describe("buildSettingDefinitions structure", () => {
   function makeFullHost() {
     return {
       ...makeHost(),
+      showSetupGuide: true,
       renderSetupGuideRow: () => {},
+      renderLlmBaseUrlRow: () => {},
+      renderApiKeyRow: () => {},
+      renderModelRow: () => {},
+      renderReasoningEffortRow: () => {},
       renderCategoryRow: () => {},
-      renderQuickStartRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},
       addCategory: () => {},
@@ -103,8 +107,33 @@ describe("buildSettingDefinitions structure", () => {
     expect(items.length).toBeGreaterThanOrEqual(4);
     const groups = items.filter((item) => item.type === "group");
     expect(groups.map((g) => g.heading)).toEqual(
-      expect.arrayContaining(["AI model", "Output & schedule", "Advanced", "Help & feedback"]),
+      expect.arrayContaining(["LLM", "Output & schedule", "Advanced", "Help & feedback"]),
     );
+  });
+
+  it("orders the compact LLM rows and removes obsolete controls", () => {
+    const items = buildSettingDefinitions(makeFullHost());
+    const llm = items.find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "LLM",
+    );
+    expect(llm?.items.map((item) => item.name)).toEqual([
+      "API base URL",
+      "API key",
+      "Model",
+      "Reasoning effort",
+    ]);
+    expect(llm?.items.map((item) => item.name)).not.toContain("Thinking mode");
+    expect(items.some((item) => item.name === "Quick start")).toBe(false);
+  });
+
+  it("only includes Getting started while setup is incomplete", () => {
+    const host = makeFullHost();
+    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
+      .toBe(true);
+    host.showSetupGuide = false;
+    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
+      .toBe(false);
   });
 
   it("resolves every declarative control key through readSettingValue", () => {
@@ -162,8 +191,7 @@ describe("buildSettingDefinitions structure", () => {
       .filter((item) => item.type === "list")
       .find((list) => list.heading === "arXiv categories")?.items
       .map((item) => item.name);
-    expect(categoryNames).toContain("Category 1");
-    expect(categoryNames).toContain("Category 2");
+    expect(categoryNames).toEqual(["1", "2"]);
     const topicNames = items
       .filter((item) => item.type === "list")
       .find((list) => list.heading === "Research topics")?.items

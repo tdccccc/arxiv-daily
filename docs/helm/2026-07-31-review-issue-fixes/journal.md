@@ -166,3 +166,24 @@
   warnings are sentence-case copies of existing imperative copy
 - next: T6 wire tab.ts (getSettingDefinitions + getControlValue +
   setControlValue overrides) + final structure tests + verification
+
+## 2026-07-31 — note (P2b manual-test UI follow-up)
+
+- evidence: 1.13+ manual testing found completed onboarding and Quick start
+  redundant, LLM controls crowded, category rows noisy, and topic cards
+  unable to collapse because the scoped grid rule overrode the collapsed
+  display rule; list description pseudo-items also offset framework reorder /
+  delete indices
+- change: L1 adjustment within P2b — completed setup and Quick start removed
+  only from declarative definitions; LLM reordered as URL / key / model /
+  reasoning with a masked revealable blur-or-Enter key input and None folded
+  into reasoning; categories use numbered fixed dropdowns; topic copy and
+  spacing reduced, responsive grid added, collapse precedence fixed; new
+  installs now default reasoning effort to medium
+- disposition: <1.13 display() remains unchanged; existing saved reasoning
+  effort is retained; existing non-preset category values remain selectable
+  until changed; pipeline rendering code is untouched
+- validation: plugin typecheck green; plugin 278 tests green; lint 0 errors /
+  52 warnings; boundaries OK; production build OK
+- next: copy manifest/main/styles to the test vault and wait for another
+  1.13+ manual pass before push / PR

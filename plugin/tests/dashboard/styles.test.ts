@@ -11,6 +11,9 @@ describe("dashboard and settings styles", () => {
       /\.arxiv-daily-settings__llm-input\s*\{[^}]*width:\s*260px;/s,
     );
     expect(styles).toMatch(
+      /\.arxiv-daily-settings__llm-url-input\s*\{[^}]*width:\s*380px;/s,
+    );
+    expect(styles).toMatch(
       /\.arxiv-daily-settings__model-select\s*\{[^}]*min-width:\s*160px;/s,
     );
   });
@@ -45,6 +48,14 @@ describe("dashboard and settings styles", () => {
     expect(styles).toMatch(
       /\.arxiv-daily-settings__topic-title\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*text-align:\s*left;/s,
     );
+  });
+
+  it("keeps declarative topic forms collapsible and responsive", () => {
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-form\[hidden\],[\s\S]*?display:\s*none;/,
+    );
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)");
+    expect(styles).toContain("@media (max-width: 600px)");
   });
 
   it("does not render a custom calendar hover tooltip from aria-label", () => {

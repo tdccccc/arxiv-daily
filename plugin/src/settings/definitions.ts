@@ -113,11 +113,13 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 /** Minimal host surface buildSettingDefinitions needs (the setting tab fits). */
 export interface SettingDefinitionsHost {
   plugin: ArxivDailyPlugin;
+  renderLlmBaseUrlRow?: (setting: Setting) => void;
   renderApiKeyRow?: (setting: Setting) => void;
   renderModelRow?: (setting: Setting) => void;
+  renderReasoningEffortRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
+  showSetupGuide?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
-  renderQuickStartRow?: (setting: Setting) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
   renderTimezoneRow?: (setting: Setting) => void;
   addCategory?: () => void;
@@ -163,7 +165,7 @@ export function buildSettingDefinitions(
   const topics = plugin.settings.arxiv.topics;
   const hostedMode = plugin.settings.email.mode === "hosted";
   return [
-    ...(host.renderSetupGuideRow
+    ...(host.renderSetupGuideRow && host.showSetupGuide
       ? [{
           name: "Getting started",
           render: (setting: Setting) => host.renderSetupGuideRow?.(setting),
@@ -181,69 +183,47 @@ export function buildSettingDefinitions(
       : []),
     {
       type: "group",
-      heading: "AI model",
+      heading: "LLM",
       items: [
+        ...(host.renderLlmBaseUrlRow
+          ? [{
+              name: "API base URL",
+              desc: "Where chat requests are sent.",
+              render: (setting: Setting) => host.renderLlmBaseUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
         ...(host.renderApiKeyRow
           ? [{
               name: "API key",
-              desc: "Saved only on this device. After saving, the key is hidden.",
+              desc: "Saved only on this device.",
               render: (setting: Setting) => host.renderApiKeyRow?.(setting),
             } satisfies SettingDefinitionItem]
           : []),
         ...(host.renderModelRow
           ? [{
               name: "Model",
-              desc: "Choose a model, or click Get models to load the list from your provider.",
+              desc: "Choose a model or load the list from your provider.",
               render: (setting: Setting) => host.renderModelRow?.(setting),
             } satisfies SettingDefinitionItem]
           : []),
-        {
-          name: "API base URL",
-          desc: "Where chat requests are sent. Default is DeepSeek; change only if you use another provider.",
-          control: {
-            type: "text",
-            key: SETTING_KEYS.llm.baseUrl,
-            placeholder: "https://api.deepseek.com/v1",
-          },
-        },
-        {
-          name: "Thinking mode",
-          desc: "Let the model spend extra effort on harder questions when the provider supports it.",
-          control: {
-            type: "toggle",
-            key: SETTING_KEYS.llm.thinkingMode,
-          },
-        },
-        {
-          name: "Reasoning effort",
-          desc: "How hard the model tries when thinking mode is on. Higher may be slower and cost more.",
-          control: {
-            type: "dropdown",
-            key: SETTING_KEYS.llm.reasoningEffort,
-            defaultValue: "medium",
-            options: {
-              low: "low",
-              medium: "medium",
-              high: "high",
-            },
-          },
-        },
+        ...(host.renderReasoningEffortRow
+          ? [{
+              name: "Reasoning effort",
+              desc: "Higher levels may be slower and cost more.",
+              render: (setting: Setting) =>
+                host.renderReasoningEffortRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
       ],
     },
     {
       type: "list",
       heading: "arXiv categories",
       emptyState: "No categories yet — use Add category to add one.",
-      items: [
-        {
-          name: "",
-          desc: "Which arXiv subject areas to watch. You can add several; the same paper is only kept once.",
-        } satisfies SettingDefinitionItem,
-        ...categories.map((category, index) => ({
-          name: `Category ${index + 1}`,
-          render: (setting: Setting) => host.renderCategoryRow?.(setting, index),
-        })),
-      ],
+      items: categories.map((_category, index) => ({
+        name: String(index + 1),
+        render: (setting: Setting) => host.renderCategoryRow?.(setting, index),
+      })),
       addItem: {
         name: "Add category",
         action: () => void host.addCategory?.(),
@@ -252,28 +232,15 @@ export function buildSettingDefinitions(
       onReorder: (oldIndex, newIndex) =>
         void host.reorderCategories?.(oldIndex, newIndex),
     },
-    ...(host.renderQuickStartRow
-      ? [{
-          name: "Quick start",
-          desc: "Load a preset bundle of topics or add one manually.",
-          render: (setting: Setting) => host.renderQuickStartRow?.(setting),
-        } satisfies SettingDefinitionItem]
-      : []),
     {
       type: "list",
       heading: "Research topics",
       emptyState:
-        "No topics yet. Pick a template above or click Add topic to define what to track. Daily reports need at least one topic before AI runs.",
-      items: [
-        {
-          name: "",
-          desc: "Each topic becomes one section in the daily report.",
-        } satisfies SettingDefinitionItem,
-        ...topics.map((topic, index) => ({
-          name: topic.name.trim() || "(unnamed)",
-          render: (setting: Setting) => host.renderTopicRow?.(setting, index),
-        })),
-      ],
+        "No topics yet. Add one to define what to track.",
+      items: topics.map((topic, index) => ({
+        name: topic.name.trim() || "(unnamed)",
+        render: (setting: Setting) => host.renderTopicRow?.(setting, index),
+      })),
       addItem: {
         name: "Add topic",
         action: () => void host.addTopic?.(),

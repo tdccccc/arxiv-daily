@@ -8,7 +8,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-v4-pro",
     thinkingMode: true,
-    reasoningEffort: "high",
+    reasoningEffort: "medium",
   },
   arxiv: {
     category: "astro-ph",

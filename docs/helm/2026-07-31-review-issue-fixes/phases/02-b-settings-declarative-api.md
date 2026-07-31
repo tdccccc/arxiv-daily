@@ -55,6 +55,10 @@ existing helper functions already exported from tab.ts. `tab.ts` overrides
       setScheduleEnabled so validation + modal flow survive
 - [x] T6: wire tab.ts (three overrides) + structure tests (every key maps,
       key items present) + full verification
+- [x] T7: manual-test UI follow-up (1.13+ only) — hide completed setup and
+      Quick start, compact/reorder LLM with masked revealable API key and
+      None-integrated reasoning, fixed category dropdowns, and concise
+      collapsible topic cards; new-install reasoning default is medium
 
 ## Verification
 

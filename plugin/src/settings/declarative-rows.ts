@@ -1,5 +1,6 @@
 import {
   Notice,
+  setIcon,
   ToggleComponent,
   type Setting,
 } from "obsidian";
@@ -7,12 +8,13 @@ import type { ArxivDailySettingTab } from "./tab";
 import {
   API_KEY_CONFIGURED_SENTINEL,
   addCategoryOptions,
+  llmHttpWarning,
   modelFetchNoticeMessage,
   persistApiKeyChange,
   renderRunWindowTimeSelect,
   TIMEZONE_OPTIONS,
 } from "./tab";
-import { arxivCategories, LlmClient, TOPIC_TEMPLATES } from "@arxiv-daily/core";
+import { arxivCategories, LlmClient } from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -37,96 +39,134 @@ function clearSettingEl(setting: Setting, ...classes: string[]): void {
  * Lives in its own module (not definitions.ts) so the shared sentinel
  * state machines can reach tab internals via the tab instance.
  */
+export function renderLlmBaseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  setting.controlEl.addClass("arxiv-daily-settings__llm-url-control");
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-url-input",
+    type: "url",
+    attr: { placeholder: "https://api.deepseek.com/v1" },
+  });
+  input.value = tab.plugin.settings.llm.baseUrl;
+  const warningEl = setting.controlEl.createDiv({
+    cls: "arxiv-daily-settings__llm-inline-warning",
+  });
+  const refreshWarning = () => {
+    const warning = llmHttpWarning(input.value);
+    warningEl.empty();
+    warningEl.toggleClass("is-visible", Boolean(warning));
+    if (warning) warningEl.setText(warning.message);
+  };
+  refreshWarning();
+  input.addEventListener("input", refreshWarning);
+  input.addEventListener("change", () => {
+    tab.runAction("save API base URL", async () => {
+      tab.plugin.settings.llm.baseUrl = input.value.trim();
+      await tab.plugin.saveSettings();
+      tab.refreshDeclarativeSetupGuide();
+    });
+  });
+}
+
 export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  const configured = Boolean(tab.plugin.settings.llm.apiKey.trim());
-  let editing = !configured;
-  let draft = "";
   const input = setting.controlEl.createEl("input", {
     cls: "arxiv-daily-settings__llm-input",
-    type: editing ? "password" : "text",
-    attr: { placeholder: "Enter API key" },
+    type: "password",
+    attr: {
+      placeholder: "Enter API key",
+      autocomplete: "off",
+      "aria-label": "LLM API key",
+    },
   });
-  input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
-  input.readOnly = !editing;
+  input.value = tab.plugin.settings.llm.apiKey;
 
-  const replace = setting.controlEl.createEl("button", {
-    text: configured ? "Replace" : "Save",
-    attr: { type: "button" },
+  const reveal = setting.controlEl.createEl("button", {
+    cls: "arxiv-daily-settings__reveal-key",
+    attr: {
+      type: "button",
+      "aria-label": "Show API key",
+      title: "Show API key",
+    },
   });
-  const cancel = setting.controlEl.createEl("button", {
-    text: "Cancel",
-    attr: { type: "button" },
-  });
-  cancel.hidden = !configured;
-  const clear = setting.controlEl.createEl("button", {
-    text: "Clear",
-    attr: { type: "button" },
-  });
-  clear.hidden = !configured;
+  setIcon(reveal, "eye");
 
-  const enterEdit = () => {
-    editing = true;
-    draft = "";
-    input.type = "password";
-    input.readOnly = false;
-    input.value = "";
-    replace.textContent = "Save";
-    cancel.hidden = false;
-    input.focus();
+  const setRevealed = (revealed: boolean) => {
+    input.type = revealed ? "text" : "password";
+    reveal.setAttribute("aria-label", revealed ? "Hide API key" : "Show API key");
+    reveal.title = revealed ? "Hide API key" : "Show API key";
+    reveal.empty();
+    setIcon(reveal, revealed ? "eye-off" : "eye");
   };
-  const reset = () => {
-    editing = false;
-    draft = "";
-    input.type = "text";
-    input.readOnly = true;
-    input.value = API_KEY_CONFIGURED_SENTINEL;
-    replace.textContent = "Replace";
-    cancel.hidden = true;
-  };
-  input.addEventListener("input", () => {
-    if (editing) draft = input.value;
-  });
-  replace.addEventListener("click", () => {
-    if (!editing) {
-      enterEdit();
-      return;
-    }
-    const next = draft.trim();
-    if (!next) return;
-    tab.runAction("save API key", async () => {
+  reveal.addEventListener("pointerdown", (event) => event.preventDefault());
+  reveal.addEventListener("click", () => setRevealed(input.type === "password"));
+
+  let savedValue = input.value;
+  let saving = false;
+  const save = async () => {
+    const next = input.value.trim();
+    if (saving || next === savedValue) return;
+    saving = true;
+    input.disabled = true;
+    reveal.disabled = true;
+    try {
       await persistApiKeyChange(
         tab.plugin.settings,
         tab.plugin.logger,
         () => tab.plugin.saveSettings(),
         next,
       );
-      tab.refreshSetupGuide();
-      reset();
-      clear.hidden = false;
-    });
-  });
-  cancel.addEventListener("click", () => {
-    if (configured || tab.plugin.settings.llm.apiKey.trim()) reset();
-    else {
-      draft = "";
-      input.value = "";
+      savedValue = next;
+      input.value = next;
+      tab.refreshDeclarativeSetupGuide();
+    } catch (error) {
+      input.value = savedValue;
+      throw error;
+    } finally {
+      saving = false;
+      input.disabled = false;
+      reveal.disabled = false;
     }
+  };
+  input.addEventListener("blur", () => tab.runAction("save API key", save));
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    input.blur();
   });
-  clear.addEventListener("click", () => {
-    tab.runAction("clear API key", async () => {
-      const confirmed = await tab.confirmReplace(
-        "Clear the saved API key? AI features will stop until you save a new key.",
-        "Clear",
-      );
-      if (!confirmed) return;
-      await persistApiKeyChange(
-        tab.plugin.settings,
-        tab.plugin.logger,
-        () => tab.plugin.saveSettings(),
-        "",
-      );
-      tab.refreshSetupGuide();
+}
+
+export function renderReasoningEffortRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  const options = [
+    ["none", "None"],
+    ["low", "Low"],
+    ["medium", "Medium"],
+    ["high", "High"],
+  ] as const;
+  for (const [value, label] of options) {
+    select.createEl("option", { value, text: label });
+  }
+  select.value = tab.plugin.settings.llm.thinkingMode
+    ? tab.plugin.settings.llm.reasoningEffort
+    : "none";
+  if (!options.some(([value]) => value === select.value)) select.value = "medium";
+  select.addEventListener("change", () => {
+    tab.runAction("save reasoning effort", async () => {
+      if (select.value === "none") {
+        tab.plugin.settings.llm.thinkingMode = false;
+      } else {
+        tab.plugin.settings.llm.thinkingMode = true;
+        tab.plugin.settings.llm.reasoningEffort = select.value;
+      }
+      await tab.plugin.saveSettings();
     });
   });
 }
@@ -143,7 +183,7 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
     void (async () => {
       tab.plugin.settings.llm.model = select.value;
       await tab.plugin.saveSettings();
-      tab.refreshSetupGuide();
+      tab.refreshDeclarativeSetupGuide();
     })();
   });
 
@@ -207,46 +247,6 @@ export function renderCategoryRow(
     void tab.runAction("save category", async () => {
       await tab.setArxivCategories(next);
       tab.refreshSettings();
-    });
-  });
-  const input = setting.controlEl.createEl("input", {
-    type: "text",
-    placeholder: "Or enter custom category",
-  });
-  input.addEventListener("input", () => {
-    if (input.value.trim()) {
-      const next = [...categories];
-      next[index] = input.value.trim();
-      void tab.runAction("save category", async () => {
-        await tab.setArxivCategories(next);
-        tab.refreshSettings();
-      });
-    }
-  });
-}
-
-/** Quick-start template loader (topics section, above the topic list). */
-export function renderQuickStartRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  prepareRow(setting);
-  const select = setting.controlEl.createEl("select");
-  const placeholder = select.createEl("option");
-  placeholder.value = "";
-  placeholder.textContent = "Load template…";
-  for (const tpl of TOPIC_TEMPLATES) {
-    const option = select.createEl("option");
-    option.value = tpl.id;
-    option.textContent = tpl.name;
-  }
-  select.value = "";
-  select.addEventListener("change", () => {
-    if (!select.value) return;
-    const id = select.value;
-    select.value = "";
-    void tab.runAction("apply quick start template", async () => {
-      await tab.applyTopicTemplate(id);
     });
   });
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
@@ -9,6 +9,52 @@ import {
   readSettingValue,
   SETTING_KEYS,
 } from "../src/settings/definitions";
+import {
+  renderApiKeyRow,
+  renderCategoryRow,
+  renderReasoningEffortRow,
+} from "../src/settings/declarative-rows";
+
+beforeAll(() => {
+  type CreateOptions = {
+    cls?: string;
+    text?: string;
+    type?: string;
+    value?: string;
+    attr?: Record<string, string>;
+  };
+  const proto = HTMLElement.prototype as HTMLElement & {
+    empty?: () => void;
+    createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
+  };
+  proto.empty ??= function () { this.replaceChildren(); };
+  proto.createEl ??= function (tag, options = {}) {
+    const element = document.createElement(tag);
+    if (options.cls) element.className = options.cls;
+    if (options.text) element.textContent = options.text;
+    if (options.type) element.setAttribute("type", options.type);
+    if (options.value !== undefined) {
+      (element as HTMLInputElement | HTMLOptionElement).value = options.value;
+    }
+    for (const [key, value] of Object.entries(options.attr ?? {})) {
+      element.setAttribute(key, value);
+    }
+    this.appendChild(element);
+    return element;
+  };
+});
+
+function renderSetting() {
+  const settingEl = document.createElement("div") as HTMLElement & {
+    createEl: typeof HTMLElement.prototype.createEl;
+  };
+  const controlEl = document.createElement("div") as HTMLElement & {
+    createEl: typeof HTMLElement.prototype.createEl;
+    empty: typeof HTMLElement.prototype.empty;
+  };
+  settingEl.appendChild(controlEl);
+  return { settingEl, controlEl };
+}
 
 /** Tab with a mocked plugin whose settings persist through saveSettings. */
 function makeTab() {
@@ -19,6 +65,8 @@ function makeTab() {
     saveSettings,
     manifest: { version: "0.0.0-test" },
     app: {},
+    stateStore: { snapshot: () => ({}) },
+    logger: { setSensitiveValues: vi.fn() },
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   return { tab, plugin, settings, saveSettings };
@@ -43,7 +91,7 @@ describe("wired getSettingDefinitions", () => {
     const groups = items.filter((item) => item.type === "group");
     expect(groups.map((g) => g.heading)).toEqual(
       expect.arrayContaining([
-        "AI model",
+        "LLM",
         "Output & schedule",
         "Email delivery",
         "Advanced",
@@ -90,7 +138,6 @@ describe("wired getSettingDefinitions", () => {
       expect.arrayContaining([
         "Getting started",
         "Enable · Paused",
-        "Quick start",
         "Timezone",
         "Run window",
         "Check every (minutes)",
@@ -122,6 +169,65 @@ describe("wired getSettingDefinitions", () => {
   });
 });
 
+describe("declarative LLM and category rows", () => {
+  it("saves and clears the API key on blur and toggles visibility", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    vi.spyOn(tab, "refreshDeclarativeSetupGuide").mockImplementation(() => {});
+    const setting = renderSetting();
+    renderApiKeyRow(tab, setting as never);
+
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const reveal = setting.controlEl.querySelector("button") as HTMLButtonElement;
+    expect(input.type).toBe("password");
+    expect(setting.controlEl.textContent).not.toContain("Replace");
+    expect(setting.controlEl.textContent).not.toContain("Clear");
+
+    input.value = "sk-secret";
+    input.dispatchEvent(new Event("blur"));
+    await vi.waitFor(() => {
+      expect(settings.llm.apiKey).toBe("sk-secret");
+      expect(saveSettings).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+
+    reveal.click();
+    expect(input.type).toBe("text");
+    expect(reveal.getAttribute("aria-label")).toBe("Hide API key");
+
+    input.value = "";
+    input.dispatchEvent(new Event("blur"));
+    await vi.waitFor(() => expect(settings.llm.apiKey).toBe(""));
+    expect(saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps None and Medium to thinking mode plus effort", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    const setting = renderSetting();
+    renderReasoningEffortRow(tab, setting as never);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+
+    select.value = "none";
+    select.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.llm.thinkingMode).toBe(false));
+
+    select.value = "medium";
+    select.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => {
+      expect(settings.llm.thinkingMode).toBe(true);
+      expect(settings.llm.reasoningEffort).toBe("medium");
+    });
+    expect(saveSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders each category as a fixed dropdown without custom input", () => {
+    const { tab } = makeTab();
+    const setting = renderSetting();
+    renderCategoryRow(tab, setting as never, 0);
+    expect(setting.controlEl.querySelector("select")).not.toBeNull();
+    expect(setting.controlEl.querySelector("input")).toBeNull();
+  });
+});
+
 describe("wired getControlValue", () => {
   it("resolves every registered key against the nested settings", () => {
     const { tab } = makeTab();
@@ -149,9 +255,13 @@ describe("wired getControlValue", () => {
     const { tab, plugin } = makeTab();
     const hostItems = buildSettingDefinitions({
       plugin,
+      showSetupGuide: true,
       renderSetupGuideRow: () => {},
+      renderLlmBaseUrlRow: () => {},
+      renderApiKeyRow: () => {},
+      renderModelRow: () => {},
+      renderReasoningEffortRow: () => {},
       renderCategoryRow: () => {},
-      renderQuickStartRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},
       addCategory: () => {},

@@ -149,18 +149,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   override getSettingDefinitions(): SettingDefinitionItem[] {
     return buildSettingDefinitions({
       plugin: this.plugin,
+      showSetupGuide: this.shouldShowSetupGuide(),
       renderSetupGuideRow: (setting) =>
         declarativeRows.renderSetupGuideRow(this, setting),
       renderScheduleEnabledRow: (setting) =>
         declarativeRows.renderScheduleEnabledRow(this, setting),
+      renderLlmBaseUrlRow: (setting) =>
+        declarativeRows.renderLlmBaseUrlRow(this, setting),
       renderApiKeyRow: (setting) =>
         declarativeRows.renderApiKeyRow(this, setting),
       renderModelRow: (setting) =>
         declarativeRows.renderModelRow(this, setting),
+      renderReasoningEffortRow: (setting) =>
+        declarativeRows.renderReasoningEffortRow(this, setting),
       renderCategoryRow: (setting, index) =>
         declarativeRows.renderCategoryRow(this, setting, index),
-      renderQuickStartRow: (setting) =>
-        declarativeRows.renderQuickStartRow(this, setting),
       renderTopicRow: (setting, index) =>
         declarativeRows.renderTopicRow(this, setting, index),
       renderTimezoneRow: (setting) =>
@@ -1332,7 +1335,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (guide) containerEl.appendChild(guide);
   }
 
+  public shouldShowSetupGuide(): boolean {
+    return shouldRenderSetupGuide(
+      getSetupStatus(
+        this.plugin.settings,
+        this.plugin.stateStore.snapshot(),
+      ),
+    );
+  }
+
+  public refreshDeclarativeSetupGuide(): void {
+    this.refreshSettings();
+  }
+
   public refreshSetupGuide(): void {
+    if (requireApiVersion("1.13.0")) {
+      this.refreshSettings();
+      return;
+    }
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
     const next = this.createSetupGuide();
     if (current instanceof HTMLElement) {
@@ -1562,10 +1582,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       setting.settingEl,
       this.plugin.settings.arxiv.topics,
       index,
+      true,
     );
   }
 
-  private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
+  private renderTopicCard(
+    container: HTMLElement,
+    topics: Topic[],
+    index: number,
+    compact = false,
+  ): void {
     const topic = topics[index];
     if (!topic) return;
     const isExpanded = this.expandedTopics.has(topic.id);
@@ -1634,14 +1660,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Name",
       attr: { for: nameId },
     });
-    this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
+    if (!compact) {
+      this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
+    }
     const nameInput = nameRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-name-input",
       type: "text",
-      attr: { id: nameId, "aria-describedby": nameHintId },
+      attr: compact
+        ? { id: nameId }
+        : { id: nameId, "aria-describedby": nameHintId },
     });
     nameInput.value = topic.name;
-    nameInput.placeholder = "E.g. Photometric redshift";
+    nameInput.placeholder = "Topic name";
 
     // Tag row
     const tagRow = form.createDiv({
@@ -1654,20 +1684,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Tag",
       attr: { for: tagId },
     });
-    this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
+    if (!compact) {
+      this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
+    }
     const tagInput = tagRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-tag-input",
       type: "text",
-      attr: { id: tagId, "aria-describedby": tagHintId },
+      attr: compact
+        ? { id: tagId }
+        : { id: tagId, "aria-describedby": tagHintId },
     });
     tagInput.value = topic.tag;
-    tagInput.placeholder = "Kebab-case-slug";
-    const autoBadge = tagRow.createSpan({
-      cls: "arxiv-daily-settings__topic-auto",
-      text: "Auto",
-    });
+    tagInput.placeholder = "topic-tag";
+    const autoBadge = compact
+      ? null
+      : tagRow.createSpan({
+          cls: "arxiv-daily-settings__topic-auto",
+          text: "Auto",
+        });
     const refreshAutoBadge = () => {
-      autoBadge.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
+      autoBadge?.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
     };
     refreshAutoBadge();
 
@@ -1709,15 +1745,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Description",
       attr: { for: descId },
     });
-    this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+    if (!compact) {
+      this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+    }
     const descArea = descRow.createEl("textarea", {
       cls: "arxiv-daily-settings__topic-description",
-      attr: { id: descId, "aria-describedby": descHintId },
+      attr: compact
+        ? { id: descId }
+        : { id: descId, "aria-describedby": descHintId },
     });
     descArea.value = topic.description;
     descArea.rows = 3;
-    descArea.placeholder =
-      "What kinds of papers should be grouped under this topic? (Natural language)";
+    descArea.placeholder = "What papers belong in this topic?";
     descArea.oninput = async () => {
       topic.description = descArea.value;
       await this.plugin.saveSettings();
@@ -1725,7 +1764,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
-    this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
+    if (!compact) {
+      this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
+    }
     const footer = form.createDiv({
       cls: "arxiv-daily-settings__topic-footer",
     });
