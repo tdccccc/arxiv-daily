@@ -5,8 +5,9 @@ updated: 2026-07-31
 
 ## Intent
 
-Fix the issues found in the 2026-07-31 code review, batch by batch, without
-changing product behavior — each batch stays independently mergeable.
+Fix the issues found in the 2026-07-31 code review, batch by batch, keeping
+each batch independently mergeable. P2b may include the user-approved settings
+UX changes and a Medium reasoning default for new or incomplete configurations.
 
 ## Success criteria
 
@@ -14,11 +15,11 @@ changing product behavior — each batch stays independently mergeable.
 - [x] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
 - [ ] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
 - [x] P3 resolved: CLI `detailSelection` documented-as-fixed (schema + journal)
-- [ ] No pipeline output change: daily reports and paper notes are byte-identical before/after each batch
+- [x] Deterministic pipeline rendering unchanged: with identical fetched data and LLM responses, daily reports and paper notes remain byte-identical; P2b's user-approved Medium default may change live LLM responses for new/incomplete configurations
 
 ## Non-goals
 
-- No product behavior changes (except whatever P3 decides explicitly)
+- No product behavior changes beyond P3 decisions and the user-approved P2b settings UX / Medium new-install reasoning default
 - No fixing the 53 sentence-case / UI-text lint warnings (pure churn)
 - No UI redesign, no new features
 

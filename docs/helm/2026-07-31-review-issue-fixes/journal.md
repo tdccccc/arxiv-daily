@@ -206,3 +206,18 @@
   52 warnings; boundaries OK; production build OK
 - next: deploy three plugin files, then another 1.13+ manual pass before
   push / PR
+
+## 2026-08-01 — steer (P2b output criterion clarified)
+
+- evidence: P2b changes `DEFAULT_SETTINGS.llm.reasoningEffort` from high to
+  medium at the user's request; reasoning effort is sent to the provider, so
+  live LLM prose for new or incomplete configurations cannot be guaranteed
+  byte-identical even though output assemblers, writers, fixtures, and their
+  tests are unchanged from main
+- change: L3 success-criterion steer approved by the user — retain Medium and
+  narrow the output criterion to deterministic rendering with identical fetched
+  data and LLM responses; record live-response differences from the intentional
+  default change as an explicit waiver, not as byte-identity evidence
+- disposition: deterministic report/note rendering is source-identical and the
+  full plugin regression suite is green; proceed to push, PR, CI, and merge
+- next: merge P2b; check `P2b landed` only after the merge reaches main
