@@ -187,3 +187,14 @@ Contracts: `./email-content-format.md`, `./email-delivery.md`.
 - change: `email.mode` + migration; cross-mode `shouldSend` on date+to; `hosted.ts` offline stub; UI Delivery mode with Beta label; OFFICIAL_DELIVERY_AVAILABLE=false.
 - disposition: Self-send path unchanged for users. Hosted cannot send until flag flipped + server exists.
 - next: Build magic-link relay service in a dedicated initiative when ready.
+
+## 2026-07-31 — note (closed as done)
+
+- evidence: all success criteria checked; branch feat/paper-identity-source-boundary
+  merged into main (0.3.3); code verified in review (paper-key, SourceAdapter,
+  pipeline re-home, deliver-email)
+- change: initiative closed as done
+- disposition: 官方代发 carried by 2026-07-27-official-email-delivery-beta
+  (done; deploy/DNS ops follow-up). Fake-source hygiene / real multi-source
+  remain parked non-goals
+- next: none (initiative closed)

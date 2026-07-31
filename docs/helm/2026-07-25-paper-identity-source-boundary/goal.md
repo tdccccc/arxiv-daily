@@ -1,7 +1,7 @@
 # Paper identity and source boundary
 
-status: active
-updated: 2026-07-27
+status: done
+updated: 2026-07-31
 
 ## Intent
 
@@ -48,7 +48,11 @@ Give arXiv Daily a stable paper identity and a source-adapter boundary so the pi
 
 ## Current focus
 
-P1–P3 code complete (**自己发送**). Docs aligned for dual-mode product (2026-07-27). **官方代发** not implemented — separate future work. Optional later: Fake-source hygiene, real multi-source, agent tooling.
+Closed. All success criteria checked; merged into main via 0.3.3.
+官方代发 (hosted relay) was carved out as separate future work and shipped
+code-wise under `2026-07-27-official-email-delivery-beta` (done; Worker
+deploy/DNS remains ops). Fake-source hygiene / real multi-source stay parked
+per non-goals.
 
 ## Open questions
 
