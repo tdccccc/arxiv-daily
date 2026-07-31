@@ -140,8 +140,8 @@ npm run build
 | Section | Fields |
 |---|---|
 | **Enable** | Toggle, shows Running / Paused status |
-| **LLM** | Provider dropdown, API Key (`Configured` sentinel with Replace/Clear), Base URL, Model, Temperature, Timeout, Thinking mode, Reasoning effort |
-| **arXiv** | Category dropdown (grouped), Research Topics (collapsible cards with Name/Tag/Description/Detail eligibility toggle), Load Template dropdown, + Add Topic button, Automatic detail notes dropdown, Timezone |
+| **LLM** | Base URL, masked/revealable API key, Model, Reasoning effort (`None` disables reasoning; new installs default to `Medium`) |
+| **arXiv** | Fixed category dropdowns, Research Topics (collapsible cards with Name/Tag/Description/Detail eligibility toggle), + Add Topic button, Automatic detail notes dropdown, Timezone |
 | **Output & Schedule** | Daily / Papers paths, Link style, Run time, Tick interval, Lookback days (≤ 5) |
 | **Advanced** | Request delay, cache TTL, char limits, skip / priority sections, log level |
 

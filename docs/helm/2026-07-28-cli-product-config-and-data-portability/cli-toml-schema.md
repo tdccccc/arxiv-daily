@@ -107,7 +107,7 @@ cache_dir = "/home/alice/Notes/.cache/arxiv-daily"
 | `model` | string | **yes** | deepseek default | `llm.model` |
 | `provider` | string | no | `"deepseek"` | `llm.provider` |
 | `thinking_mode` | bool | no | `true` | `llm.thinkingMode` |
-| `reasoning_effort` | string | no | `"high"` | `llm.reasoningEffort` |
+| `reasoning_effort` | string | no | `"medium"` | `llm.reasoningEffort` |
 
 `init` asks for key (and optionally model); writes the rest with comments.
 

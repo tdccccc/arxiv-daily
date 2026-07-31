@@ -1,0 +1,644 @@
+import {
+  Notice,
+  setIcon,
+  ToggleComponent,
+  type Setting,
+} from "obsidian";
+import type { ArxivDailySettingTab } from "./tab";
+import {
+  API_KEY_CONFIGURED_SENTINEL,
+  addCategoryOptions,
+  llmHttpWarning,
+  modelFetchNoticeMessage,
+  persistApiKeyChange,
+  renderRunWindowTimeSelect,
+  TIMEZONE_OPTIONS,
+} from "./tab";
+import { arxivCategories, LlmClient } from "@arxiv-daily/core";
+
+/**
+ * Prepare a declarative row for (re)rendering. Obsidian reuses the same
+ * Setting row and calls the render callback again on update(), so the
+ * previous render's content must be cleared to keep re-renders idempotent.
+ */
+function prepareRow(setting: Setting): void {
+  setting.controlEl.empty();
+}
+
+/** Remove previously rendered siblings from a row's main element. */
+function clearSettingEl(setting: Setting, ...classes: string[]): void {
+  for (const cls of classes) {
+    for (const el of Array.from(setting.settingEl.querySelectorAll(`.${cls}`))) {
+      el.remove();
+    }
+  }
+}
+
+/**
+ * Imperative row renderers for the Obsidian 1.13+ declarative settings API.
+ * Lives in its own module (not definitions.ts) so the shared sentinel
+ * state machines can reach tab internals via the tab instance.
+ */
+export function renderLlmBaseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  setting.controlEl.addClass("arxiv-daily-settings__llm-url-control");
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-url-input",
+    type: "url",
+    attr: { placeholder: "https://api.deepseek.com/v1" },
+  });
+  input.value = tab.plugin.settings.llm.baseUrl;
+  const warningEl = setting.controlEl.createDiv({
+    cls: "arxiv-daily-settings__llm-inline-warning",
+  });
+  const refreshWarning = () => {
+    const warning = llmHttpWarning(input.value);
+    warningEl.empty();
+    warningEl.toggleClass("is-visible", Boolean(warning));
+    if (warning) warningEl.setText(warning.message);
+  };
+  refreshWarning();
+  input.addEventListener("input", refreshWarning);
+  input.addEventListener("change", () => {
+    tab.runAction("save API base URL", async () => {
+      tab.plugin.settings.llm.baseUrl = input.value.trim();
+      await tab.plugin.saveSettings();
+      tab.refreshDeclarativeSetupGuide();
+    });
+  });
+}
+
+interface SensitiveInputOptions {
+  value: string;
+  placeholder: string;
+  ariaLabel: string;
+  normalize?: (value: string) => string;
+  save: (value: string) => Promise<void>;
+}
+
+function renderSensitiveInput(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  options: SensitiveInputOptions,
+): () => Promise<void> {
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-input",
+    type: "password",
+    attr: {
+      placeholder: options.placeholder,
+      autocomplete: "off",
+      "aria-label": options.ariaLabel,
+    },
+  });
+  input.value = options.value;
+
+  const reveal = setting.controlEl.createEl("button", {
+    cls: "arxiv-daily-settings__reveal-key",
+    attr: {
+      type: "button",
+      "aria-label": `Show ${options.ariaLabel}`,
+      title: `Show ${options.ariaLabel}`,
+    },
+  });
+  setIcon(reveal, "eye");
+
+  const setRevealed = (revealed: boolean) => {
+    input.type = revealed ? "text" : "password";
+    const action = revealed ? "Hide" : "Show";
+    reveal.setAttribute("aria-label", `${action} ${options.ariaLabel}`);
+    reveal.title = `${action} ${options.ariaLabel}`;
+    reveal.empty();
+    setIcon(reveal, revealed ? "eye-off" : "eye");
+  };
+  reveal.addEventListener("pointerdown", (event) => event.preventDefault());
+  reveal.addEventListener("click", () => setRevealed(input.type === "password"));
+
+  let savedValue = input.value;
+  let savePromise: Promise<void> | null = null;
+  const save = (): Promise<void> => {
+    if (savePromise) return savePromise;
+    const next = (options.normalize ?? ((value: string) => value.trim()))(input.value);
+    if (next === savedValue) return Promise.resolve();
+    input.disabled = true;
+    reveal.disabled = true;
+    savePromise = (async () => {
+      try {
+        await options.save(next);
+        savedValue = next;
+        input.value = next;
+      } catch (error) {
+        input.value = savedValue;
+        throw error;
+      } finally {
+        savePromise = null;
+        input.disabled = false;
+        reveal.disabled = false;
+      }
+    })();
+    return savePromise;
+  };
+  input.addEventListener("blur", () => tab.runAction(`save ${options.ariaLabel}`, save));
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    input.blur();
+  });
+  return save;
+}
+
+export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  prepareRow(setting);
+  renderSensitiveInput(tab, setting, {
+    value: tab.plugin.settings.llm.apiKey,
+    placeholder: "Enter API key",
+    ariaLabel: "LLM API key",
+    save: async (next) => {
+      await persistApiKeyChange(
+        tab.plugin.settings,
+        tab.plugin.logger,
+        () => tab.plugin.saveSettings(),
+        next,
+      );
+      tab.refreshDeclarativeSetupGuide();
+    },
+  });
+}
+
+export function renderReasoningEffortRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  const options = [
+    ["none", "None"],
+    ["low", "Low"],
+    ["medium", "Medium"],
+    ["high", "High"],
+  ] as const;
+  for (const [value, label] of options) {
+    select.createEl("option", { value, text: label });
+  }
+  select.value = tab.plugin.settings.llm.thinkingMode
+    ? tab.plugin.settings.llm.reasoningEffort
+    : "none";
+  if (!options.some(([value]) => value === select.value)) select.value = "medium";
+  select.addEventListener("change", () => {
+    tab.runAction("save reasoning effort", async () => {
+      if (select.value === "none") {
+        tab.plugin.settings.llm.thinkingMode = false;
+      } else {
+        tab.plugin.settings.llm.thinkingMode = true;
+        tab.plugin.settings.llm.reasoningEffort = select.value;
+      }
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select", {
+    cls: "arxiv-daily-settings__model-select",
+  });
+  const current = tab.plugin.settings.llm.model;
+  if (current) select.createEl("option", { value: current, text: current });
+  select.value = current;
+  select.addEventListener("change", () => {
+    void (async () => {
+      tab.plugin.settings.llm.model = select.value;
+      await tab.plugin.saveSettings();
+      tab.refreshDeclarativeSetupGuide();
+    })();
+  });
+
+  const button = setting.controlEl.createEl("button", {
+    text: "Get models",
+    attr: { type: "button" },
+  });
+  button.addEventListener("click", () => {
+    void (async () => {
+    button.textContent = "Fetching…";
+    button.disabled = true;
+    try {
+      const client = new LlmClient(
+        tab.plugin.settings.llm,
+        tab.plugin.logger,
+        tab.plugin.getHttpClient(),
+      );
+      const models = await client.fetchModels();
+      if (models.length > 0) {
+        tab.showModelDropdown(models, setting.settingEl);
+        new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
+      } else {
+        new Notice(modelFetchNoticeMessage({ kind: "empty" }));
+      }
+    } catch (e) {
+      new Notice(modelFetchNoticeMessage(
+        { kind: "error", message: e instanceof Error ? e.message : String(e) },
+        [tab.plugin.settings.llm.apiKey],
+      ));
+    } finally {
+      button.textContent = "Get models";
+      button.disabled = false;
+    }
+    })();
+  });
+}
+
+export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  clearSettingEl(setting, "arxiv-daily-setup");
+  const guide = tab.createSetupGuide();
+  if (guide) setting.settingEl.appendChild(guide);
+}
+
+/** One arXiv category: known-category dropdown + free-text override. */
+export function renderCategoryRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  index: number,
+): void {
+  prepareRow(setting);
+  const categories = arxivCategories(tab.plugin.settings.arxiv);
+  const current = categories[index] ?? "";
+  const select = setting.controlEl.createEl("select", {
+    cls: "arxiv-daily-settings__category-select",
+  });
+  addCategoryOptions(select, current);
+  select.value = current;
+  select.addEventListener("change", () => {
+    const next = [...categories];
+    next[index] = select.value;
+    void tab.runAction("save category", async () => {
+      await tab.setArxivCategories(next);
+      tab.refreshSettings();
+    });
+  });
+}
+
+/** One research topic: the shared expandable topic card. */
+export function renderTopicRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  index: number,
+): void {
+  tab.renderTopicRow(setting, index);
+}
+
+/** Timezone picker: preset dropdown + free-text override. */
+export function renderTimezoneRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  for (const zone of TIMEZONE_OPTIONS) {
+    const option = select.createEl("option");
+    option.value = zone.value;
+    option.textContent = zone.label;
+  }
+  select.value = tab.plugin.settings.arxiv.timezone;
+  select.addEventListener("change", () => {
+    tab.plugin.settings.arxiv.timezone = select.value;
+    void tab.plugin.saveSettings();
+  });
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    placeholder: "Or enter custom timezone",
+  });
+  input.addEventListener("input", () => {
+    if (input.value.trim()) {
+      tab.plugin.settings.arxiv.timezone = input.value.trim();
+      void tab.plugin.saveSettings();
+    }
+  });
+}
+
+/** Scheduler enable toggle; routes through setScheduleEnabled (validation + modal). */
+export function renderScheduleEnabledRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  new ToggleComponent(setting.controlEl)
+    .setValue(tab.plugin.settings.schedule.enabled)
+    .onChange(async (value) => {
+      await tab.plugin.setScheduleEnabled(value);
+      tab.refreshSettings();
+    });
+}
+
+/** Run window: Start/End local-time selects (24-hour clock). */
+export function renderRunWindowRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const schedule = tab.plugin.settings.schedule;
+  renderRunWindowTimeSelect(
+    setting.controlEl,
+    "Start",
+    "arxiv-daily-run-window-start",
+    schedule.runAtLocal,
+    (value) => tab.saveRunWindowTime("runAtLocal", value),
+  );
+  renderRunWindowTimeSelect(
+    setting.controlEl,
+    "End",
+    "arxiv-daily-run-window-end",
+    schedule.runUntilLocal,
+    (value) => tab.saveRunWindowTime("runUntilLocal", value),
+  );
+}
+
+/** Check-every (minutes) input; mirrors display()'s sanitize + scheduler restart. */
+export function renderTickIntervalRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    cls: "arxiv-daily-settings__tick-input",
+  });
+  input.value = String(tab.plugin.settings.schedule.tickIntervalMin);
+  input.addEventListener("input", () => {
+    tab.plugin.settings.schedule.tickIntervalMin =
+      Math.max(1, Number(input.value) || 20);
+    void tab.plugin.saveSettings().then(() => tab.plugin.restartScheduler());
+  });
+}
+
+/** Email delivery guide strip for the current mode. */
+export function renderEmailGuideRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  clearSettingEl(setting, "arxiv-daily-settings__email-guide");
+  setting.settingEl.addClass("arxiv-daily-settings__email-guide-host");
+  const { title, lines } = tab.emailGuideContent();
+  const wrap = setting.settingEl.createDiv({
+    cls: "arxiv-daily-settings__email-guide",
+  });
+  wrap.createDiv({
+    cls: "arxiv-daily-settings__email-guide-title",
+    text: title,
+  });
+  for (const line of lines) {
+    wrap.createDiv({
+      cls: "arxiv-daily-settings__email-guide-line",
+      text: line,
+    });
+  }
+}
+
+/** Email mode dropdown (Send yourself / Official delivery). */
+export function renderEmailModeRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  const selfOption = select.createEl("option");
+  selfOption.value = "self";
+  selfOption.textContent = "Send yourself";
+  const hostedOption = select.createEl("option");
+  hostedOption.value = "hosted";
+  hostedOption.textContent = "Official delivery (Beta)";
+  select.value = tab.plugin.settings.email.mode === "hosted" ? "hosted" : "self";
+  select.addEventListener("change", () => {
+    tab.plugin.settings.email.mode =
+      select.value === "hosted" ? "hosted" : "self";
+    void tab.runAction("save email mode", async () => {
+      await tab.plugin.saveSettings();
+      tab.refreshSettings();
+    });
+  });
+}
+
+const emailSavePromises = new WeakMap<ArxivDailySettingTab, Promise<void>>();
+
+async function saveEmailToDraft(
+  tab: ArxivDailySettingTab,
+  input: HTMLInputElement,
+): Promise<void> {
+  const pending = emailSavePromises.get(tab);
+  if (pending) {
+    await pending;
+    return saveEmailToDraft(tab, input);
+  }
+  const next = input.value.trim();
+  const previous = tab.plugin.settings.email.to;
+  if (next === previous) return;
+  tab.plugin.settings.email.to = next;
+  input.value = next;
+  const save = tab.plugin.saveSettings()
+    .catch((error) => {
+      tab.plugin.settings.email.to = previous;
+      input.value = previous;
+      throw error;
+    })
+    .finally(() => emailSavePromises.delete(tab));
+  emailSavePromises.set(tab, save);
+  await save;
+}
+
+async function waitForEmailToSave(tab: ArxivDailySettingTab): Promise<void> {
+  await emailSavePromises.get(tab);
+}
+
+function renderEmailActionButton(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  options: {
+    label: string;
+    pendingLabel: string;
+    action: string;
+    preserveFocus?: boolean;
+    beforeRun?: () => Promise<void>;
+    run: () => Promise<string>;
+  },
+): void {
+  const button = setting.controlEl.createEl("button", {
+    text: options.label,
+    attr: { type: "button" },
+  });
+  if (options.preserveFocus) {
+    button.addEventListener("pointerdown", (event) => event.preventDefault());
+  }
+  button.addEventListener("click", () => {
+    void (async () => {
+      button.disabled = true;
+      button.textContent = options.pendingLabel;
+      await tab.runActionAndWait(options.action, async () => {
+        await options.beforeRun?.();
+        const message = await options.run();
+        new Notice(message, 10_000);
+      });
+      button.disabled = false;
+      button.textContent = options.label;
+    })();
+  });
+}
+
+export function renderEmailToRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "email",
+    attr: { placeholder: "you@example.com" },
+  });
+  input.value = tab.plugin.settings.email.to;
+  const saveEmail = () => saveEmailToDraft(tab, input);
+  input.addEventListener("change", () => {
+    tab.runAction("save email address", saveEmail);
+  });
+  if (tab.plugin.settings.email.mode === "hosted") {
+    renderEmailActionButton(tab, setting, {
+      label: "Send verification",
+      pendingLabel: "Sending…",
+      action: "send verification email",
+      preserveFocus: true,
+      beforeRun: saveEmail,
+      run: () => tab.plugin.sendHostedVerificationEmail(),
+    });
+  }
+}
+
+/** Resend API key sentinel row (self mode). */
+export function renderEmailApiKeyRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const configured = Boolean(tab.plugin.settings.email.apiKey?.trim());
+  let editing = !configured;
+  let draft = "";
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-input",
+    type: editing ? "password" : "text",
+    attr: { placeholder: "Paste your Resend API key" },
+  });
+  input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+  input.readOnly = !editing;
+
+  const replace = setting.controlEl.createEl("button", {
+    text: configured ? "Replace" : "Save",
+    attr: { type: "button" },
+  });
+  const cancel = setting.controlEl.createEl("button", {
+    text: "Cancel",
+    attr: { type: "button" },
+  });
+  cancel.hidden = !configured;
+  const clear = setting.controlEl.createEl("button", {
+    text: "Clear",
+    attr: { type: "button" },
+  });
+  clear.hidden = !configured;
+
+  const enterEdit = () => {
+    editing = true;
+    draft = "";
+    input.type = "password";
+    input.readOnly = false;
+    input.value = "";
+    replace.textContent = "Save";
+    cancel.hidden = false;
+    input.focus();
+  };
+  const reset = () => {
+    editing = false;
+    draft = "";
+    input.type = "text";
+    input.readOnly = true;
+    input.value = API_KEY_CONFIGURED_SENTINEL;
+    replace.textContent = "Replace";
+    cancel.hidden = true;
+  };
+  input.addEventListener("input", () => {
+    if (editing) draft = input.value;
+  });
+  replace.addEventListener("click", () => {
+    if (!editing) {
+      enterEdit();
+      return;
+    }
+    const next = draft.trim();
+    if (!next) return;
+    tab.runAction("save Resend API key", async () => {
+      tab.plugin.settings.email.apiKey = next;
+      await tab.plugin.saveSettings();
+      reset();
+      clear.hidden = false;
+    });
+  });
+  cancel.addEventListener("click", () => {
+    if (configured || tab.plugin.settings.email.apiKey?.trim()) reset();
+    else {
+      draft = "";
+      input.value = "";
+    }
+  });
+  clear.addEventListener("click", () => {
+    tab.runAction("clear Resend API key", async () => {
+      const confirmed = await tab.confirmReplace(
+        "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
+        "Clear",
+      );
+      if (!confirmed) return;
+      tab.plugin.settings.email.apiKey = "";
+      await tab.plugin.saveSettings();
+      tab.refreshSettings();
+    });
+  });
+  renderEmailActionButton(tab, setting, {
+    label: "Send test",
+    pendingLabel: "Sending…",
+    action: "send test email",
+    beforeRun: () => waitForEmailToSave(tab),
+    run: () => tab.plugin.sendTestEmail(),
+  });
+}
+
+/** Verification-code masked input row (hosted mode). */
+export function renderHostedTokenRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const saveToken = renderSensitiveInput(tab, setting, {
+    value: tab.plugin.settings.email.hostedToken ?? "",
+    placeholder: "Paste the code from the verification page",
+    ariaLabel: "verification code",
+    normalize: (value) => value.replace(/\s+/g, "").trim(),
+    save: async (next) => {
+      const previous = tab.plugin.settings.email.hostedToken ?? "";
+      tab.plugin.settings.email.hostedToken = next;
+      tab.plugin.refreshSensitiveValues();
+      try {
+        await tab.plugin.saveSettings();
+      } catch (error) {
+        tab.plugin.settings.email.hostedToken = previous;
+        tab.plugin.refreshSensitiveValues();
+        throw error;
+      }
+    },
+  });
+  renderEmailActionButton(tab, setting, {
+    label: "Send test",
+    pendingLabel: "Sending…",
+    action: "send test email",
+    preserveFocus: true,
+    beforeRun: async () => {
+      await waitForEmailToSave(tab);
+      await saveToken();
+    },
+    run: () => tab.plugin.sendTestEmail(),
+  });
+}

@@ -1,5 +1,20 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import {
+  App,
+  Modal,
+  Notice,
+  PluginSettingTab,
+  requireApiVersion,
+  Setting,
+  type SettingDefinitionItem,
+} from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import {
+  buildSettingDefinitions,
+  readSettingValue,
+  SETTING_KEYS,
+  writeSettingValue,
+} from "./definitions";
+import * as declarativeRows from "./declarative-rows";
 import {
   describeResult,
   detailSelectionPreset,
@@ -121,8 +136,77 @@ function isLogLevel(value: string): value is LogLevel {
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
 
-  constructor(app: App, private plugin: ArxivDailyPlugin) {
+  constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
+  }
+
+  /**
+   * Declarative settings for Obsidian 1.13+ (searchable in Settings
+   * search). Host callbacks bind the shared row renderers and the tab's
+   * mutation methods; display() stays as the <1.13 fallback. Only called
+   * by the framework on 1.13+, so no version guard is needed here.
+   */
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return buildSettingDefinitions({
+      plugin: this.plugin,
+      showSetupGuide: this.shouldShowSetupGuide(),
+      renderSetupGuideRow: (setting) =>
+        declarativeRows.renderSetupGuideRow(this, setting),
+      renderScheduleEnabledRow: (setting) =>
+        declarativeRows.renderScheduleEnabledRow(this, setting),
+      renderLlmBaseUrlRow: (setting) =>
+        declarativeRows.renderLlmBaseUrlRow(this, setting),
+      renderApiKeyRow: (setting) =>
+        declarativeRows.renderApiKeyRow(this, setting),
+      renderModelRow: (setting) =>
+        declarativeRows.renderModelRow(this, setting),
+      renderReasoningEffortRow: (setting) =>
+        declarativeRows.renderReasoningEffortRow(this, setting),
+      renderCategoryRow: (setting, index) =>
+        declarativeRows.renderCategoryRow(this, setting, index),
+      renderTopicRow: (setting, index) =>
+        declarativeRows.renderTopicRow(this, setting, index),
+      renderTimezoneRow: (setting) =>
+        declarativeRows.renderTimezoneRow(this, setting),
+      renderRunWindowRow: (setting) =>
+        declarativeRows.renderRunWindowRow(this, setting),
+      renderTickIntervalRow: (setting) =>
+        declarativeRows.renderTickIntervalRow(this, setting),
+      renderEmailGuideRow: (setting) =>
+        declarativeRows.renderEmailGuideRow(this, setting),
+      renderEmailModeRow: (setting) =>
+        declarativeRows.renderEmailModeRow(this, setting),
+      renderEmailToRow: (setting) =>
+        declarativeRows.renderEmailToRow(this, setting),
+      renderEmailApiKeyRow: (setting) =>
+        declarativeRows.renderEmailApiKeyRow(this, setting),
+      renderHostedTokenRow: (setting) =>
+        declarativeRows.renderHostedTokenRow(this, setting),
+      addCategory: () => void this.addCategory(),
+      deleteCategory: (index) => void this.deleteCategory(index),
+      addTopic: () => void this.addTopic(),
+    });
+  }
+
+  /** Resolve a flat declarative key against the nested settings object. */
+  override getControlValue(key: string): unknown {
+    return readSettingValue(this.plugin.settings, key);
+  }
+
+  /**
+   * Persist a flat declarative key. Email To and From mirror display()'s
+   * trimming on change; From name is written raw there, so it stays raw
+   * here too.
+   */
+  override async setControlValue(key: string, value: unknown): Promise<void> {
+    if (
+      typeof value === "string" &&
+      (key === SETTING_KEYS.email.to || key === SETTING_KEYS.email.fromEmail)
+    ) {
+      value = value.trim();
+    }
+    writeSettingValue(this.plugin.settings, key, value);
+    await this.plugin.saveSettings();
   }
 
   /** Append an accessible circled "?" to a setting name. */
@@ -141,8 +225,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Notice(`arXiv Daily: ${action} failed: ${message}`, 10_000);
   }
 
-  private runAction(action: string, operation: () => Promise<unknown>): void {
-    void operation().catch((error) => this.reportActionError(action, error));
+  public async runActionAndWait(
+    action: string,
+    operation: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await operation();
+    } catch (error) {
+      this.reportActionError(action, error);
+    }
+  }
+
+  public runAction(action: string, operation: () => Promise<unknown>): void {
+    void this.runActionAndWait(action, operation);
   }
 
   /** Inline muted hint, used inside topic cards under a label. */
@@ -171,6 +266,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   /** Full-width guide block aligned with Setting name column (not indented desc). */
+  /** Guide strip copy for the current email mode; shared with the 1.13+ rows. */
+  public emailGuideContent(): { title: string; lines: string[] } {
+    const hostedMode = this.plugin.settings.email.mode === "hosted";
+    return {
+      title: hostedMode ? "Official delivery (Beta)" : "Send yourself",
+      lines: hostedMode
+        ? [
+            "1. Enter your email, then send a verification message.",
+            "2. Open the link in that email and copy the code shown on the page.",
+            "3. Paste the code below, send a test email, then turn on daily auto-send.",
+            "Capacity is limited: only a few messages per inbox per day (tests count). For heavier use, switch to Send yourself.",
+          ]
+        : [
+            "1. Create a free Resend account and an API key at resend.com.",
+            "2. Paste the key below. For a quick start, put your Resend account email in Your email and leave From email empty.",
+            "3. Send a test email, then turn on daily auto-send when it works.",
+          ],
+    };
+  }
+
   private emailGuide(
     containerEl: HTMLElement,
     opts: { title: string; lines: string[] },
@@ -190,14 +305,112 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private async setArxivCategories(categories: string[]): Promise<void> {
+  public async setArxivCategories(categories: string[]): Promise<void> {
     const normalized = normalizeUniqueCategories(categories);
     this.plugin.settings.arxiv.categories = normalized;
     if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
     await this.plugin.saveSettings();
   }
 
-  private async saveRunWindowTime(
+  /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
+  public refreshSettings(): void {
+    if (
+      requireApiVersion("1.13.0") &&
+      this.getSettingDefinitions().length > 0
+    ) {
+      this.update();
+    } else {
+      this.display();
+    }
+  }
+
+  /** Append a category (the first arXiv option not already in the list). */
+  public async addCategory(): Promise<void> {
+    const categories = arxivCategories(this.plugin.settings.arxiv);
+    await this.setArxivCategories([
+      ...categories,
+      nextCategoryCandidate(categories),
+    ]);
+    this.refreshSettings();
+  }
+
+  /** Remove a category by index; keeps the last remaining category. */
+  public async deleteCategory(index: number): Promise<void> {
+    const categories = arxivCategories(this.plugin.settings.arxiv);
+    if (categories.length <= 1) return;
+    await this.setArxivCategories(categories.filter((_, j) => j !== index));
+    this.refreshSettings();
+  }
+
+  /** Append a blank, expanded topic card. */
+  public async addTopic(): Promise<void> {
+    const newId = crypto.randomUUID();
+    const topics = this.plugin.settings.arxiv.topics;
+    topics.push({
+      id: newId,
+      name: "",
+      tag: `topic-${topics.length + 1}`,
+      description: "",
+      detail: false,
+    });
+    this.expandedTopics.add(newId);
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+  }
+
+  /** Delete a topic after confirmation; returns whether it was deleted. */
+  public async deleteTopic(index: number): Promise<boolean> {
+    const topics = this.plugin.settings.arxiv.topics;
+    const topic = topics[index];
+    if (!topic) return false;
+    const topicName = topic.name.trim() || "(unnamed)";
+    const confirmed = await this.confirmReplace(
+      `Delete the research topic "${topicName}"? This cannot be undone.`,
+      "Delete",
+    );
+    if (!confirmed) return false;
+    topics.splice(index, 1);
+    this.expandedTopics.delete(topic.id);
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+    return true;
+  }
+
+  /**
+   * Apply a quick-start template, replacing topics (and categories) after
+   * confirmation when the current setup would be overwritten.
+   */
+  public async applyTopicTemplate(templateId: string): Promise<void> {
+    const tpl = TOPIC_TEMPLATES.find((t) => t.id === templateId);
+    if (!tpl) return;
+    const settings = this.plugin.settings;
+    const categories = arxivCategories(settings.arxiv);
+    const apply = async () => {
+      settings.arxiv.category = tpl.category;
+      settings.arxiv.categories = [tpl.category];
+      settings.arxiv.topics = tpl.topics.map((t) => ({
+        ...t,
+        id: crypto.randomUUID(),
+      }));
+      await this.plugin.saveSettings();
+      this.refreshSettings();
+    };
+    const replacesCategories = categoriesWillChange(categories, [tpl.category]);
+    if (settings.arxiv.topics.length === 0 && !replacesCategories) {
+      await apply();
+      return;
+    }
+    const confirmed = await this.confirmReplace(
+      quickStartTemplateConfirmMessage(
+        settings.arxiv.topics.length,
+        tpl.name,
+        replacesCategories,
+      ),
+    );
+    if (confirmed) await apply();
+  }
+
+  public async saveRunWindowTime(
     key: "runAtLocal" | "runUntilLocal",
     value: string,
   ): Promise<void> {
@@ -424,22 +637,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           b
             .setButtonText("Remove")
             .setDisabled(categories.length === 1)
-            .onClick(async () => {
-              if (categories.length === 1) return;
-              await this.setArxivCategories(categories.filter((_, j) => j !== i));
-              this.display();
-            }),
+            .onClick(() => void this.deleteCategory(i)),
         );
     }
 
     new Setting(containerEl).addButton((b) =>
-      b.setButtonText("Add category").onClick(async () => {
-        await this.setArxivCategories([
-          ...categories,
-          nextCategoryCandidate(categories),
-        ]);
-        this.display();
-      }),
+      b.setButtonText("Add category").onClick(() => void this.addCategory()),
     );
 
     // ─── Research Topics ─────────────────────────────
@@ -461,44 +664,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.onChange(async (id) => {
           if (!id) return;
           d.setValue("");
-          const tpl = TOPIC_TEMPLATES.find((t) => t.id === id);
-          if (!tpl) return;
-          const apply = async () => {
-            s.arxiv.category = tpl.category;
-            s.arxiv.categories = [tpl.category];
-            s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
-            await this.plugin.saveSettings();
-            this.display();
-          };
-          const replacesCategories = categoriesWillChange(categories, [tpl.category]);
-          if (s.arxiv.topics.length === 0 && !replacesCategories) {
-            await apply();
-            return;
-          }
-          const confirmed = await this.confirmReplace(
-            quickStartTemplateConfirmMessage(
-              s.arxiv.topics.length,
-              tpl.name,
-              replacesCategories,
-            ),
-          );
-          if (confirmed) await apply();
+          await this.applyTopicTemplate(id);
         });
       })
       .addButton((b) => {
-        b.setButtonText("Add topic").onClick(async () => {
-          const newId = crypto.randomUUID();
-          s.arxiv.topics.push({
-            id: newId,
-            name: "",
-            tag: `topic-${s.arxiv.topics.length + 1}`,
-            description: "",
-            detail: false,
-          });
-          this.expandedTopics.add(newId);
-          await this.plugin.saveSettings();
-          this.display();
-        });
+        b.setButtonText("Add topic").onClick(() => void this.addTopic());
       });
 
     const topicsContainer = containerEl.createDiv();
@@ -542,19 +712,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
-        const zones = [
-          { v: "Asia/Shanghai", l: "Shanghai (UTC+8)" },
-          { v: "Asia/Tokyo", l: "Tokyo (UTC+9)" },
-          { v: "US/Eastern", l: "US East (UTC-5)" },
-          { v: "US/Pacific", l: "US West (UTC-8)" },
-          { v: "Europe/London", l: "London (UTC+0)" },
-          { v: "Europe/Berlin", l: "Berlin (UTC+1)" },
-          { v: "Europe/Moscow", l: "Moscow (UTC+3)" },
-          { v: "Australia/Sydney", l: "Sydney (UTC+10)" },
-          { v: "UTC", l: "UTC" },
-        ];
-        for (const z of zones) {
-          d.addOption(z.v, z.l);
+        for (const zone of TIMEZONE_OPTIONS) {
+          d.addOption(zone.value, zone.label);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
           s.arxiv.timezone = v;
@@ -684,21 +843,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
     const hostedMode = s.email.mode === "hosted";
 
-    this.emailGuide(containerEl, {
-      title: hostedMode ? "Official delivery (Beta)" : "Send yourself",
-      lines: hostedMode
-        ? [
-            "1. Enter your email, then send a verification message.",
-            "2. Open the link in that email and copy the code shown on the page.",
-            "3. Paste the code below, send a test email, then turn on daily auto-send.",
-            "Capacity is limited: only a few messages per inbox per day (tests count). For heavier use, switch to Send yourself.",
-          ]
-        : [
-            "1. Create a free Resend account and an API key at resend.com.",
-            "2. Paste the key below. For a quick start, put your Resend account email in Your email and leave From email empty.",
-            "3. Send a test email, then turn on daily auto-send when it works.",
-          ],
-    });
+    this.emailGuide(containerEl, this.emailGuideContent());
 
     new Setting(containerEl)
       .setName("How to send")
@@ -1174,7 +1319,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (guide) containerEl.appendChild(guide);
   }
 
-  private refreshSetupGuide(): void {
+  public shouldShowSetupGuide(): boolean {
+    return shouldRenderSetupGuide(
+      getSetupStatus(
+        this.plugin.settings,
+        this.plugin.stateStore.snapshot(),
+      ),
+    );
+  }
+
+  public refreshDeclarativeSetupGuide(): void {
+    this.refreshSettings();
+  }
+
+  public refreshSetupGuide(): void {
+    if (requireApiVersion("1.13.0")) {
+      this.refreshSettings();
+      return;
+    }
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
     const next = this.createSetupGuide();
     if (current instanceof HTMLElement) {
@@ -1188,7 +1350,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private createSetupGuide(): HTMLElement {
+  public createSetupGuide(): HTMLElement {
     const status = getSetupStatus(
       this.plugin.settings,
       this.plugin.stateStore.snapshot(),
@@ -1378,7 +1540,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     targetEl.focus({ preventScroll: true });
   }
 
-  private async generateFirstReport(): Promise<void> {
+  public async generateFirstReport(): Promise<void> {
     const date = formatDate(
       todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
     );
@@ -1389,7 +1551,31 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.refreshSetupGuide();
   }
 
-  private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
+  /** Render the topic card for one index into a declarative list row. */
+  public renderTopicRow(setting: Setting, index: number): void {
+    // Re-renders reuse the same row; drop the previous card first.
+    for (const el of Array.from(
+      setting.settingEl.querySelectorAll(".arxiv-daily-settings__topic-card"),
+    )) {
+      el.remove();
+    }
+    // Scopes the 1.13+ card layout (full-width row, aligned header, grid
+    // form) without touching the <1.13 display() styling.
+    setting.settingEl.addClass("arxiv-daily-settings__topic-host");
+    this.renderTopicCard(
+      setting.settingEl,
+      this.plugin.settings.arxiv.topics,
+      index,
+      true,
+    );
+  }
+
+  private renderTopicCard(
+    container: HTMLElement,
+    topics: Topic[],
+    index: number,
+    compact = false,
+  ): void {
     const topic = topics[index];
     if (!topic) return;
     const isExpanded = this.expandedTopics.has(topic.id);
@@ -1418,24 +1604,33 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const titleSpan = header.createSpan({
       cls: "arxiv-daily-settings__topic-title",
       text: topic.name.trim() || "(unnamed)",
+      attr: { title: topic.name },
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
+    let tagChip: HTMLElement | null = null;
+    const createTag = () => {
+      if (!topic.tag) return;
+      tagChip = header.createSpan({
+        cls: "arxiv-daily-settings__topic-tag",
+        text: "#" + topic.tag,
+      });
+    };
     let star: HTMLElement | null = null;
-    if (topic.detail) {
+    const createStar = () => {
+      if (!topic.detail) return;
       star = header.createSpan({
         cls: "arxiv-daily-settings__topic-star",
         text: "★",
         attr: { title: "Detail report enabled" },
       });
-    }
-
-    let tagChip: HTMLElement | null = null;
-    if (topic.tag) {
-      tagChip = header.createSpan({
-        cls: "arxiv-daily-settings__topic-tag",
-        text: "#" + topic.tag,
-      });
+    };
+    if (compact) {
+      createTag();
+      createStar();
+    } else {
+      createStar();
+      createTag();
     }
 
     // ─── Expanded form (toggled via display) ────────────────
@@ -1457,14 +1652,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Name",
       attr: { for: nameId },
     });
-    this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
+    if (!compact) {
+      this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
+    }
     const nameInput = nameRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-name-input",
       type: "text",
-      attr: { id: nameId, "aria-describedby": nameHintId },
+      attr: compact
+        ? { id: nameId }
+        : { id: nameId, "aria-describedby": nameHintId },
     });
     nameInput.value = topic.name;
-    nameInput.placeholder = "E.g. Photometric redshift";
+    nameInput.placeholder = "Topic name";
 
     // Tag row
     const tagRow = form.createDiv({
@@ -1477,25 +1676,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Tag",
       attr: { for: tagId },
     });
-    this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
+    if (!compact) {
+      this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
+    }
     const tagInput = tagRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-tag-input",
       type: "text",
-      attr: { id: tagId, "aria-describedby": tagHintId },
+      attr: compact
+        ? { id: tagId }
+        : { id: tagId, "aria-describedby": tagHintId },
     });
     tagInput.value = topic.tag;
-    tagInput.placeholder = "Kebab-case-slug";
-    const autoBadge = tagRow.createSpan({
-      cls: "arxiv-daily-settings__topic-auto",
-      text: "Auto",
-    });
+    tagInput.placeholder = "topic-tag";
+    const autoBadge = compact
+      ? null
+      : tagRow.createSpan({
+          cls: "arxiv-daily-settings__topic-auto",
+          text: "Auto",
+        });
     const refreshAutoBadge = () => {
-      autoBadge.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
+      autoBadge?.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
     };
     refreshAutoBadge();
 
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
+      titleSpan.title = topic.name;
       titleSpan.toggleClass("is-muted", !topic.name.trim());
     };
 
@@ -1531,15 +1737,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       text: "Description",
       attr: { for: descId },
     });
-    this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+    if (!compact) {
+      this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+    }
     const descArea = descRow.createEl("textarea", {
       cls: "arxiv-daily-settings__topic-description",
-      attr: { id: descId, "aria-describedby": descHintId },
+      attr: compact
+        ? { id: descId }
+        : { id: descId, "aria-describedby": descHintId },
     });
     descArea.value = topic.description;
     descArea.rows = 3;
-    descArea.placeholder =
-      "What kinds of papers should be grouped under this topic? (Natural language)";
+    descArea.placeholder = "What papers belong in this topic?";
     descArea.oninput = async () => {
       topic.description = descArea.value;
       await this.plugin.saveSettings();
@@ -1547,7 +1756,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
-    this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
+    if (!compact) {
+      this.hint(form, "Detail report = generate a full, deep-dive markdown file for primary contributions to this topic. Delete = remove this topic.");
+    }
     const footer = form.createDiv({
       cls: "arxiv-daily-settings__topic-footer",
     });
@@ -1571,8 +1782,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           text: "★",
           attr: { title: "Detail report enabled" },
         });
-        // Keep the detail indicator before the tag chip.
-        if (tagChip) header.insertBefore(star, tagChip);
+        if (!compact && tagChip) header.insertBefore(star, tagChip);
       }
     };
 
@@ -1583,16 +1793,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     delBtn.classList.add("mod-warning");
     delBtn.onclick = async (e) => {
       e.stopPropagation();
-      const topicName = topic.name.trim() || "(unnamed)";
-      const confirmed = await this.confirmReplace(
-        `Delete the research topic "${topicName}"? This cannot be undone.`,
-        "Delete",
-      );
-      if (!confirmed) return;
-      topics.splice(index, 1);
-      this.expandedTopics.delete(topic.id);
-      await this.plugin.saveSettings();
-      this.display();
+      await this.deleteTopic(index);
     };
 
     // Toggle expand/collapse on header click
@@ -1607,7 +1808,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
   }
 
-  private confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
+  public confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
     return new Promise((resolve) => {
       const modal = new Modal(this.app);
       modal.titleEl.setText("Confirm");
@@ -1632,7 +1833,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
   }
 
-  private showModelDropdown(models: string[], container: HTMLElement): void {
+  public showModelDropdown(models: string[], container: HTMLElement): void {
     // Find the existing dropdown in the model setting
     const modelSetting = container.closest(".setting-item");
     if (!modelSetting) return;
@@ -1713,7 +1914,7 @@ export function runWindowTimeOptions(current: string): RunWindowTimeOption[] {
   return values.sort((a, b) => a.value.localeCompare(b.value));
 }
 
-function renderRunWindowTimeSelect(
+export function renderRunWindowTimeSelect(
   parent: HTMLElement,
   labelText: string,
   id: string,
@@ -1746,7 +1947,20 @@ function renderRunWindowTimeSelect(
   });
 }
 
-function addCategoryOptions(
+/** Timezone presets for the arXiv section; shared by display() and the 1.13+ rows. */
+export const TIMEZONE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "Asia/Shanghai", label: "Shanghai (UTC+8)" },
+  { value: "Asia/Tokyo", label: "Tokyo (UTC+9)" },
+  { value: "US/Eastern", label: "US East (UTC-5)" },
+  { value: "US/Pacific", label: "US West (UTC-8)" },
+  { value: "Europe/London", label: "London (UTC+0)" },
+  { value: "Europe/Berlin", label: "Berlin (UTC+1)" },
+  { value: "Europe/Moscow", label: "Moscow (UTC+3)" },
+  { value: "Australia/Sydney", label: "Sydney (UTC+10)" },
+  { value: "UTC", label: "UTC" },
+];
+
+export function addCategoryOptions(
   selectEl: HTMLSelectElement,
   current?: string,
 ): void {
@@ -1778,8 +1992,7 @@ function normalizeUniqueCategories(categories: string[]): string[] {
   return out;
 }
 
-function nextCategoryCandidate(existing: string[]): string {
-  const seen = new Set(existing);
+function nextCategoryCandidate(existing: string[]): string {  const seen = new Set(existing);
   for (const group of ARXIV_CATEGORIES) {
     for (const category of group.categories) {
       if (!seen.has(category.id)) return category.id;

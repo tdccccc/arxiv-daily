@@ -5,20 +5,21 @@ updated: 2026-07-31
 
 ## Intent
 
-Fix the issues found in the 2026-07-31 code review, batch by batch, without
-changing product behavior — each batch stays independently mergeable.
+Fix the issues found in the 2026-07-31 code review, batch by batch, keeping
+each batch independently mergeable. P2b may include the user-approved settings
+UX changes and a Medium reasoning default for new or incomplete configurations.
 
 ## Success criteria
 
 - [x] P1 landed: dead code removed, legacy shim corrected, README security note added, `obsidian` devDep pinned — all checks green
-- [ ] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
+- [x] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
 - [ ] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
 - [x] P3 resolved: CLI `detailSelection` documented-as-fixed (schema + journal)
-- [ ] No pipeline output change: daily reports and paper notes are byte-identical before/after each batch
+- [x] Deterministic pipeline rendering unchanged: with identical fetched data and LLM responses, daily reports and paper notes remain byte-identical; P2b's user-approved Medium default may change live LLM responses for new/incomplete configurations
 
 ## Non-goals
 
-- No product behavior changes (except whatever P3 decides explicitly)
+- No product behavior changes beyond P3 decisions and the user-approved P2b settings UX / Medium new-install reasoning default
 - No fixing the 53 sentence-case / UI-text lint warnings (pure churn)
 - No UI redesign, no new features
 
@@ -28,7 +29,7 @@ changing product behavior — each batch stays independently mergeable.
   main checkout directly
 - P2a waits for `fix/arxiv-failure-recovery` and `fix/arxiv-request-resilience`
   merged into main — **done 2026-07-31 (be4c705)**; P2a started on
-  `refactor/dashboard-view-modules`
+  `refactor/settings-declarative-api`
 - commit-msg hook: Conventional Commits (`feat|fix|refactor|docs|test|chore|perf`),
   body with why/what/validation for multi-file or >20-line changes
 - Checks must stay green: `npm run typecheck`, `npm test`, `npm run lint`
@@ -38,13 +39,17 @@ changing product behavior — each batch stays independently mergeable.
 
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
-2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: active
-3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: pending
+2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: done
+3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: done (pending PR merge; landed criterion below)
 4. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2a (started 2026-07-31 on refactor/dashboard-view-modules)
+P2b (started 2026-07-31; branch re-cut 2026-07-31 to
+  refactor/settings-declarative-api after PR #4 merged; T1–T7 committed
+  2026-07-31, second manual-test UI follow-up in progress — pending another 1.13+
+  manual pass, then PR review + merge; the "P2b landed" success criterion
+  checks only after the merge, mirroring P2a)
 
 ## Resolved
 
