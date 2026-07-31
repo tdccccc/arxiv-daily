@@ -5,8 +5,16 @@ import {
   PluginSettingTab,
   requireApiVersion,
   Setting,
+  type SettingDefinitionItem,
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import {
+  buildSettingDefinitions,
+  readSettingValue,
+  SETTING_KEYS,
+  writeSettingValue,
+} from "./definitions";
+import * as declarativeRows from "./declarative-rows";
 import {
   describeResult,
   detailSelectionPreset,
@@ -130,6 +138,76 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
+  }
+
+  /**
+   * Declarative settings for Obsidian 1.13+ (searchable in Settings
+   * search). Host callbacks bind the shared row renderers and the tab's
+   * mutation methods; display() stays as the <1.13 fallback. Only called
+   * by the framework on 1.13+, so no version guard is needed here.
+   */
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return buildSettingDefinitions({
+      plugin: this.plugin,
+      renderSetupGuideRow: (setting) =>
+        declarativeRows.renderSetupGuideRow(this, setting),
+      renderScheduleEnabledRow: (setting) =>
+        declarativeRows.renderScheduleEnabledRow(this, setting),
+      renderApiKeyRow: (setting) =>
+        declarativeRows.renderApiKeyRow(this, setting),
+      renderModelRow: (setting) =>
+        declarativeRows.renderModelRow(this, setting),
+      renderCategoryRow: (setting, index) =>
+        declarativeRows.renderCategoryRow(this, setting, index),
+      renderQuickStartRow: (setting) =>
+        declarativeRows.renderQuickStartRow(this, setting),
+      renderTopicRow: (setting, index) =>
+        declarativeRows.renderTopicRow(this, setting, index),
+      renderTimezoneRow: (setting) =>
+        declarativeRows.renderTimezoneRow(this, setting),
+      renderRunWindowRow: (setting) =>
+        declarativeRows.renderRunWindowRow(this, setting),
+      renderTickIntervalRow: (setting) =>
+        declarativeRows.renderTickIntervalRow(this, setting),
+      renderEmailGuideRow: (setting) =>
+        declarativeRows.renderEmailGuideRow(this, setting),
+      renderEmailModeRow: (setting) =>
+        declarativeRows.renderEmailModeRow(this, setting),
+      renderEmailApiKeyRow: (setting) =>
+        declarativeRows.renderEmailApiKeyRow(this, setting),
+      renderHostedTokenRow: (setting) =>
+        declarativeRows.renderHostedTokenRow(this, setting),
+      addCategory: () => void this.addCategory(),
+      deleteCategory: (index) => void this.deleteCategory(index),
+      reorderCategories: (oldIndex, newIndex) =>
+        void this.reorderCategories(oldIndex, newIndex),
+      addTopic: () => void this.addTopic(),
+      reorderTopics: (oldIndex, newIndex) =>
+        void this.reorderTopics(oldIndex, newIndex),
+      sendVerificationEmail: () => declarativeRows.sendVerificationEmail(this),
+      sendTestEmail: () => declarativeRows.sendTestEmail(this),
+    });
+  }
+
+  /** Resolve a flat declarative key against the nested settings object. */
+  override getControlValue(key: string): unknown {
+    return readSettingValue(this.plugin.settings, key);
+  }
+
+  /**
+   * Persist a flat declarative key. Email To and From mirror display()'s
+   * trimming on change; From name is written raw there, so it stays raw
+   * here too.
+   */
+  override async setControlValue(key: string, value: unknown): Promise<void> {
+    if (
+      typeof value === "string" &&
+      (key === SETTING_KEYS.email.to || key === SETTING_KEYS.email.fromEmail)
+    ) {
+      value = value.trim();
+    }
+    writeSettingValue(this.plugin.settings, key, value);
+    await this.plugin.saveSettings();
   }
 
   /** Append an accessible circled "?" to a setting name. */
