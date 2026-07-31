@@ -95,7 +95,7 @@ arxiv-daily run --today
 
 Or without a global install: `npx arxiv-daily@latest help`.
 
-Config is only **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root`. After init you can hand-edit topics in that file.
+Config is only **`$XDG_CONFIG_HOME/arxiv-daily/config.toml`** (default `~/.config/arxiv-daily/config.toml`). No settings env vars; no `--config` / `--vault-root`. After init you can hand-edit topics in that file. The file holds your API keys in plain text — lock it down: `chmod 600 ~/.config/arxiv-daily/config.toml`.
 
 ```bash
 arxiv-daily update              # upgrade global install when a newer npm release exists
