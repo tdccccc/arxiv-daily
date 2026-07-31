@@ -221,3 +221,13 @@
 - disposition: deterministic report/note rendering is source-identical and the
   full plugin regression suite is green; proceed to push, PR, CI, and merge
 - next: merge P2b; check `P2b landed` only after the merge reaches main
+
+## 2026-08-01 — note (P2b landed; initiative complete)
+
+- evidence: user accepted the 1.13+ settings UI; PR #5 passed both CI verify
+  jobs and merged to main as 50957ecba3ad6b1314b2b0e9211942ef5a2882b3
+- change: `P2b landed` checked; pending-merge wording removed; all revised
+  success criteria are now satisfied and the initiative status is done
+- disposition: retain the P2b branch and test-vault deployment for reference;
+  no changes made to the main checkout or user `data.json`
+- next: none
