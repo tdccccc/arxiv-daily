@@ -10,9 +10,10 @@ changing product behavior — each batch stays independently mergeable.
 
 ## Success criteria
 
-- [ ] P1 landed: dead code removed, legacy shim corrected, README security note added, `obsidian` devDep pinned — all checks green
-- [ ] P2 landed: dashboard `view.ts` split into modules; settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
-- [ ] P3 resolved: CLI `detailSelection` is either configurable via TOML or explicitly documented as a fixed preset
+- [x] P1 landed: dead code removed, legacy shim corrected, README security note added, `obsidian` devDep pinned — all checks green
+- [ ] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
+- [ ] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
+- [x] P3 resolved: CLI `detailSelection` documented-as-fixed (schema + journal)
 - [ ] No pipeline output change: daily reports and paper notes are byte-identical before/after each batch
 
 ## Non-goals
@@ -23,11 +24,11 @@ changing product behavior — each batch stays independently mergeable.
 
 ## Constraints
 
-- The main worktree is in use by another agent (bug fixes): every change goes
-  through a separate worktree branch; nothing touches the main checkout
-- P2 waits for `fix/arxiv-failure-recovery` and `fix/arxiv-request-resilience`
-  to merge into `main` (they touch pipeline.ts and dashboard code — widest
-  conflict surface)
+- Every change goes through a separate worktree branch; nothing touches the
+  main checkout directly
+- P2a waits for `fix/arxiv-failure-recovery` and `fix/arxiv-request-resilience`
+  merged into main — **done 2026-07-31 (be4c705)**; P2a started on
+  `refactor/dashboard-view-modules`
 - commit-msg hook: Conventional Commits (`feat|fix|refactor|docs|test|chore|perf`),
   body with why/what/validation for multi-file or >20-line changes
 - Checks must stay green: `npm run typecheck`, `npm test`, `npm run lint`
@@ -37,13 +38,13 @@ changing product behavior — each batch stays independently mergeable.
 
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
-2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: pending
-3. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
+2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: active
+3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: pending
+4. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2 (unblocked 2026-07-31: fix/arxiv-failure-recovery and
-fix/arxiv-request-resilience merged into main via be4c705)
+P2a (started 2026-07-31 on refactor/dashboard-view-modules)
 
 ## Resolved
 
@@ -51,3 +52,6 @@ fix/arxiv-request-resilience merged into main via be4c705)
   omits `detail_selection` (schema: cli-toml-schema.md lines 59–60, 178,
   186, 348, 455, 465; decision journaled 2026-07-28 in
   cli-product-config-and-data-portability)
+- Cleanup 2026-07-31: deleted abandoned Rust-rewrite branches
+  (`feat/ui-polish` ⊂ `refactor/rust-standalone`, local + origin); no main
+  traces, no helm tracking — dead experiment from 2026-07-13..15

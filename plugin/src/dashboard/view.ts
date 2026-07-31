@@ -1,7 +1,6 @@
 import {
   ItemView,
   Menu,
-  Modal,
   Notice,
   setIcon,
   TFile,
@@ -12,19 +11,15 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
-  classifyPaperNote,
-  modernArxivResources,
   normalizeArxivId,
   planDashboardAction,
   queryDashboard,
-  validateVaultRelativeDirectory,
   type DashboardAction,
   type DashboardPatch,
   type DashboardQuery,
   type DashboardRow,
   type DashboardSortDirection,
   type DashboardSortKey,
-  type DashboardTab,
 } from "@arxiv-daily/core";
 import { syncDashboardHistory, type DashboardMarkdownFile } from "@arxiv-daily/core";
 import {
@@ -32,19 +27,18 @@ import {
   validateLlmConfig,
 } from "@arxiv-daily/core";
 import type { RunStateEntry } from "@arxiv-daily/core";
-import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "@arxiv-daily/core";
+import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
 import { SimilarPapersModal } from "./similar-papers-modal";
+import { HubModal } from "./hub-modal";
 import {
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_REPO_URL,
   buildBugReportUrl,
   buildFeatureRequestUrl,
 } from "../feedback";
-import { buildDiagnosticsReport, redactText } from "@arxiv-daily/core";
-import { formatRunHistoryRecords } from "@arxiv-daily/core";
 import { LOOKBACK_DAYS } from "@arxiv-daily/core";
 import {
   describeManualResult,
@@ -52,336 +46,123 @@ import {
   describeRunResults,
 } from "@arxiv-daily/core";
 
-export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
-const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
-const DASHBOARD_SEARCH_DEBOUNCE_MS = 250;
+import {
+  ARXIV_DAILY_DASHBOARD_VIEW,
+  DASHBOARD_SEARCH_DEBOUNCE_MS,
+  DASHBOARD_TABS,
+  DEFAULT_SORT_KEY,
+  PAGE_SIZE_OPTIONS,
+  RECENT_DATES_FOREGROUND_TIMEOUT_MS,
+  SORT_LABELS,
+} from "./constants";
 
-const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "starred", label: "Starred" },
-];
+export { ARXIV_DAILY_DASHBOARD_VIEW } from "./constants";
 
-const PAGE_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 20, label: "20" },
-  { value: 50, label: "50" },
-  { value: 100, label: "100" },
-  { value: Infinity, label: "All" },
-];
+import {
+  buildCalendarDailyReportMap,
+  calendarCellAriaLabel,
+  calendarCells,
+  isButtonElement,
+  isCalendarRunWhitelisted,
+  latestReportMonth,
+  parseCalendarDate,
+  resolveCalendarCellState,
+  resolveCalendarEmptyReason,
+  shiftMonth,
+} from "./calendar";
+import type {
+  CalendarCell,
+  CalendarEmptyReason,
+} from "./calendar";
+import type {
+  DashboardPage,
+  DailyReportDay,
+} from "./types";
+import {
+  collectIndexedDetailSummaryRefs,
+  expectedDetailSummaryPath,
+  isExpectedGeneratedDetailSummary,
+  shouldForceDashboardHistorySyncAfterDetailDeletion,
+} from "./detail-refs";
+import {
+  dailyDateFromPath,
+  dashboardHistoryPathSet,
+  filterDashboardMarkdownFiles,
+  normalizeVaultPath,
+  shouldSkipDashboardHistorySync,
+} from "./files";
+import {
+  paginateDashboardRows,
+  showingText,
+} from "./pagination";
+import {
+  dashboardHeaderStatusText,
+  latestCompletedRunDate,
+  trashFileWithUserPreference,
+} from "./actions";
 
-const SORT_LABELS: Record<DashboardSortKey, string> = {
-  relevance: "Relevance",
-  priority: "Starred first",
-  published: "Published",
-  topic: "Topic",
-  title: "Title",
-};
+export type { CalendarCell, CalendarEmptyReason, CalendarCellState } from "./calendar";
+export {
+  applyEmptyCalendarCellA11y,
+  buildCalendarDailyReportMap,
+  calendarCellAriaLabel,
+  isButtonElement,
+  isCalendarRunWhitelisted,
+  resolveCalendarCellState,
+  resolveCalendarEmptyReason,
+} from "./calendar";
+export type { CalendarRunWhitelistInput } from "./calendar";
+export type { DashboardPage, DailyReportDay } from "./types";
+export {
+  collectIndexedDetailSummaryRefs,
+  expectedDetailSummaryPath,
+  isExpectedGeneratedDetailSummary,
+  shouldForceDashboardHistorySyncAfterDetailDeletion,
+} from "./detail-refs";
+export {
+  dashboardHistoryPathSet,
+  filterDashboardMarkdownFiles,
+  shouldSkipDashboardHistorySync,
+} from "./files";
+export {
+  paginateDashboardRows,
+  showingText,
+} from "./pagination";
+export {
+  dashboardHeaderStatusText,
+  latestCompletedRunDate,
+  trashFileWithUserPreference,
+} from "./actions";
 
-const DEFAULT_SORT_KEY: DashboardSortKey = "priority";
+export { formatLogEntries } from "./log-format";
 
-export interface DashboardPage<T> {
-  rows: T[];
-  total: number;
-  totalPages: number;
-  currentPage: number;
-  start: number;
-  end: number;
-  pageSize: number;
-}
+import {
+  appendSettingsButton,
+  applyStarButtonState,
+  deferDashboardAction,
+  describeDashboardAction,
+  errorMessage,
+  executeObsidianCommand,
+  isStarredEntry,
+  openArxivResource,
+  openMarkdownFileOnce,
+  recentDatesFallbackNotice,
+  topicOptions,
+} from "./actions";
 
-export interface DailyReportDay {
-  date: string;
-  path: string;
-  papers: number;
-  starred: number;
-}
-
-export type CalendarCellState =
-  | "empty"        // No date or outside lookback
-  | "runnable"     // Can generate report
-  | "has-report"   // Report exists
-  | "no-relevant-papers"; // LLM filtered to 0 relevant papers
-
-export type CalendarEmptyReason =
-  | "blank"
-  | "arxiv-not-updated"
-  | "future"
-  | "before-tracking"
-  | "report-missing"
-  | "permanent-failure";
-
-export interface CalendarCell {
-  date: string | null;
-  state: CalendarCellState;
-  report?: DailyReportDay;
-  emptyReason?: CalendarEmptyReason;
-  failureReason?: string;
-}
-
-export interface CalendarCellResolution {
-  state: CalendarCellState;
-  emptyReason?: CalendarEmptyReason;
-}
-
-export interface CalendarRunWhitelistInput {
-  date: string;
-  today: string;
-  now: Date;
-  timezone: string;
-  runAtLocal: string;
-  runUntilLocal: string;
-  inLookback: boolean;
-  isWeekend: boolean;
-  hasDailyReport: boolean;
-  recentDates: ReadonlySet<string>;
-  runState?: RunStateEntry;
-}
-
-export function resolveCalendarCellState({
-  report,
-  runnable,
-  runState,
-  emptyReason,
-}: {
-  report?: { papers: number };
-  runnable: boolean;
-  runState?: RunStateEntry;
-  emptyReason?: CalendarEmptyReason;
-}): CalendarCellResolution {
-  if (report) {
-    return {
-      state: report.papers === 0 ? "no-relevant-papers" : "has-report",
-    };
-  }
-
-  if (runState?.status === "failed_permanent") {
-    return { state: "empty", emptyReason: "permanent-failure" };
-  }
-
-  if (isArxivNotUpdatedRunState(runState)) {
-    return { state: "empty", emptyReason: "arxiv-not-updated" };
-  }
-
-  if (runnable) return { state: "runnable" };
-
-  if (isCompletedRunState(runState)) {
-    return { state: "empty", emptyReason: "report-missing" };
-  }
-
-  return emptyReason
-    ? { state: "empty", emptyReason }
-    : { state: "empty" };
-}
-
-export function isCalendarRunWhitelisted(
-  input: CalendarRunWhitelistInput,
-): boolean {
-  if (!input.inLookback) return false;
-  if (input.isWeekend) return false;
-  if (input.hasDailyReport) return false;
-  if (isRunStateBlockedForCalendarRun(input.runState)) return false;
-
-  if (input.date === input.today) {
-    return isTimeWithinLocalWindow(
-      input.now,
-      input.timezone,
-      input.runAtLocal,
-      input.runUntilLocal,
-    );
-  }
-
-  return input.recentDates.has(input.date);
-}
-
-export interface CalendarEmptyReasonInput {
-  date: string;
-  today: string;
-  trackingStartDate: string;
-  recentDates: ReadonlySet<string>;
-}
-
-export interface CalendarDailyReportMapInput {
-  month: string;
-  scannedReports: DailyReportDay[];
-  normalizePath: (path: string) => string;
-}
+export {
+  applyStarButtonState,
+  appendSettingsButton,
+  deferDashboardAction,
+  executeObsidianCommand,
+  openMarkdownFileOnce,
+} from "./actions";
 
 interface AppWithSettingsApi extends App {
   setting?: {
     open?: () => void;
     openTabById?: (id: string) => void;
   };
-}
-
-export function resolveCalendarEmptyReason(
-  input: CalendarEmptyReasonInput,
-): CalendarEmptyReason {
-  if (input.date > input.today) return "future";
-  if (
-    input.date < input.trackingStartDate &&
-    !input.recentDates.has(input.date)
-  ) {
-    return "before-tracking";
-  }
-  return "arxiv-not-updated";
-}
-
-export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
-  if (!cell.date) return undefined;
-  const date = cell.date;
-
-  if (cell.state === "has-report" && cell.report) {
-    return `${date}: open daily report, ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
-  }
-
-  if (cell.state === "no-relevant-papers") {
-    return `${date}: open daily report, no relevant papers`;
-  }
-
-  if (cell.state === "runnable") {
-    return `${date}: run daily report`;
-  }
-
-  if (cell.emptyReason === "arxiv-not-updated") {
-    return `${date}: arXiv not updated`;
-  }
-
-  if (cell.emptyReason === "report-missing") {
-    return `${date}: daily report missing`;
-  }
-
-  if (cell.emptyReason === "permanent-failure") {
-    return `${date}: daily report failed permanently${cell.failureReason ? `, ${cell.failureReason}` : ""}`;
-  }
-
-  if (cell.emptyReason === "future") {
-    return `${date}: future date`;
-  }
-
-  return date;
-}
-
-export function applyEmptyCalendarCellA11y(button: HTMLButtonElement): void {
-  button.disabled = true;
-  button.setAttribute("tabindex", "-1");
-  button.setAttribute("aria-hidden", "true");
-}
-
-export function isButtonElement(element: HTMLElement): element is HTMLButtonElement {
-  return element.tagName === "BUTTON";
-}
-
-export function dashboardHeaderStatusText(input: {
-  isRunning: boolean;
-  lastCompletedDate?: string;
-}): string {
-  if (input.isRunning) return "Running…";
-  return `Last run: ${input.lastCompletedDate ?? "never"}`;
-}
-
-export function latestCompletedRunDate(
-  runState: Record<string, RunStateEntry | undefined>,
-): string | undefined {
-  const completed = Object.entries(runState)
-    .filter(([, entry]) => entry?.status === "completed")
-    .map(([date]) => date)
-    .sort();
-  return completed[completed.length - 1];
-}
-
-export function collectIndexedDetailSummaryRefs(
-  entries: DashboardRow["entry"][],
-): { ids: Set<string>; paths: Map<string, string> } {
-  const ids = new Set<string>();
-  const paths = new Map<string, string>();
-  for (const entry of entries) {
-    const path = normalizeVaultPath(entry.paperPath ?? "");
-    if (!entry.detail || !path) continue;
-    ids.add(entry.arxivId);
-    paths.set(entry.arxivId, path);
-  }
-  return { ids, paths };
-}
-
-export function expectedDetailSummaryPath(
-  papersDir: string,
-  rawArxivId: string,
-): string | null {
-  const canonicalId = normalizeArxivId(rawArxivId);
-  const directory = validateVaultRelativeDirectory(papersDir);
-  if (!canonicalId || !directory.ok || !directory.value) return null;
-  return `${directory.value}/${canonicalId}.md`;
-}
-
-export function isExpectedGeneratedDetailSummary(
-  markdown: string,
-  canonicalArxivId: string,
-): boolean {
-  return classifyPaperNote(markdown, canonicalArxivId).kind === "verified_detail";
-}
-
-export function shouldForceDashboardHistorySyncAfterDetailDeletion(
-  trashedFiles: number,
-  updatedEntries: number,
-): boolean {
-  return trashedFiles > 0 || updatedEntries > 0;
-}
-
-export async function trashFileWithUserPreference(
-  app: Pick<App, "fileManager" | "vault">,
-  file: TFile,
-): Promise<void> {
-  const fileManager = app.fileManager as unknown as {
-    trashFile?: (target: TFile) => Promise<void>;
-  };
-  if (typeof fileManager.trashFile === "function") {
-    await fileManager.trashFile(file);
-    return;
-  }
-
-  // Obsidian before 1.6.6 does not expose the user's trash preference.
-  // Prefer system trash; Vault.trash falls back to the local .trash folder.
-  const legacyTrash = Reflect.get(app.vault, "trash");
-  if (typeof legacyTrash !== "function") {
-    throw new Error("No compatible Obsidian trash API is available");
-  }
-  await Reflect.apply(legacyTrash, app.vault, [file, true]);
-}
-
-export async function buildCalendarDailyReportMap(
-  input: CalendarDailyReportMapInput,
-): Promise<Map<string, DailyReportDay>> {
-  const out = new Map<string, DailyReportDay>();
-  const monthPrefix = `${input.month}-`;
-
-  for (const report of input.scannedReports) {
-    if (!report.date.startsWith(monthPrefix)) continue;
-    out.set(report.date, {
-      ...report,
-      path: input.normalizePath(report.path),
-    });
-  }
-
-  return out;
-}
-
-function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
-  return (
-    runState?.status === "skipped" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
-  );
-}
-
-function isRunStateBlockedForCalendarRun(runState?: RunStateEntry): boolean {
-  return (
-    runState?.status === "running" ||
-    runState?.status === "skipped" ||
-    runState?.status === "failed_permanent" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
-  );
-}
-
-function isCompletedRunState(runState?: RunStateEntry): boolean {
-  return runState?.status === "completed";
 }
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -426,94 +207,6 @@ export async function openDashboardView(
     active: true,
   });
   workspace.setActiveLeaf(leaf, { focus: true });
-}
-
-export async function openMarkdownFileOnce(
-  app: {
-    workspace: {
-      getLeavesOfType?(type: string): unknown[];
-      setActiveLeaf?(leaf: unknown, options?: { focus?: boolean }): void;
-      openLinkText(path: string, sourcePath: string, newLeaf?: boolean): Promise<void>;
-    };
-  },
-  path: string,
-): Promise<void> {
-  const target = normalizeVaultPath(path);
-  const leaves = app.workspace.getLeavesOfType?.("markdown") ?? [];
-  for (const leaf of leaves) {
-    const leafPath = markdownPathFromLeaf(leaf);
-    if (leafPath && normalizeVaultPath(leafPath) === target) {
-      if (app.workspace.setActiveLeaf) {
-        app.workspace.setActiveLeaf(leaf, { focus: true });
-      } else {
-        await app.workspace.openLinkText(path, "", false);
-      }
-      return;
-    }
-  }
-  await app.workspace.openLinkText(path, "", false);
-}
-
-export function appendSettingsButton(
-  parent: HTMLElement,
-  onClick: () => void,
-): HTMLButtonElement {
-  const button = parent.createEl("button", {
-    cls: "arxiv-daily-dashboard__settings-btn",
-    attr: {
-      type: "button",
-      "aria-label": "Open arXiv Daily settings",
-    },
-  });
-  setIcon(button, "settings");
-  button.createSpan({ text: "Settings" });
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-export function applyStarButtonState(
-  button: HTMLButtonElement,
-  starred: boolean,
-): void {
-  button.classList.toggle("is-starred", starred);
-  button.setAttribute("aria-pressed", String(starred));
-  button.setAttribute(
-    "aria-label",
-    starred ? "Unstar paper" : "Star paper",
-  );
-  button.replaceChildren();
-  setIcon(button, "star");
-}
-
-export const DEFAULT_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
-
-const LOG_LEVEL_TAG = /\[(DEBUG|INFO|WARN|ERROR)\]/;
-
-function parseLogLevelTag(line: string): string | null {
-  const m = line.match(LOG_LEVEL_TAG);
-  return m?.[1] ? m[1].toLowerCase() : null;
-}
-
-export interface FormatLogEntriesOptions {
-  /** Levels to keep. Defaults to all four levels. */
-  levels?: Set<string>;
-}
-
-export function formatLogEntries(
-  buffer: string[],
-  opts: FormatLogEntriesOptions = {},
-): string {
-  if (buffer.length === 0) return "(no log entries)";
-  const levels = opts.levels ?? DEFAULT_LOG_LEVELS;
-  const kept: string[] = [];
-  // Iterate oldest→newest, push allowed; untagged lines are kept.
-  for (const line of buffer) {
-    const lvl = parseLogLevelTag(line);
-    if (lvl === null || levels.has(lvl)) kept.push(line);
-  }
-  if (kept.length === 0) return "(no log entries at this level)";
-  // Reverse so newest is on top.
-  return kept.reverse().join("\n");
 }
 
 class ArxivDailyDashboardView extends ItemView {
@@ -2746,615 +2439,5 @@ class ArxivDailyDashboardView extends ItemView {
       if (!entry) return null;
     }
     return entry;
-  }
-}
-
-function topicOptions(entries: DashboardRow["entry"][]): string[] {
-  const topics = new Set<string>();
-  for (const entry of entries) {
-    for (const topic of [entry.primaryTopic, ...entry.topics]) {
-      const trimmed = topic.trim();
-      if (trimmed) topics.add(trimmed);
-    }
-  }
-  return [...topics].sort((a, b) => a.localeCompare(b));
-}
-
-async function openArxivResource(
-  rawArxivId: string,
-  kind: "abs" | "pdf",
-  plugin: ArxivDailyPlugin,
-): Promise<void> {
-  const resources = modernArxivResources(rawArxivId);
-  const label = kind === "pdf" ? "PDF" : "arXiv";
-  if (!resources) {
-    plugin.logger.warn(`dashboard: refused invalid arXiv ID for ${label}`);
-    new Notice(`arXiv Daily: invalid arXiv ID; ${label} was not opened`);
-    return;
-  }
-  const url = kind === "pdf" ? resources.pdfUrl : resources.absUrl;
-  plugin.logger.info(`dashboard: opening ${label} URL ${url}`);
-  await new ObsidianResourceOpener(plugin.app).openUrl(url);
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return String(error);
-}
-
-function describeDashboardAction(action: DashboardAction): string {
-  const count = action.arxivIds.length;
-  if (action.type === "set_priority") {
-    return `set_priority:${action.priority}:${count}`;
-  }
-  if (action.type === "set_status") {
-    return `set_status:${action.status}:${count}`;
-  }
-  return `${action.type}:${count}`;
-}
-
-function isStarredEntry(entry: DashboardRow["entry"]): boolean {
-  return entry.status !== "ignored" && entry.priority === "high";
-}
-
-export function deferDashboardAction(action: () => void): void {
-  window.setTimeout(action, 0);
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(
-    value &&
-      (typeof value === "object" || typeof value === "function") &&
-      typeof (value as { then?: unknown }).then === "function",
-  );
-}
-
-export async function executeObsidianCommand(
-  app: unknown,
-  commandId: string,
-  pluginId?: string,
-): Promise<boolean> {
-  const commands = (app as {
-    commands?: {
-      executeCommandById?: (id: string) => unknown;
-      commands?: Record<
-        string,
-        {
-          callback?: () => unknown;
-          checkCallback?: (checking: boolean) => unknown;
-        }
-      >;
-    };
-  })?.commands;
-  if (!commands) return false;
-  const ids = commandId.includes(":")
-    ? [commandId]
-    : uniqueCommandIds([
-        pluginId ? `${pluginId}:${commandId}` : "",
-        commandId,
-      ]);
-  const registeredIds = ids.filter((id) => commands.commands?.[id]);
-  const executableIds = registeredIds.length ? registeredIds : ids;
-
-  if (typeof commands.executeCommandById === "function") {
-    for (const id of executableIds) {
-      const result = commands.executeCommandById(id);
-      if (isPromiseLike(result)) await result;
-      if (result !== false) return true;
-    }
-    return false;
-  }
-
-  const id = registeredIds[0];
-  const command = id ? commands.commands?.[id] : undefined;
-  if (!command) return false;
-  const callback = command.callback;
-  if (typeof callback === "function") {
-    const result = callback();
-    if (isPromiseLike(result)) await result;
-    return result !== false;
-  }
-  const checkCallback = command.checkCallback;
-  if (typeof checkCallback === "function") {
-    const result = checkCallback(false);
-    if (isPromiseLike(result)) await result;
-    return result !== false;
-  }
-  return false;
-}
-
-function uniqueCommandIds(ids: string[]): string[] {
-  const out: string[] = [];
-  for (const id of ids) {
-    if (!id || out.includes(id)) continue;
-    out.push(id);
-  }
-  return out;
-}
-
-function recentDatesFallbackNotice(refreshedAt: number): string {
-  if (!refreshedAt) {
-    return "arXiv recent dates are still refreshing in the background.";
-  }
-  const refreshed = new Date(refreshedAt).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  return `arXiv recent dates are still refreshing in the background; using cached data from ${refreshed}.`;
-}
-
-function normalizeVaultPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
-}
-
-export function filterDashboardMarkdownFiles<T extends DashboardMarkdownFile>(
-  files: T[],
-  dailyDir: string,
-  papersDir: string,
-): T[] {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
-  return files.filter((file) => {
-    const path = normalizeVaultPath(file.path);
-    return (
-      path.startsWith(`${normalizedDailyDir}/`) ||
-      path.startsWith(`${normalizedPapersDir}/`)
-    );
-  });
-}
-
-export function dashboardHistoryPathSet(
-  files: DashboardMarkdownFile[],
-  dailyDir: string,
-  papersDir: string,
-): Set<string> {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
-  return new Set(
-    files
-      .map((file) => normalizeVaultPath(file.path))
-      .filter(
-        (path) =>
-          path.startsWith(`${normalizedDailyDir}/`) ||
-          isDirectChildMarkdown(path, normalizedPapersDir),
-      ),
-  );
-}
-
-export function shouldSkipDashboardHistorySync(
-  previousHistoryPaths: ReadonlySet<string> | null,
-  currentHistoryPaths: ReadonlySet<string>,
-  currentEntryCount: number,
-): boolean {
-  if (!previousHistoryPaths || currentEntryCount === 0) return false;
-  if (previousHistoryPaths.size !== currentHistoryPaths.size) return false;
-  for (const path of currentHistoryPaths) {
-    if (!previousHistoryPaths.has(path)) return false;
-  }
-  return true;
-}
-
-function isDirectChildMarkdown(path: string, dir: string): boolean {
-  const prefix = `${dir}/`;
-  if (!path.startsWith(prefix) || !/\.md$/i.test(path)) return false;
-  return !path.slice(prefix.length).includes("/");
-}
-
-export function showingText(page: DashboardPage<unknown>): string {
-  if (page.total === 0) return "Showing 0 of 0 papers";
-  if (!isFinite(page.pageSize)) return `Showing all ${page.total} papers`;
-  return `Showing ${page.start}-${page.end} of ${page.total} papers`;
-}
-
-export function paginateDashboardRows<T>(
-  rows: T[],
-  currentPage: number,
-  pageSize: number,
-): DashboardPage<T> {
-  const total = rows.length;
-  // Infinity means "show all" — bypass arithmetic to avoid 0 * Infinity = NaN.
-  if (!isFinite(pageSize)) {
-    return {
-      rows: rows.slice(),
-      total,
-      totalPages: 1,
-      currentPage: 0,
-      start: total === 0 ? 0 : 1,
-      end: total,
-      pageSize,
-    };
-  }
-  const safePageSize = Math.max(1, Math.floor(pageSize));
-  const totalPages = Math.ceil(total / safePageSize) || 1;
-  const clampedPage = Math.max(
-    0,
-    Math.min(Math.floor(currentPage), totalPages - 1),
-  );
-  const offset = clampedPage * safePageSize;
-  const pageRows = rows.slice(offset, offset + safePageSize);
-  return {
-    rows: pageRows,
-    total,
-    totalPages,
-    currentPage: clampedPage,
-    start: pageRows.length === 0 ? 0 : offset + 1,
-    end: offset + pageRows.length,
-    pageSize: safePageSize,
-  };
-}
-
-function markdownPathFromLeaf(leaf: unknown): string | null {
-  const candidate = leaf as {
-    getViewState?: () => { state?: { file?: unknown } };
-    view?: { file?: { path?: unknown } };
-  };
-  const stateFile = candidate.getViewState?.().state?.file;
-  if (typeof stateFile === "string") return stateFile;
-  const viewPath = candidate.view?.file?.path;
-  return typeof viewPath === "string" ? viewPath : null;
-}
-
-function dailyDateFromPath(path: string, dailyDir: string): string | null {
-  const normalized = normalizeVaultPath(path);
-  const prefix = `${dailyDir}/`;
-  if (!normalized.startsWith(prefix)) return null;
-  const rest = normalized.slice(prefix.length);
-  const match = /^(\d{4}-\d{2}-\d{2})\.md$/i.exec(rest);
-  return match?.[1] ?? null;
-}
-
-function latestReportMonth(reports: DailyReportDay[]): string | null {
-  const latest = reports[reports.length - 1]?.date;
-  return latest ? latest.slice(0, 7) : null;
-}
-
-function shiftMonth(month: string, delta: number): string {
-  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
-  if (
-    typeof rawYear !== "number" ||
-    typeof rawMonthIndex !== "number" ||
-    !Number.isFinite(rawYear) ||
-    !Number.isFinite(rawMonthIndex)
-  ) {
-    return month;
-  }
-  const year = rawYear;
-  const monthIndex = rawMonthIndex;
-  const date = new Date(Date.UTC(year, monthIndex - 1 + delta, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function calendarCells(month: string): Array<{ date: string | null }> {
-  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
-  if (
-    typeof rawYear !== "number" ||
-    typeof rawMonthIndex !== "number" ||
-    !Number.isFinite(rawYear) ||
-    !Number.isFinite(rawMonthIndex)
-  ) {
-    return [];
-  }
-  const year = rawYear;
-  const monthIndex = rawMonthIndex;
-  const first = new Date(Date.UTC(year, monthIndex - 1, 1));
-  const daysInMonth = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate();
-  const mondayOffset = (first.getUTCDay() + 6) % 7;
-  const cells: Array<{ date: string | null }> = Array.from(
-    { length: mondayOffset },
-    () => ({ date: null }),
-  );
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: `${month}-${String(day).padStart(2, "0")}`,
-    });
-  }
-  while (cells.length % 7 !== 0) cells.push({ date: null });
-  return cells;
-}
-
-function parseCalendarDate(date: string): { y: number; m: number; d: number } | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!match) return null;
-  return {
-    y: Number(match[1]),
-    m: Number(match[2]),
-    d: Number(match[3]),
-  };
-}
-
-type HubModalTab = "logs" | "history" | "state" | "diagnostics";
-
-interface HubPanel {
-  button: HTMLButtonElement;
-  content: HTMLPreElement;
-  text: string;
-}
-
-class HubModal extends Modal {
-  private activeTab: HubModalTab = "logs";
-  private panels = new Map<HubModalTab, HubPanel>();
-  private logLevels: Set<string> = new Set(DEFAULT_LOG_LEVELS);
-  private levelRow: HTMLDivElement | null = null;
-  private clearButton: HTMLButtonElement | null = null;
-
-  constructor(app: App, private plugin: ArxivDailyPlugin) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl, modalEl } = this;
-    modalEl.addClass("arxiv-daily-hub-modal");
-    contentEl.addClass("arxiv-daily-hub-modal__content");
-    contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
-
-    const tabs = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__tabs" });
-    tabs.setAttribute("role", "tablist");
-    const body = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__body" });
-
-    this.createPanel(tabs, body, "logs", "Logs");
-    this.createPanel(tabs, body, "history", "Run History");
-    this.createPanel(tabs, body, "state", "Run State");
-    this.createPanel(tabs, body, "diagnostics", "Diagnostics");
-
-    const levelRow = body.createDiv({ cls: "arxiv-daily-hub-modal__level-filter" });
-    this.levelRow = levelRow;
-    this.renderLevelChips(levelRow);
-    levelRow.addClass("arxiv-daily-hub-modal__level-filter--hidden");
-
-    this.activateTab("logs");
-    this.refreshActiveTab();
-
-    const footer = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__footer" });
-    footer.createEl("button", {
-      text: "Refresh",
-      attr: { type: "button" },
-    }).onclick = () => {
-      this.refreshActiveTab();
-    };
-
-    this.clearButton = footer.createEl("button", {
-      text: "Clear logs",
-      attr: { type: "button" },
-    });
-    this.clearButton.onclick = () => {
-      this.plugin.logger.clearBuffer();
-      this.refreshActiveTab();
-    };
-    this.updateClearButton();
-
-    footer.createEl("button", {
-      text: "Copy",
-      attr: { type: "button" },
-    }).onclick = () => {
-      void this.copyActiveTab().catch((error: unknown) => {
-        this.plugin.logger.error("dashboard: failed to copy hub text", error);
-        new Notice(
-          `arXiv Daily: failed to copy hub text: ${errorMessage(error)}`,
-          10_000,
-        );
-      });
-    };
-
-    footer.createEl("button", {
-      text: "Close",
-      attr: { type: "button" },
-    }).onclick = () => {
-      this.close();
-    };
-  }
-
-  onClose() {
-    this.panels.clear();
-    this.contentEl.empty();
-  }
-
-  private createPanel(
-    tabs: HTMLElement,
-    body: HTMLElement,
-    tab: HubModalTab,
-    label: string,
-  ): void {
-    const tabId = `arxiv-daily-hub-modal-tab-${tab}`;
-    const panelId = `arxiv-daily-hub-modal-panel-${tab}`;
-    const button = tabs.createEl("button", {
-      cls: "arxiv-daily-hub-modal__tab",
-      text: label,
-      attr: {
-        type: "button",
-        role: "tab",
-        "aria-selected": "false",
-        "aria-controls": panelId,
-      },
-    });
-    button.id = tabId;
-    button.addEventListener("click", () => {
-      this.activateTab(tab);
-      this.refreshActiveTab();
-    });
-
-    const content = body.createEl("pre", {
-      cls: "arxiv-daily-hub-modal__panel",
-    });
-    content.id = panelId;
-    content.setAttribute("role", "tabpanel");
-    content.setAttribute("aria-labelledby", tabId);
-    this.panels.set(tab, { button, content, text: "" });
-  }
-
-  private activateTab(tab: HubModalTab): void {
-    this.activeTab = tab;
-    for (const [id, panel] of this.panels) {
-      const active = id === tab;
-      panel.button.toggleClass("hub-modal-tab-active", active);
-      panel.button.setAttribute("aria-selected", String(active));
-      panel.content.toggleClass("is-active", active);
-    }
-    this.setLevelRowVisibility();
-    this.updateClearButton();
-  }
-
-  private updateClearButton(): void {
-    if (!this.clearButton) return;
-    const visible = this.activeTab === "logs";
-    this.clearButton.hidden = !visible;
-    this.clearButton.disabled = !visible;
-  }
-
-  private renderLevelChips(container: HTMLElement): void {
-    container.empty();
-    const order: Array<{ key: string; label: string }> = [
-      { key: "debug", label: "Debug" },
-      { key: "info", label: "Info" },
-      { key: "warn", label: "Warn" },
-      { key: "error", label: "Error" },
-    ];
-    for (const { key, label } of order) {
-      const active = this.logLevels.has(key);
-      const chip = container.createEl("button", {
-        cls: `arxiv-daily-hub-modal__level-chip${active ? " is-active" : ""}`,
-        text: label,
-        attr: { type: "button", "aria-pressed": String(active) },
-      });
-      chip.onclick = () => {
-        if (this.logLevels.has(key)) this.logLevels.delete(key);
-        else this.logLevels.add(key);
-        this.renderLevelChips(container);
-        this.refreshActiveTab();
-      };
-    }
-    const all = container.createEl("button", {
-      cls: "arxiv-daily-hub-modal__level-chip",
-      text: "All",
-      attr: { type: "button" },
-    });
-    all.onclick = () => {
-      this.logLevels = new Set(DEFAULT_LOG_LEVELS);
-      this.renderLevelChips(container);
-      this.refreshActiveTab();
-    };
-  }
-
-  private setLevelRowVisibility(): void {
-    if (this.levelRow) {
-      this.levelRow.toggleClass(
-        "arxiv-daily-hub-modal__level-filter--hidden",
-        this.activeTab !== "logs",
-      );
-    }
-  }
-
-  private refreshActiveTab(): void {
-    const tab = this.activeTab;
-    if (tab === "logs") {
-      this.setPanelText(
-        tab,
-        formatLogEntries(this.plugin.logger.getBuffer(), { levels: this.logLevels }),
-      );
-      return;
-    }
-    this.setPanelText(tab, tab === "history" ? "Loading run history…" : tab === "state" ? "Loading run state…" : "Loading diagnostics…");
-    if (tab === "history") {
-      void this.loadRunHistory();
-    } else if (tab === "state") {
-      this.loadRunState();
-    } else {
-      this.loadDiagnostics();
-    }
-  }
-
-  private async loadRunHistory(): Promise<void> {
-    try {
-      const records = await this.plugin.runHistoryStore.readLatest(100);
-      this.setPanelText("history", formatRunHistoryRecords(records));
-    } catch (e) {
-      this.plugin.logger.warn("run history load failed", e);
-      this.setPanelText(
-        "history",
-        `Failed to load run history: ${(e as Error).message}`,
-      );
-    }
-  }
-
-  private loadRunState(): void {
-    try {
-      const snap = this.plugin.stateStore.snapshot();
-      const entries = Object.entries(snap).sort((a, b) => (a[0] < b[0] ? 1 : -1));
-      if (entries.length === 0) {
-        this.setPanelText("state", "No runs yet.");
-        return;
-      }
-      const lines = entries.slice(0, 50).map(([date, e]) => {
-        let line = `${date}: ${e.status} (attempts=${e.attempts}`;
-        if (e.papersWritten != null) line += `, papers=${e.papersWritten}`;
-        if (e.error) line += `, err=${e.error.slice(0, 120)}`;
-        line += ")";
-        return line;
-      });
-      this.setPanelText("state", lines.join("\n"));
-    } catch (e) {
-      this.plugin.logger.warn("run state load failed", e);
-      this.setPanelText("state", `Failed to load run state: ${(e as Error).message}`);
-    }
-  }
-
-  private loadDiagnostics(): void {
-    try {
-      this.setPanelText(
-        "diagnostics",
-        buildDiagnosticsReport({
-          settings: this.plugin.settings,
-          runState: this.plugin.stateStore.snapshot(),
-          version: this.plugin.manifest?.version,
-        }),
-      );
-    } catch (e) {
-      this.plugin.logger.warn("diagnostics load failed", e);
-      this.setPanelText(
-        "diagnostics",
-        `Failed to build diagnostics: ${redactText(e instanceof Error ? e.message : e, {
-          secrets: [this.plugin.settings.llm.apiKey],
-        })}`,
-      );
-    }
-  }
-
-  private setPanelText(tab: HubModalTab, text: string): void {
-    const panel = this.panels.get(tab);
-    if (!panel) return;
-    panel.text = text;
-    panel.content.setText(text);
-    panel.content.scrollTop = panel.content.scrollHeight;
-  }
-
-  private async copyActiveTab(): Promise<void> {
-    const panel = this.panels.get(this.activeTab);
-    const text = panel?.text ?? "";
-    const ownerDocument = this.contentEl.ownerDocument;
-    const ownerWindow = ownerDocument.defaultView;
-    try {
-      const clipboard = ownerWindow?.navigator.clipboard;
-      if (clipboard?.writeText) {
-        await clipboard.writeText(text);
-      } else if (panel) {
-        const range = ownerDocument.createRange();
-        range.selectNodeContents(panel.content);
-        const selection = ownerWindow?.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-        ownerDocument.execCommand("copy");
-        selection?.removeAllRanges();
-      }
-      new Notice("arXiv Daily: copied");
-    } catch (e) {
-      this.plugin.logger.warn("Could not copy hub modal text", e);
-      if (panel) {
-        const range = ownerDocument.createRange();
-        range.selectNodeContents(panel.content);
-        const selection = ownerWindow?.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-      }
-      new Notice("Could not copy; text is selectable");
-    }
   }
 }
