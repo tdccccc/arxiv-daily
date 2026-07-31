@@ -38,16 +38,15 @@ changing product behavior — each batch stays independently mergeable.
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
 2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: blocked
-3. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: pending
+3. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2 (blocked: waits for the bug-fix branch to merge into main)
+P2 (blocked: waits for fix/arxiv-failure-recovery and fix/arxiv-request-resilience to merge into main)
 
-## Open questions
+## Resolved
 
-- P3: the 2026-07-28 journal of `cli-product-config-and-data-portability`
-  already documents the decision — TOML deliberately omits
-  `detail_selection`/profile; deep-dive default = core balanced + per-topic
-  `detail`. P3 likely closes as "documented-as-fixed"; confirm with the user
-  and add the doc pointer to cli-toml-schema.md if it is missing there.
+- P3 (2026-07-31): closed as documented-as-fixed — the CLI deliberately
+  omits `detail_selection` (schema: cli-toml-schema.md lines 59–60, 178,
+  186, 348, 455, 465; decision journaled 2026-07-28 in
+  cli-product-config-and-data-portability)

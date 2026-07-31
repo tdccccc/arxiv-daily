@@ -31,3 +31,13 @@
 - disposition: P3 likely closes as documented-as-fixed pending user
   confirmation
 - next: P2 starts after the fix branches merge; P3 confirm with user
+
+## 2026-07-31 — note (P3 closed; paper-identity closed)
+
+- evidence: user confirmed P3 close; cli-toml-schema.md already documents
+  the decision in six places (59–60, 178, 186, 348, 455, 465) — no doc
+  change needed. Also closed paper-identity-source-boundary as done (all
+  criteria checked, merged via 0.3.3)
+- change: goal P3 → done, resolved section added
+- disposition: config.ts hard-coding balanced matches the schema; keep
+- next: P2 blocked on the two fix branches; nothing else pending
