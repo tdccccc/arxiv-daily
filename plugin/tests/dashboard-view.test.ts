@@ -26,6 +26,10 @@ const dashboardViewSource = readFileSync(
   resolve(process.cwd(), "src/dashboard/view.ts"),
   "utf-8",
 );
+const detailRefsSource = readFileSync(
+  resolve(process.cwd(), "src/dashboard/detail-refs.ts"),
+  "utf-8",
+);
 const pluginStyles = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
 
 describe("openDashboardView", () => {
@@ -471,7 +475,7 @@ describe("detail-summary deletion boundaries", () => {
   });
 
   it("reuses the core classifier for deletion validation", () => {
-    const validatorBody = dashboardViewSource.match(
+    const validatorBody = detailRefsSource.match(
       /export function isExpectedGeneratedDetailSummary\([\s\S]*?\n}/,
     )?.[0];
     expect(validatorBody).toContain("classifyPaperNote(markdown, canonicalArxivId)");

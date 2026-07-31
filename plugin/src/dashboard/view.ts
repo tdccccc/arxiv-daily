@@ -12,19 +12,16 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
-  classifyPaperNote,
   modernArxivResources,
   normalizeArxivId,
   planDashboardAction,
   queryDashboard,
-  validateVaultRelativeDirectory,
   type DashboardAction,
   type DashboardPatch,
   type DashboardQuery,
   type DashboardRow,
   type DashboardSortDirection,
   type DashboardSortKey,
-  type DashboardTab,
 } from "@arxiv-daily/core";
 import { syncDashboardHistory, type DashboardMarkdownFile } from "@arxiv-daily/core";
 import {
@@ -32,7 +29,7 @@ import {
   validateLlmConfig,
 } from "@arxiv-daily/core";
 import type { RunStateEntry } from "@arxiv-daily/core";
-import { daysBefore, formatDate, isTimeWithinLocalWindow, isWeekendDate, todayInTz } from "@arxiv-daily/core";
+import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
@@ -64,310 +61,84 @@ import {
 
 export { ARXIV_DAILY_DASHBOARD_VIEW } from "./constants";
 
-export interface DashboardPage<T> {
-  rows: T[];
-  total: number;
-  totalPages: number;
-  currentPage: number;
-  start: number;
-  end: number;
-  pageSize: number;
-}
+import {
+  buildCalendarDailyReportMap,
+  calendarCellAriaLabel,
+  isButtonElement,
+  isCalendarRunWhitelisted,
+  resolveCalendarCellState,
+  resolveCalendarEmptyReason,
+} from "./calendar";
+import type {
+  CalendarCell,
+  CalendarEmptyReason,
+} from "./calendar";
+import type {
+  DashboardPage,
+  DailyReportDay,
+} from "./types";
+import {
+  collectIndexedDetailSummaryRefs,
+  expectedDetailSummaryPath,
+  isExpectedGeneratedDetailSummary,
+  shouldForceDashboardHistorySyncAfterDetailDeletion,
+} from "./detail-refs";
+import {
+  dailyDateFromPath,
+  dashboardHistoryPathSet,
+  filterDashboardMarkdownFiles,
+  markdownPathFromLeaf,
+  normalizeVaultPath,
+  shouldSkipDashboardHistorySync,
+} from "./files";
+import {
+  paginateDashboardRows,
+  showingText,
+} from "./pagination";
+import {
+  dashboardHeaderStatusText,
+  latestCompletedRunDate,
+  trashFileWithUserPreference,
+} from "./actions";
 
-export interface DailyReportDay {
-  date: string;
-  path: string;
-  papers: number;
-  starred: number;
-}
-
-export type CalendarCellState =
-  | "empty"        // No date or outside lookback
-  | "runnable"     // Can generate report
-  | "has-report"   // Report exists
-  | "no-relevant-papers"; // LLM filtered to 0 relevant papers
-
-export type CalendarEmptyReason =
-  | "blank"
-  | "arxiv-not-updated"
-  | "future"
-  | "before-tracking"
-  | "report-missing"
-  | "permanent-failure";
-
-export interface CalendarCell {
-  date: string | null;
-  state: CalendarCellState;
-  report?: DailyReportDay;
-  emptyReason?: CalendarEmptyReason;
-  failureReason?: string;
-}
-
-export interface CalendarCellResolution {
-  state: CalendarCellState;
-  emptyReason?: CalendarEmptyReason;
-}
-
-export interface CalendarRunWhitelistInput {
-  date: string;
-  today: string;
-  now: Date;
-  timezone: string;
-  runAtLocal: string;
-  runUntilLocal: string;
-  inLookback: boolean;
-  isWeekend: boolean;
-  hasDailyReport: boolean;
-  recentDates: ReadonlySet<string>;
-  runState?: RunStateEntry;
-}
-
-export function resolveCalendarCellState({
-  report,
-  runnable,
-  runState,
-  emptyReason,
-}: {
-  report?: { papers: number };
-  runnable: boolean;
-  runState?: RunStateEntry;
-  emptyReason?: CalendarEmptyReason;
-}): CalendarCellResolution {
-  if (report) {
-    return {
-      state: report.papers === 0 ? "no-relevant-papers" : "has-report",
-    };
-  }
-
-  if (runState?.status === "failed_permanent") {
-    return { state: "empty", emptyReason: "permanent-failure" };
-  }
-
-  if (isArxivNotUpdatedRunState(runState)) {
-    return { state: "empty", emptyReason: "arxiv-not-updated" };
-  }
-
-  if (runnable) return { state: "runnable" };
-
-  if (isCompletedRunState(runState)) {
-    return { state: "empty", emptyReason: "report-missing" };
-  }
-
-  return emptyReason
-    ? { state: "empty", emptyReason }
-    : { state: "empty" };
-}
-
-export function isCalendarRunWhitelisted(
-  input: CalendarRunWhitelistInput,
-): boolean {
-  if (!input.inLookback) return false;
-  if (input.isWeekend) return false;
-  if (input.hasDailyReport) return false;
-  if (isRunStateBlockedForCalendarRun(input.runState)) return false;
-
-  if (input.date === input.today) {
-    return isTimeWithinLocalWindow(
-      input.now,
-      input.timezone,
-      input.runAtLocal,
-      input.runUntilLocal,
-    );
-  }
-
-  return input.recentDates.has(input.date);
-}
-
-export interface CalendarEmptyReasonInput {
-  date: string;
-  today: string;
-  trackingStartDate: string;
-  recentDates: ReadonlySet<string>;
-}
-
-export interface CalendarDailyReportMapInput {
-  month: string;
-  scannedReports: DailyReportDay[];
-  normalizePath: (path: string) => string;
-}
+export type { CalendarCell, CalendarEmptyReason, CalendarCellState } from "./calendar";
+export {
+  applyEmptyCalendarCellA11y,
+  buildCalendarDailyReportMap,
+  calendarCellAriaLabel,
+  isButtonElement,
+  isCalendarRunWhitelisted,
+  resolveCalendarCellState,
+  resolveCalendarEmptyReason,
+} from "./calendar";
+export type { CalendarRunWhitelistInput } from "./calendar";
+export type { DashboardPage, DailyReportDay } from "./types";
+export {
+  collectIndexedDetailSummaryRefs,
+  expectedDetailSummaryPath,
+  isExpectedGeneratedDetailSummary,
+  shouldForceDashboardHistorySyncAfterDetailDeletion,
+} from "./detail-refs";
+export {
+  dashboardHistoryPathSet,
+  filterDashboardMarkdownFiles,
+  shouldSkipDashboardHistorySync,
+} from "./files";
+export {
+  paginateDashboardRows,
+  showingText,
+} from "./pagination";
+export {
+  dashboardHeaderStatusText,
+  latestCompletedRunDate,
+  trashFileWithUserPreference,
+} from "./actions";
 
 interface AppWithSettingsApi extends App {
   setting?: {
     open?: () => void;
     openTabById?: (id: string) => void;
   };
-}
-
-export function resolveCalendarEmptyReason(
-  input: CalendarEmptyReasonInput,
-): CalendarEmptyReason {
-  if (input.date > input.today) return "future";
-  if (
-    input.date < input.trackingStartDate &&
-    !input.recentDates.has(input.date)
-  ) {
-    return "before-tracking";
-  }
-  return "arxiv-not-updated";
-}
-
-export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
-  if (!cell.date) return undefined;
-  const date = cell.date;
-
-  if (cell.state === "has-report" && cell.report) {
-    return `${date}: open daily report, ${cell.report.papers} indexed papers${cell.report.starred ? `, ${cell.report.starred} starred` : ""}`;
-  }
-
-  if (cell.state === "no-relevant-papers") {
-    return `${date}: open daily report, no relevant papers`;
-  }
-
-  if (cell.state === "runnable") {
-    return `${date}: run daily report`;
-  }
-
-  if (cell.emptyReason === "arxiv-not-updated") {
-    return `${date}: arXiv not updated`;
-  }
-
-  if (cell.emptyReason === "report-missing") {
-    return `${date}: daily report missing`;
-  }
-
-  if (cell.emptyReason === "permanent-failure") {
-    return `${date}: daily report failed permanently${cell.failureReason ? `, ${cell.failureReason}` : ""}`;
-  }
-
-  if (cell.emptyReason === "future") {
-    return `${date}: future date`;
-  }
-
-  return date;
-}
-
-export function applyEmptyCalendarCellA11y(button: HTMLButtonElement): void {
-  button.disabled = true;
-  button.setAttribute("tabindex", "-1");
-  button.setAttribute("aria-hidden", "true");
-}
-
-export function isButtonElement(element: HTMLElement): element is HTMLButtonElement {
-  return element.tagName === "BUTTON";
-}
-
-export function dashboardHeaderStatusText(input: {
-  isRunning: boolean;
-  lastCompletedDate?: string;
-}): string {
-  if (input.isRunning) return "Running…";
-  return `Last run: ${input.lastCompletedDate ?? "never"}`;
-}
-
-export function latestCompletedRunDate(
-  runState: Record<string, RunStateEntry | undefined>,
-): string | undefined {
-  const completed = Object.entries(runState)
-    .filter(([, entry]) => entry?.status === "completed")
-    .map(([date]) => date)
-    .sort();
-  return completed[completed.length - 1];
-}
-
-export function collectIndexedDetailSummaryRefs(
-  entries: DashboardRow["entry"][],
-): { ids: Set<string>; paths: Map<string, string> } {
-  const ids = new Set<string>();
-  const paths = new Map<string, string>();
-  for (const entry of entries) {
-    const path = normalizeVaultPath(entry.paperPath ?? "");
-    if (!entry.detail || !path) continue;
-    ids.add(entry.arxivId);
-    paths.set(entry.arxivId, path);
-  }
-  return { ids, paths };
-}
-
-export function expectedDetailSummaryPath(
-  papersDir: string,
-  rawArxivId: string,
-): string | null {
-  const canonicalId = normalizeArxivId(rawArxivId);
-  const directory = validateVaultRelativeDirectory(papersDir);
-  if (!canonicalId || !directory.ok || !directory.value) return null;
-  return `${directory.value}/${canonicalId}.md`;
-}
-
-export function isExpectedGeneratedDetailSummary(
-  markdown: string,
-  canonicalArxivId: string,
-): boolean {
-  return classifyPaperNote(markdown, canonicalArxivId).kind === "verified_detail";
-}
-
-export function shouldForceDashboardHistorySyncAfterDetailDeletion(
-  trashedFiles: number,
-  updatedEntries: number,
-): boolean {
-  return trashedFiles > 0 || updatedEntries > 0;
-}
-
-export async function trashFileWithUserPreference(
-  app: Pick<App, "fileManager" | "vault">,
-  file: TFile,
-): Promise<void> {
-  const fileManager = app.fileManager as unknown as {
-    trashFile?: (target: TFile) => Promise<void>;
-  };
-  if (typeof fileManager.trashFile === "function") {
-    await fileManager.trashFile(file);
-    return;
-  }
-
-  // Obsidian before 1.6.6 does not expose the user's trash preference.
-  // Prefer system trash; Vault.trash falls back to the local .trash folder.
-  const legacyTrash = Reflect.get(app.vault, "trash");
-  if (typeof legacyTrash !== "function") {
-    throw new Error("No compatible Obsidian trash API is available");
-  }
-  await Reflect.apply(legacyTrash, app.vault, [file, true]);
-}
-
-export async function buildCalendarDailyReportMap(
-  input: CalendarDailyReportMapInput,
-): Promise<Map<string, DailyReportDay>> {
-  const out = new Map<string, DailyReportDay>();
-  const monthPrefix = `${input.month}-`;
-
-  for (const report of input.scannedReports) {
-    if (!report.date.startsWith(monthPrefix)) continue;
-    out.set(report.date, {
-      ...report,
-      path: input.normalizePath(report.path),
-    });
-  }
-
-  return out;
-}
-
-function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
-  return (
-    runState?.status === "skipped" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
-  );
-}
-
-function isRunStateBlockedForCalendarRun(runState?: RunStateEntry): boolean {
-  return (
-    runState?.status === "running" ||
-    runState?.status === "skipped" ||
-    runState?.status === "failed_permanent" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
-  );
-}
-
-function isCompletedRunState(runState?: RunStateEntry): boolean {
-  return runState?.status === "completed";
 }
 
 export function registerDashboardView(plugin: ArxivDailyPlugin): void {
@@ -2867,126 +2638,6 @@ function recentDatesFallbackNotice(refreshedAt: number): string {
     minute: "2-digit",
   });
   return `arXiv recent dates are still refreshing in the background; using cached data from ${refreshed}.`;
-}
-
-function normalizeVaultPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
-}
-
-export function filterDashboardMarkdownFiles<T extends DashboardMarkdownFile>(
-  files: T[],
-  dailyDir: string,
-  papersDir: string,
-): T[] {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
-  return files.filter((file) => {
-    const path = normalizeVaultPath(file.path);
-    return (
-      path.startsWith(`${normalizedDailyDir}/`) ||
-      path.startsWith(`${normalizedPapersDir}/`)
-    );
-  });
-}
-
-export function dashboardHistoryPathSet(
-  files: DashboardMarkdownFile[],
-  dailyDir: string,
-  papersDir: string,
-): Set<string> {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
-  return new Set(
-    files
-      .map((file) => normalizeVaultPath(file.path))
-      .filter(
-        (path) =>
-          path.startsWith(`${normalizedDailyDir}/`) ||
-          isDirectChildMarkdown(path, normalizedPapersDir),
-      ),
-  );
-}
-
-export function shouldSkipDashboardHistorySync(
-  previousHistoryPaths: ReadonlySet<string> | null,
-  currentHistoryPaths: ReadonlySet<string>,
-  currentEntryCount: number,
-): boolean {
-  if (!previousHistoryPaths || currentEntryCount === 0) return false;
-  if (previousHistoryPaths.size !== currentHistoryPaths.size) return false;
-  for (const path of currentHistoryPaths) {
-    if (!previousHistoryPaths.has(path)) return false;
-  }
-  return true;
-}
-
-function isDirectChildMarkdown(path: string, dir: string): boolean {
-  const prefix = `${dir}/`;
-  if (!path.startsWith(prefix) || !/\.md$/i.test(path)) return false;
-  return !path.slice(prefix.length).includes("/");
-}
-
-export function showingText(page: DashboardPage<unknown>): string {
-  if (page.total === 0) return "Showing 0 of 0 papers";
-  if (!isFinite(page.pageSize)) return `Showing all ${page.total} papers`;
-  return `Showing ${page.start}-${page.end} of ${page.total} papers`;
-}
-
-export function paginateDashboardRows<T>(
-  rows: T[],
-  currentPage: number,
-  pageSize: number,
-): DashboardPage<T> {
-  const total = rows.length;
-  // Infinity means "show all" — bypass arithmetic to avoid 0 * Infinity = NaN.
-  if (!isFinite(pageSize)) {
-    return {
-      rows: rows.slice(),
-      total,
-      totalPages: 1,
-      currentPage: 0,
-      start: total === 0 ? 0 : 1,
-      end: total,
-      pageSize,
-    };
-  }
-  const safePageSize = Math.max(1, Math.floor(pageSize));
-  const totalPages = Math.ceil(total / safePageSize) || 1;
-  const clampedPage = Math.max(
-    0,
-    Math.min(Math.floor(currentPage), totalPages - 1),
-  );
-  const offset = clampedPage * safePageSize;
-  const pageRows = rows.slice(offset, offset + safePageSize);
-  return {
-    rows: pageRows,
-    total,
-    totalPages,
-    currentPage: clampedPage,
-    start: pageRows.length === 0 ? 0 : offset + 1,
-    end: offset + pageRows.length,
-    pageSize: safePageSize,
-  };
-}
-
-function markdownPathFromLeaf(leaf: unknown): string | null {
-  const candidate = leaf as {
-    getViewState?: () => { state?: { file?: unknown } };
-    view?: { file?: { path?: unknown } };
-  };
-  const stateFile = candidate.getViewState?.().state?.file;
-  if (typeof stateFile === "string") return stateFile;
-  const viewPath = candidate.view?.file?.path;
-  return typeof viewPath === "string" ? viewPath : null;
-}
-
-function dailyDateFromPath(path: string, dailyDir: string): string | null {
-  const normalized = normalizeVaultPath(path);
-  const prefix = `${dailyDir}/`;
-  if (!normalized.startsWith(prefix)) return null;
-  const rest = normalized.slice(prefix.length);
-  const match = /^(\d{4}-\d{2}-\d{2})\.md$/i.exec(rest);
-  return match?.[1] ?? null;
 }
 
 function latestReportMonth(reports: DailyReportDay[]): string | null {
