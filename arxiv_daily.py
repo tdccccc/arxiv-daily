@@ -10,18 +10,18 @@ from pathlib import Path
 
 def main() -> int:
     root = Path(__file__).resolve().parent
-    cli = root / "plugin" / "arxiv-daily-cli.cjs"
+    cli = root / "apps" / "cli" / "dist" / "arxiv-daily-cli.cjs"
     if not cli.exists():
         print(
             "arxiv_daily.py is retired. Build the Node CLI first:\n"
             "  npm ci && npm run build\n"
             "Then run:\n"
-            "  npm run cli -- run-pending",
+            "  npm run cli -- run --today",
             file=sys.stderr,
         )
         return 1
 
-    args = sys.argv[1:] or ["run-pending"]
+    args = sys.argv[1:] or ["run", "--today"]
     try:
         return subprocess.call(["node", str(cli), *args], cwd=root)
     except FileNotFoundError:
