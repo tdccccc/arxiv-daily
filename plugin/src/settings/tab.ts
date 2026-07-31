@@ -141,7 +141,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Notice(`arXiv Daily: ${action} failed: ${message}`, 10_000);
   }
 
-  private runAction(action: string, operation: () => Promise<unknown>): void {
+  public runAction(action: string, operation: () => Promise<unknown>): void {
     void operation().catch((error) => this.reportActionError(action, error));
   }
 
@@ -1174,7 +1174,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (guide) containerEl.appendChild(guide);
   }
 
-  private refreshSetupGuide(): void {
+  public refreshSetupGuide(): void {
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
     const next = this.createSetupGuide();
     if (current instanceof HTMLElement) {
@@ -1188,7 +1188,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private createSetupGuide(): HTMLElement {
+  public createSetupGuide(): HTMLElement {
     const status = getSetupStatus(
       this.plugin.settings,
       this.plugin.stateStore.snapshot(),
@@ -1378,7 +1378,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     targetEl.focus({ preventScroll: true });
   }
 
-  private async generateFirstReport(): Promise<void> {
+  public async generateFirstReport(): Promise<void> {
     const date = formatDate(
       todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
     );
@@ -1607,7 +1607,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
   }
 
-  private confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
+  public confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
     return new Promise((resolve) => {
       const modal = new Modal(this.app);
       modal.titleEl.setText("Confirm");
@@ -1632,7 +1632,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
   }
 
-  private showModelDropdown(models: string[], container: HTMLElement): void {
+  public showModelDropdown(models: string[], container: HTMLElement): void {
     // Find the existing dropdown in the model setting
     const modelSetting = container.closest(".setting-item");
     if (!modelSetting) return;

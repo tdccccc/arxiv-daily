@@ -95,7 +95,7 @@ export function writeSettingValue(
   target[last] = value;
 }
 
-import type { SettingDefinitionItem } from "obsidian";
+import type { Setting, SettingDefinitionItem } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { validateOutputDirectoryDraft } from "./tab";
 import {
@@ -109,6 +109,9 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 /** Minimal host surface buildSettingDefinitions needs (the setting tab fits). */
 export interface SettingDefinitionsHost {
   plugin: ArxivDailyPlugin;
+  renderApiKeyRow?: (setting: Setting) => void;
+  renderModelRow?: (setting: Setting) => void;
+  renderSetupGuideRow?: (setting: Setting) => void;
 }
 
 /**
@@ -122,6 +125,12 @@ export function buildSettingDefinitions(
 ): SettingDefinitionItem[] {
   const { plugin } = host;
   return [
+    ...(host.renderSetupGuideRow
+      ? [{
+          name: "Getting started",
+          render: (setting: Setting) => host.renderSetupGuideRow?.(setting),
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       name: "Enable",
       desc: "When on, daily reports run automatically on weekdays (weekends are skipped).",
@@ -134,6 +143,20 @@ export function buildSettingDefinitions(
       type: "group",
       heading: "AI model",
       items: [
+        ...(host.renderApiKeyRow
+          ? [{
+              name: "API key",
+              desc: "Saved only on this device. After saving, the key is hidden.",
+              render: (setting: Setting) => host.renderApiKeyRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderModelRow
+          ? [{
+              name: "Model",
+              desc: "Choose a model, or click Get models to load the list from your provider.",
+              render: (setting: Setting) => host.renderModelRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
         {
           name: "API base URL",
           desc: "Where chat requests are sent. Default is DeepSeek; change only if you use another provider.",

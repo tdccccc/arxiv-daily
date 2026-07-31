@@ -131,7 +131,7 @@ describe("settings tab regressions", () => {
 
   it("renders an accessible four-step first-report guide without duplicate inputs", () => {
     const guideBody = settingsTabSource.match(
-      /private createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
+      /public createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
     )?.[0];
     expect(guideBody).toBeDefined();
     expect(guideBody).toContain('createEl("ol"');
@@ -149,10 +149,10 @@ describe("settings tab regressions", () => {
 
   it("uses run-state completion, awaits the first report, and renders compact completion", () => {
     const guideBody = settingsTabSource.match(
-      /private createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
+      /public createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
     )?.[0];
     const firstReportBody = settingsTabSource.match(
-      /private async generateFirstReport\(\)[\s\S]*?\n  private renderTopicCard/,
+      /public async generateFirstReport\(\)[\s\S]*?\n  private renderTopicCard/,
     )?.[0];
     expect(guideBody).toContain("this.plugin.stateStore.snapshot()");
     expect(guideBody).toContain("status.firstReportComplete");
@@ -177,7 +177,7 @@ describe("settings tab regressions", () => {
 
   it("focuses setup targets and respects reduced motion through ownerDocument", () => {
     const scrollBody = settingsTabSource.match(
-      /private scrollToSection\([\s\S]*?\n  private async generateFirstReport/,
+      /private scrollToSection\([\s\S]*?\n  public async generateFirstReport/,
     )?.[0];
     expect(scrollBody).toContain("targetEl.ownerDocument.defaultView");
     expect(scrollBody).toContain('matchMedia?.("(prefers-reduced-motion: reduce)")');
@@ -212,7 +212,7 @@ describe("settings tab regressions", () => {
 
   it("does not register a second change listener when models are fetched", () => {
     const showModelDropdownBody = settingsTabSource.match(
-      /private showModelDropdown\([\s\S]*?\n  private textareaSetting/,
+      /public showModelDropdown\([\s\S]*?\n  private textareaSetting/,
     )?.[0];
 
     expect(showModelDropdownBody).toBeDefined();
