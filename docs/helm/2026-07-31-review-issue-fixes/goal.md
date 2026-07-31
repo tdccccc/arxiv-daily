@@ -37,12 +37,13 @@ changing product behavior — each batch stays independently mergeable.
 
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
-2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: blocked
+2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: pending
 3. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2 (blocked: waits for fix/arxiv-failure-recovery and fix/arxiv-request-resilience to merge into main)
+P2 (unblocked 2026-07-31: fix/arxiv-failure-recovery and
+fix/arxiv-request-resilience merged into main via be4c705)
 
 ## Resolved
 
