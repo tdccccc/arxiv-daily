@@ -1549,6 +1549,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Render the topic card for one index into a declarative list row. */
   public renderTopicRow(setting: Setting, index: number): void {
+    // Re-renders reuse the same row; drop the previous card first.
+    for (const el of Array.from(
+      setting.settingEl.querySelectorAll(".arxiv-daily-settings__topic-card"),
+    )) {
+      el.remove();
+    }
     this.renderTopicCard(
       setting.settingEl,
       this.plugin.settings.arxiv.topics,

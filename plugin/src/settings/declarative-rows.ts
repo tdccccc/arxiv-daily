@@ -15,11 +15,30 @@ import {
 import { arxivCategories, LlmClient, TOPIC_TEMPLATES } from "@arxiv-daily/core";
 
 /**
+ * Prepare a declarative row for (re)rendering. Obsidian reuses the same
+ * Setting row and calls the render callback again on update(), so the
+ * previous render's content must be cleared to keep re-renders idempotent.
+ */
+function prepareRow(setting: Setting): void {
+  setting.controlEl.empty();
+}
+
+/** Remove previously rendered siblings from a row's main element. */
+function clearSettingEl(setting: Setting, ...classes: string[]): void {
+  for (const cls of classes) {
+    for (const el of Array.from(setting.settingEl.querySelectorAll(`.${cls}`))) {
+      el.remove();
+    }
+  }
+}
+
+/**
  * Imperative row renderers for the Obsidian 1.13+ declarative settings API.
  * Lives in its own module (not definitions.ts) so the shared sentinel
  * state machines can reach tab internals via the tab instance.
  */
 export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  prepareRow(setting);
   const configured = Boolean(tab.plugin.settings.llm.apiKey.trim());
   let editing = !configured;
   let draft = "";
@@ -113,6 +132,7 @@ export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): vo
 }
 
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  prepareRow(setting);
   const select = setting.controlEl.createEl("select", {
     cls: "arxiv-daily-settings__model-select",
   });
@@ -162,6 +182,7 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
 }
 
 export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
+  clearSettingEl(setting, "arxiv-daily-setup");
   const guide = tab.createSetupGuide();
   if (guide) setting.settingEl.appendChild(guide);
 }
@@ -172,6 +193,7 @@ export function renderCategoryRow(
   setting: Setting,
   index: number,
 ): void {
+  prepareRow(setting);
   const categories = arxivCategories(tab.plugin.settings.arxiv);
   const current = categories[index] ?? "";
   const select = setting.controlEl.createEl("select", {
@@ -208,6 +230,7 @@ export function renderQuickStartRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const select = setting.controlEl.createEl("select");
   const placeholder = select.createEl("option");
   placeholder.value = "";
@@ -242,6 +265,7 @@ export function renderTimezoneRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const select = setting.controlEl.createEl("select");
   for (const zone of TIMEZONE_OPTIONS) {
     const option = select.createEl("option");
@@ -270,6 +294,7 @@ export function renderScheduleEnabledRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   new ToggleComponent(setting.controlEl)
     .setValue(tab.plugin.settings.schedule.enabled)
     .onChange(async (value) => {
@@ -283,6 +308,7 @@ export function renderRunWindowRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const schedule = tab.plugin.settings.schedule;
   renderRunWindowTimeSelect(
     setting.controlEl,
@@ -305,6 +331,7 @@ export function renderTickIntervalRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const input = setting.controlEl.createEl("input", {
     type: "text",
     cls: "arxiv-daily-settings__tick-input",
@@ -322,6 +349,7 @@ export function renderEmailGuideRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  clearSettingEl(setting, "arxiv-daily-settings__email-guide");
   const { title, lines } = tab.emailGuideContent();
   const wrap = setting.settingEl.createDiv({
     cls: "arxiv-daily-settings__email-guide",
@@ -343,6 +371,7 @@ export function renderEmailModeRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const select = setting.controlEl.createEl("select");
   const selfOption = select.createEl("option");
   selfOption.value = "self";
@@ -366,6 +395,7 @@ export function renderEmailApiKeyRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const configured = Boolean(tab.plugin.settings.email.apiKey?.trim());
   let editing = !configured;
   let draft = "";
@@ -454,6 +484,7 @@ export function renderHostedTokenRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
+  prepareRow(setting);
   const configured = Boolean(tab.plugin.settings.email.hostedToken?.trim());
   let editing = !configured;
   let draft = "";
