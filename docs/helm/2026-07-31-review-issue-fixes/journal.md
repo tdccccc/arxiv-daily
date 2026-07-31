@@ -79,6 +79,31 @@
 - next: P2b — settings tab getSettingDefinitions migration with 1.4.0
   fallback
 
+## 2026-07-31 — note (T6 done: tab wired to the declarative API)
+
+- evidence: the three overrides land on ArxivDailySettingTab —
+  getSettingDefinitions binds every host callback (declarative-rows
+  renderers + the tab's mutation methods), getControlValue /
+  setControlValue route flat keys through the dotted-path resolvers and
+  persist via saveSettings, with display()-parity trimming for email
+  to/fromEmail (fromName stays raw, resolving T5's noted deviation);
+  +10 structure tests in a new settings-declarative-tab.test.ts (key
+  rows present, every control key resolves through getControlValue,
+  list mutations route to tab methods, round-trip setControlValue);
+  the settings-tab source-inspection suite (33 tests) passes unchanged —
+  the three overrides sit at the class top and disturb none of its
+  regexes
+- change: T6 committed; phase 02-b → done; full workspace 1163 tests
+  green (plugin 272), typecheck green, lint 0 errors / 50 warnings (the
+  obsidianmd/settings-tab/prefer-setting-definitions warning is gone; the
+  2 sentence-case copies of imperative copy remain), boundaries OK,
+  esbuild build OK
+- disposition: display() untouched (<1.13 fallback unchanged); runtime
+  1.13+ behavior still unverifiable locally (structure tests + types are
+  the safety net, as assumed)
+- next: PR review + merge; P2b goal criterion stays unchecked until the
+  merge lands (mirrors how P2a was handled)
+
 ## 2026-07-31 — note (P2b started)
 
 - evidence: user confirmed migration despite limited user-facing value

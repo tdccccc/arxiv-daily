@@ -2,14 +2,19 @@
 
 <!-- Filename must be NN-<slug>.md with NN = N (e.g. P1 → 01-auth.md). -->
 goal_ref: ../goal.md
-status: active
+status: done
 
 ## Outcome
 
 On Obsidian 1.13+, the arXiv Daily settings tab renders through the
 declarative `getSettingDefinitions()` API (searchable in Settings search);
-`display()` stays as the <1.13 fallback with zero behavior change. All
-checks stay green.
+`display()` stays as the <1.13 fallback with zero behavior change. The tab
+wires the three overrides — `getSettingDefinitions` (host callbacks bound
+to the shared row renderers and the tab's mutation methods),
+`getControlValue`, `setControlValue` (dotted-path resolvers, persisting
+via `saveSettings`, with display()-parity trimming for email to/fromEmail
+but not fromName). All checks stay green: full workspace 1163 tests,
+typecheck, lint (0 errors), boundaries, esbuild build.
 
 ## Assumptions
 
@@ -48,7 +53,7 @@ existing helper functions already exported from tab.ts. `tab.ts` overrides
 - [x] T5: email block (to/from/mode/verify/test) + schedule block
       (enabled/time window/interval) — enable toggle re-rendered through
       setScheduleEnabled so validation + modal flow survive
-- [ ] T6: wire tab.ts (three overrides) + structure tests (every key maps,
+- [x] T6: wire tab.ts (three overrides) + structure tests (every key maps,
       key items present) + full verification
 
 ## Verification

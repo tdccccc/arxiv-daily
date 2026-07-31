@@ -39,15 +39,16 @@ changing product behavior — each batch stays independently mergeable.
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
 2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: done
-3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: active
+3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: done (pending PR merge; landed criterion below)
 4. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
 P2b (started 2026-07-31; branch re-cut 2026-07-31 to
-  refactor/settings-declarative-api after PR #4 merged; T4 arXiv section
-  committed 2026-07-31, T5 schedule + email blocks committed 2026-07-31 —
-  next: T6 wire tab.ts overrides + full verification)
+  refactor/settings-declarative-api after PR #4 merged; T1–T5 committed
+  2026-07-31, T6 tab wiring committed 2026-07-31 — pending PR review +
+  merge; the "P2b landed" success criterion checks only after the merge,
+  mirroring P2a)
 
 ## Resolved
 
