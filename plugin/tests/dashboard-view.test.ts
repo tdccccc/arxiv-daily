@@ -30,6 +30,10 @@ const detailRefsSource = readFileSync(
   resolve(process.cwd(), "src/dashboard/detail-refs.ts"),
   "utf-8",
 );
+const hubModalSource = readFileSync(
+  resolve(process.cwd(), "src/dashboard/hub-modal.ts"),
+  "utf-8",
+);
 const pluginStyles = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
 
 describe("openDashboardView", () => {
@@ -364,23 +368,23 @@ describe("dashboard render regressions", () => {
 
 describe("HubModal tabs", () => {
   it("links each tabpanel to its tab button", () => {
-    expect(dashboardViewSource).toContain('role: "tab"');
-    expect(dashboardViewSource).toContain('"aria-selected": "false"');
-    expect(dashboardViewSource).toContain('content.setAttribute("role", "tabpanel")');
-    expect(dashboardViewSource).toContain('content.setAttribute("aria-labelledby", tabId)');
-    expect(dashboardViewSource).toContain("button.id = tabId");
-    expect(dashboardViewSource).toContain("content.id = panelId");
+    expect(hubModalSource).toContain('role: "tab"');
+    expect(hubModalSource).toContain('"aria-selected": "false"');
+    expect(hubModalSource).toContain('content.setAttribute("role", "tabpanel")');
+    expect(hubModalSource).toContain('content.setAttribute("aria-labelledby", tabId)');
+    expect(hubModalSource).toContain("button.id = tabId");
+    expect(hubModalSource).toContain("content.id = panelId");
   });
 
   it("keeps Clear logs actionable only on the Logs tab", () => {
-    expect(dashboardViewSource).toContain('text: "Clear logs"');
-    expect(dashboardViewSource).toContain('const visible = this.activeTab === "logs"');
-    expect(dashboardViewSource).toContain("this.clearButton.hidden = !visible");
-    expect(dashboardViewSource).toContain("this.clearButton.disabled = !visible");
+    expect(hubModalSource).toContain('text: "Clear logs"');
+    expect(hubModalSource).toContain('const visible = this.activeTab === "logs"');
+    expect(hubModalSource).toContain("this.clearButton.hidden = !visible");
+    expect(hubModalSource).toContain("this.clearButton.disabled = !visible");
   });
 
   it("uses separate flex sizing classes for short viewports", () => {
-    expect(dashboardViewSource).toContain('contentEl.addClass("arxiv-daily-hub-modal__content")');
+    expect(hubModalSource).toContain('contentEl.addClass("arxiv-daily-hub-modal__content")');
     expect(pluginStyles).toContain(".arxiv-daily-hub-modal__content");
     expect(pluginStyles).toContain("min-height: 0");
     expect(pluginStyles).toContain("max-height: min(82vh, 740px)");
