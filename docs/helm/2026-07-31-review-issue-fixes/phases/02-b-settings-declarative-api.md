@@ -36,13 +36,15 @@ existing helper functions already exported from tab.ts. `tab.ts` overrides
 
 ## Tasks
 
-- [ ] T1: key constants + getControlValue/setControlValue path mapping
-- [ ] T2: basic blocks — LLM (base URL, model dropdown, thinking, reasoning),
+- [x] T1: key constants + getControlValue/setControlValue path mapping
+- [x] T2: basic blocks — LLM (base URL, model dropdown, thinking, reasoning),
       output (dirs, link style, language), advanced (log level, delays,
       cache expiry)
-- [ ] T3: complex rows via action/render — API-key sentinel input, test
+- [x] T3: complex rows via action/render — API-key sentinel input, test
       connection, get models, onboarding guide strip
-- [ ] T4: topics as a `list` (add/delete/reorder) + categories block
+- [x] T4: topics as a `list` (add/delete/reorder) + categories block —
+      plus quick start, detail notes, timezone to keep the arXiv section
+      complete on 1.13+; shared mutations live on the tab
 - [ ] T5: email block (to/from/mode/verify/test) + schedule block
       (enabled/time window/interval)
 - [ ] T6: wire tab.ts (three overrides) + structure tests (every key maps,

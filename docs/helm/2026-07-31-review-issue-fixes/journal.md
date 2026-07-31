@@ -102,3 +102,23 @@
   resolution also restored the P2a-done record that PR #4 had dropped
 - disposition: keep working on refactor/settings-declarative-api
 - next: T3 complex rows (API key sentinel, get models, onboarding guide)
+
+## 2026-07-31 — note (T4 done: arXiv section declarative)
+
+- evidence: categories + topics lists, quick start, detail notes, timezone
+  all expressible; the `list` type cannot nest inside a `group`, so the
+  arXiv section items sit top-level between the AI model and Output &
+  schedule groups; two settings-tab source regressions forced keeping
+  `renderTopicCard` private (public `renderTopicRow` wrapper instead) and
+  restoring the `${topicName}` delete message shape — tests untouched
+- change: T4 committed 35c6140; new shared tab mutations (addTopic,
+  deleteTopic, addCategory, deleteCategory, reorderCategories,
+  reorderTopics, applyTopicTemplate) with a `refreshSettings` dispatcher
+  (update() on 1.13+ via requireApiVersion gate, display() otherwise);
+  TIMEZONE_OPTIONS + addCategoryOptions exported for reuse
+- disposition: topics delete stays in the card (confirm + expanded-state
+  cleanup) so the topics list has no framework delete button; drag reorder
+  is a new 1.13+ capability (report section order); detail-notes "custom"
+  option mirrors display()'s conditional row; list descs render as first
+  item with empty name (L2 if the layout looks off)
+- next: T5 email + schedule blocks

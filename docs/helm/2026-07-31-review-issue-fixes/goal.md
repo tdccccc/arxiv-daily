@@ -11,7 +11,7 @@ changing product behavior — each batch stays independently mergeable.
 ## Success criteria
 
 - [x] P1 landed: dead code removed, legacy shim corrected, README security note added, `obsidian` devDep pinned — all checks green
-- [ ] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
+- [x] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
 - [ ] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
 - [x] P3 resolved: CLI `detailSelection` documented-as-fixed (schema + journal)
 - [ ] No pipeline output change: daily reports and paper notes are byte-identical before/after each batch
@@ -45,7 +45,8 @@ changing product behavior — each batch stays independently mergeable.
 ## Current focus
 
 P2b (started 2026-07-31; branch re-cut 2026-07-31 to
-  refactor/settings-declarative-api after PR #4 merged)
+  refactor/settings-declarative-api after PR #4 merged; T4 arXiv section
+  committed 2026-07-31 — next: T5 email + schedule blocks)
 
 ## Resolved
 
