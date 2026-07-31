@@ -35,13 +35,13 @@ changing product behavior — each batch stays independently mergeable.
 ## Phases
 
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
-1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: active
-2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: pending
+1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
+2. P2 — Refactors: split dashboard view.ts; declarative settings API with fallback — status: blocked
 3. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: pending
 
 ## Current focus
 
-P1
+P2 (blocked: waits for the bug-fix branch to merge into main)
 
 ## Open questions
 

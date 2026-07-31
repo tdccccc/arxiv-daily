@@ -2,7 +2,7 @@
 
 <!-- Filename must be NN-<slug>.md with NN = N (e.g. P1 → 01-auth.md). -->
 goal_ref: ../goal.md
-status: active
+status: done
 
 ## Outcome
 
@@ -34,12 +34,14 @@ full check suite at the end. No behavior changes.
       in pipeline.ts (the writer option stays: tested dormant capability)
 - [x] T2: delete unused `appendUnique` in pipeline.ts (keep the copies in
       paper-index.ts / manual-fetch.ts untouched)
-- [ ] T3: fix `arxiv_daily.py` shim — point at `apps/cli/dist/arxiv-daily-cli.cjs`,
+- [x] T3: fix `arxiv_daily.py` shim — point at `apps/cli/dist/arxiv-daily-cli.cjs`,
       drop the removed `run-pending` mention
-- [ ] T4: README — note `chmod 600 ~/.config/arxiv-daily/config.toml` next to
+- [x] T4: README — note `chmod 600 ~/.config/arxiv-daily/config.toml` next to
       the uninstall instructions
-- [ ] T5: pin root devDependency `obsidian: latest` → the resolved lockfile version
-- [ ] T6: verify (typecheck / tests / lint / boundaries), commit per item, open PR
+- [x] T5: pin root devDependency `obsidian: latest` → `^1.13.1` (resolved
+      lockfile version), lockfile root entry synced
+- [x] T6: verify (typecheck / tests / lint / boundaries), commit per item,
+      open PR #3
 
 ## Verification
 
