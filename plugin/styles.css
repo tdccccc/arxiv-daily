@@ -157,6 +157,15 @@
 }
 
 /* Email section: full-width tips aligned with setting names (not control column) */
+.arxiv-daily-settings__email-guide-host {
+  display: block;
+}
+
+.arxiv-daily-settings__email-guide-host .setting-item-info,
+.arxiv-daily-settings__email-guide-host .setting-item-control {
+  display: none;
+}
+
 .arxiv-daily-settings__email-guide {
   box-sizing: border-box;
   width: 100%;
@@ -394,7 +403,7 @@
 }
 
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;

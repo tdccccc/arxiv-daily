@@ -187,3 +187,22 @@
   52 warnings; boundaries OK; production build OK
 - next: copy manifest/main/styles to the test vault and wait for another
   1.13+ manual pass before push / PR
+
+## 2026-07-31 — note (P2b second manual-test UI follow-up)
+
+- evidence: the framework's declarative list reorder API renders drag handles
+  outside custom topic cards, producing a second visual layer; email action
+  definitions make the whole setting row clickable, and the email guide's
+  empty framework name/control columns indent its card
+- change: L1 adjustment — remove reorder from both category and topic lists;
+  keep topic tags immediately after shrinkable titles; make the declarative
+  email guide full width; move verification/test sends into right-side control
+  buttons; give hosted verification codes the same masked, revealable,
+  blur-or-Enter save flow as the LLM key, including normalization and rollback
+- disposition: no brittle styling of private framework drag DOM; <1.13
+  display() and its sentinel controls stay unchanged; inline test sending
+  first persists the current email/token draft to avoid stale credentials
+- validation: plugin typecheck green; plugin 286 tests green; lint 0 errors /
+  52 warnings; boundaries OK; production build OK
+- next: deploy three plugin files, then another 1.13+ manual pass before
+  push / PR

@@ -87,18 +87,15 @@ describe("buildSettingDefinitions structure", () => {
       renderTimezoneRow: () => {},
       addCategory: () => {},
       deleteCategory: () => {},
-      reorderCategories: () => {},
       addTopic: () => {},
-      reorderTopics: () => {},
       renderScheduleEnabledRow: () => {},
       renderRunWindowRow: () => {},
       renderTickIntervalRow: () => {},
       renderEmailGuideRow: () => {},
       renderEmailModeRow: () => {},
+      renderEmailToRow: () => {},
       renderEmailApiKeyRow: () => {},
       renderHostedTokenRow: () => {},
-      sendVerificationEmail: () => {},
-      sendTestEmail: () => {},
     };
   }
 
@@ -151,7 +148,7 @@ describe("buildSettingDefinitions structure", () => {
     walk(buildSettingDefinitions(makeHost()));
   });
 
-  it("renders categories and topics as lists with add/delete/reorder affordances", () => {
+  it("renders categories and topics without drag-to-reorder affordances", () => {
     const host = makeHost();
     const lists = buildSettingDefinitions(host).filter(
       (item) => item.type === "list",
@@ -162,9 +159,9 @@ describe("buildSettingDefinitions structure", () => {
     expect(topicsList).toBeDefined();
     expect(categoriesList?.addItem?.name).toBe("Add category");
     expect(categoriesList?.onDelete).toEqual(expect.any(Function));
-    expect(categoriesList?.onReorder).toEqual(expect.any(Function));
+    expect(categoriesList?.onReorder).toBeUndefined();
     expect(topicsList?.addItem?.name).toBe("Add topic");
-    expect(topicsList?.onReorder).toEqual(expect.any(Function));
+    expect(topicsList?.onReorder).toBeUndefined();
   });
 
   it("maps one list item per category and topic with searchable names", () => {
@@ -259,7 +256,8 @@ describe("buildSettingDefinitions structure", () => {
     expect(names).toContain("Resend API key");
     expect(names).toContain("From email");
     expect(names).toContain("From name");
-    expect(names).toContain("Send test email");
+    expect(names).not.toContain("Send test email");
+    expect(names).not.toContain("Send verification email");
     expect(names).toContain("Daily auto-send");
     expect(names).not.toContain("Verification code");
 
@@ -271,7 +269,8 @@ describe("buildSettingDefinitions structure", () => {
             item.type === "group" && item.heading === "Email delivery",
         )
         ?.items.map((item) => item.name) ?? [];
-    expect(hostedNames).toContain("Send verification email");
+    expect(hostedNames).not.toContain("Send verification email");
+    expect(hostedNames).not.toContain("Send test email");
     expect(hostedNames).toContain("Verification code");
     expect(hostedNames).not.toContain("Resend API key");
     expect(hostedNames).not.toContain("From email");

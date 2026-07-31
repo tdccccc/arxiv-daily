@@ -45,8 +45,8 @@ changing product behavior — each batch stays independently mergeable.
 ## Current focus
 
 P2b (started 2026-07-31; branch re-cut 2026-07-31 to
-  refactor/settings-declarative-api after PR #4 merged; T1–T6 committed
-  2026-07-31, manual-test UI follow-up in progress — pending another 1.13+
+  refactor/settings-declarative-api after PR #4 merged; T1–T7 committed
+  2026-07-31, second manual-test UI follow-up in progress — pending another 1.13+
   manual pass, then PR review + merge; the "P2b landed" success criterion
   checks only after the merge, mirroring P2a)
 

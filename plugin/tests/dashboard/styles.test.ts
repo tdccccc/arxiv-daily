@@ -50,6 +50,24 @@ describe("dashboard and settings styles", () => {
     );
   });
 
+  it("keeps topic tags beside shrinkable titles", () => {
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-title\s*\{[^}]*flex:\s*0 1 auto;[^}]*text-overflow:\s*ellipsis;/s,
+    );
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-star,[\s\S]*?flex:\s*0 0 auto;/,
+    );
+  });
+
+  it("aligns the declarative email guide to the full setting width", () => {
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__email-guide-host\s*\{[^}]*display:\s*block;/s,
+    );
+    expect(styles).toMatch(
+      /\.arxiv-daily-settings__email-guide-host \.setting-item-info,[\s\S]*?display:\s*none;/,
+    );
+  });
+
   it("keeps declarative topic forms collapsible and responsive", () => {
     expect(styles).toMatch(
       /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-form\[hidden\],[\s\S]*?display:\s*none;/,

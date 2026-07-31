@@ -124,18 +124,15 @@ export interface SettingDefinitionsHost {
   renderTimezoneRow?: (setting: Setting) => void;
   addCategory?: () => void;
   deleteCategory?: (index: number) => void;
-  reorderCategories?: (oldIndex: number, newIndex: number) => void;
   addTopic?: () => void;
-  reorderTopics?: (oldIndex: number, newIndex: number) => void;
   renderScheduleEnabledRow?: (setting: Setting) => void;
   renderRunWindowRow?: (setting: Setting) => void;
   renderTickIntervalRow?: (setting: Setting) => void;
   renderEmailGuideRow?: (setting: Setting) => void;
   renderEmailModeRow?: (setting: Setting) => void;
+  renderEmailToRow?: (setting: Setting) => void;
   renderEmailApiKeyRow?: (setting: Setting) => void;
   renderHostedTokenRow?: (setting: Setting) => void;
-  sendVerificationEmail?: () => void;
-  sendTestEmail?: () => void;
 }
 
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
@@ -229,8 +226,6 @@ export function buildSettingDefinitions(
         action: () => void host.addCategory?.(),
       },
       onDelete: (index) => void host.deleteCategory?.(index),
-      onReorder: (oldIndex, newIndex) =>
-        void host.reorderCategories?.(oldIndex, newIndex),
     },
     {
       type: "list",
@@ -245,8 +240,6 @@ export function buildSettingDefinitions(
         name: "Add topic",
         action: () => void host.addTopic?.(),
       },
-      onReorder: (oldIndex, newIndex) =>
-        void host.reorderTopics?.(oldIndex, newIndex),
     },
     {
       name: "Automatic detail notes",
@@ -361,24 +354,17 @@ export function buildSettingDefinitions(
                 host.renderEmailModeRow?.(setting),
             } satisfies SettingDefinitionItem]
           : []),
-        {
-          name: "Your email",
-          desc: hostedMode
-            ? "Where verification and daily digests are sent."
-            : "Where digests are delivered. With From empty, use the email on your Resend account.",
-          control: {
-            type: "text",
-            key: SETTING_KEYS.email.to,
-            placeholder: "you@example.com",
-          },
-        },
+        ...(host.renderEmailToRow
+          ? [{
+              name: "Your email",
+              desc: hostedMode
+                ? "Where verification and daily digests are sent."
+                : "Where digests are delivered. With From empty, use the email on your Resend account.",
+              render: (setting: Setting) => host.renderEmailToRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
         ...(hostedMode
           ? [
-              {
-                name: "Send verification email",
-                desc: "Sends a one-time link to confirm this address is yours.",
-                action: () => void host.sendVerificationEmail?.(),
-              } satisfies SettingDefinitionItem,
               ...(host.renderHostedTokenRow
                 ? [{
                     name: "Verification code",
@@ -416,13 +402,6 @@ export function buildSettingDefinitions(
                 },
               } satisfies SettingDefinitionItem,
             ]),
-        {
-          name: "Send test email",
-          desc: hostedMode
-            ? "Sends a sample digest now. Needs your email and verification code. Tests count toward the daily limit."
-            : "Sends a sample digest now. Needs your email and Resend API key.",
-          action: () => void host.sendTestEmail?.(),
-        },
         {
           name: "Daily auto-send",
           desc: hostedMode

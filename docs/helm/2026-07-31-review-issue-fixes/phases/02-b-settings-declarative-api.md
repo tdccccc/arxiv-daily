@@ -59,6 +59,10 @@ existing helper functions already exported from tab.ts. `tab.ts` overrides
       Quick start, compact/reorder LLM with masked revealable API key and
       None-integrated reasoning, fixed category dropdowns, and concise
       collapsible topic cards; new-install reasoning default is medium
+- [x] T8: second manual-test UI follow-up — remove framework drag layers from
+      category/topic lists, keep topic tag beside its title, align the email
+      guide, move send actions into right-side buttons, and replace the hosted
+      verification sentinel actions with masked reveal/save-on-blur input
 
 ## Verification
 

@@ -12,6 +12,9 @@ import {
 import {
   renderApiKeyRow,
   renderCategoryRow,
+  renderEmailApiKeyRow,
+  renderEmailToRow,
+  renderHostedTokenRow,
   renderReasoningEffortRow,
 } from "../src/settings/declarative-rows";
 
@@ -66,7 +69,10 @@ function makeTab() {
     manifest: { version: "0.0.0-test" },
     app: {},
     stateStore: { snapshot: () => ({}) },
-    logger: { setSensitiveValues: vi.fn() },
+    logger: { setSensitiveValues: vi.fn(), error: vi.fn() },
+    refreshSensitiveValues: vi.fn(),
+    sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
+    sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   return { tab, plugin, settings, saveSettings };
@@ -115,13 +121,12 @@ describe("wired getSettingDefinitions", () => {
     expect(topicsList).toBeDefined();
     expect(topicsList?.addItem?.name).toBe("Add topic");
 
-    let emailTo: Record<string, unknown> | undefined;
-    walkItems(items, (item) => {
-      const control = item.control as { key?: string } | undefined;
-      if (control?.key === SETTING_KEYS.email.to) emailTo = item;
-    });
-    expect(emailTo).toBeDefined();
-    expect(emailTo?.name).toBe("Your email");
+    const emailGroup = items.find(
+      (item) => item.type === "group" && item.heading === "Email delivery",
+    );
+    const emailTo = emailGroup?.items.find((item) => item.name === "Your email");
+    expect(emailTo).toHaveProperty("render");
+    expect(emailTo).not.toHaveProperty("action");
   });
 
   it("wires every render callback so complex rows are present", () => {
@@ -144,7 +149,6 @@ describe("wired getSettingDefinitions", () => {
         "Resend API key",
         "From email",
         "From name",
-        "Send test email",
         "Daily auto-send",
       ]),
     );
@@ -164,8 +168,7 @@ describe("wired getSettingDefinitions", () => {
     expect(saveSettings).toHaveBeenCalledTimes(1);
     expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
 
-    topicsList?.onReorder?.(0, 0);
-    expect(saveSettings).toHaveBeenCalledTimes(2);
+    expect(topicsList?.onReorder).toBeUndefined();
   });
 });
 
@@ -188,11 +191,11 @@ describe("declarative LLM and category rows", () => {
       expect(settings.llm.apiKey).toBe("sk-secret");
       expect(saveSettings).toHaveBeenCalledTimes(1);
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(input.disabled).toBe(false));
 
     reveal.click();
     expect(input.type).toBe("text");
-    expect(reveal.getAttribute("aria-label")).toBe("Hide API key");
+    expect(reveal.getAttribute("aria-label")).toBe("Hide LLM API key");
 
     input.value = "";
     input.dispatchEvent(new Event("blur"));
@@ -225,6 +228,130 @@ describe("declarative LLM and category rows", () => {
     renderCategoryRow(tab, setting as never, 0);
     expect(setting.controlEl.querySelector("select")).not.toBeNull();
     expect(setting.controlEl.querySelector("input")).toBeNull();
+  });
+
+  it("integrates hosted verification into the email row", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    settings.email.mode = "hosted";
+    const setting = renderSetting();
+    renderEmailToRow(tab, setting as never);
+
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((item) => item.textContent === "Send verification") as HTMLButtonElement;
+    expect(button).toBeDefined();
+    input.value = "  me@example.com  ";
+    button.click();
+
+    await vi.waitFor(() => {
+      expect(settings.email.to).toBe("me@example.com");
+      expect(saveSettings).toHaveBeenCalledTimes(1);
+      expect(plugin.sendHostedVerificationEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("waits for email persistence before sending verification", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    settings.email.mode = "hosted";
+    let finishSave!: () => void;
+    saveSettings.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishSave = resolve;
+    }));
+    const setting = renderSetting();
+    renderEmailToRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((item) => item.textContent === "Send verification") as HTMLButtonElement;
+
+    input.value = "new@example.com";
+    input.dispatchEvent(new Event("change"));
+    button.click();
+    await Promise.resolve();
+    expect(plugin.sendHostedVerificationEmail).not.toHaveBeenCalled();
+
+    finishSave();
+    await vi.waitFor(() => {
+      expect(plugin.sendHostedVerificationEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("rolls back email and skips verification when persistence fails", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    settings.email.mode = "hosted";
+    settings.email.to = "old@example.com";
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    const setting = renderSetting();
+    renderEmailToRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((item) => item.textContent === "Send verification") as HTMLButtonElement;
+
+    input.value = "new@example.com";
+    input.dispatchEvent(new Event("change"));
+    button.click();
+    await vi.waitFor(() => {
+      expect(settings.email.to).toBe("old@example.com");
+      expect(input.value).toBe("old@example.com");
+    });
+    expect(plugin.sendHostedVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  it("uses a masked verification code and saves it before sending a test", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    settings.email.mode = "hosted";
+    settings.email.hostedToken = "old-token";
+    const setting = renderSetting();
+    renderHostedTokenRow(tab, setting as never);
+
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const buttons = Array.from(setting.controlEl.querySelectorAll("button"));
+    const reveal = buttons.find((item) =>
+      item.getAttribute("aria-label") === "Show verification code",
+    ) as HTMLButtonElement;
+    const sendTest = buttons.find((item) => item.textContent === "Send test") as HTMLButtonElement;
+    expect(input.type).toBe("password");
+    expect(setting.controlEl.textContent).not.toContain("Replace");
+    expect(setting.controlEl.textContent).not.toContain("Clear");
+
+    reveal.click();
+    expect(input.type).toBe("text");
+    input.value = " new token \n value ";
+    sendTest.click();
+
+    await vi.waitFor(() => {
+      expect(settings.email.hostedToken).toBe("newtokenvalue");
+      expect(saveSettings).toHaveBeenCalledTimes(1);
+      expect(plugin.refreshSensitiveValues).toHaveBeenCalled();
+      expect(plugin.sendTestEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("rolls back a verification code when persistence fails", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    settings.email.mode = "hosted";
+    settings.email.hostedToken = "old-token";
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    const setting = renderSetting();
+    renderHostedTokenRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+
+    input.value = "new-token";
+    input.dispatchEvent(new Event("blur"));
+    await vi.waitFor(() => {
+      expect(settings.email.hostedToken).toBe("old-token");
+      expect(input.value).toBe("old-token");
+      expect(plugin.refreshSensitiveValues).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("puts the self-mode test action inside the Resend API key row", () => {
+    const { tab } = makeTab();
+    const setting = renderSetting();
+    renderEmailApiKeyRow(tab, setting as never);
+    expect(
+      Array.from(setting.controlEl.querySelectorAll("button"))
+        .some((button) => button.textContent === "Send test"),
+    ).toBe(true);
   });
 });
 
@@ -266,18 +393,15 @@ describe("wired getControlValue", () => {
       renderTimezoneRow: () => {},
       addCategory: () => {},
       deleteCategory: () => {},
-      reorderCategories: () => {},
       addTopic: () => {},
-      reorderTopics: () => {},
       renderScheduleEnabledRow: () => {},
       renderRunWindowRow: () => {},
       renderTickIntervalRow: () => {},
       renderEmailGuideRow: () => {},
       renderEmailModeRow: () => {},
+      renderEmailToRow: () => {},
       renderEmailApiKeyRow: () => {},
       renderHostedTokenRow: () => {},
-      sendVerificationEmail: () => {},
-      sendTestEmail: () => {},
     });
     const tabItems = tab.getSettingDefinitions();
     expect(tabItems.length).toBe(hostItems.length);

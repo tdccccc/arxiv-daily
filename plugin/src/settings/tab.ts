@@ -176,19 +176,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderEmailGuideRow(this, setting),
       renderEmailModeRow: (setting) =>
         declarativeRows.renderEmailModeRow(this, setting),
+      renderEmailToRow: (setting) =>
+        declarativeRows.renderEmailToRow(this, setting),
       renderEmailApiKeyRow: (setting) =>
         declarativeRows.renderEmailApiKeyRow(this, setting),
       renderHostedTokenRow: (setting) =>
         declarativeRows.renderHostedTokenRow(this, setting),
       addCategory: () => void this.addCategory(),
       deleteCategory: (index) => void this.deleteCategory(index),
-      reorderCategories: (oldIndex, newIndex) =>
-        void this.reorderCategories(oldIndex, newIndex),
       addTopic: () => void this.addTopic(),
-      reorderTopics: (oldIndex, newIndex) =>
-        void this.reorderTopics(oldIndex, newIndex),
-      sendVerificationEmail: () => declarativeRows.sendVerificationEmail(this),
-      sendTestEmail: () => declarativeRows.sendTestEmail(this),
     });
   }
 
@@ -229,8 +225,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Notice(`arXiv Daily: ${action} failed: ${message}`, 10_000);
   }
 
+  public async runActionAndWait(
+    action: string,
+    operation: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await operation();
+    } catch (error) {
+      this.reportActionError(action, error);
+    }
+  }
+
   public runAction(action: string, operation: () => Promise<unknown>): void {
-    void operation().catch((error) => this.reportActionError(action, error));
+    void this.runActionAndWait(action, operation);
   }
 
   /** Inline muted hint, used inside topic cards under a label. */
@@ -335,19 +342,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.refreshSettings();
   }
 
-  /** Move a category to a new position (list drag-to-reorder). */
-  public async reorderCategories(
-    oldIndex: number,
-    newIndex: number,
-  ): Promise<void> {
-    const categories = [...arxivCategories(this.plugin.settings.arxiv)];
-    const [moved] = categories.splice(oldIndex, 1);
-    if (moved === undefined) return;
-    categories.splice(newIndex, 0, moved);
-    await this.setArxivCategories(categories);
-    this.refreshSettings();
-  }
-
   /** Append a blank, expanded topic card. */
   public async addTopic(): Promise<void> {
     const newId = crypto.randomUUID();
@@ -380,16 +374,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
     this.refreshSettings();
     return true;
-  }
-
-  /** Move a topic to a new position (list drag-to-reorder). */
-  public async reorderTopics(oldIndex: number, newIndex: number): Promise<void> {
-    const topics = this.plugin.settings.arxiv.topics;
-    const [moved] = topics.splice(oldIndex, 1);
-    if (moved === undefined) return;
-    topics.splice(newIndex, 0, moved);
-    await this.plugin.saveSettings();
-    this.refreshSettings();
   }
 
   /**
@@ -1624,21 +1608,29 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
+    let tagChip: HTMLElement | null = null;
+    const createTag = () => {
+      if (!topic.tag) return;
+      tagChip = header.createSpan({
+        cls: "arxiv-daily-settings__topic-tag",
+        text: "#" + topic.tag,
+      });
+    };
     let star: HTMLElement | null = null;
-    if (topic.detail) {
+    const createStar = () => {
+      if (!topic.detail) return;
       star = header.createSpan({
         cls: "arxiv-daily-settings__topic-star",
         text: "★",
         attr: { title: "Detail report enabled" },
       });
-    }
-
-    let tagChip: HTMLElement | null = null;
-    if (topic.tag) {
-      tagChip = header.createSpan({
-        cls: "arxiv-daily-settings__topic-tag",
-        text: "#" + topic.tag,
-      });
+    };
+    if (compact) {
+      createTag();
+      createStar();
+    } else {
+      createStar();
+      createTag();
     }
 
     // ─── Expanded form (toggled via display) ────────────────
@@ -1790,8 +1782,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           text: "★",
           attr: { title: "Detail report enabled" },
         });
-        // Keep the detail indicator before the tag chip.
-        if (tagChip) header.insertBefore(star, tagChip);
+        if (!compact && tagChip) header.insertBefore(star, tagChip);
       }
     };
 
