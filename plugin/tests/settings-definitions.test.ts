@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allSettingKeys,
+  buildSettingDefinitions,
   readSettingValue,
   SETTING_KEYS,
   writeSettingValue,
@@ -57,5 +58,41 @@ describe("setting key path mapping", () => {
     const settings = structuredClone(DEFAULT_SETTINGS);
     writeSettingValue(settings, "missing.deep.value", 1);
     expect(settings).toEqual(structuredClone(DEFAULT_SETTINGS));
+  });
+});
+
+describe("buildSettingDefinitions structure", () => {
+  function makeHost() {
+    return {
+      plugin: {
+        settings: structuredClone(DEFAULT_SETTINGS),
+        manifest: { version: "0.0.0-test" },
+        app: {},
+      },
+    };
+  }
+
+  it("returns top-level items with an Enable toggle and section groups", () => {
+    const items = buildSettingDefinitions(makeHost());
+    expect(items.length).toBeGreaterThanOrEqual(4);
+    const groups = items.filter((item) => item.type === "group");
+    expect(groups.map((g) => g.heading)).toEqual(
+      expect.arrayContaining(["AI model", "Output & schedule", "Advanced", "Help & feedback"]),
+    );
+  });
+
+  it("resolves every declarative control key through readSettingValue", () => {
+    const keys = new Set(allSettingKeys());
+    const walk = (items: readonly unknown[]): void => {
+      for (const item of items as ReadonlyArray<Record<string, unknown>>) {
+        if (Array.isArray(item.items)) walk(item.items as unknown[]);
+        const control = item.control as { key?: string } | undefined;
+        if (control?.key) {
+          expect(keys.has(control.key)).toBe(true);
+          expect(readSettingValue(makeHost().plugin.settings, control.key)).toBeDefined();
+        }
+      }
+    };
+    walk(buildSettingDefinitions(makeHost()));
   });
 });

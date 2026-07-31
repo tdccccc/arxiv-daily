@@ -121,7 +121,7 @@ function isLogLevel(value: string): value is LogLevel {
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
 
-  constructor(app: App, private plugin: ArxivDailyPlugin) {
+  constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
   }
 
