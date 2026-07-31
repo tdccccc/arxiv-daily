@@ -29,6 +29,7 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | **Vault data** | Generated and bookkeeping content under the vault: daily reports, paper notes, paper index, run state, delivery state. Not the CLI config file. |
 | **Data export / import** | Manual packaging and restoration of vault data (not product settings) for backup or moving between machines. |
 | **Delivery state** | Bookkeeping of whether a digest was already delivered for a date and recipient, shared when both products use the same vault. |
+| **Structured-summary checkpoint** | Internal Vault-data bookkeeping that records a completed per-paper result until its complete daily report is committed. Reuse requires an exact compatibility match and may depend on result kind; a checkpoint is not a partial daily report or a paper note. |
 
 ## User-facing outputs (README / product copy)
 

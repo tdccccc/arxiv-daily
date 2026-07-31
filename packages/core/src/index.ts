@@ -32,6 +32,25 @@ export * from "./prompts/render";
 export * from "./run-format";
 export * from "./services/cancellation";
 export * from "./services/daily-selection";
+export {
+  DAILY_SUMMARY_CHECKPOINT_SCHEMA_VERSION,
+  DAILY_SUMMARY_FINGERPRINT_VERSION,
+  DAILY_SUMMARY_PROMPT_CONTRACT_VERSION,
+  DAILY_SUMMARY_RESULT_CONTRACT_VERSION,
+  DailySummaryCheckpointStore,
+  DailySummaryCheckpointStoreError,
+  buildDailySummaryCheckpointFingerprintInput,
+  createDailySummaryCompatibilityFingerprint,
+  decodeDailyPaperResult,
+  deriveDailySummaryCheckpointPaths,
+  sanitizeCheckpointEndpoint,
+  type DailySummaryCheckpointCompatibilityInput,
+  type DailySummaryCheckpointDocument,
+  type DailySummaryCheckpointEntry,
+  type DailySummaryCheckpointFingerprintInput,
+  type DailySummaryCheckpointPaths,
+  type DailySummaryCheckpointStoreOptions,
+} from "./services/daily-summary-checkpoint-store";
 export * from "./services/diagnostics";
 export * from "./services/logger";
 export * from "./services/manual-fetch";

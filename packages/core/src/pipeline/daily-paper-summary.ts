@@ -334,6 +334,14 @@ function parseDailyPaperSummary(
       { reasonCode: "invalid-json" },
     );
   }
+  return validateStructuredPaperSummaryValue(value, expectedId);
+}
+
+/** Validate and canonicalize a parsed structured summary using generation semantics. */
+export function validateStructuredPaperSummaryValue(
+  value: unknown,
+  expectedId: string,
+): StructuredPaperSummary {
   if (!isPlainObject(value)) {
     throw new DailyPaperSummaryValidationError(
       expectedId,

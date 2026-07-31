@@ -7,6 +7,7 @@ import {
   resolveTrustedOriginalAbstract,
   summarizeDailyPaper,
   summarizeDailyPaperWithValidationRetry,
+  validateStructuredPaperSummaryValue,
   type DailyPaperSummaryInput,
 } from "../src/pipeline/daily-paper-summary";
 
@@ -53,6 +54,23 @@ function expectSeparateBulletLines(content: string, fragments: string[]): void {
   expect(indexes).not.toContain(-1);
   expect(new Set(indexes).size).toBe(fragments.length);
 }
+
+describe("validateStructuredPaperSummaryValue", () => {
+  it("shares trim and scientific-math canonicalization with parsed responses", () => {
+    expect(validateStructuredPaperSummaryValue(JSON.parse(validSummary({
+      mainResult: String.raw`Uses \(\alpha=0.1\).`,
+    })), paper.id)).toMatchObject({
+      coreProblem: "concrete problem",
+      mainResult: String.raw`Uses $\alpha=0.1$.`,
+    });
+  });
+
+  it("raises the typed validation error for invalid scientific math", () => {
+    expect(() => validateStructuredPaperSummaryValue(JSON.parse(validSummary({
+      mainResult: String.raw`Bare \alpha.`,
+    })), paper.id)).toThrow(DailyPaperSummaryValidationError);
+  });
+});
 
 describe("summarizeDailyPaper", () => {
   it.each([
