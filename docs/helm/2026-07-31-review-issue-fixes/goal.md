@@ -28,7 +28,7 @@ changing product behavior — each batch stays independently mergeable.
   main checkout directly
 - P2a waits for `fix/arxiv-failure-recovery` and `fix/arxiv-request-resilience`
   merged into main — **done 2026-07-31 (be4c705)**; P2a started on
-  `refactor/dashboard-view-modules`
+  `refactor/settings-declarative-api`
 - commit-msg hook: Conventional Commits (`feat|fix|refactor|docs|test|chore|perf`),
   body with why/what/validation for multi-file or >20-line changes
 - Checks must stay green: `npm run typecheck`, `npm test`, `npm run lint`
@@ -44,7 +44,8 @@ changing product behavior — each batch stays independently mergeable.
 
 ## Current focus
 
-P2b (started 2026-07-31 on refactor/dashboard-view-modules)
+P2b (started 2026-07-31; branch re-cut 2026-07-31 to
+  refactor/settings-declarative-api after PR #4 merged)
 
 ## Resolved
 

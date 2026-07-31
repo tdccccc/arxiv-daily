@@ -92,3 +92,13 @@
   helpers; runtime 1.13 behavior not locally testable (documented
   assumption)
 - next: T1 key constants + resolver mapping
+
+## 2026-07-31 — note (branch re-cut)
+
+- evidence: PR #4 merged (pure P2a); P2b T1/T2 were on the same branch
+  and were split out to keep main clean of un-wired declarative code
+- change: P2b commits cherry-picked onto new branch
+  refactor/settings-declarative-api (from merged main); journal conflict
+  resolution also restored the P2a-done record that PR #4 had dropped
+- disposition: keep working on refactor/settings-declarative-api
+- next: T3 complex rows (API key sentinel, get models, onboarding guide)
