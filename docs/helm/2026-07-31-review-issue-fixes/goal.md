@@ -46,7 +46,8 @@ changing product behavior — each batch stays independently mergeable.
 
 P2b (started 2026-07-31; branch re-cut 2026-07-31 to
   refactor/settings-declarative-api after PR #4 merged; T4 arXiv section
-  committed 2026-07-31 — next: T5 email + schedule blocks)
+  committed 2026-07-31, T5 schedule + email blocks committed 2026-07-31 —
+  next: T6 wire tab.ts overrides + full verification)
 
 ## Resolved
 

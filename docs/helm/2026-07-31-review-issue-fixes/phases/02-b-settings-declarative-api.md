@@ -45,8 +45,9 @@ existing helper functions already exported from tab.ts. `tab.ts` overrides
 - [x] T4: topics as a `list` (add/delete/reorder) + categories block —
       plus quick start, detail notes, timezone to keep the arXiv section
       complete on 1.13+; shared mutations live on the tab
-- [ ] T5: email block (to/from/mode/verify/test) + schedule block
-      (enabled/time window/interval)
+- [x] T5: email block (to/from/mode/verify/test) + schedule block
+      (enabled/time window/interval) — enable toggle re-rendered through
+      setScheduleEnabled so validation + modal flow survive
 - [ ] T6: wire tab.ts (three overrides) + structure tests (every key maps,
       key items present) + full verification
 

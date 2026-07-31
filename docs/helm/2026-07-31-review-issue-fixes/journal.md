@@ -122,3 +122,22 @@
   option mirrors display()'s conditional row; list descs render as first
   item with empty name (L2 if the layout looks off)
 - next: T5 email + schedule blocks
+
+## 2026-07-31 — note (T5 done: schedule + email blocks declarative)
+
+- evidence: T2's plain Enable toggle bypassed setScheduleEnabled
+  (validation modal + scheduler start), so T5 re-renders it as a
+  render row with a dynamic "Enable · Running/Paused" name; tick
+  interval likewise re-rendered (sanitize + restartScheduler); email
+  rows are build-time mode conditionals (self: api key + from;
+  hosted: verify + code) refreshed via refreshSettings on mode change
+- change: T5 committed 5d66b15; tab.ts exposes saveRunWindowTime,
+  renderRunWindowTimeSelect, emailGuideContent (display() refactored
+  to use the content builder — no behavior change); +3 structure
+  tests (enable row, schedule group rows, mode-dependent email rows)
+- disposition: email text controls (to/fromEmail/fromName) write raw
+  values via the resolver — the imperative trims; acceptable deviation
+  noted for T6 setControlValue if trimming is wanted; 2 new lint
+  warnings are sentence-case copies of existing imperative copy
+- next: T6 wire tab.ts (getSettingDefinitions + getControlValue +
+  setControlValue overrides) + final structure tests + verification
