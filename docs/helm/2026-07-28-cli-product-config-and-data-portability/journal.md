@@ -81,3 +81,14 @@
 - change: Rewrote `apps/cli/src/init.ts` — section help, provider/model pickers, category group+list, email menu with optional verify-start + paste token, timezone list; `renderInitToml` English comments; tests in cli-init.test.ts.
 - disposition: Keep on branch feat/cli-init-ux; bump npm version when publishing again.
 - next: Commit / PR; local try `arxiv-daily init` after build.
+
+## 2026-07-31 — waiver
+
+- evidence: P1/P1b/P2 done, P3 done for CLI (data export/import shipped in
+  0.3.5); the goal itself labeled the plugin-side export/import UI an
+  "optional follow-up"
+- change: initiative closed as done; success criterion 4 (plugin UI
+  export/import) explicitly **waived** per helm close rules
+- disposition: keep — if the plugin export/import UI is ever built, track it
+  as a fresh initiative
+- next: none (initiative closed)

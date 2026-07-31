@@ -1,7 +1,7 @@
 # Official email delivery (Beta)
 
-status: active
-updated: 2026-07-27
+status: done
+updated: 2026-07-31
 
 ## Intent
 
@@ -38,7 +38,8 @@ Ship **Official delivery (Beta)** end-to-end: users verify an inbox via magic li
 
 ## Current focus
 
-Done (code). Deploy Worker + DNS before production use.
+Closed. Deploy Worker + DNS on arxiv-daily.top remains an ops follow-up
+outside this initiative (see journal).
 
 ## Resolved
 

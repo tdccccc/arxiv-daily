@@ -1,7 +1,7 @@
 # CLI product config and vault data portability
 
-status: active
-updated: 2026-07-28
+status: done
+updated: 2026-07-31
 
 ## Intent
 
@@ -41,7 +41,8 @@ Make the CLI a first-class **product** with a simple fixed TOML config and `init
 
 ## Current focus
 
-P3 residual: plugin data export/import UI (optional follow-up)
+Closed. Success criterion 4 (plugin export/import UI) waived as an optional
+follow-up — see journal.
 
 ## Open questions
 
