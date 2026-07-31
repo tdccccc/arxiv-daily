@@ -178,6 +178,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   /** Full-width guide block aligned with Setting name column (not indented desc). */
+  /** Guide strip copy for the current email mode; shared with the 1.13+ rows. */
+  public emailGuideContent(): { title: string; lines: string[] } {
+    const hostedMode = this.plugin.settings.email.mode === "hosted";
+    return {
+      title: hostedMode ? "Official delivery (Beta)" : "Send yourself",
+      lines: hostedMode
+        ? [
+            "1. Enter your email, then send a verification message.",
+            "2. Open the link in that email and copy the code shown on the page.",
+            "3. Paste the code below, send a test email, then turn on daily auto-send.",
+            "Capacity is limited: only a few messages per inbox per day (tests count). For heavier use, switch to Send yourself.",
+          ]
+        : [
+            "1. Create a free Resend account and an API key at resend.com.",
+            "2. Paste the key below. For a quick start, put your Resend account email in Your email and leave From email empty.",
+            "3. Send a test email, then turn on daily auto-send when it works.",
+          ],
+    };
+  }
+
   private emailGuide(
     containerEl: HTMLElement,
     opts: { title: string; lines: string[] },
@@ -325,7 +345,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (confirmed) await apply();
   }
 
-  private async saveRunWindowTime(
+  public async saveRunWindowTime(
     key: "runAtLocal" | "runUntilLocal",
     value: string,
   ): Promise<void> {
@@ -758,21 +778,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
     const hostedMode = s.email.mode === "hosted";
 
-    this.emailGuide(containerEl, {
-      title: hostedMode ? "Official delivery (Beta)" : "Send yourself",
-      lines: hostedMode
-        ? [
-            "1. Enter your email, then send a verification message.",
-            "2. Open the link in that email and copy the code shown on the page.",
-            "3. Paste the code below, send a test email, then turn on daily auto-send.",
-            "Capacity is limited: only a few messages per inbox per day (tests count). For heavier use, switch to Send yourself.",
-          ]
-        : [
-            "1. Create a free Resend account and an API key at resend.com.",
-            "2. Paste the key below. For a quick start, put your Resend account email in Your email and leave From email empty.",
-            "3. Send a test email, then turn on daily auto-send when it works.",
-          ],
-    });
+    this.emailGuide(containerEl, this.emailGuideContent());
 
     new Setting(containerEl)
       .setName("How to send")
@@ -1787,7 +1793,7 @@ export function runWindowTimeOptions(current: string): RunWindowTimeOption[] {
   return values.sort((a, b) => a.value.localeCompare(b.value));
 }
 
-function renderRunWindowTimeSelect(
+export function renderRunWindowTimeSelect(
   parent: HTMLElement,
   labelText: string,
   id: string,

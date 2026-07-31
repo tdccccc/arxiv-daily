@@ -125,6 +125,15 @@ export interface SettingDefinitionsHost {
   reorderCategories?: (oldIndex: number, newIndex: number) => void;
   addTopic?: () => void;
   reorderTopics?: (oldIndex: number, newIndex: number) => void;
+  renderScheduleEnabledRow?: (setting: Setting) => void;
+  renderRunWindowRow?: (setting: Setting) => void;
+  renderTickIntervalRow?: (setting: Setting) => void;
+  renderEmailGuideRow?: (setting: Setting) => void;
+  renderEmailModeRow?: (setting: Setting) => void;
+  renderEmailApiKeyRow?: (setting: Setting) => void;
+  renderHostedTokenRow?: (setting: Setting) => void;
+  sendVerificationEmail?: () => void;
+  sendTestEmail?: () => void;
 }
 
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
@@ -152,6 +161,7 @@ export function buildSettingDefinitions(
   const { plugin } = host;
   const categories = arxivCategories(plugin.settings.arxiv);
   const topics = plugin.settings.arxiv.topics;
+  const hostedMode = plugin.settings.email.mode === "hosted";
   return [
     ...(host.renderSetupGuideRow
       ? [{
@@ -159,14 +169,16 @@ export function buildSettingDefinitions(
           render: (setting: Setting) => host.renderSetupGuideRow?.(setting),
         } satisfies SettingDefinitionItem]
       : []),
-    {
-      name: "Enable",
-      desc: "When on, daily reports run automatically on weekdays (weekends are skipped).",
-      control: {
-        type: "toggle",
-        key: SETTING_KEYS.schedule.enabled,
-      },
-    },
+    ...(host.renderScheduleEnabledRow
+      ? [{
+          name: plugin.settings.schedule.enabled
+            ? "Enable · Running"
+            : "Enable · Paused",
+          desc: "When on, daily reports run automatically on weekdays (weekends are skipped).",
+          render: (setting: Setting) =>
+            host.renderScheduleEnabledRow?.(setting),
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       type: "group",
       heading: "AI model",
@@ -343,18 +355,115 @@ export function buildSettingDefinitions(
             },
           },
         },
+        ...(host.renderRunWindowRow
+          ? [{
+              name: "Run window",
+              desc: "Local times when automatic runs may start (24-hour clock).",
+              render: (setting: Setting) =>
+                host.renderRunWindowRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderTickIntervalRow
+          ? [{
+              name: "Check every (minutes)",
+              desc: "How often the plugin looks for a day that still needs a report. Default is 20 minutes.",
+              render: (setting: Setting) =>
+                host.renderTickIntervalRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+      ],
+    },
+    {
+      type: "group",
+      heading: "Email delivery",
+      items: [
+        ...(host.renderEmailGuideRow
+          ? [{
+              name: "",
+              render: (setting: Setting) =>
+                host.renderEmailGuideRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmailModeRow
+          ? [{
+              name: "How to send",
+              desc: hostedMode
+                ? "Official delivery (Beta) is a shared free service with a small daily limit. Prefer Send yourself if you need many messages or reliable high volume."
+                : "Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.",
+              render: (setting: Setting) =>
+                host.renderEmailModeRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
         {
-          name: "Check every (minutes)",
-          desc: "How often the scheduler checks for new papers while Obsidian is open.",
+          name: "Your email",
+          desc: hostedMode
+            ? "Where verification and daily digests are sent."
+            : "Where digests are delivered. With From empty, use the email on your Resend account.",
           control: {
             type: "text",
-            key: SETTING_KEYS.schedule.tickIntervalMin,
-            validate: (value) => {
-              const parsed = Number(value);
-              return Number.isFinite(parsed) && parsed >= 1
-                ? undefined
-                : "Enter a positive number of minutes.";
-            },
+            key: SETTING_KEYS.email.to,
+            placeholder: "you@example.com",
+          },
+        },
+        ...(hostedMode
+          ? [
+              {
+                name: "Send verification email",
+                desc: "Sends a one-time link to confirm this address is yours.",
+                action: () => void host.sendVerificationEmail?.(),
+              } satisfies SettingDefinitionItem,
+              ...(host.renderHostedTokenRow
+                ? [{
+                    name: "Verification code",
+                    desc: "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above.",
+                    render: (setting: Setting) =>
+                      host.renderHostedTokenRow?.(setting),
+                  } satisfies SettingDefinitionItem]
+                : []),
+            ]
+          : [
+              ...(host.renderEmailApiKeyRow
+                ? [{
+                    name: "Resend API key",
+                    desc: "From your Resend account. Saved only on this device; not shown again after you save.",
+                    render: (setting: Setting) =>
+                      host.renderEmailApiKeyRow?.(setting),
+                  } satisfies SettingDefinitionItem]
+                : []),
+              {
+                name: "From email",
+                desc: "Optional. Leave blank for the simplest setup (mail may only go to your Resend account email). Use an address on a domain you verified in Resend to send more freely.",
+                control: {
+                  type: "text",
+                  key: SETTING_KEYS.email.fromEmail,
+                  placeholder: "Leave blank for simplest setup",
+                },
+              } satisfies SettingDefinitionItem,
+              {
+                name: "From name",
+                desc: "Optional name shown as the sender. Default is \"arXiv Daily\".",
+                control: {
+                  type: "text",
+                  key: SETTING_KEYS.email.fromName,
+                  placeholder: "arXiv Daily",
+                },
+              } satisfies SettingDefinitionItem,
+            ]),
+        {
+          name: "Send test email",
+          desc: hostedMode
+            ? "Sends a sample digest now. Needs your email and verification code. Tests count toward the daily limit."
+            : "Sends a sample digest now. Needs your email and Resend API key.",
+          action: () => void host.sendTestEmail?.(),
+        },
+        {
+          name: "Daily auto-send",
+          desc: hostedMode
+            ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
+            : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
+          control: {
+            type: "toggle",
+            key: SETTING_KEYS.email.enabled,
           },
         },
       ],

@@ -1,10 +1,15 @@
-import { Notice, type Setting } from "obsidian";
+import {
+  Notice,
+  ToggleComponent,
+  type Setting,
+} from "obsidian";
 import type { ArxivDailySettingTab } from "./tab";
 import {
   API_KEY_CONFIGURED_SENTINEL,
   addCategoryOptions,
   modelFetchNoticeMessage,
   persistApiKeyChange,
+  renderRunWindowTimeSelect,
   TIMEZONE_OPTIONS,
 } from "./tab";
 import { arxivCategories, LlmClient, TOPIC_TEMPLATES } from "@arxiv-daily/core";
@@ -257,5 +262,297 @@ export function renderTimezoneRow(
       tab.plugin.settings.arxiv.timezone = input.value.trim();
       void tab.plugin.saveSettings();
     }
+  });
+}
+
+/** Scheduler enable toggle; routes through setScheduleEnabled (validation + modal). */
+export function renderScheduleEnabledRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  new ToggleComponent(setting.controlEl)
+    .setValue(tab.plugin.settings.schedule.enabled)
+    .onChange(async (value) => {
+      await tab.plugin.setScheduleEnabled(value);
+      tab.refreshSettings();
+    });
+}
+
+/** Run window: Start/End local-time selects (24-hour clock). */
+export function renderRunWindowRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const schedule = tab.plugin.settings.schedule;
+  renderRunWindowTimeSelect(
+    setting.controlEl,
+    "Start",
+    "arxiv-daily-run-window-start",
+    schedule.runAtLocal,
+    (value) => tab.saveRunWindowTime("runAtLocal", value),
+  );
+  renderRunWindowTimeSelect(
+    setting.controlEl,
+    "End",
+    "arxiv-daily-run-window-end",
+    schedule.runUntilLocal,
+    (value) => tab.saveRunWindowTime("runUntilLocal", value),
+  );
+}
+
+/** Check-every (minutes) input; mirrors display()'s sanitize + scheduler restart. */
+export function renderTickIntervalRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    cls: "arxiv-daily-settings__tick-input",
+  });
+  input.value = String(tab.plugin.settings.schedule.tickIntervalMin);
+  input.addEventListener("input", () => {
+    tab.plugin.settings.schedule.tickIntervalMin =
+      Math.max(1, Number(input.value) || 20);
+    void tab.plugin.saveSettings().then(() => tab.plugin.restartScheduler());
+  });
+}
+
+/** Email delivery guide strip for the current mode. */
+export function renderEmailGuideRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const { title, lines } = tab.emailGuideContent();
+  const wrap = setting.settingEl.createDiv({
+    cls: "arxiv-daily-settings__email-guide",
+  });
+  wrap.createDiv({
+    cls: "arxiv-daily-settings__email-guide-title",
+    text: title,
+  });
+  for (const line of lines) {
+    wrap.createDiv({
+      cls: "arxiv-daily-settings__email-guide-line",
+      text: line,
+    });
+  }
+}
+
+/** Email mode dropdown (Send yourself / Official delivery). */
+export function renderEmailModeRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const select = setting.controlEl.createEl("select");
+  const selfOption = select.createEl("option");
+  selfOption.value = "self";
+  selfOption.textContent = "Send yourself";
+  const hostedOption = select.createEl("option");
+  hostedOption.value = "hosted";
+  hostedOption.textContent = "Official delivery (Beta)";
+  select.value = tab.plugin.settings.email.mode === "hosted" ? "hosted" : "self";
+  select.addEventListener("change", () => {
+    tab.plugin.settings.email.mode =
+      select.value === "hosted" ? "hosted" : "self";
+    void tab.runAction("save email mode", async () => {
+      await tab.plugin.saveSettings();
+      tab.refreshSettings();
+    });
+  });
+}
+
+/** Resend API key sentinel row (self mode). */
+export function renderEmailApiKeyRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const configured = Boolean(tab.plugin.settings.email.apiKey?.trim());
+  let editing = !configured;
+  let draft = "";
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-input",
+    type: editing ? "password" : "text",
+    attr: { placeholder: "Paste your Resend API key" },
+  });
+  input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+  input.readOnly = !editing;
+
+  const replace = setting.controlEl.createEl("button", {
+    text: configured ? "Replace" : "Save",
+    attr: { type: "button" },
+  });
+  const cancel = setting.controlEl.createEl("button", {
+    text: "Cancel",
+    attr: { type: "button" },
+  });
+  cancel.hidden = !configured;
+  const clear = setting.controlEl.createEl("button", {
+    text: "Clear",
+    attr: { type: "button" },
+  });
+  clear.hidden = !configured;
+
+  const enterEdit = () => {
+    editing = true;
+    draft = "";
+    input.type = "password";
+    input.readOnly = false;
+    input.value = "";
+    replace.textContent = "Save";
+    cancel.hidden = false;
+    input.focus();
+  };
+  const reset = () => {
+    editing = false;
+    draft = "";
+    input.type = "text";
+    input.readOnly = true;
+    input.value = API_KEY_CONFIGURED_SENTINEL;
+    replace.textContent = "Replace";
+    cancel.hidden = true;
+  };
+  input.addEventListener("input", () => {
+    if (editing) draft = input.value;
+  });
+  replace.addEventListener("click", () => {
+    if (!editing) {
+      enterEdit();
+      return;
+    }
+    const next = draft.trim();
+    if (!next) return;
+    tab.runAction("save Resend API key", async () => {
+      tab.plugin.settings.email.apiKey = next;
+      await tab.plugin.saveSettings();
+      reset();
+      clear.hidden = false;
+    });
+  });
+  cancel.addEventListener("click", () => {
+    if (configured || tab.plugin.settings.email.apiKey?.trim()) reset();
+    else {
+      draft = "";
+      input.value = "";
+    }
+  });
+  clear.addEventListener("click", () => {
+    tab.runAction("clear Resend API key", async () => {
+      const confirmed = await tab.confirmReplace(
+        "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
+        "Clear",
+      );
+      if (!confirmed) return;
+      tab.plugin.settings.email.apiKey = "";
+      await tab.plugin.saveSettings();
+      tab.refreshSettings();
+    });
+  });
+}
+
+/** Verification-code sentinel row (hosted mode). */
+export function renderHostedTokenRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const configured = Boolean(tab.plugin.settings.email.hostedToken?.trim());
+  let editing = !configured;
+  let draft = "";
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__llm-input",
+    type: editing ? "password" : "text",
+    attr: { placeholder: "Paste the code from the verification page" },
+  });
+  input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
+  input.readOnly = !editing;
+
+  const replace = setting.controlEl.createEl("button", {
+    text: configured ? "Replace" : "Save",
+    attr: { type: "button" },
+  });
+  const cancel = setting.controlEl.createEl("button", {
+    text: "Cancel",
+    attr: { type: "button" },
+  });
+  cancel.hidden = !configured;
+  const clear = setting.controlEl.createEl("button", {
+    text: "Clear",
+    attr: { type: "button" },
+  });
+  clear.hidden = !configured;
+
+  const enterEdit = () => {
+    editing = true;
+    draft = "";
+    input.type = "password";
+    input.readOnly = false;
+    input.value = "";
+    replace.textContent = "Save";
+    cancel.hidden = false;
+    input.focus();
+  };
+  const reset = () => {
+    editing = false;
+    draft = "";
+    input.type = "text";
+    input.readOnly = true;
+    input.value = API_KEY_CONFIGURED_SENTINEL;
+    replace.textContent = "Replace";
+    cancel.hidden = true;
+  };
+  input.addEventListener("input", () => {
+    if (editing) draft = input.value;
+  });
+  replace.addEventListener("click", () => {
+    if (!editing) {
+      enterEdit();
+      return;
+    }
+    const next = draft.replace(/\s+/g, "").trim();
+    if (!next) {
+      new Notice("Paste the verification code before saving.");
+      return;
+    }
+    tab.runAction("save verification code", async () => {
+      tab.plugin.settings.email.hostedToken = next;
+      await tab.plugin.saveSettings();
+      tab.plugin.refreshSensitiveValues();
+      tab.refreshSettings();
+    });
+  });
+  cancel.addEventListener("click", () => {
+    if (configured || tab.plugin.settings.email.hostedToken?.trim()) reset();
+    else {
+      draft = "";
+      input.value = "";
+    }
+  });
+  clear.addEventListener("click", () => {
+    tab.runAction("clear verification code", async () => {
+      const confirmed = await tab.confirmReplace(
+        "Clear the verification code? You will need to verify your email again for Official delivery.",
+        "Clear",
+      );
+      if (!confirmed) return;
+      tab.plugin.settings.email.hostedToken = "";
+      await tab.plugin.saveSettings();
+      tab.plugin.refreshSensitiveValues();
+      tab.refreshSettings();
+    });
+  });
+}
+
+/** Send the hosted-mode verification email (action row). */
+export function sendVerificationEmail(tab: ArxivDailySettingTab): void {
+  tab.runAction("send verification email", async () => {
+    const message = await tab.plugin.sendHostedVerificationEmail();
+    new Notice(message, 10_000);
+  });
+}
+
+/** Send a sample digest now (action row). */
+export function sendTestEmail(tab: ArxivDailySettingTab): void {
+  tab.runAction("send test email", async () => {
+    const message = await tab.plugin.sendTestEmail();
+    new Notice(message, 10_000);
   });
 }

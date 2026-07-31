@@ -72,6 +72,32 @@ describe("buildSettingDefinitions structure", () => {
     };
   }
 
+  /** Host with every render/action callback supplied, as the tab will wire it. */
+  function makeFullHost() {
+    return {
+      ...makeHost(),
+      renderSetupGuideRow: () => {},
+      renderCategoryRow: () => {},
+      renderQuickStartRow: () => {},
+      renderTopicRow: () => {},
+      renderTimezoneRow: () => {},
+      addCategory: () => {},
+      deleteCategory: () => {},
+      reorderCategories: () => {},
+      addTopic: () => {},
+      reorderTopics: () => {},
+      renderScheduleEnabledRow: () => {},
+      renderRunWindowRow: () => {},
+      renderTickIntervalRow: () => {},
+      renderEmailGuideRow: () => {},
+      renderEmailModeRow: () => {},
+      renderEmailApiKeyRow: () => {},
+      renderHostedTokenRow: () => {},
+      sendVerificationEmail: () => {},
+      sendTestEmail: () => {},
+    };
+  }
+
   it("returns top-level items with an Enable toggle and section groups", () => {
     const items = buildSettingDefinitions(makeHost());
     expect(items.length).toBeGreaterThanOrEqual(4);
@@ -158,5 +184,68 @@ describe("buildSettingDefinitions structure", () => {
         defaultValue: "balanced",
       });
     }
+  });
+
+  it("renders the scheduler enable row with a Running/Paused name, no control", () => {
+    const host = makeFullHost();
+    const items = buildSettingDefinitions(host);
+    const enableRow = items.find(
+      (item) => "name" in item && item.name.startsWith("Enable ·"),
+    );
+    expect(enableRow).toBeDefined();
+    expect(enableRow).toHaveProperty("render");
+    expect(enableRow).not.toHaveProperty("control");
+    expect(
+      items.some((item) => "name" in item && item.name === "Enable · Paused"),
+    ).toBe(true);
+    host.plugin.settings.schedule.enabled = true;
+    expect(
+      buildSettingDefinitions(host).some(
+        (item) => "name" in item && item.name === "Enable · Running",
+      ),
+    ).toBe(true);
+  });
+
+  it("adds run window and interval rows to the Output & schedule group", () => {
+    const host = makeFullHost();
+    const items = buildSettingDefinitions(host);
+    const scheduleGroup = items.find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "Output & schedule",
+    );
+    const names = scheduleGroup?.items.map((item) => item.name) ?? [];
+    expect(names).toContain("Run window");
+    expect(names).toContain("Check every (minutes)");
+  });
+
+  it("swaps email rows by mode: api key + from (self) vs verify + code (hosted)", () => {
+    const host = makeFullHost();
+    const items = buildSettingDefinitions(host);
+    const emailGroup = items.find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "Email delivery",
+    );
+    expect(emailGroup).toBeDefined();
+    const names = emailGroup?.items.map((item) => item.name) ?? [];
+    expect(names).toContain("Your email");
+    expect(names).toContain("Resend API key");
+    expect(names).toContain("From email");
+    expect(names).toContain("From name");
+    expect(names).toContain("Send test email");
+    expect(names).toContain("Daily auto-send");
+    expect(names).not.toContain("Verification code");
+
+    host.plugin.settings.email.mode = "hosted";
+    const hostedNames =
+      buildSettingDefinitions(host)
+        .find(
+          (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+            item.type === "group" && item.heading === "Email delivery",
+        )
+        ?.items.map((item) => item.name) ?? [];
+    expect(hostedNames).toContain("Send verification email");
+    expect(hostedNames).toContain("Verification code");
+    expect(hostedNames).not.toContain("Resend API key");
+    expect(hostedNames).not.toContain("From email");
   });
 });
