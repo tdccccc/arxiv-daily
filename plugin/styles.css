@@ -343,6 +343,62 @@
   margin-right: 0.4em;
 }
 
+/* Declarative (1.13+) topic rows only: the card spans the full row width
+   (the framework name column is hidden — the card header carries the
+   title), the header right-aligns star/tag, and the expanded form uses a
+   two-column grid. The <1.13 display() path never gets this class. */
+.arxiv-daily-settings__topic-host {
+  flex-wrap: wrap;
+}
+
+.arxiv-daily-settings__topic-host .setting-item-info {
+  display: none;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-card {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-star,
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag {
+  flex: 0 0 auto;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 1em;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-row {
+  margin-bottom: 0;
+}
+
+.arxiv-daily-settings__topic-host
+  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__hint,
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
+  grid-column: 1 / -1;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag-input {
+  width: 100%;
+}
+
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
+  justify-content: flex-end;
+  gap: 1em;
+}
+
 .arxiv-daily-setup {
   margin-bottom: 16px;
   border: 1px solid var(--background-modifier-border);

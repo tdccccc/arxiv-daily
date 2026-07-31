@@ -1555,6 +1555,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     )) {
       el.remove();
     }
+    // Scopes the 1.13+ card layout (full-width row, aligned header, grid
+    // form) without touching the <1.13 display() styling.
+    setting.settingEl.addClass("arxiv-daily-settings__topic-host");
     this.renderTopicCard(
       setting.settingEl,
       this.plugin.settings.arxiv.topics,
@@ -1591,6 +1594,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const titleSpan = header.createSpan({
       cls: "arxiv-daily-settings__topic-title",
       text: topic.name.trim() || "(unnamed)",
+      attr: { title: topic.name },
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
@@ -1669,6 +1673,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
+      titleSpan.title = topic.name;
       titleSpan.toggleClass("is-muted", !topic.name.trim());
     };
 
