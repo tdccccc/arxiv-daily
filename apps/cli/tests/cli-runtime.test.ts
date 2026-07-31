@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DailySummaryCheckpointStore, Logger } from "@arxiv-daily/core";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
 import { buildCliRuntime } from "../src/runtime";
@@ -62,8 +63,9 @@ describe("CLI runtime", () => {
       rootDir: config.vaultRoot,
       fetch: async () => new Response("ok", { status: 200 }),
     });
+    const logger = new Logger("debug");
 
-    const runtime = await buildCliRuntime(config, { host });
+    const runtime = await buildCliRuntime(config, { host, logger });
 
     expect(runtime.writer.dailyPath("2026-06-13")).toBe(
       "arxiv-daily/daily/2026-06-13.md",
@@ -77,6 +79,15 @@ describe("CLI runtime", () => {
       primaryTopic: "astro",
       detail: false,
     });
+
+    const checkpointStore = (runtime.pipeline as any).deps.checkpointStore;
+    expect(checkpointStore).toBeInstanceOf(DailySummaryCheckpointStore);
+    expect(checkpointStore.storage).toBe(host.storage);
+    expect(checkpointStore.output).toBe(config.settings.output);
+    checkpointStore.options.onWarning("checkpoint warning", new Error("store failed"));
+    expect(logger.getBuffer().some((entry) =>
+      entry.includes("checkpoint warning") && entry.includes("store failed")
+    )).toBe(true);
 
     expect(await host.storage.exists("arxiv-daily/.index/papers.json")).toBe(
       true,

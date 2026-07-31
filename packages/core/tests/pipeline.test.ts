@@ -1173,11 +1173,17 @@ describe("ArxivPipeline", () => {
     (d.writer as any).dailyExists = vi.fn().mockResolvedValue(true);
     (d.writer as any).paperDetailExists = vi.fn().mockResolvedValue(false);
 
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
     const pipeline = new ArxivPipeline({
       markupParser,
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
       writer: d.writer as any,
+      checkpointStore,
       llm: d.llm as any,
       logger: d.logger,
       arxiv: testArxiv,
@@ -1189,8 +1195,159 @@ describe("ArxivPipeline", () => {
     const result = await pipeline.runForDate("2026-05-11");
     expect(result.kind).toBe("completed");
     expect((result as any).papersWritten).toBe(0);
+    expect(checkpointStore.removeAll).toHaveBeenCalledWith("2026-05-11");
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
     expect(d.llm.call).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failure: "write", expected: "rejected" },
+    { failure: "cancel", expected: "cancelled" },
+  ] as const)("does not clean checkpoints before a daily commit on $failure", async ({ failure, expected }) => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    const controller = new AbortController();
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+    );
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summarize = vi.fn(async () => {
+      if (failure === "cancel") controller.abort("cancelled before daily write");
+      return { markdown: "complete report", slots: [] };
+    });
+    if (failure === "write") {
+      d.writer.writeDaily.mockRejectedValue(new Error("daily write failed"));
+    }
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      checkpointStore,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: summarize as any,
+    });
+
+    if (expected === "rejected") {
+      await expect(pipeline.runForDate(date, controller.signal)).rejects.toThrow("daily write failed");
+    } else {
+      await expect(pipeline.runForDate(date, controller.signal)).resolves.toEqual({
+        kind: "cancelled",
+        reason: "cancelled before daily write",
+      });
+      expect(d.writer.writeDaily).not.toHaveBeenCalled();
+    }
+    expect(checkpointStore.removeAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { index: false, expectedKind: "completed" },
+    { index: true, expectedKind: "failed_transient" },
+  ] as const)(
+    "keeps the original $expectedKind result when existing-daily cleanup fails (index=$index)",
+    async ({ index, expectedKind }) => {
+      const d = makeDeps();
+      const date = "2026-05-11";
+      const id = "2607.00001";
+      d.writer.dailyExists.mockResolvedValue(true);
+      d.writer.readDaily.mockResolvedValue(
+        `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      );
+      const checkpointStore = {
+        lookupReusable: vi.fn(),
+        upsert: vi.fn(),
+        removeAll: vi.fn(async () => { throw new Error("cleanup denied"); }),
+      };
+      const paperIndex = index ? {
+        reconcilePaperDetails: vi.fn(async () => { throw new Error("repair denied"); }),
+        addDailyReports: vi.fn(),
+        setSummaries: vi.fn(),
+      } : undefined;
+      const warn = vi.spyOn(d.logger, "warn");
+      const pipeline = new ArxivPipeline({
+        markupParser,
+        fetcher: d.fetcher as any,
+        paperFetcher: d.paperFetcher as any,
+        writer: d.writer as any,
+        paperIndex: paperIndex as any,
+        checkpointStore,
+        llm: d.llm as any,
+        logger: d.logger,
+        arxiv: testArxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        output: DEFAULT_SETTINGS.output,
+        llmSettings: DEFAULT_SETTINGS.llm,
+        detailSelection: testDetailSelection,
+      });
+
+      const result = await pipeline.runForDate(date);
+
+      expect(result.kind).toBe(expectedKind);
+      expect(checkpointStore.removeAll).toHaveBeenCalledWith(date);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("checkpoint cleanup failed"),
+        expect.any(Error),
+      );
+      if (paperIndex) {
+        expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
+          paperIndex.reconcilePaperDetails.mock.invocationCallOrder[0]!,
+        );
+      }
+    },
+  );
+
+  it("stops existing-daily repair between derived index mutations when cancelled", async () => {
+    const d = makeDeps();
+    const controller = new AbortController();
+    const id = "2607.00001";
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => { controller.abort("cancelled after detail repair"); }),
+      addDailyReports: vi.fn(),
+      setSummaries: vi.fn(),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      checkpointStore,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate("2026-05-11", controller.signal)).resolves.toEqual({
+      kind: "cancelled",
+      reason: "cancelled after detail repair",
+    });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
+    expect(paperIndex.setSummaries).not.toHaveBeenCalled();
   });
 
   it("skips paper detail when paper file already exists", async () => {
@@ -1327,6 +1484,132 @@ describe("ArxivPipeline", () => {
     expect(daily).not.toContain(`→ [[${candidateId}]]`);
   });
 
+  it("stops fresh post-commit index projection between mutations when cancelled", async () => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    const controller = new AbortController();
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+    );
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
+        inputs.map((input) => ({
+          wasNew: true,
+          entry: { status: "inbox", paperPath: null, ...input },
+        })),
+      ),
+      addDailyReports: vi.fn(async () => { controller.abort("cancelled after daily links"); }),
+      setSummaries: vi.fn(),
+    };
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      checkpointStore,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => ({ markdown: "complete report", slots: [] })) as any,
+    });
+
+    await expect(pipeline.runForDate(date, controller.signal)).resolves.toEqual({
+      kind: "cancelled",
+      reason: "cancelled after daily links",
+    });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
+      paperIndex.addDailyReports.mock.invocationCallOrder[0]!,
+    );
+    expect(paperIndex.setSummaries).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fresh committed report authoritative when index update fails, then repairs on rerun", async () => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    let dailyExists = false;
+    d.writer.dailyExists = vi.fn(async () => dailyExists);
+    d.writer.writeDaily = vi.fn(async (writtenDate: string, markdown: string) => {
+      dailyExists = true;
+      d.writes[`daily/${writtenDate}.md`] = markdown;
+      return `daily/${writtenDate}.md`;
+    });
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+    );
+    let failDailyLink = true;
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
+        inputs.map((input) => ({
+          wasNew: true,
+          entry: { status: "inbox", paperPath: null, ...input },
+        })),
+      ),
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => {
+        if (failDailyLink) {
+          failDailyLink = false;
+          throw new Error("index disk full");
+        }
+      }),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      checkpointStore,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => ({
+        markdown: `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})\n- **核心问题**: Problem.`,
+        slots: [],
+      })) as any,
+    });
+
+    await expect(pipeline.runForDate(date)).resolves.toEqual({
+      kind: "failed_transient",
+      reason: "paper index daily report update failed: index disk full",
+    });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
+      paperIndex.addDailyReports.mock.invocationCallOrder[0]!,
+    );
+
+    await expect(pipeline.runForDate(date)).resolves.toMatchObject({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(2);
+    expect(d.fetcher.fetchRecent).toHaveBeenCalledTimes(1);
+    expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(2);
+    expect(paperIndex.setSummaries).toHaveBeenCalledTimes(1);
+  });
+
   it("repairs the full index on retry after cancellation immediately after writeDaily", async () => {
     const d = makeDeps();
     const id = firstBucketPapersFromFixture()[0]!.id;
@@ -1364,12 +1647,19 @@ describe("ArxivPipeline", () => {
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
     };
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => null),
+      upsert: vi.fn(async () => undefined),
+      removeAll: vi.fn(async () => { throw new Error("cleanup failed after commit"); }),
+    };
+    const cleanupWarning = vi.spyOn(d.logger, "warn");
     const pipeline = new ArxivPipeline({
       markupParser,
       fetcher: d.fetcher as any,
       paperFetcher: d.paperFetcher as any,
       writer: d.writer as any,
       paperIndex: paperIndex as any,
+      checkpointStore,
       llm: d.llm as any,
       logger: d.logger,
       arxiv: testArxiv,
@@ -1383,10 +1673,19 @@ describe("ArxivPipeline", () => {
       kind: "cancelled",
       reason: "cancelled after daily write",
     });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(cleanupWarning).toHaveBeenCalledWith(
+      expect.stringContaining("checkpoint cleanup failed"),
+      expect.any(Error),
+    );
+    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
+      paperIndex.addDailyReports.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
 
     expect(await pipeline.runForDate(firstDateFromFixture())).toMatchObject({ kind: "completed", papersWritten: 1,
     });
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(2);
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [id],
       `daily/${firstDateFromFixture()}.md`,

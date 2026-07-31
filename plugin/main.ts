@@ -25,6 +25,7 @@ import { ManualFetchService } from "@arxiv-daily/core";
 import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
+import { DailySummaryCheckpointStore } from "@arxiv-daily/core";
 import { PdfService } from "@arxiv-daily/core";
 import { ProjectNotesService } from "@arxiv-daily/core";
 import { RecentDatesCache } from "@arxiv-daily/core";
@@ -374,6 +375,11 @@ export default class ArxivDailyPlugin extends Plugin {
       paperFetcher,
       writer,
       paperIndex: this.buildPaperIndex(),
+      checkpointStore: new DailySummaryCheckpointStore(
+        this.host.storage,
+        this.settings.output,
+        { onWarning: (message, error) => this.logger.warn(message, error) },
+      ),
       llm,
       logger: this.logger,
       arxiv: this.settings.arxiv,

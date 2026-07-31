@@ -530,8 +530,12 @@ describe("DailySummaryCheckpointStore", () => {
     expect(await store.remove(reportDate, "missing")).toBe(false);
     expect(Object.keys((await store.load(reportDate)).entries)).toEqual(["arxiv:2608.00002"]);
 
+    files[backupPath] = "stale backup";
+    files[`${documentPath}.tmp`] = "interrupted replacement";
+
     await store.removeAll(reportDate);
     expect(files[documentPath]).toBeUndefined();
     expect(files[backupPath]).toBeUndefined();
+    expect(files[`${documentPath}.tmp`]).toBeUndefined();
   });
 });

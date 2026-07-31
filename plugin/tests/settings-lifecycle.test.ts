@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
+import { DailySummaryCheckpointStore, DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 
-const pluginMainSource = readFileSync(resolve(process.cwd(), "main.ts"), "utf8");
+const pluginMainSource = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), "../main.ts"),
+  "utf8",
+);
 
 const savedCategories = ["cs.CL", "stat.ML", "custom.quantum-ai"];
 
@@ -56,14 +60,15 @@ describe("plugin settings reload lifecycle", () => {
       softLimit: 6,
     };
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const warn = vi.fn();
     Object.assign(plugin, {
       settings: {
         ...DEFAULT_SETTINGS,
         detailSelection: configuredPolicy,
       },
-      logger: {},
+      logger: { warn },
       progress: {},
-      host: { markupParser: {} },
+      host: { markupParser: {}, storage: {} },
       buildSharedDeps: () => ({
         llm: {},
         fetcher: {},
@@ -79,6 +84,21 @@ describe("plugin settings reload lifecycle", () => {
     expect((pipeline as any).deps.detailSelection).toBe(
       plugin.settings.detailSelection,
     );
+    expect((pipeline as any).deps.checkpointStore).toBeInstanceOf(
+      DailySummaryCheckpointStore,
+    );
+    expect((pipeline as any).deps.checkpointStore.storage).toBe(
+      (plugin as any).host.storage,
+    );
+    expect((pipeline as any).deps.checkpointStore.output).toBe(
+      plugin.settings.output,
+    );
+    const checkpointError = new Error("unreadable checkpoint");
+    (pipeline as any).deps.checkpointStore.options.onWarning(
+      "checkpoint warning",
+      checkpointError,
+    );
+    expect(warn).toHaveBeenCalledWith("checkpoint warning", checkpointError);
   });
 
   it("logs persisted sanitation warnings after logger initialization", () => {

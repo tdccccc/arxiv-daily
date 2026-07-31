@@ -65,13 +65,18 @@ type PipelineFailureResult = Extract<
 
 const CONTENT_FETCH_CONCURRENCY = 6;
 
+export interface DailySummaryCheckpointLifecyclePort
+  extends DailySummaryCheckpointPort {
+  removeAll(reportDate: string): Promise<void>;
+}
+
 export interface PipelineDeps {
   fetcher: ArxivFetcher;
   markupParser: MarkupParser;
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
   paperIndex?: PaperIndexStore;
-  checkpointStore?: DailySummaryCheckpointPort;
+  checkpointStore?: DailySummaryCheckpointLifecyclePort;
   llm: LlmClient;
   logger: Logger;
   arxiv: ArxivSettings;
@@ -142,6 +147,7 @@ export class ArxivPipeline {
     // supports notes written by older versions without a separate marker.
     if (await this.deps.writer.dailyExists(dateStr)) {
       logger.info(`pipeline: daily ${dateStr} already exists, repairing index`);
+      await this.cleanupCommittedCheckpoints(dateStr);
       return await this.repairExistingDaily(dateStr, signal);
     }
     throwIfCancelled(signal);
@@ -413,6 +419,7 @@ export class ArxivPipeline {
     await this.deps.writer.writeDaily(dateStr, dailySummary, {
       metrics: runMetrics.snapshot(),
     });
+    await this.cleanupCommittedCheckpoints(dateStr);
     if (this.deps.paperIndex) {
       try {
         throwIfCancelled(signal);
@@ -420,9 +427,11 @@ export class ArxivPipeline {
           visiblePapers.map((p) => p.id),
           dailyPath,
         );
+        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
+        throwIfCancelled(signal);
       } catch (e) {
         if (isCancellationError(e)) throw e;
         return {
@@ -495,6 +504,18 @@ export class ArxivPipeline {
     }
   }
 
+  private async cleanupCommittedCheckpoints(dateStr: string): Promise<void> {
+    if (!this.deps.checkpointStore) return;
+    try {
+      await this.deps.checkpointStore.removeAll(dateStr);
+    } catch (error) {
+      this.deps.logger.warn(
+        `pipeline: committed daily checkpoint cleanup failed for ${dateStr}`,
+        error,
+      );
+    }
+  }
+
   private async repairExistingDaily(
     dateStr: string,
     signal?: AbortSignal,
@@ -518,7 +539,9 @@ export class ArxivPipeline {
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);
+      throwIfCancelled(signal);
       await this.deps.paperIndex.addDailyReports(arxivIds, dailyPath);
+      throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);
       throwIfCancelled(signal);
       this.deps.logger.info(

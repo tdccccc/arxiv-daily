@@ -23,13 +23,13 @@ Construct `DailySummaryCheckpointStore` in both plugin and CLI composition roots
 
 ## Tasks
 
-- [ ] Define a pipeline lifecycle port with `removeAll` while keeping the summarizer dependent only on lookup/upsert.
-- [ ] Best-effort clean checkpoint artifacts immediately after a fresh daily-report commit and before subsequent cancellation/index work.
-- [ ] Best-effort clean stale checkpoints whenever an existing daily report is detected, including no-index and failed-repair paths.
-- [ ] Preserve cancellation and index-repair semantics across write failure, post-commit cancellation, cleanup failure, and each index mutation failure; add cancellation checks between derived index mutations where safe.
-- [ ] Instantiate and inject the core checkpoint store in plugin and CLI composition roots using current output settings and warning redaction/logging.
-- [ ] Add focused lifecycle, retry, cleanup-artifact, and host-composition tests.
-- [ ] Run core/plugin/CLI focused tests and typechecks plus `git diff --check`.
+- [x] Define a pipeline lifecycle port with `removeAll` while keeping the summarizer dependent only on lookup/upsert.
+- [x] Best-effort clean checkpoint artifacts immediately after a fresh daily-report commit and before subsequent cancellation/index work.
+- [x] Best-effort clean stale checkpoints whenever an existing daily report is detected, including no-index and failed-repair paths.
+- [x] Preserve cancellation and index-repair semantics across write failure, post-commit cancellation, cleanup failure, and each index mutation failure; add cancellation checks between derived index mutations where safe.
+- [x] Instantiate and inject the core checkpoint store in plugin and CLI composition roots using current output settings and warning redaction/logging.
+- [x] Add focused lifecycle, retry, cleanup-artifact, and host-composition tests.
+- [x] Run core/plugin/CLI focused tests and typechecks plus `git diff --check`.
 
 ## Verification
 
