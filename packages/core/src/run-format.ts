@@ -9,6 +9,7 @@ export function describeResult(result: RunResult | null | undefined): string {
     return `done (${result.papersWritten} papers)`;
   }
   if (result.kind === "pending") return `pending: ${result.reason}`;
+  if (result.kind === "cancelled") return `cancelled: ${result.reason}`;
   if (result.kind === "failed_transient") {
     return `transient: ${result.reason}`;
   }
@@ -25,7 +26,10 @@ export function describeManualResult(
   if (!result) return "no result";
   if (result.kind === "done") return `done → ${result.path}`;
   if (result.kind === "already_exists") {
-    return `already exists at ${result.path}`;
+    return `verified detail already exists at ${result.path}`;
+  }
+  if (result.kind === "note_conflict") {
+    return `note conflict at ${result.path}: ${result.reason}`;
   }
   if (result.kind === "not_found") return `not found: ${result.reason}`;
   if (result.kind === "no_html") return `no full text: ${result.reason}`;

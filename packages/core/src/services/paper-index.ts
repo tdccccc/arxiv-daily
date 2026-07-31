@@ -231,6 +231,31 @@ export class PaperIndexStore {
     });
   }
 
+  /**
+   * Atomically creates or repairs the complete index projection for a verified
+   * manual detail note. Existing user status is preserved; only an entry first
+   * created by this mutation receives the requested initial status.
+   */
+  async reconcileManualDetail(
+    input: PaperIndexUpsert,
+    paperPath: string,
+    intendedStatusForNew: PaperStatus = "saved",
+  ): Promise<{ entry: PaperIndexEntry; wasNew: boolean }> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const { entry, wasNew } = upsertEntry(inbox, {
+        ...input,
+        detail: true,
+        paperPath: this.storage.normalizePath(paperPath),
+      });
+      entry.detail = true;
+      entry.paperPath = this.storage.normalizePath(paperPath);
+      if (wasNew) entry.status = intendedStatusForNew;
+      await this.save(inbox);
+      return { entry, wasNew };
+    });
+  }
+
   async addDailyReports(ids: string[], dailyReport: string): Promise<void> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();

@@ -3,7 +3,13 @@ import type { Logger } from "../services/logger";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { formatPaperKey } from "../services/paper-key";
 import { modernArxivResources } from "../utils/arxiv";
-import type { ArxivFetcher } from "../pipeline/arxiv-fetcher";
+import {
+  formatArxivHttpError,
+  isArxivHttpError,
+  isArxivRetryDeferredError,
+  isRetryableArxivError,
+  type ArxivFetcher,
+} from "../pipeline/arxiv-fetcher";
 import {
   parseRecent,
   type DateBucket,
@@ -65,12 +71,13 @@ export class ArxivSourceAdapter implements SourceAdapter {
           : await fetcher.fetchRecent(category);
       } catch (e) {
         if (isCancellationError(e)) throw e;
+        const message = formatArxivHttpError(e);
         failures.push({
-          kind: "failed_transient",
-          reason: `fetch /recent failed for ${category}: ${(e as Error).message}`,
+          kind: classifyArxivSourceFailure(e),
+          reason: `fetch /recent failed for ${category}: ${message}`,
         });
         logger.warn(
-          `arxiv-source: fetch /recent failed for ${category}, continuing: ${(e as Error).message}`,
+          `arxiv-source: fetch /recent failed for ${category}, continuing: ${message}`,
         );
         continue;
       }
@@ -112,18 +119,15 @@ export class ArxivSourceAdapter implements SourceAdapter {
       }
     }
 
-    if (succeededCategories.length === 0) {
+    if (failures.length > 0) {
+      logger.warn(
+        `arxiv-source: rejecting partial discovery; ${succeededCategories.length}/${categories.length} categories succeeded, ${failures.length} failed`,
+      );
       return {
         kind: "error",
         failureKind: collapseFailureKind(failures),
-        reason: collapseFailureReason(failures),
+        reason: collapseFailureReason(failures, categories.length),
       };
-    }
-
-    if (failures.length > 0) {
-      logger.warn(
-        `arxiv-source: ${succeededCategories.length}/${categories.length} categories succeeded, ${failures.length} failed`,
-      );
     }
 
     const papers = Array.from(byId.values());
@@ -199,7 +203,7 @@ export class ArxivSourceAdapter implements SourceAdapter {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       logger.warn(
-        `arxiv-source: abstract enrichment failed, continuing with titles only: ${(e as Error).message}`,
+        `arxiv-source: abstract enrichment failed, continuing with titles only: ${formatArxivHttpError(e)}`,
       );
     }
   }
@@ -412,6 +416,12 @@ function missingRecentDateReason(
   return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
 }
 
+function classifyArxivSourceFailure(error: unknown): FailureKind {
+  if (isArxivRetryDeferredError(error)) return "failed_transient";
+  if (!isArxivHttpError(error)) return "failed_transient";
+  return isRetryableArxivError(error) ? "failed_transient" : "failed_permanent";
+}
+
 function collapseFailureKind(
   failures: Array<{ kind: FailureKind; reason: string }>,
 ): FailureKind {
@@ -424,10 +434,12 @@ function collapseFailureKind(
 
 function collapseFailureReason(
   failures: Array<{ kind: FailureKind; reason: string }>,
+  categoryCount: number,
 ): string {
   if (failures.length === 0) {
     return "fetch /recent failed: no arXiv categories succeeded";
   }
   if (failures.length === 1) return failures[0]!.reason;
-  return `all arXiv categories failed: ${failures.map((f) => f.reason).join("; ")}`;
+  const scope = failures.length === categoryCount ? "all" : "some";
+  return `${scope} arXiv categories failed: ${failures.map((f) => f.reason).join("; ")}`;
 }

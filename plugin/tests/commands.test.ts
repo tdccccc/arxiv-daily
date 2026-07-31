@@ -7,6 +7,10 @@ import {
 } from "../src/commands";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { Notice } from "obsidian";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const commandsSource = readFileSync(resolve(process.cwd(), "src/commands.ts"), "utf8");
 
 function makePlugin() {
   const commands: Array<{ id: string; name: string; callback?: () => unknown }> = [];
@@ -117,6 +121,15 @@ describe("registerCommands", () => {
     expect(Notice.calls.at(-1)?.message).toContain(
       "failed to open dashboard from ribbon: leaf unavailable",
     );
+  });
+
+  it("opens only done or verified already-existing manual summaries", () => {
+    const body = commandsSource.match(
+      /function openArxivIdPicker\(\)[\s\S]*?\n  async function openTodayDaily/,
+    )?.[0];
+    expect(body).toContain('result.kind === "done" || result.kind === "already_exists"');
+    expect(body).toContain("refreshOpenDashboardViews(plugin)");
+    expect(body).toContain('openLinkText(result.path, "", false)');
   });
 
   it("binds Enter in a single-field modal input to the submit button", () => {

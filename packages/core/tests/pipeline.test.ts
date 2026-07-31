@@ -74,6 +74,23 @@ function structuredDailyResponse(messages: any[]): string | null {
   });
 }
 
+function verifiedDetailMarkdown(id: string): string {
+  return [
+    "---",
+    `arxiv_id: "${id}"`,
+    "---",
+    "# Existing detail",
+    "## Research question",
+    "A".repeat(150),
+    "## Method",
+    "B".repeat(150),
+    "## Evidence",
+    "C".repeat(150),
+    "## Limitations",
+    "D".repeat(150),
+  ].join("\n");
+}
+
 function makeDeps() {
   const writes: Record<string, string> = {};
   const fetcher = {
@@ -114,6 +131,8 @@ function makeDeps() {
     dailyExists: vi.fn(async () => false),
     readDaily: vi.fn(async (date: string) => writes[`daily/${date}.md`] ?? ""),
     paperDetailExists: vi.fn(async () => false),
+    readPaperDetail: vi.fn(async (id: string) =>
+      writes[`papers/${id}.md`] ?? verifiedDetailMarkdown(id)),
   };
   const llm = {
     call: vi.fn().mockResolvedValueOnce(JSON.stringify({ papers: [] })),
@@ -385,7 +404,7 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
-  it("continues with papers from successful categories when another category fetch fails", async () => {
+  it("rejects all papers when another configured category fetch fails", async () => {
     const d = makeDeps();
     d.fetcher.fetchRecent = vi.fn(async (category: string) => {
       if (category === "astro-ph") throw new Error("network down");
@@ -411,9 +430,12 @@ describe("ArxivPipeline", () => {
 
     const result = await pipeline.runForDate(firstDateFromFixture());
 
-    expect(result.kind).toBe("completed");
+    expect(result.kind).toBe("failed_transient");
     expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("astro-ph");
     expect(d.fetcher.fetchRecent).toHaveBeenCalledWith("cs.CL");
+    expect(d.fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
+    expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
   it("enriches abstracts and runs filter+summarize for a kept paper", async () => {
@@ -949,6 +971,60 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
   });
 
+  it("does not repair detail state from an unverified canonical-path note", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const id = "2607.00001";
+    await store.upsertFromDailyPaper({
+      arxivId: id, title: "Handwritten note", authors: "A", date: "2026-05-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+    });
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    d.writer.paperDetailExists.mockResolvedValue(true);
+    d.writer.readPaperDetail.mockResolvedValue(
+      `---\narxiv_id: \"${id}\"\n---\n# My notes\nDo not classify as generated detail.`,
+    );
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: store, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect((await pipeline.runForDate("2026-05-11")).kind).toBe("completed");
+    expect(await store.get(id)).toMatchObject({ detail: false, paperPath: null });
+  });
+
+  it("does not mutate detail state when a canonical note cannot be read", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue(
+      `### Paper\n- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    );
+    d.writer.paperDetailExists.mockResolvedValue(true);
+    d.writer.readPaperDetail.mockRejectedValue(new Error("permission denied"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(), addDailyReports: vi.fn(), setSummaries: vi.fn(),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toEqual({
+      kind: "failed_transient", reason: "paper index repair failed: permission denied",
+    });
+    expect(paperIndex.reconcilePaperDetails).not.toHaveBeenCalled();
+  });
+
   it("clears a stale indexed detail path when the canonical file is absent", async () => {
     const d = makeDeps();
     const { store } = makePaperIndex();
@@ -1125,6 +1201,7 @@ describe("ArxivPipeline", () => {
 
     const existingPath = `papers/${arxivId}.md`;
     d.writer.paperDetailExists = vi.fn(async (id: string) => id === arxivId);
+    d.writer.readPaperDetail.mockResolvedValue(verifiedDetailMarkdown(arxivId));
     const paperIndex = {
       upsertManyFromDailyPapers: vi.fn(async () => [{
         entry: { status: "inbox", detail: true, paperPath: existingPath },
@@ -1198,6 +1275,7 @@ describe("ArxivPipeline", () => {
       setPaperPath: vi.fn(),
     };
     d.writer.paperDetailExists = vi.fn(async (id: string) => id === existingId);
+    d.writer.readPaperDetail.mockResolvedValue(verifiedDetailMarkdown(existingId));
     d.llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);

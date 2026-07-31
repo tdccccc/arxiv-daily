@@ -10,6 +10,9 @@ describe("run-format", () => {
     expect(describeResult({ kind: "completed", papersWritten: 3 })).toBe(
       "done (3 papers)",
     );
+    expect(describeResult({ kind: "cancelled", reason: "stopped by user" })).toBe(
+      "cancelled: stopped by user",
+    );
     expect(describeResult({ kind: "failed_transient", reason: "timeout" })).toBe(
       "transient: timeout",
     );
@@ -28,6 +31,11 @@ describe("run-format", () => {
     expect(describeManualResult({ kind: "no_html", reason: "404" })).toBe(
       "no full text: 404",
     );
+    expect(describeManualResult({
+      kind: "note_conflict",
+      path: "papers/2606.12345.md",
+      reason: "protected handwritten note",
+    })).toBe("note conflict at papers/2606.12345.md: protected handwritten note");
   });
 
   it("formats batched run results line by line", () => {

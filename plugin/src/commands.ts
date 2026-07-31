@@ -16,7 +16,7 @@ import {
   type PaperPriority,
   type PaperStatus,
 } from "@arxiv-daily/core";
-import { openDashboardView } from "./dashboard/view";
+import { openDashboardView, refreshOpenDashboardViews } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
 import { bindEnterToButton, openDatePickerModal } from "./date-picker-modal";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
@@ -250,6 +250,10 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
           const today = formatDate(todayInTz(new Date(), tz()));
           const result = await plugin.manualFetch.fetchAndSummarize(raw, today);
           notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
+          if (result.kind === "done" || result.kind === "already_exists") {
+            await refreshOpenDashboardViews(plugin);
+            await plugin.app.workspace.openLinkText(result.path, "", false);
+          }
         })(),
         `summarize ${raw}`,
       );

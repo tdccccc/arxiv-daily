@@ -558,6 +558,78 @@ describe("PaperIndexStore", () => {
     });
   });
 
+  it("atomically creates a recovered manual detail directly as saved", async () => {
+    const { store } = makeStore();
+    const result = await store.reconcileManualDetail({
+      arxivId: "2606.12345",
+      title: "Recovered",
+      authors: "A. Author",
+      date: "2026-06-11",
+      published: "2026-06-10",
+      updated: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: true,
+    }, "arxiv-daily/papers/2606.12345.md", "saved");
+
+    expect(result).toMatchObject({
+      wasNew: true,
+      entry: {
+        status: "saved",
+        detail: true,
+        paperPath: "arxiv-daily/papers/2606.12345.md",
+      },
+    });
+  });
+
+  it("preserves existing user status while repairing verified manual detail state", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Existing", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+    });
+    await store.setStatus("2606.12345", "reading");
+
+    const result = await store.reconcileManualDetail({
+      arxivId: "2606.12345", title: "Verified", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: true,
+    }, "arxiv-daily/papers/2606.12345.md", "saved");
+
+    expect(result).toMatchObject({
+      wasNew: false,
+      entry: { status: "reading", detail: true, paperPath: "arxiv-daily/papers/2606.12345.md" },
+    });
+  });
+
+  it("leaves no default-inbox partial reconstruction after any atomic save failure", async () => {
+    const base = makeStorage();
+    let failure: "write" | "install" | null = "write";
+    const storage = {
+      ...base.storage,
+      async writeText(path: string, content: string) {
+        if (failure === "write" && path.endsWith("papers.json.tmp")) throw new Error("write failed");
+        await base.storage.writeText(path, content);
+      },
+      async rename(from: string, to: string) {
+        if (failure === "install" && from.endsWith("papers.json.tmp")) throw new Error("install failed");
+        await base.storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+    const reconcile = () => store.reconcileManualDetail({
+      arxivId: "2606.12345", title: "Recovered", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: true,
+    }, "arxiv-daily/papers/2606.12345.md", "saved");
+
+    await expect(reconcile()).rejects.toThrow("write failed");
+    expect(await store.get("2606.12345")).toBeNull();
+    failure = "install";
+    await expect(reconcile()).rejects.toThrow();
+    expect(await store.get("2606.12345")).toBeNull();
+    failure = null;
+    await expect(reconcile()).resolves.toMatchObject({ entry: { status: "saved" } });
+  });
+
   it("reports an index failure after the pre-mutation action succeeds", async () => {
     const base = makeStorage();
     const seed = new PaperIndexStore(base.storage, DEFAULT_SETTINGS.output);

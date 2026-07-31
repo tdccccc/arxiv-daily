@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { HostAdapters, ProgressReporter } from "../src/core/adapters";
+import {
+  HttpTransportError,
+  isHttpTransportError,
+  type HostAdapters,
+  type ProgressReporter,
+} from "../src/core/adapters";
 import { NoopProgressReporter } from "../src/services/progress";
 
 describe("host adapter contracts", () => {
@@ -51,6 +56,20 @@ describe("host adapter contracts", () => {
     expect(await host.secrets.getSecret("llm")).toBe("secret");
     expect(host.storage.normalizePath("a\\b")).toBe("a/b");
     expect(opened).toEqual(["note:papers/2606.12345.md"]);
+  });
+
+  it("recognizes transport errors structurally across host boundaries", () => {
+    expect(isHttpTransportError(new HttpTransportError("network", "offline"))).toBe(true);
+    expect(isHttpTransportError({
+      name: "HttpTransportError",
+      message: "deadline",
+      kind: "timeout",
+    })).toBe(true);
+    expect(isHttpTransportError({
+      name: "HttpTransportError",
+      message: "unknown",
+      kind: "local",
+    })).toBe(false);
   });
 
   it("keeps the existing noop progress reporter aligned with core", () => {

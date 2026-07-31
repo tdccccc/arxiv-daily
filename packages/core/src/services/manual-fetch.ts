@@ -1,4 +1,4 @@
-import type { ArxivFetcher } from "../pipeline/arxiv-fetcher";
+import { formatArxivHttpError, type ArxivFetcher } from "../pipeline/arxiv-fetcher";
 import type { PaperContentFetcher } from "../pipeline/paper-content";
 import type { MarkdownWriter } from "../pipeline/markdown-writer";
 import type { LlmClient } from "../llm/client";
@@ -9,15 +9,19 @@ import type { MarkupParser, StorageAdapter } from "../core/adapters";
 import type { AdvancedSettings, ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
 import { summarizePaperDetail, type DailyPaperWithContent } from "../pipeline/summarizer";
 import type { PaperIndexEntry, PaperIndexStore } from "./paper-index";
-import { parseAtomPapers, type AtomPaperMeta } from "../pipeline/atom-parser";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import { isCancellationError, throwIfCancelled } from "./cancellation";
 import { modernArxivResources } from "../utils/arxiv";
 import { validateVaultRelativeDirectory } from "../settings/validation";
+import {
+  classifyPaperNote,
+  type VerifiedDetailMetadata,
+} from "../dashboard/paper-note-classifier";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
   | { kind: "already_exists"; path: string }
+  | { kind: "note_conflict"; path: string; reason: string }
   | { kind: "not_found"; reason: string }
   | { kind: "no_html"; reason: string }
   | { kind: "error"; reason: string };
@@ -69,25 +73,40 @@ export class ManualFetchService {
       return { kind: "error", reason: `invalid papersDir: ${papersDir.reason}` };
     }
     const targetPath = storage.normalizePath(`${papersDir.value}/${id}.md`);
-    let replaceEmptyExistingNote = false;
+    let replaceableExistingContent: string | null = null;
     if (await storage.exists(targetPath)) {
-      const existing = await storage.readText(targetPath).catch((e) => {
-        logger.warn(`manual-fetch: failed to read existing note ${targetPath}`, e);
-        return undefined;
-      });
-      if (typeof existing === "string" && isFrontmatterOnlyNote(existing)) {
-        replaceEmptyExistingNote = true;
+      let existing: string;
+      try {
+        existing = await storage.readText(targetPath);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        const reason = `failed to read existing note ${targetPath}: ${errorMessage(e)}`;
+        logger.error(`manual-fetch: ${reason}`, e);
+        this.progress.setError(`Could not inspect existing note: ${id}`);
+        return { kind: "error", reason };
+      }
+      const classification = classifyPaperNote(existing, id);
+      if (classification.kind === "replaceable") {
+        replaceableExistingContent = existing;
         logger.warn(
-          `manual-fetch: ${id} exists at ${targetPath} but has no markdown body; regenerating`,
+          `manual-fetch: replacing safe ${classification.form} note for ${id} at ${targetPath}`,
         );
-      } else {
-        logger.info(`manual-fetch: ${id} already exists at ${targetPath}`);
-        const entry = await this.syncExistingIndexEntry(id, dateStr, targetPath, signal);
-        if (entry) {
-          await this.deps.writer.refreshPaperNoteFrontmatter(entry, targetPath);
-        }
+      } else if (classification.kind === "verified_detail") {
+        logger.info(`manual-fetch: verified detail summary already exists at ${targetPath}`);
+        const reconciled = await this.reconcileVerifiedDetail(
+          id,
+          dateStr,
+          targetPath,
+          classification.metadata,
+        );
+        if (reconciled) return reconciled;
         this.progress.setComplete(`Detail note already exists: ${id}`);
         return { kind: "already_exists", path: targetPath };
+      } else {
+        const reason = conflictReason(classification.reason, id);
+        logger.warn(`manual-fetch: protected existing note at ${targetPath}: ${reason}`);
+        this.progress.setError(`Existing note conflict: ${id}`);
+        return { kind: "note_conflict", path: targetPath, reason };
       }
     }
 
@@ -100,7 +119,7 @@ export class ManualFetchService {
     let categories: string[] = [];
     let abstract = "";
     try {
-      const meta = await this.fetchAtomMetadata(id, signal);
+      const meta = (await this.deps.fetcher.fetchMetadataByIds([id], signal)).get(id) ?? null;
       if (!meta) {
         logger.warn(`manual-fetch: arXiv has no entry for ${id}`);
         this.progress.setError(`arXiv has no entry for ${id}`);
@@ -116,9 +135,10 @@ export class ManualFetchService {
       abstract = meta.abstract;
     } catch (e) {
       if (isCancellationError(e)) throw e;
+      const message = formatArxivHttpError(e);
       logger.error(`manual-fetch: atom metadata failed for ${id}`, e);
-      this.progress.setError(`Metadata failed: ${(e as Error).message}`);
-      return { kind: "error", reason: `atom metadata: ${(e as Error).message}` };
+      this.progress.setError(`Metadata failed: ${message}`);
+      return { kind: "error", reason: `atom metadata: ${message}` };
     }
 
     // 3. Pull /html and extract full sections
@@ -136,9 +156,10 @@ export class ManualFetchService {
       }, signal);
     } catch (e) {
       if (isCancellationError(e)) throw e;
+      const message = formatArxivHttpError(e);
       logger.error(`manual-fetch: content fetch failed for ${id}`, e);
-      this.progress.setError(`Content fetch failed: ${(e as Error).message}`);
-      return { kind: "error", reason: `content fetch: ${(e as Error).message}` };
+      this.progress.setError(`Content fetch failed: ${message}`);
+      return { kind: "error", reason: `content fetch: ${message}` };
     }
     if (!content.fullSections) {
       logger.warn(
@@ -188,15 +209,66 @@ export class ManualFetchService {
       return { kind: "error", reason: `LLM summary: ${(e as Error).message}` };
     }
 
-    // 5. Index + write
+    // 5. Write, then commit index state. A preexisting entry is safe input for
+    // frontmatter generation, but no index mutation may precede the note write.
     throwIfCancelled(signal);
     this.progress.setStage("write-detail");
-    let indexEntry: PaperIndexEntry | undefined;
+    let existingIndexEntry: PaperIndexEntry | null = null;
     if (this.deps.paperIndex) {
       try {
-        const existing = await this.deps.paperIndex.get(id);
-        const displayDate = displayDateFromIndexEntry(existing);
-        const indexed = await this.deps.paperIndex.upsertFromDailyPaper({
+        existingIndexEntry = await this.deps.paperIndex.get(id);
+      } catch (e) {
+        logger.error(`manual-fetch: paper index read failed for ${id}`, e);
+        this.progress.setError(`Index read failed: ${(e as Error).message}`);
+        return {
+          kind: "error",
+          reason: `paper index: ${(e as Error).message}`,
+        };
+      }
+    }
+
+    // Final cancellation boundary. Revalidate a note approved for replacement
+    // immediately before entering the non-interruptible write/index commit.
+    throwIfCancelled(signal);
+    if (replaceableExistingContent !== null) {
+      let current: string;
+      try {
+        current = await storage.readText(targetPath);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        const reason = `existing note changed or could not be re-read; protected ${id} note from overwrite`;
+        logger.warn(`manual-fetch: ${reason} at ${targetPath}`, e);
+        this.progress.setError(`Existing note conflict: ${id}`);
+        return { kind: "note_conflict", path: targetPath, reason };
+      }
+      const classification = classifyPaperNote(current, id);
+      if (current !== replaceableExistingContent || classification.kind !== "replaceable") {
+        const reason = classification.kind === "conflict"
+          ? conflictReason(classification.reason, id)
+          : `existing note changed while the detail summary was prepared; protected ${id} note from overwrite`;
+        logger.warn(`manual-fetch: protected changed note at ${targetPath}: ${reason}`);
+        this.progress.setError(`Existing note conflict: ${id}`);
+        return { kind: "note_conflict", path: targetPath, reason };
+      }
+    }
+
+    logger.info(
+      `manual-fetch: ${replaceableExistingContent !== null ? "replacing" : "writing"} detail note for ${id}`,
+    );
+    const path = await this.deps.writer.writePaperDetail(
+      paper,
+      dateStr,
+      summary,
+      existingIndexEntry ?? undefined,
+      {
+        metrics: detailMetrics.snapshot(),
+        replaceExisting: replaceableExistingContent !== null,
+      },
+    );
+    if (this.deps.paperIndex) {
+      try {
+        const displayDate = displayDateFromIndexEntry(existingIndexEntry);
+        const indexed = await this.deps.paperIndex.reconcileManualDetail({
           arxivId: id,
           title,
           authors,
@@ -205,18 +277,15 @@ export class ManualFetchService {
           updated,
           arxivCategory: category,
           arxivCategories: categories,
+          abstract,
           primaryTopic: category,
           detail: true,
-        });
-        indexEntry = indexed.entry;
+        }, path, "saved");
         logger.info(
-          `manual-fetch: paper index ${indexed.wasNew ? "created" : "updated"} for ${id}`,
+          `manual-fetch: paper index ${indexed.wasNew ? "created as saved" : "updated"} ` +
+          `with detail path for ${id}`,
         );
-        if (indexed.wasNew) {
-          const saved = await this.deps.paperIndex.setStatus(id, "saved");
-          indexEntry = saved ?? indexEntry;
-          logger.info(`manual-fetch: marked ${id} as saved`);
-        }
+        await this.deps.writer.refreshPaperNoteFrontmatter(indexed.entry, path);
       } catch (e) {
         logger.error(`manual-fetch: paper index update failed for ${id}`, e);
         this.progress.setError(`Index update failed: ${(e as Error).message}`);
@@ -226,93 +295,55 @@ export class ManualFetchService {
         };
       }
     }
-
-    // Final cancellation boundary. The following atomic replacement/write and
-    // paper-path synchronization are a coherent, non-interruptible commit.
-    throwIfCancelled(signal);
-    logger.info(
-      `manual-fetch: ${replaceEmptyExistingNote ? "replacing" : "writing"} detail note for ${id}`,
-    );
-    const path = await this.deps.writer.writePaperDetail(
-      paper,
-      dateStr,
-      summary,
-      indexEntry,
-      {
-        metrics: detailMetrics.snapshot(),
-        replaceExisting: replaceEmptyExistingNote,
-      },
-    );
-    if (this.deps.paperIndex) {
-      try {
-        await this.deps.paperIndex.setPaperPath(id, path);
-        logger.info(`manual-fetch: stored paperPath for ${id} -> ${path}`);
-      } catch (e) {
-        logger.error(`manual-fetch: failed to store paperPath for ${id}`, e);
-      }
-    }
     logger.info(`manual-fetch: wrote ${path}`);
     this.progress.setComplete(`Detail note ready: ${id}`);
     return { kind: "done", path };
   }
 
-  private async syncExistingIndexEntry(
+  private async reconcileVerifiedDetail(
     id: string,
     dateStr: string,
-    targetPath: string,
-    signal?: AbortSignal,
-  ): Promise<PaperIndexEntry | undefined> {
-    const { paperIndex, logger } = this.deps;
-    if (!paperIndex) return undefined;
+    path: string,
+    metadata: VerifiedDetailMetadata,
+  ): Promise<ManualFetchResult | null> {
+    const paperIndex = this.deps.paperIndex;
+    if (!paperIndex) return null;
     try {
-      const meta = await this.fetchAtomMetadata(id, signal);
-      if (!meta) return undefined;
       const existing = await paperIndex.get(id);
-      const displayDate = displayDateFromIndexEntry(existing);
-      const indexed = await paperIndex.upsertFromDailyPaper({
-        arxivId: id,
-        title: meta.title,
-        authors: meta.authors,
-        date: dateStr,
-        published: displayDate ?? meta.published,
-        updated: meta.updated,
-        arxivCategory: meta.primaryCategory || meta.categories[0] || "other",
-        arxivCategories: meta.categories,
-        primaryTopic: meta.primaryCategory || meta.categories[0] || "other",
-        detail: true,
-        paperPath: targetPath,
-      });
-      if (indexed.wasNew) {
-        return (await paperIndex.setStatus(id, "saved")) ?? indexed.entry;
+      if (!existing &&
+        (!metadata.title || !metadata.authors || !metadata.primaryTopic || !metadata.published)) {
+        const reason =
+          `verified detail ${path} cannot safely recreate its missing index entry: ` +
+          "frontmatter requires title, authors, primary_topic, and published";
+        this.deps.logger.warn(`manual-fetch: ${reason}`);
+        this.progress.setError(`Detail index needs repair metadata: ${id}`);
+        return { kind: "error", reason };
       }
-      return indexed.entry;
+      const entry = (await paperIndex.reconcileManualDetail({
+        arxivId: id,
+        title: metadata.title ?? existing?.title ?? id,
+        authors: metadata.authors ?? existing?.authors ?? [],
+        date: metadata.published ?? dateStr,
+        published: metadata.published ?? existing?.published,
+        updated: existing?.updated ?? metadata.published,
+        arxivCategory: metadata.primaryTopic ?? existing?.category ?? "",
+        arxivCategories: existing?.categories ?? (
+          metadata.primaryTopic ? [metadata.primaryTopic] : []
+        ),
+        abstract: existing?.abstract,
+        primaryTopic: metadata.primaryTopic ?? existing?.primaryTopic ?? "",
+        detail: true,
+      }, path, "saved")).entry;
+      await this.deps.writer.refreshPaperNoteFrontmatter(entry, path);
+      this.progress.setComplete(`Detail note index repaired: ${id}`);
+      return { kind: "already_exists", path };
     } catch (e) {
-      if (isCancellationError(e)) throw e;
-      logger.warn(
-        `manual-fetch: failed to refresh existing index entry for ${id}: ${(e as Error).message}`,
-      );
-      return undefined;
+      const reason = `paper index reconciliation failed: ${errorMessage(e)}`;
+      this.deps.logger.error(`manual-fetch: ${reason} for ${id}`, e);
+      this.progress.setError(`Index repair failed: ${id}`);
+      return { kind: "error", reason };
     }
   }
-
-  /** Returns Atom metadata for one id, or null if not found. */
-  private async fetchAtomMetadata(id: string, signal?: AbortSignal): Promise<AtomPaperMeta | null> {
-    const xml = await this.deps.fetcher.fetchAtomEntry(id, signal);
-    const paper = parseAtomPapers(xml, this.deps.markupParser).find(
-      (candidate) => candidate.id === id,
-    );
-    if (!paper || !paper.title || !paper.abstract) return null;
-    const primaryCategory = paper.primaryCategory || paper.categories[0] || "other";
-    return {
-      ...paper,
-      primaryCategory,
-      categories: appendUnique(paper.categories, primaryCategory),
-    };
-  }
-}
-
-function appendUnique(values: string[], value: string): string[] {
-  return value && !values.includes(value) ? [...values, value] : values;
 }
 
 function displayDateFromIndexEntry(
@@ -330,9 +361,19 @@ function firstDailyReportDate(paths: string[]): string | undefined {
   return dates[0];
 }
 
-function isFrontmatterOnlyNote(markdown: string): boolean {
-  const trimmedStart = markdown.trimStart();
-  if (!trimmedStart.startsWith("---")) return markdown.trim().length === 0;
-  const match = /^---\s*\n[\s\S]*?\n---\s*(?:\n|$)([\s\S]*)$/.exec(trimmedStart);
-  return match ? (match[1] ?? "").trim().length === 0 : markdown.trim().length === 0;
+function conflictReason(
+  reason: "identity_mismatch" | "identity_invalid" | "user_content",
+  id: string,
+): string {
+  if (reason === "identity_mismatch") {
+    return `existing note has a different arXiv ID; protected ${id} note from overwrite`;
+  }
+  if (reason === "identity_invalid") {
+    return `existing note has ambiguous or invalid arXiv identity; protected ${id} note from overwrite`;
+  }
+  return `existing note contains user-authored or unverified content; protected ${id} note from overwrite`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }

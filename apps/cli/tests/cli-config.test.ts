@@ -80,6 +80,24 @@ describe("CLI config loader (TOML / XDG)", () => {
     expect(cfg.scheduleIntent.intervalHours).toBe(0);
   });
 
+  it("clamps legacy request delays below the safe runtime floor", async () => {
+    const cfg = await loadCliConfig({
+      configPath: "/cfg.toml",
+      readText: async () => `${minimalToml}\nrequest_delay_ms = 1000\n`,
+    });
+
+    expect(cfg.settings.advanced.requestDelayMs).toBe(3000);
+  });
+
+  it("rejects invalid request delay configuration", async () => {
+    await expect(
+      loadCliConfig({
+        configPath: "/cfg.toml",
+        readText: async () => `${minimalToml}\nrequest_delay_ms = -1\n`,
+      }),
+    ).rejects.toThrow("invalid advanced.request_delay_ms");
+  });
+
   it("ignores ARXIV_DAILY env for settings", async () => {
     const cfg = await loadCliConfig({
       configPath: "/cfg.toml",

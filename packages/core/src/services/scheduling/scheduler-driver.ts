@@ -447,19 +447,29 @@ export class SchedulerDriver {
           await this.deps.history.recordPending(date, trigger, result.reason, now);
         } else if (result.kind === "cancelled") {
           await this.deps.store.setPending(date, result.reason);
+          const message = `Daily report cancelled: ${date} (${result.reason})`;
           this.deps.logger.info(`arXiv ${date}: cancelled - ${result.reason}`);
-          this.progress.setIdle(this.latestCompleted());
+          this.progress.setError(message);
           await this.deps.history.recordCancelled(date, trigger, result.reason, now);
         } else if (result.kind === "failed_transient") {
           const persistedStatus = await this.persistFailed(date, "transient", result.reason);
-          this.deps.logger.warn(`arXiv ${date} transient: ${result.reason}`);
-          this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
-          await this.deps.history.recordFailed(date, trigger, persistedStatus, result.reason, now);
+          const persistedReason = this.deps.store.get(date).error ?? result.reason;
+          result = { kind: persistedStatus, reason: persistedReason };
+          const severity = persistedStatus === "failed_permanent" ? "permanent" : "transient";
+          const message = `Daily report failed ${severity}: ${date} (${persistedReason})`;
+          if (persistedStatus === "failed_permanent") {
+            this.deps.logger.error(`arXiv ${date} permanent: ${persistedReason}`);
+            this.deps.logger.notice(`arXiv ${date}: failed (${persistedReason})`, 10_000);
+          } else {
+            this.deps.logger.warn(`arXiv ${date} transient: ${persistedReason}`);
+          }
+          this.progress.setError(message);
+          await this.deps.history.recordFailed(date, trigger, persistedStatus, persistedReason, now);
         } else {
           const persistedStatus = await this.persistFailed(date, "permanent", result.reason);
           this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
           this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
-          this.progress.setError(`Daily report failed: ${date} (${result.reason})`);
+          this.progress.setError(`Daily report failed permanent: ${date} (${result.reason})`);
           await this.deps.history.recordFailed(date, trigger, persistedStatus, result.reason, now);
         }
       } catch (e) {

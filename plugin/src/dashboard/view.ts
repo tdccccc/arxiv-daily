@@ -12,7 +12,7 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
-  looksLikeDetailSummary,
+  classifyPaperNote,
   modernArxivResources,
   normalizeArxivId,
   planDashboardAction,
@@ -106,13 +106,15 @@ export type CalendarEmptyReason =
   | "arxiv-not-updated"
   | "future"
   | "before-tracking"
-  | "report-missing";
+  | "report-missing"
+  | "permanent-failure";
 
 export interface CalendarCell {
   date: string | null;
   state: CalendarCellState;
   report?: DailyReportDay;
   emptyReason?: CalendarEmptyReason;
+  failureReason?: string;
 }
 
 export interface CalendarCellResolution {
@@ -149,6 +151,10 @@ export function resolveCalendarCellState({
     return {
       state: report.papers === 0 ? "no-relevant-papers" : "has-report",
     };
+  }
+
+  if (runState?.status === "failed_permanent") {
+    return { state: "empty", emptyReason: "permanent-failure" };
   }
 
   if (isArxivNotUpdatedRunState(runState)) {
@@ -243,6 +249,10 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
     return `${date}: daily report missing`;
   }
 
+  if (cell.emptyReason === "permanent-failure") {
+    return `${date}: daily report failed permanently${cell.failureReason ? `, ${cell.failureReason}` : ""}`;
+  }
+
   if (cell.emptyReason === "future") {
     return `${date}: future date`;
   }
@@ -306,24 +316,7 @@ export function isExpectedGeneratedDetailSummary(
   markdown: string,
   canonicalArxivId: string,
 ): boolean {
-  const expectedId = normalizeArxivId(canonicalArxivId);
-  if (!expectedId || !looksLikeDetailSummary(markdown)) return false;
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\s|$)/.exec(markdown)?.[1];
-  if (frontmatter == null) return false;
-  const frontmatterIds: string[] = [];
-  for (const line of frontmatter.split(/\r?\n/)) {
-    const item = /^(?:arxiv_id|arxiv):\s*(.*?)\s*$/.exec(line);
-    if (!item) continue;
-    const raw = (item[1] ?? "").replace(/^(["'])(.*)\1$/, "$2").trim();
-    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(raw)) return false;
-    const normalized = normalizeArxivId(raw);
-    if (!normalized) return false;
-    frontmatterIds.push(normalized);
-  }
-  return (
-    frontmatterIds.length > 0 &&
-    frontmatterIds.every((arxivId) => arxivId === expectedId)
-  );
+  return classifyPaperNote(markdown, canonicalArxivId).kind === "verified_detail";
 }
 
 export function shouldForceDashboardHistorySyncAfterDetailDeletion(
@@ -374,7 +367,6 @@ export async function buildCalendarDailyReportMap(
 function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
   return (
     runState?.status === "skipped" ||
-    runState?.status === "failed_permanent" ||
     (runState?.status === "completed" && runState.papersWritten === 0)
   );
 }
@@ -396,6 +388,20 @@ export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   plugin.registerView(
     ARXIV_DAILY_DASHBOARD_VIEW,
     (leaf) => new ArxivDailyDashboardView(leaf, plugin),
+  );
+}
+
+export async function refreshOpenDashboardViews(
+  plugin: ArxivDailyPlugin,
+): Promise<void> {
+  const leaves = plugin.app.workspace.getLeavesOfType(ARXIV_DAILY_DASHBOARD_VIEW);
+  await Promise.all(
+    leaves.map(async (leaf) => {
+      const view = leaf.view as unknown as {
+        refreshFromVault?: () => Promise<void>;
+      };
+      await view.refreshFromVault?.();
+    }),
   );
 }
 
@@ -561,6 +567,11 @@ class ArxivDailyDashboardView extends ItemView {
     this.isOpen = false;
     this.clearSearchDebounce();
     this.contentEl.empty();
+  }
+
+  async refreshFromVault(): Promise<void> {
+    this.lastSyncedHistoryPaths = null;
+    await this.reloadIndex();
   }
 
   private async reloadIndex(): Promise<void> {
@@ -1226,7 +1237,10 @@ class ArxivDailyDashboardView extends ItemView {
       });
       if (interactive) day.setAttribute("type", "button");
       const ariaLabel = this.getCalendarCellAriaLabel(cell);
-      if (ariaLabel) day.setAttribute("aria-label", ariaLabel);
+      if (ariaLabel) {
+        day.setAttribute("aria-label", ariaLabel);
+        if (cell.emptyReason === "permanent-failure") day.setAttribute("title", ariaLabel);
+      }
 
       if (!cell.date) {
         day.setAttribute("aria-hidden", "true");
@@ -1380,6 +1394,8 @@ class ArxivDailyDashboardView extends ItemView {
         date: cellDate.date,
         state: resolution.state,
         emptyReason: resolution.emptyReason,
+        failureReason:
+          dateRunState?.status === "failed_permanent" ? dateRunState.error : undefined,
         report,
       });
     }
@@ -2514,6 +2530,7 @@ class ArxivDailyDashboardView extends ItemView {
     );
     this.notice(`arXiv Daily: ${describeManualResult(result)}`, 10_000);
     if (result.kind !== "done" && result.kind !== "already_exists") return;
+    this.lastSyncedHistoryPaths = null;
     await this.reloadIndex();
     await openMarkdownFileOnce(this.plugin.app, result.path);
   }

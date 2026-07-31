@@ -2,7 +2,7 @@ import type { HostAdapters, PipelineResult } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { LlmClient } from "@arxiv-daily/core";
 import { ArxivFetcher } from "@arxiv-daily/core";
-import { HtmlCache } from "@arxiv-daily/core";
+import { AtomMetadataCache, HtmlCache } from "@arxiv-daily/core";
 import { MarkdownWriter } from "@arxiv-daily/core";
 import {
   cleanupSourceCache,
@@ -66,6 +66,12 @@ export async function buildCliRuntime(
     ].filter(Boolean),
   );
   const llm = new LlmClient(config.settings.llm, logger, host.http);
+  const cacheStorage = new NodeStorageAdapter(config.cacheDir);
+  const metadataCache = new AtomMetadataCache({
+    rootDir: "",
+    expiryDays: config.settings.advanced.cacheExpiryDays,
+    storage: cacheStorage,
+  });
   const fetcher = new ArxivFetcher({
     category: config.settings.arxiv.category,
     categories: arxivCategories(config.settings.arxiv),
@@ -73,14 +79,18 @@ export async function buildCliRuntime(
     markupParser: host.markupParser,
     logger,
     requestDelayMs: config.settings.advanced.requestDelayMs,
+    metadataCache,
   });
   const cache = new HtmlCache({
     rootDir: "",
     expiryDays: config.settings.advanced.cacheExpiryDays,
-    storage: new NodeStorageAdapter(config.cacheDir),
+    storage: cacheStorage,
   });
   await cache.cleanupExpired().catch((e) =>
     logger.warn(`cache cleanup failed: ${(e as Error).message}`),
+  );
+  await metadataCache.cleanupExpired().catch((e) =>
+    logger.warn(`Atom metadata cache cleanup failed: ${(e as Error).message}`),
   );
   const paperFetcher = new PaperContentFetcher(fetcher, cache, logger, host.markupParser, {
     storage: host.storage,

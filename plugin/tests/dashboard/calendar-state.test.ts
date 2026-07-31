@@ -63,8 +63,9 @@ describe("Calendar State Model", () => {
       "future",
       "before-tracking",
       "report-missing",
+      "permanent-failure",
     ];
-    expect(reasons).toHaveLength(5);
+    expect(reasons).toHaveLength(6);
   });
 });
 
@@ -85,9 +86,9 @@ describe("Calendar Cell Builder", () => {
     expect(
       resolveCalendarCellState({
         runnable: true,
-        runState: runState("failed_permanent"),
+        runState: runState("failed_permanent", { error: "invalid API key" }),
       }),
-    ).toEqual({ state: "empty", emptyReason: "arxiv-not-updated" });
+    ).toEqual({ state: "empty", emptyReason: "permanent-failure" });
   });
 
   it("makes a missing completed report runnable when the date is eligible", () => {
@@ -510,6 +511,19 @@ describe("calendarCellAriaLabel", () => {
         emptyReason: "report-missing",
       }),
     ).toBe("2026-06-24: daily report missing");
+  });
+
+  it("preserves actionable permanent failure reasons", () => {
+    expect(
+      calendarCellAriaLabel({
+        date: "2026-06-24",
+        state: "empty",
+        emptyReason: "permanent-failure",
+        failureReason: "retries exhausted after 10 attempts: HTTP 403",
+      }),
+    ).toBe(
+      "2026-06-24: daily report failed permanently, retries exhausted after 10 attempts: HTTP 403",
+    );
   });
 
   it("labels zero-count reports as no relevant papers", () => {

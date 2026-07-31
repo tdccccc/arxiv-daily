@@ -1,10 +1,23 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { buildObsidianHostAdapters } from "../src/hosts/obsidian";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildObsidianHostAdapters,
+  ObsidianHttpClient,
+} from "../src/hosts/obsidian";
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
-import type { PluginSettings } from "@arxiv-daily/core";
+import {
+  ArxivFetcher,
+  DEFAULT_SETTINGS,
+  isCancellationError,
+  Logger,
+  type PluginSettings,
+} from "@arxiv-daily/core";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const resourceOpenerSource = readFileSync(
   resolve(process.cwd(), "src/hosts/obsidian/resource-opener.ts"),
@@ -127,6 +140,107 @@ describe("Obsidian host adapters", () => {
     expect(files["arxiv-daily/daily/science.md.tmp"]).toBeUndefined();
     expect(files["arxiv-daily/daily/science.md.bak"]).toBeUndefined();
     expect(Object.keys(files)).toEqual(["arxiv-daily/daily/science.md"]);
+  });
+
+  it("injects the Obsidian request implementation through the host builder", async () => {
+    const { app } = testApp();
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      text: "injected",
+    }));
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: testSettings,
+      request,
+    });
+
+    await expect(host.http.request({ url: "https://example.test" }))
+      .resolves.toMatchObject({ bodyText: "injected" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("settles logically on timeout and consumes a late rejection", async () => {
+    vi.useFakeTimers();
+    let rejectRequest!: (error: Error) => void;
+    const request = vi.fn(() => new Promise<any>((_resolve, reject) => {
+      rejectRequest = reject;
+    }));
+    const client = new ObsidianHttpClient(request);
+
+    const result = client.request({ url: "https://example.test", timeoutMs: 25 });
+    const assertion = expect(result).rejects.toMatchObject({
+      name: "HttpTransportError",
+      kind: "timeout",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+
+    rejectRequest(new Error("late request failure"));
+    await Promise.resolve();
+  });
+
+  it("does not immediately retry an Obsidian timeout while physical requestUrl may run", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    const request = vi.fn(() => {
+      active += 1;
+      if (request.mock.calls.length === 1) return new Promise<any>(() => {});
+      active -= 1;
+      return Promise.resolve({ status: 200, headers: {}, text: "later success" });
+    });
+    const fetcher = new ArxivFetcher({
+      categories: ["astro-ph"],
+      http: new ObsidianHttpClient(request),
+      markupParser: new ObsidianMarkupParser(),
+      logger: new Logger("error"),
+      requestDelayMs: 0,
+      textTimeoutMs: 25,
+    });
+
+    const first = fetcher.fetchRecent();
+    const firstAssertion = expect(first).rejects.toMatchObject({
+      kind: "timeout",
+      retryableAttempt: false,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await firstAssertion;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledOnce();
+    expect(active).toBe(1);
+
+    const later = fetcher.fetchRecent();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(later).resolves.toBe("later success");
+    expect(request).toHaveBeenCalledTimes(2);
+    // The first physical request is unavoidably still live because requestUrl
+    // exposes no cancellation primitive; only a later invocation may overlap it.
+    expect(active).toBe(1);
+  });
+
+  it("settles logically on cancellation without classifying it as transport", async () => {
+    const controller = new AbortController();
+    const client = new ObsidianHttpClient(() => new Promise<any>(() => {}));
+    const result = client.request({
+      url: "https://example.test",
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+
+    controller.abort("stop now");
+
+    await expect(result).rejects.toSatisfy(isCancellationError);
+  });
+
+  it("normalizes request rejection as a network transport error", async () => {
+    const client = new ObsidianHttpClient(async () => {
+      throw new Error("requestUrl failed");
+    });
+
+    await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({
+      name: "HttpTransportError",
+      kind: "network",
+    });
   });
 
   it("opens URLs through Obsidian's active window", async () => {

@@ -109,6 +109,29 @@ describe("CLI runtime", () => {
     );
   });
 
+  it("reuses persistent Atom metadata across CLI runtime instances", async () => {
+    const root = await makeTempDir();
+    const cacheDir = join(root, ".cache");
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, cacheDir),
+    });
+    let requests = 0;
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom"><entry><id>http://arxiv.org/abs/2606.12345v1</id><title>Cached paper</title><author><name>A. Author</name></author><summary>Abstract.</summary><published>2026-06-13T00:00:00Z</published><updated>2026-06-14T00:00:00Z</updated><arxiv:primary_category term="astro-ph"/><category term="astro-ph"/></entry></feed>`;
+    const buildHost = () => buildNodeHostAdapters({
+      rootDir: config.vaultRoot,
+      fetch: async () => { requests += 1; return new Response(atom, { status: 200 }); },
+    });
+
+    const first = await buildCliRuntime(config, { host: buildHost() });
+    expect(await first.fetcher.fetchMetadataByIds(["2606.12345"])).toHaveProperty("size", 1);
+    const second = await buildCliRuntime(config, { host: buildHost() });
+    expect(await second.fetcher.fetchMetadataByIds(["2606.12345v2"])).toHaveProperty("size", 1);
+
+    expect(requests).toBe(1);
+    await expect(access(join(cacheDir, "atom-metadata", "2606.12345.json"))).resolves.toBeUndefined();
+  });
+
   it("preserves legacy raw HTML cache files during runtime cleanup", async () => {
     const root = await makeTempDir();
     const cacheDir = join(root, ".cache");
