@@ -53,3 +53,14 @@
   ui-polish, rust-standalone) are unrelated/stale, left untouched
 - next: start P2 (split dashboard view.ts; settings getSettingDefinitions
   migration) when the user confirms
+
+## 2026-07-31 — note (P2a started; dead branches cleaned)
+
+- evidence: goal re-cut into P2a (view.ts split) / P2b (settings API);
+  deleted abandoned Rust-rewrite branches feat/ui-polish (⊂
+  refactor/rust-standalone) local + origin — no main traces, dead since
+  2026-07-15; remaining unmerged: feat/personalized-literature-agent
+- change: P2a active on refactor/dashboard-view-modules; phase
+  02-a-split-dashboard-view.md written (7 tasks, extraction order T1–T7)
+- disposition: view.ts class body untouched this phase; HubModal extracted
+- next: T1 constants.ts extraction
