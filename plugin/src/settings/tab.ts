@@ -1,4 +1,11 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import {
+  App,
+  Modal,
+  Notice,
+  PluginSettingTab,
+  requireApiVersion,
+  Setting,
+} from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import {
   describeResult,
@@ -190,11 +197,132 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private async setArxivCategories(categories: string[]): Promise<void> {
+  public async setArxivCategories(categories: string[]): Promise<void> {
     const normalized = normalizeUniqueCategories(categories);
     this.plugin.settings.arxiv.categories = normalized;
     if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
     await this.plugin.saveSettings();
+  }
+
+  /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
+  public refreshSettings(): void {
+    if (
+      requireApiVersion("1.13.0") &&
+      this.getSettingDefinitions().length > 0
+    ) {
+      this.update();
+    } else {
+      this.display();
+    }
+  }
+
+  /** Append a category (the first arXiv option not already in the list). */
+  public async addCategory(): Promise<void> {
+    const categories = arxivCategories(this.plugin.settings.arxiv);
+    await this.setArxivCategories([
+      ...categories,
+      nextCategoryCandidate(categories),
+    ]);
+    this.refreshSettings();
+  }
+
+  /** Remove a category by index; keeps the last remaining category. */
+  public async deleteCategory(index: number): Promise<void> {
+    const categories = arxivCategories(this.plugin.settings.arxiv);
+    if (categories.length <= 1) return;
+    await this.setArxivCategories(categories.filter((_, j) => j !== index));
+    this.refreshSettings();
+  }
+
+  /** Move a category to a new position (list drag-to-reorder). */
+  public async reorderCategories(
+    oldIndex: number,
+    newIndex: number,
+  ): Promise<void> {
+    const categories = [...arxivCategories(this.plugin.settings.arxiv)];
+    const [moved] = categories.splice(oldIndex, 1);
+    if (moved === undefined) return;
+    categories.splice(newIndex, 0, moved);
+    await this.setArxivCategories(categories);
+    this.refreshSettings();
+  }
+
+  /** Append a blank, expanded topic card. */
+  public async addTopic(): Promise<void> {
+    const newId = crypto.randomUUID();
+    const topics = this.plugin.settings.arxiv.topics;
+    topics.push({
+      id: newId,
+      name: "",
+      tag: `topic-${topics.length + 1}`,
+      description: "",
+      detail: false,
+    });
+    this.expandedTopics.add(newId);
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+  }
+
+  /** Delete a topic after confirmation; returns whether it was deleted. */
+  public async deleteTopic(index: number): Promise<boolean> {
+    const topics = this.plugin.settings.arxiv.topics;
+    const topic = topics[index];
+    if (!topic) return false;
+    const topicName = topic.name.trim() || "(unnamed)";
+    const confirmed = await this.confirmReplace(
+      `Delete the research topic "${topicName}"? This cannot be undone.`,
+      "Delete",
+    );
+    if (!confirmed) return false;
+    topics.splice(index, 1);
+    this.expandedTopics.delete(topic.id);
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+    return true;
+  }
+
+  /** Move a topic to a new position (list drag-to-reorder). */
+  public async reorderTopics(oldIndex: number, newIndex: number): Promise<void> {
+    const topics = this.plugin.settings.arxiv.topics;
+    const [moved] = topics.splice(oldIndex, 1);
+    if (moved === undefined) return;
+    topics.splice(newIndex, 0, moved);
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+  }
+
+  /**
+   * Apply a quick-start template, replacing topics (and categories) after
+   * confirmation when the current setup would be overwritten.
+   */
+  public async applyTopicTemplate(templateId: string): Promise<void> {
+    const tpl = TOPIC_TEMPLATES.find((t) => t.id === templateId);
+    if (!tpl) return;
+    const settings = this.plugin.settings;
+    const categories = arxivCategories(settings.arxiv);
+    const apply = async () => {
+      settings.arxiv.category = tpl.category;
+      settings.arxiv.categories = [tpl.category];
+      settings.arxiv.topics = tpl.topics.map((t) => ({
+        ...t,
+        id: crypto.randomUUID(),
+      }));
+      await this.plugin.saveSettings();
+      this.refreshSettings();
+    };
+    const replacesCategories = categoriesWillChange(categories, [tpl.category]);
+    if (settings.arxiv.topics.length === 0 && !replacesCategories) {
+      await apply();
+      return;
+    }
+    const confirmed = await this.confirmReplace(
+      quickStartTemplateConfirmMessage(
+        settings.arxiv.topics.length,
+        tpl.name,
+        replacesCategories,
+      ),
+    );
+    if (confirmed) await apply();
   }
 
   private async saveRunWindowTime(
@@ -424,22 +552,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           b
             .setButtonText("Remove")
             .setDisabled(categories.length === 1)
-            .onClick(async () => {
-              if (categories.length === 1) return;
-              await this.setArxivCategories(categories.filter((_, j) => j !== i));
-              this.display();
-            }),
+            .onClick(() => void this.deleteCategory(i)),
         );
     }
 
     new Setting(containerEl).addButton((b) =>
-      b.setButtonText("Add category").onClick(async () => {
-        await this.setArxivCategories([
-          ...categories,
-          nextCategoryCandidate(categories),
-        ]);
-        this.display();
-      }),
+      b.setButtonText("Add category").onClick(() => void this.addCategory()),
     );
 
     // ─── Research Topics ─────────────────────────────
@@ -461,44 +579,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.onChange(async (id) => {
           if (!id) return;
           d.setValue("");
-          const tpl = TOPIC_TEMPLATES.find((t) => t.id === id);
-          if (!tpl) return;
-          const apply = async () => {
-            s.arxiv.category = tpl.category;
-            s.arxiv.categories = [tpl.category];
-            s.arxiv.topics = tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() }));
-            await this.plugin.saveSettings();
-            this.display();
-          };
-          const replacesCategories = categoriesWillChange(categories, [tpl.category]);
-          if (s.arxiv.topics.length === 0 && !replacesCategories) {
-            await apply();
-            return;
-          }
-          const confirmed = await this.confirmReplace(
-            quickStartTemplateConfirmMessage(
-              s.arxiv.topics.length,
-              tpl.name,
-              replacesCategories,
-            ),
-          );
-          if (confirmed) await apply();
+          await this.applyTopicTemplate(id);
         });
       })
       .addButton((b) => {
-        b.setButtonText("Add topic").onClick(async () => {
-          const newId = crypto.randomUUID();
-          s.arxiv.topics.push({
-            id: newId,
-            name: "",
-            tag: `topic-${s.arxiv.topics.length + 1}`,
-            description: "",
-            detail: false,
-          });
-          this.expandedTopics.add(newId);
-          await this.plugin.saveSettings();
-          this.display();
-        });
+        b.setButtonText("Add topic").onClick(() => void this.addTopic());
       });
 
     const topicsContainer = containerEl.createDiv();
@@ -542,19 +627,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
-        const zones = [
-          { v: "Asia/Shanghai", l: "Shanghai (UTC+8)" },
-          { v: "Asia/Tokyo", l: "Tokyo (UTC+9)" },
-          { v: "US/Eastern", l: "US East (UTC-5)" },
-          { v: "US/Pacific", l: "US West (UTC-8)" },
-          { v: "Europe/London", l: "London (UTC+0)" },
-          { v: "Europe/Berlin", l: "Berlin (UTC+1)" },
-          { v: "Europe/Moscow", l: "Moscow (UTC+3)" },
-          { v: "Australia/Sydney", l: "Sydney (UTC+10)" },
-          { v: "UTC", l: "UTC" },
-        ];
-        for (const z of zones) {
-          d.addOption(z.v, z.l);
+        for (const zone of TIMEZONE_OPTIONS) {
+          d.addOption(zone.value, zone.label);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
           s.arxiv.timezone = v;
@@ -1389,6 +1463,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.refreshSetupGuide();
   }
 
+  /** Render the topic card for one index into a declarative list row. */
+  public renderTopicRow(setting: Setting, index: number): void {
+    this.renderTopicCard(
+      setting.settingEl,
+      this.plugin.settings.arxiv.topics,
+      index,
+    );
+  }
+
   private renderTopicCard(container: HTMLElement, topics: Topic[], index: number): void {
     const topic = topics[index];
     if (!topic) return;
@@ -1583,16 +1666,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     delBtn.classList.add("mod-warning");
     delBtn.onclick = async (e) => {
       e.stopPropagation();
-      const topicName = topic.name.trim() || "(unnamed)";
-      const confirmed = await this.confirmReplace(
-        `Delete the research topic "${topicName}"? This cannot be undone.`,
-        "Delete",
-      );
-      if (!confirmed) return;
-      topics.splice(index, 1);
-      this.expandedTopics.delete(topic.id);
-      await this.plugin.saveSettings();
-      this.display();
+      await this.deleteTopic(index);
     };
 
     // Toggle expand/collapse on header click
@@ -1746,7 +1820,20 @@ function renderRunWindowTimeSelect(
   });
 }
 
-function addCategoryOptions(
+/** Timezone presets for the arXiv section; shared by display() and the 1.13+ rows. */
+export const TIMEZONE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "Asia/Shanghai", label: "Shanghai (UTC+8)" },
+  { value: "Asia/Tokyo", label: "Tokyo (UTC+9)" },
+  { value: "US/Eastern", label: "US East (UTC-5)" },
+  { value: "US/Pacific", label: "US West (UTC-8)" },
+  { value: "Europe/London", label: "London (UTC+0)" },
+  { value: "Europe/Berlin", label: "Berlin (UTC+1)" },
+  { value: "Europe/Moscow", label: "Moscow (UTC+3)" },
+  { value: "Australia/Sydney", label: "Sydney (UTC+10)" },
+  { value: "UTC", label: "UTC" },
+];
+
+export function addCategoryOptions(
   selectEl: HTMLSelectElement,
   current?: string,
 ): void {
@@ -1778,8 +1865,7 @@ function normalizeUniqueCategories(categories: string[]): string[] {
   return out;
 }
 
-function nextCategoryCandidate(existing: string[]): string {
-  const seen = new Set(existing);
+function nextCategoryCandidate(existing: string[]): string {  const seen = new Set(existing);
   for (const group of ARXIV_CATEGORIES) {
     for (const category of group.categories) {
       if (!seen.has(category.id)) return category.id;

@@ -2,10 +2,12 @@ import { Notice, type Setting } from "obsidian";
 import type { ArxivDailySettingTab } from "./tab";
 import {
   API_KEY_CONFIGURED_SENTINEL,
+  addCategoryOptions,
   modelFetchNoticeMessage,
   persistApiKeyChange,
+  TIMEZONE_OPTIONS,
 } from "./tab";
-import { LlmClient } from "@arxiv-daily/core";
+import { arxivCategories, LlmClient, TOPIC_TEMPLATES } from "@arxiv-daily/core";
 
 /**
  * Imperative row renderers for the Obsidian 1.13+ declarative settings API.
@@ -157,4 +159,103 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
 export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
   const guide = tab.createSetupGuide();
   if (guide) setting.settingEl.appendChild(guide);
+}
+
+/** One arXiv category: known-category dropdown + free-text override. */
+export function renderCategoryRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  index: number,
+): void {
+  const categories = arxivCategories(tab.plugin.settings.arxiv);
+  const current = categories[index] ?? "";
+  const select = setting.controlEl.createEl("select", {
+    cls: "arxiv-daily-settings__category-select",
+  });
+  addCategoryOptions(select, current);
+  select.value = current;
+  select.addEventListener("change", () => {
+    const next = [...categories];
+    next[index] = select.value;
+    void tab.runAction("save category", async () => {
+      await tab.setArxivCategories(next);
+      tab.refreshSettings();
+    });
+  });
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    placeholder: "Or enter custom category",
+  });
+  input.addEventListener("input", () => {
+    if (input.value.trim()) {
+      const next = [...categories];
+      next[index] = input.value.trim();
+      void tab.runAction("save category", async () => {
+        await tab.setArxivCategories(next);
+        tab.refreshSettings();
+      });
+    }
+  });
+}
+
+/** Quick-start template loader (topics section, above the topic list). */
+export function renderQuickStartRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const select = setting.controlEl.createEl("select");
+  const placeholder = select.createEl("option");
+  placeholder.value = "";
+  placeholder.textContent = "Load template…";
+  for (const tpl of TOPIC_TEMPLATES) {
+    const option = select.createEl("option");
+    option.value = tpl.id;
+    option.textContent = tpl.name;
+  }
+  select.value = "";
+  select.addEventListener("change", () => {
+    if (!select.value) return;
+    const id = select.value;
+    select.value = "";
+    void tab.runAction("apply quick start template", async () => {
+      await tab.applyTopicTemplate(id);
+    });
+  });
+}
+
+/** One research topic: the shared expandable topic card. */
+export function renderTopicRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  index: number,
+): void {
+  tab.renderTopicRow(setting, index);
+}
+
+/** Timezone picker: preset dropdown + free-text override. */
+export function renderTimezoneRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  const select = setting.controlEl.createEl("select");
+  for (const zone of TIMEZONE_OPTIONS) {
+    const option = select.createEl("option");
+    option.value = zone.value;
+    option.textContent = zone.label;
+  }
+  select.value = tab.plugin.settings.arxiv.timezone;
+  select.addEventListener("change", () => {
+    tab.plugin.settings.arxiv.timezone = select.value;
+    void tab.plugin.saveSettings();
+  });
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    placeholder: "Or enter custom timezone",
+  });
+  input.addEventListener("input", () => {
+    if (input.value.trim()) {
+      tab.plugin.settings.arxiv.timezone = input.value.trim();
+      void tab.plugin.saveSettings();
+    }
+  });
 }

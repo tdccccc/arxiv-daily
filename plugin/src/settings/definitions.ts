@@ -20,6 +20,9 @@ export const SETTING_KEYS = {
     topics: "arxiv.topics",
     timezone: "arxiv.timezone",
   },
+  detailSelection: {
+    profile: "detailSelection.profile",
+  },
   output: {
     dailyDir: "output.dailyDir",
     papersDir: "output.papersDir",
@@ -97,6 +100,7 @@ export function writeSettingValue(
 
 import type { Setting, SettingDefinitionItem } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import { arxivCategories } from "@arxiv-daily/core";
 import { validateOutputDirectoryDraft } from "./tab";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -112,18 +116,42 @@ export interface SettingDefinitionsHost {
   renderApiKeyRow?: (setting: Setting) => void;
   renderModelRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
+  renderCategoryRow?: (setting: Setting, index: number) => void;
+  renderQuickStartRow?: (setting: Setting) => void;
+  renderTopicRow?: (setting: Setting, index: number) => void;
+  renderTimezoneRow?: (setting: Setting) => void;
+  addCategory?: () => void;
+  deleteCategory?: (index: number) => void;
+  reorderCategories?: (oldIndex: number, newIndex: number) => void;
+  addTopic?: () => void;
+  reorderTopics?: (oldIndex: number, newIndex: number) => void;
+}
+
+/** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
+function detailNotesOptions(settings: PluginSettings): Record<string, string> {
+  const options: Record<string, string> = {
+    conservative: "Fewer",
+    balanced: "Recommended",
+    broad: "More",
+  };
+  if (settings.detailSelection.profile === "custom") {
+    options.custom = "Custom (current values)";
+  }
+  return options;
 }
 
 /**
- * Declarative settings for Obsidian 1.13+. Complex rows (API key sentinel,
- * model picker, onboarding guide, topics, email verify, run window) are
- * added in later tasks of P2b; this block covers the control-expressible
- * settings. `display()` remains the <1.13 fallback.
+ * Declarative settings for Obsidian 1.13+. Complex rows (API-key sentinel,
+ * model picker, onboarding guide, topic cards, email verify, run window)
+ * use `action`/`render` callbacks; the rest are plain controls and lists.
+ * `display()` remains the <1.13 fallback.
  */
 export function buildSettingDefinitions(
   host: SettingDefinitionsHost,
 ): SettingDefinitionItem[] {
   const { plugin } = host;
+  const categories = arxivCategories(plugin.settings.arxiv);
+  const topics = plugin.settings.arxiv.topics;
   return [
     ...(host.renderSetupGuideRow
       ? [{
@@ -190,6 +218,74 @@ export function buildSettingDefinitions(
         },
       ],
     },
+    {
+      type: "list",
+      heading: "arXiv categories",
+      emptyState: "No categories yet — use Add category to add one.",
+      items: [
+        {
+          name: "",
+          desc: "Which arXiv subject areas to watch. You can add several; the same paper is only kept once.",
+        } satisfies SettingDefinitionItem,
+        ...categories.map((category, index) => ({
+          name: `Category ${index + 1}`,
+          render: (setting: Setting) => host.renderCategoryRow?.(setting, index),
+        })),
+      ],
+      addItem: {
+        name: "Add category",
+        action: () => void host.addCategory?.(),
+      },
+      onDelete: (index) => void host.deleteCategory?.(index),
+      onReorder: (oldIndex, newIndex) =>
+        void host.reorderCategories?.(oldIndex, newIndex),
+    },
+    ...(host.renderQuickStartRow
+      ? [{
+          name: "Quick start",
+          desc: "Load a preset bundle of topics or add one manually.",
+          render: (setting: Setting) => host.renderQuickStartRow?.(setting),
+        } satisfies SettingDefinitionItem]
+      : []),
+    {
+      type: "list",
+      heading: "Research topics",
+      emptyState:
+        "No topics yet. Pick a template above or click Add topic to define what to track. Daily reports need at least one topic before AI runs.",
+      items: [
+        {
+          name: "",
+          desc: "Each topic becomes one section in the daily report.",
+        } satisfies SettingDefinitionItem,
+        ...topics.map((topic, index) => ({
+          name: topic.name.trim() || "(unnamed)",
+          render: (setting: Setting) => host.renderTopicRow?.(setting, index),
+        })),
+      ],
+      addItem: {
+        name: "Add topic",
+        action: () => void host.addTopic?.(),
+      },
+      onReorder: (oldIndex, newIndex) =>
+        void host.reorderTopics?.(oldIndex, newIndex),
+    },
+    {
+      name: "Automatic detail notes",
+      desc: "How often the plugin writes a longer note for a paper. Only topics with Detail report turned on are considered. Manual “summarize paper” is unchanged.",
+      control: {
+        type: "dropdown",
+        key: SETTING_KEYS.detailSelection.profile,
+        defaultValue: "balanced",
+        options: detailNotesOptions(plugin.settings),
+      },
+    },
+    ...(host.renderTimezoneRow
+      ? [{
+          name: "Timezone",
+          desc: "Which timezone defines the current day for reports and schedules.",
+          render: (setting: Setting) => host.renderTimezoneRow?.(setting),
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       type: "group",
       heading: "Output & schedule",

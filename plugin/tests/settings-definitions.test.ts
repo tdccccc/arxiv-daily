@@ -95,4 +95,68 @@ describe("buildSettingDefinitions structure", () => {
     };
     walk(buildSettingDefinitions(makeHost()));
   });
+
+  it("renders categories and topics as lists with add/delete/reorder affordances", () => {
+    const host = makeHost();
+    const lists = buildSettingDefinitions(host).filter(
+      (item) => item.type === "list",
+    );
+    const categoriesList = lists.find((list) => list.heading === "arXiv categories");
+    const topicsList = lists.find((list) => list.heading === "Research topics");
+    expect(categoriesList).toBeDefined();
+    expect(topicsList).toBeDefined();
+    expect(categoriesList?.addItem?.name).toBe("Add category");
+    expect(categoriesList?.onDelete).toEqual(expect.any(Function));
+    expect(categoriesList?.onReorder).toEqual(expect.any(Function));
+    expect(topicsList?.addItem?.name).toBe("Add topic");
+    expect(topicsList?.onReorder).toEqual(expect.any(Function));
+  });
+
+  it("maps one list item per category and topic with searchable names", () => {
+    const host = makeHost();
+    host.plugin.settings.arxiv.categories = ["cs.AI", "cs.LG"];
+    host.plugin.settings.arxiv.topics = [
+      {
+        id: "t1",
+        name: "Photometric redshift",
+        tag: "photometric-redshift",
+        description: "",
+        detail: false,
+      },
+      {
+        id: "t2",
+        name: "",
+        tag: "",
+        description: "",
+        detail: false,
+      },
+    ];
+    const items = buildSettingDefinitions(host);
+    const categoryNames = items
+      .filter((item) => item.type === "list")
+      .find((list) => list.heading === "arXiv categories")?.items
+      .map((item) => item.name);
+    expect(categoryNames).toContain("Category 1");
+    expect(categoryNames).toContain("Category 2");
+    const topicNames = items
+      .filter((item) => item.type === "list")
+      .find((list) => list.heading === "Research topics")?.items
+      .map((item) => item.name);
+    expect(topicNames).toContain("Photometric redshift");
+    expect(topicNames).toContain("(unnamed)");
+  });
+
+  it("keeps the detail-notes profile dropdown on the balanced preset", () => {
+    const host = makeHost();
+    const items = buildSettingDefinitions(host);
+    const detailNotes = items.find((item) => item.name === "Automatic detail notes");
+    expect(detailNotes).toBeDefined();
+    if (detailNotes && "control" in detailNotes && detailNotes.control) {
+      expect(detailNotes.control).toMatchObject({
+        type: "dropdown",
+        key: SETTING_KEYS.detailSelection.profile,
+        defaultValue: "balanced",
+      });
+    }
+  });
 });
