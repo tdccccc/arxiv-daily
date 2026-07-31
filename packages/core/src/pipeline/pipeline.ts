@@ -150,7 +150,6 @@ export class ArxivPipeline {
     const fetched = await this.fetchPapersForDate(dateStr, signal);
     if (fetched.kind !== "ok") return fetched.result;
     const sourcePapers = fetched.papers;
-    const dateWindowNote = undefined;
     logger.info(
       `pipeline: ${sourcePapers.length} papers for ${dateStr} across ${fetched.categories.join(", ")}`,
     );
@@ -407,7 +406,6 @@ export class ArxivPipeline {
     throwIfCancelled(signal);
     runMetrics.setPipelineElapsedMs(Date.now() - t0);
     await this.deps.writer.writeDaily(dateStr, dailySummary, {
-      dateWindowNote,
       metrics: runMetrics.snapshot(),
     });
     if (this.deps.paperIndex) {
@@ -671,10 +669,6 @@ function paperUpdatedDate(paper: PaperMeta): string | undefined {
   const value = (paper as Partial<SourcePaperMeta>).updated?.trim() ?? "";
   const match = /^(\d{4}-\d{2}-\d{2})/.exec(value);
   return match?.[1] ?? (value || undefined);
-}
-
-function appendUnique(values: string[], value: string): string[] {
-  return values.includes(value) ? values : [...values, value];
 }
 
 async function mapConcurrent<T, R>(
