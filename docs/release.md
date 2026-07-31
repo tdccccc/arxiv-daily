@@ -6,6 +6,10 @@ suffix, or build metadata. The workflow is serialized per tag, refuses to
 replace an existing GitHub release, uploads without `--clobber`, and uses the
 curated `docs/releases/<version>.md` rather than generated notes.
 
+After the GitHub release, the workflow also publishes the CLI to npm
+(`arxiv-daily`) with build provenance when the repository has an `NPM_TOKEN`
+secret; without it the npm step is skipped.
+
 The Obsidian release assets remain exactly:
 
 - `plugin/manifest.json`
@@ -83,6 +87,21 @@ provenance before creating the GitHub release.
 
 After CI succeeds, verify that the release notes are the curated file, the
 three assets are present, and their provenance attestations are available.
+Also verify the npm package: `npm view arxiv-daily version` should report the
+new version with the expected `dist-tag latest`, and the published package
+should carry a build provenance attestation (visible in the registry metadata
+for that version).
+
+Before the first automated release, add an `NPM_TOKEN` secret (an npm
+automation token with publish scope for the `arxiv-daily` package) under
+Settings → Secrets and variables → Actions.
+
+If the workflow fails at the npm publish step after the GitHub release was
+already created, the release is immutable — do not re-run the tag or attempt
+to overwrite the npm version (`E409`). Publish the package manually from a
+clean checkout instead (`npm ci && npm publish --workspace apps/cli --access
+public`; add `--provenance` when OIDC is available). If the package was
+already published, fix forward by bumping to a new version.
 
 arXiv Daily is listed through Obsidian's Community directory. The current new
 plugin flow is to sign in at `community.obsidian.md`, link the repository owner's

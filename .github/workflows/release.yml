@@ -16,6 +16,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      # Job-level env is the documented way to make a secret available in an
+      # `if` conditional; set this secret to enable the npm publish step.
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Check out immutable tag target
         # actions/checkout v5.0.1
@@ -87,3 +91,9 @@ jobs:
             --verify-tag \
             --title "arXiv Daily $TAG" \
             --notes-file "docs/releases/$TAG.md"
+      - name: Publish CLI to npm
+        # Skipped until the repository has an NPM_TOKEN secret (Settings →
+        # Secrets and variables → Actions). --provenance uses the workflow's
+        # id-token to attach a GitHub build provenance attestation.
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        run: npm publish --workspace apps/cli --access public --provenance
