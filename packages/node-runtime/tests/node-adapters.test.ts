@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { HttpTransportError, isCancellationError } from "@arxiv-daily/core";
+import {
+  DailySummaryCheckpointStore,
+  DEFAULT_SETTINGS,
+  HttpTransportError,
+  isCancellationError,
+  type DailyPaperResult,
+  type DailySummaryCheckpointCompatibilityInput,
+} from "@arxiv-daily/core";
 import {
   buildNodeHostAdapters,
   EnvSecretProvider,
@@ -156,6 +163,53 @@ describe("NodeStorageAdapter", () => {
 
     expect(await storage.readText("daily/2026-06-13.md")).toBe("content");
     expect(await storage.exists("daily/2026-06-13.md.tmp")).toBe(false);
+  });
+
+  it("preserves a recoverable checkpoint backup across consecutive real upserts", async () => {
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+    const store = new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output);
+    const first: DailySummaryCheckpointCompatibilityInput = {
+      paper: {
+        id: "2608.00001",
+        title: "First",
+        authors: "Author",
+        abstract: "First abstract.",
+        abstractConclusion: "First content.",
+      },
+      llm: {
+        provider: "custom",
+        baseUrl: "https://example.test/v1?token=private",
+        model: "model-a",
+        thinkingMode: false,
+        reasoningEffort: "medium",
+      },
+    };
+    const second = {
+      ...first,
+      paper: { ...first.paper, id: "2608.00002", title: "Second", abstract: "Second abstract." },
+    };
+    const result = (id: string): DailyPaperResult => ({
+      kind: "structured",
+      summary: {
+        id,
+        coreProblem: "Problem",
+        keyMethod: "Method",
+        mainResult: "Result",
+        whyRelevant: "Relevant",
+        limitations: "Limits",
+      },
+    });
+
+    await store.upsert("2026-08-01", first, result("2608.00001"));
+    await store.upsert("2026-08-01", second, result("2608.00002"));
+    const paths = store.pathsFor("2026-08-01");
+    await writeFile(join(root, paths.documentPath), "corrupt", "utf8");
+
+    await expect(new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output)
+      .lookupReusable("2026-08-01", first)).resolves.toEqual(result("2608.00001"));
+    expect(JSON.parse(await readFile(join(root, paths.backupPath), "utf8")))
+      .toMatchObject({ entries: { "arxiv:2608.00001": {} } });
   });
 
   it("lists entries and rejects paths outside the root", async () => {

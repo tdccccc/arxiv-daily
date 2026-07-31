@@ -1,6 +1,6 @@
 # Daily structured-summary checkpoint recovery
 
-status: active
+status: done
 updated: 2026-08-01
 owner: sess_4ab50bf8-a3f3-40cd-bf05-66eb503e2ed9
 
@@ -10,13 +10,13 @@ Make daily-report generation resumable so a cancelled, crashed, or otherwise int
 
 ## Success criteria
 
-- [ ] Each newly completed validated or typed-fallback structured summary is durably checkpointed before the pipeline starts the next paper.
-- [ ] A rerun reuses only compatible checkpoint entries and invokes the LLM only for selected papers whose entries are missing or stale.
-- [ ] Recovered and newly generated entries preserve selected-paper order, progress, metrics, cancellation, validation, and fallback semantics.
-- [ ] The daily report remains a complete deterministic document written once through the existing atomic commit path; checkpoint files never become user-facing partial reports.
-- [ ] A committed daily report remains the authoritative recovery boundary, and existing report/index repair behavior wins over stale checkpoints.
-- [ ] Corrupt, incompatible, or unwriteable checkpoint state fails safely without silently attaching a summary to the wrong paper or losing newly paid LLM work.
-- [ ] Plugin and CLI hosts share the same host-neutral core recovery behavior and pass focused plus repository-wide verification.
+- [x] Each newly completed validated or typed-fallback structured summary is durably checkpointed before the pipeline starts the next paper.
+- [x] A rerun reuses only compatible checkpoint entries and invokes the LLM only for selected papers whose entries are missing or stale.
+- [x] Recovered and newly generated entries preserve selected-paper order, progress, metrics, cancellation, validation, and fallback semantics.
+- [x] The daily report remains a complete deterministic document written once through the existing atomic commit path; checkpoint files never become user-facing partial reports.
+- [x] A committed daily report remains the authoritative recovery boundary, and existing report/index repair behavior wins over stale checkpoints.
+- [x] Corrupt, incompatible, or unwriteable checkpoint state fails safely without silently attaching a summary to the wrong paper or losing newly paid LLM work.
+- [x] Plugin and CLI hosts share the same host-neutral core recovery behavior and pass focused plus repository-wide verification.
 
 ## Non-goals
 
@@ -43,4 +43,4 @@ Make daily-report generation resumable so a cancelled, crashed, or otherwise int
 1. P1 — a versioned host-neutral checkpoint contract and atomic store safely preserve compatible per-paper results — status: done
 2. P2 — sequential summarization resumes compatible entries and durably checkpoints each new result before continuing — status: done
 3. P3 — daily-report commit, index repair, cancellation, and checkpoint cleanup form one coherent recovery lifecycle — status: done
-4. P4 — compatibility scenarios, both hosts, operational documentation, and full regression verification support closure — status: active
+4. P4 — compatibility scenarios, both hosts, operational documentation, and full regression verification support closure — status: done

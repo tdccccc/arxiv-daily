@@ -1,5 +1,5 @@
 import type { StorageAdapter } from "../core/adapters";
-import { normalizeOpenAiBaseUrl } from "../llm/client";
+import { buildChatCompletionsUrl } from "../llm/client";
 import {
   DAILY_PAPER_SUMMARY_MAX_ATTEMPTS,
   isDailyPaperSummaryValidationError,
@@ -16,7 +16,7 @@ import { paperKeyFromArxivId } from "./paper-key";
 export const DAILY_SUMMARY_CHECKPOINT_SCHEMA_VERSION = 1 as const;
 export const DAILY_SUMMARY_PROMPT_CONTRACT_VERSION = 1 as const;
 export const DAILY_SUMMARY_RESULT_CONTRACT_VERSION = 1 as const;
-export const DAILY_SUMMARY_FINGERPRINT_VERSION = 1 as const;
+export const DAILY_SUMMARY_FINGERPRINT_VERSION = 2 as const;
 
 export interface DailySummaryCheckpointCompatibilityInput {
   paper: DailyPaperSummaryInput;
@@ -47,7 +47,7 @@ export interface DailySummaryCheckpointFingerprintInput {
   generation: {
     summaryLanguage: SummaryLanguage;
     provider: string;
-    endpoint: string;
+    endpointDigest: string;
     model: string;
     mode:
       | { kind: "temperature"; temperature: number }
@@ -92,6 +92,12 @@ export class DailySummaryCheckpointStoreError extends Error {
 }
 
 const mutationQueues = new WeakMap<StorageAdapter, Map<string, Promise<unknown>>>();
+
+type DocumentReadResult =
+  | { kind: "missing" }
+  | { kind: "corrupt"; error?: unknown }
+  | { kind: "unreadable"; error: unknown }
+  | { kind: "valid"; document: DailySummaryCheckpointDocument };
 
 export function deriveDailySummaryCheckpointPaths(
   storage: Pick<StorageAdapter, "normalizePath">,
@@ -141,7 +147,7 @@ export function buildDailySummaryCheckpointFingerprintInput(
     generation: {
       summaryLanguage: normalizeSummaryLanguage(input.summaryLanguage),
       provider: input.llm.provider,
-      endpoint: sanitizeCheckpointEndpoint(input.llm.baseUrl),
+      endpointDigest: buildCheckpointEndpointDigest(input.llm.baseUrl),
       model: input.llm.model,
       mode: effectiveGenerationMode(input.llm, temperature),
     },
@@ -195,22 +201,18 @@ function isEffectiveGenerationMode(value: unknown, provider: string): boolean {
   return false;
 }
 
-/** Remove credentials and request-specific URL components before persistence. */
-export function sanitizeCheckpointEndpoint(endpoint: string): string {
-  let parsed: URL;
+/** Hash the exact effective chat request URL so no endpoint text is persisted. */
+export function buildCheckpointEndpointDigest(baseUrl: string): string {
+  let requestUrl: URL;
   try {
-    parsed = new URL(endpoint.trim());
+    requestUrl = new URL(buildChatCompletionsUrl(baseUrl));
   } catch (error) {
     throw new DailySummaryCheckpointStoreError("checkpoint endpoint must be an absolute URL", error);
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  if (requestUrl.protocol !== "http:" && requestUrl.protocol !== "https:") {
     throw new DailySummaryCheckpointStoreError("checkpoint endpoint must use http or https");
   }
-  parsed.username = "";
-  parsed.password = "";
-  parsed.search = "";
-  parsed.hash = "";
-  return new URL(normalizeOpenAiBaseUrl(parsed.toString())).toString();
+  return `sha256:${sha256(requestUrl.toString())}`;
 }
 
 export class DailySummaryCheckpointStore {
@@ -227,11 +229,11 @@ export class DailySummaryCheckpointStore {
   async load(reportDate: string): Promise<DailySummaryCheckpointDocument> {
     const paths = this.pathsFor(reportDate);
     const primary = await this.readDocument(paths.documentPath, reportDate);
-    if (primary) return primary;
+    if (primary.kind === "valid") return primary.document;
     const backup = await this.readDocument(paths.backupPath, reportDate);
-    if (backup) {
+    if (backup.kind === "valid") {
       this.warn(`daily summary checkpoint recovered from backup: ${paths.backupPath}`);
-      return backup;
+      return backup.document;
     }
     return emptyDocument(reportDate, this.now());
   }
@@ -258,7 +260,7 @@ export class DailySummaryCheckpointStore {
   ): Promise<DailySummaryCheckpointEntry> {
     const paths = this.pathsFor(reportDate);
     return this.enqueue(paths.documentPath, async () => {
-      const document = await this.load(reportDate);
+      const document = await this.loadForMutation(reportDate);
       const fingerprintInput = buildDailySummaryCheckpointFingerprintInput(input);
       if (
         fingerprintInput.promptContractVersion !== DAILY_SUMMARY_PROMPT_CONTRACT_VERSION ||
@@ -270,7 +272,11 @@ export class DailySummaryCheckpointStore {
       }
       const paperKey = fingerprintInput.paper.paperKey;
       const paperId = fingerprintInput.paper.sourceContent.id;
-      const decodedResult = decodeDailyPaperResult(result, paperId);
+      const decodedResult = decodeDailyPaperResult(
+        result,
+        paperId,
+        fingerprintInput.paper.sourceContent.trustedOriginalAbstract,
+      );
       if (!decodedResult) {
         throw new DailySummaryCheckpointStoreError(`invalid checkpoint result for ${paperKey}`);
       }
@@ -295,7 +301,7 @@ export class DailySummaryCheckpointStore {
     const paperKey = paperKeyOrNull(paperId);
     if (!paperKey) return Promise.resolve(false);
     return this.enqueue(paths.documentPath, async () => {
-      const document = await this.load(reportDate);
+      const document = await this.loadForMutation(reportDate);
       if (!(paperKey in document.entries)) return false;
       delete document.entries[paperKey];
       document.updatedAt = this.now().toISOString();
@@ -310,32 +316,80 @@ export class DailySummaryCheckpointStore {
       await removeIfExists(this.storage, paths.documentPath);
       await removeIfExists(this.storage, paths.backupPath);
       await removeIfExists(this.storage, `${paths.documentPath}.tmp`);
+      await removeIfExists(this.storage, `${paths.backupPath}.tmp`);
     });
+  }
+
+  private async loadForMutation(reportDate: string): Promise<DailySummaryCheckpointDocument> {
+    const paths = this.pathsFor(reportDate);
+    const primary = await this.readDocument(paths.documentPath, reportDate);
+    if (primary.kind === "valid") return primary.document;
+    if (primary.kind === "unreadable") {
+      throw new DailySummaryCheckpointStoreError(
+        `cannot mutate unreadable daily summary checkpoint: ${paths.documentPath}`,
+        primary.error,
+      );
+    }
+
+    const backup = await this.readDocument(paths.backupPath, reportDate);
+    if (backup.kind === "valid") {
+      this.warn(`daily summary checkpoint recovered from backup: ${paths.backupPath}`);
+      return backup.document;
+    }
+    if (primary.kind === "missing" && backup.kind === "missing") {
+      return emptyDocument(reportDate, this.now());
+    }
+    throw new DailySummaryCheckpointStoreError(
+      `cannot mutate unreadable daily summary checkpoint: ${paths.documentPath}`,
+      backup.kind === "unreadable" || backup.kind === "corrupt"
+        ? backup.error
+        : primary.kind === "corrupt"
+          ? primary.error
+          : undefined,
+    );
   }
 
   private async readDocument(
     path: string,
     reportDate: string,
-  ): Promise<DailySummaryCheckpointDocument | null> {
+  ): Promise<DocumentReadResult> {
+    let exists: boolean;
     try {
-      if (!(await this.storage.exists(path))) return null;
-      const raw = await this.storage.readText(path);
-      const parsed: unknown = JSON.parse(raw);
-      const document = decodeDocument(parsed, reportDate);
-      if (!document) {
-        this.warn(`invalid daily summary checkpoint ignored: ${path}`);
-      } else if (
-        isPlainObject(parsed) &&
-        isPlainObject(parsed.entries) &&
-        Object.keys(parsed.entries).length !== Object.keys(document.entries).length
-      ) {
-        this.warn(`invalid daily summary checkpoint entries ignored: ${path}`);
-      }
-      return document;
+      exists = await this.storage.exists(path);
     } catch (error) {
       this.warn(`unreadable daily summary checkpoint ignored: ${path}`, error);
-      return null;
+      return { kind: "unreadable", error };
     }
+    if (!exists) return { kind: "missing" };
+
+    let raw: string;
+    try {
+      raw = await this.storage.readText(path);
+    } catch (error) {
+      this.warn(`unreadable daily summary checkpoint ignored: ${path}`, error);
+      return { kind: "unreadable", error };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      this.warn(`corrupt daily summary checkpoint ignored: ${path}`, error);
+      return { kind: "corrupt", error };
+    }
+    const document = decodeDocument(parsed, reportDate);
+    if (!document) {
+      this.warn(`invalid daily summary checkpoint ignored: ${path}`);
+      return { kind: "corrupt" };
+    }
+    if (
+      isPlainObject(parsed) &&
+      isPlainObject(parsed.entries) &&
+      Object.keys(parsed.entries).length !== Object.keys(document.entries).length
+    ) {
+      this.warn(`invalid daily summary checkpoint entries ignored: ${path}`);
+    }
+    return { kind: "valid", document };
   }
 
   private async save(
@@ -345,16 +399,8 @@ export class DailySummaryCheckpointStore {
     await ensureDirDeep(this.storage, paths.directory);
     const content = `${JSON.stringify(document, null, 2)}\n`;
     try {
-      if (this.storage.writeTextAtomic) {
-        if (await this.storage.exists(paths.documentPath)) {
-          const previous = await this.storage.readText(paths.documentPath);
-          if (decodeRawDocument(previous, document.reportDate)) {
-            await this.storage.writeTextAtomic(paths.backupPath, previous);
-          }
-        }
-        await this.storage.writeTextAtomic(paths.documentPath, content);
-        return;
-      }
+      // This document owns its .tmp/.bak lifecycle. Host atomic writers may reserve
+      // the same suffixes and are therefore deliberately not composed here.
       await replaceWithBackup(this.storage, paths, content, document.reportDate);
     } catch (error) {
       throw new DailySummaryCheckpointStoreError(
@@ -432,7 +478,11 @@ function decodeEntry(value: unknown, mapKey: string): DailySummaryCheckpointEntr
   const paperId = fingerprintInput.paper.sourceContent.id;
   if (paperKeyOrNull(paperId) !== mapKey) return null;
   if (`sha256:${sha256(JSON.stringify(fingerprintInput))}` !== value.fingerprint) return null;
-  const result = decodeDailyPaperResult(value.result, paperId);
+  const result = decodeDailyPaperResult(
+    value.result,
+    paperId,
+    fingerprintInput.paper.sourceContent.trustedOriginalAbstract,
+  );
   if (!result) return null;
   return {
     paperKey: mapKey,
@@ -467,12 +517,12 @@ function decodeFingerprintInput(value: unknown): DailySummaryCheckpointFingerpri
       (!value.paper.sourceContent.fullSections ||
         value.paper.sourceContent.fullSections !== value.paper.sourceContent.fullSections.trim())) ||
     !isExactObject(value.generation, [
-      "summaryLanguage", "provider", "endpoint", "model", "mode",
+      "summaryLanguage", "provider", "endpointDigest", "model", "mode",
     ]) ||
     (value.generation.summaryLanguage !== "zh" && value.generation.summaryLanguage !== "en") ||
     typeof value.generation.provider !== "string" ||
-    typeof value.generation.endpoint !== "string" ||
-    sanitizeEndpointOrNull(value.generation.endpoint) !== value.generation.endpoint ||
+    typeof value.generation.endpointDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(value.generation.endpointDigest) ||
     typeof value.generation.model !== "string" ||
     !isEffectiveGenerationMode(value.generation.mode, value.generation.provider)
   ) return null;
@@ -482,6 +532,7 @@ function decodeFingerprintInput(value: unknown): DailySummaryCheckpointFingerpri
 export function decodeDailyPaperResult(
   value: unknown,
   expectedPaperId: string,
+  trustedOriginalAbstract?: string,
 ): DailyPaperResult | null {
   if (!isPlainObject(value)) return null;
   if (value.kind === "structured") {
@@ -505,7 +556,8 @@ export function decodeDailyPaperResult(
       !Number.isSafeInteger(value.attempts) ||
       value.attempts < 1 ||
       value.attempts > DAILY_PAPER_SUMMARY_MAX_ATTEMPTS ||
-      typeof value.originalAbstract !== "string"
+      typeof value.originalAbstract !== "string" ||
+      (trustedOriginalAbstract !== undefined && value.originalAbstract !== trustedOriginalAbstract)
     ) return null;
     return {
       kind: "fallback",
@@ -524,28 +576,50 @@ async function replaceWithBackup(
   reportDate: string,
 ): Promise<void> {
   const tmp = `${paths.documentPath}.tmp`;
+  const backupTmp = `${paths.backupPath}.tmp`;
   await removeIfExists(storage, tmp);
-  await storage.writeText(tmp, content);
-  if (!(await storage.exists(paths.documentPath))) {
-    await storage.rename(tmp, paths.documentPath);
-    return;
-  }
+  await removeIfExists(storage, backupTmp);
 
-  const previous = await storage.readText(paths.documentPath);
-  const previousIsValid = decodeRawDocument(previous, reportDate) !== null;
-  if (previousIsValid) {
-    await removeIfExists(storage, paths.backupPath);
-    await storage.rename(paths.documentPath, paths.backupPath);
-  } else {
-    await storage.remove(paths.documentPath);
-  }
   try {
-    await storage.rename(tmp, paths.documentPath);
-  } catch (error) {
-    if (previousIsValid && await storage.exists(paths.backupPath)) {
-      await storage.rename(paths.backupPath, paths.documentPath);
+    await storage.writeText(tmp, content);
+
+    let previous: string | null = null;
+    if (await storage.exists(paths.documentPath)) {
+      previous = await storage.readText(paths.documentPath);
+      if (!decodeRawDocument(previous, reportDate)) previous = null;
     }
-    throw error;
+    let recoveryContent = previous;
+    if (recoveryContent === null && await storage.exists(paths.backupPath)) {
+      const backup = await storage.readText(paths.backupPath);
+      if (decodeRawDocument(backup, reportDate)) recoveryContent = backup;
+    }
+
+    if (previous !== null) {
+      // Keep the primary intact while publishing its replacement backup. Some
+      // adapters reject rename when the destination exists, so remove the old
+      // backup only after backupTmp is complete. A publish failure still leaves
+      // the valid primary untouched and aborts before promotion.
+      await storage.writeText(backupTmp, previous);
+      await removeIfExists(storage, paths.backupPath);
+      await storage.rename(backupTmp, paths.backupPath);
+    }
+
+    if (await storage.exists(paths.documentPath)) {
+      await storage.remove(paths.documentPath);
+    }
+    try {
+      await storage.rename(tmp, paths.documentPath);
+    } catch (error) {
+      if (recoveryContent !== null) {
+        await removeIfExists(storage, tmp);
+        await storage.writeText(tmp, recoveryContent);
+        await storage.rename(tmp, paths.documentPath);
+      }
+      throw error;
+    }
+  } finally {
+    await removeIfExists(storage, tmp);
+    await removeIfExists(storage, backupTmp);
   }
 }
 
@@ -572,14 +646,6 @@ function cloneEntry(entry: DailySummaryCheckpointEntry): DailySummaryCheckpointE
 
 function cloneResult(result: DailyPaperResult): DailyPaperResult {
   return JSON.parse(JSON.stringify(result)) as DailyPaperResult;
-}
-
-function sanitizeEndpointOrNull(endpoint: string): string | null {
-  try {
-    return sanitizeCheckpointEndpoint(endpoint);
-  } catch {
-    return null;
-  }
 }
 
 function paperKeyOrNull(paperId: string): string | null {

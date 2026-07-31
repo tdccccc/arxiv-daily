@@ -132,6 +132,11 @@ export function normalizeOpenAiBaseUrl(baseUrl: string): string {
   return normalized;
 }
 
+/** Exact effective URL identity used by chat requests. */
+export function buildChatCompletionsUrl(baseUrl: string): string {
+  return `${normalizeOpenAiBaseUrl(baseUrl)}/chat/completions`;
+}
+
 export class LlmClient {
   constructor(
     private settings: LlmSettings,
@@ -318,7 +323,7 @@ export class LlmClient {
   ): Promise<string> {
     const requestBody = { ...body, stream };
     const res = await this.http.request({
-      url: this.chatCompletionsUrl(),
+      url: buildChatCompletionsUrl(this.settings.baseUrl),
       method: "POST",
       headers: this.chatHeaders(),
       body: JSON.stringify(requestBody),
@@ -329,10 +334,6 @@ export class LlmClient {
       throw createStatusError(res.status, res.bodyText, [this.settings.apiKey]);
     }
     return res.bodyText;
-  }
-
-  private chatCompletionsUrl(): string {
-    return `${normalizeOpenAiBaseUrl(this.settings.baseUrl)}/chat/completions`;
   }
 
   private chatHeaders(): Record<string, string> {

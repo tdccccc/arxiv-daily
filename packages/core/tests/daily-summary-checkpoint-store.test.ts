@@ -4,11 +4,11 @@ import type { DailyPaperResult } from "../src/pipeline/daily-summary-assembler";
 import {
   DAILY_SUMMARY_CHECKPOINT_SCHEMA_VERSION,
   DailySummaryCheckpointStore,
+  buildCheckpointEndpointDigest,
   buildDailySummaryCheckpointFingerprintInput,
   createDailySummaryCompatibilityFingerprint,
   decodeDailyPaperResult,
   deriveDailySummaryCheckpointPaths,
-  sanitizeCheckpointEndpoint,
   sha256ForCheckpointTests,
   type DailySummaryCheckpointCompatibilityInput,
 } from "../src/services/daily-summary-checkpoint-store";
@@ -34,14 +34,14 @@ const validationFallback: DailyPaperResult = {
   kind: "fallback",
   reasonCode: "validation-exhausted",
   attempts: 3,
-  originalAbstract: "Original abstract.",
+  originalAbstract: "Abstract.",
 };
 
 const transportFallback: DailyPaperResult = {
   kind: "fallback",
   reasonCode: "transport-exhausted",
   attempts: 1,
-  originalAbstract: "Original abstract.",
+  originalAbstract: "Abstract.",
 };
 
 function compatibility(
@@ -70,34 +70,39 @@ function compatibility(
   };
 }
 
-function makeStorage(options: { atomic?: boolean } = {}) {
+function makeStorage(options: { atomic?: boolean; rejectExistingRenameTarget?: boolean } = {}) {
   const files: Record<string, string> = {};
   const dirs = new Set<string>();
   const rename = vi.fn(async (from: string, to: string) => {
     if (!(from in files)) throw new Error(`missing ${from}`);
+    if (options.rejectExistingRenameTarget && (to in files || dirs.has(to))) {
+      throw new Error(`destination exists: ${to}`);
+    }
     files[to] = files[from]!;
     delete files[from];
   });
   const writeTextAtomic = vi.fn(async (path: string, content: string) => {
     files[path] = content;
   });
+  const readText = vi.fn(async (path: string) => {
+    if (!(path in files)) throw new Error(`missing ${path}`);
+    return files[path]!;
+  });
+  const exists = vi.fn(async (path: string) => path in files || dirs.has(path));
   const storage: StorageAdapter = {
     normalizePath: (path) => path
       .replace(/\\/g, "/")
       .replace(/\/+/g, "/")
       .replace(/^\/+|\/+$/g, ""),
-    readText: async (path) => {
-      if (!(path in files)) throw new Error(`missing ${path}`);
-      return files[path]!;
-    },
+    readText,
     writeText: async (path, content) => { files[path] = content; },
     ...(options.atomic ? { writeTextAtomic } : {}),
-    exists: async (path) => path in files || dirs.has(path),
+    exists,
     mkdir: async (path) => { dirs.add(path); },
     remove: async (path) => { delete files[path]; dirs.delete(path); },
     rename,
   };
-  return { files, dirs, storage, rename, writeTextAtomic };
+  return { files, dirs, storage, exists, readText, rename, writeTextAtomic };
 }
 
 function makeStore(
@@ -135,14 +140,14 @@ describe("daily summary checkpoint fingerprint", () => {
     });
 
     expect(createDailySummaryCompatibilityFingerprint(first)).toBe(
-      "sha256:0f829379522ae8618ff885ab59166905d5e981ba808f23d3fe08456785d80d88",
+      "sha256:c0d5e6caeb38a9f70384e1274997d4d05890367377b9c650948423bcc724d6f5",
     );
     expect(createDailySummaryCompatibilityFingerprint(second)).toBe(
       createDailySummaryCompatibilityFingerprint(first),
     );
     const canonical = buildDailySummaryCheckpointFingerprintInput(first);
     expect(canonical).toMatchObject({
-      fingerprintVersion: 1,
+      fingerprintVersion: 2,
       paper: {
         paperKey: "arxiv:2608.00001",
         sourceContent: {
@@ -151,7 +156,7 @@ describe("daily summary checkpoint fingerprint", () => {
         },
       },
       generation: {
-        endpoint: "https://example.test/v1",
+        endpointDigest: buildCheckpointEndpointDigest(first.llm.baseUrl),
         summaryLanguage: "zh",
         provider: "custom",
         model: "model-a",
@@ -213,11 +218,17 @@ describe("daily summary checkpoint fingerprint", () => {
       .toEqual({ kind: "anthropic-thinking", budgetTokens: 8192 });
   });
 
-  it("sanitizes query, hash, username, and password from endpoints", () => {
-    expect(sanitizeCheckpointEndpoint("https://user:pass@example.test/v1?q=1#x"))
-      .toBe("https://example.test/v1");
-    expect(() => sanitizeCheckpointEndpoint("relative/path")).toThrow(/absolute URL/);
-    expect(() => sanitizeCheckpointEndpoint("file:///tmp/api")).toThrow(/http or https/);
+  it("digests the exact effective chat URL without exposing endpoint text", () => {
+    const sensitive = "https://user:pass@example.test/private/token?v=secret#fragment";
+    const digest = buildCheckpointEndpointDigest(sensitive);
+    expect(digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(digest).not.toContain("example.test");
+    expect(buildCheckpointEndpointDigest("https://example.test/private/token?v=one"))
+      .not.toBe(buildCheckpointEndpointDigest("https://example.test/private/token?v=two"));
+    expect(buildCheckpointEndpointDigest("https://user:one@example.test/v1"))
+      .not.toBe(buildCheckpointEndpointDigest("https://user:two@example.test/v1"));
+    expect(() => buildCheckpointEndpointDigest("relative/path")).toThrow(/absolute URL/);
+    expect(() => buildCheckpointEndpointDigest("file:///tmp/api")).toThrow(/http or https/);
   });
 
   it.each([
@@ -327,6 +338,8 @@ describe("DailySummaryCheckpointStore", () => {
       expect(raw).not.toContain("must-never-persist");
       expect(raw).not.toContain("user:secret");
       expect(raw).not.toContain("token=secret");
+      expect(raw).not.toContain("example.test");
+      expect(raw).not.toContain("/v1");
       expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual(result);
     },
   );
@@ -341,6 +354,26 @@ describe("DailySummaryCheckpointStore", () => {
       compatibility(overrides),
       structuredResult,
     )).rejects.toThrow(/unsupported daily summary contract versions/);
+  });
+
+  it("rejects a fallback whose original abstract disagrees with trusted fingerprint input", async () => {
+    const { storage } = makeStorage();
+    await expect(makeStore(storage).upsert(reportDate, compatibility(), {
+      ...validationFallback,
+      originalAbstract: "Tampered abstract.",
+    })).rejects.toThrow(/invalid checkpoint result/);
+  });
+
+  it("isolates a persisted fallback whose original abstract was tampered with", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), validationFallback);
+    const document = JSON.parse(files[documentPath]!);
+    document.entries["arxiv:2608.00001"].result.originalAbstract = "Tampered abstract.";
+    files[documentPath] = JSON.stringify(document);
+
+    expect((await store.load(reportDate)).entries).toEqual({});
+    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
   });
 
   it("records transport exhaustion but intentionally does not reuse it", async () => {
@@ -363,6 +396,22 @@ describe("DailySummaryCheckpointStore", () => {
     expect((await store.load(reportDate)).entries["arxiv:2608.00001"]?.result)
       .toEqual(structuredResult);
     expect(await store.lookupReusable(reportDate, compatibility())).toEqual(structuredResult);
+  });
+
+  it("persists no path token and treats a query-only endpoint change as a miss", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const input = compatibility({
+      llm: { ...compatibility().llm, baseUrl: "https://example.test/private/path-token?tenant=one" },
+    });
+    await store.upsert(reportDate, input, structuredResult);
+
+    expect(files[documentPath]).not.toContain("path-token");
+    expect(files[documentPath]).not.toContain("tenant=one");
+    await expect(store.lookupReusable(reportDate, {
+      ...input,
+      llm: { ...input.llm, baseUrl: "https://example.test/private/path-token?tenant=two" },
+    })).resolves.toBeNull();
   });
 
   it("returns a miss for changed compatibility while preserving reusable siblings", async () => {
@@ -450,6 +499,127 @@ describe("DailySummaryCheckpointStore", () => {
     expect(warning).toHaveBeenCalled();
   });
 
+  it("keeps lookup tolerant but rejects mutation after a transient primary EIO without backup", async () => {
+    const { files, storage, readText } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    const previous = files[documentPath]!;
+    readText.mockRejectedValueOnce(Object.assign(new Error("read EIO"), { code: "EIO" }));
+
+    await expect(store.lookupReusable(reportDate, compatibility())).resolves.toBeNull();
+    expect(files[documentPath]).toBe(previous);
+
+    readText.mockRejectedValueOnce(Object.assign(new Error("read EIO"), { code: "EIO" }));
+    await expect(store.upsert(reportDate, compatibility(), validationFallback))
+      .rejects.toThrow(/cannot mutate unreadable/);
+    expect(files[documentPath]).toBe(previous);
+  });
+
+  it("rejects mutation on primary EIO even when a valid stale backup exists", async () => {
+    const { files, storage, readText } = makeStorage();
+    const store = makeStore(storage);
+    const secondResult: DailyPaperResult = {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    };
+    const thirdInput = {
+      ...secondCompatibility(),
+      paper: {
+        ...secondCompatibility().paper,
+        id: "2608.00003",
+        title: "Third paper",
+      },
+    };
+    const thirdResult: DailyPaperResult = {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00003" },
+    };
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    await store.upsert(reportDate, secondCompatibility(), secondResult);
+    const primaryWithAAndB = files[documentPath]!;
+    expect(Object.keys(JSON.parse(files[backupPath]!).entries)).toEqual([
+      "arxiv:2608.00001",
+    ]);
+    readText.mockRejectedValueOnce(
+      Object.assign(new Error("read EIO"), { code: "EIO" }),
+    );
+
+    await expect(store.upsert(reportDate, thirdInput, thirdResult))
+      .rejects.toThrow(/cannot mutate unreadable/);
+
+    expect(files[documentPath]).toBe(primaryWithAAndB);
+    expect(Object.keys(JSON.parse(files[documentPath]!).entries).sort()).toEqual([
+      "arxiv:2608.00001",
+      "arxiv:2608.00002",
+    ]);
+    await expect(store.lookupReusable(reportDate, secondCompatibility()))
+      .resolves.toEqual(secondResult);
+    await expect(store.lookupReusable(reportDate, thirdInput)).resolves.toBeNull();
+  });
+
+  it("rejects mutation when checking primary existence fails", async () => {
+    const { files, storage, exists } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    const primary = files[documentPath]!;
+    exists.mockRejectedValueOnce(
+      Object.assign(new Error("stat EIO"), { code: "EIO" }),
+    );
+
+    await expect(store.upsert(reportDate, secondCompatibility(), {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    })).rejects.toThrow(/cannot mutate unreadable/);
+    expect(files[documentPath]).toBe(primary);
+  });
+
+  it("continues mutation from a valid backup when the primary is corrupt", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    await store.upsert(reportDate, secondCompatibility(), {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    });
+    files[documentPath] = "corrupt";
+
+    await store.upsert(reportDate, compatibility(), validationFallback);
+
+    expect(await store.lookupReusable(reportDate, compatibility())).toEqual(validationFallback);
+    // The last valid backup predates the second upsert; strict mutation uses it
+    // rather than trusting entries found only in the corrupt primary.
+    expect(await store.lookupReusable(reportDate, secondCompatibility())).toBeNull();
+  });
+
+  it("continues mutation from a valid backup when the primary is missing", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    files[backupPath] = files[documentPath]!;
+    delete files[documentPath];
+
+    await store.upsert(reportDate, secondCompatibility(), {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    });
+
+    expect(Object.keys((await store.load(reportDate)).entries).sort()).toEqual([
+      "arxiv:2608.00001",
+      "arxiv:2608.00002",
+    ]);
+  });
+
+  it("rejects mutation when both primary and backup are corrupt", async () => {
+    const { files, storage } = makeStorage();
+    files[documentPath] = "corrupt primary";
+    files[backupPath] = "corrupt backup";
+
+    await expect(makeStore(storage).upsert(reportDate, compatibility(), structuredResult))
+      .rejects.toThrow(/cannot mutate unreadable/);
+    expect(files[documentPath]).toBe("corrupt primary");
+    expect(files[backupPath]).toBe("corrupt backup");
+  });
+
   it("recovers a valid backup when the primary is corrupt", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
@@ -462,6 +632,55 @@ describe("DailySummaryCheckpointStore", () => {
       .toEqual(structuredResult);
     expect(warning.mock.calls.some(([message]) => String(message).includes("recovered from backup")))
       .toBe(true);
+  });
+
+  it("rotates backups across three upserts when rename rejects existing targets", async () => {
+    const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
+    const store = makeStore(storage);
+    const secondResult: DailyPaperResult = {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    };
+    const thirdInput = {
+      ...secondCompatibility(),
+      paper: { ...secondCompatibility().paper, id: "2608.00003", title: "Third paper" },
+    };
+    const thirdResult: DailyPaperResult = {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00003" },
+    };
+
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    await store.upsert(reportDate, secondCompatibility(), secondResult);
+    await store.upsert(reportDate, thirdInput, thirdResult);
+    files[documentPath] = "corrupt";
+
+    const recovered = makeStore(storage);
+    await expect(recovered.lookupReusable(reportDate, compatibility())).resolves.toEqual(structuredResult);
+    await expect(recovered.lookupReusable(reportDate, secondCompatibility())).resolves.toEqual(secondResult);
+    await expect(recovered.lookupReusable(reportDate, thirdInput)).resolves.toBeNull();
+    expect(files[`${documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${backupPath}.tmp`]).toBeUndefined();
+  });
+
+  it("keeps primary valid and cleans both temp files when backup publication fails", async () => {
+    const { files, storage, rename } = makeStorage({ rejectExistingRenameTarget: true });
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    const primary = files[documentPath]!;
+    files[backupPath] = primary;
+    rename.mockImplementationOnce(async () => {
+      throw new Error("injected backup publish failure");
+    });
+
+    await expect(store.upsert(reportDate, secondCompatibility(), {
+      ...structuredResult,
+      summary: { ...structuredResult.summary, id: "2608.00002" },
+    })).rejects.toThrow(/failed to save daily summary checkpoint/);
+    expect(files[documentPath]).toBe(primary);
+    expect(files[`${documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${backupPath}.tmp`]).toBeUndefined();
+    expect(await store.lookupReusable(reportDate, compatibility())).toEqual(structuredResult);
   });
 
   it("serializes same-path mutations across store instances", async () => {
@@ -497,25 +716,21 @@ describe("DailySummaryCheckpointStore", () => {
     await expect(store.upsert(reportDate, compatibility(), validationFallback))
       .rejects.toThrow(/failed to save daily summary checkpoint/);
     expect(files[documentPath]).toBe(previous);
+    expect(files[`${documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${backupPath}.tmp`]).toBeUndefined();
     expect(await store.lookupReusable(reportDate, compatibility())).toEqual(structuredResult);
   });
 
-  it("uses adapter atomic writes and retains a valid backup on failure", async () => {
+  it("uses core-owned replacement even when the adapter exposes atomic writes", async () => {
     const { files, storage, writeTextAtomic } = makeStorage({ atomic: true });
     const store = makeStore(storage);
     await store.upsert(reportDate, compatibility(), structuredResult);
     const previous = files[documentPath]!;
-    writeTextAtomic.mockImplementationOnce(async (path, content) => {
-      files[path] = content;
-    });
-    writeTextAtomic.mockImplementationOnce(async () => {
-      throw new Error("injected atomic failure");
-    });
+    await store.upsert(reportDate, compatibility(), validationFallback);
 
-    await expect(store.upsert(reportDate, compatibility(), validationFallback))
-      .rejects.toThrow(/failed to save daily summary checkpoint/);
-    expect(files[documentPath]).toBe(previous);
+    expect(writeTextAtomic).not.toHaveBeenCalled();
     expect(files[backupPath]).toBe(previous);
+    expect(await store.lookupReusable(reportDate, compatibility())).toEqual(validationFallback);
   });
 
   it("removes one entry and then all checkpoint artifacts", async () => {

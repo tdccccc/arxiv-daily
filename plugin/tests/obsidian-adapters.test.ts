@@ -8,9 +8,12 @@ import {
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 import {
   ArxivFetcher,
+  DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   isCancellationError,
   Logger,
+  type DailyPaperResult,
+  type DailySummaryCheckpointCompatibilityInput,
   type PluginSettings,
 } from "@arxiv-daily/core";
 
@@ -56,6 +59,8 @@ function testApp() {
           dirs.add(path);
         }),
         rename: vi.fn(async (from: string, to: string) => {
+          if (!(from in files)) throw new Error(`missing ${from}`);
+          if (to in files || dirs.has(to)) throw new Error(`destination exists: ${to}`);
           files[to] = files[from];
           delete files[from];
         }),
@@ -124,6 +129,57 @@ describe("Obsidian host adapters", () => {
       "",
       true,
     );
+  });
+
+  it("rotates checkpoint backups with Obsidian rename semantics", async () => {
+    const { app, files } = testApp();
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: testSettings,
+    });
+    const store = new DailySummaryCheckpointStore(host.storage, DEFAULT_SETTINGS.output);
+    const input = (id: string): DailySummaryCheckpointCompatibilityInput => ({
+      paper: {
+        id,
+        title: `Paper ${id}`,
+        authors: "Author",
+        abstract: `Abstract ${id}`,
+        abstractConclusion: `Content ${id}`,
+      },
+      llm: {
+        provider: "custom",
+        baseUrl: "https://example.test/v1",
+        model: "model-a",
+        thinkingMode: false,
+        reasoningEffort: "medium",
+      },
+    });
+    const result = (id: string): DailyPaperResult => ({
+      kind: "structured",
+      summary: {
+        id,
+        coreProblem: "Problem",
+        keyMethod: "Method",
+        mainResult: "Result",
+        whyRelevant: "Relevant",
+        limitations: "Limits",
+      },
+    });
+
+    for (const id of ["2608.00001", "2608.00002", "2608.00003"]) {
+      await store.upsert("2026-08-01", input(id), result(id));
+    }
+    const paths = store.pathsFor("2026-08-01");
+    files[paths.documentPath] = "corrupt";
+
+    await expect(new DailySummaryCheckpointStore(host.storage, DEFAULT_SETTINGS.output)
+      .lookupReusable("2026-08-01", input("2608.00001")))
+      .resolves.toEqual(result("2608.00001"));
+    await expect(new DailySummaryCheckpointStore(host.storage, DEFAULT_SETTINGS.output)
+      .lookupReusable("2026-08-01", input("2608.00002")))
+      .resolves.toEqual(result("2608.00002"));
+    expect(files[`${paths.documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${paths.backupPath}.tmp`]).toBeUndefined();
   });
 
   it("atomically preserves scientific Markdown bytes without touching plugin data", async () => {
