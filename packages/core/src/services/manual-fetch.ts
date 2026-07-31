@@ -195,6 +195,7 @@ export class ManualFetchService {
       this.progress.setStage("summarize-detail");
       summary = await summarizePaperDetail(paper, {
         llm: this.deps.llm,
+        llmSettings: this.deps.llmSettings,
         logger,
         arxivSettings: this.deps.arxiv,
         advanced: this.deps.advanced,

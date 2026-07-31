@@ -11,11 +11,13 @@ import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
 import type { PaperIndexEntry, PaperStatus } from "../services/paper-index";
 import type { Logger } from "../services/logger";
+import type { DailySummaryCheckpointCompatibilityInput } from "../services/daily-summary-checkpoint-store";
 import { normalizeSummaryLanguage } from "../settings/summary-language";
 import type {
   AdvancedSettings,
   ArxivSettings,
   LinkStyle,
+  LlmSettings,
   SummaryLanguage,
 } from "../settings/types";
 import {
@@ -26,6 +28,7 @@ import {
   assembleDailySummary,
   assembleEmergencyDailySummary,
   isDailySummaryAssemblyRuntimeError,
+  type DailyPaperResult,
   type DailyPaperSlot,
   type DailySummaryAssemblyInput,
   type DailySummaryAssemblyPaper,
@@ -51,8 +54,22 @@ export interface DailyPaperWithContent extends FilteredPaper {
   indexEntry?: PaperIndexEntry;
 }
 
+export interface DailySummaryCheckpointPort {
+  lookupReusable(
+    reportDate: string,
+    input: DailySummaryCheckpointCompatibilityInput,
+  ): Promise<DailyPaperResult | null>;
+  upsert(
+    reportDate: string,
+    input: DailySummaryCheckpointCompatibilityInput,
+    result: DailyPaperResult,
+  ): Promise<unknown>;
+}
+
 export interface SummarizerDeps {
   llm: LlmClient;
+  llmSettings: LlmSettings;
+  checkpointStore?: DailySummaryCheckpointPort;
   logger: Logger;
   arxivSettings: ArxivSettings;
   advanced: AdvancedSettings;
@@ -95,17 +112,38 @@ export async function summarizeDaily(
   for (let i = 0; i < papers.length; i += 1) {
     throwIfCancelled(deps.signal);
     const paper = papers[i]!;
-    const result = await summarizeDailyPaperWithValidationRetry(paper, {
-      llm: deps.llm,
+    const checkpointInput: DailySummaryCheckpointCompatibilityInput = {
+      paper,
       summaryLanguage: deps.summaryLanguage,
-      signal: deps.signal,
-      onMetrics: deps.onMetrics,
-    });
+      llm: deps.llmSettings,
+    };
+    const reusable = await deps.checkpointStore?.lookupReusable(
+      dateStr,
+      checkpointInput,
+    );
     throwIfCancelled(deps.signal);
+
+    let result: DailyPaperResult;
+    let recovered = false;
+    if (reusable) {
+      result = reusable;
+      recovered = true;
+    } else {
+      result = await summarizeDailyPaperWithValidationRetry(paper, {
+        llm: deps.llm,
+        summaryLanguage: deps.summaryLanguage,
+        signal: deps.signal,
+        onMetrics: deps.onMetrics,
+      });
+      throwIfCancelled(deps.signal);
+      await deps.checkpointStore?.upsert(dateStr, checkpointInput, result);
+      throwIfCancelled(deps.signal);
+    }
     if (result.kind === "fallback") {
       fallbackCount += 1;
       deps.logger.warn(
-        `summarizeDaily: fallback for ${paper.id} reason=${result.reasonCode} attempts=${result.attempts}`,
+        `summarizeDaily: fallback for ${paper.id} reason=${result.reasonCode} attempts=${result.attempts}` +
+          (recovered ? " recovered=true" : ""),
       );
     }
     slots.push({

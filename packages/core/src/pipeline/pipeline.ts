@@ -26,6 +26,7 @@ import {
   summarizeDaily,
   summarizePaperDetail,
   type DailyPaperWithContent,
+  type DailySummaryCheckpointPort,
 } from "./summarizer";
 import { extractPaperSummaries } from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
@@ -70,6 +71,7 @@ export interface PipelineDeps {
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
   paperIndex?: PaperIndexStore;
+  checkpointStore?: DailySummaryCheckpointPort;
   llm: LlmClient;
   logger: Logger;
   arxiv: ArxivSettings;
@@ -323,6 +325,7 @@ export class ArxivPipeline {
         const detailMetrics = new GenerationMetricsCollector();
         const detail = await summarizePaperDetail(paper, {
           llm: this.deps.llm,
+          llmSettings: this.deps.llmSettings,
           logger,
           arxivSettings: this.deps.arxiv,
           advanced: this.deps.advanced,
@@ -378,6 +381,8 @@ export class ArxivPipeline {
         dateStr,
         {
           llm: this.deps.llm,
+          llmSettings: this.deps.llmSettings,
+          checkpointStore: this.deps.checkpointStore,
           logger,
           arxivSettings: this.deps.arxiv,
           advanced: this.deps.advanced,

@@ -23,12 +23,12 @@ Wire the store from the core pipeline composition using its existing `StorageAda
 
 ## Tasks
 
-- [ ] Define the smallest summarizer checkpoint dependency contract and pass report date, effective LLM settings, and the shared store from pipeline without host-specific behavior.
-- [ ] Add compatible lookup to the sequential loop, rebuild recovered slots from current assembly metadata, and preserve input order across mixed hits and misses.
-- [ ] Await atomic upsert after each newly completed structured or typed-fallback result and before slot completion, progress publication, or the next LLM call.
-- [ ] Preserve cancellation, fallback logging/counts, deterministic assembly/rescue, and current-run metrics semantics for recovered and generated entries.
-- [ ] Add focused tests for all-hit, partial-hit, stale/corrupt miss, validation-fallback hit, transport-fallback retry, cancellation boundaries, checkpoint write failure, ordering, progress, metrics, and byte-identical assembly.
-- [ ] Run summarizer/pipeline focused tests, core typecheck, and `git diff --check`.
+- [x] Define the smallest summarizer checkpoint dependency contract and pass report date, effective LLM settings, and the shared store from pipeline without host-specific behavior.
+- [x] Add compatible lookup to the sequential loop, rebuild recovered slots from current assembly metadata, and preserve input order across mixed hits and misses.
+- [x] Await atomic upsert after each newly completed structured or typed-fallback result and before slot completion, progress publication, or the next LLM call.
+- [x] Preserve cancellation, fallback logging/counts, deterministic assembly/rescue, and current-run metrics semantics for recovered and generated entries.
+- [x] Add focused tests for all-hit, partial-hit, stale/corrupt miss, validation-fallback hit, transport-fallback retry, cancellation boundaries, checkpoint write failure, ordering, progress, metrics, and byte-identical assembly.
+- [x] Run summarizer/pipeline focused tests, core typecheck, and `git diff --check`.
 
 ## Verification
 

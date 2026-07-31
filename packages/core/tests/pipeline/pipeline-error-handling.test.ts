@@ -261,6 +261,7 @@ describe("Pipeline partial failure consistency", () => {
     writer?: Record<string, unknown>;
     paperIndex?: Record<string, unknown>;
     paperFetcher?: Record<string, unknown>;
+    checkpointStore?: Record<string, unknown>;
     summarizeDaily?: (...args: any[]) => Promise<{ markdown: string; slots: any[] }>;
   } = {}) {
     const ids = overrides.ids ?? ["2605.08080"];
@@ -362,6 +363,7 @@ describe("Pipeline partial failure consistency", () => {
       paperFetcher: paperFetcher as any,
       writer: writer as any,
       paperIndex: paperIndex as any,
+      checkpointStore: overrides.checkpointStore as any,
       llm: llm as any,
       logger: new Logger("error"),
       arxiv: testArxiv,
@@ -444,6 +446,29 @@ describe("Pipeline partial failure consistency", () => {
     expect(paperIndex.setSummaries).toHaveBeenCalledWith({
       [ids[0]]: { sourceSections: "Abstract", coreProblem: "Trusted problem" },
     });
+  });
+
+  it("passes report checkpoint scope to an injected summarizeDaily mock", async () => {
+    const checkpointStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+    };
+    const summarizeDaily = vi.fn(async (_papers: any[], date: string, deps: any) => {
+      expect(date).toBe("2026-05-11");
+      expect(deps.llmSettings).toBe(DEFAULT_SETTINGS.llm);
+      expect(deps.checkpointStore).toBe(checkpointStore);
+      return { markdown: "# injected daily", slots: [] };
+    });
+    const { pipeline } = makeOnePaperPipeline({
+      checkpointStore,
+      summarizeDaily,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(summarizeDaily).toHaveBeenCalledTimes(1);
   });
 
   it("writes a fallback daily report after three strict structured-validation failures", async () => {

@@ -352,6 +352,19 @@ describe("DailySummaryCheckpointStore", () => {
     expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
   });
 
+  it("allows a retried transport fallback to be overwritten by a reusable result", async () => {
+    const { storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), transportFallback);
+    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
+
+    await store.upsert(reportDate, compatibility(), structuredResult);
+
+    expect((await store.load(reportDate)).entries["arxiv:2608.00001"]?.result)
+      .toEqual(structuredResult);
+    expect(await store.lookupReusable(reportDate, compatibility())).toEqual(structuredResult);
+  });
+
   it("returns a miss for changed compatibility while preserving reusable siblings", async () => {
     const { storage } = makeStorage();
     const store = makeStore(storage);

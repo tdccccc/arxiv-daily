@@ -53,9 +53,17 @@ function structured(id: string) {
   });
 }
 
+function structuredResult(id: string) {
+  return {
+    kind: "structured" as const,
+    summary: JSON.parse(structured(id)),
+  };
+}
+
 function deps(llm: unknown, overrides: Record<string, unknown> = {}) {
   return {
     llm: llm as any,
+    llmSettings: DEFAULT_SETTINGS.llm,
     logger: new Logger("error"),
     arxivSettings,
     advanced: DEFAULT_SETTINGS.advanced,
@@ -207,6 +215,194 @@ describe("summarizeDaily", () => {
       outputTokens: 10,
       totalTokens: 30,
     });
+  });
+
+  it("mixes recovered and generated results in input order using current assembly metadata", async () => {
+    const ids = ["2607.00001", "2607.00002", "2607.00003"];
+    const progress = vi.fn();
+    const onMetrics = vi.fn();
+    const warn = vi.fn();
+    const currentLink = "[2607.00001](../papers/2607.00001.md)";
+    const recoveredFallback = {
+      kind: "fallback" as const,
+      reasonCode: "validation-exhausted" as const,
+      attempts: 3,
+      originalAbstract: "recovered original abstract",
+    };
+    const lookupReusable = vi.fn(async (_date: string, input: any) => {
+      if (input.paper.id === ids[0]) return structuredResult(ids[0]!);
+      if (input.paper.id === ids[1]) return recoveredFallback;
+      return null;
+    });
+    const upsert = vi.fn(async () => ({} as any));
+    const llm = {
+      call: vi.fn(async (messages: any[], options: any) => {
+        options.onMetrics?.({ logicalCalls: 1, attempts: 1, elapsedMs: 2, usageComplete: false });
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        return structured(id);
+      }),
+    };
+    const papers = ids.map((id) => paper(id));
+    papers[0] = paper(ids[0]!, "b", {
+      title: "Current recovered title",
+      isDetail: true,
+      paperPath: "arxiv-daily/papers/2607.00001.md",
+      detailLink: currentLink,
+    });
+
+    const resumed = await summarizeDaily(
+      papers,
+      "2026-07-22",
+      deps(llm, {
+        checkpointStore: { lookupReusable, upsert },
+        onDailyPaperProgress: progress,
+        onMetrics,
+        logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+      }),
+    );
+
+    expect(lookupReusable.mock.calls.map((call) => call[1].paper.id)).toEqual(ids);
+    expect(lookupReusable.mock.calls[0]?.[1].llm).toBe(DEFAULT_SETTINGS.llm);
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0]?.[0]).toBe("2026-07-22");
+    expect(upsert.mock.calls[0]?.[1].paper.id).toBe(ids[2]);
+    expect(resumed.slots.map((slot) => slot.paper.id)).toEqual(ids);
+    expect(resumed.slots[0]?.paper).toMatchObject({
+      title: "Current recovered title",
+      detailLink: currentLink,
+      isDetail: true,
+    });
+    expect(resumed.markdown).toContain(`### Current recovered title → ${currentLink}`);
+    expect(progress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
+    expect(onMetrics).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "summarizeDaily: fallback for 2607.00002 reason=validation-exhausted attempts=3 recovered=true",
+    );
+    expect(resumed.markdown).toContain("其中 1 篇使用回退内容。");
+  });
+
+  it("assembles byte-identical Markdown for identical fresh and recovered results", async () => {
+    const papers = [paper("2607.00001"), paper("2607.00002", "b")];
+    const freshLlm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        return structured(id);
+      }),
+    };
+    const fresh = await summarizeDaily(papers, "2026-07-22", deps(freshLlm));
+    const recoveredLlm = { call: vi.fn() };
+    const lookupReusable = vi.fn(async (_date: string, input: any) =>
+      structuredResult(input.paper.id));
+
+    const resumed = await summarizeDaily(
+      papers,
+      "2026-07-22",
+      deps(recoveredLlm, {
+        checkpointStore: { lookupReusable, upsert: vi.fn() },
+      }),
+    );
+
+    expect(recoveredLlm.call).not.toHaveBeenCalled();
+    expect(resumed.markdown).toBe(fresh.markdown);
+    expect(resumed.slots).toEqual(fresh.slots);
+  });
+
+  it("does not complete a slot or start the next call until checkpoint upsert succeeds", async () => {
+    const progress = vi.fn();
+    let rejectWrite!: (error: Error) => void;
+    const pendingWrite = new Promise<never>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => null),
+      upsert: vi.fn(() => pendingWrite),
+    };
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        return structured(id);
+      }),
+    };
+    const summarizing = summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002")],
+      "2026-07-22",
+      deps(llm, { checkpointStore, onDailyPaperProgress: progress }),
+    );
+    await vi.waitFor(() => expect(checkpointStore.upsert).toHaveBeenCalledTimes(1));
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(progress).not.toHaveBeenCalled();
+
+    rejectWrite(new Error("checkpoint disk full"));
+    await expect(summarizing).rejects.toThrow("checkpoint disk full");
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
+  it("honors cancellation after lookup and after durable upsert without starting an LLM call", async () => {
+    const afterLookup = new AbortController();
+    const lookupStore = {
+      lookupReusable: vi.fn(async () => {
+        afterLookup.abort("cancelled after lookup");
+        return structuredResult("2607.00001");
+      }),
+      upsert: vi.fn(),
+    };
+    const lookupLlm = { call: vi.fn() };
+    await expect(summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(lookupLlm, { checkpointStore: lookupStore, signal: afterLookup.signal }),
+    )).rejects.toThrow("cancelled after lookup");
+    expect(lookupLlm.call).not.toHaveBeenCalled();
+
+    const afterUpsert = new AbortController();
+    const progress = vi.fn();
+    const upsertStore = {
+      lookupReusable: vi.fn(async () => null),
+      upsert: vi.fn(async () => {
+        afterUpsert.abort("cancelled after durable upsert");
+        return {} as any;
+      }),
+    };
+    const upsertLlm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        return structured(id);
+      }),
+    };
+    await expect(summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002")],
+      "2026-07-22",
+      deps(upsertLlm, {
+        checkpointStore: upsertStore,
+        signal: afterUpsert.signal,
+        onDailyPaperProgress: progress,
+      }),
+    )).rejects.toThrow("cancelled after durable upsert");
+    expect(upsertLlm.call).toHaveBeenCalledTimes(1);
+    expect(upsertStore.upsert).toHaveBeenCalledTimes(1);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
+  it("retries a transport fallback miss and overwrites it with the new result", async () => {
+    const lookupReusable = vi.fn(async () => null);
+    const upsert = vi.fn(async () => ({} as any));
+    const llm = { call: vi.fn().mockResolvedValue(structured("2607.00001")) };
+
+    const result = await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm, { checkpointStore: { lookupReusable, upsert } }),
+    );
+
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(
+      "2026-07-22",
+      expect.objectContaining({ paper: expect.objectContaining({ id: "2607.00001" }) }),
+      structuredResult("2607.00001"),
+    );
+    expect(result.slots[0]?.result).toEqual(structuredResult("2607.00001"));
   });
 
   it("does not start a later paper after cancellation between calls", async () => {

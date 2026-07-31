@@ -41,6 +41,6 @@ Make daily-report generation resumable so a cancelled, crashed, or otherwise int
 ## Phases
 
 1. P1 — a versioned host-neutral checkpoint contract and atomic store safely preserve compatible per-paper results — status: done
-2. P2 — sequential summarization resumes compatible entries and durably checkpoints each new result before continuing — status: active
-3. P3 — daily-report commit, index repair, cancellation, and checkpoint cleanup form one coherent recovery lifecycle — status: pending
+2. P2 — sequential summarization resumes compatible entries and durably checkpoints each new result before continuing — status: done
+3. P3 — daily-report commit, index repair, cancellation, and checkpoint cleanup form one coherent recovery lifecycle — status: active
 4. P4 — compatibility scenarios, both hosts, operational documentation, and full regression verification support closure — status: pending
