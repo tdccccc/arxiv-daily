@@ -45,56 +45,72 @@ export class PaperContentFetcher {
 
   async fetch(arxivId: string, opts: PaperContentOpts, signal?: AbortSignal): Promise<PaperContent> {
     throwIfCancelled(signal);
-    // 1. Try the rendered HTML version (cached on hit)
+    // 1. Try the rendered HTML version (cached on hit). Any non-cancellation
+    // cache, transport, or extraction exception is a fallback signal.
     const htmlKey = `html/${arxivId}`;
-    let html = await this.cache.get(htmlKey, "html");
-    if (!html) {
-      const res = await this.fetcher.fetchPaperHtml(arxivId, signal);
-      if (res.ok) {
-        html = res.body;
-        await this.cache.set(htmlKey, "html", html);
-      }
-    } else {
-      this.logger.debug(`paper-content: html cache hit for ${arxivId}`);
-    }
-
+    const failures: string[] = [];
     let htmlContent: PaperContent | null = null;
-    if (html) {
-      const ac = extractAbstractConclusion(
-        html,
-        { sectionCharLimit: opts.sectionCharLimit },
-        this.markupParser,
-      );
-      const sectionsOpts: ExtractSectionsOpts = {
-        sectionCharLimit: opts.sectionCharLimit,
-        paperCharLimit: opts.paperCharLimit,
-      };
-      const fs = opts.isDetail
-        ? extractSections(html, sectionsOpts, this.markupParser)
-        : null;
-      if (ac && (!opts.isDetail || fs)) {
-        this.logger.info(
-          `paper-content: extracted ${arxivId} from rendered HTML` +
-            (fs ? ` (${fs.length} chars sections)` : ""),
+    try {
+      let html = await this.cache.get(htmlKey, "html");
+      if (!html) {
+        const res = await this.fetcher.fetchPaperHtml(arxivId, signal);
+        if (res.ok) {
+          html = res.body;
+          try {
+            await this.cache.set(htmlKey, "html", html);
+          } catch (error) {
+            if (isCancellationError(error)) throw error;
+            this.logger.warn(`paper-content: html cache write failed for ${arxivId}`, error);
+          }
+        } else {
+          failures.push(`rendered HTML unavailable for ${arxivId} (HTTP ${res.status})`);
+        }
+      } else {
+        this.logger.debug(`paper-content: html cache hit for ${arxivId}`);
+      }
+
+      if (html) {
+        const ac = extractAbstractConclusion(
+          html,
+          { sectionCharLimit: opts.sectionCharLimit },
+          this.markupParser,
         );
-        return {
-          abstractConclusion: ac,
+        const sectionsOpts: ExtractSectionsOpts = {
+          sectionCharLimit: opts.sectionCharLimit,
+          paperCharLimit: opts.paperCharLimit,
+        };
+        const fs = opts.isDetail
+          ? extractSections(html, sectionsOpts, this.markupParser)
+          : null;
+        if (ac && (!opts.isDetail || fs)) {
+          this.logger.info(
+            `paper-content: extracted ${arxivId} from rendered HTML` +
+              (fs ? ` (${fs.length} chars sections)` : ""),
+          );
+          return {
+            abstractConclusion: ac,
+            fullSections: fs,
+            fullTextSource: fs ? "arxiv-html" : undefined,
+          };
+        }
+        const plain = html
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .slice(0, opts.paperCharLimit);
+        htmlContent = {
+          abstractConclusion: ac ?? plain,
           fullSections: fs,
           fullTextSource: fs ? "arxiv-html" : undefined,
         };
+        if (!opts.isDetail || fs) return htmlContent;
+        failures.push(`rendered HTML sections empty for ${arxivId}`);
+        this.logger.warn(`paper-content: html sections empty for ${arxivId}, falling back to source`);
       }
-      // Fallback: strip tags from full HTML if section extraction missed
-      const plain = html
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .slice(0, opts.paperCharLimit);
-      htmlContent = {
-        abstractConclusion: ac ?? plain,
-        fullSections: fs,
-        fullTextSource: fs ? "arxiv-html" : undefined,
-      };
-      if (!opts.isDetail || fs) return htmlContent;
-      this.logger.warn(`paper-content: html sections empty for ${arxivId}, falling back to source`);
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      const reason = `rendered HTML/cache failed for ${arxivId}: ${errorMessage(e)}`;
+      failures.push(reason);
+      this.logger.warn(`paper-content: ${reason}, falling back`, e);
     }
 
     // 2. Fallback to arXiv source when full text sections are needed.
@@ -106,12 +122,13 @@ export class PaperContentFetcher {
           abstractConclusion:
             source.abstractConclusion ??
             htmlContent?.abstractConclusion ??
-            (await this.fetchAbsAbstract(arxivId, signal)),
+            (await this.fetchAbsAbstract(arxivId, signal)).abstract,
           fullSections: source.fullSections,
           fullTextSource: "arxiv-source",
         };
       }
       sourceFailure = source.reason;
+      if (sourceFailure) failures.push(sourceFailure);
     }
 
     // 3. Fallback to /abs page for daily summaries. Manual detail summaries
@@ -119,34 +136,44 @@ export class PaperContentFetcher {
     this.logger.info(
       `paper-content: fallback to abs page for ${arxivId} (sourceFailure=${!!sourceFailure})`,
     );
+    let abstractConclusion = htmlContent?.abstractConclusion;
+    if (!abstractConclusion) {
+      const abs = await this.fetchAbsAbstract(arxivId, signal);
+      abstractConclusion = abs.abstract;
+      if (abs.failure) failures.push(abs.failure);
+    }
     return {
-      abstractConclusion:
-        htmlContent?.abstractConclusion ?? (await this.fetchAbsAbstract(arxivId, signal)),
+      abstractConclusion,
       fullSections: null,
       fullTextFailure:
-        sourceFailure ??
-        `no rendered HTML or extractable arXiv source for ${arxivId}`,
+        failures.length > 0
+          ? failures.join("; ")
+          : `no rendered HTML or extractable arXiv source for ${arxivId}`,
     };
   }
 
-  private async fetchAbsAbstract(arxivId: string, signal?: AbortSignal): Promise<string> {
+  private async fetchAbsAbstract(
+    arxivId: string,
+    signal?: AbortSignal,
+  ): Promise<{ abstract: string; failure?: string }> {
     const absKey = `abs/${arxivId}`;
-    let abs = await this.cache.get(absKey, "abs");
-    if (!abs) {
-      try {
+    try {
+      let abs = await this.cache.get(absKey, "abs");
+      if (!abs) {
         abs = await this.fetcher.fetchPaperAbsPage(arxivId, signal);
         await this.cache.set(absKey, "abs", abs);
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        this.logger.error(`paper-content: abs fetch failed ${arxivId}`, e);
-        return `[获取失败] arXiv ID: ${arxivId}`;
       }
+      const doc = this.markupParser.parseFromString(abs, "text/html");
+      const bq = doc.querySelector("blockquote.abstract");
+      const text =
+        (bq?.textContent ?? "").replace(/^\s*Abstract:?\s*/, "").trim() || "N/A";
+      return { abstract: `## Abstract\n${text}` };
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      const failure = `abs/cache failed for ${arxivId}: ${errorMessage(e)}`;
+      this.logger.error(`paper-content: ${failure}`, e);
+      return { abstract: `[获取失败] arXiv ID: ${arxivId}`, failure };
     }
-    const doc = this.markupParser.parseFromString(abs, "text/html");
-    const bq = doc.querySelector("blockquote.abstract");
-    const text =
-      (bq?.textContent ?? "").replace(/^\s*Abstract:?\s*/, "").trim() || "N/A";
-    return `## Abstract\n${text}`;
   }
 
   private async fetchSourceContent(
@@ -355,4 +382,8 @@ function isExpired(cachedAt: string, expiryDays: number): boolean {
   const timestamp = Date.parse(cachedAt);
   if (!Number.isFinite(timestamp)) return true;
   return (Date.now() - timestamp) / 86_400_000 > expiryDays;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }

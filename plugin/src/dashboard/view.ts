@@ -106,13 +106,15 @@ export type CalendarEmptyReason =
   | "arxiv-not-updated"
   | "future"
   | "before-tracking"
-  | "report-missing";
+  | "report-missing"
+  | "permanent-failure";
 
 export interface CalendarCell {
   date: string | null;
   state: CalendarCellState;
   report?: DailyReportDay;
   emptyReason?: CalendarEmptyReason;
+  failureReason?: string;
 }
 
 export interface CalendarCellResolution {
@@ -149,6 +151,10 @@ export function resolveCalendarCellState({
     return {
       state: report.papers === 0 ? "no-relevant-papers" : "has-report",
     };
+  }
+
+  if (runState?.status === "failed_permanent") {
+    return { state: "empty", emptyReason: "permanent-failure" };
   }
 
   if (isArxivNotUpdatedRunState(runState)) {
@@ -241,6 +247,10 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
 
   if (cell.emptyReason === "report-missing") {
     return `${date}: daily report missing`;
+  }
+
+  if (cell.emptyReason === "permanent-failure") {
+    return `${date}: daily report failed permanently${cell.failureReason ? `, ${cell.failureReason}` : ""}`;
   }
 
   if (cell.emptyReason === "future") {
@@ -357,7 +367,6 @@ export async function buildCalendarDailyReportMap(
 function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
   return (
     runState?.status === "skipped" ||
-    runState?.status === "failed_permanent" ||
     (runState?.status === "completed" && runState.papersWritten === 0)
   );
 }
@@ -1228,7 +1237,10 @@ class ArxivDailyDashboardView extends ItemView {
       });
       if (interactive) day.setAttribute("type", "button");
       const ariaLabel = this.getCalendarCellAriaLabel(cell);
-      if (ariaLabel) day.setAttribute("aria-label", ariaLabel);
+      if (ariaLabel) {
+        day.setAttribute("aria-label", ariaLabel);
+        if (cell.emptyReason === "permanent-failure") day.setAttribute("title", ariaLabel);
+      }
 
       if (!cell.date) {
         day.setAttribute("aria-hidden", "true");
@@ -1382,6 +1394,8 @@ class ArxivDailyDashboardView extends ItemView {
         date: cellDate.date,
         state: resolution.state,
         emptyReason: resolution.emptyReason,
+        failureReason:
+          dateRunState?.status === "failed_permanent" ? dateRunState.error : undefined,
         report,
       });
     }

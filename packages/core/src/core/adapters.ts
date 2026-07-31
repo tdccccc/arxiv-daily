@@ -21,6 +21,45 @@ export interface HttpClient {
   request(req: HttpRequest): Promise<HttpResponse>;
 }
 
+export type HttpTransportErrorKind = "network" | "timeout";
+
+const HTTP_TRANSPORT_ERROR_NAME = "HttpTransportError";
+
+export interface HttpTransportErrorOptions extends ErrorOptions {
+  /** True only when the host knows the physical attempt has stopped before retry. */
+  retryableAttempt?: boolean;
+}
+
+/** Host-neutral failure raised when an HTTP transport cannot produce a response. */
+export class HttpTransportError extends Error {
+  readonly kind: HttpTransportErrorKind;
+  readonly retryableAttempt: boolean;
+
+  constructor(
+    kind: HttpTransportErrorKind,
+    message: string,
+    options: HttpTransportErrorOptions = {},
+  ) {
+    super(message, options);
+    this.name = HTTP_TRANSPORT_ERROR_NAME;
+    this.kind = kind;
+    this.retryableAttempt = options.retryableAttempt === true;
+  }
+}
+
+/** Structural guard so errors remain recognizable across package/realm boundaries. */
+export function isHttpTransportError(error: unknown): error is HttpTransportError {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as Partial<HttpTransportError>;
+  return (
+    candidate.name === HTTP_TRANSPORT_ERROR_NAME &&
+    typeof candidate.message === "string" &&
+    (candidate.kind === "network" || candidate.kind === "timeout") &&
+    (candidate.retryableAttempt === undefined ||
+      typeof candidate.retryableAttempt === "boolean")
+  );
+}
+
 export interface StorageEntry {
   path: string;
   type: "file" | "folder";

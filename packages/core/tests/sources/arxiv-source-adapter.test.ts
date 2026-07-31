@@ -12,7 +12,10 @@ import type { SourcePaperMeta } from "../../src/sources";
 import { Logger } from "../../src/services/logger";
 import { markupParser } from "../markup-parser";
 import { parseRecent } from "../../src/pipeline/arxiv-parser";
-import { ArxivHttpError } from "../../src/pipeline/arxiv-fetcher";
+import {
+  ArxivHttpError,
+  ArxivRetryDeferredError,
+} from "../../src/pipeline/arxiv-fetcher";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const recentHtml = readFileSync(
@@ -169,6 +172,69 @@ describe("ArxivSourceAdapter", () => {
     expect(content.canonicalUrl).toBe("https://arxiv.org/abs/2605.08080");
   });
 
+  it("rejects partial multi-category input before Atom enrichment and refetches all categories", async () => {
+    const buckets = parseRecent(recentHtml, markupParser);
+    const date = buckets[0]!.announceDate;
+    const fetcher = {
+      fetchRecent: vi.fn()
+        .mockResolvedValueOnce(recentHtml)
+        .mockRejectedValueOnce(new ArxivHttpError(503, "https://arxiv.org/list/cs.LG/recent"))
+        .mockResolvedValueOnce(recentHtml)
+        .mockResolvedValueOnce(recentHtml),
+      fetchMetadataByIds: vi.fn().mockResolvedValue(new Map()),
+    };
+    const adapter = new ArxivSourceAdapter({
+      fetcher: fetcher as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["astro-ph", "cs.LG"],
+    });
+
+    await expect(adapter.listForDate(date)).resolves.toMatchObject({
+      kind: "error",
+      failureKind: "failed_transient",
+    });
+    expect(fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+
+    const retry = await adapter.listForDate(date);
+    expect(retry.kind).toBe("ok");
+    if (retry.kind === "ok") {
+      expect(retry.channels).toEqual(["astro-ph", "cs.LG"]);
+      expect(new Set(retry.papers.map((paper) => paper.externalId)).size).toBe(
+        retry.papers.length,
+      );
+      expect(retry.papers.every((paper) =>
+        paper.categories.includes("astro-ph") && paper.categories.includes("cs.LG")
+      )).toBe(true);
+    }
+    expect(fetcher.fetchRecent.mock.calls.map(([category]) => category)).toEqual([
+      "astro-ph", "cs.LG", "astro-ph", "cs.LG",
+    ]);
+    expect(fetcher.fetchMetadataByIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes a mixed transient/permanent category failure transient", async () => {
+    const fetcher = {
+      fetchRecent: vi.fn()
+        .mockRejectedValueOnce(new ArxivHttpError(404, "https://arxiv.org/list/bad/recent"))
+        .mockRejectedValueOnce(new ArxivHttpError(503, "https://arxiv.org/list/slow/recent")),
+      fetchMetadataByIds: vi.fn(),
+    };
+    const adapter = new ArxivSourceAdapter({
+      fetcher: fetcher as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["bad", "slow"],
+    });
+
+    await expect(adapter.listForDate("2026-05-11")).resolves.toMatchObject({
+      kind: "error",
+      failureKind: "failed_transient",
+    });
+  });
+
   it("listForDate returns collapsed error when all categories fail fetch", async () => {
     const fetcher = {
       fetchRecent: vi.fn().mockRejectedValue(new Error("network down")),
@@ -213,6 +279,29 @@ describe("ArxivSourceAdapter", () => {
     expect(result).toMatchObject({ kind: "error", failureKind });
     expect(result.kind === "error" ? result.reason : "").toContain(text);
     expect(result.kind === "error" ? result.reason : "").not.toContain("skip=0");
+  });
+
+  it("keeps long Retry-After deferral transient with actionable timing", async () => {
+    const fetcher = {
+      fetchRecent: vi.fn().mockRejectedValue(
+        new ArxivRetryDeferredError(new Date("2026-06-25T12:00:00.000Z"), 7_200_000),
+      ),
+      fetchMetadataByIds: vi.fn(),
+    };
+    const adapter = new ArxivSourceAdapter({
+      fetcher: fetcher as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["astro-ph"],
+    });
+
+    const result = await adapter.listForDate("2026-05-11");
+
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    expect(result.kind === "error" ? result.reason : "").toContain(
+      "retry at 2026-06-25T12:00:00.000Z (2h remaining)",
+    );
   });
 
   it("rejects invalid externalId in fetchContent as unavailable", async () => {

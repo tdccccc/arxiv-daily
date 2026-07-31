@@ -207,6 +207,10 @@ export class MarkdownWriter {
     return await this.opts.storage.exists(path);
   }
 
+  async readPaperDetail(id: string): Promise<string> {
+    return this.opts.storage.readText(this.paperDetailPath(id));
+  }
+
   async cleanupTemporaryFiles(): Promise<string[]> {
     const removed: string[] = [];
     for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
@@ -327,7 +331,7 @@ function encodeRelativeLinkTarget(path: string): string {
 }
 
 function escapeYaml(s: string): string {
-  return s.replace(/"/g, '\\"');
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function paperFrontmatter(meta: {

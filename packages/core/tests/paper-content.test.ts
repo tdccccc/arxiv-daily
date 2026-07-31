@@ -144,6 +144,92 @@ The results include a measured improvement, uncertainty estimates, and a compari
     ).toBe(true);
   });
 
+  it.each(["html cache", "html request", "html cache write"])(
+    "continues to source after a thrown %s failure",
+    async (failurePoint) => {
+      const tex = String.raw`
+\documentclass{article}
+\begin{document}
+\begin{abstract}
+Fallback abstract from source.
+\end{abstract}
+\section{Method}
+We describe the data, model assumptions, calibration strategy, and validation experiment in detail.
+\section{Results}
+The results include a measured improvement, uncertainty estimates, and a comparison with the baseline.
+\end{document}
+`;
+      const fetcher = {
+        fetchPaperHtml: vi.fn(async () => {
+          if (failurePoint === "html request") throw new Error("html network failed");
+          return { ok: true, status: 200, body: "<html>unused</html>" };
+        }),
+        fetchSource: vi.fn(async () => ({ ok: true, body: toArrayBuffer(tex) })),
+        fetchPaperAbsPage: vi.fn(),
+      };
+      const cache = makeCache();
+      if (failurePoint === "html cache") cache.get.mockRejectedValueOnce(new Error("cache read failed"));
+      if (failurePoint === "html cache write") cache.set.mockRejectedValueOnce(new Error("cache write failed"));
+      const paperFetcher = new PaperContentFetcher(
+        fetcher as any,
+        cache as any,
+        new Logger("error"),
+        markupParser,
+      );
+
+      const result = await paperFetcher.fetch("2606.13359", opts);
+
+      expect(result.fullTextSource).toBe("arxiv-source");
+      expect(fetcher.fetchSource).toHaveBeenCalledOnce();
+      if (failurePoint === "html cache write") {
+        expect(result.abstractConclusion).not.toContain("Fallback abstract from source");
+        expect(fetcher.fetchPaperAbsPage).not.toHaveBeenCalled();
+      } else {
+        expect(fetcher.fetchPaperAbsPage).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("aggregates HTML, source, and abs failure reasons", async () => {
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => { throw new Error("html down"); }),
+      fetchSource: vi.fn(async () => { throw new Error("source down"); }),
+      fetchPaperAbsPage: vi.fn(async () => { throw new Error("abs down"); }),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any,
+      makeCache() as any,
+      new Logger("error"),
+      markupParser,
+    );
+
+    const result = await paperFetcher.fetch("2606.13359", opts);
+
+    expect(result.abstractConclusion).toContain("获取失败");
+    expect(result.fullTextFailure).toContain("html down");
+    expect(result.fullTextFailure).toContain("source down");
+    expect(result.fullTextFailure).toContain("abs down");
+  });
+
+  it("propagates cancellation from the rendered HTML path without fallbacks", async () => {
+    const abort = Object.assign(new Error("cancelled"), { name: "AbortError" });
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => { throw abort; }),
+      fetchSource: vi.fn(),
+      fetchPaperAbsPage: vi.fn(),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any,
+      makeCache() as any,
+      new Logger("error"),
+      markupParser,
+    );
+
+    await expect(paperFetcher.fetch("2606.13359", opts)).rejects.toBe(abort);
+    expect(fetcher.fetchSource).not.toHaveBeenCalled();
+    expect(fetcher.fetchPaperAbsPage).not.toHaveBeenCalled();
+  });
+
   it("returns a clear full-text failure when source is unavailable", async () => {
     const fetcher = {
       fetchPaperHtml: vi.fn(async () => ({ ok: false, status: 404 })),

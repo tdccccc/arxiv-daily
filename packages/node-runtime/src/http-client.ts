@@ -1,7 +1,10 @@
-import type {
-  HttpClient,
-  HttpRequest,
-  HttpResponse,
+import {
+  HttpTransportError,
+  isHttpTransportError,
+  throwIfCancelled,
+  type HttpClient,
+  type HttpRequest,
+  type HttpResponse,
 } from "@arxiv-daily/core";
 
 export type FetchLike = (
@@ -16,30 +19,23 @@ export class NodeHttpClient implements HttpClient {
     this.fetchImpl = fetchImpl ?? requireFetch();
   }
 
-  async request(req: HttpRequest): Promise<HttpResponse> {
+  request(req: HttpRequest): Promise<HttpResponse> {
+    throwIfCancelled(req.signal);
     const controller = new AbortController();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const abortFromSignal = () => controller.abort(req.signal?.reason);
+    const operation = this.performRequest(req, controller.signal);
+    return settleRequest(operation, req, controller);
+  }
 
-    if (req.signal?.aborted) {
-      abortFromSignal();
-    } else {
-      req.signal?.addEventListener("abort", abortFromSignal, { once: true });
-    }
-
-    if (req.timeoutMs && req.timeoutMs > 0) {
-      timeout = setTimeout(
-        () => controller.abort(new Error(`HTTP timeout after ${req.timeoutMs}ms`)),
-        req.timeoutMs,
-      );
-    }
-
+  private async performRequest(
+    req: HttpRequest,
+    signal: AbortSignal,
+  ): Promise<HttpResponse> {
     try {
       const res = await this.fetchImpl(req.url, {
         method: req.method ?? "GET",
         headers: req.headers,
         body: req.body as BodyInit | undefined,
-        signal: controller.signal,
+        signal,
       });
       const headers: Record<string, string> = {};
       res.headers.forEach((value, key) => {
@@ -58,11 +54,68 @@ export class NodeHttpClient implements HttpClient {
         headers,
         bodyText: await res.text(),
       };
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      req.signal?.removeEventListener("abort", abortFromSignal);
+    } catch (error) {
+      throwIfCancelled(req.signal);
+      if (isHttpTransportError(error)) throw error;
+      throw new HttpTransportError(
+        "network",
+        `HTTP network failure: ${req.url}`,
+        { cause: error, retryableAttempt: true },
+      );
     }
   }
+}
+
+function settleRequest(
+  operation: Promise<HttpResponse>,
+  req: HttpRequest,
+  controller: AbortController,
+): Promise<HttpResponse> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      req.signal?.removeEventListener("abort", onAbort);
+    };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = () => {
+      controller.abort(req.signal?.reason);
+      settle(() => {
+        try {
+          throwIfCancelled(req.signal);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    };
+
+    req.signal?.addEventListener("abort", onAbort, { once: true });
+    if (req.signal?.aborted) {
+      onAbort();
+    } else if (req.timeoutMs && req.timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        const error = new HttpTransportError(
+          "timeout",
+          `HTTP timeout after ${req.timeoutMs}ms: ${req.url}`,
+          { retryableAttempt: true },
+        );
+        controller.abort(error);
+        settle(() => reject(error));
+      }, req.timeoutMs);
+    }
+
+    operation.then(
+      (response) => settle(() => resolve(response)),
+      (error) => settle(() => reject(error)),
+    );
+  });
 }
 
 function requireFetch(): FetchLike {

@@ -456,6 +456,13 @@ describe("SchedulerService", () => {
       },
     });
     const history = makeHistory();
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), notice: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    };
+    const progress = {
+      setTask: vi.fn(), setBatch: vi.fn(), setStage: vi.fn(), setComplete: vi.fn(),
+      setError: vi.fn(), setIdle: vi.fn(), setDisabled: vi.fn(),
+    };
     const svc = new SchedulerService({
       getSettings: () => DEFAULT_SETTINGS,
       store,
@@ -464,25 +471,68 @@ describe("SchedulerService", () => {
         kind: "failed_transient",
         reason: "network timeout",
       })),
-      logger: new Logger("error"),
+      logger,
+      progress,
       now: () => new Date("2026-06-25T10:23:00Z"),
       runHistory: history.store,
     });
 
     const result = await svc.runForDateNow("2026-06-24");
 
+    const exhaustionReason = "retries exhausted after 10 attempts: network timeout";
     expect(result).toEqual({
-      kind: "failed_transient",
-      reason: "network timeout",
+      kind: "failed_permanent",
+      reason: exhaustionReason,
     });
-    expect(store.get("2026-06-24").status).toBe("failed_permanent");
+    expect(store.get("2026-06-24")).toMatchObject({
+      status: "failed_permanent",
+      attempts: 10,
+      error: exhaustionReason,
+    });
+    expect(logger.error).toHaveBeenCalledWith(
+      `arXiv 2026-06-24 permanent: ${exhaustionReason}`,
+    );
+    expect(progress.setError).toHaveBeenCalledWith(
+      `Daily report failed permanent: 2026-06-24 (${exhaustionReason})`,
+    );
     expect(history.records.at(-1)).toMatchObject({
       event: "failed",
       trigger: "manual",
       date: "2026-06-24",
       status: "failed_permanent",
       resultKind: "failed_permanent",
-      reason: "network timeout",
+      reason: exhaustionReason,
+      errorMessage: exhaustionReason,
+    });
+  });
+
+  it("keeps attempt 9 transient", async () => {
+    const store = makeStore();
+    await store.load();
+    await store.replaceAll({
+      "2026-06-24": {
+        status: "failed_transient",
+        lastAttempt: 0,
+        attempts: 8,
+        error: "previous timeout",
+      },
+    });
+    const result = await new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => ({
+        kind: "failed_transient",
+        reason: "network timeout",
+      })),
+      logger: new Logger("error"),
+    }).runForDateNow("2026-06-24");
+
+    expect(result).toEqual({ kind: "failed_transient", reason: "network timeout" });
+    expect(store.get("2026-06-24")).toMatchObject({
+      status: "failed_transient",
+      attempts: 9,
+      error: "network timeout",
     });
   });
 

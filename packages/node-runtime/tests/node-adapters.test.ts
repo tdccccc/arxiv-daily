@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { HttpTransportError, isCancellationError } from "@arxiv-daily/core";
 import {
   buildNodeHostAdapters,
   EnvSecretProvider,
@@ -15,6 +16,8 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) await rm(dir, { recursive: true, force: true });
@@ -67,6 +70,55 @@ describe("NodeHttpClient", () => {
     expect(calls[0].input).toBe("https://example.test");
     expect(calls[0].init?.method).toBe("POST");
     expect(calls[0].init?.body).toBe("payload");
+  });
+
+  it("enforces the deadline through body consumption when fetch ignores abort", async () => {
+    vi.useFakeTimers();
+    let rejectBody!: (error: Error) => void;
+    const body = new Promise<string>((_resolve, reject) => { rejectBody = reject; });
+    const fetchImpl: FetchLike = vi.fn(async () => ({
+      status: 200,
+      headers: new Headers(),
+      text: () => body,
+    }) as Response);
+    const client = new NodeHttpClient(fetchImpl);
+
+    const result = client.request({ url: "https://example.test", timeoutMs: 25 });
+    const assertion = expect(result).rejects.toMatchObject({
+      name: "HttpTransportError",
+      kind: "timeout",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+
+    rejectBody(new Error("late body failure"));
+    await Promise.resolve();
+  });
+
+  it("distinguishes caller cancellation from timeout without waiting for fetch", async () => {
+    const controller = new AbortController();
+    const client = new NodeHttpClient(() => new Promise<Response>(() => {}));
+    const result = client.request({
+      url: "https://example.test",
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+
+    controller.abort("stop now");
+
+    await expect(result).rejects.toSatisfy(isCancellationError);
+  });
+
+  it("normalizes fetch rejection as a network transport error", async () => {
+    const cause = new Error("socket closed");
+    const client = new NodeHttpClient(async () => { throw cause; });
+
+    await expect(client.request({ url: "https://example.test" })).rejects.toEqual(
+      expect.objectContaining<HttpTransportError>({
+        name: "HttpTransportError",
+        kind: "network",
+      }),
+    );
   });
 });
 

@@ -1,12 +1,14 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { AtomPaperMeta } from "./atom-parser";
 import { modernArxivResources } from "../utils/arxiv";
+import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 export interface AtomMetadataCacheOptions {
   rootDir: string;
   expiryDays: number;
   storage: StorageAdapter;
   now?: () => Date;
+  operationLeaseMs?: number;
 }
 
 interface AtomMetadataCacheEnvelope {
@@ -15,10 +17,50 @@ interface AtomMetadataCacheEnvelope {
   paper: AtomPaperMeta;
 }
 
-export class AtomMetadataCache {
-  constructor(private opts: AtomMetadataCacheOptions) {}
+const DEFAULT_CACHE_OPERATION_LEASE_MS = 30_000;
+const MIN_CACHE_OPERATION_LEASE_MS = 1;
+let cacheOperationQueues = new WeakMap<StorageAdapter, Map<string, Promise<void>>>();
 
-  async get(id: string): Promise<AtomPaperMeta | null> {
+export class AtomMetadataCache {
+  private readonly queueRoot: string;
+
+  constructor(private opts: AtomMetadataCacheOptions) {
+    this.queueRoot = opts.storage.normalizePath(opts.rootDir);
+  }
+
+  async get(id: string, signal?: AbortSignal): Promise<AtomPaperMeta | null> {
+    try {
+      return await this.serialize(() => this.getUnlocked(id), signal);
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      return null;
+    }
+  }
+
+  set(id: string, paper: AtomPaperMeta, signal?: AbortSignal): Promise<void> {
+    return this.serialize(() => this.setUnlocked(id, paper), signal);
+  }
+
+  async cleanupExpired(signal?: AbortSignal): Promise<number> {
+    try {
+      return await this.serialize(() => this.cleanupExpiredUnlocked(), signal);
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      return 0;
+    }
+  }
+
+  private serialize<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return serializeCacheOperation(
+      this.opts.storage,
+      this.queueRoot,
+      operation,
+      boundedLeaseMs(this.opts.operationLeaseMs),
+      signal,
+    );
+  }
+
+  private async getUnlocked(id: string): Promise<AtomPaperMeta | null> {
     const canonicalId = canonicalArxivId(id);
     if (!canonicalId) return null;
     const path = this.pathFor(canonicalId);
@@ -39,7 +81,7 @@ export class AtomMetadataCache {
     }
   }
 
-  async set(id: string, paper: AtomPaperMeta): Promise<void> {
+  private async setUnlocked(id: string, paper: AtomPaperMeta): Promise<void> {
     const canonicalId = canonicalArxivId(id);
     if (!canonicalId || paper.id !== canonicalId || !isAtomPaperMeta(paper)) {
       throw new Error(`invalid Atom metadata cache entry for ${id}`);
@@ -59,7 +101,7 @@ export class AtomMetadataCache {
     }
   }
 
-  async cleanupExpired(): Promise<number> {
+  private async cleanupExpiredUnlocked(): Promise<number> {
     const storage = this.opts.storage;
     if (!storage.list) return 0;
     const dir = this.cacheDir();
@@ -150,8 +192,125 @@ function canonicalArxivId(id: string): string | null {
 
 function isExpired(cachedAt: string, expiryDays: number, now: Date): boolean {
   const timestamp = Date.parse(cachedAt);
-  if (!Number.isFinite(timestamp)) return true;
-  return now.getTime() - timestamp > expiryDays * 86_400_000;
+  const nowMs = now.getTime();
+  const ttlMs = expiryDays * 86_400_000;
+  if (
+    !Number.isFinite(timestamp) ||
+    !Number.isFinite(nowMs) ||
+    !Number.isFinite(expiryDays) ||
+    expiryDays < 0 ||
+    !Number.isFinite(ttlMs) ||
+    timestamp > nowMs
+  ) return true;
+  return nowMs - timestamp > ttlMs;
+}
+
+function serializeCacheOperation<T>(
+  storage: StorageAdapter,
+  root: string,
+  operation: () => Promise<T>,
+  leaseMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  throwIfCancelled(signal);
+  let queues = cacheOperationQueues.get(storage);
+  if (!queues) {
+    queues = new Map();
+    cacheOperationQueues.set(storage, queues);
+  }
+  const predecessor = queues.get(root) ?? Promise.resolve();
+  const scheduled = predecessor.catch(() => undefined).then(async () => {
+    throwIfCancelled(signal);
+    let physical: Promise<T>;
+    try {
+      physical = Promise.resolve(operation());
+    } catch (error) {
+      physical = Promise.reject(error);
+    }
+    // The lease recovers the logical queue. An adapter that ignores cancellation
+    // can still settle later and physically overlap a newer operation; consuming
+    // that settlement prevents rejection leaks but cannot cancel unsupported I/O.
+    void physical.catch(() => undefined);
+    return operationLease(physical, leaseMs, signal);
+  });
+  const result = abortablePromise(scheduled, signal);
+  const queueTail = scheduled.then(() => undefined, () => undefined);
+  queues.set(root, queueTail);
+  void queueTail.finally(() => {
+    if (queues?.get(root) === queueTail) queues.delete(root);
+  });
+  return result;
+}
+
+function operationLease<T>(
+  physical: Promise<T>,
+  leaseMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = () => settle(() => reject(cancellationError(signal)));
+    const timeout = setTimeout(
+      () => settle(() => reject(new Error(
+        `Atom metadata cache operation lease expired after ${leaseMs}ms`,
+      ))),
+      leaseMs,
+    );
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    physical.then(
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
+    );
+  });
+}
+
+function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfCancelled(signal);
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(cancellationError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) return onAbort();
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+}
+
+function cancellationError(signal?: AbortSignal): unknown {
+  try {
+    throwIfCancelled(signal);
+  } catch (error) {
+    return error;
+  }
+  return new Error("cancelled by user");
+}
+
+function boundedLeaseMs(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value)) return DEFAULT_CACHE_OPERATION_LEASE_MS;
+  return Math.max(MIN_CACHE_OPERATION_LEASE_MS, value);
+}
+
+/** Reset shared cache operation state between tests. Not intended for runtime use. */
+export function resetAtomMetadataCacheForTests(): Promise<void> {
+  cacheOperationQueues = new WeakMap();
+  return Promise.resolve();
 }
 
 function isNonEmptyString(value: unknown): value is string {

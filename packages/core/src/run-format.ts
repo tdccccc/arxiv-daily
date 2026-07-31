@@ -9,6 +9,7 @@ export function describeResult(result: RunResult | null | undefined): string {
     return `done (${result.papersWritten} papers)`;
   }
   if (result.kind === "pending") return `pending: ${result.reason}`;
+  if (result.kind === "cancelled") return `cancelled: ${result.reason}`;
   if (result.kind === "failed_transient") {
     return `transient: ${result.reason}`;
   }

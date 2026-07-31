@@ -351,13 +351,24 @@ describe("ManualFetchService", () => {
     expect(d.files[target]).toContain("# Summary");
   });
 
-  it("returns verified already_exists with zero network, LLM, index, or note mutation", async () => {
+  it("reconciles verified already_exists with zero network or LLM work", async () => {
     const d = makeDeps({ exists: true });
+    const existing = {
+      arxivId: "2605.08080",
+      status: "reading",
+      priority: "high",
+      detail: false,
+      paperPath: null,
+    };
     const paperIndex = {
-      get: vi.fn(),
+      get: vi.fn(async () => existing),
       upsertFromDailyPaper: vi.fn(),
       setStatus: vi.fn(),
       setPaperPath: vi.fn(),
+      reconcileManualDetail: vi.fn(async () => ({
+        wasNew: false,
+        entry: { ...existing, detail: true, paperPath: "arxiv-daily/papers/2605.08080.md" },
+      })),
     };
     const svc = new ManualFetchService({
       markupParser,
@@ -382,8 +393,95 @@ describe("ManualFetchService", () => {
     expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
     expect(d.llm.call).not.toHaveBeenCalled();
     expect(paperIndex.upsertFromDailyPaper).not.toHaveBeenCalled();
+    expect(paperIndex.setStatus).not.toHaveBeenCalled();
+    expect(paperIndex.reconcileManualDetail).toHaveBeenCalledWith(
+      expect.objectContaining({ arxivId: "2605.08080", detail: true }),
+      "arxiv-daily/papers/2605.08080.md",
+      "saved",
+    );
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
-    expect(d.writer.refreshPaperNoteFrontmatter).not.toHaveBeenCalled();
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "reading", priority: "high", detail: true }),
+      "arxiv-daily/papers/2605.08080.md",
+    );
+  });
+
+  it("recreates a missing index from sufficient verified frontmatter without network work", async () => {
+    const d = makeDeps();
+    const path = "arxiv-daily/papers/2605.08080.md";
+    d.files[path] = [
+      "---",
+      'title: "Recovered title"',
+      'authors: "A. Author, B. Author"',
+      'arxiv_id: "2605.08080"',
+      "primary_topic: photo-z",
+      "published: 2026-05-12",
+      "---",
+      "# Existing detail",
+      "## Research question", "A".repeat(150),
+      "## Method", "B".repeat(150),
+      "## Evidence", "C".repeat(150),
+      "## Limitations", "D".repeat(150),
+    ].join("\n");
+    const paperIndex = {
+      get: vi.fn(async () => null),
+      upsertFromDailyPaper: vi.fn(async (input: any) => ({
+        wasNew: true,
+        entry: { ...input, status: "inbox", priority: "normal", detail: true },
+      })),
+      setStatus: vi.fn(),
+      setPaperPath: vi.fn(),
+      reconcileManualDetail: vi.fn(async (input: any, paperPath: string) => ({
+        wasNew: true,
+        entry: {
+          ...input, arxivId: "2605.08080", status: "saved", priority: "normal",
+          detail: true, paperPath,
+        },
+      })),
+    };
+    const svc = new ManualFetchService({
+      markupParser, storage: d.storage, fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any, writer: d.writer as any,
+      paperIndex: paperIndex as any, llm: d.llm as any, logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    await expect(svc.fetchAndSummarize("2605.08080", "2026-07-30")).resolves.toEqual({
+      kind: "already_exists", path,
+    });
+    expect(paperIndex.reconcileManualDetail).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Recovered title",
+      authors: "A. Author, B. Author",
+      date: "2026-05-12",
+      primaryTopic: "photo-z",
+      detail: true,
+    }), path, "saved");
+    expect(paperIndex.upsertFromDailyPaper).not.toHaveBeenCalled();
+    expect(paperIndex.setStatus).not.toHaveBeenCalled();
+    expect(d.fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit safe error when a verified note cannot recreate a missing index", async () => {
+    const d = makeDeps({ exists: true });
+    const paperIndex = {
+      get: vi.fn(async () => null), upsertFromDailyPaper: vi.fn(),
+      setStatus: vi.fn(), setPaperPath: vi.fn(),
+    };
+    const svc = new ManualFetchService({
+      markupParser, storage: d.storage, fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any, writer: d.writer as any,
+      paperIndex: paperIndex as any, llm: d.llm as any, logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    const result = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
+    expect(result).toMatchObject({ kind: "error", reason: expect.stringContaining("cannot safely recreate") });
+    expect(paperIndex.upsertFromDailyPaper).not.toHaveBeenCalled();
+    expect(d.fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -583,6 +681,111 @@ describe("ManualFetchService", () => {
 
     expect(d.files["arxiv-daily/.index/papers.json"]).toBeUndefined();
     await expect(paperIndex.get("2605.08080")).resolves.toBeNull();
+  });
+
+  it("recovers a verified note after a post-write index failure without refetching", async () => {
+    const d = makeDeps();
+    const path = "arxiv-daily/papers/2605.08080.md";
+    d.writer.writePaperDetail.mockImplementationOnce(async () => {
+      d.files[path] = [
+        "---", 'title: "Test paper title"', 'authors: "Foo Bar et al."',
+        'arxiv_id: "2605.08080"', "primary_topic: astro-ph.CO",
+        "published: 2026-02-02", "---", "# Detail",
+        "## Research question", "A".repeat(150), "## Method", "B".repeat(150),
+        "## Evidence", "C".repeat(150), "## Limitations", "D".repeat(150),
+      ].join("\n");
+      return path;
+    });
+    const entry = {
+      arxivId: "2605.08080", status: "reading", priority: "high",
+      detail: false, paperPath: null, dailyReports: [], published: "2026-02-02",
+    };
+    let fail = true;
+    const paperIndex = {
+      get: vi.fn(async () => entry),
+      upsertFromDailyPaper: vi.fn(async () => {
+        if (fail) { fail = false; throw new Error("index disk full"); }
+        return { entry, wasNew: false };
+      }),
+      setStatus: vi.fn(),
+      setPaperPath: vi.fn(),
+      reconcileManualDetail: vi.fn(async (_input: any, paperPath: string) => {
+        if (fail) { fail = false; throw new Error("index disk full"); }
+        return { wasNew: false, entry: { ...entry, detail: true, paperPath } };
+      }),
+    };
+    const build = () => new ManualFetchService({
+      markupParser, storage: d.storage, fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any, writer: d.writer as any,
+      paperIndex: paperIndex as any, llm: d.llm as any, logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    await expect(build().fetchAndSummarize("2605.08080", "2026-05-12")).resolves.toMatchObject({
+      kind: "error", reason: expect.stringContaining("index disk full"),
+    });
+    d.fetcher.fetchMetadataByIds.mockClear();
+    d.paperFetcher.fetch.mockClear();
+    d.llm.call.mockClear();
+
+    await expect(build().fetchAndSummarize("2605.08080", "2026-05-12")).resolves.toEqual({
+      kind: "already_exists", path,
+    });
+    expect(d.fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
+    expect(paperIndex.setStatus).not.toHaveBeenCalled();
+    expect(paperIndex.reconcileManualDetail).toHaveBeenLastCalledWith(
+      expect.objectContaining({ arxivId: "2605.08080", detail: true }), path, "saved",
+    );
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "reading", priority: "high", detail: true }), path,
+    );
+  });
+
+  it("keeps an atomic index coherent when frontmatter refresh fails and retries refresh next invocation", async () => {
+    const d = makeDeps();
+    const path = "arxiv-daily/papers/2605.08080.md";
+    d.writer.writePaperDetail.mockImplementationOnce(async () => {
+      d.files[path] = [
+        "---", 'title: "Test paper title"', 'authors: "Foo Bar et al."',
+        'arxiv_id: "2605.08080"', "primary_topic: astro-ph.CO",
+        "published: 2026-02-02", "---", "# Detail",
+        "## Research question", "A".repeat(150), "## Method", "B".repeat(150),
+        "## Evidence", "C".repeat(150), "## Limitations", "D".repeat(150),
+      ].join("\n");
+      return path;
+    });
+    d.writer.refreshPaperNoteFrontmatter
+      .mockRejectedValueOnce(new Error("frontmatter disk full"))
+      .mockResolvedValue(path);
+    const paperIndex = new PaperIndexStore(d.storage, DEFAULT_SETTINGS.output);
+    const build = () => new ManualFetchService({
+      markupParser, storage: d.storage, fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any, writer: d.writer as any,
+      paperIndex, llm: d.llm as any, logger: new Logger("error"),
+      arxiv: DEFAULT_SETTINGS.arxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+    });
+
+    await expect(build().fetchAndSummarize("2605.08080", "2026-05-12")).resolves.toMatchObject({
+      kind: "error", reason: expect.stringContaining("frontmatter disk full"),
+    });
+    await expect(paperIndex.get("2605.08080")).resolves.toMatchObject({
+      status: "saved", detail: true, paperPath: path,
+    });
+    d.fetcher.fetchMetadataByIds.mockClear();
+    d.paperFetcher.fetch.mockClear();
+    d.llm.call.mockClear();
+
+    await expect(build().fetchAndSummarize("2605.08080", "2026-05-12")).resolves.toEqual({
+      kind: "already_exists", path,
+    });
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledTimes(2);
+    expect(d.fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(d.paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
   });
 
   it("updates the paper index when a manual detail note is created", async () => {

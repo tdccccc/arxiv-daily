@@ -13,7 +13,10 @@ import { GenerationMetricsCollector } from "../metrics/generation";
 import { isCancellationError, throwIfCancelled } from "./cancellation";
 import { modernArxivResources } from "../utils/arxiv";
 import { validateVaultRelativeDirectory } from "../settings/validation";
-import { classifyPaperNote } from "../dashboard/paper-note-classifier";
+import {
+  classifyPaperNote,
+  type VerifiedDetailMetadata,
+} from "../dashboard/paper-note-classifier";
 
 export type ManualFetchResult =
   | { kind: "done"; path: string }
@@ -90,6 +93,13 @@ export class ManualFetchService {
         );
       } else if (classification.kind === "verified_detail") {
         logger.info(`manual-fetch: verified detail summary already exists at ${targetPath}`);
+        const reconciled = await this.reconcileVerifiedDetail(
+          id,
+          dateStr,
+          targetPath,
+          classification.metadata,
+        );
+        if (reconciled) return reconciled;
         this.progress.setComplete(`Detail note already exists: ${id}`);
         return { kind: "already_exists", path: targetPath };
       } else {
@@ -258,7 +268,7 @@ export class ManualFetchService {
     if (this.deps.paperIndex) {
       try {
         const displayDate = displayDateFromIndexEntry(existingIndexEntry);
-        const indexed = await this.deps.paperIndex.upsertFromDailyPaper({
+        const indexed = await this.deps.paperIndex.reconcileManualDetail({
           arxivId: id,
           title,
           authors,
@@ -270,20 +280,12 @@ export class ManualFetchService {
           abstract,
           primaryTopic: category,
           detail: true,
-        });
-        let indexEntry = indexed.entry;
+        }, path, "saved");
         logger.info(
-          `manual-fetch: paper index ${indexed.wasNew ? "created" : "updated"} for ${id}`,
+          `manual-fetch: paper index ${indexed.wasNew ? "created as saved" : "updated"} ` +
+          `with detail path for ${id}`,
         );
-        if (indexed.wasNew) {
-          const saved = await this.deps.paperIndex.setStatus(id, "saved");
-          indexEntry = saved ?? indexEntry;
-          logger.info(`manual-fetch: marked ${id} as saved`);
-        }
-        const withPath = await this.deps.paperIndex.setPaperPath(id, path);
-        indexEntry = withPath ?? indexEntry;
-        logger.info(`manual-fetch: stored paperPath for ${id} -> ${path}`);
-        await this.deps.writer.refreshPaperNoteFrontmatter(indexEntry, path);
+        await this.deps.writer.refreshPaperNoteFrontmatter(indexed.entry, path);
       } catch (e) {
         logger.error(`manual-fetch: paper index update failed for ${id}`, e);
         this.progress.setError(`Index update failed: ${(e as Error).message}`);
@@ -296,6 +298,51 @@ export class ManualFetchService {
     logger.info(`manual-fetch: wrote ${path}`);
     this.progress.setComplete(`Detail note ready: ${id}`);
     return { kind: "done", path };
+  }
+
+  private async reconcileVerifiedDetail(
+    id: string,
+    dateStr: string,
+    path: string,
+    metadata: VerifiedDetailMetadata,
+  ): Promise<ManualFetchResult | null> {
+    const paperIndex = this.deps.paperIndex;
+    if (!paperIndex) return null;
+    try {
+      const existing = await paperIndex.get(id);
+      if (!existing &&
+        (!metadata.title || !metadata.authors || !metadata.primaryTopic || !metadata.published)) {
+        const reason =
+          `verified detail ${path} cannot safely recreate its missing index entry: ` +
+          "frontmatter requires title, authors, primary_topic, and published";
+        this.deps.logger.warn(`manual-fetch: ${reason}`);
+        this.progress.setError(`Detail index needs repair metadata: ${id}`);
+        return { kind: "error", reason };
+      }
+      const entry = (await paperIndex.reconcileManualDetail({
+        arxivId: id,
+        title: metadata.title ?? existing?.title ?? id,
+        authors: metadata.authors ?? existing?.authors ?? [],
+        date: metadata.published ?? dateStr,
+        published: metadata.published ?? existing?.published,
+        updated: existing?.updated ?? metadata.published,
+        arxivCategory: metadata.primaryTopic ?? existing?.category ?? "",
+        arxivCategories: existing?.categories ?? (
+          metadata.primaryTopic ? [metadata.primaryTopic] : []
+        ),
+        abstract: existing?.abstract,
+        primaryTopic: metadata.primaryTopic ?? existing?.primaryTopic ?? "",
+        detail: true,
+      }, path, "saved")).entry;
+      await this.deps.writer.refreshPaperNoteFrontmatter(entry, path);
+      this.progress.setComplete(`Detail note index repaired: ${id}`);
+      return { kind: "already_exists", path };
+    } catch (e) {
+      const reason = `paper index reconciliation failed: ${errorMessage(e)}`;
+      this.deps.logger.error(`manual-fetch: ${reason} for ${id}`, e);
+      this.progress.setError(`Index repair failed: ${id}`);
+      return { kind: "error", reason };
+    }
   }
 }
 

@@ -87,6 +87,13 @@ describe("MarkdownWriter existence checks", () => {
     });
     expect(await writer.paperDetailExists("2605.06587")).toBe(true);
   });
+
+  it("reads a canonical paper detail for classification-based repair", async () => {
+    const { writer } = makeWriter({
+      "arxiv-daily/papers/2605.06587.md": "verified markdown",
+    });
+    expect(await writer.readPaperDetail("2605.06587")).toBe("verified markdown");
+  });
 });
 
 describe("MarkdownWriter link style", () => {

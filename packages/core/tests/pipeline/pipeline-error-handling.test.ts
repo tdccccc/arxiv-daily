@@ -292,6 +292,20 @@ describe("Pipeline partial failure consistency", () => {
       paperDetailLink: vi.fn((id: string) => `[[${id}]]`),
       dailyExists: vi.fn(async () => false),
       paperDetailExists: vi.fn(async () => false),
+      readPaperDetail: vi.fn(async (id: string) => [
+        "---",
+        `arxiv_id: \"${id}\"`,
+        "---",
+        "# Existing detail",
+        "## Research question",
+        "A".repeat(150),
+        "## Method",
+        "B".repeat(150),
+        "## Evidence",
+        "C".repeat(150),
+        "## Limitations",
+        "D".repeat(150),
+      ].join("\n")),
       ...overrides.writer,
     };
     const paperIndex = {
@@ -610,7 +624,7 @@ describe("Pipeline partial failure consistency", () => {
     );
   });
 
-  it("logs permanent category failures at error level and summarizes partial failures", async () => {
+  it("rejects partial category discovery before pipeline mutations", async () => {
     const logger = new Logger("debug");
     const logError = vi.spyOn(logger, "error");
     const logWarn = vi.spyOn(logger, "warn");
@@ -649,7 +663,10 @@ describe("Pipeline partial failure consistency", () => {
       detailSelection: testDetailSelection,
     });
 
-    await pipeline.runForDate("2026-05-11");
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({
+      kind: "failed_permanent",
+      reason: expect.stringContaining("parse failed for bad.cat"),
+    });
 
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining("arxiv-source: parse failed for bad.cat"),
@@ -658,8 +675,10 @@ describe("Pipeline partial failure consistency", () => {
       expect.stringContaining("parse failed for bad.cat"),
     );
     expect(logWarn).toHaveBeenCalledWith(
-      "arxiv-source: 1/2 categories succeeded, 1 failed",
+      "arxiv-source: rejecting partial discovery; 1/2 categories succeeded, 1 failed",
     );
+    expect(fetcher.fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
   });
 
   it("fetches paper content with bounded concurrency", async () => {

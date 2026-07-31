@@ -111,14 +111,17 @@ export class StateStore {
       const prev = this.get(date);
       let status: Extract<RunStatus, "failed_transient" | "failed_permanent"> =
         kind === "permanent" ? "failed_permanent" : "failed_transient";
-      if (status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS) {
-        status = "failed_permanent";
-      }
+      const retriesExhausted =
+        status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS;
+      if (retriesExhausted) status = "failed_permanent";
+      const persistedMessage = retriesExhausted
+        ? `retries exhausted after ${prev.attempts} attempts: ${message}`
+        : message;
       this.state[date] = {
         ...prev,
         status,
         lastAttempt: Date.now(),
-        error: message,
+        error: persistedMessage,
       };
       await this.saveFn({ runState: this.state });
       return status;

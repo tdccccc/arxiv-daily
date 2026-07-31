@@ -76,6 +76,27 @@ describe("classifyPaperNote", () => {
     });
   });
 
+  it("decodes writer-escaped verified metadata without compounding punctuation", () => {
+    const classified = classifyPaperNote([
+      "---",
+      'title: "A \\"quoted\\" title: C:\\\\papers #1"',
+      'authors: "A. \\"Alias\\" Author, C:\\\\Lab #team"',
+      `arxiv_id: "${id}"`,
+      "primary_topic: astro-ph.CO",
+      "published: 2026-06-13",
+      "---",
+      detailMarkdown().split("---\n").at(-1),
+    ].join("\n"), id);
+
+    expect(classified).toMatchObject({
+      kind: "verified_detail",
+      metadata: {
+        title: 'A "quoted" title: C:\\papers #1',
+        authors: 'A. "Alias" Author, C:\\Lab #team',
+      },
+    });
+  });
+
   it("never treats URL-like or nested YAML values as trusted identity", () => {
     expect(classifyPaperNote(`---\narxiv_id: "https://arxiv.org/abs/${id}"\n---\n# text`, id)).toMatchObject({
       kind: "conflict",

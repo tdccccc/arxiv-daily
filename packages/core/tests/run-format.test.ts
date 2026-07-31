@@ -10,6 +10,9 @@ describe("run-format", () => {
     expect(describeResult({ kind: "completed", papersWritten: 3 })).toBe(
       "done (3 papers)",
     );
+    expect(describeResult({ kind: "cancelled", reason: "stopped by user" })).toBe(
+      "cancelled: stopped by user",
+    );
     expect(describeResult({ kind: "failed_transient", reason: "timeout" })).toBe(
       "transient: timeout",
     );

@@ -40,6 +40,7 @@ import {
   paperMetaFromSourcePaper,
   type SourceAdapter,
 } from "../sources";
+import { classifyPaperNote } from "../dashboard/paper-note-classifier";
 
 /** Pipeline-local paper meta after source listing (arXiv-compatible shape). */
 interface SourcePaperMeta extends PaperMeta {
@@ -279,11 +280,8 @@ export class ArxivPipeline {
       CONTENT_FETCH_CONCURRENCY,
       async (paper) => {
         throwIfCancelled(signal);
-        const exists = await this.deps.writer.paperDetailExists(paper.id);
-        if (!exists) {
-          return { ...paper, paperPath: null };
-        }
-        const path = this.deps.writer.paperDetailPath(paper.id);
+        const path = await this.verifiedDetailPath(paper.id, signal);
+        if (!path) return { ...paper, paperPath: null };
         if (paper.paperPath !== path) {
           await this.repairPaperPath(paper.id, path, signal);
         }
@@ -348,9 +346,7 @@ export class ArxivPipeline {
         if (isCancellationError(e)) throw e;
         logger.error(`pipeline: detail failed for ${paper.id}`, e);
         // Handle a note created between the initial existence check and write.
-        if (await this.deps.writer.paperDetailExists(paper.id)) {
-          confirmedPath = this.deps.writer.paperDetailPath(paper.id);
-        }
+        confirmedPath = await this.verifiedDetailPath(paper.id, signal);
       }
       if (!confirmedPath) continue;
       await this.repairPaperPath(paper.id, confirmedPath, signal);
@@ -462,6 +458,24 @@ export class ArxivPipeline {
     });
   }
 
+  private async verifiedDetailPath(
+    arxivId: string,
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    if (!(await this.deps.writer.paperDetailExists(arxivId))) return null;
+    throwIfCancelled(signal);
+    const markdown = await this.deps.writer.readPaperDetail(arxivId);
+    throwIfCancelled(signal);
+    const classification = classifyPaperNote(markdown, arxivId);
+    if (classification.kind !== "verified_detail") {
+      this.deps.logger.warn(
+        `pipeline: canonical note for ${arxivId} is ${classification.kind}, not verified detail`,
+      );
+      return null;
+    }
+    return this.deps.writer.paperDetailPath(arxivId);
+  }
+
   private async repairPaperPath(
     arxivId: string,
     path: string,
@@ -497,9 +511,7 @@ export class ArxivPipeline {
       const canonicalDetailPaths: Record<string, string | null> = {};
       for (const arxivId of arxivIds) {
         throwIfCancelled(signal);
-        canonicalDetailPaths[arxivId] = await this.deps.writer.paperDetailExists(arxivId)
-          ? this.deps.writer.paperDetailPath(arxivId)
-          : null;
+        canonicalDetailPaths[arxivId] = await this.verifiedDetailPath(arxivId, signal);
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);

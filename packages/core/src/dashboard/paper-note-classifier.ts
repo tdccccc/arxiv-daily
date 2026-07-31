@@ -1,8 +1,16 @@
 import { looksLikeDetailSummary } from "./detail-summary";
 import { modernArxivResources } from "../utils/arxiv";
 
+export interface VerifiedDetailMetadata {
+  arxivId: string;
+  title?: string;
+  authors?: string;
+  primaryTopic?: string;
+  published?: string;
+}
+
 export type PaperNoteClassification =
-  | { kind: "verified_detail"; arxivId: string }
+  | { kind: "verified_detail"; arxivId: string; metadata: VerifiedDetailMetadata }
   | { kind: "replaceable"; arxivId: string; form: "empty" | "frontmatter_only" | "generated_empty_stub" }
   | { kind: "conflict"; arxivId: string; reason: "identity_mismatch" | "identity_invalid" | "user_content" };
 
@@ -39,7 +47,11 @@ export function classifyPaperNote(
   }
 
   if (identity.kind === "match" && looksLikeDetailSummary(markdown)) {
-    return { kind: "verified_detail", arxivId: expected };
+    return {
+      kind: "verified_detail",
+      arxivId: expected,
+      metadata: readVerifiedDetailMetadata(frontmatter?.yaml ?? "", expected),
+    };
   }
 
   if (
@@ -80,6 +92,58 @@ function readStrictArxivIdentity(
   return ids.every((id) => id === expected)
     ? { kind: "match" }
     : { kind: "mismatch" };
+}
+
+function readVerifiedDetailMetadata(
+  yaml: string,
+  arxivId: string,
+): VerifiedDetailMetadata {
+  const metadata: VerifiedDetailMetadata = { arxivId };
+  const values = new Map<string, string>();
+  for (const line of yaml.split(/\r?\n/)) {
+    const match = /^(title|authors|primary_topic|published):(?:[ \t]*(.*))?$/.exec(line);
+    if (!match?.[1]) continue;
+    const raw = (match[2] ?? "").trim();
+    const value = decodeYamlScalar(raw)?.trim();
+    if (value) values.set(match[1], value);
+  }
+  const title = values.get("title");
+  const authors = values.get("authors");
+  const primaryTopic = values.get("primary_topic");
+  const published = values.get("published");
+  const date = published ? /\d{4}-\d{2}-\d{2}/.exec(published)?.[0] : undefined;
+  if (title) metadata.title = title;
+  if (authors) metadata.authors = authors;
+  if (primaryTopic) metadata.primaryTopic = primaryTopic;
+  if (date) metadata.published = date;
+  return metadata;
+}
+
+function decodeYamlScalar(raw: string): string | null {
+  if (raw.startsWith('"')) {
+    if (!raw.endsWith('"') || raw.length < 2) return null;
+    const body = raw.slice(1, -1);
+    let out = "";
+    for (let index = 0; index < body.length; index += 1) {
+      const char = body[index];
+      if (char !== "\\") {
+        out += char;
+        continue;
+      }
+      const escaped = body[index + 1];
+      // Exact inverse of markdown-writer escapeYaml. Reject other YAML escape
+      // sequences rather than silently transforming metadata we did not write.
+      if (escaped !== "\\" && escaped !== '"') return null;
+      out += escaped;
+      index += 1;
+    }
+    return out;
+  }
+  if (raw.startsWith("'")) {
+    if (!raw.endsWith("'") || raw.length < 2) return null;
+    return raw.slice(1, -1).replace(/''/g, "'");
+  }
+  return raw;
 }
 
 function isExactGeneratedEmptyStub(body: string, id: string): boolean {

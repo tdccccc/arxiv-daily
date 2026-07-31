@@ -6,6 +6,7 @@ import { modernArxivResources } from "../utils/arxiv";
 import {
   formatArxivHttpError,
   isArxivHttpError,
+  isArxivRetryDeferredError,
   isRetryableArxivError,
   type ArxivFetcher,
 } from "../pipeline/arxiv-fetcher";
@@ -118,18 +119,15 @@ export class ArxivSourceAdapter implements SourceAdapter {
       }
     }
 
-    if (succeededCategories.length === 0) {
+    if (failures.length > 0) {
+      logger.warn(
+        `arxiv-source: rejecting partial discovery; ${succeededCategories.length}/${categories.length} categories succeeded, ${failures.length} failed`,
+      );
       return {
         kind: "error",
         failureKind: collapseFailureKind(failures),
-        reason: collapseFailureReason(failures),
+        reason: collapseFailureReason(failures, categories.length),
       };
-    }
-
-    if (failures.length > 0) {
-      logger.warn(
-        `arxiv-source: ${succeededCategories.length}/${categories.length} categories succeeded, ${failures.length} failed`,
-      );
     }
 
     const papers = Array.from(byId.values());
@@ -419,6 +417,7 @@ function missingRecentDateReason(
 }
 
 function classifyArxivSourceFailure(error: unknown): FailureKind {
+  if (isArxivRetryDeferredError(error)) return "failed_transient";
   if (!isArxivHttpError(error)) return "failed_transient";
   return isRetryableArxivError(error) ? "failed_transient" : "failed_permanent";
 }
@@ -435,10 +434,12 @@ function collapseFailureKind(
 
 function collapseFailureReason(
   failures: Array<{ kind: FailureKind; reason: string }>,
+  categoryCount: number,
 ): string {
   if (failures.length === 0) {
     return "fetch /recent failed: no arXiv categories succeeded";
   }
   if (failures.length === 1) return failures[0]!.reason;
-  return `all arXiv categories failed: ${failures.map((f) => f.reason).join("; ")}`;
+  const scope = failures.length === categoryCount ? "all" : "some";
+  return `${scope} arXiv categories failed: ${failures.map((f) => f.reason).join("; ")}`;
 }
