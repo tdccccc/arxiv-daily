@@ -23,7 +23,7 @@
   },
   "type": "module",
   "bin": {
-    "arxiv-daily": "./dist/arxiv-daily-cli.cjs"
+    "arxiv-daily": "dist/arxiv-daily-cli.cjs"
   },
   "files": [
     "dist/arxiv-daily-cli.cjs",
