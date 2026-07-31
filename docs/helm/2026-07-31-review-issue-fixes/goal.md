@@ -38,13 +38,13 @@ changing product behavior — each batch stays independently mergeable.
 
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
-2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: active
-3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: pending
+2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: done
+3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: active
 4. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2a (started 2026-07-31 on refactor/dashboard-view-modules)
+P2b (started 2026-07-31 on refactor/dashboard-view-modules)
 
 ## Resolved
 

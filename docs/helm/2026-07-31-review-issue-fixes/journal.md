@@ -64,3 +64,31 @@
   02-a-split-dashboard-view.md written (7 tasks, extraction order T1–T7)
 - disposition: view.ts class body untouched this phase; HubModal extracted
 - next: T1 constants.ts extraction
+
+## 2026-07-31 — note (P2a done)
+
+- evidence: view.ts 3360 → 2443 lines; 6 new modules (constants, types,
+  calendar, files, pagination, log-format, detail-refs, actions,
+  hub-modal); two source-level test suites retargeted to the new homes
+  (detail-refs.ts, hub-modal.ts); full workspace 1139 tests green,
+  typecheck green, lint back at the 53-warning baseline
+- change: P2a closed; outcome corrected (L1): class body stays intact per
+  scope, so ≤1700 was unreachable; class-internal rendering splits noted
+  for a future phase
+- disposition: keep all modules; no behavior change (byte-identical output)
+- next: P2b — settings tab getSettingDefinitions migration with 1.4.0
+  fallback
+
+## 2026-07-31 — note (P2b started)
+
+- evidence: user confirmed migration despite limited user-facing value
+  (Settings search + native rendering); API researched from obsidian
+  1.13.1 types — declarative items (action/control/render/group/page/
+  list), resolver hooks getControlValue/setControlValue default to
+  plugin.settings (ours is nested → need path mapping)
+- change: P2b active; phase 02-b-settings-declarative-api.md written
+  (6 tasks, T1–T6); display() stays as <1.13 fallback
+- disposition: new settings/definitions.ts module; reuse existing tab.ts
+  helpers; runtime 1.13 behavior not locally testable (documented
+  assumption)
+- next: T1 key constants + resolver mapping
