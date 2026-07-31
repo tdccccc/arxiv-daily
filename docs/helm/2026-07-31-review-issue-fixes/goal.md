@@ -25,8 +25,9 @@ changing product behavior — each batch stays independently mergeable.
 
 - The main worktree is in use by another agent (bug fixes): every change goes
   through a separate worktree branch; nothing touches the main checkout
-- Refactors with the widest conflict surface (P2) wait until the bug-fix work
-  merges into `main`
+- P2 waits for `fix/arxiv-failure-recovery` and `fix/arxiv-request-resilience`
+  to merge into `main` (they touch pipeline.ts and dashboard code — widest
+  conflict surface)
 - commit-msg hook: Conventional Commits (`feat|fix|refactor|docs|test|chore|perf`),
   body with why/what/validation for multi-file or >20-line changes
 - Checks must stay green: `npm run typecheck`, `npm test`, `npm run lint`
@@ -45,4 +46,8 @@ P2 (blocked: waits for the bug-fix branch to merge into main)
 
 ## Open questions
 
-- P3: should the CLI expose a `detail_selection` TOML option (and what shape — profile string, per-topic overrides)? — resolve when P3 starts
+- P3: the 2026-07-28 journal of `cli-product-config-and-data-portability`
+  already documents the decision — TOML deliberately omits
+  `detail_selection`/profile; deep-dive default = core balanced + per-topic
+  `detail`. P3 likely closes as "documented-as-fixed"; confirm with the user
+  and add the doc pointer to cli-toml-schema.md if it is missing there.
