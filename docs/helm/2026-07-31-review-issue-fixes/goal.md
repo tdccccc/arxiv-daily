@@ -1,7 +1,7 @@
 # Review issue fixes
 
-status: active
-updated: 2026-07-31
+status: done
+updated: 2026-08-01
 
 ## Intent
 
@@ -13,7 +13,7 @@ UX changes and a Medium reasoning default for new or incomplete configurations.
 
 - [x] P1 landed: dead code removed, legacy shim corrected, README security note added, `obsidian` devDep pinned — all checks green
 - [x] P2a landed: dashboard `view.ts` split into modules; view class + re-exports remain; all checks green
-- [ ] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback
+- [x] P2b landed: settings tab migrates to `getSettingDefinitions` with a 1.4.0 fallback — PR #5 merged 2026-08-01
 - [x] P3 resolved: CLI `detailSelection` documented-as-fixed (schema + journal)
 - [x] Deterministic pipeline rendering unchanged: with identical fetched data and LLM responses, daily reports and paper notes remain byte-identical; P2b's user-approved Medium default may change live LLM responses for new/incomplete configurations
 
@@ -40,16 +40,13 @@ UX changes and a Medium reasoning default for new or incomplete configurations.
 <!-- Mirror status from phases/NN-*.md. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — Zero-risk cleanup: dead code, legacy shim, README note, pinned obsidian — status: done
 2. P2a — Split dashboard view.ts into modules (helpers + HubModal out; class + re-exports stay) — status: done
-3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: done (pending PR merge; landed criterion below)
+3. P2b — Settings tab getSettingDefinitions migration with 1.4.0 fallback — status: done
 4. P3 — Decision: CLI detailSelection configurable or documented-as-fixed — status: done
 
 ## Current focus
 
-P2b (started 2026-07-31; branch re-cut 2026-07-31 to
-  refactor/settings-declarative-api after PR #4 merged; T1–T7 committed
-  2026-07-31, second manual-test UI follow-up in progress — pending another 1.13+
-  manual pass, then PR review + merge; the "P2b landed" success criterion
-  checks only after the merge, mirroring P2a)
+Initiative complete: PR #5 merged P2b into main after the 1.13+ manual UI pass
+and two successful CI verify jobs.
 
 ## Resolved
 
