@@ -52,31 +52,17 @@ import {
   describeRunResults,
 } from "@arxiv-daily/core";
 
-export const ARXIV_DAILY_DASHBOARD_VIEW = "arxiv-daily-dashboard";
-const RECENT_DATES_FOREGROUND_TIMEOUT_MS = 3000;
-const DASHBOARD_SEARCH_DEBOUNCE_MS = 250;
+import {
+  ARXIV_DAILY_DASHBOARD_VIEW,
+  DASHBOARD_SEARCH_DEBOUNCE_MS,
+  DASHBOARD_TABS,
+  DEFAULT_SORT_KEY,
+  PAGE_SIZE_OPTIONS,
+  RECENT_DATES_FOREGROUND_TIMEOUT_MS,
+  SORT_LABELS,
+} from "./constants";
 
-const DASHBOARD_TABS: Array<{ id: DashboardTab; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "starred", label: "Starred" },
-];
-
-const PAGE_SIZE_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 20, label: "20" },
-  { value: 50, label: "50" },
-  { value: 100, label: "100" },
-  { value: Infinity, label: "All" },
-];
-
-const SORT_LABELS: Record<DashboardSortKey, string> = {
-  relevance: "Relevance",
-  priority: "Starred first",
-  published: "Published",
-  topic: "Topic",
-  title: "Title",
-};
-
-const DEFAULT_SORT_KEY: DashboardSortKey = "priority";
+export { ARXIV_DAILY_DASHBOARD_VIEW } from "./constants";
 
 export interface DashboardPage<T> {
   rows: T[];
