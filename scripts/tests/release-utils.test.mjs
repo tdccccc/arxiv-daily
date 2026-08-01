@@ -52,6 +52,18 @@ test("the release workflow runs the release-tool tests during verification", asy
   );
 });
 
+test("release workflows configure npm auth and constrain CLI recovery", async () => {
+  const releaseWorkflow = await readFile(`${root}/.github/workflows/release.yml`, "utf8");
+  const recoveryWorkflow = await readFile(`${root}/.github/workflows/publish-cli-recovery.yml`, "utf8");
+  assert.match(releaseWorkflow, /^\s+registry-url: https:\/\/registry\.npmjs\.org$/m);
+  assert.match(recoveryWorkflow, /^\s+workflow_dispatch:$/m);
+  assert.match(recoveryWorkflow, /^\s+ref: \$\{\{ inputs\.version \}\}$/m);
+  assert.match(recoveryWorkflow, /Refusing to overwrite existing npm version/);
+  assert.match(recoveryWorkflow, /^\s+npm run check:release-version -- "\$VERSION"$/m);
+  assert.match(recoveryWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m);
+  assert.match(recoveryWorkflow, /^\s+run: npm publish --workspace apps\/cli --access public --provenance$/m);
+});
+
 test("the bundle banner contains the complete locked pako license exactly once", async () => {
   const notice = await readPakoNotice();
   const lockedLicense = (await readFile(`${root}/node_modules/pako/LICENSE`, "utf8")).trimEnd();

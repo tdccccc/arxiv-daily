@@ -32,6 +32,7 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22.17.0
+          registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Verify stable tag and release inputs

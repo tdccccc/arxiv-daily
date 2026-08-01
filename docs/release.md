@@ -98,10 +98,11 @@ Settings → Secrets and variables → Actions.
 
 If the workflow fails at the npm publish step after the GitHub release was
 already created, the release is immutable — do not re-run the tag or attempt
-to overwrite the npm version (`E409`). Publish the package manually from a
-clean checkout instead (`npm ci && npm publish --workspace apps/cli --access
-public`; add `--provenance` when OIDC is available). If the package was
-already published, fix forward by bumping to a new version.
+to overwrite the npm version (`E409`). Run the **Recover CLI npm publication**
+workflow manually with that existing stable tag. It checks out the immutable
+tag, refuses an already-published npm version, reruns the complete release gate,
+and publishes with provenance. If the package was already published, fix
+forward by bumping to a new version.
 
 arXiv Daily is listed through Obsidian's Community directory. The current new
 plugin flow is to sign in at `community.obsidian.md`, link the repository owner's
