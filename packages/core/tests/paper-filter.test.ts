@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { filterPapers } from "../src/pipeline/paper-filter";
+import { buildPaperFilterRequest, filterPapers } from "../src/pipeline/paper-filter";
 import { Logger } from "../src/services/logger";
 import type { ArxivSettings, Topic } from "../src/settings/types";
 import type { PaperMeta } from "../src/pipeline/arxiv-parser";
@@ -36,6 +36,20 @@ describe("filterPapers", () => {
     expect(llm.call).not.toHaveBeenCalled();
   });
 
+  it("uses the exported exact request builder for the live call", async () => {
+    const topics = makeTopics();
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [] })) };
+    const arxivSettings = makeArxiv(topics);
+    await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings,
+    });
+    const request = buildPaperFilterRequest([samplePaper], arxivSettings);
+    expect(llm.call.mock.calls[0][0]).toEqual(request.messages);
+    expect(llm.call.mock.calls[0][1]).toMatchObject(request.options);
+  });
+
   it("includes the topic list without detail hints in the system prompt", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
@@ -70,6 +84,31 @@ describe("filterPapers", () => {
     expect(out[0].isDetail).toBe(false);
   });
 
+
+  it("keeps a configured tag containing a pipe", async () => {
+    const pipeTopic: Topic = {
+      id: "pipe",
+      name: "NLP and LLM",
+      tag: "nlp|llm",
+      description: "language model research",
+      detail: false,
+    };
+    const llm = {
+      call: vi.fn().mockResolvedValue(
+        JSON.stringify({ papers: [{ id: samplePaper.id, category: "nlp|llm" }] }),
+      ),
+    };
+
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv([pipeTopic]),
+    });
+
+    expect(out).toMatchObject([{ id: samplePaper.id, category: "nlp|llm" }]);
+    expect(buildPaperFilterRequest([samplePaper], makeArxiv([pipeTopic])).identity.validTags)
+      .toEqual(["nlp|llm"]);
+  });
 
   it("drops papers with category 'skip'", async () => {
     const llm = {

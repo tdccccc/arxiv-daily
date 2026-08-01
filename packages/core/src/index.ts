@@ -32,6 +32,7 @@ export * from "./prompts/render";
 export * from "./run-format";
 export * from "./services/cancellation";
 export * from "./services/daily-selection";
+export * from "./services/daily-filter-checkpoint-store";
 export {
   DAILY_SUMMARY_CHECKPOINT_SCHEMA_VERSION,
   DAILY_SUMMARY_FINGERPRINT_VERSION,
@@ -40,10 +41,12 @@ export {
   DailySummaryCheckpointStore,
   DailySummaryCheckpointStoreError,
   buildCheckpointEndpointDigest,
+  buildCheckpointGenerationIdentity,
   buildDailySummaryCheckpointFingerprintInput,
   createDailySummaryCompatibilityFingerprint,
   decodeDailyPaperResult,
   deriveDailySummaryCheckpointPaths,
+  type CheckpointGenerationIdentity,
   type DailySummaryCheckpointCompatibilityInput,
   type DailySummaryCheckpointDocument,
   type DailySummaryCheckpointEntry,

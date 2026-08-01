@@ -31,6 +31,16 @@ export interface DailySummaryCheckpointCompatibilityInput {
   resultContractVersion?: number;
 }
 
+export interface CheckpointGenerationIdentity {
+  provider: string;
+  endpointDigest: string;
+  model: string;
+  mode:
+    | { kind: "temperature"; temperature: number }
+    | { kind: "anthropic-thinking"; budgetTokens: number }
+    | { kind: "reasoning-thinking"; reasoningEffort: string };
+}
+
 export interface DailySummaryCheckpointFingerprintInput {
   fingerprintVersion: typeof DAILY_SUMMARY_FINGERPRINT_VERSION;
   paper: {
@@ -44,15 +54,8 @@ export interface DailySummaryCheckpointFingerprintInput {
       fullSections: string | null;
     };
   };
-  generation: {
+  generation: CheckpointGenerationIdentity & {
     summaryLanguage: SummaryLanguage;
-    provider: string;
-    endpointDigest: string;
-    model: string;
-    mode:
-      | { kind: "temperature"; temperature: number }
-      | { kind: "anthropic-thinking"; budgetTokens: number }
-      | { kind: "reasoning-thinking"; reasoningEffort: string };
   };
   promptContractVersion: number;
   resultContractVersion: number;
@@ -146,10 +149,7 @@ export function buildDailySummaryCheckpointFingerprintInput(
     },
     generation: {
       summaryLanguage: normalizeSummaryLanguage(input.summaryLanguage),
-      provider: input.llm.provider,
-      endpointDigest: buildCheckpointEndpointDigest(input.llm.baseUrl),
-      model: input.llm.model,
-      mode: effectiveGenerationMode(input.llm, temperature),
+      ...buildCheckpointGenerationIdentity(input.llm, temperature),
     },
     promptContractVersion:
       input.promptContractVersion ?? DAILY_SUMMARY_PROMPT_CONTRACT_VERSION,
@@ -164,8 +164,23 @@ export function createDailySummaryCompatibilityFingerprint(
   return `sha256:${sha256(JSON.stringify(buildDailySummaryCheckpointFingerprintInput(input)))}`;
 }
 
+export function buildCheckpointGenerationIdentity(
+  llm: Pick<LlmSettings, "provider" | "baseUrl" | "model" | "thinkingMode" | "reasoningEffort">,
+  temperature: number,
+): CheckpointGenerationIdentity {
+  if (!Number.isFinite(temperature)) {
+    throw new DailySummaryCheckpointStoreError("checkpoint temperature must be finite");
+  }
+  return {
+    provider: llm.provider,
+    endpointDigest: buildCheckpointEndpointDigest(llm.baseUrl),
+    model: llm.model,
+    mode: effectiveGenerationMode(llm, temperature),
+  };
+}
+
 function effectiveGenerationMode(
-  llm: DailySummaryCheckpointCompatibilityInput["llm"],
+  llm: Pick<LlmSettings, "provider" | "thinkingMode" | "reasoningEffort">,
   temperature: number,
 ): DailySummaryCheckpointFingerprintInput["generation"]["mode"] {
   if (!llm.thinkingMode) return { kind: "temperature", temperature };

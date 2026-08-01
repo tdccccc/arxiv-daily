@@ -1,4 +1,4 @@
-import type { LlmClient } from "../llm/client";
+import type { ChatMessage, LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, Topic } from "../settings/types";
@@ -23,6 +23,97 @@ export interface PaperFilterDeps {
   onMetrics?: MetricsObserver;
 }
 
+export interface PaperFilterRequest {
+  messages: ChatMessage[];
+  options: { temperature: 0 };
+  identity: {
+    knownIds: string[];
+    validTags: string[];
+  };
+}
+
+export interface FilterRecord {
+  id: string;
+  category: string;
+}
+
+export type FilterRecordDecodeResult =
+  | { ok: true; value: FilterRecord[] }
+  | { ok: false; reason: string };
+
+/** Construct the exact request consumed by the live paper-filter LLM call. */
+export function buildPaperFilterRequest(
+  papers: PaperMeta[],
+  arxivSettings: ArxivSettings,
+): PaperFilterRequest {
+  const topics: Topic[] = arxivSettings.topics ?? [];
+  const topicLines = topics.map((t) => `- ${t.tag}: ${t.description}`).join("\n");
+  const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
+  const papersText = papers
+    .map(
+      (p) =>
+        `---\nID: ${escapePaperDataFence(p.id)}\n` +
+        `Title: ${escapePaperDataFence(p.title)}\n` +
+        `Abstract: ${escapePaperDataFence(p.abstract)}\n`,
+    )
+    .join("");
+  return {
+    messages: [
+      {
+        role: "system",
+        content: renderPrompt(filterSystemTemplate, {
+          topicLines,
+          tagOptions,
+          injectionGuard: injectionGuardZh,
+        }),
+      },
+      {
+        role: "user",
+        content: `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n<paper_data>\n${papersText}</paper_data>`,
+      },
+    ],
+    options: { temperature: 0 },
+    identity: {
+      knownIds: papers.map((paper) => paper.id),
+      validTags: topics.map((topic) => topic.tag),
+    },
+  };
+}
+
+/** Strictly decode validated model decisions while preserving record order and omissions. */
+export function decodePaperFilterRecords(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+  validTags: ReadonlySet<string>,
+): FilterRecordDecodeResult {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["papers"]) || !Array.isArray(value.papers)) {
+    return { ok: false, reason: "root must be exactly {papers:[...]}" };
+  }
+
+  const seen = new Set<string>();
+  const records: FilterRecord[] = [];
+  for (const record of value.papers) {
+    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category"])) {
+      return { ok: false, reason: "paper record has an invalid shape" };
+    }
+    if (typeof record.id !== "string" || !knownIds.has(record.id)) {
+      return { ok: false, reason: "paper record has an unknown id" };
+    }
+    if (seen.has(record.id)) {
+      return { ok: false, reason: "paper record has a duplicate id" };
+    }
+    if (
+      typeof record.category !== "string" ||
+      (record.category !== "skip" && !validTags.has(record.category))
+    ) {
+      return { ok: false, reason: `paper ${record.id} has an invalid category` };
+    }
+    seen.add(record.id);
+    records.push({ id: record.id, category: record.category });
+  }
+  return { ok: true, value: records };
+}
+
 export async function filterPapers(
   papers: PaperMeta[],
   deps: PaperFilterDeps,
@@ -37,28 +128,7 @@ export async function filterPapers(
     return [];
   }
 
-  const topicLines = topics
-    .map((t) => `- ${t.tag}: ${t.description}`)
-    .join("\n");
-  const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
-  const validTags = new Set(topics.map((t) => t.tag));
-
-  const papersText = papers
-    .map(
-      (p) =>
-        `---\nID: ${escapePaperDataFence(p.id)}\n` +
-        `Title: ${escapePaperDataFence(p.title)}\n` +
-        `Abstract: ${escapePaperDataFence(p.abstract)}\n`,
-    )
-    .join("");
-
-  const systemPrompt = renderPrompt(filterSystemTemplate, {
-    topicLines,
-    tagOptions,
-    injectionGuard: injectionGuardZh,
-  });
-
-  const userContent = `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n<paper_data>\n${papersText}</paper_data>`;
+  const request = buildPaperFilterRequest(papers, arxivSettings);
 
   logger.info(
     `paper-filter: sending ${papers.length} papers to LLM for classification`,
@@ -66,13 +136,11 @@ export async function filterPapers(
 
   let raw: string;
   try {
-    raw = await llm.call(
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      { temperature: 0, signal: deps.signal, onMetrics: deps.onMetrics },
-    );
+    raw = await llm.call(request.messages, {
+      ...request.options,
+      signal: deps.signal,
+      onMetrics: deps.onMetrics,
+    });
   } catch (e) {
     if (isCancellationError(e)) throw e;
     logger.error("paper-filter: LLM call failed", e);
@@ -89,7 +157,11 @@ export async function filterPapers(
   }
 
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
-  const records = parseFilterRecords(parsed, new Set(idMap.keys()), validTags);
+  const records = decodePaperFilterRecords(
+    parsed,
+    new Set(request.identity.knownIds),
+    new Set(request.identity.validTags),
+  );
   if (!records.ok) {
     logger.warn(`paper-filter: invalid LLM response (${records.reason}); keeping no papers`);
     return [];
@@ -119,44 +191,6 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
-}
-
-interface FilterRecord {
-  id: string;
-  category: string;
-}
-
-function parseFilterRecords(
-  value: unknown,
-  knownIds: ReadonlySet<string>,
-  validTags: ReadonlySet<string>,
-): { ok: true; value: FilterRecord[] } | { ok: false; reason: string } {
-  if (!isPlainObject(value) || !hasExactKeys(value, ["papers"]) || !Array.isArray(value.papers)) {
-    return { ok: false, reason: "root must be exactly {papers:[...]}" };
-  }
-
-  const seen = new Set<string>();
-  const records: FilterRecord[] = [];
-  for (const record of value.papers) {
-    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category"])) {
-      return { ok: false, reason: "paper record has an invalid shape" };
-    }
-    if (typeof record.id !== "string" || !knownIds.has(record.id)) {
-      return { ok: false, reason: "paper record has an unknown id" };
-    }
-    if (seen.has(record.id)) {
-      return { ok: false, reason: "paper record has a duplicate id" };
-    }
-    if (
-      typeof record.category !== "string" ||
-      (record.category !== "skip" && !validTags.has(record.category))
-    ) {
-      return { ok: false, reason: `paper ${record.id} has an invalid category` };
-    }
-    seen.add(record.id);
-    records.push({ id: record.id, category: record.category });
-  }
-  return { ok: true, value: records };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
