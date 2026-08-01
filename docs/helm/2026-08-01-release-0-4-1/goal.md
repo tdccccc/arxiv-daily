@@ -12,7 +12,7 @@ Fix forward from the immutable failed 0.4.0 tag by making CI use the repository'
 
 - [x] The release workflow runs all workspace tests serially with the required heap allowance, protected by a release-tool regression test.
 - [x] All product and release metadata and curated notes consistently identify 0.4.1 and explain the 0.4.0 tag-only failure.
-- [ ] The exact workflow command and complete release gate pass locally.
+- [x] The exact workflow command and complete release gate pass locally.
 - [ ] The verified fix-forward commit reaches local and remote main without disturbing existing worktree edits.
 - [ ] No 0.4.1 tag is pushed without explicit authorization after the new release checkpoint.
 
@@ -34,5 +34,5 @@ Fix forward from the immutable failed 0.4.0 tag by making CI use the repository'
 ## Phases
 
 1. P1 — CI-safe tests, 0.4.1 metadata, and curated fix-forward notes form a new candidate — status: done
-2. P2 — the exact CI-equivalent complete gate verifies the 0.4.1 candidate — status: active
-3. P3 — verified main is pushed and stops before the separately authorized 0.4.1 tag — status: pending
+2. P2 — the exact CI-equivalent complete gate verifies the 0.4.1 candidate — status: done
+3. P3 — verified main is pushed and stops before the separately authorized 0.4.1 tag — status: active
