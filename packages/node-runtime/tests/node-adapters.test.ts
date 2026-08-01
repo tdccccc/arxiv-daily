@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   HttpTransportError,
   isCancellationError,
+  prepareDailyFilterCheckpoint,
   type DailyPaperResult,
   type DailySummaryCheckpointCompatibilityInput,
 } from "@arxiv-daily/core";
@@ -35,6 +37,10 @@ async function makeTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "arxiv-daily-node-"));
   tempDirs.push(dir);
   return dir;
+}
+
+async function fileMode(path: string): Promise<number> {
+  return (await stat(path)).mode & 0o777;
 }
 
 function captureStream() {
@@ -168,6 +174,12 @@ describe("NodeStorageAdapter", () => {
   it("preserves a recoverable checkpoint backup across consecutive real upserts", async () => {
     const root = await makeTempDir();
     const storage = new NodeStorageAdapter(root);
+    const privateWrites: Array<{ path: string; mode: number; actualMode: number }> = [];
+    const writePrivate = storage.writeTextWithMode.bind(storage);
+    storage.writeTextWithMode = async (path, content, mode) => {
+      await writePrivate(path, content, mode);
+      privateWrites.push({ path, mode, actualMode: await fileMode(join(root, path)) });
+    };
     const store = new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output);
     const first: DailySummaryCheckpointCompatibilityInput = {
       paper: {
@@ -210,6 +222,73 @@ describe("NodeStorageAdapter", () => {
       .lookupReusable("2026-08-01", first)).resolves.toEqual(result("2608.00001"));
     expect(JSON.parse(await readFile(join(root, paths.backupPath), "utf8")))
       .toMatchObject({ entries: { "arxiv:2608.00001": {} } });
+    expect(await fileMode(join(root, paths.documentPath))).toBe(0o600);
+    expect(await fileMode(join(root, paths.backupPath))).toBe(0o600);
+    expect(privateWrites).toEqual(expect.arrayContaining([
+      { path: `${paths.documentPath}.tmp`, mode: 0o600, actualMode: 0o600 },
+      { path: `${paths.backupPath}.tmp`, mode: 0o600, actualMode: 0o600 },
+    ]));
+  });
+
+  it("reconstructs filter checkpoints from backup and cleans every real file", async () => {
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+    const privateWrites: Array<{ path: string; mode: number; actualMode: number }> = [];
+    const writePrivate = storage.writeTextWithMode.bind(storage);
+    storage.writeTextWithMode = async (path, content, mode) => {
+      await writePrivate(path, content, mode);
+      privateWrites.push({ path, mode, actualMode: await fileMode(join(root, path)) });
+    };
+    const store = new DailyFilterCheckpointStore(storage, DEFAULT_SETTINGS.output);
+    const compatibility = {
+      papers: [
+        { id: "2608.00001", title: "First", authors: "Author", abstract: "First abstract." },
+      ],
+      arxivSettings: {
+        ...DEFAULT_SETTINGS.arxiv,
+        categories: ["astro-ph"],
+        topics: [
+          { id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false },
+        ],
+      },
+      llm: {
+        provider: "custom" as const,
+        baseUrl: "https://example.test/v1?token=private",
+        model: "model-a",
+        thinkingMode: false,
+        reasoningEffort: "medium" as const,
+      },
+    };
+    const prepared = prepareDailyFilterCheckpoint(compatibility);
+    const first = [{ id: "2608.00001", category: "topic" }];
+    const second = [{ id: "2608.00001", category: "skip" }];
+
+    await store.save("2026-08-01", prepared, first);
+    await store.save("2026-08-01", prepared, second);
+    const paths = store.pathsFor("2026-08-01");
+    await writeFile(join(root, paths.documentPath), "corrupt", "utf8");
+
+    await expect(new DailyFilterCheckpointStore(storage, DEFAULT_SETTINGS.output)
+      .lookupReusable("2026-08-01", prepared)).resolves.toEqual(first);
+    expect(JSON.parse(await readFile(join(root, paths.backupPath), "utf8")))
+      .toMatchObject({ result: first });
+    expect(await fileMode(join(root, paths.documentPath))).toBe(0o600);
+    expect(await fileMode(join(root, paths.backupPath))).toBe(0o600);
+    expect(privateWrites).toEqual(expect.arrayContaining([
+      { path: `${paths.documentPath}.tmp`, mode: 0o600, actualMode: 0o600 },
+      { path: `${paths.backupPath}.tmp`, mode: 0o600, actualMode: 0o600 },
+    ]));
+
+    await new DailyFilterCheckpointStore(storage, DEFAULT_SETTINGS.output)
+      .removeAll("2026-08-01");
+    for (const path of [
+      paths.documentPath,
+      paths.backupPath,
+      `${paths.documentPath}.tmp`,
+      `${paths.backupPath}.tmp`,
+    ]) {
+      expect(await storage.exists(path)).toBe(false);
+    }
   });
 
   it("lists entries and rejects paths outside the root", async () => {

@@ -596,7 +596,7 @@ async function replaceWithBackup(
   await removeIfExists(storage, backupTmp);
 
   try {
-    await storage.writeText(tmp, content);
+    await writePrivateCheckpointText(storage, tmp, content);
 
     let previous: string | null = null;
     if (await storage.exists(paths.documentPath)) {
@@ -614,7 +614,7 @@ async function replaceWithBackup(
       // adapters reject rename when the destination exists, so remove the old
       // backup only after backupTmp is complete. A publish failure still leaves
       // the valid primary untouched and aborts before promotion.
-      await storage.writeText(backupTmp, previous);
+      await writePrivateCheckpointText(storage, backupTmp, previous);
       await removeIfExists(storage, paths.backupPath);
       await storage.rename(backupTmp, paths.backupPath);
     }
@@ -627,7 +627,7 @@ async function replaceWithBackup(
     } catch (error) {
       if (recoveryContent !== null) {
         await removeIfExists(storage, tmp);
-        await storage.writeText(tmp, recoveryContent);
+        await writePrivateCheckpointText(storage, tmp, recoveryContent);
         await storage.rename(tmp, paths.documentPath);
       }
       throw error;
@@ -711,6 +711,18 @@ function isExactObject(value: unknown, keys: readonly string[]): value is Record
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+async function writePrivateCheckpointText(
+  storage: StorageAdapter,
+  path: string,
+  content: string,
+): Promise<void> {
+  if (storage.writeTextWithMode) {
+    await storage.writeTextWithMode(path, content, 0o600);
+    return;
+  }
+  await storage.writeText(path, content);
 }
 
 async function ensureDirDeep(storage: StorageAdapter, dir: string): Promise<void> {

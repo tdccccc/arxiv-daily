@@ -21,6 +21,16 @@ export class NodeStorageAdapter implements StorageAdapter {
     await fs.writeFile(this.toFsPath(storagePath), content, "utf8");
   }
 
+  async writeTextWithMode(
+    storagePath: string,
+    content: string,
+    mode: number,
+  ): Promise<void> {
+    const target = this.toFsPath(storagePath);
+    await fs.writeFile(target, content, { encoding: "utf8", mode });
+    await fs.chmod(target, mode);
+  }
+
   async writeTextAtomic(storagePath: string, content: string): Promise<void> {
     const target = this.toFsPath(storagePath);
     const tmp = this.toFsPath(`${storagePath}.tmp`);

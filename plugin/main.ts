@@ -25,7 +25,10 @@ import { ManualFetchService } from "@arxiv-daily/core";
 import { registerCommands } from "./src/commands";
 import { todayInTz, formatDate } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
-import { DailySummaryCheckpointStore } from "@arxiv-daily/core";
+import {
+  DailyFilterCheckpointStore,
+  DailySummaryCheckpointStore,
+} from "@arxiv-daily/core";
 import { PdfService } from "@arxiv-daily/core";
 import { ProjectNotesService } from "@arxiv-daily/core";
 import { RecentDatesCache } from "@arxiv-daily/core";
@@ -369,17 +372,28 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildPipeline(): ArxivPipeline {
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
+    const checkpointStoreOptions = {
+      onWarning: (message: string, error?: unknown) =>
+        this.logger.warn(message, error),
+    };
     return new ArxivPipeline({
       fetcher,
       markupParser: this.host.markupParser,
       paperFetcher,
       writer,
       paperIndex: this.buildPaperIndex(),
-      checkpointStore: new DailySummaryCheckpointStore(
-        this.host.storage,
-        this.settings.output,
-        { onWarning: (message, error) => this.logger.warn(message, error) },
-      ),
+      checkpointStores: {
+        filter: new DailyFilterCheckpointStore(
+          this.host.storage,
+          this.settings.output,
+          checkpointStoreOptions,
+        ),
+        summary: new DailySummaryCheckpointStore(
+          this.host.storage,
+          this.settings.output,
+          checkpointStoreOptions,
+        ),
+      },
       llm,
       logger: this.logger,
       arxiv: this.settings.arxiv,

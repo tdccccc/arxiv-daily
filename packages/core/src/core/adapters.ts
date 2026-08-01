@@ -69,6 +69,8 @@ export interface StorageAdapter {
   normalizePath(path: string): string;
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
+  /** Writes host-private data with a restrictive mode when the host supports it. */
+  writeTextWithMode?(path: string, content: string, mode: number): Promise<void>;
   writeTextAtomic?(path: string, content: string): Promise<void>;
   appendText?(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;

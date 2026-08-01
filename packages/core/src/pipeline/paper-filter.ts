@@ -1,16 +1,27 @@
-import type { ChatMessage, LlmClient } from "../llm/client";
+import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
-import type { ArxivSettings, Topic } from "../settings/types";
-import { formatArxivCategories } from "../settings/categories";
+import type { ArxivSettings, LlmSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
-import { renderPrompt } from "../prompts/render";
-import filterSystemTemplate from "../prompts/paper-filter.system.md";
-import injectionGuardZh from "../prompts/injection-guard.md";
-import { escapePaperDataFence } from "./prompt-safety";
 import type { MetricsObserver } from "../metrics/generation";
-import type { DailyFilterCheckpointCompatibilityInput } from "../services/daily-filter-checkpoint-store";
-import type { LlmSettings } from "../settings/types";
+import {
+  buildPaperFilterRequest,
+  decodePaperFilterRecords,
+  prepareDailyFilterCheckpoint,
+  type FilterRecord,
+  type PreparedDailyFilterCheckpoint,
+} from "./paper-filter-contract";
+
+export {
+  buildPaperFilterRequest,
+  decodePaperFilterRecords,
+  prepareDailyFilterCheckpoint,
+  type DailyFilterCheckpointCompatibilityInput,
+  type FilterRecord,
+  type FilterRecordDecodeResult,
+  type PaperFilterRequest,
+  type PreparedDailyFilterCheckpoint,
+} from "./paper-filter-contract";
 
 export interface FilteredPaper extends PaperMeta {
   category: string;
@@ -20,11 +31,11 @@ export interface FilteredPaper extends PaperMeta {
 export interface DailyFilterCheckpointPort {
   lookupReusable(
     reportDate: string,
-    input: DailyFilterCheckpointCompatibilityInput,
+    prepared: PreparedDailyFilterCheckpoint,
   ): Promise<FilterRecord[] | null>;
   save(
     reportDate: string,
-    input: DailyFilterCheckpointCompatibilityInput,
+    prepared: PreparedDailyFilterCheckpoint,
     result: FilterRecord[],
   ): Promise<unknown>;
 }
@@ -53,97 +64,6 @@ export function isPaperFilterCheckpointError(
   return error instanceof PaperFilterCheckpointError;
 }
 
-export interface PaperFilterRequest {
-  messages: ChatMessage[];
-  options: { temperature: 0 };
-  identity: {
-    knownIds: string[];
-    validTags: string[];
-  };
-}
-
-export interface FilterRecord {
-  id: string;
-  category: string;
-}
-
-export type FilterRecordDecodeResult =
-  | { ok: true; value: FilterRecord[] }
-  | { ok: false; reason: string };
-
-/** Construct the exact request consumed by the live paper-filter LLM call. */
-export function buildPaperFilterRequest(
-  papers: PaperMeta[],
-  arxivSettings: ArxivSettings,
-): PaperFilterRequest {
-  const topics: Topic[] = arxivSettings.topics ?? [];
-  const topicLines = topics.map((t) => `- ${t.tag}: ${t.description}`).join("\n");
-  const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
-  const papersText = papers
-    .map(
-      (p) =>
-        `---\nID: ${escapePaperDataFence(p.id)}\n` +
-        `Title: ${escapePaperDataFence(p.title)}\n` +
-        `Abstract: ${escapePaperDataFence(p.abstract)}\n`,
-    )
-    .join("");
-  return {
-    messages: [
-      {
-        role: "system",
-        content: renderPrompt(filterSystemTemplate, {
-          topicLines,
-          tagOptions,
-          injectionGuard: injectionGuardZh,
-        }),
-      },
-      {
-        role: "user",
-        content: `以下是今日 arXiv ${formatArxivCategories(arxivSettings)} 的所有新论文：\n\n<paper_data>\n${papersText}</paper_data>`,
-      },
-    ],
-    options: { temperature: 0 },
-    identity: {
-      knownIds: papers.map((paper) => paper.id),
-      validTags: topics.map((topic) => topic.tag),
-    },
-  };
-}
-
-/** Strictly decode validated model decisions while preserving record order and omissions. */
-export function decodePaperFilterRecords(
-  value: unknown,
-  knownIds: ReadonlySet<string>,
-  validTags: ReadonlySet<string>,
-): FilterRecordDecodeResult {
-  if (!isPlainObject(value) || !hasExactKeys(value, ["papers"]) || !Array.isArray(value.papers)) {
-    return { ok: false, reason: "root must be exactly {papers:[...]}" };
-  }
-
-  const seen = new Set<string>();
-  const records: FilterRecord[] = [];
-  for (const record of value.papers) {
-    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category"])) {
-      return { ok: false, reason: "paper record has an invalid shape" };
-    }
-    if (typeof record.id !== "string" || !knownIds.has(record.id)) {
-      return { ok: false, reason: "paper record has an unknown id" };
-    }
-    if (seen.has(record.id)) {
-      return { ok: false, reason: "paper record has a duplicate id" };
-    }
-    if (
-      typeof record.category !== "string" ||
-      (record.category !== "skip" && !validTags.has(record.category))
-    ) {
-      return { ok: false, reason: `paper ${record.id} has an invalid category` };
-    }
-    seen.add(record.id);
-    records.push({ id: record.id, category: record.category });
-  }
-  return { ok: true, value: records };
-}
-
 export async function filterPapers(
   papers: PaperMeta[],
   deps: PaperFilterDeps,
@@ -158,18 +78,28 @@ export async function filterPapers(
     return [];
   }
 
-  const request = buildPaperFilterRequest(papers, arxivSettings);
-  const checkpointInput: DailyFilterCheckpointCompatibilityInput = {
-    papers,
-    arxivSettings,
-    llm: deps.llmSettings,
-  };
+  let prepared: PreparedDailyFilterCheckpoint | undefined;
+  try {
+    prepared = deps.checkpointStore
+      ? prepareDailyFilterCheckpoint({
+          papers,
+          arxivSettings,
+          llm: deps.llmSettings,
+        })
+      : undefined;
+  } catch (error) {
+    throw new PaperFilterCheckpointError(
+      `prepare failed for ${deps.reportDate}: ${(error as Error).message}`,
+      error,
+    );
+  }
+  const request = prepared?.request ?? buildPaperFilterRequest(papers, arxivSettings);
   let validatedRecords: FilterRecord[];
   let reusable: FilterRecord[] | null | undefined;
   try {
     reusable = await deps.checkpointStore?.lookupReusable(
       deps.reportDate,
-      checkpointInput,
+      prepared!,
     );
   } catch (error) {
     if (isCancellationError(error)) throw error;
@@ -230,7 +160,7 @@ export async function filterPapers(
     try {
       await deps.checkpointStore?.save(
         deps.reportDate,
-        checkpointInput,
+        prepared!,
         validatedRecords,
       );
     } catch (error) {
@@ -274,17 +204,4 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = [...expected].sort();
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
 }

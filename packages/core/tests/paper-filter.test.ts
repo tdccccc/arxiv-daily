@@ -1,5 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
-import { buildPaperFilterRequest, filterPapers } from "../src/pipeline/paper-filter";
+import {
+  buildPaperFilterRequest,
+  filterPapers,
+  prepareDailyFilterCheckpoint,
+  type FilterRecord,
+  type PreparedDailyFilterCheckpoint,
+} from "../src/pipeline/paper-filter";
+import {
+  DailyFilterCheckpointStore,
+  createDailyFilterCompatibilityFingerprint,
+  deriveDailyFilterCheckpointPaths,
+} from "../src/services/daily-filter-checkpoint-store";
+import type { StorageAdapter } from "../src/core/adapters";
 import { Logger } from "../src/services/logger";
 import type { ArxivSettings, Topic } from "../src/settings/types";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -22,6 +34,24 @@ const checkpointScope = {
   reportDate: "2026-08-01",
   llmSettings: DEFAULT_SETTINGS.llm,
 };
+
+function memoryStorage() {
+  const files: Record<string, string> = {};
+  const dirs = new Set<string>();
+  const storage: StorageAdapter = {
+    normalizePath: (path) => path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, ""),
+    exists: async (path) => path in files || dirs.has(path),
+    readText: async (path) => {
+      if (!(path in files)) throw new Error(`missing ${path}`);
+      return files[path]!;
+    },
+    writeText: async (path, content) => { files[path] = content; },
+    mkdir: async (path) => { dirs.add(path); },
+    remove: async (path) => { delete files[path]; dirs.delete(path); },
+    rename: async (from, to) => { files[to] = files[from]!; delete files[from]; },
+  };
+  return { files, storage };
+}
 
 const samplePaper: PaperMeta = {
   id: "2601.12345",
@@ -214,6 +244,94 @@ describe("filterPapers", () => {
     expect(logger.info).toHaveBeenCalledWith(
       "paper-filter: checkpoint hit date=2026-08-01 count=2",
     );
+  });
+
+  it("replaces a real corrupt store once and hits it without a second LLM call", async () => {
+    const { files, storage } = memoryStorage();
+    const paths = deriveDailyFilterCheckpointPaths(
+      storage,
+      DEFAULT_SETTINGS.output,
+      checkpointScope.reportDate,
+    );
+    files[paths.documentPath] = "{corrupt";
+    files[paths.backupPath] = JSON.stringify({ schemaVersion: 999 });
+    const checkpointStore = new DailyFilterCheckpointStore(
+      storage,
+      DEFAULT_SETTINGS.output,
+    );
+    const llm = { call: vi.fn(async () => JSON.stringify({
+      papers: [{ id: samplePaper.id, category: "photo-z" }],
+    })) };
+    const deps = {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
+      ...checkpointScope,
+    };
+
+    await expect(filterPapers([samplePaper], deps)).resolves.toHaveLength(1);
+    await expect(filterPapers([samplePaper], deps)).resolves.toHaveLength(1);
+
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(files[paths.documentPath]).not.toContain("corrupt");
+    if (files[paths.backupPath]) {
+      expect(files[paths.backupPath]).not.toContain('"schemaVersion":999');
+    }
+    expect(files[`${paths.documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${paths.backupPath}.tmp`]).toBeUndefined();
+  });
+
+  it("persists the immutable exact request snapshot when settings mutate during the LLM call", async () => {
+    const arxivSettings = makeArxiv(makeTopics());
+    const llmSettings = { ...DEFAULT_SETTINGS.llm };
+    const original = prepareDailyFilterCheckpoint({
+      papers: [samplePaper],
+      arxivSettings,
+      llm: llmSettings,
+    });
+    const originalFingerprint = createDailyFilterCompatibilityFingerprint(original);
+    const saved = new Map<string, FilterRecord[]>();
+    const checkpointStore = {
+      lookupReusable: vi.fn(async (_date: string, snapshot: PreparedDailyFilterCheckpoint) =>
+        saved.get(createDailyFilterCompatibilityFingerprint(snapshot)) ?? null),
+      save: vi.fn(async (_date: string, snapshot: PreparedDailyFilterCheckpoint, records: FilterRecord[]) => {
+        saved.set(createDailyFilterCompatibilityFingerprint(snapshot), records);
+      }),
+    };
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        expect(messages).toEqual(original.request.messages);
+        arxivSettings.topics[0]!.description = "mutated while awaiting LLM";
+        llmSettings.model = "mutated-model";
+        llmSettings.baseUrl = "https://mutated.example/v1";
+        llmSettings.thinkingMode = !llmSettings.thinkingMode;
+        return JSON.stringify({
+          papers: [{ id: samplePaper.id, category: "photo-z" }],
+        });
+      }),
+    };
+
+    await expect(filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings,
+      llmSettings,
+      reportDate: checkpointScope.reportDate,
+      checkpointStore,
+    })).resolves.toHaveLength(1);
+
+    expect([...saved.keys()]).toEqual([originalFingerprint]);
+    const changed = prepareDailyFilterCheckpoint({
+      papers: [samplePaper],
+      arxivSettings,
+      llm: llmSettings,
+    });
+    expect(createDailyFilterCompatibilityFingerprint(changed)).not.toBe(originalFingerprint);
+    expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, changed)).toBeNull();
+    expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, original)).toEqual([
+      { id: samplePaper.id, category: "photo-z" },
+    ]);
   });
 
   it("awaits durable persistence of strict records and never caches invalid responses", async () => {

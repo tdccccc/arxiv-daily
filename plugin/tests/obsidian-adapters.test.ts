@@ -8,10 +8,12 @@ import {
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 import {
   ArxivFetcher,
+  DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   isCancellationError,
   Logger,
+  prepareDailyFilterCheckpoint,
   type DailyPaperResult,
   type DailySummaryCheckpointCompatibilityInput,
   type PluginSettings,
@@ -180,6 +182,57 @@ describe("Obsidian host adapters", () => {
       .resolves.toEqual(result("2608.00002"));
     expect(files[`${paths.documentPath}.tmp`]).toBeUndefined();
     expect(files[`${paths.backupPath}.tmp`]).toBeUndefined();
+  });
+
+  it("reconstructs filter checkpoints from backup and cleans every Obsidian file", async () => {
+    const { app, files } = testApp();
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: testSettings,
+    });
+    const store = new DailyFilterCheckpointStore(host.storage, DEFAULT_SETTINGS.output);
+    const compatibility = {
+      papers: [
+        { id: "2608.00001", title: "First", authors: "Author", abstract: "First abstract." },
+      ],
+      arxivSettings: {
+        ...DEFAULT_SETTINGS.arxiv,
+        categories: ["astro-ph"],
+        topics: [
+          { id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false },
+        ],
+      },
+      llm: {
+        provider: "custom" as const,
+        baseUrl: "https://example.test/v1?token=private",
+        model: "model-a",
+        thinkingMode: false,
+        reasoningEffort: "medium" as const,
+      },
+    };
+    const prepared = prepareDailyFilterCheckpoint(compatibility);
+    const first = [{ id: "2608.00001", category: "topic" }];
+    const second = [{ id: "2608.00001", category: "skip" }];
+
+    await store.save("2026-08-01", prepared, first);
+    await store.save("2026-08-01", prepared, second);
+    const paths = store.pathsFor("2026-08-01");
+    files[paths.documentPath] = "corrupt";
+
+    await expect(new DailyFilterCheckpointStore(host.storage, DEFAULT_SETTINGS.output)
+      .lookupReusable("2026-08-01", prepared)).resolves.toEqual(first);
+    expect(JSON.parse(files[paths.backupPath]!)).toMatchObject({ result: first });
+
+    await new DailyFilterCheckpointStore(host.storage, DEFAULT_SETTINGS.output)
+      .removeAll("2026-08-01");
+    for (const path of [
+      paths.documentPath,
+      paths.backupPath,
+      `${paths.documentPath}.tmp`,
+      `${paths.backupPath}.tmp`,
+    ]) {
+      expect(files[path]).toBeUndefined();
+    }
   });
 
   it("atomically preserves scientific Markdown bytes without touching plugin data", async () => {

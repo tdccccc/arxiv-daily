@@ -1,48 +1,32 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { ChatMessage } from "../llm/client";
-import type { PaperMeta } from "../pipeline/arxiv-parser";
+import type { CheckpointGenerationIdentity } from "./daily-summary-checkpoint-store";
 import {
-  buildPaperFilterRequest,
+  DAILY_FILTER_FINGERPRINT_VERSION,
+  DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
   decodePaperFilterRecords,
+  isPreparedDailyFilterCheckpoint,
+  prepareDailyFilterCheckpoint,
+  type DailyFilterCheckpointCompatibilityInput,
+  type DailyFilterCheckpointFingerprintInput,
   type FilterRecord,
-} from "../pipeline/paper-filter";
-import type { ArxivSettings, LlmSettings, OutputSettings } from "../settings/types";
+  type PreparedDailyFilterCheckpoint,
+} from "../pipeline/paper-filter-contract";
+import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "./paper-index";
-import {
-  buildCheckpointGenerationIdentity,
-  sha256ForCheckpointTests,
-  type CheckpointGenerationIdentity,
-} from "./daily-summary-checkpoint-store";
+import { sha256ForCheckpointTests } from "./daily-summary-checkpoint-store";
 
 export const DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION = 1 as const;
-export const DAILY_FILTER_FINGERPRINT_VERSION = 1 as const;
-export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 1 as const;
-export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 1 as const;
-
-export interface DailyFilterCheckpointCompatibilityInput {
-  papers: PaperMeta[];
-  arxivSettings: ArxivSettings;
-  llm: Pick<
-    LlmSettings,
-    "provider" | "baseUrl" | "model" | "thinkingMode" | "reasoningEffort"
-  > & { apiKey?: string };
-  promptContractVersion?: number;
-  resultContractVersion?: number;
-}
-
-export interface DailyFilterCheckpointFingerprintInput {
-  fingerprintVersion: typeof DAILY_FILTER_FINGERPRINT_VERSION;
-  request: {
-    messages: ChatMessage[];
-    identity: {
-      knownIds: string[];
-      validTags: string[];
-    };
-  };
-  generation: CheckpointGenerationIdentity;
-  promptContractVersion: number;
-  resultContractVersion: number;
-}
+export {
+  DAILY_FILTER_FINGERPRINT_VERSION,
+  DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
+  prepareDailyFilterCheckpoint,
+  type DailyFilterCheckpointCompatibilityInput,
+  type DailyFilterCheckpointFingerprintInput,
+  type PreparedDailyFilterCheckpoint,
+} from "../pipeline/paper-filter-contract";
 
 export interface DailyFilterCheckpointDocument {
   schemaVersion: typeof DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION;
@@ -96,37 +80,23 @@ export function deriveDailyFilterCheckpointPaths(
 }
 
 export function buildDailyFilterCheckpointFingerprintInput(
-  input: DailyFilterCheckpointCompatibilityInput,
+  input: DailyFilterCheckpointCompatibilityInput | PreparedDailyFilterCheckpoint,
 ): DailyFilterCheckpointFingerprintInput {
-  const request = buildPaperFilterRequest(input.papers, input.arxivSettings);
-  let generation: CheckpointGenerationIdentity;
   try {
-    generation = buildCheckpointGenerationIdentity(
-      input.llm,
-      request.options.temperature,
-    );
+    const prepared = isPreparedDailyFilterCheckpoint(input)
+      ? input
+      : prepareDailyFilterCheckpoint(input);
+    return clone(prepared.fingerprintInput);
   } catch (error) {
     throw new DailyFilterCheckpointStoreError(
       "invalid daily filter generation identity",
       error,
     );
   }
-  return {
-    fingerprintVersion: DAILY_FILTER_FINGERPRINT_VERSION,
-    request: {
-      messages: clone(request.messages),
-      identity: clone(request.identity),
-    },
-    generation,
-    promptContractVersion:
-      input.promptContractVersion ?? DAILY_FILTER_PROMPT_CONTRACT_VERSION,
-    resultContractVersion:
-      input.resultContractVersion ?? DAILY_FILTER_RESULT_CONTRACT_VERSION,
-  };
 }
 
 export function createDailyFilterCompatibilityFingerprint(
-  input: DailyFilterCheckpointCompatibilityInput,
+  input: DailyFilterCheckpointCompatibilityInput | PreparedDailyFilterCheckpoint,
 ): string {
   return fingerprint(buildDailyFilterCheckpointFingerprintInput(input));
 }
@@ -146,7 +116,19 @@ export class DailyFilterCheckpointStore {
     const paths = this.pathsFor(reportDate);
     const primary = await this.readDocument(paths.documentPath, reportDate);
     if (primary.kind === "valid") return primary.document;
+    if (primary.kind === "unreadable") {
+      throw new DailyFilterCheckpointStoreError(
+        `cannot read daily filter checkpoint: ${paths.documentPath}`,
+        primary.error,
+      );
+    }
     const backup = await this.readDocument(paths.backupPath, reportDate);
+    if (backup.kind === "unreadable") {
+      throw new DailyFilterCheckpointStoreError(
+        `cannot read daily filter checkpoint: ${paths.backupPath}`,
+        backup.error,
+      );
+    }
     if (backup.kind === "valid") {
       this.warn(`daily filter checkpoint recovered from backup: ${paths.backupPath}`);
       return backup.document;
@@ -156,23 +138,25 @@ export class DailyFilterCheckpointStore {
 
   async lookupReusable(
     reportDate: string,
-    input: DailyFilterCheckpointCompatibilityInput,
+    prepared: PreparedDailyFilterCheckpoint,
   ): Promise<FilterRecord[] | null> {
+    requirePrepared(prepared);
     const document = await this.load(reportDate);
     if (!document) return null;
-    if (document.fingerprint !== createDailyFilterCompatibilityFingerprint(input)) return null;
+    if (document.fingerprint !== createDailyFilterCompatibilityFingerprint(prepared)) return null;
     return clone(document.result);
   }
 
   save(
     reportDate: string,
-    input: DailyFilterCheckpointCompatibilityInput,
+    prepared: PreparedDailyFilterCheckpoint,
     result: unknown,
   ): Promise<DailyFilterCheckpointDocument> {
     const paths = this.pathsFor(reportDate);
     return this.enqueue(paths.documentPath, async () => {
+      requirePrepared(prepared);
       await this.assertMutable(reportDate);
-      const fingerprintInput = buildDailyFilterCheckpointFingerprintInput(input);
+      const fingerprintInput = buildDailyFilterCheckpointFingerprintInput(prepared);
       if (
         fingerprintInput.promptContractVersion !== DAILY_FILTER_PROMPT_CONTRACT_VERSION ||
         fingerprintInput.resultContractVersion !== DAILY_FILTER_RESULT_CONTRACT_VERSION
@@ -229,15 +213,16 @@ export class DailyFilterCheckpointStore {
       this.warn(`daily filter checkpoint recovered from backup: ${paths.backupPath}`);
       return;
     }
-    if (primary.kind === "missing" && backup.kind === "missing") return;
-    throw new DailyFilterCheckpointStoreError(
-      `cannot mutate unreadable daily filter checkpoint: ${paths.documentPath}`,
-      backup.kind === "unreadable" || backup.kind === "corrupt"
-        ? backup.error
-        : primary.kind === "corrupt"
-          ? primary.error
-          : undefined,
-    );
+    if (backup.kind === "unreadable") {
+      throw new DailyFilterCheckpointStoreError(
+        `cannot mutate unreadable daily filter checkpoint: ${paths.backupPath}`,
+        backup.error,
+      );
+    }
+    // Missing or readable-corrupt documents carry no durable state. A newly
+    // strict-valid result may replace them; persist will never rotate corrupt
+    // bytes into the backup or use them as promotion recovery content.
+    return;
   }
 
   private async readDocument(path: string, reportDate: string): Promise<DocumentReadResult> {
@@ -408,7 +393,7 @@ async function replaceWithBackup(
   await removeIfExists(storage, tmp);
   await removeIfExists(storage, backupTmp);
   try {
-    await storage.writeText(tmp, content);
+    await writePrivateCheckpointText(storage, tmp, content);
     let previous: string | null = null;
     if (await storage.exists(paths.documentPath)) {
       const raw = await storage.readText(paths.documentPath);
@@ -417,10 +402,14 @@ async function replaceWithBackup(
     let recoveryContent = previous;
     if (recoveryContent === null && await storage.exists(paths.backupPath)) {
       const raw = await storage.readText(paths.backupPath);
-      if (decodeRawDocument(raw, reportDate)) recoveryContent = raw;
+      if (decodeRawDocument(raw, reportDate)) {
+        recoveryContent = raw;
+      } else {
+        await storage.remove(paths.backupPath);
+      }
     }
     if (previous !== null) {
-      await storage.writeText(backupTmp, previous);
+      await writePrivateCheckpointText(storage, backupTmp, previous);
       await removeIfExists(storage, paths.backupPath);
       await storage.rename(backupTmp, paths.backupPath);
     }
@@ -430,7 +419,7 @@ async function replaceWithBackup(
     } catch (error) {
       if (recoveryContent !== null) {
         await removeIfExists(storage, tmp);
-        await storage.writeText(tmp, recoveryContent);
+        await writePrivateCheckpointText(storage, tmp, recoveryContent);
         await storage.rename(tmp, paths.documentPath);
       }
       throw error;
@@ -450,6 +439,14 @@ function decodeRawDocument(raw: string, reportDate: string): DailyFilterCheckpoi
     return decodeDocument(JSON.parse(raw), reportDate);
   } catch {
     return null;
+  }
+}
+
+function requirePrepared(value: unknown): asserts value is PreparedDailyFilterCheckpoint {
+  if (!isPreparedDailyFilterCheckpoint(value)) {
+    throw new DailyFilterCheckpointStoreError(
+      "daily filter checkpoint requires a prepared exact request snapshot",
+    );
   }
 }
 
@@ -480,6 +477,18 @@ function isExactObject(value: unknown, keys: readonly string[]): value is Record
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+async function writePrivateCheckpointText(
+  storage: StorageAdapter,
+  path: string,
+  content: string,
+): Promise<void> {
+  if (storage.writeTextWithMode) {
+    await storage.writeTextWithMode(path, content, 0o600);
+    return;
+  }
+  await storage.writeText(path, content);
 }
 
 async function ensureDirDeep(storage: StorageAdapter, dir: string): Promise<void> {

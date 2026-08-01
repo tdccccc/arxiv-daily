@@ -98,6 +98,18 @@ in-vault settings GUI, catch-up scheduling, and on-demand manual runs.
 - One-shot, lossy migration from v0.1.x on first load (`migration.ts`).
 - Full vitest suite and production build are expected to pass before release.
 
+## Interrupted-run recovery
+
+The plugin and CLI use the same Core recovery policy and the active output paths. Before downstream work, a validated filter batch (including a valid zero-selection result) is stored at `<output-root>/.index/filter-checkpoints/YYYY-MM-DD.json`; each completed structured summary is stored at `<output-root>/.index/daily-summary-checkpoints/YYYY-MM-DD.json`. Each document can have one `.bak` recovery file.
+
+Reuse is exact-compatible. Filter compatibility binds the complete rendered request and effective generation identity, so any paper metadata, topic, ordering, endpoint identity, model, generation-mode, or contract change invalidates the whole batch. Summary compatibility binds its complete source and generation inputs. Normal logs report `paper-filter: checkpoint hit|miss|persisted` for the batch and `summarizeDaily: checkpoint hit|miss|persisted` per paper; corruption, backup recovery, and cleanup failure warn.
+
+A committed daily report is authoritative. Commit triggers best-effort cleanup of both checkpoint kinds, and cleanup failure does not invalidate the report. To force recomputation after an interruption, close Obsidian and stop every CLI run using the Vault, then delete that date's JSON and `.bak` files (or either checkpoint directory). Never merge or edit these internal files.
+
+Treat checkpoints and Vault-data export archives as sensitive. They can include rendered filter requests, research-topic descriptions, paper metadata/content, validated decisions, and generated summaries. Credentials, plaintext endpoints, and raw provider responses are not stored; endpoint identity is a digest. This exclusion does not make checkpoint data safe to publish. On Node hosts the checkpoint primary, temporary, backup, and backup-temporary files use mode `0600`; Obsidian exposes no portable chmod operation.
+
+The checkpoint fingerprint is a deterministic compatibility digest, not a MAC, signature, authenticity proof, or protection against file rewriting. Use only a trusted Vault and trusted import archives. A malicious local writer with Vault access is outside the recovery feature's threat model; close Obsidian and stop CLI writers before backup, import, or manual cleanup.
+
 ## Dashboard Features
 
 ### Settings Button

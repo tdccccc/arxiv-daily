@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { DailySummaryCheckpointStore, DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import {
+  DailyFilterCheckpointStore,
+  DailySummaryCheckpointStore,
+  DEFAULT_SETTINGS,
+} from "@arxiv-daily/core";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 
@@ -84,21 +88,26 @@ describe("plugin settings reload lifecycle", () => {
     expect((pipeline as any).deps.detailSelection).toBe(
       plugin.settings.detailSelection,
     );
-    expect((pipeline as any).deps.checkpointStore).toBeInstanceOf(
-      DailySummaryCheckpointStore,
-    );
-    expect((pipeline as any).deps.checkpointStore.storage).toBe(
-      (plugin as any).host.storage,
-    );
-    expect((pipeline as any).deps.checkpointStore.output).toBe(
-      plugin.settings.output,
-    );
+    const checkpointStores = (pipeline as any).deps.checkpointStores;
+    expect(checkpointStores.filter).toBeInstanceOf(DailyFilterCheckpointStore);
+    expect(checkpointStores.summary).toBeInstanceOf(DailySummaryCheckpointStore);
     const checkpointError = new Error("unreadable checkpoint");
-    (pipeline as any).deps.checkpointStore.options.onWarning(
+    for (const store of [checkpointStores.filter, checkpointStores.summary]) {
+      expect(store.storage).toBe((plugin as any).host.storage);
+      expect(store.output).toBe(plugin.settings.output);
+      store.options.onWarning("checkpoint warning", checkpointError);
+    }
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
       "checkpoint warning",
       checkpointError,
     );
-    expect(warn).toHaveBeenCalledWith("checkpoint warning", checkpointError);
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      "checkpoint warning",
+      checkpointError,
+    );
   });
 
   it("logs persisted sanitation warnings after logger initialization", () => {

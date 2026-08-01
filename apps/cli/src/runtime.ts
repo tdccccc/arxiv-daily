@@ -14,7 +14,10 @@ import { OperationRegistry, RunCancellationService } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
 import { ManualFetchService } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
-import { DailySummaryCheckpointStore } from "@arxiv-daily/core";
+import {
+  DailyFilterCheckpointStore,
+  DailySummaryCheckpointStore,
+} from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
@@ -115,10 +118,18 @@ export async function buildCliRuntime(
     logger.warn(`markdown temp cleanup failed: ${(e as Error).message}`),
   );
   const paperIndex = new PaperIndexStore(host.storage, config.settings.output);
-  const checkpointStore = new DailySummaryCheckpointStore(
+  const checkpointStoreOptions = {
+    onWarning: (message: string, error?: unknown) => logger.warn(message, error),
+  };
+  const filterCheckpointStore = new DailyFilterCheckpointStore(
     host.storage,
     config.settings.output,
-    { onWarning: (message, error) => logger.warn(message, error) },
+    checkpointStoreOptions,
+  );
+  const summaryCheckpointStore = new DailySummaryCheckpointStore(
+    host.storage,
+    config.settings.output,
+    checkpointStoreOptions,
   );
   const stateStore = createStorageStateStore(
     host.storage,
@@ -136,7 +147,10 @@ export async function buildCliRuntime(
     paperFetcher,
     writer,
     paperIndex,
-    checkpointStore,
+    checkpointStores: {
+      filter: filterCheckpointStore,
+      summary: summaryCheckpointStore,
+    },
     llm,
     logger,
     arxiv: config.settings.arxiv,

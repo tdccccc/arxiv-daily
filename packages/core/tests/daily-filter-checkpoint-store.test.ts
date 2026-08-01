@@ -13,6 +13,7 @@ import {
   buildDailyFilterCheckpointFingerprintInput,
   createDailyFilterCompatibilityFingerprint,
   deriveDailyFilterCheckpointPaths,
+  prepareDailyFilterCheckpoint,
 } from "../src/services/daily-filter-checkpoint-store";
 import {
   DailyFilterCheckpointStore as ExportedDailyFilterCheckpointStore,
@@ -60,6 +61,12 @@ function compatibility(
     },
     ...overrides,
   };
+}
+
+function prepared(
+  overrides: Partial<DailyFilterCheckpointCompatibilityInput> = {},
+) {
+  return prepareDailyFilterCheckpoint(compatibility(overrides));
 }
 
 function makeStorage(options: { rejectExistingRenameTarget?: boolean } = {}) {
@@ -235,9 +242,20 @@ describe("DailyFilterCheckpointStore", () => {
     expect(() => deriveDailyFilterCheckpointPaths({ normalizePath: (path) => path }, DEFAULT_SETTINGS.output, "2026-02-30")).toThrow(/invalid checkpoint report date/);
   });
 
+  it("rejects caller-constructed objects at the store boundary", async () => {
+    const { storage } = makeStorage();
+    const arbitrary = {
+      request: buildPaperFilterRequest(papers, compatibility().arxivSettings),
+      fingerprintInput: buildDailyFilterCheckpointFingerprintInput(compatibility()),
+    };
+    await expect(
+      makeStore(storage).save(reportDate, arbitrary as any, result),
+    ).rejects.toThrow(/prepared exact request snapshot/);
+  });
+
   it.each([[result], [[] as FilterRecord[]]])("strictly saves and reuses ordered result %j", async (records) => {
     const { files, storage } = makeStorage();
-    await makeStore(storage).save(reportDate, compatibility(), records);
+    await makeStore(storage).save(reportDate, prepared(), records);
     expect(JSON.parse(files[documentPath]!)).toMatchObject({
       schemaVersion: DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION,
       reportDate,
@@ -245,7 +263,7 @@ describe("DailyFilterCheckpointStore", () => {
     });
     expect(files[documentPath]).not.toContain("never-persist");
     expect(files[documentPath]).not.toContain("example.test");
-    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual(records);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual(records);
   });
 
   it("round-trips after reconstruction when a valid tag contains a pipe", async () => {
@@ -264,7 +282,11 @@ describe("DailyFilterCheckpointStore", () => {
     });
     const records = [{ id: papers[0]!.id, category: "nlp|llm" }];
 
-    await makeStore(storage).save(reportDate, input, records);
+    await makeStore(storage).save(
+      reportDate,
+      prepareDailyFilterCheckpoint(input),
+      records,
+    );
 
     const persisted = JSON.parse(files[documentPath]!);
     expect(persisted.fingerprintInput.request.identity).toEqual({
@@ -274,13 +296,13 @@ describe("DailyFilterCheckpointStore", () => {
     expect(persisted.fingerprintInput.request.messages[0].content)
       .toContain("nlp|llm|skip");
     expect(await makeStore(storage).load(reportDate)).toMatchObject({ result: records });
-    expect(await makeStore(storage).lookupReusable(reportDate, input)).toEqual(records);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepareDailyFilterCheckpoint(input))).toEqual(records);
   });
 
   it("rejects invalid result and unsupported contracts", async () => {
     const { storage } = makeStorage();
-    await expect(makeStore(storage).save(reportDate, compatibility(), [{ id: "unknown", category: "topic-a" }])).rejects.toThrow(/invalid daily filter/);
-    await expect(makeStore(storage).save(reportDate, compatibility({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
+    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a" }])).rejects.toThrow(/invalid daily filter/);
+    await expect(makeStore(storage).save(reportDate, prepared({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
   });
 
   it.each([
@@ -292,12 +314,12 @@ describe("DailyFilterCheckpointStore", () => {
   ])("strict load rejects %s", async (_name, mutate) => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const document = JSON.parse(files[documentPath]!);
     mutate(document);
     files[documentPath] = JSON.stringify(document);
     expect(await store.load(reportDate)).toBeNull();
-    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
+    expect(await store.lookupReusable(reportDate, prepared())).toBeNull();
   });
 
   it.each([
@@ -316,66 +338,100 @@ describe("DailyFilterCheckpointStore", () => {
   ])("strict load rejects recomputed %s identity tampering", async (_name, mutate) => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const document = JSON.parse(files[documentPath]!);
     mutate(document);
     recomputeDocumentFingerprint(document);
     files[documentPath] = JSON.stringify(document);
     expect(await store.load(reportDate)).toBeNull();
-    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
+    expect(await store.lookupReusable(reportDate, prepared())).toBeNull();
   });
 
   it("changed structured identity participates in compatibility fingerprint", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const document = JSON.parse(files[documentPath]!);
     document.fingerprintInput.request.identity.validTags.push("tampered-tag");
     recomputeDocumentFingerprint(document);
     files[documentPath] = JSON.stringify(document);
 
     expect(await store.load(reportDate)).toMatchObject({ result });
-    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
+    expect(await store.lookupReusable(reportDate, prepared())).toBeNull();
   });
 
   it("treats corrupt primary as miss and recovers valid backup", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     files[backupPath] = files[documentPath]!;
     files[documentPath] = "corrupt";
-    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual(result);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual(result);
     delete files[backupPath];
-    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toBeNull();
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
+  it.each([
+    ["invalid JSON primary with no backup", "{not-json", undefined],
+    ["invalid schema primary with no backup", JSON.stringify({ schemaVersion: 999 }), undefined],
+    ["corrupt primary and corrupt backup", "{bad-primary", "{bad-backup"],
+  ])("replaces readable-corrupt state: %s", async (_name, primary, backup) => {
+    const { files, storage } = makeStorage();
+    files[documentPath] = primary;
+    if (backup !== undefined) files[backupPath] = backup;
+    const store = makeStore(storage);
+
+    expect(await store.lookupReusable(reportDate, prepared())).toBeNull();
+    await store.save(reportDate, prepared(), result);
+
+    expect(await store.lookupReusable(reportDate, prepared())).toEqual(result);
+    expect(files[documentPath]).not.toContain("bad-primary");
+    if (files[backupPath]) expect(files[backupPath]).not.toContain("bad-backup");
+    expect(files[`${documentPath}.tmp`]).toBeUndefined();
+    expect(files[`${backupPath}.tmp`]).toBeUndefined();
+  });
+
+  it("fails lookup closed on primary EIO without consulting a valid backup", async () => {
+    const { files, storage, readText } = makeStorage();
+    const store = makeStore(storage);
+    await store.save(reportDate, prepared(), result);
+    files[backupPath] = files[documentPath]!;
+    readText.mockClear();
+    readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
+
+    await expect(store.lookupReusable(reportDate, prepared())).rejects.toThrow(
+      /cannot read daily filter checkpoint/,
+    );
+    expect(readText).toHaveBeenCalledTimes(1);
   });
 
   it("fails mutation closed on primary EIO even with a valid backup", async () => {
     const { files, storage, readText } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     files[backupPath] = files[documentPath]!;
     const primary = files[documentPath]!;
     readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
-    await expect(store.save(reportDate, compatibility(), [])).rejects.toThrow(/cannot mutate unreadable/);
+    await expect(store.save(reportDate, prepared(), [])).rejects.toThrow(/cannot mutate unreadable/);
     expect(files[documentPath]).toBe(primary);
   });
 
   it("permits replacement from a valid backup when primary is corrupt", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     files[backupPath] = files[documentPath]!;
     files[documentPath] = "corrupt";
-    await store.save(reportDate, compatibility(), []);
-    expect(await store.lookupReusable(reportDate, compatibility())).toEqual([]);
+    await store.save(reportDate, prepared(), []);
+    expect(await store.lookupReusable(reportDate, prepared())).toEqual([]);
   });
 
   it("rotates backups and cleans temp artifacts", async () => {
     const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const first = files[documentPath]!;
-    await store.save(reportDate, compatibility(), []);
+    await store.save(reportDate, prepared(), []);
     expect(files[backupPath]).toBe(first);
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
     expect(files[`${backupPath}.tmp`]).toBeUndefined();
@@ -384,11 +440,11 @@ describe("DailyFilterCheckpointStore", () => {
   it("keeps primary valid when backup publication fails", async () => {
     const { files, storage, rename } = makeStorage({ rejectExistingRenameTarget: true });
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const primary = files[documentPath]!;
     files[backupPath] = primary;
     rename.mockImplementationOnce(async () => { throw new Error("injected backup failure"); });
-    await expect(store.save(reportDate, compatibility(), [])).rejects.toThrow(/failed to save/);
+    await expect(store.save(reportDate, prepared(), [])).rejects.toThrow(/failed to save/);
     expect(files[documentPath]).toBe(primary);
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
     expect(files[`${backupPath}.tmp`]).toBeUndefined();
@@ -397,23 +453,23 @@ describe("DailyFilterCheckpointStore", () => {
   it("serializes same-path saves across store instances", async () => {
     const { storage } = makeStorage();
     await Promise.all([
-      makeStore(storage).save(reportDate, compatibility(), result),
-      makeStore(storage).save(reportDate, compatibility(), []),
+      makeStore(storage).save(reportDate, prepared(), result),
+      makeStore(storage).save(reportDate, prepared(), []),
     ]);
-    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual([]);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual([]);
   });
 
   it("restores the previous primary after promotion failure", async () => {
     const { files, storage, rename } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     const primary = files[documentPath]!;
     rename.mockImplementationOnce(async (from, to) => {
       files[to] = files[from]!;
       delete files[from];
     });
     rename.mockImplementationOnce(async () => { throw new Error("injected promotion failure"); });
-    await expect(store.save(reportDate, compatibility(), [])).rejects.toThrow(/failed to save/);
+    await expect(store.save(reportDate, prepared(), [])).rejects.toThrow(/failed to save/);
     expect(files[documentPath]).toBe(primary);
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
   });
@@ -421,7 +477,7 @@ describe("DailyFilterCheckpointStore", () => {
   it("removes primary, backup, and temp artifacts", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
-    await store.save(reportDate, compatibility(), result);
+    await store.save(reportDate, prepared(), result);
     files[backupPath] = files[documentPath]!;
     files[`${documentPath}.tmp`] = "tmp";
     files[`${backupPath}.tmp`] = "tmp";

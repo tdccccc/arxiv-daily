@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DailySummaryCheckpointStore, Logger } from "@arxiv-daily/core";
+import {
+  DailyFilterCheckpointStore,
+  DailySummaryCheckpointStore,
+  Logger,
+} from "@arxiv-daily/core";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
 import { buildCliRuntime } from "../src/runtime";
@@ -80,14 +84,17 @@ describe("CLI runtime", () => {
       detail: false,
     });
 
-    const checkpointStore = (runtime.pipeline as any).deps.checkpointStore;
-    expect(checkpointStore).toBeInstanceOf(DailySummaryCheckpointStore);
-    expect(checkpointStore.storage).toBe(host.storage);
-    expect(checkpointStore.output).toBe(config.settings.output);
-    checkpointStore.options.onWarning("checkpoint warning", new Error("store failed"));
-    expect(logger.getBuffer().some((entry) =>
+    const checkpointStores = (runtime.pipeline as any).deps.checkpointStores;
+    expect(checkpointStores.filter).toBeInstanceOf(DailyFilterCheckpointStore);
+    expect(checkpointStores.summary).toBeInstanceOf(DailySummaryCheckpointStore);
+    for (const store of [checkpointStores.filter, checkpointStores.summary]) {
+      expect(store.storage).toBe(host.storage);
+      expect(store.output).toBe(config.settings.output);
+      store.options.onWarning("checkpoint warning", new Error("store failed"));
+    }
+    expect(logger.getBuffer().filter((entry) =>
       entry.includes("checkpoint warning") && entry.includes("store failed")
-    )).toBe(true);
+    )).toHaveLength(2);
 
     expect(await host.storage.exists("arxiv-daily/.index/papers.json")).toBe(
       true,

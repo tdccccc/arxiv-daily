@@ -450,6 +450,27 @@ describe("Pipeline partial failure consistency", () => {
     });
   });
 
+  it("fails closed before LLM when filter checkpoint lookup is unreadable", async () => {
+    const eio = Object.assign(new Error("checkpoint EIO"), { code: "EIO" });
+    const filterStore = {
+      lookupReusable: vi.fn(async () => { throw eio; }),
+      save: vi.fn(),
+      removeAll: vi.fn(),
+    };
+    const { pipeline, llm, writer, paperIndex } = makeOnePaperPipeline({
+      checkpointStores: { filter: filterStore },
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "failed_transient",
+      reason: "paper filter checkpoint failed: lookup failed for 2026-05-11: checkpoint EIO",
+    });
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(filterStore.save).not.toHaveBeenCalled();
+    expect(paperIndex.upsertManyFromDailyPapers).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
+  });
+
   it("stops before every downstream mutation when filter checkpoint persistence fails", async () => {
     const filterStore = {
       lookupReusable: vi.fn(async () => null),
@@ -469,6 +490,35 @@ describe("Pipeline partial failure consistency", () => {
     expect(paperIndex.upsertManyFromDailyPapers).not.toHaveBeenCalled();
     expect(paperFetcher.fetch).not.toHaveBeenCalled();
     expect(summarizeDaily).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it("replaces a corrupt filter miss once and hits it on the next zero-result run", async () => {
+    let records: any[] | null = null;
+    const filterStore = {
+      lookupReusable: vi.fn(async () => records),
+      save: vi.fn(async (_date: string, _prepared: unknown, saved: any[]) => {
+        records = saved;
+      }),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const { pipeline, llm, writer } = makeOnePaperPipeline({
+      checkpointStores: { filter: filterStore },
+    });
+    llm.call = vi.fn(async () => JSON.stringify({ papers: [] }));
+
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({
+      kind: "completed",
+      papersWritten: 0,
+    });
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({
+      kind: "completed",
+      papersWritten: 0,
+    });
+
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(filterStore.save).toHaveBeenCalledTimes(1);
+    expect(filterStore.lookupReusable).toHaveBeenCalledTimes(2);
     expect(writer.writeDaily).not.toHaveBeenCalled();
   });
 
@@ -520,7 +570,12 @@ describe("Pipeline partial failure consistency", () => {
     expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed" });
     expect(filterStore.lookupReusable).toHaveBeenCalledWith(
       "2026-05-11",
-      expect.objectContaining({ llm: DEFAULT_SETTINGS.llm }),
+      expect.objectContaining({
+        request: expect.objectContaining({ options: { temperature: 0 } }),
+        fingerprintInput: expect.objectContaining({
+          generation: expect.objectContaining({ model: DEFAULT_SETTINGS.llm.model }),
+        }),
+      }),
     );
     expect(llm.call).not.toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("选择最匹配的主题") })]),

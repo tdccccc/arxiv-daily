@@ -1,6 +1,6 @@
 # Daily filter checkpoint recovery
 
-status: active
+status: done
 updated: 2026-08-01
 owner: sess_4ab50bf8-a3f3-40cd-bf05-66eb503e2ed9
 
@@ -10,13 +10,13 @@ Make interrupted daily-report runs reuse an exact-compatible, validated paper-fi
 
 ## Success criteria
 
-- [ ] A validated filter result is durably checkpointed before Paper Index, content, detail, or summary work begins.
-- [ ] An interrupted rerun reuses only an exact-compatible filter batch and does not repeat its filter LLM request.
-- [ ] Filter and structured-summary checkpoint hit, miss, and persistence events are visible in normal diagnostic logs.
-- [ ] Cancellation, invalid responses, transport errors, checkpoint write failures, metrics, progress, and output ordering retain their existing semantics.
-- [ ] A committed daily report remains authoritative and triggers best-effort cleanup of all transient daily-generation checkpoints.
-- [ ] Plugin and CLI share one host-neutral Core implementation, and filter checkpoints remain portable Vault data without persisting credentials, plaintext endpoints, or raw provider responses.
-- [ ] Focused adversarial tests and the complete repository quality suite pass.
+- [x] A validated filter result is durably checkpointed before Paper Index, content, detail, or summary work begins.
+- [x] An interrupted rerun reuses only an exact-compatible filter batch and does not repeat its filter LLM request.
+- [x] Filter and structured-summary checkpoint hit, miss, and persistence events are visible in normal diagnostic logs.
+- [x] Cancellation, invalid responses, transport errors, checkpoint write failures, metrics, progress, and output ordering retain their existing semantics.
+- [x] A committed daily report remains authoritative and triggers best-effort cleanup of all transient daily-generation checkpoints.
+- [x] Plugin and CLI share one host-neutral Core implementation, and filter checkpoints remain portable Vault data without persisting credentials, plaintext endpoints, or raw provider responses.
+- [x] Focused adversarial tests and the complete repository quality suite pass.
 
 ## Non-goals
 
@@ -41,4 +41,4 @@ Make interrupted daily-report runs reuse an exact-compatible, validated paper-fi
 
 1. P1 — a strict batch filter contract and durable store preserve only exact-compatible validated decisions — status: done
 2. P2 — pipeline filter resume, checkpoint logs, and unified cleanup preserve all cancellation and commit boundaries — status: done
-3. P3 — both hosts, Vault portability, operator documentation, adversarial review, and full verification support closure — status: active
+3. P3 — both hosts, Vault portability, operator documentation, adversarial review, and full verification support closure — status: done
