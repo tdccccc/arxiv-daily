@@ -6,9 +6,10 @@ suffix, or build metadata. The workflow is serialized per tag, refuses to
 replace an existing GitHub release, uploads without `--clobber`, and uses the
 curated `docs/releases/<version>.md` rather than generated notes.
 
-After the GitHub release, the workflow also publishes the CLI to npm
-(`arxiv-daily`) with build provenance when the repository has an `NPM_TOKEN`
-secret; without it the npm step is skipped.
+After the GitHub release succeeds, `.github/workflows/publish-cli.yml`
+publishes the CLI (`arxiv-daily`) through npm Trusted Publishing with build
+provenance. npm binds that workflow's GitHub OIDC identity; no long-lived npm
+publish token or one-time password is passed to Actions.
 
 The Obsidian release assets remain exactly:
 
@@ -49,7 +50,7 @@ npm run check:release-version -- "$VERSION"
 npm run check:boundaries
 npm run lint
 npm run typecheck
-npm test
+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1
 npm run build
 npm run smoke:build
 ```
@@ -92,17 +93,18 @@ new version with the expected `dist-tag latest`, and the published package
 should carry a build provenance attestation (visible in the registry metadata
 for that version).
 
-Before the first automated release, add an `NPM_TOKEN` secret (an npm
-automation token with publish scope for the `arxiv-daily` package) under
-Settings → Secrets and variables → Actions.
+Configure npm Trusted Publishing for package `arxiv-daily` with GitHub owner
+`tdccccc`, repository `arxiv-daily`, and workflow `publish-cli.yml`. Leave the
+environment blank unless the workflow is changed to use a named GitHub
+environment. The workflow uses a GitHub-hosted runner, Node 22.17.0, npm 11.5.1
+or newer, and `id-token: write` as required by npm.
 
-If the workflow fails at the npm publish step after the GitHub release was
-already created, the release is immutable — do not re-run the tag or attempt
-to overwrite the npm version (`E409`). Run the **Recover CLI npm publication**
-workflow manually with that existing stable tag. It checks out the immutable
-tag, refuses an already-published npm version, reruns the complete release gate,
-and publishes with provenance. If the package was already published, fix
-forward by bumping to a new version.
+If CLI publication fails after the immutable GitHub release already exists, do
+not re-run or move the tag. Manually dispatch **Publish CLI to npm** with that
+existing stable version. The same trusted workflow checks out the immutable
+tag, requires the matching GitHub release, refuses an already-published npm
+version, reruns the complete release gate, and publishes through OIDC. If the
+package was already published, fix forward by bumping to a new version.
 
 arXiv Daily is listed through Obsidian's Community directory. The current new
 plugin flow is to sign in at `community.obsidian.md`, link the repository owner's

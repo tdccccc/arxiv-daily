@@ -52,16 +52,19 @@ test("the release workflow runs the release-tool tests during verification", asy
   );
 });
 
-test("release workflows configure npm auth and constrain CLI recovery", async () => {
+test("trusted CLI publishing is OIDC-only and constrained to immutable releases", async () => {
   const releaseWorkflow = await readFile(`${root}/.github/workflows/release.yml`, "utf8");
-  const recoveryWorkflow = await readFile(`${root}/.github/workflows/publish-cli-recovery.yml`, "utf8");
-  assert.match(releaseWorkflow, /^\s+registry-url: https:\/\/registry\.npmjs\.org$/m);
-  assert.match(recoveryWorkflow, /^\s+workflow_dispatch:$/m);
-  assert.match(recoveryWorkflow, /^\s+ref: \$\{\{ inputs\.version \}\}$/m);
-  assert.match(recoveryWorkflow, /Refusing to overwrite existing npm version/);
-  assert.match(recoveryWorkflow, /^\s+npm run check:release-version -- "\$VERSION"$/m);
-  assert.match(recoveryWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m);
-  assert.match(recoveryWorkflow, /^\s+run: npm publish --workspace apps\/cli --access public --provenance$/m);
+  const publishWorkflow = await readFile(`${root}/.github/workflows/publish-cli.yml`, "utf8");
+  assert.doesNotMatch(releaseWorkflow, /npm publish/);
+  assert.match(publishWorkflow, /^\s+workflow_run:$/m);
+  assert.match(publishWorkflow, /^\s+workflow_dispatch:$/m);
+  assert.match(publishWorkflow, /^\s+id-token: write$/m);
+  assert.doesNotMatch(publishWorkflow, /NPM_TOKEN|NODE_AUTH_TOKEN/);
+  assert.match(publishWorkflow, /^\s+run: npm install --global npm@\^11\.5\.1$/m);
+  assert.match(publishWorkflow, /Refusing to overwrite existing npm version/);
+  assert.match(publishWorkflow, /^\s+gh release view "\$version" >\/dev\/null$/m);
+  assert.match(publishWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m);
+  assert.match(publishWorkflow, /^\s+run: npm publish --workspace apps\/cli --access public$/m);
 });
 
 test("the bundle banner contains the complete locked pako license exactly once", async () => {

@@ -1,0 +1,87 @@
+name: Publish CLI to npm
+
+on:
+  workflow_run:
+    workflows: [Release Obsidian plugin]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing stable GitHub release tag to publish to npm
+        required: true
+        type: string
+
+concurrency:
+  group: publish-cli-${{ inputs.version || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      REQUESTED_VERSION: ${{ inputs.version }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.version || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.17.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install trusted-publishing npm
+        run: npm install --global npm@^11.5.1
+      - name: Resolve and verify immutable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if test -n "$REQUESTED_VERSION"; then
+            version="$REQUESTED_VERSION"
+          else
+            version="$(git tag --points-at "$RELEASE_SHA" --list '*.*.*')"
+            test "$(printf '%s\n' "$version" | sed '/^$/d' | wc -l)" -eq 1
+          fi
+          node --input-type=module - "$version" <<'NODE'
+          import { validateSemVer } from "./scripts/release-utils.mjs";
+          const version = process.argv[2];
+          validateSemVer(version);
+          if (version.includes("-") || version.includes("+")) {
+            throw new Error(`Publishing version must be stable SemVer: ${version}`);
+          }
+          NODE
+          test "$(git rev-parse "refs/tags/$version^{commit}")" = "$(git rev-parse HEAD)"
+          test -f "docs/releases/$version.md"
+          gh release view "$version" >/dev/null
+          if npm view "arxiv-daily@$version" version >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing npm version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release candidate
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          npm run check:release-version -- "$VERSION"
+          npm run test:release-tools
+          npm run check:boundaries
+          npm run lint
+          npm run typecheck
+          NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1
+          npm run build
+          npm run smoke:build
+      - name: Publish CLI with trusted publishing
+        run: npm publish --workspace apps/cli --access public
