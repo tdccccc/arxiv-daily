@@ -21,7 +21,12 @@ import {
   throwIfCancelled,
 } from "../services/cancellation";
 import type { PaperMeta } from "./arxiv-parser";
-import { filterPapers, type FilteredPaper } from "./paper-filter";
+import {
+  filterPapers,
+  isPaperFilterCheckpointError,
+  type DailyFilterCheckpointPort,
+  type FilteredPaper,
+} from "./paper-filter";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -65,9 +70,21 @@ type PipelineFailureResult = Extract<
 
 const CONTENT_FETCH_CONCURRENCY = 6;
 
-export interface DailySummaryCheckpointLifecyclePort
-  extends DailySummaryCheckpointPort {
+export interface DateScopedCheckpointLifecyclePort {
   removeAll(reportDate: string): Promise<void>;
+}
+
+export interface DailySummaryCheckpointLifecyclePort
+  extends DailySummaryCheckpointPort,
+    DateScopedCheckpointLifecyclePort {}
+
+export interface DailyFilterCheckpointLifecyclePort
+  extends DailyFilterCheckpointPort,
+    DateScopedCheckpointLifecyclePort {}
+
+export interface DailyGenerationCheckpointStores {
+  filter?: DailyFilterCheckpointLifecyclePort;
+  summary?: DailySummaryCheckpointLifecyclePort;
 }
 
 export interface PipelineDeps {
@@ -76,6 +93,8 @@ export interface PipelineDeps {
   paperFetcher: PaperContentFetcher;
   writer: MarkdownWriter;
   paperIndex?: PaperIndexStore;
+  checkpointStores?: DailyGenerationCheckpointStores;
+  /** @deprecated Host compatibility until checkpointStores wiring lands. */
   checkpointStore?: DailySummaryCheckpointLifecyclePort;
   llm: LlmClient;
   logger: Logger;
@@ -184,11 +203,20 @@ export class ArxivPipeline {
         llm: this.deps.llm,
         logger,
         arxivSettings: this.deps.arxiv,
+        reportDate: dateStr,
+        llmSettings: this.deps.llmSettings,
+        checkpointStore: this.deps.checkpointStores?.filter,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
       });
     } catch (e) {
       if (isCancellationError(e)) throw e;
+      if (isPaperFilterCheckpointError(e)) {
+        return {
+          kind: "failed_transient",
+          reason: `paper filter checkpoint failed: ${e.message}`,
+        };
+      }
       return {
         kind: isPermanentLlmError(e) ? "failed_permanent" : "failed_transient",
         reason: `paper filter LLM failed: ${(e as Error).message}`,
@@ -388,7 +416,7 @@ export class ArxivPipeline {
         {
           llm: this.deps.llm,
           llmSettings: this.deps.llmSettings,
-          checkpointStore: this.deps.checkpointStore,
+          checkpointStore: this.deps.checkpointStores?.summary ?? this.deps.checkpointStore,
           logger,
           arxivSettings: this.deps.arxiv,
           advanced: this.deps.advanced,
@@ -505,14 +533,23 @@ export class ArxivPipeline {
   }
 
   private async cleanupCommittedCheckpoints(dateStr: string): Promise<void> {
-    if (!this.deps.checkpointStore) return;
-    try {
-      await this.deps.checkpointStore.removeAll(dateStr);
-    } catch (error) {
-      this.deps.logger.warn(
-        `pipeline: committed daily checkpoint cleanup failed for ${dateStr}`,
-        error,
-      );
+    const stores: Array<[
+      keyof DailyGenerationCheckpointStores,
+      DateScopedCheckpointLifecyclePort | undefined,
+    ]> = [
+      ["filter", this.deps.checkpointStores?.filter],
+      ["summary", this.deps.checkpointStores?.summary ?? this.deps.checkpointStore],
+    ];
+    for (const [label, store] of stores) {
+      if (!store) continue;
+      try {
+        await store.removeAll(dateStr);
+      } catch (error) {
+        this.deps.logger.warn(
+          `pipeline: committed daily ${label} checkpoint cleanup failed for ${dateStr}`,
+          error,
+        );
+      }
     }
   }
 

@@ -117,10 +117,16 @@ export async function summarizeDaily(
       summaryLanguage: deps.summaryLanguage,
       llm: deps.llmSettings,
     };
-    const reusable = await deps.checkpointStore?.lookupReusable(
-      dateStr,
-      checkpointInput,
-    );
+    let reusable: DailyPaperResult | null | undefined;
+    try {
+      reusable = await deps.checkpointStore?.lookupReusable(
+        dateStr,
+        checkpointInput,
+      );
+    } catch (error) {
+      throwIfCancelled(deps.signal);
+      throw error;
+    }
     throwIfCancelled(deps.signal);
 
     let result: DailyPaperResult;
@@ -128,7 +134,15 @@ export async function summarizeDaily(
     if (reusable) {
       result = reusable;
       recovered = true;
+      deps.logger.info(
+        `summarizeDaily: checkpoint hit date=${dateStr} paper=${paper.id}`,
+      );
     } else {
+      if (deps.checkpointStore) {
+        deps.logger.info(
+          `summarizeDaily: checkpoint miss date=${dateStr} paper=${paper.id}`,
+        );
+      }
       result = await summarizeDailyPaperWithValidationRetry(paper, {
         llm: deps.llm,
         summaryLanguage: deps.summaryLanguage,
@@ -136,8 +150,18 @@ export async function summarizeDaily(
         onMetrics: deps.onMetrics,
       });
       throwIfCancelled(deps.signal);
-      await deps.checkpointStore?.upsert(dateStr, checkpointInput, result);
+      try {
+        await deps.checkpointStore?.upsert(dateStr, checkpointInput, result);
+      } catch (error) {
+        throwIfCancelled(deps.signal);
+        throw error;
+      }
       throwIfCancelled(deps.signal);
+      if (deps.checkpointStore) {
+        deps.logger.info(
+          `summarizeDaily: checkpoint persisted date=${dateStr} paper=${paper.id}`,
+        );
+      }
     }
     if (result.kind === "fallback") {
       fallbackCount += 1;

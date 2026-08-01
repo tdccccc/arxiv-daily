@@ -221,6 +221,7 @@ describe("summarizeDaily", () => {
     const ids = ["2607.00001", "2607.00002", "2607.00003"];
     const progress = vi.fn();
     const onMetrics = vi.fn();
+    const info = vi.fn();
     const warn = vi.fn();
     const currentLink = "[2607.00001](../papers/2607.00001.md)";
     const recoveredFallback = {
@@ -257,7 +258,7 @@ describe("summarizeDaily", () => {
         checkpointStore: { lookupReusable, upsert },
         onDailyPaperProgress: progress,
         onMetrics,
-        logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
+        logger: { info, warn, error: vi.fn(), debug: vi.fn() },
       }),
     );
 
@@ -276,6 +277,14 @@ describe("summarizeDaily", () => {
     expect(resumed.markdown).toContain(`### Current recovered title → ${currentLink}`);
     expect(progress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
     expect(onMetrics).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls.map(([message]) => message).filter((message) =>
+      String(message).includes("checkpoint"),
+    )).toEqual([
+      "summarizeDaily: checkpoint hit date=2026-07-22 paper=2607.00001",
+      "summarizeDaily: checkpoint hit date=2026-07-22 paper=2607.00002",
+      "summarizeDaily: checkpoint miss date=2026-07-22 paper=2607.00003",
+      "summarizeDaily: checkpoint persisted date=2026-07-22 paper=2607.00003",
+    ]);
     expect(warn).toHaveBeenCalledWith(
       "summarizeDaily: fallback for 2607.00002 reason=validation-exhausted attempts=3 recovered=true",
     );

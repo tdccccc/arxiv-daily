@@ -9,18 +9,48 @@ import filterSystemTemplate from "../prompts/paper-filter.system.md";
 import injectionGuardZh from "../prompts/injection-guard.md";
 import { escapePaperDataFence } from "./prompt-safety";
 import type { MetricsObserver } from "../metrics/generation";
+import type { DailyFilterCheckpointCompatibilityInput } from "../services/daily-filter-checkpoint-store";
+import type { LlmSettings } from "../settings/types";
 
 export interface FilteredPaper extends PaperMeta {
   category: string;
   isDetail: boolean;
 }
 
+export interface DailyFilterCheckpointPort {
+  lookupReusable(
+    reportDate: string,
+    input: DailyFilterCheckpointCompatibilityInput,
+  ): Promise<FilterRecord[] | null>;
+  save(
+    reportDate: string,
+    input: DailyFilterCheckpointCompatibilityInput,
+    result: FilterRecord[],
+  ): Promise<unknown>;
+}
+
 export interface PaperFilterDeps {
   llm: LlmClient;
   logger: Logger;
   arxivSettings: ArxivSettings;
+  reportDate: string;
+  llmSettings: LlmSettings;
+  checkpointStore?: DailyFilterCheckpointPort;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
+}
+
+export class PaperFilterCheckpointError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = "PaperFilterCheckpointError";
+  }
+}
+
+export function isPaperFilterCheckpointError(
+  error: unknown,
+): error is PaperFilterCheckpointError {
+  return error instanceof PaperFilterCheckpointError;
 }
 
 export interface PaperFilterRequest {
@@ -129,46 +159,99 @@ export async function filterPapers(
   }
 
   const request = buildPaperFilterRequest(papers, arxivSettings);
-
-  logger.info(
-    `paper-filter: sending ${papers.length} papers to LLM for classification`,
-  );
-
-  let raw: string;
+  const checkpointInput: DailyFilterCheckpointCompatibilityInput = {
+    papers,
+    arxivSettings,
+    llm: deps.llmSettings,
+  };
+  let validatedRecords: FilterRecord[];
+  let reusable: FilterRecord[] | null | undefined;
   try {
-    raw = await llm.call(request.messages, {
-      ...request.options,
-      signal: deps.signal,
-      onMetrics: deps.onMetrics,
-    });
-  } catch (e) {
-    if (isCancellationError(e)) throw e;
-    logger.error("paper-filter: LLM call failed", e);
-    throw e;
+    reusable = await deps.checkpointStore?.lookupReusable(
+      deps.reportDate,
+      checkpointInput,
+    );
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    throwIfCancelled(deps.signal);
+    throw new PaperFilterCheckpointError(
+      `lookup failed for ${deps.reportDate}: ${(error as Error).message}`,
+      error,
+    );
   }
   throwIfCancelled(deps.signal);
+  if (reusable) {
+    validatedRecords = reusable;
+    logger.info(
+      `paper-filter: checkpoint hit date=${deps.reportDate} count=${validatedRecords.length}`,
+    );
+  } else {
+    if (deps.checkpointStore) {
+      logger.info(
+        `paper-filter: checkpoint miss date=${deps.reportDate} count=${papers.length}`,
+      );
+    }
+    logger.info(
+      `paper-filter: sending ${papers.length} papers to LLM for classification`,
+    );
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    logger.error("paper-filter: response is not strict JSON", e);
-    return [];
+    let raw: string;
+    try {
+      raw = await llm.call(request.messages, {
+        ...request.options,
+        signal: deps.signal,
+        onMetrics: deps.onMetrics,
+      });
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      logger.error("paper-filter: LLM call failed", e);
+      throw e;
+    }
+    throwIfCancelled(deps.signal);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      logger.error("paper-filter: response is not strict JSON", e);
+      return [];
+    }
+
+    const records = decodePaperFilterRecords(
+      parsed,
+      new Set(request.identity.knownIds),
+      new Set(request.identity.validTags),
+    );
+    if (!records.ok) {
+      logger.warn(`paper-filter: invalid LLM response (${records.reason}); keeping no papers`);
+      return [];
+    }
+    validatedRecords = records.value;
+    try {
+      await deps.checkpointStore?.save(
+        deps.reportDate,
+        checkpointInput,
+        validatedRecords,
+      );
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      throwIfCancelled(deps.signal);
+      throw new PaperFilterCheckpointError(
+        `save failed for ${deps.reportDate}: ${(error as Error).message}`,
+        error,
+      );
+    }
+    throwIfCancelled(deps.signal);
+    if (deps.checkpointStore) {
+      logger.info(
+        `paper-filter: checkpoint persisted date=${deps.reportDate} count=${validatedRecords.length}`,
+      );
+    }
   }
 
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
-  const records = decodePaperFilterRecords(
-    parsed,
-    new Set(request.identity.knownIds),
-    new Set(request.identity.validTags),
-  );
-  if (!records.ok) {
-    logger.warn(`paper-filter: invalid LLM response (${records.reason}); keeping no papers`);
-    return [];
-  }
-
   const out: FilteredPaper[] = [];
-  for (const item of records.value) {
+  for (const item of validatedRecords) {
     if (item.category === "skip") continue;
     const meta = idMap.get(item.id)!;
     out.push({ ...meta, category: item.category, isDetail: false });

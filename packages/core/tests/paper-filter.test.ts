@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { buildPaperFilterRequest, filterPapers } from "../src/pipeline/paper-filter";
 import { Logger } from "../src/services/logger";
 import type { ArxivSettings, Topic } from "../src/settings/types";
+import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PaperMeta } from "../src/pipeline/arxiv-parser";
 
 
@@ -17,6 +18,11 @@ function makeArxiv(topics: Topic[]): ArxivSettings {
   return { category: "astro-ph", categories: ["astro-ph"], topics, timezone: "UTC" };
 }
 
+const checkpointScope = {
+  reportDate: "2026-08-01",
+  llmSettings: DEFAULT_SETTINGS.llm,
+};
+
 const samplePaper: PaperMeta = {
   id: "2601.12345",
   title: "A new photo-z method",
@@ -31,6 +37,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv([]),
+      ...checkpointScope,
     });
     expect(out).toEqual([]);
     expect(llm.call).not.toHaveBeenCalled();
@@ -44,6 +51,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings,
+      ...checkpointScope,
     });
     const request = buildPaperFilterRequest([samplePaper], arxivSettings);
     expect(llm.call.mock.calls[0][0]).toEqual(request.messages);
@@ -60,6 +68,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     const sys = llm.call.mock.calls[0][0][0].content as string;
     expect(sys).toContain("- photo-z: photo-z methods");
@@ -78,6 +87,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     expect(out).toHaveLength(1);
     expect(out[0].category).toBe("photo-z");
@@ -103,6 +113,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv([pipeTopic]),
+      ...checkpointScope,
     });
 
     expect(out).toMatchObject([{ id: samplePaper.id, category: "nlp|llm" }]);
@@ -120,6 +131,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     expect(out).toEqual([]);
   });
@@ -134,6 +146,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     expect(out).toEqual([]);
   });
@@ -161,8 +174,116 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     expect(out).toEqual([]);
+  });
+
+  it("reuses checkpoint records in persisted order with current metadata and no LLM metrics", async () => {
+    const currentPapers = [
+      samplePaper,
+      { ...samplePaper, id: "2601.54321", title: "Current second title" },
+    ];
+    const onMetrics = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => [
+        { id: "2601.54321", category: "galaxy-cluster" },
+        { id: samplePaper.id, category: "photo-z" },
+      ]),
+      save: vi.fn(),
+    };
+    const llm = { call: vi.fn() };
+
+    const out = await filterPapers(currentPapers, {
+      llm: llm as any,
+      logger: logger as any,
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
+      onMetrics,
+      ...checkpointScope,
+    });
+
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(onMetrics).not.toHaveBeenCalled();
+    expect(checkpointStore.save).not.toHaveBeenCalled();
+    expect(out).toEqual([
+      { ...currentPapers[1], category: "galaxy-cluster", isDetail: false },
+      { ...currentPapers[0], category: "photo-z", isDetail: false },
+    ]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "paper-filter: checkpoint hit date=2026-08-01 count=2",
+    );
+  });
+
+  it("awaits durable persistence of strict records and never caches invalid responses", async () => {
+    let releaseSave!: () => void;
+    const pendingSave = new Promise<void>((resolve) => { releaseSave = resolve; });
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(() => pendingSave),
+    };
+    const llm = { call: vi.fn(async () => JSON.stringify({
+      papers: [{ id: samplePaper.id, category: "photo-z" }],
+    })) };
+    let settled = false;
+    const filtering = filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
+      ...checkpointScope,
+    }).finally(() => { settled = true; });
+    await vi.waitFor(() => expect(checkpointStore.save).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+    releaseSave();
+    await expect(filtering).resolves.toHaveLength(1);
+
+    checkpointStore.save.mockClear();
+    llm.call.mockResolvedValueOnce("not json");
+    await expect(filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
+      ...checkpointScope,
+    })).resolves.toEqual([]);
+    expect(checkpointStore.save).not.toHaveBeenCalled();
+  });
+
+  it("does not log a hit or persisted event after cancellation at those boundaries", async () => {
+    const hitController = new AbortController();
+    const hitLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    await expect(filterPapers([samplePaper], {
+      llm: { call: vi.fn() } as any,
+      logger: hitLogger as any,
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore: {
+        lookupReusable: vi.fn(async () => {
+          hitController.abort("cancel after lookup");
+          return [{ id: samplePaper.id, category: "photo-z" }];
+        }),
+        save: vi.fn(),
+      },
+      signal: hitController.signal,
+      ...checkpointScope,
+    })).rejects.toThrow("cancel after lookup");
+    expect(hitLogger.info).not.toHaveBeenCalledWith(expect.stringContaining("checkpoint hit"));
+
+    const saveController = new AbortController();
+    const saveLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    await expect(filterPapers([samplePaper], {
+      llm: { call: vi.fn(async () => JSON.stringify({ papers: [] })) } as any,
+      logger: saveLogger as any,
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore: {
+        lookupReusable: vi.fn(async () => null),
+        save: vi.fn(async () => { saveController.abort("cancel after save"); }),
+      },
+      signal: saveController.signal,
+      ...checkpointScope,
+    })).rejects.toThrow("cancel after save");
+    expect(saveLogger.info).not.toHaveBeenCalledWith(expect.stringContaining("checkpoint persisted"));
   });
 
   it("system prompt matches the golden snapshot", async () => {
@@ -173,6 +294,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     expect(llm.call.mock.calls[0][0][0].content as string).toMatchSnapshot();
   });
@@ -185,6 +307,7 @@ describe("filterPapers", () => {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
     });
     const sys = llm.call.mock.calls[0][0][0].content as string;
     const user = llm.call.mock.calls[0][0][1].content as string;
@@ -212,6 +335,7 @@ describe("filterPapers", () => {
         llm: llm as any,
         logger: new Logger("error"),
         arxivSettings: makeArxiv(makeTopics()),
+        ...checkpointScope,
       },
     );
 

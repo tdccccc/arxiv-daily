@@ -40,5 +40,5 @@ Make interrupted daily-report runs reuse an exact-compatible, validated paper-fi
 ## Phases
 
 1. P1 — a strict batch filter contract and durable store preserve only exact-compatible validated decisions — status: done
-2. P2 — pipeline filter resume, checkpoint logs, and unified cleanup preserve all cancellation and commit boundaries — status: active
-3. P3 — both hosts, Vault portability, operator documentation, adversarial review, and full verification support closure — status: pending
+2. P2 — pipeline filter resume, checkpoint logs, and unified cleanup preserve all cancellation and commit boundaries — status: done
+3. P3 — both hosts, Vault portability, operator documentation, adversarial review, and full verification support closure — status: active

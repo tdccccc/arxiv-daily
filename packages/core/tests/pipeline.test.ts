@@ -1307,6 +1307,52 @@ describe("ArxivPipeline", () => {
     },
   );
 
+  it("attempts both date-scoped checkpoint cleanups independently for an authoritative daily", async () => {
+    const d = makeDeps();
+    const date = "2026-05-11";
+    d.writer.dailyExists.mockResolvedValue(true);
+    const filter = {
+      lookupReusable: vi.fn(),
+      save: vi.fn(),
+      removeAll: vi.fn(async () => { throw new Error("filter cleanup denied"); }),
+    };
+    const summary = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => { throw new Error("summary cleanup denied"); }),
+    };
+    const warn = vi.spyOn(d.logger, "warn");
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      checkpointStores: { filter, summary },
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate(date)).resolves.toEqual({
+      kind: "completed",
+      papersWritten: 0,
+    });
+    expect(filter.removeAll).toHaveBeenCalledWith(date);
+    expect(summary.removeAll).toHaveBeenCalledWith(date);
+    expect(warn).toHaveBeenCalledWith(
+      `pipeline: committed daily filter checkpoint cleanup failed for ${date}`,
+      expect.any(Error),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      `pipeline: committed daily summary checkpoint cleanup failed for ${date}`,
+      expect.any(Error),
+    );
+  });
+
   it("stops existing-daily repair between derived index mutations when cancelled", async () => {
     const d = makeDeps();
     const controller = new AbortController();

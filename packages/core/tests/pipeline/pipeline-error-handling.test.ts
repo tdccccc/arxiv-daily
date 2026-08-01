@@ -262,6 +262,7 @@ describe("Pipeline partial failure consistency", () => {
     paperIndex?: Record<string, unknown>;
     paperFetcher?: Record<string, unknown>;
     checkpointStore?: Record<string, unknown>;
+    checkpointStores?: Record<string, unknown>;
     summarizeDaily?: (...args: any[]) => Promise<{ markdown: string; slots: any[] }>;
   } = {}) {
     const ids = overrides.ids ?? ["2605.08080"];
@@ -364,6 +365,7 @@ describe("Pipeline partial failure consistency", () => {
       writer: writer as any,
       paperIndex: paperIndex as any,
       checkpointStore: overrides.checkpointStore as any,
+      checkpointStores: overrides.checkpointStores as any,
       llm: llm as any,
       logger: new Logger("error"),
       arxiv: testArxiv,
@@ -446,6 +448,85 @@ describe("Pipeline partial failure consistency", () => {
     expect(paperIndex.setSummaries).toHaveBeenCalledWith({
       [ids[0]]: { sourceSections: "Abstract", coreProblem: "Trusted problem" },
     });
+  });
+
+  it("stops before every downstream mutation when filter checkpoint persistence fails", async () => {
+    const filterStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(async () => { throw new Error("filter checkpoint disk full"); }),
+      removeAll: vi.fn(),
+    };
+    const summarizeDaily = vi.fn();
+    const { pipeline, writer, paperIndex, paperFetcher } = makeOnePaperPipeline({
+      checkpointStores: { filter: filterStore },
+      summarizeDaily,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "failed_transient",
+      reason: "paper filter checkpoint failed: save failed for 2026-05-11: filter checkpoint disk full",
+    });
+    expect(paperIndex.upsertManyFromDailyPapers).not.toHaveBeenCalled();
+    expect(paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(summarizeDaily).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it("retains a strict zero-result filter checkpoint when no daily report is committed", async () => {
+    const filterStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const { pipeline, llm, writer } = makeOnePaperPipeline({
+      checkpointStores: { filter: filterStore },
+    });
+    llm.call = vi.fn(async () => JSON.stringify({ papers: [] }));
+
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({
+      kind: "completed",
+      papersWritten: 0,
+    });
+    expect(filterStore.save).toHaveBeenCalledWith(
+      "2026-05-11",
+      expect.any(Object),
+      [],
+    );
+    expect(filterStore.removeAll).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it("passes filter and summary checkpoint scopes to their orchestration seams", async () => {
+    const filterStore = {
+      lookupReusable: vi.fn(async () => [{ id: "2605.08080", category: "test" }]),
+      save: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summaryStore = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summarizeDaily = vi.fn(async (_papers: any[], date: string, deps: any) => {
+      expect(date).toBe("2026-05-11");
+      expect(deps.checkpointStore).toBe(summaryStore);
+      return { markdown: "# injected daily", slots: [] };
+    });
+    const { pipeline, llm } = makeOnePaperPipeline({
+      checkpointStores: { filter: filterStore, summary: summaryStore },
+      summarizeDaily,
+    });
+
+    expect(await pipeline.runForDate("2026-05-11")).toMatchObject({ kind: "completed" });
+    expect(filterStore.lookupReusable).toHaveBeenCalledWith(
+      "2026-05-11",
+      expect.objectContaining({ llm: DEFAULT_SETTINGS.llm }),
+    );
+    expect(llm.call).not.toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("选择最匹配的主题") })]),
+      expect.anything(),
+    );
+    expect(summarizeDaily).toHaveBeenCalledTimes(1);
   });
 
   it("passes report checkpoint scope to an injected summarizeDaily mock", async () => {
