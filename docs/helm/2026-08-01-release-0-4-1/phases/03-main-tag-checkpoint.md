@@ -19,11 +19,22 @@ Commit evidence, fast-forward local main, verify protected hashes, push main, re
 
 ## Tasks
 
-- [ ] Commit P2 evidence.
-- [ ] Fast-forward local main without overlapping seven dirty documentation files.
-- [ ] Confirm protected file hashes and push corrected main.
-- [ ] Reconfirm 0.4.1 target availability and workflow prerequisite.
-- [ ] Stop and request explicit authorization for annotated tag 0.4.1.
+- [x] Commit P2 evidence.
+- [x] Fast-forward local main without overlapping seven dirty documentation files.
+- [x] Confirm protected file hashes and push corrected main.
+- [x] Reconfirm 0.4.1 target availability and workflow prerequisite.
+- [x] Stop and request explicit authorization for annotated tag 0.4.1.
+
+## Recorded evidence
+
+- The user explicitly authorized immutable tag `0.4.1`; it resolves to verified release commit `41c19062fd6fa3b30f34ebc5596b69e452863c84`.
+- GitHub Release `0.4.1` published successfully with curated notes and exactly `manifest.json`, `main.js`, and `styles.css`; asset attestation completed successfully.
+- The original combined workflow's npm step exposed token authentication and package 2FA failures without changing the npm registry.
+- CLI publication was moved to OIDC-only `publish-cli.yml`, constrained to immutable stable tags with matching GitHub Releases and guarded against version overwrite.
+- npm Trusted Publishing recovery run 30695658781 completed successfully after rerunning the complete candidate gate.
+- npm now reports `arxiv-daily@0.4.1` and `dist-tags.latest=0.4.1`, with SLSA provenance and registry signature metadata.
+- Local and remote main resolve to `76f950b911b512367c2806522331beb5866b2a9f`; the seven pre-existing documentation edits remain uncommitted and protected.
+- Failed tag `0.4.0` was never moved or reused and produced no GitHub Release or npm package.
 
 ## Verification
 
