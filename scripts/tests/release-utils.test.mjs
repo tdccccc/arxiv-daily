@@ -46,6 +46,10 @@ test("the release workflow runs the release-tool tests during verification", asy
   assert.ok(verifyWorkspace, "release workflow must define the workspace verification step");
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run test:release-tools$/m);
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run lint$/m);
+  assert.match(
+    verifyWorkspace.groups.commands,
+    /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m,
+  );
 });
 
 test("the bundle banner contains the complete locked pako license exactly once", async () => {

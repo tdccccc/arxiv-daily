@@ -70,7 +70,7 @@ jobs:
           npm run check:boundaries
           npm run lint
           npm run typecheck
-          npm test
+          NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1
           npm run build
           npm run smoke:build
       - name: Attest release assets
