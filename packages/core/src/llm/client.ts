@@ -250,6 +250,7 @@ export class LlmClient {
               throwIfCancelled(opts.signal);
               return result.content;
             } catch (error) {
+              if (isCancellationError(error)) throw error;
               if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
               attempts += 1;
               const fallback = { ...params };
@@ -259,6 +260,7 @@ export class LlmClient {
                 finalUsage = result.usage;
                 return result.content;
               } catch (fallbackError) {
+                if (isCancellationError(fallbackError)) throw fallbackError;
                 throw this.safeError(fallbackError);
               }
             } finally {

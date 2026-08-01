@@ -61,6 +61,26 @@ describe("retry", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("does not announce a retry when the attempt fails after cancellation", async () => {
+    const controller = new AbortController();
+    const onRetry = vi.fn();
+    const fn = vi.fn(async () => {
+      controller.abort("cancelled by test");
+      throw new Error("request failed after abort");
+    });
+
+    await expect(
+      retry(fn, {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        signal: controller.signal,
+        onRetry,
+      }),
+    ).rejects.toThrow("cancelled by test");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("does not retry after cancellation during backoff", async () => {
     const controller = new AbortController();
     const fn = vi.fn().mockRejectedValue(new Error("boom"));

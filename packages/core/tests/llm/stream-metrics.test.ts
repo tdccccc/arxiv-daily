@@ -4,6 +4,10 @@ import {
   LlmTransientExhaustedError,
   isUnsupportedStreamOptionsError,
 } from "../../src/llm/client";
+import {
+  RunCancelledError,
+  isCancellationError,
+} from "../../src/services/cancellation";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { HttpClient, HttpRequest, HttpResponse } from "../../src/core/adapters";
@@ -16,10 +20,13 @@ function sse(events: unknown[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
 }
 
-function client(request: (req: HttpRequest) => Promise<HttpResponse>) {
+function client(
+  request: (req: HttpRequest) => Promise<HttpResponse>,
+  logger = new Logger("error"),
+) {
   return new LlmClient(
     { ...DEFAULT_SETTINGS.llm, apiKey: "sk-full-secret", model: "test" },
-    new Logger("error"),
+    logger,
     { request } satisfies HttpClient,
   );
 }
@@ -59,6 +66,48 @@ describe("LLM stream metrics", () => {
     expect(metrics).toHaveBeenCalledWith(expect.objectContaining({
       logicalCalls: 1, attempts: 2, usageComplete: false,
     }));
+  });
+
+  it("does not log or schedule a retry when a request is cancelled", async () => {
+    const controller = new AbortController();
+    const logger = new Logger("error");
+    const warn = vi.spyOn(logger, "warn");
+    const request = vi.fn(async () => {
+      controller.abort("cancelled by user");
+      throw new RunCancelledError("cancelled by user");
+    });
+
+    const error = await client(request, logger)
+      .call([{ role: "user", content: "x" }], { signal: controller.signal })
+      .catch((caught) => caught);
+
+    expect(isCancellationError(error)).toBe(true);
+    expect(error).toBeInstanceOf(RunCancelledError);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not retry when the stream-options fallback is cancelled", async () => {
+    const controller = new AbortController();
+    const logger = new Logger("error");
+    const warn = vi.spyOn(logger, "warn");
+    const request = vi.fn()
+      .mockResolvedValueOnce(response(400, JSON.stringify({
+        error: { message: "stream_options is unsupported" },
+      })))
+      .mockImplementationOnce(async () => {
+        controller.abort("cancelled by user");
+        throw new RunCancelledError("cancelled by user");
+      });
+
+    const error = await client(request, logger)
+      .call([{ role: "user", content: "x" }], { signal: controller.signal })
+      .catch((caught) => caught);
+
+    expect(isCancellationError(error)).toBe(true);
+    expect(error).toBeInstanceOf(RunCancelledError);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("types exhausted transient retries at the LLM client boundary", async () => {

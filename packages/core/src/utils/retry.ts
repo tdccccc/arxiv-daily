@@ -21,6 +21,7 @@ export async function retry<T>(fn: () => Promise<T>, opts: RetryOptions): Promis
       return await fn();
     } catch (err) {
       lastError = err;
+      throwIfCancelled(opts.signal);
       if (isCancellationError(err)) throw err;
       if (attempt >= opts.maxAttempts) break;
       if (opts.shouldRetry && !opts.shouldRetry(err, attempt)) break;
