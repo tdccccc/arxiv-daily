@@ -1,6 +1,6 @@
 # Release 0.4.0
 
-status: active
+status: done
 updated: 2026-08-01
 owner: sess_4ab50bf8-a3f3-40cd-bf05-66eb503e2ed9
 
@@ -13,8 +13,8 @@ Prepare one verified 0.4.0 release commit for the CLI and Obsidian plugin, shipp
 - [x] All CLI, plugin, shared workspace, manifest, version-map, and lockfile metadata consistently identify version 0.4.0.
 - [x] Curated 0.4.0 notes accurately describe the user-visible changes, upgrade path, compatibility, and checkpoint data handling.
 - [x] The complete documented release gate passes from a clean release worktree.
-- [ ] The verified release commit is fast-forwarded into local `main` without disturbing its pre-existing uncommitted documentation edits.
-- [ ] The exact commit, tag, assets, npm prerequisite, and verification evidence are reported before any external publication.
+- [x] The verified release commit is fast-forwarded into local `main` without disturbing its pre-existing uncommitted documentation edits.
+- [x] The exact commit, tag, assets, npm prerequisite, and verification evidence are reported before any external publication.
 
 ## Non-goals
 
@@ -34,4 +34,4 @@ Prepare one verified 0.4.0 release commit for the CLI and Obsidian plugin, shipp
 
 1. P1 — curated notes and synchronized metadata form a reviewable 0.4.0 release candidate — status: done
 2. P2 — the complete release gate and product artifact checks establish a verified release commit — status: done
-3. P3 — the verified commit reaches local main and stops at an explicit publication checkpoint — status: active
+3. P3 — the verified commit reaches local main and stops at an explicit publication checkpoint — status: done
