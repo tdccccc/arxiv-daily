@@ -1,6 +1,6 @@
-# CLI command surface (target)
+# CLI command surface
 
-status: draft (docs only; not fully implemented)  
+status: done
 decision_ref: `docs/adr/0003-two-products-cli-config-and-data-portability.md`  
 schema_ref: `./cli-toml-schema.md`  
 goal_ref: `./goal.md`

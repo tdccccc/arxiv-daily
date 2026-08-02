@@ -37,4 +37,4 @@ Make arXiv-backed manual summaries reliable under upstream throttling and outage
 
 ## Current focus
 
-P4
+Done. P4 verification passed and the initiative is closed.
