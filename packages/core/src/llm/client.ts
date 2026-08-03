@@ -15,6 +15,18 @@ import {
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
+export const LLM_MAX_OUTPUT_CODE_UNITS = 10_000_000;
+export const LLM_MAX_COMPLETION_TOKENS = 1_000_000;
+export const LLM_OUTPUT_LIMIT_EXCEEDED_ERROR_CODE = "ARXIV_LLM_OUTPUT_LIMIT_EXCEEDED" as const;
+
+export class LlmOutputLimitExceededError extends Error {
+  readonly code = LLM_OUTPUT_LIMIT_EXCEEDED_ERROR_CODE;
+
+  constructor() {
+    super("LLM output exceeded configured limit");
+    this.name = "LlmOutputLimitExceededError";
+  }
+}
 
 export class StreamIdleTimeoutError extends Error {
   constructor(message = "LLM stream idle timeout") {
@@ -66,6 +78,10 @@ export interface CallOptions {
   temperature?: number;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
+  /** Reject accumulated response content above this UTF-16 code-unit count. */
+  maxOutputCodeUnits?: number;
+  /** Provider-compatible completion-token request bound (`max_tokens`). */
+  maxCompletionTokens?: number;
 }
 
 interface StreamResult {
@@ -216,6 +232,7 @@ export class LlmClient {
   }
 
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
+    const limits = validateCallLimits(opts);
     const started = Date.now();
     let attempts = 0;
     let finalUsage: TokenUsage | undefined;
@@ -232,6 +249,9 @@ export class LlmClient {
               stream: true,
               stream_options: { include_usage: true },
             };
+            if (limits.maxCompletionTokens !== undefined) {
+              params.max_tokens = limits.maxCompletionTokens;
+            }
             if (this.settings.thinkingMode) {
               if (this.settings.provider === "anthropic") {
                 const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
@@ -245,22 +265,27 @@ export class LlmClient {
             }
             const abort = createAttemptAbortController(opts.signal);
             try {
-              const result = await this.postChatStream(params, abort.controller, opts.signal);
+              const result = await this.postChatStream(
+                params, abort.controller, opts.signal, limits.maxOutputCodeUnits,
+              );
               finalUsage = result.usage;
               throwIfCancelled(opts.signal);
               return result.content;
             } catch (error) {
-              if (isCancellationError(error)) throw error;
+              if (isCancellationError(error) || error instanceof LlmOutputLimitExceededError) throw error;
               if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
               attempts += 1;
               const fallback = { ...params };
               delete fallback.stream_options;
               try {
-                const result = await this.postChatStream(fallback, abort.controller, opts.signal);
+                const result = await this.postChatStream(
+                  fallback, abort.controller, opts.signal, limits.maxOutputCodeUnits,
+                );
                 finalUsage = result.usage;
                 return result.content;
               } catch (fallbackError) {
-                if (isCancellationError(fallbackError)) throw fallbackError;
+                if (isCancellationError(fallbackError)
+                  || fallbackError instanceof LlmOutputLimitExceededError) throw fallbackError;
                 throw this.safeError(fallbackError);
               }
             } finally {
@@ -271,7 +296,9 @@ export class LlmClient {
             maxAttempts: 3,
             baseDelayMs: 5000,
             signal: opts.signal,
-            shouldRetry: (err) => !isCancellationError(err) && !isPermanentLlmError(err),
+            shouldRetry: (err) => !isCancellationError(err)
+              && !(err instanceof LlmOutputLimitExceededError)
+              && !isPermanentLlmError(err),
             onRetry: (err, attempt, wait) => {
               hadRetriedGenerationFailure = true;
               this.logger.warn(
@@ -281,7 +308,9 @@ export class LlmClient {
           },
         );
       } catch (error) {
-        if (isCancellationError(error) || isPermanentLlmError(error)) throw error;
+        if (isCancellationError(error)
+          || error instanceof LlmOutputLimitExceededError
+          || isPermanentLlmError(error)) throw error;
         throw new LlmTransientExhaustedError(this.safeError(error));
       }
     } finally {
@@ -308,6 +337,7 @@ export class LlmClient {
     body: Record<string, unknown>,
     controller: AbortController,
     signal?: AbortSignal,
+    maxOutputCodeUnits?: number,
   ): Promise<StreamResult> {
     const raw = await this.requestChat({ ...body, stream: true }, true, signal);
     return collectStreamResultWithIdleTimeout(
@@ -315,6 +345,7 @@ export class LlmClient {
       controller,
       LLM_STREAM_IDLE_TIMEOUT_MS,
       signal,
+      maxOutputCodeUnits,
     );
   }
 
@@ -411,9 +442,10 @@ export async function collectStreamWithIdleTimeout(
   controller: AbortController,
   idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
   signal?: AbortSignal,
+  maxOutputCodeUnits?: number,
 ): Promise<string> {
   return (await collectStreamResultWithIdleTimeout(
-    stream, controller, idleTimeoutMs, signal,
+    stream, controller, idleTimeoutMs, signal, maxOutputCodeUnits,
   )).content;
 }
 
@@ -422,8 +454,13 @@ export async function collectStreamResultWithIdleTimeout(
   controller: AbortController,
   idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
   signal?: AbortSignal,
+  maxOutputCodeUnits?: number,
 ): Promise<StreamResult> {
+  const outputLimit = validatePositiveBoundedInteger(
+    "maxOutputCodeUnits", maxOutputCodeUnits, LLM_MAX_OUTPUT_CODE_UNITS,
+  );
   const chunks: string[] = [];
+  let outputCodeUnits = 0;
   let usage: TokenUsage | undefined;
   const iterator = stream[Symbol.asyncIterator]();
   while (true) {
@@ -432,7 +469,14 @@ export async function collectStreamResultWithIdleTimeout(
     if (next.done) break;
     throwIfCancelled(signal);
     const delta = streamDeltaContent(next.value);
-    if (delta) chunks.push(delta);
+    if (delta) {
+      outputCodeUnits += delta.length;
+      if (outputLimit !== undefined && outputCodeUnits > outputLimit) {
+        controller.abort(new LlmOutputLimitExceededError());
+        throw new LlmOutputLimitExceededError();
+      }
+      chunks.push(delta);
+    }
     usage = parseTokenUsage(next.value) ?? usage;
   }
   throwIfCancelled(signal);
@@ -491,6 +535,32 @@ function streamDeltaContent(chunk: unknown): string | undefined {
     .choices;
   const content = choices?.[0]?.delta?.content;
   return typeof content === "string" ? content : undefined;
+}
+
+function validateCallLimits(opts: CallOptions): {
+  maxOutputCodeUnits?: number;
+  maxCompletionTokens?: number;
+} {
+  return {
+    maxOutputCodeUnits: validatePositiveBoundedInteger(
+      "maxOutputCodeUnits", opts.maxOutputCodeUnits, LLM_MAX_OUTPUT_CODE_UNITS,
+    ),
+    maxCompletionTokens: validatePositiveBoundedInteger(
+      "maxCompletionTokens", opts.maxCompletionTokens, LLM_MAX_COMPLETION_TOKENS,
+    ),
+  };
+}
+
+function validatePositiveBoundedInteger(
+  name: string,
+  value: number | undefined,
+  maximum: number,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
+    throw new TypeError(`${name} must be a positive safe integer no greater than ${maximum}`);
+  }
+  return value;
 }
 
 function createAttemptAbortController(signal?: AbortSignal): {

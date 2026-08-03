@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  LLM_MAX_COMPLETION_TOKENS,
+  LLM_MAX_OUTPUT_CODE_UNITS,
   LlmClient,
+  LlmOutputLimitExceededError,
   LlmTransientExhaustedError,
   isUnsupportedStreamOptionsError,
 } from "../../src/llm/client";
@@ -51,6 +54,45 @@ describe("LLM stream metrics", () => {
       logicalCalls: 1, attempts: 1, usageComplete: true,
       inputTokens: 8, outputTokens: 2, totalTokens: 10,
     }));
+  });
+
+  it("sends validated completion bounds and retains them in stream-options fallback", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(response(400, JSON.stringify({ error: { message: "stream_options is unsupported" } })))
+      .mockResolvedValueOnce(response(200, sse([{ choices: [{ delta: { content: "ok" } }] }])));
+    await expect(client(request).call([{ role: "user", content: "x" }], {
+      maxCompletionTokens: 4096,
+      maxOutputCodeUnits: 64_000,
+    })).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(request.mock.calls[0]?.[0].body))).toMatchObject({ max_tokens: 4096 });
+    expect(JSON.parse(String(request.mock.calls[1]?.[0].body))).toMatchObject({ max_tokens: 4096 });
+    for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER, LLM_MAX_OUTPUT_CODE_UNITS + 1]) {
+      await expect(client(vi.fn()).call([{ role: "user", content: "x" }], {
+        maxOutputCodeUnits: value,
+      })).rejects.toBeInstanceOf(TypeError);
+    }
+    await expect(client(vi.fn()).call([{ role: "user", content: "x" }], {
+      maxCompletionTokens: LLM_MAX_COMPLETION_TOKENS + 1,
+    })).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("rejects streamed output at the accumulation limit without transport retry or content logging", async () => {
+    const logger = new Logger("error");
+    const warn = vi.spyOn(logger, "warn");
+    const request = vi.fn(async () => response(200, sse([
+      { choices: [{ delta: { content: "1234" } }] },
+      { choices: [{ delta: { content: "SECRET-OVERFLOW" } }] },
+      { choices: [{ delta: { content: "never-accumulated" } }] },
+    ])));
+    const error = await client(request, logger).call([{ role: "user", content: "x" }], {
+      maxOutputCodeUnits: 5,
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(LlmOutputLimitExceededError);
+    expect(error).toMatchObject({ code: "ARXIV_LLM_OUTPUT_LIMIT_EXCEEDED" });
+    expect(error.message).not.toContain("SECRET-OVERFLOW");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("falls back once only for explicit unsupported stream_options 400/422", async () => {

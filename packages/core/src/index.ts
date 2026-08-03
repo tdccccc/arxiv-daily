@@ -9,6 +9,7 @@ export * from "./dashboard/paper-search-index";
 export * from "./dashboard/paper-note-classifier";
 export * from "./library/arxiv-library-metadata-resolver";
 export * from "./library/personal-library-catalog";
+export * from "./library/personal-library-direction-proposer";
 export * from "./library/personal-library-interest-profile";
 export * from "./library/personal-library-interest-profile-review";
 export * from "./library/personal-library-interest-profile-store";
