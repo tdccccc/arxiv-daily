@@ -7,6 +7,7 @@ export * from "./dashboard/history-sync";
 export * from "./dashboard/model";
 export * from "./dashboard/paper-search-index";
 export * from "./dashboard/paper-note-classifier";
+export * from "./library/personal-library-catalog";
 export * from "./library/scoped-library-source";
 export * from "./llm/client";
 export * from "./metrics/generation";
