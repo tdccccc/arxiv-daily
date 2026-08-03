@@ -10,6 +10,7 @@ export * from "./dashboard/paper-note-classifier";
 export * from "./library/arxiv-library-metadata-resolver";
 export * from "./library/personal-library-catalog";
 export * from "./library/personal-library-interest-profile";
+export * from "./library/personal-library-interest-profile-review";
 export * from "./library/personal-library-interest-profile-store";
 export * from "./library/personal-library-reconciliation";
 export * from "./library/scoped-library-source";

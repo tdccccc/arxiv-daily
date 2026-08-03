@@ -5,14 +5,16 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 1 as const;
-export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 1 as const;
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 2 as const;
+export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 2 as const;
+export const PERSONAL_LIBRARY_LEGACY_INTEREST_PROFILE_SCHEMA_VERSION = 1 as const;
 export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
 export const PERSONAL_LIBRARY_MIN_REPRESENTATIVES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_REPRESENTATIVES = 5 as const;
 export const PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS = 1_000 as const;
 export const PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS = 12 as const;
+export const PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS = 12 as const;
 export const PERSONAL_LIBRARY_MAX_DIRECTIONS = 256 as const;
 export const PERSONAL_LIBRARY_MAX_DIRECTION_ANCESTRY_IDS = 256 as const;
 export const PERSONAL_LIBRARY_MAX_PROFILE_ANCESTRY_IDS = 256 as const;
@@ -47,6 +49,7 @@ export interface PersonalLibraryDirectionProposal {
   scopeFingerprint: string;
   identificationFingerprint: string;
   catalogInputFingerprint: string;
+  catalogInputPapers: PersonalLibraryRepresentativeEvidence[];
   generationContractFingerprint: string;
   generatedAt: string;
   candidates: PersonalLibraryDirectionCandidate[];
@@ -60,7 +63,7 @@ interface PersonalLibraryConfirmedDirectionCommon {
   representatives: PersonalLibraryRepresentativeEvidence[];
   representativeSetFingerprint: string;
   lineage: {
-    proposalId: string;
+    proposalIds: string[];
     candidateIds: string[];
     /** Retained merged ancestors whose merge chains terminate at this direction. */
     directionIds: string[];
@@ -167,30 +170,54 @@ export function createPersonalLibraryPaperEvidenceFingerprint(
   });
 }
 
+export function createPersonalLibraryCatalogInputManifest(
+  papers: readonly PersonalLibraryPaperRecord[],
+): PersonalLibraryRepresentativeEvidence[] {
+  if (!Array.isArray(papers) || papers.length === 0
+    || papers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
+    throw new TypeError("catalog input must contain a bounded explicit paper selection");
+  }
+  const manifest = papers.map((paper) => ({
+    paperKey: paper.paperKey,
+    evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper),
+  })).sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
+  if (!isStrictlyOrderedUnique(manifest.map(({ paperKey }) => paperKey))) {
+    throw new TypeError("selected catalog paper keys must be unique");
+  }
+  return manifest;
+}
+
+export function createPersonalLibraryCatalogInputManifestFingerprint(input: {
+  scopeFingerprint: string;
+  identificationFingerprint: string;
+  catalogInputPapers: readonly PersonalLibraryRepresentativeEvidence[];
+}): string {
+  if (!isExactObject(input, ["scopeFingerprint", "identificationFingerprint", "catalogInputPapers"])
+    || !isFingerprint(input.scopeFingerprint)
+    || !isFingerprint(input.identificationFingerprint)) {
+    throw new TypeError("catalog input manifest identity must be exact fingerprints");
+  }
+  const manifest = decodeCatalogInputManifest(input.catalogInputPapers);
+  if (!manifest) throw new TypeError("catalog input manifest must be canonical and bounded");
+  return fingerprint({
+    scopeFingerprint: input.scopeFingerprint,
+    identificationFingerprint: input.identificationFingerprint,
+    papers: manifest,
+  });
+}
+
 export function createPersonalLibraryCatalogInputFingerprint(input: {
   scopeFingerprint: string;
   identificationFingerprint: string;
   papers: readonly PersonalLibraryPaperRecord[];
 }): string {
-  if (!isExactObject(input, ["scopeFingerprint", "identificationFingerprint", "papers"])
-    || !isFingerprint(input.scopeFingerprint)
-    || !isFingerprint(input.identificationFingerprint)
-    || !Array.isArray(input.papers)
-    || input.papers.length === 0
-    || input.papers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
-    throw new TypeError("catalog input must contain a bounded explicit paper selection");
+  if (!isExactObject(input, ["scopeFingerprint", "identificationFingerprint", "papers"])) {
+    throw new TypeError("catalog input must be exact");
   }
-  const papers = input.papers.map((paper) => ({
-    paperKey: paper.paperKey,
-    evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper),
-  })).sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
-  if (!isStrictlyOrderedUnique(papers.map(({ paperKey }) => paperKey))) {
-    throw new TypeError("selected catalog paper keys must be unique");
-  }
-  return fingerprint({
+  return createPersonalLibraryCatalogInputManifestFingerprint({
     scopeFingerprint: input.scopeFingerprint,
     identificationFingerprint: input.identificationFingerprint,
-    papers,
+    catalogInputPapers: createPersonalLibraryCatalogInputManifest(input.papers),
   });
 }
 
@@ -215,7 +242,7 @@ export function decodePersonalLibraryDirectionProposal(
 ): PersonalLibraryDirectionProposal | null {
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
-    "catalogInputFingerprint", "generationContractFingerprint", "generatedAt", "candidates",
+    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "candidates",
   ]) || value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION
     || !isNonNegativeSafeInteger(value.revision)
     || !isOpaqueId(value.proposalId)
@@ -227,6 +254,13 @@ export function decodePersonalLibraryDirectionProposal(
     || !Array.isArray(value.candidates)
     || value.candidates.length < PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES
     || value.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) return null;
+
+  const catalogInputPapers = decodeCatalogInputManifest(value.catalogInputPapers);
+  if (!catalogInputPapers || createPersonalLibraryCatalogInputManifestFingerprint({
+    scopeFingerprint: value.scopeFingerprint,
+    identificationFingerprint: value.identificationFingerprint,
+    catalogInputPapers,
+  }) !== value.catalogInputFingerprint) return null;
 
   const candidates: PersonalLibraryDirectionCandidate[] = [];
   for (const raw of value.candidates) {
@@ -242,10 +276,60 @@ export function decodePersonalLibraryDirectionProposal(
     scopeFingerprint: value.scopeFingerprint,
     identificationFingerprint: value.identificationFingerprint,
     catalogInputFingerprint: value.catalogInputFingerprint,
+    catalogInputPapers,
     generationContractFingerprint: value.generationContractFingerprint,
     generatedAt: value.generatedAt,
     candidates,
   };
+}
+
+export function decodePersistedPersonalLibraryInterestProfile(
+  value: unknown,
+): PersonalLibraryInterestProfile | null {
+  const profile = decodePersonalLibraryInterestProfile(value);
+  if (!profile || profile.directions.some((direction) => direction.updatedAt > profile.updatedAt)) {
+    return null;
+  }
+  return profile;
+}
+
+export function decodeDurablePersonalLibraryInterestProfile(
+  value: unknown,
+): PersonalLibraryInterestProfile | null {
+  return decodePersistedPersonalLibraryInterestProfile(value)
+    ?? migrateLegacyPersonalLibraryInterestProfile(value);
+}
+
+export function migrateLegacyPersonalLibraryInterestProfile(
+  value: unknown,
+): PersonalLibraryInterestProfile | null {
+  if (!isExactObject(value, [
+    "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
+    "directions",
+  ]) || value.schemaVersion !== PERSONAL_LIBRARY_LEGACY_INTEREST_PROFILE_SCHEMA_VERSION
+    || !Array.isArray(value.directions)) return null;
+  const directions: unknown[] = [];
+  for (const raw of value.directions) {
+    if (!isPlainObject(raw) || !isExactObject(raw.lineage, ["proposalId", "candidateIds", "directionIds"])
+      || !isOpaqueId(raw.lineage.proposalId)) return null;
+    directions.push({
+      ...raw,
+      lineage: {
+        proposalIds: [raw.lineage.proposalId],
+        candidateIds: raw.lineage.candidateIds,
+        directionIds: raw.lineage.directionIds,
+      },
+    });
+  }
+  const migrated = decodePersonalLibraryInterestProfile({
+    ...value,
+    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
+    directions,
+  });
+  if (!migrated || migrated.directions.some((direction) => direction.updatedAt > migrated.updatedAt)) {
+    return null;
+  }
+  return migrated;
 }
 
 export function decodePersonalLibraryInterestProfile(
@@ -266,7 +350,7 @@ export function decodePersonalLibraryInterestProfile(
   let totalAncestryIds = 0;
   for (const raw of value.directions) {
     const direction = decodeDirection(raw);
-    if (!direction || direction.updatedAt > value.updatedAt) return null;
+    if (!direction) return null;
     totalAncestryIds += direction.lineage.directionIds.length;
     if (totalAncestryIds > PERSONAL_LIBRARY_MAX_PROFILE_ANCESTRY_IDS) return null;
     directions.push(direction);
@@ -300,7 +384,7 @@ export function evaluatePersonalLibraryInterestEligibility(
   profileValue: unknown,
   catalogValue: unknown,
 ): PersonalLibraryInterestEligibility {
-  const profile = decodePersonalLibraryInterestProfile(profileValue);
+  const profile = decodePersistedPersonalLibraryInterestProfile(profileValue);
   const catalog = decodePersonalLibraryCatalog(catalogValue);
   const documentDiagnostics: PersonalLibraryEligibilityDocumentDiagnostic[] = [];
   if (!profile) documentDiagnostics.push("profile-invalid");
@@ -390,8 +474,8 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
     || !isBoundedText(value.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
     || !isDiscoveryCues(value.discoveryCues)
     || !isFingerprint(value.representativeSetFingerprint)
-    || !isExactObject(value.lineage, ["proposalId", "candidateIds", "directionIds"])
-    || !isOpaqueId(value.lineage.proposalId)
+    || !isExactObject(value.lineage, ["proposalIds", "candidateIds", "directionIds"])
+    || !isOpaqueIdArray(value.lineage.proposalIds, false, PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS)
     || !isOpaqueIdArray(value.lineage.candidateIds, true, PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS)
     || !isOpaqueIdArray(value.lineage.directionIds, true, PERSONAL_LIBRARY_MAX_DIRECTION_ANCESTRY_IDS)
     || !isCanonicalTimestamp(value.createdAt)
@@ -410,7 +494,7 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
     representatives,
     representativeSetFingerprint: value.representativeSetFingerprint,
     lineage: {
-      proposalId: value.lineage.proposalId,
+      proposalIds: [...value.lineage.proposalIds],
       candidateIds: [...value.lineage.candidateIds],
       directionIds: [...value.lineage.directionIds],
     },
@@ -420,6 +504,19 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
   return merged
     ? { ...common, status: "merged", mergedIntoDirectionId: value.mergedIntoDirectionId }
     : { ...common, status: value.status as "active" | "disabled" };
+}
+
+function decodeCatalogInputManifest(value: unknown): PersonalLibraryRepresentativeEvidence[] | null {
+  if (!Array.isArray(value) || value.length === 0
+    || value.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) return null;
+  const manifest: PersonalLibraryRepresentativeEvidence[] = [];
+  for (const raw of value) {
+    if (!isExactObject(raw, ["paperKey", "evidenceFingerprint"])
+      || !isCanonicalArxivPaperKey(raw.paperKey)
+      || !isFingerprint(raw.evidenceFingerprint)) return null;
+    manifest.push({ paperKey: raw.paperKey, evidenceFingerprint: raw.evidenceFingerprint });
+  }
+  return isStrictlyOrderedUnique(manifest.map(({ paperKey }) => paperKey)) ? manifest : null;
 }
 
 function decodeRepresentatives(value: unknown): PersonalLibraryRepresentativeEvidence[] | null {

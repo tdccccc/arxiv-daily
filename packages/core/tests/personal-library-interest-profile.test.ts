@@ -3,13 +3,17 @@ import {
   PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS,
   PERSONAL_LIBRARY_MAX_DIRECTIONS,
   PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
   PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
   createPersonalLibraryCatalogInputFingerprint,
+  createPersonalLibraryCatalogInputManifest,
   createPersonalLibraryGenerationContractFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
+  decodeDurablePersonalLibraryInterestProfile,
   decodePersonalLibraryDirectionProposal,
   decodePersonalLibraryInterestProfile,
+  decodePersistedPersonalLibraryInterestProfile,
   evaluatePersonalLibraryInterestEligibility,
   type PersonalLibraryConfirmedDirection,
   type PersonalLibraryDirectionProposal,
@@ -70,7 +74,7 @@ function representative(entry = paper("2608.00001")): PersonalLibraryRepresentat
 function proposal(): PersonalLibraryDirectionProposal {
   const representatives = [representative()];
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     proposalId: "proposal.1",
     scopeFingerprint,
@@ -80,6 +84,7 @@ function proposal(): PersonalLibraryDirectionProposal {
       identificationFingerprint,
       papers: Object.values(catalog().papers),
     }),
+    catalogInputPapers: createPersonalLibraryCatalogInputManifest(Object.values(catalog().papers)),
     generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint("contract-v1"),
     generatedAt: now,
     candidates: [{
@@ -112,7 +117,7 @@ function direction(
     representatives,
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
     lineage: {
-      proposalId: "proposal.1",
+      proposalIds: ["proposal.1"],
       candidateIds: ["candidate.1"],
       directionIds: options.ancestors ?? [],
     },
@@ -126,7 +131,7 @@ function direction(
 
 function profile(directions: PersonalLibraryConfirmedDirection[] = [direction("direction.1")]): PersonalLibraryInterestProfile {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 3,
     scopeFingerprint,
     identificationFingerprint,
@@ -149,14 +154,36 @@ describe("personal library proposal and profile contracts", () => {
   it("strictly decodes separate exact current-schema documents", () => {
     expect(decodePersonalLibraryDirectionProposal(proposal())).toEqual(proposal());
     expect(decodePersonalLibraryInterestProfile(profile())).toEqual(profile());
-    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), schemaVersion: 2 })).toBeNull();
-    expect(decodePersonalLibraryInterestProfile({ ...profile(), schemaVersion: 2 })).toBeNull();
+    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), schemaVersion: 1 })).toBeNull();
+    expect(decodePersonalLibraryInterestProfile({ ...profile(), schemaVersion: 3 })).toBeNull();
     expect(decodePersonalLibraryDirectionProposal({ ...proposal(), unexpected: true })).toBeNull();
     expect(decodePersonalLibraryInterestProfile({ ...profile(), unexpected: true })).toBeNull();
     expect(decodePersonalLibraryDirectionProposal({ ...proposal(), generatedAt: "2026-08-03" })).toBeNull();
     expect(decodePersonalLibraryInterestProfile({ ...profile(), updatedAt: "2026-08-03" })).toBeNull();
     expectInvalidRevisions(proposal() as unknown as Record<string, unknown>, decodePersonalLibraryDirectionProposal);
     expectInvalidRevisions(profile() as unknown as Record<string, unknown>, decodePersonalLibraryInterestProfile);
+  });
+
+  it("requires an exact canonical bounded proposal input manifest and matching fingerprint", () => {
+    const missing = clone(proposal()) as unknown as Record<string, any>;
+    delete missing.catalogInputPapers;
+    expect(decodePersonalLibraryDirectionProposal(missing)).toBeNull();
+    const empty = clone(proposal());
+    empty.catalogInputPapers = [];
+    expect(decodePersonalLibraryDirectionProposal(empty)).toBeNull();
+    const unsorted = clone(proposal());
+    unsorted.catalogInputPapers.reverse();
+    expect(decodePersonalLibraryDirectionProposal(unsorted)).toBeNull();
+    const duplicate = clone(proposal());
+    duplicate.catalogInputPapers = [duplicate.catalogInputPapers[0]!, duplicate.catalogInputPapers[0]!];
+    expect(decodePersonalLibraryDirectionProposal(duplicate)).toBeNull();
+    const tampered = clone(proposal());
+    tampered.catalogInputPapers[0]!.evidenceFingerprint = `sha256:${"f".repeat(64)}`;
+    expect(decodePersonalLibraryDirectionProposal(tampered)).toBeNull();
+    const legacy = clone(proposal()) as unknown as Record<string, any>;
+    legacy.schemaVersion = 1;
+    delete legacy.catalogInputPapers;
+    expect(decodePersonalLibraryDirectionProposal(legacy)).toBeNull();
   });
 
   it("rejects nested extra keys, wrong status shapes, and noncanonical timestamps", () => {
@@ -271,6 +298,61 @@ describe("personal library proposal and profile contracts", () => {
     expect(decodePersonalLibraryInterestProfile(descendant)).toBeNull();
   });
 
+  it("strictly migrates exact legacy v1 profiles while current decode remains v2-only", () => {
+    const legacy = clone(profile()) as unknown as Record<string, any>;
+    legacy.schemaVersion = 1;
+    legacy.directions[0].lineage = {
+      proposalId: "proposal.1", candidateIds: ["candidate.1"], directionIds: [],
+    };
+    expect(decodePersonalLibraryInterestProfile(legacy)).toBeNull();
+    expect(decodeDurablePersonalLibraryInterestProfile(legacy)).toEqual(profile());
+    const malformed = clone(legacy);
+    malformed.directions[0].lineage.unexpected = true;
+    expect(decodeDurablePersonalLibraryInterestProfile(malformed)).toBeNull();
+    const wrongShape = clone(legacy);
+    wrongShape.directions[0].lineage.proposalId = " padded ";
+    expect(decodeDurablePersonalLibraryInterestProfile(wrongShape)).toBeNull();
+    const oldInvalidTimestamp = clone(legacy);
+    oldInvalidTimestamp.directions[0].updatedAt = "2030-01-01T00:00:00.000Z";
+    expect(decodeDurablePersonalLibraryInterestProfile(oldInvalidTimestamp)).toBeNull();
+  });
+
+  it("allows transient chronology but rejects it as persisted or eligible profile state", () => {
+    const transient = profile();
+    transient.directions[0]!.updatedAt = "2026-08-03T13:00:00.000Z";
+    expect(decodePersonalLibraryInterestProfile(transient)).toEqual(transient);
+    expect(decodePersistedPersonalLibraryInterestProfile(transient)).toBeNull();
+    expect(decodeDurablePersonalLibraryInterestProfile(transient)).toBeNull();
+    expect(evaluatePersonalLibraryInterestEligibility(transient, catalog())).toEqual({
+      documentDiagnostics: ["profile-invalid"], eligibleDirections: [], diagnostics: [],
+    });
+  });
+
+  it("requires canonical non-empty bounded confirmed proposal lineage", () => {
+    const singular = profile();
+    expect(decodePersonalLibraryInterestProfile(singular)).toEqual(singular);
+    const legacy = clone(profile()) as unknown as Record<string, any>;
+    legacy.directions[0].lineage = {
+      proposalId: "proposal.1", candidateIds: ["candidate.1"], directionIds: [],
+    };
+    expect(decodePersonalLibraryInterestProfile(legacy)).toBeNull();
+    const empty = clone(profile());
+    empty.directions[0]!.lineage.proposalIds = [];
+    expect(decodePersonalLibraryInterestProfile(empty)).toBeNull();
+    const unsorted = clone(profile());
+    unsorted.directions[0]!.lineage.proposalIds = ["proposal.2", "proposal.1"];
+    expect(decodePersonalLibraryInterestProfile(unsorted)).toBeNull();
+    const duplicate = clone(profile());
+    duplicate.directions[0]!.lineage.proposalIds = ["proposal.1", "proposal.1"];
+    expect(decodePersonalLibraryInterestProfile(duplicate)).toBeNull();
+    const overflow = clone(profile());
+    overflow.directions[0]!.lineage.proposalIds = Array.from(
+      { length: PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS + 1 },
+      (_, index) => `proposal.${String(index).padStart(2, "0")}`,
+    );
+    expect(decodePersonalLibraryInterestProfile(overflow)).toBeNull();
+  });
+
   it("bounds profile directions and rejects direction ordering and duplicates", () => {
     const overflow = profile(Array.from({ length: PERSONAL_LIBRARY_MAX_DIRECTIONS + 1 }, (_, index) => (
       direction(`direction.${String(index).padStart(3, "0")}`)
@@ -369,7 +451,7 @@ describe("personal library eligibility", () => {
   });
 
   it("explicitly diagnoses invalid profile and invalid/future/broken catalogs", () => {
-    const malformedProfile = { ...profile(), schemaVersion: 2 };
+    const malformedProfile = { ...profile(), schemaVersion: 3 };
     expect(evaluatePersonalLibraryInterestEligibility(malformedProfile, catalog())).toEqual({
       documentDiagnostics: ["profile-invalid"], eligibleDirections: [], diagnostics: [],
     });

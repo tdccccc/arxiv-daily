@@ -4,6 +4,10 @@ import {
   PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   createEmptyPersonalLibraryInterestProfile,
+  createPersonalLibraryCatalogInputFingerprint,
+  createPersonalLibraryCatalogInputManifest,
+  createPersonalLibraryCatalogInputManifestFingerprint,
+  createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
   isEmptyPersonalLibraryInterestProfile,
   type PersonalLibraryDirectionProposal,
@@ -11,16 +15,26 @@ import {
 } from "../src/library/personal-library-interest-profile";
 import {
   PersonalLibraryDirectionProposalStore,
+  PersonalLibraryDirectionProposalStoreError,
   PersonalLibraryInterestProfileStore,
+  PersonalLibraryInterestProfileStoreError,
+  confirmPersonalLibraryDirectionWithStores,
   derivePersonalLibraryInterestProfileStorePaths,
 } from "../src/library/personal-library-interest-profile-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import type { PersonalLibraryCatalog, PersonalLibraryPaperRecord } from "../src/library/personal-library-catalog";
 
 const scope = `sha256:${"a".repeat(64)}`;
 const identification = `sha256:${"b".repeat(64)}`;
 const otherScope = `sha256:${"c".repeat(64)}`;
 const otherIdentification = `sha256:${"d".repeat(64)}`;
-const evidence = `sha256:${"e".repeat(64)}`;
+const evidence = createPersonalLibraryPaperEvidenceFingerprint({
+  paperKey: "arxiv:2608.00001", source: "arxiv", externalId: "2608.00001",
+  title: "Reliable agents", authors: ["A. Researcher"], abstract: "Reliable agents.",
+  published: "2026-08-01T00:00:00.000Z", updated: "2026-08-02T00:00:00.000Z",
+  primaryCategory: "cs.AI", categories: ["cs.AI"], evidenceDepth: "metadata-and-abstract",
+  filePaths: ["papers/2608.00001.pdf"],
+});
 const firstTime = new Date("2026-08-03T12:00:00.000Z");
 const secondTime = new Date("2026-08-03T13:00:00.000Z");
 const directory = `arxiv-daily/.index/personal-library-profiles/${"a".repeat(64)}/${"b".repeat(64)}`;
@@ -58,15 +72,45 @@ function makeStorage(atomic = true) {
   };
 }
 
+function catalogPaper(): PersonalLibraryPaperRecord {
+  return {
+    paperKey: "arxiv:2608.00001", source: "arxiv", externalId: "2608.00001",
+    title: "Reliable agents", authors: ["A. Researcher"], abstract: "Reliable agents.",
+    published: "2026-08-01T00:00:00.000Z", updated: "2026-08-02T00:00:00.000Z",
+    primaryCategory: "cs.AI", categories: ["cs.AI"], evidenceDepth: "metadata-and-abstract",
+    filePaths: ["papers/2608.00001.pdf"],
+  };
+}
+
+function confirmationCatalog(): PersonalLibraryCatalog {
+  const paper = catalogPaper();
+  return {
+    schemaVersion: 1, revision: 1, scopeFingerprint: scope, identificationFingerprint: identification,
+    updatedAt: firstTime.toISOString(), lastScan: null,
+    files: { [paper.filePaths[0]!]: {
+      path: paper.filePaths[0]!, status: "ready", observationFingerprint: `sha256:${"2".repeat(64)}`,
+      paperKey: paper.paperKey, arxivId: paper.externalId, updatedAt: firstTime.toISOString(),
+    } },
+    papers: { [paper.paperKey]: paper },
+  };
+}
+
 function proposal(overrides: Partial<PersonalLibraryDirectionProposal> = {}): PersonalLibraryDirectionProposal {
-  const representatives = [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence }];
+  const paper = catalogPaper();
+  const representatives = [{
+    paperKey: paper.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper),
+  }];
   return {
     schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
     revision: 99,
     proposalId: "proposal-1",
     scopeFingerprint: scope,
     identificationFingerprint: identification,
-    catalogInputFingerprint: `sha256:${"f".repeat(64)}`,
+    catalogInputFingerprint: createPersonalLibraryCatalogInputFingerprint({
+      scopeFingerprint: scope, identificationFingerprint: identification,
+      papers: Object.values(confirmationCatalog().papers),
+    }),
+    catalogInputPapers: createPersonalLibraryCatalogInputManifest(Object.values(confirmationCatalog().papers)),
     generationContractFingerprint: `sha256:${"1".repeat(64)}`,
     generatedAt: firstTime.toISOString(),
     candidates: [{
@@ -92,11 +136,25 @@ function profile(overrides: Partial<PersonalLibraryInterestProfile> = {}): Perso
       description: "Reliable research agents.", discoveryCues: ["agent reliability"],
       representatives,
       representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
-      lineage: { proposalId: "proposal-1", candidateIds: ["candidate-1"], directionIds: [] },
+      lineage: { proposalIds: ["proposal-1"], candidateIds: ["candidate-1"], directionIds: [] },
       createdAt: firstTime.toISOString(), updatedAt: firstTime.toISOString(),
     }],
     ...overrides,
   };
+}
+
+function legacyProfile(overrides: Partial<PersonalLibraryInterestProfile> = {}): Record<string, any> {
+  const current = profile(overrides) as unknown as Record<string, any>;
+  current.schemaVersion = 1;
+  current.directions = current.directions.map((direction: Record<string, any>) => ({
+    ...direction,
+    lineage: {
+      proposalId: direction.lineage.proposalIds[0],
+      candidateIds: direction.lineage.candidateIds,
+      directionIds: direction.lineage.directionIds,
+    },
+  }));
+  return current;
 }
 
 function stores(storage: StorageAdapter, now = () => secondTime) {
@@ -154,8 +212,13 @@ describe("scope-bound paths and construction", () => {
       memory.storage, DEFAULT_SETTINGS.output, otherScope, otherIdentification,
     );
     const savedA = await a.proposals.replace(proposal(), null);
+    const otherManifest = createPersonalLibraryCatalogInputManifest(Object.values(confirmationCatalog().papers));
     const b = proposal({ scopeFingerprint: otherScope, identificationFingerprint: otherIdentification,
-      proposalId: "proposal-b" });
+      proposalId: "proposal-b", catalogInputPapers: otherManifest,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: otherScope, identificationFingerprint: otherIdentification,
+        catalogInputPapers: otherManifest,
+      }) });
     await bProposal.replace(b, null);
     await a.profiles.replace(profile(), 0);
     await expect(stores(memory.storage).proposals.load()).resolves.toEqual(savedA);
@@ -165,6 +228,22 @@ describe("scope-bound paths and construction", () => {
 });
 
 describe("proposal lifecycle", () => {
+  it("fails closed with regeneration-required for legacy v1 primary or backup", async () => {
+    const primary = makeStorage();
+    const legacy = proposal() as unknown as Record<string, any>;
+    legacy.schemaVersion = 1;
+    delete legacy.catalogInputPapers;
+    primary.files[proposalPath] = JSON.stringify(legacy);
+    await expect(stores(primary.storage).proposals.load())
+      .rejects.toMatchObject({ code: "regeneration-required" });
+
+    const backup = makeStorage();
+    backup.files[proposalPath] = "corrupt";
+    backup.files[proposalBackupPath] = JSON.stringify(legacy);
+    await expect(stores(backup.storage).proposals.load())
+      .rejects.toMatchObject({ code: "regeneration-required" });
+  });
+
   it("distinguishes missing null from a durable empty proposal generation", async () => {
     const memory = makeStorage();
     const store = stores(memory.storage).proposals;
@@ -246,6 +325,38 @@ describe("proposal lifecycle", () => {
 });
 
 describe("profile lifecycle", () => {
+  it("rejects persisted v2 chronology where a direction is newer than the document", async () => {
+    const memory = makeStorage();
+    const malformed = profile({ revision: 4 });
+    malformed.directions[0]!.updatedAt = secondTime.toISOString();
+    memory.files[profilePath] = JSON.stringify(malformed);
+    await expect(stores(memory.storage).profiles.load())
+      .rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+  });
+
+  it("migrates a valid v1 primary atomically and reloads strict v2 without semantic changes", async () => {
+    const memory = makeStorage();
+    memory.files[profilePath] = JSON.stringify(legacyProfile({ revision: 6 }));
+    const loaded = await stores(memory.storage).profiles.load();
+    expect(loaded).toEqual(profile({ revision: 6 }));
+    expect(parse<PersonalLibraryInterestProfile>(memory.files[profilePath])).toEqual(loaded);
+    expect(memory.writeTextAtomic).toHaveBeenCalledWith(
+      profilePath, `${JSON.stringify(loaded, null, 2)}\n`,
+    );
+    memory.writeTextAtomic.mockClear();
+    await expect(stores(memory.storage).profiles.load()).resolves.toEqual(loaded);
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it("recovers and migrates a valid v1 backup when primary is corrupt", async () => {
+    const memory = makeStorage();
+    memory.files[profilePath] = "corrupt";
+    memory.files[profileBackupPath] = JSON.stringify(legacyProfile({ revision: 5 }));
+    const loaded = await stores(memory.storage).profiles.load();
+    expect(loaded).toEqual(profile({ revision: 5 }));
+    expect(parse<PersonalLibraryInterestProfile>(memory.files[profilePath])).toEqual(loaded);
+  });
+
   it("returns a strict unpersisted empty profile and first content is revision one", async () => {
     const memory = makeStorage();
     const store = stores(memory.storage).profiles;
@@ -360,6 +471,200 @@ describe("profile lifecycle", () => {
   });
 });
 
+describe("profile-first confirmation coordinator", () => {
+  function confirmationInput(memory: ReturnType<typeof makeStorage>) {
+    const bound = stores(memory.storage);
+    return {
+      proposalStore: bound.proposals, profileStore: bound.profiles,
+      proposal: proposal({ revision: 0 }), profile: createEmptyPersonalLibraryInterestProfile(scope, identification, firstTime),
+      catalog: confirmationCatalog(), candidateId: "candidate-1", directionId: "direction-1",
+      status: "active" as const,
+      draft: { name: "Reliable agents", description: "Reliable research agents.",
+        discoveryCues: ["agent reliability"], representativePaperKeys: ["arxiv:2608.00001"] },
+      now: secondTime, expectedProposalRevision: 0, expectedProfileRevision: 0,
+    };
+  }
+
+  it("persists profile before proposal and returns actual saved documents", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    const initial = await input.proposalStore.replace(input.proposal, null);
+    input.proposal = initial;
+    memory.writeTextAtomic.mockClear();
+    const result = await confirmPersonalLibraryDirectionWithStores(input);
+    const primaryWrites = memory.writeTextAtomic.mock.calls.map(([path]) => path)
+      .filter((path) => path === profilePath || path === proposalPath);
+    expect(primaryWrites).toEqual([profilePath, proposalPath]);
+    expect(result.profile).toMatchObject({
+      revision: 1, updatedAt: secondTime.toISOString(),
+      directions: [expect.objectContaining({ id: "direction-1", updatedAt: secondTime.toISOString() })],
+    });
+    expect(result.proposal).toMatchObject({ revision: 1, candidates: [] });
+    await expect(input.profileStore.load()).resolves.toEqual(result.profile);
+    await expect(input.proposalStore.load()).resolves.toEqual(result.proposal);
+  });
+
+  it("leaves proposal untouched when profile persistence fails", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const before = await input.proposalStore.load();
+    memory.setAtomicImplementation(async (path, content) => {
+      if (path === profilePath) throw new Error("profile failed");
+      memory.files[path] = content;
+    });
+    await expect(confirmPersonalLibraryDirectionWithStores(input)).rejects.toMatchObject({
+      code: "partial-confirmation-conflict",
+      details: expect.objectContaining({ stage: "profile-state-unreadable" }),
+    });
+    await expect(input.proposalStore.load()).resolves.toEqual(before);
+  });
+
+  it("continues after profile committed-then-thrown and consumes proposal once", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    let profilePrimaryWrites = 0;
+    memory.setAtomicImplementation(async (path, content) => {
+      memory.files[path] = content;
+      if (path === profilePath && profilePrimaryWrites++ === 0) throw new Error("profile response lost");
+    });
+    const result = await confirmPersonalLibraryDirectionWithStores(input);
+    expect(result.profile.directions).toHaveLength(1);
+    expect(result.proposal.candidates).toEqual([]);
+    expect(memory.writeTextAtomic.mock.calls.filter(([path]) => path === proposalPath)).toHaveLength(2);
+  });
+
+  it("does not touch proposal when ambiguous profile state diverged", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const originalProfileReplace = input.profileStore.replace.bind(input.profileStore);
+    vi.spyOn(input.profileStore, "replace").mockImplementationOnce(async () => {
+      const divergent = profile();
+      divergent.directions[0]!.name = "Concurrent profile edit";
+      await originalProfileReplace(divergent, 0);
+      throw new PersonalLibraryInterestProfileStoreError("ambiguous", "save-failed");
+    });
+    const proposalWrites = memory.writeTextAtomic.mock.calls.filter(([path]) => path === proposalPath).length;
+    await expect(confirmPersonalLibraryDirectionWithStores(input)).rejects.toMatchObject({
+      code: "partial-confirmation-conflict",
+      details: expect.objectContaining({ stage: "profile-divergent" }),
+    });
+    expect(memory.writeTextAtomic.mock.calls.filter(([path]) => path === proposalPath)).toHaveLength(proposalWrites);
+    await expect(input.proposalStore.load()).resolves.toEqual(input.proposal);
+  });
+
+  it("reconciles proposal failure and retry without duplicate direction", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    let failed = false;
+    memory.setAtomicImplementation(async (path, content) => {
+      if (path === proposalPath && !failed) { failed = true; throw new Error("proposal failed"); }
+      memory.files[path] = content;
+    });
+    const result = await confirmPersonalLibraryDirectionWithStores(input);
+    expect(result.profile.directions.map(({ id }) => id)).toEqual(["direction-1"]);
+    expect(result.proposal.candidates).toEqual([]);
+    await expect(confirmPersonalLibraryDirectionWithStores(input)).resolves.toMatchObject({
+      profile: expect.objectContaining({ directions: [expect.objectContaining({ id: "direction-1" })] }),
+      proposal: expect.objectContaining({ candidates: [] }),
+    });
+  });
+
+  it("wraps proposal stale with partial-state semantics without a second replace", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const replace = vi.spyOn(input.proposalStore, "replace").mockRejectedValueOnce(
+      new PersonalLibraryDirectionProposalStoreError("stale injected", "stale"),
+    );
+    const caught = await confirmPersonalLibraryDirectionWithStores(input).catch((error) => error);
+    expect(caught).toMatchObject({
+      code: "partial-confirmation-conflict",
+      details: expect.objectContaining({ stage: "proposal-write-failed-after-profile-commit" }),
+      cause: expect.objectContaining({ code: "stale" }),
+    });
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a second proposal retry that committed then threw after one final read", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const originalReplace = input.proposalStore.replace.bind(input.proposalStore);
+    let call = 0;
+    vi.spyOn(input.proposalStore, "replace").mockImplementation(async (next, revision) => {
+      call += 1;
+      if (call === 1) throw new PersonalLibraryDirectionProposalStoreError("first precommit", "save-failed");
+      const saved = await originalReplace(next, revision);
+      throw new PersonalLibraryDirectionProposalStoreError(`second committed ${saved.revision}`, "save-failed");
+    });
+    const result = await confirmPersonalLibraryDirectionWithStores(input);
+    expect(result.proposal.candidates).toEqual([]);
+    expect(call).toBe(2);
+  });
+
+  it("wraps second proposal retry stale and preserves original proposal", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    let call = 0;
+    const replace = vi.spyOn(input.proposalStore, "replace").mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw new PersonalLibraryDirectionProposalStoreError("first precommit", "save-failed");
+      throw new PersonalLibraryDirectionProposalStoreError("retry stale", "stale");
+    });
+    const caught = await confirmPersonalLibraryDirectionWithStores(input).catch((error) => error);
+    expect(caught).toMatchObject({
+      code: "partial-confirmation-conflict",
+      details: expect.objectContaining({ stage: "proposal-retry-failed-after-profile-commit" }),
+      cause: expect.objectContaining({ code: "stale" }),
+    });
+    expect(replace).toHaveBeenCalledTimes(2);
+    await expect(input.proposalStore.load()).resolves.toEqual(input.proposal);
+  });
+
+  it("preserves a concurrent proposal edit and reports partial confirmation conflict", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const originalReplace = input.proposalStore.replace.bind(input.proposalStore);
+    let first = true;
+    const replace = vi.spyOn(input.proposalStore, "replace").mockImplementation(async (next, revision) => {
+      if (!first) return await originalReplace(next, revision);
+      first = false;
+      const edited = { ...input.proposal, candidates: input.proposal.candidates.map((candidate) => ({
+        ...candidate, name: "Concurrent researcher edit",
+      })) };
+      await originalReplace(edited, input.proposal.revision);
+      throw new PersonalLibraryDirectionProposalStoreError("ambiguous", "save-failed");
+    });
+    await expect(confirmPersonalLibraryDirectionWithStores(input)).rejects.toMatchObject({
+      code: "partial-confirmation-conflict",
+    });
+    expect(replace).toHaveBeenCalledTimes(1);
+    await expect(input.proposalStore.load()).resolves.toMatchObject({
+      candidates: [expect.objectContaining({ name: "Concurrent researcher edit" })],
+    });
+  });
+
+  it("rejects concurrent stale profile confirmation before touching proposal", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    input.proposal = await input.proposalStore.replace(input.proposal, null);
+    const winner = await confirmPersonalLibraryDirectionWithStores(input);
+    const proposalWrites = memory.writeTextAtomic.mock.calls.filter(([path]) => path === proposalPath).length;
+    const stale = confirmationInput(memory);
+    stale.proposal = input.proposal;
+    stale.directionId = "direction-2";
+    await expect(confirmPersonalLibraryDirectionWithStores(stale)).rejects.toMatchObject({ code: "stale" });
+    expect(memory.writeTextAtomic.mock.calls.filter(([path]) => path === proposalPath)).toHaveLength(proposalWrites);
+    expect(winner.profile.directions).toHaveLength(1);
+  });
+});
+
 describe("recovery, errors, and serialization", () => {
   it("repairs compatible backup and fails valid incompatible primary without resurrection", async () => {
     const memory = makeStorage();
@@ -368,7 +673,14 @@ describe("recovery, errors, and serialization", () => {
     await expect(stores(memory.storage).proposals.load()).resolves.toEqual(saved);
     expect(parse(memory.files[proposalPath])).toEqual(saved);
 
-    memory.files[proposalPath] = JSON.stringify(proposal({ scopeFingerprint: otherScope }));
+    const incompatibleManifest = createPersonalLibraryCatalogInputManifest(Object.values(confirmationCatalog().papers));
+    memory.files[proposalPath] = JSON.stringify(proposal({
+      scopeFingerprint: otherScope,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: otherScope, identificationFingerprint: identification,
+        catalogInputPapers: incompatibleManifest,
+      }),
+    }));
     memory.files[proposalBackupPath] = JSON.stringify(saved);
     const caught = await stores(memory.storage).proposals.load().catch((error) => error);
     expect(codeOf(caught)).toBe("incompatible");

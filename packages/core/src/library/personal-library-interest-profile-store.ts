@@ -1,12 +1,19 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "../services/paper-index";
+import type { PersonalLibraryCatalog } from "./personal-library-catalog";
+import {
+  confirmPersonalLibraryDirectionCandidate,
+  type PersonalLibraryReviewedDirectionDraft,
+} from "./personal-library-interest-profile-review";
 import {
   PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   createEmptyPersonalLibraryInterestProfile,
+  decodeDurablePersonalLibraryInterestProfile,
   decodePersonalLibraryDirectionProposal,
   decodePersonalLibraryInterestProfile,
+  decodePersistedPersonalLibraryInterestProfile,
   type PersonalLibraryDirectionProposal,
   type PersonalLibraryInterestProfile,
 } from "./personal-library-interest-profile";
@@ -33,6 +40,7 @@ export type PersonalLibraryStoreErrorCode =
   | "stale"
   | "incompatible"
   | "corrupt-or-unreadable"
+  | "regeneration-required"
   | "atomic-write-unsupported"
   | "repair-failed"
   | "save-failed";
@@ -58,6 +66,19 @@ export class PersonalLibraryDirectionProposalStoreError extends Error {
   }
 }
 
+export class PersonalLibraryConfirmationCoordinatorError extends Error {
+  readonly code = "partial-confirmation-conflict" as const;
+
+  constructor(
+    message: string,
+    readonly details: Readonly<Record<string, unknown>> = {},
+    options: { cause?: unknown } = {},
+  ) {
+    super(message, options);
+    this.name = "PersonalLibraryConfirmationCoordinatorError";
+  }
+}
+
 export class PersonalLibraryInterestProfileStoreError extends Error {
   readonly expectedRevision?: number | null;
   readonly currentRevision?: number | null;
@@ -79,7 +100,7 @@ type Decoder<T> = (value: unknown) => T | null;
 type ReadResult<T> =
   | { kind: "missing" }
   | { kind: "valid"; document: T; raw: string }
-  | { kind: "corrupt"; error?: unknown }
+  | { kind: "corrupt"; raw?: string; error?: unknown }
   | { kind: "unreadable"; error: unknown };
 
 // Runtime-local serialization is guaranteed only for the same StorageAdapter object and
@@ -199,6 +220,164 @@ export class PersonalLibraryDirectionProposalStore {
   }
 }
 
+export interface ConfirmPersonalLibraryDirectionWithStoresInput {
+  proposalStore: PersonalLibraryDirectionProposalStore;
+  profileStore: PersonalLibraryInterestProfileStore;
+  proposal: PersonalLibraryDirectionProposal;
+  profile: PersonalLibraryInterestProfile;
+  catalog: PersonalLibraryCatalog;
+  candidateId: string;
+  directionId: string;
+  status: "active" | "disabled";
+  draft: PersonalLibraryReviewedDirectionDraft;
+  now: Date;
+  expectedProposalRevision: number;
+  expectedProfileRevision: number;
+}
+
+export async function confirmPersonalLibraryDirectionWithStores(
+  input: ConfirmPersonalLibraryDirectionWithStoresInput,
+): Promise<{ proposal: PersonalLibraryDirectionProposal; profile: PersonalLibraryInterestProfile }> {
+  const requested = confirmPersonalLibraryDirectionCandidate({
+    proposal: input.proposal,
+    profile: input.profile,
+    catalog: input.catalog,
+    candidateId: input.candidateId,
+    directionId: input.directionId,
+    status: input.status,
+    draft: input.draft,
+    now: input.now,
+  });
+  const originalProfile = clone(input.profile);
+  const requestedProfile = clone(requested.profile);
+  const originalProposal = clone(input.proposal);
+  const requestedProposal = clone(requested.proposal);
+  const savedProfile = await establishConfirmedProfile({
+    store: input.profileStore,
+    original: originalProfile,
+    requested: requestedProfile,
+    expectedRevision: input.expectedProfileRevision,
+    directionId: input.directionId,
+  });
+  const savedProposal = await consumeConfirmedProposal({
+    store: input.proposalStore,
+    original: originalProposal,
+    requested: requestedProposal,
+    expectedRevision: input.expectedProposalRevision,
+    directionId: input.directionId,
+  });
+  return { proposal: savedProposal, profile: savedProfile };
+}
+
+async function establishConfirmedProfile(input: {
+  store: PersonalLibraryInterestProfileStore;
+  original: PersonalLibraryInterestProfile;
+  requested: PersonalLibraryInterestProfile;
+  expectedRevision: number;
+  directionId: string;
+}): Promise<PersonalLibraryInterestProfile> {
+  try {
+    return await input.store.replace(input.requested, input.expectedRevision);
+  } catch (caught) {
+    if (!(caught instanceof PersonalLibraryInterestProfileStoreError)
+      || caught.code !== "save-failed") throw caught;
+    const durable = await loadProfileForCoordinator(input.store, input.directionId, caught);
+    if (semanticProfile(durable) === semanticProfile(input.requested)) return durable;
+    if (semanticProfile(durable) !== semanticProfile(input.original)) {
+      throw coordinatorConflict("profile-divergent", input.directionId, caught, durable.revision);
+    }
+    try {
+      return await input.store.replace(input.requested, durable.revision);
+    } catch (retryCaught) {
+      if (!(retryCaught instanceof PersonalLibraryInterestProfileStoreError)
+        || retryCaught.code !== "save-failed") {
+        throw coordinatorConflict("profile-retry-failed", input.directionId, retryCaught, durable.revision);
+      }
+      const final = await loadProfileForCoordinator(input.store, input.directionId, retryCaught);
+      if (semanticProfile(final) === semanticProfile(input.requested)) return final;
+      throw coordinatorConflict("profile-commit-uncertain", input.directionId, retryCaught, final.revision);
+    }
+  }
+}
+
+async function consumeConfirmedProposal(input: {
+  store: PersonalLibraryDirectionProposalStore;
+  original: PersonalLibraryDirectionProposal;
+  requested: PersonalLibraryDirectionProposal;
+  expectedRevision: number;
+  directionId: string;
+}): Promise<PersonalLibraryDirectionProposal> {
+  try {
+    return await input.store.replace(input.requested, input.expectedRevision);
+  } catch (caught) {
+    if (!(caught instanceof PersonalLibraryDirectionProposalStoreError)
+      || caught.code !== "save-failed") {
+      throw coordinatorConflict("proposal-write-failed-after-profile-commit", input.directionId, caught);
+    }
+    const durable = await loadProposalForCoordinator(input.store, input.directionId, caught);
+    if (semanticProposalIgnoringRevision(durable) === semanticProposalIgnoringRevision(input.requested)) {
+      return durable;
+    }
+    if (semanticProposalIgnoringRevision(durable) !== semanticProposalIgnoringRevision(input.original)) {
+      throw coordinatorConflict("proposal-divergent-after-profile-commit", input.directionId, caught, durable.revision);
+    }
+    try {
+      return await input.store.replace(input.requested, durable.revision);
+    } catch (retryCaught) {
+      if (!(retryCaught instanceof PersonalLibraryDirectionProposalStoreError)
+        || retryCaught.code !== "save-failed") {
+        throw coordinatorConflict("proposal-retry-failed-after-profile-commit", input.directionId,
+          retryCaught, durable.revision);
+      }
+      const final = await loadProposalForCoordinator(input.store, input.directionId, retryCaught);
+      if (semanticProposalIgnoringRevision(final) === semanticProposalIgnoringRevision(input.requested)) {
+        return final;
+      }
+      throw coordinatorConflict("proposal-commit-uncertain-after-profile-commit", input.directionId,
+        retryCaught, final.revision);
+    }
+  }
+}
+
+async function loadProfileForCoordinator(
+  store: PersonalLibraryInterestProfileStore,
+  directionId: string,
+  cause: unknown,
+): Promise<PersonalLibraryInterestProfile> {
+  try {
+    return await store.load();
+  } catch (caught) {
+    throw coordinatorConflict("profile-state-unreadable", directionId, caught ?? cause);
+  }
+}
+
+async function loadProposalForCoordinator(
+  store: PersonalLibraryDirectionProposalStore,
+  directionId: string,
+  cause: unknown,
+): Promise<PersonalLibraryDirectionProposal> {
+  try {
+    const proposal = await store.load();
+    if (proposal) return proposal;
+  } catch (caught) {
+    throw coordinatorConflict("proposal-state-unreadable-after-profile-commit", directionId, caught);
+  }
+  throw coordinatorConflict("proposal-missing-after-profile-commit", directionId, cause);
+}
+
+function coordinatorConflict(
+  stage: string,
+  directionId: string,
+  cause: unknown,
+  currentRevision?: number,
+): PersonalLibraryConfirmationCoordinatorError {
+  return new PersonalLibraryConfirmationCoordinatorError(
+    `personal library confirmation coordinator conflict at ${stage}`,
+    { stage, directionId, ...(currentRevision === undefined ? {} : { currentRevision }) },
+    { cause },
+  );
+}
+
 export class PersonalLibraryInterestProfileStore {
   readonly paths: PersonalLibraryInterestProfileDocumentPaths;
   private readonly scopeFingerprint: string;
@@ -272,7 +451,7 @@ export class PersonalLibraryInterestProfileStore {
       }
       candidate.revision = loaded === null ? 1 : current.revision + 1;
       candidate.updatedAt = latestTimestamp(this.validNow(), current, candidate);
-      if (!decodePersonalLibraryInterestProfile(candidate)) {
+      if (!decodePersistedPersonalLibraryInterestProfile(candidate)) {
         throw error("profile", "invalid", "cannot persist invalid personal library interest profile");
       }
       await saveDocument(this.storage, this.paths, "profile", candidate, loaded?.raw ?? null);
@@ -285,7 +464,9 @@ export class PersonalLibraryInterestProfileStore {
       storage: this.storage,
       paths: this.paths,
       kind: "profile",
-      decoder: decodePersonalLibraryInterestProfile,
+      decoder: decodeDurablePersonalLibraryInterestProfile,
+      canonicalDecoder: decodePersistedPersonalLibraryInterestProfile,
+      migrateOnLoad: true,
       scopeFingerprint: this.scopeFingerprint,
       identificationFingerprint: this.identificationFingerprint,
       onWarning: this.options.onWarning,
@@ -325,6 +506,8 @@ async function loadDurableDocument<T>(input: {
   paths: PersonalLibraryInterestProfileDocumentPaths;
   kind: StoreKind;
   decoder: Decoder<T>;
+  canonicalDecoder?: Decoder<T>;
+  migrateOnLoad?: boolean;
   scopeFingerprint: string;
   identificationFingerprint: string;
   onWarning?: (message: string, error?: unknown) => void;
@@ -334,6 +517,13 @@ async function loadDurableDocument<T>(input: {
     if (!compatible(primary.document as T & Fingerprinted, input)) {
       throw error(input.kind, "incompatible",
         `incompatible personal library ${label(input.kind)}: ${input.paths.documentPath}`);
+    }
+    const migrated = input.migrateOnLoad && input.canonicalDecoder
+      && input.canonicalDecoder(JSON.parse(primary.raw)) === null;
+    if (migrated) {
+      const raw = `${JSON.stringify(primary.document, null, 2)}\n`;
+      await repairPrimary(input.storage, input.paths, input.kind, raw);
+      return { document: primary.document as T & Fingerprinted, raw };
     }
     return { document: primary.document as T & Fingerprinted, raw: primary.raw };
   }
@@ -345,10 +535,17 @@ async function loadDurableDocument<T>(input: {
     }
     input.onWarning?.(`personal library ${label(input.kind)} recovered from backup: ${input.paths.backupPath}`,
       readCause(primary));
-    await repairPrimary(input.storage, input.paths, input.kind, backup.raw);
-    return { document: backup.document as T & Fingerprinted, raw: backup.raw };
+    const migrated = input.migrateOnLoad && input.canonicalDecoder
+      && input.canonicalDecoder(JSON.parse(backup.raw)) === null;
+    const raw = migrated ? `${JSON.stringify(backup.document, null, 2)}\n` : backup.raw;
+    await repairPrimary(input.storage, input.paths, input.kind, raw);
+    return { document: backup.document as T & Fingerprinted, raw };
   }
   if (primary.kind === "missing" && backup.kind === "missing") return null;
+  if (input.kind === "proposal" && (isLegacyProposalRead(primary) || isLegacyProposalRead(backup))) {
+    throw error("proposal", "regeneration-required",
+      `legacy personal library direction proposal must be regenerated: ${input.paths.documentPath}`);
+  }
   throw error(input.kind, "corrupt-or-unreadable",
     `corrupt or unreadable personal library ${label(input.kind)}: ${input.paths.documentPath}`,
     { cause: readCause(backup) ?? readCause(primary) });
@@ -368,7 +565,7 @@ async function readDocument<T>(storage: StorageAdapter, path: string, decoder: D
   }
   try {
     const document = decoder(JSON.parse(raw));
-    return document ? { kind: "valid", document, raw } : { kind: "corrupt" };
+    return document ? { kind: "valid", document, raw } : { kind: "corrupt", raw };
   } catch (caught) {
     return { kind: "corrupt", error: caught };
   }
@@ -462,9 +659,13 @@ function compatible(document: Fingerprinted, input: Fingerprinted): boolean {
     && document.identificationFingerprint === input.identificationFingerprint;
 }
 
-function semanticProposal(document: PersonalLibraryDirectionProposal): string {
+function semanticProposalIgnoringRevision(document: PersonalLibraryDirectionProposal): string {
   const { revision: _revision, ...semantic } = document;
   return JSON.stringify(semantic);
+}
+
+function semanticProposal(document: PersonalLibraryDirectionProposal): string {
+  return semanticProposalIgnoringRevision(document);
 }
 
 function semanticProfile(document: PersonalLibraryInterestProfile): string {
@@ -495,6 +696,16 @@ function label(kind: StoreKind): string {
 
 function canonicalRaw(raw: string): string {
   return `${JSON.stringify(JSON.parse(raw), null, 2)}\n`;
+}
+
+function isLegacyProposalRead<T>(result: ReadResult<T>): boolean {
+  if (result.kind !== "corrupt" || typeof result.raw !== "string") return false;
+  try {
+    const value = JSON.parse(result.raw);
+    return typeof value === "object" && value !== null && value.schemaVersion === 1;
+  } catch {
+    return false;
+  }
 }
 
 function readCause<T>(result: ReadResult<T>): unknown {
