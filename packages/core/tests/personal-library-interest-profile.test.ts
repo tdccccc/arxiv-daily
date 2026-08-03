@@ -178,7 +178,8 @@ describe("personal library proposal and profile contracts", () => {
   });
 
   it("enforces candidate, representative, ordering, duplicate, and lineage bounds", () => {
-    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), candidates: [] })).toBeNull();
+    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), candidates: [] }))
+      .toEqual({ ...proposal(), candidates: [] });
     const tooMany = proposal();
     tooMany.candidates = Array.from({ length: PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES + 1 }, (_, index) => ({
       ...proposal().candidates[0]!, id: `candidate.${String(index).padStart(2, "0")}`,

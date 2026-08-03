@@ -7,7 +7,7 @@ import { sha256Hex } from "../utils/digest";
 
 export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 1 as const;
 export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 1 as const;
-export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 1 as const;
+export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
 export const PERSONAL_LIBRARY_MIN_REPRESENTATIVES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_REPRESENTATIVES = 5 as const;
@@ -83,6 +83,31 @@ export interface PersonalLibraryInterestProfile {
   identificationFingerprint: string;
   updatedAt: string;
   directions: PersonalLibraryConfirmedDirection[];
+}
+
+export function createEmptyPersonalLibraryInterestProfile(
+  scopeFingerprint: string,
+  identificationFingerprint: string,
+  now: Date = new Date(),
+): PersonalLibraryInterestProfile {
+  const profile: PersonalLibraryInterestProfile = {
+    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
+    revision: 0,
+    scopeFingerprint,
+    identificationFingerprint,
+    updatedAt: now.toISOString(),
+    directions: [],
+  };
+  const decoded = decodePersonalLibraryInterestProfile(profile);
+  if (!decoded) throw new TypeError("cannot create empty personal library interest profile");
+  return decoded;
+}
+
+export function isEmptyPersonalLibraryInterestProfile(
+  value: unknown,
+): value is PersonalLibraryInterestProfile {
+  const decoded = decodePersonalLibraryInterestProfile(value);
+  return decoded !== null && decoded.directions.length === 0;
 }
 
 export type PersonalLibraryEligibilityDocumentDiagnostic =
