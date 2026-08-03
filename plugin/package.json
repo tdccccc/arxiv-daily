@@ -21,6 +21,7 @@
     "test": "vitest run --config vitest.config.mts"
   },
   "dependencies": {
-    "@arxiv-daily/core": "0.4.1"
+    "@arxiv-daily/core": "0.4.1",
+    "@arxiv-daily/node-runtime": "0.4.1"
   }
 }

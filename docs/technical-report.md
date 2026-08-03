@@ -77,11 +77,11 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 packages/core          → 仅 pako（+ 自身）
 packages/node-runtime  → @arxiv-daily/core
 apps/cli               → @arxiv-daily/core, @arxiv-daily/node-runtime
-plugin                 → @arxiv-daily/core, obsidian
+plugin                 → @arxiv-daily/core, obsidian；仅额外允许 @arxiv-daily/node-runtime/scoped-library-source
 services/email-relay   → 独立（不在 npm workspaces）
 ```
 
-禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin；禁止深层 `@arxiv-daily/*/…` 导入。
+禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin。workspace 深层导入默认禁止；唯一显式例外是插件可导入 `@arxiv-daily/node-runtime/scoped-library-source`，且插件不得改用 node-runtime 根入口。该子路径提供的 scoped library capability 目前尚未接入插件 `main.ts`、设置或日报流水线，因此不构成当前用户可调用功能。
 
 逻辑分层：
 

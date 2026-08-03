@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@arxiv-daily/core": ["packages/core/src/index.ts"],
-      "@arxiv-daily/node-runtime": ["packages/node-runtime/src/index.ts"]
+      "@arxiv-daily/node-runtime": ["packages/node-runtime/src/index.ts"],
+      "@arxiv-daily/node-runtime/scoped-library-source": ["packages/node-runtime/src/scoped-library-source.ts"]
     }
   }
 }

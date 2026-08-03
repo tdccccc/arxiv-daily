@@ -41,3 +41,10 @@ export { ObsidianResourceOpener } from "./resource-opener";
 export { ObsidianSettingsSecretProvider } from "./secrets";
 export { ObsidianStorageAdapter } from "./storage-adapter";
 export { ObsidianMarkupParser } from "./markup-parser";
+export { openObsidianLibrarySource } from "./library-source";
+export {
+  ObsidianLibraryDirectoryPicker,
+  type DirectoryDialog,
+  type DirectoryDialogResult,
+  type LibraryDirectorySelection,
+} from "./library-directory-picker";

@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   HttpTransportError,
   isHttpTransportError,
+  NoopProgressReporter,
   type HostAdapters,
   type ProgressReporter,
-} from "../src/core/adapters";
-import { NoopProgressReporter } from "../src/services/progress";
+  type ScopedLibrarySource,
+} from "../src/index";
 
 describe("host adapter contracts", () => {
   it("can be implemented without Obsidian runtime types", async () => {
@@ -56,6 +57,26 @@ describe("host adapter contracts", () => {
     expect(await host.secrets.getSecret("llm")).toBe("secret");
     expect(host.storage.normalizePath("a\\b")).toBe("a/b");
     expect(opened).toEqual(["note:papers/2606.12345.md"]);
+  });
+
+  it("defines personal-library access as a read-only scoped capability", async () => {
+    const source: ScopedLibrarySource = {
+      inventory: async () => ({
+        entries: [{ path: "papers/example.pdf", type: "file", size: 123 }],
+        truncated: false,
+      }),
+      readBinary: async () => new Uint8Array([1, 2, 3]).buffer,
+    };
+
+    expect(await source.inventory()).toEqual({
+      entries: [{ path: "papers/example.pdf", type: "file", size: 123 }],
+      truncated: false,
+    });
+    expect(Array.from(new Uint8Array(await source.readBinary("papers/example.pdf"))))
+      .toEqual([1, 2, 3]);
+    expect("writeText" in source).toBe(false);
+    expect("remove" in source).toBe(false);
+    expect("rename" in source).toBe(false);
   });
 
   it("recognizes transport errors structurally across host boundaries", () => {

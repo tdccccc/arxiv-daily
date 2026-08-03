@@ -22,8 +22,8 @@ First prove the narrow host boundary: investigate the supported Obsidian desktop
 ## Tasks
 
 - [x] Verify the supported Obsidian desktop directory-selection and external-filesystem mechanisms, plugin review/bundle constraints, mobile behavior, and cross-platform path risks; record the selected host boundary and rejected alternatives in this phase or an ADR if the decision meets ADR criteria.
-- [ ] Define a minimal scoped, read-only library-source contract and threat model covering root containment, path representation, symlinks, listing/stat/read limits, cancellation, unsupported hosts, and redacted diagnostics without widening `StorageAdapter`.
-- [ ] Implement the desktop host capability and directory-selection composition so only the selected root can be listed/read and no write, remove, rename, arbitrary-root, or escape operation is exposed.
+- [x] Define a minimal scoped, read-only library-source contract and threat model covering root containment, path representation, symlinks, listing/stat/read limits, cancellation, unsupported hosts, and redacted diagnostics without widening `StorageAdapter`.
+- [x] Implement the desktop host capability and directory-selection composition so only the selected root can be listed/read and no write, remove, rename, arbitrary-root, or escape operation is exposed.
 - [ ] Add plugin settings/status entry and a focused connection flow that shows selected scope, eligible paper-file types, metadata/abstract depth, and configured endpoint identity before granting authorization.
 - [ ] Persist authorization identity, support explicit revocation, and invalidate authorization when the selected root, eligible content, processing depth, or effective endpoint changes; keep local inventory separate from model processing.
 - [ ] Produce a bounded, cancellable inventory preview for Vault-internal and external roots, visibly separating eligible candidates, ignored files, unsupported host, permission errors, and unsafe paths without resolving paper metadata or invoking the LLM.
