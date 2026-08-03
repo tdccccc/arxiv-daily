@@ -27,13 +27,20 @@ describe("openScopedLibrarySource", () => {
     await writeFile(join(root, "papers", "example.pdf"), new Uint8Array([1, 2, 3]));
     const source = await openScopedLibrarySource(root);
 
-    await expect(source.inventory()).resolves.toEqual({
+    const inventory = await source.inventory();
+    expect(inventory).toEqual({
       entries: [
         { path: "papers", type: "folder" },
-        { path: "papers/example.pdf", type: "file" },
+        {
+          path: "papers/example.pdf",
+          type: "file",
+          size: 3,
+          mtimeMs: expect.any(Number),
+        },
       ],
       truncated: false,
     });
+    expect(inventory.entries[1]?.mtimeMs).toBeGreaterThan(0);
     expect(Array.from(new Uint8Array(await source.readBinary("papers/example.pdf"))))
       .toEqual([1, 2, 3]);
     expect("writeText" in source).toBe(false);
@@ -114,6 +121,31 @@ describe("openScopedLibrarySource", () => {
     await expect(source.readBinary("linked/private.pdf")).rejects.toMatchObject({
       kind: "unsafe-path",
     });
+  });
+
+  it("refreshes file observations on later inventories", async () => {
+    const root = await makeTempDir();
+    const paper = join(root, "paper.pdf");
+    await writeFile(paper, "one");
+    const source = await openScopedLibrarySource(root);
+    const first = await source.inventory();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await writeFile(paper, "longer");
+    const second = await source.inventory();
+
+    expect(first.entries).toEqual([{
+      path: "paper.pdf",
+      type: "file",
+      size: 3,
+      mtimeMs: expect.any(Number),
+    }]);
+    expect(second.entries).toEqual([{
+      path: "paper.pdf",
+      type: "file",
+      size: 6,
+      mtimeMs: expect.any(Number),
+    }]);
+    expect(second.entries[0]!.mtimeMs).toBeGreaterThanOrEqual(first.entries[0]!.mtimeMs!);
   });
 
   it("applies capability entry, depth, and byte limits that calls cannot widen", async () => {

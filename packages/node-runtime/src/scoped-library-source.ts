@@ -88,7 +88,10 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
             ? `${relativeDir}/${dirEntry.name}`
             : dirEntry.name;
 
-          if (dirEntry.isSymbolicLink()) {
+          const absoluteEntry = path.join(absoluteDir, dirEntry.name);
+          const entryInfo = await inspectInventoryEntry(absoluteEntry, dirEntry);
+          throwIfCancelled(options.signal);
+          if (entryInfo.kind === "symbolic-link") {
             entries.push({
               path: relativePath,
               type: "ignored",
@@ -96,7 +99,7 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
             });
             continue;
           }
-          if (dirEntry.isDirectory()) {
+          if (entryInfo.kind === "directory") {
             entries.push({ path: relativePath, type: "folder" });
             if (depth < maxDepth) {
               await visit(relativePath, depth + 1);
@@ -106,8 +109,13 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
             }
             continue;
           }
-          if (dirEntry.isFile()) {
-            entries.push({ path: relativePath, type: "file" });
+          if (entryInfo.kind === "file") {
+            entries.push({
+              path: relativePath,
+              type: "file",
+              size: entryInfo.info.size,
+              mtimeMs: entryInfo.info.mtimeMs,
+            });
             continue;
           }
           entries.push({
@@ -239,6 +247,31 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
         );
       }
     }
+  }
+}
+
+type InventoryEntryInfo =
+  | { kind: "symbolic-link" }
+  | { kind: "directory" }
+  | { kind: "file"; info: Stats }
+  | { kind: "unsupported" };
+
+async function inspectInventoryEntry(
+  absoluteEntry: string,
+  dirEntry: { isSymbolicLink(): boolean },
+): Promise<InventoryEntryInfo> {
+  if (dirEntry.isSymbolicLink()) return { kind: "symbolic-link" };
+  try {
+    // lstat both supplies file observations and classifies DT_UNKNOWN entries.
+    // Rechecking known entries also catches replacement by a symbolic link after
+    // the directory entry was read.
+    const info = await fs.lstat(absoluteEntry);
+    if (info.isSymbolicLink()) return { kind: "symbolic-link" };
+    if (info.isDirectory()) return { kind: "directory" };
+    if (info.isFile()) return { kind: "file", info };
+    return { kind: "unsupported" };
+  } catch (error) {
+    throw mapFsError(error, "Unable to inspect a selected library entry");
   }
 }
 

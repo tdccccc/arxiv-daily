@@ -23,7 +23,7 @@ Add a Core-owned catalog distinct from `PaperIndexStore`. A scan inventories eli
 
 - [x] Define and test the host-neutral catalog schema, strict decoder, scan summary, paper/file outcome semantics, scope/identification fingerprint, and storage path under the existing index root.
 - [x] Implement a durable catalog store with valid-backup recovery, fail-closed mutation on unreadable current/backup data, path-scoped serialization, atomic whole-document writes, and deterministic semantic revisioning.
-- [ ] Extend scoped inventory with safely obtained size/mtime observations, including bounded fallback for unknown `Dirent` types, without weakening canonical-root, identity, symlink, entry, depth, cancellation, or redacted-error guarantees.
+- [x] Extend scoped inventory with safely obtained size/mtime observations, including bounded fallback for unknown `Dirent` types, without weakening canonical-root, identity, symlink, entry, depth, cancellation, or redacted-error guarantees.
 - [ ] Implement deterministic modern-arXiv PDF filename identification and incremental reconciliation: unchanged reuse, unresolved/unrelated/failed isolation, duplicate file-to-paper membership, complete-scan deletion, and truncated-scan preservation.
 - [ ] Add batched arXiv metadata/abstract enrichment through an injected Core resolver, preserving prior usable records and per-file failures when IDs are absent or network enrichment is partial.
 - [ ] Wire one explicit plugin scan/reload action with root-change/unload/supersession cancellation, summarized ready/unresolved/failed counts, and no requirement for model-processing authorization.

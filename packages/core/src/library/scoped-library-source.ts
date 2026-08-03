@@ -4,6 +4,7 @@ export interface LibrarySourceEntry {
   path: string;
   type: LibraryEntryType;
   size?: number;
+  mtimeMs?: number;
   ignoredReason?: "symbolic-link" | "unsupported-entry";
 }
 
