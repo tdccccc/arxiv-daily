@@ -24,7 +24,7 @@ A bounded Core proposer deterministically selects and renders catalog evidence, 
 
 ## Tasks
 
-- [ ] Define and adversarially test strict Core schemas, canonical fingerprints, bounds, opaque identity/lineage, stale diagnostics, and discovery-eligibility semantics for separate proposal and confirmed-profile documents.
+- [x] Define and adversarially test strict Core schemas, canonical fingerprints, bounds, opaque identity/lineage, stale diagnostics, and discovery-eligibility semantics for separate proposal and confirmed-profile documents.
 - [ ] Implement proposal and confirmed-profile stores under the configured Vault index root with atomic writes, valid-backup repair, fail-closed corruption handling, semantic no-op revisions, optimistic stale-write rejection, path-scoped serialization, and independent recovery.
 - [ ] Implement and test pure researcher-review transactions for candidate correction/merge/removal and explicit confirmation plus confirmed-direction edit/merge/disable/re-enable/removal, preserving authority boundaries and representative evidence integrity.
 - [ ] Implement a bounded, cancellable Core direction proposer with deterministic evidence selection/batching, prompt-injection containment, strict reference validation and typed retry, 1–12 candidate directions, 1–5 representatives each, and no path/PDF/unrelated-content disclosure.
