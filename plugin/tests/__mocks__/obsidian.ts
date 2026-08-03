@@ -77,10 +77,17 @@ export class Setting {
 }
 
 export class Modal {
+  static opened: Modal[] = [];
+  titleEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   contentEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   constructor(_app: App) {}
-  open(): void {}
-  close(): void {}
+  open(): void {
+    Modal.opened.push(this);
+    this.onOpen();
+  }
+  close(): void {
+    this.onClose();
+  }
   onOpen(): void {}
   onClose(): void {}
 }

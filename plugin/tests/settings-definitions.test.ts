@@ -82,6 +82,7 @@ describe("buildSettingDefinitions structure", () => {
       renderApiKeyRow: () => {},
       renderModelRow: () => {},
       renderReasoningEffortRow: () => {},
+      renderLibraryConnectionRow: () => {},
       renderCategoryRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},

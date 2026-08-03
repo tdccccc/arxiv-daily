@@ -1,5 +1,11 @@
 import { Notice, Plugin } from "obsidian";
-import type { PipelineResult, PluginSettings, RunState } from "@arxiv-daily/core";
+import type {
+  LibraryInventory,
+  PipelineResult,
+  PluginSettings,
+  RunState,
+} from "@arxiv-daily/core";
+import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
@@ -41,11 +47,29 @@ import {
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
-import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
+import {
+  buildObsidianHostAdapters,
+  ObsidianLibraryDirectoryPicker,
+  openObsidianLibrarySource,
+} from "./src/hosts/obsidian";
+import {
+  authorizeLibraryConnection,
+  buildLibraryInventoryPreview,
+  createLibraryConnection,
+  decodeLibraryConnection,
+  libraryAuthorizationDisclosure,
+  libraryConnectionStatus,
+  revokeLibraryConnection,
+  type LibraryAuthorizationDisclosure,
+  type LibraryConnectionStatus,
+  type LibraryInventoryPreview,
+  type PersistedLibraryConnection,
+} from "./src/library/connection";
 
 interface PersistedData {
   settings: PluginSettings;
   runState?: RunState;
+  libraryConnection?: PersistedLibraryConnection;
 }
 
 let lastCacheCleanupDate: string | null = null;
@@ -86,6 +110,14 @@ export default class ArxivDailyPlugin extends Plugin {
   private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
   private host!: HostAdapters;
+  private libraryConnection?: PersistedLibraryConnection;
+  private librarySource?: OpenedScopedLibrarySource;
+  private libraryDirectoryPicker = new ObsidianLibraryDirectoryPicker();
+  private openLibrarySource: (selectedRoot: string) => Promise<OpenedScopedLibrarySource>
+    = openObsidianLibrarySource;
+  private libraryInventoryController?: AbortController;
+  private libraryMutationQueue: Promise<void> = Promise.resolve();
+  private librarySelectionRevision = 0;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -106,7 +138,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.host = buildObsidianHostAdapters({
       app: this.app,
       getSettings: () => this.settings,
-      persistSettings: () => this.persistSettings(),
+      persistSettings: () => this.enqueueLibraryMutation(() => this.persistSettings()),
     });
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
@@ -204,6 +236,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.unloading = true;
     this.scheduler?.stop();
     this.operations.cancelAll("plugin unloaded");
+    this.libraryInventoryController?.abort("plugin unloaded");
     this.unsubscribeOperations?.();
     this.unsubscribeOperations = undefined;
     if (this.progress instanceof StatusBarController) this.progress.dispose();
@@ -218,7 +251,131 @@ export default class ArxivDailyPlugin extends Plugin {
       this.settings.detailSelection,
     );
     this.refreshSensitiveValues();
-    await this.persistSettings();
+    await this.enqueueLibraryMutation(() => this.persistSettings());
+  }
+
+  getLibraryConnectionStatus(): LibraryConnectionStatus {
+    return libraryConnectionStatus(
+      this.libraryConnection,
+      this.settings.llm.baseUrl,
+    );
+  }
+
+  getLibraryAuthorizationDisclosure(): LibraryAuthorizationDisclosure | null {
+    if (!this.libraryConnection) return null;
+    return libraryAuthorizationDisclosure(
+      this.libraryConnection,
+      this.settings.llm.baseUrl,
+    );
+  }
+
+  async selectLibraryRoot(): Promise<"selected" | "cancelled" | "unsupported"> {
+    const revision = ++this.librarySelectionRevision;
+    const selection = await this.libraryDirectoryPicker.select();
+    if (selection.kind !== "selected") return selection.kind;
+    const source = await this.openLibrarySource(selection.path);
+    return await this.enqueueLibraryMutation(async () => {
+      if (revision !== this.librarySelectionRevision) return "cancelled" as const;
+      const previousConnection = this.libraryConnection;
+      const previousSource = this.librarySource;
+      this.libraryInventoryController?.abort("library folder changed");
+      this.libraryConnection = createLibraryConnection(source.canonicalRoot, source.rootIdentity);
+      this.librarySource = source;
+      this.refreshSensitiveValues();
+      try {
+        await this.persistSettings();
+        return "selected" as const;
+      } catch (error) {
+        this.libraryConnection = previousConnection;
+        this.librarySource = previousSource;
+        this.refreshSensitiveValues();
+        throw error;
+      }
+    });
+  }
+
+  async authorizeLibraryProcessing(expectedFingerprint?: string): Promise<void> {
+    await this.enqueueLibraryMutation(async () => {
+      if (!this.libraryConnection) throw new Error("Choose a personal library first");
+      const disclosure = libraryAuthorizationDisclosure(
+        this.libraryConnection,
+        this.settings.llm.baseUrl,
+      );
+      if (
+        expectedFingerprint
+        && disclosure.authorizationFingerprint !== expectedFingerprint
+      ) {
+        throw new Error("Library authorization terms changed; review them again");
+      }
+      const previous = this.libraryConnection;
+      this.libraryConnection = authorizeLibraryConnection(
+        previous,
+        this.settings.llm.baseUrl,
+      );
+      try {
+        await this.persistSettings();
+      } catch (error) {
+        this.libraryConnection = previous;
+        throw error;
+      }
+    });
+  }
+
+  async revokeLibraryProcessing(): Promise<void> {
+    await this.enqueueLibraryMutation(async () => {
+      if (!this.libraryConnection) return;
+      const previous = this.libraryConnection;
+      this.libraryConnection = revokeLibraryConnection(previous);
+      try {
+        await this.persistSettings();
+      } catch (error) {
+        this.libraryConnection = previous;
+        throw error;
+      }
+    });
+  }
+
+  async previewLibraryInventory(signal?: AbortSignal): Promise<LibraryInventoryPreview> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    this.libraryInventoryController?.abort("superseded by a new preview");
+    const controller = new AbortController();
+    this.libraryInventoryController = controller;
+    const onAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    try {
+      controller.signal.throwIfAborted();
+      const source = this.librarySource
+        ?? await this.openLibrarySource(connection.selectedRoot);
+      controller.signal.throwIfAborted();
+      if (
+        source.canonicalRoot !== connection.selectedRoot
+        || source.rootIdentity !== connection.rootIdentity
+      ) {
+        throw new Error("Library folder identity changed; choose it again");
+      }
+      if (this.libraryConnection !== connection) {
+        throw new Error("Library connection changed while building the preview");
+      }
+      this.librarySource = source;
+      const inventory: LibraryInventory = await source.inventory({
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
+      if (this.libraryConnection !== connection) {
+        throw new Error("Library connection changed while building the preview");
+      }
+      return buildLibraryInventoryPreview(
+        inventory,
+        connection.eligibleExtensions,
+      );
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      if (this.libraryInventoryController === controller) {
+        this.libraryInventoryController = undefined;
+      }
+    }
   }
 
   restartScheduler(): void {
@@ -293,14 +450,43 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private async loadSettingsAndState(): Promise<string[]> {
-    const loaded = settingsAndStateFromPersistedData(await this.loadData());
+    const raw: unknown = await this.loadData();
+    const loaded = settingsAndStateFromPersistedData(raw);
     this.legacyRunState = loaded.runState;
     this.settings = loaded.settings;
+    const persisted = raw && typeof raw === "object"
+      ? raw as Record<string, unknown>
+      : {};
+    const persistedLibraryConnection = persisted.libraryConnection;
+    this.libraryConnection = decodeLibraryConnection(
+      persistedLibraryConnection,
+    );
+    if (
+      persistedLibraryConnection !== undefined
+      && !this.libraryConnection
+    ) {
+      loaded.warnings.push("ignored invalid personal library connection metadata");
+    }
     return loaded.warnings;
   }
 
+  private enqueueLibraryMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.libraryMutationQueue ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    this.libraryMutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   private async persistSettings(): Promise<void> {
-    const data: PersistedData = { settings: this.settings };
+    const data: PersistedData = {
+      settings: this.settings,
+      ...(this.libraryConnection
+        ? { libraryConnection: this.libraryConnection }
+        : {}),
+    };
     await this.saveData(data);
   }
 
@@ -310,6 +496,7 @@ export default class ArxivDailyPlugin extends Plugin {
         this.settings.llm.apiKey,
         this.settings.email?.apiKey ?? "",
         this.settings.email?.hostedToken ?? "",
+        this.libraryConnection?.selectedRoot ?? "",
       ].filter(Boolean),
     );
   }

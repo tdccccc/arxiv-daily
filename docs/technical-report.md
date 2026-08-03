@@ -57,7 +57,11 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 `buildObsidianHostAdapters`（`plugin/src/hosts/obsidian/`）将 Vault、`requestUrl`、设置中的密钥、工作区打开笔记/URL、DOM 解析接到 core。
 
-`ArxivDailyPlugin`（`plugin/main.ts`）在 `onload` 中：加载设置与状态 → 构建 host → 状态栏进度 → `SchedulerService` → 注册设置页/Dashboard/命令；`schedule.enabled` 时启动进程内调度。卸载时停止调度并 `operations.cancelAll`。
+`ArxivDailyPlugin`（`plugin/main.ts`）在 `onload` 中：加载设置与状态 → 构建 host → 状态栏进度 → `SchedulerService` → 注册设置页/Dashboard/命令；`schedule.enabled` 时启动进程内调度。卸载时停止调度、取消活动操作，并中止正在运行的个人文献库 inventory。
+
+插件设置页的 **Personal library** 组可通过 Obsidian 桌面宿主的 Electron 目录选择器连接一个 Vault 内或 Vault 外目录。`selectLibraryRoot` 调用窄入口 `openObsidianLibrarySource`，后者只桥接 `@arxiv-daily/node-runtime/scoped-library-source`；成功打开后保存 canonical root 与文件系统 identity。用户可在不授予模型处理许可的情况下运行本地只读 inventory preview；设置页将 PDF 标为 eligible，将其他文件类型、符号链接和特殊条目标为 ignored，并在 modal 中对每组最多显示 100 条路径。
+
+模型处理许可是独立的插件本地状态。授权 modal 展示 canonical folder、eligible extensions、处理深度和脱敏后的 Chat Completions endpoint；确认时必须提交与展示内容相同的 fingerprint。fingerprint 绑定 root path、文件系统 identity、扩展名集合、处理深度和 endpoint，不绑定 API key、模型或 thinking 参数。目录、identity、endpoint、扩展名或处理深度变化会使授权失效；Revoke 只移除模型处理许可，不断开本地只读目录。当前个人文献库路径只调用 inventory preview，未接入 `ArxivPipeline`、日报、详报或邮件。
 
 生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建；输出路径变更时由 `reloadStateStoreForOutputPaths` 替换 `StateStore`/`RunHistoryStore`；调度启停经 `restartScheduler` / `setScheduleEnabled`。
 
@@ -81,7 +85,7 @@ plugin                 → @arxiv-daily/core, obsidian；仅额外允许 @arxiv-
 services/email-relay   → 独立（不在 npm workspaces）
 ```
 
-禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin。workspace 深层导入默认禁止；唯一显式例外是插件可导入 `@arxiv-daily/node-runtime/scoped-library-source`，且插件不得改用 node-runtime 根入口。该子路径提供的 scoped library capability 目前尚未接入插件 `main.ts`、设置或日报流水线，因此不构成当前用户可调用功能。
+禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin。workspace 深层导入默认禁止；唯一显式例外是插件可导入 `@arxiv-daily/node-runtime/scoped-library-source`，且插件不得改用 node-runtime 根入口。插件 `main.ts` 经 Obsidian host bridge 调用该子路径完成个人文献库选择后的 scoped source 打开与 inventory；日报生成仍只使用既有 `HostAdapters`/Vault 数据路径。
 
 逻辑分层：
 
@@ -215,7 +219,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 
 **设置持久化**
 
-- 插件：Obsidian `loadData`/`saveData` 存 `PluginSettings`；旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。  
+- 插件：Obsidian `loadData`/`saveData` 存 sibling `settings` 与可选 `libraryConnection`；后者包含 canonical root、文件系统 identity、eligible extensions、处理深度及可选授权 fingerprint/time，不包含 API key。设置与文献库状态的整份持久化经同一进程内 mutation queue 串行；选择、授权或撤销保存失败时恢复内存状态。旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。
 - CLI：见上文配置映射；schedule intent 与插件进程内 schedule 字段语义分离。
 
 **缓存**
@@ -232,6 +236,10 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 ### Host 适配与边界
 
 所有业务 I/O 经 `HostAdapters`。`scripts/check-boundaries.mjs` 在发布验证中保证分层；email-relay / extensions 不受该脚本约束。
+
+### Scoped personal-library capability
+
+core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有写入、删除、重命名方法。Node 实现 `openScopedLibrarySource` 将 capability 固定到 canonical root，并记录 `dev:ino` identity；每次 inventory/read 前复核根 identity。inventory 默认最多 10,000 entries、深度 16，调用方只能收紧限制；遍历不跟随符号链接，深度/数量裁剪通过 `truncated` 暴露。`readBinary` 只接受无 `.`/`..`、绝对路径、反斜杠或盘符的逻辑相对路径，默认最多 25 MiB；它逐段拒绝符号链接，以 no-follow 方式打开文件句柄，再复核 canonical containment、路径/句柄 inode 和大小，最后从已验证句柄读取。映射后的文件系统错误不保留含绝对路径的原始 cause。
 
 ### 源适配器
 
@@ -335,6 +343,8 @@ core / plugin / CLI 工作区有大量 Vitest。email-relay 仅有本地 crypto/
 ### 输入与路径安全
 
 - Vault 相对目录校验与 `dailyDir`/`papersDir` 冲突检测。  
+- 个人文献库目录通过 canonical root + 文件系统 identity 绑定；普通设置仅显示目录 basename，授权 modal 才显示完整 scope。完整 root 加入插件 logger 敏感值列表。endpoint disclosure 删除 userinfo/fragment，并保留 query 参数名但将值替换为 `[redacted]`。
+- scoped library capability 为只读、相对路径、root-contained、no-symlink 边界，并限制 inventory entries/depth 与单文件读取字节数；根目录或目标文件在验证期间改变时拒绝操作。
 - 数据导入限制见上文硬数字，并拒绝 `..` / 逃出 vault。  
 - Prompt 侧含 injection-guard 模板。
 

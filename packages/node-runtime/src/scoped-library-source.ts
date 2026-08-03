@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -22,21 +22,32 @@ export interface OpenScopedLibrarySourceOptions {
   maxReadBytes?: number;
 }
 
+export interface OpenedScopedLibrarySource extends ScopedLibrarySource {
+  readonly canonicalRoot: string;
+  readonly rootIdentity: string;
+}
+
 export async function openScopedLibrarySource(
   selectedRoot: string,
   options: OpenScopedLibrarySourceOptions = {},
-): Promise<ScopedLibrarySource> {
+): Promise<OpenedScopedLibrarySource> {
   const canonicalRoot = await canonicalizeRoot(selectedRoot);
-  return new NodeScopedLibrarySource(canonicalRoot, options);
+  const rootInfo = await fs.stat(canonicalRoot);
+  return new NodeScopedLibrarySource(
+    canonicalRoot,
+    `${rootInfo.dev}:${rootInfo.ino}`,
+    options,
+  );
 }
 
-class NodeScopedLibrarySource implements ScopedLibrarySource {
+class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
   private readonly maxEntries: number;
   private readonly maxDepth: number;
   private readonly maxReadBytes: number;
 
   constructor(
-    private readonly canonicalRoot: string,
+    readonly canonicalRoot: string,
+    readonly rootIdentity: string,
     options: OpenScopedLibrarySourceOptions,
   ) {
     this.maxEntries = positiveInteger(options.maxEntries, DEFAULT_MAX_ENTRIES);
@@ -45,6 +56,7 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
   }
 
   async inventory(options: LibraryInventoryOptions = {}): Promise<LibraryInventory> {
+    await this.assertRootIdentity();
     const maxEntries = boundedPositiveInteger(options.maxEntries, this.maxEntries);
     const maxDepth = boundedNonNegativeInteger(options.maxDepth, this.maxDepth);
     const entries: LibrarySourceEntry[] = [];
@@ -57,8 +69,11 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
         : this.canonicalRoot;
       let directory: Awaited<ReturnType<typeof fs.opendir>>;
       try {
+        await assertCanonicalDirectory(this.canonicalRoot, absoluteDir);
         directory = await fs.opendir(absoluteDir);
+        await assertCanonicalDirectory(this.canonicalRoot, absoluteDir);
       } catch (error) {
+        if (error instanceof LibrarySourceError) throw error;
         throw mapFsError(error, "Unable to list the selected library");
       }
 
@@ -72,15 +87,8 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
           const relativePath = relativeDir
             ? `${relativeDir}/${dirEntry.name}`
             : dirEntry.name;
-          const absolutePath = path.join(this.canonicalRoot, ...relativePath.split("/"));
-          let info: Stats;
-          try {
-            info = await fs.lstat(absolutePath);
-          } catch (error) {
-            throw mapFsError(error, "Unable to inspect a library entry");
-          }
 
-          if (info.isSymbolicLink()) {
+          if (dirEntry.isSymbolicLink()) {
             entries.push({
               path: relativePath,
               type: "ignored",
@@ -88,7 +96,7 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
             });
             continue;
           }
-          if (info.isDirectory()) {
+          if (dirEntry.isDirectory()) {
             entries.push({ path: relativePath, type: "folder" });
             if (depth < maxDepth) {
               await visit(relativePath, depth + 1);
@@ -98,8 +106,8 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
             }
             continue;
           }
-          if (info.isFile()) {
-            entries.push({ path: relativePath, type: "file", size: info.size });
+          if (dirEntry.isFile()) {
+            entries.push({ path: relativePath, type: "file" });
             continue;
           }
           entries.push({
@@ -114,9 +122,11 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
       } finally {
         await directory.close().catch(() => undefined);
       }
+      await assertCanonicalDirectory(this.canonicalRoot, absoluteDir);
     };
 
     await visit("", 0);
+    await this.assertRootIdentity();
     return { entries, truncated };
   }
 
@@ -125,42 +135,91 @@ class NodeScopedLibrarySource implements ScopedLibrarySource {
     options: LibraryReadOptions = {},
   ): Promise<ArrayBuffer> {
     throwIfCancelled(options.signal);
+    await this.assertRootIdentity();
     const segments = validateLogicalPath(logicalPath);
     const absolutePath = path.join(this.canonicalRoot, ...segments);
     await this.assertNoSymbolicLink(segments);
 
-    let canonicalTarget: string;
-    let info: Stats;
+    let handle: Awaited<ReturnType<typeof fs.open>>;
     try {
-      canonicalTarget = await fs.realpath(absolutePath);
-      assertContained(this.canonicalRoot, canonicalTarget);
-      info = await fs.stat(canonicalTarget);
+      handle = await fs.open(
+        absolutePath,
+        constants.O_RDONLY | noFollowFlag(),
+      );
     } catch (error) {
-      if (error instanceof LibrarySourceError) throw error;
       throw mapFsError(error, "Unable to inspect the requested library file");
     }
-    if (!info.isFile()) {
-      throw new LibrarySourceError("not-file", "The requested library entry is not a file");
-    }
 
-    const maxBytes = boundedPositiveInteger(options.maxBytes, this.maxReadBytes);
-    if (info.size > maxBytes) {
-      throw new LibrarySourceError(
-        "limit-exceeded",
-        "The requested library file exceeds the configured read limit",
-      );
-    }
-
-    throwIfCancelled(options.signal);
-    let buffer: Buffer;
     try {
-      buffer = await fs.readFile(canonicalTarget, { signal: options.signal });
+      await this.assertNoSymbolicLink(segments);
+      const [canonicalTarget, pathInfo, pathLinkInfo, handleInfo] = await Promise.all([
+        fs.realpath(absolutePath),
+        fs.stat(absolutePath),
+        fs.lstat(absolutePath),
+        handle.stat(),
+      ]);
+      assertContained(this.canonicalRoot, canonicalTarget);
+      if (pathLinkInfo.isSymbolicLink()) {
+        throw new LibrarySourceError(
+          "unsafe-path",
+          "Symbolic links are not readable through the library boundary",
+        );
+      }
+      if (!handleInfo.isFile() || !pathInfo.isFile()) {
+        throw new LibrarySourceError(
+          "not-file",
+          "The requested library entry is not a file",
+        );
+      }
+      if (!sameFileIdentity(pathInfo, handleInfo)) {
+        throw new LibrarySourceError(
+          "unsafe-path",
+          "The requested library entry changed while it was being opened",
+        );
+      }
+
+      const maxBytes = boundedPositiveInteger(options.maxBytes, this.maxReadBytes);
+      if (handleInfo.size > maxBytes) {
+        throw new LibrarySourceError(
+          "limit-exceeded",
+          "The requested library file exceeds the configured read limit",
+        );
+      }
+
+      throwIfCancelled(options.signal);
+      const buffer = await handle.readFile({ signal: options.signal });
+      throwIfCancelled(options.signal);
+      if (buffer.byteLength > maxBytes) {
+        throw new LibrarySourceError(
+          "limit-exceeded",
+          "The requested library file exceeds the configured read limit",
+        );
+      }
+      return Uint8Array.from(buffer).buffer;
     } catch (error) {
-      if (isCancellationError(error)) throw error;
+      if (isCancellationError(error) || error instanceof LibrarySourceError) throw error;
       throw mapFsError(error, "Unable to read the requested library file");
+    } finally {
+      await handle.close().catch(() => undefined);
     }
-    throwIfCancelled(options.signal);
-    return Uint8Array.from(buffer).buffer;
+  }
+
+  private async assertRootIdentity(): Promise<void> {
+    try {
+      const info = await fs.stat(this.canonicalRoot);
+      if (
+        !info.isDirectory()
+        || `${info.dev}:${info.ino}` !== this.rootIdentity
+      ) {
+        throw new LibrarySourceError(
+          "unsafe-path",
+          "The selected library root changed after access was granted",
+        );
+      }
+    } catch (error) {
+      if (error instanceof LibrarySourceError) throw error;
+      throw mapFsError(error, "Unable to verify the selected library root", "invalid-root");
+    }
   }
 
   private async assertNoSymbolicLink(segments: string[]): Promise<void> {
@@ -215,6 +274,33 @@ function validateLogicalPath(logicalPath: string): string[] {
     throw new LibrarySourceError("unsafe-path", "The library path is not a safe relative path");
   }
   return segments;
+}
+
+async function assertCanonicalDirectory(
+  canonicalRoot: string,
+  absoluteDir: string,
+): Promise<void> {
+  const canonicalDir = await fs.realpath(absoluteDir);
+  assertContained(canonicalRoot, canonicalDir);
+  const relative = path.relative(canonicalRoot, canonicalDir);
+  if (relative !== path.relative(canonicalRoot, absoluteDir)) {
+    throw new LibrarySourceError(
+      "unsafe-path",
+      "Symbolic links are not traversable through the library boundary",
+    );
+  }
+  const info = await fs.stat(canonicalDir);
+  if (!info.isDirectory()) {
+    throw new LibrarySourceError("not-file", "The requested library entry is not a directory");
+  }
+}
+
+function noFollowFlag(): number {
+  return typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+}
+
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function assertContained(root: string, target: string): void {

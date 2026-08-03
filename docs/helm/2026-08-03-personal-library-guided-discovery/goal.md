@@ -41,7 +41,7 @@ Connect a researcher-chosen personal literature library to the reliable daily ar
 
 ## Phases
 
-1. P1 — the desktop plugin proves safe, consent-bound read-only access to one Vault-internal or external library root without changing daily behavior — status: active
+1. P1 — the desktop plugin proves safe, consent-bound read-only access to one Vault-internal or external library root without changing daily behavior — status: completed
 2. P2 — a durable paper-level catalog incrementally identifies and reloads usable library papers while isolating unresolved and unrelated files — status: pending
 3. P3 — researcher-reviewed directions and representative sets become the only library-derived inputs eligible for daily discovery — status: pending
 4. P4 — daily filtering combines manual topics and confirmed directions with complete, visible discovery provenance — status: pending
@@ -50,7 +50,6 @@ Connect a researcher-chosen personal literature library to the reliable daily ar
 
 ## Open questions
 
-- What desktop host boundary can expose a user-selected external directory without allowing plugin business code or Core to gain arbitrary Node filesystem access?
 - Which exact PDF and Markdown identification signals form the minimum P2 catalog contract?
 - Where should the researcher-editable confirmed directions and representative sets be authoritative: Markdown, structured Vault data, or a paired authoritative/projection model?
 - Should email digest projection include discovery source and personal novelty in this initiative, or only the Markdown daily report and Dashboard?

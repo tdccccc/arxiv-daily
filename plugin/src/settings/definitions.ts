@@ -117,6 +117,7 @@ export interface SettingDefinitionsHost {
   renderApiKeyRow?: (setting: Setting) => void;
   renderModelRow?: (setting: Setting) => void;
   renderReasoningEffortRow?: (setting: Setting) => void;
+  renderLibraryConnectionRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
   showSetupGuide?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
@@ -213,6 +214,18 @@ export function buildSettingDefinitions(
           : []),
       ],
     },
+    ...(host.renderLibraryConnectionRow
+      ? [{
+          type: "group",
+          heading: "Personal library",
+          items: [{
+            name: "Library connection",
+            desc: "Choose one local paper library. Scanning is read-only and separate from daily reports.",
+            render: (setting: Setting) =>
+              host.renderLibraryConnectionRow?.(setting),
+          }],
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       type: "list",
       heading: "arXiv categories",

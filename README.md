@@ -77,6 +77,15 @@ The guide stays until a report completes. Details: [Getting Started](docs/gettin
 - Open or create a **paper note** when you want more depth
 - Optional: enable **email** after a successful test send
 
+### Personal library access (desktop preview)
+
+The plugin can connect one local paper-library folder, including a folder outside your Vault. Access is **read-only** and limited to the folder you explicitly select: arXiv Daily cannot write, rename, or delete its files, and symbolic links are not followed.
+
+- **Inventory preview stays local** and shows which PDFs are eligible or ignored; it does not require model-processing authorization.
+- **Model processing is separately authorized** after showing the selected folder, eligible file types, processing depth, and effective model endpoint.
+- Changing the folder, endpoint, eligible file types, or processing depth invalidates authorization. You can also revoke it at any time.
+- The current preview does not change daily filtering, reports, paper notes, or email delivery.
+
 ---
 
 ## CLI

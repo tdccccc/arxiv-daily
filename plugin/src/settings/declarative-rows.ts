@@ -39,6 +39,14 @@ function clearSettingEl(setting: Setting, ...classes: string[]): void {
  * Lives in its own module (not definitions.ts) so the shared sentinel
  * state machines can reach tab internals via the tab instance.
  */
+export function renderLibraryConnectionRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  tab.renderLibraryConnectionControls(setting);
+}
+
 export function renderLlmBaseUrlRow(
   tab: ArxivDailySettingTab,
   setting: Setting,

@@ -41,6 +41,10 @@ import {
   buildFeatureRequestUrl,
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
+import {
+  confirmLibraryAuthorization,
+  showLibraryInventoryPreview,
+} from "../library/modal";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
 
@@ -162,6 +166,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderModelRow(this, setting),
       renderReasoningEffortRow: (setting) =>
         declarativeRows.renderReasoningEffortRow(this, setting),
+      renderLibraryConnectionRow: (setting) =>
+        declarativeRows.renderLibraryConnectionRow(this, setting),
       renderCategoryRow: (setting, index) =>
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
@@ -253,7 +259,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
+    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -303,6 +309,79 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         text: line,
       });
     }
+  }
+
+  public renderLibraryConnectionControls(setting: Setting): void {
+    const status = this.plugin.getLibraryConnectionStatus();
+    const descriptions = {
+      disconnected: "No personal library selected.",
+      "authorization-required": `Selected: ${status.kind === "authorization-required" ? status.rootLabel : ""}. Authorization required.`,
+      "authorization-invalidated": `Selected: ${status.kind === "authorization-invalidated" ? status.rootLabel : ""}. Authorization expired after configuration changed.`,
+      authorized: `Connected: ${status.kind === "authorized" ? status.rootLabel : ""}. Metadata and abstracts authorized.`,
+    } as const;
+    setting.setDesc(descriptions[status.kind]);
+    setting.addButton((button) =>
+      button
+        .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
+        .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
+    );
+    if (status.kind !== "disconnected") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Preview")
+          .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
+      );
+    }
+    if (status.kind === "authorization-required" || status.kind === "authorization-invalidated") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Review & authorize")
+          .setCta()
+          .onClick(() => this.runAction("authorize personal library", () => this.reviewLibraryAuthorization())),
+      );
+    }
+    if (status.kind === "authorized") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Revoke")
+          .setWarning()
+          .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
+      );
+    }
+  }
+
+  public async chooseLibraryRoot(): Promise<void> {
+    const result = await this.plugin.selectLibraryRoot();
+    if (result === "unsupported") {
+      new Notice("arXiv Daily: system folder selection is unavailable in this Obsidian desktop version.", 10_000);
+      return;
+    }
+    if (result === "selected") {
+      new Notice("arXiv Daily: personal library selected. You can preview files locally before authorizing model processing.");
+      this.refreshSettings();
+    }
+  }
+
+  public async reviewLibraryAuthorization(): Promise<void> {
+    const disclosure = this.plugin.getLibraryAuthorizationDisclosure();
+    if (!disclosure) throw new Error("Choose a personal library first");
+    if (!await confirmLibraryAuthorization(this.app, disclosure)) return;
+    await this.plugin.authorizeLibraryProcessing(
+      disclosure.authorizationFingerprint,
+    );
+    new Notice("arXiv Daily: personal library processing authorized.");
+    this.refreshSettings();
+  }
+
+  public async previewLibraryInventory(): Promise<void> {
+    const preview = await this.plugin.previewLibraryInventory();
+    showLibraryInventoryPreview(this.app, preview);
+  }
+
+  public async revokeLibraryAuthorization(): Promise<void> {
+    await this.plugin.revokeLibraryProcessing();
+    new Notice("arXiv Daily: personal library authorization revoked.");
+    this.refreshSettings();
   }
 
   public async setArxivCategories(categories: string[]): Promise<void> {
@@ -597,6 +676,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             }
           });
       });
+
+    // ─── Personal library ─────────────────────────────
+    this.sectionHeading(
+      containerEl,
+      "Personal library",
+      "library",
+      "Connect one local paper library through read-only access.",
+    );
+    const librarySetting = new Setting(containerEl).setName("Library connection");
+    this.renderLibraryConnectionControls(librarySetting);
 
     // ─── arXiv ────────────────────────────────────────
     this.sectionHeading(containerEl, "arXiv", "arxiv");

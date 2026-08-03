@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isCancellationError } from "@arxiv-daily/core";
@@ -30,7 +30,7 @@ describe("openScopedLibrarySource", () => {
     await expect(source.inventory()).resolves.toEqual({
       entries: [
         { path: "papers", type: "folder" },
-        { path: "papers/example.pdf", type: "file", size: 3 },
+        { path: "papers/example.pdf", type: "file" },
       ],
       truncated: false,
     });
@@ -57,6 +57,39 @@ describe("openScopedLibrarySource", () => {
     await expect(source.readBinary(logicalPath)).rejects.toMatchObject({
       name: "LibrarySourceError",
       kind: "unsafe-path",
+    });
+  });
+
+  it("exposes a canonical root identity for authorization binding", async () => {
+    const parent = await makeTempDir();
+    const root = join(parent, "root");
+    const alias = join(parent, "alias");
+    await mkdir(root);
+    await symlink(root, alias, "dir");
+
+    const direct = await openScopedLibrarySource(root);
+    const selectedAlias = await openScopedLibrarySource(alias);
+
+    expect(selectedAlias.canonicalRoot).toBe(direct.canonicalRoot);
+    expect(selectedAlias.rootIdentity).toBe(direct.rootIdentity);
+    expect(selectedAlias.rootIdentity).toMatch(/^\d+:\d+$/);
+  });
+
+  it("changes root identity when a directory is replaced at the same path", async () => {
+    const parent = await makeTempDir();
+    const root = join(parent, "root");
+    await mkdir(root);
+    const original = await openScopedLibrarySource(root);
+    await rename(root, join(parent, "old-root"));
+    await mkdir(root);
+
+    const replacement = await openScopedLibrarySource(root);
+
+    expect(replacement.canonicalRoot).toBe(original.canonicalRoot);
+    expect(replacement.rootIdentity).not.toBe(original.rootIdentity);
+    await expect(original.inventory()).rejects.toMatchObject({
+      kind: "unsafe-path",
+      message: "The selected library root changed after access was granted",
     });
   });
 

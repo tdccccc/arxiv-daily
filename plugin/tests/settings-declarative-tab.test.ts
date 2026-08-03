@@ -73,6 +73,17 @@ function makeTab() {
     refreshSensitiveValues: vi.fn(),
     sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
+    getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
+    selectLibraryRoot: vi.fn().mockResolvedValue("cancelled"),
+    getLibraryAuthorizationDisclosure: vi.fn().mockReturnValue(null),
+    authorizeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    previewLibraryInventory: vi.fn().mockResolvedValue({
+      eligible: [],
+      ignored: [],
+      folders: 0,
+      truncated: false,
+    }),
+    revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   return { tab, plugin, settings, saveSettings };
@@ -169,6 +180,79 @@ describe("wired getSettingDefinitions", () => {
     expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
 
     expect(topicsList?.onReorder).toBeUndefined();
+  });
+});
+
+describe("personal library settings row", () => {
+  function renderLibraryButtons(tab: ArxivDailySettingTab) {
+    const buttons: Array<{
+      text: string;
+      cta: boolean;
+      warning: boolean;
+      click?: () => void;
+    }> = [];
+    const setting = {
+      setDesc: vi.fn().mockReturnThis(),
+      addButton(callback: (button: any) => void) {
+        const state = { text: "", cta: false, warning: false } as {
+          text: string;
+          cta: boolean;
+          warning: boolean;
+          click?: () => void;
+        };
+        const button = {
+          setButtonText(text: string) { state.text = text; return button; },
+          setCta() { state.cta = true; return button; },
+          setWarning() { state.warning = true; return button; },
+          onClick(click: () => void) { state.click = click; return button; },
+        };
+        callback(button);
+        buttons.push(state);
+        return setting;
+      },
+    };
+    tab.renderLibraryConnectionControls(setting as never);
+    return { buttons, setting };
+  }
+
+  it("shows only folder selection while disconnected", () => {
+    const { tab } = makeTab();
+    const { buttons } = renderLibraryButtons(tab);
+    expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
+  });
+
+  it("shows authorization after selection and preview/revoke after approval", () => {
+    const { tab, plugin } = makeTab();
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const pending = renderLibraryButtons(tab).buttons;
+    expect(pending.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Preview",
+      "Review & authorize",
+    ]);
+    expect(pending[2]?.cta).toBe(true);
+    pending[2]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "authorize personal library",
+      expect.any(Function),
+    );
+
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    });
+    const authorized = renderLibraryButtons(tab).buttons;
+    expect(authorized.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Preview",
+      "Revoke",
+    ]);
+    expect(authorized[2]?.warning).toBe(true);
   });
 });
 
@@ -388,6 +472,7 @@ describe("wired getControlValue", () => {
       renderApiKeyRow: () => {},
       renderModelRow: () => {},
       renderReasoningEffortRow: () => {},
+      renderLibraryConnectionRow: () => {},
       renderCategoryRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},
