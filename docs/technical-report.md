@@ -61,7 +61,11 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 插件设置页的 **Personal library** 组可通过 Obsidian 桌面宿主的 Electron 目录选择器连接一个 Vault 内或 Vault 外目录。`selectLibraryRoot` 调用窄入口 `openObsidianLibrarySource`，后者只桥接 `@arxiv-daily/node-runtime/scoped-library-source`；成功打开后保存 canonical root 与文件系统 identity。用户可在不授予模型处理许可的情况下运行本地只读 inventory preview；Node scoped source 对 inventory 中的非符号链接条目使用 `lstat` 分类，文件条目带有 size 与 mtime 观测，符号链接不被跟随。设置页将 PDF 标为 eligible，将其他文件类型、符号链接和特殊条目标为 ignored，并在 modal 中对每组最多显示 100 条路径。
 
-模型处理许可是独立的插件本地状态。授权 modal 展示 canonical folder、eligible extensions、处理深度和脱敏后的 Chat Completions endpoint；确认时必须提交与展示内容相同的 fingerprint。fingerprint 绑定 root path、文件系统 identity、扩展名集合、处理深度和 endpoint，不绑定 API key、模型或 thinking 参数。目录、identity、endpoint、扩展名或处理深度变化会使授权失效；Revoke 只移除模型处理许可，不断开本地只读目录。当前个人文献库路径只调用 inventory preview，未接入 `ArxivPipeline`、日报、详报或邮件。
+模型处理许可是独立的插件本地状态。授权 modal 展示 canonical folder、eligible extensions、处理深度和脱敏后的 Chat Completions endpoint；确认时必须提交与展示内容相同的 fingerprint。fingerprint 绑定 root path、文件系统 identity、扩展名集合、处理深度和 endpoint，不绑定 API key、模型或 thinking 参数。目录、identity、endpoint、扩展名或处理深度变化会使授权失效；Revoke 只移除模型处理许可，不断开本地只读目录。
+
+连接目录后，用户还可显式执行 **Scan library** 或 **Reload catalog**，两者不要求模型处理许可。扫描只从 eligible PDF 的逻辑文件名识别现代 arXiv ID，不读取 PDF bytes；Core reconciliation 以 path、size、mtime 和识别策略构造 observation fingerprint，复用未变文件，将 unresolved、unrelated 与暂时 failed 文件隔离，并把同一论文的多个 PDF 汇入一个 paper record。需要补齐的 canonical ID 通过现有 `ArxivFetcher.fetchMetadataByIds` 请求 arXiv Atom API；Atom metadata 保留完整作者数组、标题、日期、分类与摘要，未发送绝对/相对文件路径或 PDF 内容。
+
+`PersonalLibraryCatalogStore` 将严格版本化 catalog 保存到现有 Vault index root 下的 `personal-library-catalog.json`。store 使用宿主 `writeTextAtomic`、独立 `.backup` generation、同 adapter/path 的进程内 mutation queue、严格 decoder、scope/identification compatibility 检查与语义 revision；有效 backup recovery 会修复 primary。完整 inventory 会移除缺失文件贡献，truncated inventory 保留未观察到的旧记录。插件将扫描注册为 `personal-library-scan` operation；重复扫描被拒绝，卸载、目录变化和输出路径变化会请求取消；进入最终不可中断的 atomic promotion 后采用 commit-wins 语义。设置页只显示 revision 与 ready/papers/unresolved/unrelated/failed/truncated counts。该 catalog 当前仍未接入 `ArxivPipeline`、日报、详报、Paper Index、模型 profile 或邮件。
 
 生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建；输出路径变更时由 `reloadStateStoreForOutputPaths` 替换 `StateStore`/`RunHistoryStore`；调度启停经 `restartScheduler` / `setScheduleEnabled`。
 

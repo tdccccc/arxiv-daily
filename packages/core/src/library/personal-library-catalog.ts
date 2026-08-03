@@ -236,6 +236,16 @@ export class PersonalLibraryCatalogStore {
     scopeFingerprint: string,
     identificationFingerprint: string,
   ): Promise<PersonalLibraryCatalog> {
+    return await this.enqueue(() => this.loadUnlocked(
+      scopeFingerprint,
+      identificationFingerprint,
+    ));
+  }
+
+  private async loadUnlocked(
+    scopeFingerprint: string,
+    identificationFingerprint: string,
+  ): Promise<PersonalLibraryCatalog> {
     const primary = await this.readDocument(this.paths.documentPath);
     if (primary.kind === "valid" && isCompatible(
       primary.document,
@@ -249,6 +259,7 @@ export class PersonalLibraryCatalogStore {
       identificationFingerprint,
     )) {
       this.warn(`personal library catalog recovered from backup: ${this.paths.backupPath}`);
+      await this.repairPrimary(backup.document);
       return cloneCatalog(backup.document);
     }
     if (primary.kind === "missing" && backup.kind === "missing") {
@@ -309,6 +320,7 @@ export class PersonalLibraryCatalogStore {
       identificationFingerprint,
     )) {
       this.warn(`personal library catalog recovered from backup: ${this.paths.backupPath}`);
+      await this.repairPrimary(backup.document);
       return backup.document;
     }
     if (primary.kind === "missing" && backup.kind === "missing") {
@@ -348,6 +360,26 @@ export class PersonalLibraryCatalogStore {
     } catch (error) {
       this.warn(`corrupt personal library catalog ignored: ${path}`, error);
       return { kind: "corrupt", error };
+    }
+  }
+
+  private async repairPrimary(document: PersonalLibraryCatalog): Promise<void> {
+    if (!this.storage.writeTextAtomic) {
+      throw new PersonalLibraryCatalogStoreError(
+        "personal library catalog storage does not support atomic writes",
+      );
+    }
+    try {
+      await ensureDirDeep(this.storage, this.paths.directory);
+      await this.storage.writeTextAtomic(
+        this.paths.documentPath,
+        `${JSON.stringify(document, null, 2)}\n`,
+      );
+    } catch (error) {
+      throw new PersonalLibraryCatalogStoreError(
+        `failed to repair personal library catalog: ${this.paths.documentPath}`,
+        error,
+      );
     }
   }
 
@@ -490,6 +522,9 @@ async function replaceWithBackup(
   }
   try {
     await storage.writeTextAtomic(paths.documentPath, content);
+    if (previous === null && recoveryContent === null) {
+      await storage.writeTextAtomic(paths.backupPath, content).catch(() => undefined);
+    }
   } catch (error) {
     if (recoveryContent !== null) {
       await storage.writeTextAtomic(paths.documentPath, recoveryContent);

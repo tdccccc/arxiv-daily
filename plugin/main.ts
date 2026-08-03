@@ -1,6 +1,7 @@
 import { Notice, Plugin } from "obsidian";
 import type {
   LibraryInventory,
+  PersonalLibraryCatalog,
   PipelineResult,
   PluginSettings,
   RunState,
@@ -13,7 +14,16 @@ import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
-import { OperationRegistry, RunCancellationService, normalizeArxivId } from "@arxiv-daily/core";
+import {
+  ArxivLibraryMetadataResolver,
+  createPersonalLibraryIdentificationFingerprint,
+  createPersonalLibraryScopeFingerprint,
+  OperationRegistry,
+  PersonalLibraryCatalogStore,
+  reconcilePersonalLibraryCatalog,
+  RunCancellationService,
+  normalizeArxivId,
+} from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
@@ -116,8 +126,10 @@ export default class ArxivDailyPlugin extends Plugin {
   private openLibrarySource: (selectedRoot: string) => Promise<OpenedScopedLibrarySource>
     = openObsidianLibrarySource;
   private libraryInventoryController?: AbortController;
+  private libraryCatalog: PersonalLibraryCatalog | null = null;
   private libraryMutationQueue: Promise<void> = Promise.resolve();
   private librarySelectionRevision = 0;
+  private libraryConnectionRevision = 0;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -140,6 +152,16 @@ export default class ArxivDailyPlugin extends Plugin {
       getSettings: () => this.settings,
       persistSettings: () => this.enqueueLibraryMutation(() => this.persistSettings()),
     });
+    if (!this.host.storage.writeTextAtomic) {
+      throw new Error("Obsidian storage does not support atomic personal library catalog writes");
+    }
+    if (this.libraryConnection) {
+      await this.reloadPersonalLibraryCatalog().catch((error) => {
+        this.libraryCatalog = null;
+        this.logger.error("personal library catalog load failed", error);
+        new Notice(`arXiv Daily: personal library catalog could not be loaded: ${error instanceof Error ? error.message : String(error)}`, 10_000);
+      });
+    }
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
       buildFetcher: () => this.buildArxivFetcher(),
@@ -274,13 +296,19 @@ export default class ArxivDailyPlugin extends Plugin {
     const selection = await this.libraryDirectoryPicker.select();
     if (selection.kind !== "selected") return selection.kind;
     const source = await this.openLibrarySource(selection.path);
+    if (revision !== this.librarySelectionRevision) return "cancelled";
+    this.cancelPersonalLibraryScans("library folder changed");
     return await this.enqueueLibraryMutation(async () => {
       if (revision !== this.librarySelectionRevision) return "cancelled" as const;
       const previousConnection = this.libraryConnection;
       const previousSource = this.librarySource;
+      const previousCatalog = this.libraryCatalog;
+      const previousConnectionRevision = this.libraryConnectionRevision;
       this.libraryInventoryController?.abort("library folder changed");
+      this.libraryConnectionRevision += 1;
       this.libraryConnection = createLibraryConnection(source.canonicalRoot, source.rootIdentity);
       this.librarySource = source;
+      this.libraryCatalog = null;
       this.refreshSensitiveValues();
       try {
         await this.persistSettings();
@@ -288,6 +316,8 @@ export default class ArxivDailyPlugin extends Plugin {
       } catch (error) {
         this.libraryConnection = previousConnection;
         this.librarySource = previousSource;
+        this.libraryCatalog = previousCatalog;
+        this.libraryConnectionRevision = previousConnectionRevision;
         this.refreshSensitiveValues();
         throw error;
       }
@@ -378,31 +408,125 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  getPersonalLibraryCatalog(): PersonalLibraryCatalog | null {
+    return this.libraryCatalog
+      ? structuredClone(this.libraryCatalog)
+      : null;
+  }
+
+  async reloadPersonalLibraryCatalog(): Promise<PersonalLibraryCatalog | null> {
+    const connection = this.libraryConnection;
+    if (!connection) {
+      this.libraryCatalog = null;
+      return null;
+    }
+    const revision = this.libraryConnectionRevision;
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    const catalog = await this.buildPersonalLibraryCatalogStore().load(
+      scopeFingerprint,
+      identificationFingerprint,
+    );
+    this.assertLibraryConnectionCurrent(connection, revision);
+    this.libraryCatalog = catalog;
+    return structuredClone(catalog);
+  }
+
+  async scanPersonalLibrary(): Promise<PersonalLibraryCatalog> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const revision = this.libraryConnectionRevision;
+    const store = this.buildPersonalLibraryCatalogStore();
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    if (this.operations.find("personal-library-scan", scopeFingerprint)) {
+      throw new Error("Personal library scan is already active");
+    }
+    const operation = this.operations.begin(
+      "personal-library-scan",
+      "Personal library scan",
+      scopeFingerprint,
+    );
+    const updateProgress = this.operations.snapshot().length === 1;
+    if (updateProgress) this.progress?.setTask("Scanning personal library", "Inventorying eligible files");
+    try {
+      operation.signal.throwIfAborted();
+      const source = this.librarySource
+        ?? await this.openLibrarySource(connection.selectedRoot);
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      if (
+        source.canonicalRoot !== connection.selectedRoot
+        || source.rootIdentity !== connection.rootIdentity
+      ) {
+        throw new Error("Library folder identity changed; choose it again");
+      }
+      this.librarySource = source;
+      const inventory = await source.inventory({ signal: operation.signal });
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      const current = await store.load(scopeFingerprint, identificationFingerprint);
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      const reconciled = await reconcilePersonalLibraryCatalog({
+        current,
+        inventory,
+        eligibleExtensions: connection.eligibleExtensions,
+        resolver: new ArxivLibraryMetadataResolver(this.buildArxivFetcher()),
+        signal: operation.signal,
+      });
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      const saved = await this.enqueueLibraryMutation(async () => {
+        operation.signal.throwIfAborted();
+        this.assertLibraryConnectionCurrent(connection, revision);
+        const saved = await store.replace(reconciled.catalog);
+        // Atomic promotion cannot be interrupted. Once it succeeds, the scan is
+        // committed even if cancellation arrives during that final write.
+        this.assertLibraryConnectionCurrent(connection, revision);
+        this.libraryCatalog = saved;
+        return saved;
+      });
+      this.libraryCatalog = saved;
+      if (updateProgress) this.progress?.setComplete("Personal library scan complete");
+      return structuredClone(saved);
+    } catch (error) {
+      if (updateProgress && !operation.signal.aborted) {
+        this.progress?.setError("Personal library scan failed");
+      }
+      throw error;
+    } finally {
+      operation.finish();
+    }
+  }
+
   restartScheduler(): void {
     this.scheduler.stop();
     if (this.settings.schedule.enabled) this.scheduler.start();
   }
 
   async reloadStateStoreForOutputPaths(): Promise<void> {
-    const nextStore = createStorageStateStore(
-      this.host.storage,
-      this.settings.output,
-      this.logger,
-    );
-    await nextStore.load();
-    this.stateStore = nextStore;
-    this.scheduler.replaceStore(nextStore);
-    this.runHistoryStore = RunHistoryStore.fromStorage(
-      this.host.storage,
-      this.settings.output,
-      this.logger,
-    );
-    this.scheduler.replaceRunHistory(this.runHistoryStore);
-    if (this.settings.schedule.enabled) {
-      this.progress.setIdle(latestCompletedDate(nextStore));
-    } else {
-      this.progress.setDisabled();
-    }
+    this.cancelPersonalLibraryScans("output paths changed");
+    await this.enqueueLibraryMutation(async () => {
+      const nextStore = createStorageStateStore(
+        this.host.storage,
+        this.settings.output,
+        this.logger,
+      );
+      await nextStore.load();
+      this.stateStore = nextStore;
+      this.scheduler.replaceStore(nextStore);
+      this.runHistoryStore = RunHistoryStore.fromStorage(
+        this.host.storage,
+        this.settings.output,
+        this.logger,
+      );
+      this.scheduler.replaceRunHistory(this.runHistoryStore);
+      await this.reloadPersonalLibraryCatalog();
+      if (this.settings.schedule.enabled) {
+        this.progress.setIdle(latestCompletedDate(nextStore));
+      } else {
+        this.progress.setDisabled();
+      }
+    });
   }
 
   async setScheduleEnabled(enabled: boolean): Promise<boolean> {
@@ -468,6 +592,57 @@ export default class ArxivDailyPlugin extends Plugin {
       loaded.warnings.push("ignored invalid personal library connection metadata");
     }
     return loaded.warnings;
+  }
+
+  private libraryFingerprints(connection: PersistedLibraryConnection): {
+    scopeFingerprint: string;
+    identificationFingerprint: string;
+  } {
+    return {
+      scopeFingerprint: createPersonalLibraryScopeFingerprint({
+        rootIdentity: connection.rootIdentity,
+        eligibleExtensions: connection.eligibleExtensions,
+      }),
+      identificationFingerprint: createPersonalLibraryIdentificationFingerprint(
+        connection.eligibleExtensions,
+      ),
+    };
+  }
+
+  private buildPersonalLibraryCatalogStore(): PersonalLibraryCatalogStore {
+    if (!this.host?.storage.writeTextAtomic) {
+      throw new Error("Personal library catalog requires atomic storage writes");
+    }
+    return new PersonalLibraryCatalogStore(
+      this.host.storage,
+      this.settings.output,
+      { onWarning: (message, error) => this.logger.warn(message, error) },
+    );
+  }
+
+  private assertLibraryConnectionCurrent(
+    connection: PersistedLibraryConnection,
+    revision: number,
+  ): void {
+    if (
+      this.libraryConnection !== connection
+      || this.libraryConnectionRevision !== revision
+    ) {
+      throw new Error("Library connection changed during personal library operation");
+    }
+  }
+
+  private cancelPersonalLibraryScans(reason: string): void {
+    const registry = this.operations as OperationRegistry & {
+      snapshot?: OperationRegistry["snapshot"];
+      cancel?: OperationRegistry["cancel"];
+    };
+    if (!registry.snapshot || !registry.cancel) return;
+    for (const operation of registry.snapshot()) {
+      if (operation.kind === "personal-library-scan") {
+        registry.cancel(operation.id, reason);
+      }
+    }
   }
 
   private enqueueLibraryMutation<T>(operation: () => Promise<T>): Promise<T> {

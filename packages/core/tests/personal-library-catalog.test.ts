@@ -231,6 +231,7 @@ describe("PersonalLibraryCatalogStore", () => {
     expect(saved.revision).toBe(1);
     expect(saved.updatedAt).toBe(secondNow.toISOString());
     expect(files[documentPath]).toBe(`${JSON.stringify(saved, null, 2)}\n`);
+    expect(files[backupPath]).toBe(files[documentPath]);
     await expect(store.load(scopeFingerprint, identificationFingerprint)).resolves.toEqual(saved);
   });
 
@@ -292,6 +293,7 @@ describe("PersonalLibraryCatalogStore", () => {
 
     await expect(makeStore(storage, () => secondNow, warning)
       .load(scopeFingerprint, identificationFingerprint)).resolves.toEqual(saved);
+    expect(JSON.parse(files[documentPath]!)).toEqual(saved);
     expect(warning.mock.calls.some(([message]) => String(message).includes("recovered from backup")))
       .toBe(true);
   });

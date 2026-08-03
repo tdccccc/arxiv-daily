@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import type { PersonalLibraryCatalog } from "@arxiv-daily/core";
 import type {
   LibraryAuthorizationDisclosure,
   LibraryInventoryPreview,
@@ -37,6 +38,33 @@ export function confirmLibraryAuthorization(
     modal.onClose = () => finish(false);
     modal.open();
   });
+}
+
+export function showPersonalLibraryCatalogSummary(
+  app: App,
+  catalog: PersonalLibraryCatalog,
+): void {
+  const modal = new Modal(app);
+  modal.titleEl.setText("Personal library catalog");
+  const summary = catalog.lastScan ?? {
+    ready: 0,
+    papers: Object.keys(catalog.papers).length,
+    unresolved: 0,
+    unrelated: 0,
+    failed: 0,
+    truncated: false,
+  };
+  const list = modal.contentEl.createEl("dl");
+  addDisclosure(list, "Revision", String(catalog.revision));
+  addDisclosure(list, "Ready files", String(summary.ready));
+  addDisclosure(list, "Papers", String(summary.papers));
+  addDisclosure(list, "Unresolved", String(summary.unresolved));
+  addDisclosure(list, "Unrelated", String(summary.unrelated));
+  addDisclosure(list, "Failed", String(summary.failed));
+  addDisclosure(list, "Truncated", summary.truncated ? "Yes" : "No");
+  const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
+  actions.createEl("button", { text: "Close" }).onclick = () => modal.close();
+  modal.open();
 }
 
 export function showLibraryInventoryPreview(

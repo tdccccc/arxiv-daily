@@ -44,6 +44,7 @@ import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import {
   confirmLibraryAuthorization,
   showLibraryInventoryPreview,
+  showPersonalLibraryCatalogSummary,
 } from "../library/modal";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
@@ -331,6 +332,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .setButtonText("Preview")
           .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
       );
+      setting.addButton((button) =>
+        button
+          .setButtonText("Scan library")
+          .onClick(() => this.runAction("scan personal library", () => this.scanPersonalLibrary())),
+      );
+      setting.addButton((button) =>
+        button
+          .setButtonText("Reload catalog")
+          .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
+      );
     }
     if (status.kind === "authorization-required" || status.kind === "authorization-invalidated") {
       setting.addButton((button) =>
@@ -376,6 +387,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   public async previewLibraryInventory(): Promise<void> {
     const preview = await this.plugin.previewLibraryInventory();
     showLibraryInventoryPreview(this.app, preview);
+  }
+
+  public async scanPersonalLibrary(): Promise<void> {
+    const catalog = await this.plugin.scanPersonalLibrary();
+    showPersonalLibraryCatalogSummary(this.app, catalog);
+  }
+
+  public async reloadPersonalLibraryCatalog(): Promise<void> {
+    const catalog = await this.plugin.reloadPersonalLibraryCatalog();
+    if (!catalog) throw new Error("Choose a personal library first");
+    showPersonalLibraryCatalogSummary(this.app, catalog);
   }
 
   public async revokeLibraryAuthorization(): Promise<void> {

@@ -9,6 +9,7 @@ const paper = {
   id: "2605.08080",
   title: "A paper",
   authors: "A. Author",
+  authorNames: ["A. Author"],
   abstract: "An abstract.",
   published: "2026-05-01T00:00:00Z",
   updated: "2026-05-02T00:00:00Z",

@@ -83,6 +83,8 @@ function makeTab() {
       folders: 0,
       truncated: false,
     }),
+    scanPersonalLibrary: vi.fn().mockResolvedValue({}),
+    reloadPersonalLibraryCatalog: vi.fn().mockResolvedValue({}),
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
@@ -232,10 +234,12 @@ describe("personal library settings row", () => {
     expect(pending.map((button) => button.text)).toEqual([
       "Change folder",
       "Preview",
+      "Scan library",
+      "Reload catalog",
       "Review & authorize",
     ]);
-    expect(pending[2]?.cta).toBe(true);
-    pending[2]?.click?.();
+    expect(pending[4]?.cta).toBe(true);
+    pending[4]?.click?.();
     expect(runAction).toHaveBeenCalledWith(
       "authorize personal library",
       expect.any(Function),
@@ -250,9 +254,11 @@ describe("personal library settings row", () => {
     expect(authorized.map((button) => button.text)).toEqual([
       "Change folder",
       "Preview",
+      "Scan library",
+      "Reload catalog",
       "Revoke",
     ]);
-    expect(authorized[2]?.warning).toBe(true);
+    expect(authorized[4]?.warning).toBe(true);
   });
 });
 

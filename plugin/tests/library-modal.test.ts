@@ -3,6 +3,7 @@ import { Modal, type App } from "obsidian";
 import {
   confirmLibraryAuthorization,
   showLibraryInventoryPreview,
+  showPersonalLibraryCatalogSummary,
 } from "../src/library/modal";
 
 beforeAll(() => {
@@ -68,6 +69,38 @@ describe("personal library authorization modal", () => {
     const closed = confirmLibraryAuthorization({} as App, disclosure);
     Modal.opened.at(-1)!.close();
     await expect(closed).resolves.toBe(false);
+  });
+});
+
+describe("personal library catalog modal", () => {
+  it("renders revision and every scan count without an absolute root", () => {
+    showPersonalLibraryCatalogSummary({} as App, {
+      schemaVersion: 1,
+      revision: 7,
+      scopeFingerprint: `sha256:${"a".repeat(64)}`,
+      identificationFingerprint: `sha256:${"b".repeat(64)}`,
+      updatedAt: "2026-08-03T00:00:00.000Z",
+      lastScan: {
+        ready: 3,
+        papers: 2,
+        unresolved: 4,
+        unrelated: 5,
+        failed: 6,
+        truncated: true,
+      },
+      files: {},
+      papers: {},
+    });
+    const modal = Modal.opened.at(-1)!;
+    expect(modal.titleEl.textContent).toBe("Personal library catalog");
+    expect(modal.contentEl.textContent).toContain("Revision7");
+    expect(modal.contentEl.textContent).toContain("Ready files3");
+    expect(modal.contentEl.textContent).toContain("Papers2");
+    expect(modal.contentEl.textContent).toContain("Unresolved4");
+    expect(modal.contentEl.textContent).toContain("Unrelated5");
+    expect(modal.contentEl.textContent).toContain("Failed6");
+    expect(modal.contentEl.textContent).toContain("TruncatedYes");
+    expect(modal.contentEl.textContent).not.toContain("/private");
   });
 });
 
