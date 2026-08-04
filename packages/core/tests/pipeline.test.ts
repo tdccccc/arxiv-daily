@@ -219,6 +219,34 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
+  it("honors a captured personalized lifecycle signal before any fetch", async () => {
+    const d = makeDeps();
+    const lifecycle = new AbortController();
+    lifecycle.abort("personalized authorization revoked");
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      personalizedDiscovery: { directions: [] },
+      personalizedDiscoverySignal: lifecycle.signal,
+    });
+
+    await expect(pipeline.runForDate(firstDateFromFixture())).resolves.toEqual({
+      kind: "cancelled",
+      reason: "personalized authorization revoked",
+    });
+    expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+    expect(d.llm.call).not.toHaveBeenCalled();
+  });
+
   it("passes the abort signal to recent and metadata fetches", async () => {
     const d = makeDeps();
     const controller = new AbortController();

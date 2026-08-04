@@ -153,7 +153,7 @@ describe("plugin settings reload lifecycle", () => {
     const pipeline = (plugin as any).buildPipeline();
 
     expect((pipeline as any).deps.detailSelection).toEqual(configuredPolicy);
-    expect((pipeline as any).deps.detailSelection).toBe(
+    expect((pipeline as any).deps.detailSelection).not.toBe(
       plugin.settings.detailSelection,
     );
     const checkpointStores = (pipeline as any).deps.checkpointStores;
@@ -162,7 +162,8 @@ describe("plugin settings reload lifecycle", () => {
     const checkpointError = new Error("unreadable checkpoint");
     for (const store of [checkpointStores.filter, checkpointStores.summary]) {
       expect(store.storage).toBe((plugin as any).host.storage);
-      expect(store.output).toBe(plugin.settings.output);
+      expect(store.output).toEqual(plugin.settings.output);
+      expect(store.output).not.toBe(plugin.settings.output);
       store.options.onWarning("checkpoint warning", checkpointError);
     }
     expect(warn).toHaveBeenCalledTimes(2);

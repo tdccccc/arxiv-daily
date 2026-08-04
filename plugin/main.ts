@@ -5,6 +5,7 @@ import type {
   PersonalLibraryDirectionProposal,
   PersonalLibraryInterestEligibility,
   PersonalLibraryInterestProfile,
+  PersonalizedDiscoveryInput,
   PersonalLibraryReviewedDirectionDraft,
   PersonalLibraryDirectionTextPatch,
   PipelineResult,
@@ -36,6 +37,7 @@ import {
   mergePersonalLibraryConfirmedDirections,
   mergePersonalLibraryDirectionCandidates,
   proposePersonalLibraryDirections,
+  preparePersonalizedDiscoveryInput,
   removePersonalLibraryConfirmedDirection,
   removePersonalLibraryDirectionCandidate,
   selectPersonalLibraryDirectionPapers,
@@ -178,6 +180,9 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryProfile: PersonalLibraryInterestProfile | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
   private libraryProfileLoadError: PersonalLibraryReviewLoadError | null = null;
+  private personalizedDailyDiscoveryAvailable = true;
+  private personalizedDailyDiscoveryRevision = 0;
+  private personalizedDailyRunControllers = new Map<ArxivPipeline, AbortController>();
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -263,7 +268,14 @@ export default class ArxivDailyPlugin extends Plugin {
       store: this.stateStore,
       lock: this.runLock,
       logger: this.logger,
-      runForDate: (date, signal) => this.buildPipeline().runForDate(date, signal),
+      runForDate: async (date, signal) => {
+        const pipeline = this.buildPipeline();
+        try {
+          return await pipeline.runForDate(date, signal);
+        } finally {
+          this.releasePersonalizedDailyPipeline(pipeline);
+        }
+      },
       progress: this.progress,
       cancellation: this.runCancellation,
       recentDates: this.recentDates,
@@ -347,6 +359,7 @@ export default class ArxivDailyPlugin extends Plugin {
     if (selection.kind !== "selected") return selection.kind;
     const source = await this.openLibrarySource(selection.path);
     if (revision !== this.librarySelectionRevision) return "cancelled";
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable("library folder changed");
     this.cancelPersonalLibraryOperations("library folder changed");
     return await this.enqueueLibraryMutation(async () => {
       if (revision !== this.librarySelectionRevision) return "cancelled" as const;
@@ -375,41 +388,51 @@ export default class ArxivDailyPlugin extends Plugin {
         this.libraryProposalLoadError = previousProposalError;
         this.libraryProfileLoadError = previousProfileError;
         this.libraryConnectionRevision = previousConnectionRevision;
+        this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
         this.refreshSensitiveValues();
         throw error;
       }
-      await this.reloadPersonalLibraryCatalog().catch((error) => {
+      await this.reloadPersonalLibraryCatalog(discoveryRevision).catch((error) => {
         this.libraryCatalog = null;
         this.logger.error?.("personal library catalog load failed after folder selection", error);
       });
-      await this.reloadPersonalLibraryProfileDocuments();
+      await this.reloadPersonalLibraryProfileDocuments(discoveryRevision);
+      this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
       return "selected" as const;
     });
   }
 
   async authorizeLibraryProcessing(expectedFingerprint?: string): Promise<void> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const connectionRevision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const discoveryRevision = this.personalizedDailyDiscoveryRevision;
+    const endpoint = this.effectiveLlmEndpoint(this.settings.llm.baseUrl);
+    const disclosure = libraryAuthorizationDisclosure(connection, this.settings.llm.baseUrl);
+    if (expectedFingerprint
+      && disclosure.authorizationFingerprint !== expectedFingerprint) {
+      throw new Error("Library authorization terms changed; review them again");
+    }
     await this.enqueueLibraryMutation(async () => {
-      if (!this.libraryConnection) throw new Error("Choose a personal library first");
-      const disclosure = libraryAuthorizationDisclosure(
-        this.libraryConnection,
-        this.settings.llm.baseUrl,
-      );
-      if (
-        expectedFingerprint
-        && disclosure.authorizationFingerprint !== expectedFingerprint
-      ) {
-        throw new Error("Library authorization terms changed; review them again");
+      if (this.libraryConnection !== connection
+        || this.libraryConnectionRevision !== connectionRevision
+        || this.libraryOutputRevision !== outputRevision
+        || this.personalizedDailyDiscoveryRevision !== discoveryRevision
+        || this.effectiveLlmEndpoint(this.settings.llm.baseUrl) !== endpoint) {
+        throw new Error("Library authorization was superseded by a newer library change");
       }
-      const previous = this.libraryConnection;
-      this.libraryConnection = authorizeLibraryConnection(
-        previous,
-        this.settings.llm.baseUrl,
-      );
+      const authorized = authorizeLibraryConnection(connection, this.settings.llm.baseUrl);
+      this.libraryConnection = authorized;
       try {
         await this.persistSettings();
       } catch (error) {
-        this.libraryConnection = previous;
+        if (this.libraryConnection === authorized) this.libraryConnection = connection;
         throw error;
+      }
+      const identity = this.capturePersonalizedDiscoveryIdentity(authorized);
+      if (identity) {
+        this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
       }
     });
   }
@@ -418,6 +441,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const previous = this.libraryConnection;
     if (!previous) return;
     const revoked = revokeLibraryConnection(previous);
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable("library processing authorization revoked");
     this.cancelPersonalLibraryDirectionGeneration("library processing authorization revoked");
     // Consent becomes ineffective synchronously at invocation, before waiting for
     // an earlier library mutation to finish.
@@ -428,7 +452,10 @@ export default class ArxivDailyPlugin extends Plugin {
       try {
         await this.persistSettings();
       } catch (error) {
-        if (this.libraryConnection === revoked) this.libraryConnection = previous;
+        if (this.libraryConnection === revoked) {
+          this.libraryConnection = previous;
+          this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
+        }
         throw error;
       }
     });
@@ -436,10 +463,16 @@ export default class ArxivDailyPlugin extends Plugin {
 
   async setLlmBaseUrl(next: string): Promise<void> {
     const normalized = next.trim();
+    const requestedEndpointChanged = this.effectiveLlmEndpoint(this.settings.llm.baseUrl)
+      !== this.effectiveLlmEndpoint(normalized);
+    const discoveryRevision = requestedEndpointChanged
+      ? this.markPersonalizedDailyDiscoveryUnavailable("model endpoint changed")
+      : undefined;
+    if (requestedEndpointChanged) {
+      this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
+    }
     await this.enqueueLibraryMutation(async () => {
       const previous = this.settings.llm.baseUrl;
-      const endpointChanged = this.effectiveLlmEndpoint(previous) !== this.effectiveLlmEndpoint(normalized);
-      if (endpointChanged) this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
       this.settings.llm.baseUrl = normalized;
       this.settings.detailSelection = sanitizeDetailSelection(this.settings.detailSelection);
       this.refreshSensitiveValues();
@@ -447,8 +480,14 @@ export default class ArxivDailyPlugin extends Plugin {
         await this.persistSettings();
       } catch (error) {
         this.settings.llm.baseUrl = previous;
+        if (discoveryRevision !== undefined) {
+          this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
+        }
         this.refreshSensitiveValues();
         throw error;
+      }
+      if (discoveryRevision !== undefined) {
+        this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
       }
     });
   }
@@ -530,7 +569,12 @@ export default class ArxivDailyPlugin extends Plugin {
     };
   }
 
-  async reloadPersonalLibraryCatalog(): Promise<PersonalLibraryCatalog | null> {
+  async reloadPersonalLibraryCatalog(
+    transitionRevision?: number,
+  ): Promise<PersonalLibraryCatalog | null> {
+    const ownsTransition = transitionRevision === undefined;
+    const discoveryRevision = transitionRevision
+      ?? this.markPersonalizedDailyDiscoveryUnavailable("personal library catalog reloaded");
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryCatalog = null;
@@ -546,6 +590,10 @@ export default class ArxivDailyPlugin extends Plugin {
     this.assertLibraryConnectionCurrent(connection, revision);
     this.libraryCatalog = catalog;
     this.libraryCatalogLoadError = null;
+    const identity = this.capturePersonalizedDiscoveryIdentity(connection);
+    if (ownsTransition && identity) {
+      this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
+    }
     return structuredClone(catalog);
   }
 
@@ -570,7 +618,12 @@ export default class ArxivDailyPlugin extends Plugin {
     return this.libraryProfile ? structuredClone(this.libraryProfile) : null;
   }
 
-  async reloadPersonalLibraryProfileDocuments(): Promise<PersonalLibraryProfileSnapshot> {
+  async reloadPersonalLibraryProfileDocuments(
+    transitionRevision?: number,
+  ): Promise<PersonalLibraryProfileSnapshot> {
+    const ownsTransition = transitionRevision === undefined;
+    const discoveryRevision = transitionRevision
+      ?? this.markPersonalizedDailyDiscoveryUnavailable("personal library profile reloaded");
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryProposal = null;
@@ -604,6 +657,10 @@ export default class ArxivDailyPlugin extends Plugin {
         this.logger?.error("personal library interest profile load failed", error);
       }),
     ]);
+    const identity = this.capturePersonalizedDiscoveryIdentity(connection);
+    if (ownsTransition && identity) {
+      this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
+    }
     return this.getPersonalLibraryProfileSnapshot();
   }
 
@@ -711,6 +768,9 @@ export default class ArxivDailyPlugin extends Plugin {
     now?: Date;
   }): Promise<PersonalLibraryProfileSnapshot> {
     const guard = this.capturePersonalLibraryReviewGuard();
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+      "confirmed personal library direction changed",
+    );
     return this.enqueueLibraryMutation(async () => {
       this.assertPersonalLibraryReviewGuard(guard);
       const stores = this.buildPersonalLibraryProfileStores(guard.connection);
@@ -736,10 +796,12 @@ export default class ArxivDailyPlugin extends Plugin {
         this.libraryProfile = saved.profile;
         this.libraryProposalLoadError = null;
         this.libraryProfileLoadError = null;
+        const identity = this.capturePersonalizedDiscoveryIdentity(guard.connection);
+        if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
         return this.getPersonalLibraryProfileSnapshot();
       } catch (error) {
         if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, discoveryRevision);
         }
         throw error;
       }
@@ -850,6 +912,9 @@ export default class ArxivDailyPlugin extends Plugin {
       });
       operation.signal.throwIfAborted();
       this.assertLibraryConnectionCurrent(connection, revision);
+      const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+        "personal library catalog evidence changed",
+      );
       const saved = await this.enqueueLibraryMutation(async () => {
         operation.signal.throwIfAborted();
         this.assertLibraryConnectionCurrent(connection, revision);
@@ -858,6 +923,9 @@ export default class ArxivDailyPlugin extends Plugin {
         // committed even if cancellation arrives during that final write.
         this.assertLibraryConnectionCurrent(connection, revision);
         this.libraryCatalog = saved;
+        this.libraryCatalogLoadError = null;
+        const identity = this.capturePersonalizedDiscoveryIdentity(connection);
+        if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
         return saved;
       });
       this.libraryCatalog = saved;
@@ -880,6 +948,7 @@ export default class ArxivDailyPlugin extends Plugin {
 
   async reloadStateStoreForOutputPaths(): Promise<void> {
     this.libraryOutputRevision += 1;
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable("output paths changed");
     this.cancelPersonalLibraryOperations("output paths changed");
     await this.enqueueLibraryMutation(async () => {
       const nextStore = createStorageStateStore(
@@ -896,8 +965,10 @@ export default class ArxivDailyPlugin extends Plugin {
         this.logger,
       );
       this.scheduler.replaceRunHistory(this.runHistoryStore);
-      await this.reloadPersonalLibraryCatalog();
-      await this.reloadPersonalLibraryProfileDocuments();
+      await this.reloadPersonalLibraryCatalog(discoveryRevision);
+      await this.reloadPersonalLibraryProfileDocuments(discoveryRevision);
+      const identity = this.capturePersonalizedDiscoveryIdentity();
+      if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
       if (this.settings.schedule.enabled) {
         this.progress.setIdle(latestCompletedDate(nextStore));
       } else {
@@ -1053,43 +1124,54 @@ export default class ArxivDailyPlugin extends Plugin {
     this.assertPersonalLibraryReviewGuard(guard);
     const catalog = this.libraryCatalog;
     if (!catalog) throw new Error("Scan and load the personal library catalog first");
-    await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
-    if (this.libraryProfileLoadError || !this.libraryProfile) {
+    const loaded = await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+    if (loaded.profile.status === "rejected") {
       throw new Error("Personal library confirmed profile is unavailable");
     }
-    if (requireProposal && (this.libraryProposalLoadError || !this.libraryProposal)) {
+    if (requireProposal && loaded.proposal.status === "rejected") {
       throw new Error("Personal library direction proposal is unavailable");
     }
     this.assertPersonalLibraryReviewGuard(guard);
     return {
       catalog: structuredClone(catalog),
-      proposal: this.libraryProposal ? structuredClone(this.libraryProposal) : null,
-      profile: structuredClone(this.libraryProfile),
+      proposal: loaded.proposal.status === "fulfilled" && loaded.proposal.value
+        ? structuredClone(loaded.proposal.value)
+        : null,
+      profile: structuredClone(loaded.profile.value),
     };
   }
 
   private async loadPersonalLibraryReviewDocumentsDirect(
     guard: { connection: PersistedLibraryConnection; connectionRevision: number; outputRevision: number },
     stores: { proposal: PersonalLibraryDirectionProposalStore; profile: PersonalLibraryInterestProfileStore },
-  ): Promise<void> {
+    discoveryRevision?: number,
+  ): Promise<{
+    proposal: PromiseSettledResult<PersonalLibraryDirectionProposal | null>;
+    profile: PromiseSettledResult<PersonalLibraryInterestProfile>;
+  }> {
     const [proposal, profile] = await Promise.allSettled([stores.proposal.load(), stores.profile.load()]);
     this.assertPersonalLibraryReviewGuard(guard);
-    if (proposal.status === "fulfilled") {
-      this.libraryProposal = proposal.value;
-      this.libraryProposalLoadError = null;
-    } else {
-      this.libraryProposal = null;
-      this.libraryProposalLoadError = this.safeProfileLoadError("proposal", proposal.reason);
-      this.logger?.error("personal library direction proposal load failed", proposal.reason);
+    if (discoveryRevision !== undefined) {
+      if (proposal.status === "fulfilled") {
+        this.libraryProposal = proposal.value;
+        this.libraryProposalLoadError = null;
+      } else {
+        this.libraryProposal = null;
+        this.libraryProposalLoadError = this.safeProfileLoadError("proposal", proposal.reason);
+        this.logger?.error("personal library direction proposal load failed", proposal.reason);
+      }
+      if (profile.status === "fulfilled") {
+        this.libraryProfile = profile.value;
+        this.libraryProfileLoadError = null;
+      } else {
+        this.libraryProfile = null;
+        this.libraryProfileLoadError = this.safeProfileLoadError("profile", profile.reason);
+        this.logger?.error("personal library interest profile load failed", profile.reason);
+      }
+      const identity = this.capturePersonalizedDiscoveryIdentity(guard.connection);
+      if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
     }
-    if (profile.status === "fulfilled") {
-      this.libraryProfile = profile.value;
-      this.libraryProfileLoadError = null;
-    } else {
-      this.libraryProfile = null;
-      this.libraryProfileLoadError = this.safeProfileLoadError("profile", profile.reason);
-      this.logger?.error("personal library interest profile load failed", profile.reason);
-    }
+    return { proposal, profile };
   }
 
   private async mutatePersonalLibraryProposal(
@@ -1128,6 +1210,9 @@ export default class ArxivDailyPlugin extends Plugin {
     ) => PersonalLibraryInterestProfile,
   ): Promise<PersonalLibraryProfileSnapshot> {
     const guard = this.capturePersonalLibraryReviewGuard();
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+      "confirmed personal library direction changed",
+    );
     return this.enqueueLibraryMutation(async () => {
       this.assertPersonalLibraryReviewGuard(guard);
       const stores = this.buildPersonalLibraryProfileStores(guard.connection);
@@ -1140,10 +1225,12 @@ export default class ArxivDailyPlugin extends Plugin {
         this.assertPersonalLibraryReviewGuard(guard);
         this.libraryProfile = saved;
         this.libraryProfileLoadError = null;
+        const identity = this.capturePersonalizedDiscoveryIdentity(guard.connection);
+        if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
         return this.getPersonalLibraryProfileSnapshot();
       } catch (error) {
         if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, discoveryRevision);
         }
         throw error;
       }
@@ -1244,6 +1331,96 @@ export default class ArxivDailyPlugin extends Plugin {
       || this.libraryConnectionRevision !== revision
     ) {
       throw new Error("Library connection changed during personal library operation");
+    }
+  }
+
+  private markPersonalizedDailyDiscoveryUnavailable(reason: string): number {
+    this.personalizedDailyDiscoveryAvailable = false;
+    const revision = (this.personalizedDailyDiscoveryRevision ?? 0) + 1;
+    this.personalizedDailyDiscoveryRevision = revision;
+    for (const controller of this.personalizedDailyRunControllers?.values() ?? []) {
+      if (!controller.signal.aborted) controller.abort(reason);
+    }
+    return revision;
+  }
+
+  private restorePersonalizedDailyDiscoveryAvailability(
+    revision: number,
+    expected?: {
+      connection: PersistedLibraryConnection;
+      connectionRevision: number;
+      outputRevision: number;
+      endpoint: string;
+    },
+  ): void {
+    if (this.personalizedDailyDiscoveryRevision !== revision) return;
+    if (expected) {
+      if (this.libraryConnection !== expected.connection
+        || this.libraryConnectionRevision !== expected.connectionRevision
+        || this.libraryOutputRevision !== expected.outputRevision
+        || this.effectiveLlmEndpoint(this.settings.llm.baseUrl) !== expected.endpoint
+        || this.getLibraryConnectionStatus().kind !== "authorized") {
+        return;
+      }
+    }
+    this.personalizedDailyDiscoveryAvailable = true;
+  }
+
+  private capturePersonalizedDiscoveryIdentity(connection = this.libraryConnection): {
+    connection: PersistedLibraryConnection;
+    connectionRevision: number;
+    outputRevision: number;
+    endpoint: string;
+  } | undefined {
+    if (!connection) return undefined;
+    return {
+      connection,
+      connectionRevision: this.libraryConnectionRevision,
+      outputRevision: this.libraryOutputRevision,
+      endpoint: this.effectiveLlmEndpoint(this.settings.llm.baseUrl),
+    };
+  }
+
+  private releasePersonalizedDailyPipeline(pipeline: ArxivPipeline): void {
+    this.personalizedDailyRunControllers?.delete(pipeline);
+  }
+
+  private buildPersonalizedDailyDiscoverySnapshot(): PersonalizedDiscoveryInput | undefined {
+    if (this.personalizedDailyDiscoveryAvailable === false
+      || this.libraryCatalogLoadError
+      || this.libraryProfileLoadError
+      || this.getLibraryConnectionStatus().kind !== "authorized") {
+      return undefined;
+    }
+    const catalog = this.libraryCatalog;
+    const profile = this.libraryProfile;
+    if (!catalog || !profile) return undefined;
+    const eligibility = evaluatePersonalLibraryInterestEligibility(profile, catalog);
+    if (eligibility.documentDiagnostics.length > 0
+      || eligibility.eligibleDirections.length === 0) {
+      return undefined;
+    }
+    try {
+      return preparePersonalizedDiscoveryInput({
+        directions: eligibility.eligibleDirections.map((direction) => ({
+          id: direction.id,
+          name: direction.name,
+          description: direction.description,
+          discoveryCues: [...direction.discoveryCues],
+          representatives: direction.representatives.map((representative) => {
+            const paper = catalog.papers[representative.paperKey];
+            if (!paper) throw new Error("eligible representative is missing from catalog");
+            return {
+              paperKey: representative.paperKey,
+              title: paper.title,
+              evidenceDepth: paper.evidenceDepth,
+            };
+          }),
+        })),
+      });
+    } catch (error) {
+      this.logger.warn("personal library discovery snapshot invalid; using manual-only", error);
+      return undefined;
     }
   }
 
@@ -1366,38 +1543,47 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private buildPipeline(): ArxivPipeline {
-    const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps();
+    const settings = structuredClone(this.settings);
+    const personalizedDiscovery = this.buildPersonalizedDailyDiscoverySnapshot();
+    const personalizedController = personalizedDiscovery ? new AbortController() : undefined;
+    const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps(settings);
     const checkpointStoreOptions = {
       onWarning: (message: string, error?: unknown) =>
         this.logger.warn(message, error),
     };
-    return new ArxivPipeline({
+    const pipeline = new ArxivPipeline({
       fetcher,
       markupParser: this.host.markupParser,
       paperFetcher,
       writer,
-      paperIndex: this.buildPaperIndex(),
+      paperIndex: this.buildPaperIndex(settings.output),
       checkpointStores: {
         filter: new DailyFilterCheckpointStore(
           this.host.storage,
-          this.settings.output,
+          settings.output,
           checkpointStoreOptions,
         ),
         summary: new DailySummaryCheckpointStore(
           this.host.storage,
-          this.settings.output,
+          settings.output,
           checkpointStoreOptions,
         ),
       },
       llm,
       logger: this.logger,
-      arxiv: this.settings.arxiv,
-      advanced: this.settings.advanced,
-      output: this.settings.output,
-      llmSettings: this.settings.llm,
-      detailSelection: this.settings.detailSelection,
+      arxiv: settings.arxiv,
+      advanced: settings.advanced,
+      output: settings.output,
+      llmSettings: settings.llm,
+      detailSelection: settings.detailSelection,
+      personalizedDiscovery,
+      personalizedDiscoverySignal: personalizedController?.signal,
       progress: this.progress,
     });
+    if (personalizedController) {
+      (this.personalizedDailyRunControllers ??= new Map()).set(pipeline, personalizedController);
+    }
+    return pipeline;
   }
 
   private buildManualFetch(): ManualFetchService {
@@ -1419,48 +1605,48 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
-  buildArxivFetcher(): ArxivFetcher {
+  buildArxivFetcher(settings: PluginSettings = this.settings): ArxivFetcher {
     return new ArxivFetcher({
-      category: this.settings.arxiv.category,
-      categories: arxivCategories(this.settings.arxiv),
+      category: settings.arxiv.category,
+      categories: arxivCategories(settings.arxiv),
       http: this.host.http,
       markupParser: this.host.markupParser,
       logger: this.logger,
-      requestDelayMs: this.settings.advanced.requestDelayMs,
+      requestDelayMs: settings.advanced.requestDelayMs,
       metadataCache: new AtomMetadataCache({
         rootDir: this.pluginCacheDir(),
-        expiryDays: this.settings.advanced.cacheExpiryDays,
+        expiryDays: settings.advanced.cacheExpiryDays,
         storage: this.host.storage,
       }),
     });
   }
 
-  private buildSharedDeps() {
-    const llm = new LlmClient(this.settings.llm, this.logger, this.host.http);
-    const fetcher = this.buildArxivFetcher();
+  private buildSharedDeps(settings: PluginSettings = this.settings) {
+    const llm = new LlmClient(settings.llm, this.logger, this.host.http);
+    const fetcher = this.buildArxivFetcher(settings);
     const cache = new HtmlCache({
       rootDir: this.pluginCacheDir(),
-      expiryDays: this.settings.advanced.cacheExpiryDays,
+      expiryDays: settings.advanced.cacheExpiryDays,
       storage: this.host.storage,
     });
     const paperFetcher = new PaperContentFetcher(fetcher, cache, this.logger, this.host.markupParser, {
       storage: this.host.storage,
       cacheDir: `${this.pluginDir()}/.cache/source`,
-      expiryDays: this.settings.advanced.cacheExpiryDays,
+      expiryDays: settings.advanced.cacheExpiryDays,
     });
     const writer = new MarkdownWriter({
       storage: this.host.storage,
       logger: this.logger,
-      arxiv: this.settings.arxiv,
-      output: this.settings.output,
+      arxiv: settings.arxiv,
+      output: settings.output,
     });
     return { llm, fetcher, paperFetcher, writer };
   }
 
-  buildPaperIndex(): PaperIndexStore {
+  buildPaperIndex(output: PluginSettings["output"] = this.settings.output): PaperIndexStore {
     return new PaperIndexStore(
       this.host.storage,
-      this.settings.output,
+      output,
     );
   }
 
