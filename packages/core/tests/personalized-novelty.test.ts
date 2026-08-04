@@ -21,6 +21,7 @@ import {
   planPersonalNoveltyCalls,
   preparePersonalNoveltyMatches,
   preparePersonalizedNoveltyInput,
+  runPersonalNoveltyStage,
   type NoveltyDailyPaper,
   type NoveltyRepresentativePaper,
   type PersonalNovelty,
@@ -31,6 +32,7 @@ import {
 } from "../src/index";
 import type { ChatMessage, CallOptions } from "../src/llm/client";
 import { RunCancelledError } from "../src/services/cancellation";
+import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 function dailyPaper(index: number, overrides: Partial<NoveltyDailyPaper> = {}): NoveltyDailyPaper {
   return {
@@ -519,6 +521,36 @@ describe("personal novelty plan and comparison basis", () => {
       .toMatchObject({ ok: true, value: { entries: [] } });
   });
 
+  it("renders byte-identical requests for single-paper slices and the full plan", () => {
+    const papers = [dailyPaper(1), dailyPaper(2)];
+    const representatives = [representative(1), representative(2)];
+    const fullMatches = {
+      paperMatches: [
+        match("arxiv:2608.00001", "direction.001"),
+        match("arxiv:2608.00002", "direction.001", "direction.002"),
+      ],
+      directionRepresentatives: [
+        { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001", "arxiv:2501.00002"] },
+        { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002"] },
+      ],
+    };
+    const full = planPersonalNoveltyCalls({ papers, representatives }, fullMatches);
+    if (!full.ok) throw new Error("unexpected plan-too-large");
+    const fullEntry = full.value.entries[1]!;
+    if (fullEntry.kind !== "call") throw new Error("expected a call entry");
+    const sliced = planPersonalNoveltyCalls({ papers, representatives }, {
+      paperMatches: [match("arxiv:2608.00002", "direction.001", "direction.002")],
+      directionRepresentatives: fullMatches.directionRepresentatives,
+    });
+    if (!sliced.ok) throw new Error("unexpected plan-too-large");
+    const slicedEntry = sliced.value.entries[0]!;
+    if (slicedEntry.kind !== "call") throw new Error("expected a call entry");
+    // Per-paper failure isolation must never change call identity: the
+    // single-paper slice renders the exact same request bytes as the full plan.
+    expect(JSON.stringify(slicedEntry.request)).toBe(JSON.stringify(fullEntry.request));
+    expect(slicedEntry.request).toEqual(fullEntry.request);
+  });
+
   it("rejects matches referencing unknown papers, directions, or representatives", () => {
     expect(() => planPersonalNoveltyCalls(input(), {
       paperMatches: [match("arxiv:2608.00009", "direction.001")],
@@ -906,5 +938,157 @@ describe("personal novelty generator", () => {
       expect(user).not.toContain(forbidden);
       expect(payload).not.toContain(forbidden);
     }
+  });
+});
+
+describe("personal novelty stage", () => {
+  function stageCheckpointStore(saveNovelty = vi.fn(async () => undefined)) {
+    return {
+      lookupNoveltyReusable: vi.fn(async () => null),
+      saveNovelty,
+    };
+  }
+
+  it("gives typed input-invalid no-novelty only to papers with broken references", async () => {
+    const input = { papers: [dailyPaper(1), dailyPaper(2)], representatives: [representative(1)] };
+    const matches = {
+      paperMatches: [
+        match("arxiv:2608.00001", "direction.001"),
+        match("arxiv:2608.00002", "direction.099"),
+      ],
+      directionRepresentatives: [direction(1, ["arxiv:2501.00001"])],
+    };
+    const warnings = vi.fn();
+    const saveNovelty = vi.fn(async () => undefined);
+    const llm = new AutomaticLlm();
+    const result = await runPersonalNoveltyStage({
+      input, matches, llm,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      reportDate: "2026-08-01",
+      checkpointStore: stageCheckpointStore(saveNovelty),
+      onWarning: warnings,
+    });
+    expect(result.reusedCheckpoint).toBe(false);
+    expect(result.outcomes).toMatchObject([
+      { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "input-invalid" },
+      { paperKey: "arxiv:2608.00001", status: "novelty" },
+    ]);
+    expect(llm.calls).toHaveLength(1);
+    expect(saveNovelty).toHaveBeenCalledTimes(1);
+    // Only the valid paper's terminal outcome is persisted, with exact coverage
+    // of the single planned call paper.
+    expect(saveNovelty.mock.calls[0]![2]).toEqual([
+      expect.objectContaining({ paperKey: "arxiv:2608.00001", status: "novelty" }),
+    ]);
+    expect(warnings).not.toHaveBeenCalled();
+  });
+
+  it("never plans or persists papers whose representatives are unknown", async () => {
+    const input = { papers: [dailyPaper(1), dailyPaper(2)], representatives: [] };
+    const matches = {
+      paperMatches: [
+        match("arxiv:2608.00001", "direction.001"),
+        match("arxiv:2608.00002", "direction.002"),
+      ],
+      directionRepresentatives: [
+        { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
+        { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00001"] },
+      ],
+    };
+    const saveNovelty = vi.fn();
+    const llm = { call: vi.fn() };
+    const result = await runPersonalNoveltyStage({
+      input, matches, llm,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      reportDate: "2026-08-01",
+      checkpointStore: stageCheckpointStore(saveNovelty),
+    });
+    expect(result.outcomes).toEqual([
+      { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "input-invalid" },
+      { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "input-invalid" },
+    ]);
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(saveNovelty).not.toHaveBeenCalled();
+  });
+
+  it("skips the checkpoint save when any paper degrades on transport and logs the error object", async () => {
+    const transport = new Error("provider 500");
+    const warnings: Array<[string, unknown]> = [];
+    const saveNovelty = vi.fn();
+    let calls = 0;
+    const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
+      calls += 1;
+      if (calls === 2) throw transport;
+      const { basis } = decodePayload(messages);
+      return noveltyResponse({ comparisonBasis: [basis[0]!.paperKey] });
+    }) };
+    const result = await runPersonalNoveltyStage({
+      input: { papers: [dailyPaper(1), dailyPaper(2)], representatives: [representative(1)] },
+      matches: {
+        paperMatches: [
+          match("arxiv:2608.00001", "direction.001"),
+          match("arxiv:2608.00002", "direction.001"),
+        ],
+        directionRepresentatives: [direction(1, ["arxiv:2501.00001"])],
+      },
+      llm,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      reportDate: "2026-08-01",
+      checkpointStore: stageCheckpointStore(saveNovelty),
+      onWarning: (message, error) => warnings.push([message, error]),
+    });
+    expect(result.outcomes).toMatchObject([
+      { paperKey: "arxiv:2608.00001", status: "novelty" },
+      { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "transport" },
+    ]);
+    // Degraded papers must never be durably marked no-novelty: no save at all.
+    expect(saveNovelty).not.toHaveBeenCalled();
+    // Fixed-text warning with the raw error object handed to the redacting logger.
+    expect(warnings).toEqual([
+      ["personal novelty call degraded for arxiv:2608.00002 (transport)", transport],
+    ]);
+  });
+
+  it("persists typed validation-exhausted outcomes and reuses them on a complete hit", async () => {
+    const saveNovelty = vi.fn(async () => undefined);
+    const lookupNoveltyReusable = vi.fn(async () => null);
+    const store = { lookupNoveltyReusable, saveNovelty };
+    const llm = { call: vi.fn(async () => "not json") };
+    const input = { papers: [dailyPaper(1)], representatives: [representative(1)] };
+    const matches = {
+      paperMatches: [match("arxiv:2608.00001", "direction.001")],
+      directionRepresentatives: [direction(1, ["arxiv:2501.00001"])],
+    };
+    const first = await runPersonalNoveltyStage({
+      input, matches, llm,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      reportDate: "2026-08-01",
+      checkpointStore: store,
+    });
+    expect(first.outcomes).toEqual([
+      { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "validation-exhausted" },
+    ]);
+    expect(saveNovelty).toHaveBeenCalledTimes(1);
+    expect(saveNovelty.mock.calls[0]![2]).toEqual([
+      { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "validation-exhausted" },
+    ]);
+    // A complete persisted hit (including the typed no-novelty outcome) reuses
+    // the checkpoint without any LLM calls.
+    lookupNoveltyReusable.mockResolvedValue([
+      { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "validation-exhausted" },
+    ]);
+    const second = await runPersonalNoveltyStage({
+      input, matches, llm,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      reportDate: "2026-08-01",
+      checkpointStore: store,
+    });
+    expect(second).toEqual({
+      reusedCheckpoint: true,
+      outcomes: [
+        { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "validation-exhausted" },
+      ],
+    });
+    expect(llm.call).toHaveBeenCalledTimes(3);
   });
 });

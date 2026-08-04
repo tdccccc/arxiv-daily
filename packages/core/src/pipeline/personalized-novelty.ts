@@ -1,7 +1,10 @@
 import type { ChatMessage, CallOptions } from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
-import { throwIfCancelled } from "../services/cancellation";
+import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { buildCheckpointGenerationIdentity } from "../services/daily-summary-checkpoint-store";
 import { paperKeyFromArxivId } from "../services/paper-key";
+import type { LlmSettings } from "../settings/types";
+import { sha256Hex } from "../utils/digest";
 import injectionGuard from "../prompts/injection-guard.en.md";
 import personalNoveltyPromptTemplate from "../prompts/personal-novelty.system.md";
 import { renderPrompt } from "../prompts/render";
@@ -146,7 +149,26 @@ export interface PersonalNovelty {
 
 export type PersonalNoveltyNoNoveltyReason =
   | "plan-too-large"
-  | "validation-exhausted";
+  | "validation-exhausted"
+  | "input-invalid";
+
+/**
+ * Stage-level no-novelty reasons beyond the generator's typed outcomes:
+ * "checkpoint" covers prepared-snapshot, lookup, and save failures; "transport"
+ * and "output-limit" are per-paper LLM failures the stage degrades instead of
+ * propagating; "input-invalid" is a per-paper reference violation (unknown
+ * daily paper, unknown matched direction, or unknown representative) that the
+ * stage excludes from the plan without degrading valid papers.
+ */
+export type PersonalNoveltyStageNoNoveltyReason =
+  | PersonalNoveltyNoNoveltyReason
+  | "checkpoint"
+  | "transport"
+  | "output-limit";
+
+export type PersonalNoveltyStageOutcome =
+  | { paperKey: string; status: "novelty"; novelty: PersonalNovelty }
+  | { paperKey: string; status: "no-novelty"; reason: PersonalNoveltyStageNoNoveltyReason };
 
 export type PersonalNoveltyPaperOutcome =
   | { paperKey: string; status: "novelty"; novelty: PersonalNovelty }
@@ -191,6 +213,53 @@ export type PersonalNoveltyPlanResult =
   | { ok: true; value: PersonalNoveltyCallPlan }
   | { ok: false; reason: "plan-too-large" };
 
+export const NOVELTY_CHECKPOINT_FINGERPRINT_VERSION = 1 as const;
+
+/**
+ * One persisted terminal outcome per planned call paper, keyed by canonical
+ * paperKey: a validated "novelty" result or a typed "no-novelty" outcome
+ * (validation-exhausted for call entries, plan-too-large for plan entries).
+ * The persisted result must cover every planned call paper exactly once;
+ * partial coverage is treated as a miss and never reused.
+ */
+export type NoveltyCheckpointRecord =
+  | { paperKey: string; status: "novelty"; novelty: PersonalNovelty }
+  | { paperKey: string; status: "no-novelty"; reason: "validation-exhausted" | "plan-too-large" };
+
+/**
+ * Branded frozen snapshot of the exact per-paper call plan actually consumed by
+ * live generation calls, the direction identity (matches), the effective
+ * generation identity, and the prompt/result contract versions. The fingerprint
+ * is sha256 of the exact JSON of fingerprintInput; load recomputes and compares
+ * it before any result record is trusted.
+ */
+export interface PreparedNoveltyCheckpoint {
+  readonly fingerprintInput: {
+    fingerprintVersion: typeof NOVELTY_CHECKPOINT_FINGERPRINT_VERSION;
+    promptContractVersion: number;
+    resultContractVersion: number;
+    /** Direction identity: per-paper matched directions and direction representatives. */
+    matches: PersonalNoveltyMatchInput;
+    /** Exact per-paper call plan (messages, options, identity, totals). */
+    plan: PersonalNoveltyCallPlan;
+    generation: ReturnType<typeof buildCheckpointGenerationIdentity>;
+  };
+  readonly fingerprint: string;
+}
+
+/** Checkpoint port methods are distinctly named to avoid overload ambiguity with filter ports. */
+export interface NoveltyCheckpointPort {
+  lookupNoveltyReusable(
+    reportDate: string,
+    prepared: PreparedNoveltyCheckpoint,
+  ): Promise<NoveltyCheckpointRecord[] | null>;
+  saveNovelty(
+    reportDate: string,
+    prepared: PreparedNoveltyCheckpoint,
+    result: PersonalNoveltyStageOutcome[],
+  ): Promise<unknown>;
+}
+
 export interface PersonalNoveltyLlmPort {
   call(messages: ChatMessage[], options?: CallOptions): Promise<string>;
 }
@@ -206,6 +275,8 @@ export interface GeneratePersonalNoveltiesOptions {
 const systemPrompt = renderPrompt(personalNoveltyPromptTemplate, { injectionGuard });
 const USER_PREFIX = "Compare this new paper against its complete representative basis.\n<paper_data>\n";
 const USER_SUFFIX = "\n</paper_data>";
+const preparedNoveltyPlans = new WeakSet<object>();
+const preparedNoveltySnapshots = new WeakSet<object>();
 
 /**
  * Best-effort per-paper novelty evidence contract.
@@ -425,18 +496,17 @@ export function planPersonalNoveltyCalls(
     || aggregateCompletionTokens > PERSONAL_NOVELTY_MAX_AGGREGATE_COMPLETION_TOKENS) {
     return planTooLarge();
   }
-  return {
-    ok: true,
-    value: deepFreeze({
-      entries,
-      totals: {
-        papers: matches.paperMatches.length,
-        calls,
-        aggregatePromptCodeUnits,
-        aggregateCompletionTokens,
-      },
-    }),
-  };
+  const plan = deepFreeze({
+    entries,
+    totals: {
+      papers: matches.paperMatches.length,
+      calls,
+      aggregatePromptCodeUnits,
+      aggregateCompletionTokens,
+    },
+  });
+  preparedNoveltyPlans.add(plan);
+  return { ok: true, value: plan };
 }
 
 export function buildPersonalNoveltyRequest(
@@ -511,6 +581,426 @@ export function decodePersonalNovelty(
   };
 }
 
+/**
+ * Builds a branded frozen checkpoint snapshot from the exact plan produced by
+ * planPersonalNoveltyCalls (the same planned requests live generation consumes)
+ * plus the direction identity, the effective generation identity, and the
+ * prompt/result contract versions.
+ */
+export function prepareNoveltyCheckpoint(input: {
+  plan: PersonalNoveltyCallPlan;
+  matches: PersonalNoveltyMatchInput;
+  llm: LlmSettings;
+  promptContractVersion?: number;
+  resultContractVersion?: number;
+}): PreparedNoveltyCheckpoint {
+  if (!preparedNoveltyPlans.has(input.plan) || !isValidNoveltyPlan(input.plan)) {
+    throw new TypeError("personal novelty plan must be an exact prepared call plan");
+  }
+  const matches = preparePersonalNoveltyMatches(input.matches);
+  const fingerprintInput = {
+    fingerprintVersion: NOVELTY_CHECKPOINT_FINGERPRINT_VERSION,
+    promptContractVersion: input.promptContractVersion ?? PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
+    resultContractVersion: input.resultContractVersion ?? PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
+    matches: clone(matches),
+    plan: clone(input.plan),
+    generation: buildCheckpointGenerationIdentity(input.llm, 0),
+  };
+  const snapshot = {
+    fingerprintInput,
+    fingerprint: fingerprintNoveltyCheckpointInput(fingerprintInput),
+  };
+  deepFreeze(snapshot);
+  preparedNoveltySnapshots.add(snapshot);
+  return snapshot;
+}
+
+export function fingerprintNoveltyCheckpointInput(
+  input: PreparedNoveltyCheckpoint["fingerprintInput"],
+): string {
+  return `sha256:${sha256Hex(JSON.stringify(input))}`;
+}
+
+export function isPreparedNoveltyCheckpoint(
+  value: unknown,
+): value is PreparedNoveltyCheckpoint {
+  return typeof value === "object" && value !== null && preparedNoveltySnapshots.has(value);
+}
+
+/**
+ * Strict decode of a persisted fingerprintInput: exact keys, supported contract
+ * versions, canonical matches, a valid exact call plan, and a valid generation
+ * identity. The caller recomputes the fingerprint over the result.
+ */
+export function decodeNoveltyFingerprintInput(
+  value: unknown,
+): PreparedNoveltyCheckpoint["fingerprintInput"] | null {
+  if (!isExactDataObject(value, [
+    "fingerprintVersion", "promptContractVersion", "resultContractVersion", "matches", "plan",
+    "generation",
+  ]) || value.fingerprintVersion !== NOVELTY_CHECKPOINT_FINGERPRINT_VERSION
+    || value.promptContractVersion !== PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION
+    || value.resultContractVersion !== PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION
+    || !isValidNoveltyPlan(value.plan)
+    || !isCheckpointGenerationIdentity(value.generation)) return null;
+  let matches: PersonalNoveltyMatchInput;
+  try {
+    matches = preparePersonalNoveltyMatches(value.matches);
+  } catch {
+    return null;
+  }
+  return clone({
+    fingerprintVersion: NOVELTY_CHECKPOINT_FINGERPRINT_VERSION,
+    promptContractVersion: PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
+    resultContractVersion: PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
+    matches,
+    plan: value.plan,
+    generation: value.generation,
+  });
+}
+
+/**
+ * Strict structural validation of the exact per-paper call plan: bounded
+ * ordered-unique canonical entries, exact request options, message shapes with
+ * the exact rendered system prompt and user fence, identity consistent with the
+ * entry paperKey and a valid basis, and totals recomputed from the entries.
+ * Exact rendered content identity is additionally guaranteed by the fingerprint
+ * recompute over fingerprintInput at load.
+ */
+export function isValidNoveltyPlan(plan: unknown): plan is PersonalNoveltyCallPlan {
+  if (!isExactDataObject(plan, ["entries", "totals"])
+    || !Array.isArray(plan.entries) || !hasOwnDataArrayEntries(plan.entries)
+    || !isExactDataObject(plan.totals, [
+      "papers", "calls", "aggregatePromptCodeUnits", "aggregateCompletionTokens",
+    ]) || !Object.values(plan.totals).every((entry) => Number.isSafeInteger(entry) && entry >= 0)
+    || plan.entries.length > PERSONAL_NOVELTY_MAX_PAPERS) return false;
+  const seen = new Set<string>();
+  let previousKey = "";
+  let callCount = 0;
+  let aggregatePromptCodeUnits = 0;
+  for (const entry of plan.entries) {
+    if (typeof entry !== "object" || entry === null
+      || (entry as { kind?: unknown }).kind !== "call"
+        && (entry as { kind?: unknown }).kind !== "no-novelty") return false;
+    if (entry.kind === "no-novelty") {
+      if (!isExactDataObject(entry, ["paperKey", "kind", "reason"])
+        || entry.reason !== "plan-too-large") return false;
+    } else if (!isExactDataObject(entry, ["paperKey", "kind", "request"])) {
+      return false;
+    }
+    if (!isCanonicalArxivPaperKey(entry.paperKey) || seen.has(entry.paperKey)
+      || (previousKey !== "" && codeUnitCompare(previousKey, entry.paperKey) >= 0)) return false;
+    seen.add(entry.paperKey);
+    previousKey = entry.paperKey;
+    if (entry.kind === "no-novelty") continue;
+    const request = entry.request;
+    if (!isExactDataObject(request, ["messages", "options", "identity"])
+      || !Array.isArray(request.messages) || !hasOwnDataArrayEntries(request.messages)
+      || request.messages.length !== 2
+      || !request.messages.every((message: unknown) => isExactDataObject(message, ["role", "content"])
+        && (message.role === "system" || message.role === "user") && typeof message.content === "string")
+      || request.messages[0]!.content !== systemPrompt
+      || !request.messages[1]!.content.startsWith(USER_PREFIX)
+      || !request.messages[1]!.content.endsWith(USER_SUFFIX)
+      || !isExactDataObject(request.options, [
+        "temperature", "maxOutputCodeUnits", "maxCompletionTokens",
+      ]) || request.options.temperature !== 0
+      || request.options.maxOutputCodeUnits !== PERSONAL_NOVELTY_MAX_OUTPUT_CODE_UNITS
+      || request.options.maxCompletionTokens !== PERSONAL_NOVELTY_MAX_COMPLETION_TOKENS
+      || !isExactDataObject(request.identity, ["paperKey", "basisPaperKeys"])
+      || request.identity.paperKey !== entry.paperKey
+      || !Array.isArray(request.identity.basisPaperKeys)
+      || !hasOwnDataArrayEntries(request.identity.basisPaperKeys)
+      || request.identity.basisPaperKeys.length < 1
+      || request.identity.basisPaperKeys.length > PERSONAL_NOVELTY_MAX_COMPARISON_BASIS
+      || !request.identity.basisPaperKeys.every(isCanonicalArxivPaperKey)
+      || !isStrictlyOrderedUnique(request.identity.basisPaperKeys)) return false;
+    const promptUnits = request.messages.reduce(
+      (sum: number, message: ChatMessage) => sum + message.content.length, 0,
+    );
+    if (promptUnits + PERSONAL_NOVELTY_MAX_RETRY_GUIDANCE_CODE_UNITS
+      > PERSONAL_NOVELTY_MAX_CALL_CODE_UNITS) return false;
+    callCount += 1;
+    aggregatePromptCodeUnits += promptUnits * PERSONAL_NOVELTY_VALIDATION_ATTEMPTS
+      + PERSONAL_NOVELTY_MAX_RETRY_GUIDANCE_CODE_UNITS * (PERSONAL_NOVELTY_VALIDATION_ATTEMPTS - 1);
+  }
+  return plan.totals.papers === plan.entries.length
+    && plan.totals.calls === callCount
+    && plan.totals.aggregatePromptCodeUnits === aggregatePromptCodeUnits
+    && plan.totals.aggregateCompletionTokens === callCount * PERSONAL_NOVELTY_VALIDATION_ATTEMPTS
+      * PERSONAL_NOVELTY_MAX_COMPLETION_TOKENS;
+}
+
+/**
+ * Strict decode of persisted terminal outcomes: a bounded array (never more
+ * records than planned call entries), exact {paperKey, status, ...} records
+ * ordered unique by canonical paperKey, each paper present in the plan, each
+ * novelty strictly validated against that entry's complete basis, each
+ * no-novelty reason persistable and consistent with the entry kind (a call
+ * entry can only end validation-exhausted; a plan no-novelty entry can only end
+ * plan-too-large), and exact coverage of every planned call paper — partial
+ * coverage is invalid and treated as a miss.
+ */
+export function decodeNoveltyCheckpointRecords(
+  value: unknown,
+  plan: PersonalNoveltyCallPlan,
+): { ok: true; value: NoveltyCheckpointRecord[] } | { ok: false; reason: string } {
+  if (!Array.isArray(value) || !hasOwnDataArrayEntries(value)) {
+    return { ok: false, reason: "result must be an array" };
+  }
+  if (value.length > plan.entries.length) {
+    return { ok: false, reason: "result exceeds the planned call entries" };
+  }
+  const basisByPaperKey = new Map<string, Set<string>>();
+  const expectedKindByKey = new Map<string, "call" | "no-novelty">();
+  for (const entry of plan.entries) {
+    expectedKindByKey.set(entry.paperKey, entry.kind);
+    if (entry.kind === "call") {
+      basisByPaperKey.set(entry.paperKey, new Set(entry.request.identity.basisPaperKeys));
+    }
+  }
+  const records: NoveltyCheckpointRecord[] = [];
+  const seen = new Set<string>();
+  let previousKey = "";
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null
+      || ((raw as { status?: unknown }).status !== "novelty"
+        && (raw as { status?: unknown }).status !== "no-novelty")) {
+      return { ok: false, reason: "novelty record is malformed" };
+    }
+    if (raw.status === "novelty") {
+      if (!isExactDataObject(raw, ["paperKey", "status", "novelty"])) {
+        return { ok: false, reason: "novelty record is malformed" };
+      }
+    } else if (!isExactDataObject(raw, ["paperKey", "status", "reason"])) {
+      return { ok: false, reason: "novelty record is malformed" };
+    }
+    if (!isCanonicalArxivPaperKey(raw.paperKey) || seen.has(raw.paperKey)
+      || (previousKey !== "" && codeUnitCompare(previousKey, raw.paperKey) >= 0)) {
+      return { ok: false, reason: "novelty records must be ordered and unique" };
+    }
+    const expectedKind = expectedKindByKey.get(raw.paperKey);
+    if (!expectedKind) {
+      return { ok: false, reason: "novelty record references an unknown or unplanned paper" };
+    }
+    seen.add(raw.paperKey);
+    previousKey = raw.paperKey;
+    if (raw.status === "novelty") {
+      if (expectedKind !== "call") {
+        return { ok: false, reason: "novelty record does not match the planned entry" };
+      }
+      const decoded = decodePersonalNovelty(
+        JSON.stringify(raw.novelty),
+        basisByPaperKey.get(raw.paperKey)!,
+      );
+      if (!decoded.ok) {
+        return { ok: false, reason: `novelty record is invalid: ${decoded.reason}` };
+      }
+      records.push({ paperKey: raw.paperKey, status: "novelty", novelty: decoded.value });
+    } else {
+      if (raw.reason !== "validation-exhausted" && raw.reason !== "plan-too-large") {
+        return { ok: false, reason: "novelty no-novelty reason is not persistable" };
+      }
+      if (expectedKind === "call" ? raw.reason !== "validation-exhausted"
+        : raw.reason !== "plan-too-large") {
+        return { ok: false, reason: "novelty no-novelty record does not match the planned entry" };
+      }
+      records.push({ paperKey: raw.paperKey, status: "no-novelty", reason: raw.reason });
+    }
+  }
+  if (records.length !== plan.entries.length) {
+    return { ok: false, reason: "result must cover every planned paper" };
+  }
+  return { ok: true, value: records };
+}
+
+/**
+ * Deterministic best-effort pipeline novelty stage.
+ *
+ * Degrade-to-no-novelty semantics (documented decision; novelty is additive
+ * evidence and must never fail, block, or rewrite the reliable daily run):
+ * - Malformed input DTOs (TypeError from the strict prepare contracts) degrade
+ *   the whole stage to no-novelty with a sanitized warning.
+ * - Reference violations are per-paper, never whole-stage: every library-derived
+ *   paper is pre-validated against the supplied daily evidence, matched
+ *   directions, and representative evidence; papers with broken references get
+ *   a typed per-paper no-novelty ("input-invalid") and valid papers continue.
+ * - Whole-run or per-paper plan-too-large yields typed per-paper no-novelty
+ *   before any call.
+ * - Checkpoint prepare/lookup/save failures degrade the whole stage to
+ *   no-novelty with a sanitized warning (the checkpoint is the durable reuse
+ *   record; a run that cannot read or write it behaves as if no novelty was
+ *   produced rather than failing or persisting unrecoverable state).
+ * - Transport and output-limit LLM failures are caught and degrade only the
+ *   affected paper, and when any paper degrades this way the checkpoint save is
+ *   skipped entirely so degraded papers are regenerated on rerun and never
+ *   durably marked no-novelty. Cancellation is never swallowed:
+ *   isCancellationError is rethrown.
+ * - A checkpoint hit is reused only when its persisted records are strictly
+ *   valid and cover every planned call paper; invalid or partial records are
+ *   treated as a miss and regenerate all planned papers.
+ * - Per-paper generation uses single-paper match slices that render exactly the
+ *   same requests as the full plan, so per-paper failure isolation never
+ *   changes call identity.
+ * - Warnings use fixed text and pass the error object to the redacting logger;
+ *   raw error messages are never embedded in warning text.
+ */
+export async function runPersonalNoveltyStage(
+  options: {
+    input: PersonalizedNoveltyInput;
+    matches: PersonalNoveltyMatchInput;
+    llm: PersonalNoveltyLlmPort;
+    llmSettings: LlmSettings;
+    reportDate: string;
+    checkpointStore?: NoveltyCheckpointPort;
+    signal?: AbortSignal;
+    onMetrics?: MetricsObserver;
+    onWarning?: (message: string, error?: unknown) => void;
+  },
+): Promise<{ outcomes: PersonalNoveltyStageOutcome[]; reusedCheckpoint: boolean }> {
+  throwIfCancelled(options.signal);
+  let input: PersonalizedNoveltyInput;
+  let matches: PersonalNoveltyMatchInput;
+  try {
+    input = preparePersonalizedNoveltyInput(options.input);
+    matches = preparePersonalNoveltyMatches(options.matches);
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    throwIfCancelled(options.signal);
+    options.onWarning?.("personal novelty input invalid", error);
+    return { outcomes: [], reusedCheckpoint: false };
+  }
+  if (matches.paperMatches.length === 0) return { outcomes: [], reusedCheckpoint: false };
+
+  // Per-paper reference validation: unknown daily papers, unknown matched
+  // directions, or unknown representatives produce a typed per-paper no-novelty
+  // ("input-invalid") and never join the plan; one broken reference cannot
+  // degrade the valid papers.
+  const partitioned = partitionValidPapers(input, matches);
+  const invalidOutcomes: PersonalNoveltyStageOutcome[] = partitioned.invalid.map(({ paperKey }) => ({
+    paperKey, status: "no-novelty", reason: "input-invalid",
+  }));
+  if (partitioned.valid.length === 0) {
+    return { outcomes: invalidOutcomes, reusedCheckpoint: false };
+  }
+  const validMatches: PersonalNoveltyMatchInput = {
+    paperMatches: partitioned.valid,
+    directionRepresentatives: matches.directionRepresentatives,
+  };
+
+  let planned: PersonalNoveltyCallPlan;
+  try {
+    const result = planPersonalNoveltyCalls(input, validMatches);
+    if (!result.ok) {
+      return {
+        outcomes: [
+          ...invalidOutcomes,
+          ...partitioned.valid.map(({ paperKey }) => ({
+            paperKey, status: "no-novelty" as const, reason: "plan-too-large" as const,
+          })),
+        ],
+        reusedCheckpoint: false,
+      };
+    }
+    planned = result.value;
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    throwIfCancelled(options.signal);
+    options.onWarning?.("personal novelty plan invalid", error);
+    return {
+      outcomes: [
+        ...invalidOutcomes,
+        ...partitioned.valid.map(({ paperKey }) => ({
+          paperKey, status: "no-novelty" as const, reason: "input-invalid" as const,
+        })),
+      ],
+      reusedCheckpoint: false,
+    };
+  }
+
+  let prepared: PreparedNoveltyCheckpoint | undefined;
+  if (options.checkpointStore) {
+    try {
+      prepared = prepareNoveltyCheckpoint({
+        plan: planned, matches: validMatches, llm: options.llmSettings,
+      });
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      throwIfCancelled(options.signal);
+      options.onWarning?.("personal novelty checkpoint prepare failed", error);
+      return { outcomes: checkpointNoNovelty(invalidOutcomes, planned), reusedCheckpoint: false };
+    }
+    let reusable: NoveltyCheckpointRecord[] | null | undefined;
+    try {
+      reusable = await options.checkpointStore.lookupNoveltyReusable(options.reportDate, prepared);
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      throwIfCancelled(options.signal);
+      options.onWarning?.("personal novelty checkpoint lookup failed", error);
+      return { outcomes: checkpointNoNovelty(invalidOutcomes, planned), reusedCheckpoint: false };
+    }
+    throwIfCancelled(options.signal);
+    if (reusable) {
+      const decoded = decodeNoveltyCheckpointRecords(reusable, planned);
+      if (decoded.ok) {
+        return {
+          outcomes: [...invalidOutcomes, ...decoded.value.map(recordAsOutcome)],
+          reusedCheckpoint: true,
+        };
+      }
+      options.onWarning?.(`personal novelty checkpoint result invalid: ${decoded.reason}`);
+      // Invalid (including partial-coverage) persisted records are not trusted;
+      // regenerate every planned paper below.
+    }
+  }
+
+  const plannedOutcomes: PersonalNoveltyStageOutcome[] = [];
+  let degraded = false;
+  for (const entry of planned.entries) {
+    throwIfCancelled(options.signal);
+    if (entry.kind === "no-novelty") {
+      plannedOutcomes.push({
+        paperKey: entry.paperKey, status: "no-novelty", reason: "plan-too-large",
+      });
+      continue;
+    }
+    try {
+      const single = await generatePersonalNovelties({
+        input,
+        matches: singlePaperMatches(validMatches, entry.paperKey),
+        llm: options.llm,
+        signal: options.signal,
+        onMetrics: options.onMetrics,
+      });
+      plannedOutcomes.push(...single);
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      throwIfCancelled(options.signal);
+      const reason = error instanceof PersonalNoveltyOutputLimitError
+        ? "output-limit"
+        : "transport";
+      degraded = true;
+      options.onWarning?.(
+        `personal novelty call degraded for ${entry.paperKey} (${reason})`,
+        error,
+      );
+      plannedOutcomes.push({ paperKey: entry.paperKey, status: "no-novelty", reason });
+    }
+  }
+  if (prepared && options.checkpointStore && !degraded) {
+    try {
+      await options.checkpointStore.saveNovelty(options.reportDate, prepared, plannedOutcomes);
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      throwIfCancelled(options.signal);
+      options.onWarning?.("personal novelty checkpoint save failed", error);
+      return { outcomes: checkpointNoNovelty(invalidOutcomes, planned), reusedCheckpoint: false };
+    }
+  }
+  throwIfCancelled(options.signal);
+  return { outcomes: [...invalidOutcomes, ...plannedOutcomes], reusedCheckpoint: false };
+}
+
 async function callValidatedNovelty(
   entry: Extract<PersonalNoveltyPlanEntry, { kind: "call" }>,
   options: GeneratePersonalNoveltiesOptions,
@@ -545,13 +1035,12 @@ async function callValidatedNovelty(
 }
 
 function emptyPlan(): PersonalNoveltyPlanResult {
-  return {
-    ok: true,
-    value: deepFreeze({
-      entries: [],
-      totals: { papers: 0, calls: 0, aggregatePromptCodeUnits: 0, aggregateCompletionTokens: 0 },
-    }),
-  };
+  const plan = deepFreeze({
+    entries: [],
+    totals: { papers: 0, calls: 0, aggregatePromptCodeUnits: 0, aggregateCompletionTokens: 0 },
+  });
+  preparedNoveltyPlans.add(plan);
+  return { ok: true, value: plan };
 }
 
 function planTooLarge(): PersonalNoveltyPlanResult {
@@ -594,6 +1083,100 @@ function isStrictlyOrderedUnique(value: readonly string[]): boolean {
   return value.every((entry, index) => index === 0 || codeUnitCompare(value[index - 1]!, entry) < 0);
 }
 
+function checkpointNoNovelty(
+  invalidOutcomes: PersonalNoveltyStageOutcome[],
+  planned: PersonalNoveltyCallPlan,
+): PersonalNoveltyStageOutcome[] {
+  return [
+    ...invalidOutcomes,
+    ...planned.entries.map((entry) => ({
+      paperKey: entry.paperKey, status: "no-novelty" as const, reason: "checkpoint" as const,
+    })),
+  ];
+}
+
+function recordAsOutcome(record: NoveltyCheckpointRecord): PersonalNoveltyStageOutcome {
+  return record.status === "novelty"
+    ? { paperKey: record.paperKey, status: "novelty", novelty: record.novelty }
+    : { paperKey: record.paperKey, status: "no-novelty", reason: record.reason };
+}
+
+/**
+ * Per-paper reference validation against the supplied trusted evidence: the
+ * daily paper must exist in input.papers, every matched direction must exist in
+ * matches.directionRepresentatives, and every representative of those
+ * directions must exist in input.representatives. Valid papers keep their
+ * match; invalid papers receive a typed per-paper no-novelty ("input-invalid")
+ * and never join the plan.
+ */
+function partitionValidPapers(
+  input: PersonalizedNoveltyInput,
+  matches: PersonalNoveltyMatchInput,
+): { valid: PersonalNoveltyPaperMatch[]; invalid: PersonalNoveltyPaperMatch[] } {
+  const paperByKey = new Map(input.papers.map((paper) => [paper.paperKey, paper]));
+  const representativeByKey = new Map(
+    input.representatives.map((paper) => [paper.paperKey, paper]),
+  );
+  const representativesByDirection = new Map(
+    matches.directionRepresentatives.map((entry) => [entry.directionId, entry.representativePaperKeys]),
+  );
+  const valid: PersonalNoveltyPaperMatch[] = [];
+  const invalid: PersonalNoveltyPaperMatch[] = [];
+  for (const match of matches.paperMatches) {
+    if (!paperByKey.has(match.paperKey)) {
+      invalid.push(match);
+      continue;
+    }
+    let referencesValid = true;
+    for (const directionId of match.directionIds) {
+      const keys = representativesByDirection.get(directionId);
+      if (!keys) {
+        referencesValid = false;
+        break;
+      }
+      for (const key of keys) {
+        if (!representativeByKey.has(key)) {
+          referencesValid = false;
+          break;
+        }
+      }
+      if (!referencesValid) break;
+    }
+    if (referencesValid) valid.push(match);
+    else invalid.push(match);
+  }
+  return { valid, invalid };
+}
+
+/** Single-paper match slice rendering exactly the same request as the full plan. */
+function singlePaperMatches(
+  matches: PersonalNoveltyMatchInput,
+  paperKey: string,
+): PersonalNoveltyMatchInput {
+  const match = matches.paperMatches.find((entry) => entry.paperKey === paperKey)!;
+  return { paperMatches: [match], directionRepresentatives: matches.directionRepresentatives };
+}
+
+function isCheckpointGenerationIdentity(value: unknown): boolean {
+  if (!isExactDataObject(value, ["provider", "endpointDigest", "model", "mode"])
+    || typeof value.provider !== "string" || typeof value.model !== "string"
+    || typeof value.endpointDigest !== "string"
+    || !/^sha256:[0-9a-f]{64}$/.test(value.endpointDigest)
+    || !isExactDataObject(value.mode, Object.keys(value.mode ?? {}))) return false;
+  if (value.mode.kind === "temperature") {
+    return isExactDataObject(value.mode, ["kind", "temperature"])
+      && typeof value.mode.temperature === "number" && Number.isFinite(value.mode.temperature);
+  }
+  if (value.mode.kind === "anthropic-thinking") {
+    return value.provider === "anthropic"
+      && isExactDataObject(value.mode, ["kind", "budgetTokens"])
+      && Number.isSafeInteger(value.mode.budgetTokens) && value.mode.budgetTokens > 0;
+  }
+  return value.mode.kind === "reasoning-thinking" && value.provider !== "anthropic"
+    && isExactDataObject(value.mode, ["kind", "reasoningEffort"])
+    && typeof value.mode.reasoningEffort === "string";
+}
+
 function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -610,6 +1193,10 @@ function isExactDataObject(value: unknown, keys: readonly string[]): value is Re
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return Boolean(descriptor && "value" in descriptor);
   });
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function deepFreeze<T>(value: T): T {

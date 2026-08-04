@@ -93,6 +93,7 @@ export type ProgressStage =
   | "fetch-recent"
   | "enrich-abstract"
   | "filter"
+  | "personal-novelty"
   | "fetch-content"
   | "summarize-daily"
   | "summarize-detail"

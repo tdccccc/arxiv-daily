@@ -32,6 +32,14 @@ import type {
   PersonalizedFilterCheckpointPort,
 } from "./personalized-paper-filter";
 import {
+  runPersonalNoveltyStage,
+  type NoveltyCheckpointPort,
+  type PersonalNoveltyMatchInput,
+  type PersonalNoveltyStageOutcome,
+  type PersonalizedNoveltyInput,
+} from "./personalized-novelty";
+import { paperKeyFromArxivId } from "../services/paper-key";
+import {
   summarizeDaily,
   summarizePaperDetail,
   type DailyPaperWithContent,
@@ -88,6 +96,7 @@ export interface DailySummaryCheckpointLifecyclePort
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
     PersonalizedFilterCheckpointPort,
+    NoveltyCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
 export interface DailyGenerationCheckpointStores {
@@ -115,6 +124,17 @@ export interface PipelineDeps {
   personalizedDiscovery?: PersonalizedDiscoveryInput;
   /** Host lifecycle cancellation for a run that captured personalized discovery. */
   personalizedDiscoverySignal?: AbortSignal;
+  /**
+   * Immutable host-authorized novelty input (daily paper evidence + complete
+   * representative evidence). When absent the novelty stage is skipped entirely
+   * and manual-only behavior stays byte-compatible.
+   */
+  personalizedNoveltyInput?: PersonalizedNoveltyInput;
+  /**
+   * Direction→representative mapping for novelty. Per-paper matched directions
+   * are derived from the validated discovery provenance of filtered papers.
+   */
+  personalizedNoveltyMatches?: PersonalNoveltyMatchInput;
   progress?: ProgressReporter;
   summarizeDaily?: typeof summarizeDaily;
   /**
@@ -247,6 +267,71 @@ export class ArxivPipeline {
         papersWritten: 0,
         digest: this.buildZeroDigest(dateStr),
       };
+    }
+
+    // 5b. Best-effort personal novelty for library-derived papers only. The
+    // per-paper matched-direction mapping is derived from the validated
+    // discovery provenance of filtered papers; direction→representatives come
+    // from the host's novelty matches. Novelty is additive evidence that must
+    // never fail, block, or rewrite the reliable daily run: every failure class
+    // degrades to no-novelty inside the stage and PipelineResult semantics stay
+    // unchanged.
+    const noveltyInput = this.deps.personalizedNoveltyInput;
+    const noveltyMatchInput = this.deps.personalizedNoveltyMatches;
+    if (noveltyInput && noveltyMatchInput) {
+      const libraryDerived = filtered.filter(
+        (paper) => (paper.discoveryProvenance?.directions.length ?? 0) > 0,
+      );
+      if (libraryDerived.length > 0) {
+        stageStart("personal-novelty");
+        this.progress.setStage("personal-novelty");
+        try {
+          const paperMatches = libraryDerived
+            .map((paper) => ({
+              paperKey: paperKeyFromArxivId(paper.id),
+              directionIds: paper.discoveryProvenance!.directions.map(({ id }) => id),
+            }))
+            .sort((left, right) =>
+              left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
+            );
+          const stage = await runPersonalNoveltyStage({
+            input: noveltyInput,
+            matches: {
+              paperMatches,
+              directionRepresentatives: noveltyMatchInput.directionRepresentatives,
+            },
+            llm: this.deps.llm,
+            llmSettings: this.deps.llmSettings,
+            reportDate: dateStr,
+            checkpointStore: this.deps.checkpointStores?.filter,
+            signal,
+            onMetrics: (metrics) => runMetrics.record(metrics),
+            onWarning: (message, error) => {
+              this.deps.logger.warn(
+                `pipeline: personal novelty degraded: ${message}`,
+                error,
+              );
+            },
+          });
+          const noveltyByKey = new Map(
+            stage.outcomes
+              .filter(
+                (outcome): outcome is Extract<PersonalNoveltyStageOutcome, { status: "novelty" }> =>
+                  outcome.status === "novelty",
+              )
+              .map((outcome) => [outcome.paperKey, outcome.novelty]),
+          );
+          if (noveltyByKey.size > 0) {
+            filtered = filtered.map((paper) => {
+              const novelty = noveltyByKey.get(paperKeyFromArxivId(paper.id));
+              return novelty ? { ...paper, personalNovelty: novelty } : paper;
+            });
+          }
+        } finally {
+          stageEnd("personal-novelty");
+        }
+        throwIfCancelled(signal);
+      }
     }
 
     throwIfCancelled(signal);
