@@ -367,6 +367,19 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "review-personal-library-directions",
+    name: "Review personal library directions",
+    callback: () => {
+      try {
+        plugin.openPersonalLibraryDirectionReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open personal library direction review", error);
+        notice("arXiv Daily: direction review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
     id: "show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),

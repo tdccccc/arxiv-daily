@@ -53,6 +53,7 @@ function makePlugin() {
       commands.push(command);
     }),
     addRibbonIcon: vi.fn(() => ({ addClass: vi.fn() })),
+    openPersonalLibraryDirectionReview: vi.fn(),
   };
 }
 
@@ -91,6 +92,42 @@ describe("registerCommands", () => {
         name: "Show run history",
       }),
     );
+  });
+
+  it("registers and routes personal library direction review through the shared plugin entry", () => {
+    const plugin = makePlugin();
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "review-personal-library-directions");
+
+    expect(command?.name).toBe("Review personal library directions");
+    command?.callback?.();
+    expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce();
+    expect(plugin.addCommand).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: expect.stringMatching(/generate.*library/i) }),
+    );
+  });
+
+  it("contains synchronous direction review open failures without exposing details", () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    const hostile = new Error("/Users/alice/private/profile.json sha256:deadbeef");
+    plugin.openPersonalLibraryDirectionReview.mockImplementation(() => { throw hostile; });
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "review-personal-library-directions");
+
+    expect(() => command?.callback?.()).not.toThrow();
+    expect(plugin.logger.error).toHaveBeenCalledWith(
+      "commands: failed to open personal library direction review",
+      hostile,
+    );
+    expect(Notice.calls.at(-1)?.message).toBe(
+      "arXiv Daily: direction review could not be opened. Try again.",
+    );
+    expect(Notice.calls.at(-1)?.message).not.toContain("/Users/alice");
   });
 
   it("logs and notices rejected ribbon dashboard opens", async () => {

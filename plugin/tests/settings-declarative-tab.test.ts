@@ -90,6 +90,7 @@ function makeTab() {
     scanPersonalLibrary: vi.fn().mockResolvedValue({}),
     reloadPersonalLibraryCatalog: vi.fn().mockResolvedValue({}),
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    openPersonalLibraryDirectionReview: vi.fn(),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   return { tab, plugin, settings, saveSettings };
@@ -237,13 +238,16 @@ describe("personal library settings row", () => {
     const pending = renderLibraryButtons(tab).buttons;
     expect(pending.map((button) => button.text)).toEqual([
       "Change folder",
+      "Review directions",
       "Preview",
       "Scan library",
       "Reload catalog",
       "Review & authorize",
     ]);
-    expect(pending[4]?.cta).toBe(true);
-    pending[4]?.click?.();
+    pending[1]?.click?.();
+    expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce();
+    expect(pending[5]?.cta).toBe(true);
+    pending[5]?.click?.();
     expect(runAction).toHaveBeenCalledWith(
       "authorize personal library",
       expect.any(Function),
@@ -257,12 +261,13 @@ describe("personal library settings row", () => {
     const authorized = renderLibraryButtons(tab).buttons;
     expect(authorized.map((button) => button.text)).toEqual([
       "Change folder",
+      "Review directions",
       "Preview",
       "Scan library",
       "Reload catalog",
       "Revoke",
     ]);
-    expect(authorized[4]?.warning).toBe(true);
+    expect(authorized[5]?.warning).toBe(true);
   });
 });
 

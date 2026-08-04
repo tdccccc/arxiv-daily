@@ -1580,3 +1580,109 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   color: var(--text-on-accent);
   border-color: var(--interactive-accent);
 }
+
+
+/* Personal library direction review */
+.arxiv-daily-interest-review {
+  width: min(60rem, 92vw);
+}
+
+.arxiv-daily-interest-review__disclosure,
+.arxiv-daily-interest-review__hint,
+.arxiv-daily-interest-review__diagnostic {
+  color: var(--text-muted);
+}
+
+.arxiv-daily-interest-review__toolbar,
+.arxiv-daily-interest-review__section-actions,
+.arxiv-daily-interest-review__card-heading,
+.arxiv-daily-interest-review__card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__toolbar {
+  justify-content: space-between;
+  margin-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__tabs {
+  display: flex;
+  gap: var(--size-4-1);
+}
+
+.arxiv-daily-interest-review__tab[aria-selected="true"] {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.arxiv-daily-interest-review__error,
+.arxiv-daily-interest-review__document-error {
+  margin-block: var(--size-4-2);
+  padding: var(--size-4-2);
+  border: 1px solid var(--color-red);
+  border-radius: var(--radius-s);
+  color: var(--text-error);
+  white-space: pre-wrap;
+}
+
+.arxiv-daily-interest-review__card {
+  margin-block: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.arxiv-daily-interest-review__card-heading strong {
+  flex: 1 1 14rem;
+}
+
+.arxiv-daily-interest-review__status {
+  padding: 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  text-transform: capitalize;
+}
+
+.arxiv-daily-interest-review__form {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr);
+  gap: var(--size-4-3);
+  margin-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  min-width: 0;
+}
+
+.arxiv-daily-interest-review__field input,
+.arxiv-daily-interest-review__field textarea,
+.arxiv-daily-interest-review__field select {
+  width: 100%;
+}
+
+.arxiv-daily-interest-review__evidence,
+.arxiv-daily-interest-review__diagnostics {
+  margin-block: var(--size-4-2);
+}
+
+@media (max-width: 700px) {
+  .arxiv-daily-interest-review {
+    width: auto;
+  }
+
+  .arxiv-daily-interest-review__form {
+    grid-template-columns: 1fr;
+  }
+
+  .arxiv-daily-interest-review__toolbar,
+  .arxiv-daily-interest-review__section-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

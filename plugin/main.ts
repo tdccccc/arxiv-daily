@@ -49,6 +49,10 @@ import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
 import { chooseModal } from "./src/services/modal";
+import {
+  openPersonalLibraryInterestProfileModal,
+  type InterestProfileReviewController,
+} from "./src/library/interest-profile-modal";
 import { LlmClient } from "@arxiv-daily/core";
 import { ArxivFetcher } from "@arxiv-daily/core";
 import { AtomMetadataCache, HtmlCache } from "@arxiv-daily/core";
@@ -104,7 +108,7 @@ interface PersistedData {
 }
 
 export interface PersonalLibraryReviewLoadError {
-  kind: "proposal" | "profile";
+  kind: "catalog" | "proposal" | "profile";
   code: string;
   message: string;
 }
@@ -115,6 +119,7 @@ export interface PersonalLibraryProfileSnapshot {
   profile: PersonalLibraryInterestProfile | null;
   eligibility: PersonalLibraryInterestEligibility;
   authorization: LibraryConnectionStatus;
+  catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
   profileLoadError: PersonalLibraryReviewLoadError | null;
 }
@@ -164,6 +169,7 @@ export default class ArxivDailyPlugin extends Plugin {
     = openObsidianLibrarySource;
   private libraryInventoryController?: AbortController;
   private libraryCatalog: PersonalLibraryCatalog | null = null;
+  private libraryCatalogLoadError: PersonalLibraryReviewLoadError | null = null;
   private libraryMutationQueue: Promise<void> = Promise.resolve();
   private librarySelectionRevision = 0;
   private libraryConnectionRevision = 0;
@@ -200,6 +206,7 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.libraryConnection) {
       await this.reloadPersonalLibraryCatalog().catch((error) => {
         this.libraryCatalog = null;
+        this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
         this.logger.error("personal library catalog load failed", error);
         new Notice(`arXiv Daily: personal library catalog could not be loaded: ${error instanceof Error ? error.message : String(error)}`, 10_000);
       });
@@ -495,10 +502,39 @@ export default class ArxivDailyPlugin extends Plugin {
       : null;
   }
 
+  openPersonalLibraryDirectionReview(): void {
+    openPersonalLibraryInterestProfileModal(this.app, this.personalLibraryReviewController());
+  }
+
+  private personalLibraryReviewController(): InterestProfileReviewController {
+    return {
+      snapshot: () => this.getPersonalLibraryProfileSnapshot(),
+      reload: async () => {
+        await this.reloadPersonalLibraryCatalog().catch((error) => {
+          this.libraryCatalog = null;
+          this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
+          this.logger.error("personal library catalog reload failed", error);
+        });
+        return this.reloadPersonalLibraryProfileDocuments();
+      },
+      generate: () => this.generatePersonalLibraryDirections(),
+      updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
+      mergeProposals: (input) => this.mergePersonalLibraryProposalCandidates(input),
+      discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
+      confirmProposal: (input) => this.confirmPersonalLibraryProposalCandidate(input),
+      updateConfirmed: (input) => this.updatePersonalLibraryConfirmedDirection(input),
+      mergeConfirmed: (input) => this.mergePersonalLibraryConfirmedDirections(input),
+      enable: (directionId) => this.enablePersonalLibraryConfirmedDirection(directionId),
+      disable: (directionId) => this.disablePersonalLibraryConfirmedDirection(directionId),
+      remove: (input) => this.removePersonalLibraryConfirmedDirection(input),
+    };
+  }
+
   async reloadPersonalLibraryCatalog(): Promise<PersonalLibraryCatalog | null> {
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryCatalog = null;
+      this.libraryCatalogLoadError = null;
       return null;
     }
     const revision = this.libraryConnectionRevision;
@@ -509,6 +545,7 @@ export default class ArxivDailyPlugin extends Plugin {
     );
     this.assertLibraryConnectionCurrent(connection, revision);
     this.libraryCatalog = catalog;
+    this.libraryCatalogLoadError = null;
     return structuredClone(catalog);
   }
 
@@ -519,6 +556,7 @@ export default class ArxivDailyPlugin extends Plugin {
       profile: this.libraryProfile,
       eligibility: evaluatePersonalLibraryInterestEligibility(this.libraryProfile, this.libraryCatalog),
       authorization: this.getLibraryConnectionStatus(),
+      catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
       profileLoadError: this.libraryProfileLoadError,
     });
@@ -1162,6 +1200,7 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private resetPersonalLibraryProfileState(): void {
     this.libraryCatalog = null;
+    this.libraryCatalogLoadError = null;
     this.libraryProposal = null;
     this.libraryProfile = null;
     this.libraryProposalLoadError = null;
@@ -1169,14 +1208,16 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private safeProfileLoadError(
-    kind: "proposal" | "profile",
+    kind: "catalog" | "proposal" | "profile",
     error: unknown,
   ): PersonalLibraryReviewLoadError {
     const code = typeof error === "object" && error !== null && "code" in error
       && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code
       : "load-failed";
-    const label = kind === "proposal" ? "direction proposal" : "confirmed profile";
+    const label = kind === "catalog"
+      ? "catalog"
+      : kind === "proposal" ? "direction proposal" : "confirmed profile";
     return { kind, code, message: `Personal library ${label} could not be loaded (${code}).` };
   }
 

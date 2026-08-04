@@ -333,6 +333,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (status.kind !== "disconnected") {
       setting.addButton((button) =>
         button
+          .setButtonText("Review directions")
+          .onClick(() => this.plugin.openPersonalLibraryDirectionReview()),
+      );
+      setting.addButton((button) =>
+        button
           .setButtonText("Preview")
           .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
       );
