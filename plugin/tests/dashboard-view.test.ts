@@ -6,6 +6,7 @@ import {
   applyStarButtonState,
   collectIndexedDetailSummaryRefs,
   dashboardHistoryPathSet,
+  dashboardOccurrenceProvenanceLines,
   deferDashboardAction,
   executeObsidianCommand,
   expectedDetailSummaryPath,
@@ -388,6 +389,113 @@ describe("HubModal tabs", () => {
     expect(pluginStyles).toContain(".arxiv-daily-hub-modal__content");
     expect(pluginStyles).toContain("min-height: 0");
     expect(pluginStyles).toContain("max-height: min(82vh, 740px)");
+  });
+});
+
+describe("dashboard occurrence provenance", () => {
+  it("formats manual, library, and both-source metadata with every direction and representative", () => {
+    const row = {
+      entry: indexedPaper("2606.10001"),
+      arxivId: "2606.10001",
+      title: "New paper",
+      authors: "A. Author",
+      topic: "rag",
+      firstSeen: "2026-06-10",
+      hasDetailSummary: false,
+      occurrenceProvenance: {
+        reportPath: "arxiv-daily/daily/2026-06-10.md",
+        reportDate: "2026-06-10",
+        source: "both" as const,
+        manualTopics: [{ tag: "rag", name: "RAG" }],
+        directions: [{
+          id: "direction-1",
+          name: "Reliable retrieval",
+          representatives: [{
+            paperKey: "arxiv:2501.00001",
+            title: "Prior one",
+            evidenceDepth: "metadata-and-abstract" as const,
+          }],
+        }, {
+          id: "direction-2",
+          name: "Evaluation",
+          representatives: [{
+            paperKey: "arxiv:2501.00002",
+            title: "Prior two",
+            evidenceDepth: "metadata-and-abstract" as const,
+          }],
+        }],
+        evidenceDepth: "metadata-and-abstract" as const,
+      },
+    };
+
+    expect(dashboardOccurrenceProvenanceLines(row)).toEqual([
+      "Discovery source: Manual + library",
+      "Manual topics: RAG (rag)",
+      "Library directions: Reliable retrieval: Prior one (arxiv:2501.00001); Evaluation: Prior two (arxiv:2501.00002)",
+      "Evidence depth: metadata and abstract",
+    ]);
+    expect(dashboardOccurrenceProvenanceLines({
+      ...row,
+      occurrenceProvenance: {
+        ...row.occurrenceProvenance,
+        source: "manual",
+        directions: [],
+        evidenceDepth: undefined,
+      },
+    })).toEqual(["Discovery source: Manual", "Manual topics: RAG (rag)"]);
+    expect(dashboardOccurrenceProvenanceLines({
+      ...row,
+      occurrenceProvenance: {
+        ...row.occurrenceProvenance,
+        source: "library",
+        manualTopics: [],
+      },
+    })[0]).toBe("Discovery source: Library");
+  });
+
+  it("keeps hostile metadata literal and renders provenance independently from search reasons", () => {
+    const lines = dashboardOccurrenceProvenanceLines({
+      entry: indexedPaper("2606.10002"),
+      arxivId: "2606.10002",
+      title: "Hostile paper",
+      authors: "A. Author",
+      topic: "hostile",
+      firstSeen: "2026-06-10",
+      hasDetailSummary: false,
+      matchReasons: [{ field: "title", text: "title matched hostile" }],
+      occurrenceProvenance: {
+        reportPath: "arxiv-daily/daily/2026-06-10.md",
+        reportDate: "2026-06-10",
+        source: "library",
+        manualTopics: [],
+        directions: [{
+          id: "hostile",
+          name: "<img src=x onerror=alert(1)> **direction**",
+          representatives: [{
+            paperKey: "arxiv:2501.00001",
+            title: "[prior](javascript:alert(1)) <script>bad()</script>",
+            evidenceDepth: "metadata-and-abstract",
+          }],
+        }],
+        evidenceDepth: "metadata-and-abstract",
+      },
+    });
+
+    expect(lines.join("\n")).toContain("<img src=x onerror=alert(1)> **direction**");
+    expect(lines.join("\n")).toContain("[prior](javascript:alert(1)) <script>bad()</script>");
+    expect(lines.join("\n")).not.toContain("title matched hostile");
+    expect(dashboardViewSource).toContain("dashboardOccurrenceProvenanceLines(row)");
+    expect(dashboardViewSource).toContain('text: line');
+    expect(dashboardViewSource).not.toContain("attr: { title: line }");
+    expect(dashboardViewSource).toContain("this.isActiveRelevanceSearch() && row.matchReasons?.length");
+    const provenanceStyles = pluginStyles.match(
+      /\.arxiv-daily-dashboard__provenance\s*\{[\s\S]*?\}/,
+    )?.[0];
+    expect(provenanceStyles).toBeDefined();
+    expect(provenanceStyles).toContain("overflow-wrap: anywhere");
+    expect(provenanceStyles).toContain("white-space: normal");
+    expect(provenanceStyles).not.toContain("text-overflow: ellipsis");
+    expect(provenanceStyles).not.toContain("overflow: hidden");
   });
 });
 

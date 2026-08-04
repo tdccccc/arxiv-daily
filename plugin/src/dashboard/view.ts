@@ -113,6 +113,29 @@ export {
 } from "./calendar";
 export type { CalendarRunWhitelistInput } from "./calendar";
 export type { DashboardPage, DailyReportDay } from "./types";
+
+export function dashboardOccurrenceProvenanceLines(row: DashboardRow): string[] {
+  const provenance = row.occurrenceProvenance;
+  if (!provenance) return [];
+  const source = provenance.source === "both"
+    ? "Manual + library"
+    : provenance.source === "manual" ? "Manual" : "Library";
+  const lines = [`Discovery source: ${source}`];
+  if (provenance.manualTopics.length > 0) {
+    lines.push(`Manual topics: ${provenance.manualTopics.map(({ tag, name }) =>
+      name && name !== tag ? `${name} (${tag})` : tag
+    ).join(", ")}`);
+  }
+  if (provenance.directions.length > 0) {
+    lines.push(`Library directions: ${provenance.directions.map((direction) =>
+      `${direction.name}: ${direction.representatives.map((representative) =>
+        `${representative.title} (${representative.paperKey})`
+      ).join(", ")}`
+    ).join("; ")}`);
+    lines.push("Evidence depth: metadata and abstract");
+  }
+  return lines;
+}
 export {
   collectIndexedDetailSummaryRefs,
   expectedDetailSummaryPath,
@@ -470,6 +493,7 @@ class ArxivDailyDashboardView extends ItemView {
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
       searchIndex: this.searchIndex,
+      topics: this.plugin.settings.arxiv.topics,
     });
     this.renderToolbar(contentEl, result);
     this.renderRecentDatesNotice(contentEl);
@@ -509,6 +533,7 @@ class ArxivDailyDashboardView extends ItemView {
       queryDashboard(this.entries, this.query, {
         detailSummaryIds: this.detailSummaryIds,
         searchIndex: this.searchIndex,
+        topics: this.plugin.settings.arxiv.topics,
       });
     this.statsEl.empty();
     this.batchEl.empty();
@@ -1444,6 +1469,12 @@ class ArxivDailyDashboardView extends ItemView {
         cls: "arxiv-daily-dashboard__meta",
         text: `${row.arxivId} · ${row.authors || "Unknown authors"}`,
       });
+      for (const line of dashboardOccurrenceProvenanceLines(row)) {
+        titleCell.createDiv({
+          cls: "arxiv-daily-dashboard__provenance",
+          text: line,
+        });
+      }
       if (this.isActiveRelevanceSearch() && row.matchReasons?.length) {
         titleCell.createDiv({
           cls: "arxiv-daily-dashboard__match-reason",
@@ -1510,6 +1541,7 @@ class ArxivDailyDashboardView extends ItemView {
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
       searchIndex: this.searchIndex,
+      topics: this.plugin.settings.arxiv.topics,
     });
     const page = paginateDashboardRows(
       result.rows,

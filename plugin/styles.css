@@ -1271,6 +1271,15 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   color: var(--text-faint);
 }
 
+.arxiv-daily-dashboard__provenance {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .arxiv-daily-dashboard__match-reason {
   margin-top: 4px;
   overflow: hidden;

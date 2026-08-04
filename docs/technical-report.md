@@ -208,7 +208,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 
 ### Dashboard 与命令
 
-- Dashboard（`plugin/src/dashboard/view.ts`）：`PaperIndexStore`、run-state、vault 文件同步（`syncDashboardHistory` / `queryDashboard`）；日历、检索、分页、状态操作；运行入口同样走 `scheduler.runForDateNow` / force 等路径。  
+- Dashboard（`plugin/src/dashboard/view.ts`）：`PaperIndexStore`、run-state、vault 文件同步（`syncDashboardHistory` / `queryDashboard`）；日历、检索、分页、状态操作；运行入口同样走 `scheduler.runForDateNow` / force 等路径。`queryDashboard` 从已提交日报对应的 occurrence provenance 中按 report date 与规范化路径确定性选择最新一条，独立投影 manual/library/both、manual topic、direction、代表论文与 `metadata-and-abstract` depth；视图在标题下完整换行、纯文本展示，不依赖搜索状态，也不与 query-time `matchReasons` 混用。
 - 命令（`plugin/src/commands.ts`）：今日运行、回看 pending、重试失败、指定日/强制日、清 run-state、手动 arXiv id 摘要、诊断等；运行前 `validateFilterConfig` / `validateLlmConfig`。
 
 ## Data and State

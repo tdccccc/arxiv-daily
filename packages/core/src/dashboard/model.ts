@@ -4,6 +4,11 @@ import type {
   PaperStatus,
   PaperSummary,
 } from "../services/paper-index";
+import type {
+  DiscoveryDirectionProvenance,
+  PersonalizedDiscoveryRepresentative,
+} from "../pipeline/personalized-paper-filter";
+import type { Topic } from "../settings/types";
 import {
   PaperSearchIndex,
   type PaperSearchReason,
@@ -36,6 +41,28 @@ export interface DashboardQuery {
   };
 }
 
+export interface DashboardDiscoveryRepresentative {
+  paperKey: string;
+  title: string;
+  evidenceDepth: PersonalizedDiscoveryRepresentative["evidenceDepth"];
+}
+
+export interface DashboardDiscoveryDirection {
+  id: string;
+  name: string;
+  representatives: DashboardDiscoveryRepresentative[];
+}
+
+/** Durable metadata from the latest applicable committed report occurrence. */
+export interface DashboardOccurrenceProvenance {
+  reportPath: string;
+  reportDate: string;
+  source: "manual" | "library" | "both";
+  manualTopics: Array<{ tag: string; name?: string }>;
+  directions: DashboardDiscoveryDirection[];
+  evidenceDepth?: PersonalizedDiscoveryRepresentative["evidenceDepth"];
+}
+
 export interface DashboardRow {
   entry: PaperIndexEntry;
   arxivId: string;
@@ -44,6 +71,7 @@ export interface DashboardRow {
   topic: string;
   firstSeen: string;
   hasDetailSummary: boolean;
+  occurrenceProvenance?: DashboardOccurrenceProvenance;
   relevanceScore?: number;
   matchReasons?: PaperSearchReason[];
 }
@@ -67,6 +95,7 @@ export interface DashboardQueryOptions {
   now?: Date;
   detailSummaryIds?: ReadonlySet<string>;
   searchIndex?: PaperSearchIndex | null;
+  topics?: readonly Pick<Topic, "tag" | "name">[];
 }
 
 export type DashboardAction =
@@ -269,6 +298,7 @@ function toDashboardRow(
     topic: displayTopic(entry),
     firstSeen: firstSeenDate(entry),
     hasDetailSummary: hasDetailSummary(entry, opts),
+    ...projectDashboardOccurrenceProvenance(entry, opts.topics),
     ...(searchResult
       ? { relevanceScore: searchResult.score, matchReasons: searchResult.reasons }
       : {}),
@@ -280,6 +310,78 @@ function hasDetailSummary(
   opts: DashboardQueryOptions,
 ): boolean {
   return Boolean(opts.detailSummaryIds?.has(entry.arxivId));
+}
+
+/**
+ * Selects the latest provenance-bearing committed occurrence by the ISO date in
+ * its daily-report filename, then by normalized report path as a deterministic
+ * repeated-report tie-breaker. Legacy entries and reports without provenance
+ * intentionally project no Dashboard metadata.
+ */
+export function projectDashboardOccurrenceProvenance(
+  entry: Pick<PaperIndexEntry, "dailyReports" | "discoveryProvenanceByReport">,
+  topics: readonly Pick<Topic, "tag" | "name">[] = [],
+): Partial<Pick<DashboardRow, "occurrenceProvenance">> {
+  const committedReports = new Set((entry.dailyReports ?? []).map(normalizeReportPath));
+  const candidates = Object.entries(entry.discoveryProvenanceByReport ?? {})
+    .map(([rawReportPath, provenance]) => ({
+      reportPath: normalizeReportPath(rawReportPath),
+      reportDate: dailyReportDate(rawReportPath),
+      provenance,
+    }))
+    .filter((candidate) =>
+      candidate.reportDate && committedReports.has(candidate.reportPath)
+    )
+    .sort((a, b) =>
+      b.reportDate!.localeCompare(a.reportDate!) ||
+      b.reportPath.localeCompare(a.reportPath)
+    );
+  const selected = candidates[0];
+  if (!selected?.reportDate) return {};
+
+  const topicNames = new Map(topics.map((topic) => [topic.tag, topic.name]));
+  const manualTopics = selected.provenance.manualTopicTags.map((tag) => ({
+    tag,
+    ...(topicNames.get(tag) ? { name: topicNames.get(tag) } : {}),
+  }));
+  const directions = selected.provenance.directions.map(projectDirection);
+  const hasManual = manualTopics.length > 0;
+  const hasLibrary = directions.length > 0;
+  if (!hasManual && !hasLibrary) return {};
+
+  return {
+    occurrenceProvenance: {
+      reportPath: selected.reportPath,
+      reportDate: selected.reportDate,
+      source: hasManual && hasLibrary ? "both" : hasManual ? "manual" : "library",
+      manualTopics,
+      directions,
+      ...(hasLibrary ? { evidenceDepth: "metadata-and-abstract" as const } : {}),
+    },
+  };
+}
+
+function projectDirection(
+  direction: DiscoveryDirectionProvenance,
+): DashboardDiscoveryDirection {
+  return {
+    id: direction.id,
+    name: direction.name,
+    representatives: direction.representatives.map((representative) => ({
+      paperKey: representative.paperKey,
+      title: representative.title,
+      evidenceDepth: representative.evidenceDepth,
+    })),
+  };
+}
+
+function normalizeReportPath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\.\//, "");
+}
+
+function dailyReportDate(path: string): string | null {
+  const filename = normalizeReportPath(path).split("/").pop() ?? "";
+  return /^(\d{4}-\d{2}-\d{2})\.md$/.exec(filename)?.[1] ?? null;
 }
 
 function sortRows(
