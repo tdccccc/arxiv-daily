@@ -151,19 +151,58 @@ describe("personal library profile lifecycle", () => {
       }],
     }] });
     expect(Object.isFrozen(deps.personalizedDiscovery)).toBe(true);
-    const serialized = JSON.stringify(deps.personalizedDiscovery);
-    expect(serialized).not.toContain("/private/library");
-    expect(serialized).not.toContain("papers/2608.00001.pdf");
-    expect(serialized).not.toContain("Evidence");
-    expect(serialized).not.toContain("sha256:");
-    expect(serialized).not.toContain("secret");
-    expect(serialized).not.toContain("authorization");
+    expect(deps.personalizedNoveltyRepresentatives).toEqual({
+      representatives: [{
+        paperKey: "arxiv:2608.00001",
+        title: "Reliable agents",
+        authors: ["Ada"],
+        abstract: "Evidence",
+        published: "2026-08-01T00:00:00.000Z",
+        categories: ["cs.AI"],
+      }],
+    });
+    expect(Object.isFrozen(deps.personalizedNoveltyRepresentatives)).toBe(true);
+    expect(deps.personalizedNoveltyMatches).toEqual({
+      paperMatches: [],
+      directionRepresentatives: [{
+        directionId: "direction-confirmed",
+        representativePaperKeys: ["arxiv:2608.00001"],
+      }],
+    });
+    expect(Object.isFrozen(deps.personalizedNoveltyMatches)).toBe(true);
+    expect(deps.personalizedDiscoverySignal).toBeDefined();
+
+    const discoverySerialized = JSON.stringify(deps.personalizedDiscovery);
+    // Discovery stays title-only; abstracts never enter the discovery payload.
+    expect(discoverySerialized).not.toContain("Evidence");
+    const noveltySerialized = JSON.stringify({
+      representatives: deps.personalizedNoveltyRepresentatives,
+      matches: deps.personalizedNoveltyMatches,
+    });
+    // Representative abstracts are metadata-and-abstract consent evidence for
+    // the authorized endpoint; paths/PDF/fingerprints/auth/credentials never
+    // appear in either payload.
+    expect(noveltySerialized).toContain("Evidence");
+    for (const serialized of [discoverySerialized, noveltySerialized]) {
+      expect(serialized).not.toContain("/private/library");
+      expect(serialized).not.toContain("papers/2608.00001.pdf");
+      expect(serialized).not.toContain("sha256:");
+      expect(serialized).not.toContain("secret");
+      expect(serialized).not.toContain("authorization");
+    }
 
     internals.libraryProfile.directions[0].name = "Mutated later";
     internals.libraryCatalog.papers["arxiv:2608.00001"].title = "Mutated later";
+    internals.libraryCatalog.papers["arxiv:2608.00001"].abstract = "Mutated later abstract";
     plugin.settings.arxiv.topics.push({ tag: "later", description: "later" });
     expect(deps.personalizedDiscovery.directions[0].name).toBe("Confirmed reliable agents");
     expect(deps.personalizedDiscovery.directions[0].representatives[0].title).toBe("Reliable agents");
+    expect(deps.personalizedNoveltyRepresentatives.representatives[0].title).toBe("Reliable agents");
+    expect(deps.personalizedNoveltyRepresentatives.representatives[0].abstract).toBe("Evidence");
+    expect(deps.personalizedNoveltyMatches.directionRepresentatives[0]).toEqual({
+      directionId: "direction-confirmed",
+      representativePaperKeys: ["arxiv:2608.00001"],
+    });
     expect(deps.arxiv.topics).toEqual([]);
   });
 
@@ -181,7 +220,96 @@ describe("personal library profile lifecycle", () => {
     internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
     internals.buildPaperIndex = vi.fn(() => ({}));
     internals.host.markupParser = {};
-    expect(internals.buildPipeline().deps.personalizedDiscovery).toBeUndefined();
+    const deps = internals.buildPipeline().deps;
+    expect(deps.personalizedDiscovery).toBeUndefined();
+    expect(deps.personalizedNoveltyRepresentatives).toBeUndefined();
+    expect(deps.personalizedNoveltyMatches).toBeUndefined();
+    expect(deps.personalizedDiscoverySignal).toBeUndefined();
+  });
+
+  it("yields all three personalized deps for a normal eligible profile", () => {
+    const { internals, catalog } = fixture();
+    internals.libraryProfile = confirmedProfile(catalog);
+    internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
+    internals.buildPaperIndex = vi.fn(() => ({}));
+    internals.host.markupParser = {};
+    const deps = internals.buildPipeline().deps;
+    expect(deps.personalizedDiscovery).toBeDefined();
+    expect(deps.personalizedNoveltyRepresentatives).toBeDefined();
+    expect(deps.personalizedNoveltyMatches).toBeDefined();
+    expect(deps.personalizedDiscoverySignal).toBeDefined();
+  });
+
+  it("caps pathological representative evidence to strict novelty DTO bounds without dropping discovery", () => {
+    const { plugin, internals, catalog } = fixture();
+    const paper = catalog.papers["arxiv:2608.00001"]!;
+    paper.authors = Array.from({ length: 17 }, (_, index) => `Author ${index}`);
+    paper.abstract = `  ${"x".repeat(6_100)}  `;
+    // The profile fingerprint is derived from the current catalog record, so
+    // the mutated paper remains eligible.
+    internals.libraryProfile = confirmedProfile(catalog);
+    internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
+    internals.buildPaperIndex = vi.fn(() => ({}));
+    internals.host.markupParser = {};
+
+    const deps = internals.buildPipeline().deps;
+    // Discovery is untouched by the pathological representative evidence.
+    expect(deps.personalizedDiscovery).toEqual({ directions: [{
+      id: "direction-confirmed",
+      name: "Confirmed reliable agents",
+      description: "Researcher-reviewed reliable agent methods.",
+      discoveryCues: ["agent evaluation"],
+      representatives: [{
+        paperKey: "arxiv:2608.00001",
+        title: "Reliable agents",
+        evidenceDepth: "metadata-and-abstract",
+      }],
+    }] });
+    // The join-boundary display caps bring the evidence inside the strict DTO:
+    // authors sliced to the cap, abstract trimmed and sliced to the cap.
+    expect(deps.personalizedNoveltyRepresentatives.representatives).toEqual([{
+      paperKey: "arxiv:2608.00001",
+      title: "Reliable agents",
+      authors: Array.from({ length: 16 }, (_, index) => `Author ${index}`),
+      abstract: "x".repeat(6_000),
+      published: "2026-08-01T00:00:00.000Z",
+      categories: ["cs.AI"],
+    }]);
+    expect(deps.personalizedNoveltyMatches).toEqual({
+      paperMatches: [],
+      directionRepresentatives: [{
+        directionId: "direction-confirmed",
+        representativePaperKeys: ["arxiv:2608.00001"],
+      }],
+    });
+  });
+
+  it("keeps personalized discovery when novelty evidence cannot fit the strict DTO", () => {
+    const { plugin, internals, catalog } = fixture();
+    const paper = catalog.papers["arxiv:2608.00001"]!;
+    // A single author name beyond the per-author 120-code-unit bound is not
+    // covered by the join-boundary caps, so the strict novelty prepare rejects
+    // the representative evidence while discovery still prepares.
+    paper.authors = ["A".repeat(121)];
+    internals.libraryProfile = confirmedProfile(catalog);
+    const warn = vi.mocked(internals.logger.warn);
+    internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
+    internals.buildPaperIndex = vi.fn(() => ({}));
+    internals.host.markupParser = {};
+
+    const deps = internals.buildPipeline().deps;
+    expect(deps.personalizedDiscovery).toBeDefined();
+    expect(deps.personalizedNoveltyRepresentatives).toBeUndefined();
+    expect(deps.personalizedNoveltyMatches).toBeUndefined();
+    expect(deps.personalizedDiscoverySignal).toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      "personal novelty snapshot invalid; continuing with discovery-only",
+      expect.any(Error),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      "personal library discovery snapshot invalid; using manual-only",
+      expect.anything(),
+    );
   });
 
   it("rebuilds fresh snapshots at the shared daily convergence seam", () => {
@@ -192,9 +320,97 @@ describe("personal library profile lifecycle", () => {
     internals.host.markupParser = {};
     const first = internals.buildPipeline();
     internals.libraryProfile.directions[0].name = "Fresh confirmed name";
+    internals.libraryProfile.directions[0].id = "direction-renamed";
     const second = internals.buildPipeline();
     expect(first.deps.personalizedDiscovery.directions[0].name).toBe("Confirmed reliable agents");
     expect(second.deps.personalizedDiscovery.directions[0].name).toBe("Fresh confirmed name");
+    expect(first.deps.personalizedNoveltyMatches.directionRepresentatives).toEqual([{
+      directionId: "direction-confirmed",
+      representativePaperKeys: ["arxiv:2608.00001"],
+    }]);
+    expect(second.deps.personalizedNoveltyMatches.directionRepresentatives).toEqual([{
+      directionId: "direction-renamed",
+      representativePaperKeys: ["arxiv:2608.00001"],
+    }]);
+  });
+
+  it("joins novelty representatives and direction mappings from the same eligible directions with dedup and canonical order", () => {
+    const { plugin, internals, catalog } = fixture();
+    catalog.papers["arxiv:2608.00002"] = {
+      ...structuredClone(catalog.papers["arxiv:2608.00001"]),
+      paperKey: "arxiv:2608.00002", externalId: "2608.00002",
+      title: "Second agent paper", authors: ["Bob"], abstract: "Second evidence",
+      published: "2026-07-01T00:00:00.000Z", categories: ["cs.LG", "cs.AI"],
+      filePaths: ["papers/2608.00002.pdf"],
+    };
+    catalog.files["papers/2608.00002.pdf"] = {
+      path: "papers/2608.00002.pdf", status: "ready",
+      observationFingerprint: `sha256:${"e".repeat(64)}`,
+      paperKey: "arxiv:2608.00002", arxivId: "2608.00002",
+      updatedAt: "2026-08-03T00:00:00.000Z",
+    };
+    const first = catalog.papers["arxiv:2608.00001"]!;
+    const second = catalog.papers["arxiv:2608.00002"]!;
+    const profile = confirmedProfile(catalog);
+    profile.directions.unshift({
+      id: "direction-alpha",
+      status: "active",
+      name: "Alpha direction",
+      description: "Second confirmed direction.",
+      discoveryCues: ["alpha evidence"],
+      representatives: [
+        { paperKey: first.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(first) },
+        { paperKey: second.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(second) },
+      ],
+      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint([
+        { paperKey: first.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(first) },
+        { paperKey: second.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(second) },
+      ]),
+      lineage: { proposalIds: ["proposal.2"], candidateIds: ["candidate.2"], directionIds: [] },
+      createdAt: "2026-08-03T01:00:00.000Z",
+      updatedAt: "2026-08-03T01:00:00.000Z",
+    });
+    internals.libraryProfile = profile;
+    internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
+    internals.buildPaperIndex = vi.fn(() => ({}));
+    internals.host.markupParser = {};
+
+    const deps = internals.buildPipeline().deps;
+    // Shared representative arxiv:2608.00001 appears once: deduplicated union.
+    expect(deps.personalizedNoveltyRepresentatives.representatives.map(({ paperKey }) => paperKey))
+      .toEqual(["arxiv:2608.00001", "arxiv:2608.00002"]);
+    expect(deps.personalizedNoveltyRepresentatives.representatives[1]).toEqual({
+      paperKey: "arxiv:2608.00002",
+      title: "Second agent paper",
+      authors: ["Bob"],
+      abstract: "Second evidence",
+      published: "2026-07-01T00:00:00.000Z",
+      categories: ["cs.LG", "cs.AI"],
+    });
+    expect(deps.personalizedNoveltyMatches.directionRepresentatives).toEqual([
+      { directionId: "direction-alpha", representativePaperKeys: ["arxiv:2608.00001", "arxiv:2608.00002"] },
+      { directionId: "direction-confirmed", representativePaperKeys: ["arxiv:2608.00001"] },
+    ]);
+    const serialized = JSON.stringify(deps.personalizedNoveltyRepresentatives)
+      + JSON.stringify(deps.personalizedNoveltyMatches);
+    expect(serialized).not.toContain("papers/2608.00002.pdf");
+    expect(serialized).not.toContain("sha256:");
+    expect(serialized).not.toContain("/private/library");
+    expect(serialized).not.toContain("secret");
+    // Unrelated catalog records never join the representative evidence.
+    expect(serialized).not.toContain("2608.99999");
+  });
+
+  it("never passes personalized discovery or novelty deps to manual single-paper fetch", () => {
+    const { internals } = fixture();
+    internals.buildSharedDeps = vi.fn(() => ({ llm: {}, fetcher: {}, paperFetcher: {}, writer: {} }));
+    internals.buildPaperIndex = vi.fn(() => ({}));
+    internals.host.markupParser = {};
+    const service = internals.buildManualFetch();
+    const deps = (service as any).deps;
+    expect(deps.personalizedDiscovery).toBeUndefined();
+    expect(deps.personalizedNoveltyRepresentatives).toBeUndefined();
+    expect(deps.personalizedNoveltyMatches).toBeUndefined();
   });
 
   it("does not reopen authorization across a newer queued root or output transition", async () => {
@@ -306,6 +522,8 @@ describe("personal library profile lifecycle", () => {
     internals.buildPaperIndex = vi.fn(() => ({}));
     internals.host.markupParser = {};
     const pipeline = internals.buildPipeline();
+    expect(pipeline.deps.personalizedNoveltyRepresentatives).toBeDefined();
+    expect(pipeline.deps.personalizedNoveltyMatches).toBeDefined();
     const mutation = mutate(plugin);
     expect(pipeline.deps.personalizedDiscoverySignal.aborted).toBe(true);
     await mutation;
@@ -361,6 +579,11 @@ describe("personal library profile lifecycle", () => {
     internals.buildPaperIndex = vi.fn(() => ({}));
     internals.host.markupParser = {};
     const pipeline = internals.buildPipeline();
+    // The captured novelty evidence rides the same authorized discovery
+    // snapshot and the same abort signal; revocation must abort it before any
+    // novelty call can run.
+    expect(pipeline.deps.personalizedNoveltyRepresentatives).toBeDefined();
+    expect(pipeline.deps.personalizedNoveltyMatches).toBeDefined();
     const scan = plugin.operations.begin("personal-library-scan", "scan");
     const review = plugin.operations.begin("personal-library-direction-generation", "review");
     const detail = plugin.operations.begin("detail-summary", "detail");

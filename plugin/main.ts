@@ -6,6 +6,9 @@ import type {
   PersonalLibraryInterestEligibility,
   PersonalLibraryInterestProfile,
   PersonalizedDiscoveryInput,
+  PersonalNoveltyMatchInput,
+  PersonalizedNoveltyRepresentativesInput,
+  NoveltyRepresentativePaper,
   PersonalLibraryReviewedDirectionDraft,
   PersonalLibraryDirectionTextPatch,
   PipelineResult,
@@ -38,6 +41,11 @@ import {
   mergePersonalLibraryDirectionCandidates,
   proposePersonalLibraryDirections,
   preparePersonalizedDiscoveryInput,
+  preparePersonalizedNoveltyRepresentatives,
+  preparePersonalNoveltyMatches,
+  PERSONAL_NOVELTY_MAX_AUTHORS,
+  PERSONAL_NOVELTY_MAX_CATEGORIES,
+  PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS,
   removePersonalLibraryConfirmedDirection,
   removePersonalLibraryDirectionCandidate,
   selectPersonalLibraryDirectionPapers,
@@ -124,6 +132,22 @@ export interface PersonalLibraryProfileSnapshot {
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
   profileLoadError: PersonalLibraryReviewLoadError | null;
+}
+
+/**
+ * One immutable daily discovery snapshot captured from the currently
+ * authorized eligibility join: the personalized discovery input plus, when
+ * novelty preparation succeeds, the library-derived novelty representative
+ * evidence and the direction→representative mapping. Discovery and novelty
+ * share the same gate and lifecycle guards; per-run daily paper evidence for
+ * novelty is derived inside the pipeline from the fetched source papers, never
+ * here. A novelty-preparation failure degrades to a discovery-only snapshot
+ * and never drops personalized discovery.
+ */
+interface PersonalizedDailyDiscoverySnapshot {
+  personalizedDiscovery: PersonalizedDiscoveryInput;
+  personalizedNoveltyRepresentatives?: PersonalizedNoveltyRepresentativesInput;
+  personalizedNoveltyMatches?: PersonalNoveltyMatchInput;
 }
 
 let lastCacheCleanupDate: string | null = null;
@@ -1385,7 +1409,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.personalizedDailyRunControllers?.delete(pipeline);
   }
 
-  private buildPersonalizedDailyDiscoverySnapshot(): PersonalizedDiscoveryInput | undefined {
+  private buildPersonalizedDailyDiscoverySnapshot(): PersonalizedDailyDiscoverySnapshot | undefined {
     if (this.personalizedDailyDiscoveryAvailable === false
       || this.libraryCatalogLoadError
       || this.libraryProfileLoadError
@@ -1400,8 +1424,11 @@ export default class ArxivDailyPlugin extends Plugin {
       || eligibility.eligibleDirections.length === 0) {
       return undefined;
     }
+    // Discovery is prepared first, exactly as before: a discovery-preparation
+    // failure still degrades to manual-only with the original warning.
+    let personalizedDiscovery: PersonalizedDiscoveryInput;
     try {
-      return preparePersonalizedDiscoveryInput({
+      personalizedDiscovery = preparePersonalizedDiscoveryInput({
         directions: eligibility.eligibleDirections.map((direction) => ({
           id: direction.id,
           name: direction.name,
@@ -1421,6 +1448,65 @@ export default class ArxivDailyPlugin extends Plugin {
     } catch (error) {
       this.logger.warn("personal library discovery snapshot invalid; using manual-only", error);
       return undefined;
+    }
+    // Novelty representative evidence and the direction→representative mapping
+    // derive from the same eligibility join, but novelty preparation is
+    // decoupled from the discovery gate: a failure degrades to a
+    // discovery-only snapshot with a fixed-text warning and never drops
+    // personalized discovery. Evidence is metadata and abstracts within the
+    // authorized processing depth: no paths, PDF bytes, fingerprints,
+    // authorization state, credentials, or unrelated catalog records ever
+    // enter the snapshot.
+    try {
+      const representativeByKey = new Map<string, NoveltyRepresentativePaper>();
+      for (const direction of eligibility.eligibleDirections) {
+        for (const representative of direction.representatives) {
+          if (representativeByKey.has(representative.paperKey)) continue;
+          const paper = catalog.papers[representative.paperKey];
+          if (!paper) throw new Error("eligible representative is missing from catalog");
+          // Display-metadata/evidence caps at the join boundary: titles and
+          // abstracts are trimmed, and authors/categories/abstract are sliced
+          // to the strict DTO bounds. Basis membership is the set of
+          // representative paperKeys carried by matches.directionRepresentatives
+          // — these caps bound only the rendered metadata/abstract evidence
+          // and never truncate the comparison basis.
+          representativeByKey.set(representative.paperKey, {
+            paperKey: representative.paperKey,
+            title: paper.title.trim(),
+            authors: paper.authors.slice(0, PERSONAL_NOVELTY_MAX_AUTHORS),
+            abstract: paper.abstract.trim().slice(0, PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS),
+            published: paper.published,
+            categories: paper.categories.slice(0, PERSONAL_NOVELTY_MAX_CATEGORIES),
+          });
+        }
+      }
+      const representatives = [...representativeByKey.values()]
+        .sort((left, right) =>
+          left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
+        );
+      const directionRepresentatives = eligibility.eligibleDirections
+        .map((direction) => ({
+          directionId: direction.id,
+          representativePaperKeys: direction.representatives
+            .map(({ paperKey }) => paperKey)
+            .sort((left, right) => left < right ? -1 : left > right ? 1 : 0),
+        }))
+        .sort((left, right) =>
+          left.directionId < right.directionId ? -1 : left.directionId > right.directionId ? 1 : 0,
+        );
+      return {
+        personalizedDiscovery,
+        personalizedNoveltyRepresentatives: preparePersonalizedNoveltyRepresentatives({
+          representatives,
+        }),
+        personalizedNoveltyMatches: preparePersonalNoveltyMatches({
+          paperMatches: [],
+          directionRepresentatives,
+        }),
+      };
+    } catch (error) {
+      this.logger.warn("personal novelty snapshot invalid; continuing with discovery-only", error);
+      return { personalizedDiscovery };
     }
   }
 
@@ -1544,7 +1630,8 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildPipeline(): ArxivPipeline {
     const settings = structuredClone(this.settings);
-    const personalizedDiscovery = this.buildPersonalizedDailyDiscoverySnapshot();
+    const personalizedSnapshot = this.buildPersonalizedDailyDiscoverySnapshot();
+    const personalizedDiscovery = personalizedSnapshot?.personalizedDiscovery;
     const personalizedController = personalizedDiscovery ? new AbortController() : undefined;
     const { llm, fetcher, paperFetcher, writer } = this.buildSharedDeps(settings);
     const checkpointStoreOptions = {
@@ -1578,6 +1665,8 @@ export default class ArxivDailyPlugin extends Plugin {
       detailSelection: settings.detailSelection,
       personalizedDiscovery,
       personalizedDiscoverySignal: personalizedController?.signal,
+      personalizedNoveltyRepresentatives: personalizedSnapshot?.personalizedNoveltyRepresentatives,
+      personalizedNoveltyMatches: personalizedSnapshot?.personalizedNoveltyMatches,
       progress: this.progress,
     });
     if (personalizedController) {

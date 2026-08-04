@@ -23,6 +23,7 @@ import {
   planPersonalNoveltyCalls,
   preparePersonalNoveltyMatches,
   preparePersonalizedNoveltyInput,
+  preparePersonalizedNoveltyRepresentatives,
   runPersonalNoveltyStage,
   type NoveltyDailyPaper,
   type NoveltyRepresentativePaper,
@@ -261,6 +262,45 @@ describe("personalized novelty trusted input", () => {
       paperMatches: [{ ...match("arxiv:2608.00001", "direction.001"), extra: true }],
       directionRepresentatives: [],
     })).toThrow(/malformed/);
+  });
+
+  it("prepares the representatives-only host input with the same strict bounds and immutability", () => {
+    const prepared = preparePersonalizedNoveltyRepresentatives({
+      representatives: [representative(1), representative(2)],
+    });
+    expect(prepared).toEqual({
+      representatives: [representative(1), representative(2)],
+    });
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(prepared.representatives[0])).toBe(true);
+    expect(Object.isFrozen(prepared.representatives[1].authors)).toBe(true);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [representative(2), representative(1)],
+    })).toThrow(/sorted/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [representative(1), representative(1)],
+    })).toThrow(/sorted/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [{ ...representative(1), abstract: "x".repeat(6_001) }],
+    })).toThrow(/malformed/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [{ ...representative(1), authors: [] }],
+    })).toThrow(/malformed/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [{ ...representative(1), categories: [] }],
+    })).toThrow(/malformed/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [{ ...representative(1), published: "x".repeat(33) }],
+    })).toThrow(/malformed/);
+    // Exact key set: no papers half, no extra keys, no empty-object shape games.
+    expect(() => preparePersonalizedNoveltyRepresentatives({
+      representatives: [], papers: [],
+    })).toThrow(/exact bounded/);
+    expect(() => preparePersonalizedNoveltyRepresentatives({})).toThrow(/exact bounded/);
+    // Empty representative lists are valid (no eligible directions never reach
+    // this prepare; the snapshot gate already rejected them).
+    expect(preparePersonalizedNoveltyRepresentatives({ representatives: [] }))
+      .toEqual({ representatives: [] });
   });
 });
 

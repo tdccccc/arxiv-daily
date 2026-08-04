@@ -24,7 +24,7 @@ import {
   PERSONAL_NOVELTY_MAX_OUTPUT_CODE_UNITS,
   type NoveltyCheckpointRecord,
   type PersonalNoveltyMatchInput,
-  type PersonalizedNoveltyInput,
+  type PersonalizedNoveltyRepresentativesInput,
 } from "../../src/pipeline/personalized-novelty";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -112,13 +112,8 @@ const discoveryOne: PersonalizedDiscoveryInput = {
   }],
 };
 
-function noveltyInput(paperKeys: string[]): PersonalizedNoveltyInput {
+function noveltyRepresentativesInput(): PersonalizedNoveltyRepresentativesInput {
   return {
-    papers: paperKeys.map((paperKey) => ({
-      paperKey,
-      title: `New paper ${paperKey}`,
-      abstract: `Abstract ${paperKey}`,
-    })),
     representatives: [{
       paperKey: "arxiv:2501.00001",
       title: "Prior paper one",
@@ -144,7 +139,7 @@ interface NoveltyHarnessOptions {
   keptIds?: string[];
   matchedIds?: string[];
   discovery?: PersonalizedDiscoveryInput;
-  input?: PersonalizedNoveltyInput;
+  input?: PersonalizedNoveltyRepresentativesInput;
   matches?: PersonalNoveltyMatchInput;
   onNovelty?: (messages: ChatMessage[], callNumber: number) => string;
   filterStores?: Record<string, unknown>;
@@ -265,8 +260,8 @@ function makePipeline(options: NoveltyHarnessOptions = {}) {
     llmSettings: options.llmSettings ?? DEFAULT_SETTINGS.llm,
     detailSelection: testDetailSelection,
     personalizedDiscovery: options.discovery ?? discoveryOne,
-    personalizedNoveltyInput: options.input
-      ?? noveltyInput(keptIds.map((id) => `arxiv:${id}`).sort()),
+    personalizedNoveltyRepresentatives: options.input
+      ?? noveltyRepresentativesInput(),
     personalizedNoveltyMatches: options.matches ?? noveltyMatches(),
     summarizeDaily: summarizeDaily as any,
   });
@@ -305,6 +300,105 @@ describe("pipeline personal novelty stage", () => {
     });
     expect(byId["2605.08068"].personalNovelty).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain("personalNovelty");
+  });
+
+  it("derives strict daily paper evidence from this run's fetched source papers, not the host snapshot", async () => {
+    const ids = firstBucketIds();
+    const payloads: Array<{ paper: unknown; basis: unknown }> = [];
+    const { pipeline, capturedPapers, noveltyCalls } = makePipeline({
+      matchedIds: [ids[0]!, ids[1]!],
+      onNovelty: (messages) => {
+        const fence = /<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(messages[1]?.content ?? "");
+        payloads.push(JSON.parse(fence?.[1] ?? "{}"));
+        return noveltyResponse();
+      },
+    });
+    expect(await pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    expect(noveltyCalls()).toBe(2);
+    // Canonical sorted paperKeys: the derived daily evidence is the fetched
+    // source title/abstract (enriched Atom abstract), never host-supplied
+    // placeholders.
+    expect(payloads.map((payload) => (payload.paper as any).paperKey)).toEqual([
+      "arxiv:2605.08068", "arxiv:2605.08080",
+    ]);
+    expect(payloads[1]!.paper).toEqual({
+      paperKey: "arxiv:2605.08080",
+      title: "CMB Limits on the Absorption of Light Vector and Axial-Vector Dark Matter",
+      abstract: "atom abstract",
+    });
+    expect(payloads[0]!.paper).toMatchObject({ paperKey: "arxiv:2605.08068" });
+    // The complete representative evidence (metadata and abstract) renders into
+    // the endpoint call payload alongside the derived paper.
+    expect(payloads[0]!.basis).toEqual([{
+      paperKey: "arxiv:2501.00001",
+      title: "Prior paper one",
+      authors: ["Author One"],
+      abstract: "Prior abstract one",
+      published: "2026-08-01T00:00:00.000Z",
+      categories: ["cs.AI"],
+    }]);
+    expect(capturedPapers).toHaveLength(2);
+  });
+
+  it("degrades only an empty-evidence fetched paper to input-invalid and keeps the valid paper's novelty", async () => {
+    const ids = firstBucketIds();
+    const saveNovelty = vi.fn(async () => undefined);
+    const lookupNoveltyReusable = vi.fn(async () => null);
+    const harness = makePipeline({
+      keptIds: [ids[0]!, ids[1]!],
+      matchedIds: [ids[0]!, ids[1]!],
+      filterStores: { lookupNoveltyReusable, saveNovelty },
+    });
+    // ids[0] gets no Atom metadata, so its fetched abstract stays empty while
+    // ids[1] is enriched normally: the empty-evidence paper is excluded from
+    // the derived input and must degrade per-paper, never the whole stage.
+    (harness.pipeline as any).deps.fetcher.fetchMetadataByIds.mockImplementation(
+      async (requested: string[]) =>
+        new Map(requested.filter((id) => id === ids[1]).map((id) => [id, atomMeta(id)])),
+    );
+    expect(await harness.pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    expect(harness.noveltyCalls()).toBe(1);
+    expect(saveNovelty).toHaveBeenCalledTimes(1);
+    // Only the planned valid paper is persisted; the empty-evidence paper is a
+    // typed per-paper input-invalid outcome that never joins the plan.
+    expect(saveNovelty.mock.calls[0]![2]).toEqual([expect.objectContaining({
+      paperKey: "arxiv:2605.08068",
+      status: "novelty",
+    })]);
+    const byId = Object.fromEntries(harness.capturedPapers.map((paper) => [paper.id, paper]));
+    expect(byId["2605.08068"].personalNovelty).toBeDefined();
+    expect(byId["2605.08080"].personalNovelty).toBeUndefined();
+  });
+
+  it("rejects a stored checkpoint hit when the derived daily paper evidence changes between runs", async () => {
+    let savedFingerprint: string | undefined;
+    const saveNovelty = vi.fn(async (_date: string, prepared: { fingerprint: string }) => {
+      savedFingerprint = prepared.fingerprint;
+    });
+    const lookupNoveltyReusable = vi.fn(async (_date: string, prepared: { fingerprint: string }) => {
+      return savedFingerprint !== undefined && prepared.fingerprint === savedFingerprint
+        ? [record("arxiv:2605.08080")]
+        : null;
+    });
+    const first = makePipeline({ filterStores: { lookupNoveltyReusable, saveNovelty } });
+    expect(await first.pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    expect(first.noveltyCalls()).toBe(1);
+    expect(savedFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const second = makePipeline({ filterStores: { lookupNoveltyReusable, saveNovelty } });
+    (second.pipeline as any).deps.fetcher.fetchMetadataByIds.mockImplementation(
+      async (requested: string[]) =>
+        new Map(requested.map((id) => [id, { ...atomMeta(id), abstract: "changed abstract" }])),
+    );
+    expect(await second.pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    // The changed fetched abstract renders different derived daily paper
+    // evidence, so the recomputed checkpoint fingerprint no longer matches the
+    // stored one: the hit is rejected and the paper is regenerated instead of
+    // reusing stale evidence.
+    expect(second.noveltyCalls()).toBe(1);
+    expect(saveNovelty).toHaveBeenCalledTimes(2);
+    expect(lookupNoveltyReusable.mock.calls[1]![1].fingerprint)
+      .not.toBe(lookupNoveltyReusable.mock.calls[0]![1].fingerprint);
   });
 
   it("persists generated outcomes through the novelty checkpoint port", async () => {
@@ -514,10 +608,7 @@ describe("pipeline personal novelty stage", () => {
       })),
     );
     const ids = firstBucketIds();
-    const input: PersonalizedNoveltyInput = {
-      papers: [{ paperKey: `arxiv:${ids[0]!}`, title: "New paper", abstract: "Abstract" }],
-      representatives,
-    };
+    const input: PersonalizedNoveltyRepresentativesInput = { representatives };
     const matches: PersonalNoveltyMatchInput = {
       paperMatches: [],
       directionRepresentatives: directions,
@@ -620,7 +711,7 @@ describe("pipeline personal novelty stage", () => {
     const { pipeline, writer, capturedPapers, noveltyCalls } = makePipeline({
       keptIds: [ids[0]!],
     });
-    (pipeline as any).deps.personalizedNoveltyInput = undefined;
+    (pipeline as any).deps.personalizedNoveltyRepresentatives = undefined;
     (pipeline as any).deps.personalizedNoveltyMatches = undefined;
     (pipeline as any).deps.checkpointStores.filter.lookupNoveltyReusable = lookupNoveltyReusable;
     expect(await pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });

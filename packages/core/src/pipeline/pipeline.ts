@@ -34,10 +34,14 @@ import type {
 import {
   runPersonalNoveltyStage,
   attachPersonalNoveltyBasis,
+  PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS,
+  PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS,
   type NoveltyCheckpointPort,
+  type NoveltyDailyPaper,
   type PersonalNoveltyMatchInput,
   type PersonalNoveltyStageOutcome,
   type PersonalizedNoveltyInput,
+  type PersonalizedNoveltyRepresentativesInput,
 } from "./personalized-novelty";
 import { paperKeyFromArxivId } from "../services/paper-key";
 import {
@@ -127,11 +131,14 @@ export interface PipelineDeps {
   /** Host lifecycle cancellation for a run that captured personalized discovery. */
   personalizedDiscoverySignal?: AbortSignal;
   /**
-   * Immutable host-authorized novelty input (daily paper evidence + complete
-   * representative evidence). When absent the novelty stage is skipped entirely
-   * and manual-only behavior stays byte-compatible.
+   * Immutable host-authorized novelty representative evidence (library-derived
+   * catalog metadata and abstracts). Daily paper evidence is per-run fetch
+   * output, so the host snapshot supplies representatives only and the
+   * pipeline joins the run's papers into the full novelty input. When absent
+   * the novelty stage is skipped entirely and manual-only behavior stays
+   * byte-compatible.
    */
-  personalizedNoveltyInput?: PersonalizedNoveltyInput;
+  personalizedNoveltyRepresentatives?: PersonalizedNoveltyRepresentativesInput;
   /**
    * Direction→representative mapping for novelty. Per-paper matched directions
    * are derived from the validated discovery provenance of filtered papers.
@@ -274,13 +281,16 @@ export class ArxivPipeline {
     // 5b. Best-effort personal novelty for library-derived papers only. The
     // per-paper matched-direction mapping is derived from the validated
     // discovery provenance of filtered papers; direction→representatives come
-    // from the host's novelty matches. Novelty is additive evidence that must
-    // never fail, block, or rewrite the reliable daily run: every failure class
-    // degrades to no-novelty inside the stage and PipelineResult semantics stay
-    // unchanged.
-    const noveltyInput = this.deps.personalizedNoveltyInput;
+    // from the host's novelty matches. Strict daily paper evidence (paperKey,
+    // title, abstract) is derived here from this run's fetched source papers —
+    // the host snapshot has no knowledge of the per-run fetch — and joined
+    // with the host's library-derived representative evidence into the full
+    // novelty input. Novelty is additive evidence that must never fail, block,
+    // or rewrite the reliable daily run: every failure class degrades to
+    // no-novelty inside the stage and PipelineResult semantics stay unchanged.
+    const noveltyRepresentatives = this.deps.personalizedNoveltyRepresentatives;
     const noveltyMatchInput = this.deps.personalizedNoveltyMatches;
-    if (noveltyInput && noveltyMatchInput) {
+    if (noveltyRepresentatives && noveltyMatchInput) {
       const libraryDerived = filtered.filter(
         (paper) => (paper.discoveryProvenance?.directions.length ?? 0) > 0,
       );
@@ -296,8 +306,37 @@ export class ArxivPipeline {
             .sort((left, right) =>
               left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
             );
+          const sourceByKey = new Map(
+            sourcePapers.map((paper) => [paper.paperKey, paper]),
+          );
+          const papers: NoveltyDailyPaper[] = [];
+          for (const match of paperMatches) {
+            const source = sourceByKey.get(match.paperKey);
+            if (!source) continue;
+            // Strict daily paper evidence is derived from the fetched source
+            // papers with trim-first bounds: only papers whose title and
+            // abstract are non-empty and within the DTO bounds join the
+            // input. Papers excluded here keep their provenance match and are
+            // marked per-paper no-novelty ("input-invalid") by the stage's
+            // reference validation, so one empty-evidence paper can never
+            // degrade the whole novelty stage.
+            const title = source.title.trim();
+            const abstract = source.abstract.trim();
+            if (title.length === 0 || abstract.length === 0
+              || title.length > PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS
+              || abstract.length > PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS) {
+              continue;
+            }
+            papers.push({ paperKey: match.paperKey, title, abstract });
+          }
+          papers.sort((left, right) =>
+            left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
+          );
           const stage = await runPersonalNoveltyStage({
-            input: noveltyInput,
+            input: {
+              papers,
+              representatives: noveltyRepresentatives.representatives,
+            },
             matches: {
               paperMatches,
               directionRepresentatives: noveltyMatchInput.directionRepresentatives,
@@ -336,7 +375,7 @@ export class ArxivPipeline {
                   ...paper,
                   personalNovelty: attachPersonalNoveltyBasis(
                     novelty,
-                    noveltyInput.representatives,
+                    noveltyRepresentatives.representatives,
                   ),
                 };
               } catch (error) {

@@ -113,6 +113,20 @@ export interface PersonalizedNoveltyInput {
   representatives: NoveltyRepresentativePaper[];
 }
 
+/**
+ * Trusted host-neutral DTO for the library-derived half of the novelty input:
+ * representative prior-paper evidence only. Per-run daily paper evidence is
+ * known only inside a pipeline run (the fetched source papers), so the host
+ * snapshot supplies representatives and the pipeline joins the run's daily
+ * papers into a full PersonalizedNoveltyInput before generation. It cannot
+ * carry paths, PDF bytes, fingerprints, authorization, credentials, or
+ * unrelated catalog or file records; the representative list is bounded,
+ * deduplicated, and canonically sorted by paperKey.
+ */
+export interface PersonalizedNoveltyRepresentativesInput {
+  representatives: NoveltyRepresentativePaper[];
+}
+
 /** A library-derived daily paper and the direction ids it matched. */
 export interface PersonalNoveltyPaperMatch {
   paperKey: string;
@@ -359,8 +373,35 @@ export function preparePersonalizedNoveltyInput(value: unknown): PersonalizedNov
   if (!isStrictlyOrderedUnique(papers.map(({ paperKey }) => paperKey))) {
     throw new TypeError("personalized novelty papers must be code-unit sorted and unique");
   }
+  const representatives = prepareNoveltyRepresentatives(value.representatives);
+  return deepFreeze({ papers, representatives });
+}
+
+/**
+ * Strict prepare of the host-side representatives-only novelty input: exact
+ * key set, a bounded own-data array of strict canonical representative records
+ * sorted unique by paperKey. Used by the plugin's immutable daily discovery
+ * snapshot so the representative evidence is validated and frozen at capture
+ * time, before the pipeline joins per-run daily papers into the full input.
+ */
+export function preparePersonalizedNoveltyRepresentatives(
+  value: unknown,
+): PersonalizedNoveltyRepresentativesInput {
+  if (!isExactDataObject(value, ["representatives"])) {
+    throw new TypeError(
+      "personalized novelty representatives input must be an exact bounded representative list",
+    );
+  }
+  const representatives = prepareNoveltyRepresentatives(value.representatives);
+  return deepFreeze({ representatives });
+}
+
+function prepareNoveltyRepresentatives(value: unknown): NoveltyRepresentativePaper[] {
+  if (!isOwnDataArray(value, 0, PERSONAL_NOVELTY_MAX_REPRESENTATIVES)) {
+    throw new TypeError("personalized novelty representatives must be an exact bounded list");
+  }
   const representatives: NoveltyRepresentativePaper[] = [];
-  for (const raw of value.representatives) {
+  for (const raw of value) {
     if (!isExactDataObject(raw, ["paperKey", "title", "authors", "abstract", "published", "categories"])
       || !isCanonicalArxivPaperKey(raw.paperKey)
       || !isBoundedText(raw.title, PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS)
@@ -386,7 +427,7 @@ export function preparePersonalizedNoveltyInput(value: unknown): PersonalizedNov
   if (!isStrictlyOrderedUnique(representatives.map(({ paperKey }) => paperKey))) {
     throw new TypeError("personalized novelty representatives must be code-unit sorted and unique");
   }
-  return deepFreeze({ papers, representatives });
+  return representatives;
 }
 
 export function preparePersonalNoveltyMatches(value: unknown): PersonalNoveltyMatchInput {
