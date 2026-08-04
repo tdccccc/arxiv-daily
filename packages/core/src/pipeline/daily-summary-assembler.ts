@@ -6,6 +6,9 @@ import {
   normalizeSummaryLanguage,
 } from "../settings/summary-language";
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
+import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
+import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
+import type { PaperDiscoveryProvenance } from "./personalized-paper-filter";
 import {
   DAILY_SUMMARY_EMERGENCY_MARKER,
   emergencyWarning,
@@ -34,6 +37,7 @@ export interface DailySummaryAssemblyPaper {
   isDetail: boolean;
   paperPath?: string | null;
   detailLink?: string;
+  discoveryProvenance?: PaperDiscoveryProvenance;
 }
 
 export type DailyPaperFallbackReasonCode =
@@ -104,11 +108,16 @@ export function preflightDailySummaryPapers(
     requireTrustedMetadata(`paper ${paper.id} authors`, paper.authors);
     requireTrustedMetadata(`paper ${paper.id} category`, paper.category);
     requireTrustedMetadata(`paper ${paper.id} source sections`, paper.sourceSections);
+    if (paper.discoveryProvenance
+      && !normalizePaperDiscoveryProvenance(paper.discoveryProvenance)) {
+      throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid discovery provenance`);
+    }
     if (paperIds.has(paper.id)) {
       throw new Error(`preflightDailySummaryAssembly: duplicate input paper ID: ${paper.id}`);
     }
     paperIds.add(paper.id);
-    if (!topicsByTag.has(paper.category)) {
+    if (!topicsByTag.has(paper.category)
+      && paper.category !== PERSONALIZED_LIBRARY_ONLY_CATEGORY) {
       throw new Error(
         `preflightDailySummaryAssembly: paper ${paper.id} has unknown category tag: ${paper.category}`,
       );
@@ -230,7 +239,12 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
       out.push(noCategoryPapersText(language));
       continue;
     }
-    for (const slot of topicSlots) out.push("", renderSlot(slot, language));
+    for (const slot of topicSlots) out.push("", renderSlot(slot, language, dateStr));
+  }
+  const librarySlots = slotsByTopic.get(PERSONALIZED_LIBRARY_ONLY_CATEGORY) ?? [];
+  if (librarySlots.length > 0) {
+    out.push("", `## ${language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`);
+    for (const slot of librarySlots) out.push("", renderSlot(slot, language, dateStr));
   }
   return out.join("\n");
 }
@@ -239,19 +253,20 @@ function groupSlots(
   slots: DailyPaperSlot[],
   arxivSettings: ArxivSettings,
 ): Map<string, DailyPaperSlot[]> {
-  const slotsByTopic = new Map(
-    arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]]),
-  );
+  const slotsByTopic = new Map([
+    ...arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]] as const),
+    [PERSONALIZED_LIBRARY_ONLY_CATEGORY, [] as DailyPaperSlot[]] as const,
+  ]);
   for (const slot of slots) slotsByTopic.get(slot.paper.category)!.push(slot);
   return slotsByTopic;
 }
 
-function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage): string {
+function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage, reportDate: string): string {
   if (slot.result.kind === "fallback") {
-    return renderFallbackBlock(slot.paper, slot.result.originalAbstract, language);
+    return renderFallbackBlock(slot.paper, slot.result.originalAbstract, language, [], reportDate);
   }
   return [
-    ...renderPaperHeader(slot.paper, language),
+    ...renderPaperHeader(slot.paper, language, [], reportDate),
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

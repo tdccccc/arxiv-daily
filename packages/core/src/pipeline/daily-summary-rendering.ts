@@ -5,6 +5,10 @@ import type {
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
 import { neutralizeRawHtml } from "./raw-html";
+import {
+  escapeDiscoveryProvenancePlainText,
+  renderDiscoveryProvenanceMarker,
+} from "./discovery-provenance-marker";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
   "<!-- arxiv-daily-emergency-report:v1 -->";
@@ -134,6 +138,7 @@ export function renderPaperHeader(
   paper: DailySummaryAssemblyPaper,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
+  reportDate?: string,
 ): string[] {
   const detailLink = safeDetailLink(
     paper.id,
@@ -146,10 +151,49 @@ export function renderPaperHeader(
   return [
     ...leadingMarkers,
     `### ${normalizeMarkdownLine(paper.title)}${detailLink ? ` → ${detailLink}` : ""}`,
+    ...(paper.discoveryProvenance
+      ? [
+          renderDiscoveryProvenanceMarker(
+            paper.discoveryProvenance,
+            paper.id,
+            reportDate ?? (() => { throw new TypeError("report date is required for provenance"); })(),
+          ),
+          renderVisibleDiscoveryProvenance(paper.discoveryProvenance, language),
+        ]
+      : []),
     `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
   ];
+}
+
+function renderVisibleDiscoveryProvenance(
+  provenance: NonNullable<DailySummaryAssemblyPaper["discoveryProvenance"]>,
+  language: SummaryLanguage,
+): string {
+  const manual = provenance.manualTopicTags.map(escapeDiscoveryProvenancePlainText);
+  const directions = provenance.directions.map((direction) => {
+    const representatives = direction.representatives.map((representative) =>
+      `${escapeDiscoveryProvenancePlainText(representative.title)} (${escapeDiscoveryProvenancePlainText(representative.paperKey)})`
+    ).join(language === "en" ? "; " : "；");
+    return `${escapeDiscoveryProvenancePlainText(direction.name)} [${representatives}]`;
+  });
+  const sources = [
+    ...(manual.length > 0
+      ? [language === "en" ? `manual topics: ${manual.join(", ")}` : `手动主题：${manual.join("、")}`]
+      : []),
+    ...(directions.length > 0
+      ? [language === "en"
+          ? `library directions: ${directions.join("; ")}`
+          : `个人文献库方向：${directions.join("；")}`]
+      : []),
+  ];
+  const depth = directions.length > 0
+    ? language === "en" ? "; evidence depth: metadata and abstract" : "；证据深度：元数据与摘要"
+    : "";
+  return language === "en"
+    ? `> Discovery source: ${sources.join("; ")}${depth}`
+    : `> 发现来源：${sources.join("；")}${depth}`;
 }
 
 export function renderStructuredFields(
@@ -166,8 +210,9 @@ export function renderFallbackBlock(
   originalAbstract: string,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
+  reportDate?: string,
 ): string {
-  const lines = renderPaperHeader(paper, language, leadingMarkers);
+  const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
   const warning = language === "en"
     ? `> **Summary unavailable.** Read the [original paper on arXiv](${arxivUrl}) directly.`
@@ -177,7 +222,7 @@ export function renderFallbackBlock(
   const abstract = normalizeMarkdownLine(originalAbstract);
   const headingIndex = leadingMarkers.length;
   lines.splice(
-    headingIndex + 1,
+    headingIndex + (paper.discoveryProvenance ? 3 : 1),
     0,
     warning,
     `<!-- ${DAILY_SUMMARY_FALLBACK_MARKER_PREFIX}:${paper.id} -->`,

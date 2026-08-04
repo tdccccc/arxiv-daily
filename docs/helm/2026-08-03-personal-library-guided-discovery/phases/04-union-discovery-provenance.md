@@ -24,8 +24,8 @@ Introduce bounded host-neutral discovery-input and occurrence-provenance contrac
 ## Tasks
 
 - [x] Define and adversarially test strict bounded Core discovery input, personalized classification, deterministic union/deduplication/order, trusted provenance, cancellation, and exact checkpoint compatibility while preserving the unchanged legacy manual path.
-- [ ] Carry provenance through filtered papers and deterministic structured/fallback daily rendering, with a localized library-only section and a strict bounded machine-readable marker that cannot be forged by hostile metadata.
-- [ ] Persist provenance per committed report occurrence in a backward-compatible Paper Index evolution; restore it through existing-daily repair and Dashboard history sync without erasing summaries, user state, paths, or repeated-date history.
+- [x] Carry provenance through filtered papers and deterministic structured/fallback daily rendering, with a localized library-only section and a strict bounded machine-readable marker that cannot be forged by hostile metadata.
+- [x] Persist provenance per committed report occurrence in a backward-compatible Paper Index evolution; restore it through existing-daily repair and Dashboard history sync without erasing summaries, user state, paths, or repeated-date history.
 - [ ] Build one plugin-owned immutable daily discovery snapshot from current authorization plus Core eligibility, wire every scheduler/manual daily entry through it, and fail closed across root/output/endpoint/revocation/reload races without changing manual single-paper fetch.
 - [ ] Project durable occurrence provenance as separate Dashboard metadata, visibly naming manual/library/both sources, directions, representatives, and metadata-and-abstract depth without conflating query-time match reasons or P5 novelty.
 - [ ] Prove manual-only compatibility, complete union provenance, authorization and privacy boundaries, deterministic commit/checkpoint recovery, and no summary/detail/email regression; run full repository quality suites and independent correctness/security reviews.

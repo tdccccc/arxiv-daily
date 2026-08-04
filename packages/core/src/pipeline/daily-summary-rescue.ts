@@ -21,6 +21,7 @@ import {
   extractFallbackPaperIds,
   extractPaperSummaries,
 } from "./daily-summary-parser";
+import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
 import {
   fallbackCountLine,
   normalizeMarkdownLine,
@@ -320,7 +321,22 @@ export function renderDailySummaryRescueMarkdown(contract: RescueContract): stri
       out.push(noCategoryPapersText(contract.language));
       continue;
     }
-    for (const slot of topicSlots) out.push("", renderRescueSlot(slot, contract.language));
+    for (const slot of topicSlots) {
+      out.push("", renderRescueSlot(slot, contract.language, contract.date));
+    }
+  }
+  const librarySlots = contract.slots.filter(
+    ({ paper }) => paper.category === PERSONALIZED_LIBRARY_ONLY_CATEGORY,
+  );
+  if (librarySlots.length > 0) {
+    out.push(
+      "",
+      "<!-- arxiv-daily-rescue-library-only -->",
+      `## ${contract.language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`,
+    );
+    for (const slot of librarySlots) {
+      out.push("", renderRescueSlot(slot, contract.language, contract.date));
+    }
   }
   out.push("", "<!-- arxiv-daily-rescue-report:end -->");
   return out.join("\n");
@@ -329,6 +345,7 @@ export function renderDailySummaryRescueMarkdown(contract: RescueContract): stri
 function renderRescueSlot(
   slot: RescueContract["slots"][number],
   language: SummaryLanguage,
+  reportDate: string,
 ): string {
   const marker = `<!-- arxiv-daily-rescue-paper:${slot.paper.id}:${slot.result.kind} -->`;
   if (slot.result.kind === "fallback") {
@@ -337,10 +354,11 @@ function renderRescueSlot(
       slot.result.originalAbstract,
       language,
       [marker],
+      reportDate,
     );
   }
   return [
-    ...renderPaperHeader(slot.paper, language, [marker]),
+    ...renderPaperHeader(slot.paper, language, [marker], reportDate),
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

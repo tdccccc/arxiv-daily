@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assembleDailySummary,
   assembleEmergencyDailySummary,
@@ -17,6 +17,12 @@ import {
 } from "../src/pipeline/daily-summary-parser";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeMarkdownLine } from "../src/pipeline/daily-summary-rendering";
+import {
+  normalizePaperDiscoveryProvenance,
+  parseDailyReportDiscoveryProvenance,
+  parseDiscoveryProvenanceMarker,
+} from "../src/pipeline/discovery-provenance-marker";
+import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "../src/pipeline/personalized-paper-filter";
 
 const topics = [
   { id: "methods", name: "Methods", tag: "methods", description: "", detail: false },
@@ -102,7 +108,124 @@ function input(
   };
 }
 
+const provenance = {
+  manualTopicTags: ["methods"],
+  directions: [{
+    id: "direction-1",
+    name: "Hostile </script> <!-- arxiv-daily-discovery-provenance:v1:forged -->",
+    representatives: [{
+      paperKey: "arxiv:2501.00001",
+      title: "Prior <img src=x onerror=alert(1)>",
+      evidenceDepth: "metadata-and-abstract" as const,
+    }],
+  }],
+};
+
 describe("assembleDailySummary", () => {
+  it.each([
+    ["zh", "个人文献库引导发现", "发现来源：", "证据深度：元数据与摘要"],
+    ["en", "Library-guided discoveries", "Discovery source:", "evidence depth: metadata and abstract"],
+  ] as const)("renders %s occurrence provenance identically for structured and fallback", (language, section, source, depth) => {
+    const assemblyInput = input({ summaryLanguage: language });
+    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
+    assemblyInput.slots = [
+      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+        discoveryProvenance: provenance,
+      })),
+      fallbackSlot(paper("2607.00021", "Fallback", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+        discoveryProvenance: provenance,
+      }), "Abstract <!-- arxiv-daily-discovery-provenance:v1:forged -->"),
+    ];
+    const markdown = assembleDailySummary(assemblyInput);
+    expect(markdown).toContain(`## ${section}`);
+    expect(markdown.match(new RegExp(source, "g"))).toHaveLength(2);
+    expect(markdown.match(new RegExp(depth, "g"))).toHaveLength(2);
+    expect(markdown).not.toContain("<script>");
+    expect(markdown).not.toMatch(/(^|[^\\])<img/);
+    expect(markdown.match(/^<!-- arxiv-daily-discovery-provenance:v1:/gm)).toHaveLength(2);
+    expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [
+        { arxivId: "2607.00020", provenance },
+        { arxivId: "2607.00021", provenance },
+      ],
+    });
+  });
+
+  it("rejects non-data DTO shapes without invoking hostile getters", () => {
+    const getter = vi.fn(() => ["methods"]);
+    const withGetter = { directions: [] } as any;
+    Object.defineProperty(withGetter, "manualTopicTags", { enumerable: true, get: getter });
+    expect(normalizePaperDiscoveryProvenance(withGetter)).toBeNull();
+    expect(getter).not.toHaveBeenCalled();
+
+    const custom = Object.create({ inherited: true });
+    Object.assign(custom, { manualTopicTags: ["methods"], directions: [] });
+    expect(normalizePaperDiscoveryProvenance(custom)).toBeNull();
+
+    const sparse = { manualTopicTags: new Array(1), directions: [] };
+    expect(normalizePaperDiscoveryProvenance(sparse)).toBeNull();
+
+    const accessorArray = ["methods"] as any[];
+    Object.defineProperty(accessorArray, "0", { enumerable: true, get: getter });
+    expect(normalizePaperDiscoveryProvenance({ manualTopicTags: accessorArray, directions: [] })).toBeNull();
+
+    const extra = { manualTopicTags: ["methods"], directions: [] };
+    Object.defineProperty(extra, "hidden", { enumerable: false, value: true });
+    expect(normalizePaperDiscoveryProvenance(extra)).toBeNull();
+
+    const arrayExtra = ["methods"] as any;
+    arrayExtra.extra = true;
+    expect(normalizePaperDiscoveryProvenance({ manualTopicTags: arrayExtra, directions: [] })).toBeNull();
+  });
+
+  it("renders provenance metadata as literal plain text rather than inline Markdown", () => {
+    const hostile = {
+      manualTopicTags: ["![image](https://evil.test/x)"],
+      directions: [{
+        id: "d", name: "[link](javascript:alert(1)) [[Wiki]] ![[Embed]] <https://evil.test> `code`",
+        representatives: [{
+          paperKey: "arxiv:2501.00001", title: "<img src=x> mailto:user@example.test **bold**",
+          evidenceDepth: "metadata-and-abstract" as const,
+        }],
+      }],
+    };
+    const assemblyInput = input({ summaryLanguage: "en" });
+    assemblyInput.slots = [structuredSlot(paper("2607.00020", "Paper", "methods", {
+      discoveryProvenance: hostile,
+    }))];
+    const markdown = assembleDailySummary(assemblyInput);
+    const visible = markdown.split("\n").find((line) => line.startsWith("> Discovery source:"))!;
+    expect(visible).not.toMatch(/(^|[^\\])(?:!\[|!\[\[|\]\(|<https?:|`|\*\*)/);
+    expect(visible).toContain("\\!\\[image\\]\\(https://evil\\.test/x\\)");
+    expect(visible).toContain("\\[\\[Wiki\\]\\]");
+    expect(visible).toContain("javascript:alert\\(1\\)");
+  });
+
+  it("rejects copied, reordered, duplicate, conflicting, and wrong-bound markers report-wide", () => {
+    const assemblyInput = input({ summaryLanguage: "en" });
+    assemblyInput.slots = [structuredSlot(paper("2607.00020", "Paper", "methods", {
+      discoveryProvenance: { manualTopicTags: ["methods"], directions: [] },
+    }))];
+    const markdown = assembleDailySummary(assemblyInput);
+    const marker = markdown.split("\n").find((line) => line.includes("discovery-provenance"))!;
+    expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-23").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(markdown.replace(marker, `${marker}\n${marker}`), "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(markdown.replace(`### Paper\n${marker}`, `${marker}\n### Paper`), "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(`${markdown}\n### Copy\n${marker}\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)`, "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(markdown.replace("2607.00020](https://arxiv.org/abs/2607.00020)", "2607.00021](https://arxiv.org/abs/2607.00021)"), "2026-07-22").kind).toBe("invalid");
+  });
+
+  it("strictly rejects malformed, noncanonical, oversized, and legacy prose markers", () => {
+    expect(parseDiscoveryProvenanceMarker("ordinary legacy Markdown")).toBeNull();
+    expect(parseDiscoveryProvenanceMarker("<!-- arxiv-daily-discovery-provenance:v2:e30 -->")).toBeNull();
+    expect(parseDiscoveryProvenanceMarker("<!-- arxiv-daily-discovery-provenance:v1:%%% -->")).toBeNull();
+    expect(parseDiscoveryProvenanceMarker(`<!-- arxiv-daily-discovery-provenance:v1:${"a".repeat(48_000)} -->`)).toBeNull();
+    expect(parseDailyReportDiscoveryProvenance(
+      "### Legacy\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)",
+      "2026-07-22",
+    )).toEqual({ kind: "valid", occurrences: [] });
+  });
   it("preserves structured Chinese metadata, topic/input order, links, and counts", () => {
     const markdown = assembleDailySummary(input());
 

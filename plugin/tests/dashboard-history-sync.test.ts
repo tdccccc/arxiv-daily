@@ -3,6 +3,7 @@ import {
   PaperSearchIndex,
   queryDashboard,
   syncDashboardHistory,
+  renderDiscoveryProvenanceMarker,
 } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
@@ -143,6 +144,7 @@ function indexedPaper(
     priority: "normal",
     seenDates: ["2026-06-10"],
     dailyReports: [],
+    discoveryProvenanceByReport: {},
     paperPath: null,
     arxivUrl: `https://arxiv.org/abs/${id}`,
     pdfUrl: `https://arxiv.org/pdf/${id}`,
@@ -156,6 +158,51 @@ function indexedPaper(
 }
 
 describe("syncDashboardHistory", () => {
+  it("rebuilds occurrence provenance and removes it only for no-longer-managed reports", async () => {
+    const provenance = {
+      manualTopicTags: ["photo-z"],
+      directions: [{
+        id: "direction-1", name: "Library direction", representatives: [{
+          paperKey: "arxiv:2501.00001", title: "Prior", evidenceDepth: "metadata-and-abstract" as const,
+        }],
+      }],
+    };
+    const marker = renderDiscoveryProvenanceMarker(provenance, "2606.00001", "2026-06-10");
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "## Photo-z", "### Paper", marker,
+        "- **Authors**: A", "- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)",
+      ].join("\n"),
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00001": {
+          dailyReports: ["arxiv/daily/2026-06-09.md", "external/daily.md"],
+          discoveryProvenanceByReport: {
+            "arxiv/daily/2026-06-09.md": provenance,
+            "external/daily.md": provenance,
+          },
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+    expect(index.papers["arxiv:2606.00001"]!.discoveryProvenanceByReport).toEqual({
+      "external/daily.md": provenance,
+      "arxiv/daily/2026-06-10.md": provenance,
+    });
+
+    files["arxiv/daily/2026-06-10.md"] = files["arxiv/daily/2026-06-10.md"]!.replace(
+      marker,
+      `${marker}\n${marker}`,
+    );
+    const afterInvalidEdit = await syncDashboardHistory({
+      vault: makeVault(files), store, output, topics,
+    });
+    expect(afterInvalidEdit.papers["arxiv:2606.00001"]!.discoveryProvenanceByReport)
+      .toEqual({
+        "external/daily.md": provenance,
+        "arxiv/daily/2026-06-10.md": provenance,
+      });
+  });
   it("backfills daily papers and detail summary files into the paper index", async () => {
     const { files, storage } = makeStorage({
       "arxiv/daily/2026-06-10.md": [

@@ -34,7 +34,10 @@ import {
   type DailyPaperWithContent,
   type DailySummaryCheckpointPort,
 } from "./summarizer";
-import { extractPaperSummaries } from "./daily-summary-parser";
+import {
+  parseDailyReportDiscoveryProvenance,
+  extractPaperSummaries,
+} from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import {
@@ -459,6 +462,16 @@ export class ArxivPipeline {
           dailyPath,
         );
         throwIfCancelled(signal);
+        const provenance = parseDailyReportDiscoveryProvenance(dailySummary, dateStr);
+        if (provenance.kind === "valid") {
+          await this.deps.paperIndex.reconcileDailyReportOccurrenceProvenance?.(
+            dailyPath,
+            provenance.occurrences,
+          );
+        } else {
+          logger.warn(`pipeline: committed provenance projection invalid: ${provenance.reason}`);
+        }
+        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
@@ -581,6 +594,16 @@ export class ArxivPipeline {
       await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);
       throwIfCancelled(signal);
       await this.deps.paperIndex.addDailyReports(arxivIds, dailyPath);
+      throwIfCancelled(signal);
+      const provenance = parseDailyReportDiscoveryProvenance(markdown, dateStr);
+      if (provenance.kind === "valid") {
+        await this.deps.paperIndex.reconcileDailyReportOccurrenceProvenance?.(
+          dailyPath,
+          provenance.occurrences,
+        );
+      } else {
+        this.deps.logger.warn(`pipeline: existing daily provenance invalid: ${provenance.reason}`);
+      }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);
       throwIfCancelled(signal);

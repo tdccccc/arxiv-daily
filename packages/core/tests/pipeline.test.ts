@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
+import { renderDiscoveryProvenanceMarker } from "../src/pipeline/discovery-provenance-marker";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
@@ -737,6 +738,60 @@ describe("ArxivPipeline", () => {
       [id]: { coreProblem: "Repaired problem." },
     });
     expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+  });
+
+  it("restores occurrence provenance from committed Markdown during existing-daily repair", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const provenance = { manualTopicTags: ["photo-z"], directions: [] };
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "## Topic", "### Existing paper", renderDiscoveryProvenanceMarker(provenance, id, "2026-05-11"),
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    ].join("\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 1),
+      setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
+    expect(paperIndex.reconcileDailyReportOccurrenceProvenance).toHaveBeenCalledWith(
+      "daily/2026-05-11.md", [{ arxivId: id, provenance }],
+    );
+  });
+
+  it("does not destructively reconcile existing occurrence provenance when report markers are invalid", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const marker = renderDiscoveryProvenanceMarker(
+      { manualTopicTags: ["photo-z"], directions: [] }, id, "2026-05-11",
+    );
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "## Topic", "### Existing paper", marker, marker,
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    ].join("\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0), addDailyReports: vi.fn(async () => undefined),
+      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0), setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
+    expect(paperIndex.reconcileDailyReportOccurrenceProvenance).not.toHaveBeenCalled();
   });
 
   it("repairs IDs from standalone legacy controls but ignores inline fake marker prose", async () => {
@@ -1849,7 +1904,7 @@ describe("ArxivPipeline", () => {
     await pipeline.runForDate(firstDateFromFixture());
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(json.schemaVersion).toBe(4);
+    expect(json.schemaVersion).toBe(5);
     expect(json.papers[`arxiv:${arxivId}`]).toMatchObject({
       abstract: "atom abstract",
       paperPath: `papers/${arxivId}.md`,

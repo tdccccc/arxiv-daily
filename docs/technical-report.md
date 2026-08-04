@@ -150,7 +150,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 6. **正文获取**：并发度 6；经 `SourceAdapter.fetchContent`；失败降级为错误占位文本，不中断整日。  
 7. **详报选择**：`selectDetailPapers`（阈值与 soft limit 来自 `detailSelection`）；磁盘上已存在且 `classifyPaperNote` 为 `verified_detail` 的详报不占 soft quota。  
 8. **详报写作**：对选中且有全文的论文 `summarizePaperDetail` + `writePaperDetail`；**仅当文件真实存在**后回写 `paperPath` / `isDetail`。  
-9. **日报摘要**：`summarizeDaily`（可走 summary checkpoint）→ `writeDaily` → 清理 checkpoint → 更新索引中的日报路径与结构化 summary；此阶段索引回写失败 → **`failed_transient`**。  
+9. **日报摘要**：`summarizeDaily`（可走 summary checkpoint）→ `writeDaily` → 清理 checkpoint → 更新索引中的日报路径、结构化 summary，以及日报中严格 marker 可解析时的 occurrence-level discovery provenance；此阶段索引回写失败 → **`failed_transient`**。已有日报修复与 Dashboard history sync 可从绑定 report date、arXiv ID 的 canonical marker 重建 provenance；marker 结构无效时保留既有 projection，不做破坏性覆盖。
 10. **返回**：`completed` + `DailyDigest`（供邮件自动发送）。
 
 取消通过 `AbortSignal` / `isCancellationError` 映射为流水线 `cancelled`。调度落盘时将 `cancelled`（及部分中断）写为 run-state **`pending`**（可再跑），`RunStatus` 无独立 `cancelled`。
@@ -217,7 +217,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 | --- | --- |
 | `arxiv-daily/daily/YYYY-MM-DD.md` | 日报（权威提交物） |
 | `arxiv-daily/papers/<externalId>.md` | 详报（路径 stem 为 externalId，非 paperKey） |
-| `arxiv-daily/.index/papers.json` | 论文索引（schema v4；key 为 `paperKey` 如 `arxiv:…`） |
+| `arxiv-daily/.index/papers.json` | 论文索引（schema v5；key 为 `paperKey` 如 `arxiv:…`，可按日报路径保存 occurrence-level discovery provenance） |
 | `arxiv-daily/.index/run-state.json` | 按日运行状态（原子写 + `.bak`） |
 | `arxiv-daily/.index/run-history.jsonl` | 运行历史（可轮转） |
 | `arxiv-daily/.index/delivery-state.json` | 邮件投递记录 |

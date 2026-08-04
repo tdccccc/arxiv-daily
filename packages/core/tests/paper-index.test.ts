@@ -104,15 +104,15 @@ describe("PaperIndexStore", () => {
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
     });
   });
 
-  it.each([1, 2, 3, 4])("reads paper index schema %i", async (schemaVersion) => {
+  it.each([1, 2, 3, 4, 5])("reads paper index schema %i", async (schemaVersion) => {
     const bareOrKey =
-      schemaVersion === 4
+      schemaVersion >= 4
         ? {
             "arxiv:2606.12345": {
               paperKey: "arxiv:2606.12345",
@@ -140,7 +140,7 @@ describe("PaperIndexStore", () => {
 
     const inbox = await store.load();
 
-    expect(inbox.schemaVersion).toBe(4);
+    expect(inbox.schemaVersion).toBe(5);
     expect(inbox.papers["arxiv:2606.12345"]).toMatchObject({
       paperKey: "arxiv:2606.12345",
       source: "arxiv",
@@ -203,7 +203,7 @@ describe("PaperIndexStore", () => {
     expect(dirs.has("arxiv-daily")).toBe(true);
     expect(dirs.has("arxiv-daily/.index")).toBe(true);
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.schemaVersion).toBe(4);
+    expect(saved.schemaVersion).toBe(5);
     expect(saved.papers["arxiv:2606.12345"].title).toBe("A paper");
     expect(saved.papers["arxiv:2606.12345"]).toMatchObject({
       paperKey: "arxiv:2606.12345",
@@ -212,6 +212,53 @@ describe("PaperIndexStore", () => {
       arxivId: "2606.12345",
     });
     expect(saved.papers["2606.12345"]).toBeUndefined();
+  });
+
+  it("persists occurrence provenance per repeated committed report and preserves user fields", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-11.md",
+    });
+    await store.setStatus("2606.12345", "saved");
+    const first = {
+      manualTopicTags: ["photo-z"],
+      directions: [],
+    };
+    const second = {
+      manualTopicTags: [],
+      directions: [{
+        id: "direction-1", name: "Library direction", representatives: [{
+          paperKey: "arxiv:2501.00001", title: "Prior", evidenceDepth: "metadata-and-abstract" as const,
+        }],
+      }],
+    };
+    await store.reconcileDailyReportOccurrenceProvenance(
+      "arxiv-daily/daily/2026-06-11.md",
+      [{ arxivId: "2606.12345", provenance: first }],
+    );
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-12",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-12.md",
+    });
+    await store.reconcileDailyReportOccurrenceProvenance(
+      "arxiv-daily/daily/2026-06-12.md",
+      [{ arxivId: "2606.12345", provenance: second }],
+    );
+    const entry = (await store.load()).papers["arxiv:2606.12345"]!;
+    expect(entry.status).toBe("saved");
+    expect(entry.dailyReports).toHaveLength(2);
+    expect(entry.discoveryProvenanceByReport).toEqual({
+      "arxiv-daily/daily/2026-06-11.md": first,
+      "arxiv-daily/daily/2026-06-12.md": second,
+    });
+    await store.reconcileDailyReportOccurrenceProvenance(
+      "arxiv-daily/daily/2026-06-11.md", [],
+    );
+    expect((await store.load()).papers["arxiv:2606.12345"]!.discoveryProvenanceByReport)
+      .toEqual({ "arxiv-daily/daily/2026-06-12.md": second });
   });
 
   it("normalizes and preserves abstracts during upsert", async () => {
@@ -299,7 +346,7 @@ describe("PaperIndexStore", () => {
 
     expect(files["arxiv-daily/index/papers.json"]).toBeUndefined();
     const migrated = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(migrated.papers["arxiv:2606.12345"].status).toBe("saved");
     expect(migrated.papers["arxiv:2606.12345"].priority).toBe("high");
     expect(migrated.papers["arxiv:2606.12345"]).toMatchObject({

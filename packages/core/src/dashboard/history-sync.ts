@@ -8,8 +8,12 @@ import { paperKeyFromArxivId } from "../services/paper-key";
 import type { OutputSettings, Topic } from "../settings/types";
 import {
   extractFallbackAbstracts,
+  parseDailyReportDiscoveryProvenance,
   extractPaperSummaries,
 } from "../pipeline/daily-summary-parser";
+import type {
+  DailyReportDiscoveryProvenanceParseResult,
+} from "../pipeline/discovery-provenance-marker";
 import { classifyPaperNote } from "./paper-note-classifier";
 import { modernArxivResources } from "../utils/arxiv";
 
@@ -57,6 +61,7 @@ interface DailyCandidateCollection {
   paperIdsByReport: Map<string, Set<string>>;
   parsedReports: Set<string>;
   summaries: Record<string, PaperSummary>;
+  provenanceByReport: Map<string, DailyReportDiscoveryProvenanceParseResult>;
 }
 
 export async function syncDashboardHistory(
@@ -90,6 +95,19 @@ export async function syncDashboardHistory(
     index = await deps.store.load();
   }
 
+  for (const report of dailyCollection.parsedReports) {
+    const provenance = dailyCollection.provenanceByReport.get(report);
+    if (provenance?.kind === "valid") {
+      await deps.store.reconcileDailyReportOccurrenceProvenance(
+        report,
+        provenance.occurrences,
+      );
+    } else if (provenance?.kind === "invalid") {
+      deps.logger?.warn(`dashboard: skipped invalid provenance in ${report}: ${provenance.reason}`);
+    }
+  }
+  index = await deps.store.load();
+
   const summariesChanged = await deps.store.setSummaries(dailyCollection.summaries);
   if (summariesChanged > 0) {
     deps.logger?.info(
@@ -116,6 +134,9 @@ export async function syncDashboardHistory(
     dailyReportPaths,
     dailyCollection.paperIdsByReport,
     dailyCollection.parsedReports,
+    new Set([...dailyCollection.provenanceByReport]
+      .filter(([, result]) => result.kind === "invalid")
+      .map(([report]) => report)),
     deps.output,
   );
   if (pruned.changed > 0 || pruned.removed > 0) {
@@ -198,6 +219,7 @@ async function collectDailyCandidates(
   const paperIdsByReport = new Map<string, Set<string>>();
   const parsedReports = new Set<string>();
   const summaries: Record<string, PaperSummary> = {};
+  const provenanceByReport = new Map<string, DailyReportDiscoveryProvenanceParseResult>();
   const seen = new Set<string>();
   const dailyFiles = markdownFiles
     .map((file) => ({ file, path: normalizeVaultPath(file.path) }))
@@ -209,6 +231,7 @@ async function collectDailyCandidates(
     try {
       const markdown = await deps.vault.adapter.read(path);
       mergePaperSummaries(summaries, extractPaperSummaries(markdown));
+      provenanceByReport.set(path, parseDailyReportDiscoveryProvenance(markdown, date));
       const fallbackAbstracts = extractFallbackAbstracts(markdown);
       const parsed = parseDailyCandidates(
         markdown,
@@ -232,7 +255,7 @@ async function collectDailyCandidates(
       deps.logger?.warn(`dashboard: failed to inspect daily file ${path}`, e);
     }
   }
-  return { candidates, paperIdsByReport, parsedReports, summaries };
+  return { candidates, paperIdsByReport, parsedReports, summaries, provenanceByReport };
 }
 
 function mergePaperSummaries(
@@ -417,6 +440,7 @@ function pruneStaleDailyReports(
   existingDailyReports: Set<string>,
   paperIdsByReport: Map<string, Set<string>>,
   parsedReports: Set<string>,
+  invalidProvenanceReports: Set<string>,
   output: OutputSettings,
 ): { changed: number; removed: number } {
   const dailyDir = normalizeVaultPath(output.dailyDir);
@@ -444,6 +468,15 @@ function pruneStaleDailyReports(
     if (!sameStrings(entry.dailyReports, dailyReports)) {
       entry.dailyReports = dailyReports;
       changed += 1;
+    }
+    for (const report of Object.keys(entry.discoveryProvenanceByReport)) {
+      const normalizedReport = normalizeVaultPath(report);
+      const managed = Boolean(dailyDateFromPath(normalizedReport, dailyDir));
+      if (managed && !invalidProvenanceReports.has(normalizedReport)
+        && !dailyReports.includes(normalizedReport)) {
+        delete entry.discoveryProvenanceByReport[report];
+        changed += 1;
+      }
     }
 
     if (removedDates.size > 0) {
