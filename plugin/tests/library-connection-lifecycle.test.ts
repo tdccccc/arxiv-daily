@@ -14,14 +14,27 @@ function makePlugin() {
   const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
   const saveData = vi.fn().mockResolvedValue(undefined);
   const setSensitiveValues = vi.fn();
+  const files = new Map<string, string>();
   Object.assign(plugin, {
     settings: structuredClone(DEFAULT_SETTINGS),
-    logger: { setSensitiveValues },
+    logger: { setSensitiveValues, error: vi.fn(), warn: vi.fn() },
+    host: { storage: {
+      normalizePath: (path: string) => path,
+      exists: async (path: string) => files.has(path),
+      readText: async (path: string) => files.get(path)!,
+      writeText: async (path: string, value: string) => { files.set(path, value); },
+      writeTextAtomic: async (path: string, value: string) => { files.set(path, value); },
+      mkdir: async () => undefined,
+      rename: async () => undefined,
+      remove: async () => undefined,
+    } },
     saveData,
     libraryDirectoryPicker: { select: vi.fn() },
     openLibrarySource: vi.fn(),
     operations: { cancelAll: vi.fn() },
     librarySelectionRevision: 0,
+    libraryConnectionRevision: 0,
+    libraryOutputRevision: 0,
     libraryMutationQueue: Promise.resolve(),
   });
   return {

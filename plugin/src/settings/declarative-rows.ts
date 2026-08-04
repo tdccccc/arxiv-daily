@@ -72,8 +72,7 @@ export function renderLlmBaseUrlRow(
   input.addEventListener("input", refreshWarning);
   input.addEventListener("change", () => {
     tab.runAction("save API base URL", async () => {
-      tab.plugin.settings.llm.baseUrl = input.value.trim();
-      await tab.plugin.saveSettings();
+      await tab.plugin.setLlmBaseUrl(input.value);
       tab.refreshDeclarativeSetupGuide();
     });
   });

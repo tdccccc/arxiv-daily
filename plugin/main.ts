@@ -2,6 +2,11 @@ import { Notice, Plugin } from "obsidian";
 import type {
   LibraryInventory,
   PersonalLibraryCatalog,
+  PersonalLibraryDirectionProposal,
+  PersonalLibraryInterestEligibility,
+  PersonalLibraryInterestProfile,
+  PersonalLibraryReviewedDirectionDraft,
+  PersonalLibraryDirectionTextPatch,
   PipelineResult,
   PluginSettings,
   RunState,
@@ -20,6 +25,22 @@ import {
   createPersonalLibraryScopeFingerprint,
   OperationRegistry,
   PersonalLibraryCatalogStore,
+  PersonalLibraryDirectionProposalStore,
+  PersonalLibraryInterestProfileStore,
+  confirmPersonalLibraryDirectionWithStores,
+  buildChatCompletionsUrl,
+  createPersonalLibraryCatalogInputFingerprint,
+  disablePersonalLibraryConfirmedDirection,
+  enablePersonalLibraryConfirmedDirection,
+  evaluatePersonalLibraryInterestEligibility,
+  mergePersonalLibraryConfirmedDirections,
+  mergePersonalLibraryDirectionCandidates,
+  proposePersonalLibraryDirections,
+  removePersonalLibraryConfirmedDirection,
+  removePersonalLibraryDirectionCandidate,
+  selectPersonalLibraryDirectionPapers,
+  updatePersonalLibraryConfirmedDirection,
+  updatePersonalLibraryDirectionCandidate,
   reconcilePersonalLibraryCatalog,
   RunCancellationService,
   normalizeArxivId,
@@ -82,6 +103,22 @@ interface PersistedData {
   libraryConnection?: PersistedLibraryConnection;
 }
 
+export interface PersonalLibraryReviewLoadError {
+  kind: "proposal" | "profile";
+  code: string;
+  message: string;
+}
+
+export interface PersonalLibraryProfileSnapshot {
+  catalog: PersonalLibraryCatalog | null;
+  proposal: PersonalLibraryDirectionProposal | null;
+  profile: PersonalLibraryInterestProfile | null;
+  eligibility: PersonalLibraryInterestEligibility;
+  authorization: LibraryConnectionStatus;
+  proposalLoadError: PersonalLibraryReviewLoadError | null;
+  profileLoadError: PersonalLibraryReviewLoadError | null;
+}
+
 let lastCacheCleanupDate: string | null = null;
 
 export function cacheCleanupDateKey(now: Date, timezone: string): string {
@@ -130,6 +167,11 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryMutationQueue: Promise<void> = Promise.resolve();
   private librarySelectionRevision = 0;
   private libraryConnectionRevision = 0;
+  private libraryOutputRevision = 0;
+  private libraryProposal: PersonalLibraryDirectionProposal | null = null;
+  private libraryProfile: PersonalLibraryInterestProfile | null = null;
+  private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
+  private libraryProfileLoadError: PersonalLibraryReviewLoadError | null = null;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -161,6 +203,7 @@ export default class ArxivDailyPlugin extends Plugin {
         this.logger.error("personal library catalog load failed", error);
         new Notice(`arXiv Daily: personal library catalog could not be loaded: ${error instanceof Error ? error.message : String(error)}`, 10_000);
       });
+      await this.reloadPersonalLibraryProfileDocuments();
     }
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
@@ -297,30 +340,43 @@ export default class ArxivDailyPlugin extends Plugin {
     if (selection.kind !== "selected") return selection.kind;
     const source = await this.openLibrarySource(selection.path);
     if (revision !== this.librarySelectionRevision) return "cancelled";
-    this.cancelPersonalLibraryScans("library folder changed");
+    this.cancelPersonalLibraryOperations("library folder changed");
     return await this.enqueueLibraryMutation(async () => {
       if (revision !== this.librarySelectionRevision) return "cancelled" as const;
       const previousConnection = this.libraryConnection;
       const previousSource = this.librarySource;
       const previousCatalog = this.libraryCatalog;
+      const previousProposal = this.libraryProposal;
+      const previousProfile = this.libraryProfile;
+      const previousProposalError = this.libraryProposalLoadError;
+      const previousProfileError = this.libraryProfileLoadError;
       const previousConnectionRevision = this.libraryConnectionRevision;
       this.libraryInventoryController?.abort("library folder changed");
       this.libraryConnectionRevision += 1;
       this.libraryConnection = createLibraryConnection(source.canonicalRoot, source.rootIdentity);
       this.librarySource = source;
-      this.libraryCatalog = null;
+      this.resetPersonalLibraryProfileState();
       this.refreshSensitiveValues();
       try {
         await this.persistSettings();
-        return "selected" as const;
       } catch (error) {
         this.libraryConnection = previousConnection;
         this.librarySource = previousSource;
         this.libraryCatalog = previousCatalog;
+        this.libraryProposal = previousProposal;
+        this.libraryProfile = previousProfile;
+        this.libraryProposalLoadError = previousProposalError;
+        this.libraryProfileLoadError = previousProfileError;
         this.libraryConnectionRevision = previousConnectionRevision;
         this.refreshSensitiveValues();
         throw error;
       }
+      await this.reloadPersonalLibraryCatalog().catch((error) => {
+        this.libraryCatalog = null;
+        this.logger.error?.("personal library catalog load failed after folder selection", error);
+      });
+      await this.reloadPersonalLibraryProfileDocuments();
+      return "selected" as const;
     });
   }
 
@@ -352,14 +408,39 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async revokeLibraryProcessing(): Promise<void> {
+    const previous = this.libraryConnection;
+    if (!previous) return;
+    const revoked = revokeLibraryConnection(previous);
+    this.cancelPersonalLibraryDirectionGeneration("library processing authorization revoked");
+    // Consent becomes ineffective synchronously at invocation, before waiting for
+    // an earlier library mutation to finish.
+    this.libraryConnection = revoked;
     await this.enqueueLibraryMutation(async () => {
-      if (!this.libraryConnection) return;
-      const previous = this.libraryConnection;
-      this.libraryConnection = revokeLibraryConnection(previous);
+      this.cancelPersonalLibraryDirectionGeneration("library processing authorization revoked");
+      if (this.libraryConnection !== revoked) return;
       try {
         await this.persistSettings();
       } catch (error) {
-        this.libraryConnection = previous;
+        if (this.libraryConnection === revoked) this.libraryConnection = previous;
+        throw error;
+      }
+    });
+  }
+
+  async setLlmBaseUrl(next: string): Promise<void> {
+    const normalized = next.trim();
+    await this.enqueueLibraryMutation(async () => {
+      const previous = this.settings.llm.baseUrl;
+      const endpointChanged = this.effectiveLlmEndpoint(previous) !== this.effectiveLlmEndpoint(normalized);
+      if (endpointChanged) this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
+      this.settings.llm.baseUrl = normalized;
+      this.settings.detailSelection = sanitizeDetailSelection(this.settings.detailSelection);
+      this.refreshSensitiveValues();
+      try {
+        await this.persistSettings();
+      } catch (error) {
+        this.settings.llm.baseUrl = previous;
+        this.refreshSensitiveValues();
         throw error;
       }
     });
@@ -429,6 +510,262 @@ export default class ArxivDailyPlugin extends Plugin {
     this.assertLibraryConnectionCurrent(connection, revision);
     this.libraryCatalog = catalog;
     return structuredClone(catalog);
+  }
+
+  getPersonalLibraryProfileSnapshot(): PersonalLibraryProfileSnapshot {
+    return structuredClone({
+      catalog: this.libraryCatalog,
+      proposal: this.libraryProposal,
+      profile: this.libraryProfile,
+      eligibility: evaluatePersonalLibraryInterestEligibility(this.libraryProfile, this.libraryCatalog),
+      authorization: this.getLibraryConnectionStatus(),
+      proposalLoadError: this.libraryProposalLoadError,
+      profileLoadError: this.libraryProfileLoadError,
+    });
+  }
+
+  getPersonalLibraryDirectionProposal(): PersonalLibraryDirectionProposal | null {
+    return this.libraryProposal ? structuredClone(this.libraryProposal) : null;
+  }
+
+  getPersonalLibraryInterestProfile(): PersonalLibraryInterestProfile | null {
+    return this.libraryProfile ? structuredClone(this.libraryProfile) : null;
+  }
+
+  async reloadPersonalLibraryProfileDocuments(): Promise<PersonalLibraryProfileSnapshot> {
+    const connection = this.libraryConnection;
+    if (!connection) {
+      this.libraryProposal = null;
+      this.libraryProfile = null;
+      this.libraryProposalLoadError = null;
+      this.libraryProfileLoadError = null;
+      return this.getPersonalLibraryProfileSnapshot();
+    }
+    const connectionRevision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const stores = this.buildPersonalLibraryProfileStores(connection);
+    await Promise.all([
+      stores.proposal.load().then((proposal) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryProposal = proposal;
+        this.libraryProposalLoadError = null;
+      }).catch((error) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryProposal = null;
+        this.libraryProposalLoadError = this.safeProfileLoadError("proposal", error);
+        this.logger?.error("personal library direction proposal load failed", error);
+      }),
+      stores.profile.load().then((profile) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryProfile = profile;
+        this.libraryProfileLoadError = null;
+      }).catch((error) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryProfile = null;
+        this.libraryProfileLoadError = this.safeProfileLoadError("profile", error);
+        this.logger?.error("personal library interest profile load failed", error);
+      }),
+    ]);
+    return this.getPersonalLibraryProfileSnapshot();
+  }
+
+  async generatePersonalLibraryDirections(): Promise<PersonalLibraryDirectionProposal> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    if (this.getLibraryConnectionStatus().kind !== "authorized") {
+      throw new Error("Authorize personal library model processing first");
+    }
+    const catalog = this.libraryCatalog;
+    if (!catalog) throw new Error("Scan and load the personal library catalog first");
+    const { scopeFingerprint } = this.libraryFingerprints(connection);
+    if (this.operations.find("personal-library-direction-generation", scopeFingerprint)) {
+      throw new Error("Personal library direction generation is already active");
+    }
+    const connectionRevision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const authorizationFingerprint = connection.authorization?.fingerprint;
+    const selectedInputFingerprint = this.selectedCatalogFingerprint(catalog);
+    const expectedProposalRevision = this.libraryProposal?.revision ?? null;
+    const llmSettings = structuredClone(this.settings.llm);
+    const store = this.buildPersonalLibraryProfileStores(connection).proposal;
+    const operation = this.operations.begin(
+      "personal-library-direction-generation",
+      "Personal library direction generation",
+      scopeFingerprint,
+    );
+    try {
+      this.assertPersonalLibraryGenerationCurrent({
+        connection, connectionRevision, outputRevision, authorizationFingerprint,
+        catalog, selectedInputFingerprint, expectedProposalRevision,
+      });
+      const proposal = await proposePersonalLibraryDirections({
+        catalog: structuredClone(catalog),
+        llm: new LlmClient(llmSettings, this.logger, this.host.http),
+        signal: operation.signal,
+        createId: () => crypto.randomUUID(),
+      });
+      operation.signal.throwIfAborted();
+      this.assertPersonalLibraryGenerationCurrent({
+        connection, connectionRevision, outputRevision, authorizationFingerprint,
+        catalog, selectedInputFingerprint, expectedProposalRevision,
+      });
+      return await this.enqueueLibraryMutation(async () => {
+        operation.signal.throwIfAborted();
+        this.assertPersonalLibraryGenerationCurrent({
+          connection, connectionRevision, outputRevision, authorizationFingerprint,
+          catalog, selectedInputFingerprint, expectedProposalRevision,
+        });
+        const saved = await store.replace(proposal, expectedProposalRevision);
+        this.libraryProposal = saved;
+        this.libraryProposalLoadError = null;
+        return structuredClone(saved);
+      });
+    } catch (error) {
+      if (this.isReviewPersistenceConflict(error)) await this.reloadPersonalLibraryProfileDocuments();
+      throw error;
+    } finally {
+      operation.finish();
+    }
+  }
+
+  async updatePersonalLibraryProposalCandidate(input: {
+    candidateId: string;
+    patch: PersonalLibraryDirectionTextPatch;
+    representativePaperKeys?: string[];
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProposal((proposal, catalog) =>
+      updatePersonalLibraryDirectionCandidate({
+        proposal,
+        candidateId: input.candidateId,
+        patch: input.patch,
+        ...(input.representativePaperKeys === undefined ? {} : {
+          representativePaperKeys: input.representativePaperKeys,
+          catalog,
+        }),
+      }));
+  }
+
+  async mergePersonalLibraryProposalCandidates(input: {
+    sourceCandidateIds: string[];
+    draft: PersonalLibraryReviewedDirectionDraft;
+    candidateId?: string;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProposal((proposal, catalog) =>
+      mergePersonalLibraryDirectionCandidates({
+        proposal,
+        sourceCandidateIds: input.sourceCandidateIds,
+        candidateId: input.candidateId ?? crypto.randomUUID(),
+        draft: input.draft,
+        catalog,
+      }));
+  }
+
+  async removePersonalLibraryProposalCandidate(candidateId: string): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProposal((proposal) =>
+      removePersonalLibraryDirectionCandidate({ proposal, candidateId }));
+  }
+
+  async confirmPersonalLibraryProposalCandidate(input: {
+    candidateId: string;
+    draft: PersonalLibraryReviewedDirectionDraft;
+    status: "active" | "disabled";
+    directionId?: string;
+    now?: Date;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    const guard = this.capturePersonalLibraryReviewGuard();
+    return this.enqueueLibraryMutation(async () => {
+      this.assertPersonalLibraryReviewGuard(guard);
+      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
+      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, true);
+      try {
+        this.assertPersonalLibraryReviewGuard(guard);
+        const saved = await confirmPersonalLibraryDirectionWithStores({
+          proposalStore: stores.proposal,
+          profileStore: stores.profile,
+          proposal: current.proposal!,
+          profile: current.profile,
+          catalog: current.catalog,
+          candidateId: input.candidateId,
+          directionId: input.directionId ?? crypto.randomUUID(),
+          status: input.status,
+          draft: input.draft,
+          now: input.now ?? new Date(),
+          expectedProposalRevision: current.proposal!.revision,
+          expectedProfileRevision: current.profile.revision,
+        });
+        this.assertPersonalLibraryReviewGuard(guard);
+        this.libraryProposal = saved.proposal;
+        this.libraryProfile = saved.profile;
+        this.libraryProposalLoadError = null;
+        this.libraryProfileLoadError = null;
+        return this.getPersonalLibraryProfileSnapshot();
+      } catch (error) {
+        if (this.isReviewPersistenceConflict(error)) {
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+        }
+        throw error;
+      }
+    });
+  }
+
+  async updatePersonalLibraryConfirmedDirection(input: {
+    directionId: string;
+    patch: PersonalLibraryDirectionTextPatch;
+    representativePaperKeys?: string[];
+    now?: Date;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile, catalog) =>
+      updatePersonalLibraryConfirmedDirection({
+        profile,
+        directionId: input.directionId,
+        patch: input.patch,
+        ...(input.representativePaperKeys === undefined ? {} : {
+          representativePaperKeys: input.representativePaperKeys,
+          catalog,
+        }),
+        now: input.now ?? new Date(),
+      }));
+  }
+
+  async disablePersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile) =>
+      disablePersonalLibraryConfirmedDirection({ profile, directionId, now }));
+  }
+
+  async enablePersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile, catalog) =>
+      enablePersonalLibraryConfirmedDirection({ profile, directionId, catalog, now }));
+  }
+
+  async mergePersonalLibraryConfirmedDirections(input: {
+    sourceDirectionIds: string[];
+    draft: PersonalLibraryReviewedDirectionDraft;
+    status: "active" | "disabled";
+    directionId?: string;
+    now?: Date;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile, catalog) =>
+      mergePersonalLibraryConfirmedDirections({
+        profile,
+        sourceDirectionIds: input.sourceDirectionIds,
+        directionId: input.directionId ?? crypto.randomUUID(),
+        status: input.status,
+        draft: input.draft,
+        catalog,
+        now: input.now ?? new Date(),
+      }));
+  }
+
+  async removePersonalLibraryConfirmedDirection(input: {
+    directionId: string;
+    mode: "restrict" | "cascade";
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile) =>
+      removePersonalLibraryConfirmedDirection({
+        profile,
+        directionId: input.directionId,
+        mode: input.mode,
+      }));
   }
 
   async scanPersonalLibrary(): Promise<PersonalLibraryCatalog> {
@@ -504,7 +841,8 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async reloadStateStoreForOutputPaths(): Promise<void> {
-    this.cancelPersonalLibraryScans("output paths changed");
+    this.libraryOutputRevision += 1;
+    this.cancelPersonalLibraryOperations("output paths changed");
     await this.enqueueLibraryMutation(async () => {
       const nextStore = createStorageStateStore(
         this.host.storage,
@@ -521,6 +859,7 @@ export default class ArxivDailyPlugin extends Plugin {
       );
       this.scheduler.replaceRunHistory(this.runHistoryStore);
       await this.reloadPersonalLibraryCatalog();
+      await this.reloadPersonalLibraryProfileDocuments();
       if (this.settings.schedule.enabled) {
         this.progress.setIdle(latestCompletedDate(nextStore));
       } else {
@@ -620,6 +959,241 @@ export default class ArxivDailyPlugin extends Plugin {
     );
   }
 
+  private buildPersonalLibraryProfileStores(connection: PersistedLibraryConnection): {
+    proposal: PersonalLibraryDirectionProposalStore;
+    profile: PersonalLibraryInterestProfileStore;
+  } {
+    if (!this.host?.storage.writeTextAtomic) {
+      throw new Error("Personal library review requires atomic storage writes");
+    }
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    const options = { onWarning: (message: string, error?: unknown) => this.logger.warn(message, error) };
+    return {
+      proposal: new PersonalLibraryDirectionProposalStore(
+        this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
+      ),
+      profile: new PersonalLibraryInterestProfileStore(
+        this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
+      ),
+    };
+  }
+
+  private capturePersonalLibraryReviewGuard(): {
+    connection: PersistedLibraryConnection;
+    connectionRevision: number;
+    outputRevision: number;
+  } {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    return {
+      connection,
+      connectionRevision: this.libraryConnectionRevision,
+      outputRevision: this.libraryOutputRevision,
+    };
+  }
+
+  private assertPersonalLibraryReviewGuard(guard: {
+    connection: PersistedLibraryConnection;
+    connectionRevision: number;
+    outputRevision: number;
+  }): void {
+    this.assertLibraryConnectionCurrent(guard.connection, guard.connectionRevision);
+    if (this.libraryOutputRevision !== guard.outputRevision) {
+      throw new Error("Output paths changed during personal library review");
+    }
+  }
+
+  private async loadPersonalLibraryReviewStateDirect(
+    guard: { connection: PersistedLibraryConnection; connectionRevision: number; outputRevision: number },
+    stores: { proposal: PersonalLibraryDirectionProposalStore; profile: PersonalLibraryInterestProfileStore },
+    requireProposal: boolean,
+  ): Promise<{
+    catalog: PersonalLibraryCatalog;
+    proposal: PersonalLibraryDirectionProposal | null;
+    profile: PersonalLibraryInterestProfile;
+  }> {
+    this.assertPersonalLibraryReviewGuard(guard);
+    const catalog = this.libraryCatalog;
+    if (!catalog) throw new Error("Scan and load the personal library catalog first");
+    await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+    if (this.libraryProfileLoadError || !this.libraryProfile) {
+      throw new Error("Personal library confirmed profile is unavailable");
+    }
+    if (requireProposal && (this.libraryProposalLoadError || !this.libraryProposal)) {
+      throw new Error("Personal library direction proposal is unavailable");
+    }
+    this.assertPersonalLibraryReviewGuard(guard);
+    return {
+      catalog: structuredClone(catalog),
+      proposal: this.libraryProposal ? structuredClone(this.libraryProposal) : null,
+      profile: structuredClone(this.libraryProfile),
+    };
+  }
+
+  private async loadPersonalLibraryReviewDocumentsDirect(
+    guard: { connection: PersistedLibraryConnection; connectionRevision: number; outputRevision: number },
+    stores: { proposal: PersonalLibraryDirectionProposalStore; profile: PersonalLibraryInterestProfileStore },
+  ): Promise<void> {
+    const [proposal, profile] = await Promise.allSettled([stores.proposal.load(), stores.profile.load()]);
+    this.assertPersonalLibraryReviewGuard(guard);
+    if (proposal.status === "fulfilled") {
+      this.libraryProposal = proposal.value;
+      this.libraryProposalLoadError = null;
+    } else {
+      this.libraryProposal = null;
+      this.libraryProposalLoadError = this.safeProfileLoadError("proposal", proposal.reason);
+      this.logger?.error("personal library direction proposal load failed", proposal.reason);
+    }
+    if (profile.status === "fulfilled") {
+      this.libraryProfile = profile.value;
+      this.libraryProfileLoadError = null;
+    } else {
+      this.libraryProfile = null;
+      this.libraryProfileLoadError = this.safeProfileLoadError("profile", profile.reason);
+      this.logger?.error("personal library interest profile load failed", profile.reason);
+    }
+  }
+
+  private async mutatePersonalLibraryProposal(
+    mutation: (
+      proposal: PersonalLibraryDirectionProposal,
+      catalog: PersonalLibraryCatalog,
+    ) => PersonalLibraryDirectionProposal,
+  ): Promise<PersonalLibraryProfileSnapshot> {
+    const guard = this.capturePersonalLibraryReviewGuard();
+    return this.enqueueLibraryMutation(async () => {
+      this.assertPersonalLibraryReviewGuard(guard);
+      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
+      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, true);
+      try {
+        const saved = await stores.proposal.replace(
+          mutation(current.proposal!, current.catalog),
+          current.proposal!.revision,
+        );
+        this.assertPersonalLibraryReviewGuard(guard);
+        this.libraryProposal = saved;
+        this.libraryProposalLoadError = null;
+        return this.getPersonalLibraryProfileSnapshot();
+      } catch (error) {
+        if (this.isReviewPersistenceConflict(error)) {
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+        }
+        throw error;
+      }
+    });
+  }
+
+  private async mutatePersonalLibraryProfile(
+    mutation: (
+      profile: PersonalLibraryInterestProfile,
+      catalog: PersonalLibraryCatalog,
+    ) => PersonalLibraryInterestProfile,
+  ): Promise<PersonalLibraryProfileSnapshot> {
+    const guard = this.capturePersonalLibraryReviewGuard();
+    return this.enqueueLibraryMutation(async () => {
+      this.assertPersonalLibraryReviewGuard(guard);
+      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
+      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, false);
+      try {
+        const saved = await stores.profile.replace(
+          mutation(current.profile, current.catalog),
+          current.profile.revision,
+        );
+        this.assertPersonalLibraryReviewGuard(guard);
+        this.libraryProfile = saved;
+        this.libraryProfileLoadError = null;
+        return this.getPersonalLibraryProfileSnapshot();
+      } catch (error) {
+        if (this.isReviewPersistenceConflict(error)) {
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
+        }
+        throw error;
+      }
+    });
+  }
+
+  private selectedCatalogFingerprint(catalog: PersonalLibraryCatalog): string {
+    return createPersonalLibraryCatalogInputFingerprint({
+      scopeFingerprint: catalog.scopeFingerprint,
+      identificationFingerprint: catalog.identificationFingerprint,
+      papers: selectPersonalLibraryDirectionPapers(catalog),
+    });
+  }
+
+  private assertPersonalLibraryGenerationCurrent(input: {
+    connection: PersistedLibraryConnection;
+    connectionRevision: number;
+    outputRevision: number;
+    authorizationFingerprint?: string;
+    catalog: PersonalLibraryCatalog;
+    selectedInputFingerprint: string;
+    expectedProposalRevision: number | null;
+  }): void {
+    this.assertLibraryConnectionCurrent(input.connection, input.connectionRevision);
+    if (this.libraryOutputRevision !== input.outputRevision) {
+      throw new Error("Output paths changed during personal library direction generation");
+    }
+    if (this.getLibraryConnectionStatus().kind !== "authorized"
+      || this.libraryConnection?.authorization?.fingerprint !== input.authorizationFingerprint) {
+      throw new Error("Personal library model authorization changed during generation");
+    }
+    const currentCatalog = this.libraryCatalog;
+    if (!currentCatalog
+      || currentCatalog.scopeFingerprint !== input.catalog.scopeFingerprint
+      || currentCatalog.identificationFingerprint !== input.catalog.identificationFingerprint
+      || this.selectedCatalogFingerprint(currentCatalog) !== input.selectedInputFingerprint) {
+      throw new Error("Selected personal library catalog evidence changed during generation");
+    }
+    if ((this.libraryProposal?.revision ?? null) !== input.expectedProposalRevision) {
+      throw new Error("Personal library direction proposal changed during generation");
+    }
+  }
+
+  private assertPersonalLibraryDocumentLoadCurrent(
+    connection: PersistedLibraryConnection,
+    connectionRevision: number,
+    outputRevision: number,
+  ): void {
+    this.assertLibraryConnectionCurrent(connection, connectionRevision);
+    if (this.libraryOutputRevision !== outputRevision) {
+      throw new Error("Output paths changed while loading personal library review state");
+    }
+  }
+
+  private resetPersonalLibraryProfileState(): void {
+    this.libraryCatalog = null;
+    this.libraryProposal = null;
+    this.libraryProfile = null;
+    this.libraryProposalLoadError = null;
+    this.libraryProfileLoadError = null;
+  }
+
+  private safeProfileLoadError(
+    kind: "proposal" | "profile",
+    error: unknown,
+  ): PersonalLibraryReviewLoadError {
+    const code = typeof error === "object" && error !== null && "code" in error
+      && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : "load-failed";
+    const label = kind === "proposal" ? "direction proposal" : "confirmed profile";
+    return { kind, code, message: `Personal library ${label} could not be loaded (${code}).` };
+  }
+
+  private isReviewPersistenceConflict(error: unknown): boolean {
+    if (typeof error !== "object" || error === null) return false;
+    const code = (error as { code?: unknown }).code;
+    return code === "stale" || code === "partial-confirmation-conflict";
+  }
+
+  private effectiveLlmEndpoint(baseUrl: string): string {
+    try {
+      return buildChatCompletionsUrl(baseUrl.trim());
+    } catch {
+      return baseUrl.trim();
+    }
+  }
+
   private assertLibraryConnectionCurrent(
     connection: PersistedLibraryConnection,
     revision: number,
@@ -633,13 +1207,31 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private cancelPersonalLibraryScans(reason: string): void {
+    this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-scan"]);
+  }
+
+  private cancelPersonalLibraryDirectionGeneration(reason: string): void {
+    this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-direction-generation"]);
+  }
+
+  private cancelPersonalLibraryOperations(reason: string): void {
+    this.cancelPersonalLibraryOperationKinds(reason, [
+      "personal-library-scan",
+      "personal-library-direction-generation",
+    ]);
+  }
+
+  private cancelPersonalLibraryOperationKinds(
+    reason: string,
+    kinds: Array<"personal-library-scan" | "personal-library-direction-generation">,
+  ): void {
     const registry = this.operations as OperationRegistry & {
       snapshot?: OperationRegistry["snapshot"];
       cancel?: OperationRegistry["cancel"];
     };
     if (!registry.snapshot || !registry.cancel) return;
     for (const operation of registry.snapshot()) {
-      if (operation.kind === "personal-library-scan") {
+      if (kinds.includes(operation.kind as typeof kinds[number])) {
         registry.cancel(operation.id, reason);
       }
     }

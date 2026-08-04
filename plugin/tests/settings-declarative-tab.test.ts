@@ -66,6 +66,10 @@ function makeTab() {
   const plugin = {
     settings,
     saveSettings,
+    setLlmBaseUrl: vi.fn(async (value: string) => {
+      settings.llm.baseUrl = value.trim();
+      await saveSettings();
+    }),
     manifest: { version: "0.0.0-test" },
     app: {},
     stateStore: { snapshot: () => ({}) },

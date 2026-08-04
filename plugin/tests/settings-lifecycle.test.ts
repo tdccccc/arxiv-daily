@@ -46,6 +46,74 @@ describe("plugin directory resolution", () => {
 });
 
 describe("plugin settings reload lifecycle", () => {
+  it("routes base URL persistence through effective-endpoint cancellation", async () => {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const cancel = vi.fn();
+    Object.assign(plugin, {
+      settings,
+      operations: {
+        snapshot: () => [{ id: "generation:1", kind: "personal-library-direction-generation" }],
+        cancel,
+      },
+      logger: { setSensitiveValues: vi.fn() },
+      saveData: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await plugin.setLlmBaseUrl(`${settings.llm.baseUrl}/`);
+    expect(cancel).not.toHaveBeenCalled();
+    await plugin.setLlmBaseUrl("https://other.example/v1");
+    expect(cancel).toHaveBeenCalledWith("generation:1", "model endpoint changed");
+  });
+
+  it("rolls back base URL when persistence fails", async () => {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const previous = settings.llm.baseUrl;
+    Object.assign(plugin, {
+      settings,
+      operations: { snapshot: () => [], cancel: vi.fn() },
+      logger: { setSensitiveValues: vi.fn() },
+      saveData: vi.fn().mockRejectedValue(new Error("disk full")),
+    });
+
+    await expect(plugin.setLlmBaseUrl("https://other.example/v1")).rejects.toThrow("disk full");
+    expect(settings.llm.baseUrl).toBe(previous);
+  });
+
+  it("serializes overlapping base URL setters without stale rollback", async () => {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const persisted: string[] = [];
+    let releaseFirst!: () => void;
+    const saveData = vi.fn(async (data: { settings: typeof settings }) => {
+      const value = data.settings.llm.baseUrl;
+      if (saveData.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        throw new Error("first failed");
+      }
+      persisted.push(value);
+    });
+    Object.assign(plugin, {
+      settings,
+      operations: { snapshot: () => [], cancel: vi.fn() },
+      logger: { setSensitiveValues: vi.fn() },
+      saveData,
+    });
+
+    const first = plugin.setLlmBaseUrl("https://first.example/v1");
+    const firstRejected = expect(first).rejects.toThrow("first failed");
+    await vi.waitFor(() => expect(saveData).toHaveBeenCalledTimes(1));
+    const second = plugin.setLlmBaseUrl("https://second.example/v1");
+    expect(settings.llm.baseUrl).toBe("https://first.example/v1");
+    releaseFirst();
+    await firstRejected;
+    await second;
+
+    expect(settings.llm.baseUrl).toBe("https://second.example/v1");
+    expect(persisted).toEqual(["https://second.example/v1"]);
+  });
+
   it("sanitizes detail selection immediately before saving", () => {
     const saveBody = pluginMainSource.match(
       /async saveSettings\(\): Promise<void> \{[\s\S]*?\n  \}/,

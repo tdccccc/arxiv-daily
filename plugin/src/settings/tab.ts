@@ -212,6 +212,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     ) {
       value = value.trim();
     }
+    if (key === SETTING_KEYS.llm.baseUrl && typeof value === "string") {
+      await this.plugin.setLlmBaseUrl(value);
+      return;
+    }
     writeSettingValue(this.plugin.settings, key, value);
     await this.plugin.saveSettings();
   }
@@ -592,8 +596,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setPlaceholder("https://api.deepseek.com/v1")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
           .onChange(async (v) => {
-            s.llm.baseUrl = v;
-            await this.plugin.saveSettings();
+            await this.plugin.setLlmBaseUrl(v);
             renderLlmHttpWarning(v);
             this.refreshSetupGuide();
           });

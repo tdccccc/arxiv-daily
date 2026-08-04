@@ -2,7 +2,8 @@ export type OperationKind =
   | "daily-run"
   | "detail-summary"
   | "pdf-download"
-  | "personal-library-scan";
+  | "personal-library-scan"
+  | "personal-library-direction-generation";
 
 export interface OperationSnapshot {
   readonly id: string;
