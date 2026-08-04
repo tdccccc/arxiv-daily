@@ -24,6 +24,7 @@ export * from "./pipeline/atom-parser";
 export * from "./pipeline/daily-paper-summary";
 export * from "./pipeline/daily-summary-assembler";
 export * from "./pipeline/discovery-provenance-marker";
+export * from "./pipeline/personal-novelty-marker";
 export * from "./pipeline/daily-summary-parser";
 export * from "./pipeline/daily-summary-rescue";
 export * from "./pipeline/detail-selector";

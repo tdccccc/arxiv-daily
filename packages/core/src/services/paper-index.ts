@@ -3,6 +3,8 @@ import {
   normalizePaperDiscoveryProvenance,
 } from "../pipeline/discovery-provenance-marker";
 import type { PaperDiscoveryProvenance } from "../pipeline/personalized-paper-filter";
+import { normalizePersonalNovelty } from "../pipeline/personalized-novelty";
+import type { PersonalNovelty } from "../pipeline/personalized-novelty";
 import type { OutputSettings } from "../settings/types";
 import {
   portablePathCollisionKey,
@@ -75,6 +77,8 @@ export interface PaperIndexEntry {
   dailyReports: string[];
   /** Occurrence projection keyed by normalized committed daily-report path. */
   discoveryProvenanceByReport: Record<string, PaperDiscoveryProvenance>;
+  /** Validated personal-novelty occurrence projection keyed by normalized committed daily-report path. */
+  noveltyByReport: Record<string, PersonalNovelty>;
   /** Vault-relative note path; stem is externalId, not paperKey. */
   paperPath: string | null;
   arxivUrl: string;
@@ -297,6 +301,43 @@ export class PaperIndexStore {
           }
         } else if (Object.prototype.hasOwnProperty.call(entry.discoveryProvenanceByReport, report)) {
           delete entry.discoveryProvenanceByReport[report];
+          changed += 1;
+        }
+      }
+      if (changed > 0) await this.save(inbox);
+      return changed;
+    });
+  }
+
+  /**
+   * Sets or clears the per-report personal-novelty occurrence for every indexed
+   * entry, mirroring reconcileDailyReportOccurrenceProvenance. Occurrences are
+   * strictly normalized; a malformed occurrence rejects the whole mutation so
+   * the derived index never persists partial projection state.
+   */
+  async reconcileDailyReportOccurrenceNovelty(
+    dailyReport: string,
+    occurrences: Array<{ arxivId: string; novelty: PersonalNovelty }>,
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const report = normalizeStoragePath(dailyReport);
+      const next = new Map<string, PersonalNovelty>();
+      for (const occurrence of occurrences) {
+        const novelty = normalizePersonalNovelty(occurrence.novelty);
+        if (!novelty) throw new PaperIndexError("invalid occurrence personal novelty");
+        next.set(paperKeyFromArxivId(occurrence.arxivId), novelty);
+      }
+      let changed = 0;
+      for (const entry of Object.values(inbox.papers)) {
+        const novelty = next.get(entry.paperKey);
+        if (novelty) {
+          if (JSON.stringify(entry.noveltyByReport[report]) !== JSON.stringify(novelty)) {
+            entry.noveltyByReport[report] = novelty;
+            changed += 1;
+          }
+        } else if (Object.prototype.hasOwnProperty.call(entry.noveltyByReport, report)) {
+          delete entry.noveltyByReport[report];
           changed += 1;
         }
       }
@@ -637,6 +678,7 @@ function upsertEntry(
       ? appendUnique(existing?.dailyReports ?? [], input.dailyReport)
       : existing?.dailyReports ?? [],
     discoveryProvenanceByReport: existing?.discoveryProvenanceByReport ?? {},
+    noveltyByReport: existing?.noveltyByReport ?? {},
     paperPath,
     arxivUrl: resources.absUrl,
     pdfUrl: resources.pdfUrl,
@@ -711,6 +753,7 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     seenDates: stringArray(obj.seenDates),
     dailyReports: stringArray(obj.dailyReports),
     discoveryProvenanceByReport: normalizeProvenanceByReport(obj.discoveryProvenanceByReport),
+    noveltyByReport: normalizeNoveltyByReport(obj.noveltyByReport),
     paperPath: obj.paperPath ? normalizeStoragePath(String(obj.paperPath)) : null,
     arxivUrl: resources?.absUrl ?? stringOr(obj.arxivUrl, ""),
     pdfUrl: resources?.pdfUrl ?? stringOr(obj.pdfUrl, ""),
@@ -881,6 +924,22 @@ function normalizeProvenanceByReport(value: unknown): Record<string, PaperDiscov
     const normalizedPath = normalizeStoragePath(path);
     const provenance = normalizePaperDiscoveryProvenance(raw);
     if (normalizedPath && provenance) out[normalizedPath] = provenance;
+  }
+  return out;
+}
+
+/**
+ * Strict per-report novelty normalization: structurally invalid novelty records
+ * are omitted without failing the whole document (the discovery-provenance
+ * precedent); only valid occurrences survive into the derived index.
+ */
+function normalizeNoveltyByReport(value: unknown): Record<string, PersonalNovelty> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, PersonalNovelty> = {};
+  for (const [path, raw] of Object.entries(value)) {
+    const normalizedPath = normalizeStoragePath(path);
+    const novelty = normalizePersonalNovelty(raw);
+    if (normalizedPath && novelty) out[normalizedPath] = novelty;
   }
   return out;
 }

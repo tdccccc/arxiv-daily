@@ -9,6 +9,11 @@ import {
   escapeDiscoveryProvenancePlainText,
   renderDiscoveryProvenanceMarker,
 } from "./discovery-provenance-marker";
+import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
+import type {
+  PersonalNoveltyDifferenceType,
+  PersonalNoveltyWithBasis,
+} from "./personalized-novelty";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
   "<!-- arxiv-daily-emergency-report:v1 -->";
@@ -36,6 +41,29 @@ export const DAILY_SUMMARY_FIELD_LABELS: Record<
     ["whyRelevant", "Research value"],
     ["limitations", "Scope and limits"],
   ],
+};
+
+/** Localized difference-type labels for the visible novelty line. */
+export const PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS: Record<
+  SummaryLanguage,
+  Record<PersonalNoveltyDifferenceType, string>
+> = {
+  zh: {
+    "new-task": "新任务",
+    "new-method": "新方法",
+    "new-dataset": "新数据集",
+    "new-experiment": "新实验",
+    "efficiency-result": "效率结果",
+    "counter-evidence": "反例证据",
+  },
+  en: {
+    "new-task": "new task",
+    "new-method": "new method",
+    "new-dataset": "new dataset",
+    "new-experiment": "new experiment",
+    "efficiency-result": "efficiency result",
+    "counter-evidence": "counter-evidence",
+  },
 };
 
 /**
@@ -156,9 +184,19 @@ export function renderPaperHeader(
           renderDiscoveryProvenanceMarker(
             paper.discoveryProvenance,
             paper.id,
-            reportDate ?? (() => { throw new TypeError("report date is required for provenance"); })(),
+            requireReportDate(reportDate),
           ),
           renderVisibleDiscoveryProvenance(paper.discoveryProvenance, language),
+        ]
+      : []),
+    ...(paper.personalNovelty
+      ? [
+          renderPersonalNoveltyMarker(
+            paper.personalNovelty,
+            paper.id,
+            requireReportDate(reportDate),
+          ),
+          renderVisiblePersonalNovelty(paper.personalNovelty, language),
         ]
       : []),
     `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
@@ -196,6 +234,37 @@ function renderVisibleDiscoveryProvenance(
     : `> 发现来源：${sources.join("；")}${depth}`;
 }
 
+/**
+ * Deterministic localized novelty line: localized difference-type label,
+ * named representative prior papers (paperKey + trusted title carried on the
+ * assembly paper), the explicit metadata-and-abstract evidence depth, and the
+ * bounded explanation. Every literal is escaped to plain text like the
+ * discovery-provenance projection.
+ */
+function renderVisiblePersonalNovelty(
+  novelty: NonNullable<DailySummaryAssemblyPaper["personalNovelty"]>,
+  language: SummaryLanguage,
+): string {
+  const typeLabel = PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS[language][novelty.differenceType];
+  const basis = novelty.comparisonBasis.map((paperKey) => {
+    const title = novelty.comparisonBasisTitles[paperKey];
+    const name = title
+      ? escapeDiscoveryProvenancePlainText(title)
+      : escapeDiscoveryProvenancePlainText(paperKey);
+    return `${name} (${escapeDiscoveryProvenancePlainText(paperKey)})`;
+  }).join(language === "en" ? "; " : "；");
+  const depth = language === "en" ? "metadata and abstract" : "元数据与摘要";
+  const explanation = escapeDiscoveryProvenancePlainText(novelty.explanation);
+  return language === "en"
+    ? `> Personal novelty: ${typeLabel} vs. prior papers: ${basis}; evidence depth: ${depth}; ${explanation}`
+    : `> 个人新颖性：${typeLabel}，对比先验文献：${basis}；证据深度：${depth}；${explanation}`;
+}
+
+function requireReportDate(reportDate?: string): string {
+  if (!reportDate) throw new TypeError("report date is required for paper markers");
+  return reportDate;
+}
+
 export function renderStructuredFields(
   summary: StructuredPaperSummary,
   language: SummaryLanguage,
@@ -222,7 +291,9 @@ export function renderFallbackBlock(
   const abstract = normalizeMarkdownLine(originalAbstract);
   const headingIndex = leadingMarkers.length;
   lines.splice(
-    headingIndex + (paper.discoveryProvenance ? 3 : 1),
+    headingIndex + 1
+      + (paper.discoveryProvenance ? 2 : 0)
+      + (paper.personalNovelty ? 2 : 0),
     0,
     warning,
     `<!-- ${DAILY_SUMMARY_FALLBACK_MARKER_PREFIX}:${paper.id} -->`,

@@ -33,6 +33,7 @@ import type {
 } from "./personalized-paper-filter";
 import {
   runPersonalNoveltyStage,
+  attachPersonalNoveltyBasis,
   type NoveltyCheckpointPort,
   type PersonalNoveltyMatchInput,
   type PersonalNoveltyStageOutcome,
@@ -47,6 +48,7 @@ import {
 } from "./summarizer";
 import {
   parseDailyReportDiscoveryProvenance,
+  parseDailyReportPersonalNovelty,
   extractPaperSummaries,
 } from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
@@ -324,7 +326,27 @@ export class ArxivPipeline {
           if (noveltyByKey.size > 0) {
             filtered = filtered.map((paper) => {
               const novelty = noveltyByKey.get(paperKeyFromArxivId(paper.id));
-              return novelty ? { ...paper, personalNovelty: novelty } : paper;
+              if (!novelty) return paper;
+              try {
+                // Resolve display titles from the same trusted representative
+                // evidence the novelty stage validated against. A contract
+                // violation degrades only this paper to no-novelty; it must
+                // never fail, block, or rewrite the reliable daily run.
+                return {
+                  ...paper,
+                  personalNovelty: attachPersonalNoveltyBasis(
+                    novelty,
+                    noveltyInput.representatives,
+                  ),
+                };
+              } catch (error) {
+                if (isCancellationError(error)) throw error;
+                this.deps.logger.warn(
+                  `pipeline: personal novelty basis enrichment failed for ${paper.id}`,
+                  error,
+                );
+                return paper;
+              }
             });
           }
         } finally {
@@ -566,6 +588,16 @@ export class ArxivPipeline {
           logger.warn(`pipeline: committed provenance projection invalid: ${provenance.reason}`);
         }
         throwIfCancelled(signal);
+        const novelty = parseDailyReportPersonalNovelty(dailySummary, dateStr);
+        if (novelty.kind === "valid") {
+          await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
+            dailyPath,
+            novelty.occurrences,
+          );
+        } else {
+          logger.warn(`pipeline: committed novelty projection invalid: ${novelty.reason}`);
+        }
+        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
@@ -697,6 +729,16 @@ export class ArxivPipeline {
         );
       } else {
         this.deps.logger.warn(`pipeline: existing daily provenance invalid: ${provenance.reason}`);
+      }
+      throwIfCancelled(signal);
+      const novelty = parseDailyReportPersonalNovelty(markdown, dateStr);
+      if (novelty.kind === "valid") {
+        await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
+          dailyPath,
+          novelty.occurrences,
+        );
+      } else {
+        this.deps.logger.warn(`pipeline: existing daily novelty invalid: ${novelty.reason}`);
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);

@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
 import { renderDiscoveryProvenanceMarker } from "../src/pipeline/discovery-provenance-marker";
+import { renderPersonalNoveltyMarker } from "../src/pipeline/personal-novelty-marker";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
@@ -820,6 +821,160 @@ describe("ArxivPipeline", () => {
     });
     await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
     expect(paperIndex.reconcileDailyReportOccurrenceProvenance).not.toHaveBeenCalled();
+  });
+
+  it("restores occurrence novelty from committed Markdown during existing-daily repair", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const novelty = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "Repaired validated novelty.",
+    };
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "## Topic", "### Existing paper", renderPersonalNoveltyMarker(novelty, id, "2026-05-11"),
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    ].join("\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
+      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 1),
+      setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
+    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledWith(
+      "daily/2026-05-11.md", [{ arxivId: id, novelty }],
+    );
+  });
+
+  it("reconciles provenance but skips novelty mutation when committed novelty markers are invalid", async () => {
+    const d = makeDeps();
+    const id = "2607.00001";
+    const provenance = { manualTopicTags: ["photo-z"], directions: [] };
+    const noveltyMarker = renderPersonalNoveltyMarker(
+      { differenceType: "new-method", comparisonBasis: ["arxiv:2501.00001"],
+        evidenceDepth: "metadata-and-abstract", explanation: "Repaired." },
+      id, "2026-05-11",
+    );
+    d.writer.dailyExists.mockResolvedValue(true);
+    d.writer.readDaily.mockResolvedValue([
+      "## Topic", "### Existing paper",
+      renderDiscoveryProvenanceMarker(provenance, id, "2026-05-11"),
+      noveltyMarker, noveltyMarker,
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+    ].join("\n"));
+    const paperIndex = {
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => undefined),
+      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
+      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 0),
+      setSummaries: vi.fn(async () => 0),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
+      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
+    expect(paperIndex.reconcileDailyReportOccurrenceProvenance).toHaveBeenCalledWith(
+      "daily/2026-05-11.md", [{ arxivId: id, provenance }],
+    );
+    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).not.toHaveBeenCalled();
+  });
+
+  it("recovers committed occurrence novelty through existing-daily repair after a post-commit index interruption", async () => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    const novelty = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "Committed validated novelty.",
+    };
+    let dailyExists = false;
+    d.writer.dailyExists = vi.fn(async () => dailyExists);
+    d.writer.writeDaily = vi.fn(async (writtenDate: string, markdown: string) => {
+      dailyExists = true;
+      d.writes[`daily/${writtenDate}.md`] = markdown;
+      return `daily/${writtenDate}.md`;
+    });
+    d.writer.readDaily = vi.fn(async (writtenDate: string) => d.writes[`daily/${writtenDate}.md`] ?? "");
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+    );
+    let failDailyLink = true;
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
+        inputs.map((input) => ({
+          wasNew: true,
+          entry: { status: "inbox", paperPath: null, ...input },
+        })),
+      ),
+      reconcilePaperDetails: vi.fn(async () => 0),
+      addDailyReports: vi.fn(async () => {
+        if (failDailyLink) {
+          failDailyLink = false;
+          throw new Error("index disk full");
+        }
+      }),
+      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
+      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 1),
+      setSummaries: vi.fn(async () => 1),
+    };
+    const committed = [
+      "### Paper",
+      renderPersonalNoveltyMarker(novelty, id, date),
+      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      "- **核心问题**: Problem.",
+    ].join("\n");
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => ({
+        markdown: committed,
+        slots: [],
+      })) as any,
+    });
+
+    await expect(pipeline.runForDate(date)).resolves.toEqual({
+      kind: "failed_transient",
+      reason: "paper index daily report update failed: index disk full",
+    });
+    await expect(pipeline.runForDate(date)).resolves.toMatchObject({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledWith(
+      `daily/${date}.md`,
+      [{ arxivId: id, novelty }],
+    );
+    // The post-commit interruption happened before novelty reconciliation on
+    // the first run; the repair run recovered it from the committed Markdown.
+    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledTimes(1);
+    expect(paperIndex.reconcileDailyReportOccurrenceProvenance).toHaveBeenCalled();
   });
 
   it("repairs IDs from standalone legacy controls but ignores inline fake marker prose", async () => {

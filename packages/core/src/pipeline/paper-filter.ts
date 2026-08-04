@@ -22,7 +22,7 @@ import {
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
-import type { PersonalNovelty } from "./personalized-novelty";
+import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 
 export {
   buildPaperFilterRequest,
@@ -40,8 +40,8 @@ export interface FilteredPaper extends PaperMeta {
   isDetail: boolean;
   /** Present only on the personalized path; legacy manual-only objects are unchanged. */
   discoveryProvenance?: PaperDiscoveryProvenance;
-  /** Validated personal novelty, attached only to library-derived papers with a novelty outcome. */
-  personalNovelty?: PersonalNovelty;
+  /** Validated personal novelty with trusted basis display titles, attached only to library-derived papers with a novelty outcome. */
+  personalNovelty?: PersonalNoveltyWithBasis;
 }
 
 export interface DailyFilterCheckpointPort {

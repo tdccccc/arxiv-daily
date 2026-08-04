@@ -6,14 +6,20 @@ import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { parseRecent } from "../../src/pipeline/arxiv-parser";
 import { summarizeDaily as realSummarizeDaily } from "../../src/pipeline/summarizer";
+import {
+  parseDailyReportDiscoveryProvenance,
+  parseDailyReportPersonalNovelty,
+} from "../../src/pipeline/daily-summary-parser";
 import type { ChatMessage } from "../../src/llm/client";
 import {
   buildDailySummaryCheckpointFingerprintInput,
   createDailySummaryCompatibilityFingerprint,
 } from "../../src/services/daily-summary-checkpoint-store";
 import { Logger } from "../../src/services/logger";
+import { RunCancelledError } from "../../src/services/cancellation";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { PersonalizedDiscoveryInput } from "../../src/pipeline/personalized-paper-filter";
+import * as personalizedNovelty from "../../src/pipeline/personalized-novelty";
 import {
   PERSONAL_NOVELTY_MAX_OUTPUT_CODE_UNITS,
   type NoveltyCheckpointRecord,
@@ -295,6 +301,7 @@ describe("pipeline personal novelty stage", () => {
       comparisonBasis: ["arxiv:2501.00001"],
       evidenceDepth: "metadata-and-abstract",
       explanation: "Introduces a method absent from the representative abstracts.",
+      comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one" },
     });
     expect(byId["2605.08068"].personalNovelty).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain("personalNovelty");
@@ -555,8 +562,37 @@ describe("pipeline personal novelty stage", () => {
     expect(raw).not.toContain("novelty");
     expect(raw).not.toContain("Introduces a method");
     const markdown = Object.values(writes)[0] ?? "";
+    // The committed report legitimately carries the rendered novelty (marker +
+    // visible line), but never the internal camelCase field name.
     expect(markdown).not.toContain("personalNovelty");
-    expect(markdown).not.toContain("Introduces a method");
+    expect(markdown).toContain("<!-- arxiv-daily-personal-novelty:v1:");
+    expect(markdown).toContain("Prior paper one (arxiv:2501\\.00001)");
+    expect(markdown).toContain("Introduces a method");
+  });
+
+  it("carries validated novelty through deterministic daily rendering into the committed report", async () => {
+    const { pipeline, writes } = makePipeline({
+      summarizeDaily: realSummarizeDaily as any,
+    });
+    expect(await pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    const markdown = Object.values(writes)[0]!;
+    expect(markdown).toContain("Prior paper one (arxiv:2501\\.00001)");
+    expect(markdown).toContain("证据深度：元数据与摘要");
+    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v1:/gm)).toHaveLength(1);
+    expect(parseDailyReportPersonalNovelty(markdown, DATE)).toEqual({
+      kind: "valid",
+      occurrences: [{
+        arxivId: "2605.08080",
+        novelty: {
+          differenceType: "new-method",
+          comparisonBasis: ["arxiv:2501.00001"],
+          evidenceDepth: "metadata-and-abstract",
+          explanation: "Introduces a method absent from the representative abstracts.",
+        },
+      }],
+    });
+    // Marker families stay independent in the committed report.
+    expect(parseDailyReportDiscoveryProvenance(markdown, DATE).kind).toBe("valid");
   });
 
   it("does no novelty stage work when no papers survive filtering", async () => {
@@ -606,5 +642,54 @@ describe("pipeline personal novelty stage", () => {
     expect(lookupNoveltyReusable).not.toHaveBeenCalled();
     expect(saveNovelty).not.toHaveBeenCalled();
     expect(capturedPapers.every((paper) => paper.personalNovelty === undefined)).toBe(true);
+  });
+
+  it("degrades only the affected paper when basis enrichment fails and the run still completes", async () => {
+    const ids = firstBucketIds();
+    const warnSpy = vi.spyOn(Logger.prototype, "warn");
+    const attachSpy = vi.spyOn(personalizedNovelty, "attachPersonalNoveltyBasis");
+    attachSpy.mockImplementationOnce(() => {
+      throw new Error("basis enrichment failed");
+    });
+    const { pipeline, capturedPapers, noveltyCalls } = makePipeline({
+      matchedIds: [ids[0]!, ids[1]!],
+    });
+    expect(await pipeline.runForDate(DATE)).toMatchObject({ kind: "completed" });
+    expect(noveltyCalls()).toBe(2);
+    expect(attachSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("personal novelty basis enrichment failed"),
+      expect.any(Error),
+    );
+    // Exactly one paper lost its novelty to the injected attach failure; the
+    // other keeps its validated novelty with trusted basis titles.
+    const kept = capturedPapers.filter((paper) => paper.personalNovelty !== undefined);
+    const degraded = capturedPapers.filter((paper) => paper.personalNovelty === undefined);
+    expect(kept).toHaveLength(1);
+    expect(degraded).toHaveLength(1);
+    expect(kept[0]!.personalNovelty).toEqual({
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "Introduces a method absent from the representative abstracts.",
+      comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one" },
+    });
+  });
+
+  it("rethrows cancellation raised during basis enrichment", async () => {
+    const ids = firstBucketIds();
+    const attachSpy = vi.spyOn(personalizedNovelty, "attachPersonalNoveltyBasis");
+    attachSpy.mockImplementation(() => {
+      throw new RunCancelledError("cancelled during attach");
+    });
+    const { pipeline, writer, noveltyCalls } = makePipeline({
+      matchedIds: [ids[0]!],
+    });
+    expect(await pipeline.runForDate(DATE)).toEqual({
+      kind: "cancelled",
+      reason: "cancelled during attach",
+    });
+    expect(noveltyCalls()).toBe(1);
+    expect(writer.writeDaily).not.toHaveBeenCalled();
   });
 });

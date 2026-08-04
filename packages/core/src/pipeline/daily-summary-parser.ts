@@ -9,6 +9,10 @@ export {
   parseDailyReportDiscoveryProvenance,
   parseDiscoveryProvenanceMarker,
 } from "./discovery-provenance-marker";
+export {
+  parseDailyReportPersonalNovelty,
+  parsePersonalNoveltyMarker,
+} from "./personal-novelty-marker";
 
 export { DAILY_SUMMARY_EMERGENCY_MARKER };
 

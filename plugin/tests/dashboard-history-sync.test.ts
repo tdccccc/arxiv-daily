@@ -4,6 +4,7 @@ import {
   queryDashboard,
   syncDashboardHistory,
   renderDiscoveryProvenanceMarker,
+  renderPersonalNoveltyMarker,
 } from "@arxiv-daily/core";
 import { PaperIndexStore } from "@arxiv-daily/core";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
@@ -145,6 +146,7 @@ function indexedPaper(
     seenDates: ["2026-06-10"],
     dailyReports: [],
     discoveryProvenanceByReport: {},
+    noveltyByReport: {},
     paperPath: null,
     arxivUrl: `https://arxiv.org/abs/${id}`,
     pdfUrl: `https://arxiv.org/pdf/${id}`,
@@ -202,6 +204,99 @@ describe("syncDashboardHistory", () => {
         "external/daily.md": provenance,
         "arxiv/daily/2026-06-10.md": provenance,
       });
+  });
+  it("rebuilds occurrence novelty and removes it only for no-longer-managed reports", async () => {
+    const novelty = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "New method explanation.",
+    };
+    const marker = renderPersonalNoveltyMarker(novelty, "2606.00001", "2026-06-10");
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "## Photo-z", "### Paper", marker,
+        "- **Authors**: A", "- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)",
+      ].join("\n"),
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00001": {
+          dailyReports: ["arxiv/daily/2026-06-09.md", "external/daily.md"],
+          discoveryProvenanceByReport: {},
+          noveltyByReport: {
+            "arxiv/daily/2026-06-09.md": novelty,
+            "external/daily.md": novelty,
+          },
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+    expect(index.papers["arxiv:2606.00001"]!.noveltyByReport).toEqual({
+      "external/daily.md": novelty,
+      "arxiv/daily/2026-06-10.md": novelty,
+    });
+
+    files["arxiv/daily/2026-06-10.md"] = files["arxiv/daily/2026-06-10.md"]!.replace(
+      marker,
+      `${marker}\n${marker}`,
+    );
+    const afterInvalidEdit = await syncDashboardHistory({
+      vault: makeVault(files), store, output, topics,
+    });
+    expect(afterInvalidEdit.papers["arxiv:2606.00001"]!.noveltyByReport)
+      .toEqual({
+        "external/daily.md": novelty,
+        "arxiv/daily/2026-06-10.md": novelty,
+      });
+  });
+  it("still rebuilds discovery provenance when novelty markers are invalid", async () => {
+    const provenance = {
+      manualTopicTags: ["photo-z"],
+      directions: [{
+        id: "direction-1", name: "Library direction", representatives: [{
+          paperKey: "arxiv:2501.00001", title: "Prior", evidenceDepth: "metadata-and-abstract" as const,
+        }],
+      }],
+    };
+    const novelty = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "New method explanation.",
+    };
+    const provMarker = renderDiscoveryProvenanceMarker(provenance, "2606.00001", "2026-06-10");
+    const novMarker = renderPersonalNoveltyMarker(novelty, "2606.00001", "2026-06-10");
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "## Photo-z", "### Paper", provMarker, novMarker, novMarker,
+        "- **Authors**: A", "- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)",
+      ].join("\n"),
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00001": {
+          dailyReports: ["arxiv/daily/2026-06-09.md", "external/daily.md"],
+          discoveryProvenanceByReport: {
+            "arxiv/daily/2026-06-09.md": provenance,
+            "external/daily.md": provenance,
+          },
+          noveltyByReport: {
+            "arxiv/daily/2026-06-09.md": novelty,
+            "external/daily.md": novelty,
+          },
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+    expect(index.papers["arxiv:2606.00001"]!.discoveryProvenanceByReport).toEqual({
+      "external/daily.md": provenance,
+      "arxiv/daily/2026-06-10.md": provenance,
+    });
+    // Invalid novelty markers disable only the novelty projection: the stale
+    // managed-report novelty is removed, the current report is not written,
+    // and unmanaged novelty survives.
+    expect(index.papers["arxiv:2606.00001"]!.noveltyByReport).toEqual({
+      "external/daily.md": novelty,
+    });
   });
   it("backfills daily papers and detail summary files into the paper index", async () => {
     const { files, storage } = makeStorage({

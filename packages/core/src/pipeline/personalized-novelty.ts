@@ -147,6 +147,19 @@ export interface PersonalNovelty {
   explanation: string;
 }
 
+/**
+ * Display shape carried from the pipeline stage onto assembly papers: the
+ * validated novelty plus trusted display titles for the comparison-basis
+ * paperKeys, resolved from the same host representative evidence the novelty
+ * stage validated against. The persisted marker payload stays minimal
+ * (differenceType, comparisonBasis paperKeys, evidenceDepth, explanation);
+ * titles exist only for visible rendering and never enter markers or the index.
+ */
+export interface PersonalNoveltyWithBasis extends PersonalNovelty {
+  /** Display titles keyed by comparisonBasis paperKey; keys exactly match comparisonBasis. */
+  comparisonBasisTitles: Record<string, string>;
+}
+
 export type PersonalNoveltyNoNoveltyReason =
   | "plan-too-large"
   | "validation-exhausted"
@@ -579,6 +592,113 @@ export function decodePersonalNovelty(
       explanation: value.explanation,
     }),
   };
+}
+
+/**
+ * Strict normalize of a trusted PersonalNovelty DTO (host data, never raw model
+ * output): exact keys, known difference-type enum, a non-empty unique subset of
+ * canonical arXiv paperKeys in code-unit order within the comparison-basis
+ * bound, the exact metadata-and-abstract evidence depth, and a bounded
+ * non-empty trimmed explanation. Fails wholly — partial data is never promoted.
+ */
+export function normalizePersonalNovelty(value: unknown): PersonalNovelty | null {
+  if (!isExactOwnDataObject(value, [
+    "differenceType", "comparisonBasis", "evidenceDepth", "explanation",
+  ])) return null;
+  if (!PERSONAL_NOVELTY_DIFFERENCE_TYPES.includes(value.differenceType)) return null;
+  if (!isOwnDataArray(value.comparisonBasis, 1, PERSONAL_NOVELTY_MAX_COMPARISON_BASIS)
+    || !value.comparisonBasis.every(isCanonicalArxivPaperKey)
+    || !isStrictlyOrderedUnique(value.comparisonBasis)) return null;
+  if (value.evidenceDepth !== PERSONAL_NOVELTY_EVIDENCE_DEPTH) return null;
+  if (!isBoundedText(value.explanation, PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS)) return null;
+  return deepFreeze({
+    differenceType: value.differenceType,
+    comparisonBasis: [...value.comparisonBasis],
+    evidenceDepth: PERSONAL_NOVELTY_EVIDENCE_DEPTH,
+    explanation: value.explanation,
+  });
+}
+
+/**
+ * Strict normalize of the trusted display shape carried on assembly papers:
+ * the novelty contract above plus display titles whose keys exactly match the
+ * comparison-basis paperKeys, each a bounded non-empty trimmed title.
+ */
+export function normalizePersonalNoveltyWithBasis(value: unknown): PersonalNoveltyWithBasis | null {
+  if (!isExactOwnDataObject(value, [
+    "differenceType", "comparisonBasis", "evidenceDepth", "explanation",
+    "comparisonBasisTitles",
+  ])) return null;
+  const novelty = normalizePersonalNovelty({
+    differenceType: value.differenceType,
+    comparisonBasis: value.comparisonBasis,
+    evidenceDepth: value.evidenceDepth,
+    explanation: value.explanation,
+  });
+  if (!novelty) return null;
+  if (!isExactOwnDataObject(value.comparisonBasisTitles, novelty.comparisonBasis)) return null;
+  for (const paperKey of novelty.comparisonBasis) {
+    if (!isBoundedText(
+      value.comparisonBasisTitles[paperKey],
+      PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS,
+    )) return null;
+  }
+  return deepFreeze({
+    ...novelty,
+    comparisonBasisTitles: Object.fromEntries(
+      novelty.comparisonBasis.map((paperKey) => [paperKey, value.comparisonBasisTitles[paperKey]]),
+    ),
+  });
+}
+
+/**
+ * Strict normalize for marker rendering: accepts the minimal novelty DTO or
+ * the display shape carrying comparisonBasisTitles. Display titles are dropped
+ * — the persisted marker payload stays minimal (differenceType, comparisonBasis
+ * paperKeys, evidenceDepth, explanation) — and every other shape is rejected.
+ */
+export function normalizePersonalNoveltyForMarker(value: unknown): PersonalNovelty | null {
+  if (isExactOwnDataObject(value, [
+    "differenceType", "comparisonBasis", "evidenceDepth", "explanation",
+    "comparisonBasisTitles",
+  ]) || isExactOwnDataObject(value, [
+    "differenceType", "comparisonBasis", "evidenceDepth", "explanation",
+  ])) {
+    return normalizePersonalNovelty({
+      differenceType: value.differenceType,
+      comparisonBasis: value.comparisonBasis,
+      evidenceDepth: value.evidenceDepth,
+      explanation: value.explanation,
+    });
+  }
+  return null;
+}
+
+/**
+ * Joins a validated novelty with display titles resolved from trusted host
+ * representative evidence. Strict: every comparison-basis paperKey must be
+ * present in the supplied representative list with a bounded non-empty trimmed
+ * title, otherwise a TypeError is thrown (a contract violation the pipeline
+ * attach site degrades to no-novelty for that paper instead of failing the
+ * run). The produced display shape always satisfies
+ * normalizePersonalNoveltyWithBasis.
+ */
+export function attachPersonalNoveltyBasis(
+  novelty: PersonalNovelty,
+  representatives: ReadonlyArray<Pick<NoveltyRepresentativePaper, "paperKey" | "title">>,
+): PersonalNoveltyWithBasis {
+  const normalized = normalizePersonalNovelty(novelty);
+  if (!normalized) throw new TypeError("personal novelty is malformed");
+  const titleByKey = new Map(representatives.map(({ paperKey, title }) => [paperKey, title]));
+  const comparisonBasisTitles: Record<string, string> = {};
+  for (const paperKey of normalized.comparisonBasis) {
+    const title = titleByKey.get(paperKey);
+    if (!isBoundedText(title, PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS)) {
+      throw new TypeError(`personal novelty basis lacks a trusted representative title: ${paperKey}`);
+    }
+    comparisonBasisTitles[paperKey] = title;
+  }
+  return deepFreeze({ ...normalized, comparisonBasisTitles });
 }
 
 /**
@@ -1193,6 +1313,26 @@ function isExactDataObject(value: unknown, keys: readonly string[]): value is Re
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return Boolean(descriptor && "value" in descriptor);
   });
+}
+
+/**
+ * Marker-hardening exact own-data check for trusted DTO normalization: no
+ * prototype chains, no non-enumerable own keys, no accessor descriptors, and
+ * an exact key set. Used by the novelty normalize helpers so hostile metadata
+ * cannot smuggle extra state into rendering, markers, or the index.
+ */
+function isExactOwnDataObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== keys.length) return false;
+  for (const key of ownKeys) {
+    if (typeof key !== "string" || !keys.includes(key)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return false;
+  }
+  return true;
 }
 
 function clone<T>(value: T): T {

@@ -22,6 +22,17 @@ import {
   parseDailyReportDiscoveryProvenance,
   parseDiscoveryProvenanceMarker,
 } from "../src/pipeline/discovery-provenance-marker";
+import {
+  PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS,
+  parseDailyReportPersonalNovelty,
+  parsePersonalNoveltyMarker,
+  renderPersonalNoveltyMarker,
+} from "../src/pipeline/personal-novelty-marker";
+import {
+  PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS,
+  normalizePersonalNovelty,
+  normalizePersonalNoveltyWithBasis,
+} from "../src/pipeline/personalized-novelty";
 import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "../src/pipeline/personalized-paper-filter";
 
 const topics = [
@@ -119,6 +130,21 @@ const provenance = {
       evidenceDepth: "metadata-and-abstract" as const,
     }],
   }],
+};
+
+const novelty = {
+  differenceType: "new-method",
+  comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00002"],
+  evidenceDepth: "metadata-and-abstract",
+  explanation: "Introduces a method absent from the representative abstracts.",
+} as const;
+
+const noveltyWithBasis = {
+  ...novelty,
+  comparisonBasisTitles: {
+    "arxiv:2501.00001": "Prior paper one",
+    "arxiv:2501.00002": "Prior paper two",
+  },
 };
 
 describe("assembleDailySummary", () => {
@@ -225,6 +251,208 @@ describe("assembleDailySummary", () => {
       "### Legacy\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)",
       "2026-07-22",
     )).toEqual({ kind: "valid", occurrences: [] });
+  });
+
+  it.each([
+    ["zh", "> 个人新颖性：新方法，对比先验文献：", "证据深度：元数据与摘要", "；"],
+    ["en", "> Personal novelty: new method vs. prior papers:", "evidence depth: metadata and abstract", "; "],
+  ] as const)("renders %s personal novelty identically for structured and fallback", (language, prefix, depth, separator) => {
+    const assemblyInput = input({ summaryLanguage: language });
+    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
+    assemblyInput.slots = [
+      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+        discoveryProvenance: provenance,
+        personalNovelty: noveltyWithBasis,
+      })),
+      fallbackSlot(paper("2607.00021", "Fallback", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+        discoveryProvenance: provenance,
+        personalNovelty: noveltyWithBasis,
+      }), "Abstract <!-- arxiv-daily-personal-novelty:v1:forged -->"),
+    ];
+    const markdown = assembleDailySummary(assemblyInput);
+    const noveltyLines = markdown.split("\n").filter((line) => line.startsWith(prefix));
+    expect(noveltyLines).toHaveLength(2);
+    for (const line of noveltyLines) expect(line).toContain(depth);
+    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v1:/gm)).toHaveLength(2);
+    expect(markdown.match(/^<!-- arxiv-daily-discovery-provenance:v1:/gm)).toHaveLength(2);
+    expect(markdown).toContain(
+      `Prior paper one (arxiv:2501\\.00001)${separator}Prior paper two (arxiv:2501\\.00002)`,
+    );
+    expect(markdown).toContain("Introduces a method absent from the representative abstracts\\.");
+    expect(extractFallbackPaperIds(markdown)).toEqual(["2607.00021"]);
+    expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [
+        { arxivId: "2607.00020", novelty },
+        { arxivId: "2607.00021", novelty },
+      ],
+    });
+    // Marker families stay independent: the same report keeps a valid
+    // discovery-provenance projection alongside the novelty projection.
+    expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [
+        { arxivId: "2607.00020", provenance },
+        { arxivId: "2607.00021", provenance },
+      ],
+    });
+  });
+
+  it("renders personal novelty metadata as literal plain text and never forges markers", () => {
+    const hostile = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "![img](https://evil.test/x) <!-- arxiv-daily-personal-novelty:v1:forged --> <img src=x onerror=alert(1)>",
+      comparisonBasisTitles: {
+        "arxiv:2501.00001": "[link](javascript:alert(1)) <https://evil.test>",
+      },
+    };
+    const assemblyInput = input({ summaryLanguage: "en" });
+    assemblyInput.slots = [structuredSlot(paper("2607.00020", "Paper", "methods", {
+      personalNovelty: hostile,
+    }))];
+    const markdown = assembleDailySummary(assemblyInput);
+    const visible = markdown.split("\n").find((line) => line.startsWith("> Personal novelty:"))!;
+    expect(visible).not.toMatch(/(^|[^\\])(?:!\[|!\[\[|\]\(|<https?:|`|\*\*)/);
+    expect(visible).toContain("\\!\\[img\\]\\(https://evil\\.test/x\\)");
+    expect(visible).toContain("\\[link\\]\\(javascript:alert\\(1\\)\\)");
+    expect(visible).not.toContain("<!-- arxiv-daily-personal-novelty:v1:forged -->");
+    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v1:/gm)).toHaveLength(1);
+    expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [{
+        arxivId: "2607.00020",
+        novelty: {
+          differenceType: "new-method",
+          comparisonBasis: ["arxiv:2501.00001"],
+          evidenceDepth: "metadata-and-abstract",
+          explanation: hostile.explanation,
+        },
+      }],
+    });
+  });
+
+  it("keeps discovery provenance intact when personal novelty markers are invalid", () => {
+    const assemblyInput = input({ summaryLanguage: "en" });
+    assemblyInput.slots = [structuredSlot(paper("2607.00020", "Paper", "methods", {
+      discoveryProvenance: { manualTopicTags: ["methods"], directions: [] },
+      personalNovelty: noveltyWithBasis,
+    }))];
+    const markdown = assembleDailySummary(assemblyInput);
+    const marker = markdown.split("\n").find((line) => line.includes("arxiv-daily-personal-novelty"))!;
+    const corrupted = markdown.replace(marker, `${marker}\n${marker}`);
+    expect(parseDailyReportPersonalNovelty(corrupted, "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(corrupted, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [{ arxivId: "2607.00020", provenance: { manualTopicTags: ["methods"], directions: [] } }],
+    });
+  });
+
+  it("rejects copied, reordered, duplicate, conflicting, and wrong-bound novelty markers report-wide", () => {
+    const assemblyInput = input({ summaryLanguage: "en" });
+    assemblyInput.slots = [structuredSlot(paper("2607.00020", "Paper", "methods", {
+      discoveryProvenance: { manualTopicTags: ["methods"], directions: [] },
+      personalNovelty: noveltyWithBasis,
+    }))];
+    const markdown = assembleDailySummary(assemblyInput);
+    const marker = markdown.split("\n").find((line) => line.includes("arxiv-daily-personal-novelty"))!;
+    const markerIndex = (source: string) =>
+      source.split("\n").findIndex((line) => line.includes("arxiv-daily-personal-novelty:v1:"))!;
+    const headingIndex = (source: string) =>
+      source.split("\n").findIndex((line) => line === "### Paper")!;
+    expect(parseDailyReportPersonalNovelty(markdown, "2026-07-23").kind).toBe("invalid");
+    expect(parseDailyReportPersonalNovelty(markdown.replace(marker, `${marker}\n${marker}`), "2026-07-22").kind).toBe("invalid");
+    const movedAboveHeading = markdown.split("\n");
+    const moved = movedAboveHeading.splice(markerIndex(markdown), 1)[0]!;
+    movedAboveHeading.splice(headingIndex(markdown), 0, moved);
+    expect(parseDailyReportPersonalNovelty(movedAboveHeading.join("\n"), "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportPersonalNovelty(`${markdown}\n### Copy\n${marker}\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)`, "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportPersonalNovelty(markdown.replace("2607.00020](https://arxiv.org/abs/2607.00020)", "2607.00021](https://arxiv.org/abs/2607.00021)"), "2026-07-22").kind).toBe("invalid");
+    const lines = markdown.split("\n");
+    const provIndex = lines.findIndex((line) => line.includes("arxiv-daily-discovery-provenance:v1:"))!;
+    const novIndex = markerIndex(markdown);
+    [lines[provIndex], lines[novIndex]] = [lines[novIndex]!, lines[provIndex]!];
+    expect(parseDailyReportPersonalNovelty(lines.join("\n"), "2026-07-22").kind).toBe("invalid");
+    expect(parseDailyReportDiscoveryProvenance(lines.join("\n"), "2026-07-22").kind).toBe("invalid");
+  });
+
+  it("strictly rejects malformed, noncanonical, oversized, and legacy prose novelty markers", () => {
+    expect(parsePersonalNoveltyMarker("ordinary legacy Markdown")).toBeNull();
+    expect(parsePersonalNoveltyMarker("<!-- arxiv-daily-personal-novelty:v2:e30 -->")).toBeNull();
+    expect(parsePersonalNoveltyMarker("<!-- arxiv-daily-personal-novelty:v1:%%% -->")).toBeNull();
+    expect(parsePersonalNoveltyMarker(`<!-- arxiv-daily-personal-novelty:v1:${"a".repeat(PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS)} -->`)).toBeNull();
+    expect(parseDailyReportPersonalNovelty(
+      "### Legacy\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)",
+      "2026-07-22",
+    )).toEqual({ kind: "valid", occurrences: [] });
+  });
+
+  it("renders and parses the worst-case bounded personal novelty marker", () => {
+    const worst = {
+      differenceType: "counter-evidence",
+      comparisonBasis: Array.from(
+        { length: 40 },
+        (_, index) => `arxiv:2601.${String(index).padStart(5, "0")}`,
+      ),
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "\u0001".repeat(PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS),
+    };
+    const marker = renderPersonalNoveltyMarker(worst, "2601.00001", "2026-08-03");
+    expect(marker.length).toBeLessThanOrEqual(PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS);
+    expect(parsePersonalNoveltyMarker(marker)).toEqual({
+      v: 1,
+      d: "2026-08-03",
+      a: "2601.00001",
+      n: worst,
+    });
+  });
+
+  it("strictly normalizes trusted novelty DTOs without invoking hostile getters", () => {
+    const getter = vi.fn(() => "Prior paper one");
+    const withGetter = { ...novelty, comparisonBasisTitles: {} } as any;
+    Object.defineProperty(withGetter, "comparisonBasisTitles", { enumerable: true, get: getter });
+    expect(normalizePersonalNoveltyWithBasis(withGetter)).toBeNull();
+    expect(getter).not.toHaveBeenCalled();
+
+    const custom = Object.create({ inherited: true });
+    Object.assign(custom, { ...noveltyWithBasis });
+    expect(normalizePersonalNoveltyWithBasis(custom)).toBeNull();
+
+    const sparse = { ...noveltyWithBasis, comparisonBasis: new Array(1) };
+    expect(normalizePersonalNoveltyWithBasis(sparse)).toBeNull();
+
+    const extra = { ...noveltyWithBasis };
+    Object.defineProperty(extra, "hidden", { enumerable: false, value: true });
+    expect(normalizePersonalNoveltyWithBasis(extra)).toBeNull();
+
+    const extraKey = { ...noveltyWithBasis, comparisonBasisTitles: { "arxiv:2501.00001": "one", "arxiv:2501.99999": "two" } };
+    expect(normalizePersonalNoveltyWithBasis(extraKey)).toBeNull();
+
+    const missingTitle = { ...noveltyWithBasis, comparisonBasisTitles: { "arxiv:2501.00001": "one" } };
+    expect(normalizePersonalNoveltyWithBasis(missingTitle)).toBeNull();
+
+    expect(normalizePersonalNovelty({
+      ...novelty,
+      differenceType: "breakthrough",
+    })).toBeNull();
+    expect(normalizePersonalNovelty({
+      ...novelty,
+      comparisonBasis: ["arxiv:2501.00002", "arxiv:2501.00001"],
+    })).toBeNull();
+    expect(normalizePersonalNovelty({
+      ...novelty,
+      comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00001"],
+    })).toBeNull();
+    expect(normalizePersonalNovelty({ ...novelty, comparisonBasis: ["arxiv:not-a-key"] })).toBeNull();
+    expect(normalizePersonalNovelty({ ...novelty, explanation: "  padded  " })).toBeNull();
+    expect(normalizePersonalNovelty({
+      ...novelty,
+      explanation: "x".repeat(PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS + 1),
+    })).toBeNull();
+    expect(normalizePersonalNovelty(noveltyWithBasis)).toBeNull();
+    expect(normalizePersonalNovelty(novelty)).toEqual(novelty);
+    expect(normalizePersonalNoveltyWithBasis(noveltyWithBasis)).toEqual(noveltyWithBasis);
   });
   it("preserves structured Chinese metadata, topic/input order, links, and counts", () => {
     const markdown = assembleDailySummary(input());
@@ -636,6 +864,80 @@ describe("preflightDailySummaryAssembly", () => {
         );
       },
       message: "paper 2607.00001 has invalid fallback attempts",
+    },
+    {
+      name: "invalid difference type in personal novelty",
+      modify: (value: DailySummaryAssemblyInput) => {
+        value.slots[0] = {
+          ...value.slots[0]!,
+          paper: {
+            ...value.slots[0]!.paper,
+            personalNovelty: { ...noveltyWithBasis, differenceType: "breakthrough" },
+          },
+        };
+      },
+      message: "paper 2607.00001 has invalid personal novelty",
+    },
+    {
+      name: "non-canonical comparison basis in personal novelty",
+      modify: (value: DailySummaryAssemblyInput) => {
+        value.slots[0] = {
+          ...value.slots[0]!,
+          paper: {
+            ...value.slots[0]!.paper,
+            personalNovelty: { ...noveltyWithBasis, comparisonBasis: ["arxiv:not-a-key"] },
+          },
+        };
+      },
+      message: "paper 2607.00001 has invalid personal novelty",
+    },
+    {
+      name: "personal novelty missing basis display titles",
+      modify: (value: DailySummaryAssemblyInput) => {
+        value.slots[0] = {
+          ...value.slots[0]!,
+          paper: {
+            ...value.slots[0]!.paper,
+            personalNovelty: { ...noveltyWithBasis, comparisonBasisTitles: undefined },
+          },
+        };
+      },
+      message: "paper 2607.00001 has invalid personal novelty",
+    },
+    {
+      name: "personal novelty display titles with untrusted keys",
+      modify: (value: DailySummaryAssemblyInput) => {
+        value.slots[0] = {
+          ...value.slots[0]!,
+          paper: {
+            ...value.slots[0]!.paper,
+            personalNovelty: {
+              ...noveltyWithBasis,
+              comparisonBasisTitles: {
+                "arxiv:2501.00001": "one",
+                "arxiv:2501.99999": "untrusted",
+              },
+            },
+          },
+        };
+      },
+      message: "paper 2607.00001 has invalid personal novelty",
+    },
+    {
+      name: "oversized personal novelty explanation",
+      modify: (value: DailySummaryAssemblyInput) => {
+        value.slots[0] = {
+          ...value.slots[0]!,
+          paper: {
+            ...value.slots[0]!.paper,
+            personalNovelty: {
+              ...noveltyWithBasis,
+              explanation: "x".repeat(PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS + 1),
+            },
+          },
+        };
+      },
+      message: "paper 2607.00001 has invalid personal novelty",
     },
   ])("rejects $name before assembly", ({ modify, message }) => {
     const assemblyInput = input();

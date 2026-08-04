@@ -9,6 +9,8 @@ import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
 import type { PaperDiscoveryProvenance } from "./personalized-paper-filter";
+import { normalizePersonalNoveltyWithBasis } from "./personalized-novelty";
+import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import {
   DAILY_SUMMARY_EMERGENCY_MARKER,
   emergencyWarning,
@@ -38,6 +40,14 @@ export interface DailySummaryAssemblyPaper {
   paperPath?: string | null;
   detailLink?: string;
   discoveryProvenance?: PaperDiscoveryProvenance;
+  /**
+   * Validated personal novelty with trusted basis display titles, carried only
+   * from library-derived papers with a novelty outcome. Novelty is not part of
+   * daily summary generation prompts or the summary checkpoint identity, but —
+   * like discovery provenance — the deterministic rescue/emergency re-render
+   * contracts may carry it; persisted markers stay minimal.
+   */
+  personalNovelty?: PersonalNoveltyWithBasis;
 }
 
 export type DailyPaperFallbackReasonCode =
@@ -111,6 +121,10 @@ export function preflightDailySummaryPapers(
     if (paper.discoveryProvenance
       && !normalizePaperDiscoveryProvenance(paper.discoveryProvenance)) {
       throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid discovery provenance`);
+    }
+    if (paper.personalNovelty
+      && !normalizePersonalNoveltyWithBasis(paper.personalNovelty)) {
+      throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid personal novelty`);
     }
     if (paperIds.has(paper.id)) {
       throw new Error(`preflightDailySummaryAssembly: duplicate input paper ID: ${paper.id}`);

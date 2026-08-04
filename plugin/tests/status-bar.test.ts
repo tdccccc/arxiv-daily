@@ -176,7 +176,9 @@ describe("StatusBarController", () => {
     expect(progress?.getAttribute("role")).toBe("progressbar");
     expect(progress?.getAttribute("aria-valuemin")).toBe("0");
     expect(progress?.getAttribute("aria-valuemax")).toBe("100");
-    expect(progress?.getAttribute("aria-valuenow")).toBe("56");
+    // fetch-content is stage 6 of 9 ((5 + 2/4) / 9 * 100 rounded); the
+    // personal-novelty stage added to STAGE_ORDER shifted this expectation.
+    expect(progress?.getAttribute("aria-valuenow")).toBe("61");
   });
 
   it("keeps completion panel visible when setIdle follows setComplete", async () => {

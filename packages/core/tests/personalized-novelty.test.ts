@@ -15,9 +15,11 @@ import {
   PERSONAL_NOVELTY_MAX_RETRY_GUIDANCE_CODE_UNITS,
   PERSONAL_NOVELTY_VALIDATION_ATTEMPTS,
   PersonalNoveltyOutputLimitError,
+  attachPersonalNoveltyBasis,
   buildPersonalNoveltyRequest,
   decodePersonalNovelty,
   generatePersonalNovelties,
+  normalizePersonalNoveltyWithBasis,
   planPersonalNoveltyCalls,
   preparePersonalNoveltyMatches,
   preparePersonalizedNoveltyInput,
@@ -1090,5 +1092,69 @@ describe("personal novelty stage", () => {
       ],
     });
     expect(llm.call).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("attachPersonalNoveltyBasis", () => {
+  const novelty: PersonalNovelty = {
+    differenceType: "new-method",
+    comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00002"],
+    evidenceDepth: "metadata-and-abstract",
+    explanation: "Bounded explanation.",
+  };
+  const representatives = [
+    { paperKey: "arxiv:2501.00001", title: "Prior paper one" },
+    { paperKey: "arxiv:2501.00002", title: "Prior paper two" },
+  ];
+
+  it("joins trusted display titles for every comparison-basis paperKey", () => {
+    const attached = attachPersonalNoveltyBasis(novelty, representatives);
+    expect(attached).toEqual({
+      ...novelty,
+      comparisonBasisTitles: {
+        "arxiv:2501.00001": "Prior paper one",
+        "arxiv:2501.00002": "Prior paper two",
+      },
+    });
+    expect(Object.isFrozen(attached)).toBe(true);
+    expect(Object.isFrozen(attached.comparisonBasisTitles)).toBe(true);
+    // The display shape satisfies the strict preflight normalize.
+    expect(normalizePersonalNoveltyWithBasis(attached)).toEqual(attached);
+    // Representatives outside the basis are ignored.
+    expect(attachPersonalNoveltyBasis(novelty, [
+      ...representatives,
+      { paperKey: "arxiv:2501.00003", title: "Unused prior" },
+    ]).comparisonBasisTitles).toEqual(attached.comparisonBasisTitles);
+  });
+
+  it("throws TypeError when a representative is missing for a basis paperKey", () => {
+    expect(() => attachPersonalNoveltyBasis(novelty, [representatives[0]!]))
+      .toThrow(/trusted representative title: arxiv:2501\.00002/);
+    expect(() => attachPersonalNoveltyBasis(novelty, []))
+      .toThrow(TypeError);
+  });
+
+  it("throws TypeError when a representative title is missing or empty", () => {
+    expect(() => attachPersonalNoveltyBasis(novelty, [
+      representatives[0]!,
+      { paperKey: "arxiv:2501.00002", title: undefined as unknown as string },
+    ])).toThrow(/trusted representative title: arxiv:2501\.00002/);
+    expect(() => attachPersonalNoveltyBasis(novelty, [
+      representatives[0]!,
+      { paperKey: "arxiv:2501.00002", title: "  " },
+    ])).toThrow(TypeError);
+  });
+
+  it("throws TypeError for malformed novelty with extra keys or invalid values", () => {
+    expect(() => attachPersonalNoveltyBasis({ ...novelty, extra: true } as any, representatives))
+      .toThrow(TypeError);
+    expect(() => attachPersonalNoveltyBasis({ ...novelty, differenceType: "breakthrough" } as any, representatives))
+      .toThrow(/malformed/);
+    expect(() => attachPersonalNoveltyBasis({ ...novelty, comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00001"] } as any, representatives))
+      .toThrow(/malformed/);
+    expect(() => attachPersonalNoveltyBasis({ ...novelty, explanation: "  padded  " } as any, representatives))
+      .toThrow(/malformed/);
+    expect(() => attachPersonalNoveltyBasis(null as any, representatives))
+      .toThrow(TypeError);
   });
 });
