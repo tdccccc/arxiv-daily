@@ -27,6 +27,7 @@ import {
   type DailyFilterCheckpointPort,
   type FilteredPaper,
 } from "./paper-filter";
+import type { PersonalizedFilterCheckpointPort } from "./personalized-paper-filter";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -80,6 +81,7 @@ export interface DailySummaryCheckpointLifecyclePort
 
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
+    PersonalizedFilterCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
 export interface DailyGenerationCheckpointStores {
@@ -206,6 +208,7 @@ export class ArxivPipeline {
         reportDate: dateStr,
         llmSettings: this.deps.llmSettings,
         checkpointStore: this.deps.checkpointStores?.filter,
+        personalizedCheckpointStore: this.deps.checkpointStores?.filter,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
       });

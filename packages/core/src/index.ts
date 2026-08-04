@@ -30,6 +30,7 @@ export * from "./pipeline/html-cache";
 export * from "./pipeline/markdown-writer";
 export * from "./pipeline/paper-content";
 export * from "./pipeline/paper-filter";
+export * from "./pipeline/personalized-paper-filter";
 export * from "./pipeline/pipeline";
 export * from "./pipeline/prompt-safety";
 export * from "./pipeline/scientific-markdown-math";
