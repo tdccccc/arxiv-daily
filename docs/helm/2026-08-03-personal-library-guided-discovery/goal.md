@@ -1,7 +1,7 @@
 # Personal-library-guided daily discovery
 
 status: active
-updated: 2026-08-03
+updated: 2026-08-04
 owner: current-session
 
 ## Intent
@@ -44,7 +44,7 @@ Connect a researcher-chosen personal literature library to the reliable daily ar
 1. P1 — the desktop plugin proves safe, consent-bound read-only access to one Vault-internal or external library root without changing daily behavior — status: done
 2. P2 — a durable paper-level catalog incrementally identifies and reloads usable library papers while isolating unresolved and unrelated files — status: done
 3. P3 — researcher-reviewed directions and representative sets become the only library-derived inputs eligible for daily discovery — status: done
-4. P4 — daily filtering combines manual topics and confirmed directions with complete, visible discovery provenance — status: pending
+4. P4 — daily filtering combines manual topics and confirmed directions with complete, visible discovery provenance — status: active
 5. P5 — personalized entries add validated abstract-level novelty evidence to the deterministic daily experience — status: pending
 6. P6 — operational hardening and dogfood comparison demonstrate valuable discoveries missed by manual topics and pass full verification — status: pending
 
