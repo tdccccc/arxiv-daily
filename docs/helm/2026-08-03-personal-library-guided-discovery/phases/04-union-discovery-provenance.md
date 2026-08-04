@@ -28,8 +28,8 @@ Introduce bounded host-neutral discovery-input and occurrence-provenance contrac
 - [x] Persist provenance per committed report occurrence in a backward-compatible Paper Index evolution; restore it through existing-daily repair and Dashboard history sync without erasing summaries, user state, paths, or repeated-date history.
 - [x] Build one plugin-owned immutable daily discovery snapshot from current authorization plus Core eligibility, wire every scheduler/manual daily entry through it, and fail closed across root/output/endpoint/revocation/reload races without changing manual single-paper fetch.
 - [x] Project durable occurrence provenance as separate Dashboard metadata, visibly naming manual/library/both sources, directions, representatives, and metadata-and-abstract depth without conflating query-time match reasons or P5 novelty.
-- [ ] Prove manual-only compatibility, complete union provenance, authorization and privacy boundaries, deterministic commit/checkpoint recovery, and no summary/detail/email regression; run full repository quality suites and independent correctness/security reviews.
-- [ ] Complete every accepted implementation chunk's independent technical-report handoff, mark P4 done while keeping P5 pending and the goal active, and create staged local commits without pushing.
+- [x] Prove manual-only compatibility, complete union provenance, authorization and privacy boundaries, deterministic commit/checkpoint recovery, and no summary/detail/email regression; run full repository quality suites and independent correctness/security reviews.
+- [x] Complete every accepted implementation chunk's independent technical-report handoff, mark P4 done while keeping P5 pending and the goal active, and create staged local commits without pushing.
 
 ## Verification
 
