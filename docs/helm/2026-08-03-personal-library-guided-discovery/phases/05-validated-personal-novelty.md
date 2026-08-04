@@ -27,8 +27,8 @@ Add strict host-neutral novelty DTOs and a bounded generator in Core that valida
 - [x] Carry validated novelty through filtered papers and deterministic structured/fallback daily rendering with a localized plain-text line, a strict versioned machine-readable novelty marker bound to its paper block, per-report novelty persistence in the Paper Index, and non-destructive existing-daily repair and Dashboard history recovery.
 - [x] Project the latest applicable committed novelty as separate Dashboard metadata, text-only and accessible, distinct from discovery provenance and query-time match reasons, without new filters, ranking, search, or fabricated novelty claims.
 - [x] Extend the plugin's immutable daily discovery snapshot to derive novelty input from the same currently authorized eligibility plus catalog representative evidence, with the existing revision/identity guards and combined abort signal, without changing manual single-paper fetch or proposal-only review.
-- [ ] Prove manual-only compatibility, authorized-eligibility-only novelty, complete checkpoint/recovery behavior, privacy and authorization boundaries, and no summary/detail/email regression; run full repository quality suites and independent correctness/security reviews.
-- [ ] Complete every accepted implementation chunk's independent technical-report handoff, mark P5 done while keeping P6 pending and the goal active, and create staged local commits without pushing.
+- [x] Prove manual-only compatibility, authorized-eligibility-only novelty, complete checkpoint/recovery behavior, privacy and authorization boundaries, and no summary/detail/email regression; run full repository quality suites and independent correctness/security reviews.
+- [x] Complete every accepted implementation chunk's independent technical-report handoff, mark P5 done while keeping P6 pending and the goal active, and create staged local commits without pushing.
 
 ## Verification
 
