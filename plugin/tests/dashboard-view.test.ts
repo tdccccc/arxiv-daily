@@ -7,6 +7,7 @@ import {
   collectIndexedDetailSummaryRefs,
   dashboardHistoryPathSet,
   dashboardOccurrenceProvenanceLines,
+  dashboardPersonalNoveltyLines,
   deferDashboardAction,
   executeObsidianCommand,
   expectedDetailSummaryPath,
@@ -496,6 +497,117 @@ describe("dashboard occurrence provenance", () => {
     expect(provenanceStyles).toContain("white-space: normal");
     expect(provenanceStyles).not.toContain("text-overflow: ellipsis");
     expect(provenanceStyles).not.toContain("overflow: hidden");
+  });
+});
+
+describe("dashboard occurrence personal novelty", () => {
+  const noveltyRow = {
+    entry: indexedPaper("2606.10001"),
+    arxivId: "2606.10001",
+    title: "New paper",
+    authors: "A. Author",
+    topic: "rag",
+    firstSeen: "2026-06-10",
+    hasDetailSummary: false,
+    personalNovelty: {
+      reportPath: "arxiv-daily/daily/2026-06-10.md",
+      reportDate: "2026-06-10",
+      differenceType: "new-method",
+      comparisonBasis: [
+        { paperKey: "arxiv:2501.00001" },
+        { paperKey: "arxiv:2501.00002" },
+      ],
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "Introduces a method absent from the representative abstracts.",
+    },
+  };
+
+  it("formats a clearly labeled novelty block with difference type, paperKey-only basis, depth, and explanation", () => {
+    expect(dashboardPersonalNoveltyLines(noveltyRow)).toEqual([
+      "Personal novelty: new method vs. prior papers: arxiv:2501.00001, arxiv:2501.00002",
+      "Evidence depth: metadata and abstract",
+      "Introduces a method absent from the representative abstracts.",
+    ]);
+    expect(dashboardPersonalNoveltyLines({
+      ...noveltyRow,
+      personalNovelty: {
+        ...noveltyRow.personalNovelty,
+        differenceType: "counter-evidence",
+      },
+    })[0]).toBe(
+      "Personal novelty: counter-evidence vs. prior papers: arxiv:2501.00001, arxiv:2501.00002",
+    );
+  });
+
+  it("keeps hostile novelty text literal, collapses whitespace, and stays separate from provenance and match reasons", () => {
+    const row = {
+      ...noveltyRow,
+      matchReasons: [{ field: "title", text: "title matched hostile" }],
+      occurrenceProvenance: {
+        reportPath: "arxiv-daily/daily/2026-06-10.md",
+        reportDate: "2026-06-10",
+        source: "library",
+        manualTopics: [],
+        directions: [{
+          id: "direction-1",
+          name: "Reliable retrieval",
+          representatives: [{
+            paperKey: "arxiv:2501.00001",
+            title: "Prior one",
+            evidenceDepth: "metadata-and-abstract",
+          }],
+        }],
+        evidenceDepth: "metadata-and-abstract",
+      },
+      personalNovelty: {
+        ...noveltyRow.personalNovelty,
+        explanation: "<img src=x onerror=alert(1)> [link](javascript:alert(1))\n  hostile   text ",
+      },
+    };
+
+    const lines = dashboardPersonalNoveltyLines(row);
+    const joined = lines.join("\n");
+    expect(joined).toContain("<img src=x onerror=alert(1)> [link](javascript:alert(1))");
+    // Whitespace runs collapse to single spaces like the daily-report line.
+    expect(joined).toContain("hostile text");
+    expect(joined).not.toContain("hostile   text");
+    expect(joined).not.toContain("title matched hostile");
+    expect(joined).not.toContain("Reliable retrieval");
+    expect(joined).not.toContain("Prior one");
+    expect(dashboardOccurrenceProvenanceLines(row).join("\n"))
+      .not.toContain("Personal novelty:");
+    expect(dashboardViewSource).toContain("dashboardPersonalNoveltyLines(row)");
+    expect(dashboardViewSource).toContain('text: line');
+    expect(dashboardViewSource).toContain('"arxiv-daily-dashboard__novelty"');
+    expect(dashboardViewSource).not.toContain("attr: { title: line }");
+    expect(dashboardViewSource).not.toContain("innerHTML");
+    const noveltyStyles = pluginStyles.match(
+      /\.arxiv-daily-dashboard__novelty\s*\{[\s\S]*?\}/,
+    )?.[0];
+    expect(noveltyStyles).toBeDefined();
+    expect(noveltyStyles).toContain("overflow-wrap: anywhere");
+    expect(noveltyStyles).toContain("white-space: normal");
+    expect(noveltyStyles).not.toContain("text-overflow: ellipsis");
+    expect(noveltyStyles).not.toContain("overflow: hidden");
+    expect(pluginStyles).toContain(".arxiv-daily-dashboard__provenance");
+    expect(pluginStyles).toContain(".arxiv-daily-dashboard__match-reason");
+    // The novelty block is visually distinct from the provenance block and
+    // from query-time match-reason truncation styles.
+    expect(noveltyStyles).not.toEqual(
+      pluginStyles.match(/\.arxiv-daily-dashboard__provenance\s*\{[\s\S]*?\}/)?.[0],
+    );
+  });
+
+  it("returns no novelty lines for legacy rows without novelty metadata", () => {
+    expect(dashboardPersonalNoveltyLines({
+      entry: indexedPaper("2606.10002"),
+      arxivId: "2606.10002",
+      title: "Legacy paper",
+      authors: "A. Author",
+      topic: "rag",
+      firstSeen: "2026-06-10",
+      hasDetailSummary: false,
+    })).toEqual([]);
   });
 });
 

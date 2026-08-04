@@ -1280,6 +1280,16 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   white-space: normal;
 }
 
+.arxiv-daily-dashboard__novelty {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-style: italic;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .arxiv-daily-dashboard__match-reason {
   margin-top: 4px;
   overflow: hidden;

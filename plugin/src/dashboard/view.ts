@@ -12,6 +12,7 @@ import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
   normalizeArxivId,
+  personalNoveltyDifferenceTypeLabel,
   planDashboardAction,
   queryDashboard,
   type DashboardAction,
@@ -135,6 +136,30 @@ export function dashboardOccurrenceProvenanceLines(row: DashboardRow): string[] 
     lines.push("Evidence depth: metadata and abstract");
   }
   return lines;
+}
+
+/**
+ * Deterministic plain-text Dashboard novelty block, clearly labeled and fully
+ * distinct from the discovery provenance block: a localized difference-type
+ * label with the persisted comparison-basis paperKeys (titles are never
+ * persisted in the index and are never invented; the label explains the basis
+ * papers are the direction's representative prior papers), the explicit
+ * metadata-and-abstract evidence-depth disclosure, and the bounded explanation
+ * with whitespace collapsed. Every line is rendered literally through DOM text
+ * APIs — no tooltips, no truncation, and the full text is visible and
+ * keyboard/touch accessible without hover.
+ */
+export function dashboardPersonalNoveltyLines(row: DashboardRow): string[] {
+  const novelty = row.personalNovelty;
+  if (!novelty) return [];
+  const typeLabel = personalNoveltyDifferenceTypeLabel(novelty.differenceType, "en");
+  const basis = novelty.comparisonBasis.map(({ paperKey }) => paperKey).join(", ");
+  const explanation = novelty.explanation.replace(/\s+/gu, " ").trim();
+  return [
+    `Personal novelty: ${typeLabel} vs. prior papers: ${basis}`,
+    "Evidence depth: metadata and abstract",
+    explanation,
+  ];
 }
 export {
   collectIndexedDetailSummaryRefs,
@@ -1472,6 +1497,12 @@ class ArxivDailyDashboardView extends ItemView {
       for (const line of dashboardOccurrenceProvenanceLines(row)) {
         titleCell.createDiv({
           cls: "arxiv-daily-dashboard__provenance",
+          text: line,
+        });
+      }
+      for (const line of dashboardPersonalNoveltyLines(row)) {
+        titleCell.createDiv({
+          cls: "arxiv-daily-dashboard__novelty",
           text: line,
         });
       }

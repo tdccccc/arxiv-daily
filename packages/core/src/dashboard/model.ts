@@ -8,7 +8,11 @@ import type {
   DiscoveryDirectionProvenance,
   PersonalizedDiscoveryRepresentative,
 } from "../pipeline/personalized-paper-filter";
-import type { Topic } from "../settings/types";
+import type {
+  PersonalNovelty,
+  PersonalNoveltyDifferenceType,
+} from "../pipeline/personalized-novelty";
+import type { SummaryLanguage, Topic } from "../settings/types";
 import {
   PaperSearchIndex,
   type PaperSearchReason,
@@ -63,6 +67,30 @@ export interface DashboardOccurrenceProvenance {
   evidenceDepth?: PersonalizedDiscoveryRepresentative["evidenceDepth"];
 }
 
+/**
+ * One representative prior paper of a Dashboard novelty comparison basis.
+ * Only the persisted paperKey is carried: titles are never persisted in the
+ * index (the marker/index payload stays minimal), so display titles are never
+ * invented from other sources.
+ */
+export interface DashboardPersonalNoveltyBasisPaper {
+  paperKey: string;
+}
+
+/**
+ * Durable validated personal-novelty metadata from the latest applicable
+ * committed report occurrence, selected with the same deterministic
+ * report-date/path rules as DashboardOccurrenceProvenance.
+ */
+export interface DashboardPersonalNovelty {
+  reportPath: string;
+  reportDate: string;
+  differenceType: PersonalNoveltyDifferenceType;
+  comparisonBasis: DashboardPersonalNoveltyBasisPaper[];
+  evidenceDepth: PersonalNovelty["evidenceDepth"];
+  explanation: string;
+}
+
 export interface DashboardRow {
   entry: PaperIndexEntry;
   arxivId: string;
@@ -72,6 +100,7 @@ export interface DashboardRow {
   firstSeen: string;
   hasDetailSummary: boolean;
   occurrenceProvenance?: DashboardOccurrenceProvenance;
+  personalNovelty?: DashboardPersonalNovelty;
   relevanceScore?: number;
   matchReasons?: PaperSearchReason[];
 }
@@ -134,6 +163,42 @@ const PRIORITY_ORDER: Record<PaperPriority, number> = {
   normal: 1,
   low: 2,
 };
+
+/**
+ * Localized difference-type labels for the Dashboard novelty block, matching
+ * the daily-report novelty line labels exactly (en: "new method"; zh: "新方法").
+ * The Dashboard UI itself renders in English; the zh map exists for host-neutral
+ * label coverage and is verified against the difference-type enum in tests.
+ */
+export const DASHBOARD_PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS: Record<
+  SummaryLanguage,
+  Record<PersonalNoveltyDifferenceType, string>
+> = {
+  zh: {
+    "new-task": "新任务",
+    "new-method": "新方法",
+    "new-dataset": "新数据集",
+    "new-experiment": "新实验",
+    "efficiency-result": "效率结果",
+    "counter-evidence": "反例证据",
+  },
+  en: {
+    "new-task": "new task",
+    "new-method": "new method",
+    "new-dataset": "new dataset",
+    "new-experiment": "new experiment",
+    "efficiency-result": "efficiency result",
+    "counter-evidence": "counter-evidence",
+  },
+};
+
+/** Localized Dashboard label for one validated novelty difference type. */
+export function personalNoveltyDifferenceTypeLabel(
+  differenceType: PersonalNoveltyDifferenceType,
+  language: SummaryLanguage = "en",
+): string {
+  return DASHBOARD_PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS[language][differenceType];
+}
 
 export function queryDashboard(
   entries: PaperIndexEntry[],
@@ -299,6 +364,7 @@ function toDashboardRow(
     firstSeen: firstSeenDate(entry),
     hasDetailSummary: hasDetailSummary(entry, opts),
     ...projectDashboardOccurrenceProvenance(entry, opts.topics),
+    ...projectDashboardOccurrenceNovelty(entry),
     ...(searchResult
       ? { relevanceScore: searchResult.score, matchReasons: searchResult.reasons }
       : {}),
@@ -315,7 +381,8 @@ function hasDetailSummary(
 /**
  * Selects the latest provenance-bearing committed occurrence by the ISO date in
  * its daily-report filename, then by normalized report path as a deterministic
- * repeated-report tie-breaker. Legacy entries and reports without provenance
+ * repeated-report tie-breaker, restricted to reports present in
+ * entry.dailyReports. Legacy entries and reports without provenance
  * intentionally project no Dashboard metadata.
  */
 export function projectDashboardOccurrenceProvenance(
@@ -323,28 +390,22 @@ export function projectDashboardOccurrenceProvenance(
   topics: readonly Pick<Topic, "tag" | "name">[] = [],
 ): Partial<Pick<DashboardRow, "occurrenceProvenance">> {
   const committedReports = new Set((entry.dailyReports ?? []).map(normalizeReportPath));
-  const candidates = Object.entries(entry.discoveryProvenanceByReport ?? {})
-    .map(([rawReportPath, provenance]) => ({
-      reportPath: normalizeReportPath(rawReportPath),
-      reportDate: dailyReportDate(rawReportPath),
+  const byPath = new Map(
+    Object.entries(entry.discoveryProvenanceByReport ?? {}).map(([rawReportPath, provenance]) => [
+      normalizeReportPath(rawReportPath),
       provenance,
-    }))
-    .filter((candidate) =>
-      candidate.reportDate && committedReports.has(candidate.reportPath)
-    )
-    .sort((a, b) =>
-      b.reportDate!.localeCompare(a.reportDate!) ||
-      b.reportPath.localeCompare(a.reportPath)
-    );
-  const selected = candidates[0];
-  if (!selected?.reportDate) return {};
+    ]),
+  );
+  const selected = selectLatestCommittedReport(byPath.keys(), committedReports);
+  const provenance = selected ? byPath.get(selected.reportPath) : undefined;
+  if (!selected || !provenance) return {};
 
   const topicNames = new Map(topics.map((topic) => [topic.tag, topic.name]));
-  const manualTopics = selected.provenance.manualTopicTags.map((tag) => ({
+  const manualTopics = provenance.manualTopicTags.map((tag) => ({
     tag,
     ...(topicNames.get(tag) ? { name: topicNames.get(tag) } : {}),
   }));
-  const directions = selected.provenance.directions.map(projectDirection);
+  const directions = provenance.directions.map(projectDirection);
   const hasManual = manualTopics.length > 0;
   const hasLibrary = directions.length > 0;
   if (!hasManual && !hasLibrary) return {};
@@ -359,6 +420,70 @@ export function projectDashboardOccurrenceProvenance(
       ...(hasLibrary ? { evidenceDepth: "metadata-and-abstract" as const } : {}),
     },
   };
+}
+
+/**
+ * Projects the validated personal novelty of the latest committed occurrence
+ * onto a Dashboard row using exactly the same deterministic report-date/path
+ * selection as projectDashboardOccurrenceProvenance, over noveltyByReport ∩
+ * dailyReports. Only persisted minimal payload is projected: the comparison
+ * basis carries paperKeys (titles are never persisted in the index and are
+ * never invented), and the exact validated evidence depth and bounded
+ * explanation pass through. Legacy/no-novelty rows project no metadata.
+ */
+export function projectDashboardOccurrenceNovelty(
+  entry: Pick<PaperIndexEntry, "dailyReports" | "noveltyByReport">,
+): Partial<Pick<DashboardRow, "personalNovelty">> {
+  const committedReports = new Set((entry.dailyReports ?? []).map(normalizeReportPath));
+  const byPath = new Map(
+    Object.entries(entry.noveltyByReport ?? {}).map(([rawReportPath, novelty]) => [
+      normalizeReportPath(rawReportPath),
+      novelty,
+    ]),
+  );
+  const selected = selectLatestCommittedReport(byPath.keys(), committedReports);
+  const novelty = selected ? byPath.get(selected.reportPath) : undefined;
+  if (!selected || !novelty) return {};
+
+  return {
+    personalNovelty: {
+      reportPath: selected.reportPath,
+      reportDate: selected.reportDate,
+      differenceType: novelty.differenceType,
+      comparisonBasis: novelty.comparisonBasis.map((paperKey) => ({ paperKey })),
+      evidenceDepth: novelty.evidenceDepth,
+      explanation: novelty.explanation,
+    },
+  };
+}
+
+/**
+ * Deterministic latest committed occurrence selection shared by the provenance
+ * and novelty projections: newest ISO report date in the daily-report filename
+ * first, then normalized report path as a same-date repeated-report
+ * tie-breaker, restricted to committed reports (dailyReports ∩ candidate
+ * paths). Invalid or uncommitted report paths never project metadata.
+ */
+function selectLatestCommittedReport(
+  rawReportPaths: Iterable<string>,
+  committedReports: ReadonlySet<string>,
+): { reportPath: string; reportDate: string } | null {
+  const candidates = [...rawReportPaths]
+    .map((rawReportPath) => ({
+      reportPath: normalizeReportPath(rawReportPath),
+      reportDate: dailyReportDate(rawReportPath),
+    }))
+    .filter((candidate) =>
+      candidate.reportDate && committedReports.has(candidate.reportPath)
+    )
+    .sort((a, b) =>
+      b.reportDate!.localeCompare(a.reportDate!) ||
+      b.reportPath.localeCompare(a.reportPath)
+    );
+  const selected = candidates[0];
+  return selected?.reportDate
+    ? { reportPath: selected.reportPath, reportDate: selected.reportDate }
+    : null;
 }
 
 function projectDirection(
