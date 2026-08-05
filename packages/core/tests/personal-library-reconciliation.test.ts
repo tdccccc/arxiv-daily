@@ -252,3 +252,53 @@ describe("reconcilePersonalLibraryCatalog", () => {
       .not.toBe(createLibraryFileObservationFingerprint({ ...entry, path: "copy.pdf" }, identificationFingerprint));
   });
 });
+
+describe("content-based file identification (strategy v2)", () => {
+  it("identifies unresolved files through the injected identifier", async () => {
+    const identifyFile = { identify: vi.fn(async (path: string) =>
+      path.endsWith("Wadekar2023.pdf") ? "2001.04385" : null) };
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("Wadekar2023.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile,
+      now,
+    });
+    expect(identifyFile.identify).toHaveBeenCalledWith("Wadekar2023.pdf", undefined, 100);
+    const record = Object.values(result.catalog.files)[0]!;
+    expect(record.status).toBe("ready");
+    expect(result.catalog.papers["arxiv:2001.04385"]).toBeDefined();
+  });
+
+  it("keeps files unresolved when content identification fails or throws", async () => {
+    const identifyFile = { identify: vi.fn(async () => {
+      throw new Error("read failed");
+    }) };
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("scan.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+    });
+    const record = Object.values(result.catalog.files)[0]!;
+    expect(record.status).toBe("unresolved");
+  });
+
+  it("never calls the identifier for files whose names already carry an arXiv ID", async () => {
+    const identifyFile = { identify: vi.fn(async () => "2402.18634") };
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("2402.18634v2.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2402.18634")]),
+      identifyFile,
+      now,
+    });
+    expect(identifyFile.identify).not.toHaveBeenCalled();
+    const record = Object.values(result.catalog.files)[0]!;
+    expect(record.status).toBe("ready");
+  });
+});

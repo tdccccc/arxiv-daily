@@ -254,7 +254,7 @@ describe("PersonalLibraryCatalogStore", () => {
     expect(writeTextAtomic).not.toHaveBeenCalled();
   });
 
-  it("refuses catalogs from another library scope", async () => {
+  it("treats catalogs from another scope or identification policy as empty instead of unreadable", async () => {
     const { storage } = makeStorage();
     const store = makeStore(storage);
     await store.replace(populatedCatalog());
@@ -262,12 +262,22 @@ describe("PersonalLibraryCatalogStore", () => {
       rootIdentity: "42:2002",
       eligibleExtensions: [".pdf"],
     });
+    const olderIdentification = `sha256:${"e".repeat(64)}`;
 
-    await expect(store.load(otherScope, identificationFingerprint))
-      .rejects.toThrow(/cannot load unreadable/);
+    // A valid document under a different policy must never block a rescan
+    // (it would make library switching and identification upgrades fail).
+    const loaded = await store.load(otherScope, identificationFingerprint);
+    expect(loaded.files).toEqual({});
+    expect(loaded.papers).toEqual({});
+    expect(loaded.scopeFingerprint).toBe(otherScope);
+    const older = await store.load(scopeFingerprint, olderIdentification);
+    expect(older.files).toEqual({});
+
+    // A replacement under the current policy is allowed to supersede
+    // documents written by an older policy (upgrade migration).
     const replacement = populatedCatalog();
     replacement.scopeFingerprint = otherScope;
-    await expect(store.replace(replacement)).rejects.toThrow(/cannot mutate unreadable/);
+    await expect(store.replace(replacement)).resolves.toBeDefined();
   });
 
   it("refuses revision overflow without changing the primary", async () => {

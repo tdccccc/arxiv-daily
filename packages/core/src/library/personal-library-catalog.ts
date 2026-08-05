@@ -6,7 +6,7 @@ import { derivePaperInboxPaths } from "../services/paper-index";
 import { paperKeyFromArxivId } from "../services/paper-key";
 
 export const PERSONAL_LIBRARY_CATALOG_SCHEMA_VERSION = 1 as const;
-export const PERSONAL_LIBRARY_IDENTIFICATION_VERSION = 1 as const;
+export const PERSONAL_LIBRARY_IDENTIFICATION_VERSION = 2 as const;
 
 export type PersonalLibraryFileRecord =
   | {
@@ -122,7 +122,7 @@ export function createPersonalLibraryIdentificationFingerprint(
   }
   return `sha256:${sha256Hex(JSON.stringify({
     version: PERSONAL_LIBRARY_IDENTIFICATION_VERSION,
-    strategy: "modern-arxiv-id-in-filename",
+    strategy: "modern-arxiv-id-in-filename|pdf-text-evidence",
     eligibleExtensions: extensions,
   }))}`;
 }
@@ -262,7 +262,22 @@ export class PersonalLibraryCatalogStore {
       await this.repairPrimary(backup.document);
       return cloneCatalog(backup.document);
     }
-    if (primary.kind === "missing" && backup.kind === "missing") {
+    // A document that is valid under a different scope/identification policy
+    // is not data for the current strategy: it must never block a rescan and
+    // never be promoted. Treat it like a missing document for this policy.
+    const primaryUnavailable = primary.kind === "missing"
+      || (primary.kind === "valid" && !isCompatible(
+        primary.document,
+        scopeFingerprint,
+        identificationFingerprint,
+      ));
+    const backupUnavailable = backup.kind === "missing"
+      || (backup.kind === "valid" && !isCompatible(
+        backup.document,
+        scopeFingerprint,
+        identificationFingerprint,
+      ));
+    if (primaryUnavailable && backupUnavailable) {
       return createEmptyPersonalLibraryCatalog(
         scopeFingerprint,
         identificationFingerprint,
@@ -323,7 +338,21 @@ export class PersonalLibraryCatalogStore {
       await this.repairPrimary(backup.document);
       return backup.document;
     }
-    if (primary.kind === "missing" && backup.kind === "missing") {
+    // Same policy as loadUnlocked: valid-but-incompatible documents belong to
+    // an older identification/scope strategy and must not block a mutation.
+    const primaryUnavailable = primary.kind === "missing"
+      || (primary.kind === "valid" && !isCompatible(
+        primary.document,
+        scopeFingerprint,
+        identificationFingerprint,
+      ));
+    const backupUnavailable = backup.kind === "missing"
+      || (backup.kind === "valid" && !isCompatible(
+        backup.document,
+        scopeFingerprint,
+        identificationFingerprint,
+      ));
+    if (primaryUnavailable && backupUnavailable) {
       return createEmptyPersonalLibraryCatalog(
         scopeFingerprint,
         identificationFingerprint,

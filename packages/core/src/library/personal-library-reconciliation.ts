@@ -28,11 +28,29 @@ export interface PersonalLibraryMetadataResolver {
   ): Promise<Map<string, PersonalLibraryResolvedMetadata>>;
 }
 
+/**
+ * Content-based file identification (identification strategy v2). The host
+ * supplies evidence (e.g. PDF text extraction via the scoped source) for
+ * files whose filenames carry no arXiv ID; the identifier returns a
+ * canonical arXiv ID or null. Identity remains evidence-checked downstream:
+ * the resolver still fetches canonical metadata before a file becomes ready.
+ */
+export interface PersonalLibraryFileIdentifier {
+  identify(
+    logicalPath: string,
+    signal?: AbortSignal,
+    /** Observed file size in bytes, when the inventory provides it. */
+    size?: number,
+  ): Promise<string | null>;
+}
+
 export interface ReconcilePersonalLibraryCatalogInput {
   current: PersonalLibraryCatalog;
   inventory: LibraryInventory;
   eligibleExtensions: readonly string[];
   resolver: PersonalLibraryMetadataResolver;
+  /** Optional content-based identification for files with unrecognized names. */
+  identifyFile?: PersonalLibraryFileIdentifier;
   now?: Date;
   signal?: AbortSignal;
 }
@@ -121,7 +139,16 @@ export async function reconcilePersonalLibraryCatalog(
       continue;
     }
 
-    const arxivId = identifyModernArxivIdFromFilename(entry.path);
+    let arxivId = identifyModernArxivIdFromFilename(entry.path);
+    if (!arxivId && input.identifyFile) {
+      try {
+        arxivId = await input.identifyFile.identify(entry.path, input.signal, entry.size) ?? null;
+      } catch {
+        // Content identification is best-effort: any failure keeps the file
+        // unresolved instead of failing or blocking the scan.
+        arxivId = null;
+      }
+    }
     if (!arxivId) {
       defineRecordEntry(files, entry.path, {
         path: entry.path,
