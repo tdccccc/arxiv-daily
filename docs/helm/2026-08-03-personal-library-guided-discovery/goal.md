@@ -1,6 +1,6 @@
 # Personal-library-guided daily discovery
 
-status: active
+status: done
 updated: 2026-08-04
 owner: current-session
 
@@ -46,8 +46,8 @@ Connect a researcher-chosen personal literature library to the reliable daily ar
 3. P3 — researcher-reviewed directions and representative sets become the only library-derived inputs eligible for daily discovery — status: done
 4. P4 — daily filtering combines manual topics and confirmed directions with complete, visible discovery provenance — status: done
 5. P5 — personalized entries add validated abstract-level novelty evidence to the deterministic daily experience — status: done
-6. P6 — operational hardening and dogfood comparison demonstrate valuable discoveries missed by manual topics and pass full verification — status: pending
+6. P6 — operational hardening and dogfood comparison demonstrate valuable discoveries missed by manual topics and pass full verification — status: done
 
 ## Open questions
 
-- Should email digest projection include discovery source and personal novelty in this initiative, or only the Markdown daily report and Dashboard?
+- ~~Should email digest projection include discovery source and personal novelty in this initiative, or only the Markdown daily report and Dashboard?~~ **Resolved 2026-08-04 (P6): digest/email stays unchanged in this initiative.** Occurrence provenance and personal novelty are already persisted in the Paper Index and daily-report markers, so a later email projection is an isolated digest-model + render change with low rework cost.
