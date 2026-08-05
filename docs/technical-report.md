@@ -20,7 +20,8 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 | 包管理 | npm workspaces | 工作区：`packages/*`、`apps/*`、`plugin`；`services/email-relay` 独立 |
 | 业务核 | `@arxiv-daily/core` | 流水线、LLM、调度、索引、设置、邮件编排；生产第三方依赖仅 `pako` |
 | Node 宿主 | `@arxiv-daily/node-runtime` | `fetch`、文件系统、`EnvSecretProvider`、linkedom 等 |
-| Obsidian 宿主 | Obsidian Plugin API + `obsidian` 类型 | Vault 读写、`requestUrl`、设置持久化、UI |
+| Obsidian 宿主 | Obsidian Plugin API + `obsidian` 类型；内置 pdf.js（`loadPdfJs` → `window.pdfjsLib`） | Vault 读写、`requestUrl`、设置持久化、UI、PDF 全文提取 |
+| 本地嵌入 | `@huggingface/transformers` v4（onnxruntime-web，q8；插件运行时依赖，esbuild 打包） | 插件宿主内 CPU 全文嵌入（multilingual-e5-small）；`pdfjs-dist` 仅作 devDependency 供 Node 侧验证注入 |
 | 构建 | esbuild | 插件打 `main.js`；CLI 打 `dist/arxiv-daily-cli.cjs`（并复制到 `plugin/arxiv-daily-cli.cjs`） |
 | 测试/类型 | Vitest、`tsc --noEmit`、ESLint（含 `eslint-plugin-obsidianmd`） | 工作区测试；边界检查脚本 |
 | 邮件 | Resend HTTP API；Cloudflare Workers + KV + Durable Objects | 自发送与官方代发 |
@@ -38,6 +39,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 - **LLM**（`LlmClient`）：流式调用、客户端内瞬态重试、thinking/reasoning 参数、模型列表探测、敏感信息脱敏。
 - **调度**（`SchedulerService` / `SchedulerDriver`）：本地时间窗、回看窗口、周末跳过、运行锁、状态机与历史记录；公开 API 主要在 `SchedulerService`（`tick`、`tickToday`、`tickTodayScheduled`、`runForDateNow`、`forceRunForDate`、`retryFailedInLookback`、`runAllPending` 等）。
 - **数据面**：`PaperIndexStore`、`StateStore`、`RunHistoryStore`、过滤/日总结 checkpoint、邮件 `delivery-state`。
+- **全文知识库**（`packages/core/src/library/fulltext/`）：本地全文索引与相似检索的 host-neutral 编排。端口 `PdfTextExtractor`（PDF bytes → 页序文本）与 `EmbeddingModel`（文本批量 → 384 维 Float32 向量）由宿主实现；e5 query/passage 前缀策略属 core（`applyEmbeddingPrefix`）。纯函数 `chunkFullText` 以段落聚合 + ~10% 重叠切块（token 估算 `ceil(chars/4)`，保留 1 起始页码）。旁路 store `FullTextKnowledgeBaseFileStore` 不写入 papers.json，路径按 scope/identification fingerprint 分片到 `<indexDir>/personal-library-knowledge-base/<scopeHex>/<idHex>/`：`manifest.json`（primary/backup、expectedRevision CAS、严格 decoder、语义重放幂等；模型切换需先重建）为权威索引，`papers/<sha256(paperKey)>.json` 为内容寻址派生数据（chunk 文本 + 行主序 Float32 向量，base64 序列化，幂等重写）。编排 `indexPersonalLibraryFullText` 按 catalog 的 observation fingerprint（path/size/mtime）与模型 id 增量复用，失败按论文记录并下次续跑，退出 catalog 的论文被剪枝；`searchFullTextKnowledgeBase` 查询期只做一次 `query:` 前缀嵌入 + 全库暴力余弦 top-k（论文得分 = 最大 chunk 相似度，命中 chunk 带 page 与文本作可解释证据）。
 - **投递编排**（`deliverDailyEmailIfEnabled`）：self Resend 与 hosted 中继；返回 `DeliverEmailResult`，失败不回写流水线 run-state。
 - **设置**：`PluginSettings`、默认值、校验、迁移、主题模板、详情选择策略。
 
@@ -67,6 +69,8 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 `PersonalLibraryCatalogStore` 将严格版本化 catalog 保存到现有 Vault index root 下的 `personal-library-catalog.json`。store 使用宿主 `writeTextAtomic`、独立 `.backup` generation、同 adapter/path 的进程内 mutation queue、严格 decoder、scope/identification compatibility 检查与语义 revision；有效 backup recovery 会修复 primary。完整 inventory 会移除缺失文件贡献，truncated inventory 保留未观察到的旧记录。插件将扫描注册为 `personal-library-scan` operation；重复扫描被拒绝，卸载、目录变化和输出路径变化会请求取消；进入最终不可中断的 atomic promotion 后采用 commit-wins 语义。设置页只显示 revision 与 ready/papers/unresolved/unrelated/failed/truncated counts。
 
+全文知识库是本地操作（独立于模型处理许可）：命令 `index-personal-library-fulltext` 与 `search-personal-library-fulltext`（`plugin/src/commands.ts` 的 `FullTextQueryModal` 输入查询）调用 `ArxivDailyPlugin.indexPersonalLibraryFullText` / `searchPersonalLibraryFullText`（`plugin/main.ts`），走 core 编排。索引流程：`loadPdfJs()` 就绪后以 `ObsidianPdfTextExtractor`（默认读 `window.pdfjsLib`，可注入；pdf.js 无 signal 参数，取消走 `loadingTask.destroy()` 且每个 await 与 AbortSignal 竞速，规避 destroy 后未决 promise 永不 settle 的挂起；单页失败降级为空串、文档级失败抛错）提取全文，`createTransformersEmbeddingModel()`（transformers.js `feature-extraction`，`Xenova/multilingual-e5-small` q8，CPU；懒加载，加载后断言 384 维；首次使用下载模型并经 HF 镜像选项下载，模型与 onnxruntime wasm 均缓存于 vault 外——渲染进程 Cache API / Node `cacheDir`；批量 ≤32 条、批量间检查取消）嵌入分块，`FullTextKnowledgeBaseFileStore` 持久化。操作注册为 `personal-library-fulltext-index`，随卸载/目录变化取消；检索命令每次查询只做一次本地嵌入。esbuild 将 transformers.js 解析到其 web 构建（`alias`）并启用 `onnxruntime-web-use-extern-wasm` conditions，wasm 二进制运行时从 CDN 拉取并缓存，插件 `main.js` 不携带 wasm 资产。
+
 选中文献库时，插件还会按 scope 与识别策略 identity 从 Vault index root 下独立加载可替换的 direction proposal 和研究者确认的 interest profile；缺失 proposal 表示尚无提议，缺失 profile 表示严格空 profile，一个文档损坏不会清空另一个。两者使用独立 primary/backup、原子整文档写入、语义 revision 与 CAS；确认操作按 profile-first 协调，避免在权威 profile 写入失败时先消费 proposal candidate。插件内部的生成入口只接受当前有效的模型处理许可与已加载 catalog，使用独立 `LlmClient` 调用有界 Core proposer，并在提交前复核连接、输出位置、许可和精确 catalog evidence fingerprint；目录、输出位置、有效 endpoint 或撤销许可会定向取消生成。
 
 设置页的 **Review directions** 和命令 `review-personal-library-directions` 打开同一个 Proposed/Confirmed modal。Proposed 候选可检查和修改名称、描述、discovery cues 与 1–5 篇代表论文，也可显式合并、移除或确认；只有确认操作会把候选转入研究者权威 profile。Confirmed 方向保留 active/disabled/merged 状态、代表论文与 evidence diagnostics，并通过显式操作编辑、启停、合并或按 restrict/cascade 删除。modal 将模型和 catalog 内容按纯文本渲染；本地查看与 review 不要求仍持有模型处理许可，重新生成则要求当前许可。
@@ -93,7 +97,8 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 packages/core          → 仅 pako（+ 自身）
 packages/node-runtime  → @arxiv-daily/core
 apps/cli               → @arxiv-daily/core, @arxiv-daily/node-runtime
-plugin                 → @arxiv-daily/core, obsidian；仅额外允许 @arxiv-daily/node-runtime/scoped-library-source
+plugin                 → @arxiv-daily/core, obsidian；仅额外允许 @arxiv-daily/node-runtime/scoped-library-source；
+                         运行时第三方依赖 @huggingface/transformers（esbuild 打包，边界脚本不扫描 node_modules）
 services/email-relay   → 独立（不在 npm workspaces）
 ```
 
@@ -212,7 +217,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 ### Dashboard 与命令
 
 - Dashboard（`plugin/src/dashboard/view.ts`）：`PaperIndexStore`、run-state、vault 文件同步（`syncDashboardHistory` / `queryDashboard`）；日历、检索、分页、状态操作；运行入口同样走 `scheduler.runForDateNow` / force 等路径。`queryDashboard` 从已提交日报对应的 occurrence provenance 与 novelty 中按 report date 与规范化路径确定性选择最新一条，独立投影 manual/library/both、manual topic、direction、代表论文与 `metadata-and-abstract` depth，以及校验后的 personal novelty（差异类型、比较基准 `paperKey`、证据深度、有界解释）；视图在标题下完整换行、纯文本展示，不依赖搜索状态，也不与 query-time `matchReasons` 混用。
-- 命令（`plugin/src/commands.ts`）：今日运行、回看 pending、重试失败、指定日/强制日、清 run-state、手动 arXiv id 摘要、诊断等；运行前 `validateFilterConfig` / `validateLlmConfig`。
+- 命令（`plugin/src/commands.ts`）：今日运行、回看 pending、重试失败、指定日/强制日、清 run-state、手动 arXiv id 摘要、诊断等；运行前 `validateFilterConfig` / `validateLlmConfig`。全文知识库命令：`index-personal-library-fulltext`（增量索引 + 结果统计通知）与 `search-personal-library-fulltext`（`FullTextQueryModal` 查询 → 本地嵌入检索 → 前 5 名论文 + 相似度 + 命中段落摘要通知）。
 
 ## Data and State
 
@@ -280,7 +285,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 ### 操作与取消
 
-`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`；`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`、`personal-library-scan`、`personal-library-direction-generation`、`personal-library-fulltext-index`；`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
 
 ### 原子写与状态一致性
 
