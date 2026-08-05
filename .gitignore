@@ -22,3 +22,4 @@ __pycache__/
 services/**/node_modules/
 .venv/
 .worktree/
+tmp/
