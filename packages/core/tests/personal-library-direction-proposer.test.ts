@@ -5,6 +5,7 @@ import {
   PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS,
+  PERSONAL_LIBRARY_DIRECTION_MAX_GROUPING_OUTPUT_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_MAX_PAPERS_PER_BATCH,
   PERSONAL_LIBRARY_DIRECTION_MAX_SELECTED_PAPERS,
@@ -15,6 +16,7 @@ import {
   proposePersonalLibraryDirections,
   renderPersonalLibraryDirectionPaper,
   selectPersonalLibraryDirectionPapers,
+  validatePersonalLibraryDirectionGrouping,
   type PersonalLibraryDirectionLlmPort,
 } from "../src/library/personal-library-direction-proposer";
 import { decodePersonalLibraryDirectionProposal } from "../src/library/personal-library-interest-profile";
@@ -78,6 +80,21 @@ function candidate(keys: string[], overrides: Record<string, unknown> = {}): str
   }] });
 }
 
+function groupingReply(data: any[]): string {
+  const keys = data.map((entry: any) => entry.paperKey);
+  const half = Math.ceil(keys.length / 2);
+  return JSON.stringify({ groups: [
+    { name: "Group A", description: "First half of the library papers.", paperKeys: keys.slice(0, half) },
+    { name: "Group B", description: "Second half of the library papers.", paperKeys: keys.slice(half) },
+  ] });
+}
+
+function isGroupingData(data: any): boolean {
+  return Array.isArray(data)
+    && data.every((entry: any) => typeof entry?.paperKey === "string"
+      && typeof entry?.title === "string" && !("abstract" in entry));
+}
+
 function paperData(messages: ChatMessage[]): any {
   const content = messages.find(({ role }) => role === "user")!.content;
   const match = /<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(content);
@@ -90,6 +107,17 @@ class AutomaticLlm implements PersonalLibraryDirectionLlmPort {
   async call(messages: ChatMessage[], options?: CallOptions): Promise<string> {
     this.calls.push({ messages, options });
     const data = paperData(messages);
+    const isGrouping = Array.isArray(data)
+      && data.every((entry: any) => typeof entry?.paperKey === "string"
+        && typeof entry?.title === "string" && !("abstract" in entry));
+    if (isGrouping) {
+      const keys = data.map((entry: any) => entry.paperKey);
+      const half = Math.ceil(keys.length / 2);
+      return JSON.stringify({ groups: [
+        { name: "Group A", description: "First half of the library papers.", paperKeys: keys.slice(0, half) },
+        { name: "Group B", description: "Second half of the library papers.", paperKeys: keys.slice(half) },
+      ] });
+    }
     const keys = Array.isArray(data)
       ? [data[0].paperKey]
       : [data.candidates[0].representativePaperKeys[0]];
@@ -170,9 +198,12 @@ describe("personal-library direction proposer generation", () => {
     const now = vi.fn(() => new Date(timestamp));
     const createId = vi.fn(ids);
     const result = await proposePersonalLibraryDirections({ catalog: catalog(entries), llm, now, createId });
-    expect(llm.calls).toHaveLength(3);
-    expect(llm.calls.map(({ options }) => options?.temperature)).toEqual([0, 0, 0]);
-    expect(llm.calls.every(({ options }) =>
+    expect(llm.calls).toHaveLength(4);
+    expect(llm.calls.map(({ options }) => options?.temperature)).toEqual([0, 0, 0, 0]);
+    // grouping call is title-level (smaller bounds); extraction and synthesis use the full bounds
+    expect(llm.calls[0]!.options?.maxOutputCodeUnits)
+      .toBe(PERSONAL_LIBRARY_DIRECTION_MAX_GROUPING_OUTPUT_CODE_UNITS);
+    expect(llm.calls.slice(1).every(({ options }) =>
       options?.maxOutputCodeUnits === PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS
       && options.maxCompletionTokens === PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS)).toBe(true);
     expect(now).toHaveBeenCalledTimes(1);
@@ -247,6 +278,7 @@ describe("personal-library direction proposer generation", () => {
     const entries = Array.from({ length: 200 }, (_, index) => paper(index + 1));
     const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
       const data = paperData(messages);
+      if (isGroupingData(data)) return groupingReply(data);
       if (!Array.isArray(data)) throw new Error("synthesis must not be called");
       const key = data[0].paperKey as string;
       return JSON.stringify({ candidates: Array.from({ length: 12 }, (_, index) => ({
@@ -258,7 +290,8 @@ describe("personal-library direction proposer generation", () => {
     }) };
     await expect(proposePersonalLibraryDirections(proposeOptions(entries, llm)))
       .rejects.toMatchObject({ code: "synthesis-too-large" });
-    expect(llm.call).toHaveBeenCalledTimes(10);
+    // 1 grouping + 10 extraction batches; synthesis is never reached
+    expect(llm.call).toHaveBeenCalledTimes(11);
   });
 
   it("rejects oversized custom-port output immediately without validation retries", async () => {
@@ -272,7 +305,11 @@ describe("personal-library direction proposer generation", () => {
     const first = paper(1).paperKey;
     const second = paper(21).paperKey;
     const responses = [candidate([first]), candidate([second]), candidate([first, second])];
-    const llm = { call: vi.fn(async () => responses.shift()!) };
+    const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
+      const data = paperData(messages);
+      if (isGroupingData(data)) return groupingReply(data);
+      return responses.shift()!;
+    }) };
     const result = await proposePersonalLibraryDirections(proposeOptions(
       Array.from({ length: 21 }, (_, index) => paper(index + 1)), llm,
     ));
@@ -281,7 +318,9 @@ describe("personal-library direction proposer generation", () => {
     let inventedCall = 0;
     await expect(proposePersonalLibraryDirections(proposeOptions(
       Array.from({ length: 21 }, (_, index) => paper(index + 1)),
-      { call: vi.fn(async () => {
+      { call: vi.fn(async (messages: ChatMessage[]) => {
+        const data = paperData(messages);
+        if (isGroupingData(data)) return groupingReply(data);
         inventedCall += 1;
         if (inventedCall === 1) return candidate([first]);
         if (inventedCall === 2) return candidate([second]);
@@ -302,6 +341,35 @@ describe("personal-library direction proposer generation", () => {
       JSON.stringify({ candidates: [{ name: "x", description: "y", discoveryCues: ["a"], representativePaperKeys: [paper(1).paperKey], extra: true }] }),
       JSON.stringify({ candidates: [] }),
       JSON.stringify({ candidates: [{ name: " x ", description: "y", discoveryCues: ["z", "a"], representativePaperKeys: [paper(1).paperKey] }] }),
+    ]) {
+      await expect(proposePersonalLibraryDirections(proposeOptions(
+        [paper(1)], { call: vi.fn(async () => raw) },
+      ))).rejects.toBeInstanceOf(PersonalLibraryDirectionValidationError);
+    }
+  });
+
+  it("accepts model cues and representatives in any order and canonicalizes them server-side", async () => {
+    const first = paper(1).paperKey;
+    const second = paper(9).paperKey;
+    const raw = JSON.stringify({ candidates: [{
+      name: "Reliable agents",
+      description: "Methods for reliable agentic systems.",
+      discoveryCues: ["z cue", "S8 tension", "a cue"],
+      representativePaperKeys: [second, first],
+    }] });
+    const result = await proposePersonalLibraryDirections(proposeOptions(
+      [paper(1), paper(9)], { call: vi.fn(async () => raw) },
+    ));
+    expect(result.candidates[0]?.discoveryCues).toEqual(["S8 tension", "a cue", "z cue"]);
+    expect(result.candidates[0]?.representatives.map(({ paperKey }) => paperKey))
+      .toEqual([first, second]);
+  });
+
+  it("still rejects duplicated cues and representatives", async () => {
+    const first = paper(1).paperKey;
+    for (const raw of [
+      JSON.stringify({ candidates: [{ name: "n", description: "d", discoveryCues: ["a", "a"], representativePaperKeys: [first] }] }),
+      JSON.stringify({ candidates: [{ name: "n", description: "d", discoveryCues: ["a"], representativePaperKeys: [first, first] }] }),
     ]) {
       await expect(proposePersonalLibraryDirections(proposeOptions(
         [paper(1)], { call: vi.fn(async () => raw) },
@@ -392,5 +460,80 @@ describe("personal-library direction proposer generation", () => {
     for (const limit of [200, 20, 60_000, 64_000, 6_000, 4_096, 12, 3]) {
       expect(PERSONAL_LIBRARY_DIRECTION_GENERATION_CONTRACT).toContain(String(limit));
     }
+  });
+});
+
+describe("personal-library direction grouping", () => {
+  const keys = (n: number) => paper(n).paperKey;
+
+  it("strictly validates global coverage, duplicates, and shape", () => {
+    const selected = new Set([keys(1), keys(2), keys(3)]);
+    const valid = { groups: [
+      { name: "A", description: "First.", paperKeys: [keys(1), keys(2)] },
+      { name: "B", description: "Second.", paperKeys: [keys(3)] },
+    ] };
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify(valid), selected).ok).toBe(true);
+
+    const incomplete = { groups: [
+      { name: "A", description: "First.", paperKeys: [keys(1)] },
+      { name: "B", description: "Second.", paperKeys: [keys(2)] },
+    ] };
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify(incomplete), selected))
+      .toEqual({ ok: false, reason: "coverage-incomplete" });
+
+    const duplicated = { groups: [
+      { name: "A", description: "First.", paperKeys: [keys(1), keys(2)] },
+      { name: "B", description: "Second.", paperKeys: [keys(2)] },
+    ] };
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify(duplicated), selected))
+      .toEqual({ ok: false, reason: "coverage-duplicated" });
+
+    const unknown = { groups: [
+      { name: "A", description: "First.", paperKeys: [keys(1), "arxiv:9999.99999"] },
+      { name: "B", description: "Second.", paperKeys: [keys(2), keys(3)] },
+    ] };
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify(unknown), selected))
+      .toEqual({ ok: false, reason: "paper-keys-invalid" });
+
+    expect(validatePersonalLibraryDirectionGrouping("{ broken", selected))
+      .toEqual({ ok: false, reason: "not-json" });
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify({ groups: [] }), selected))
+      .toEqual({ ok: false, reason: "group-count" });
+    expect(validatePersonalLibraryDirectionGrouping(JSON.stringify({ candidates: [] }), selected))
+      .toEqual({ ok: false, reason: "wrong-shape" });
+  });
+
+  it("groups papers by topic before extraction so each batch sees one theme", async () => {
+    const entries = Array.from({ length: 21 }, (_, index) => paper(index + 1));
+    const extractionBatches: string[][] = [];
+    const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
+      const data = paperData(messages);
+      if (isGroupingData(data)) return groupingReply(data);
+      const keys = Array.isArray(data)
+        ? data.map((entry: any) => entry.paperKey)
+        : [data.candidates[0].representativePaperKeys[0]];
+      if (Array.isArray(data)) extractionBatches.push(keys);
+      return candidate([keys[0]!]);
+    }) };
+    const result = await proposePersonalLibraryDirections(proposeOptions(entries, llm));
+    expect(result.candidates.length).toBeGreaterThan(0);
+    // 21 papers split into two groups: each extraction batch is a coherent half
+    expect(extractionBatches).toHaveLength(2);
+    expect(extractionBatches[0]!.length).toBe(11);
+    expect(extractionBatches[1]!.length).toBe(10);
+  });
+
+  it("falls back to sequential batches when grouping keeps failing validation", async () => {
+    const entries = Array.from({ length: 21 }, (_, index) => paper(index + 1));
+    const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
+      const data = paperData(messages);
+      if (isGroupingData(data)) return "{\"groups\":[{\"name\":\"A\",\"description\":\"d\",\"paperKeys\":[\"only-one\"]}]}";
+      const key = Array.isArray(data) ? data[0].paperKey : data.candidates[0].representativePaperKeys[0];
+      return candidate([key]);
+    }) };
+    const result = await proposePersonalLibraryDirections(proposeOptions(entries, llm));
+    // grouping exhausted its 3 attempts, then sequential batching still works
+    expect(llm.call).toHaveBeenCalledTimes(3 + 2 + 1);
+    expect(result.candidates.length).toBeGreaterThan(0);
   });
 });
