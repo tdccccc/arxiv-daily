@@ -3,7 +3,8 @@ export type OperationKind =
   | "detail-summary"
   | "pdf-download"
   | "personal-library-scan"
-  | "personal-library-direction-generation";
+  | "personal-library-direction-generation"
+  | "personal-library-fulltext-index";
 
 export interface OperationSnapshot {
   readonly id: string;
