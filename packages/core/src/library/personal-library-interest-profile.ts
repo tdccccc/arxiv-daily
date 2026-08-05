@@ -5,8 +5,8 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 2 as const;
-export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 2 as const;
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 3 as const;
+export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 3 as const;
 export const PERSONAL_LIBRARY_LEGACY_INTEREST_PROFILE_SCHEMA_VERSION = 1 as const;
 export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
@@ -25,11 +25,25 @@ export const PERSONAL_LIBRARY_MIN_DISCOVERY_CUES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUES = 12 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH = 200 as const;
 export const PERSONAL_LIBRARY_MAX_GENERATION_CONTRACT_LENGTH = 4_096 as const;
+export const PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS = 512 as const;
+export const PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS = 64 as const;
 
 export interface PersonalLibraryRepresentativeEvidence {
   paperKey: string;
   evidenceFingerprint: string;
 }
+
+export interface PersonalLibraryClusterMember {
+  paperKey: string;
+  confidence: number;
+}
+
+export type PersonalLibraryDirectionTimelineEvent =
+  | { kind: "created"; at: string }
+  | { kind: "edited"; at: string }
+  | { kind: "members-updated"; at: string }
+  | { kind: "merged"; at: string; sourceDirectionIds: string[] }
+  | { kind: "removed"; at: string; mode: "restrict" | "cascade" };
 
 export interface PersonalLibraryDirectionCandidate {
   id: string;
@@ -40,6 +54,8 @@ export interface PersonalLibraryDirectionCandidate {
   representativeSetFingerprint: string;
   /** Includes this candidate's id; other ids are retained historical source candidates. */
   lineage: { candidateIds: string[] };
+  /** Cluster membership confidence produced by the clustering proposer; absent in legacy candidates. */
+  clusterMembers?: PersonalLibraryClusterMember[];
 }
 
 export interface PersonalLibraryDirectionProposal {
@@ -62,6 +78,8 @@ interface PersonalLibraryConfirmedDirectionCommon {
   discoveryCues: string[];
   representatives: PersonalLibraryRepresentativeEvidence[];
   representativeSetFingerprint: string;
+  clusterMembers: PersonalLibraryClusterMember[];
+  timeline: PersonalLibraryDirectionTimelineEvent[];
   lineage: {
     proposalIds: string[];
     candidateIds: string[];
@@ -243,7 +261,9 @@ export function decodePersonalLibraryDirectionProposal(
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
     "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "candidates",
-  ]) || value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION
+  ])
+    // Schema 2 proposals remain readable: candidates gained only the optional clusterMembers field in v3.
+    || (value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION && value.schemaVersion !== 2)
     || !isNonNegativeSafeInteger(value.revision)
     || !isOpaqueId(value.proposalId)
     || !isFingerprint(value.scopeFingerprint)
@@ -286,7 +306,8 @@ export function decodePersonalLibraryDirectionProposal(
 export function decodePersistedPersonalLibraryInterestProfile(
   value: unknown,
 ): PersonalLibraryInterestProfile | null {
-  const profile = decodePersonalLibraryInterestProfile(value);
+  const profile = decodePersonalLibraryInterestProfile(value)
+    ?? migrateV2PersonalLibraryInterestProfile(value);
   if (!profile || profile.directions.some((direction) => direction.updatedAt > profile.updatedAt)) {
     return null;
   }
@@ -314,6 +335,8 @@ export function migrateLegacyPersonalLibraryInterestProfile(
       || !isOpaqueId(raw.lineage.proposalId)) return null;
     directions.push({
       ...raw,
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: raw.createdAt }],
       lineage: {
         proposalIds: [raw.lineage.proposalId],
         candidateIds: raw.lineage.candidateIds,
@@ -330,6 +353,28 @@ export function migrateLegacyPersonalLibraryInterestProfile(
     return null;
   }
   return migrated;
+}
+
+function migrateV2PersonalLibraryInterestProfile(
+  value: unknown,
+): PersonalLibraryInterestProfile | null {
+  if (!isExactObject(value, [
+    "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
+    "directions",
+  ]) || value.schemaVersion !== 2 || !Array.isArray(value.directions)) return null;
+  const directions: unknown[] = value.directions.map((raw) => {
+    if (!isPlainObject(raw)) return raw;
+    return {
+      ...raw,
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: raw.createdAt }],
+    };
+  });
+  return decodePersonalLibraryInterestProfile({
+    ...value,
+    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
+    directions,
+  });
 }
 
 export function decodePersonalLibraryInterestProfile(
@@ -434,10 +479,14 @@ export function evaluatePersonalLibraryInterestEligibility(
 }
 
 function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | null {
-  if (!isExactObject(value, [
+  const hasClusterMembers = isPlainObject(value) && Object.hasOwn(value, "clusterMembers");
+  const keys = [
     "id", "name", "description", "discoveryCues", "representatives",
     "representativeSetFingerprint", "lineage",
-  ]) || !isOpaqueId(value.id) || !isBoundedText(value.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
+    ...(hasClusterMembers ? ["clusterMembers"] : []),
+  ];
+  if (!isExactObject(value, keys)
+    || !isOpaqueId(value.id) || !isBoundedText(value.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
     || !isBoundedText(value.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
     || !isDiscoveryCues(value.discoveryCues)
     || !isFingerprint(value.representativeSetFingerprint)
@@ -448,6 +497,12 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
   if (!representatives
     || createPersonalLibraryRepresentativeSetFingerprint(representatives)
       !== value.representativeSetFingerprint) return null;
+  let clusterMembers: PersonalLibraryClusterMember[] | undefined;
+  if (hasClusterMembers) {
+    const decoded = decodeClusterMembers(value.clusterMembers);
+    if (!decoded) return null;
+    clusterMembers = decoded;
+  }
   return {
     id: value.id,
     name: value.name,
@@ -456,6 +511,7 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
     representatives,
     representativeSetFingerprint: value.representativeSetFingerprint,
     lineage: { candidateIds: [...value.lineage.candidateIds] },
+    ...(clusterMembers !== undefined ? { clusterMembers } : {}),
   };
 }
 
@@ -464,7 +520,7 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
   const merged = value.status === "merged";
   const keys = [
     "id", "status", "name", "description", "discoveryCues", "representatives",
-    "representativeSetFingerprint", "lineage", "createdAt", "updatedAt",
+    "representativeSetFingerprint", "clusterMembers", "timeline", "lineage", "createdAt", "updatedAt",
     ...(merged ? ["mergedIntoDirectionId"] : []),
   ];
   if (!isExactObject(value, keys)
@@ -486,6 +542,9 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
   if (!representatives
     || createPersonalLibraryRepresentativeSetFingerprint(representatives)
       !== value.representativeSetFingerprint) return null;
+  const clusterMembers = decodeClusterMembers(value.clusterMembers);
+  const timeline = decodeTimeline(value.timeline, value.createdAt);
+  if (!clusterMembers || !timeline) return null;
   const common: PersonalLibraryConfirmedDirectionCommon = {
     id: value.id,
     name: value.name,
@@ -493,6 +552,8 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
     discoveryCues: [...value.discoveryCues],
     representatives,
     representativeSetFingerprint: value.representativeSetFingerprint,
+    clusterMembers,
+    timeline,
     lineage: {
       proposalIds: [...value.lineage.proposalIds],
       candidateIds: [...value.lineage.candidateIds],
@@ -533,6 +594,76 @@ function decodeRepresentatives(value: unknown): PersonalLibraryRepresentativeEvi
   return isStrictlyOrderedUnique(representatives.map(({ paperKey }) => paperKey))
     ? representatives
     : null;
+}
+
+function decodeClusterMembers(value: unknown): PersonalLibraryClusterMember[] | null {
+  if (!Array.isArray(value) || value.length > PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS) return null;
+  const members: PersonalLibraryClusterMember[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!isExactObject(raw, ["paperKey", "confidence"])
+      || typeof raw.paperKey !== "string"
+      || raw.paperKey.length === 0
+      || raw.paperKey.length > PERSONAL_LIBRARY_MAX_ID_LENGTH
+      || typeof raw.confidence !== "number"
+      || !Number.isFinite(raw.confidence)
+      || raw.confidence < 0
+      || raw.confidence > 1
+      || seen.has(raw.paperKey)) return null;
+    seen.add(raw.paperKey);
+    members.push({ paperKey: raw.paperKey, confidence: raw.confidence });
+  }
+  return members;
+}
+
+function decodeTimeline(
+  value: unknown,
+  createdAt: string,
+): PersonalLibraryDirectionTimelineEvent[] | null {
+  if (!Array.isArray(value)
+    || value.length === 0
+    || value.length > PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS) return null;
+  const events: PersonalLibraryDirectionTimelineEvent[] = [];
+  let previousAt: string | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const event = decodeTimelineEvent(value[index]);
+    if (!event) return null;
+    if (index === 0) {
+      if (event.kind !== "created" || event.at !== createdAt) return null;
+    } else {
+      if (event.kind === "created") return null;
+      if (previousAt !== null && event.at < previousAt) return null;
+    }
+    previousAt = event.at;
+    events.push(event);
+  }
+  return events;
+}
+
+function decodeTimelineEvent(value: unknown): PersonalLibraryDirectionTimelineEvent | null {
+  if (!isPlainObject(value)
+    || typeof value.kind !== "string"
+    || !isCanonicalTimestamp(value.at)) return null;
+  switch (value.kind) {
+    case "created":
+    case "edited":
+    case "members-updated":
+      return isExactObject(value, ["kind", "at"])
+        ? { kind: value.kind, at: value.at }
+        : null;
+    case "merged":
+      return isExactObject(value, ["kind", "at", "sourceDirectionIds"])
+        && isOpaqueIdArray(value.sourceDirectionIds, false, PERSONAL_LIBRARY_MAX_DIRECTIONS)
+        ? { kind: "merged", at: value.at, sourceDirectionIds: [...value.sourceDirectionIds] }
+        : null;
+    case "removed":
+      return isExactObject(value, ["kind", "at", "mode"])
+        && (value.mode === "restrict" || value.mode === "cascade")
+        ? { kind: "removed", at: value.at, mode: value.mode }
+        : null;
+    default:
+      return null;
+  }
 }
 
 function isCanonicalCatalogPaper(value: unknown): value is PersonalLibraryPaperRecord {

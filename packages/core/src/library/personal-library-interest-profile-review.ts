@@ -4,14 +4,17 @@ import {
   PERSONAL_LIBRARY_MAX_DIRECTIONS,
   PERSONAL_LIBRARY_MAX_PROFILE_ANCESTRY_IDS,
   PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
+  PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS,
   createPersonalLibraryCatalogInputManifestFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
   decodePersonalLibraryDirectionProposal,
   decodePersonalLibraryInterestProfile,
+  type PersonalLibraryClusterMember,
   type PersonalLibraryConfirmedDirection,
   type PersonalLibraryDirectionCandidate,
   type PersonalLibraryDirectionProposal,
+  type PersonalLibraryDirectionTimelineEvent,
   type PersonalLibraryInterestProfile,
   type PersonalLibraryRepresentativeEvidence,
 } from "./personal-library-interest-profile";
@@ -83,7 +86,7 @@ export function updatePersonalLibraryDirectionCandidate(input: unknown): Persona
     description: patch.description ?? current.description,
     discoveryCues: patch.discoveryCues ?? current.discoveryCues,
     representativePaperKeys: representatives.map(({ paperKey }) => paperKey),
-  }, representatives, current.lineage.candidateIds);
+  }, representatives, current.lineage.candidateIds, current.clusterMembers);
   if (JSON.stringify(updated) === JSON.stringify(current)) return proposal;
   proposal.candidates[index] = updated;
   proposal.candidates.sort(byId);
@@ -105,7 +108,8 @@ export function mergePersonalLibraryDirectionCandidates(input: unknown): Persona
   const draft = reviewedDraft(raw.draft);
   const catalog = compatibleCatalog(raw.catalog, proposal);
   const representatives = representativesFromCatalog(catalog, draft.representativePaperKeys);
-  const merged = candidateFromReviewed(candidateId, draft, representatives, lineage);
+  const merged = candidateFromReviewed(candidateId, draft, representatives, lineage,
+    unionClusterMembers(sources));
   proposal.candidates = proposal.candidates.filter(({ id }) => !sourceIds.includes(id));
   proposal.candidates.push(merged);
   proposal.candidates.sort(byId);
@@ -181,6 +185,8 @@ export function confirmPersonalLibraryDirectionCandidate(input: unknown): {
     discoveryCues: [...draft.discoveryCues],
     representatives,
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+    clusterMembers: candidate.clusterMembers?.map((member) => ({ ...member })) ?? [],
+    timeline: [{ kind: "created", at: timestamp }],
     lineage: {
       proposalIds: [proposal.proposalId],
       candidateIds: [...candidate.lineage.candidateIds],
@@ -223,6 +229,7 @@ export function updatePersonalLibraryConfirmedDirection(input: unknown): Persona
   };
   if (sameDirectionSemantics(current, next)) return profile;
   next.updatedAt = monotonicTimestamp(timestamp, current.updatedAt);
+  next.timeline = appendTimelineEvent(current.timeline, { kind: "edited", at: next.updatedAt });
   profile.directions[index] = next;
   return outputProfile(profile);
 }
@@ -282,6 +289,7 @@ export function mergePersonalLibraryConfirmedDirections(input: unknown): Persona
     mergedIntoDirectionId: directionId,
     updatedAt: monotonicTimestamp(timestamp, direction.updatedAt),
   } : direction);
+  const targetUpdatedAt = monotonicTimestamp(timestamp, ...sources.map(({ updatedAt }) => updatedAt));
   profile.directions.push({
     id: directionId,
     status,
@@ -290,24 +298,39 @@ export function mergePersonalLibraryConfirmedDirections(input: unknown): Persona
     discoveryCues: [...draft.discoveryCues],
     representatives,
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+    clusterMembers: [],
+    timeline: [
+      { kind: "created", at: timestamp },
+      { kind: "merged", at: targetUpdatedAt, sourceDirectionIds: [...sourceIds] },
+    ],
     lineage: { proposalIds, candidateIds, directionIds },
     createdAt: timestamp,
-    updatedAt: monotonicTimestamp(timestamp, ...sources.map(({ updatedAt }) => updatedAt)),
+    updatedAt: targetUpdatedAt,
   });
   profile.directions.sort(byId);
   return outputProfile(profile);
 }
 
 export function removePersonalLibraryConfirmedDirection(input: unknown): PersonalLibraryInterestProfile {
-  const raw = exactInput(input, ["profile", "directionId", "mode"]);
+  const raw = exactInput(input, ["profile", "directionId", "mode", "now"], ["now"]);
   const profile = profileDocument(raw.profile);
   const directionId = opaqueId(raw.directionId, "directionId");
   if (raw.mode !== "restrict" && raw.mode !== "cascade") fail("invalid-input", "mode must be restrict or cascade");
+  const eventAt = raw.now === undefined ? undefined : canonicalDate(raw.now);
   if (!profile.directions.some(({ id }) => id === directionId)) fail("not-found", "direction was not found", { directionId });
   const component = mergeComponent(profile.directions, directionId);
   if (raw.mode === "restrict" && component.size !== 1) {
     fail("merge-relationship", "direction participates in a merge family", {
       directionId, relatedDirectionIds: [...component].sort(codeUnitCompare),
+    });
+  }
+  // The removal event closes the direction timeline before the direction leaves the profile.
+  for (const id of component) {
+    const direction = profile.directions.find(({ id: currentId }) => currentId === id)!;
+    direction.timeline = appendTimelineEvent(direction.timeline, {
+      kind: "removed",
+      at: eventAt === undefined ? direction.updatedAt : monotonicTimestamp(eventAt, direction.updatedAt),
+      mode: raw.mode,
     });
   }
   profile.directions = profile.directions.filter(({ id }) => !component.has(id));
@@ -434,6 +457,7 @@ function candidateFromReviewed(
   draft: PersonalLibraryReviewedDirectionDraft,
   representatives: PersonalLibraryRepresentativeEvidence[],
   candidateIds: string[],
+  clusterMembers?: PersonalLibraryClusterMember[],
 ): PersonalLibraryDirectionCandidate {
   return {
     id,
@@ -443,7 +467,22 @@ function candidateFromReviewed(
     representatives: representatives.map((entry) => ({ ...entry })),
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
     lineage: { candidateIds: [...candidateIds] },
+    ...(clusterMembers !== undefined ? { clusterMembers: clusterMembers.map((member) => ({ ...member })) } : {}),
   };
+}
+
+function unionClusterMembers(
+  sources: readonly PersonalLibraryDirectionCandidate[],
+): PersonalLibraryClusterMember[] | undefined {
+  const byPaperKey = new Map<string, number>();
+  for (const source of sources) {
+    for (const member of source.clusterMembers ?? []) {
+      const current = byPaperKey.get(member.paperKey);
+      if (current === undefined || member.confidence > current) byPaperKey.set(member.paperKey, member.confidence);
+    }
+  }
+  if (byPaperKey.size === 0) return undefined;
+  return [...byPaperKey.entries()].map(([paperKey, confidence]) => ({ paperKey, confidence }));
 }
 
 function exactReviewedSemantics(
@@ -481,7 +520,7 @@ function outputProfile(value: PersonalLibraryInterestProfile): PersonalLibraryIn
 function decodeCandidateViaProposal(candidate: unknown): PersonalLibraryDirectionCandidate | null {
   const fingerprint = `sha256:${"0".repeat(64)}`;
   return decodePersonalLibraryDirectionProposal({
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 0,
     proposalId: "validation",
     scopeFingerprint: fingerprint,
@@ -599,6 +638,16 @@ function canonicalUnion(...sets: readonly (readonly string[])[]): string[] {
 
 function monotonicTimestamp(candidate: string, ...existing: string[]): string {
   return [candidate, ...existing].reduce((latest, value) => Date.parse(value) > Date.parse(latest) ? value : latest);
+}
+
+function appendTimelineEvent(
+  timeline: PersonalLibraryDirectionTimelineEvent[],
+  event: PersonalLibraryDirectionTimelineEvent,
+): PersonalLibraryDirectionTimelineEvent[] {
+  const next = [...timeline, event];
+  if (next.length <= PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS) return next;
+  // Keep the created anchor event and the most recent events; drop the oldest non-anchor events.
+  return [next[0]!, ...next.slice(next.length - (PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS - 1))];
 }
 
 function verifyProposalCatalogManifest(

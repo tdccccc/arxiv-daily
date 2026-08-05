@@ -70,7 +70,7 @@ function proposal(ids = ["candidate.1", "candidate.2"]): PersonalLibraryDirectio
     catalog().papers["arxiv:2608.00001"]!,
   ]);
   return {
-    schemaVersion: 2, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
+    schemaVersion: 3, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
     identificationFingerprint: identification,
     catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
       scopeFingerprint: scope, identificationFingerprint: identification, catalogInputPapers,
@@ -101,6 +101,8 @@ function direction(id: string, proposalId: string, candidateId: string, status: 
     id, status, name: `Direction ${id}`, description: "Confirmed.", discoveryCues: ["confirmed cue"],
     representatives: [representative],
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint([representative]),
+    clusterMembers: [],
+    timeline: [{ kind: "created" as const, at: t0 }],
     lineage: { proposalIds: [proposalId], candidateIds: [candidateId], directionIds: [] },
     createdAt: t0, updatedAt: t0,
   } satisfies PersonalLibraryConfirmedDirection;
@@ -303,7 +305,11 @@ describe("confirmed direction review transactions", () => {
   it("merges terminal directions across proposals without lineage loss and retains direct sources", () => {
     const original = frozen(profile([
       direction("direction.1", "proposal.1", "candidate.1"),
-      { ...direction("direction.2", "proposal.2", "candidate.2", "disabled"), createdAt: "2026-08-03T09:00:00.000Z" },
+      {
+        ...direction("direction.2", "proposal.2", "candidate.2", "disabled"),
+        createdAt: "2026-08-03T09:00:00.000Z",
+        timeline: [{ kind: "created", at: "2026-08-03T09:00:00.000Z" }],
+      },
     ]));
     const merged = mergePersonalLibraryConfirmedDirections({
       profile: original, sourceDirectionIds: ["direction.1", "direction.2"], directionId: "direction.3",
@@ -326,8 +332,11 @@ describe("confirmed direction review transactions", () => {
       status: "active", draft: draft(), catalog: catalog(), now: t2,
     })).toThrow(expect.objectContaining({ code: "conflict" }));
 
-    const newerSource = { ...direction("direction.4", "proposal.4", "candidate.4"),
-      createdAt: "2026-08-03T13:00:00.000Z", updatedAt: "2026-08-03T13:00:00.000Z" };
+    const newerSource = {
+      ...direction("direction.4", "proposal.4", "candidate.4"),
+      createdAt: "2026-08-03T13:00:00.000Z", updatedAt: "2026-08-03T13:00:00.000Z",
+      timeline: [{ kind: "created", at: "2026-08-03T13:00:00.000Z" }],
+    };
     const chainBase = { ...merged, updatedAt: t0, directions: [...merged.directions, newerSource].sort((a, b) => a.id.localeCompare(b.id)) };
     const chained = mergePersonalLibraryConfirmedDirections({
       profile: chainBase, sourceDirectionIds: ["direction.3", "direction.4"], directionId: "direction.5",

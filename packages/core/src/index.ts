@@ -9,6 +9,8 @@ export * from "./dashboard/paper-search-index";
 export * from "./dashboard/paper-note-classifier";
 export * from "./library/arxiv-library-metadata-resolver";
 export * from "./library/arxiv-title-search";
+export * from "./library/clustering/clusterer";
+export * from "./library/clustering/paper-vector";
 export * from "./library/fulltext/chunking";
 export * from "./library/fulltext/index-orchestration";
 export * from "./library/fulltext/knowledge-base";

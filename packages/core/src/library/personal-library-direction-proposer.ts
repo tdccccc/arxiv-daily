@@ -6,7 +6,11 @@ import type { ChatMessage, CallOptions } from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
 import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
+import { clusterPaperVectors, type ClusteringOptions } from "./clustering/clusterer";
+import { buildClusteringInput } from "./clustering/paper-vector";
+import type { FullTextKnowledgeBaseStore } from "./fulltext/knowledge-base";
 import {
+  PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
@@ -23,6 +27,8 @@ import {
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
   decodePersonalLibraryDirectionProposal,
+  type PersonalLibraryClusterMember,
+  type PersonalLibraryDirectionCandidate,
   type PersonalLibraryDirectionProposal,
 } from "./personal-library-interest-profile";
 import {
@@ -644,4 +650,302 @@ function isExactObject(value: unknown, keys: readonly string[]): value is Record
   const actual = Object.keys(value).sort(codeUnitCompare);
   const expected = [...keys].sort(codeUnitCompare);
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+// ============================================================================
+// Clustered direction proposer (T3): cluster the full-text knowledge base
+// into theme clusters, run one extraction stage per cluster, and skip the
+// cross-cluster synthesis stage — cluster boundaries ARE the theme
+// boundaries. This entry point is appended; the unclustered proposer above
+// is unchanged.
+// ============================================================================
+
+export const PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION =
+  "personal-library-clustered-direction-proposer-v1" as const;
+
+export interface ProposeClusteredDirectionsOptions {
+  catalog: unknown;
+  knowledgeBase: FullTextKnowledgeBaseStore;
+  clustering?: import("./clustering/clusterer").ClusteringOptions;
+  llm: PersonalLibraryDirectionLlmPort;
+  signal?: AbortSignal;
+  onMetrics?: MetricsObserver;
+  now?: () => Date;
+  createId: (kind: "proposal" | "candidate", ordinal: number) => string;
+}
+
+/**
+ * Clustered-proposer error: carries the same codes as the unclustered
+ * proposer (callers that catch PersonalLibraryDirectionProposerError still
+ * catch these), plus a human-readable detail for the clustered failure modes
+ * (knowledge base scope mismatch, empty index, catalog not backing the
+ * knowledge base evidence).
+ */
+export class ClusteredDirectionsProposerError extends PersonalLibraryDirectionProposerError {
+  constructor(
+    code: PersonalLibraryDirectionProposerErrorCode,
+    readonly detail: string,
+  ) {
+    super(code);
+    this.message = `personal library direction proposer failed: ${code}: ${detail}`;
+  }
+}
+
+/**
+ * Effective clustering parameters, used by the generation contract. The
+ * defaults mirror clusterer.ts (whose defaults are module-private):
+ * minClusterSize 2, centerCorpus true, minSimilarity 0, relativeStopRatio 0.65.
+ */
+export function resolvePersonalLibraryClusteringOptions(
+  options?: ClusteringOptions,
+): Required<ClusteringOptions> {
+  return {
+    minClusterSize: options?.minClusterSize ?? 2,
+    centerCorpus: options?.centerCorpus ?? true,
+    minSimilarity: options?.minSimilarity ?? 0,
+    relativeStopRatio: options?.relativeStopRatio ?? 0.65,
+  };
+}
+
+/**
+ * Generation contract for the clustered flow. Unlike the fixed unclustered
+ * contract constant, this is built per call because the clustering
+ * parameters are caller-supplied: they determine the cluster boundaries and
+ * therefore the theme scopes of every candidate, so they must be serialized
+ * into the contract for the generation to be reproducible and parameter
+ * drift detectable from the proposal.
+ */
+export function createPersonalLibraryClusteredDirectionGenerationContract(
+  clustering: Required<ClusteringOptions>,
+): string {
+  return JSON.stringify({
+    version: PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION,
+    extractionPrompt: PERSONAL_LIBRARY_DIRECTION_EXTRACTION_PROMPT_VERSION,
+    groupingPrompt: "none",
+    synthesisPrompt: "none",
+    strategy: "knowledge-base-vector-clustering-then-per-cluster-extraction-no-synthesis",
+    clustering,
+    selection: "knowledge-base-ready-papers-canonical-paperKey-code-unit-order-first",
+    maxClusteringInputPapers: PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
+    maxPapersPerExtractionMessage: PERSONAL_LIBRARY_DIRECTION_MAX_PAPERS_PER_BATCH,
+    maxExtractionMessageCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS,
+    maxAbstractCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS,
+    abstractTruncationMarker: PERSONAL_LIBRARY_DIRECTION_ABSTRACT_TRUNCATION_MARKER,
+    maxCandidatesPerCluster: Math.min(
+      PERSONAL_LIBRARY_DIRECTION_MAX_PROVISIONAL_CANDIDATES_PER_BATCH,
+      PERSONAL_LIBRARY_DIRECTION_MAX_FINAL_CANDIDATES,
+      PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+    ),
+    maxProposalCandidates: PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+    maxClusterMembers: PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
+    maxOutputCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
+    maxCompletionTokens: PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS,
+    validationAttemptsPerStage: PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS,
+    temperature: 0,
+    dto: "exact-{candidates:[{name,description,discoveryCues,representativePaperKeys}]}",
+    candidateBounds: {
+      nameMax: PERSONAL_LIBRARY_MAX_NAME_LENGTH,
+      descriptionMax: PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
+      cuesMin: PERSONAL_LIBRARY_MIN_DISCOVERY_CUES,
+      cuesMax: PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
+      cueLengthMax: PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
+      representativesMin: PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
+      representativesMax: PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
+    },
+    referencePolicy: "extraction=cluster-members-only",
+    synthesis: "none-cluster-boundaries-are-theme-boundaries",
+    proposalSchemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+  });
+}
+
+/**
+ * Cluster the knowledge base into themes and extract one direction draft per
+ * cluster. The clustering input is capped at the catalog input manifest
+ * bound (1000) because every input paper is listed in catalogInputPapers:
+ * the review interface derives the outlier buffer pool by subtracting each
+ * candidate's clusterMembers from catalogInputPapers.
+ */
+export async function proposeClusteredPersonalLibraryDirections(
+  options: ProposeClusteredDirectionsOptions,
+): Promise<PersonalLibraryDirectionProposal> {
+  throwIfCancelled(options.signal);
+  const catalog = decodePersonalLibraryCatalog(options.catalog);
+  if (!catalog) {
+    throw new ClusteredDirectionsProposerError("catalog-invalid", "catalog is not a valid personal library catalog");
+  }
+
+  // The knowledge base is sharded by the same scope/identification
+  // fingerprints as the catalog; evidence indexed under another policy must
+  // never be proposed against this catalog.
+  const manifest = await options.knowledgeBase.loadManifest();
+  throwIfCancelled(options.signal);
+  if (manifest.scopeFingerprint !== catalog.scopeFingerprint
+    || manifest.identificationFingerprint !== catalog.identificationFingerprint) {
+    throw new ClusteredDirectionsProposerError(
+      "catalog-invalid",
+      "knowledge base manifest scope/identification fingerprints do not match the catalog; rebuild the knowledge base for this catalog",
+    );
+  }
+
+  const clusteringInput = await buildClusteringInput(
+    options.knowledgeBase,
+    PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
+  );
+  if (clusteringInput.length === 0) {
+    throw new ClusteredDirectionsProposerError(
+      "no-evidence",
+      "knowledge base has no indexed papers with usable vectors; run full-text indexing first",
+    );
+  }
+  throwIfCancelled(options.signal);
+
+  const clustering = clusterPaperVectors(clusteringInput, options.clustering);
+  if (clustering.clusters.length === 0) {
+    throw new ClusteredDirectionsProposerError(
+      "no-evidence",
+      "clustering produced no theme clusters; every paper fell into the outlier pool",
+    );
+  }
+
+  // Every clustering-input paper must be backed by catalog metadata: cluster
+  // members feed the extraction messages and the whole input feeds the
+  // catalog input manifest (evidence fingerprints).
+  for (const { paperKey } of clusteringInput) {
+    if (!catalog.papers[paperKey]) {
+      throw new ClusteredDirectionsProposerError(
+        "catalog-invalid",
+        `knowledge base paper ${paperKey} is absent from the catalog`,
+      );
+    }
+  }
+  for (const cluster of clustering.clusters) {
+    if (cluster.paperKeys.length > PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS) {
+      throw new ClusteredDirectionsProposerError(
+        "evidence-too-large",
+        `cluster ${cluster.id} has ${cluster.paperKeys.length} members, exceeding the schema bound of ${PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS}`,
+      );
+    }
+  }
+
+  const generatedAt = canonicalNow(options.now?.() ?? new Date());
+  const inputPapers = clusteringInput.map(({ paperKey }) => catalog.papers[paperKey]!);
+  const evidenceManifest = createPersonalLibraryCatalogInputManifest(inputPapers);
+  const evidenceByKey = new Map(evidenceManifest.map((entry) => [entry.paperKey, entry.evidenceFingerprint]));
+  let proposalId: string;
+  try {
+    proposalId = options.createId("proposal", 0);
+  } catch {
+    throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal id provider failed");
+  }
+
+  const candidates: PersonalLibraryDirectionCandidate[] = [];
+  for (const cluster of clustering.clusters) {
+    throwIfCancelled(options.signal);
+    const clusterPapers = cluster.paperKeys.map((paperKey) => catalog.papers[paperKey]!);
+    const userMessage = renderClusteredExtractionMessage(clusterPapers);
+    const allowed = new Set(cluster.paperKeys);
+    // Same validation/retry loop and extraction system prompt as the
+    // unclustered proposer; the cluster is the batch.
+    const result = await callValidatedStage(
+      "extraction", extractionSystemPrompt, userMessage, allowed, options,
+    );
+    throwIfCancelled(options.signal);
+    if (candidates.length + result.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) {
+      throw new ClusteredDirectionsProposerError(
+        "output-too-large",
+        `combined cluster candidates exceed the proposal limit of ${PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES}`,
+      );
+    }
+    const clusterMembers: PersonalLibraryClusterMember[] = Object.entries(cluster.memberConfidence)
+      .map(([paperKey, confidence]) => ({
+        paperKey,
+        // The proposal schema bounds confidence to [0,1]; the cosine of
+        // float32 vectors can overshoot 1 by float epsilon (for example
+        // 1.0000000000000002), so clamp instead of failing the strict
+        // proposal decode. Values within range are passed through unchanged.
+        confidence: Math.min(1, Math.max(0, confidence)),
+      }))
+      .sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
+    for (let index = 0; index < result.candidates.length; index += 1) {
+      const candidate = result.candidates[index]!;
+      const ordinal = candidates.length + index;
+      let id: string;
+      try {
+        id = options.createId("candidate", ordinal);
+      } catch {
+        throw new ClusteredDirectionsProposerError("proposal-invariant", "candidate id provider failed");
+      }
+      const representatives = candidate.representativePaperKeys.map((paperKey) => ({
+        paperKey,
+        evidenceFingerprint: evidenceByKey.get(paperKey)!,
+      }));
+      candidates.push({
+        id,
+        name: candidate.name,
+        description: candidate.description,
+        discoveryCues: [...candidate.discoveryCues],
+        representatives,
+        representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+        lineage: { candidateIds: [id] },
+        clusterMembers: clusterMembers.map((member) => ({ ...member })),
+      });
+    }
+  }
+  candidates.sort((left, right) => codeUnitCompare(left.id, right.id));
+
+  let proposal: PersonalLibraryDirectionProposal;
+  try {
+    proposal = {
+      schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+      revision: 0,
+      proposalId,
+      scopeFingerprint: catalog.scopeFingerprint,
+      identificationFingerprint: catalog.identificationFingerprint,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputFingerprint({
+        scopeFingerprint: catalog.scopeFingerprint,
+        identificationFingerprint: catalog.identificationFingerprint,
+        papers: inputPapers,
+      }),
+      catalogInputPapers: evidenceManifest,
+      generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint(
+        createPersonalLibraryClusteredDirectionGenerationContract(
+          resolvePersonalLibraryClusteringOptions(options.clustering),
+        ),
+      ),
+      generatedAt,
+      candidates,
+    };
+  } catch {
+    throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal construction failed");
+  }
+  const decoded = decodePersonalLibraryDirectionProposal(proposal);
+  if (!decoded || decoded.candidates.length < 1) {
+    throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal failed strict decode");
+  }
+  return decoded;
+}
+
+/**
+ * One extraction message per cluster: a cluster is one thematic unit, so it
+ * must fit the single-message bounds (paper count and code units) that the
+ * unclustered flow applies per batch; oversized clusters are an
+ * evidence-too-large condition, not something to silently split.
+ */
+function renderClusteredExtractionMessage(
+  papers: readonly PersonalLibraryPaperRecord[],
+): string {
+  if (papers.length > PERSONAL_LIBRARY_DIRECTION_MAX_PAPERS_PER_BATCH) {
+    throw new ClusteredDirectionsProposerError(
+      "evidence-too-large",
+      `cluster has ${papers.length} members, exceeding the single-extraction-message bound of ${PERSONAL_LIBRARY_DIRECTION_MAX_PAPERS_PER_BATCH}`,
+    );
+  }
+  const message = renderPersonalLibraryExtractionUserMessage(papers);
+  if (message.length > PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS) {
+    throw new ClusteredDirectionsProposerError(
+      "evidence-too-large",
+      "cluster extraction message exceeds the code-unit bound; cluster abstracts are too large for one extraction",
+    );
+  }
+  return message;
 }

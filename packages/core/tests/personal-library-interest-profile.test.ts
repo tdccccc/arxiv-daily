@@ -74,7 +74,7 @@ function representative(entry = paper("2608.00001")): PersonalLibraryRepresentat
 function proposal(): PersonalLibraryDirectionProposal {
   const representatives = [representative()];
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 0,
     proposalId: "proposal.1",
     scopeFingerprint,
@@ -116,6 +116,8 @@ function direction(
     discoveryCues: ["cue one", "cue two"],
     representatives,
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+    clusterMembers: [],
+    timeline: [{ kind: "created" as const, at: now }],
     lineage: {
       proposalIds: ["proposal.1"],
       candidateIds: ["candidate.1"],
@@ -131,7 +133,7 @@ function direction(
 
 function profile(directions: PersonalLibraryConfirmedDirection[] = [direction("direction.1")]): PersonalLibraryInterestProfile {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 3,
     scopeFingerprint,
     identificationFingerprint,
@@ -155,7 +157,7 @@ describe("personal library proposal and profile contracts", () => {
     expect(decodePersonalLibraryDirectionProposal(proposal())).toEqual(proposal());
     expect(decodePersonalLibraryInterestProfile(profile())).toEqual(profile());
     expect(decodePersonalLibraryDirectionProposal({ ...proposal(), schemaVersion: 1 })).toBeNull();
-    expect(decodePersonalLibraryInterestProfile({ ...profile(), schemaVersion: 3 })).toBeNull();
+    expect(decodePersonalLibraryInterestProfile({ ...profile(), schemaVersion: 4 })).toBeNull();
     expect(decodePersonalLibraryDirectionProposal({ ...proposal(), unexpected: true })).toBeNull();
     expect(decodePersonalLibraryInterestProfile({ ...profile(), unexpected: true })).toBeNull();
     expect(decodePersonalLibraryDirectionProposal({ ...proposal(), generatedAt: "2026-08-03" })).toBeNull();
@@ -298,7 +300,7 @@ describe("personal library proposal and profile contracts", () => {
     expect(decodePersonalLibraryInterestProfile(descendant)).toBeNull();
   });
 
-  it("strictly migrates exact legacy v1 profiles while current decode remains v2-only", () => {
+  it("strictly migrates exact legacy v1 profiles while current decode remains v3-only", () => {
     const legacy = clone(profile()) as unknown as Record<string, any>;
     legacy.schemaVersion = 1;
     legacy.directions[0].lineage = {
@@ -451,7 +453,7 @@ describe("personal library eligibility", () => {
   });
 
   it("explicitly diagnoses invalid profile and invalid/future/broken catalogs", () => {
-    const malformedProfile = { ...profile(), schemaVersion: 3 };
+    const malformedProfile = { ...profile(), schemaVersion: 4 };
     expect(evaluatePersonalLibraryInterestEligibility(malformedProfile, catalog())).toEqual({
       documentDiagnostics: ["profile-invalid"], eligibleDirections: [], diagnostics: [],
     });

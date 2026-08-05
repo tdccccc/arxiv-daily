@@ -208,7 +208,7 @@ describe("personal-library direction proposer generation", () => {
       && options.maxCompletionTokens === PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS)).toBe(true);
     expect(now).toHaveBeenCalledTimes(1);
     expect(createId.mock.calls).toEqual([["proposal", 0], ["candidate", 0]]);
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(3);
     expect(result.revision).toBe(0);
     expect(result.generatedAt).toBe(timestamp);
     expect(result.catalogInputPapers).toHaveLength(21);

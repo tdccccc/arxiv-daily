@@ -136,6 +136,8 @@ function profile(overrides: Partial<PersonalLibraryInterestProfile> = {}): Perso
       description: "Reliable research agents.", discoveryCues: ["agent reliability"],
       representatives,
       representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: firstTime.toISOString() }],
       lineage: { proposalIds: ["proposal-1"], candidateIds: ["candidate-1"], directionIds: [] },
       createdAt: firstTime.toISOString(), updatedAt: firstTime.toISOString(),
     }],
@@ -346,6 +348,28 @@ describe("profile lifecycle", () => {
     memory.writeTextAtomic.mockClear();
     await expect(stores(memory.storage).profiles.load()).resolves.toEqual(loaded);
     expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it("loads a v2 primary as a v3 document with v3 defaults and upgrades the schema on the next save", async () => {
+    const memory = makeStorage();
+    const v2 = JSON.parse(JSON.stringify(profile({ revision: 6 }))) as Record<string, any>;
+    v2.schemaVersion = 2;
+    v2.directions = v2.directions.map((raw: Record<string, any>) => {
+      const { clusterMembers: _clusterMembers, timeline: _timeline, ...rest } = raw;
+      return rest;
+    });
+    memory.files[profilePath] = JSON.stringify(v2);
+    const loaded = await stores(memory.storage).profiles.load();
+    expect(loaded).toEqual(profile({ revision: 6 }));
+    // In-memory v2→v3 migration is applied without eagerly rewriting the on-disk schema.
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+    const changed = profile({ revision: 6 });
+    changed.directions[0]!.name = "Changed on v3";
+    await stores(memory.storage).profiles.replace(changed, loaded.revision);
+    expect(parse<PersonalLibraryInterestProfile>(memory.files[profilePath])!.schemaVersion).toBe(3);
+    await expect(stores(memory.storage).profiles.load()).resolves.toMatchObject({
+      directions: [expect.objectContaining({ name: "Changed on v3" })],
+    });
   });
 
   it("recovers and migrates a valid v1 backup when primary is corrupt", async () => {
