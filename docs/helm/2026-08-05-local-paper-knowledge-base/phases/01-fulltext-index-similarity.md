@@ -23,13 +23,13 @@ Core 新增 `packages/core/src/library/fulltext/`：定义 `PdfTextExtractor` / 
 
 ## Tasks
 
-- [ ] Core 端口与 KB 文档类型：`PdfTextExtractor` / `EmbeddingModel` 端口、KB 记录（modelId、dimension、chunk 文本+page+向量、文本哈希）、store 接口与路径推导（scope/id fingerprint 分片）、严格 decoder。
-- [ ] 全文提取验证（plugin host）：接入 Obsidian 内置 pdf.js，对 3-5 篇真实 arXiv PDF 验证全文质量（页序、正文覆盖、垃圾行），记录验证结果；失败即触发 reshape。
-- [ ] 分块（core 纯函数）：按段落/标题切分，~512 token、带重叠、保留 page 号、噪声过滤；单测。
-- [ ] 本地嵌入（plugin host）：transformers.js 加载 multilingual-e5-small q8，CPU 批量推理，模型按需下载（HF 镜像）+ vault 外缓存；core 编排调用。
-- [ ] KB store：manifest（primary/backup、CAS expectedRevision、严格 decoder、语义 revision）+ 每论文 chunk/向量文件（内容寻址、幂等重写）；单测覆盖 stale/corrupt/重建。
-- [ ] 暴力余弦检索：查询向量 vs 存储 chunk 向量 → 论文级 top-k（相似度 + 命中 chunk 证据）；单测（合成向量）。
-- [ ] 端到端增量索引：scan→catalog→KB 增量更新（observationFingerprint/文本哈希复用）、重建验证、插件命令触发；用真实论文验证可解释检索结果。
+- [x] Core 端口与 KB 文档类型：`PdfTextExtractor` / `EmbeddingModel` 端口、KB 记录（modelId、dimension、chunk 文本+page+向量、文本哈希）、store 接口与路径推导（scope/id fingerprint 分片）、严格 decoder。
+- [x] 全文提取验证（plugin host）：接入 Obsidian 内置 pdf.js，对 3-5 篇真实 arXiv PDF 验证全文质量（页序、正文覆盖、垃圾行），记录验证结果；失败即触发 reshape。
+- [x] 分块（core 纯函数）：按段落/标题切分，~512 token、带重叠、保留 page 号、噪声过滤；单测。
+- [x] 本地嵌入（plugin host）：transformers.js 加载 multilingual-e5-small q8，CPU 批量推理，模型按需下载（HF 镜像）+ vault 外缓存；core 编排调用。
+- [x] KB store：manifest（primary/backup、CAS expectedRevision、严格 decoder、语义 revision）+ 每论文 chunk/向量文件（内容寻址、幂等重写）；单测覆盖 stale/corrupt/重建。
+- [x] 暴力余弦检索：查询向量 vs 存储 chunk 向量 → 论文级 top-k（相似度 + 命中 chunk 证据）；单测（合成向量）。
+- [x] 端到端增量索引：scan→catalog→KB 增量更新（observationFingerprint/文本哈希复用）、重建验证、插件命令触发；用真实论文验证可解释检索结果。
 
 ## Verification
 
