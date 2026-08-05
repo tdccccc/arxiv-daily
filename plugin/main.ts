@@ -25,6 +25,8 @@ import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
 import {
   ArxivLibraryMetadataResolver,
+  extractPdfIdentificationEvidence,
+  searchArxivTitle,
   createPersonalLibraryIdentificationFingerprint,
   createPersonalLibraryScopeFingerprint,
   OperationRegistry,
@@ -152,7 +154,10 @@ interface PersonalizedDailyDiscoverySnapshot {
 
 let lastCacheCleanupDate: string | null = null;
 
-export function cacheCleanupDateKey(now: Date, timezone: string): string {
+export const IDENTIFICATION_HEAD_BYTES = 4 * 1024 * 1024;
+const IDENTIFICATION_TAIL_BYTES = 1024 * 1024;
+
+function cacheCleanupDateKey(now: Date, timezone: string): string {
   return formatDate(todayInTz(now, timezone));
 }
 
@@ -907,7 +912,7 @@ export default class ArxivDailyPlugin extends Plugin {
       scopeFingerprint,
     );
     const updateProgress = this.operations.snapshot().length === 1;
-    if (updateProgress) this.progress?.setTask("Scanning personal library", "Inventorying eligible files");
+    if (updateProgress) this.progress?.setTask("Scanning personal library", "Identifying library papers");
     try {
       operation.signal.throwIfAborted();
       const source = this.librarySource
@@ -932,6 +937,46 @@ export default class ArxivDailyPlugin extends Plugin {
         inventory,
         eligibleExtensions: connection.eligibleExtensions,
         resolver: new ArxivLibraryMetadataResolver(this.buildArxivFetcher()),
+        // Content-based identification (strategy v2): files whose names carry
+        // no arXiv ID are identified from PDF text evidence, with an arXiv
+        // title-search fallback. Failures keep files unresolved.
+        identifyFile: {
+          // Identification reads bounded ranges only (header + tail), never
+          // the whole file: arXiv page headers, XMP, and Info metadata all
+          // live there, and full-file reads made scans hang on large PDFs.
+          identify: async (logicalPath, signal, size) => {
+            const source = this.librarySource;
+            if (!source) return null;
+            try {
+              const [head, tail] = await Promise.all([
+                source.readBinary(logicalPath, { signal, start: 0, end: IDENTIFICATION_HEAD_BYTES }),
+                size && size > IDENTIFICATION_HEAD_BYTES
+                  ? source.readBinary(logicalPath, {
+                      signal,
+                      start: size - IDENTIFICATION_TAIL_BYTES,
+                      end: size,
+                    })
+                  : Promise.resolve(new ArrayBuffer(0)),
+              ]);
+              const combined = new Uint8Array(head.byteLength + tail.byteLength);
+              combined.set(new Uint8Array(head), 0);
+              combined.set(new Uint8Array(tail), head.byteLength);
+              const evidence = extractPdfIdentificationEvidence(combined);
+              if (evidence.arxivId) return evidence.arxivId;
+              if (evidence.title) {
+                try {
+                  const result = await searchArxivTitle(this.host.http, evidence.title, signal);
+                  return result.arxivId;
+                } catch {
+                  return null;
+                }
+              }
+            } catch {
+              return null;
+            }
+            return null;
+          },
+        },
         signal: operation.signal,
       });
       operation.signal.throwIfAborted();

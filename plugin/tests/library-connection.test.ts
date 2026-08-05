@@ -78,6 +78,24 @@ describe("personal library connection", () => {
       .toBe("authorization-required");
   });
 
+  it("keeps status evaluation total when the endpoint can no longer be digested", () => {
+    const connection = createLibraryConnection("/papers", "1:2");
+    const authorized = authorizeLibraryConnection(connection, endpoint);
+
+    // An invalid or non-http(s) endpoint shape invalidates the grant instead
+    // of throwing into the settings tab or daily-run snapshot path.
+    for (const broken of ["not a url", "ftp://example.com/v1", ""]) {
+      expect(() => libraryConnectionStatus(authorized, broken)).not.toThrow();
+      expect(libraryConnectionStatus(authorized, broken).kind)
+        .toBe("authorization-invalidated");
+    }
+    // Pre-grant states never touch the endpoint digest at all.
+    expect(libraryConnectionStatus(undefined, "not a url"))
+      .toEqual({ kind: "disconnected" });
+    expect(libraryConnectionStatus(connection, "not a url").kind)
+      .toBe("authorization-required");
+  });
+
   it("normalizes file types and binds the fingerprint to scope and processing terms", () => {
     const base = createLibraryConnection("/papers", "1:2");
     const reordered = { ...base, eligibleExtensions: [".PDF", ".pdf"] };

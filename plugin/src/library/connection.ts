@@ -94,7 +94,16 @@ export function libraryConnectionStatus(
   if (!connection.authorization) {
     return { kind: "authorization-required", rootLabel };
   }
-  if (connection.authorization.fingerprint !== libraryAuthorizationFingerprint(connection, baseUrl)) {
+  // Status evaluation must be total: an endpoint that can no longer be
+  // digested (invalid URL shape after a settings change or external edit)
+  // invalidates the grant instead of throwing into settings and run paths.
+  let fingerprint: string;
+  try {
+    fingerprint = libraryAuthorizationFingerprint(connection, baseUrl);
+  } catch {
+    return { kind: "authorization-invalidated", rootLabel };
+  }
+  if (connection.authorization.fingerprint !== fingerprint) {
     return { kind: "authorization-invalidated", rootLabel };
   }
   return {

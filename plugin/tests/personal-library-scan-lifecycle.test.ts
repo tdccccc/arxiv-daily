@@ -115,7 +115,9 @@ describe("personal library scan lifecycle", () => {
       truncated: false,
     });
     expect(fetchMetadataByIds).toHaveBeenCalledWith(["2601.01234"], expect.any(AbortSignal));
-    expect(source.readBinary).not.toHaveBeenCalled();
+    // Identification v2 attempts PDF-evidence identification for unrecognized
+    // filenames; a read failure keeps the file unresolved instead of failing.
+    expect(source.readBinary).toHaveBeenCalledWith("papers/notes.pdf", expect.any(Object));
     expect(storage.writeTextAtomic).toHaveBeenCalled();
     expect(internals.buildArxivFetcher).toHaveBeenCalledTimes(1);
 
@@ -145,7 +147,9 @@ describe("personal library scan lifecycle", () => {
     const reload = plugin.reloadPersonalLibraryCatalog();
     expect(reloaded.signal.aborted).toBe(true);
     await reload;
-    expect(source.readBinary).not.toHaveBeenCalled();
+    // A scan may read PDF evidence for unrecognized files; the reload itself
+    // must not re-read PDFs (unrecognized files reuse their observations).
+    expect(source.readBinary).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a duplicate scan operation", async () => {
