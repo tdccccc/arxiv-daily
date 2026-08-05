@@ -43,8 +43,22 @@ export { ObsidianStorageAdapter } from "./storage-adapter";
 export { ObsidianMarkupParser } from "./markup-parser";
 export { openObsidianLibrarySource } from "./library-source";
 export {
+  ObsidianPdfTextExtractor,
+  type PdfJsLib,
+  type PdfJsLoadingTask,
+  type PdfJsDocument,
+  type PdfJsPage,
+  type PdfJsTextContent,
+  type PdfJsTextItem,
+} from "./pdf-text-extractor";
+export {
   ObsidianLibraryDirectoryPicker,
   type DirectoryDialog,
   type DirectoryDialogResult,
   type LibraryDirectorySelection,
 } from "./library-directory-picker";
+export {
+  createTransformersEmbeddingModel,
+  EMBEDDING_MODEL_ID,
+  type TransformersEmbeddingModelOptions,
+} from "./embedding-model";

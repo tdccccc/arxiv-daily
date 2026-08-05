@@ -22,6 +22,10 @@
   },
   "dependencies": {
     "@arxiv-daily/core": "0.4.1",
-    "@arxiv-daily/node-runtime": "0.4.1"
+    "@arxiv-daily/node-runtime": "0.4.1",
+    "@huggingface/transformers": "^4.2.0"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "^6.2.108"
   }
 }

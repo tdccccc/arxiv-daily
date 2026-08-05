@@ -380,6 +380,58 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "index-personal-library-fulltext",
+    name: "Index personal library full text (local embeddings)",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: indexing personal library full text…");
+          try {
+            const summary = await plugin.indexPersonalLibraryFullText();
+            notice(
+              `arXiv Daily: full-text index — ${summary.indexed} indexed, `
+              + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned`,
+              10_000,
+            );
+          } catch (error) {
+            plugin.logger.error("commands: personal library full-text indexing failed", error);
+            notice(`arXiv Daily: full-text indexing failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "index personal library full text",
+      ),
+  });
+
+  plugin.addCommand({
+    id: "search-personal-library-fulltext",
+    name: "Search personal library full text…",
+    callback: () =>
+      new FullTextQueryModal(plugin.app, (query) => {
+        if (!query) return;
+        runDetached(
+          (async () => {
+            try {
+              const matches = await plugin.searchPersonalLibraryFullText(query);
+              if (matches.length === 0) {
+                notice("arXiv Daily: no similar papers found in the full-text index", 10_000);
+                return;
+              }
+              const lines = matches.slice(0, 5).map((match) => {
+                const excerpt = match.hits[0]?.text.slice(0, 120).replace(/\s+/g, " ") ?? "";
+                return `${match.title}\n  similarity ${match.score.toFixed(3)} — ${excerpt}…`;
+              });
+              notice(`arXiv Daily: top ${Math.min(matches.length, 5)} matches\n${lines.join("\n")}`, 12_000);
+            } catch (error) {
+              plugin.logger.error("commands: personal library full-text search failed", error);
+              notice(`arXiv Daily: full-text search failed: ${errorMessage(error)}`, 10_000);
+            }
+          })(),
+          "search personal library full text",
+        );
+      }, notice).open(),
+  });
+
+  plugin.addCommand({
     id: "show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),
@@ -468,6 +520,51 @@ class ArxivIdModal extends Modal {
         .onClick(() => {
           if (!this.value) {
             this.notice("Please enter an arXiv ID");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value);
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class FullTextQueryModal extends Modal {
+  private value = "";
+  constructor(
+    app: App,
+    private onSubmit: (query: string | null) => void,
+    private notice: CommandNotice,
+  ) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Search personal library full text" });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
+    new Setting(contentEl)
+      .setName("Query")
+      .setDesc("A research question or description; matched against local full-text embeddings")
+      .addText((t) => {
+        inputEl = t.inputEl;
+        t.setPlaceholder("e.g. graph neural networks for node classification")
+          .onChange((v) => {
+            this.value = v.trim();
+          });
+      });
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
+      b
+        .setButtonText("Search")
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            this.notice("Please enter a query");
             return;
           }
           this.close();

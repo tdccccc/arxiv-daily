@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, loadPdfJs } from "obsidian";
 import type {
   LibraryInventory,
   PersonalLibraryCatalog,
@@ -14,6 +14,8 @@ import type {
   PipelineResult,
   PluginSettings,
   RunState,
+  FullTextIndexRunSummary,
+  KnowledgeBaseChunkHit,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
@@ -56,6 +58,9 @@ import {
   reconcilePersonalLibraryCatalog,
   RunCancellationService,
   normalizeArxivId,
+  FullTextKnowledgeBaseFileStore,
+  indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
+  searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
 } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
@@ -97,6 +102,8 @@ import { registerDashboardView } from "./src/dashboard/view";
 import {
   buildObsidianHostAdapters,
   ObsidianLibraryDirectoryPicker,
+  ObsidianPdfTextExtractor,
+  createTransformersEmbeddingModel,
   openObsidianLibrarySource,
 } from "./src/hosts/obsidian";
 import {
@@ -1010,6 +1017,133 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  private buildFullTextKnowledgeBaseStore(
+    connection: PersistedLibraryConnection,
+  ): FullTextKnowledgeBaseFileStore {
+    if (!this.host?.storage.writeTextAtomic) {
+      throw new Error("Personal library full-text index requires atomic storage writes");
+    }
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    return new FullTextKnowledgeBaseFileStore(
+      this.host.storage,
+      this.settings.output,
+      scopeFingerprint,
+      identificationFingerprint,
+      { onWarning: (message, error) => this.logger.warn(message, error) },
+    );
+  }
+
+  /**
+   * Incrementally index the personal library's full text into the local
+   * knowledge base: extract (Obsidian built-in pdf.js) → chunk → embed
+   * (multilingual-e5-small q8) → store. Unchanged papers are reused via their
+   * catalog observation fingerprints; failures are recorded and retried on
+   * the next run. Local operation — independent of any model processing
+   * authorization; no full-text content ever enters an LLM input.
+   */
+  async indexPersonalLibraryFullText(): Promise<FullTextIndexRunSummary> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const revision = this.libraryConnectionRevision;
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    if (this.operations.find("personal-library-fulltext-index", scopeFingerprint)) {
+      throw new Error("Personal library full-text indexing is already active");
+    }
+    const operation = this.operations.begin(
+      "personal-library-fulltext-index",
+      "Personal library full-text index",
+      scopeFingerprint,
+    );
+    const updateProgress = this.operations.snapshot().length === 1;
+    if (updateProgress) {
+      this.progress?.setTask("Indexing personal library full text", "Extracting and embedding PDF text");
+    }
+    try {
+      operation.signal.throwIfAborted();
+      const catalog = await this.buildPersonalLibraryCatalogStore().load(
+        scopeFingerprint,
+        identificationFingerprint,
+      );
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      const source = this.librarySource
+        ?? await this.openLibrarySource(connection.selectedRoot);
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      if (
+        source.canonicalRoot !== connection.selectedRoot
+        || source.rootIdentity !== connection.rootIdentity
+      ) {
+        throw new Error("Library folder identity changed; choose it again");
+      }
+      this.librarySource = source;
+      // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
+      // after the official loader resolves; the extractor defaults to it.
+      await loadPdfJs();
+      const extractor = new ObsidianPdfTextExtractor();
+      const embedding = createTransformersEmbeddingModel();
+      const store = this.buildFullTextKnowledgeBaseStore(connection);
+      const summary = await indexFullTextKnowledgeBase({
+        catalog,
+        source,
+        extractor,
+        embedding,
+        store,
+        logger: this.logger,
+        onProgress: (detail) => {
+          operation.signal.throwIfAborted();
+          if (updateProgress) this.progress?.setTask("Indexing personal library full text", detail);
+        },
+        signal: operation.signal,
+      });
+      operation.signal.throwIfAborted();
+      if (updateProgress) {
+        this.progress?.setComplete(
+          `Full-text index: ${summary.indexed} indexed, ${summary.reused} reused, `
+          + `${summary.failed} failed, ${summary.pruned} pruned`,
+        );
+      }
+      return summary;
+    } catch (error) {
+      if (updateProgress && !operation.signal.aborted) {
+        this.progress?.setError("Personal library full-text indexing failed");
+      }
+      throw error;
+    } finally {
+      operation.finish();
+    }
+  }
+
+  /**
+   * Embed the query locally and return the most similar indexed papers with
+   * their best matching passages. Joins catalog titles for display; the
+   * similarity evidence (hit chunk text) is explainable end to end.
+   */
+  async searchPersonalLibraryFullText(
+    queryText: string,
+  ): Promise<Array<{ paperKey: string; title: string; score: number; hits: KnowledgeBaseChunkHit[] }>> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    const catalog = await this.buildPersonalLibraryCatalogStore().load(
+      scopeFingerprint,
+      identificationFingerprint,
+    );
+    const matches = await searchFullTextKnowledgeBaseCore({
+      store: this.buildFullTextKnowledgeBaseStore(connection),
+      embedding: createTransformersEmbeddingModel(),
+      queryText,
+    });
+    const titles = new Map<string, string>();
+    for (const paper of Object.values(catalog.papers)) titles.set(paper.paperKey, paper.title);
+    return matches.map((match) => ({
+      paperKey: match.paperKey,
+      title: titles.get(match.paperKey) ?? match.paperKey,
+      score: match.score,
+      hits: match.hits,
+    }));
+  }
+
   restartScheduler(): void {
     this.scheduler.stop();
     if (this.settings.schedule.enabled) this.scheduler.start();
@@ -1567,12 +1701,17 @@ export default class ArxivDailyPlugin extends Plugin {
     this.cancelPersonalLibraryOperationKinds(reason, [
       "personal-library-scan",
       "personal-library-direction-generation",
+      "personal-library-fulltext-index",
     ]);
   }
 
   private cancelPersonalLibraryOperationKinds(
     reason: string,
-    kinds: Array<"personal-library-scan" | "personal-library-direction-generation">,
+    kinds: Array<
+      | "personal-library-scan"
+      | "personal-library-direction-generation"
+      | "personal-library-fulltext-index"
+    >,
   ): void {
     const registry = this.operations as OperationRegistry & {
       snapshot?: OperationRegistry["snapshot"];
