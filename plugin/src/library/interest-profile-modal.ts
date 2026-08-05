@@ -7,9 +7,13 @@ import {
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   type PersonalLibraryCatalog,
+  type PersonalLibraryClusterMember,
   type PersonalLibraryConfirmedDirection,
   type PersonalLibraryDirectionCandidate,
+  type PersonalLibraryDirectionProposal,
   type PersonalLibraryDirectionTextPatch,
+  type PersonalLibraryDirectionTimelineEvent,
+  type PersonalLibraryRepresentativeEvidence,
   type PersonalLibraryReviewedDirectionDraft,
 } from "@arxiv-daily/core";
 import type { PersonalLibraryProfileSnapshot } from "../../main";
@@ -214,6 +218,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       merge.disabled = this.pending || this.selectedProposals.size < 2;
       merge.addEventListener("click", () => void this.mergeSelectedProposals(snapshot));
     }
+    this.renderBufferPool(parent, snapshot);
   }
 
   private renderConfirmed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
@@ -295,7 +300,13 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       list.createEl("li", { text: paper ? `${paper.title} — ${representative.paperKey}` : `${representative.paperKey} — missing from current catalog` });
     }
 
-    if (kind === "confirmed") this.renderConfirmedDiagnostics(card, direction as PersonalLibraryConfirmedDirection, snapshot);
+    if (direction.clusterMembers && direction.clusterMembers.length > 0) {
+      this.renderClusterMembers(card, direction.clusterMembers, snapshot);
+    }
+    if (kind === "confirmed") {
+      this.renderConfirmedDiagnostics(card, direction as PersonalLibraryConfirmedDirection, snapshot);
+      this.renderTimeline(card, (direction as PersonalLibraryConfirmedDirection).timeline);
+    }
     const actions = card.createDiv({ cls: "arxiv-daily-interest-review__card-actions" });
     const save = actions.createEl("button", { text: "Save edits", attr: { type: "button" } });
     save.disabled = this.pending || !terminal;
@@ -352,6 +363,46 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     for (const reason of diagnostic.reasons) {
       list.createEl("li", { text: reason.paperKey ? `${reason.reason}: ${reason.paperKey}` : reason.reason });
     }
+  }
+
+  private renderClusterMembers(
+    parent: HTMLElement,
+    members: readonly PersonalLibraryClusterMember[],
+    snapshot: InterestProfileReviewSnapshot,
+  ): void {
+    const details = parent.createEl("details", { cls: "arxiv-daily-interest-review__cluster" });
+    details.createEl("summary", { text: describeClusterMembers(members) ?? `Cluster members ${members.length}` });
+    const list = details.createEl("ul");
+    for (const member of members) {
+      const paper = snapshot.catalog?.papers[member.paperKey];
+      const label = paper ? paper.title : member.paperKey;
+      list.createEl("li", { text: `${label} — ${formatConfidence(member.confidence)}` });
+    }
+  }
+
+  private renderTimeline(parent: HTMLElement, timeline: readonly PersonalLibraryDirectionTimelineEvent[] | undefined): void {
+    if (!timeline || timeline.length === 0) return;
+    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__timeline" });
+    section.createEl("strong", { text: "Timeline" });
+    const list = section.createEl("ul");
+    for (const event of timeline.slice(-PERSONAL_LIBRARY_TIMELINE_DISPLAY_LIMIT).reverse()) {
+      list.createEl("li", { text: `${formatTimelineTimestamp(event.at)} — ${timelineEventLabel(event.kind)}` });
+    }
+  }
+
+  private renderBufferPool(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
+    const buffer = unclassifiedBufferPoolPapers(snapshot.proposal);
+    if (buffer.length === 0) return;
+    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__buffer" });
+    section.createEl("strong", { text: bufferPoolHeading(buffer.length) });
+    const list = section.createEl("ul");
+    for (const entry of buffer) {
+      const paper = snapshot.catalog?.papers[entry.paperKey];
+      list.createEl("li", {
+        text: paper ? `${paper.title} — ${entry.paperKey}` : `${entry.paperKey} — missing from current catalog`,
+      });
+    }
+    section.createEl("p", { cls: "arxiv-daily-interest-review__hint", text: "这些论文未进入任何方向草案" });
   }
 
   private textField(parent: HTMLElement, labelText: string, value: string, maxLength: number): HTMLInputElement {
@@ -574,6 +625,51 @@ export function validateDraft(draft: PersonalLibraryReviewedDirectionDraft): str
   if (draft.discoveryCues.some((cue) => cue.length > PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)) return `Each discovery cue must be at most ${PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH} characters.`;
   if (draft.representativePaperKeys.length < PERSONAL_LIBRARY_MIN_REPRESENTATIVES || draft.representativePaperKeys.length > PERSONAL_LIBRARY_MAX_REPRESENTATIVES) return `Choose ${PERSONAL_LIBRARY_MIN_REPRESENTATIVES}–${PERSONAL_LIBRARY_MAX_REPRESENTATIVES} representative papers.`;
   return null;
+}
+
+const PERSONAL_LIBRARY_TIMELINE_DISPLAY_LIMIT = 5 as const;
+
+export function formatConfidence(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+export function describeClusterMembers(members: readonly PersonalLibraryClusterMember[]): string | null {
+  if (members.length === 0) return null;
+  const average = members.reduce((sum, member) => sum + member.confidence, 0) / members.length;
+  return `Cluster members ${members.length} · avg. confidence ${formatConfidence(average)}`;
+}
+
+export function bufferPoolHeading(count: number): string {
+  return `Unclustered (buffer pool) ${count}`;
+}
+
+const TIMELINE_EVENT_LABELS: Record<PersonalLibraryDirectionTimelineEvent["kind"], string> = {
+  created: "Created",
+  edited: "Edited",
+  "members-updated": "Members updated",
+  merged: "Merged",
+  removed: "Removed",
+};
+
+export function timelineEventLabel(kind: PersonalLibraryDirectionTimelineEvent["kind"]): string {
+  return TIMELINE_EVENT_LABELS[kind];
+}
+
+export function formatTimelineTimestamp(at: string): string {
+  const date = new Date(at);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+export function unclassifiedBufferPoolPapers(
+  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "candidates"> | null,
+): PersonalLibraryRepresentativeEvidence[] {
+  if (!proposal) return [];
+  const covered = new Set<string>();
+  for (const candidate of proposal.candidates) {
+    for (const member of candidate.clusterMembers ?? []) covered.add(member.paperKey);
+  }
+  return proposal.catalogInputPapers.filter((entry) => !covered.has(entry.paperKey));
 }
 
 function generationAvailability(snapshot: InterestProfileReviewSnapshot): { allowed: boolean; reason: string } {

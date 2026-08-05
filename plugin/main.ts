@@ -43,7 +43,7 @@ import {
   evaluatePersonalLibraryInterestEligibility,
   mergePersonalLibraryConfirmedDirections,
   mergePersonalLibraryDirectionCandidates,
-  proposePersonalLibraryDirections,
+  proposeClusteredPersonalLibraryDirections,
   preparePersonalizedDiscoveryInput,
   preparePersonalizedNoveltyRepresentatives,
   preparePersonalNoveltyMatches,
@@ -729,8 +729,9 @@ export default class ArxivDailyPlugin extends Plugin {
         connection, connectionRevision, outputRevision, authorizationFingerprint,
         catalog, selectedInputFingerprint, expectedProposalRevision,
       });
-      const proposal = await proposePersonalLibraryDirections({
+      const proposal = await proposeClusteredPersonalLibraryDirections({
         catalog: structuredClone(catalog),
+        knowledgeBase: this.buildFullTextKnowledgeBaseStore(connection),
         llm: new LlmClient(llmSettings, this.logger, this.host.http),
         signal: operation.signal,
         createId: () => crypto.randomUUID(),

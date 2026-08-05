@@ -67,6 +67,20 @@ function fixture() {
     updated: "2026-08-02T00:00:00.000Z", primaryCategory: "cs.AI", categories: ["cs.AI"],
     evidenceDepth: "metadata-and-abstract", filePaths: ["papers/2608.00001.pdf"],
   };
+  catalog.files["papers/2608.00002.pdf"] = {
+    path: "papers/2608.00002.pdf",
+    status: "ready",
+    observationFingerprint: `sha256:${"e".repeat(64)}`,
+    paperKey: "arxiv:2608.00002",
+    arxivId: "2608.00002",
+    updatedAt: "2026-08-03T00:00:00.000Z",
+  };
+  catalog.papers["arxiv:2608.00002"] = {
+    paperKey: "arxiv:2608.00002", source: "arxiv", externalId: "2608.00002",
+    title: "Agent evaluation methods", authors: ["Bob"], abstract: "Evidence", published: "2026-08-01T00:00:00.000Z",
+    updated: "2026-08-02T00:00:00.000Z", primaryCategory: "cs.AI", categories: ["cs.AI"],
+    evidenceDepth: "metadata-and-abstract", filePaths: ["papers/2608.00002.pdf"],
+  };
   const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
   Object.assign(plugin, {
     settings,
@@ -81,6 +95,10 @@ function fixture() {
     libraryOutputRevision: 0,
     librarySelectionRevision: 0,
     saveData: vi.fn().mockResolvedValue(undefined),
+    // Clustered generation reads the full-text knowledge base for its input;
+    // an empty KB would fail with no-evidence before any LLM call, so stub a
+    // populated in-memory KB whose two papers cluster into one theme.
+    buildFullTextKnowledgeBaseStore: () => makeFullTextKnowledgeBase(scopeFingerprint, identificationFingerprint),
   });
   return { plugin, internals: plugin as any, storage, files, catalog, connection, scopeFingerprint, identificationFingerprint };
 }
@@ -92,7 +110,7 @@ function confirmedProfile(catalog: PersonalLibraryCatalog): PersonalLibraryInter
     evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper),
   }];
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 1,
     scopeFingerprint: catalog.scopeFingerprint,
     identificationFingerprint: catalog.identificationFingerprint,
@@ -105,6 +123,8 @@ function confirmedProfile(catalog: PersonalLibraryCatalog): PersonalLibraryInter
       discoveryCues: ["agent evaluation"],
       representatives,
       representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: "2026-08-03T01:00:00.000Z" }],
       lineage: { proposalIds: ["proposal.1"], candidateIds: ["candidate.1"], directionIds: [] },
       createdAt: "2026-08-03T01:00:00.000Z",
       updatedAt: "2026-08-03T01:00:00.000Z",
@@ -366,6 +386,8 @@ describe("personal library profile lifecycle", () => {
         { paperKey: first.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(first) },
         { paperKey: second.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(second) },
       ]),
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: "2026-08-03T01:00:00.000Z" }],
       lineage: { proposalIds: ["proposal.2"], candidateIds: ["candidate.2"], directionIds: [] },
       createdAt: "2026-08-03T01:00:00.000Z",
       updatedAt: "2026-08-03T01:00:00.000Z",
@@ -640,7 +662,7 @@ describe("personal library profile lifecycle", () => {
     release();
     const saved = await first;
     expect(saved.revision).toBe(0);
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(1);
     expect(internals.buildSharedDeps).not.toHaveBeenCalled();
     expect(internals.buildPipeline).not.toHaveBeenCalled();
   });
@@ -690,7 +712,7 @@ describe("personal library profile lifecycle", () => {
 
     call.mockImplementationOnce(() => new Promise<string>((resolve) => { release = () => resolve(modelResult()); }));
     const stale = plugin.generatePersonalLibraryDirections();
-    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
     internals.libraryCatalog.papers["arxiv:2608.00001"].abstract = "Changed selected evidence";
     release();
     await expect(stale).rejects.toThrow("Selected personal library catalog evidence changed");
@@ -881,3 +903,44 @@ describe("personal library profile lifecycle", () => {
     expect(profile.revision).toBe(0);
   });
 });
+
+function makeFullTextKnowledgeBase(scopeFingerprint: string, identificationFingerprint: string) {
+  const documents = new Map<string, unknown>();
+  for (const [index, seed] of [[1, "c"], [2, "e"]] as const) {
+    const paperKey = `arxiv:2608.0000${index}`;
+    documents.set(paperKey, {
+      schemaVersion: 1,
+      paperKey,
+      modelId: "fake",
+      dimension: 8,
+      textHash: `sha256:${"d".repeat(64)}`,
+      filePaths: [`papers/2608.0000${index}.pdf`],
+      observationFingerprints: [`sha256:${seed.repeat(64)}`],
+      chunks: [{ index: 0, page: 1, text: `paper ${index}` }],
+      // Identical theme chunk: the two papers cluster into one theme.
+      vectors: new Float32Array([1, 0, 0, 0, 0, 0, 0, 0]),
+      updatedAt: "2026-08-03T00:00:00.000Z",
+    });
+  }
+  return {
+    paths: { directory: "kb", manifest: { directory: "kb", documentPath: "kb/manifest.json", backupPath: "kb/m.json.backup" }, papersDirectory: "kb/papers" },
+    loadManifest: async () => ({
+      schemaVersion: 1,
+      revision: 1,
+      scopeFingerprint,
+      identificationFingerprint,
+      modelId: "fake",
+      dimension: 8,
+      updatedAt: "2026-08-03T00:00:00.000Z",
+      papers: {
+        "arxiv:2608.00001": { paperKey: "arxiv:2608.00001", status: "ready", modelId: "fake", dimension: 8, textHash: `sha256:${"d".repeat(64)}`, filePaths: ["papers/2608.00001.pdf"], observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1, updatedAt: "2026-08-03T00:00:00.000Z" },
+        "arxiv:2608.00002": { paperKey: "arxiv:2608.00002", status: "ready", modelId: "fake", dimension: 8, textHash: `sha256:${"d".repeat(64)}`, filePaths: ["papers/2608.00002.pdf"], observationFingerprints: [`sha256:${"e".repeat(64)}`], chunkCount: 1, updatedAt: "2026-08-03T00:00:00.000Z" },
+      },
+    }),
+    loadPaper: async (paperKey: string) => documents.get(paperKey) ?? null,
+    replaceManifest: async () => { throw new Error("not used"); },
+    savePaper: async () => {},
+    removePaper: async () => {},
+    removeAll: async () => {},
+  };
+}

@@ -2,7 +2,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Modal, type App } from "obsidian";
 import {
   PersonalLibraryInterestProfileModal,
+  bufferPoolHeading,
+  describeClusterMembers,
+  formatConfidence,
   normalizeLines,
+  timelineEventLabel,
+  unclassifiedBufferPoolPapers,
   type InterestProfileReviewController,
   type InterestProfileReviewSnapshot,
 } from "../src/library/interest-profile-modal";
@@ -300,5 +305,199 @@ describe("personal library interest profile modal", () => {
     await confirmChoice("Enable");
     await vi.waitFor(() => expect(failedModal.contentEl.querySelector('[role="alert"]')?.textContent).toContain("evidence is missing or stale"));
     expect(failedModal.contentEl.textContent).not.toContain(hostile);
+  });
+});
+
+describe("cluster products in the personal library interest review", () => {
+  const input = [
+    { paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence },
+    { paperKey: "arxiv:2608.00002", evidenceFingerprint: evidence },
+    { paperKey: "arxiv:2608.00003", evidenceFingerprint: evidence },
+  ];
+
+  function paper(paperKey: string, title: string): any {
+    return {
+      paperKey, source: "arxiv", externalId: paperKey.slice("arxiv:".length), title,
+      authors: ["A"], abstract: "Abstract", published: "2026-08-01T00:00:00.000Z",
+      updated: "2026-08-01T00:00:00.000Z", primaryCategory: "cs.AI", categories: ["cs.AI"],
+      evidenceDepth: "metadata-and-abstract", filePaths: ["paper.pdf"],
+    };
+  }
+
+  function catalogWith(extra: Record<string, any> = {}): any {
+    const base = snapshot().catalog!;
+    return { ...base, papers: { ...base.papers, ...extra } };
+  }
+
+  it("shows cluster member count, average confidence, and per-member confidence for proposed candidates", () => {
+    const clustered = {
+      ...candidate,
+      clusterMembers: [
+        { paperKey: "arxiv:2608.00001", confidence: 0.9 },
+        { paperKey: "arxiv:2608.00002", confidence: 0.8 },
+        { paperKey: "arxiv:2608.00003", confidence: 0.5 },
+      ],
+    };
+    const state = snapshot({
+      catalog: catalogWith({ "arxiv:2608.00002": paper("arxiv:2608.00002", "Second cluster paper") }),
+      proposal: { ...snapshot().proposal!, catalogInputPapers: input, candidates: [clustered] },
+    });
+    const { mock } = controller(state);
+    const modal = open(mock);
+    const cluster = modal.contentEl.querySelector(".arxiv-daily-interest-review__cluster");
+    expect(cluster).not.toBeNull();
+    expect(cluster!.querySelector("summary")?.textContent).toBe("Cluster members 3 · avg. confidence 73%");
+    expect(Array.from(cluster!.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+      "Paper <img src=x> — 90%",
+      "Second cluster paper — 80%",
+      "arxiv:2608.00003 — 50%",
+    ]);
+    expect(cluster!.querySelector("img")).toBeNull();
+  });
+
+  it("derives the buffer pool as catalog input papers minus the union of all cluster members", () => {
+    const first = {
+      ...candidate,
+      clusterMembers: [
+        { paperKey: "arxiv:2608.00001", confidence: 0.9 },
+        { paperKey: "arxiv:2608.00002", confidence: 0.7 },
+      ],
+    };
+    const second = {
+      ...candidate, id: "candidate-2", name: "Second",
+      lineage: { candidateIds: ["candidate-2"] },
+      clusterMembers: [{ paperKey: "arxiv:2608.00002", confidence: 0.6 }],
+    };
+    const state = snapshot({
+      catalog: catalogWith({
+        "arxiv:2608.00003": paper("arxiv:2608.00003", "Buffered third paper"),
+        "arxiv:2608.00004": paper("arxiv:2608.00004", "Buffered fourth paper"),
+      }),
+      proposal: {
+        ...snapshot().proposal!,
+        catalogInputPapers: [
+          { paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence },
+          { paperKey: "arxiv:2608.00002", evidenceFingerprint: evidence },
+          { paperKey: "arxiv:2608.00003", evidenceFingerprint: evidence },
+          { paperKey: "arxiv:2608.00004", evidenceFingerprint: evidence },
+        ],
+        candidates: [first, second],
+      },
+    });
+    expect(unclassifiedBufferPoolPapers(state.proposal)).toEqual([
+      { paperKey: "arxiv:2608.00003", evidenceFingerprint: evidence },
+      { paperKey: "arxiv:2608.00004", evidenceFingerprint: evidence },
+    ]);
+    const { mock } = controller(state);
+    const modal = open(mock);
+    const buffer = modal.contentEl.querySelector(".arxiv-daily-interest-review__buffer");
+    expect(buffer).not.toBeNull();
+    expect(buffer!.querySelector("strong")?.textContent).toBe("Unclustered (buffer pool) 2");
+    expect(Array.from(buffer!.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+      "Buffered third paper — arxiv:2608.00003",
+      "Buffered fourth paper — arxiv:2608.00004",
+    ]);
+    expect(buffer!.textContent).toContain("这些论文未进入任何方向草案");
+  });
+
+  it("omits the buffer pool section when every catalog input paper is covered", () => {
+    const covered = { ...candidate, clusterMembers: [{ paperKey: "arxiv:2608.00001", confidence: 1 }] };
+    const { mock } = controller(snapshot({
+      proposal: { ...snapshot().proposal!, candidates: [covered] },
+    }));
+    const modal = open(mock);
+    expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__buffer")).toBeNull();
+    expect(modal.contentEl.textContent).not.toContain("Unclustered (buffer pool)");
+  });
+
+  it("treats legacy candidates without cluster members as covering nothing and renders no cluster block", () => {
+    const state = snapshot({
+      catalog: catalogWith({ "arxiv:2608.00002": paper("arxiv:2608.00002", "Second paper") }),
+      proposal: { ...snapshot().proposal!, catalogInputPapers: input, candidates: [{ ...candidate }] },
+    });
+    const { mock } = controller(state);
+    const modal = open(mock);
+    expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__cluster")).toBeNull();
+    const buffer = modal.contentEl.querySelector(".arxiv-daily-interest-review__buffer");
+    expect(buffer?.querySelector("strong")?.textContent).toBe("Unclustered (buffer pool) 3");
+    expect(Array.from(buffer!.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+      "Paper <img src=x> — arxiv:2608.00001",
+      "Second paper — arxiv:2608.00002",
+      "arxiv:2608.00003 — missing from current catalog",
+    ]);
+  });
+
+  it("shows confirmed cluster member summaries and the most recent five timeline events with mapped labels", () => {
+    const confirmed = {
+      ...direction,
+      clusterMembers: [
+        { paperKey: "arxiv:2608.00001", confidence: 0.95 },
+        { paperKey: "arxiv:2608.00002", confidence: 0.85 },
+      ],
+      timeline: [
+        { kind: "created", at: "2026-08-01T00:00:00.000Z" },
+        { kind: "edited", at: "2026-08-02T00:00:00.000Z" },
+        { kind: "members-updated", at: "2026-08-03T00:00:00.000Z" },
+        { kind: "merged", at: "2026-08-04T00:00:00.000Z", sourceDirectionIds: ["direction-0", "direction-9"] },
+        { kind: "removed", at: "2026-08-05T00:00:00.000Z", mode: "restrict" },
+        { kind: "edited", at: "2026-08-06T00:00:00.000Z" },
+      ],
+    };
+    const state = snapshot({
+      catalog: catalogWith({ "arxiv:2608.00002": paper("arxiv:2608.00002", "Second confirmed paper") }),
+      profile: { ...snapshot().profile!, directions: [confirmed] },
+    });
+    const { mock } = controller(state);
+    const modal = open(mock);
+    button(modal.contentEl, "Confirmed").click();
+    const cluster = modal.contentEl.querySelector(".arxiv-daily-interest-review__cluster");
+    expect(cluster?.querySelector("summary")?.textContent).toBe("Cluster members 2 · avg. confidence 90%");
+    expect(Array.from(cluster!.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+      "Paper <img src=x> — 95%",
+      "Second confirmed paper — 85%",
+    ]);
+    expect(Array.from(modal.contentEl.querySelectorAll(".arxiv-daily-interest-review__timeline li"))
+      .map((item) => item.textContent)).toEqual([
+      "2026-08-06 00:00 — Edited",
+      "2026-08-05 00:00 — Removed",
+      "2026-08-04 00:00 — Merged",
+      "2026-08-03 00:00 — Members updated",
+      "2026-08-02 00:00 — Edited",
+    ]);
+    expect(modal.contentEl.textContent).not.toContain("Created");
+  });
+
+  it("omits the cluster block for confirmed directions with no cluster members but keeps the timeline", () => {
+    const emptyCluster = {
+      ...direction,
+      clusterMembers: [],
+      timeline: [{ kind: "created", at: "2026-08-03T00:00:00.000Z" }],
+    };
+    const { mock } = controller(snapshot({
+      profile: { ...snapshot().profile!, directions: [emptyCluster] },
+    }));
+    const modal = open(mock);
+    button(modal.contentEl, "Confirmed").click();
+    expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__cluster")).toBeNull();
+    expect(Array.from(modal.contentEl.querySelectorAll(".arxiv-daily-interest-review__timeline li"))
+      .map((item) => item.textContent)).toEqual(["2026-08-03 00:00 — Created"]);
+  });
+
+  it("formats confidence, cluster summaries, buffer headings, and timeline labels deterministically", () => {
+    expect(formatConfidence(0.7333)).toBe("73%");
+    expect(formatConfidence(1)).toBe("100%");
+    expect(formatConfidence(0.005)).toBe("1%");
+    expect(describeClusterMembers([])).toBeNull();
+    expect(describeClusterMembers([
+      { paperKey: "arxiv:2608.00001", confidence: 0.9 },
+      { paperKey: "arxiv:2608.00002", confidence: 0.8 },
+    ])).toBe("Cluster members 2 · avg. confidence 85%");
+    expect(bufferPoolHeading(2)).toBe("Unclustered (buffer pool) 2");
+    expect(timelineEventLabel("created")).toBe("Created");
+    expect(timelineEventLabel("edited")).toBe("Edited");
+    expect(timelineEventLabel("members-updated")).toBe("Members updated");
+    expect(timelineEventLabel("merged")).toBe("Merged");
+    expect(timelineEventLabel("removed")).toBe("Removed");
+    expect(unclassifiedBufferPoolPapers(null)).toEqual([]);
   });
 });
