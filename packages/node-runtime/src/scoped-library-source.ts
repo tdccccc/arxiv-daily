@@ -193,9 +193,28 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
           "The requested library file exceeds the configured read limit",
         );
       }
+      const start = nonNegativeInteger(options.start, 0);
+      const end = Math.min(boundedPositiveInteger(options.end, handleInfo.size), handleInfo.size);
+      if (start >= end) {
+        throw new LibrarySourceError("unsafe-path", "The requested library range is empty");
+      }
 
       throwIfCancelled(options.signal);
-      const buffer = await handle.readFile({ signal: options.signal });
+      const rangeBytes = Math.min(end, handleInfo.size) - start;
+      const buffer = new Uint8Array(rangeBytes);
+      if (rangeBytes > 0) {
+        const { bytesRead } = await handle.read(buffer, {
+          offset: 0,
+          length: rangeBytes,
+          position: start,
+        });
+        if (bytesRead < rangeBytes) {
+          throw new LibrarySourceError(
+            "io",
+            "The requested library range could not be fully read",
+          );
+        }
+      }
       throwIfCancelled(options.signal);
       if (buffer.byteLength > maxBytes) {
         throw new LibrarySourceError(
@@ -203,7 +222,7 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
           "The requested library file exceeds the configured read limit",
         );
       }
-      return Uint8Array.from(buffer).buffer;
+      return buffer.buffer;
     } catch (error) {
       if (isCancellationError(error) || error instanceof LibrarySourceError) throw error;
       throw mapFsError(error, "Unable to read the requested library file");

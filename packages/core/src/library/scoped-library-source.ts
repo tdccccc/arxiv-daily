@@ -21,6 +21,10 @@ export interface LibraryInventoryOptions {
 
 export interface LibraryReadOptions {
   maxBytes?: number;
+  /** Inclusive zero-based start offset for a bounded range read. */
+  start?: number;
+  /** Exclusive zero-based end offset for a bounded range read. */
+  end?: number;
   signal?: AbortSignal;
 }
 

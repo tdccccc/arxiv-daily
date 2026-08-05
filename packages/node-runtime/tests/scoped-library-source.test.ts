@@ -67,6 +67,25 @@ describe("openScopedLibrarySource", () => {
     });
   });
 
+  it("reads bounded byte ranges with start/end offsets", async () => {
+    const dir = await makeTempDir();
+    await mkdir(join(dir, "papers"), { recursive: true });
+    await writeFile(join(dir, "papers/example.pdf"), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    const source = await openScopedLibrarySource(dir);
+    expect(Array.from(new Uint8Array(
+      await source.readBinary("papers/example.pdf", { start: 1, end: 4 }),
+    ))).toEqual([1, 2, 3]);
+    // end beyond EOF clamps to the file size
+    expect(Array.from(new Uint8Array(
+      await source.readBinary("papers/example.pdf", { start: 7, end: 999 }),
+    ))).toEqual([7, 8, 9]);
+    // start 0 end 0 and inverted ranges are rejected
+    await expect(source.readBinary("papers/example.pdf", { start: 5, end: 5 }))
+      .rejects.toMatchObject({ kind: "unsafe-path" });
+    await expect(source.readBinary("papers/example.pdf", { start: 6, end: 3 }))
+      .rejects.toMatchObject({ kind: "unsafe-path" });
+  });
+
   it("exposes a canonical root identity for authorization binding", async () => {
     const parent = await makeTempDir();
     const root = join(parent, "root");
