@@ -17,3 +17,24 @@
 - change: phase 02 Approach/Tasks 更新（质心聚类 → SNN → single-linkage）；`clusterPaperVectors` 接口最终为 { minClusterSize, centerCorpus, minSimilarity(默认0), relativeStopRatio(默认0.65) }；`buildClusteringInput` 从论文级向量聚合改为加载 chunk 向量（长文截断 80 chunk）；`aggregatePaperVector` 删除；T3 resolver/generationContract 同步；e2e 语料改为异构 12 篇。
 - disposition: 保留 single-linkage 引擎；T1/T2 的质心/SNN 实现已替换（git 历史可查）。
 - next: P2 收尾（已提交）；P3 增量更新（缓冲池触发局部重聚类）按 goal.md 索引行推进。
+
+## 2026-08-06 — note（SPECTER 换嵌入实测结论）
+
+- evidence: 用 allenai-specter（q8 onnx，transformers.js 本地加载）对真实语料（15 篇 DL 近邻 + 12 篇异构）实测分离度：DL 语料同/跨主题间隙 0.031（e5-small 0.018）、异构 0.043（e5 0.015）——SPECTER 分布确实更好（1.7-2.9×），但 p25(same) 与 p75(cross) 仍重叠，同领域子主题无质变。用 SPECTER 向量直接跑现有聚类引擎（相对排序），输出与 e5 几乎相同（同构的 GNN 簇 + physics/bio 混杂簇 + 缓冲池）——相对排序对间隙改善不敏感。
+- change: 无（不改产品代码，仅实测）。集成成本已记录：tokenizer_config 缺 model_max_length/truncation（公式段落 token 爆炸，需自适应截断）、q8 onnx 需本地组装（重命名 + 补 tokenizer_config）、推理慢 ~3×、768 维存储翻倍。
+- disposition: 维持 e5-small 为嵌入模型；SPECTER 记录为未来"模型可配置化"的备选（潜在价值在检索 top-k 精度而非聚类）。
+- next: P3 增量更新闭环（goal.md 索引行 pending → active）。
+
+## 2026-08-06 — P3 T5a/T5b 完成（建议 store + 审核接线）
+
+- evidence: core `IncrementalSuggestionsStore`（CAS/primary-backup/严格 decoder，35 测试）+ `apply{Attach,Split,Merge}Suggestion`/`buildNewDirectionDraft`（SUGGESTION_MEMBER_CONFIDENCE=0.9，split 派生方向带 `split-derived` 标记）验收；plugin 增量闭环接线完成并全量验收：`runIncrementalDirectionUpdate`（placement → attach 建议；buffer ≥ `INCREMENTAL_BUFFER_TRIGGER=3` 触发 reclusterPool + LLM diff；建议文档整体 replace CAS——新证据取代旧 pending 建议）、`applyIncrementalSuggestion`/`dismissIncrementalSuggestion`（内容键 `${kind}:${directionId}:${firstPaperKey}`，因 DirectionDiffSuggestion 无 id 字段；new 建议转候选入 proposal store 走现有确认流程）、lock/unlock、命令 `check-incremental-direction-updates`/`review-incremental-suggestions`、审核 UI 建议区块 + 锁定按钮。验证：tsc 0 error；plugin 全量 405/405（含新 16 测试）；core 未动（上次验收 1528 全过）。
+- change: 编排适配——① placement 与 recluster 各自加载+centering（core 未导出 centering 变换，低频路径两次加载可接受，plugin 镜像 `centerChunksInPlace` 与 core 私有实现同构）；② 增量更新复用 `personal-library-direction-generation` operation kind（core OperationKind 封闭 union 无增量 kind，共享授权门与撤销范围）；③ apply/dismiss/lock 为本地确定性操作不要求模型授权（与 revoke 后本地 review 可用一致）；④ `reclusterBufferPool` 因边界词禁 `Buffer` 实现名为 `reclusterPool`。
+- disposition: 保留。子代理经历：T5b 两次派遣（默认 deepseek-v4-flash）均在探索后模型层空响应失败（零产出、无部分改动）；第三次显式 sonnet 成功——后续复杂 plugin 任务默认 sonnet。
+- next: P3-T6 端到端验证（真实库增量场景 + 全量测试 + boundaries + journal 记录缓冲池阈值实测）。
+
+## 2026-08-06 — P3 T6 端到端验证完成（P3 全阶段收尾）
+
+- evidence: 真实语料全链路通过（31 项 PASS，tmp/incremental-e2e/ scratch）。场景：P2 异构语料副本（4 GNN/4 物理/4 生物）→ 确认 physics 为第 2 方向（profile rev 1→2）→ 真实索引 5 篇 DL PDF（chunks 49/64/44/70/262，KB rev 1→2、17 papers）→ placement（默认 0.25/0.05）：**attach 8 / buffer 1**（confidence min 0.190/median 0.339/max 0.552；margin min 0.046/median 0.150/max 0.392；5 篇 DL 全附 GNN——centered e5 空间里 transformer 类论文与 GNN 同域，1706.03762 最高 0.552/margin 0.392）→ 严格变体 0.35（attach 3/buffer 6）驱动 recluster（1 簇 6 篇，nearest GNN 0.349/physics 0.318）+ fake LLM diff（attach 3 → GNN、new 3）→ 应用 attach：GNN members 5→8 + members-updated 事件，建议文档 CAS 移除（rev 1→2）→ 锁定验证：locked GNN 的 split/merge 均 `direction-locked` 拒绝（含 suggestDirectionDiff 全流程 attempts=3 抛错）、attach 放行、unlock 恢复 → 重载核验全部 store 一致。
+- change: 无 steer。阈值实测结论（journal 定论）：**默认 minSimilarity 0.25 在真实语料偏宽**（阈值扫描 0.15/0.2/0.25 均 8/9、0.3→6/9、0.35→3/9；minMargin 0.05 与 0.02 同结果、0.1→7/9）；DL→GNN 附着力强是 e5 centered 空间的真实分布，非 bug；若产品上希望缓冲池更活跃可调 0.3-0.35，但 0.25 的"宽松优先 attach + 用户审核"符合用户决定优先理念，维持默认。stale-CAS 拒绝路径与 replay 幂等（同内容不抛 stale）均已实测。
+- disposition: 保留全部；tmp/incremental-e2e/ 为 scratch 不入库。
+- next: 全部阶段完成。收尾：goal.md 成功标准全勾 + P3 done；technical-report handoff；提交需用户指令（P6）。
