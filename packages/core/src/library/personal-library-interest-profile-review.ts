@@ -337,6 +337,52 @@ export function removePersonalLibraryConfirmedDirection(input: unknown): Persona
   return outputProfile(profile);
 }
 
+export function lockPersonalLibraryConfirmedDirection(input: unknown): PersonalLibraryInterestProfile {
+  const raw = exactInput(input, ["profile", "directionId", "now"], ["now"]);
+  const profile = profileDocument(raw.profile);
+  const directionId = opaqueId(raw.directionId, "directionId");
+  const requestedAt = raw.now === undefined ? undefined : canonicalDate(raw.now);
+  const index = profile.directions.findIndex(({ id }) => id === directionId);
+  if (index < 0) fail("not-found", "direction was not found", { directionId });
+  const current = profile.directions[index]!;
+  if (current.status === "merged") fail("conflict", "merged directions cannot be locked", { directionId });
+  if (current.lockedAt !== undefined) fail("conflict", "direction is already locked", { directionId });
+  const lockedAt = requestedAt === undefined
+    ? current.updatedAt
+    : monotonicTimestamp(requestedAt, current.updatedAt);
+  const next: PersonalLibraryConfirmedDirection = {
+    ...current,
+    lockedAt,
+    updatedAt: lockedAt,
+    timeline: appendTimelineEvent(current.timeline, { kind: "locked", at: lockedAt }),
+  };
+  profile.directions[index] = next;
+  return outputProfile(profile);
+}
+
+export function unlockPersonalLibraryConfirmedDirection(input: unknown): PersonalLibraryInterestProfile {
+  const raw = exactInput(input, ["profile", "directionId", "now"], ["now"]);
+  const profile = profileDocument(raw.profile);
+  const directionId = opaqueId(raw.directionId, "directionId");
+  const requestedAt = raw.now === undefined ? undefined : canonicalDate(raw.now);
+  const index = profile.directions.findIndex(({ id }) => id === directionId);
+  if (index < 0) fail("not-found", "direction was not found", { directionId });
+  const current = profile.directions[index]!;
+  if (current.status === "merged") fail("conflict", "merged directions cannot be unlocked", { directionId });
+  if (current.lockedAt === undefined) fail("conflict", "direction is not locked", { directionId });
+  const unlockedAt = requestedAt === undefined
+    ? current.updatedAt
+    : monotonicTimestamp(requestedAt, current.updatedAt);
+  const { lockedAt: _lockedAt, ...rest } = current;
+  const next: PersonalLibraryConfirmedDirection = {
+    ...rest,
+    updatedAt: unlockedAt,
+    timeline: appendTimelineEvent(current.timeline, { kind: "unlocked", at: unlockedAt }),
+  };
+  profile.directions[index] = next;
+  return outputProfile(profile);
+}
+
 function changeStatus(
   profile: PersonalLibraryInterestProfile,
   directionId: string,

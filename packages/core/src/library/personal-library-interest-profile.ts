@@ -43,7 +43,10 @@ export type PersonalLibraryDirectionTimelineEvent =
   | { kind: "edited"; at: string }
   | { kind: "members-updated"; at: string }
   | { kind: "merged"; at: string; sourceDirectionIds: string[] }
-  | { kind: "removed"; at: string; mode: "restrict" | "cascade" };
+  | { kind: "removed"; at: string; mode: "restrict" | "cascade" }
+  | { kind: "locked"; at: string }
+  | { kind: "unlocked"; at: string }
+  | { kind: "split"; at: string; sourceDirectionId: string };
 
 export interface PersonalLibraryDirectionCandidate {
   id: string;
@@ -88,6 +91,8 @@ interface PersonalLibraryConfirmedDirectionCommon {
   };
   createdAt: string;
   updatedAt: string;
+  /** ISO timestamp of the direction lock; absent means the direction is not locked. */
+  lockedAt?: string;
 }
 
 export type PersonalLibraryConfirmedDirection =
@@ -518,10 +523,12 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
 function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | null {
   if (!isPlainObject(value)) return null;
   const merged = value.status === "merged";
+  const hasLockedAt = Object.hasOwn(value, "lockedAt");
   const keys = [
     "id", "status", "name", "description", "discoveryCues", "representatives",
     "representativeSetFingerprint", "clusterMembers", "timeline", "lineage", "createdAt", "updatedAt",
     ...(merged ? ["mergedIntoDirectionId"] : []),
+    ...(hasLockedAt ? ["lockedAt"] : []),
   ];
   if (!isExactObject(value, keys)
     || (value.status !== "active" && value.status !== "disabled" && !merged)
@@ -537,6 +544,7 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
     || !isCanonicalTimestamp(value.createdAt)
     || !isCanonicalTimestamp(value.updatedAt)
     || value.createdAt > value.updatedAt
+    || (hasLockedAt && (!isCanonicalTimestamp(value.lockedAt) || value.lockedAt < value.createdAt))
     || (merged && !isOpaqueId(value.mergedIntoDirectionId))) return null;
   const representatives = decodeRepresentatives(value.representatives);
   if (!representatives
@@ -561,6 +569,7 @@ function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | nu
     },
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    ...(hasLockedAt ? { lockedAt: value.lockedAt } : {}),
   };
   return merged
     ? { ...common, status: "merged", mergedIntoDirectionId: value.mergedIntoDirectionId }
@@ -661,9 +670,27 @@ function decodeTimelineEvent(value: unknown): PersonalLibraryDirectionTimelineEv
         && (value.mode === "restrict" || value.mode === "cascade")
         ? { kind: "removed", at: value.at, mode: value.mode }
         : null;
+    case "locked":
+    case "unlocked":
+      return isExactObject(value, ["kind", "at"])
+        ? { kind: value.kind, at: value.at }
+        : null;
+    case "split":
+      return isExactObject(value, ["kind", "at", "sourceDirectionId"])
+        && isSplitSourceDirectionId(value.sourceDirectionId)
+        ? { kind: "split", at: value.at, sourceDirectionId: value.sourceDirectionId }
+        : null;
     default:
       return null;
   }
+}
+
+function isSplitSourceDirectionId(value: unknown): value is string {
+  // Split sources are retained as opaque ids with a relaxed bound above direction ids.
+  return typeof value === "string"
+    && value.length >= 1
+    && value.length <= 256
+    && /^[A-Za-z0-9._~-]+$/.test(value);
 }
 
 function isCanonicalCatalogPaper(value: unknown): value is PersonalLibraryPaperRecord {
