@@ -6,6 +6,7 @@ import {
   PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
+  type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
   type PersonalLibraryClusterMember,
   type PersonalLibraryConfirmedDirection,
@@ -60,6 +61,10 @@ export interface InterestProfileReviewController {
     directionId: string;
     mode: "restrict" | "cascade";
   }): Promise<InterestProfileReviewSnapshot>;
+  applySuggestion(key: string): Promise<InterestProfileReviewSnapshot>;
+  dismissSuggestion(key: string): Promise<InterestProfileReviewSnapshot>;
+  lock(directionId: string): Promise<InterestProfileReviewSnapshot>;
+  unlock(directionId: string): Promise<InterestProfileReviewSnapshot>;
 }
 
 type ReviewTab = "proposed" | "confirmed";
@@ -131,6 +136,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     });
     error.hidden = !this.errorMessage;
     error.textContent = this.errorMessage;
+
+    this.renderIncrementalSuggestions(root, snapshot);
 
     const panel = root.createEl("section", {
       cls: "arxiv-daily-interest-review__panel",
@@ -283,6 +290,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     });
     heading.createEl("strong", { text: direction.name });
     if ("status" in direction) heading.createSpan({ text: direction.status, cls: `arxiv-daily-interest-review__status is-${direction.status}` });
+    if ("lockedAt" in direction && direction.lockedAt !== undefined) {
+      heading.createSpan({ text: "locked", cls: "arxiv-daily-interest-review__status is-locked" });
+    }
 
     const form = card.createDiv({ cls: "arxiv-daily-interest-review__form" });
     const name = this.textField(form, "Name", direction.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH);
@@ -335,6 +345,15 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       const toggle = parent.createEl("button", { text: direction.status === "active" ? "Disable" : "Enable", attr: { type: "button" } });
       toggle.disabled = this.pending;
       toggle.addEventListener("click", () => void this.toggleConfirmed(direction));
+      if (direction.lockedAt !== undefined) {
+        const unlock = parent.createEl("button", { text: "Unlock", attr: { type: "button" } });
+        unlock.disabled = this.pending;
+        unlock.addEventListener("click", () => void this.run("unlock direction", () => this.controller.unlock(direction.id)));
+      } else {
+        const lock = parent.createEl("button", { text: "Lock", attr: { type: "button" } });
+        lock.disabled = this.pending;
+        lock.addEventListener("click", () => void this.run("lock direction", () => this.controller.lock(direction.id)));
+      }
     }
     const restrict = parent.createEl("button", { text: "Remove", attr: { type: "button" } });
     restrict.addClass("mod-warning");
@@ -403,6 +422,87 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       });
     }
     section.createEl("p", { cls: "arxiv-daily-interest-review__hint", text: "这些论文未进入任何方向草案" });
+  }
+
+  private renderIncrementalSuggestions(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
+    this.renderDocumentError(parent, "Incremental suggestions", snapshot.suggestionsLoadError);
+    const suggestions = snapshot.suggestions?.suggestions ?? [];
+    if (suggestions.length === 0) {
+      parent.createEl("p", {
+        cls: "arxiv-daily-interest-review__suggestions-empty",
+        text: "No incremental suggestions. Run a check for new papers to review suggestions here.",
+      });
+      return;
+    }
+    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__suggestions" });
+    section.createEl("strong", { text: `Incremental suggestions ${suggestions.length}` });
+    for (const suggestion of suggestions) {
+      this.renderIncrementalSuggestion(section, suggestion, snapshot);
+    }
+  }
+
+  private renderIncrementalSuggestion(
+    parent: HTMLElement,
+    suggestion: DirectionDiffSuggestion,
+    snapshot: InterestProfileReviewSnapshot,
+  ): void {
+    const card = parent.createEl("article", { cls: "arxiv-daily-interest-review__suggestion" });
+    const heading = card.createDiv({ cls: "arxiv-daily-interest-review__suggestion-heading" });
+    heading.createEl("span", {
+      cls: `arxiv-daily-interest-review__suggestion-kind is-${suggestion.kind}`,
+      text: suggestion.kind,
+    });
+    heading.createEl("strong", { text: this.incrementalSuggestionTarget(suggestion, snapshot) });
+    heading.createSpan({ text: incrementalSuggestionPaperCount(suggestion) });
+    card.createEl("p", {
+      cls: "arxiv-daily-interest-review__suggestion-reason",
+      text: truncateReason(suggestion.reason),
+    });
+    const actions = card.createDiv({ cls: "arxiv-daily-interest-review__suggestion-actions" });
+    const apply = actions.createEl("button", {
+      text: suggestion.kind === "new" ? "Convert to proposal" : "Apply",
+      attr: { type: "button" },
+    });
+    apply.disabled = this.pending;
+    apply.addEventListener("click", () => void this.applyIncrementalSuggestion(suggestion));
+    const dismiss = actions.createEl("button", { text: "Ignore", attr: { type: "button" } });
+    dismiss.disabled = this.pending;
+    dismiss.addEventListener("click", () => void this.dismissIncrementalSuggestion(suggestion));
+  }
+
+  private incrementalSuggestionTarget(
+    suggestion: DirectionDiffSuggestion,
+    snapshot: InterestProfileReviewSnapshot,
+  ): string {
+    switch (suggestion.kind) {
+      case "merge": {
+        const names = suggestion.directionIds.map((id) => this.directionName(snapshot, id));
+        return names.join(" + ");
+      }
+      case "new":
+        return "New direction";
+      case "attach":
+      case "split":
+        return this.directionName(snapshot, suggestion.directionId);
+    }
+  }
+
+  private directionName(snapshot: InterestProfileReviewSnapshot, directionId: string): string {
+    return snapshot.profile?.directions.find((direction) => direction.id === directionId)?.name
+      ?? directionId;
+  }
+
+  private async applyIncrementalSuggestion(suggestion: DirectionDiffSuggestion): Promise<void> {
+    const convertingToProposal = suggestion.kind === "new";
+    await this.run("apply incremental suggestion", async () => {
+      await this.controller.applySuggestion(incrementalSuggestionKey(suggestion));
+      if (convertingToProposal) this.tab = "proposed";
+    });
+  }
+
+  private async dismissIncrementalSuggestion(suggestion: DirectionDiffSuggestion): Promise<void> {
+    await this.run("dismiss incremental suggestion", () =>
+      this.controller.dismissSuggestion(incrementalSuggestionKey(suggestion)));
   }
 
   private textField(parent: HTMLElement, labelText: string, value: string, maxLength: number): HTMLInputElement {
@@ -649,6 +749,9 @@ const TIMELINE_EVENT_LABELS: Record<PersonalLibraryDirectionTimelineEvent["kind"
   "members-updated": "Members updated",
   merged: "Merged",
   removed: "Removed",
+  locked: "Locked",
+  unlocked: "Unlocked",
+  split: "Split",
 };
 
 export function timelineEventLabel(kind: PersonalLibraryDirectionTimelineEvent["kind"]): string {
@@ -670,6 +773,34 @@ export function unclassifiedBufferPoolPapers(
     for (const member of candidate.clusterMembers ?? []) covered.add(member.paperKey);
   }
   return proposal.catalogInputPapers.filter((entry) => !covered.has(entry.paperKey));
+}
+
+/**
+ * Content key of one incremental suggestion; must match the plugin's key
+ * scheme (kind:directionId:firstPaperKey). Keys are only ever compared
+ * against keys computed the same way, never parsed.
+ */
+export function incrementalSuggestionKey(suggestion: DirectionDiffSuggestion): string {
+  switch (suggestion.kind) {
+    case "attach":
+      return `attach:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
+    case "new":
+      return `new::${suggestion.paperKeys[0]}`;
+    case "split":
+      return `split:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
+    case "merge":
+      return `merge:${suggestion.directionIds[0]}:${suggestion.directionIds[1]}`;
+  }
+}
+
+export function incrementalSuggestionPaperCount(suggestion: DirectionDiffSuggestion): string {
+  if (suggestion.kind === "merge") return "2 directions";
+  return `${suggestion.paperKeys.length} paper(s)`;
+}
+
+export function truncateReason(reason: string, maximum = 160): string {
+  if (reason.length <= maximum) return reason;
+  return `${reason.slice(0, maximum).trimEnd()}…`;
 }
 
 function generationAvailability(snapshot: InterestProfileReviewSnapshot): { allowed: boolean; reason: string } {

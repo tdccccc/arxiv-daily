@@ -16,6 +16,11 @@ import type {
   RunState,
   FullTextIndexRunSummary,
   KnowledgeBaseChunkHit,
+  DirectionDiffSuggestion,
+  IncrementalSuggestionsDocument,
+  PersonalLibraryDirectionCandidate,
+  PersonalLibraryRepresentativeEvidence,
+  ClusteringInputPaper,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
@@ -61,6 +66,26 @@ import {
   FullTextKnowledgeBaseFileStore,
   indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
   searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
+  IncrementalSuggestionsStore,
+  applyAttachSuggestion,
+  applyMergeSuggestion,
+  applySplitSuggestion,
+  buildNewDirectionDraft,
+  createEmptyIncrementalSuggestionsDocument,
+  createPersonalLibraryCatalogInputManifestFingerprint,
+  createPersonalLibraryGenerationContractFingerprint,
+  createPersonalLibraryPaperEvidenceFingerprint,
+  createPersonalLibraryRepresentativeSetFingerprint,
+  loadClusteringInput,
+  lockPersonalLibraryConfirmedDirection,
+  unlockPersonalLibraryConfirmedDirection,
+  PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
+  PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
+  PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
+  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+  reclusterPool,
+  suggestDirectionDiff,
+  suggestIncrementalPlacement,
 } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
@@ -127,7 +152,7 @@ interface PersistedData {
 }
 
 export interface PersonalLibraryReviewLoadError {
-  kind: "catalog" | "proposal" | "profile";
+  kind: "catalog" | "proposal" | "profile" | "suggestions";
   code: string;
   message: string;
 }
@@ -136,11 +161,13 @@ export interface PersonalLibraryProfileSnapshot {
   catalog: PersonalLibraryCatalog | null;
   proposal: PersonalLibraryDirectionProposal | null;
   profile: PersonalLibraryInterestProfile | null;
+  suggestions: IncrementalSuggestionsDocument | null;
   eligibility: PersonalLibraryInterestEligibility;
   authorization: LibraryConnectionStatus;
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
   profileLoadError: PersonalLibraryReviewLoadError | null;
+  suggestionsLoadError: PersonalLibraryReviewLoadError | null;
 }
 
 /**
@@ -163,6 +190,16 @@ let lastCacheCleanupDate: string | null = null;
 
 export const IDENTIFICATION_HEAD_BYTES = 4 * 1024 * 1024;
 const IDENTIFICATION_TAIL_BYTES = 1024 * 1024;
+
+/**
+ * Minimum buffer-pool size before the incremental direction update runs the
+ * low-frequency recluster + LLM diff pass; below it only deterministic
+ * placement attach suggestions are recorded.
+ */
+export const INCREMENTAL_BUFFER_TRIGGER = 3 as const;
+
+/** Fixed reason attached to deterministic placement attach suggestions. */
+const INCREMENTAL_ATTACH_REASON = "Newly indexed paper matches this confirmed direction." as const;
 
 function cacheCleanupDateKey(now: Date, timezone: string): string {
   return formatDate(todayInTz(now, timezone));
@@ -214,8 +251,10 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryOutputRevision = 0;
   private libraryProposal: PersonalLibraryDirectionProposal | null = null;
   private libraryProfile: PersonalLibraryInterestProfile | null = null;
+  private librarySuggestions: IncrementalSuggestionsDocument | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
   private libraryProfileLoadError: PersonalLibraryReviewLoadError | null = null;
+  private librarySuggestionsLoadError: PersonalLibraryReviewLoadError | null = null;
   private personalizedDailyDiscoveryAvailable = true;
   private personalizedDailyDiscoveryRevision = 0;
   private personalizedDailyRunControllers = new Map<ArxivPipeline, AbortController>();
@@ -602,6 +641,10 @@ export default class ArxivDailyPlugin extends Plugin {
       enable: (directionId) => this.enablePersonalLibraryConfirmedDirection(directionId),
       disable: (directionId) => this.disablePersonalLibraryConfirmedDirection(directionId),
       remove: (input) => this.removePersonalLibraryConfirmedDirection(input),
+      applySuggestion: (key) => this.applyIncrementalSuggestion(key),
+      dismissSuggestion: (key) => this.dismissIncrementalSuggestion(key),
+      lock: (directionId) => this.lockPersonalLibraryConfirmedDirection(directionId),
+      unlock: (directionId) => this.unlockPersonalLibraryConfirmedDirection(directionId),
     };
   }
 
@@ -638,11 +681,13 @@ export default class ArxivDailyPlugin extends Plugin {
       catalog: this.libraryCatalog,
       proposal: this.libraryProposal,
       profile: this.libraryProfile,
+      suggestions: this.librarySuggestions,
       eligibility: evaluatePersonalLibraryInterestEligibility(this.libraryProfile, this.libraryCatalog),
       authorization: this.getLibraryConnectionStatus(),
       catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
       profileLoadError: this.libraryProfileLoadError,
+      suggestionsLoadError: this.librarySuggestionsLoadError,
     });
   }
 
@@ -664,8 +709,10 @@ export default class ArxivDailyPlugin extends Plugin {
     if (!connection) {
       this.libraryProposal = null;
       this.libraryProfile = null;
+      this.librarySuggestions = null;
       this.libraryProposalLoadError = null;
       this.libraryProfileLoadError = null;
+      this.librarySuggestionsLoadError = null;
       return this.getPersonalLibraryProfileSnapshot();
     }
     const connectionRevision = this.libraryConnectionRevision;
@@ -691,6 +738,16 @@ export default class ArxivDailyPlugin extends Plugin {
         this.libraryProfile = null;
         this.libraryProfileLoadError = this.safeProfileLoadError("profile", error);
         this.logger?.error("personal library interest profile load failed", error);
+      }),
+      stores.suggestions.load().then((suggestions) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.librarySuggestions = suggestions;
+        this.librarySuggestionsLoadError = null;
+      }).catch((error) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.librarySuggestions = null;
+        this.librarySuggestionsLoadError = this.safeProfileLoadError("suggestions", error);
+        this.logger?.error("incremental suggestions load failed", error);
       }),
     ]);
     const identity = this.capturePersonalizedDiscoveryIdentity(connection);
@@ -903,6 +960,222 @@ export default class ArxivDailyPlugin extends Plugin {
         directionId: input.directionId,
         mode: input.mode,
       }));
+  }
+
+  getIncrementalSuggestions(): IncrementalSuggestionsDocument | null {
+    return this.librarySuggestions ? structuredClone(this.librarySuggestions) : null;
+  }
+
+  /**
+   * Incremental direction update: place every indexed paper not yet covered by
+   * a confirmed direction (deterministic attach vs. buffer), then — only when
+   * the buffer pool reached INCREMENTAL_BUFFER_TRIGGER papers — recluster the
+   * pool and ask the LLM for direction-diff suggestions. The merged suggestion
+   * set replaces the persisted suggestions document (CAS); pending suggestions
+   * from an earlier run are superseded by the newest evidence.
+   */
+  async runIncrementalDirectionUpdate(): Promise<{
+    suggestions: number;
+    attachments: number;
+    buffered: number;
+  }> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    if (this.getLibraryConnectionStatus().kind !== "authorized") {
+      throw new Error("Authorize personal library model processing first");
+    }
+    const profile = this.libraryProfile;
+    if (!profile) throw new Error("Load the confirmed personal library profile first");
+    const { scopeFingerprint } = this.libraryFingerprints(connection);
+    // The operation reuses the direction-generation kind: the closed core
+    // OperationKind union has no incremental kind, and the two flows share the
+    // authorization gate and cancellation scope (revocation cancels both).
+    if (this.operations.find("personal-library-direction-generation", scopeFingerprint)) {
+      throw new Error("Incremental direction update is already active");
+    }
+    const connectionRevision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const authorizationFingerprint = connection.authorization?.fingerprint;
+    const llmSettings = structuredClone(this.settings.llm);
+    const knowledgeBase = this.buildFullTextKnowledgeBaseStore(connection);
+    const operation = this.operations.begin(
+      "personal-library-direction-generation",
+      "Incremental direction update",
+      scopeFingerprint,
+    );
+    try {
+      operation.signal.throwIfAborted();
+      this.assertIncrementalUpdateCurrent({
+        connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
+      });
+      const placement = await suggestIncrementalPlacement({
+        profile: { directions: profile.directions },
+        knowledgeBase,
+        signal: operation.signal,
+      });
+      operation.signal.throwIfAborted();
+      const attachSuggestions: DirectionDiffSuggestion[] = [];
+      const bufferPaperKeys: string[] = [];
+      for (const paperKey of Object.keys(placement.placements).sort()) {
+        const decision = placement.placements[paperKey]!;
+        if (decision.kind === "attach") {
+          attachSuggestions.push({
+            kind: "attach",
+            directionId: decision.directionId,
+            paperKeys: [paperKey],
+            reason: INCREMENTAL_ATTACH_REASON,
+          });
+        } else {
+          bufferPaperKeys.push(paperKey);
+        }
+      }
+      // Reclustering + LLM diff are the low-frequency path. The placement pass
+      // already loaded and centered its own corpus copy, but the core API does
+      // not expose the centered papers (nor the centering transform), so the
+      // pool pass reloads and re-centers the corpus — a second load is fine
+      // here. LLM suggestions can only reference cluster papers, so the union
+      // with the per-paper placement attaches is always conflict-free.
+      let llmSuggestions: DirectionDiffSuggestion[] = [];
+      if (bufferPaperKeys.length >= INCREMENTAL_BUFFER_TRIGGER) {
+        const centered = await this.loadCenteredClusteringInput(knowledgeBase, operation.signal);
+        operation.signal.throwIfAborted();
+        const pooled = reclusterPool(centered, {
+          poolPaperKeys: bufferPaperKeys,
+          directions: profile.directions,
+        });
+        llmSuggestions = await suggestDirectionDiff({
+          directions: profile.directions,
+          clusters: pooled.candidates,
+          llm: new LlmClient(llmSettings, this.logger, this.host.http),
+          signal: operation.signal,
+        });
+      }
+      operation.signal.throwIfAborted();
+      const suggestions = mergeIncrementalSuggestions(attachSuggestions, llmSuggestions);
+      const nextDocument = emptyIncrementalSuggestionsDocument(connection, suggestions, new Date());
+      return await this.enqueueLibraryMutation(async () => {
+        operation.signal.throwIfAborted();
+        this.assertIncrementalUpdateCurrent({
+          connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
+        });
+        const store = this.buildIncrementalSuggestionsStore(connection);
+        const current = await store.load();
+        const saved = await store.replace(nextDocument, current.revision);
+        this.assertIncrementalUpdateCurrent({
+          connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
+        });
+        this.librarySuggestions = saved;
+        this.librarySuggestionsLoadError = null;
+        return {
+          suggestions: saved.suggestions.length,
+          attachments: saved.suggestions.filter((entry) => entry.kind === "attach").length,
+          buffered: bufferPaperKeys.length,
+        };
+      });
+    } catch (error) {
+      if (this.isReviewPersistenceConflict(error)) await this.reloadPersonalLibraryProfileDocuments();
+      throw error;
+    } finally {
+      operation.finish();
+    }
+  }
+
+  /**
+   * Apply one persisted incremental suggestion. attach/split/merge mutate the
+   * confirmed profile through the same review persistence path; "new" becomes
+   * a review candidate in the proposal store (the existing confirmation flow
+   * then decides the direction — the caller surfaces the proposal). The
+   * suggestion is removed from the suggestions document (CAS) after the
+   * mutation commits. Local operation: no model authorization required.
+   */
+  async applyIncrementalSuggestion(key: string): Promise<PersonalLibraryProfileSnapshot> {
+    const guard = this.capturePersonalLibraryReviewGuard();
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+      "incremental direction suggestion applied",
+    );
+    return this.enqueueLibraryMutation(async () => {
+      this.assertPersonalLibraryReviewGuard(guard);
+      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
+      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, false);
+      const suggestions = await stores.suggestions.load();
+      const suggestion = findIncrementalSuggestionByKey(suggestions.suggestions, key);
+      if (!suggestion) {
+        throw new Error("Incremental suggestion no longer exists. Refresh and try again.");
+      }
+      const now = new Date();
+      let profile = current.profile;
+      let proposal = current.proposal;
+      const expectedProposalRevision = proposal?.revision ?? null;
+      if (suggestion.kind === "new") {
+        proposal = this.attachNewSuggestionToProposal(suggestion, proposal, current.catalog, now);
+      } else {
+        profile = applySuggestionToProfile(profile, suggestion, now);
+      }
+      try {
+        if (suggestion.kind === "new") {
+          const savedProposal = await stores.proposal.replace(proposal!, expectedProposalRevision);
+          this.assertPersonalLibraryReviewGuard(guard);
+          this.libraryProposal = savedProposal;
+          this.libraryProposalLoadError = null;
+        } else {
+          const savedProfile = await stores.profile.replace(profile, profile.revision);
+          this.assertPersonalLibraryReviewGuard(guard);
+          this.libraryProfile = savedProfile;
+          this.libraryProfileLoadError = null;
+        }
+        const remaining = suggestions.suggestions.filter((entry) => !sameIncrementalSuggestion(entry, suggestion));
+        const nextDocument = suggestionsDocumentWithout(
+          suggestions,
+          remaining,
+          now,
+        );
+        const savedSuggestions = await stores.suggestions.replace(nextDocument, suggestions.revision);
+        this.assertPersonalLibraryReviewGuard(guard);
+        this.librarySuggestions = savedSuggestions;
+        this.librarySuggestionsLoadError = null;
+      } catch (error) {
+        if (this.isReviewPersistenceConflict(error)) {
+          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, discoveryRevision);
+        }
+        throw error;
+      }
+      const identity = this.capturePersonalizedDiscoveryIdentity(guard.connection);
+      if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
+      return this.getPersonalLibraryProfileSnapshot();
+    });
+  }
+
+  /** Remove one persisted incremental suggestion without applying it. */
+  async dismissIncrementalSuggestion(key: string): Promise<PersonalLibraryProfileSnapshot> {
+    const guard = this.capturePersonalLibraryReviewGuard();
+    return this.enqueueLibraryMutation(async () => {
+      this.assertPersonalLibraryReviewGuard(guard);
+      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
+      const suggestions = await stores.suggestions.load();
+      const suggestion = findIncrementalSuggestionByKey(suggestions.suggestions, key);
+      if (!suggestion) {
+        throw new Error("Incremental suggestion no longer exists. Refresh and try again.");
+      }
+      const remaining = suggestions.suggestions.filter((entry) => !sameIncrementalSuggestion(entry, suggestion));
+      const saved = await stores.suggestions.replace(
+        suggestionsDocumentWithout(suggestions, remaining, new Date()),
+        suggestions.revision,
+      );
+      this.assertPersonalLibraryReviewGuard(guard);
+      this.librarySuggestions = saved;
+      this.librarySuggestionsLoadError = null;
+      return this.getPersonalLibraryProfileSnapshot();
+    });
+  }
+
+  async lockPersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile) =>
+      lockPersonalLibraryConfirmedDirection({ profile, directionId, now }));
+  }
+
+  async unlockPersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProfile((profile) =>
+      unlockPersonalLibraryConfirmedDirection({ profile, directionId, now }));
   }
 
   async scanPersonalLibrary(): Promise<PersonalLibraryCatalog> {
@@ -1275,6 +1548,7 @@ export default class ArxivDailyPlugin extends Plugin {
   private buildPersonalLibraryProfileStores(connection: PersistedLibraryConnection): {
     proposal: PersonalLibraryDirectionProposalStore;
     profile: PersonalLibraryInterestProfileStore;
+    suggestions: IncrementalSuggestionsStore;
   } {
     if (!this.host?.storage.writeTextAtomic) {
       throw new Error("Personal library review requires atomic storage writes");
@@ -1286,6 +1560,9 @@ export default class ArxivDailyPlugin extends Plugin {
         this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
       ),
       profile: new PersonalLibraryInterestProfileStore(
+        this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
+      ),
+      suggestions: new IncrementalSuggestionsStore(
         this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
       ),
     };
@@ -1478,6 +1755,119 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  /**
+   * Guards the incremental update run: connection/output/authorization are the
+   * same gates as direction generation; the confirmed profile is captured by
+   * reference so any reload supersedes the run.
+   */
+  private assertIncrementalUpdateCurrent(input: {
+    connection: PersistedLibraryConnection;
+    connectionRevision: number;
+    outputRevision: number;
+    authorizationFingerprint?: string;
+    profile: PersonalLibraryInterestProfile;
+  }): void {
+    this.assertLibraryConnectionCurrent(input.connection, input.connectionRevision);
+    if (this.libraryOutputRevision !== input.outputRevision) {
+      throw new Error("Output paths changed during incremental direction update");
+    }
+    if (this.getLibraryConnectionStatus().kind !== "authorized"
+      || this.libraryConnection?.authorization?.fingerprint !== input.authorizationFingerprint) {
+      throw new Error("Personal library model authorization changed during incremental update");
+    }
+    if (this.libraryProfile !== input.profile) {
+      throw new Error("Personal library confirmed profile changed during incremental update");
+    }
+  }
+
+  private buildIncrementalSuggestionsStore(connection: PersistedLibraryConnection): IncrementalSuggestionsStore {
+    if (!this.host?.storage.writeTextAtomic) {
+      throw new Error("Incremental suggestions require atomic storage writes");
+    }
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    return new IncrementalSuggestionsStore(
+      this.host.storage,
+      this.settings.output,
+      scopeFingerprint,
+      identificationFingerprint,
+      { onWarning: (message, error) => this.logger.warn(message, error) },
+    );
+  }
+
+  /**
+   * Load the ready papers and apply the corpus-centered chunk transform in
+   * place — the same transform the placement pass applies internally. The core
+   * incremental API does not export the transform, so the plugin mirrors it
+   * here for the (low-frequency) recluster pass.
+   */
+  private async loadCenteredClusteringInput(
+    knowledgeBase: FullTextKnowledgeBaseFileStore,
+    signal?: AbortSignal,
+  ): Promise<ClusteringInputPaper[]> {
+    const papers = await loadClusteringInput(knowledgeBase, signal);
+    centerChunksInPlace(papers);
+    return papers;
+  }
+
+  /**
+   * Convert a "new" suggestion into a review candidate and append it to the
+   * proposal document (creating one when none exists yet). The candidate
+   * carries the suggestion's cluster members so the review shows them; its
+   * representatives are resolved against the current catalog evidence so the
+   * existing confirmation flow can verify and confirm it.
+   */
+  private attachNewSuggestionToProposal(
+    suggestion: Extract<DirectionDiffSuggestion, { kind: "new" }>,
+    proposal: PersonalLibraryDirectionProposal | null,
+    catalog: PersonalLibraryCatalog,
+    now: Date,
+  ): PersonalLibraryDirectionProposal {
+    const draft = buildNewDirectionDraft(suggestion);
+    const candidateId = crypto.randomUUID();
+    const representativePaperKeys = draft.representativePaperKeys
+      .slice(0, PERSONAL_LIBRARY_MAX_REPRESENTATIVES);
+    const representatives = representativePaperKeys.map((paperKey) => {
+      const paper = catalog.papers[paperKey];
+      if (!paper) {
+        throw new Error(`Suggestion paper is missing from the current catalog: ${paperKey}`);
+      }
+      return { paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper) };
+    });
+    const candidate: PersonalLibraryDirectionCandidate = {
+      id: candidateId,
+      name: draft.name,
+      description: draft.description,
+      discoveryCues: [draft.description.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)],
+      representatives,
+      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+      lineage: { candidateIds: [candidateId] },
+      clusterMembers: draft.clusterMembers.slice(0, PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS),
+    };
+    const inputPapers = mergeRepresentativeEvidence(
+      proposal?.catalogInputPapers ?? [],
+      representatives,
+    );
+    const scopeFingerprint = catalog.scopeFingerprint;
+    const identificationFingerprint = catalog.identificationFingerprint;
+    return {
+      schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+      revision: proposal?.revision ?? 0,
+      proposalId: proposal?.proposalId ?? crypto.randomUUID(),
+      scopeFingerprint,
+      identificationFingerprint,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint,
+        identificationFingerprint,
+        catalogInputPapers: inputPapers,
+      }),
+      catalogInputPapers: inputPapers,
+      generationContractFingerprint: proposal?.generationContractFingerprint
+        ?? createPersonalLibraryGenerationContractFingerprint("incremental-new-suggestion"),
+      generatedAt: proposal?.generatedAt ?? now.toISOString(),
+      candidates: [...(proposal?.candidates ?? []), candidate].sort(byOpaqueId),
+    };
+  }
+
   private assertPersonalLibraryDocumentLoadCurrent(
     connection: PersistedLibraryConnection,
     connectionRevision: number,
@@ -1494,12 +1884,14 @@ export default class ArxivDailyPlugin extends Plugin {
     this.libraryCatalogLoadError = null;
     this.libraryProposal = null;
     this.libraryProfile = null;
+    this.librarySuggestions = null;
     this.libraryProposalLoadError = null;
     this.libraryProfileLoadError = null;
+    this.librarySuggestionsLoadError = null;
   }
 
   private safeProfileLoadError(
-    kind: "catalog" | "proposal" | "profile",
+    kind: "catalog" | "proposal" | "profile" | "suggestions",
     error: unknown,
   ): PersonalLibraryReviewLoadError {
     const code = typeof error === "object" && error !== null && "code" in error
@@ -1508,7 +1900,8 @@ export default class ArxivDailyPlugin extends Plugin {
       : "load-failed";
     const label = kind === "catalog"
       ? "catalog"
-      : kind === "proposal" ? "direction proposal" : "confirmed profile";
+      : kind === "proposal" ? "direction proposal"
+        : kind === "suggestions" ? "incremental suggestions" : "confirmed profile";
     return { kind, code, message: `Personal library ${label} could not be loaded (${code}).` };
   }
 
@@ -2028,4 +2421,213 @@ function latestCompletedDate(store: StateStore): string | undefined {
     .map(([date]) => date)
     .sort();
   return completed[completed.length - 1];
+}
+
+// ---------------------------------------------------------------------------
+// Incremental direction update helpers (plugin-internal).
+// ---------------------------------------------------------------------------
+
+/**
+ * Content key of one persisted suggestion, used by the review UI and the
+ * plugin methods to address a single suggestion. The key is never parsed —
+ * lookups recompute it for every suggestion in the loaded document — so the
+ * colons inside paper keys (e.g. "arxiv:2608.00001") are harmless.
+ */
+function incrementalSuggestionKey(suggestion: DirectionDiffSuggestion): string {
+  switch (suggestion.kind) {
+    case "attach":
+      return `attach:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
+    case "new":
+      return `new::${suggestion.paperKeys[0]}`;
+    case "split":
+      return `split:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
+    case "merge":
+      return `merge:${suggestion.directionIds[0]}:${suggestion.directionIds[1]}`;
+  }
+}
+
+function findIncrementalSuggestionByKey(
+  suggestions: readonly DirectionDiffSuggestion[],
+  key: string,
+): DirectionDiffSuggestion | undefined {
+  return suggestions.find((suggestion) => incrementalSuggestionKey(suggestion) === key);
+}
+
+function sameIncrementalSuggestion(
+  left: DirectionDiffSuggestion,
+  right: DirectionDiffSuggestion,
+): boolean {
+  return incrementalSuggestionKey(left) === incrementalSuggestionKey(right);
+}
+
+function suggestionsDocumentWithout(
+  document: IncrementalSuggestionsDocument,
+  suggestions: DirectionDiffSuggestion[],
+  now: Date,
+): IncrementalSuggestionsDocument {
+  const empty = createEmptyIncrementalSuggestionsDocument(
+    document.scopeFingerprint,
+    document.identificationFingerprint,
+    now,
+  );
+  return { ...empty, suggestions };
+}
+
+function emptyIncrementalSuggestionsDocument(
+  connection: PersistedLibraryConnection,
+  suggestions: DirectionDiffSuggestion[],
+  now: Date,
+): IncrementalSuggestionsDocument {
+  const { scopeFingerprint, identificationFingerprint } = libraryFingerprints(connection);
+  const empty = createEmptyIncrementalSuggestionsDocument(
+    scopeFingerprint,
+    identificationFingerprint,
+    now,
+  );
+  return { ...empty, suggestions };
+}
+
+/**
+ * Canonical union of placement attaches (deterministic) and LLM diff
+ * suggestions (cluster-bound): papers never overlap between the two sources,
+ * so the merged list is conflict-free once sorted into the store's canonical
+ * code-unit order.
+ */
+function mergeIncrementalSuggestions(
+  attach: readonly DirectionDiffSuggestion[],
+  llm: readonly DirectionDiffSuggestion[],
+): DirectionDiffSuggestion[] {
+  return [...attach, ...llm].sort(compareIncrementalSuggestions);
+}
+
+const SUGGESTION_KIND_ORDER: Readonly<Record<DirectionDiffSuggestion["kind"], number>> = {
+  attach: 0,
+  merge: 1,
+  new: 2,
+  split: 3,
+};
+
+function compareIncrementalSuggestions(left: DirectionDiffSuggestion, right: DirectionDiffSuggestion): number {
+  const leftKey = incrementalSuggestionSortKey(left);
+  const rightKey = incrementalSuggestionSortKey(right);
+  for (let index = 0; index < leftKey.length; index += 1) {
+    const diff = codeUnitCompare(leftKey[index]!, rightKey[index]!);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function incrementalSuggestionSortKey(suggestion: DirectionDiffSuggestion): string[] {
+  switch (suggestion.kind) {
+    case "attach":
+      return [String(SUGGESTION_KIND_ORDER.attach), suggestion.directionId, suggestion.paperKeys[0] ?? ""];
+    case "merge":
+      return [String(SUGGESTION_KIND_ORDER.merge), suggestion.directionIds[0], suggestion.directionIds[1]];
+    case "new":
+      return [String(SUGGESTION_KIND_ORDER.new), suggestion.paperKeys[0] ?? "", ""];
+    case "split":
+      return [String(SUGGESTION_KIND_ORDER.split), suggestion.directionId, suggestion.paperKeys[0] ?? ""];
+  }
+}
+
+function applySuggestionToProfile(
+  profile: PersonalLibraryInterestProfile,
+  suggestion: DirectionDiffSuggestion,
+  now: Date,
+): PersonalLibraryInterestProfile {
+  switch (suggestion.kind) {
+    case "attach":
+      return applyAttachSuggestion({ profile, suggestion, now });
+    case "split":
+      return applySplitSuggestion({
+        profile,
+        suggestion,
+        createId: () => crypto.randomUUID(),
+        now,
+      }).profile;
+    case "merge":
+      return applyMergeSuggestion({
+        profile,
+        suggestion,
+        createId: () => crypto.randomUUID(),
+        now,
+      });
+    case "new":
+      throw new Error("new suggestions are converted to review candidates, not applied to the profile");
+  }
+}
+
+/** Merge representative evidence by paperKey, keeping the first occurrence. */
+function mergeRepresentativeEvidence(
+  current: readonly PersonalLibraryRepresentativeEvidence[],
+  additional: readonly PersonalLibraryRepresentativeEvidence[],
+): PersonalLibraryRepresentativeEvidence[] {
+  const byKey = new Map(current.map((entry) => [entry.paperKey, entry]));
+  for (const entry of additional) {
+    if (!byKey.has(entry.paperKey)) byKey.set(entry.paperKey, entry);
+  }
+  return [...byKey.values()].sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
+}
+
+function byOpaqueId(left: { id: string }, right: { id: string }): number {
+  return codeUnitCompare(left.id, right.id);
+}
+
+/**
+ * Corpus-centered chunk transform, mirrored from the core clustering/
+ * placement implementation (which does not export it): subtract the corpus
+ * chunk mean, then renormalize every chunk. Mutates the papers in place.
+ */
+function centerChunksInPlace(papers: readonly ClusteringInputPaper[]): void {
+  let count = 0;
+  const dimension = papers[0]?.chunks[0]?.length ?? 0;
+  const mean = new Float64Array(dimension);
+  for (const paper of papers) {
+    for (const chunk of paper.chunks) {
+      for (let index = 0; index < dimension; index += 1) mean[index]! += chunk[index] ?? 0;
+      count += 1;
+    }
+  }
+  if (count === 0) return;
+  for (let index = 0; index < dimension; index += 1) mean[index]! /= count;
+  for (const paper of papers) {
+    paper.chunks = paper.chunks.map((chunk) => {
+      const out = new Float32Array(chunk.length);
+      for (let index = 0; index < chunk.length; index += 1) {
+        out[index] = (chunk[index] ?? 0) - mean[index]!;
+      }
+      return normalizedChunkInPlace(out);
+    });
+  }
+}
+
+function normalizedChunkInPlace(chunk: Float32Array): Float32Array {
+  let norm = 0;
+  for (const value of chunk) norm += value * value;
+  norm = Math.sqrt(norm);
+  if (norm === 0) return chunk.slice();
+  const out = new Float32Array(chunk.length);
+  for (let index = 0; index < chunk.length; index += 1) {
+    out[index] = (chunk[index] ?? 0) / norm;
+  }
+  return out;
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function libraryFingerprints(connection: PersistedLibraryConnection): {
+  scopeFingerprint: string;
+  identificationFingerprint: string;
+} {
+  return {
+    scopeFingerprint: createPersonalLibraryScopeFingerprint({
+      rootIdentity: connection.rootIdentity,
+      eligibleExtensions: connection.eligibleExtensions,
+    }),
+    identificationFingerprint: createPersonalLibraryIdentificationFingerprint(
+      connection.eligibleExtensions,
+    ),
+  };
 }

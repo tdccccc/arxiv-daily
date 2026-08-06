@@ -5,8 +5,11 @@ import {
   bufferPoolHeading,
   describeClusterMembers,
   formatConfidence,
+  incrementalSuggestionKey,
+  incrementalSuggestionPaperCount,
   normalizeLines,
   timelineEventLabel,
+  truncateReason,
   unclassifiedBufferPoolPapers,
   type InterestProfileReviewController,
   type InterestProfileReviewSnapshot,
@@ -75,12 +78,13 @@ function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): Inter
       schemaVersion: 2, revision: 0, scopeFingerprint: fingerprint, identificationFingerprint: fingerprint,
       updatedAt: "2026-08-03T00:00:00.000Z", directions: [direction],
     },
+    suggestions: null,
     eligibility: {
       documentDiagnostics: [], eligibleDirections: [direction],
       diagnostics: [{ directionId: direction.id, eligible: true, reasons: [] }],
     },
     authorization: { kind: "authorized", rootLabel: "papers", processingDepth: "metadata-and-abstracts", endpoint: "https://example.test" } as any,
-    catalogLoadError: null, proposalLoadError: null, profileLoadError: null,
+    catalogLoadError: null, proposalLoadError: null, profileLoadError: null, suggestionsLoadError: null,
     ...overrides,
   };
 }
@@ -93,6 +97,7 @@ function controller(initial = snapshot()) {
     reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
     updateProposal: update, mergeProposals: update, discardProposal: update, confirmProposal: update,
     updateConfirmed: update, mergeConfirmed: update, enable: update, disable: update, remove: update,
+    applySuggestion: update, dismissSuggestion: update, lock: update, unlock: update,
   };
   return { mock, set: (next: InterestProfileReviewSnapshot) => { current = next; } };
 }
@@ -305,6 +310,106 @@ describe("personal library interest profile modal", () => {
     await confirmChoice("Enable");
     await vi.waitFor(() => expect(failedModal.contentEl.querySelector('[role="alert"]')?.textContent).toContain("evidence is missing or stale"));
     expect(failedModal.contentEl.textContent).not.toContain(hostile);
+  });
+});
+
+describe("incremental suggestions in the review modal", () => {
+  const longReason = "An attached suggestion whose reason exceeds the display budget and must be truncated at the boundary to keep the card compact. ".repeat(4);
+
+  function suggestionsDoc() {
+    return {
+      schemaVersion: 1, revision: 1, scopeFingerprint: fingerprint, identificationFingerprint: fingerprint,
+      updatedAt: "2026-08-03T00:00:00.000Z",
+      suggestions: [
+        { kind: "attach", directionId: "direction-1", paperKeys: ["arxiv:2608.00001"], reason: "Newly indexed paper matches this confirmed direction." },
+        { kind: "new", paperKeys: ["arxiv:2608.00005"], reason: "A new evaluation theme beyond the current directions." },
+        { kind: "split", directionId: "direction-1", paperKeys: ["arxiv:2608.00006"], reason: longReason },
+        { kind: "merge", directionIds: ["direction-1", "direction-2"], reason: "Merge overlapping confirmed directions." },
+      ],
+    } as any;
+  }
+
+  it("shows an empty state when no incremental suggestions exist", () => {
+    const { mock } = controller();
+    const modal = open(mock);
+    expect(modal.contentEl.textContent).toContain("No incremental suggestions.");
+    expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__suggestions")).toBeNull();
+  });
+
+  it("renders kind badges, targets, paper counts, and truncated reasons as text", () => {
+    const { mock } = controller(snapshot({ suggestions: suggestionsDoc() }));
+    const modal = open(mock);
+    const section = modal.contentEl.querySelector(".arxiv-daily-interest-review__suggestions");
+    expect(section).not.toBeNull();
+    expect(section!.querySelector("strong")?.textContent).toBe("Incremental suggestions 4");
+    const cards = section!.querySelectorAll(".arxiv-daily-interest-review__suggestion");
+    expect(cards).toHaveLength(4);
+    expect(Array.from(section!.querySelectorAll(".arxiv-daily-interest-review__suggestion-kind"))
+      .map((item) => item.textContent)).toEqual(["attach", "new", "split", "merge"]);
+    expect(section!.textContent).toContain("Confirmed agents"); // attach/split target name
+    expect(section!.textContent).toContain("1 paper(s)");
+    expect(section!.textContent).toContain("New direction");
+    expect(section!.textContent).toContain("2 directions");
+    expect(section!.textContent).toContain("Newly indexed paper matches this confirmed direction.");
+    const splitReason = section!.querySelectorAll(".arxiv-daily-interest-review__suggestion-reason")[2]?.textContent;
+    expect(splitReason).toBe(truncateReason(longReason));
+    expect(splitReason?.endsWith("…")).toBe(true);
+    expect(button(modal.contentEl, "Apply")).toBeDefined();
+    expect(button(modal.contentEl, "Convert to proposal")).toBeDefined();
+    expect(modal.contentEl.querySelectorAll("button").length).toBeGreaterThanOrEqual(
+      Array.from(modal.contentEl.querySelectorAll("button")).filter((item) => item.textContent === "Ignore").length + 2,
+    );
+    expect(section!.querySelector("img")).toBeNull();
+  });
+
+  it("routes Apply and Ignore through controller suggestion keys", async () => {
+    const { mock } = controller(snapshot({ suggestions: suggestionsDoc() }));
+    const modal = open(mock);
+    button(modal.contentEl, "Apply").click();
+    await vi.waitFor(() => expect(mock.applySuggestion).toHaveBeenCalledWith("attach:direction-1:arxiv:2608.00001"));
+    button(modal.contentEl, "Ignore").click();
+    await vi.waitFor(() => expect(mock.dismissSuggestion).toHaveBeenCalledWith("attach:direction-1:arxiv:2608.00001"));
+    expect(mock.dismissSuggestion).toHaveBeenCalledOnce();
+  });
+
+  it("converts a new suggestion into a review candidate and switches to the proposed tab", async () => {
+    const { mock } = controller(snapshot({ suggestions: suggestionsDoc() }));
+    const modal = open(mock);
+    button(modal.contentEl, "Convert to proposal").click();
+    await vi.waitFor(() => expect(mock.applySuggestion).toHaveBeenCalledWith("new::arxiv:2608.00005"));
+    await vi.waitFor(() => expect(modal.contentEl.querySelector("#arxiv-daily-interest-proposed-tab")?.getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("formats suggestion keys, paper counts, and truncation deterministically", () => {
+    expect(incrementalSuggestionKey({ kind: "attach", directionId: "d-1", paperKeys: ["arxiv:2608.00001"], reason: "r" }))
+      .toBe("attach:d-1:arxiv:2608.00001");
+    expect(incrementalSuggestionKey({ kind: "new", paperKeys: ["arxiv:2608.00001"], reason: "r" }))
+      .toBe("new::arxiv:2608.00001");
+    expect(incrementalSuggestionKey({ kind: "split", directionId: "d-1", paperKeys: ["arxiv:2608.00001"], reason: "r" }))
+      .toBe("split:d-1:arxiv:2608.00001");
+    expect(incrementalSuggestionKey({ kind: "merge", directionIds: ["d-1", "d-2"], reason: "r" }))
+      .toBe("merge:d-1:d-2");
+    expect(incrementalSuggestionPaperCount({ kind: "attach", directionId: "d-1", paperKeys: ["a", "b"], reason: "r" })).toBe("2 paper(s)");
+    expect(incrementalSuggestionPaperCount({ kind: "merge", directionIds: ["d-1", "d-2"], reason: "r" })).toBe("2 directions");
+    expect(truncateReason("short")).toBe("short");
+    expect(truncateReason("x".repeat(200))).toBe(`${"x".repeat(160)}…`);
+  });
+
+  it("shows the lock state and routes lock/unlock on confirmed direction cards", async () => {
+    const locked = { ...direction, lockedAt: "2026-08-04T00:00:00.000Z" };
+    const { mock, set } = controller(snapshot({
+      profile: { ...snapshot().profile!, directions: [locked] },
+    }));
+    const modal = open(mock);
+    button(modal.contentEl, "Confirmed").click();
+    expect(modal.contentEl.textContent).toContain("locked");
+    button(modal.contentEl, "Unlock").click();
+    await vi.waitFor(() => expect(mock.unlock).toHaveBeenCalledWith("direction-1"));
+
+    set(snapshot({ profile: { ...snapshot().profile!, directions: [direction] } }));
+    button(modal.contentEl, "Confirmed").click();
+    button(modal.contentEl, "Lock").click();
+    await vi.waitFor(() => expect(mock.lock).toHaveBeenCalledWith("direction-1"));
   });
 });
 

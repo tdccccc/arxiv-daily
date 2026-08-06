@@ -380,6 +380,43 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "check-incremental-direction-updates",
+    name: "Check incremental direction updates",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: checking incremental direction updates…");
+          try {
+            const summary = await plugin.runIncrementalDirectionUpdate();
+            notice(
+              `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
+              + `stored (${summary.attachments} attachment(s)), `
+              + `${summary.buffered} paper(s) buffered`,
+              10_000,
+            );
+          } catch (error) {
+            plugin.logger.error("commands: incremental direction update failed", error);
+            notice(`arXiv Daily: incremental update failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "check incremental direction updates",
+      ),
+  });
+
+  plugin.addCommand({
+    id: "review-incremental-suggestions",
+    name: "Review incremental direction suggestions",
+    callback: () => {
+      try {
+        plugin.openPersonalLibraryDirectionReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open incremental suggestion review", error);
+        notice("arXiv Daily: suggestion review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
     id: "index-personal-library-fulltext",
     name: "Index personal library full text (local embeddings)",
     callback: () =>
