@@ -10,6 +10,7 @@ import {
   dashboardPersonalNoveltyLines,
   deferDashboardAction,
   executeObsidianCommand,
+  bindSearchClearButton,
   expectedDetailSummaryPath,
   filterDashboardMarkdownFiles,
   formatLogEntries,
@@ -1005,5 +1006,46 @@ describe("formatLogEntries", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe("2026-07-03 09:00:00.000 [INFO] ok");
     expect(lines[1]).toBe("weird line without level");
+  });
+});
+
+describe("bindSearchClearButton", () => {
+  it("shows the clear button only while the input has text", () => {
+    const input = document.createElement("input");
+    const button = document.createElement("button");
+    bindSearchClearButton(input, button, vi.fn());
+
+    expect(button.hidden).toBe(true);
+    input.value = "attention";
+    input.dispatchEvent(new Event("input"));
+    expect(button.hidden).toBe(false);
+    input.value = "  ";
+    input.dispatchEvent(new Event("input"));
+    expect(button.hidden).toBe(true);
+  });
+
+  it("clears the input, runs onClear once, hides the button, and keeps focus", () => {
+    const input = document.createElement("input");
+    input.value = "attention";
+    const button = document.createElement("button");
+    const onClear = vi.fn();
+    const focus = vi.spyOn(input, "focus");
+    bindSearchClearButton(input, button, onClear);
+    input.dispatchEvent(new Event("input"));
+    expect(button.hidden).toBe(false);
+
+    button.click();
+
+    expect(input.value).toBe("");
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(button.hidden).toBe(true);
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
+  it("starts hidden when a restored query is empty", () => {
+    const input = document.createElement("input");
+    const button = document.createElement("button");
+    bindSearchClearButton(input, button, vi.fn());
+    expect(button.hidden).toBe(true);
   });
 });

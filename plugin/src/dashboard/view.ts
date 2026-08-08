@@ -224,6 +224,29 @@ export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   );
 }
 
+/**
+ * One-click clear for the dashboard search box: the × button is visible only
+ * while the input has text, clears the input and runs `onClear` immediately
+ * (no debounce), and keeps focus in the input. The native search-cancel
+ * affordance is suppressed in CSS so exactly one clear control exists.
+ */
+export function bindSearchClearButton(
+  input: HTMLInputElement,
+  button: HTMLButtonElement,
+  onClear: () => void,
+): void {
+  button.hidden = input.value.trim().length === 0;
+  button.addEventListener("click", () => {
+    input.value = "";
+    onClear();
+    button.hidden = true;
+    input.focus();
+  });
+  input.addEventListener("input", () => {
+    button.hidden = input.value.trim().length === 0;
+  });
+}
+
 export async function refreshOpenDashboardViews(
   plugin: ArxivDailyPlugin,
 ): Promise<void> {
@@ -1293,17 +1316,34 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__filters",
     });
 
-    const search = this.createFilterField(
+    const searchField = this.createFilterField(
       filters,
       "Search",
       "arxiv-daily-dashboard__filter--search",
-    ).createEl("input", {
+    );
+    const searchBox = searchField.createDiv({
+      cls: "arxiv-daily-dashboard__search-box",
+    });
+    const search = searchBox.createEl("input", {
       attr: {
         type: "search",
         placeholder: "ID, title, author, topic, summary",
       },
     });
+    const clearButton = searchBox.createEl("button", {
+      cls: "arxiv-daily-dashboard__search-clear",
+      attr: { type: "button", "aria-label": "Clear search" },
+    });
+    setIcon(clearButton, "x");
     search.value = this.query.search ?? "";
+    bindSearchClearButton(search, clearButton, () => {
+      this.clearSearchDebounce();
+      this.searchDebounceTimer = null;
+      this.query = { ...this.query, search: undefined };
+      this.currentPage = 0;
+      this.renderCurrentResults();
+      this.refreshLibrarySearch();
+    });
     search.addEventListener("input", () => {
       this.clearSearchDebounce();
       this.searchDebounceTimer = window.setTimeout(() => {

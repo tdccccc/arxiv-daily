@@ -981,6 +981,41 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   min-width: 0;
 }
 
+.arxiv-daily-dashboard__search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.arxiv-daily-dashboard__search-box input {
+  padding-right: 28px;
+}
+
+.arxiv-daily-dashboard__search-box input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.arxiv-daily-dashboard__search-clear {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.arxiv-daily-dashboard__search-clear:hover {
+  color: var(--text-normal);
+}
+
+.arxiv-daily-dashboard__search-clear[hidden] {
+  display: none;
+}
+
 .arxiv-daily-dashboard__filter--topic {
   grid-area: topic;
   min-width: 0;

@@ -95,3 +95,9 @@
 - evidence: 用户实测反馈——"Daily similar" 页每条都显示 "Matched title/abstract…" 理由行，视觉杂乱；要求直接显示结果。
 - change: renderDailyPanel 移除 reason 行（含 "Shared indexed terms" 兜底）；`PaperSearchResult.reasons` 数据保留（仅展示层不渲染）；styles.css 清理 __reason 规则；测试改为断言"不显示 Matched/Shared indexed terms"。
 - disposition: 保留。本调整在 P6 已关闭后发生，作为独立小提交记录。
+
+## 2026-08-07 — note（P6 后调整：搜索框一键清空按钮）
+
+- evidence: 用户反馈——Dashboard 搜索栏最右侧需要一键清空（×）。
+- change: 搜索输入外包相对定位容器 + 绝对定位 × 按钮（仅输入有文本时显示）；`bindSearchClearButton` 助手（点击即清空+重置查询+重渲染行与 KB 区块+保持焦点，无防抖）；隐藏原生 search-cancel 避免双清空控件；+3 测试。
+- disposition: 保留。
