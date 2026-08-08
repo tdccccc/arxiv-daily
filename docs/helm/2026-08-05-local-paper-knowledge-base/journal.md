@@ -75,3 +75,10 @@
 - change: T1/T2 修复已提交（e05dd96 refactor centering 去重、ba15254 cues 标题派生）；T3 无代码改动（结论记录）。technical-report handoff：三次均 no-impact（报告无相关语句需要更新；kind 复用语义 line 290 已记载）。
 - disposition: 保留全部修复；tmp/t1-centering-equivalence.mjs 与 clusterer-bundle.mjs 为 scratch 不入库。
 - next: goal.md P5 done + status done（本条目同批提交）。P6（检索入口 ADR 0006 + 自动触发 ADR 0007 实现）待用户指令；其余未决项：模型可配置化、CLI host。
+
+## 2026-08-07 — note（P6 启动：检索入口 + 自动触发实现）
+
+- evidence: 用户指令开始 P6。输入资产：ADR 0006（单框双结果 + 双页模态框 + 标题+摘要查询）、ADR 0007（索引完成触发 + 授权门拆分 + 整体替换 + 覆盖提示）、P5-T3 实现提示（授权检查下移 LLM 阶段、authorizationFingerprint 保留、placement-only 被撤销取消无副作用）。
+- change: goal.md status → active + P6 索引行；phases/06-search-entry-and-auto-trigger.md（T1 双页模态框 → T2 单框双结果 → T3 自动触发+授权拆分 → T4 覆盖提示 → T5 收尾）。
+- disposition: 无代码改动。
+- next: P6-T1 扩展 SimilarPapersModal 双页。
