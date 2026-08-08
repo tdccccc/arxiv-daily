@@ -1702,6 +1702,12 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   color: var(--text-muted);
 }
 
+.arxiv-daily-interest-review__pending-authorization {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+  margin-top: 8px;
+}
+
 .arxiv-daily-interest-review__toolbar,
 .arxiv-daily-interest-review__section-actions,
 .arxiv-daily-interest-review__card-heading,

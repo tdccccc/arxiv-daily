@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Notice } from "obsidian";
 import {
   DEFAULT_SETTINGS,
   IncrementalSuggestionsStore,
@@ -224,14 +225,69 @@ function suggestionsStore(
 const SIX_PAPERS = Object.entries(PAPER_VECTORS).map(([paperKey, vectors]) => ({ paperKey, vectors }));
 
 describe("incremental direction update", () => {
-  it("rejects the update run without model authorization and writes nothing", async () => {
-    const { plugin, internals, files } = fixture(SIX_PAPERS);
+  it("runs placement without model authorization, skips the LLM stage, and records pending authorization", async () => {
+    const { plugin, internals, storage, scopeFingerprint, identificationFingerprint } = fixture(SIX_PAPERS);
     internals.libraryConnection = createLibraryConnection("/private/library", "1:2");
     internals.libraryProfile = confirmedProfile(internals.libraryCatalog);
     const call = vi.spyOn(LlmClient.prototype, "call");
-    await expect(plugin.runIncrementalDirectionUpdate()).rejects.toThrow("Authorize");
+
+    const summary = await plugin.runIncrementalDirectionUpdate();
+
+    // Placement ran (same-theme attach), the LLM diff was skipped, and the
+    // buffered papers are recorded as pending authorization.
     expect(call).not.toHaveBeenCalled();
-    expect([...files.keys()].some((path) => path.includes("incremental-suggestions"))).toBe(false);
+    expect(summary.pendingAuthorizationBuffered).toBeGreaterThan(0);
+    const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
+    expect(doc.pendingAuthorization?.bufferedPaperCount).toBe(summary.pendingAuthorizationBuffered);
+    expect(doc.pendingAuthorization?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(doc.suggestions.some((entry) => entry.kind === "attach")).toBe(true);
+  });
+
+  it("auto-triggers the incremental update after indexing new papers", async () => {
+    const { plugin, internals } = fixture(SIX_PAPERS);
+    Notice.calls = [];
+    const run = vi.spyOn(plugin, "runIncrementalDirectionUpdate").mockResolvedValue({
+      suggestions: 2,
+      attachments: 1,
+      buffered: 1,
+      pendingAuthorizationBuffered: 0,
+    });
+
+    await internals.runIncrementalDirectionUpdateAfterIndex({
+      indexed: 1, reused: 0, failed: 0, pruned: 0,
+    });
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(Notice.calls.at(-1)?.message).toContain("incremental update");
+  });
+
+  it("does not trigger on reuse-only index runs", async () => {
+    const { plugin, internals } = fixture(SIX_PAPERS);
+    const run = vi.spyOn(plugin, "runIncrementalDirectionUpdate").mockResolvedValue({
+      suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0,
+    });
+
+    await internals.runIncrementalDirectionUpdateAfterIndex({
+      indexed: 0, reused: 5, failed: 0, pruned: 0,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("swallows auto-trigger failures so the index command stays successful", async () => {
+    const { plugin, internals } = fixture(SIX_PAPERS);
+    const failure = new Error("incremental direction update is already active");
+    const run = vi.spyOn(plugin, "runIncrementalDirectionUpdate").mockRejectedValue(failure);
+
+    await expect(internals.runIncrementalDirectionUpdateAfterIndex({
+      indexed: 1, reused: 0, failed: 0, pruned: 0,
+    })).resolves.toBeUndefined();
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(plugin.logger.warn).toHaveBeenCalledWith(
+      "incremental direction update after indexing failed",
+      failure,
+    );
   });
 
   it("produces an empty suggestions document for an empty knowledge base without an LLM call", async () => {
@@ -239,7 +295,7 @@ describe("incremental direction update", () => {
     internals.libraryProfile = confirmedProfile(internals.libraryCatalog);
     const call = vi.spyOn(LlmClient.prototype, "call");
     const summary = await plugin.runIncrementalDirectionUpdate();
-    expect(summary).toEqual({ suggestions: 0, attachments: 0, buffered: 0 });
+    expect(summary).toEqual({ suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0 });
     expect(call).not.toHaveBeenCalled();
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions).toEqual([]);
@@ -256,7 +312,7 @@ describe("incremental direction update", () => {
     const call = vi.spyOn(LlmClient.prototype, "call");
     const summary = await plugin.runIncrementalDirectionUpdate();
     // One attach suggestion; one buffered paper stays below the trigger.
-    expect(summary).toEqual({ suggestions: 1, attachments: 1, buffered: 1 });
+    expect(summary).toEqual({ suggestions: 1, attachments: 1, buffered: 1, pendingAuthorizationBuffered: 0 });
     expect(call).not.toHaveBeenCalled();
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions).toEqual([{
@@ -279,7 +335,7 @@ describe("incremental direction update", () => {
       }],
     }));
     const summary = await plugin.runIncrementalDirectionUpdate();
-    expect(summary).toEqual({ suggestions: 2, attachments: 2, buffered: 4 });
+    expect(summary).toEqual({ suggestions: 2, attachments: 2, buffered: 4, pendingAuthorizationBuffered: 0 });
     expect(call).toHaveBeenCalledTimes(1);
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions.map((suggestion) => suggestion.paperKeys)).toEqual([

@@ -426,6 +426,13 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 
   private renderIncrementalSuggestions(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     this.renderDocumentError(parent, "Incremental suggestions", snapshot.suggestionsLoadError);
+    const pending = snapshot.suggestions?.pendingAuthorization;
+    if (pending) {
+      parent.createEl("p", {
+        cls: "arxiv-daily-interest-review__pending-authorization",
+        text: `${pending.bufferedPaperCount} buffered paper(s) await model authorization to generate suggestions.`,
+      });
+    }
     const suggestions = snapshot.suggestions?.suggestions ?? [];
     if (suggestions.length === 0) {
       parent.createEl("p", {

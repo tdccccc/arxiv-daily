@@ -37,6 +37,15 @@ export interface IncrementalSuggestionsDocument {
   identificationFingerprint: string;
   updatedAt: string;
   suggestions: DirectionDiffSuggestion[];
+  /**
+   * Present when the LLM diff stage was skipped because model-processing
+   * consent was missing: the buffer pool papers await authorization to
+   * generate suggestions (ADR 0007 split consent gate).
+   */
+  pendingAuthorization?: {
+    bufferedPaperCount: number;
+    updatedAt: string;
+  };
 }
 
 export interface IncrementalSuggestionsDocumentPaths {
@@ -131,15 +140,25 @@ export function decodeIncrementalSuggestion(value: unknown): DirectionDiffSugges
 export function decodeIncrementalSuggestionsDocument(
   value: unknown,
 ): IncrementalSuggestionsDocument | null {
-  if (!isExactObject(value, [
+  const baseKeys = [
     "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
     "suggestions",
-  ]) || value.schemaVersion !== INCREMENTAL_SUGGESTIONS_SCHEMA_VERSION
+  ];
+  const hasPending = typeof value === "object" && value !== null
+    && "pendingAuthorization" in value;
+  if (!(isExactObject(value, hasPending ? [...baseKeys, "pendingAuthorization"] : baseKeys))
+    || value.schemaVersion !== INCREMENTAL_SUGGESTIONS_SCHEMA_VERSION
     || !isNonNegativeSafeInteger(value.revision)
     || !isFingerprint(value.scopeFingerprint)
     || !isFingerprint(value.identificationFingerprint)
     || !isCanonicalTimestamp(value.updatedAt)
     || !Array.isArray(value.suggestions)) return null;
+  if (value.pendingAuthorization !== undefined) {
+    const pending = value.pendingAuthorization;
+    if (!isExactObject(pending, ["bufferedPaperCount", "updatedAt"])
+      || !isNonNegativeSafeInteger(pending.bufferedPaperCount)
+      || !isCanonicalTimestamp(pending.updatedAt)) return null;
+  }
 
   const suggestions: DirectionDiffSuggestion[] = [];
   for (const raw of value.suggestions) {
@@ -179,6 +198,14 @@ export function decodeIncrementalSuggestionsDocument(
     identificationFingerprint: value.identificationFingerprint,
     updatedAt: value.updatedAt,
     suggestions,
+    ...(value.pendingAuthorization !== undefined
+      ? {
+          pendingAuthorization: {
+            bufferedPaperCount: value.pendingAuthorization.bufferedPaperCount,
+            updatedAt: value.pendingAuthorization.updatedAt,
+          },
+        }
+      : {}),
   };
 }
 

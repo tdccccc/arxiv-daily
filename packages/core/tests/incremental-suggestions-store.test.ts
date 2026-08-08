@@ -192,6 +192,33 @@ describe("suggestions document decoding", () => {
     expect(decoded!.suggestions).toEqual([]);
   });
 
+  it("round-trips the optional pending-authorization note", () => {
+    const withPending = document({
+      suggestions: [],
+      pendingAuthorization: {
+        bufferedPaperCount: 4,
+        updatedAt: "2026-08-07T00:00:00.000Z",
+      },
+    });
+    expect(decodeIncrementalSuggestionsDocument(
+      JSON.parse(JSON.stringify(withPending)),
+    )).toEqual(withPending);
+  });
+
+  it("rejects malformed pending-authorization notes", () => {
+    const invalid: unknown[] = [
+      { ...document(), pendingAuthorization: { bufferedPaperCount: -1, updatedAt: "2026-08-07T00:00:00.000Z" } },
+      { ...document(), pendingAuthorization: { bufferedPaperCount: 1.5, updatedAt: "2026-08-07T00:00:00.000Z" } },
+      { ...document(), pendingAuthorization: { bufferedPaperCount: 1, updatedAt: "2026-08-07" } },
+      { ...document(), pendingAuthorization: { bufferedPaperCount: 1 } },
+      { ...document(), pendingAuthorization: { bufferedPaperCount: 1, updatedAt: "2026-08-07T00:00:00.000Z", extra: true } },
+      { ...document(), pendingAuthorization: "pending" },
+    ];
+    for (const value of invalid) {
+      expect(decodeIncrementalSuggestionsDocument(value)).toBeNull();
+    }
+  });
+
   it("rejects documents with invalid schema, identity, or revision fields", () => {
     const invalid = [
       { ...document(), schemaVersion: 2 },

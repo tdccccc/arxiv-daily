@@ -392,10 +392,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
           notice("arXiv Daily: checking incremental direction updates…");
           try {
             const summary = await plugin.runIncrementalDirectionUpdate();
+            const pending = summary.pendingAuthorizationBuffered > 0
+              ? `, ${summary.pendingAuthorizationBuffered} awaiting model authorization`
+              : "";
             notice(
               `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
               + `stored (${summary.attachments} attachment(s)), `
-              + `${summary.buffered} paper(s) buffered`,
+              + `${summary.buffered} paper(s) buffered${pending}`,
               10_000,
             );
           } catch (error) {

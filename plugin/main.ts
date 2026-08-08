@@ -984,17 +984,20 @@ export default class ArxivDailyPlugin extends Plugin {
    * pool and ask the LLM for direction-diff suggestions. The merged suggestion
    * set replaces the persisted suggestions document (CAS); pending suggestions
    * from an earlier run are superseded by the newest evidence.
+   *
+   * Consent gate (ADR 0007): placement is local embedding similarity and runs
+   * without model-processing consent; the recluster + LLM diff stage requires
+   * it. Without consent the LLM stage is skipped and the document records
+   * `pendingAuthorization` for the buffered papers.
    */
   async runIncrementalDirectionUpdate(): Promise<{
     suggestions: number;
     attachments: number;
     buffered: number;
+    pendingAuthorizationBuffered: number;
   }> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
-    if (this.getLibraryConnectionStatus().kind !== "authorized") {
-      throw new Error("Authorize personal library model processing first");
-    }
     const profile = this.libraryProfile;
     if (!profile) throw new Error("Load the confirmed personal library profile first");
     const { scopeFingerprint } = this.libraryFingerprints(connection);
@@ -1018,7 +1021,7 @@ export default class ArxivDailyPlugin extends Plugin {
       operation.signal.throwIfAborted();
       this.assertIncrementalUpdateCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-      });
+      }, false);
       const placement = await suggestIncrementalPlacement({
         profile: { directions: profile.directions },
         knowledgeBase,
@@ -1046,41 +1049,57 @@ export default class ArxivDailyPlugin extends Plugin {
       // pool pass reloads and re-centers the corpus — a second load is fine
       // here. LLM suggestions can only reference cluster papers, so the union
       // with the per-paper placement attaches is always conflict-free.
+      // The LLM stage requires model-processing consent (ADR 0007); without
+      // it the buffered papers are recorded as pending authorization.
       let llmSuggestions: DirectionDiffSuggestion[] = [];
+      let pendingAuthorizationBuffered = 0;
+      const llmAuthorized = this.getLibraryConnectionStatus().kind === "authorized"
+        && this.libraryConnection?.authorization?.fingerprint === authorizationFingerprint;
       if (bufferPaperKeys.length >= INCREMENTAL_BUFFER_TRIGGER) {
-        const centered = await this.loadCenteredClusteringInput(knowledgeBase, operation.signal);
-        operation.signal.throwIfAborted();
-        const pooled = reclusterPool(centered, {
-          poolPaperKeys: bufferPaperKeys,
-          directions: profile.directions,
-        });
-        llmSuggestions = await suggestDirectionDiff({
-          directions: profile.directions,
-          clusters: pooled.candidates,
-          llm: new LlmClient(llmSettings, this.logger, this.host.http),
-          signal: operation.signal,
-        });
+        if (!llmAuthorized) {
+          pendingAuthorizationBuffered = bufferPaperKeys.length;
+        } else {
+          const centered = await this.loadCenteredClusteringInput(knowledgeBase, operation.signal);
+          operation.signal.throwIfAborted();
+          const pooled = reclusterPool(centered, {
+            poolPaperKeys: bufferPaperKeys,
+            directions: profile.directions,
+          });
+          llmSuggestions = await suggestDirectionDiff({
+            directions: profile.directions,
+            clusters: pooled.candidates,
+            llm: new LlmClient(llmSettings, this.logger, this.host.http),
+            signal: operation.signal,
+          });
+        }
       }
       operation.signal.throwIfAborted();
       const suggestions = mergeIncrementalSuggestions(attachSuggestions, llmSuggestions);
       const nextDocument = emptyIncrementalSuggestionsDocument(connection, suggestions, new Date());
+      if (pendingAuthorizationBuffered > 0) {
+        nextDocument.pendingAuthorization = {
+          bufferedPaperCount: pendingAuthorizationBuffered,
+          updatedAt: nextDocument.updatedAt,
+        };
+      }
       return await this.enqueueLibraryMutation(async () => {
         operation.signal.throwIfAborted();
         this.assertIncrementalUpdateCurrent({
           connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-        });
+        }, llmAuthorized);
         const store = this.buildIncrementalSuggestionsStore(connection);
         const current = await store.load();
         const saved = await store.replace(nextDocument, current.revision);
         this.assertIncrementalUpdateCurrent({
           connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-        });
+        }, llmAuthorized);
         this.librarySuggestions = saved;
         this.librarySuggestionsLoadError = null;
         return {
           suggestions: saved.suggestions.length,
           attachments: saved.suggestions.filter((entry) => entry.kind === "attach").length,
           buffered: bufferPaperKeys.length,
+          pendingAuthorizationBuffered,
         };
       });
     } catch (error) {
@@ -1388,6 +1407,10 @@ export default class ArxivDailyPlugin extends Plugin {
           + `${summary.failed} failed, ${summary.pruned} pruned`,
         );
       }
+      // ADR 0007: new or changed papers trigger the incremental direction
+      // update automatically (placement always; LLM diff only with consent).
+      // Failures never fail the index command.
+      await this.runIncrementalDirectionUpdateAfterIndex(summary);
       return summary;
     } catch (error) {
       if (updateProgress && !operation.signal.aborted) {
@@ -1579,6 +1602,32 @@ export default class ArxivDailyPlugin extends Plugin {
         runtimeProbe: describeRuntimeProbe(),
         error: describeDiagnosticsError(error),
       };
+    }
+  }
+
+  /**
+   * ADR 0007 auto-trigger after an index run: only new or changed papers
+   * (indexed > 0) trigger the incremental update. Runs the same update as
+   * the manual command and surfaces the result with a Notice; any failure
+   * (already active, no profile, transient LLM error) is logged and
+   * swallowed so the index command stays successful.
+   */
+  private async runIncrementalDirectionUpdateAfterIndex(
+    summary: FullTextIndexRunSummary,
+  ): Promise<void> {
+    if (summary.indexed <= 0) return;
+    try {
+      const update = await this.runIncrementalDirectionUpdate();
+      const pending = update.pendingAuthorizationBuffered > 0
+        ? `, ${update.pendingAuthorizationBuffered} buffered awaiting model authorization`
+        : "";
+      new Notice(
+        `arXiv Daily: incremental update — ${update.suggestions} suggestions `
+        + `(${update.attachments} attaches), ${update.buffered} buffered${pending}`,
+        10_000,
+      );
+    } catch (error) {
+      this.logger.warn("incremental direction update after indexing failed", error);
     }
   }
 
@@ -1924,19 +1973,23 @@ export default class ArxivDailyPlugin extends Plugin {
    * same gates as direction generation; the confirmed profile is captured by
    * reference so any reload supersedes the run.
    */
-  private assertIncrementalUpdateCurrent(input: {
-    connection: PersistedLibraryConnection;
-    connectionRevision: number;
-    outputRevision: number;
-    authorizationFingerprint?: string;
-    profile: PersonalLibraryInterestProfile;
-  }): void {
+  private assertIncrementalUpdateCurrent(
+    input: {
+      connection: PersistedLibraryConnection;
+      connectionRevision: number;
+      outputRevision: number;
+      authorizationFingerprint?: string;
+      profile: PersonalLibraryInterestProfile;
+    },
+    requireAuthorization: boolean,
+  ): void {
     this.assertLibraryConnectionCurrent(input.connection, input.connectionRevision);
     if (this.libraryOutputRevision !== input.outputRevision) {
       throw new Error("Output paths changed during incremental direction update");
     }
-    if (this.getLibraryConnectionStatus().kind !== "authorized"
-      || this.libraryConnection?.authorization?.fingerprint !== input.authorizationFingerprint) {
+    if (requireAuthorization
+      && (this.getLibraryConnectionStatus().kind !== "authorized"
+        || this.libraryConnection?.authorization?.fingerprint !== input.authorizationFingerprint)) {
       throw new Error("Personal library model authorization changed during incremental update");
     }
     if (this.libraryProfile !== input.profile) {
@@ -2645,7 +2698,15 @@ function suggestionsDocumentWithout(
     document.identificationFingerprint,
     now,
   );
-  return { ...empty, suggestions };
+  return {
+    ...empty,
+    suggestions,
+    // Applying or dismissing a suggestion does not change the buffer pool,
+    // so a pending-authorization note from the last run stays visible.
+    ...(document.pendingAuthorization
+      ? { pendingAuthorization: document.pendingAuthorization }
+      : {}),
+  };
 }
 
 function emptyIncrementalSuggestionsDocument(

@@ -336,6 +336,20 @@ describe("incremental suggestions in the review modal", () => {
     expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__suggestions")).toBeNull();
   });
 
+  it("renders the pending-authorization banner from the suggestions document", () => {
+    const { mock } = controller(snapshot({
+      suggestions: {
+        ...suggestionsDoc(),
+        suggestions: [],
+        pendingAuthorization: { bufferedPaperCount: 4, updatedAt: "2026-08-07T00:00:00.000Z" },
+      },
+    }));
+    const modal = open(mock);
+    expect(modal.contentEl.textContent).toContain(
+      "4 buffered paper(s) await model authorization to generate suggestions.",
+    );
+  });
+
   it("renders kind badges, targets, paper counts, and truncated reasons as text", () => {
     const { mock } = controller(snapshot({ suggestions: suggestionsDoc() }));
     const modal = open(mock);
