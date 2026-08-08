@@ -36,6 +36,7 @@ import {
   SimilarPapersModal,
   type SimilarPapersModalOptions,
 } from "./similar-papers-modal";
+import { renderLibrarySearchBlock } from "./library-search-block";
 import { HubModal } from "./hub-modal";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -276,6 +277,8 @@ class ArxivDailyDashboardView extends ItemView {
   private batchEl: HTMLElement | null = null;
   private statsEl: HTMLElement | null = null;
   private resultsEl: HTMLElement | null = null;
+  private libraryResultsEl: HTMLElement | null = null;
+  private librarySearchToken = 0;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: number | null = null;
@@ -541,7 +544,11 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.batchEl = contentEl.createDiv();
     this.resultsEl = contentEl.createDiv();
+    this.libraryResultsEl = contentEl.createDiv({
+      cls: "arxiv-daily-dashboard__library-results",
+    });
     this.renderCurrentResults(result);
+    this.refreshLibrarySearch();
   }
 
   private renderRecentDatesNotice(contentEl: HTMLElement): void {
@@ -1304,6 +1311,7 @@ class ArxivDailyDashboardView extends ItemView {
         this.query = { ...this.query, search: search.value.trim() || undefined };
         this.currentPage = 0;
         this.renderCurrentResults();
+        this.refreshLibrarySearch();
       }, DASHBOARD_SEARCH_DEBOUNCE_MS);
     });
 
@@ -2294,6 +2302,50 @@ class ArxivDailyDashboardView extends ItemView {
         }));
       },
     };
+  }
+
+  /**
+   * Second result surface of the single search box (ADR 0006): the library
+   * full-text knowledge base is queried with the same search text, asynchron-
+   * ously, and its matches render in a block below the filters. Short queries
+   * (< 2 chars) skip the KB; a staleness token drops responses from queries
+   * that were already superseded. Failures (no connection, no index, model
+   * errors) degrade to an inline message and never affect row filtering.
+   */
+  private refreshLibrarySearch(): void {
+    if (!this.libraryResultsEl) return;
+    const query = this.query.search?.trim() ?? "";
+    const token = ++this.librarySearchToken;
+    if (query.length < 2) {
+      this.libraryResultsEl.empty();
+      return;
+    }
+    renderLibrarySearchBlock(this.libraryResultsEl, { kind: "loading" });
+    void this.plugin.searchPersonalLibraryFullText(query).then(
+      (matches) => {
+        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+        if (matches.length === 0) {
+          renderLibrarySearchBlock(this.libraryResultsEl, { kind: "empty" });
+          return;
+        }
+        renderLibrarySearchBlock(this.libraryResultsEl, {
+          kind: "matches",
+          matches: matches.slice(0, 5).map((match) => ({
+            paperKey: match.paperKey,
+            title: match.title,
+            score: match.score,
+            excerpt: match.hits[0]?.text.slice(0, 120).replace(/\s+/g, " ") ?? "",
+          })),
+        });
+      },
+      (error: unknown) => {
+        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+        renderLibrarySearchBlock(this.libraryResultsEl, {
+          kind: "error",
+          message: errorMessage(error),
+        });
+      },
+    );
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
