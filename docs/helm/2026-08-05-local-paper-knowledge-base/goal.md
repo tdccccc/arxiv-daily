@@ -1,7 +1,7 @@
 # 本地论文知识库（local paper knowledge base）
 
 status: done
-updated: 2026-08-06
+updated: 2026-08-07
 owner: current-session
 
 ## Intent
@@ -41,6 +41,7 @@ owner: current-session
 1. P1 — 全文索引与相似检索：PDF 全文提取（复用 Obsidian 内置 pdf.js）、分块、本地嵌入、暴力余弦检索、增量更新、存储与重建 —— status: done
 2. P2 — 聚类方向生成：聚类（HDBSCAN 或等价）发现候选簇 + 离群缓冲池；LLM 为每簇生成方向草案；方向存储升级为版本化实体；审核界面 —— status: done
 3. P3 — 方向增量更新：缓冲池触发局部重聚类、LLM diff 建议（归入/新建/分裂/合并）、审核队列、方向锁定与漂移检测、低频全量重建兜底 —— status: done
+4. P4 — Obsidian 运行时验证与修复：真实 Obsidian 中验证 `window.pdfjsLib` 可用性与渲染进程 wasm/模型加载表现（P1 遗留未决项），发现问题则修复，结论记录在案 —— status: done
 
 ## Open questions
 
