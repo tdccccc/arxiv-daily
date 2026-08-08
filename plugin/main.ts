@@ -1996,11 +1996,23 @@ export default class ArxivDailyPlugin extends Plugin {
       }
       return { paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper) };
     });
+    // Discovery cues: representative paper titles (deduped, code-unit sorted
+    // — the strict candidate decoder requires >=1 cue, strictly ordered and
+    // unique). Titles are natural cues for what the new direction is about;
+    // the reason falls back when no titles are available.
+    const titleCues = [...new Set(
+      representativePaperKeys
+        .map((paperKey) => catalog.papers[paperKey]?.title?.trim() ?? "")
+        .filter((title) => title.length > 0)
+        .map((title) => title.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)),
+    )].sort(codeUnitCompare);
     const candidate: PersonalLibraryDirectionCandidate = {
       id: candidateId,
       name: draft.name,
       description: draft.description,
-      discoveryCues: [draft.description.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)],
+      discoveryCues: titleCues.length > 0
+        ? titleCues
+        : [draft.description.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)],
       representatives,
       representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
       lineage: { candidateIds: [candidateId] },

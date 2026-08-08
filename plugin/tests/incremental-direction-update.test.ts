@@ -394,6 +394,13 @@ describe("incremental direction update", () => {
     expect(candidate?.representatives.map(({ paperKey }) => paperKey)).toEqual([
       "arxiv:2608.00003", "arxiv:2608.00004",
     ]);
+    // Discovery cues come from the representative paper titles (code-unit
+    // sorted, satisfying the strict candidate decoder), not a truncated
+    // reason.
+    expect(candidate?.discoveryCues).toEqual([
+      "Paper 2608.00003",
+      "Paper 2608.00004",
+    ]);
     // The placement attach remains; only the converted suggestion leaves.
     expect(snapshot.suggestions?.suggestions.map((suggestion) => suggestion.paperKeys)).toEqual([
       ["arxiv:2608.00002"],
