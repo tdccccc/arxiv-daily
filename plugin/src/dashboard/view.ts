@@ -1331,7 +1331,10 @@ class ArxivDailyDashboardView extends ItemView {
       },
     });
     const clearButton = searchBox.createEl("button", {
-      cls: "arxiv-daily-dashboard__search-clear",
+      // clickable-icon is Obsidian's icon-button chrome (no border, no
+      // background); the custom class only positions the button inside the
+      // search box.
+      cls: "clickable-icon arxiv-daily-dashboard__search-clear",
       attr: { type: "button", "aria-label": "Clear search" },
     });
     setIcon(clearButton, "x");

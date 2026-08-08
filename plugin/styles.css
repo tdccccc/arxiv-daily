@@ -997,14 +997,10 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-dashboard__search-clear {
   position: absolute;
-  right: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--text-muted);
-  cursor: pointer;
   padding: 4px;
 }
 
