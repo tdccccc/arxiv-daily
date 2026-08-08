@@ -60,5 +60,9 @@ export {
 export {
   createTransformersEmbeddingModel,
   EMBEDDING_MODEL_ID,
+  inspectTransformersEnv,
+  alignElectronReleaseProbe,
+  describeRuntimeProbe,
   type TransformersEmbeddingModelOptions,
+  type TransformersEnvFacts,
 } from "./embedding-model";

@@ -4,6 +4,10 @@ import { todayInTz, formatDate } from "@arxiv-daily/core";
 import { validateFilterConfig, validateLlmConfig } from "@arxiv-daily/core";
 import { chooseModal } from "./services/modal";
 import {
+  formatFullTextRuntimeDiagnostics,
+  summarizeFullTextRuntimeDiagnostics,
+} from "./services/fulltext-runtime-diagnostics";
+import {
   buildDiagnosticsReport,
   redactText,
   type PaperIndexDiagnostics,
@@ -469,6 +473,31 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "diagnose-fulltext-runtime",
+    name: "Diagnose full-text runtime (pdf.js + embeddings)",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: diagnosing full-text runtime…");
+          try {
+            const report = await plugin.diagnoseFullTextRuntime();
+            const text = formatFullTextRuntimeDiagnostics(report);
+            plugin.logger.info(`full-text runtime diagnostics:\n${text}`);
+            notice(
+              `arXiv Daily: full-text runtime — ${summarizeFullTextRuntimeDiagnostics(report)}`,
+              15_000,
+            );
+            new FullTextRuntimeDiagnosticsModal(plugin.app, text).open();
+          } catch (error) {
+            plugin.logger.error("commands: full-text runtime diagnostics failed", error);
+            notice(`arXiv Daily: full-text runtime diagnostics failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "diagnose full-text runtime",
+      ),
+  });
+
+  plugin.addCommand({
     id: "show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),
@@ -854,6 +883,45 @@ class DiagnosticsModal extends Modal {
             new Notice("arXiv Daily: diagnostics copied");
           } catch (e) {
             this.plugin.logger.warn("Could not copy diagnostics; text is selectable", e);
+            textarea.select();
+            new Notice("Could not copy diagnostics; text is selectable");
+          }
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class FullTextRuntimeDiagnosticsModal extends Modal {
+  constructor(app: App, private readonly report: string) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "arXiv Daily full-text runtime diagnostics" });
+    const textarea = contentEl.createEl("textarea", {
+      cls: "arxiv-daily-diagnostics-textarea",
+    });
+    textarea.value = this.report;
+    textarea.readOnly = true;
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Copy")
+        .setCta()
+        .onClick(async () => {
+          try {
+            const ownerDocument = textarea.ownerDocument;
+            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
+            if (clipboard?.writeText) {
+              await clipboard.writeText(this.report);
+            } else {
+              textarea.select();
+              ownerDocument.execCommand("copy");
+            }
+            new Notice("arXiv Daily: diagnostics copied");
+          } catch (e) {
             textarea.select();
             new Notice("Could not copy diagnostics; text is selectable");
           }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeAll, vi } from "vitest";
 import {
   bindEnterToButton,
   isSupportedPaperIndexSchemaVersion,
@@ -6,11 +6,52 @@ import {
   registerCommands,
 } from "../src/commands";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
-import { Notice } from "obsidian";
+import { Modal, Notice } from "obsidian";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { FullTextRuntimeDiagnostics } from "../src/services/fulltext-runtime-diagnostics";
 
 const commandsSource = readFileSync(resolve(process.cwd(), "src/commands.ts"), "utf8");
+
+/**
+ * Obsidian extends HTMLElement with createEl; the diagnostics modal's onOpen
+ * uses it, so mirror the tiny surface here (same pattern as
+ * personal-library-interest-profile-modal.test.ts).
+ */
+beforeAll(() => {
+  type Options = { cls?: string; text?: string; attr?: Record<string, string> };
+  const proto = HTMLElement.prototype as any;
+  proto.createEl ??= function (tag: string, options: Options = {}) {
+    const element = document.createElement(tag);
+    if (options.cls) element.className = options.cls;
+    if (options.text !== undefined) element.textContent = options.text;
+    for (const [key, value] of Object.entries(options.attr ?? {})) element.setAttribute(key, value);
+    this.appendChild(element);
+    return element;
+  };
+});
+
+/** Canned pass report for the full-text runtime diagnostics command. */
+function passRuntimeDiagnostics(): FullTextRuntimeDiagnostics {
+  return {
+    library: { connected: true, scopeFingerprint: "scope-hex", paperCount: 5 },
+    pdfJs: {
+      status: "pass",
+      loadPdfJsResolved: true,
+      loaderReturnedLib: true,
+      windowPdfJsLibPresent: true,
+      windowPdfJsLibVersion: "4.2.189",
+      smoke: { status: "pass", paperKey: "arXiv:1706.03762", pages: 15, chars: 12345 },
+    },
+    embedding: {
+      status: "pass",
+      modelId: "multilingual-e5-small-q8",
+      dimension: 384,
+      remoteHost: "https://huggingface.co/",
+      loadMs: 1234,
+    },
+  };
+}
 
 function makePlugin() {
   const commands: Array<{ id: string; name: string; callback?: () => unknown }> = [];
@@ -54,6 +95,7 @@ function makePlugin() {
     }),
     addRibbonIcon: vi.fn(() => ({ addClass: vi.fn() })),
     openPersonalLibraryDirectionReview: vi.fn(),
+    diagnoseFullTextRuntime: vi.fn(async () => passRuntimeDiagnostics()),
   };
 }
 
@@ -128,6 +170,87 @@ describe("registerCommands", () => {
       "arXiv Daily: direction review could not be opened. Try again.",
     );
     expect(Notice.calls.at(-1)?.message).not.toContain("/Users/alice");
+  });
+
+  it("registers the full-text runtime diagnostics command and renders its report", async () => {
+    Notice.calls = [];
+    Modal.opened.length = 0;
+    const plugin = makePlugin();
+    const report = passRuntimeDiagnostics();
+    plugin.diagnoseFullTextRuntime.mockResolvedValue(report);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "diagnose-fulltext-runtime");
+
+    expect(command?.name).toBe("Diagnose full-text runtime (pdf.js + embeddings)");
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+
+    expect(plugin.diagnoseFullTextRuntime).toHaveBeenCalledOnce();
+    expect(Notice.calls.at(-1)?.message).toContain("pdf.js PASS");
+    expect(Notice.calls.at(-1)?.message).toContain("embeddings PASS");
+    expect(Notice.calls.at(-1)?.message).toContain("smoke 15 pages / 12345 chars");
+    const modal = Modal.opened.at(-1);
+    expect(modal?.contentEl.textContent).toContain("full-text runtime diagnostics");
+    const textarea = modal?.contentEl.querySelector("textarea");
+    expect(textarea?.value).toContain("window.pdfjsLib: present (version 4.2.189)");
+    expect(textarea?.value).toContain("smoke extraction: pass");
+  });
+
+  it("summarizes a failing runtime diagnostics run into FAIL notices", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.diagnoseFullTextRuntime.mockResolvedValue({
+      library: { connected: false },
+      pdfJs: {
+        status: "fail",
+        loadPdfJsResolved: false,
+        loaderReturnedLib: false,
+        windowPdfJsLibPresent: false,
+        error: "loadPdfJs rejected",
+      },
+      embedding: {
+        status: "fail",
+        modelId: "multilingual-e5-small-q8",
+        dimension: 384,
+        error: "fetch failed",
+      },
+    });
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "diagnose-fulltext-runtime");
+
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+
+    expect(Notice.calls.some((c) => c.message.includes("pdf.js FAIL"))).toBe(true);
+    expect(Notice.calls.some((c) => c.message.includes("loadPdfJs rejected"))).toBe(true);
+    expect(Notice.calls.some((c) => c.message.includes("embeddings FAIL"))).toBe(true);
+    expect(Notice.calls.some((c) => c.message.includes("fetch failed"))).toBe(true);
+  });
+
+  it("notices and logs when the diagnostics probe itself rejects", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    const failure = new Error("probe crashed");
+    plugin.diagnoseFullTextRuntime.mockRejectedValue(failure);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "diagnose-fulltext-runtime");
+
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+
+    expect(plugin.logger.error).toHaveBeenCalledWith(
+      "commands: full-text runtime diagnostics failed",
+      failure,
+    );
+    expect(Notice.calls.at(-1)?.message).toBe(
+      "arXiv Daily: full-text runtime diagnostics failed: probe crashed",
+    );
   });
 
   it("logs and notices rejected ribbon dashboard opens", async () => {

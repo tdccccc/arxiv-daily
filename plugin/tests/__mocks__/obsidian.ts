@@ -14,6 +14,17 @@ export function normalizePath(p: string): string {
 
 export function setIcon(_parent: HTMLElement, _iconId: string): void {}
 
+/**
+ * Mirrors the official loader's contract: resolves to a pdf.js library
+ * object and makes it reachable via `window.pdfjsLib` (the production path
+ * reads the window global, so the mock sets it like the real loader does).
+ */
+export async function loadPdfJs(): Promise<{ version: string }> {
+  const lib = { version: "mock-pdfjs" };
+  (globalThis as unknown as { pdfjsLib?: { version: string } }).pdfjsLib = lib;
+  return lib;
+}
+
 export class TFile {
   constructor(readonly path: string = "") {}
 }

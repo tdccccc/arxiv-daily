@@ -18,13 +18,20 @@
  * configured inside this factory, before the first pipeline load, and only
  * when an option requires it.
  *
- * Device selection: transformers.js v4 accepts `device: "cpu"` only on Node
- * (onnxruntime-node); in web/Electron-renderer environments "cpu" throws
- * `Unsupported device` — the wasm backend is the CPU execution provider
- * there. The same probe transformers.js uses internally
- * (`process.release.name === "node"`) decides which side we are on, so the
- * factory code path is shared verbatim between the Obsidian plugin and the
- * Node smoke tests.
+ * Device selection: transformers.js v4 accepts `device: "cpu"` only on real
+ * Node (onnxruntime-node); in web/Electron-renderer environments the wasm
+ * backend is the CPU execution provider ("wasm" device). The same probe
+ * transformers.js uses internally (`process.release.name === "node"`) decides
+ * which side we are on. One wrinkle: Obsidian's renderer runs with Node.js
+ * integration, so `process.release.name` is "node" there even though the
+ * runtime is a Chromium renderer — that would push transformers.js into its
+ * Node branch, which the plugin's web bundle does not contain (the
+ * onnxruntime-node module is tree-shaken out), crashing with
+ * `Cannot read properties of undefined (reading 'create')` at module init.
+ * Electron renderers expose `process.versions.electron`; when present, the
+ * factory aligns the probe to "electron" first (see
+ * `alignElectronReleaseProbe`), keeping transformers.js and `isNodeRuntime()`
+ * on the same wasm/browser branch.
  *
  * Cancellation: transformers.js has no AbortSignal plumbing, so embeds are
  * batched (bounded memory, abort granularity) with the caller's signal
@@ -91,6 +98,7 @@ type PipelineOutputTensor = Awaited<ReturnType<FeatureExtractionPipeline["_call"
 export function createTransformersEmbeddingModel(
   options?: TransformersEmbeddingModelOptions,
 ): EmbeddingModel {
+  alignElectronReleaseProbe();
   const loader = new LazyModelLoader(options);
   return {
     modelId: EMBEDDING_MODEL_ID,
@@ -201,11 +209,47 @@ function configureTransformersEnv(
   }
 }
 
+/** Read-only facts about the transformers.js `env` singleton. */
+export interface TransformersEnvFacts {
+  remoteHost?: string;
+  wasmPaths?: string;
+  cacheDir?: string;
+}
+
+/**
+ * Inspect the transformers.js `env` singleton for diagnostics (the
+ * `diagnose-fulltext-runtime` command). Safe to call anytime: it only reads
+ * the env after a lazy module import; a failed model load still leaves the
+ * configured values readable. The ONNX wasm paths default is populated by
+ * the backend on initialization, so read them after a load attempt.
+ * Returns null when the module itself cannot be imported.
+ */
+export async function inspectTransformersEnv(): Promise<TransformersEnvFacts | null> {
+  try {
+    const transformers = await import("@huggingface/transformers");
+    const env = transformers.env as unknown as {
+      remoteHost?: string;
+      cacheDir?: string;
+      backends?: { onnx?: { wasm?: { wasmPaths?: string | Record<string, string> } } };
+    };
+    const wasmPaths = env.backends?.onnx?.wasm?.wasmPaths;
+    return {
+      remoteHost: env.remoteHost,
+      wasmPaths:
+        typeof wasmPaths === "string" ? wasmPaths : wasmPaths ? JSON.stringify(wasmPaths) : undefined,
+      cacheDir: env.cacheDir,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Same runtime probe transformers.js uses internally: a Node.js process has
  * `process.release.name === "node"`; the Obsidian renderer exposes `process`
- * too, but with `release.name === "electron"` (or undefined), so it resolves
- * to the web/wasm path.
+ * too (Node.js integration), but with `process.versions.electron` present —
+ * see `alignElectronReleaseProbe`, which makes the release name "electron"
+ * so this resolves to the web/wasm path.
  */
 function isNodeRuntime(): boolean {
   return (
@@ -214,6 +258,51 @@ function isNodeRuntime(): boolean {
     && process.release !== null
     && process.release.name === "node"
   );
+}
+
+/**
+ * Electron renderers run with Node.js integration, so `process.release.name`
+ * is "node" there even though the runtime is a Chromium renderer. Without
+ * alignment, transformers.js v4 selects its Node branch (onnxruntime-node),
+ * which the plugin's web bundle does not contain (tree-shaken), and module
+ * init crashes with `Cannot read properties of undefined (reading 'create')`
+ * (`ONNX.InferenceSession` is undefined). Electron renderers expose
+ * `process.versions.electron`; when present, report the release name as
+ * "electron" — semantically accurate — so transformers.js and
+ * `isNodeRuntime()` both take the wasm/browser branch. Idempotent; must run
+ * before the transformers.js module initializes (the factory calls it before
+ * the lazy import). Real Node processes have no `versions.electron` and are
+ * left untouched.
+ */
+export function alignElectronReleaseProbe(): void {
+  if (typeof process === "undefined") return;
+  const versions = (process as { versions?: { electron?: unknown } }).versions;
+  if (versions?.electron === undefined) return;
+  const release = process.release;
+  if (release?.name === "electron") return;
+  try {
+    Object.defineProperty(process, "release", {
+      value: { ...release, name: "electron" },
+      configurable: true,
+    });
+  } catch {
+    // Non-configurable release (unexpected in Electron renderers): leave the
+    // probe as-is; the wasm branch cannot be forced through this path.
+  }
+}
+
+/**
+ * Human-readable runtime probe for the `diagnose-fulltext-runtime` report:
+ * which branch transformers.js will take (`process.release.name`) and whether
+ * the Electron marker is present.
+ */
+export function describeRuntimeProbe(): string {
+  if (typeof process === "undefined") return "no process (plain browser)";
+  const versions = (process as { versions?: { electron?: unknown } }).versions;
+  const electron = versions?.electron as string | undefined;
+  return electron !== undefined
+    ? `process.release.name=${process.release?.name ?? "?"} (electron ${electron})`
+    : `process.release.name=${process.release?.name ?? "?"} (node)`;
 }
 
 /**

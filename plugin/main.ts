@@ -129,8 +129,18 @@ import {
   ObsidianLibraryDirectoryPicker,
   ObsidianPdfTextExtractor,
   createTransformersEmbeddingModel,
+  describeRuntimeProbe,
+  inspectTransformersEnv,
   openObsidianLibrarySource,
 } from "./src/hosts/obsidian";
+import {
+  describeDiagnosticsError,
+  type EmbeddingDiagnostics,
+  type FullTextRuntimeDiagnostics,
+  type LibraryDiagnostics,
+  type PdfJsDiagnostics,
+  type PdfJsSmokeDiagnostics,
+} from "./src/services/fulltext-runtime-diagnostics";
 import {
   authorizeLibraryConnection,
   buildLibraryInventoryPreview,
@@ -1416,6 +1426,159 @@ export default class ArxivDailyPlugin extends Plugin {
       score: match.score,
       hits: match.hits,
     }));
+  }
+
+  /**
+   * Pre-flight diagnostics for the full-text runtime, isolating the two
+   * Obsidian-only unknowns that Node-side tests cannot cover: pdf.js
+   * availability after `loadPdfJs()` (window.pdfjsLib + a real smoke
+   * extraction) and transformers.js model/wasm loading in the renderer.
+   * Each part is probed independently; a failure in one does not block the
+   * other, and the whole run never throws — problems are reported in the
+   * result.
+   */
+  async diagnoseFullTextRuntime(): Promise<FullTextRuntimeDiagnostics> {
+    const updateProgress = this.operations.snapshot().length === 0;
+    const library: LibraryDiagnostics = { connected: false };
+    const connection = this.libraryConnection;
+    if (connection) {
+      const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+      library.connected = true;
+      library.scopeFingerprint = scopeFingerprint;
+      try {
+        const catalog = await this.buildPersonalLibraryCatalogStore().load(
+          scopeFingerprint,
+          identificationFingerprint,
+        );
+        library.paperCount = Object.keys(catalog.papers).length;
+      } catch (error) {
+        this.logger.warn("diagnostics: personal library catalog load failed", error);
+      }
+    }
+    if (updateProgress) this.progress?.setTask("Diagnosing full-text runtime", "Checking pdf.js");
+    const pdfJs = await this.diagnosePdfJs(connection);
+    if (updateProgress) {
+      this.progress?.setTask("Diagnosing full-text runtime", "Loading embedding model");
+    }
+    const embedding = await this.diagnoseEmbedding();
+    if (updateProgress) this.progress?.setComplete("Full-text runtime diagnostics complete");
+    return { library, pdfJs, embedding };
+  }
+
+  private async diagnosePdfJs(
+    connection: PersistedLibraryConnection | undefined,
+  ): Promise<PdfJsDiagnostics> {
+    let loadPdfJsResolved = false;
+    let loaderReturnedLib = false;
+    let windowPdfJsLibPresent = false;
+    let windowPdfJsLibVersion: string | undefined;
+    try {
+      const returned: unknown = await loadPdfJs();
+      loadPdfJsResolved = true;
+      loaderReturnedLib =
+        returned != null && (typeof returned === "object" || typeof returned === "function");
+      const win = globalThis as unknown as { pdfjsLib?: { version?: string } };
+      windowPdfJsLibPresent = win.pdfjsLib != null;
+      windowPdfJsLibVersion = win.pdfjsLib?.version;
+    } catch (error) {
+      return {
+        status: "fail",
+        loadPdfJsResolved,
+        loaderReturnedLib,
+        windowPdfJsLibPresent,
+        error: describeDiagnosticsError(error),
+      };
+    }
+    const smoke = connection
+      ? await this.smokeExtractFirstLibraryPdf(connection)
+      : {
+          status: "skipped" as const,
+          error: "no library connection — smoke extraction skipped",
+        };
+    // The production path reads `window.pdfjsLib`; without it the feature
+    // cannot run, so that alone is a failure regardless of smoke availability.
+    let status: PdfJsDiagnostics["status"];
+    if (!windowPdfJsLibPresent) status = "fail";
+    else if (smoke.status === "pass") status = "pass";
+    else if (smoke.status === "fail") status = "fail";
+    else status = "skipped";
+    return {
+      status,
+      loadPdfJsResolved,
+      loaderReturnedLib,
+      windowPdfJsLibPresent,
+      windowPdfJsLibVersion,
+      smoke,
+    };
+  }
+
+  private async smokeExtractFirstLibraryPdf(
+    connection: PersistedLibraryConnection,
+  ): Promise<PdfJsSmokeDiagnostics> {
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    try {
+      const catalog = await this.buildPersonalLibraryCatalogStore().load(
+        scopeFingerprint,
+        identificationFingerprint,
+      );
+      const entry = Object.values(catalog.papers).find((paper) => paper.filePaths.length > 0);
+      const filePath = entry?.filePaths[0];
+      if (!entry || !filePath) {
+        return {
+          status: "skipped",
+          error: "no library papers with PDF files — smoke extraction skipped",
+        };
+      }
+      const source = this.librarySource ?? await this.openLibrarySource(connection.selectedRoot);
+      const bytes = await source.readBinary(filePath);
+      // Deliberately the default path: the extractor reads `window.pdfjsLib`,
+      // exactly what `index-personal-library-fulltext` runs.
+      const extractor = new ObsidianPdfTextExtractor();
+      const result = await extractor.extractPdfText(new Uint8Array(bytes));
+      const chars = result.pages.reduce((sum, page) => sum + page.length, 0);
+      if (result.pages.length === 0 || chars === 0) {
+        return {
+          status: "fail",
+          paperKey: entry.paperKey,
+          pages: result.pages.length,
+          chars,
+          error: "extraction returned no text",
+        };
+      }
+      return { status: "pass", paperKey: entry.paperKey, pages: result.pages.length, chars };
+    } catch (error) {
+      return { status: "fail", error: describeDiagnosticsError(error) };
+    }
+  }
+
+  private async diagnoseEmbedding(): Promise<EmbeddingDiagnostics> {
+    const embedding = createTransformersEmbeddingModel();
+    try {
+      const started = Date.now();
+      await embedding.embed(["diagnostic probe"]);
+      const loadMs = Date.now() - started;
+      const facts = await inspectTransformersEnv();
+      return {
+        status: "pass",
+        modelId: embedding.modelId,
+        dimension: embedding.dimension,
+        remoteHost: facts?.remoteHost,
+        wasmPaths: facts?.wasmPaths,
+        runtimeProbe: describeRuntimeProbe(),
+        loadMs,
+      };
+    } catch (error) {
+      const facts = await inspectTransformersEnv().catch(() => null);
+      return {
+        status: "fail",
+        modelId: embedding.modelId,
+        dimension: embedding.dimension,
+        remoteHost: facts?.remoteHost,
+        wasmPaths: facts?.wasmPaths,
+        runtimeProbe: describeRuntimeProbe(),
+        error: describeDiagnosticsError(error),
+      };
+    }
   }
 
   restartScheduler(): void {
