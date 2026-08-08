@@ -82,3 +82,10 @@
 - change: goal.md status → active + P6 索引行；phases/06-search-entry-and-auto-trigger.md（T1 双页模态框 → T2 单框双结果 → T3 自动触发+授权拆分 → T4 覆盖提示 → T5 收尾）。
 - disposition: 无代码改动。
 - next: P6-T1 扩展 SimilarPapersModal 双页。
+
+## 2026-08-07 — note（P6 完成：检索入口 + 自动触发落地）
+
+- evidence: ADR 0006/0007 全部实现并验收。**T1 双页模态框**：SimilarPapersModal 增加可选 `library`（query + load），有则 Library/Daily 双页（Library 默认、加载/错误/空三态），无则原样渲染；Dashboard 以标题+摘要（空回退标题）构建查询。**T2 单框双结果**：refreshLibrarySearch（防抖回调 + 主渲染挂点，≥2 字符、staleness token），纯渲染抽到 library-search-block.ts。**T3 自动触发+授权拆分**：run-entry 授权 throw 移除、assertIncrementalUpdateCurrent 参数化；LLM 阶段检查授权 + fingerprint，无许可跳过并写 pendingAuthorization（core decoder 兼容两种形状）；审核 UI 待授权横幅；索引完成 indexed>0 自动触发（失败仅记录）。**T4 覆盖提示**：mutation 比较新旧建议集，不同则 summary.superseded + 通知提示。验证：core 1534/1534（+2 pendingAuthorization 解码）、plugin 434/434（重写 1 + 新增 8）、lint 0、boundaries OK、typecheck 全过；technical-report handoff：T1/T2/T3/T4 均 updated（Dashboard 段、授权门段、命令段）。
+- change: 四个功能 chunk 已提交（46028b1 双页模态框、df1774f 单框双结果、a335efc 自动触发+门拆分、bbfb191 覆盖提示）；本条目为 P6 收尾（goal.md P6 done + status done 同批提交）。
+- disposition: 保留全部。测试环境备注：hf-mirror 无 CORS（浏览器直接下载失败），插件默认 huggingface.co 不受影响——镜像设置若做需处理。
+- next: P6 完成。待办清单剩余：模型可配置化（SPECTER，含 768 维存储翻倍）、CLI host 提取/嵌入。构建产物待用户安装验证（桌面 vault 需重启 Obsidian 生效）。

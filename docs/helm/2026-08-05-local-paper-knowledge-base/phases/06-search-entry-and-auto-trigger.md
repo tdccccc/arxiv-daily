@@ -25,9 +25,11 @@ T1 先扩展现有 `SimilarPapersModal` 为双页（库内相似页异步调用 
 - [x] T2 单框双结果：Dashboard 搜索框查询 → 现有行过滤（不变）+ 异步 KB 相似区块（复用 T1 呈现）；无 KB/失败静默降级；插件测试
   - 实现：`refreshLibrarySearch`（防抖回调 + 主渲染挂点，≥2 字符才触发，staleness token 丢弃过期响应）；纯渲染抽到 `library-search-block.ts`（loading/matches/empty/error 四态）。+5 区块测试；plugin 429/429、lint 0、boundaries OK；technical-report Dashboard 段更新（updated）。
 - [ ] T2 单框双结果：Dashboard 搜索框查询 → 现有行过滤（不变）+ 异步 KB 相似区块（复用 T1 呈现）；无 KB/失败静默降级；插件测试
-- [ ] T3 自动触发 + 授权拆分：`runIncrementalDirectionUpdate` 授权检查下移到 LLM diff 阶段（placement 无条件跑）；索引完成后 `indexed > 0` 自动触发（复用同一方法，通知 summary）；"待授权"状态在审核 UI 呈现；插件测试
-- [ ] T4 覆盖未审阅提示：整体替换建议文档前检测 pending 建议 → 覆盖时 Notice/状态栏提示；测试
-- [ ] T5 收尾：core/plugin 全量测试、tsc、lint、boundaries；technical-report handoff（每个被接受 chunk）；提交；goal.md P6 done + status done
+- [x] T3 自动触发 + 授权拆分：`runIncrementalDirectionUpdate` 授权检查下移到 LLM diff 阶段（placement 无条件跑）；索引完成后 `indexed > 0` 自动触发（复用同一方法，通知 summary）；"待授权"状态在审核 UI 呈现；插件测试
+  - 实现：run-entry 授权 throw 移除；`assertIncrementalUpdateCurrent` 参数化 `requireAuthorization`（placement 路径 false，LLM 路径 true）；LLM 阶段检查授权 + authorizationFingerprint，无许可跳过并写 `pendingAuthorization`（缓冲数+时间戳）到建议文档（core decoder 兼容两种形状）；审核 UI 待授权横幅；`runIncrementalDirectionUpdateAfterIndex(summary)` 索引后自动触发（indexed≤0 跳过、失败仅记录）。core +2 测试、plugin 测试重写无授权场景 +3 自动触发；core 1534/1534、plugin 433/433；technical-report 授权门段更新（updated）。
+- [x] T4 覆盖未审阅提示：整体替换建议文档前检测 pending 建议 → 覆盖时 Notice/状态栏提示；测试
+  - 实现：mutation 内比较 current 与 nextDocument 建议集（JSON 相等即重放，不提示），不同则 summary 返回 `superseded` 计数；手动命令与自动触发通知追加 "N un-reviewed suggestion(s) superseded by new evidence"。+1 双轮测试（run 1 空 LLM → run 2 new 建议，superseded=1）；plugin 434/434；technical-report 命令段更新（updated）。
+- [x] T5 收尾：core/plugin 全量测试、tsc、lint、boundaries；technical-report handoff（每个被接受 chunk）；提交；goal.md P6 done + status done
 
 ## Verification
 
