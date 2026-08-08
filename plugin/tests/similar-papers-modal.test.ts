@@ -178,4 +178,90 @@ describe("Similar Papers modal", () => {
     });
     expect(content.textContent).toContain("local paper index");
   });
+
+  it("renders the library tab first and loads library matches asynchronously", async () => {
+    const load = vi.fn(async () => [
+      {
+        paperKey: "arxiv:2607.01001",
+        title: "Library Paper",
+        score: 0.812345,
+        hits: [
+          { chunkIndex: 3, page: 2, text: "A matching passage about retrieval.", score: 0.81 },
+        ],
+      },
+    ]);
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [{ entry: paper("2607.00002"), score: 1, reasons: [] }],
+      library: { query: "Title\n\nAbstract", load },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+
+    // Library tab selected by default; daily panel hidden.
+    expect(content.querySelector('button[aria-selected="true"]')?.textContent).toBe("Library similar");
+    expect(content.textContent).toContain("Searching your library…");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(content.textContent).toContain("Library Paper");
+    expect(content.textContent).toContain("similarity 0.812");
+    expect(content.textContent).toContain("p.2 · A matching passage about retrieval.");
+    const dailyPanel = content.querySelector('[role="tabpanel"][hidden]');
+    expect(dailyPanel?.textContent).toContain("2607.00002");
+  });
+
+  it("switches to the daily tab and back without reloading the library", async () => {
+    const load = vi.fn(async () => []);
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [{ entry: paper("2607.00002"), score: 1, reasons: [] }],
+      library: { query: "Title", load },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+
+    const dailyTab = [...content.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find((button) => button.textContent === "Daily similar");
+    dailyTab?.click();
+    expect(content.querySelector('[role="tabpanel"]:not([hidden])')?.textContent)
+      .toContain("2607.00002");
+    const libraryTab = [...content.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find((button) => button.textContent === "Library similar");
+    libraryTab?.click();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders library load failures without escaping the modal", async () => {
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [],
+      library: {
+        query: "Title",
+        load: async () => { throw new Error("no full-text index"); },
+      },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(content.textContent).toContain("Library full-text search unavailable: no full-text index");
+  });
+
+  it("renders an empty library result", async () => {
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [],
+      library: { query: "Title", load: async () => [] },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(content.textContent).toContain("No similar papers found in your library.");
+  });
 });

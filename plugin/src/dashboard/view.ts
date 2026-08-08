@@ -32,7 +32,10 @@ import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/c
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
-import { SimilarPapersModal } from "./similar-papers-modal";
+import {
+  SimilarPapersModal,
+  type SimilarPapersModalOptions,
+} from "./similar-papers-modal";
 import { HubModal } from "./hub-modal";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -2247,9 +2250,11 @@ class ArxivDailyDashboardView extends ItemView {
       }
     }
     const results = index.similar(entry, { limit: 10 });
+    const library = this.buildLibrarySimilarOption(entry);
     new SimilarPapersModal(this.plugin.app, {
       source: entry,
       results,
+      ...(library ? { library } : {}),
       openDetail: (candidate) => this.openDetailSummary(candidate),
       openDaily: (candidate) => this.openDailyReport(candidate),
       openArxiv: (candidate) =>
@@ -2263,6 +2268,32 @@ class ArxivDailyDashboardView extends ItemView {
         this.notice(`arXiv Daily: ${action} failed`);
       },
     }).open();
+  }
+
+  /**
+   * Library full-text similarity tab for the row button: the query is the
+   * paper's title + abstract (title-only fallback), loaded asynchronously
+   * inside the modal. Returns undefined when there is nothing queryable, in
+   * which case the modal renders only the daily-report similarity list.
+   */
+  private buildLibrarySimilarOption(
+    entry: DashboardRow["entry"],
+  ): SimilarPapersModalOptions["library"] | undefined {
+    const abstract = entry.abstract?.trim() ?? "";
+    const query = abstract ? `${entry.title}\n\n${abstract}` : entry.title;
+    if (!query.trim()) return undefined;
+    return {
+      query,
+      load: async () => {
+        const matches = await this.plugin.searchPersonalLibraryFullText(query);
+        return matches.map((match) => ({
+          paperKey: match.paperKey,
+          title: match.title,
+          score: match.score,
+          hits: match.hits,
+        }));
+      },
+    };
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {

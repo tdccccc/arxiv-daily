@@ -1426,6 +1426,49 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   margin-top: 8px;
 }
 
+.arxiv-daily-similar-modal__tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.arxiv-daily-similar-modal__tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  padding: 6px 10px;
+  border-bottom: 2px solid transparent;
+}
+
+.arxiv-daily-similar-modal__tab[aria-selected="true"] {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+
+.arxiv-daily-similar-modal__panel {
+  margin-top: 10px;
+}
+
+.arxiv-daily-similar-modal__hit {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-similar-modal__status,
+.arxiv-daily-similar-modal__error {
+  margin-top: 10px;
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-similar-modal__error {
+  color: var(--text-error);
+}
+
 @media (max-width: 520px) {
   .arxiv-daily-similar-modal {
     padding-inline: 12px;
