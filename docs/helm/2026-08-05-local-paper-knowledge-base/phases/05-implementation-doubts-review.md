@@ -19,7 +19,8 @@ P3 T5b 报告遗留的实现存疑项全部有代码核对的定论；可修复�
 
 ## Tasks
 
-- [ ] T1 存疑项 4（centering 镜像）：对比 plugin `centerChunksInPlace`/`normalizedChunkInPlace` 与 core 聚类 centering 实现（数值同构性）→ core 导出共用变换 → plugin 切换 → 行为不变验证（e2e 数值对比或等价测试）
+- [x] T1 存疑项 4（centering 镜像）：对比 plugin `centerChunksInPlace`/`normalizedChunkInPlace` 与 core 聚类 centering 实现（数值同构性）→ core 导出共用变换 → plugin 切换 → 行为不变验证（e2e 数值对比或等价测试）
+  - 结论：两实现逐行同构（Float64 均值、同迭代序、减均值重归一、零范数拷贝）；core 的"先归一化"在 KB 单位向量上近似恒等。core 新增非可变 `centerCorpusChunks` 并接入内部流水线，plugin `loadCenteredClusteringInput` 切换共用，镜像函数删除；+4 core 测试；scratch 逐位等价验证（真实 KB 5 篇 187,776 floats，max diff = 0，BIT-IDENTICAL）；technical-report handoff no-impact。
 - [ ] T2 存疑项 3（discoveryCues 截断）：定位 "new" 候选 `discoveryCues` 填充路径（reason 截断单条）→ 定修法（填充源 vs decoder 放宽，评估其它路径影响）→ 修复 + 测试
 - [ ] T3 存疑项 2（operation kind 复用）：核对增量更新与全量生成共用 `personal-library-direction-generation` 的授权门/撤销范围/取消语义 → 定论（保持复用 or 新 kind）→ 记录与 ADR 0007 拆分授权门的衔接
 - [ ] 收尾：每个被接受 chunk 的 technical-report handoff；core 全量（`NODE_OPTIONS=--max-old-space-size=8192 npx vitest run`，1528+）+ plugin 全量（420+）+ lint + boundaries；每阶段提交；goal.md P5 done + status done
