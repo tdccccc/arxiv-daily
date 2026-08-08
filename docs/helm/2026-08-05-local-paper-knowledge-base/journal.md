@@ -61,3 +61,10 @@
 - change: **检索入口（ADR 0006）**：①单框双结果——Dashboard 搜索框保持单一输入，查询同时过滤日报行（词法，现状）+ 异步查文献库 KB（相似度+命中段落+打开动作区块）；无 KB/未授权只出前者，无模式切换；②行内按钮升级为双页模态框（库内相似全文为主 + 日报相似词法为次，无 KB 只显示词法页）；③从论文查询 = 标题+摘要（空摘要回退纯标题；PDF 永不作查询源，仅在检索目标侧）。**增量触发（ADR 0007）**：①索引完成且 indexed>0 自动触发；②授权门拆分——placement 免许可始终跑，LLM diff 需许可（无则跳过并记"待授权"进审核 UI）；③建议永不自动应用；④建议文档保持整体替换 + 覆盖未审阅时提示（状态栏/Notice）。CONTEXT.md 新增术语：Library similarity、Direction suggestion。两 ADR 已落盘（docs/adr/0006、0007）。
 - disposition: 全部保留。实现尚未开始——定案作为后续 helm phase（P5）的输入，phase 计划需待执行指令。
 - next: 待用户决定是否进入 P5 实现（检索入口 + 自动触发）。其余未决项：实现存疑项复核（P3 遗留 4 项）、模型可配置化、CLI host。
+
+## 2026-08-07 — note（P5 启动：实现存疑项复核，4→3→2 顺序）
+
+- evidence: 用户确认按推荐顺序复核 P3 T5b 遗留存疑项。存疑项 1（建议文档整体替换 vs 合并）已在开放问题定案中由 ADR 0007 关闭（保持整体替换 + 覆盖未审阅提示，提示实现归 P6 检索入口/自动触发阶段）；剩余 3 项：4 centering 镜像（唯一答案明确项，先做）、3 discoveryCues 截断（用户可见数据质量）、2 operation kind 复用（结论喂 ADR 0007 授权门拆分的实现）。
+- change: goal.md status → active + P5 索引行；phases/05-implementation-doubts-review.md（T1 4→T2 3→T3 2 + 收尾）。
+- disposition: 无代码改动。
+- next: P5-T1 存疑项 4：核对 plugin 镜像与 core centering 数值同构性。
