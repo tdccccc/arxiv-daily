@@ -251,6 +251,7 @@ describe("incremental direction update", () => {
       attachments: 1,
       buffered: 1,
       pendingAuthorizationBuffered: 0,
+      superseded: 0,
     });
 
     await internals.runIncrementalDirectionUpdateAfterIndex({
@@ -264,7 +265,7 @@ describe("incremental direction update", () => {
   it("does not trigger on reuse-only index runs", async () => {
     const { plugin, internals } = fixture(SIX_PAPERS);
     const run = vi.spyOn(plugin, "runIncrementalDirectionUpdate").mockResolvedValue({
-      suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0,
+      suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0, superseded: 0,
     });
 
     await internals.runIncrementalDirectionUpdateAfterIndex({
@@ -295,7 +296,7 @@ describe("incremental direction update", () => {
     internals.libraryProfile = confirmedProfile(internals.libraryCatalog);
     const call = vi.spyOn(LlmClient.prototype, "call");
     const summary = await plugin.runIncrementalDirectionUpdate();
-    expect(summary).toEqual({ suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0 });
+    expect(summary).toEqual({ suggestions: 0, attachments: 0, buffered: 0, pendingAuthorizationBuffered: 0, superseded: 0 });
     expect(call).not.toHaveBeenCalled();
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions).toEqual([]);
@@ -312,7 +313,7 @@ describe("incremental direction update", () => {
     const call = vi.spyOn(LlmClient.prototype, "call");
     const summary = await plugin.runIncrementalDirectionUpdate();
     // One attach suggestion; one buffered paper stays below the trigger.
-    expect(summary).toEqual({ suggestions: 1, attachments: 1, buffered: 1, pendingAuthorizationBuffered: 0 });
+    expect(summary).toEqual({ suggestions: 1, attachments: 1, buffered: 1, pendingAuthorizationBuffered: 0, superseded: 0 });
     expect(call).not.toHaveBeenCalled();
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions).toEqual([{
@@ -335,7 +336,7 @@ describe("incremental direction update", () => {
       }],
     }));
     const summary = await plugin.runIncrementalDirectionUpdate();
-    expect(summary).toEqual({ suggestions: 2, attachments: 2, buffered: 4, pendingAuthorizationBuffered: 0 });
+    expect(summary).toEqual({ suggestions: 2, attachments: 2, buffered: 4, pendingAuthorizationBuffered: 0, superseded: 0 });
     expect(call).toHaveBeenCalledTimes(1);
     const doc = await suggestionsStore(storage, plugin, scopeFingerprint, identificationFingerprint).load();
     expect(doc.suggestions.map((suggestion) => suggestion.paperKeys)).toEqual([
@@ -490,5 +491,32 @@ describe("incremental direction update", () => {
 
   it("exposes the buffer trigger constant used by the update", () => {
     expect(INCREMENTAL_BUFFER_TRIGGER).toBe(3);
+  });
+});
+
+describe("incremental direction update supersede hint", () => {
+  it("counts un-reviewed suggestions superseded by a newer run", async () => {
+    const { plugin, internals } = fixture(SIX_PAPERS);
+    internals.libraryProfile = confirmedProfile(internals.libraryCatalog);
+    const call = vi.spyOn(LlmClient.prototype, "call");
+    // Run 1: the LLM produces no diff suggestions (buffer pool untouched by
+    // the LLM stage); the document holds only the placement attach.
+    call.mockResolvedValueOnce(JSON.stringify({ suggestions: [] }));
+    const first = await plugin.runIncrementalDirectionUpdate();
+    expect(first.superseded).toBe(0);
+    expect(first.suggestions).toBe(1); // attach for the same-theme paper
+
+    // Run 2: the same state but the LLM now returns a "new" suggestion; the
+    // whole-document replace supersedes the un-reviewed attach from run 1.
+    call.mockResolvedValueOnce(JSON.stringify({
+      suggestions: [{
+        kind: "new",
+        paperKeys: ["arxiv:2608.00003", "arxiv:2608.00004"],
+        reason: "A new theme beyond the current directions.",
+      }],
+    }));
+    const second = await plugin.runIncrementalDirectionUpdate();
+    expect(second.superseded).toBe(1);
+    expect(second.suggestions).toBe(2); // attach d1 + new theme
   });
 });

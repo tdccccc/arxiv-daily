@@ -995,6 +995,8 @@ export default class ArxivDailyPlugin extends Plugin {
     attachments: number;
     buffered: number;
     pendingAuthorizationBuffered: number;
+    /** Un-reviewed suggestions from the previous run that this run replaced. */
+    superseded: number;
   }> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
@@ -1089,6 +1091,13 @@ export default class ArxivDailyPlugin extends Plugin {
         }, llmAuthorized);
         const store = this.buildIncrementalSuggestionsStore(connection);
         const current = await store.load();
+        // Whole-document replace (ADR 0007): un-reviewed suggestions from the
+        // previous run are superseded by the newest evidence. Count them so
+        // the notice can make the replacement visible.
+        const superseded = current.suggestions.length > 0
+          && JSON.stringify(current.suggestions) !== JSON.stringify(nextDocument.suggestions)
+          ? current.suggestions.length
+          : 0;
         const saved = await store.replace(nextDocument, current.revision);
         this.assertIncrementalUpdateCurrent({
           connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
@@ -1100,6 +1109,7 @@ export default class ArxivDailyPlugin extends Plugin {
           attachments: saved.suggestions.filter((entry) => entry.kind === "attach").length,
           buffered: bufferPaperKeys.length,
           pendingAuthorizationBuffered,
+          superseded,
         };
       });
     } catch (error) {
@@ -1621,9 +1631,12 @@ export default class ArxivDailyPlugin extends Plugin {
       const pending = update.pendingAuthorizationBuffered > 0
         ? `, ${update.pendingAuthorizationBuffered} buffered awaiting model authorization`
         : "";
+      const superseded = update.superseded > 0
+        ? `, ${update.superseded} un-reviewed suggestion(s) superseded by new evidence`
+        : "";
       new Notice(
         `arXiv Daily: incremental update — ${update.suggestions} suggestions `
-        + `(${update.attachments} attaches), ${update.buffered} buffered${pending}`,
+        + `(${update.attachments} attaches), ${update.buffered} buffered${pending}${superseded}`,
         10_000,
       );
     } catch (error) {

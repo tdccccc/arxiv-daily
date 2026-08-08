@@ -395,10 +395,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
             const pending = summary.pendingAuthorizationBuffered > 0
               ? `, ${summary.pendingAuthorizationBuffered} awaiting model authorization`
               : "";
+            const superseded = summary.superseded > 0
+              ? `, ${summary.superseded} un-reviewed suggestion(s) superseded by new evidence`
+              : "";
             notice(
               `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
               + `stored (${summary.attachments} attachment(s)), `
-              + `${summary.buffered} paper(s) buffered${pending}`,
+              + `${summary.buffered} paper(s) buffered${pending}${superseded}`,
               10_000,
             );
           } catch (error) {
