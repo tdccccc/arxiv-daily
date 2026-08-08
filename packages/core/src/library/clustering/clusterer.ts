@@ -102,15 +102,19 @@ export function clusterPaperVectors(
     .sort((left, right) => (left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0));
   if (papers.length === 0) return { clusters: [], outliers: [] };
 
-  if (centerCorpus) centerChunks(papers);
+  // Corpus-level centering is the one transform host incremental passes also
+  // need; it is exported as the non-mutating `centerCorpusChunks` so both
+  // paths share a single implementation and cannot drift.
+  let centered: ClusteringInputPaper[] = papers;
+  if (centerCorpus) centered = centerCorpusChunks(papers);
 
   // Pairwise strongest chunk evidence (symmetric), as mergeable edges.
-  const n = papers.length;
+  const n = centered.length;
   const similarity = new Float64Array(n * n);
   for (let i = 0; i < n; i += 1) {
     similarity[i * n + i] = 1;
     for (let j = i + 1; j < n; j += 1) {
-      const score = maxChunkCosine(papers[i]!.chunks, papers[j]!.chunks);
+      const score = maxChunkCosine(centered[i]!.chunks, centered[j]!.chunks);
       similarity[i * n + j] = score;
       similarity[j * n + i] = score;
     }
@@ -215,7 +219,17 @@ function normalizedChunk(chunk: Float32Array): Float32Array {
   return out;
 }
 
-function centerChunks(papers: Array<{ paperKey: string; chunks: Float32Array[] }>): void {
+/**
+ * Corpus-level centering of chunk vectors (public, non-mutating): subtract
+ * the corpus chunk mean (Float64 accumulation, input order preserved), then
+ * renormalize every chunk. Host incremental passes use this instead of
+ * mirroring the transform, so clustering and placement cannot drift apart.
+ * Returns new paper objects with new chunk arrays; the input is never
+ * mutated.
+ */
+export function centerCorpusChunks(
+  papers: readonly ClusteringInputPaper[],
+): ClusteringInputPaper[] {
   let count = 0;
   const dimension = papers[0]?.chunks[0]?.length ?? 0;
   const mean = new Float64Array(dimension);
@@ -225,17 +239,18 @@ function centerChunks(papers: Array<{ paperKey: string; chunks: Float32Array[] }
       count += 1;
     }
   }
-  if (count === 0) return;
+  if (count === 0) return [...papers];
   for (let index = 0; index < dimension; index += 1) mean[index]! /= count;
-  for (const paper of papers) {
-    paper.chunks = paper.chunks.map((chunk) => {
+  return papers.map((paper) => ({
+    paperKey: paper.paperKey,
+    chunks: paper.chunks.map((chunk) => {
       const out = new Float32Array(chunk.length);
       for (let index = 0; index < chunk.length; index += 1) {
         out[index] = (chunk[index] ?? 0) - mean[index]!;
       }
       return normalizedChunk(out);
-    });
-  }
+    }),
+  }));
 }
 
 function sumOfSquares(values: Float32Array): number {

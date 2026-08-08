@@ -76,6 +76,7 @@ import {
   createPersonalLibraryGenerationContractFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
+  centerCorpusChunks,
   loadClusteringInput,
   lockPersonalLibraryConfirmedDirection,
   unlockPersonalLibraryConfirmedDirection,
@@ -1958,18 +1959,17 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
-   * Load the ready papers and apply the corpus-centered chunk transform in
-   * place — the same transform the placement pass applies internally. The core
-   * incremental API does not export the transform, so the plugin mirrors it
-   * here for the (low-frequency) recluster pass.
+   * Load the ready papers and apply the corpus-centered chunk transform —
+   * the same transform the placement pass applies internally. Core exports
+   * the transform (`centerCorpusChunks`) so the recluster pass cannot drift
+   * from the clustering implementation.
    */
   private async loadCenteredClusteringInput(
     knowledgeBase: FullTextKnowledgeBaseFileStore,
     signal?: AbortSignal,
   ): Promise<ClusteringInputPaper[]> {
     const papers = await loadClusteringInput(knowledgeBase, signal);
-    centerChunksInPlace(papers);
-    return papers;
+    return centerCorpusChunks(papers);
   }
 
   /**
@@ -2734,46 +2734,6 @@ function mergeRepresentativeEvidence(
 
 function byOpaqueId(left: { id: string }, right: { id: string }): number {
   return codeUnitCompare(left.id, right.id);
-}
-
-/**
- * Corpus-centered chunk transform, mirrored from the core clustering/
- * placement implementation (which does not export it): subtract the corpus
- * chunk mean, then renormalize every chunk. Mutates the papers in place.
- */
-function centerChunksInPlace(papers: readonly ClusteringInputPaper[]): void {
-  let count = 0;
-  const dimension = papers[0]?.chunks[0]?.length ?? 0;
-  const mean = new Float64Array(dimension);
-  for (const paper of papers) {
-    for (const chunk of paper.chunks) {
-      for (let index = 0; index < dimension; index += 1) mean[index]! += chunk[index] ?? 0;
-      count += 1;
-    }
-  }
-  if (count === 0) return;
-  for (let index = 0; index < dimension; index += 1) mean[index]! /= count;
-  for (const paper of papers) {
-    paper.chunks = paper.chunks.map((chunk) => {
-      const out = new Float32Array(chunk.length);
-      for (let index = 0; index < chunk.length; index += 1) {
-        out[index] = (chunk[index] ?? 0) - mean[index]!;
-      }
-      return normalizedChunkInPlace(out);
-    });
-  }
-}
-
-function normalizedChunkInPlace(chunk: Float32Array): Float32Array {
-  let norm = 0;
-  for (const value of chunk) norm += value * value;
-  norm = Math.sqrt(norm);
-  if (norm === 0) return chunk.slice();
-  const out = new Float32Array(chunk.length);
-  for (let index = 0; index < chunk.length; index += 1) {
-    out[index] = (chunk[index] ?? 0) / norm;
-  }
-  return out;
 }
 
 function codeUnitCompare(left: string, right: string): number {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clusterPaperVectors, type ClusteringInputPaper } from "../src/library/clustering/clusterer";
+import {
+  centerCorpusChunks,
+  clusterPaperVectors,
+  type ClusteringInputPaper,
+} from "../src/library/clustering/clusterer";
 import { buildClusteringInput } from "../src/library/clustering/paper-vector";
 import type {
   FullTextKnowledgeBaseManifest,
@@ -38,6 +42,16 @@ function oneHot(dimension: number): Float32Array {
   return out;
 }
 
+/** Unit-norm noise (KB chunk vectors are stored unit-normalized). */
+function unitVector(seed: number): Float32Array {
+  const raw = randomVector(seed);
+  let sum = 0;
+  for (const value of raw) sum += value * value;
+  const norm = Math.sqrt(sum);
+  for (let index = 0; index < raw.length; index += 1) raw[index]! /= norm;
+  return raw;
+}
+
 const THEME_A = oneHot(0);
 const THEME_B = oneHot(1);
 const THEME_C = oneHot(2);
@@ -45,6 +59,85 @@ const THEME_C = oneHot(2);
 function paper(paperKey: string, ...chunks: Float32Array[]): ClusteringInputPaper {
   return { paperKey, chunks };
 }
+
+describe("centerCorpusChunks", () => {
+  it("does not mutate its input and preserves paper order", () => {
+    const input = [
+      paper("a", randomVector(1), randomVector(2)),
+      paper("b", randomVector(3), randomVector(4), randomVector(5)),
+    ];
+    const snapshot = input.map((p) => ({
+      paperKey: p.paperKey,
+      chunks: p.chunks.map((c) => c.slice()),
+    }));
+
+    const output = centerCorpusChunks(input);
+
+    expect(output).not.toBe(input);
+    expect(output[0]).not.toBe(input[0]);
+    expect(output[0]?.chunks[0]).not.toBe(input[0]?.chunks[0]);
+    expect(input[0]?.chunks[0]).toEqual(snapshot[0]?.chunks[0]);
+    expect(input[1]?.chunks).toEqual(snapshot[1]?.chunks);
+    expect(output.map((p) => p.paperKey)).toEqual(["a", "b"]);
+  });
+
+  it("produces unit-norm chunks whose corpus mean is ~0", () => {
+    const input = [
+      paper("a", randomVector(1), randomVector(2)),
+      paper("b", randomVector(3)),
+      paper("c", randomVector(4), randomVector(5), randomVector(6)),
+    ];
+
+    const output = centerCorpusChunks(input);
+
+    const mean = new Float64Array(DIMENSION);
+    let count = 0;
+    for (const p of output) {
+      for (const chunk of p.chunks) {
+        let sum = 0;
+        for (let index = 0; index < DIMENSION; index += 1) {
+          sum += chunk[index]! * chunk[index]!;
+          mean[index]! += chunk[index]!;
+        }
+        expect(Math.sqrt(sum)).toBeCloseTo(1, 6);
+        count += 1;
+      }
+    }
+    for (let index = 0; index < DIMENSION; index += 1) {
+      // Renormalization rescales each chunk by its own norm, so the corpus
+      // mean after centering is only approximately zero — chunks near the
+      // mean get amplified by normalization. Bound the drift loosely.
+      expect(Math.abs(mean[index]! / count)).toBeLessThan(0.02);
+    }
+  });
+
+  it("handles an empty corpus by returning the papers untouched", () => {
+    const input = [paper("a"), paper("b", new Float32Array(0))];
+    expect(centerCorpusChunks(input).map((p) => p.paperKey)).toEqual(["a", "b"]);
+  });
+
+  it("is the exact transform the clustering pipeline applies", () => {
+    // The exported transform is the single implementation used inside
+    // clusterPaperVectors; centering then clustering without a second
+    // centering must reproduce the pipeline's own centered clustering.
+    // Inputs are unit-norm, matching stored KB vectors.
+    const input = [
+      paper("a", THEME_A, unitVector(11), unitVector(12)),
+      paper("b", THEME_A, unitVector(13), unitVector(14)),
+      paper("c", THEME_B, unitVector(15), unitVector(16)),
+      paper("d", THEME_C, unitVector(17)),
+    ];
+    const direct = clusterPaperVectors(input, { centerCorpus: true, minClusterSize: 2 });
+    const viaExport = clusterPaperVectors(centerCorpusChunks(input), {
+      centerCorpus: false,
+      minClusterSize: 2,
+    });
+    expect(viaExport.clusters.map((c) => c.paperKeys)).toEqual(
+      direct.clusters.map((c) => c.paperKeys),
+    );
+    expect(viaExport.outliers).toEqual(direct.outliers);
+  });
+});
 
 describe("clusterPaperVectors (SNN)", () => {
   it("clusters same-theme papers and pools outliers", () => {
