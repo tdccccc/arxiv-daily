@@ -22,6 +22,8 @@ T1 先扩展现有 `SimilarPapersModal` 为双页（库内相似页异步调用 
 
 - [x] T1 双页模态框：`SimilarPapersModal` 扩展（库内相似页：异步加载标题+摘要查询的 KB 结果，相似度+命中段落+打开动作；日报相似页：现有词法结果）；行内按钮接线；无 KB 只显示日报页；插件测试
   - 实现：`library?` 可选选项（query + load）；有则 Library/Daily 双页（Library 默认选中，加载/错误/空三态）；无则原样渲染（既有测试不变）。Dashboard `buildLibrarySimilarOption` 以标题+摘要（空回退标题）经 `searchPersonalLibraryFullText` 异步加载；无可查询文本则不传 library。+4 模态框测试；plugin 424/424、tsc/lint/boundaries 全绿；technical-report Dashboard 段已更新（updated）。
+- [x] T2 单框双结果：Dashboard 搜索框查询 → 现有行过滤（不变）+ 异步 KB 相似区块（复用 T1 呈现）；无 KB/失败静默降级；插件测试
+  - 实现：`refreshLibrarySearch`（防抖回调 + 主渲染挂点，≥2 字符才触发，staleness token 丢弃过期响应）；纯渲染抽到 `library-search-block.ts`（loading/matches/empty/error 四态）。+5 区块测试；plugin 429/429、lint 0、boundaries OK；technical-report Dashboard 段更新（updated）。
 - [ ] T2 单框双结果：Dashboard 搜索框查询 → 现有行过滤（不变）+ 异步 KB 相似区块（复用 T1 呈现）；无 KB/失败静默降级；插件测试
 - [ ] T3 自动触发 + 授权拆分：`runIncrementalDirectionUpdate` 授权检查下移到 LLM diff 阶段（placement 无条件跑）；索引完成后 `indexed > 0` 自动触发（复用同一方法，通知 summary）；"待授权"状态在审核 UI 呈现；插件测试
 - [ ] T4 覆盖未审阅提示：整体替换建议文档前检测 pending 建议 → 覆盖时 Notice/状态栏提示；测试
