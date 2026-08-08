@@ -54,3 +54,10 @@
 - change: 修复 chunk（`alignElectronReleaseProbe` + `describeRuntimeProbe` + 诊断报告 `runtime probe` 字段；测试 +5，plugin 420/420、lint 0 error、boundaries OK）；technical-report 已 update（嵌入宿主段 + 命令列表段）。phase 04 Verification 判定表按实测修订（"5/5 top-1" → "自命中 ≥4/5 + 近并列翻转归因"）。
 - disposition: 保留全部实现与修复；repro 资产（tmp/repro-*.mjs、tmp/pp/electron 33、/tmp/electron-repro*）为 scratch 不入库，journal 引用可复现。hf-mirror 无 CORS 头（浏览器直接下载会失败；插件默认 huggingface.co 有 CORS 不受影响）——若未来加镜像设置需处理 CORS/代理。
 - next: P4 收尾——goal.md P4 done + status done；technical-report handoff 完成；手册更新完成。后续可选：检索入口形态/增量触发节奏 open questions；镜像设置接线（含 CORS 注意点）。
+
+## 2026-08-07 — note（开放问题定案：检索入口 + 增量触发节奏，grill-with-docs）
+
+- evidence: 两开放问题经 grill-with-docs 逐题定案（领域语言对照：knowledge evolution / research companion / 机器建议永不覆盖用户决定）。代码事实：Dashboard 行内已有词法 "Find similar papers" 按钮（PaperSearchIndex.similar，SimilarPapersModal）；全文检索仅命令面板（FullTextQueryModal，结果仅 Notice）；catalog 记录 `abstract` 为必填字段（识别失败可为空串）；增量链路现状整跑需模型处理许可（personal-library-direction-generation），placement 为本地嵌入无 LLM。
+- change: **检索入口（ADR 0006）**：①单框双结果——Dashboard 搜索框保持单一输入，查询同时过滤日报行（词法，现状）+ 异步查文献库 KB（相似度+命中段落+打开动作区块）；无 KB/未授权只出前者，无模式切换；②行内按钮升级为双页模态框（库内相似全文为主 + 日报相似词法为次，无 KB 只显示词法页）；③从论文查询 = 标题+摘要（空摘要回退纯标题；PDF 永不作查询源，仅在检索目标侧）。**增量触发（ADR 0007）**：①索引完成且 indexed>0 自动触发；②授权门拆分——placement 免许可始终跑，LLM diff 需许可（无则跳过并记"待授权"进审核 UI）；③建议永不自动应用；④建议文档保持整体替换 + 覆盖未审阅时提示（状态栏/Notice）。CONTEXT.md 新增术语：Library similarity、Direction suggestion。两 ADR 已落盘（docs/adr/0006、0007）。
+- disposition: 全部保留。实现尚未开始——定案作为后续 helm phase（P5）的输入，phase 计划需待执行指令。
+- next: 待用户决定是否进入 P5 实现（检索入口 + 自动触发）。其余未决项：实现存疑项复核（P3 遗留 4 项）、模型可配置化、CLI host。
