@@ -68,3 +68,10 @@
 - change: goal.md status → active + P5 索引行；phases/05-implementation-doubts-review.md（T1 4→T2 3→T3 2 + 收尾）。
 - disposition: 无代码改动。
 - next: P5-T1 存疑项 4：核对 plugin 镜像与 core centering 数值同构性。
+
+## 2026-08-07 — note（P5 完成：实现存疑项复核 3/3 定论）
+
+- evidence: 存疑项 4（centering 镜像）：plugin 镜像与 core 私有变换逐行同构；core 的"先归一化"在 KB 单位向量上近似恒等。修复＝core 导出非可变 `centerCorpusChunks`（clusterer.ts），内部流水线接入，plugin `loadCenteredClusteringInput` 切换，镜像删除；+4 core 测试（非可变/单位范数/空语料/流水线等价）；scratch 逐位等价（真实 KB 5 篇 187,776 floats max diff=0）；core 1532/1532、plugin 420/420、lint 0、boundaries OK。存疑项 3（discoveryCues 截断）：截断在 plugin `attachNewSuggestionToProposal`（core draft 返回空 cues）；decoder 要求 ≥1 且严格升序唯一。修复＝代表论文标题去重+排序作 cues（catalog 可得），空回退 reason；core `derivedCues` 保持（merge/split 无标题源）。存疑项 2（operation kind 复用）：**保持复用**——同一授权门域 + 共享撤销取消范围（main.ts:531/536/558）+ 同 kind/key 互斥（全量与增量都写同一 profile store，并发互斥必需）；新增 kind 有害（破坏互斥、扩大 union、撤销清单双处维护）。ADR 0007 的授权门拆分在 plugin 门检查层实现（不经 kind）：P6 把 run-entry 授权检查下移到 LLM diff 阶段，placement 免许可照跑 + "待授权"状态。
+- change: T1/T2 修复已提交（e05dd96 refactor centering 去重、ba15254 cues 标题派生）；T3 无代码改动（结论记录）。technical-report handoff：三次均 no-impact（报告无相关语句需要更新；kind 复用语义 line 290 已记载）。
+- disposition: 保留全部修复；tmp/t1-centering-equivalence.mjs 与 clusterer-bundle.mjs 为 scratch 不入库。
+- next: goal.md P5 done + status done（本条目同批提交）。P6（检索入口 ADR 0006 + 自动触发 ADR 0007 实现）待用户指令；其余未决项：模型可配置化、CLI host。

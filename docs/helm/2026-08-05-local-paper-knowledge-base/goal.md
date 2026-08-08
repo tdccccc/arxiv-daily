@@ -1,6 +1,6 @@
 # 本地论文知识库（local paper knowledge base）
 
-status: active
+status: done
 updated: 2026-08-07
 owner: current-session
 
@@ -42,7 +42,7 @@ owner: current-session
 2. P2 — 聚类方向生成：聚类（HDBSCAN 或等价）发现候选簇 + 离群缓冲池；LLM 为每簇生成方向草案；方向存储升级为版本化实体；审核界面 —— status: done
 3. P3 — 方向增量更新：缓冲池触发局部重聚类、LLM diff 建议（归入/新建/分裂/合并）、审核队列、方向锁定与漂移检测、低频全量重建兜底 —— status: done
 4. P4 — Obsidian 运行时验证与修复：真实 Obsidian 中验证 `window.pdfjsLib` 可用性与渲染进程 wasm/模型加载表现（P1 遗留未决项），发现问题则修复，结论记录在案 —— status: done
-5. P5 — 实现存疑项复核（P3 T5b 遗留）：centering 镜像去重、new 候选 discoveryCues 截断、增量更新 operation kind 复用（存疑项 1 已由 ADR 0007 关闭）—— 每项代码核对定论，可修复项修复并验收 —— status: active
+5. P5 — 实现存疑项复核（P3 T5b 遗留）：centering 镜像去重、new 候选 discoveryCues 截断、增量更新 operation kind 复用（存疑项 1 已由 ADR 0007 关闭）—— 每项代码核对定论，可修复项修复并验收 —— status: done
 
 ## Open questions
 
