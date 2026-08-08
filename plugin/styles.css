@@ -1382,7 +1382,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-similar-modal__source,
 .arxiv-daily-similar-modal__meta,
 .arxiv-daily-similar-modal__context,
-.arxiv-daily-similar-modal__reason,
 .arxiv-daily-similar-modal__empty {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
@@ -1409,14 +1408,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 .arxiv-daily-similar-modal__meta,
-.arxiv-daily-similar-modal__context,
-.arxiv-daily-similar-modal__reason {
+.arxiv-daily-similar-modal__context {
   margin-top: 4px;
   overflow-wrap: anywhere;
-}
-
-.arxiv-daily-similar-modal__reason {
-  color: var(--text-accent);
 }
 
 .arxiv-daily-similar-modal__actions {

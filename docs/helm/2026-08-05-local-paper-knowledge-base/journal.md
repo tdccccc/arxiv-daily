@@ -89,3 +89,9 @@
 - change: 四个功能 chunk 已提交（46028b1 双页模态框、df1774f 单框双结果、a335efc 自动触发+门拆分、bbfb191 覆盖提示）；本条目为 P6 收尾（goal.md P6 done + status done 同批提交）。
 - disposition: 保留全部。测试环境备注：hf-mirror 无 CORS（浏览器直接下载失败），插件默认 huggingface.co 不受影响——镜像设置若做需处理。
 - next: P6 完成。待办清单剩余：模型可配置化（SPECTER，含 768 维存储翻倍）、CLI host 提取/嵌入。构建产物待用户安装验证（桌面 vault 需重启 Obsidian 生效）。
+
+## 2026-08-07 — note（P6 后调整：相似论文模态框移除 match-reason 噪音）
+
+- evidence: 用户实测反馈——"Daily similar" 页每条都显示 "Matched title/abstract…" 理由行，视觉杂乱；要求直接显示结果。
+- change: renderDailyPanel 移除 reason 行（含 "Shared indexed terms" 兜底）；`PaperSearchResult.reasons` 数据保留（仅展示层不渲染）；styles.css 清理 __reason 规则；测试改为断言"不显示 Matched/Shared indexed terms"。
+- disposition: 保留。本调整在 P6 已关闭后发生，作为独立小提交记录。

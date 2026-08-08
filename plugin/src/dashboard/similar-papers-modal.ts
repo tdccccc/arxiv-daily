@@ -193,11 +193,6 @@ function renderDailyPanel(
         resourceSummary(result.entry),
       ].join(" · "),
     });
-    const reason = result.reasons.slice(0, 2).map((value) => value.text).join(" · ");
-    item.createDiv({
-      cls: "arxiv-daily-similar-modal__reason",
-      text: reason || "Shared indexed terms",
-    });
     const actions = item.createDiv({
       cls: "arxiv-daily-similar-modal__actions",
       attr: { "aria-label": `Actions for ${result.entry.arxivId}` },

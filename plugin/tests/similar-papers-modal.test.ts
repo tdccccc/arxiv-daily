@@ -58,7 +58,7 @@ function paper(id: string): PaperIndexEntry {
 }
 
 describe("Similar Papers modal", () => {
-  it("renders local reasons without percentage scores and exposes accessible callbacks", () => {
+  it("renders results without match-reason noise and exposes accessible callbacks", () => {
     const source = paper("2607.00001");
     const candidate = paper("2607.00002");
     const result: PaperSearchResult = {
@@ -76,7 +76,10 @@ describe("Similar Papers modal", () => {
 
     renderSimilarPapersModal(content, { source, results: [result], ...callbacks });
 
-    expect(content.textContent).toContain("Matched title: retrieval");
+    // The reason text is carried in the data but deliberately not rendered:
+    // users see the result directly, without per-item match-reason noise.
+    expect(content.textContent).not.toContain("Matched");
+    expect(content.textContent).not.toContain("Shared indexed terms");
     expect(content.textContent).not.toContain("%");
     const buttons = [...content.querySelectorAll<HTMLButtonElement>("button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
