@@ -205,7 +205,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 | --- | --- |
 | `arxiv-daily/daily/YYYY-MM-DD.md` | 日报（权威提交物） |
 | `arxiv-daily/papers/<externalId>.md` | 详报（路径 stem 为 externalId，非 paperKey） |
-| `arxiv-daily/.index/papers.json` | 论文索引（schema v4；key 为 `paperKey` 如 `arxiv:…`） |
+| `arxiv-daily/.index/papers.json` | 论文索引（schema v4；key 为 `paperKey` 如 `arxiv:…`；同目录 `.bak` 为恢复副本） |
 | `arxiv-daily/.index/run-state.json` | 按日运行状态（原子写 + `.bak`） |
 | `arxiv-daily/.index/run-history.jsonl` | 运行历史（可轮转） |
 | `arxiv-daily/.index/delivery-state.json` | 邮件投递记录 |
@@ -261,9 +261,19 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 `OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`；`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
 
+### Paper Index 持久化与 History Sync
+
+`PaperIndexStore`（`packages/core/src/services/paper-index.ts`）按 primary `papers.json` → `.bak` → legacy `index/papers.json` 的顺序选择首个有效文档；任一路径的真实读取错误直接失败，候选文件存在但均无法解析时也不会构造空索引。读取兼容 schema 1–4，内存归一为 schema 4，后续保存写 schema 4。
+
+索引写入先生成 `.tmp`，再把已验证的旧 primary 发布为 `.bak`，最后以 `.tmp → papers.json` rename 作为新内容的提交点。primary 缺失或损坏时不会用它覆盖有效 backup；提升失败时只尝试恢复提交前已验证的 primary、backup 或 legacy 内容。`PaperIndexStore` 的领域 mutation 在模块级、按 primary 路径共享的 Promise 队列中执行完整的读取、修改、校验和保存事务；该串行范围限于同一 JavaScript realm，不提供跨进程锁或 `fsync` 级掉电保证。
+
+Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫描日报和论文笔记，再在同一索引 mutation 中重读当前状态。日报证据可补建非详情索引投影；论文详情必须由无歧义、身份一致的受管笔记证明。重复或冲突的顶层 `arxiv_id` / `arxiv` 标量会保护涉及的全部论文身份，嵌套字段、数组和正文不参与身份判断。破坏性清理还会比较扫描基线与 mutation 开始时的当前投影；扫描期间被其他操作删除或修改的详情不会被陈旧候选复活或清理。
+
+插件 diagnostics 复用 `PaperIndexStore.inspect()` 的文档选择结果。索引解析、读取及后续笔记探测失败在可复制报告、日志、DiagnosticsModal 和 Hub 中只暴露稳定分类（如 `paper_index_invalid`、`paper_index_unavailable`），不传播底层异常 message 或 cause。
+
 ### 原子写与状态一致性
 
-`StateStore` / 索引 / checkpoint / delivery-state 普遍使用临时文件 + rename 或 `writeTextAtomic`；同路径 mutation 队列避免并发写撕裂。日报 Markdown 存在即视为该日已提交的权威信号。
+`StateStore` / Paper Index / checkpoint / delivery-state 使用各自的临时文件与 rename 或 `writeTextAtomic` 流程；相关同路径 mutation 队列在进程内串行化读改写。日报 Markdown 存在即视为该日已提交的权威信号。
 
 ## External Integrations and Executable Configuration
 

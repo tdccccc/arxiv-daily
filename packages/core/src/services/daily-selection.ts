@@ -49,14 +49,14 @@ export function parseDailySelections(markdown: string): DailyPaperSelection[] {
   return Array.from(selections.values());
 }
 
-export async function applyDailySelections(
+export function applyDailySelections(
   store: PaperIndexStore,
   selections: DailyPaperSelection[],
 ): Promise<DailySelectionSyncResult> {
-  const index = await store.load();
-  const result = applySelectionsToIndex(index, selections);
-  if (result.changed > 0) await store.save(index);
-  return result;
+  return store.mutate((index) => {
+    const result = applySelectionsToIndex(index, selections);
+    return { result, changed: result.changed > 0 };
+  });
 }
 
 export function applySelectionsToIndex(
