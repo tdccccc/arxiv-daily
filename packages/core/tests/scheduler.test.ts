@@ -414,6 +414,29 @@ describe("SchedulerService", () => {
     ]);
   });
 
+  it("does not invoke the completion callback for transient failures", async () => {
+    const store = makeStore();
+    await store.load();
+    const onDailyCompleted = vi.fn();
+    const result = {
+      kind: "failed_transient" as const,
+      reason: "paper filter response validation failed: response is not strict JSON",
+    };
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => result),
+      logger: new Logger("error"),
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      onDailyCompleted,
+    });
+
+    expect(await svc.runForDateNow("2026-06-24")).toEqual(result);
+    expect(store.get("2026-06-24").status).toBe("failed_transient");
+    expect(onDailyCompleted).not.toHaveBeenCalled();
+  });
+
   it("writes failed run history with errorMessage for thrown runs", async () => {
     const store = makeStore();
     await store.load();

@@ -132,8 +132,8 @@ services/email-relay   → 独立（不在 npm workspaces）
 
 1. **已有日报**：若 `MarkdownWriter.dailyExists(date)`，清理已提交 checkpoint，并对 Paper Index 做修复后返回 `completed`（修复路径可不带 digest）。  
 2. **发现**：默认 `ArxivSourceAdapter.listForDate`（arXiv `/recent` + 摘要 enrichment）；空列表 → `pending`（不写空文件）。  
-3. **LLM 过滤**：`filterPapers`；可写 `filter-checkpoints`；永久/瞬态 LLM 错误映射为对应失败 kind。  
-4. **过滤结果为空**：直接 `completed`（`papersWritten: 0`，空 digest），**不写** Paper Index。  
+3. **LLM 过滤**：`filterPapers`；可写 `filter-checkpoints`。模型响应必须是严格的 `{ "papers": [...] }` JSON，记录仅接受当前请求中的 ID、唯一 ID，以及配置 topic tag 或 `skip`；响应 JSON/契约校验失败 → **`failed_transient`**，不保存 checkpoint，也不进入 Paper Index 与后续生成。永久/瞬态 LLM 调用错误映射为对应失败 kind。
+4. **过滤结果为空**：严格验证后的空数组或全部合法 `skip` 直接 `completed`（`papersWritten: 0`，空 digest），**不写** Paper Index。
 5. **索引入库**：`PaperIndexStore` upsert；失败 → **`failed_permanent`**。`ignored` 不进入后续可见集合；若全部 ignored → `completed`（0 篇，空 digest）。  
 6. **正文获取**：并发度 6；经 `SourceAdapter.fetchContent`；失败降级为错误占位文本，不中断整日。  
 7. **详报选择**：`selectDetailPapers`（阈值与 soft limit 来自 `detailSelection`）；磁盘上已存在且 `classifyPaperNote` 为 `verified_detail` 的详报不占 soft quota。  
@@ -343,7 +343,7 @@ core / plugin / CLI 工作区有大量 Vitest。email-relay 仅有本地 crypto/
 | 结果 | 含义与后续 |
 | --- | --- |
 | `pending` | 如 arXiv 当日无文，或取消后调度落盘；不写空日报 / 可再跑 |
-| `failed_transient` | 可重试（网络、部分 LLM、日报后索引摘要回写等）；受 tick 退避与最多 10 次 attempts 升级约束 |
+| `failed_transient` | 可重试（网络、过滤响应 JSON/契约校验、部分 LLM、日报后索引摘要回写等）；受 tick 退避与最多 10 次 attempts 升级约束 |
 | `failed_permanent` | 配置/永久 LLM、过滤后索引入库失败、瞬态次数耗尽、陈旧 `running` 恢复等 |
 | `cancelled` | 流水线结果 kind；调度写 `pending` |
 | `completed` | 含 0 篇可见论文；已有日报修复路径 |
