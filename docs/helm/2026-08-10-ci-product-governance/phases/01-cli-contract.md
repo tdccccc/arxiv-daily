@@ -26,11 +26,11 @@ VS Code companion 保留的流水线命令均使用当前 CLI 语法，CLI 与�
 
 ## Tasks
 
-- [ ] 以 Red 测试和共享 fixture 锁定允许的 companion CLI argv。
-- [ ] 将 today/ID 命令迁移到当前 CLI 并移除失效命令、flags、secret/config UI。
-- [ ] 更新 manifest、README、package checks 和 smoke tests，保留非流水线功能。
-- [ ] 运行 CLI 与 companion 定向和仓库兼容回归。
-- [ ] 完成独立技术报告交接、提交 P1 并切换到 P2。
+- [x] 以 Red 测试和共享 fixture 锁定允许的 companion CLI argv。
+- [x] 将 today/ID 命令迁移到当前 CLI 并移除失效命令、flags、secret/config UI。
+- [x] 更新 manifest、README、package checks 和 smoke tests，保留非流水线功能。
+- [x] 运行 CLI 与 companion 定向和仓库兼容回归。
+- [x] 完成独立技术报告交接并提交 P1。
 
 ## Verification
 
