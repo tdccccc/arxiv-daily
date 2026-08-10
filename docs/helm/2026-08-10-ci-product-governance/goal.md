@@ -32,4 +32,4 @@ owner: zcode-main-session
 
 1. P1 — Companion 命令与当前 CLI 契约一致 — status: done
 2. P2 — 默认测试资源问题解决且根 PR 门禁覆盖 release-equivalent 检查 — status: done
-3. P3 — Relay、companion 与全部产品单元进入独立 CI 和显式治理 — status: pending
+3. P3 — Relay、companion 与全部产品单元进入独立 CI 和显式治理 — status: active
