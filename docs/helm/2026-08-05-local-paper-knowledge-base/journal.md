@@ -114,3 +114,10 @@
 - change: ①core placement `loadClusteringInput` 每篇让出事件循环；②嵌入批 32→8（单块更短、让出更密）。embedding 吞吐本机 ~9s/32 批（CPU wasm 固有，134 篇全程 ~25min，非卡死只是慢）。
 - disposition: 保留。测量资产 tmp/embed-block-*、tmp/extract-block-* 为 scratch。
 - next: 请用户以新构建干净复测（重启 Obsidian → 重跑索引，已完成的论文复用）。
+
+## 2026-08-10 — note（设计定案：远程嵌入可选开关，grill-with-docs 六题）
+
+- evidence: 用户提出"是否能用便宜模型做 indexing"→ 澄清：嵌入模型 ≠ chat LLM（DeepSeek 无 embeddings API），提速路径是**远程嵌入 API**；实测本地嵌入 ~0.3-1s/chunk、134 篇小时级。grill 六题定案：①披露强度=走现有授权流（全文级授权，modal 披露"全文分块发送至 <endpoint>"）；②默认与入口=首次引导选择（建立文献库时选本地/远程，切换需重建 KB）；③出机内容=全部 chunk（提速前提）；④失败回退=逐篇 failed + 下次重试（整库单一模型，不混向量空间）；⑤配置=独立嵌入设置区 + 授权记录扩展多端点（任一端点变更需重新授权）；⑥范围=只做远程嵌入，本地多 worker 后续单独评估。
+- change: ADR 0008（docs/adr/0008-opt-in-remote-embedding.md）；CONTEXT.md：Library processing consent 更新为多端点/全深度措辞 + 新增 Embedding mode 术语。goal.md Non-goal "远程 embedding API（远程作为可选开关留待未来）"被实现为预留开关——默认全本地仍成立。
+- disposition: 保留。实现未开始（P7 待用户指令）。
+- next: P7 实现（远程嵌入：设置区 + 授权扩展 + RemoteEmbeddingModel + 引导选择 + 切换重建提示）。
