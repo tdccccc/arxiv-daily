@@ -1,5 +1,6 @@
 import {
   App,
+  Menu,
   Modal,
   Notice,
   PluginSettingTab,
@@ -336,33 +337,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       authorized: `Connected: ${status.kind === "authorized" ? status.rootLabel : ""}. Metadata and abstracts authorized.`,
     } as const;
     setting.setDesc(descriptions[status.kind]);
+    setting.controlEl.addClass("arxiv-daily-settings__library-controls");
     setting.addButton((button) =>
       button
         .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
         .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
     );
-    if (status.kind !== "disconnected") {
-      setting.addButton((button) =>
-        button
-          .setButtonText("Review directions")
-          .onClick(() => this.plugin.openPersonalLibraryDirectionReview()),
-      );
-      setting.addButton((button) =>
-        button
-          .setButtonText("Preview")
-          .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
-      );
-      setting.addButton((button) =>
-        button
-          .setButtonText("Scan library")
-          .onClick(() => this.runAction("scan personal library", () => this.scanPersonalLibrary())),
-      );
-      setting.addButton((button) =>
-        button
-          .setButtonText("Reload catalog")
-          .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
-      );
-    }
     if (status.kind === "authorization-required" || status.kind === "authorization-invalidated") {
       setting.addButton((button) =>
         button
@@ -379,6 +359,44 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
       );
     }
+    if (status.kind !== "disconnected") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Manage…")
+          .onClick(() => {
+            const rect = button.buttonEl.getBoundingClientRect();
+            this.openLibraryManageMenu({ x: rect.left, y: rect.bottom });
+          }),
+      );
+    }
+  }
+
+  /** Secondary library actions behind one menu so the row stays compact. */
+  private openLibraryManageMenu(position: { x: number; y: number }): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("Review directions")
+        .onClick(() => this.runAction("open direction review", async () => {
+          this.plugin.openPersonalLibraryDirectionReview();
+        })),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Preview library files")
+        .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Scan library")
+        .onClick(() => this.runAction("scan personal library", () => this.scanPersonalLibrary())),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Reload catalog")
+        .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
+    );
+    menu.showAtPosition(position);
   }
 
   public async chooseLibraryRoot(): Promise<void> {

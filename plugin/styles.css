@@ -1816,3 +1816,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
     flex-direction: column;
   }
 }
+
+.arxiv-daily-settings__library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

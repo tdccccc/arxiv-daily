@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { App } from "obsidian";
+import { MenuItem, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { ArxivDailySettingTab } from "../src/settings/tab";
@@ -199,6 +199,7 @@ describe("personal library settings row", () => {
       click?: () => void;
     }> = [];
     const setting = {
+      controlEl: { addClass: vi.fn() },
       setDesc: vi.fn().mockReturnThis(),
       addButton(callback: (button: any) => void) {
         const state = { text: "", cta: false, warning: false } as {
@@ -208,6 +209,7 @@ describe("personal library settings row", () => {
           click?: () => void;
         };
         const button = {
+          buttonEl: { getBoundingClientRect: vi.fn(() => ({ left: 0, bottom: 0 })) },
           setButtonText(text: string) { state.text = text; return button; },
           setCta() { state.cta = true; return button; },
           setWarning() { state.warning = true; return button; },
@@ -228,7 +230,7 @@ describe("personal library settings row", () => {
     expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
   });
 
-  it("shows authorization after selection and preview/revoke after approval", () => {
+  it("shows authorization after selection and a compact manage menu after approval", () => {
     const { tab, plugin } = makeTab();
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
@@ -238,20 +240,40 @@ describe("personal library settings row", () => {
     const pending = renderLibraryButtons(tab).buttons;
     expect(pending.map((button) => button.text)).toEqual([
       "Change folder",
-      "Review directions",
-      "Preview",
-      "Scan library",
-      "Reload catalog",
       "Review & authorize",
+      "Manage…",
     ]);
+    expect(pending[1]?.cta).toBe(true);
     pending[1]?.click?.();
-    expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce();
-    expect(pending[5]?.cta).toBe(true);
-    pending[5]?.click?.();
     expect(runAction).toHaveBeenCalledWith(
       "authorize personal library",
       expect.any(Function),
     );
+
+    // The secondary actions live in the Manage… menu.
+    const menuTitles: string[] = [];
+    const menuClicks: Array<() => void> = [];
+    const setTitle = vi.spyOn(MenuItem.prototype, "setTitle")
+      .mockImplementation(function (this: unknown, title: string) {
+        menuTitles.push(title);
+        return this;
+      });
+    const onClick = vi.spyOn(MenuItem.prototype, "onClick")
+      .mockImplementation(function (this: unknown, cb: () => void) {
+        menuClicks.push(cb);
+        return this;
+      });
+    pending[2]?.click?.();
+    expect(menuTitles).toEqual([
+      "Review directions",
+      "Preview library files",
+      "Scan library",
+      "Reload catalog",
+    ]);
+    menuClicks[0]?.();
+    expect(runAction).toHaveBeenCalledWith("open direction review", expect.any(Function));
+    setTitle.mockRestore();
+    onClick.mockRestore();
 
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
@@ -261,13 +283,10 @@ describe("personal library settings row", () => {
     const authorized = renderLibraryButtons(tab).buttons;
     expect(authorized.map((button) => button.text)).toEqual([
       "Change folder",
-      "Review directions",
-      "Preview",
-      "Scan library",
-      "Reload catalog",
       "Revoke",
+      "Manage…",
     ]);
-    expect(authorized[5]?.warning).toBe(true);
+    expect(authorized[1]?.warning).toBe(true);
   });
 });
 
