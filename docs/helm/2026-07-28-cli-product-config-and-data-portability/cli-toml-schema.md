@@ -1,6 +1,6 @@
-# CLI TOML schema draft
+# CLI TOML schema
 
-status: draft (docs only; not implemented)  
+status: done
 decision_ref: `docs/adr/0003-two-products-cli-config-and-data-portability.md`  
 goal_ref: `./goal.md`  
 phase_ref: `./phases/01-cli-toml-init.md`

@@ -1,7 +1,7 @@
 # P1 — worker-api
 
 goal_ref: ../goal.md
-status: active
+status: done
 
 ## Outcome
 
@@ -15,12 +15,12 @@ status: active
 
 ## Tasks
 
-- [ ] Scaffold wrangler project + README deploy steps
-- [ ] `POST /v1/verify/start` — body `{ email }` → send magic link
-- [ ] `GET /v1/verify` — query token → bind device token, HTML page to copy token
-- [ ] `POST /v1/deliver` — Bearer device token + digest/html/text → Resend
-- [ ] Quota (default 2/day/email) + Idempotency-Key
-- [ ] Unit-testable pure helpers where practical
+- [x] Scaffold wrangler project + README deploy steps
+- [x] `POST /v1/verify/start` — body `{ email }` → send magic link
+- [x] `GET /v1/verify` — query token → bind device token, HTML page to copy token
+- [x] `POST /v1/deliver` — Bearer device token + digest/html/text → Resend
+- [x] Quota (default 2/day/email) + Idempotency-Key
+- [x] Unit-testable pure helpers where practical
 
 ## Verification
 
