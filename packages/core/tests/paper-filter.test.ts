@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildPaperFilterRequest,
   filterPapers,
+  isPaperFilterResponseValidationError,
+  PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+  PaperFilterResponseValidationError,
   prepareDailyFilterCheckpoint,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
@@ -61,6 +64,30 @@ const samplePaper: PaperMeta = {
 };
 
 describe("filterPapers", () => {
+  it("recognizes only real validation errors and compatible Error instances", () => {
+    const local = new PaperFilterResponseValidationError(
+      "response is not strict JSON",
+      "invalid-json",
+    );
+    const compatible = Object.assign(new Error("response is not strict JSON"), {
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode: "invalid-json",
+    });
+    const spoofed = {
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode: "invalid-json",
+      message: "untrusted response text",
+      stack: "fake stack",
+    };
+
+    expect(isPaperFilterResponseValidationError(local)).toBe(true);
+    expect(isPaperFilterResponseValidationError(compatible)).toBe(true);
+    expect(isPaperFilterResponseValidationError(spoofed)).toBe(false);
+    expect(isPaperFilterResponseValidationError(new Error("ordinary"))).toBe(false);
+  });
+
   it("returns [] without calling LLM when topics is empty", async () => {
     const llm = { call: vi.fn() };
     const out = await filterPapers([samplePaper], {
@@ -166,47 +193,68 @@ describe("filterPapers", () => {
     expect(out).toEqual([]);
   });
 
-  it("drops all papers for an unknown tag", async () => {
+  it("rejects an unknown tag as an invalid response contract", async () => {
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(),
+    };
     const llm = {
       call: vi.fn().mockResolvedValue(
         JSON.stringify({ papers: [{ id: "2601.12345", category: "nope" }] }),
       ),
     };
-    const out = await filterPapers([samplePaper], {
+
+    await expect(filterPapers([samplePaper], {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
       ...checkpointScope,
+    })).rejects.toMatchObject({
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode: "invalid-contract",
+      message: "response violates the filter contract: paper 2601.12345 has an invalid category",
     });
-    expect(out).toEqual([]);
+    expect(checkpointStore.save).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["non-JSON", "not JSON"],
-    ["markdown-wrapped JSON", '```json\n{"papers":[]}\n```'],
-    ["array root", JSON.stringify([])],
-    ["extra root key", JSON.stringify({ papers: [], extra: true })],
-    ["missing papers", JSON.stringify({})],
-    ["papers not array", JSON.stringify({ papers: {} })],
-    ["non-record paper", JSON.stringify({ papers: [null] })],
-    ["missing record key", JSON.stringify({ papers: [{ id: samplePaper.id }] })],
-    ["extra detail key", JSON.stringify({ papers: [{ id: samplePaper.id, category: "photo-z", detail: true }] })],
-    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z" }] })],
+    ["non-JSON", "not JSON", "invalid-json"],
+    ["markdown-wrapped JSON", '```json\n{"papers":[]}\n```', "invalid-json"],
+    ["array root", JSON.stringify([]), "invalid-contract"],
+    ["extra root key", JSON.stringify({ papers: [], extra: true }), "invalid-contract"],
+    ["missing papers", JSON.stringify({}), "invalid-contract"],
+    ["papers not array", JSON.stringify({ papers: {} }), "invalid-contract"],
+    ["non-record paper", JSON.stringify({ papers: [null] }), "invalid-contract"],
+    ["missing record key", JSON.stringify({ papers: [{ id: samplePaper.id }] }), "invalid-contract"],
+    ["extra detail key", JSON.stringify({ papers: [{ id: samplePaper.id, category: "photo-z", detail: true }] }), "invalid-contract"],
+    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z" }] }), "invalid-contract"],
     ["duplicate ID", JSON.stringify({ papers: [
       { id: samplePaper.id, category: "photo-z" },
       { id: samplePaper.id, category: "skip" },
-    ] })],
-    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z" }] })],
-    ["non-string category", JSON.stringify({ papers: [{ id: samplePaper.id, category: null }] })],
-  ])("rejects %s conservatively", async (_label, raw) => {
+    ] }), "invalid-contract"],
+    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z" }] }), "invalid-contract"],
+    ["non-string category", JSON.stringify({ papers: [{ id: samplePaper.id, category: null }] }), "invalid-contract"],
+  ])("rejects %s without caching it", async (_label, raw, reasonCode) => {
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(),
+    };
     const llm = { call: vi.fn().mockResolvedValue(raw) };
-    const out = await filterPapers([samplePaper], {
+
+    await expect(filterPapers([samplePaper], {
       llm: llm as any,
       logger: new Logger("error"),
       arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
       ...checkpointScope,
+    })).rejects.toMatchObject({
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode,
     });
-    expect(out).toEqual([]);
+    expect(checkpointStore.save).not.toHaveBeenCalled();
   });
 
   it("reuses checkpoint records in persisted order with current metadata and no LLM metrics", async () => {
@@ -365,7 +413,11 @@ describe("filterPapers", () => {
       arxivSettings: makeArxiv(makeTopics()),
       checkpointStore,
       ...checkpointScope,
-    })).resolves.toEqual([]);
+    })).rejects.toMatchObject({
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode: "invalid-json",
+    });
     expect(checkpointStore.save).not.toHaveBeenCalled();
   });
 
