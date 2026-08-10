@@ -304,15 +304,22 @@ export function describeRuntimeProbe(): string {
   if (typeof process === "undefined") return "no process (plain browser)";
   const versions = (process as { versions?: { electron?: unknown } }).versions;
   const electron = versions?.electron as string | undefined;
+  const isolated = typeof window !== "undefined"
+    && typeof (window as { crossOriginIsolated?: unknown }).crossOriginIsolated === "boolean"
+    ? String((window as { crossOriginIsolated?: unknown }).crossOriginIsolated)
+    : "n/a";
   return electron !== undefined
-    ? `process.release.name=${process.release?.name ?? "?"} (electron ${electron})`
+    ? `process.release.name=${process.release?.name ?? "?"} (electron ${electron}, crossOriginIsolated=${isolated})`
     : `process.release.name=${process.release?.name ?? "?"} (node)`;
 }
 
 /** Let queued host events run (timers, clicks, renders) before continuing. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof setTimeout === "function") setTimeout(resolve, 0);
+    const schedule = typeof window !== "undefined"
+      ? window.setTimeout.bind(window)
+      : setTimeout;
+    if (typeof schedule === "function") schedule(resolve, 0);
     else resolve();
   });
 }

@@ -102,12 +102,13 @@ export async function indexPersonalLibraryFullText(
   const outcomes: FullTextIndexPaperOutcome[] = [];
   const paperKeys = Object.keys(catalog.papers).sort();
   const total = paperKeys.length;
+  const progressStartedAt = Date.now();
 
   for (let position = 0; position < total; position += 1) {
     throwIfCancelled(input.signal);
     const paperKey = paperKeys[position]!;
     const paper = catalog.papers[paperKey]!;
-    input.onProgress?.(`indexing ${paperKey} (${position + 1}/${total})`);
+    input.onProgress?.(indexProgressDetail(paperKey, position + 1, total, progressStartedAt));
 
     const fingerprints = paper.filePaths.map((path) => catalog.files[path]?.observationFingerprint);
     if (fingerprints.some((fingerprint) => fingerprint === undefined)) {
@@ -328,4 +329,31 @@ function yieldToEventLoop(): Promise<void> {
     if (typeof setTimeout === "function") setTimeout(resolve, 0);
     else resolve();
   });
+}
+
+/**
+ * Progress line with wall-clock rate and remaining-time estimate, so a long
+ * local index run reads as "working, N remaining" rather than "stuck".
+ */
+function indexProgressDetail(
+  paperKey: string,
+  position: number,
+  total: number,
+  startedAt: number,
+): string {
+  const elapsedMs = Date.now() - startedAt;
+  const done = position - 1;
+  let eta = "";
+  if (done > 0 && elapsedMs > 0) {
+    const perPaperMs = elapsedMs / done;
+    const remainingSeconds = Math.round((total - done) * perPaperMs / 1000);
+    if (remainingSeconds > 0) eta = `, ~${formatDuration(remainingSeconds)} remaining`;
+  }
+  return `indexing ${paperKey} (${position}/${total})${eta}`;
+}
+
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
