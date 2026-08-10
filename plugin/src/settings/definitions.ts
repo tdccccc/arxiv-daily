@@ -141,6 +141,11 @@ export interface SettingDefinitionsHost {
   renderEmailToRow?: (setting: Setting) => void;
   renderEmailApiKeyRow?: (setting: Setting) => void;
   renderHostedTokenRow?: (setting: Setting) => void;
+  renderEmbeddingModeRow?: (setting: Setting) => void;
+  renderEmbeddingBaseUrlRow?: (setting: Setting) => void;
+  renderEmbeddingApiKeyRow?: (setting: Setting) => void;
+  renderEmbeddingModelRow?: (setting: Setting) => void;
+  renderEmbeddingDimensionRow?: (setting: Setting) => void;
 }
 
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
@@ -217,6 +222,49 @@ export function buildSettingDefinitions(
               desc: "Higher levels may be slower and cost more.",
               render: (setting: Setting) =>
                 host.renderReasoningEffortRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+      ],
+    },
+    {
+      type: "group",
+      heading: "Embedding",
+      items: [
+        ...(host.renderEmbeddingModeRow
+          ? [{
+              name: "Embedding mode",
+              desc: "Local embeds offline on this device (slow for large libraries). "
+                + "Remote sends full-text chunks to an embeddings API (fast; requires "
+                + "full-text authorization; switching modes rebuilds the index).",
+              render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingBaseUrlRow
+          ? [{
+              name: "Embedding API base URL",
+              desc: "OpenAI-compatible embeddings endpoint.",
+              render: (setting: Setting) => host.renderEmbeddingBaseUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingApiKeyRow
+          ? [{
+              name: "Embedding API key",
+              desc: "Saved only on this device.",
+              render: (setting: Setting) => host.renderEmbeddingApiKeyRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingModelRow
+          ? [{
+              name: "Embedding model",
+              desc: "Model name sent to the endpoint.",
+              render: (setting: Setting) => host.renderEmbeddingModelRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingDimensionRow
+          ? [{
+              name: "Embedding dimension",
+              desc: "Vector width of the remote model. Must match the model.",
+              render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
             } satisfies SettingDefinitionItem]
           : []),
       ],

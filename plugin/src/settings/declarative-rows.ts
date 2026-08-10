@@ -649,3 +649,96 @@ export function renderHostedTokenRow(
     run: () => tab.plugin.sendTestEmail(),
   });
 }
+
+export function renderEmbeddingModeRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  const local = select.createEl("option", { text: "Local (offline, default)" });
+  local.value = "local";
+  const remote = select.createEl("option", { text: "Remote (fast, full text leaves this device)" });
+  remote.value = "remote";
+  select.value = tab.plugin.settings.embedding.mode;
+  select.addEventListener("change", () => {
+    tab.runAction("save embedding mode", async () => {
+      tab.plugin.settings.embedding.mode = select.value === "remote" ? "remote" : "local";
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingBaseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "url",
+    attr: { placeholder: "https://api.openai.com/v1" },
+  });
+  input.value = tab.plugin.settings.embedding.baseUrl;
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding base url", async () => {
+      tab.plugin.settings.embedding.baseUrl = input.value.trim();
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingApiKeyRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "password",
+    attr: { placeholder: "Enter API key" },
+  });
+  input.value = tab.plugin.settings.embedding.apiKey;
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding api key", async () => {
+      tab.plugin.settings.embedding.apiKey = input.value.trim();
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingModelRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    attr: { placeholder: "text-embedding-3-small" },
+  });
+  input.value = tab.plugin.settings.embedding.model;
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding model", async () => {
+      tab.plugin.settings.embedding.model = input.value.trim();
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingDimensionRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "number",
+    attr: { placeholder: "1536", min: "1", step: "1" },
+  });
+  input.value = String(tab.plugin.settings.embedding.dimension);
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding dimension", async () => {
+      const parsed = Number(input.value.trim());
+      if (Number.isInteger(parsed) && parsed > 0) {
+        tab.plugin.settings.embedding.dimension = parsed;
+        await tab.plugin.saveSettings();
+      }
+    });
+  });
+}

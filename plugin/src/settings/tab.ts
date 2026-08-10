@@ -168,6 +168,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderModelRow(this, setting),
       renderReasoningEffortRow: (setting) =>
         declarativeRows.renderReasoningEffortRow(this, setting),
+      renderEmbeddingModeRow: (setting) =>
+        declarativeRows.renderEmbeddingModeRow(this, setting),
+      renderEmbeddingBaseUrlRow: (setting) =>
+        declarativeRows.renderEmbeddingBaseUrlRow(this, setting),
+      renderEmbeddingApiKeyRow: (setting) =>
+        declarativeRows.renderEmbeddingApiKeyRow(this, setting),
+      renderEmbeddingModelRow: (setting) =>
+        declarativeRows.renderEmbeddingModelRow(this, setting),
+      renderEmbeddingDimensionRow: (setting) =>
+        declarativeRows.renderEmbeddingDimensionRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
       renderCategoryRow: (setting, index) =>

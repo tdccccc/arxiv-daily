@@ -97,6 +97,11 @@ describe("buildSettingDefinitions structure", () => {
       renderEmailToRow: () => {},
       renderEmailApiKeyRow: () => {},
       renderHostedTokenRow: () => {},
+      renderEmbeddingModeRow: () => {},
+      renderEmbeddingBaseUrlRow: () => {},
+      renderEmbeddingApiKeyRow: () => {},
+      renderEmbeddingModelRow: () => {},
+      renderEmbeddingDimensionRow: () => {},
     };
   }
 
@@ -105,7 +110,7 @@ describe("buildSettingDefinitions structure", () => {
     expect(items.length).toBeGreaterThanOrEqual(4);
     const groups = items.filter((item) => item.type === "group");
     expect(groups.map((g) => g.heading)).toEqual(
-      expect.arrayContaining(["LLM", "Output & schedule", "Advanced", "Help & feedback"]),
+      expect.arrayContaining(["LLM", "Embedding", "Output & schedule", "Advanced", "Help & feedback"]),
     );
   });
 
@@ -123,6 +128,26 @@ describe("buildSettingDefinitions structure", () => {
     ]);
     expect(llm?.items.map((item) => item.name)).not.toContain("Thinking mode");
     expect(items.some((item) => item.name === "Quick start")).toBe(false);
+  });
+
+  it("orders the embedding rows for remote configuration", () => {
+    const items = buildSettingDefinitions(makeFullHost());
+    const embedding = items.find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "Embedding",
+    );
+    expect(embedding?.items.map((item) => item.name)).toEqual([
+      "Embedding mode",
+      "Embedding API base URL",
+      "Embedding API key",
+      "Embedding model",
+      "Embedding dimension",
+    ]);
+    // Without the render callbacks the group carries no rows.
+    const bare = buildSettingDefinitions(makeHost()).find(
+      (item) => item.type === "group" && item.heading === "Embedding",
+    );
+    expect(bare?.items ?? []).toHaveLength(0);
   });
 
   it("only includes Getting started while setup is incomplete", () => {
