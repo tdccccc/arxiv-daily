@@ -135,3 +135,10 @@
 - change: 四 chunk 已提交（1d154a4 remote model、ed34343 settings、14bbf76 authorization、T4 待提交）。验证：core 1547/1547（+9）、plugin 442/442（+3 引导 modal）、lint 0、boundaries OK。
 - disposition: 保留全部。
 - next: T5 工厂接线（index/search 按 mode 选嵌入实现）→ T6 收尾。
+
+## 2026-08-10 — note（P7 完成：远程嵌入可选开关全部落地）
+
+- evidence: T1-T5 五个 chunk 全部验收（提交 1d154a4/ed34343/14bbf76/aa82875/8041e8b）。core `RemoteEmbeddingModel`（OpenAI 兼容 /embeddings、批量≤64、维度断言、密钥脱敏、abort、modelId 不含端点）；EmbeddingModel port `prefixPolicy`；`PluginSettings.embedding` + 校验 + 设置 UI + CLI 映射；授权多端点 scope 化 + full-text 深度 + modal 披露；首次引导选择（initialChoiceDone）；工厂接线 + 远程门禁（配置完整 + full-text 授权）。验证：core 1547/1547（+15 累计本阶段）、plugin 447/447（+12）、lint 0、boundaries OK；technical-report handoff 全部 updated。
+- change: 无 steer。goal.md P7 done + status done（本条目同批提交）。
+- disposition: 保留全部。用户侧待验证：设置页 Embedding 区 → 切 remote → 配端点/密钥/模型/维度 → Review & authorize（full-text 深度披露）→ 索引分钟级。
+- next: P7 完成。其余待办：模型可配置化（已部分被远程嵌入覆盖）、CLI host 提取/嵌入、多 worker 本地并行（远程之外提速）。构建产物待用户安装验证。

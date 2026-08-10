@@ -20,12 +20,12 @@ T1 先做 core `RemoteEmbeddingModel`（批量、超时、abort、错误分类�
 
 ## Tasks
 
-- [ ] T1 core `RemoteEmbeddingModel`：OpenAI 兼容 embeddings 客户端（批量 ≤64、超时、AbortSignal、HTTP 错误分类、`modelId`/`dimension` 声明）+ core 测试（mock http）
-- [ ] T2 设置：`PluginSettings.embedding`（mode `local|remote`、provider/baseUrl/apiKey/model/dimension?）+ 默认值 + 校验 + CLI `[embedding]` 映射 + 插件设置 UI 行 + 测试
-- [ ] T3 授权扩展：`LIBRARY_PROCESSING_DEPTH` 扩为 union + full-text 档；`libraryAuthorizationFingerprint` 纳入嵌入端点（远程模式）；授权 modal 披露嵌入端点与全文深度；深度升级/端点变更重新授权 + 测试
-- [ ] T4 首次引导选择：库准备流程中选嵌入模式（本地/远程，含速度/隐私说明与切换重建提示）+ 测试
-- [ ] T5 工厂接线：`indexPersonalLibraryFullText`/`searchPersonalLibraryFullText`/增量按 `settings.embedding.mode` 构建嵌入模型（本地 transformers vs core RemoteEmbeddingModel）；modelId 随配置声明 + 测试
-- [ ] T6 收尾：core/plugin 全量测试、tsc、lint、boundaries；technical-report handoff（每被接受 chunk）；每阶段提交；goal.md P7 done + status done
+- [x] T1 core `RemoteEmbeddingModel`：OpenAI 兼容 embeddings 客户端（批量 ≤64、超时、AbortSignal、HTTP 错误分类、`modelId`/`dimension` 声明）+ core 测试（mock http）—— 端口增 `prefixPolicy`（e5|none）编排条件化前缀；+9 测试；commit 1d154a4
+- [x] T2 设置：`PluginSettings.embedding`（mode `local|remote`、provider/baseUrl/apiKey/model/dimension + initialChoiceDone）+ 默认值 + 校验（validateEmbeddingConfig）+ CLI `[embedding]` 映射 + 插件设置 UI Embedding 区；+4 校验 + CLI 映射测试；commit ed34343
+- [x] T3 授权扩展：`LIBRARY_PROCESSING_DEPTHS` union + full-text 档；授权 scope 化（LLM 端点 + 可选嵌入端点），指纹含嵌入端点 digest；授权 modal 披露嵌入端点与全文深度；decode 兼容两种深度；+2 远程授权测试；commit 14bbf76
+- [x] T4 首次引导选择：`chooseLibraryRoot` 成功后 `offerEmbeddingModeChoice`（initialChoiceDone 一次；modal 含速度/隐私/重建提示，关闭默认本地）；+3 测试；commit aa82875
+- [x] T5 工厂接线：`buildEmbeddingModel` 按 mode 选择（本地 transformers vs remote）；`assertRemoteEmbeddingReady` 门禁（远程需完整配置 + full-text 授权）；index/search 接入，诊断保持本地；+5 测试；commit 8041e8b
+- [x] T6 收尾：core 1547/1547、plugin 447/447、tsc/lint/boundaries 全绿；technical-report handoff（T1-T5 均 updated：全文机制段、设置形状、授权段、嵌入宿主段）；每阶段提交完成；goal.md P7 done + status done
 
 ## Verification
 
