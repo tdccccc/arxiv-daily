@@ -65,7 +65,7 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 插件设置页的 **Personal library** 组可通过 Obsidian 桌面宿主的 Electron 目录选择器连接一个 Vault 内或 Vault 外目录。`selectLibraryRoot` 调用窄入口 `openObsidianLibrarySource`，后者只桥接 `@arxiv-daily/node-runtime/scoped-library-source`；成功打开后保存 canonical root 与文件系统 identity。用户可在不授予模型处理许可的情况下运行本地只读 inventory preview；Node scoped source 对 inventory 中的非符号链接条目使用 `lstat` 分类，文件条目带有 size 与 mtime 观测，符号链接不被跟随。设置页将 PDF 标为 eligible，将其他文件类型、符号链接和特殊条目标为 ignored，并在 modal 中对每组最多显示 100 条路径。
 
-模型处理许可是独立的插件本地状态。授权 modal 展示 canonical folder、eligible extensions、处理深度和脱敏后的 Chat Completions endpoint；确认时必须提交与展示内容相同的 fingerprint。fingerprint 绑定 root path、文件系统 identity、扩展名集合、处理深度和 endpoint，不绑定 API key、模型或 thinking 参数。目录、identity、endpoint、扩展名或处理深度变化会使授权失效；Revoke 只移除模型处理许可，不断开本地只读目录。
+模型处理许可是独立的插件本地状态。授权 modal 展示 canonical folder、eligible extensions、处理深度和脱敏后的 Chat Completions endpoint（远程嵌入开启时另展示 embedding endpoint 与 full-text 深度，ADR 0008）；确认时必须提交与展示内容相同的 fingerprint。fingerprint 绑定 root path、文件系统 identity、扩展名集合、处理深度和端点（LLM endpoint，远程嵌入开启时含 embedding endpoint digest），不绑定 API key、模型或 thinking 参数。目录、identity、端点、扩展名或处理深度变化会使授权失效；远程嵌入授权以 `full-text` 深度记录；Revoke 只移除模型处理许可，不断开本地只读目录。
 
 连接目录后，用户还可显式执行 **Scan library** 或 **Reload catalog**，两者不要求模型处理许可。扫描只从 eligible PDF 的逻辑文件名识别现代 arXiv ID，不读取 PDF bytes；Core reconciliation 以 path、size、mtime 和识别策略构造 observation fingerprint，复用未变文件，将 unresolved、unrelated 与暂时 failed 文件隔离，并把同一论文的多个 PDF 汇入一个 paper record。需要补齐的 canonical ID 通过现有 `ArxivFetcher.fetchMetadataByIds` 请求 arXiv Atom API；Atom metadata 保留完整作者数组、标题、日期、分类与摘要，未发送绝对/相对文件路径或 PDF 内容。
 

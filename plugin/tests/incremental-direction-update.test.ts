@@ -129,7 +129,7 @@ function fixture(papers: ReadonlyArray<{ paperKey: string; vectors: readonly num
   settings.llm.model = "test-model";
   settings.llm.baseUrl = "https://model.example/v1";
   const rawConnection = createLibraryConnection("/private/library", "1:2");
-  const connection = authorizeLibraryConnection(rawConnection, settings.llm.baseUrl, new Date("2026-08-03T00:00:00Z"));
+  const connection = authorizeLibraryConnection(rawConnection, { llmBaseUrl: settings.llm.baseUrl }, new Date("2026-08-03T00:00:00Z"));
   const scopeFingerprint = createPersonalLibraryScopeFingerprint({
     rootIdentity: connection.rootIdentity,
     eligibleExtensions: connection.eligibleExtensions,

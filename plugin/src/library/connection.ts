@@ -6,8 +6,23 @@ import {
 } from "@arxiv-daily/core";
 
 export const LIBRARY_CONNECTION_SCHEMA_VERSION = 1 as const;
-export const LIBRARY_PROCESSING_DEPTH = "metadata-and-abstracts" as const;
+/** Processing depths a library connection can be authorized at (ADR 0008). */
+export const LIBRARY_PROCESSING_DEPTHS = ["metadata-and-abstracts", "full-text"] as const;
+export type LibraryProcessingDepth = (typeof LIBRARY_PROCESSING_DEPTHS)[number];
+export const LIBRARY_PROCESSING_DEPTH = LIBRARY_PROCESSING_DEPTHS[0];
 export const LIBRARY_ELIGIBLE_EXTENSIONS = [".pdf"] as const;
+
+/**
+ * What a library authorization grant covers: the LLM endpoint, plus the
+ * embedding endpoint when remote embedding is enabled (ADR 0008). Changing
+ * any endpoint or the processing depth invalidates the grant.
+ */
+export interface LibraryAuthorizationScope {
+  /** LLM chat endpoint base URL. */
+  llmBaseUrl: string;
+  /** Embedding endpoint base URL when remote embedding is enabled. */
+  embeddingEndpoint?: { baseUrl: string };
+}
 
 export interface PersistedLibraryAuthorization {
   fingerprint: string;
@@ -19,7 +34,7 @@ export interface PersistedLibraryConnection {
   selectedRoot: string;
   rootIdentity: string;
   eligibleExtensions: string[];
-  processingDepth: typeof LIBRARY_PROCESSING_DEPTH;
+  processingDepth: LibraryProcessingDepth;
   authorization?: PersistedLibraryAuthorization;
 }
 
@@ -32,8 +47,10 @@ export type LibraryConnectionStatus =
 export interface LibraryAuthorizationDisclosure {
   selectedRoot: string;
   eligibleExtensions: string[];
-  processingDepth: typeof LIBRARY_PROCESSING_DEPTH;
+  processingDepth: LibraryProcessingDepth;
   endpoint: string;
+  /** Present when remote embedding is enabled (full-text depth). */
+  embeddingEndpoint?: string;
   authorizationFingerprint: string;
 }
 
@@ -66,7 +83,7 @@ export function decodeLibraryConnection(value: unknown): PersistedLibraryConnect
     || !value.selectedRoot.trim()
     || typeof value.rootIdentity !== "string"
     || !/^\d+:\d+$/.test(value.rootIdentity)
-    || value.processingDepth !== LIBRARY_PROCESSING_DEPTH
+    || !isLibraryProcessingDepth(value.processingDepth)
     || !Array.isArray(value.eligibleExtensions)
     || !value.eligibleExtensions.every((entry) => typeof entry === "string")
   ) {
@@ -80,14 +97,14 @@ export function decodeLibraryConnection(value: unknown): PersistedLibraryConnect
     selectedRoot: value.selectedRoot,
     rootIdentity: value.rootIdentity,
     eligibleExtensions,
-    processingDepth: LIBRARY_PROCESSING_DEPTH,
+    processingDepth: value.processingDepth,
     ...(authorization ? { authorization } : {}),
   };
 }
 
 export function libraryConnectionStatus(
   connection: PersistedLibraryConnection | undefined,
-  baseUrl: string,
+  scope: LibraryAuthorizationScope,
 ): LibraryConnectionStatus {
   if (!connection) return { kind: "disconnected" };
   const rootLabel = libraryRootLabel(connection.selectedRoot);
@@ -99,7 +116,7 @@ export function libraryConnectionStatus(
   // invalidates the grant instead of throwing into settings and run paths.
   let fingerprint: string;
   try {
-    fingerprint = libraryAuthorizationFingerprint(connection, baseUrl);
+    fingerprint = libraryAuthorizationFingerprint(connection, scope);
   } catch {
     return { kind: "authorization-invalidated", rootLabel };
   }
@@ -115,13 +132,16 @@ export function libraryConnectionStatus(
 
 export function authorizeLibraryConnection(
   connection: PersistedLibraryConnection,
-  baseUrl: string,
+  scope: LibraryAuthorizationScope,
   now = new Date(),
 ): PersistedLibraryConnection {
   return {
     ...connection,
+    // Remote embedding processes full text, so its grants are full-text
+    // depth (ADR 0008); local-only grants stay at metadata and abstracts.
+    processingDepth: scope.embeddingEndpoint ? "full-text" : LIBRARY_PROCESSING_DEPTH,
     authorization: {
-      fingerprint: libraryAuthorizationFingerprint(connection, baseUrl),
+      fingerprint: libraryAuthorizationFingerprint(connection, scope),
       grantedAt: now.toISOString(),
     },
   };
@@ -136,20 +156,23 @@ export function revokeLibraryConnection(
 
 export function libraryAuthorizationDisclosure(
   connection: PersistedLibraryConnection,
-  baseUrl: string,
+  scope: LibraryAuthorizationScope,
 ): LibraryAuthorizationDisclosure {
   return {
     selectedRoot: connection.selectedRoot,
     eligibleExtensions: [...connection.eligibleExtensions],
     processingDepth: connection.processingDepth,
-    endpoint: displayChatEndpoint(baseUrl),
-    authorizationFingerprint: libraryAuthorizationFingerprint(connection, baseUrl),
+    endpoint: displayChatEndpoint(scope.llmBaseUrl),
+    ...(scope.embeddingEndpoint
+      ? { embeddingEndpoint: displayChatEndpoint(scope.embeddingEndpoint.baseUrl) }
+      : {}),
+    authorizationFingerprint: libraryAuthorizationFingerprint(connection, scope),
   };
 }
 
 export function libraryAuthorizationFingerprint(
   connection: PersistedLibraryConnection,
-  baseUrl: string,
+  scope: LibraryAuthorizationScope,
 ): string {
   const input = {
     version: 1,
@@ -157,8 +180,11 @@ export function libraryAuthorizationFingerprint(
       `${connection.selectedRoot}\0${connection.rootIdentity}`,
     )}`,
     eligibleExtensions: normalizeExtensions(connection.eligibleExtensions),
-    processingDepth: connection.processingDepth,
-    endpointDigest: buildCheckpointEndpointDigest(baseUrl),
+    processingDepth: scope.embeddingEndpoint ? "full-text" : connection.processingDepth,
+    endpointDigest: buildCheckpointEndpointDigest(scope.llmBaseUrl),
+    ...(scope.embeddingEndpoint
+      ? { embeddingEndpointDigest: buildCheckpointEndpointDigest(scope.embeddingEndpoint.baseUrl) }
+      : {}),
   };
   return `sha256:${sha256Hex(JSON.stringify(input))}`;
 }
@@ -243,4 +269,8 @@ function decodeAuthorization(value: unknown): PersistedLibraryAuthorization | un
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isLibraryProcessingDepth(value: unknown): value is LibraryProcessingDepth {
+  return value === "metadata-and-abstracts" || value === "full-text";
 }

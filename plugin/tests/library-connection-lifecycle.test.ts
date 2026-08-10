@@ -211,7 +211,7 @@ describe("personal library plugin lifecycle", () => {
     internals.libraryConnection = createLibraryConnection("/papers", "1:2");
     const disclosure = libraryAuthorizationDisclosure(
       internals.libraryConnection,
-      plugin.settings.llm.baseUrl,
+      { llmBaseUrl: plugin.settings.llm.baseUrl },
     );
     await plugin.authorizeLibraryProcessing(disclosure.authorizationFingerprint);
 

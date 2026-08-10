@@ -13,15 +13,26 @@ export function confirmLibraryAuthorization(
     const modal = new Modal(app);
     modal.titleEl.setText("Authorize personal library");
     modal.contentEl.createEl("p", {
-      text: "Review exactly what arXiv Daily may process through your configured model endpoint.",
+      text: "Review exactly what arXiv Daily may process through your configured model endpoints.",
     });
     const list = modal.contentEl.createEl("dl");
     addDisclosure(list, "Folder", disclosure.selectedRoot);
     addDisclosure(list, "Files", disclosure.eligibleExtensions.join(", "));
-    addDisclosure(list, "Depth", "Metadata and abstracts only");
+    addDisclosure(
+      list,
+      "Depth",
+      disclosure.processingDepth === "full-text"
+        ? "Full text (remote embedding sends full-text chunks to the embedding endpoint)"
+        : "Metadata and abstracts only",
+    );
     addDisclosure(list, "Endpoint", disclosure.endpoint);
+    if (disclosure.embeddingEndpoint) {
+      addDisclosure(list, "Embedding endpoint", disclosure.embeddingEndpoint);
+    }
     modal.contentEl.createEl("p", {
-      text: "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoint in later profile-building steps. Changing the folder, endpoint, file types, or depth invalidates it.",
+      text: disclosure.processingDepth === "full-text"
+        ? "Authorizing permits full-text chunks to be sent to the endpoints above for similarity indexing in later steps. Changing the folder, endpoints, file types, or depth invalidates it."
+        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoint in later profile-building steps. Changing the folder, endpoint, file types, or depth invalidates it.",
     });
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
     let settled = false;

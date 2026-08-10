@@ -144,6 +144,7 @@ import {
 } from "./src/services/fulltext-runtime-diagnostics";
 import {
   authorizeLibraryConnection,
+  type LibraryAuthorizationScope,
   buildLibraryInventoryPreview,
   createLibraryConnection,
   decodeLibraryConnection,
@@ -427,7 +428,7 @@ export default class ArxivDailyPlugin extends Plugin {
   getLibraryConnectionStatus(): LibraryConnectionStatus {
     return libraryConnectionStatus(
       this.libraryConnection,
-      this.settings.llm.baseUrl,
+      this.libraryAuthorizationScope(),
     );
   }
 
@@ -435,8 +436,18 @@ export default class ArxivDailyPlugin extends Plugin {
     if (!this.libraryConnection) return null;
     return libraryAuthorizationDisclosure(
       this.libraryConnection,
-      this.settings.llm.baseUrl,
+      this.libraryAuthorizationScope(),
     );
+  }
+
+  /** Authorization scope: the LLM endpoint plus the embedding endpoint when remote embedding is enabled. */
+  private libraryAuthorizationScope(): LibraryAuthorizationScope {
+    return {
+      llmBaseUrl: this.settings.llm.baseUrl,
+      ...(this.settings.embedding.mode === "remote" && this.settings.embedding.baseUrl.trim()
+        ? { embeddingEndpoint: { baseUrl: this.settings.embedding.baseUrl } }
+        : {}),
+    };
   }
 
   async selectLibraryRoot(): Promise<"selected" | "cancelled" | "unsupported"> {
@@ -495,7 +506,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const outputRevision = this.libraryOutputRevision;
     const discoveryRevision = this.personalizedDailyDiscoveryRevision;
     const endpoint = this.effectiveLlmEndpoint(this.settings.llm.baseUrl);
-    const disclosure = libraryAuthorizationDisclosure(connection, this.settings.llm.baseUrl);
+    const disclosure = libraryAuthorizationDisclosure(connection, this.libraryAuthorizationScope());
     if (expectedFingerprint
       && disclosure.authorizationFingerprint !== expectedFingerprint) {
       throw new Error("Library authorization terms changed; review them again");
@@ -508,7 +519,7 @@ export default class ArxivDailyPlugin extends Plugin {
         || this.effectiveLlmEndpoint(this.settings.llm.baseUrl) !== endpoint) {
         throw new Error("Library authorization was superseded by a newer library change");
       }
-      const authorized = authorizeLibraryConnection(connection, this.settings.llm.baseUrl);
+      const authorized = authorizeLibraryConnection(connection, this.libraryAuthorizationScope());
       this.libraryConnection = authorized;
       try {
         await this.persistSettings();
