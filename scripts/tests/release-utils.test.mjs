@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { noticeBanner, readPakoNotice, root, validateSemVer } from "../release-utils.mjs";
+import {
+  manifestFiles,
+  noticeBanner,
+  packageFiles,
+  readPakoNotice,
+  root,
+  validateSemVer,
+} from "../release-utils.mjs";
 
 const valid = [
   "0.0.0",
@@ -38,6 +45,17 @@ test("validateSemVer accepts complete SemVer 2.0.0 forms", () => {
 test("validateSemVer rejects prefixes, partials, whitespace, and leading zeroes", () => {
   for (const value of invalid) assert.throws(() => validateSemVer(value), /Invalid SemVer/);
   assert.throws(() => validateSemVer(undefined), /Invalid SemVer/);
+});
+
+test("release tools share the root release package contract", () => {
+  assert.deepEqual(packageFiles, [
+    "package.json",
+    "plugin/package.json",
+    "packages/core/package.json",
+    "packages/node-runtime/package.json",
+    "apps/cli/package.json",
+  ]);
+  assert.deepEqual(manifestFiles, ["manifest.json", "plugin/manifest.json"]);
 });
 
 test("the release workflow runs the release-tool tests during verification", async () => {
