@@ -233,14 +233,15 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger,
     );
     await nextStore.load();
-    this.stateStore = nextStore;
-    this.scheduler.replaceStore(nextStore);
-    this.runHistoryStore = RunHistoryStore.fromStorage(
+    const nextRunHistoryStore = RunHistoryStore.fromStorage(
       this.host.storage,
       this.settings.output,
       this.logger,
     );
-    this.scheduler.replaceRunHistory(this.runHistoryStore);
+    this.scheduler.replaceStore(nextStore);
+    this.scheduler.replaceRunHistory(nextRunHistoryStore);
+    this.stateStore = nextStore;
+    this.runHistoryStore = nextRunHistoryStore;
     if (this.settings.schedule.enabled) {
       this.progress.setIdle(latestCompletedDate(nextStore));
     } else {

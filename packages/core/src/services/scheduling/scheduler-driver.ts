@@ -19,7 +19,7 @@ import type { StateStore } from "../state-store";
 import { lookbackDateStrings, todayDateString } from "./date-selector";
 import { LOOKBACK_DAYS } from "./constants";
 import type { HistoryRecorder } from "./history-recorder";
-import { checkTickGate, isRunning } from "./run-gate";
+import { checkTickGate } from "./run-gate";
 import type { TimeGate } from "./types";
 
 export interface SchedulerRunOptions {
@@ -53,10 +53,51 @@ export interface SchedulerDriverDeps {
 }
 
 type SchedulerResult = PipelineResult | { kind: "skipped"; reason: string };
+type CompletedPipelineResult = Extract<PipelineResult, { kind: "completed" }>;
+
+interface PendingCompletion {
+  result: CompletedPipelineResult;
+  papersWritten: number;
+  requestedPapersWritten: number;
+  preservedPapersWritten: boolean;
+  trigger: RunHistoryTrigger;
+  completedAt: Date;
+  committed: boolean;
+}
+
+type PendingNonCompletionResult = Extract<
+  PipelineResult,
+  { kind: "pending" | "cancelled" }
+>;
+
+interface PendingNonCompletion {
+  result: PendingNonCompletionResult;
+  trigger: RunHistoryTrigger;
+  at: Date;
+}
+
+interface PendingCompletionAttempt {
+  handled: boolean;
+  result?: SchedulerResult;
+}
+
+type RunMode = "normal" | "scheduled" | "run-all-pending" | "retry" | "force";
+type TryRunResult = SchedulerResult | { kind: "not-eligible" };
+
+const COMPLETION_COMMIT_FAILURE_REASON = "scheduler completion commit failed";
+const STORE_REPLACEMENT_ACTIVE_ERROR =
+  "cannot replace scheduler store while work is active";
 
 export class SchedulerDriver {
   private intervalHandle: number | null = null;
   private readonly progress: ProgressReporter;
+  private readonly pendingCompletions = new Map<string, PendingCompletion>();
+  private readonly pendingNonCompletions = new Map<string, PendingNonCompletion>();
+  private readonly pendingCompletionFinalizations = new Map<
+    string,
+    Promise<PipelineResult | undefined>
+  >();
+  private activeWork = 0;
   private ticking = false;
 
   constructor(private deps: SchedulerDriverDeps) {
@@ -64,6 +105,13 @@ export class SchedulerDriver {
   }
 
   replaceStore(store: StateStore): void {
+    if (
+      this.activeWork > 0 ||
+      this.pendingCompletions.size > 0 ||
+      this.pendingNonCompletions.size > 0
+    ) {
+      throw new Error(STORE_REPLACEMENT_ACTIVE_ERROR);
+    }
     this.deps.store = store;
   }
 
@@ -71,7 +119,11 @@ export class SchedulerDriver {
     const min = this.deps.getSettings().schedule.tickIntervalMin;
     this.stop();
     const handle = setInterval(() => {
-      this.runScheduledTick().catch((e) => this.deps.logger.error("scheduler tick failed", e));
+      this.runScheduledTick().catch((error) =>
+        this.safeEffect(() =>
+          this.deps.logger.error("scheduler tick failed", error),
+        ),
+      );
     }, Math.max(1, min) * 60_000);
     this.intervalHandle = handle as unknown as number;
   }
@@ -94,38 +146,55 @@ export class SchedulerDriver {
   async tick(): Promise<void> {
     const now = this.now();
     const s = this.deps.getSettings();
-    if (!s.schedule.enabled) return;
     const tz = s.arxiv.timezone;
-
     const todayObj = todayInTz(now, tz);
     const today = todayDateString(tz, () => now);
     const dateStrings = lookbackDateStrings(tz, LOOKBACK_DAYS, () => now);
+    const pendingRetryDates = this.pendingRetryDates(dateStrings);
+    if (!s.schedule.enabled) {
+      await this.retryPendingCompletions(pendingRetryDates, now);
+      return;
+    }
     const minutesNow = minutesSinceMidnight(now, tz);
     const scheduledMin = minutesFromHHMM(s.schedule.runAtLocal);
     const endMin = minutesFromHHMM(s.schedule.runUntilLocal);
 
     if (!isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
-      this.progress.setIdle(this.latestCompleted());
+      await this.retryPendingCompletions(pendingRetryDates, now);
+      this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
       return;
     }
 
     // Today's report is already generated (or finalized). Stay idle for the
-    // remainder of the run window to avoid re-querying arxiv on every tick.
-    if (this.deps.store.isDone(today)) {
-      this.progress.setIdle(this.latestCompleted());
+    // remainder of the run window to avoid re-querying arxiv on every tick,
+    // but still finalize any in-memory completion candidates from prior dates.
+    if (
+      this.deps.store.isDone(today) &&
+      (await this.confirmDurablyDone(today))
+    ) {
+      await this.retryPendingCompletions(pendingRetryDates, now);
+      this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
       return;
     }
 
     const batch = this.beginCancellationBatch();
     try {
+      const retriedPending = await this.retryPendingCompletions(
+        pendingRetryDates,
+        now,
+        "scheduler",
+        batch,
+      );
       await this.deps.recentDates?.refresh(batch?.signal);
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const dateObj = daysBefore(todayObj, i, tz);
         const date = dateStrings[i];
-        if (!date) continue;
+        if (!date || retriedPending.has(date)) continue;
         const isToday = date === today;
-        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
+        this.safeEffect(() =>
+          this.progress.setBatch(i + 1, LOOKBACK_DAYS, date),
+        );
         if (isWeekendDate(dateObj, tz)) continue;
         await this.tickDate(date, {
           now,
@@ -138,26 +207,51 @@ export class SchedulerDriver {
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
   }
 
   async tickToday(): Promise<SchedulerResult | undefined> {
     const now = this.now();
     const s = this.deps.getSettings();
     const tz = s.arxiv.timezone;
+    const today = todayDateString(tz, () => now);
+    const pendingAttempt = await this.attemptPendingCompletion(
+      today,
+      "scheduler",
+      now,
+    );
+    if (pendingAttempt.handled) {
+      this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
+      return pendingAttempt.result;
+    }
     if (!s.schedule.enabled) {
-      await this.deps.history.recordSkippedForDate(todayInTz(now, tz), "scheduler", "disabled", now);
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordSkippedForDate(
+          todayInTz(now, tz),
+          "scheduler",
+          "disabled",
+          now,
+        ),
+      );
       return { kind: "skipped", reason: "disabled" };
     }
     if (isWeekendInTz(now, tz)) {
-      this.progress.setIdle(this.latestCompleted(), "weekend");
-      await this.deps.history.recordSkippedForDate(todayInTz(now, tz), "scheduler", "weekend", now);
+      this.safeEffect(() =>
+        this.progress.setIdle(this.latestCompleted(), "weekend"),
+      );
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordSkippedForDate(
+          todayInTz(now, tz),
+          "scheduler",
+          "weekend",
+          now,
+        ),
+      );
       return { kind: "skipped", reason: "weekend" };
     }
-    const today = todayDateString(tz, () => now);
-    this.progress.setBatch(1, 1, today);
+    this.safeEffect(() => this.progress.setBatch(1, 1, today));
     const batch = this.beginCancellationBatch();
-    let result: PipelineResult | undefined;
+    let result: SchedulerResult | undefined;
     try {
       await this.deps.recentDates?.refresh(batch?.signal);
       result = await this.tickDate(today, {
@@ -168,7 +262,7 @@ export class SchedulerDriver {
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
     if (result === undefined) {
       await this.deps.history.recordSkipped(today, "scheduler", "guarded", now);
       return { kind: "skipped", reason: "guarded" };
@@ -180,22 +274,47 @@ export class SchedulerDriver {
     const now = this.now();
     const s = this.deps.getSettings();
     const tz = s.arxiv.timezone;
+    const today = todayDateString(tz, () => now);
+    const pendingAttempt = await this.attemptPendingCompletion(
+      today,
+      "scheduler",
+      now,
+    );
+    if (pendingAttempt.handled) {
+      this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
+      return pendingAttempt.result;
+    }
     if (!s.schedule.enabled) {
-      await this.deps.history.recordSkippedForDate(todayInTz(now, tz), "scheduler", "disabled", now);
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordSkippedForDate(
+          todayInTz(now, tz),
+          "scheduler",
+          "disabled",
+          now,
+        ),
+      );
       return { kind: "skipped", reason: "disabled" };
     }
     if (isWeekendInTz(now, tz)) {
-      this.progress.setIdle(this.latestCompleted(), "weekend");
-      await this.deps.history.recordSkippedForDate(todayInTz(now, tz), "scheduler", "weekend", now);
+      this.safeEffect(() =>
+        this.progress.setIdle(this.latestCompleted(), "weekend"),
+      );
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordSkippedForDate(
+          todayInTz(now, tz),
+          "scheduler",
+          "weekend",
+          now,
+        ),
+      );
       return { kind: "skipped", reason: "weekend" };
     }
-    const today = todayDateString(tz, () => now);
     const minutesNow = minutesSinceMidnight(now, tz);
     const scheduledMin = minutesFromHHMM(s.schedule.runAtLocal);
     const endMin = minutesFromHHMM(s.schedule.runUntilLocal);
-    this.progress.setBatch(1, 1, today);
+    this.safeEffect(() => this.progress.setBatch(1, 1, today));
     const batch = this.beginCancellationBatch();
-    let result: PipelineResult | undefined;
+    let result: SchedulerResult | undefined;
     try {
       if (isTimeWithinLocalWindow(now, tz, s.schedule.runAtLocal, s.schedule.runUntilLocal)) {
         await this.deps.recentDates?.refresh(batch?.signal);
@@ -209,7 +328,7 @@ export class SchedulerDriver {
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
     if (result === undefined) {
       await this.deps.history.recordSkipped(today, "scheduler", "guarded", now);
       return { kind: "skipped", reason: "guarded" };
@@ -226,13 +345,7 @@ export class SchedulerDriver {
   }
 
   async forceRunForDate(date: string): Promise<SchedulerResult> {
-    const now = this.now();
-    const entry = this.deps.store.get(date);
-    if (entry.status === "running") {
-      await this.deps.history.recordSkipped(date, "force", "already running", now);
-      return { kind: "skipped", reason: "already running" };
-    }
-    return this.runForDateNowAt(date, { trigger: "force" }, now, {
+    return this.runForDateNowAt(date, { trigger: "force" }, this.now(), {
       clearDateBeforeRun: true,
     });
   }
@@ -246,30 +359,43 @@ export class SchedulerDriver {
 
     const batch = this.beginCancellationBatch();
     try {
+      const retriedPending = await this.retryPendingCompletions(
+        dateStrings,
+        now,
+        "retry",
+        batch,
+      );
+      for (const [date, result] of retriedPending) {
+        results.push({
+          date,
+          result: result ?? { kind: "skipped", reason: "lock held" },
+        });
+      }
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
-        if (!date) continue;
-        const entry = this.deps.store.get(date);
-        if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
-          continue;
-        }
-        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-        const r = await this.tryRun(date, "retry", now, batch, {
-          clearDateBeforeRun: true,
-        });
-        if (r === undefined) {
-          await this.deps.history.recordSkipped(date, "retry", "lock held", now);
-          results.push({ date, result: { kind: "skipped", reason: "lock held" } });
-        } else {
-          results.push({ date, result: r });
+        if (!date || retriedPending.has(date)) continue;
+        this.safeEffect(() =>
+          this.progress.setBatch(i + 1, LOOKBACK_DAYS, date),
+        );
+        const result = await this.tryRun(date, "retry", now, batch, "retry");
+        if (result === undefined) {
+          await this.safeAsyncEffect(() =>
+            this.deps.history.recordSkipped(date, "retry", "lock held", now),
+          );
+          results.push({
+            date,
+            result: { kind: "skipped", reason: "lock held" },
+          });
+        } else if (result.kind !== "not-eligible") {
+          results.push({ date, result });
         }
         if (this.isCancellationRequested(batch)) break;
       }
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
     return results;
   }
 
@@ -290,11 +416,23 @@ export class SchedulerDriver {
 
     const batch = this.beginCancellationBatch();
     try {
+      const retriedPending = await this.retryPendingCompletions(
+        dateStrings,
+        now,
+        "run-all-pending",
+        batch,
+      );
+      for (const [date, result] of retriedPending) {
+        results.push({
+          date,
+          result: result ?? { kind: "skipped", reason: "lock held" },
+        });
+      }
       await this.deps.recentDates?.refresh(batch?.signal);
       for (let i = 0; i < dateStrings.length; i += 1) {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
-        if (!date) continue;
+        if (!date || retriedPending.has(date)) continue;
         if (
           date !== today &&
           this.deps.recentDates?.hasDate &&
@@ -302,27 +440,38 @@ export class SchedulerDriver {
         ) {
           continue;
         }
-        const entry = this.deps.store.get(date);
-        if (this.deps.store.isDone(date)) continue;
-        if (entry.status === "running") {
-          await this.deps.history.recordSkipped(date, "run-all-pending", "already running", now);
-          results.push({ date, result: { kind: "skipped", reason: "already running" } });
-          continue;
-        }
-        this.progress.setBatch(i + 1, LOOKBACK_DAYS, date);
-        const r = await this.tryRun(date, "run-all-pending", now, batch);
-        if (r === undefined) {
-          await this.deps.history.recordSkipped(date, "run-all-pending", "lock held", now);
-          results.push({ date, result: { kind: "skipped", reason: "lock held" } });
-        } else {
-          results.push({ date, result: r });
+        this.safeEffect(() =>
+          this.progress.setBatch(i + 1, LOOKBACK_DAYS, date),
+        );
+        const result = await this.tryRun(
+          date,
+          "run-all-pending",
+          now,
+          batch,
+          "run-all-pending",
+        );
+        if (result === undefined) {
+          await this.safeAsyncEffect(() =>
+            this.deps.history.recordSkipped(
+              date,
+              "run-all-pending",
+              "lock held",
+              now,
+            ),
+          );
+          results.push({
+            date,
+            result: { kind: "skipped", reason: "lock held" },
+          });
+        } else if (result.kind !== "not-eligible") {
+          results.push({ date, result });
         }
         if (this.isCancellationRequested(batch)) break;
       }
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
     return results;
   }
 
@@ -333,23 +482,38 @@ export class SchedulerDriver {
     runOpts: { clearDateBeforeRun?: boolean } = {},
   ): Promise<SchedulerResult> {
     const trigger = opts.trigger ?? "manual";
-    if (isRunning(date, this.deps.store)) {
-      await this.deps.history.recordSkipped(date, trigger, "already running", now);
-      return { kind: "skipped", reason: "already running" };
+    const pendingAttempt = await this.attemptPendingCompletion(
+      date,
+      trigger,
+      now,
+    );
+    if (pendingAttempt.handled) {
+      return pendingAttempt.result ?? { kind: "skipped", reason: "lock held" };
     }
-    this.progress.setBatch(1, 1, date);
+    this.safeEffect(() => this.progress.setBatch(1, 1, date));
     const batch = this.beginCancellationBatch();
-    let result: PipelineResult | undefined;
+    let result: TryRunResult | undefined;
     try {
       await this.deps.recentDates?.refresh(batch?.signal);
-      result = await this.tryRun(date, trigger, now, batch, runOpts);
+      result = await this.tryRun(
+        date,
+        trigger,
+        now,
+        batch,
+        runOpts.clearDateBeforeRun ? "force" : "normal",
+      );
     } finally {
       this.finishCancellationBatch(batch);
     }
-    this.progress.setIdle(this.latestCompleted());
+    this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
     if (result === undefined) {
-      await this.deps.history.recordSkipped(date, trigger, "lock held", now);
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordSkipped(date, trigger, "lock held", now),
+      );
       return { kind: "skipped", reason: "lock held" };
+    }
+    if (result.kind === "not-eligible") {
+      return { kind: "skipped", reason: "guarded" };
     }
     return result;
   }
@@ -362,24 +526,16 @@ export class SchedulerDriver {
       trigger: RunHistoryTrigger;
       cancellationBatch?: RunCancellationBatch;
     },
-  ): Promise<PipelineResult | undefined> {
-    const s = this.deps.getSettings();
-    const entry = this.deps.store.get(date);
-    const decision = checkTickGate(date, this.deps.store, {
-      now: opts.now,
-      timeGate: opts.timeGate,
-      tickIntervalMin: s.schedule.tickIntervalMin,
-    });
-    if (!decision.allow) {
-      if (decision.reason === "already-done") {
-        this.deps.logger.debug(`tickDate: ${date} already done (${entry.status}), skip`);
-      } else if (decision.reason === "running") {
-        this.deps.logger.debug(`tickDate: ${date} currently running, skip`);
-      }
-      return undefined;
-    }
-
-    return await this.tryRun(date, opts.trigger, opts.now, opts.cancellationBatch);
+  ): Promise<SchedulerResult | undefined> {
+    const result = await this.tryRun(
+      date,
+      opts.trigger,
+      opts.now,
+      opts.cancellationBatch,
+      "scheduled",
+      opts.timeGate,
+    );
+    return result?.kind === "not-eligible" ? undefined : result;
   }
 
   private async tryRun(
@@ -387,110 +543,533 @@ export class SchedulerDriver {
     trigger: RunHistoryTrigger,
     now: Date,
     cancellationBatch?: RunCancellationBatch,
-    opts: { clearDateBeforeRun?: boolean } = {},
-  ): Promise<PipelineResult | undefined> {
-    return this.deps.lock.withLock(date, async () => {
-      if (opts.clearDateBeforeRun) {
-        await this.deps.store.clearDate(date);
-      }
-      const previousEntry = this.deps.store.get(date);
-      this.deps.cancellation?.prepareRun();
-      const signal = this.deps.cancellation?.begin(date, cancellationBatch);
-      let result: PipelineResult;
-      try {
-        this.progress.setTask("arXiv Daily report", date);
-        await this.deps.store.setRunning(date);
-        await this.deps.history.recordStarted(date, trigger, now);
-        result = signal
-          ? await this.deps.runForDate(date, signal)
-          : await this.deps.runForDate(date);
-      } catch (e) {
-        result = isCancellationError(e)
-          ? {
-              kind: "cancelled",
-              reason: errorMessage(e),
-            }
-          : {
-              kind: "failed_transient",
-              reason: errorMessage(e),
-            };
-      }
-      try {
-        if (result.kind === "completed") {
-          const papersWritten = preservedCompletedPaperCount(
-            previousEntry,
-            result.papersWritten,
+    mode: RunMode = "normal",
+    timeGate?: TimeGate,
+  ): Promise<TryRunResult | undefined> {
+    const store = this.deps.store;
+    this.activeWork += 1;
+    try {
+      return await this.deps.lock.withLock(date, async () => {
+        const pendingCompletion = this.pendingCompletions.get(date);
+        if (pendingCompletion) {
+          return this.runPendingCompletionFinalization(date, () =>
+            this.finalizePendingCompletionLocked(
+              date,
+              pendingCompletion,
+              trigger,
+              now,
+              store,
+            ),
           );
-          const preservedPapersWritten = papersWritten !== result.papersWritten;
-          await this.deps.store.setCompleted(date, papersWritten);
-          this.deps.logger.notice(`arXiv ${date}: ${papersWritten} papers written`);
-          this.progress.setComplete(`Daily report complete: ${date}`);
-          await this.deps.history.recordCompleted(date, trigger, {
-            papersWritten,
-            requestedPapersWritten: result.papersWritten,
-            preservedPapersWritten,
-          }, now);
-          if (this.deps.onDailyCompleted) {
+        }
+        const pendingNonCompletion = this.pendingNonCompletions.get(date);
+        if (pendingNonCompletion) {
+          return this.finalizePendingNonCompletionLocked(
+            date,
+            pendingNonCompletion,
+            store,
+          );
+        }
+
+        try {
+          await store.loadAuthoritative();
+        } catch (error) {
+          return this.storeFailureResult(date, trigger, now, error);
+        }
+
+        const currentEntry = store.get(date);
+        if (mode === "scheduled") {
+          const decision = checkTickGate(date, store, {
+            now,
+            timeGate,
+            tickIntervalMin: this.deps.getSettings().schedule.tickIntervalMin,
+          });
+          if (!decision.allow) {
+            this.safeEffect(() => {
+              if (decision.reason === "already-done") {
+                this.deps.logger.debug(
+                  `tickDate: ${date} already done (${currentEntry.status}), skip`,
+                );
+              } else if (decision.reason === "running") {
+                this.deps.logger.debug(`tickDate: ${date} currently running, skip`);
+              }
+            });
+            return { kind: "not-eligible" as const };
+          }
+        } else if (mode === "retry") {
+          if (
+            currentEntry.status !== "failed_transient" &&
+            currentEntry.status !== "failed_permanent"
+          ) {
+            return { kind: "not-eligible" as const };
+          }
+        } else if (mode === "run-all-pending") {
+          if (store.isDone(date)) return { kind: "not-eligible" as const };
+          if (currentEntry.status === "running") {
+            await this.safeAsyncEffect(() =>
+              this.deps.history.recordSkipped(
+                date,
+                trigger,
+                "already running",
+                now,
+              ),
+            );
+            return { kind: "skipped" as const, reason: "already running" };
+          }
+        } else if (mode === "normal") {
+          if (store.isDone(date)) {
+            await this.safeAsyncEffect(() =>
+              this.deps.history.recordSkipped(date, trigger, "already done", now),
+            );
+            return { kind: "skipped" as const, reason: "already done" };
+          }
+          if (currentEntry.status === "running") {
+            await this.safeAsyncEffect(() =>
+              this.deps.history.recordSkipped(
+                date,
+                trigger,
+                "already running",
+                now,
+              ),
+            );
+            return { kind: "skipped" as const, reason: "already running" };
+          }
+        }
+
+        if (mode === "force" || mode === "retry") {
+          try {
+            await store.clearDate(date);
+          } catch (error) {
+            return this.storeFailureResult(date, trigger, now, error);
+          }
+        }
+
+        const previousEntry = store.get(date);
+        this.safeEffect(() => this.deps.cancellation?.prepareRun());
+        const signal = this.beginCancellationRun(date, cancellationBatch);
+        let result: PipelineResult;
+        try {
+          this.safeEffect(() =>
+            this.progress.setTask("arXiv Daily report", date),
+          );
+          try {
+            await store.setRunning(date);
+          } catch (error) {
+            this.safeEffect(() => this.deps.cancellation?.finish(date));
+            return this.storeFailureResult(date, trigger, now, error);
+          }
+          await this.safeAsyncEffect(() =>
+            this.deps.history.recordStarted(date, trigger, now),
+          );
+          result = signal
+            ? await this.deps.runForDate(date, signal)
+            : await this.deps.runForDate(date);
+        } catch (error) {
+          result = isCancellationError(error)
+            ? { kind: "cancelled", reason: errorMessage(error) }
+            : { kind: "failed_transient", reason: errorMessage(error) };
+        }
+
+        try {
+          if (result.kind === "completed") {
+            const papersWritten = preservedCompletedPaperCount(
+              previousEntry,
+              result.papersWritten,
+            );
+            const pending: PendingCompletion = {
+              result,
+              papersWritten,
+              requestedPapersWritten: result.papersWritten,
+              preservedPapersWritten: papersWritten !== result.papersWritten,
+              trigger,
+              completedAt: now,
+              committed: false,
+            };
+            this.pendingCompletions.set(date, pending);
+            const finalization = this.finalizePendingCompletionLocked(
+              date,
+              pending,
+              trigger,
+              now,
+              store,
+            );
+            this.pendingCompletionFinalizations.set(date, finalization);
             try {
-              await this.deps.onDailyCompleted(date, result);
-            } catch (e) {
-              this.deps.logger.error(
-                `scheduler: onDailyCompleted failed for ${date}; pipeline remains completed`,
-                e,
-              );
+              return await finalization;
+            } finally {
+              if (this.pendingCompletionFinalizations.get(date) === finalization) {
+                this.pendingCompletionFinalizations.delete(date);
+              }
             }
           }
-        } else if (result.kind === "pending") {
-          await this.deps.store.setPending(date, result.reason);
-          this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);
-          this.progress.setIdle(this.latestCompleted());
-          await this.deps.history.recordPending(date, trigger, result.reason, now);
-        } else if (result.kind === "cancelled") {
-          await this.deps.store.setPending(date, result.reason);
-          const message = `Daily report cancelled: ${date} (${result.reason})`;
-          this.deps.logger.info(`arXiv ${date}: cancelled - ${result.reason}`);
-          this.progress.setError(message);
-          await this.deps.history.recordCancelled(date, trigger, result.reason, now);
-        } else if (result.kind === "failed_transient") {
-          const persistedStatus = await this.persistFailed(date, "transient", result.reason);
-          const persistedReason = this.deps.store.get(date).error ?? result.reason;
-          result = { kind: persistedStatus, reason: persistedReason };
-          const severity = persistedStatus === "failed_permanent" ? "permanent" : "transient";
-          const message = `Daily report failed ${severity}: ${date} (${persistedReason})`;
-          if (persistedStatus === "failed_permanent") {
-            this.deps.logger.error(`arXiv ${date} permanent: ${persistedReason}`);
-            this.deps.logger.notice(`arXiv ${date}: failed (${persistedReason})`, 10_000);
-          } else {
-            this.deps.logger.warn(`arXiv ${date} transient: ${persistedReason}`);
+          if (result.kind === "pending" || result.kind === "cancelled") {
+            const pending: PendingNonCompletion = { result, trigger, at: now };
+            this.pendingNonCompletions.set(date, pending);
+            return await this.finalizePendingNonCompletionLocked(date, pending, store);
           }
-          this.progress.setError(message);
-          await this.deps.history.recordFailed(date, trigger, persistedStatus, persistedReason, now);
-        } else {
-          const persistedStatus = await this.persistFailed(date, "permanent", result.reason);
-          this.deps.logger.error(`arXiv ${date} permanent: ${result.reason}`);
-          this.deps.logger.notice(`arXiv ${date}: failed (${result.reason})`, 10_000);
-          this.progress.setError(`Daily report failed permanent: ${date} (${result.reason})`);
-          await this.deps.history.recordFailed(date, trigger, persistedStatus, result.reason, now);
+          return await this.finalizeFailureLocked(date, result, trigger, now, store);
+        } finally {
+          this.safeEffect(() => this.deps.cancellation?.finish(date));
         }
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        this.deps.logger.error(
-          `scheduler: failed to persist result for ${date}; continuing batch`,
-          e,
-        );
-      } finally {
-        this.deps.cancellation?.finish(date);
+      });
+    } finally {
+      this.activeWork -= 1;
+    }
+  }
+
+  private async attemptPendingCompletion(
+    date: string,
+    trigger: RunHistoryTrigger,
+    now: Date,
+  ): Promise<PendingCompletionAttempt> {
+    const existingFinalization = this.pendingCompletionFinalizations.get(date);
+    if (existingFinalization) {
+      return { handled: true, result: await existingFinalization };
+    }
+    if (!this.pendingCompletions.has(date) && !this.pendingNonCompletions.has(date)) {
+      return { handled: false };
+    }
+    const result = await this.tryRun(date, trigger, now);
+    if (result?.kind === "not-eligible") return { handled: true };
+    return { handled: true, result };
+  }
+
+  private async runPendingCompletionFinalization(
+    date: string,
+    finalize: () => Promise<PipelineResult | undefined>,
+  ): Promise<PipelineResult | undefined> {
+    const existing = this.pendingCompletionFinalizations.get(date);
+    if (existing) return existing;
+
+    const finalization = finalize();
+    this.pendingCompletionFinalizations.set(date, finalization);
+    try {
+      return await finalization;
+    } finally {
+      if (this.pendingCompletionFinalizations.get(date) === finalization) {
+        this.pendingCompletionFinalizations.delete(date);
       }
-      return result;
-    });
+    }
+  }
+
+  private pendingRetryDates(preferredDates: string[]): string[] {
+    const pendingDates = new Set([
+      ...this.pendingCompletions.keys(),
+      ...this.pendingNonCompletions.keys(),
+    ]);
+    return [
+      ...preferredDates,
+      ...[...pendingDates].filter((date) => !preferredDates.includes(date)),
+    ];
+  }
+
+  private async retryPendingCompletions(
+    dates: string[],
+    now: Date,
+    trigger: RunHistoryTrigger = "scheduler",
+    cancellationBatch?: RunCancellationBatch,
+  ): Promise<Map<string, SchedulerResult | undefined>> {
+    const results = new Map<string, SchedulerResult | undefined>();
+    for (const [index, date] of dates.entries()) {
+      if (
+        !this.pendingCompletions.has(date) &&
+        !this.pendingNonCompletions.has(date)
+      ) {
+        continue;
+      }
+      if (this.isCancellationRequested(cancellationBatch)) break;
+      this.safeEffect(() =>
+        this.progress.setBatch(Math.max(1, index + 1), dates.length, date),
+      );
+      const attempt = await this.attemptPendingCompletion(date, trigger, now);
+      if (attempt.handled) results.set(date, attempt.result);
+    }
+    return results;
+  }
+
+  private async finalizePendingCompletionLocked(
+    date: string,
+    pending: PendingCompletion,
+    attemptTrigger: RunHistoryTrigger,
+    now: Date,
+    store: StateStore,
+  ): Promise<PipelineResult> {
+    if (!pending.committed) {
+      try {
+        await store.setCompleted(date, pending.papersWritten);
+        pending.committed = true;
+      } catch (commitFailure) {
+        this.safeEffect(() =>
+          this.deps.logger.error(
+            `scheduler: completion commit failed for ${date}; retaining pending completion`,
+            commitFailure,
+          ),
+        );
+        this.safeEffect(() =>
+          this.progress.setError(
+            `Daily report failed transient: ${date} (${COMPLETION_COMMIT_FAILURE_REASON})`,
+          ),
+        );
+        await this.safeAsyncEffect(() =>
+          this.deps.history.recordFailed(
+            date,
+            attemptTrigger,
+            "failed_transient",
+            COMPLETION_COMMIT_FAILURE_REASON,
+            now,
+          ),
+        );
+        return {
+          kind: "failed_transient",
+          reason: COMPLETION_COMMIT_FAILURE_REASON,
+        };
+      }
+    }
+
+    this.safeEffect(() =>
+      this.deps.logger.notice(
+        `arXiv ${date}: ${pending.papersWritten} papers written`,
+      ),
+    );
+    this.safeEffect(() =>
+      this.progress.setComplete(`Daily report complete: ${date}`),
+    );
+    await this.safeAsyncEffect(() =>
+      this.deps.history.recordCompleted(
+        date,
+        pending.trigger,
+        {
+          papersWritten: pending.papersWritten,
+          requestedPapersWritten: pending.requestedPapersWritten,
+          preservedPapersWritten: pending.preservedPapersWritten,
+        },
+        pending.completedAt,
+      ),
+    );
+    if (this.deps.onDailyCompleted) {
+      await this.safeAsyncEffect(
+        () => this.deps.onDailyCompleted!(date, pending.result),
+        `scheduler: onDailyCompleted failed for ${date}; pipeline remains completed`,
+      );
+    }
+    this.pendingCompletions.delete(date);
+    return pending.result;
+  }
+
+  private async finalizePendingNonCompletionLocked(
+    date: string,
+    pending: PendingNonCompletion,
+    store: StateStore,
+  ): Promise<PendingNonCompletionResult> {
+    try {
+      await store.setPending(date, pending.result.reason);
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.error(
+          `scheduler: failed to persist ${pending.result.kind} result for ${date}; retaining terminal transition`,
+          error,
+        ),
+      );
+      return pending.result;
+    }
+
+    if (pending.result.kind === "pending") {
+      this.safeEffect(() =>
+        this.deps.logger.info(
+          `arXiv ${date}: pending - ${pending.result.reason}`,
+        ),
+      );
+      this.safeEffect(() => this.progress.setIdle(this.latestCompleted()));
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordPending(
+          date,
+          pending.trigger,
+          pending.result.reason,
+          pending.at,
+        ),
+      );
+    } else {
+      this.safeEffect(() =>
+        this.deps.logger.info(
+          `arXiv ${date}: cancelled - ${pending.result.reason}`,
+        ),
+      );
+      this.safeEffect(() =>
+        this.progress.setError(
+          `Daily report cancelled: ${date} (${pending.result.reason})`,
+        ),
+      );
+      await this.safeAsyncEffect(() =>
+        this.deps.history.recordCancelled(
+          date,
+          pending.trigger,
+          pending.result.reason,
+          pending.at,
+        ),
+      );
+    }
+    this.pendingNonCompletions.delete(date);
+    return pending.result;
+  }
+
+  private async confirmDurablyDone(date: string): Promise<boolean> {
+    const store = this.deps.store;
+    this.activeWork += 1;
+    try {
+      const confirmed = await this.deps.lock.withLock(date, async () => {
+        try {
+          await store.loadAuthoritative();
+        } catch {
+          return false;
+        }
+        return store.isDone(date);
+      });
+      return confirmed ?? false;
+    } finally {
+      this.activeWork -= 1;
+    }
+  }
+
+  private async finalizeFailureLocked(
+    date: string,
+    result: Extract<
+      PipelineResult,
+      { kind: "failed_transient" | "failed_permanent" }
+    >,
+    trigger: RunHistoryTrigger,
+    now: Date,
+    store: StateStore,
+  ): Promise<Extract<
+    PipelineResult,
+    { kind: "failed_transient" | "failed_permanent" }
+  >> {
+    const failureKind =
+      result.kind === "failed_permanent" ? "permanent" : "transient";
+    let persistedStatus: "failed_transient" | "failed_permanent" = result.kind;
+    try {
+      persistedStatus = await store.setFailed(date, failureKind, result.reason);
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.error(
+          `scheduler: failed to persist failure for ${date}; clearing running state`,
+          error,
+        ),
+      );
+      try {
+        await store.clearDate(date);
+      } catch (clearError) {
+        this.safeEffect(() =>
+          this.deps.logger.error(
+            `scheduler: failed to clear running state for ${date}`,
+            clearError,
+          ),
+        );
+      }
+    }
+
+    const persistedReason = store.get(date).error ?? result.reason;
+    const severity =
+      persistedStatus === "failed_permanent" ? "permanent" : "transient";
+    if (persistedStatus === "failed_permanent") {
+      this.safeEffect(() =>
+        this.deps.logger.error(`arXiv ${date} permanent: ${persistedReason}`),
+      );
+      this.safeEffect(() =>
+        this.deps.logger.notice(
+          `arXiv ${date}: failed (${persistedReason})`,
+          10_000,
+        ),
+      );
+    } else {
+      this.safeEffect(() =>
+        this.deps.logger.warn(`arXiv ${date} transient: ${persistedReason}`),
+      );
+    }
+    this.safeEffect(() =>
+      this.progress.setError(
+        `Daily report failed ${severity}: ${date} (${persistedReason})`,
+      ),
+    );
+    await this.safeAsyncEffect(() =>
+      this.deps.history.recordFailed(
+        date,
+        trigger,
+        persistedStatus,
+        persistedReason,
+        now,
+      ),
+    );
+    return { kind: persistedStatus, reason: persistedReason };
+  }
+
+  private async storeFailureResult(
+    date: string,
+    trigger: RunHistoryTrigger,
+    now: Date,
+    error: unknown,
+  ): Promise<Extract<PipelineResult, { kind: "failed_transient" }>> {
+    const reason = errorMessage(error);
+    this.safeEffect(() =>
+      this.deps.logger.error(`scheduler: state store failed for ${date}`, error),
+    );
+    this.safeEffect(() =>
+      this.progress.setError(`Daily report failed transient: ${date} (${reason})`),
+    );
+    await this.safeAsyncEffect(() =>
+      this.deps.history.recordFailed(
+        date,
+        trigger,
+        "failed_transient",
+        reason,
+        now,
+      ),
+    );
+    return { kind: "failed_transient", reason };
+  }
+
+  private safeEffect(effect: () => void): void {
+    try {
+      effect();
+    } catch {
+      // In-memory observability is best effort and never changes run state.
+    }
+  }
+
+  private async safeAsyncEffect(
+    effect: () => Promise<void>,
+    failureMessage?: string,
+  ): Promise<void> {
+    try {
+      await effect();
+    } catch (error) {
+      if (failureMessage) {
+        this.safeEffect(() => this.deps.logger.error(failureMessage, error));
+      }
+    }
   }
 
   private beginCancellationBatch(): RunCancellationBatch | undefined {
-    return this.deps.cancellation?.beginBatch();
+    try {
+      return this.deps.cancellation?.beginBatch();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private beginCancellationRun(
+    date: string,
+    batch?: RunCancellationBatch,
+  ): AbortSignal | undefined {
+    try {
+      return this.deps.cancellation?.begin(date, batch);
+    } catch {
+      return undefined;
+    }
   }
 
   private finishCancellationBatch(batch: RunCancellationBatch | undefined): void {
-    if (batch) this.deps.cancellation?.finishBatch(batch);
+    if (!batch) return;
+    this.safeEffect(() => this.deps.cancellation?.finishBatch(batch));
   }
 
   private isCancellationRequested(batch?: RunCancellationBatch): boolean {
