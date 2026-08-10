@@ -27,6 +27,8 @@ export interface EmbeddingSettings {
   model: string;
   /** Expected vector width of the remote model, e.g. 1536. */
   dimension: number;
+  /** Whether the first-time local/remote choice was already offered (ADR 0008). */
+  initialChoiceDone: boolean;
 }
 
 export interface Topic {

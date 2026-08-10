@@ -117,3 +117,45 @@ function renderPaths(parent: HTMLElement, heading: string, paths: string[]): voi
   for (const path of paths.slice(0, 100)) list.createEl("li", { text: path });
   if (paths.length > 100) list.createEl("li", { text: `…and ${paths.length - 100} more` });
 }
+
+/**
+ * First-time guided choice between local and remote embedding (ADR 0008),
+ * shown right after a library is first connected — before the user hits the
+ * long local index. Dismissing the modal keeps the local default; the choice
+ * is always changeable later in settings (switching rebuilds the index).
+ */
+export function confirmEmbeddingMode(app: App): Promise<"local" | "remote"> {
+  return new Promise((resolve) => {
+    const modal = new Modal(app);
+    modal.titleEl.setText("Embedding mode");
+    modal.contentEl.createEl("p", {
+      text: "How should arXiv Daily turn your library's full text into similarity vectors? "
+        + "You can change this later in settings — switching modes rebuilds the index.",
+    });
+    const list = modal.contentEl.createEl("dl");
+    addDisclosure(
+      list,
+      "Local (offline, default)",
+      "Embeds on this device with a bundled model. Private and offline, but indexing a large library takes a long time (hours).",
+    );
+    addDisclosure(
+      list,
+      "Remote (fast)",
+      "Sends full-text chunks to an embeddings API. Indexing takes minutes; requires model authorization at full-text depth; full text leaves this device.",
+    );
+    const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
+    let settled = false;
+    const finish = (mode: "local" | "remote") => {
+      if (settled) return;
+      settled = true;
+      resolve(mode);
+      modal.close();
+    };
+    actions.createEl("button", { text: "Local" }).onclick = () => finish("local");
+    const remote = actions.createEl("button", { text: "Remote" });
+    remote.addClass("mod-cta");
+    remote.onclick = () => finish("remote");
+    modal.onClose = () => finish("local");
+    modal.open();
+  });
+}

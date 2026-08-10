@@ -55,5 +55,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     apiKey: "",
     model: "",
     dimension: 384,
+    initialChoiceDone: false,
   },
 };

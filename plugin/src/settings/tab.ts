@@ -42,6 +42,7 @@ import {
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import {
+  confirmEmbeddingMode,
   confirmLibraryAuthorization,
   showLibraryInventoryPreview,
   showPersonalLibraryCatalogSummary,
@@ -379,7 +380,28 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (result === "selected") {
       new Notice("arXiv Daily: personal library selected. You can preview files locally before authorizing model processing.");
       this.refreshSettings();
+      await this.offerEmbeddingModeChoice();
     }
+  }
+
+  /**
+   * First-time guided choice between local and remote embedding (ADR 0008),
+   * offered once when a library is first connected. Dismissing keeps local;
+   * the mode stays changeable in settings (switching rebuilds the index).
+   */
+  private async offerEmbeddingModeChoice(): Promise<void> {
+    if (this.plugin.settings.embedding.initialChoiceDone) return;
+    const mode = await confirmEmbeddingMode(this.app);
+    this.plugin.settings.embedding.mode = mode;
+    this.plugin.settings.embedding.initialChoiceDone = true;
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+    new Notice(
+      mode === "remote"
+        ? "arXiv Daily: remote embedding enabled — review & authorize at full-text depth before indexing."
+        : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
+      10_000,
+    );
   }
 
   public async reviewLibraryAuthorization(): Promise<void> {

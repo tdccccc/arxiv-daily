@@ -128,3 +128,10 @@
 - change: goal.md status → active + P7 索引行；phases/07-remote-embedding.md（T1 core 远程模型 → T2 设置 → T3 授权扩展 → T4 引导选择 → T5 工厂接线 → T6 收尾）。
 - disposition: 无代码改动。
 - next: P7-T1 core RemoteEmbeddingModel（OpenAI 兼容 /embeddings 客户端 + mock http 测试）。
+
+## 2026-08-10 — note（P7 T1-T4 完成：远程嵌入实现过半）
+
+- evidence: T1 core `RemoteEmbeddingModel`（OpenAI 兼容 /embeddings，批量≤64、维度断言、abort、密钥脱敏；modelId `remote:{model}:{dimension}` 不含端点）；EmbeddingModel port 增 `prefixPolicy`（e5|none），编排条件化前缀；本地 host 声明 e5。T2 `PluginSettings.embedding`（mode/provider/baseUrl/apiKey/model/dimension + initialChoiceDone）+ `validateEmbeddingConfig` + 设置 UI Embedding 区 + CLI `[embedding]` 映射。T3 授权多端点：scope 化（LLM 端点 + 可选嵌入端点）、远程授权记 full-text 深度、指纹含嵌入端点 digest、授权 modal 披露嵌入端点与全文深度、decode 兼容两种深度。T4 首次引导选择：库连接成功后 `offerEmbeddingModeChoice`（initialChoiceDone 标记，一次），modal 选本地/远程（含速度/隐私/重建提示），关闭默认本地。
+- change: 四 chunk 已提交（1d154a4 remote model、ed34343 settings、14bbf76 authorization、T4 待提交）。验证：core 1547/1547（+9）、plugin 442/442（+3 引导 modal）、lint 0、boundaries OK。
+- disposition: 保留全部。
+- next: T5 工厂接线（index/search 按 mode 选嵌入实现）→ T6 收尾。
