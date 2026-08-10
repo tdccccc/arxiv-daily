@@ -7,7 +7,13 @@ import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
-import { OperationRegistry, RunCancellationService, normalizeArxivId } from "@arxiv-daily/core";
+import {
+  OperationRegistry,
+  RunCancellationService,
+  normalizeArxivId,
+  type OperationHandle,
+  type OperationKind,
+} from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
@@ -42,10 +48,46 @@ import {
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
 import { buildObsidianHostAdapters } from "./src/hosts/obsidian";
+import {
+  SettingsChangeService,
+  type PreparedOutputStores,
+} from "./src/settings/change-service";
 
 interface PersistedData {
   settings: PluginSettings;
   runState?: RunState;
+}
+
+class SettingsOperationRegistry extends OperationRegistry {
+  private outputTransitionActive = false;
+
+  override begin(
+    kind: OperationKind,
+    label: string,
+    key?: string,
+  ): OperationHandle {
+    if (this.outputTransitionActive) {
+      throw new Error(
+        "Cannot start an operation while output directories are changing",
+      );
+    }
+    return super.begin(kind, label, key);
+  }
+
+  beginOutputTransition(): () => void {
+    if (this.outputTransitionActive || this.snapshot().length > 0) {
+      throw new Error(
+        "Output directories cannot change while operations or runs are active",
+      );
+    }
+    this.outputTransitionActive = true;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.outputTransitionActive = false;
+    };
+  }
 }
 
 let lastCacheCleanupDate: string | null = null;
@@ -76,15 +118,18 @@ export default class ArxivDailyPlugin extends Plugin {
   stateStore!: StateStore;
   runHistoryStore!: RunHistoryStore;
   scheduler!: SchedulerService;
+  settingsChanges!: SettingsChangeService;
   recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
-  readonly operations = new OperationRegistry();
+  readonly operations = new SettingsOperationRegistry();
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService(this.operations);
   private unloading = false;
   private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
+  private scheduleIntentRevision = 0;
+  private scheduleIntentQueue: Promise<void> = Promise.resolve();
   private host!: HostAdapters;
 
   getHttpClient(): HttpClient {
@@ -106,7 +151,8 @@ export default class ArxivDailyPlugin extends Plugin {
     this.host = buildObsidianHostAdapters({
       app: this.app,
       getSettings: () => this.settings,
-      persistSettings: () => this.persistSettings(),
+      changeSettingValue: (key, value) =>
+        this.settingsChanges.changeValue(key, value),
     });
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
@@ -167,6 +213,21 @@ export default class ArxivDailyPlugin extends Plugin {
       dailyPathForDate: (date) => this.buildMarkdownWriter().dailyPath(date),
       onDailyCompleted: (date, result) => this.deliverCompletedDigest(date, result),
     });
+    this.settingsChanges = new SettingsChangeService({
+      settings: this.settings,
+      persistSettings: (candidate) => this.persistSettings(candidate),
+      prepareOutputStores: (candidate) => this.prepareOutputStores(candidate),
+      installOutputStores: (prepared) => this.installOutputStores(prepared),
+      hasActiveOutputWork: () => this.hasActiveOutputWork(),
+      beginOutputTransition: () => this.beginOutputTransition(),
+      reportPostCommitError: (action, error) =>
+        this.logger.error(`settings: failed to ${action} after persistence`, error),
+      setLoggerLevel: (level) => this.logger.setLevel(level),
+      setLoggerTimezone: (timezone) => this.logger.setTimezone(timezone),
+      restartScheduler: () => this.restartScheduler(),
+      setScheduleEnabled: (enabled) => this.applyScheduleEnabledRuntime(enabled),
+      refreshSensitiveValues: () => this.refreshSensitiveValues(),
+    });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
     // changes (model, key, paths) always take effect without needing to reload.
@@ -214,11 +275,16 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    this.settings.detailSelection = sanitizeDetailSelection(
+    if (this.settingsChanges) {
+      await this.settingsChanges.persistCurrent();
+      return;
+    }
+    Object.assign(
       this.settings.detailSelection,
+      sanitizeDetailSelection(this.settings.detailSelection),
     );
+    await this.persistSettings(this.settings);
     this.refreshSensitiveValues();
-    await this.persistSettings();
   }
 
   restartScheduler(): void {
@@ -226,70 +292,154 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled) this.scheduler.start();
   }
 
-  async reloadStateStoreForOutputPaths(): Promise<void> {
-    const nextStore = createStorageStateStore(
+  private async prepareOutputStores(
+    candidate: PluginSettings,
+  ): Promise<PreparedOutputStores> {
+    const stateStore = createStorageStateStore(
       this.host.storage,
-      this.settings.output,
+      candidate.output,
       this.logger,
     );
-    await nextStore.load();
-    this.stateStore = nextStore;
-    this.scheduler.replaceStore(nextStore);
-    this.runHistoryStore = RunHistoryStore.fromStorage(
+    await stateStore.load();
+    const runHistoryStore = RunHistoryStore.fromStorage(
       this.host.storage,
-      this.settings.output,
+      candidate.output,
       this.logger,
     );
-    this.scheduler.replaceRunHistory(this.runHistoryStore);
+    await runHistoryStore.readLatest(1);
+    return { stateStore, runHistoryStore };
+  }
+
+  private installOutputStores(prepared: PreparedOutputStores): void {
+    // Scheduler validates both references first, then publishes one immutable
+    // pair. A failure therefore leaves every old reference installed without a
+    // rollback path that could itself throw and split state from history.
+    this.scheduler.replacePersistenceStores(
+      prepared.stateStore,
+      prepared.runHistoryStore,
+    );
+    this.stateStore = prepared.stateStore;
+    this.runHistoryStore = prepared.runHistoryStore;
     if (this.settings.schedule.enabled) {
-      this.progress.setIdle(latestCompletedDate(nextStore));
+      this.progress.setIdle(latestCompletedDate(prepared.stateStore));
     } else {
       this.progress.setDisabled();
     }
   }
 
-  async setScheduleEnabled(enabled: boolean): Promise<boolean> {
-    if (this.settings.schedule.enabled === enabled) return true;
+  hasActiveOutputWork(): boolean {
+    return this.operations.snapshot().length > 0 || this.scheduler.activeRuns().length > 0;
+  }
 
-    if (enabled) {
-      const v = validateSchedulerConfig(this.settings);
-      if (!v.ok) {
-        new Notice(`Cannot enable arXiv Daily:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
+  async withOutputOperation<T>(
+    kind: "paper-index" | "paper-note",
+    label: string,
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const handle = this.operations.begin(kind, label, key);
+    try {
+      return await operation();
+    } finally {
+      handle.finish();
+    }
+  }
+
+  private beginOutputTransition(): () => void {
+    if (this.scheduler.activeRuns().length > 0) {
+      throw new Error(
+        "Output directories cannot change while operations or runs are active",
+      );
+    }
+    return this.operations.beginOutputTransition();
+  }
+
+  /** Kept for callers outside Settings; new path changes use settingsChanges. */
+  async reloadStateStoreForOutputPaths(): Promise<void> {
+    this.installOutputStores(await this.prepareOutputStores(this.settings));
+  }
+
+  async setScheduleEnabled(enabled: boolean): Promise<boolean> {
+    const revision = (this.scheduleIntentRevision ?? 0) + 1;
+    this.scheduleIntentRevision = revision;
+    let choice: "skip" | "run" | "none" | null = enabled ? "none" : null;
+    if (enabled && !this.settings.schedule.enabled) {
+      const candidate: PluginSettings = {
+        ...this.settings,
+        schedule: { ...this.settings.schedule, enabled: true },
+      };
+      const validation = validateSchedulerConfig(candidate);
+      if (!validation.ok) {
+        if (revision === this.scheduleIntentRevision) {
+          new Notice(
+            `Cannot enable arXiv Daily:\n${validation.reasons.map((reason) => "• " + reason).join("\n")}`,
+            10_000,
+          );
+        }
         return false;
       }
-      const choice = await chooseModal(
-        this.app,
-        "Enable arXiv Daily",
-        "Scheduler will check for new papers daily. Run today's summary right now?",
-        [
-          { label: "Cancel", value: "cancel" },
-          { label: "Skip today", value: "skip" },
-          { label: "Run today", value: "run", cta: true },
-        ],
-      );
-      if (choice === null || choice === "cancel") return false;
+      const selected = await this.chooseScheduleEnableAction();
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (selected === null || selected === "cancel") return false;
+      choice = selected === "run" ? "run" : "skip";
+    }
 
-      this.settings.schedule.enabled = true;
-      await this.saveSettings();
-      this.scheduler.start();
+    return this.enqueueScheduleIntent(async () => {
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (this.settings.schedule.enabled !== enabled) {
+        await this.settingsChanges.changeValue("schedule.enabled", enabled);
+      }
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (!enabled || choice === "none") return true;
+
       if (choice === "skip") {
         const today = formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
         await this.stateStore.setSkipped(today, "user opted out at enable time");
-        this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+        if (revision === this.scheduleIntentRevision) {
+          this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+        }
       } else {
         const result = await this.scheduler.tickToday();
-        if (result?.kind === "skipped" && result.reason === "weekend") {
+        if (
+          revision === this.scheduleIntentRevision &&
+          result?.kind === "skipped" &&
+          result.reason === "weekend"
+        ) {
           this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
         }
       }
-      return true;
-    }
+      return revision === this.scheduleIntentRevision;
+    });
+  }
 
-    this.settings.schedule.enabled = false;
-    await this.saveSettings();
-    this.scheduler.stop();
-    this.progress.setDisabled();
-    return true;
+  private chooseScheduleEnableAction(): Promise<string | null> {
+    return chooseModal(
+      this.app,
+      "Enable arXiv Daily",
+      "Scheduler will check for new papers daily. Run today's summary right now?",
+      [
+        { label: "Cancel", value: "cancel" },
+        { label: "Skip today", value: "skip" },
+        { label: "Run today", value: "run", cta: true },
+      ],
+    );
+  }
+
+  private enqueueScheduleIntent(
+    operation: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const queued = (this.scheduleIntentQueue ?? Promise.resolve()).then(operation);
+    this.scheduleIntentQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  private applyScheduleEnabledRuntime(enabled: boolean): void {
+    if (enabled) {
+      this.scheduler.start();
+    } else {
+      this.scheduler.stop();
+      this.progress.setDisabled();
+    }
   }
 
   private async loadSettingsAndState(): Promise<string[]> {
@@ -299,8 +449,8 @@ export default class ArxivDailyPlugin extends Plugin {
     return loaded.warnings;
   }
 
-  private async persistSettings(): Promise<void> {
-    const data: PersistedData = { settings: this.settings };
+  private async persistSettings(settings: PluginSettings): Promise<void> {
+    const data: PersistedData = { settings };
     await this.saveData(data);
   }
 

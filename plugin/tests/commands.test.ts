@@ -123,6 +123,26 @@ describe("registerCommands", () => {
     );
   });
 
+  it("leases paper-index and paper-note command writes through the output gate", () => {
+    const markBody = commandsSource.match(
+      /async function setPaperMark[\s\S]*?\n  async function createPaperNote/,
+    )?.[0];
+    const noteBody = commandsSource.match(
+      /async function createPaperNote[\s\S]*?\n  function openArxivIdPicker/,
+    )?.[0];
+
+    expect(markBody).toContain("await plugin.withOutputOperation(");
+    expect(markBody).toContain('mark === "saved" ? "paper-note" : "paper-index"');
+    expect(noteBody).toContain("await plugin.withOutputOperation(");
+    expect(noteBody).toContain('"paper-note"');
+    expect(markBody?.indexOf("withOutputOperation")).toBeLessThan(
+      markBody?.indexOf("buildPaperIndex") ?? -1,
+    );
+    expect(noteBody?.indexOf("withOutputOperation")).toBeLessThan(
+      noteBody?.indexOf("buildPaperIndex") ?? -1,
+    );
+  });
+
   it("opens only done or verified already-existing manual summaries", () => {
     const body = commandsSource.match(
       /function openArxivIdPicker\(\)[\s\S]*?\n  async function openTodayDaily/,

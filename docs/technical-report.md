@@ -59,7 +59,7 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 `ArxivDailyPlugin`（`plugin/main.ts`）在 `onload` 中：加载设置与状态 → 构建 host → 状态栏进度 → `SchedulerService` → 注册设置页/Dashboard/命令；`schedule.enabled` 时启动进程内调度。卸载时停止调度并 `operations.cancelAll`。
 
-生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建；输出路径变更时由 `reloadStateStoreForOutputPaths` 替换 `StateStore`/`RunHistoryStore`；调度启停经 `restartScheduler` / `setScheduleEnabled`。
+生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建。插件设置变更经 `SettingsChangeService` 串行提交；输出目录候选会预加载新的 `StateStore` / `RunHistoryStore`，再由 Scheduler 通过一次同步 pair replacement 联合安装，调度启停与定时器更新在设置持久化和 live commit 后执行。
 
 ### Node CLI
 
@@ -215,7 +215,10 @@ services/email-relay   → 独立（不在 npm workspaces）
 
 **设置持久化**
 
-- 插件：Obsidian `loadData`/`saveData` 存 `PluginSettings`；旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。  
+- 插件：Obsidian `loadData`/`saveData` 存 `PluginSettings`；旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。启动合并设置时会校验输出目录和 IANA 时区；无效持久化值恢复默认并在 logger 初始化后记录 warning。
+- `SettingsChangeService`（`plugin/src/settings/change-service.ts`）对普通设置执行 serialized candidate transaction：克隆当前设置 → 字段及跨字段校验 → 准备候选资源 → 持久化 candidate → 原位提交 live settings → 安装 store 和 runtime effect。持久化前 live settings、调度器、logger 与输出 store 不变；live commit 失败时不安装候选资源或 effect。持久化后的 host/runtime effect 是 best effort，失败会记录但不会回滚 durable settings。
+- 输出目录切换从准备到安装完成期间持有 output transition；已有 output operation 或 scheduler run 会拒绝切换，transition 持有时也拒绝新的 operation。paper-index 状态修改和 paper-note 创建通过 `withOutputOperation` 持有 lease，避免旧 writer 跨目录切换继续写。
+- 设置页的 legacy 与 declarative renderer 共用同一 transaction service。timezone、run-window 与 schedule enabled 控件各自使用 revision/queue，旧异步结果不会覆盖后续用户意图；timezone 仅提交有效 IANA 标识。
 - CLI：见上文配置映射；schedule intent 与插件进程内 schedule 字段语义分离。
 
 **缓存**
@@ -259,7 +262,7 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 ### 操作与取消
 
-`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`；`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download` 及插件的 `paper-index` / `paper-note` output lease；`RunCancellationService` 与 scheduler 协作。设置输出 transition 与 operation registry 双向互斥。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
 
 ### 原子写与状态一致性
 
@@ -329,7 +332,7 @@ core / plugin / CLI 工作区有大量 Vitest。email-relay 仅有本地 crypto/
 ### 密钥与脱敏
 
 - LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。  
-- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`）。  
+- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页只用 `Configured` 表示已有密钥；stored LLM/Resend/hosted secret 不写入输入 DOM，用户通过 Replace/Cancel/Clear 明确变更。
 - Worker 不向客户端暴露 Resend key；设备 token 经验证页展示，KV 仅存哈希。
 
 ### 输入与路径安全

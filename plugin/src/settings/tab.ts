@@ -12,8 +12,12 @@ import {
   buildSettingDefinitions,
   readSettingValue,
   SETTING_KEYS,
-  writeSettingValue,
 } from "./definitions";
+import {
+  SettingsChangeError,
+  isValidTimezone,
+  type SettingsValueChange,
+} from "./change-service";
 import * as declarativeRows from "./declarative-rows";
 import {
   describeResult,
@@ -43,24 +47,6 @@ import {
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 
 export const API_KEY_CONFIGURED_SENTINEL = "Configured";
-
-export async function persistApiKeyChange(
-  settings: { llm: { apiKey: string } },
-  logger: { setSensitiveValues(values: readonly string[]): void },
-  saveSettings: () => Promise<void>,
-  nextApiKey: string,
-): Promise<void> {
-  const previousApiKey = settings.llm.apiKey;
-  settings.llm.apiKey = nextApiKey;
-  logger.setSensitiveValues(nextApiKey ? [nextApiKey] : []);
-  try {
-    await saveSettings();
-  } catch (error) {
-    settings.llm.apiKey = previousApiKey;
-    logger.setSensitiveValues(previousApiKey ? [previousApiKey] : []);
-    throw error;
-  }
-}
 
 export function validateOutputDirectoryDraft(
   draft: string,
@@ -135,6 +121,8 @@ function isLogLevel(value: string): value is LogLevel {
 
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
+  private readonly controlRevisions = new WeakMap<object, number>();
+  private readonly declarativeKeyRevisions = new Map<string, number>();
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -205,8 +193,97 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     ) {
       value = value.trim();
     }
-    writeSettingValue(this.plugin.settings, key, value);
-    await this.plugin.saveSettings();
+    const revision = (this.declarativeKeyRevisions.get(key) ?? 0) + 1;
+    this.declarativeKeyRevisions.set(key, revision);
+    try {
+      await this.changeSettingValue(key, value);
+    } catch (error) {
+      if (this.declarativeKeyRevisions.get(key) === revision) {
+        this.refreshSettings();
+      }
+      throw error;
+    }
+  }
+
+  public async changeSettingValue(key: string, value: unknown): Promise<void> {
+    await this.plugin.settingsChanges.changeValue(key, value);
+  }
+
+  public async changeSettingValues(
+    changes: readonly SettingsValueChange[],
+  ): Promise<void> {
+    await this.plugin.settingsChanges.change({ changes });
+  }
+
+  /**
+   * Track renderer drafts so an earlier queued failure cannot overwrite a
+   * later draft already displayed by the same control.
+   */
+  public beginControlChange(control: object): number {
+    const revision = (this.controlRevisions.get(control) ?? 0) + 1;
+    this.controlRevisions.set(control, revision);
+    return revision;
+  }
+
+  public isCurrentControlChange(control: object, revision: number): boolean {
+    return this.controlRevisions.get(control) === revision;
+  }
+
+  /** Resolve the value visible after a rejection finishes. */
+  public restoreCurrentControlValue(error: unknown, key: string): unknown {
+    if (error instanceof SettingsChangeError) {
+      const live = this.getControlValue(key);
+      return live === undefined ? error.restoreValue(key) : live;
+    }
+    return this.getControlValue(key);
+  }
+
+  public restoreCurrentStringControlValue(
+    error: unknown,
+    key: string,
+    fallback = "",
+  ): string {
+    const value = this.restoreCurrentControlValue(error, key);
+    return typeof value === "string" ? value : fallback;
+  }
+
+  /** Resolve the old value carried by a rejected declarative transaction. */
+  public restoreControlValue(error: unknown, key: string): unknown {
+    const live = this.getControlValue(key);
+    return live === undefined && error instanceof SettingsChangeError
+      ? error.restoreValue(key)
+      : live;
+  }
+
+  public restoreStringControlValue(
+    error: unknown,
+    key: string,
+    fallback = "",
+  ): string {
+    const value = this.restoreControlValue(error, key);
+    return typeof value === "string" ? value : fallback;
+  }
+
+  private async saveLegacyControl(
+    control: object,
+    action: string,
+    key: string,
+    changes: readonly SettingsValueChange[],
+    restoreDisplayed: (value: unknown) => void,
+  ): Promise<boolean> {
+    const revision = this.beginControlChange(control);
+    try {
+      await this.changeSettingValues(changes);
+      const current = this.isCurrentControlChange(control, revision);
+      if (current) restoreDisplayed(this.getControlValue(key));
+      return current;
+    } catch (error) {
+      if (this.isCurrentControlChange(control, revision)) {
+        restoreDisplayed(this.restoreCurrentControlValue(error, key));
+      }
+      this.reportActionError(action, error);
+      return false;
+    }
   }
 
   /** Append an accessible circled "?" to a setting name. */
@@ -223,6 +300,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const message = error instanceof Error ? error.message : String(error);
     this.plugin.logger.error(`settings: ${action} failed`, error);
     new Notice(`arXiv Daily: ${action} failed: ${message}`, 10_000);
+  }
+
+  public reportSettingsActionError(action: string, error: unknown): void {
+    this.reportActionError(action, error);
   }
 
   public async runActionAndWait(
@@ -410,17 +491,152 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (confirmed) await apply();
   }
 
+  public async saveTimezone(timezone: string): Promise<void> {
+    await this.plugin.settingsChanges.changeValue("arxiv.timezone", timezone);
+  }
+
+  public bindTimezoneDraftInput(
+    input: HTMLInputElement,
+    select?: HTMLSelectElement,
+  ): void {
+    let saveQueue = Promise.resolve();
+    let latestSave: { draft: string; promise: Promise<void> } | undefined;
+    let latestSuccessful = this.plugin.settings.arxiv.timezone;
+    const syncSelect = (timezone: string) => {
+      if (!select) return;
+      if (!Array.from(select.options).some((option) => option.value === timezone)) {
+        select.createEl("option", {
+          value: timezone,
+          text: `${timezone} — custom`,
+        });
+      }
+      select.value = timezone;
+    };
+    const commit = (): Promise<void> => {
+      const draft = input.value.trim();
+      if (!draft) return Promise.resolve();
+      if (latestSave?.draft === draft) return latestSave.promise;
+      if (!isValidTimezone(draft)) {
+        input.setCustomValidity("Invalid timezone");
+        input.addClass("is-invalid");
+        return Promise.resolve();
+      }
+      input.setCustomValidity("");
+      input.removeClass("is-invalid");
+      const revision = this.beginControlChange(input);
+      const operation = saveQueue.then(async () => {
+        try {
+          await this.saveTimezone(draft);
+          latestSuccessful = draft;
+          if (this.isCurrentControlChange(input, revision)) {
+            input.value = "";
+            input.setCustomValidity("");
+            input.removeClass("is-invalid");
+            syncSelect(draft);
+          }
+        } catch (error) {
+          if (this.isCurrentControlChange(input, revision)) {
+            const restored = this.restoreCurrentStringControlValue(
+              error,
+              SETTING_KEYS.arxiv.timezone,
+              latestSuccessful,
+            );
+            latestSuccessful = restored;
+            input.value = restored;
+            syncSelect(restored);
+          }
+          throw error;
+        }
+      });
+      let tracked: Promise<void>;
+      tracked = operation.finally(() => {
+        if (latestSave?.promise === tracked) latestSave = undefined;
+      });
+      latestSave = { draft, promise: tracked };
+      saveQueue = tracked.catch(() => undefined);
+      return tracked;
+    };
+    input.addEventListener("input", () => {
+      // Typing a distinct draft supersedes any older save's UI result even
+      // before blur/change queues the new transaction.
+      this.beginControlChange(input);
+      input.setCustomValidity("");
+      input.removeClass("is-invalid");
+    });
+    input.addEventListener("change", () => this.runAction("save timezone", commit));
+    input.addEventListener("blur", () => this.runAction("save timezone", commit));
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      this.runAction("save timezone", commit);
+    });
+  }
+
+  public async saveTickInterval(value: string | number): Promise<number> {
+    const interval = Math.max(1, Number(value) || 20);
+    await this.plugin.settingsChanges.changeValue(
+      "schedule.tickIntervalMin",
+      interval,
+    );
+    return interval;
+  }
+
+  public bindTickIntervalInput(input: HTMLInputElement): void {
+    let saveQueue = Promise.resolve();
+    let latestDraft: string | undefined;
+    let latestSave = Promise.resolve();
+    const commit = (): Promise<void> => {
+      const draft = input.value;
+      if (draft === latestDraft) return latestSave;
+      latestDraft = draft;
+      const revision = this.beginControlChange(input);
+      const operation = saveQueue.then(async () => {
+        try {
+          const next = await this.saveTickInterval(draft);
+          if (this.isCurrentControlChange(input, revision)) {
+            input.value = String(next);
+          }
+        } catch (error) {
+          if (this.isCurrentControlChange(input, revision)) {
+            input.value = String(
+              this.restoreCurrentControlValue(error, SETTING_KEYS.schedule.tickIntervalMin),
+            );
+          }
+          throw error;
+        }
+      }).finally(() => {
+        if (latestDraft === draft) latestDraft = undefined;
+      });
+      saveQueue = operation.catch(() => undefined);
+      latestSave = operation;
+      return operation;
+    };
+    input.addEventListener("change", () =>
+      this.runAction("save tick interval", commit));
+    input.addEventListener("blur", () =>
+      this.runAction("save tick interval", commit));
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      this.runAction("save tick interval", commit);
+    });
+  }
+
+  public async saveLogLevel(value: string): Promise<boolean> {
+    if (!isLogLevel(value)) return false;
+    await this.plugin.settingsChanges.changeValue("advanced.logLevel", value);
+    return true;
+  }
+
   public async saveRunWindowTime(
     key: "runAtLocal" | "runUntilLocal",
     value: string,
   ): Promise<void> {
-    const previous = this.plugin.settings.schedule[key];
-    this.plugin.settings.schedule[key] = value;
     try {
-      await this.plugin.saveSettings();
+      await this.plugin.settingsChanges.changeValue(`schedule.${key}`, value);
     } catch (error) {
-      this.plugin.settings.schedule[key] = previous;
       this.reportActionError("save run window", error);
+      throw error;
     }
   }
 
@@ -438,25 +654,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     input.toggleClass("is-invalid", !validation.ok);
     if (!validation.ok || !validation.value) return;
 
-    const previous = this.plugin.settings.output[key];
-    if (validation.value === previous) return;
-    this.plugin.settings.output[key] = validation.value;
+    const settingKey = `output.${key}`;
+    if (validation.value === this.plugin.settings.output[key]) return;
+    const revision = this.beginControlChange(input);
     try {
-      await this.plugin.reloadStateStoreForOutputPaths();
-      await this.plugin.saveSettings();
-      input.value = validation.value;
+      await this.plugin.settingsChanges.changeValue(settingKey, validation.value);
+      if (this.isCurrentControlChange(input, revision)) input.value = validation.value;
     } catch (error) {
-      this.plugin.settings.output[key] = previous;
-      input.value = previous;
-      input.setCustomValidity("");
-      input.removeClass("is-invalid");
-      try {
-        await this.plugin.reloadStateStoreForOutputPaths();
-      } catch (rollbackError) {
-        this.plugin.logger.error("settings: failed to restore output stores after rollback", rollbackError);
+      if (this.isCurrentControlChange(input, revision)) {
+        input.value = this.restoreCurrentStringControlValue(error, settingKey);
+        input.setCustomValidity("");
+        input.removeClass("is-invalid");
       }
-      this.plugin.logger.error(`settings: rejected ${key} after store reload failed`, error);
-      new Notice(`arXiv Daily: output path was not changed: ${(error as Error).message}`, 10_000);
+      this.plugin.logger.error(`settings: rejected ${key}`, error);
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`arXiv Daily: output path was not changed: ${message}`, 10_000);
     }
   }
 
@@ -474,8 +686,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("When on, daily reports run automatically on weekdays (weekends are skipped).")
       .addToggle((t) =>
         t.setValue(s.schedule.enabled).onChange(async (v) => {
-          await this.plugin.setScheduleEnabled(v);
-          this.display();
+          const revision = this.beginControlChange(t);
+          try {
+            const changed = await this.plugin.setScheduleEnabled(v);
+            if (this.isCurrentControlChange(t, revision) && !changed) {
+              t.setValue(this.plugin.settings.schedule.enabled);
+            }
+          } catch (error) {
+            if (this.isCurrentControlChange(t, revision)) {
+              t.setValue(this.plugin.settings.schedule.enabled);
+              this.reportActionError("save schedule enabled", error);
+            }
+          } finally {
+            if (this.isCurrentControlChange(t, revision)) this.display();
+          }
         }),
       );
 
@@ -491,10 +715,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setPlaceholder("https://api.deepseek.com/v1")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
           .onChange(async (v) => {
-            s.llm.baseUrl = v;
-            await this.plugin.saveSettings();
-            renderLlmHttpWarning(v);
-            this.refreshSetupGuide();
+            const next = v.trim();
+            const saved = await this.saveLegacyControl(
+              t,
+              "save API base URL",
+              SETTING_KEYS.llm.baseUrl,
+              [{ key: SETTING_KEYS.llm.baseUrl, value: next }],
+              (value) => {
+                const restored = typeof value === "string" ? value : "";
+                t.setValue(restored);
+                renderLlmHttpWarning(restored);
+              },
+            );
+            if (saved) this.refreshSetupGuide();
           });
       });
     const llmWarningEl = containerEl.createDiv({
@@ -549,9 +782,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.addOption(s.llm.model, s.llm.model);
       }
       d.setValue(s.llm.model).onChange(async (v) => {
-        s.llm.model = v;
-        await this.plugin.saveSettings();
-        this.refreshSetupGuide();
+        const saved = await this.saveLegacyControl(
+          d,
+          "save model",
+          SETTING_KEYS.llm.model,
+          [{ key: SETTING_KEYS.llm.model, value: v }],
+          (value) => {
+            d.setValue(typeof value === "string" ? value : "");
+          },
+        );
+        if (saved) this.refreshSetupGuide();
       });
     });
 
@@ -567,8 +807,23 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc(thinkingDesc)
       .addToggle((t) =>
         t.setValue(s.llm.thinkingMode).onChange(async (v) => {
-          s.llm.thinkingMode = v;
-          await this.plugin.saveSettings();
+          await this.saveLegacyControl(
+            t,
+            "save thinking mode",
+            SETTING_KEYS.llm.thinkingMode,
+            v
+              ? [
+                  { key: SETTING_KEYS.llm.thinkingMode, value: true },
+                  {
+                    key: SETTING_KEYS.llm.reasoningEffort,
+                    value: s.llm.reasoningEffort || "medium",
+                  },
+                ]
+              : [{ key: SETTING_KEYS.llm.thinkingMode, value: false }],
+            (value) => {
+              t.setValue(Boolean(value));
+            },
+          );
         }),
       );
 
@@ -583,18 +838,38 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }
         d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0]!)
           .onChange(async (v) => {
-            s.llm.reasoningEffort = v;
-            await this.plugin.saveSettings();
+            await this.saveLegacyControl(
+              d,
+              "save reasoning effort",
+              SETTING_KEYS.llm.reasoningEffort,
+              [
+                { key: SETTING_KEYS.llm.thinkingMode, value: true },
+                { key: SETTING_KEYS.llm.reasoningEffort, value: v },
+              ],
+              (value) => {
+                d.setValue(typeof value === "string" ? value : efforts[0]!);
+              },
+            );
           });
       })
       .addText((t) => {
         t.setPlaceholder("Or enter custom value")
           .setValue("")
           .onChange(async (v) => {
-            if (v.trim()) {
-              s.llm.reasoningEffort = v.trim();
-              await this.plugin.saveSettings();
-            }
+            const next = v.trim();
+            if (!next) return;
+            await this.saveLegacyControl(
+              t,
+              "save custom reasoning effort",
+              SETTING_KEYS.llm.reasoningEffort,
+              [
+                { key: SETTING_KEYS.llm.thinkingMode, value: true },
+                { key: SETTING_KEYS.llm.reasoningEffort, value: next },
+              ],
+              (value) => {
+                t.setValue(typeof value === "string" ? value : "");
+              },
+            );
           });
       });
 
@@ -703,9 +978,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             profile !== "balanced" &&
             profile !== "broad"
           ) return;
-          s.detailSelection = detailSelectionPreset(profile);
-          await this.plugin.saveSettings();
-          this.display();
+          const preset = detailSelectionPreset(profile);
+          const saved = await this.saveLegacyControl(
+            d,
+            "save automatic detail notes",
+            SETTING_KEYS.detailSelection.profile,
+            [
+              { key: SETTING_KEYS.detailSelection.profile, value: preset.profile },
+              { key: "detailSelection.normalThreshold", value: preset.normalThreshold },
+              { key: "detailSelection.exceptionalThreshold", value: preset.exceptionalThreshold },
+              { key: "detailSelection.softLimit", value: preset.softLimit },
+            ],
+            (value) => {
+              d.setValue(typeof value === "string" ? value : "balanced");
+            },
+          );
+          if (saved) this.display();
         });
       });
 
@@ -716,19 +1004,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           d.addOption(zone.value, zone.label);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
-          s.arxiv.timezone = v;
-          await this.plugin.saveSettings();
+          await this.saveLegacyControl(
+            d,
+            "save timezone",
+            SETTING_KEYS.arxiv.timezone,
+            [{ key: SETTING_KEYS.arxiv.timezone, value: v }],
+            (value) => {
+              d.setValue(typeof value === "string" ? value : "");
+            },
+          );
         });
       })
       .addText((t) => {
-        t.setPlaceholder("Or enter custom timezone")
-          .setValue("")
-          .onChange(async (v) => {
-            if (v.trim()) {
-              s.arxiv.timezone = v.trim();
-              await this.plugin.saveSettings();
-            }
-          });
+        t.setPlaceholder("Or enter custom timezone").setValue("");
+        this.bindTimezoneDraftInput(t.inputEl);
       });
 
     // ─── Output & Schedule ────────────────────────────
@@ -775,8 +1064,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .addOption("relative", "Standard relative link")
           .setValue(s.output.linkStyle ?? "wikilink")
           .onChange(async (v) => {
-            s.output.linkStyle = v === "relative" ? "relative" : "wikilink";
-            await this.plugin.saveSettings();
+            await this.saveLegacyControl(
+              d,
+              "save link style",
+              SETTING_KEYS.output.linkStyle,
+              [{
+                key: SETTING_KEYS.output.linkStyle,
+                value: v === "relative" ? "relative" : "wikilink",
+              }],
+              (value) => {
+                d.setValue(value === "relative" ? "relative" : "wikilink");
+              },
+            );
           }),
       );
 
@@ -789,8 +1088,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .addOption("en", "English")
           .setValue(s.output.summaryLanguage ?? "zh")
           .onChange(async (v) => {
-            s.output.summaryLanguage = v === "en" ? "en" : "zh";
-            await this.plugin.saveSettings();
+            await this.saveLegacyControl(
+              d,
+              "save summary language",
+              SETTING_KEYS.output.summaryLanguage,
+              [{
+                key: SETTING_KEYS.output.summaryLanguage,
+                value: v === "en" ? "en" : "zh",
+              }],
+              (value) => {
+                d.setValue(value === "en" ? "en" : "zh");
+              },
+            );
           }),
       );
 
@@ -813,34 +1122,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
 
     this.attachHelp(
-      new Setting(containerEl).setName("Check every (minutes)").addText((t) =>
-        t.setValue(String(s.schedule.tickIntervalMin)).onChange(async (v) => {
-          s.schedule.tickIntervalMin = Math.max(1, Number(v) || 20);
-          await this.plugin.saveSettings();
-          this.plugin.restartScheduler();
-        }),
-      ),
+      new Setting(containerEl).setName("Check every (minutes)").addText((t) => {
+        t.setValue(String(s.schedule.tickIntervalMin));
+        this.bindTickIntervalInput(t.inputEl);
+      }),
       "How often the plugin looks for a day that still needs a report. Default is 20 minutes.",
     );
 
     // ─── Email ───────────────────────────────────────────
     this.sectionHeading(containerEl, "Email delivery", "email");
 
-    if (!s.email) {
-      s.email = {
-        enabled: false,
-        mode: "self",
-        to: "",
-        fromEmail: "",
-        fromName: "arXiv Daily",
-        apiKey: "",
-        hostedToken: "",
-        hostedBaseUrl: "",
-      };
-    }
-    if (s.email.mode !== "self" && s.email.mode !== "hosted") {
-      s.email.mode = "self";
-    }
     const hostedMode = s.email.mode === "hosted";
 
     this.emailGuide(containerEl, this.emailGuideContent());
@@ -857,9 +1148,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.addOption("hosted", "Official delivery (Beta)");
         d.setValue(hostedMode ? "hosted" : "self");
         d.onChange(async (value) => {
-          s.email.mode = value === "hosted" ? "hosted" : "self";
-          await this.plugin.saveSettings();
-          this.display();
+          const saved = await this.saveLegacyControl(
+            d,
+            "save email mode",
+            SETTING_KEYS.email.mode,
+            [{
+              key: SETTING_KEYS.email.mode,
+              value: value === "hosted" ? "hosted" : "self",
+            }],
+            (restored) => {
+              d.setValue(restored === "hosted" ? "hosted" : "self");
+            },
+          );
+          if (saved) this.display();
         });
       });
 
@@ -874,8 +1175,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.setPlaceholder("you@example.com")
           .setValue(s.email.to)
           .onChange(async (v) => {
-            s.email.to = v.trim();
-            await this.plugin.saveSettings();
+            await this.saveLegacyControl(
+              t,
+              "save email address",
+              SETTING_KEYS.email.to,
+              [{ key: SETTING_KEYS.email.to, value: v.trim() }],
+              (value) => {
+                t.setValue(typeof value === "string" ? value : "");
+              },
+            );
           });
       });
 
@@ -905,8 +1213,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.setPlaceholder("Leave blank for simplest setup")
             .setValue(s.email.fromEmail)
             .onChange(async (v) => {
-              s.email.fromEmail = v.trim();
-              await this.plugin.saveSettings();
+              await this.saveLegacyControl(
+                t,
+                "save From email",
+                SETTING_KEYS.email.fromEmail,
+                [{ key: SETTING_KEYS.email.fromEmail, value: v.trim() }],
+                (value) => {
+                  t.setValue(typeof value === "string" ? value : "");
+                },
+              );
             });
         });
 
@@ -917,8 +1232,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.setPlaceholder("arXiv Daily")
             .setValue(s.email.fromName ?? "")
             .onChange(async (v) => {
-              s.email.fromName = v;
-              await this.plugin.saveSettings();
+              await this.saveLegacyControl(
+                t,
+                "save From name",
+                SETTING_KEYS.email.fromName,
+                [{ key: SETTING_KEYS.email.fromName, value: v }],
+                (value) => {
+                  t.setValue(typeof value === "string" ? value : "");
+                },
+              );
             });
         });
     }
@@ -948,8 +1270,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       )
       .addToggle((t) =>
         t.setValue(s.email.enabled).onChange(async (v) => {
-          s.email.enabled = v;
-          await this.plugin.saveSettings();
+          await this.saveLegacyControl(
+            t,
+            "save daily auto-send",
+            SETTING_KEYS.email.enabled,
+            [{ key: SETTING_KEYS.email.enabled, value: v }],
+            (value) => {
+              t.setValue(Boolean(value));
+            },
+          );
         }),
       );
 
@@ -966,9 +1295,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .setValue(s.advanced.logLevel)
           .onChange(async (value) => {
             if (!isLogLevel(value)) return;
-            s.advanced.logLevel = value;
-            await this.plugin.saveSettings();
-            this.plugin.logger.setLevel(value);
+            await this.saveLegacyControl(
+              d,
+              "save log level",
+              SETTING_KEYS.advanced.logLevel,
+              [{ key: SETTING_KEYS.advanced.logLevel, value }],
+              (restored) => {
+                d.setValue(typeof restored === "string" ? restored : "info");
+              },
+            );
           }),
       ),
       "How much detail appears in the developer console. Use debug only when troubleshooting; info is the default.",
@@ -1096,11 +1431,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
       const next = draft.trim();
       if (!next) return;
+      const revision = this.beginControlChange(input);
       this.runAction("save Resend API key", async () => {
-        this.plugin.settings.email.apiKey = next;
-        await this.plugin.saveSettings();
-        reset();
-        clear.hidden = false;
+        try {
+          await this.changeSettingValue("email.apiKey", next);
+          if (this.isCurrentControlChange(input, revision)) {
+            reset();
+            clear.hidden = false;
+          }
+        } catch (error) {
+          if (this.isCurrentControlChange(input, revision)) {
+            if (this.plugin.settings.email.apiKey?.trim()) reset();
+            else {
+              draft = "";
+              input.value = "";
+            }
+          }
+          throw error;
+        }
       });
     });
     cancel.addEventListener("click", () => {
@@ -1117,8 +1465,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           "Clear",
         );
         if (!confirmed) return;
-        this.plugin.settings.email.apiKey = "";
-        await this.plugin.saveSettings();
+        await this.changeSettingValue("email.apiKey", "");
         this.display();
       });
     });
@@ -1183,16 +1530,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         enterEdit();
         return;
       }
+      const revision = this.beginControlChange(input);
       this.runAction("save verification code", async () => {
         const next = draft.replace(/\s+/g, "").trim();
         if (!next) {
           new Notice("Paste the verification code before saving.");
           return;
         }
-        this.plugin.settings.email.hostedToken = next;
-        await this.plugin.saveSettings();
-        this.plugin.refreshSensitiveValues();
-        this.display();
+        try {
+          await this.changeSettingValue("email.hostedToken", next);
+          if (this.isCurrentControlChange(input, revision)) this.display();
+        } catch (error) {
+          if (this.isCurrentControlChange(input, revision)) {
+            if (this.plugin.settings.email.hostedToken?.trim()) reset();
+            else {
+              draft = "";
+              input.value = "";
+            }
+          }
+          throw error;
+        }
       });
     });
     cancel.addEventListener("click", () => {
@@ -1209,9 +1566,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           "Clear",
         );
         if (!confirmed) return;
-        this.plugin.settings.email.hostedToken = "";
-        await this.plugin.saveSettings();
-        this.plugin.refreshSensitiveValues();
+        await this.changeSettingValue("email.hostedToken", "");
         this.display();
       });
     });
@@ -1276,16 +1631,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
       const next = draft.trim();
       if (!next) return;
+      const revision = this.beginControlChange(input);
       this.runAction("save API key", async () => {
-        await persistApiKeyChange(
-          this.plugin.settings,
-          this.plugin.logger,
-          () => this.plugin.saveSettings(),
-          next,
-        );
-        this.refreshSetupGuide();
-        reset();
-        clear.hidden = false;
+        try {
+          await this.changeSettingValue("llm.apiKey", next);
+          if (this.isCurrentControlChange(input, revision)) {
+            this.refreshSetupGuide();
+            reset();
+            clear.hidden = false;
+          }
+        } catch (error) {
+          if (this.isCurrentControlChange(input, revision)) {
+            if (this.plugin.settings.llm.apiKey.trim()) reset();
+            else {
+              draft = "";
+              input.value = "";
+            }
+          }
+          throw error;
+        }
       });
     });
     cancel.addEventListener("click", () => {
@@ -1302,12 +1666,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           "Clear",
         );
         if (!confirmed) return;
-        await persistApiKeyChange(
-          this.plugin.settings,
-          this.plugin.logger,
-          () => this.plugin.saveSettings(),
-          "",
-        );
+        await this.changeSettingValue("llm.apiKey", "");
         this.refreshSetupGuide();
         this.display();
       });
@@ -1856,8 +2215,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     } else if (models.length > 0) {
       // Select first model if current not in list
       select.value = models[0]!;
-      this.plugin.settings.llm.model = models[0]!;
-      this.runAction("save selected model", () => this.plugin.saveSettings());
+      this.runAction("save selected model", async () => {
+        try {
+          await this.changeSettingValue("llm.model", models[0]!);
+        } catch (error) {
+          select.value = this.restoreStringControlValue(error, "llm.model");
+          throw error;
+        }
+      });
     }
   }
 
@@ -1941,9 +2306,24 @@ export function renderRunWindowTimeSelect(
     optionEl.disabled = !option.valid;
   }
   select.value = current;
+  let revision = 0;
+  let latestSuccessful = current;
+  let saveQueue = Promise.resolve();
   select.addEventListener("change", () => {
-    if (!isValidLocalTime(select.value)) return;
-    void onChange(select.value);
+    const next = select.value;
+    if (!isValidLocalTime(next)) return;
+    const changeRevision = ++revision;
+    const operation = saveQueue.then(async () => {
+      try {
+        await onChange(next);
+        latestSuccessful = next;
+        if (revision === changeRevision) select.value = next;
+      } catch (error) {
+        if (revision === changeRevision) select.value = latestSuccessful;
+        throw error;
+      }
+    });
+    saveQueue = operation.catch(() => undefined);
   });
 }
 

@@ -34,6 +34,7 @@ export interface SchedulerRecentDates {
 export interface SchedulerDriverDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
+  getStore?: () => StateStore;
   lock: RunLock;
   runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
   logger: Logger;
@@ -111,7 +112,7 @@ export class SchedulerDriver {
 
     // Today's report is already generated (or finalized). Stay idle for the
     // remainder of the run window to avoid re-querying arxiv on every tick.
-    if (this.deps.store.isDone(today)) {
+    if (this.store().isDone(today)) {
       this.progress.setIdle(this.latestCompleted());
       return;
     }
@@ -227,7 +228,7 @@ export class SchedulerDriver {
 
   async forceRunForDate(date: string): Promise<SchedulerResult> {
     const now = this.now();
-    const entry = this.deps.store.get(date);
+    const entry = this.store().get(date);
     if (entry.status === "running") {
       await this.deps.history.recordSkipped(date, "force", "already running", now);
       return { kind: "skipped", reason: "already running" };
@@ -250,7 +251,7 @@ export class SchedulerDriver {
         if (this.isCancellationRequested(batch)) break;
         const date = dateStrings[i];
         if (!date) continue;
-        const entry = this.deps.store.get(date);
+        const entry = this.store().get(date);
         if (entry.status !== "failed_transient" && entry.status !== "failed_permanent") {
           continue;
         }
@@ -302,8 +303,8 @@ export class SchedulerDriver {
         ) {
           continue;
         }
-        const entry = this.deps.store.get(date);
-        if (this.deps.store.isDone(date)) continue;
+        const entry = this.store().get(date);
+        if (this.store().isDone(date)) continue;
         if (entry.status === "running") {
           await this.deps.history.recordSkipped(date, "run-all-pending", "already running", now);
           results.push({ date, result: { kind: "skipped", reason: "already running" } });
@@ -333,7 +334,7 @@ export class SchedulerDriver {
     runOpts: { clearDateBeforeRun?: boolean } = {},
   ): Promise<SchedulerResult> {
     const trigger = opts.trigger ?? "manual";
-    if (isRunning(date, this.deps.store)) {
+    if (isRunning(date, this.store())) {
       await this.deps.history.recordSkipped(date, trigger, "already running", now);
       return { kind: "skipped", reason: "already running" };
     }
@@ -364,8 +365,8 @@ export class SchedulerDriver {
     },
   ): Promise<PipelineResult | undefined> {
     const s = this.deps.getSettings();
-    const entry = this.deps.store.get(date);
-    const decision = checkTickGate(date, this.deps.store, {
+    const entry = this.store().get(date);
+    const decision = checkTickGate(date, this.store(), {
       now: opts.now,
       timeGate: opts.timeGate,
       tickIntervalMin: s.schedule.tickIntervalMin,
@@ -391,15 +392,15 @@ export class SchedulerDriver {
   ): Promise<PipelineResult | undefined> {
     return this.deps.lock.withLock(date, async () => {
       if (opts.clearDateBeforeRun) {
-        await this.deps.store.clearDate(date);
+        await this.store().clearDate(date);
       }
-      const previousEntry = this.deps.store.get(date);
+      const previousEntry = this.store().get(date);
       this.deps.cancellation?.prepareRun();
       const signal = this.deps.cancellation?.begin(date, cancellationBatch);
       let result: PipelineResult;
       try {
         this.progress.setTask("arXiv Daily report", date);
-        await this.deps.store.setRunning(date);
+        await this.store().setRunning(date);
         await this.deps.history.recordStarted(date, trigger, now);
         result = signal
           ? await this.deps.runForDate(date, signal)
@@ -422,7 +423,7 @@ export class SchedulerDriver {
             result.papersWritten,
           );
           const preservedPapersWritten = papersWritten !== result.papersWritten;
-          await this.deps.store.setCompleted(date, papersWritten);
+          await this.store().setCompleted(date, papersWritten);
           this.deps.logger.notice(`arXiv ${date}: ${papersWritten} papers written`);
           this.progress.setComplete(`Daily report complete: ${date}`);
           await this.deps.history.recordCompleted(date, trigger, {
@@ -441,19 +442,19 @@ export class SchedulerDriver {
             }
           }
         } else if (result.kind === "pending") {
-          await this.deps.store.setPending(date, result.reason);
+          await this.store().setPending(date, result.reason);
           this.deps.logger.info(`arXiv ${date}: pending - ${result.reason}`);
           this.progress.setIdle(this.latestCompleted());
           await this.deps.history.recordPending(date, trigger, result.reason, now);
         } else if (result.kind === "cancelled") {
-          await this.deps.store.setPending(date, result.reason);
+          await this.store().setPending(date, result.reason);
           const message = `Daily report cancelled: ${date} (${result.reason})`;
           this.deps.logger.info(`arXiv ${date}: cancelled - ${result.reason}`);
           this.progress.setError(message);
           await this.deps.history.recordCancelled(date, trigger, result.reason, now);
         } else if (result.kind === "failed_transient") {
           const persistedStatus = await this.persistFailed(date, "transient", result.reason);
-          const persistedReason = this.deps.store.get(date).error ?? result.reason;
+          const persistedReason = this.store().get(date).error ?? result.reason;
           result = { kind: persistedStatus, reason: persistedReason };
           const severity = persistedStatus === "failed_permanent" ? "permanent" : "transient";
           const message = `Daily report failed ${severity}: ${date} (${persistedReason})`;
@@ -513,24 +514,28 @@ export class SchedulerDriver {
     reason: string,
   ): Promise<"failed_transient" | "failed_permanent"> {
     try {
-      return await this.deps.store.setFailed(date, kind, reason);
+      return await this.store().setFailed(date, kind, reason);
     } catch (e) {
       this.deps.logger.error(
         `scheduler: failed to persist failure for ${date}; clearing running state`,
         e,
       );
-      await this.deps.store.clearDate(date);
+      await this.store().clearDate(date);
       return kind === "permanent" ? "failed_permanent" : "failed_transient";
     }
   }
 
   private latestCompleted(): string | undefined {
-    const snap = this.deps.store.snapshot();
+    const snap = this.store().snapshot();
     const done = Object.entries(snap)
       .filter(([, v]) => v.status === "completed")
       .map(([k]) => k)
       .sort();
     return done[done.length - 1];
+  }
+
+  private store(): StateStore {
+    return this.deps.getStore?.() ?? this.deps.store;
   }
 
   private now(): Date {

@@ -30,6 +30,63 @@ function makeHistory() {
 }
 
 describe("SchedulerService", () => {
+  it("rejects an invalid state/history pair without changing either live reference", async () => {
+    const oldStore = makeStore();
+    const candidateStore = makeStore();
+    await oldStore.load();
+    await candidateStore.load();
+    const oldHistory = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store: oldStore,
+      lock: new RunLock(),
+      runForDate: vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 }),
+      logger: new Logger("error"),
+      runHistory: oldHistory.store,
+    });
+
+    expect(() => svc.replacePersistenceStores(
+      candidateStore,
+      {} as never,
+    )).toThrow(/run history/i);
+    await svc.runForDateNow("2026-06-16");
+
+    expect(oldStore.get("2026-06-16").status).toBe("completed");
+    expect(candidateStore.get("2026-06-16").status).toBe("pending");
+    expect(oldHistory.records.map((record) => record.event)).toEqual([
+      "started",
+      "completed",
+    ]);
+  });
+
+  it("installs a replacement state/history pair together for later runs", async () => {
+    const oldStore = makeStore();
+    const newStore = makeStore();
+    await oldStore.load();
+    await newStore.load();
+    const oldHistory = makeHistory();
+    const newHistory = makeHistory();
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store: oldStore,
+      lock: new RunLock(),
+      runForDate: vi.fn().mockResolvedValue({ kind: "completed", papersWritten: 1 }),
+      logger: new Logger("error"),
+      runHistory: oldHistory.store,
+    });
+
+    svc.replacePersistenceStores(newStore, newHistory.store);
+    await svc.runForDateNow("2026-06-16");
+
+    expect(oldStore.get("2026-06-16").status).toBe("pending");
+    expect(oldHistory.records).toEqual([]);
+    expect(newStore.get("2026-06-16").status).toBe("completed");
+    expect(newHistory.records.map((record) => record.event)).toEqual([
+      "started",
+      "completed",
+    ]);
+  });
+
   it("uses a replacement state store for later runs", async () => {
     const oldStore = makeStore();
     const newStore = makeStore();
