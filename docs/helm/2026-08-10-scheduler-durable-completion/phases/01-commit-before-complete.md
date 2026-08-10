@@ -26,12 +26,12 @@ Scheduler 的完成结果、用户反馈、history 和 post-completion hook 都�
 
 ## Tasks
 
-- [ ] 以 Red 测试锁定 completion commit failure、callback/progress/history 边界和 batch 继续行为。
-- [ ] 将 StateStore mutation 改为保存后发布，并实现保存异常后的 durable readback 判定。
-- [ ] 让 Scheduler completion commit failure 映射为明确 `failed_transient`，禁止完成副作用。
-- [ ] 补充重试、history best-effort 和 CLI 结果回归测试。
-- [ ] 运行定向、完整回归和独立代码复核。
-- [ ] 完成独立技术报告交接、提交和 Helm 收口。
+- [x] 以 Red 测试锁定 completion commit failure、callback/progress/history 边界和 batch 继续行为。
+- [x] 将 StateStore mutation 改为保存后发布，并实现保存异常后的 durable readback 判定。
+- [x] 让 Scheduler completion commit failure 映射为明确 `failed_transient`，禁止完成副作用。
+- [x] 补充重试、history best-effort 和 CLI 结果回归测试。
+- [x] 运行定向、完整回归和独立代码复核。
+- [x] 完成独立技术报告交接、提交和 Helm 收口。
 
 ## Verification
 

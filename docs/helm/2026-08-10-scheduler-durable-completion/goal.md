@@ -1,6 +1,6 @@
 # Scheduler Durable Completion
 
-status: active
+status: done
 updated: 2026-08-10
 owner: zcode-main-session
 
@@ -10,11 +10,11 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] `setCompleted` 无法确认时返回 `failed_transient`，不显示完成、不记录 completed history、不调用 completion callback。
-- [ ] StateStore 保存成功前不向读取者发布候选状态，失败后内存与 durable state 一致或保守恢复旧快照。
-- [ ] 保存抛错但 durable candidate 已落盘时能通过重新读取确认，避免虚假失败。
-- [ ] batch 在单日 commit 失败后继续处理其他日期，后续重试可以完成。
-- [ ] Run history 保持 best effort，既有 Plugin/CLI 结果契约不变，完整门禁和技术报告同步。
+- [x] `setCompleted` 无法确认时返回 `failed_transient`，不显示完成、不记录 completed history、不调用 completion callback。
+- [x] StateStore 保存成功前不向读取者发布候选状态，失败后内存与 durable state 一致或保守恢复旧快照。
+- [x] 保存抛错但 durable candidate 已落盘时能通过重新读取确认，避免虚假失败。
+- [x] batch 在单日 commit 失败后继续处理其他日期，后续重试可以完成。
+- [x] Run history 保持 best effort，既有 Plugin/CLI 结果契约不变，完整门禁和技术报告同步。
 
 ## Non-goals
 
@@ -30,4 +30,4 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — Scheduler 只在 durable completion commit 后公开完成 — status: active
+1. P1 — Scheduler 只在 durable completion commit 后公开完成 — status: done
