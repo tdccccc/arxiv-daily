@@ -121,3 +121,10 @@
 - change: ADR 0008（docs/adr/0008-opt-in-remote-embedding.md）；CONTEXT.md：Library processing consent 更新为多端点/全深度措辞 + 新增 Embedding mode 术语。goal.md Non-goal "远程 embedding API（远程作为可选开关留待未来）"被实现为预留开关——默认全本地仍成立。
 - disposition: 保留。实现未开始（P7 待用户指令）。
 - next: P7 实现（远程嵌入：设置区 + 授权扩展 + RemoteEmbeddingModel + 引导选择 + 切换重建提示）。
+
+## 2026-08-10 — note（P7 启动：远程嵌入可选开关实现）
+
+- evidence: 用户确认 134 篇本地索引太慢，直接开始 P7。输入资产：ADR 0008（六项定案：授权流披露、首次引导、全文 chunk 出机、逐篇失败重试、独立配置+授权多端点、只做远程嵌入）。已核实落点：LlmClient 的 http.request 模式（core 远程实现可复用）；授权在 plugin/src/library/connection.ts（LIBRARY_PROCESSING_DEPTH 为单字面量 const、libraryAuthorizationFingerprint 只含 LLM baseUrl——需扩为 union 与多端点）。
+- change: goal.md status → active + P7 索引行；phases/07-remote-embedding.md（T1 core 远程模型 → T2 设置 → T3 授权扩展 → T4 引导选择 → T5 工厂接线 → T6 收尾）。
+- disposition: 无代码改动。
+- next: P7-T1 core RemoteEmbeddingModel（OpenAI 兼容 /embeddings 客户端 + mock http 测试）。

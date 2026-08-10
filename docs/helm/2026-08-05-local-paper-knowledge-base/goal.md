@@ -1,7 +1,7 @@
 # 本地论文知识库（local paper knowledge base）
 
-status: done
-updated: 2026-08-07
+status: active
+updated: 2026-08-10
 owner: current-session
 
 ## Intent
@@ -44,6 +44,7 @@ owner: current-session
 4. P4 — Obsidian 运行时验证与修复：真实 Obsidian 中验证 `window.pdfjsLib` 可用性与渲染进程 wasm/模型加载表现（P1 遗留未决项），发现问题则修复，结论记录在案 —— status: done
 5. P5 — 实现存疑项复核（P3 T5b 遗留）：centering 镜像去重、new 候选 discoveryCues 截断、增量更新 operation kind 复用（存疑项 1 已由 ADR 0007 关闭）—— 每项代码核对定论，可修复项修复并验收 —— status: done
 6. P6 — 检索入口与自动触发（ADR 0006/0007 实现）：行内按钮双页模态框（库内全文相似 + 日报词法相似）、Dashboard 单框双结果（词法过滤 + KB 相似区块）、索引完成自动触发增量更新（placement 免许可、LLM diff 授权拆分 + 待授权状态）、建议覆盖未审阅提示 —— status: done
+7. P7 — 远程嵌入可选开关（ADR 0008 实现）：core RemoteEmbeddingModel（OpenAI 兼容 /embeddings）、独立嵌入设置区（含 CLI 映射）、授权扩展（多端点指纹 + full-text 深度 + modal 披露）、首次引导选择（本地/远程 + 切换重建提示）、工厂接线（index/search 按 mode 选择）—— 134 篇库首次索引分钟级（远程）—— status: active
 
 ## Open questions
 
