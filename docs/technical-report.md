@@ -8,7 +8,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 - **Node CLI**（`apps/cli/`，npm 包名 `arxiv-daily`）读取固定路径 `config.toml`，提供单次运行、crontab 安装、数据导入导出与邮件命令；
 - **Cloudflare Worker 邮件中继**（`services/email-relay/`，不在根 npm workspaces，包版本独立）实现官方代发（Beta）的验证与投递；
 - 根目录 `arxiv_daily.py` 为兼容壳：若 `apps/cli/dist/arxiv-daily-cli.cjs` 存在则转发 argv（无参时默认 `run --today`）；
-- `extensions/vscode-arxiv-daily` 为独立配套扩展（未进 workspaces），提供 vault 探测与 webview 骨架，但当前仍调用已移除的 CLI 参数/子命令（`--config` / `--vault-root`、`run-pending`、`summarize`），与 0.4.x 固定路径 CLI **不兼容**，不能当作可用生产包装。
+- **VS Code companion**（`extensions/vscode-arxiv-daily/`，未进根 workspaces，版本独立）提供 vault 探测、Paper Index Dashboard，以及通过当前 CLI 契约执行今日运行和按 ID 摘要。
 
 业务核通过 `HostAdapters`（HTTP、存储、密钥、进度、资源打开、标记解析）与具体运行时解耦。插件与 CLI 分别注入 Obsidian / Node 适配层后，共享 `ArxivPipeline`、状态/索引与投递编排；调度语义在两端不同（见下文）。
 
@@ -21,6 +21,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 | 业务核 | `@arxiv-daily/core` | 流水线、LLM、调度、索引、设置、邮件编排；生产第三方依赖仅 `pako` |
 | Node 宿主 | `@arxiv-daily/node-runtime` | `fetch`、文件系统、`EnvSecretProvider`、linkedom 等 |
 | Obsidian 宿主 | Obsidian Plugin API + `obsidian` 类型 | Vault 读写、`requestUrl`、设置持久化、UI |
+| VS Code companion | VS Code Extension API `^1.90.0` | `workspace.fs` Dashboard 与 `ProcessExecution` CLI 任务 |
 | 构建 | esbuild | 插件打 `main.js`；CLI 打 `dist/arxiv-daily-cli.cjs`（并复制到 `plugin/arxiv-daily-cli.cjs`） |
 | 测试/类型 | Vitest、`tsc --noEmit`、ESLint（含 `eslint-plugin-obsidianmd`） | 工作区测试；边界检查脚本 |
 | 邮件 | Resend HTTP API；Cloudflare Workers + KV + Durable Objects | 自发送与官方代发 |
@@ -69,6 +70,14 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 `services/email-relay` 使用 Wrangler 部署；默认 `PUBLIC_BASE_URL = https://mail.arxiv-daily.top`。处理健康检查、验证起始/完成与 `/v1/deliver`；投递优先经 Durable Object `DeliverGate` 串行化同一幂等键，并配合 KV 幂等与 UTC 日配额。
 
+### VS Code companion
+
+`extensions/vscode-arxiv-daily/src/extension.js` 注册三个命令：打开 Reading Dashboard、运行今日流水线、按 arXiv ID 摘要。Dashboard 通过 `workspace.fs` 访问当前工作区内的 `arxiv-daily/.index/papers.json`；只有 Dashboard 和 Paper Index 编辑依赖工作区 vault 探测。
+
+两个流水线命令不读取工作区中的 Obsidian 配置或 SecretStorage。它们从 `arxivDaily.cliPath` 取得可执行文件名或路径，并通过 VS Code `ProcessExecution` 以独立 argv 启动进程任务：今日运行传入 `run --today`，按 ID 摘要传入 `run --id <canonical-id>`。扩展在派发前注册 task/process 结束监听，等待对应 `TaskExecution` 的进程退出；退出码 `0` 才视为成功，非零退出、无进程退出的任务结束和取消均返回错误并清理监听器。
+
+ID 输入只接受现代 arXiv ID 或字面量 `arxiv.org` / `www.arxiv.org` 的 HTTP(S) abs/PDF URL；校验月份、四位/五位序号时期边界、非零序号与 `v1+` 版本后，传给 CLI 的是去掉版本号的 canonical ID。流水线运行使用 CLI TOML 中的 `vault_root` 与密钥配置，因此没有打开 workspace 时仍可执行。
+
 ## Architecture and Module Boundaries
 
 依赖方向（`scripts/check-boundaries.mjs` 强制；**不**扫描 email-relay / extensions）：
@@ -79,6 +88,7 @@ packages/node-runtime  → @arxiv-daily/core
 apps/cli               → @arxiv-daily/core, @arxiv-daily/node-runtime
 plugin                 → @arxiv-daily/core, obsidian
 services/email-relay   → 独立（不在 npm workspaces）
+extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces）
 ```
 
 禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin；禁止深层 `@arxiv-daily/*/…` 导入。
@@ -101,6 +111,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 | CLI | `apps/cli/src/main.ts` → `dist/arxiv-daily-cli.cjs`（bin `arxiv-daily`） | 子命令驱动的批处理/运维 |
 | 兼容 Python | `arxiv_daily.py` | `node apps/cli/dist/arxiv-daily-cli.cjs …` |
 | Worker | `services/email-relay/src/index.ts` | `fetch` 路由 `/health`、`/v1/verify/*`、`/v1/deliver` |
+| VS Code companion | `extensions/vscode-arxiv-daily/src/extension.js` | 命令注册、Reading Dashboard 与 CLI 进程任务桥接 |
 
 ### CLI 命令面
 
@@ -300,7 +311,7 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 ### 本地脚本（根 `package.json`）
 
-- `npm run typecheck` / `test` / `build`：工作区透传（**不含** email-relay）  
+- `npm run typecheck` / `test` / `build`：工作区透传（**不含** email-relay 与 VS Code companion）
 - `npm run lint`：插件 ESLint  
 - `npm run check:boundaries`：分层边界  
 - `npm run smoke:build`：CLI/插件产物冒烟  
@@ -311,6 +322,7 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 - 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）  
 - CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，构建时复制到 `plugin/arxiv-daily-cli.cjs`；`prepack` 先 build  
+- VS Code companion：清单直接以 `src/extension.js` 为 CommonJS 入口；`build` 校验清单/命令注册，`test` 覆盖 workspace adapter、Dashboard、CLI 任务契约与 smoke，`vsix:package` 生成独立 VSIX
 - smoke 检查含 help 退出码、坏配置、pako notice、插件包不泄漏 workspace 解析符号等
 
 ### CI / 发布
@@ -319,6 +331,7 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 - **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → boundaries / lint / typecheck / test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。  
 - **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。  
 - **email-relay**：目录内 `wrangler deploy` / 本地 `npm test`；**不在** GitHub Actions 默认路径。
+- **VS Code companion**：目录内独立执行 `build` / `test` / `smoke` / `vsix:package`；当前没有专属 GitHub Actions workflow。
 
 ### 验证面
 

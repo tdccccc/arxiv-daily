@@ -37,28 +37,19 @@ assert.deepEqual(vscodeApi.commands.opened.map((item) => item.path), [
   "/workspace/vault/arxiv-daily/papers/2606.12345.md",
 ]);
 
-const ran = await runForToday(
-  vscodeApi,
-  vscodeApi.context,
-  () => new Date("2026-06-13T09:30:00"),
-);
+const runPromise = runForToday(vscodeApi);
+assert.equal(vscodeApi.executedTasks.length, 1);
+assert.equal(vscodeApi.taskExecutions.length, 1);
+vscodeApi.endTaskProcess(vscodeApi.taskExecutions[0], 0);
+vscodeApi.endTask(vscodeApi.taskExecutions[0]);
+const ran = await runPromise;
 assert.equal(ran, true);
-assert.equal(vscodeApi.terminals.length, 1);
-assert.equal(vscodeApi.terminals[0].options.cwd, "/workspace/vault");
-assert.equal(vscodeApi.terminals[0].options.env.ARXIV_DAILY_API_KEY, "sk-smoke");
-assert.equal(vscodeApi.terminals[0].options.env.ARXIV_DAILY_LINK_STYLE, "relative");
-assert.equal(
-  vscodeApi.terminals[0].sent[0],
-  "arxiv-daily run --date 2026-06-13 --config /workspace/vault/arxiv-daily/.index/vscode-cli.config.json --vault-root /workspace/vault",
-);
-const cliConfigText = new TextDecoder().decode(
-  await vscodeApi.fs.readFile(uri("/workspace/vault/arxiv-daily/.index/vscode-cli.config.json")),
-);
-const cliConfig = JSON.parse(cliConfigText);
-assert.equal(cliConfig.settings.arxiv.topics[0].tag, "photo-z");
-assert.equal(cliConfig.settings.llm.apiKey, "");
-assert(!cliConfigText.includes("sk-smoke"));
-assert(!cliConfigText.includes("obsidian-smoke-key"));
+assert.equal(vscodeApi.terminals.length, 0);
+assert.equal(vscodeApi.activeTaskProcessListeners, 0);
+assert.equal(vscodeApi.activeTaskListeners, 0);
+assert.equal(vscodeApi.executedTasks[0].scope, vscodeApi.TaskScope.Workspace);
+assert.equal(vscodeApi.executedTasks[0].execution.process, "arxiv-daily");
+assert.deepEqual(vscodeApi.executedTasks[0].execution.args, ["run", "--today"]);
 
 console.log("arXiv Daily VS Code extension smoke OK");
 
@@ -67,11 +58,6 @@ function seedVault(fs) {
   fs.addDirectory("/workspace/vault/arxiv-daily/.index");
   fs.addDirectory("/workspace/vault/arxiv-daily/daily");
   fs.addDirectory("/workspace/vault/arxiv-daily/papers");
-  fs.addDirectory("/workspace/vault/.obsidian/plugins/arxiv-daily");
-  fs.addFile(
-    "/workspace/vault/.obsidian/plugins/arxiv-daily/data.json",
-    JSON.stringify(samplePluginData(), null, 2),
-  );
   fs.addFile(
     "/workspace/vault/arxiv-daily/.index/papers.json",
     JSON.stringify(
@@ -115,63 +101,44 @@ function seedVault(fs) {
   fs.addFile("/workspace/vault/arxiv-daily/papers/2606.12345.md", "# Paper");
 }
 
-function samplePluginData() {
-  return {
-    settings: {
-      llm: {
-        apiKey: "obsidian-smoke-key",
-        provider: "deepseek",
-        baseUrl: "https://api.deepseek.com/v1",
-        model: "deepseek-v4-pro",
-        temperature: 0.3,
-        timeoutMs: 300000,
-        thinkingMode: true,
-        reasoningEffort: "high",
-      },
-      arxiv: {
-        category: "astro-ph",
-        categories: ["astro-ph"],
-        topics: [
-          {
-            id: "topic-1",
-            name: "Photo-z",
-            tag: "photo-z",
-            description: "photometric redshift calibration",
-            detail: true,
-          },
-        ],
-        timezone: "Asia/Shanghai",
-      },
-      output: {
-        dailyDir: "arxiv-daily/daily",
-        papersDir: "arxiv-daily/papers",
-        linkStyle: "wikilink",
-      },
-      schedule: {
-        enabled: false,
-        runAtLocal: "09:30",
-        tickIntervalMin: 20,
-        lookbackDays: 5,
-      },
-      advanced: {
-        requestDelayMs: 3000,
-        cacheExpiryDays: 7,
-        sectionCharLimit: 8000,
-        paperCharLimit: 50000,
-        dailyCharLimit: 400000,
-        skipSections: [],
-        prioritySections: ["abstract", "conclusion"],
-        logLevel: "info",
-      },
-    },
-  };
-}
-
 function createMockVscodeApi() {
   const fs = createMemoryFs();
   const terminals = [];
+  const executedTasks = [];
+  const taskExecutions = [];
+  const taskProcessListeners = new Set();
+  const taskListeners = new Set();
   const opened = [];
-  return {
+
+  class ProcessExecution {
+    constructor(process, args) {
+      this.process = process;
+      this.args = [...args];
+    }
+  }
+
+  class Task {
+    constructor(definition, scope, name, source, execution) {
+      this.definition = definition;
+      this.scope = scope;
+      this.name = name;
+      this.source = source;
+      this.execution = execution;
+    }
+  }
+
+  class TaskExecution {
+    constructor(task) {
+      this.task = task;
+    }
+  }
+
+  const vscodeApi = {
+    ProcessExecution,
+    Task,
+    TaskScope: {
+      Workspace: 2,
+    },
     FileType: {
       File: 1,
       Directory: 2,
@@ -188,11 +155,6 @@ function createMockVscodeApi() {
       },
     },
     context: {
-      secrets: {
-        async get(key) {
-          return key === "arxivDaily.llm.apiKey" ? "sk-smoke" : undefined;
-        },
-      },
       subscriptions: [],
     },
     workspace: {
@@ -234,6 +196,30 @@ function createMockVscodeApi() {
         opened.push(target);
       },
     },
+    tasks: {
+      onDidEndTaskProcess(listener) {
+        taskProcessListeners.add(listener);
+        return {
+          dispose() {
+            taskProcessListeners.delete(listener);
+          },
+        };
+      },
+      onDidEndTask(listener) {
+        taskListeners.add(listener);
+        return {
+          dispose() {
+            taskListeners.delete(listener);
+          },
+        };
+      },
+      async executeTask(task) {
+        executedTasks.push(task);
+        const taskExecution = new TaskExecution(task);
+        taskExecutions.push(taskExecution);
+        return taskExecution;
+      },
+    },
     env: {
       openedExternal: [],
       async openExternal(target) {
@@ -242,7 +228,29 @@ function createMockVscodeApi() {
     },
     fs,
     terminals,
+    executedTasks,
+    taskExecutions,
+    endTaskProcess(execution, exitCode) {
+      for (const listener of [...taskProcessListeners]) {
+        listener({ execution, exitCode });
+      }
+    },
+    endTask(execution) {
+      for (const listener of [...taskListeners]) {
+        listener({ execution });
+      }
+    },
   };
+
+  Object.defineProperties(vscodeApi, {
+    activeTaskProcessListeners: {
+      get: () => taskProcessListeners.size,
+    },
+    activeTaskListeners: {
+      get: () => taskListeners.size,
+    },
+  });
+  return vscodeApi;
 }
 
 function createMockPanel() {

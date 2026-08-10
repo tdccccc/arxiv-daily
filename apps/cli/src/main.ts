@@ -264,17 +264,23 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
   return 1;
 }
 
+const REMOVED_OVERRIDE_FLAGS = ["--config", "--vault-root", "--cache-dir"];
+
 function parseCli(argv: string[]): CliCommand {
-  const rest: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === undefined) continue;
-    if (arg === "--help" || arg === "-h") return { name: "help" };
-    if (arg === "--config" || arg === "--vault-root" || arg === "--cache-dir") {
+  for (const arg of argv) {
+    const removedFlag = REMOVED_OVERRIDE_FLAGS.find(
+      (flag) => arg === flag || arg.startsWith(`${flag}=`),
+    );
+    if (removedFlag) {
       throw new Error(
-        `${arg} is no longer supported; use ~/.config/arxiv-daily/config.toml (arxiv-daily init)`,
+        `${removedFlag} is no longer supported; use ~/.config/arxiv-daily/config.toml (arxiv-daily init)`,
       );
     }
+  }
+
+  const rest: string[] = [];
+  for (const arg of argv) {
+    if (arg === "--help" || arg === "-h") return { name: "help" };
     rest.push(arg);
   }
 
