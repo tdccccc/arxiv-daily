@@ -1321,16 +1321,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   white-space: normal;
 }
 
-.arxiv-daily-dashboard__match-reason {
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--text-accent);
-  font-size: var(--font-ui-smaller);
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .arxiv-daily-dashboard__star {
   color: var(--text-faint);
 }

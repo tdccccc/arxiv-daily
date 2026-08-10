@@ -121,6 +121,10 @@ export function createTransformersEmbeddingModel(
           signal,
         );
         vectors.push(...tensorToVectors(output, EXPECTED_DIMENSION));
+        // Yield between inference batches so a long index run does not
+        // freeze the host UI (the Obsidian renderer processes queued events
+        // between batches); harmless on Node hosts.
+        await yieldToEventLoop();
       }
       return vectors;
     },
@@ -305,12 +309,19 @@ export function describeRuntimeProbe(): string {
     : `process.release.name=${process.release?.name ?? "?"} (node)`;
 }
 
+/** Let queued host events run (timers, clicks, renders) before continuing. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setTimeout === "function") setTimeout(resolve, 0);
+    else resolve();
+  });
+}
+
 /**
  * Copy the pipeline output rows into fresh Float32Array instances. The copy
  * is required: transformers.js may reuse the underlying tensor buffer across
  * calls, so callers must not retain views into it.
- */
-function tensorToVectors(
+ */function tensorToVectors(
   tensor: PipelineOutputTensor,
   expectedDimension: number,
 ): Float32Array[] {

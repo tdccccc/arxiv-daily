@@ -1560,12 +1560,6 @@ class ArxivDailyDashboardView extends ItemView {
           text: line,
         });
       }
-      if (this.isActiveRelevanceSearch() && row.matchReasons?.length) {
-        titleCell.createDiv({
-          cls: "arxiv-daily-dashboard__match-reason",
-          text: row.matchReasons.slice(0, 2).map((reason) => reason.text).join(" · "),
-        });
-      }
 
       tr.createEl("td", { text: row.topic });
       tr.createEl("td", { text: row.entry.published || "-" });
@@ -2283,10 +2277,6 @@ class ArxivDailyDashboardView extends ItemView {
     this.notice(
       `arXiv Daily: ${entry.arxivId} ${starred ? "starred" : "unstarred"}`,
     );
-  }
-
-  private isActiveRelevanceSearch(): boolean {
-    return Boolean(this.query.search?.trim()) && (!this.query.sort || this.query.sort.key === "relevance");
   }
 
   private openSimilarPapers(entry: DashboardRow["entry"]): void {

@@ -489,7 +489,9 @@ describe("dashboard occurrence provenance", () => {
     expect(dashboardViewSource).toContain("dashboardOccurrenceProvenanceLines(row)");
     expect(dashboardViewSource).toContain('text: line');
     expect(dashboardViewSource).not.toContain("attr: { title: line }");
-    expect(dashboardViewSource).toContain("this.isActiveRelevanceSearch() && row.matchReasons?.length");
+    // Match reasons are deliberately not rendered on dashboard rows: users
+    // see the result directly, without per-row match-reason noise.
+    expect(dashboardViewSource).not.toContain("arxiv-daily-dashboard__match-reason");
     const provenanceStyles = pluginStyles.match(
       /\.arxiv-daily-dashboard__provenance\s*\{[\s\S]*?\}/,
     )?.[0];
@@ -591,9 +593,9 @@ describe("dashboard occurrence personal novelty", () => {
     expect(noveltyStyles).not.toContain("text-overflow: ellipsis");
     expect(noveltyStyles).not.toContain("overflow: hidden");
     expect(pluginStyles).toContain(".arxiv-daily-dashboard__provenance");
-    expect(pluginStyles).toContain(".arxiv-daily-dashboard__match-reason");
-    // The novelty block is visually distinct from the provenance block and
-    // from query-time match-reason truncation styles.
+    // Match-reason styles were removed with the per-row reason display.
+    expect(pluginStyles).not.toContain(".arxiv-daily-dashboard__match-reason");
+    // The novelty block is visually distinct from the provenance block.
     expect(noveltyStyles).not.toEqual(
       pluginStyles.match(/\.arxiv-daily-dashboard__provenance\s*\{[\s\S]*?\}/)?.[0],
     );
@@ -614,7 +616,8 @@ describe("dashboard occurrence personal novelty", () => {
 
 describe("dashboard pane responsiveness", () => {
   it("styles compact search explanations and narrow similar-paper content", () => {
-    expect(pluginStyles).toContain(".arxiv-daily-dashboard__match-reason");
+    // Match-reason styles were removed with the per-row reason display.
+    expect(pluginStyles).not.toContain(".arxiv-daily-dashboard__match-reason");
     expect(pluginStyles).toContain(".arxiv-daily-similar-modal__actions");
     expect(pluginStyles).toContain("@media (max-width: 520px)");
   });

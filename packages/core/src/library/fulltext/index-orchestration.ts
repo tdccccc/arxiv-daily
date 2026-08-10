@@ -146,6 +146,10 @@ export async function indexPersonalLibraryFullText(
       log?.warn(`fulltext: indexing failed for ${paperKey}: ${message}`);
       outcomes.push(recordFailed(paperKey, message, nowIso, papers, embedding.modelId, embedding.dimension));
     }
+    // Yield between papers so a long index run does not freeze host UIs (the
+    // Obsidian renderer processes queued events between papers); harmless on
+    // Node hosts.
+    await yieldToEventLoop();
   }
 
   // Prune papers that left the catalog; their derived documents are deleted too.
@@ -311,5 +315,17 @@ export async function searchFullTextKnowledgeBase(
     queryVector,
     limit: input.limit,
     maxHitsPerPaper: input.maxHitsPerPaper,
+  });
+}
+
+/**
+ * Let queued host events run (timers, clicks, renders) before continuing a
+ * long index run, so host UIs (the Obsidian renderer) stay responsive while
+ * many papers are extracted and embedded. Harmless on Node hosts.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setTimeout === "function") setTimeout(resolve, 0);
+    else resolve();
   });
 }

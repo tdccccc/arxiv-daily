@@ -101,3 +101,9 @@
 - evidence: 用户反馈——Dashboard 搜索栏最右侧需要一键清空（×）。
 - change: 搜索输入外包相对定位容器 + 绝对定位 × 按钮（仅输入有文本时显示）；`bindSearchClearButton` 助手（点击即清空+重置查询+重渲染行与 KB 区块+保持焦点，无防抖）；隐藏原生 search-cancel 避免双清空控件；+3 测试。
 - disposition: 保留。
+
+## 2026-08-07 — note（P6 后调整：行内 match-reason 移除 + 索引卡死修复）
+
+- evidence: 用户实测反馈 ①搜索框结果行仍显示 "Matched abstract/source sections"（上次只删了模态框里的，行内是另一处）；②134 篇全文索引时 Obsidian 主线程被占满、界面无响应（点击/最小化均卡住）。
+- change: ①移除 Dashboard 行内 match-reason 显示（view.ts 块 + isActiveRelevanceSearch 方法 + __match-reason 样式；matchReasons 数据保留）；②主线程让出——embedding-model `embed()` 每批推理后与 core 编排每篇论文后 `yieldToEventLoop()`（setTimeout 0，Node 宿主无害），渲染进程可处理排队事件。
+- disposition: 保留。教训：安装插件产物需 main.js + styles.css 同步复制（此前提过）。

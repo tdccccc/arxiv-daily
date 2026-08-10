@@ -927,7 +927,7 @@ class FullTextRuntimeDiagnosticsModal extends Modal {
               ownerDocument.execCommand("copy");
             }
             new Notice("arXiv Daily: diagnostics copied");
-          } catch (e) {
+          } catch {
             textarea.select();
             new Notice("Could not copy diagnostics; text is selectable");
           }
