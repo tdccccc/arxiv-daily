@@ -1,6 +1,6 @@
 # Architecture, Code Organization, and UI Audit
 
-status: active
+status: done
 updated: 2026-08-10
 owner: zcode-main-session
 
@@ -10,10 +10,10 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] 架构和代码组织结论覆盖主要产品、共享 Core、宿主边界及工程基础设施，并由当前源码或配置支撑。
-- [ ] 前端审查覆盖 Dashboard、设置页及全局样式，明确视觉更新是否必要及其范围。
-- [ ] 高优先级发现经过主会话复核，包含影响、证据位置、建议方案和投入优先级。
-- [ ] 审查报告落入 `docs/reviews/`，可直接作为后续改进阶段的输入。
+- [x] 架构和代码组织结论覆盖主要产品、共享 Core、宿主边界及工程基础设施，并由当前源码或配置支撑。
+- [x] 前端审查覆盖 Dashboard、设置页及全局样式，明确视觉更新是否必要及其范围。
+- [x] 高优先级发现经过主会话复核，包含影响、证据位置、建议方案和投入优先级。
+- [x] 审查报告落入 `docs/reviews/`，可直接作为后续改进阶段的输入。
 
 ## Non-goals
 
@@ -29,4 +29,4 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — 形成经复核的架构、代码组织与前端设计审查报告 — status: active
+1. P1 — 形成经复核的架构、代码组织与前端设计审查报告 — status: done
