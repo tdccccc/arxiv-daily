@@ -135,6 +135,11 @@ import {
   openObsidianLibrarySource,
 } from "./src/hosts/obsidian";
 import {
+  createRemoteEmbeddingModel,
+  validateEmbeddingConfig,
+  type EmbeddingModel,
+} from "@arxiv-daily/core";
+import {
   describeDiagnosticsError,
   type EmbeddingDiagnostics,
   type FullTextRuntimeDiagnostics,
@@ -1359,12 +1364,48 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
+   * Embedding backend for the full-text knowledge base (ADR 0008): the
+   * bundled local transformers.js model by default, or the remote
+   * OpenAI-compatible model when the embedding mode is `remote`.
+   */
+  private buildEmbeddingModel(): EmbeddingModel {
+    if (this.settings.embedding.mode === "remote") {
+      return createRemoteEmbeddingModel({
+        baseUrl: this.settings.embedding.baseUrl,
+        apiKey: this.settings.embedding.apiKey,
+        model: this.settings.embedding.model,
+        dimension: this.settings.embedding.dimension,
+        http: this.host.http,
+      });
+    }
+    return createTransformersEmbeddingModel();
+  }
+
+  /**
+   * Remote embedding sends full-text chunks to a named endpoint, so it needs
+   * a valid remote configuration AND full-text processing authorization
+   * (ADR 0008). The local mode needs neither.
+   */
+  private assertRemoteEmbeddingReady(): void {
+    if (this.settings.embedding.mode !== "remote") return;
+    const validation = validateEmbeddingConfig(this.settings);
+    if (!validation.ok) {
+      throw new Error(`Remote embedding configuration incomplete: ${validation.reasons.join("; ")}`);
+    }
+    if (this.getLibraryConnectionStatus().kind !== "authorized") {
+      throw new Error("Remote embedding requires authorizing full-text processing first");
+    }
+  }
+
+  /**
    * Incrementally index the personal library's full text into the local
    * knowledge base: extract (Obsidian built-in pdf.js) → chunk → embed
-   * (multilingual-e5-small q8) → store. Unchanged papers are reused via their
+   * (multilingual-e5-small q8, or the remote endpoint in remote mode) →
+   * store. Unchanged papers are reused via their
    * catalog observation fingerprints; failures are recorded and retried on
-   * the next run. Local operation — independent of any model processing
-   * authorization; no full-text content ever enters an LLM input.
+   * the next run. Local mode is independent of any model processing
+   * authorization; remote mode requires full-text authorization and sends
+   * full-text chunks to the configured embedding endpoint.
    */
   async indexPersonalLibraryFullText(): Promise<FullTextIndexRunSummary> {
     const connection = this.libraryConnection;
@@ -1406,7 +1447,8 @@ export default class ArxivDailyPlugin extends Plugin {
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
       const extractor = new ObsidianPdfTextExtractor();
-      const embedding = createTransformersEmbeddingModel();
+      this.assertRemoteEmbeddingReady();
+      const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
       const summary = await indexFullTextKnowledgeBase({
         catalog,
@@ -1458,9 +1500,10 @@ export default class ArxivDailyPlugin extends Plugin {
       scopeFingerprint,
       identificationFingerprint,
     );
+    this.assertRemoteEmbeddingReady();
     const matches = await searchFullTextKnowledgeBaseCore({
       store: this.buildFullTextKnowledgeBaseStore(connection),
-      embedding: createTransformersEmbeddingModel(),
+      embedding: this.buildEmbeddingModel(),
       queryText,
     });
     const titles = new Map<string, string>();
