@@ -24,10 +24,11 @@ owner: zcode-main-session
 
 ## Constraints
 
-- Plugin 与 CLI 共用 Vault 时必须有跨进程 exclusive claim；仅使用进程内队列不算完成。
+- 支持自动投递的宿主必须提供操作系统级跨进程 exclusive claim；无法提供该能力的 Obsidian 宿主必须 fail closed。
 - 不记录 API key、token、原始邮件正文或未哈希收件人到 provider idempotency key。
 - 不恢复已经删除的 CLI 配置方式，也不扩大到 Scheduler durable completion。
 
 ## Phases
 
-1. P1 — 自动邮件在客户端与 relay 边界具备可验证的重复投递防护 — status: active
+1. P1 — 以通用 DataAdapter copy 实现跨进程 claim — status: superseded
+2. P1b — 自动邮件在具备真实 OS claim 的客户端与租户隔离 relay 边界获得可验证防护 — status: active
