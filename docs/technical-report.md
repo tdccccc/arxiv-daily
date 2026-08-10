@@ -311,7 +311,10 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 ### 本地脚本（根 `package.json`）
 
-- `npm run typecheck` / `test` / `build`：工作区透传（**不含** email-relay 与 VS Code companion）
+- `npm run typecheck` / `build`：根 workspace 透传（**不含** email-relay 与 VS Code companion）
+- `npm test`：无附加参数时经 `scripts/run-root-tests.mjs` 调用 `test:workspaces`，覆盖全部根 workspace；带测试路径或 Vitest 参数时只把原参数传给一次 `@arxiv-daily/core` 测试调用
+- `npm run test:workspaces -- <args>`：向全部根 workspace 传递测试参数，是 CI 与发布验证使用的全套测试入口
+- Core 的无参数测试由 `scripts/run-core-tests.mjs` 递归发现 `tests/**/*.test.ts`，按路径确定性排序后以每批最多 8 个文件、每个 Vitest 子进程一个 worker 执行；显式参数直接进入单个 Vitest 子进程
 - `npm run lint`：插件 ESLint  
 - `npm run check:boundaries`：分层边界  
 - `npm run smoke:build`：CLI/插件产物冒烟  
@@ -327,15 +330,15 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 ### CI / 发布
 
-- **Lint and typecheck**（`lint.yml`）：push/PR 上 `npm ci`、lint、typecheck（**不**跑 test / boundaries / smoke）。  
-- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → boundaries / lint / typecheck / test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。  
-- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。  
+- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
+- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → release tools / boundaries / lint / typecheck / 8 GiB 全 workspace test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。
+- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → 运行同一全 workspace 验证入口 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。
 - **email-relay**：目录内 `wrangler deploy` / 本地 `npm test`；**不在** GitHub Actions 默认路径。
 - **VS Code companion**：目录内独立执行 `build` / `test` / `smoke` / `vsix:package`；当前没有专属 GitHub Actions workflow。
 
 ### 验证面
 
-core / plugin / CLI 工作区有大量 Vitest。email-relay 仅有本地 crypto/KV 幂等测试。测试用于约束行为；生产路径以源码注册与打包入口为准。
+core / plugin / CLI 工作区有大量 Vitest。Core 流水线集成测试使用包含两个论文条目的代表性 recent 页面输入；arXiv parser 与 source adapter 专项测试继续读取完整的真实页面夹具。email-relay 仅有本地 crypto/KV 幂等测试。测试用于约束行为；生产路径以源码注册与打包入口为准。
 
 ## Security and Failure Behavior
 
