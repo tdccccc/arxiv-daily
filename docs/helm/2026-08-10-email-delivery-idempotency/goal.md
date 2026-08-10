@@ -1,7 +1,7 @@
 # Email Delivery Idempotency
 
 status: active
-updated: 2026-08-10
+updated: 2026-08-11
 owner: zcode-main-session
 
 ## Intent

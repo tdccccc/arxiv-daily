@@ -1,7 +1,7 @@
 # P1b — idempotent-delivery
 
 goal_ref: ../goal.md
-updated: 2026-08-10
+updated: 2026-08-11
 
 ## Outcome
 
@@ -13,10 +13,11 @@ updated: 2026-08-10
 - Resend 稳定 `Idempotency-Key` 能在本地进程崩溃和内部重试窗口中提供最终 provider 去重边界。
 - Relay 可按认证设备而非客户端 key 选择 Durable Object，使配额和所有该设备投递决策在一个串行边界内执行。
 - 结果不明时阻断自动重试优先于可能漏发。
+- 旧 v1 客户端只会按明文 `record.recipient` 匹配阻断记录；为满足已锁定的混合版本防重复目标，兼容主状态保留该字段并在 Node 宿主强制私有文件权限。Generation sidecar、provider key、relay ledger、日志和结果不保存明文收件人。
 
 ## Approach
 
-保留已验证的严格状态读取、稳定 provider key、结果 union 和 fail-closed binding；替换通用 `DataAdapter.copy` claim、按裸 key 分片的 relay DO、非原子 KV quota 和过宽 HTTP 重试分类。桌面 Plugin 与 CLI 使用操作系统级 exclusive create，能力不足的 Obsidian 宿主拒绝自动投递。Relay 以认证设备作用域串行配额和幂等 ledger，并用请求指纹校验 replay；Provider 明确拒绝、模糊结果和未尝试取消分别处理。对锁与 claim 增加有界恢复协议，恢复操作不得重新开放已开始的模糊投递。
+保留已验证的严格状态读取、稳定 provider key、结果 union 和 fail-closed binding；替换通用 `DataAdapter.copy` claim、按裸 key 分片的 relay DO、非原子 KV quota 和过宽 HTTP 重试分类。桌面 Plugin 与 CLI 使用 descriptor-anchored OS exclusive create，能力不足的宿主拒绝自动投递。兼容主状态继续提供旧 v1 reader 能识别的阻断记录，并使用私有写入；不可变 generation sidecar 只持久化哈希 recipient identity 和安全枚举错误。Relay 以认证设备作用域串行配额和幂等 ledger，并用请求指纹校验 replay；Provider 明确拒绝、模糊结果和未尝试取消分别处理。对锁与 claim 增加有界恢复协议，恢复操作不得重新开放已开始的模糊投递。单版本 Worker cutover 在接受 v2 流量前要求显式 readiness barrier，并将精确 legacy KV delivered/pending 证据导入 DO；不确定时 fail closed。
 
 ## Test strategy
 
@@ -31,7 +32,8 @@ updated: 2026-08-10
 - [ ] 为本地状态锁与 claim 实现可验证的有界恢复；只有可证明未开始 provider 调用的孤儿 claim 可释放，模糊或已开始记录继续阻断。
 - [ ] 收紧 Core 与 relay 的 provider 结果分类、内部重试和 pre-attempt cancellation，保持稳定 key 且不将 408/409/5xx 当明确未发送。
 - [ ] 将 relay DO 改为认证设备作用域，在同一串行边界内执行幂等、请求指纹和配额预占/结算；阻止跨租户抢占和不同 key 并发绕过。
-- [ ] 定义并测试 relay ledger 的 pending/done 保留与清理策略；发布采用单版本 cutover，不宣称 eventual-consistent KV 可提供安全并存/回滚。
+- [ ] 定义并测试 relay ledger 的 pending/done 保留与清理策略；发布采用显式 readiness barrier 的单版本 cutover，导入 legacy delivered/pending 证据，不宣称 eventual-consistent KV 可提供安全并存/回滚。
+- [ ] 将兼容主状态限制为私有 v1 阻断文件；generation sidecar、结果和日志只使用哈希 identity 与稳定安全错误码。
 - [ ] 更新所有结果消费者并运行定向、独立复核和完整回归。
 - [ ] 完成独立技术报告交接、提交和 Helm 收口。
 
