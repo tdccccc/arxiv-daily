@@ -26,11 +26,11 @@ updated: 2026-08-10
 
 ## Tasks
 
-- [ ] 复现并记录默认 `npm test` 的 Core heap 失败。
-- [ ] 以 Red 测试锁定分批 runner 的完整覆盖、失败传播和 focused invocation 兼容性。
-- [ ] 实现 Core 短生命周期测试批次并在标准 heap 下验证根测试。
-- [ ] 升级根 PR workflow 并加入 workflow invariant 测试。
-- [ ] 运行 release-equivalent 根门禁、完成独立复核与技术报告交接。
+- [x] 复现并记录默认 `npm test` 的 Core heap 失败。
+- [x] 以 Red 测试锁定分批 runner 的完整覆盖、失败传播和 focused invocation 兼容性。
+- [x] 实现 Core 短生命周期测试批次并在标准 heap 下验证根测试。
+- [x] 升级根 PR workflow 并加入 workflow invariant 测试。
+- [x] 运行 release-equivalent 根门禁、完成独立复核与技术报告交接。
 
 ## Verification
 
