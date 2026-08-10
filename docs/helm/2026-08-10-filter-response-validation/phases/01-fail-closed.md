@@ -19,13 +19,13 @@ updated: 2026-08-10
 
 ## Tasks
 
-- [ ] 新增过滤响应验证错误类型、稳定错误码和结构 guard。
-- [ ] 将非法 JSON 与非法过滤契约改为抛出专用错误。
-- [ ] 在 Pipeline 中显式映射为可诊断的 `failed_transient`。
-- [ ] 更新 filter 单元测试并保留合法空/skip 行为。
-- [ ] 增加 Pipeline 回归测试，确认非法响应无下游 mutation。
-- [ ] 运行定向、类型、边界、全量测试与构建验证。
-- [ ] 完成技术报告交接、提交与阶段收口。
+- [x] 新增过滤响应验证错误类型、稳定错误码和结构 guard。
+- [x] 将非法 JSON 与非法过滤契约改为抛出专用错误。
+- [x] 在 Pipeline 中显式映射为可诊断的 `failed_transient`。
+- [x] 更新 filter 单元测试并保留合法空/skip 行为。
+- [x] 增加 Pipeline 回归测试，确认非法响应无下游 mutation。
+- [x] 运行定向、类型、边界、全量测试与构建验证。
+- [x] 完成技术报告交接、提交与阶段收口。
 
 ## Verification
 

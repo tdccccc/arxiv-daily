@@ -1,6 +1,6 @@
 # Filter Response Validation
 
-status: active
+status: done
 updated: 2026-08-10
 owner: zcode-main-session
 
@@ -10,11 +10,11 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] 非严格 JSON 和不符合过滤契约的模型响应映射为 `failed_transient`，并保留安全、明确的失败原因。
-- [ ] 严格 `{"papers":[]}`、合法 `skip` 和全部 ignored 的既有成功零结果语义保持不变。
-- [ ] 非法响应不保存过滤 checkpoint，不更新 Paper Index，不抓取正文，不写日报，也不进入完成后的邮件回调。
-- [ ] 定向测试、Core 类型检查、边界检查和现有 release 测试门禁通过。
-- [ ] 当前实现的技术报告与接受后的代码保持同步。
+- [x] 非严格 JSON 和不符合过滤契约的模型响应映射为 `failed_transient`，并保留安全、明确的失败原因。
+- [x] 严格 `{"papers":[]}`、合法 `skip` 和全部 ignored 的既有成功零结果语义保持不变。
+- [x] 非法响应不保存过滤 checkpoint，不更新 Paper Index，不抓取正文，不写日报，也不进入完成后的邮件回调。
+- [x] 定向测试、Core 类型检查、边界检查和现有 release 测试门禁通过。
+- [x] 当前实现的技术报告与接受后的代码保持同步。
 
 ## Non-goals
 
@@ -32,4 +32,4 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — 非法过滤响应 fail closed，合法零结果保持兼容 — status: active
+1. P1 — 非法过滤响应 fail closed，合法零结果保持兼容 — status: done
