@@ -58,7 +58,7 @@ const TRANSFORMERS_MODEL_REPO = "Xenova/multilingual-e5-small";
 /** Embedding width of multilingual-e5-small; asserted against the loaded model. */
 const EXPECTED_DIMENSION = 384;
 /** Texts per inference call: bounds q8-session memory and gives abort granularity. */
-const EMBED_BATCH_SIZE = 32;
+const EMBED_BATCH_SIZE = 8;
 
 export interface TransformersEmbeddingModelOptions {
   /**

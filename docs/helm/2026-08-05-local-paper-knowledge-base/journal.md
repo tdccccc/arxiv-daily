@@ -107,3 +107,10 @@
 - evidence: 用户实测反馈 ①搜索框结果行仍显示 "Matched abstract/source sections"（上次只删了模态框里的，行内是另一处）；②134 篇全文索引时 Obsidian 主线程被占满、界面无响应（点击/最小化均卡住）。
 - change: ①移除 Dashboard 行内 match-reason 显示（view.ts 块 + isActiveRelevanceSearch 方法 + __match-reason 样式；matchReasons 数据保留）；②主线程让出——embedding-model `embed()` 每批推理后与 core 编排每篇论文后 `yieldToEventLoop()`（setTimeout 0，Node 宿主无害），渲染进程可处理排队事件。
 - disposition: 保留。教训：安装插件产物需 main.js + styles.css 同步复制（此前提过）。
+
+## 2026-08-07 — note（P6 后调整：卡死二次排查——实测嵌入/提取均不阻塞，补 placement 让出）
+
+- evidence: 用户反馈仍卡死。Electron 忠实复现测量：嵌入 256 段 ~100s 但主线程最大阻塞 59ms（asyncify wasm 内部让出 + 批量让出有效）；Obsidian 内置 pdf.js 启动即设 `GlobalWorkerOptions.workerSrc=/lib/pdfjs/pdf.worker.min.mjs`（提取走 worker 不阻塞主线程）。剩余真实阻塞点：索引完成后自动触发的 placement `loadClusteringInput` 逐篇 base64 解码 + JSON.parse 无让出（134 篇时主线程卡数十秒）。
+- change: ①core placement `loadClusteringInput` 每篇让出事件循环；②嵌入批 32→8（单块更短、让出更密）。embedding 吞吐本机 ~9s/32 批（CPU wasm 固有，134 篇全程 ~25min，非卡死只是慢）。
+- disposition: 保留。测量资产 tmp/embed-block-*、tmp/extract-block-* 为 scratch。
+- next: 请用户以新构建干净复测（重启 Obsidian → 重跑索引，已完成的论文复用）。

@@ -178,6 +178,10 @@ export async function loadClusteringInput(
     const chunks = chunkVectors(document);
     if (chunks.length === 0) continue;
     papers.push({ paperKey, chunks });
+    // Yield per paper so host UIs stay responsive while a large library's
+    // vectors are decoded and parsed (the incremental auto-trigger runs this
+    // right after indexing); harmless on Node hosts.
+    await yieldToEventLoop();
   }
   return papers;
 }
@@ -263,4 +267,12 @@ function requireFiniteInRange(
     throw new TypeError(`${name} must be a finite number in [${min}, ${max}]`);
   }
   return value;
+}
+
+/** Let queued host events run before continuing a long vector load. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setTimeout === "function") setTimeout(resolve, 0);
+    else resolve();
+  });
 }
