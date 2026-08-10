@@ -26,13 +26,13 @@ updated: 2026-08-10
 
 ## Tasks
 
-- [ ] 以 Red 测试锁定 declarative 直接 mutation、output store、runtime effect 与 timezone 缺口。
-- [ ] 实现串行 SettingsChangeService 和候选 settings 的 validate/prepare/persist/commit 协议。
-- [ ] 将普通 declarative scalar 与关键 custom rows 接入统一服务。
-- [ ] 将 legacy output、timezone、interval、log level 和 schedule enabled 接入同一服务。
-- [ ] 增加无效持久化 timezone fallback 和 renderer 控件回滚测试。
-- [ ] 运行定向、完整回归和独立代码复核。
-- [ ] 完成独立技术报告交接、提交和 Helm 收口。
+- [x] 以 Red 测试锁定 declarative 直接 mutation、output store、runtime effect 与 timezone 缺口。
+- [x] 实现串行 SettingsChangeService 和候选 settings 的 validate/prepare/persist/commit 协议。
+- [x] 将普通 declarative scalar 与关键 custom rows 接入统一服务。
+- [x] 将 legacy output、timezone、interval、log level 和 schedule enabled 接入同一服务。
+- [x] 增加无效持久化 timezone fallback 和 renderer 控件回滚测试。
+- [x] 运行定向、完整回归和独立代码复核。
+- [x] 完成独立技术报告交接、提交和 Helm 收口。
 
 ## Verification
 

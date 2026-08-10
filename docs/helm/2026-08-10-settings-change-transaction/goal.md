@@ -1,6 +1,6 @@
 # Settings Change Transaction
 
-status: active
+status: done
 updated: 2026-08-10
 owner: zcode-main-session
 
@@ -10,11 +10,11 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] 普通 declarative scalar 不再直接修改 live settings 后裸保存，失败时配置与运行时均保持旧值。
-- [ ] output directories 同时校验冲突、预加载候选 stores，并只在持久化成功后安装；活跃运行时拒绝切换根目录。
-- [ ] log level、timezone、tick interval 和 schedule enabled 的 runtime effect 只在持久化成功后发生。
-- [ ] 时区以 draft 提交并严格验证，无效持久化时区安全回退，不再触发 Dashboard/Logger `RangeError`。
-- [ ] Obsidian 1.4 legacy 与 1.13+ declarative 行为一致，定向及完整门禁通过并同步技术报告。
+- [x] 普通 declarative scalar 不再直接修改 live settings 后裸保存，失败时配置与运行时均保持旧值。
+- [x] output directories 同时校验冲突、预加载候选 stores，并只在持久化成功后安装；活跃运行时拒绝切换根目录。
+- [x] log level、timezone、tick interval 和 schedule enabled 的 runtime effect 只在持久化成功后发生。
+- [x] 时区以 draft 提交并严格验证，无效持久化时区安全回退，不再触发 Dashboard/Logger `RangeError`。
+- [x] Obsidian 1.4 legacy 与 1.13+ declarative 行为一致，定向及完整门禁通过并同步技术报告。
 
 ## Non-goals
 
@@ -30,4 +30,4 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — 两套 Settings renderer 通过统一事务保持配置与运行时一致 — status: active
+1. P1 — 两套 Settings renderer 通过统一事务保持配置与运行时一致 — status: done
