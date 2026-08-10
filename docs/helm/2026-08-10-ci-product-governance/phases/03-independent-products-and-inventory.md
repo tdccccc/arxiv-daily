@@ -27,11 +27,11 @@ Email relay 与 VS Code companion 使用各自的依赖锁和产品契约进入�
 
 ## Tasks
 
-- [ ] 以 Red 测试锁定 root release group、email relay、VS Code companion 的 inventory 与治理策略。
-- [ ] 新增 email relay 独立 PR workflow，覆盖自身 lockfile、Core hosted-delivery contract、tests、typecheck 与 Wrangler dry-run。
-- [ ] 新增 VS Code companion 独立 PR workflow，覆盖自身 lockfile、CLI contract、build、tests、smoke 与临时 VSIX 验证。
-- [ ] 实现 product-unit inventory checker，拒绝未经分类或治理信息不完整的新 package/app/plugin/service/extension。
-- [ ] 运行根、relay、companion 三组门禁，完成独立复核、技术报告交接和远端 PR CI 验证准备。
+- [x] 以 Red 测试锁定 root release group、email relay、VS Code companion 的 inventory 与治理策略。
+- [x] 新增 email relay 独立 PR workflow，覆盖自身 lockfile、Core hosted-delivery contract、tests、typecheck 与 Wrangler dry-run。
+- [x] 新增 VS Code companion 独立 PR workflow，覆盖自身 lockfile、CLI contract、build、tests、smoke 与临时 VSIX 验证。
+- [x] 实现 product-unit inventory checker，拒绝未经分类或治理信息不完整的新 package/app/plugin/service/extension。
+- [x] 运行根、relay、companion 三组门禁，完成独立复核、技术报告交接和远端 PR CI 验证准备。
 
 ## Verification
 
