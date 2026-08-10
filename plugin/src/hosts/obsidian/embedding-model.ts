@@ -103,6 +103,7 @@ export function createTransformersEmbeddingModel(
   return {
     modelId: EMBEDDING_MODEL_ID,
     dimension: EXPECTED_DIMENSION,
+    prefixPolicy: "e5",
     async embed(
       texts: readonly string[],
       embedOptions?: EmbeddingOptions,

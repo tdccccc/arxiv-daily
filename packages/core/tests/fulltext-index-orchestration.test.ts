@@ -124,6 +124,7 @@ class FakeExtractor implements PdfTextExtractor {
 class FakeEmbedding implements EmbeddingModel {
   readonly modelId = "fake-e5-q8";
   readonly dimension = 4;
+  readonly prefixPolicy = "e5" as const;
   calls = 0;
 
   constructor(private readonly vectors: Readonly<Record<string, Float32Array>> = {}) {}

@@ -29,11 +29,18 @@ export interface EmbeddingOptions {
   signal?: AbortSignal;
 }
 
+export type EmbeddingPrefixPolicy = "e5" | "none";
+
 export interface EmbeddingModel {
   /** Stable identifier of the loaded model (family + quantization), e.g. `multilingual-e5-small-q8`. */
   readonly modelId: string;
   /** Vector dimension of the model, e.g. 384. */
   readonly dimension: number;
+  /**
+   * Whether the caller must apply the e5 query/passage prefixes. e5-family
+   * hosts expect them; remote OpenAI-compatible models embed plain text.
+   */
+  readonly prefixPolicy: EmbeddingPrefixPolicy;
   /**
    * Embed texts in batch order. The caller applies the prefix policy before
    * calling (see `applyEmbeddingPrefix`); the host treats input as final.

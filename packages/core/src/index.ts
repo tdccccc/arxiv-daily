@@ -21,6 +21,7 @@ export * from "./library/incremental/placement";
 export * from "./library/incremental/recluster";
 export * from "./library/incremental/suggestions-store";
 export * from "./library/fulltext/ports";
+export * from "./library/fulltext/remote-embedding-model";
 export * from "./library/fulltext/retrieval";
 export * from "./library/pdf-identification-evidence";
 export * from "./library/pdf-text-utils";

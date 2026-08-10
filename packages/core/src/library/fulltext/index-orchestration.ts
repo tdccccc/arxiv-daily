@@ -197,7 +197,7 @@ async function buildPaperDocument(input: {
   const textHash = `sha256:${sha256Hex(pages.join("\n"))}`;
   const chunks = chunkFullText(pages);
   const vectors = await input.embedding.embed(
-    chunks.map((chunk) => applyEmbeddingPrefix("passage", chunk.text)),
+    chunks.map((chunk) => prefixFor("passage", input.embedding, chunk.text)),
     { signal: input.signal },
   );
   if (vectors.length !== chunks.length) {
@@ -299,7 +299,7 @@ export async function searchFullTextKnowledgeBase(
   const manifest = await input.store.loadManifest();
   if (Object.keys(manifest.papers).length === 0) return [];
   const queryVectors = await input.embedding.embed(
-    [applyEmbeddingPrefix("query", input.queryText)],
+    [prefixFor("query", input.embedding, input.queryText)],
     { signal: input.signal },
   );
   const queryVector = queryVectors[0];
@@ -356,4 +356,16 @@ function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+/**
+ * Apply the model's prefix policy: e5-family models get the query/passage
+ * prefixes, remote models embed plain text.
+ */
+function prefixFor(
+  kind: "query" | "passage",
+  embedding: { readonly prefixPolicy: "e5" | "none" },
+  text: string,
+): string {
+  return embedding.prefixPolicy === "e5" ? applyEmbeddingPrefix(kind, text) : text;
 }
