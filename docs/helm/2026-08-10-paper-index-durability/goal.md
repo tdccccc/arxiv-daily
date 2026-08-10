@@ -1,6 +1,6 @@
 # Paper Index Durability
 
-status: active
+status: done
 updated: 2026-08-10
 owner: zcode-main-session
 
@@ -10,11 +10,11 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] primary missing/corrupt 时能读取有效 `.bak`，真实 I/O 不可读或所有现有副本无效时 fail closed。
-- [ ] 保存流程不会用损坏 primary 覆盖唯一有效备份，提升失败后仍保留可恢复内容。
-- [ ] daily selection、history sync 和所有领域 mutation 在队列内重新读取并合并最新索引。
-- [ ] schema 1–4、legacy 路径和现有 Paper Index 用户语义保持兼容。
-- [ ] 定向及完整门禁通过，diagnostics 和技术报告反映真实恢复语义。
+- [x] primary missing/corrupt 时能读取有效 `.bak`，真实 I/O 不可读或所有现有副本无效时 fail closed。
+- [x] 保存流程不会用损坏 primary 覆盖唯一有效备份，提升失败后仍保留可恢复内容。
+- [x] daily selection、history sync 和所有领域 mutation 在队列内重新读取并合并最新索引。
+- [x] schema 1–4、legacy 路径和现有 Paper Index 用户语义保持兼容。
+- [x] 定向及完整门禁通过，diagnostics 和技术报告反映真实恢复语义。
 
 ## Non-goals
 
@@ -30,4 +30,4 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — Paper Index 具备有效副本恢复和排队读改写语义 — status: active
+1. P1 — Paper Index 具备有效副本恢复和排队读改写语义 — status: done

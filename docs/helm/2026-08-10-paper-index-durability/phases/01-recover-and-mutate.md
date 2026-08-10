@@ -26,12 +26,12 @@ Paper Index 始终从最新有效副本读取，保存失败不破坏恢复点�
 
 ## Tasks
 
-- [ ] 以 Red 测试锁定分类读取、backup-only 恢复和不可读 fail-closed。
-- [ ] 实现 primary/backup/legacy 的验证读取和可恢复替换流程。
-- [ ] 收紧裸 `save`，让所有领域读改写在队列内重新读取并保存。
-- [ ] 迁移 daily selection、history sync 与 diagnostics 并增加交错测试。
-- [ ] 运行定向、故障注入和完整回归。
-- [ ] 完成独立技术报告交接、提交和 Helm 收口。
+- [x] 以 Red 测试锁定分类读取、backup-only 恢复和不可读 fail-closed。
+- [x] 实现 primary/backup/legacy 的验证读取和可恢复替换流程。
+- [x] 收紧裸 `save`，让所有领域读改写在队列内重新读取并保存。
+- [x] 迁移 daily selection、history sync 与 diagnostics 并增加交错测试。
+- [x] 运行定向、故障注入和完整回归。
+- [x] 完成独立技术报告交接、提交和 Helm 收口。
 
 ## Verification
 
