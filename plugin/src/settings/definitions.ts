@@ -35,6 +35,13 @@ export const SETTING_KEYS = {
     runUntilLocal: "schedule.runUntilLocal",
     tickIntervalMin: "schedule.tickIntervalMin",
   },
+  embedding: {
+    mode: "embedding.mode",
+    baseUrl: "embedding.baseUrl",
+    apiKey: "embedding.apiKey",
+    model: "embedding.model",
+    dimension: "embedding.dimension",
+  },
   advanced: {
     requestDelayMs: "advanced.requestDelayMs",
     cacheExpiryDays: "advanced.cacheExpiryDays",

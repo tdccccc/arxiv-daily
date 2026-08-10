@@ -48,4 +48,12 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     hostedToken: "",
     hostedBaseUrl: "",
   },
+  embedding: {
+    mode: "local",
+    provider: "",
+    baseUrl: "",
+    apiKey: "",
+    model: "",
+    dimension: 384,
+  },
 };

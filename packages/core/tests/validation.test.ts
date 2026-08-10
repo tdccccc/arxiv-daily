@@ -4,6 +4,7 @@ import {
   validateFilterConfig,
   validateScheduleConfig,
   validateVaultRelativeDirectory,
+  validateEmbeddingConfig,
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
@@ -259,5 +260,48 @@ describe("schedule defaults", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/run window/i);
+  });
+});
+
+describe("validateEmbeddingConfig", () => {
+  it("passes in local mode without any remote fields", () => {
+    const r = validateEmbeddingConfig(makeSettings({ embedding: { ...DEFAULT_SETTINGS.embedding, mode: "local" } }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("requires the remote fields when mode is remote", () => {
+    const r = validateEmbeddingConfig(makeSettings({ embedding: { ...DEFAULT_SETTINGS.embedding, mode: "remote" } }));
+    expect(r.ok).toBe(false);
+    expect(r.reasons).toEqual(
+      expect.arrayContaining(["Embedding Base URL is empty", "Embedding API Key is empty", "Embedding Model is empty"]),
+    );
+  });
+
+  it("rejects a non-positive dimension in remote mode", () => {
+    const r = validateEmbeddingConfig(makeSettings({
+      embedding: {
+        mode: "remote",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-embed",
+        model: "text-embedding-3-small",
+        dimension: 0,
+      },
+    }));
+    expect(r.reasons).toContain("Embedding dimension must be a positive integer");
+  });
+
+  it("passes with a complete remote configuration", () => {
+    const r = validateEmbeddingConfig(makeSettings({
+      embedding: {
+        mode: "remote",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-embed",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+      },
+    }));
+    expect(r.ok).toBe(true);
   });
 });

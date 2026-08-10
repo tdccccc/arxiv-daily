@@ -41,6 +41,7 @@ function mergeSettings(
     schedule: { ...defaults.schedule, ...(partial.schedule ?? {}) },
     advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },
     email: migrateEmailSettings(partial.email ?? defaults.email),
+    embedding: { ...defaults.embedding, ...(partial.embedding ?? {}) },
   };
 }
 

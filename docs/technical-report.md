@@ -313,6 +313,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 - `schedule`：enabled、runAtLocal、runUntilLocal、tickIntervalMin（**插件进程内**）
 - `advanced`：requestDelayMs（默认 3000）、cacheExpiryDays、正文长度上限、logLevel
 - `email`：enabled、mode（`self|hosted`）、to、fromEmail/fromName、apiKey、hostedToken、hostedBaseUrl
+- `embedding`（ADR 0008）：mode（`local|remote`，默认 local）、provider、baseUrl、apiKey、model、dimension（远程模式必填配置；CLI `[embedding]` 映射同形状）
 
 ### 环境变量与 secrets
 

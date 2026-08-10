@@ -264,7 +264,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
+    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced" | "embedding",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -702,6 +702,74 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             if (v.trim()) {
               s.llm.reasoningEffort = v.trim();
+              await this.plugin.saveSettings();
+            }
+          });
+      });
+
+    // ─── Embedding ────────────────────────────────────
+    this.sectionHeading(containerEl, "Embedding", "embedding");
+    new Setting(containerEl)
+      .setName("Embedding mode")
+      .setDesc(
+        "How library full text becomes similarity vectors. Local embeds offline on this device "
+          + "(slow for large libraries). Remote sends full-text chunks to an embeddings API "
+          + "(fast; requires model-processing authorization at full-text depth; "
+          + "switching modes rebuilds the index).",
+      )
+      .addDropdown((d) => {
+        d.addOption("local", "Local (offline, default)");
+        d.addOption("remote", "Remote (fast, full text leaves this device)");
+        d.setValue(s.embedding.mode);
+        d.onChange(async (v) => {
+          s.embedding.mode = v === "remote" ? "remote" : "local";
+          await this.plugin.saveSettings();
+        });
+      });
+    new Setting(containerEl)
+      .setName("Embedding API base URL")
+      .setDesc("OpenAI-compatible embeddings endpoint, e.g. https://api.openai.com/v1.")
+      .addText((t) => {
+        t.setPlaceholder("https://api.openai.com/v1")
+          .setValue(s.embedding.baseUrl)
+          .onChange(async (v) => {
+            s.embedding.baseUrl = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding API key")
+      .setDesc("Saved only on this device.")
+      .addText((t) => {
+        t.inputEl.type = "password";
+        t.setPlaceholder("Enter API key")
+          .setValue(s.embedding.apiKey)
+          .onChange(async (v) => {
+            s.embedding.apiKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding model")
+      .setDesc("Model name sent to the endpoint, e.g. text-embedding-3-small.")
+      .addText((t) => {
+        t.setPlaceholder("text-embedding-3-small")
+          .setValue(s.embedding.model)
+          .onChange(async (v) => {
+            s.embedding.model = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding dimension")
+      .setDesc("Vector width of the remote model, e.g. 1536. Must match the model.")
+      .addText((t) => {
+        t.setPlaceholder("1536")
+          .setValue(String(s.embedding.dimension))
+          .onChange(async (v) => {
+            const parsed = Number(v.trim());
+            if (Number.isInteger(parsed) && parsed > 0) {
+              s.embedding.dimension = parsed;
               await this.plugin.saveSettings();
             }
           });

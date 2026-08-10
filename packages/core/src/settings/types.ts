@@ -9,6 +9,26 @@ export interface LlmSettings {
   reasoningEffort: string;
 }
 
+export type EmbeddingMode = "local" | "remote";
+
+/**
+ * Embedding backend for the personal library full-text knowledge base
+ * (ADR 0008). `local` embeds offline with the bundled multilingual-e5-small
+ * model; `remote` sends full-text chunks to an OpenAI-compatible embeddings
+ * endpoint (requires full-text processing consent).
+ */
+export interface EmbeddingSettings {
+  mode: EmbeddingMode;
+  provider: string;
+  /** OpenAI-compatible embeddings endpoint base URL, e.g. `https://api.openai.com/v1`. */
+  baseUrl: string;
+  apiKey: string;
+  /** Model name sent to the endpoint, e.g. `text-embedding-3-small`. */
+  model: string;
+  /** Expected vector width of the remote model, e.g. 1536. */
+  dimension: number;
+}
+
 export interface Topic {
   id: string;
   name: string;
@@ -94,6 +114,7 @@ export interface PluginSettings {
   schedule: ScheduleSettings;
   advanced: AdvancedSettings;
   email: EmailSettings;
+  embedding: EmbeddingSettings;
 }
 
 export type RunStatus =

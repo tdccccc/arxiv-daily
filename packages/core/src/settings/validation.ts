@@ -167,3 +167,20 @@ export function validateSchedulerConfig(settings: PluginSettings): ValidationRes
     reasons: [...filter.reasons, ...schedule.reasons],
   };
 }
+
+/**
+ * Remote embedding configuration is only required when the embedding mode
+ * is `remote` (ADR 0008); the local mode needs none of it.
+ */
+export function validateEmbeddingConfig(settings: PluginSettings): ValidationResult {
+  const reasons: string[] = [];
+  if (settings.embedding.mode === "remote") {
+    if (!settings.embedding.baseUrl.trim()) reasons.push("Embedding Base URL is empty");
+    if (!settings.embedding.apiKey.trim()) reasons.push("Embedding API Key is empty");
+    if (!settings.embedding.model.trim()) reasons.push("Embedding Model is empty");
+    if (!Number.isInteger(settings.embedding.dimension) || settings.embedding.dimension <= 0) {
+      reasons.push("Embedding dimension must be a positive integer");
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}

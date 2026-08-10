@@ -11,6 +11,13 @@ api_key = "sk-test"
 base_url = "https://api.example.com/v1"
 model = "m1"
 
+[embedding]
+mode = "remote"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-embed"
+model = "text-embedding-3-small"
+dimension = 1536
+
 [arxiv]
 categories = ["cs.LG"]
 timezone = "UTC"
@@ -69,6 +76,13 @@ describe("CLI config loader (TOML / XDG)", () => {
     expect(cfg.cacheDir).toBe("/vault/.cache/arxiv-daily");
     expect(cfg.settings.llm.apiKey).toBe("sk-test");
     expect(cfg.settings.llm.baseUrl).toBe("https://api.example.com/v1");
+    expect(cfg.settings.embedding).toMatchObject({
+      mode: "remote",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-embed",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    });
     expect(cfg.settings.arxiv.categories).toEqual(["cs.LG"]);
     expect(cfg.settings.arxiv.category).toBe("cs.LG");
     expect(cfg.settings.arxiv.topics[0]?.tag).toBe("ml");
