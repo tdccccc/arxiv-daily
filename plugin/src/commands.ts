@@ -202,22 +202,29 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       notice("Invalid arXiv ID");
       return;
     }
-    const store = plugin.buildPaperIndex();
-    const state = stateForMark(mark);
-    let entry = await store.setStatus(id, state.status);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    entry = await store.setPriority(id, state.priority);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    if (mark === "saved") {
-      await ensurePaperNote(plugin, store, entry);
-    }
-    notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
+    await plugin.withOutputOperation(
+      mark === "saved" ? "paper-note" : "paper-index",
+      `Set paper mark: ${id}`,
+      id,
+      async () => {
+        const store = plugin.buildPaperIndex();
+        const state = stateForMark(mark);
+        let entry = await store.setStatus(id, state.status);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        entry = await store.setPriority(id, state.priority);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        if (mark === "saved") {
+          await ensurePaperNote(plugin, store, entry);
+        }
+        notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
+      },
+    );
   }
 
   async function createPaperNote(rawId: string) {
@@ -226,15 +233,22 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       notice("Invalid arXiv ID");
       return;
     }
-    const store = plugin.buildPaperIndex();
-    const entry = await store.get(id);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    const path = await ensurePaperNote(plugin, store, entry);
-    await plugin.app.workspace.openLinkText(path, "", false);
-    notice(`arXiv Daily: paper note ready at ${path}`);
+    await plugin.withOutputOperation(
+      "paper-note",
+      `Create paper note: ${id}`,
+      id,
+      async () => {
+        const store = plugin.buildPaperIndex();
+        const entry = await store.get(id);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        const path = await ensurePaperNote(plugin, store, entry);
+        await plugin.app.workspace.openLinkText(path, "", false);
+        notice(`arXiv Daily: paper note ready at ${path}`);
+      },
+    );
   }
 
   function openArxivIdPicker() {

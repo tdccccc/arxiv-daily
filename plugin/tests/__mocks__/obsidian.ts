@@ -12,6 +12,10 @@ export function normalizePath(p: string): string {
   return p;
 }
 
+export function requireApiVersion(_version: string): boolean {
+  return true;
+}
+
 export function setIcon(_parent: HTMLElement, _iconId: string): void {}
 
 export class TFile {
@@ -62,18 +66,229 @@ export class ItemView {
 }
 
 export class PluginSettingTab {
-  constructor(_app: App, _plugin: Plugin) {}
+  readonly containerEl: HTMLElement;
+
+  constructor(_app: App, _plugin: Plugin) {
+    this.containerEl = document.createElement("div");
+  }
+
+  update(): void {}
+}
+
+export class TextComponent {
+  readonly inputEl: HTMLInputElement;
+  private callback?: (value: string) => unknown;
+
+  constructor(container: HTMLElement) {
+    this.inputEl = document.createElement("input");
+    this.inputEl.type = "text";
+    container.appendChild(this.inputEl);
+  }
+
+  setPlaceholder(value: string): this {
+    this.inputEl.placeholder = value;
+    return this;
+  }
+
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+
+  onChange(callback: (value: string) => unknown): this {
+    this.callback = callback;
+    this.inputEl.addEventListener("change", () => {
+      void this.callback?.(this.inputEl.value);
+    });
+    return this;
+  }
+
+  async trigger(value: string): Promise<void> {
+    this.inputEl.value = value;
+    await this.callback?.(value);
+  }
+}
+
+export class TextAreaComponent {
+  readonly inputEl: HTMLTextAreaElement;
+  private callback?: (value: string) => unknown;
+
+  constructor(container: HTMLElement) {
+    this.inputEl = document.createElement("textarea");
+    container.appendChild(this.inputEl);
+  }
+
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+
+  onChange(callback: (value: string) => unknown): this {
+    this.callback = callback;
+    return this;
+  }
+}
+
+export class DropdownComponent {
+  readonly selectEl: HTMLSelectElement;
+  private callback?: (value: string) => unknown;
+
+  constructor(container: HTMLElement) {
+    this.selectEl = document.createElement("select");
+    container.appendChild(this.selectEl);
+  }
+
+  addOption(value: string, label: string): this {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    this.selectEl.appendChild(option);
+    return this;
+  }
+
+  setValue(value: string): this {
+    this.selectEl.value = value;
+    return this;
+  }
+
+  onChange(callback: (value: string) => unknown): this {
+    this.callback = callback;
+    this.selectEl.addEventListener("change", () => {
+      void this.callback?.(this.selectEl.value);
+    });
+    return this;
+  }
+
+  async trigger(value: string): Promise<void> {
+    if (!Array.from(this.selectEl.options).some((option) => option.value === value)) {
+      this.addOption(value, value);
+    }
+    this.selectEl.value = value;
+    await this.callback?.(value);
+  }
+}
+
+export class ButtonComponent {
+  readonly buttonEl: HTMLButtonElement;
+  private callback?: () => unknown;
+
+  constructor(container: HTMLElement) {
+    this.buttonEl = document.createElement("button");
+    container.appendChild(this.buttonEl);
+  }
+
+  setButtonText(value: string): this {
+    this.buttonEl.textContent = value;
+    return this;
+  }
+
+  setDisabled(value: boolean): this {
+    this.buttonEl.disabled = value;
+    return this;
+  }
+
+  setCta(): this { return this; }
+
+  onClick(callback: () => unknown): this {
+    this.callback = callback;
+    this.buttonEl.addEventListener("click", () => { void this.callback?.(); });
+    return this;
+  }
 }
 
 export class Setting {
-  constructor(_container: HTMLElement) {}
-  setName(_v: string) { return this; }
-  setDesc(_v: string) { return this; }
-  addText(_cb: any) { return this; }
-  addTextArea(_cb: any) { return this; }
-  addToggle(_cb: any) { return this; }
-  addDropdown(_cb: any) { return this; }
-  addButton(_cb: any) { return this; }
+  static readonly instances: Setting[] = [];
+  readonly settingEl: HTMLElement;
+  readonly nameEl: HTMLElement;
+  readonly descEl: HTMLElement;
+  readonly controlEl: HTMLElement;
+  readonly components: Array<TextComponent | TextAreaComponent | ToggleComponent | DropdownComponent | ButtonComponent> = [];
+
+  constructor(container: HTMLElement) {
+    this.settingEl = document.createElement("div");
+    this.settingEl.className = "setting-item";
+    this.nameEl = document.createElement("div");
+    this.nameEl.className = "setting-item-name";
+    this.descEl = document.createElement("div");
+    this.descEl.className = "setting-item-description";
+    this.controlEl = document.createElement("div");
+    this.controlEl.className = "setting-item-control";
+    this.settingEl.append(this.nameEl, this.descEl, this.controlEl);
+    container.appendChild(this.settingEl);
+    Setting.instances.push(this);
+  }
+
+  static reset(): void {
+    Setting.instances.length = 0;
+  }
+
+  setName(value: string) { this.nameEl.textContent = value; return this; }
+  setDesc(value: string) { this.descEl.textContent = value; return this; }
+  setHeading() { return this; }
+  addText(cb: (component: TextComponent) => unknown) {
+    const component = new TextComponent(this.controlEl);
+    this.components.push(component);
+    cb(component);
+    return this;
+  }
+  addTextArea(cb: (component: TextAreaComponent) => unknown) {
+    const component = new TextAreaComponent(this.controlEl);
+    this.components.push(component);
+    cb(component);
+    return this;
+  }
+  addToggle(cb: (component: ToggleComponent) => unknown) {
+    const component = new ToggleComponent(this.controlEl);
+    this.components.push(component);
+    cb(component);
+    return this;
+  }
+  addDropdown(cb: (component: DropdownComponent) => unknown) {
+    const component = new DropdownComponent(this.controlEl);
+    this.components.push(component);
+    cb(component);
+    return this;
+  }
+  addButton(cb: (component: ButtonComponent) => unknown) {
+    const component = new ButtonComponent(this.controlEl);
+    this.components.push(component);
+    cb(component);
+    return this;
+  }
+}
+
+export class ToggleComponent {
+  static readonly instances: ToggleComponent[] = [];
+  readonly toggleEl: HTMLInputElement;
+  value = false;
+  private callback?: (value: boolean) => unknown;
+
+  constructor(container: HTMLElement) {
+    this.toggleEl = document.createElement("input");
+    this.toggleEl.type = "checkbox";
+    container.appendChild(this.toggleEl);
+    ToggleComponent.instances.push(this);
+  }
+
+  setValue(value: boolean): this {
+    this.value = value;
+    this.toggleEl.checked = value;
+    return this;
+  }
+
+  onChange(callback: (value: boolean) => unknown): this {
+    this.callback = callback;
+    return this;
+  }
+
+  async trigger(value: boolean): Promise<void> {
+    this.value = value;
+    await this.callback?.(value);
+  }
+
+  static reset(): void {
+    ToggleComponent.instances.length = 0;
+  }
 }
 
 export class Modal {

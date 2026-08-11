@@ -18,9 +18,40 @@ export interface SchedulerRecentDates {
   hasDate?: (date: string) => boolean;
 }
 
+export class SchedulerPersistenceBinding {
+  #pair: {
+    readonly stateStore: StateStore;
+    readonly runHistory?: Pick<RunHistoryStore, "safeAppend">;
+  };
+
+  constructor(
+    stateStore: StateStore,
+    runHistory?: Pick<RunHistoryStore, "safeAppend">,
+  ) {
+    this.#pair = { stateStore, runHistory };
+  }
+
+  get stateStore(): StateStore {
+    return this.#pair.stateStore;
+  }
+
+  get runHistory(): Pick<RunHistoryStore, "safeAppend"> | undefined {
+    return this.#pair.runHistory;
+  }
+
+  replace(
+    stateStore: StateStore,
+    runHistory: Pick<RunHistoryStore, "safeAppend">,
+  ): void {
+    assertPersistenceStorePair(stateStore, runHistory);
+    this.#pair = { stateStore, runHistory };
+  }
+}
+
 export interface SchedulerDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
+  persistence?: SchedulerPersistenceBinding;
   lock: RunLock;
   runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
   logger: Logger;
@@ -40,14 +71,20 @@ type SchedulerResult = PipelineResult | { kind: "skipped"; reason: string };
 
 export class SchedulerService {
   private driver: SchedulerDriver;
-  private store: StateStore;
+  private readonly persistence: SchedulerPersistenceBinding;
   private readonly historyDeps: HistoryRecorderDeps;
 
   constructor(deps: SchedulerDeps) {
-    this.store = deps.store;
+    this.persistence = deps.persistence ?? new SchedulerPersistenceBinding(
+      deps.store,
+      deps.runHistory,
+    );
+    const persistence = this.persistence;
     this.historyDeps = {
-      runHistory: deps.runHistory,
-      store: () => this.store,
+      get runHistory() {
+        return persistence.runHistory;
+      },
+      store: () => persistence.stateStore,
       dailyPathForDate: deps.dailyPathForDate,
       now: deps.now,
       logger: deps.logger,
@@ -56,6 +93,7 @@ export class SchedulerService {
     this.driver = new SchedulerDriver({
       getSettings: deps.getSettings,
       store: deps.store,
+      getStore: () => this.persistence.stateStore,
       lock: deps.lock,
       runForDate: deps.runForDate,
       logger: deps.logger,
@@ -78,13 +116,26 @@ export class SchedulerService {
     this.driver.stop();
   }
 
-  replaceStore(store: StateStore): void {
-    this.driver.replaceStore(store);
-    this.store = store;
+  replacePersistenceStores(
+    stateStore: StateStore,
+    runHistory: Pick<RunHistoryStore, "safeAppend">,
+  ): void {
+    assertPersistenceStorePair(stateStore, runHistory);
+    this.driver.assertStoreReplacementAllowed();
+    this.persistence.replace(stateStore, runHistory);
   }
 
+  /** Compatibility for Core callers that replace only state persistence. */
+  replaceStore(store: StateStore): void {
+    this.replacePersistenceStores(
+      store,
+      this.persistence.runHistory ?? { safeAppend: async () => undefined },
+    );
+  }
+
+  /** Compatibility for Core callers that replace only run history. */
   replaceRunHistory(runHistory: Pick<RunHistoryStore, "safeAppend">): void {
-    this.historyDeps.runHistory = runHistory;
+    this.replacePersistenceStores(this.persistence.stateStore, runHistory);
   }
 
   cancelCurrentRun(reason = "cancelled by user"): string[] {
@@ -128,8 +179,9 @@ export class SchedulerService {
 
   private async recoverStaleRunning(): Promise<void> {
     try {
-      if (typeof this.store.recoverStaleRunning !== "function") return;
-      const recovered = await this.store.recoverStaleRunning(
+      const store = this.persistence.stateStore;
+      if (typeof store.recoverStaleRunning !== "function") return;
+      const recovered = await store.recoverStaleRunning(
         (this.historyDeps.now?.() ?? new Date()).getTime(),
       );
       if (recovered.length > 0) {
@@ -140,5 +192,21 @@ export class SchedulerService {
     } catch (e) {
       this.historyDeps.logger?.warn("scheduler: stale running recovery failed", e);
     }
+  }
+}
+
+function assertPersistenceStorePair(
+  stateStore: StateStore,
+  runHistory: Pick<RunHistoryStore, "safeAppend">,
+): void {
+  if (
+    !stateStore ||
+    typeof stateStore.get !== "function" ||
+    typeof stateStore.snapshot !== "function"
+  ) {
+    throw new Error("Invalid scheduler state store replacement");
+  }
+  if (!runHistory || typeof runHistory.safeAppend !== "function") {
+    throw new Error("Invalid scheduler run history replacement");
   }
 }

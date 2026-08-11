@@ -21,7 +21,18 @@ export function settingsAndStateFromPersistedData(raw: unknown): {
   const merged = mergeSettings(DEFAULT_SETTINGS, partial);
   merged.arxiv = migrateArxivSettings(partial.arxiv);
   merged.email = migrateEmailSettings(partial.email);
-  const warnings = sanitizePersistedOutputDirectories(merged);
+  const persistedArxiv = isRecord(partial.arxiv) ? partial.arxiv : undefined;
+  const hasPersistedTimezone = Boolean(
+    persistedArxiv && Object.prototype.hasOwnProperty.call(persistedArxiv, "timezone"),
+  );
+  const warnings = [
+    ...sanitizePersistedOutputDirectories(merged),
+    ...sanitizePersistedTimezone(
+      merged,
+      hasPersistedTimezone ? persistedArxiv?.timezone : undefined,
+      hasPersistedTimezone,
+    ),
+  ];
   return {
     settings: merged,
     runState: isRecord(data.runState) ? data.runState as RunState : {},
@@ -70,6 +81,29 @@ function sanitizePersistedOutputDirectories(settings: PluginSettings): string[] 
     );
   }
   return warnings;
+}
+
+function sanitizePersistedTimezone(
+  settings: PluginSettings,
+  persistedTimezone: unknown,
+  wasPersisted: boolean,
+): string[] {
+  if (wasPersisted && (
+    typeof persistedTimezone !== "string" || !persistedTimezone.trim()
+  )) {
+    settings.arxiv.timezone = DEFAULT_SETTINGS.arxiv.timezone;
+    return ["Ignored invalid persisted arxiv.timezone; restored default"];
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: settings.arxiv.timezone,
+    }).format();
+    return [];
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    settings.arxiv.timezone = DEFAULT_SETTINGS.arxiv.timezone;
+    return ["Ignored invalid persisted arxiv.timezone; restored default"];
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

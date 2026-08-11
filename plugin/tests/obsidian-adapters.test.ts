@@ -6,6 +6,7 @@ import {
   ObsidianHttpClient,
 } from "../src/hosts/obsidian";
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
+import { SettingsChangeService } from "../src/settings/change-service";
 import {
   ArxivFetcher,
   DailyFilterCheckpointStore,
@@ -103,11 +104,15 @@ describe("Obsidian host adapters", () => {
     const { app, files, workspace } = testApp();
     const settings = testSettings();
     const persistSettings = vi.fn();
+    const settingsChanges = new SettingsChangeService({
+      settings,
+      persistSettings,
+    });
 
     const host = buildObsidianHostAdapters({
       app: app as any,
       getSettings: () => settings,
-      persistSettings,
+      changeSettingValue: (key, value) => settingsChanges.changeValue(key, value),
     });
 
     await host.storage.mkdir("arxiv-daily/daily");
@@ -131,6 +136,47 @@ describe("Obsidian host adapters", () => {
       "",
       true,
     );
+  });
+
+  it("keeps the live host secret unchanged until candidate persistence succeeds", async () => {
+    const { app } = testApp();
+    const settings = testSettings();
+    let finishSave: (() => void) | undefined;
+    const persistSettings = vi.fn(async (candidate: PluginSettings) => {
+      expect(candidate.llm.apiKey).toBe("next-key");
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+    });
+    const settingsChanges = new SettingsChangeService({ settings, persistSettings });
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: () => settings,
+      changeSettingValue: (key, value) => settingsChanges.changeValue(key, value),
+    });
+
+    const changing = host.secrets.setSecret?.("llm.apiKey", "next-key");
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledOnce());
+    expect(settings.llm.apiKey).toBe("stored-key");
+    finishSave?.();
+    await changing;
+
+    expect(settings.llm.apiKey).toBe("next-key");
+  });
+
+  it("restores the live host secret when candidate persistence fails", async () => {
+    const { app } = testApp();
+    const settings = testSettings();
+    const settingsChanges = new SettingsChangeService({
+      settings,
+      persistSettings: vi.fn().mockRejectedValue(new Error("disk full")),
+    });
+    const host = buildObsidianHostAdapters({
+      app: app as any,
+      getSettings: () => settings,
+      changeSettingValue: (key, value) => settingsChanges.changeValue(key, value),
+    });
+
+    await expect(host.secrets.deleteSecret?.("apiKey")).rejects.toThrow("disk full");
+    expect(settings.llm.apiKey).toBe("stored-key");
   });
 
   it("rotates checkpoint backups with Obsidian rename semantics", async () => {

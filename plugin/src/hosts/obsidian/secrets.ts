@@ -5,6 +5,10 @@ export class ObsidianSettingsSecretProvider implements SecretProvider {
   constructor(
     private getSettings: () => PluginSettings,
     private persistSettings?: () => Promise<void> | void,
+    private changeSettingValue?: (
+      key: string,
+      value: unknown,
+    ) => Promise<void> | void,
   ) {}
 
   async getSecret(key: string): Promise<string | null> {
@@ -17,14 +21,29 @@ export class ObsidianSettingsSecretProvider implements SecretProvider {
     if (!isApiKeySecret(key)) {
       throw new Error(`unsupported Obsidian secret key: ${key}`);
     }
-    this.getSettings().llm.apiKey = value;
-    await this.persistSettings?.();
+    await this.writeApiKey(value);
   }
 
   async deleteSecret(key: string): Promise<void> {
     if (!isApiKeySecret(key)) return;
-    this.getSettings().llm.apiKey = "";
-    await this.persistSettings?.();
+    await this.writeApiKey("");
+  }
+
+  private async writeApiKey(value: string): Promise<void> {
+    if (this.changeSettingValue) {
+      await this.changeSettingValue("llm.apiKey", value);
+      return;
+    }
+
+    const settings = this.getSettings();
+    const previous = settings.llm.apiKey;
+    settings.llm.apiKey = value;
+    try {
+      await this.persistSettings?.();
+    } catch (error) {
+      settings.llm.apiKey = previous;
+      throw error;
+    }
   }
 }
 

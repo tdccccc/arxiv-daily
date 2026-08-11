@@ -34,6 +34,7 @@ export interface SchedulerRecentDates {
 export interface SchedulerDriverDeps {
   getSettings: () => PluginSettings;
   store: StateStore;
+  getStore?: () => StateStore;
   lock: RunLock;
   runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
   logger: Logger;
@@ -104,7 +105,7 @@ export class SchedulerDriver {
     this.progress = deps.progress ?? new NoopProgressReporter();
   }
 
-  replaceStore(store: StateStore): void {
+  assertStoreReplacementAllowed(): void {
     if (
       this.activeWork > 0 ||
       this.pendingCompletions.size > 0 ||
@@ -112,6 +113,10 @@ export class SchedulerDriver {
     ) {
       throw new Error(STORE_REPLACEMENT_ACTIVE_ERROR);
     }
+  }
+
+  replaceStore(store: StateStore): void {
+    this.assertStoreReplacementAllowed();
     this.deps.store = store;
   }
 
@@ -169,7 +174,7 @@ export class SchedulerDriver {
     // remainder of the run window to avoid re-querying arxiv on every tick,
     // but still finalize any in-memory completion candidates from prior dates.
     if (
-      this.deps.store.isDone(today) &&
+      this.store().isDone(today) &&
       (await this.confirmDurablyDone(today))
     ) {
       await this.retryPendingCompletions(pendingRetryDates, now);
@@ -546,7 +551,7 @@ export class SchedulerDriver {
     mode: RunMode = "normal",
     timeGate?: TimeGate,
   ): Promise<TryRunResult | undefined> {
-    const store = this.deps.store;
+    const store = this.store();
     this.activeWork += 1;
     try {
       return await this.deps.lock.withLock(date, async () => {
@@ -634,6 +639,16 @@ export class SchedulerDriver {
             );
             return { kind: "skipped" as const, reason: "already running" };
           }
+        } else if (mode === "force" && currentEntry.status === "running") {
+          await this.safeAsyncEffect(() =>
+            this.deps.history.recordSkipped(
+              date,
+              trigger,
+              "already running",
+              now,
+            ),
+          );
+          return { kind: "skipped" as const, reason: "already running" };
         }
 
         if (mode === "force" || mode === "retry") {
@@ -913,7 +928,7 @@ export class SchedulerDriver {
   }
 
   private async confirmDurablyDone(date: string): Promise<boolean> {
-    const store = this.deps.store;
+    const store = this.store();
     this.activeWork += 1;
     try {
       const confirmed = await this.deps.lock.withLock(date, async () => {
@@ -1086,30 +1101,17 @@ export class SchedulerDriver {
     }
   }
 
-  private async persistFailed(
-    date: string,
-    kind: "transient" | "permanent",
-    reason: string,
-  ): Promise<"failed_transient" | "failed_permanent"> {
-    try {
-      return await this.deps.store.setFailed(date, kind, reason);
-    } catch (e) {
-      this.deps.logger.error(
-        `scheduler: failed to persist failure for ${date}; clearing running state`,
-        e,
-      );
-      await this.deps.store.clearDate(date);
-      return kind === "permanent" ? "failed_permanent" : "failed_transient";
-    }
-  }
-
   private latestCompleted(): string | undefined {
-    const snap = this.deps.store.snapshot();
+    const snap = this.store().snapshot();
     const done = Object.entries(snap)
       .filter(([, v]) => v.status === "completed")
       .map(([k]) => k)
       .sort();
     return done[done.length - 1];
+  }
+
+  private store(): StateStore {
+    return this.deps.getStore?.() ?? this.deps.store;
   }
 
   private now(): Date {
