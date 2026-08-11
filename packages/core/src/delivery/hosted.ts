@@ -38,6 +38,13 @@ export interface HostedDeliverResult {
   attempts: number;
 }
 
+// Legacy relay provider IDs are untrusted transition data. This conservative
+// cap matches the existing 128-character delivery/provider key contracts.
+const LEGACY_PROVIDER_ID_MAX_LENGTH = 128;
+// Accepted bodies are tiny even when every ID character is a JSON escape. Bound
+// lexical work before decoding member names and values.
+const HOSTED_SUCCESS_BODY_MAX_LENGTH = 4096;
+
 /**
  * POST digest to the project relay. Offline until OFFICIAL_DELIVERY_AVAILABLE.
  * Server holds the send API key; plugin only sends auth token + payload.
@@ -166,18 +173,7 @@ export async function sendViaHosted(opts: {
     );
   }
 
-  try {
-    const parsed = JSON.parse(res.bodyText) as unknown;
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      Object.keys(parsed as Record<string, unknown>).length !== 1 ||
-      (parsed as { ok?: unknown }).ok !== true
-    ) {
-      throw new Error("invalid safe success contract");
-    }
-  } catch {
+  if (!isHostedSuccessBody(res.bodyText)) {
     throw new HostedDeliveryError(
       "Official delivery returned an invalid success response.",
       res.status,
@@ -187,6 +183,147 @@ export async function sendViaHosted(opts: {
   }
 
   return { attempts: 1 };
+}
+
+function isHostedSuccessBody(bodyText: string): boolean {
+  if (
+    bodyText.length === 0 ||
+    bodyText.length > HOSTED_SUCCESS_BODY_MAX_LENGTH ||
+    hasDuplicateTopLevelJsonMember(bodyText)
+  ) {
+    return false;
+  }
+
+  try {
+    return isHostedSuccessResponse(JSON.parse(bodyText) as unknown);
+  } catch {
+    return false;
+  }
+}
+
+function isHostedSuccessResponse(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+
+  const response = value as Record<string, unknown>;
+  const keys = Object.keys(response);
+  if (response.ok !== true) return false;
+  if (keys.length === 1) return keys[0] === "ok";
+
+  if (
+    typeof response.id !== "string" ||
+    !response.id.trim() ||
+    response.id.length > LEGACY_PROVIDER_ID_MAX_LENGTH
+  ) {
+    return false;
+  }
+
+  // The validated provider ID is transition evidence only. Return a boolean so
+  // it cannot reach delivery results, persisted state, or logs.
+  if (keys.length === 2) {
+    return keys.includes("ok") && keys.includes("id");
+  }
+  return (
+    keys.length === 3 &&
+    keys.includes("ok") &&
+    keys.includes("id") &&
+    keys.includes("deduped") &&
+    response.deduped === true
+  );
+}
+
+/**
+ * Reject duplicate members before JSON.parse can collapse them. This scanner is
+ * bounded by HOSTED_SUCCESS_BODY_MAX_LENGTH and decodes quoted member names with
+ * JSON.parse, so escaped names compare by their actual JSON string value.
+ */
+function hasDuplicateTopLevelJsonMember(bodyText: string): boolean {
+  let index = skipJsonWhitespace(bodyText, 0);
+  if (bodyText[index] !== "{") return false;
+  index = skipJsonWhitespace(bodyText, index + 1);
+
+  const names = new Set<string>();
+  while (bodyText[index] !== "}") {
+    if (bodyText[index] !== '"') return false;
+    const keyEnd = jsonStringEnd(bodyText, index);
+    if (keyEnd < 0) return false;
+
+    let name: string;
+    try {
+      name = JSON.parse(bodyText.slice(index, keyEnd)) as string;
+    } catch {
+      return false;
+    }
+    if (names.has(name)) return true;
+    names.add(name);
+
+    index = skipJsonWhitespace(bodyText, keyEnd);
+    if (bodyText[index] !== ":") return false;
+    index = jsonTopLevelValueEnd(bodyText, index + 1);
+    if (index < 0) return false;
+    index = skipJsonWhitespace(bodyText, index);
+    if (bodyText[index] === ",") {
+      index = skipJsonWhitespace(bodyText, index + 1);
+      continue;
+    }
+    if (bodyText[index] !== "}") return false;
+  }
+  return false;
+}
+
+function jsonTopLevelValueEnd(bodyText: string, start: number): number {
+  let index = skipJsonWhitespace(bodyText, start);
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  while (index < bodyText.length) {
+    const char = bodyText[index];
+    if (char === '"') {
+      index = jsonStringEnd(bodyText, index);
+      if (index < 0) return -1;
+      continue;
+    }
+    if (char === "{") objectDepth += 1;
+    else if (char === "}") {
+      if (objectDepth === 0 && arrayDepth === 0) return index;
+      objectDepth -= 1;
+      if (objectDepth < 0) return -1;
+    } else if (char === "[") arrayDepth += 1;
+    else if (char === "]") {
+      arrayDepth -= 1;
+      if (arrayDepth < 0) return -1;
+    } else if (char === "," && objectDepth === 0 && arrayDepth === 0) {
+      return index;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function jsonStringEnd(bodyText: string, start: number): number {
+  let escaped = false;
+  for (let index = start + 1; index < bodyText.length; index += 1) {
+    const char = bodyText[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (char === '"') {
+      return index + 1;
+    }
+  }
+  return -1;
+}
+
+function skipJsonWhitespace(bodyText: string, start: number): number {
+  let index = start;
+  while (
+    bodyText[index] === " " ||
+    bodyText[index] === "\n" ||
+    bodyText[index] === "\r" ||
+    bodyText[index] === "\t"
+  ) {
+    index += 1;
+  }
+  return index;
 }
 
 /** Map rendered mail into the shape the future relay expects (docs/contract). */
