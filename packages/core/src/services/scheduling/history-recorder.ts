@@ -76,7 +76,7 @@ export class HistoryRecorder {
       date,
       event: "failed",
       trigger,
-      status: entry.status,
+      status: resultKind,
       resultKind,
       reason,
       errorMessage: reason,
@@ -132,19 +132,31 @@ export class HistoryRecorder {
   ): Promise<void> {
     if (!this.deps.runHistory) return;
     const now = at ?? (this.deps.now ?? (() => new Date()))();
-    await this.deps.runHistory.safeAppend({
-      schemaVersion: 1,
-      at: now.toISOString(),
-      dailyPath: this.dailyPathForDate(record.date),
-      ...record,
-    });
+    try {
+      await this.deps.runHistory.safeAppend({
+        schemaVersion: 1,
+        at: now.toISOString(),
+        dailyPath: this.dailyPathForDate(record.date),
+        ...record,
+      });
+    } catch (e) {
+      try {
+        this.deps.logger?.warn("scheduler: run history append failed", e);
+      } catch {
+        // Run history and its diagnostics are in-memory best effort.
+      }
+    }
   }
 
   private dailyPathForDate(date: string): string | undefined {
     try {
       return this.deps.dailyPathForDate?.(date);
     } catch (e) {
-      this.deps.logger?.warn(`daily path resolution failed for ${date}`, e);
+      try {
+        this.deps.logger?.warn(`daily path resolution failed for ${date}`, e);
+      } catch {
+        // Daily-path diagnostics are in-memory best effort.
+      }
       return undefined;
     }
   }

@@ -144,6 +144,30 @@ describe("CLI main", () => {
     expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13");
   });
 
+  it("prints scheduler completion commit failures as existing transient errors", async () => {
+    const io = captureIo();
+    const runtime = fakeRuntime();
+    runtime.scheduler = {
+      runForDateNow: vi.fn(async () => ({
+        kind: "failed_transient" as const,
+        reason: "scheduler completion commit failed",
+      })),
+    };
+
+    const code = await runCli({
+      argv: ["run", "--date", "2026-06-13"],
+      io: io.io,
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => runtime,
+    });
+
+    expect(code).toBe(1);
+    expect(io.stdout.join("")).toBe("");
+    expect(io.stderr.join("")).toContain(
+      "run 2026-06-13: failed_transient (scheduler completion commit failed)",
+    );
+  });
+
   it("rejects run-pending", async () => {
     const io = captureIo();
     const code = await runCli({

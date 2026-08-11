@@ -79,8 +79,8 @@ export class SchedulerService {
   }
 
   replaceStore(store: StateStore): void {
-    this.store = store;
     this.driver.replaceStore(store);
+    this.store = store;
   }
 
   replaceRunHistory(runHistory: Pick<RunHistoryStore, "safeAppend">): void {

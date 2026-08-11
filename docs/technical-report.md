@@ -164,10 +164,12 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - 仅在 `runAtLocal`–`runUntilLocal` 本地时间窗内工作（多日 tick 时时间窗主要约束“今天”）；
 - 回看 `LOOKBACK_DAYS = 5` 个日历日；配置时区下的周末跳过；
 - `checkTickGate`：已完成 / 运行中 / 窗外 / 瞬态失败退避则跳过；
-- `RunLock` 保证同日互斥；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- 注入的 `RunLock` 串行化同日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- `StateStore` mutation 从权威 primary 重载 durable state，修改 candidate，保存后精确回读整个 run-state；只有回读与 candidate 完全相等才发布到内存。保存抛错但回读已等于 candidate 时提交仍成立，其余保存或确认失败保留 mutation 前的内存快照；
+- 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
 - 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_permanent`**（错误文案：`recovered stale running state after startup`）；
-- 完成时调用可选 `onDailyCompleted`（接邮件）；回调失败不得改写 run-state。
+- run history、进度/日志、取消清理和 `onDailyCompleted` 是 completed hard commit 之后的 best-effort effect，任一失败不撤销已确认的 run-state。pending completion 不持久化为 outbox；进程退出后不保证原 digest、history 或完成回调重放。
 
 **插件 vs CLI 调度：**
 
@@ -284,7 +286,11 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 ### 原子写与状态一致性
 
-`StateStore` / Paper Index / checkpoint / delivery-state 使用各自的临时文件与 rename 或 `writeTextAtomic` 流程；相关同路径 mutation 队列在进程内串行化读改写。日报 Markdown 存在即视为该日已提交的权威信号。
+`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
+
+插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该协调和 pending completion 都是单进程语义，没有 Plugin/CLI 跨进程锁。
+
+Paper Index、checkpoint 与 delivery-state 使用各自的临时文件和 rename 或 `writeTextAtomic` 流程；相关同路径 mutation 队列在进程内串行化读改写。日报 Markdown 存在即视为该日已提交的权威信号。
 
 ## External Integrations and Executable Configuration
 
