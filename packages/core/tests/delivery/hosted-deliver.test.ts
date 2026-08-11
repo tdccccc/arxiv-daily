@@ -72,6 +72,10 @@ function memoryStorage(): StorageAdapter {
 describe("hosted deliverDailyEmailIfEnabled", () => {
   const output = DEFAULT_SETTINGS.output;
   const digest = sampleDailyDigest({ date: "2026-07-27", language: "zh" });
+  // Matches the existing 128-character delivery/provider boundary while keeping
+  // the transitional provider identifier strictly bounded.
+  const legacyProviderIdMaxLength = 128;
+  const escapedLegacyProviderId = 'private-"provider\\id,{braces}';
 
   it("force test-send uses test idempotency key and does not block auto-send", async () => {
     const storage = memoryStorage();
@@ -208,11 +212,137 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
   });
 
   it.each([
-    ["not-json", "invalid JSON"],
-    [JSON.stringify({ id: "" }), "missing success marker"],
-    [JSON.stringify({ ok: false }), "false success marker"],
-    [JSON.stringify({ ok: true, id: "private-provider-id" }), "unsafe extra field"],
-  ])("keeps an invalid hosted 2xx blocking (%s)", async (bodyText) => {
+    ["canonical", JSON.stringify({ ok: true }), undefined],
+    [
+      "legacy provider ID",
+      JSON.stringify({ id: "private-provider-id", ok: true }),
+      "private-provider-id",
+    ],
+    [
+      "legacy deduplicated provider ID at the bound",
+      JSON.stringify({
+        deduped: true,
+        id: "d".repeat(legacyProviderIdMaxLength),
+        ok: true,
+      }),
+      "d".repeat(legacyProviderIdMaxLength),
+    ],
+    [
+      "legacy provider ID with escaped JSON characters",
+      JSON.stringify({ id: escapedLegacyProviderId, ok: true }),
+      escapedLegacyProviderId,
+    ],
+  ])(
+    "accepts the exact %s success shape and discards its provider ID",
+    async (_case, bodyText, providerId) => {
+      const storage = memoryStorage();
+      const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText }));
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+      const email = {
+        enabled: true,
+        mode: "hosted" as const,
+        to: "you@example.com",
+        hostedToken: "device_token_hex",
+        fromEmail: "",
+      };
+
+      const first = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+        logger,
+      });
+      const second = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+        logger,
+      });
+
+      expect(first).toEqual({ kind: "delivered", attempts: 1 });
+      expect(second.kind).toBe("skipped");
+      expect(request).toHaveBeenCalledTimes(1);
+      if (providerId) {
+        const exposed = [
+          JSON.stringify(first),
+          JSON.stringify(second),
+          JSON.stringify([
+            logger.info.mock.calls,
+            logger.warn.mock.calls,
+            logger.error.mock.calls,
+            logger.debug.mock.calls,
+          ]),
+          await persistedDeliveryText(storage),
+        ].join("\n");
+        expect(exposed).not.toContain(providerId);
+      }
+    },
+  );
+
+  it.each([
+    ["invalid JSON", "not-json"],
+    ["oversized success body", `${" ".repeat(4096)}{"ok":true}`],
+    ["null", "null"],
+    ["array", JSON.stringify([{ ok: true }])],
+    ["primitive", "true"],
+    ["empty object", JSON.stringify({})],
+    ["missing success marker", JSON.stringify({ id: "provider-id" })],
+    ["false success marker", JSON.stringify({ ok: false })],
+    ["string success marker", JSON.stringify({ ok: "true" })],
+    ["duplicate success marker", '{"ok":false,"ok":true}'],
+    [
+      "duplicate provider ID",
+      '{"ok":true,"id":"first-provider-id","id":"second-provider-id"}',
+    ],
+    [
+      "escaped duplicate provider ID member",
+      '{"ok":true,"\\u0069d":"first-provider-id","id":"second-provider-id"}',
+    ],
+    [
+      "duplicate deduped marker",
+      '{"ok":true,"id":"provider-id","deduped":false,"deduped":true}',
+    ],
+    ["empty provider ID", JSON.stringify({ ok: true, id: "" })],
+    ["blank provider ID", JSON.stringify({ ok: true, id: "   " })],
+    [
+      "oversized provider ID",
+      JSON.stringify({ ok: true, id: "p".repeat(legacyProviderIdMaxLength + 1) }),
+    ],
+    ["numeric provider ID", JSON.stringify({ ok: true, id: 1 })],
+    ["null provider ID", JSON.stringify({ ok: true, id: null })],
+    ["object provider ID", JSON.stringify({ ok: true, id: {} })],
+    ["array provider ID", JSON.stringify({ ok: true, id: ["provider-id"] })],
+    ["deduped without provider ID", JSON.stringify({ deduped: true, ok: true })],
+    [
+      "deduped false",
+      JSON.stringify({ deduped: false, id: "provider-id", ok: true }),
+    ],
+    [
+      "deduped string",
+      JSON.stringify({ deduped: "true", id: "provider-id", ok: true }),
+    ],
+    ["extra canonical field", JSON.stringify({ extra: true, ok: true })],
+    [
+      "extra legacy field",
+      JSON.stringify({ extra: true, id: "provider-id", ok: true }),
+    ],
+    [
+      "extra deduplicated field",
+      JSON.stringify({
+        deduped: true,
+        extra: true,
+        id: "provider-id",
+        ok: true,
+      }),
+    ],
+  ])("keeps an invalid hosted 2xx blocking (%s)", async (_case, bodyText) => {
     const storage = memoryStorage();
     const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText }));
     const email = {
