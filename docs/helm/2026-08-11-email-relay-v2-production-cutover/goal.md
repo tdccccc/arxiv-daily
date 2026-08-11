@@ -24,9 +24,11 @@ owner: zcode-main-session
 
 ## Constraints
 
+- 首次部署的新 Worker 必须从 automatic-locked 状态启动；旧 Worker 的真实 provider fence 由 operator 先撤销旧 Resend 凭据建立，新凭据只交给仍锁死 automatic 的新 Worker。
+- 不以新 Worker 内的 lease、KV marker 或部署完成时间声称旧 Worker 已 quiesce；撤销旧 provider 凭据和确认新 build 均是后续生产 runbook 的独立人工检查点。
 - 模糊 provider/operator 结果必须 fail closed，并通过 status/fix-forward 恢复，不能盲目重试。
 - Secret 不进入 argv、日志、journal、PR 或人工确认短语；不持久化邮箱、token、KV 原值或邮件正文。
-- 真实部署、生产 mutation、activation 与真实邮件分别需要后续明确授权。
+- 真实部署、provider 凭据撤销/更新、生产 mutation、activation 与真实邮件分别需要后续明确授权。
 
 ## Phases
 
