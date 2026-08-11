@@ -198,7 +198,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 
 `delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient；Node 与受支持的 Obsidian 桌面文件系统将主文件和临时/备份产物强制为 `0600`，读取既有宽权限主文件时也收紧为 `0600`。Linux 宿主使用 `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`、`/proc/self/fd` descriptor 锚定和原子 rename；无法提供这些能力的宿主对自动投递 fail closed。跨文件系统 rename 不降级为 copy。
 
-显式 `force`/邮件测试不创建自动 claim，也不改写 automatic delivery state；每次生成独立 `arxiv-daily:test:<random>` key，因此不会占用正式日报 identity。self 模式的 API key 当前来自 settings/config；From 为空时使用 `onboarding@resend.dev`。hosted 模式使用 Bearer `hostedToken` 调用默认 `https://mail.arxiv-daily.top/v1/deliver`，客户端只接受精确的 `{ "ok": true }` 成功响应。`OFFICIAL_DELIVERY_AVAILABLE = true` 仅表示客户端路径开启，不证明外部 Worker 已部署或可用。
+显式 `force`/邮件测试不创建自动 claim，也不改写 automatic delivery state；每次生成独立 `arxiv-daily:test:<random>` key，因此不会占用正式日报 identity。self 模式的 API key 当前来自 settings/config；From 为空时使用 `onboarding@resend.dev`。hosted 模式使用 Bearer `hostedToken` 调用默认 `https://mail.arxiv-daily.top/v1/deliver`。客户端接受精确的 `{ "ok": true }`，也接受仅附带非空且不超过 128 字符 `id` 的 `{ "ok": true, "id": string }` 与额外含字面量 `"deduped": true` 的响应；整个响应体上限为 4096 字符，重复顶层成员、其他字段或类型均视为结果不明。旧响应中的 provider ID 只参与局部契约验证，随后丢弃，不进入投递结果、日志或持久状态。`OFFICIAL_DELIVERY_AVAILABLE = true` 仅表示客户端路径开启，不证明外部 Worker 已部署或可用。
 
 **Worker：**
 
