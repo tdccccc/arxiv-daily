@@ -10,8 +10,10 @@ const pkg = JSON.parse(await readFile(packagePath, "utf8"));
 const requiredCommands = [
   "arxivDaily.openDashboard",
   "arxivDaily.run",
-  "arxivDaily.runPending",
   "arxivDaily.summarizeById",
+];
+const removedCommands = [
+  "arxivDaily.runPending",
   "arxivDaily.configureApiKey",
 ];
 
@@ -28,13 +30,24 @@ assert(
 
 const commands = pkg.contributes?.commands ?? [];
 const commandIds = commands.map((command) => command.command);
-for (const command of requiredCommands) {
-  assert(commandIds.includes(command), `missing command contribution: ${command}`);
+assertSameMembers(commandIds, requiredCommands, "command contributions");
+assertSameMembers(
+  pkg.activationEvents,
+  requiredCommands.map((command) => `onCommand:${command}`),
+  "activation events",
+);
+for (const command of removedCommands) {
+  assert(!commandIds.includes(command), `removed command contribution remains: ${command}`);
   assert(
-    pkg.activationEvents.includes(`onCommand:${command}`),
-    `missing activation event for ${command}`,
+    !pkg.activationEvents.includes(`onCommand:${command}`),
+    `removed activation event remains: ${command}`,
   );
 }
+assertSameMembers(
+  Object.keys(pkg.contributes?.configuration?.properties ?? {}),
+  ["arxivDaily.cliPath"],
+  "configuration properties",
+);
 
 const mainPath = path.join(root, pkg.main);
 const readmePath = path.join(root, "README.md");
@@ -50,8 +63,23 @@ for (const command of requiredCommands) {
     `entrypoint does not register ${command}`,
   );
 }
+for (const command of removedCommands) {
+  assert(
+    !source.includes(`registerCommand("${command}"`),
+    `entrypoint still registers ${command}`,
+  );
+}
 
 console.log(`arXiv Daily VS Code scaffold OK (${requiredCommands.length} commands)`);
+
+function assertSameMembers(actual, expected, label) {
+  const actualSorted = [...actual].sort();
+  const expectedSorted = [...expected].sort();
+  assert(
+    JSON.stringify(actualSorted) === JSON.stringify(expectedSorted),
+    `${label} differ: expected ${expectedSorted.join(", ")}; received ${actualSorted.join(", ")}`,
+  );
+}
 
 function assert(condition, message) {
   if (!condition) {

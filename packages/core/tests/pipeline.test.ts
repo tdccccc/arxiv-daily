@@ -1,8 +1,5 @@
 import { markupParser } from "./markup-parser";
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
@@ -13,11 +10,21 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { StorageAdapter } from "../src/core/adapters";
 
 
-const here = dirname(fileURLToPath(import.meta.url));
-const recentHtml = readFileSync(
-  resolve(here, "fixtures/arxiv-recent-astroph.html"),
-  "utf8",
-);
+const recentHtml = `
+  <dl id="articles">
+    <h3>Mon, 11 May 2026 (showing 2 of 2 entries)</h3>
+    <dt><a title="Abstract" href="/abs/2605.08080">arXiv:2605.08080</a></dt>
+    <dd>
+      <div class="list-title">Title: First pipeline paper</div>
+      <div class="list-authors"><a>First Author</a><a>Second Author</a></div>
+    </dd>
+    <dt><a title="Abstract" href="/abs/2605.08068">arXiv:2605.08068</a></dt>
+    <dd>
+      <div class="list-title">Title: Second pipeline paper</div>
+      <div class="list-authors"><a>Another Author</a></div>
+    </dd>
+  </dl>
+`;
 
 const testDetailSelection = {
   normalThreshold: 70,

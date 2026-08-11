@@ -1,8 +1,19 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliCommandRuntime } from "../src/main";
 import type { CliRuntimeConfig } from "../src/config";
 import { DEFAULT_CLI_SCHEDULE } from "../src/config";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+
+interface CompanionCliContract {
+  schemaVersion: number;
+  commands: Array<{ id: string; argv: string[] }>;
+  removedCommands: Array<{ id: string; argv: string[] }>;
+}
+
+const companionCliContract = JSON.parse(
+  readFileSync(new URL("../../../contracts/companion-cli-commands.json", import.meta.url), "utf8"),
+) as CompanionCliContract;
 
 function captureIo() {
   const stdout: string[] = [];
@@ -133,6 +144,30 @@ describe("CLI main", () => {
     expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13");
   });
 
+  it("prints scheduler completion commit failures as existing transient errors", async () => {
+    const io = captureIo();
+    const runtime = fakeRuntime();
+    runtime.scheduler = {
+      runForDateNow: vi.fn(async () => ({
+        kind: "failed_transient" as const,
+        reason: "scheduler completion commit failed",
+      })),
+    };
+
+    const code = await runCli({
+      argv: ["run", "--date", "2026-06-13"],
+      io: io.io,
+      loadConfig: vi.fn(async () => testConfig()),
+      buildRuntime: () => runtime,
+    });
+
+    expect(code).toBe(1);
+    expect(io.stdout.join("")).toBe("");
+    expect(io.stderr.join("")).toContain(
+      "run 2026-06-13: failed_transient (scheduler completion commit failed)",
+    );
+  });
+
   it("rejects run-pending", async () => {
     const io = captureIo();
     const code = await runCli({
@@ -143,6 +178,67 @@ describe("CLI main", () => {
     });
     expect(code).toBe(2);
     expect(io.stderr.join("")).toContain("run-pending was removed");
+  });
+
+  it.each(companionCliContract.commands)(
+    "accepts companion command contract argv for $id",
+    async ({ id, argv }) => {
+      expect(companionCliContract.schemaVersion).toBe(1);
+      const io = captureIo();
+      const runtime = fakeRuntime();
+      const code = await runCli({
+        argv,
+        io: io.io,
+        now: () => new Date("2026-06-13T12:00:00Z"),
+        loadConfig: vi.fn(async () => testConfig()),
+        buildRuntime: () => runtime,
+      });
+      expect(code, `${id}: ${io.stderr.join("")}`).toBe(0);
+    },
+  );
+
+  it.each(companionCliContract.removedCommands)(
+    "rejects removed companion argv for $id before config load",
+    async ({ id, argv }) => {
+      const io = captureIo();
+      const loadConfig = vi.fn(async () => testConfig());
+      const buildRuntime = vi.fn(() => fakeRuntime());
+      const code = await runCli({
+        argv,
+        io: io.io,
+        loadConfig,
+        buildRuntime,
+      });
+      expect(code, `${id}: ${io.stderr.join("")}`).not.toBe(0);
+      if (argv.some((arg) => /^(--config|--vault-root|--cache-dir)(?:=|$)/.test(arg))) {
+        expect(code, id).toBe(2);
+        expect(io.stderr.join(""), id).toContain("no longer supported");
+        expect(loadConfig, id).not.toHaveBeenCalled();
+        expect(buildRuntime, id).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not prefix-match longer names as removed flags", async () => {
+    const io = captureIo();
+    const loadConfig = vi.fn(async () => testConfig());
+    const runtime = fakeRuntime();
+    const code = await runCli({
+      argv: [
+        "run",
+        "--today",
+        "--config-extra=x",
+        "--vault-rooted=/tmp/vault",
+        "--cache-directory=/tmp/cache",
+      ],
+      io: io.io,
+      now: () => new Date("2026-06-13T12:00:00Z"),
+      loadConfig,
+      buildRuntime: () => runtime,
+    });
+    expect(code, io.stderr.join("")).toBe(0);
+    expect(loadConfig).toHaveBeenCalledOnce();
+    expect(runtime.pipeline.runForDate).toHaveBeenCalledWith("2026-06-13");
   });
 
   it("runs --id for deep dive", async () => {

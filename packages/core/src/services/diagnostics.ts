@@ -16,6 +16,8 @@ export interface DiagnosticsInput {
 export interface PaperIndexDiagnostics {
   path: string;
   exists: boolean;
+  sourcePath?: string;
+  recoveredFromBackup?: boolean;
   schemaVersion?: number;
   total?: number;
   statusCounts?: Record<string, number>;
@@ -197,6 +199,10 @@ function formatPaperIndex(diag: PaperIndexDiagnostics | undefined): string[] {
     `  path: ${diag.path}`,
     `  exists: ${diag.exists ? "yes" : "no"}`,
   ];
+  if (diag.sourcePath) lines.push(`  sourcePath: ${diag.sourcePath}`);
+  if (diag.recoveredFromBackup != null) {
+    lines.push(`  recoveredFromBackup: ${diag.recoveredFromBackup ? "yes" : "no"}`);
+  }
   if (diag.error) {
     lines.push(`  error: ${diag.error}`);
     return lines;

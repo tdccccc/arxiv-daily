@@ -1,23 +1,15 @@
-const { DEFAULT_API_KEY_SECRET, createSecretProvider } = require("./secrets");
-const { findArxivDailyVault } = require("./workspace");
-
 const DEFAULT_CLI_PATH = "arxiv-daily";
-const OBSIDIAN_PLUGIN_DATA_PATH = ".obsidian/plugins/arxiv-daily/data.json";
-const VSCODE_CLI_CONFIG_PATH = "arxiv-daily/.index/vscode-cli.config.json";
+const MODERN_ARXIV_ID_RE = /^(\d{2})(\d{2})\.(\d{4,5})(?:v[1-9]\d*)?$/;
+const ARXIV_URL_RE = /^https?:\/\/(?:www\.)?arxiv\.org\/(abs|pdf)\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(\.pdf)?(?:[?#].*)?$/;
 
-async function runForToday(vscodeApi, context, now = () => new Date()) {
-  const date = formatDate(now());
-  return await runCliCommand(vscodeApi, context, ["run", "--date", date]);
+async function runForToday(vscodeApi) {
+  return await runCliTask(vscodeApi, ["run", "--today"]);
 }
 
-async function runPending(vscodeApi, context) {
-  return await runCliCommand(vscodeApi, context, ["run-pending"]);
-}
-
-async function summarizeById(vscodeApi, context) {
+async function summarizeById(vscodeApi) {
   const input = await vscodeApi.window.showInputBox({
     title: "Summarize arXiv ID",
-    prompt: "Enter an arXiv ID or URL.",
+    prompt: "Enter a modern arXiv ID or an arxiv.org abs/PDF URL.",
     placeHolder: "2606.12345",
     ignoreFocusOut: true,
   });
@@ -27,90 +19,74 @@ async function summarizeById(vscodeApi, context) {
     void vscodeApi.window.showWarningMessage("arXiv Daily: invalid arXiv ID.");
     return false;
   }
-  return await runCliCommand(vscodeApi, context, ["summarize", "--id", arxivId]);
+  return await runCliTask(vscodeApi, ["run", "--id", arxivId]);
 }
 
-async function runCliCommand(vscodeApi, context, args) {
-  const vault = await findArxivDailyVault(vscodeApi);
-  if (!vault) {
-    void vscodeApi.window.showWarningMessage(
-      "arXiv Daily: no workspace folder contains arxiv-daily/.",
-    );
-    return false;
-  }
+async function runCliTask(vscodeApi, args) {
+  const execution = new vscodeApi.ProcessExecution(
+    cliPathFromSettings(vscodeApi),
+    args,
+  );
+  const task = new vscodeApi.Task(
+    { type: "process" },
+    vscodeApi.TaskScope.Workspace,
+    "Run CLI",
+    "arXiv Daily",
+    execution,
+  );
 
-  const apiKey = await createSecretProvider(context).getSecret(DEFAULT_API_KEY_SECRET);
-  if (!apiKey) {
-    void vscodeApi.window.showWarningMessage(
-      "arXiv Daily: configure an API key before running the pipeline.",
-    );
-    return false;
-  }
-
-  const cliPath = cliPathFromSettings(vscodeApi);
-  const vaultRoot = uriToFsPath(vault.vaultRootUri);
-  let configPath = null;
-  try {
-    configPath = await prepareCliConfig(vscodeApi, vault);
-  } catch (error) {
-    void vscodeApi.window.showErrorMessage(
-      `arXiv Daily: failed to prepare CLI config: ${error.message}`,
-    );
-    return false;
-  }
-  const terminal = vscodeApi.window.createTerminal({
-    name: "arXiv Daily",
-    cwd: vaultRoot,
-    env: {
-      ARXIV_DAILY_API_KEY: apiKey,
-      ARXIV_DAILY_LINK_STYLE: "relative",
-    },
+  let dispatchedExecution;
+  let resolveCompletion;
+  let bufferedEvents = [];
+  const completion = new Promise((resolve) => {
+    resolveCompletion = resolve;
   });
-  terminal.show();
-  const cliArgs = [...args];
-  if (configPath) cliArgs.push("--config", configPath);
-  cliArgs.push("--vault-root", vaultRoot);
-  terminal.sendText(buildCliCommand(cliPath, cliArgs));
-  return true;
-}
+  const handleEndEvent = (kind, event) => {
+    const completionEvent = { kind, event };
+    if (!dispatchedExecution) {
+      bufferedEvents.push(completionEvent);
+      return;
+    }
+    if (event.execution === dispatchedExecution) {
+      resolveCompletion(completionEvent);
+    }
+  };
+  const processListener = vscodeApi.tasks.onDidEndTaskProcess((event) => {
+    handleEndEvent("process", event);
+  });
+  let taskListener;
 
-async function prepareCliConfig(vscodeApi, vault) {
-  const storage = vault.storage;
-  if (!(await storage.exists(OBSIDIAN_PLUGIN_DATA_PATH))) return null;
-
-  const raw = JSON.parse(await storage.readText(OBSIDIAN_PLUGIN_DATA_PATH));
-  const settings = sanitizeSettingsForCli(extractPluginSettings(raw));
-  await storage.mkdir("arxiv-daily/.index");
-  await storage.writeText(
-    VSCODE_CLI_CONFIG_PATH,
-    JSON.stringify({ settings, linkStyle: "relative" }, null, 2),
-  );
-  return uriToFsPath(
-    vscodeApi.Uri.joinPath(
-      vault.vaultRootUri,
-      ...VSCODE_CLI_CONFIG_PATH.split("/"),
-    ),
-  );
-}
-
-function extractPluginSettings(data) {
-  if (!isRecord(data)) {
-    throw new Error("Obsidian plugin data must be a JSON object");
+  try {
+    taskListener = vscodeApi.tasks.onDidEndTask((event) => {
+      handleEndEvent("task", event);
+    });
+    dispatchedExecution = await vscodeApi.tasks.executeTask(task);
+    const matchingEarlyEvents = bufferedEvents.filter(
+      ({ event }) => event.execution === dispatchedExecution,
+    );
+    const earlyCompletion =
+      matchingEarlyEvents.find(({ kind }) => kind === "process") ??
+      matchingEarlyEvents[0];
+    bufferedEvents = [];
+    const completed = earlyCompletion ?? await completion;
+    if (completed.kind === "task") {
+      throw new Error(
+        "arXiv Daily CLI task ended without a process exit; launch may have failed or the task was cancelled.",
+      );
+    }
+    if (completed.event.exitCode === 0) return true;
+    if (completed.event.exitCode === undefined) {
+      throw new Error(
+        "arXiv Daily CLI task was cancelled before reporting an exit code.",
+      );
+    }
+    throw new Error(
+      `arXiv Daily CLI process exited with exit code ${completed.event.exitCode}.`,
+    );
+  } finally {
+    processListener.dispose();
+    taskListener?.dispose();
   }
-  const settings = isRecord(data.settings) ? data.settings : data;
-  if (!isRecord(settings)) {
-    throw new Error("Obsidian plugin settings must be a JSON object");
-  }
-  return settings;
-}
-
-function sanitizeSettingsForCli(settings) {
-  const next = JSON.parse(JSON.stringify(settings));
-  if (!isRecord(next.llm)) next.llm = {};
-  next.llm.apiKey = "";
-  if (!isRecord(next.output)) next.output = {};
-  next.output.linkStyle = "relative";
-  return next;
 }
 
 function cliPathFromSettings(vscodeApi) {
@@ -120,45 +96,36 @@ function cliPathFromSettings(vscodeApi) {
   return String(configured || DEFAULT_CLI_PATH).trim() || DEFAULT_CLI_PATH;
 }
 
-function buildCliCommand(cliPath, args) {
-  return [cliPath, ...args].map(shellQuote).join(" ");
-}
-
-function shellQuote(value) {
-  const text = String(value);
-  if (/^[A-Za-z0-9_./:=@+-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, "'\\''")}'`;
-}
-
-function formatDate(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function normalizeArxivId(input) {
-  const trimmed = String(input).trim();
-  const match = trimmed.match(/(?:arxiv\.org\/(?:abs|pdf)\/)?([0-9]{4}\.[0-9]{4,5})(?:v[0-9]+)?/i);
-  return match?.[1] ?? "";
+  const candidate = String(input).trim();
+  if (isValidModernArxivId(candidate)) {
+    return candidate.replace(/v[1-9]\d*$/, "");
+  }
+
+  const urlMatch = ARXIV_URL_RE.exec(candidate);
+  if (!urlMatch) return "";
+  const [, pathKind, id, pdfSuffix] = urlMatch;
+  if (pdfSuffix && pathKind !== "pdf") return "";
+  return isValidModernArxivId(id)
+    ? id.replace(/v[1-9]\d*$/, "")
+    : "";
 }
 
-function uriToFsPath(uri) {
-  return uri.fsPath || uri.path;
-}
+function isValidModernArxivId(candidate) {
+  const match = MODERN_ARXIV_ID_RE.exec(candidate);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const sequence = match[3];
+  if (month < 1 || month > 12 || Number(sequence) === 0) return false;
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  const issue = year * 100 + month;
+  if (issue < 704) return false;
+  return issue <= 1412 ? sequence.length === 4 : sequence.length === 5;
 }
 
 module.exports = {
-  OBSIDIAN_PLUGIN_DATA_PATH,
-  VSCODE_CLI_CONFIG_PATH,
-  buildCliCommand,
-  formatDate,
   normalizeArxivId,
-  prepareCliConfig,
   runForToday,
-  runPending,
   summarizeById,
 };

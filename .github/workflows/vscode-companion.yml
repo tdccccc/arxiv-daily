@@ -1,0 +1,62 @@
+name: VS Code companion verification
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - extensions/vscode-arxiv-daily/**
+      - contracts/companion-cli-commands.json
+      - apps/cli/package.json
+      - apps/cli/src/main.ts
+      - apps/cli/tests/cli-main.test.ts
+      - .github/workflows/vscode-companion.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+  pull_request:
+    paths:
+      - extensions/vscode-arxiv-daily/**
+      - contracts/companion-cli-commands.json
+      - apps/cli/package.json
+      - apps/cli/src/main.ts
+      - apps/cli/tests/cli-main.test.ts
+      - .github/workflows/vscode-companion.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/vscode-arxiv-daily
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: extensions/vscode-arxiv-daily/package-lock.json
+      - name: Install companion dependencies
+        run: npm ci
+      - name: Build companion
+        run: npm run build
+      - name: Test companion
+        run: npm test
+      - name: Smoke test companion
+        run: npm run smoke
+      - name: Verify temporary VSIX package
+        run: |
+          output="$RUNNER_TEMP/arxiv-daily-vscode.vsix"
+          npm run vsix:package -- --out "$output"
+          test -s "$output"

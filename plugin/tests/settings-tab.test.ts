@@ -1,19 +1,142 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  DropdownComponent,
+  Setting,
+  TextComponent,
+  ToggleComponent,
+  type App,
+} from "obsidian";
+import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type ArxivDailyPlugin from "../main";
 import {
+  API_KEY_CONFIGURED_SENTINEL,
+  ArxivDailySettingTab,
   isValidLocalTime,
   llmHttpWarning,
   modelFetchNoticeMessage,
-  persistApiKeyChange,
   runWindowTimeOptions,
   validateOutputDirectoryDraft,
 } from "../src/settings/tab";
+import { SettingsChangeService } from "../src/settings/change-service";
 
 const settingsTabSource = readFileSync(
   resolve(process.cwd(), "src/settings/tab.ts"),
   "utf-8",
 );
+
+beforeAll(() => {
+  type CreateOptions = {
+    cls?: string;
+    text?: string;
+    type?: string;
+    value?: string;
+    attr?: Record<string, string>;
+  };
+  const proto = HTMLElement.prototype as HTMLElement & {
+    empty?: () => void;
+    addClass?: (...classes: string[]) => void;
+    removeClass?: (...classes: string[]) => void;
+    toggleClass?: (className: string, force?: boolean) => void;
+    setText?: (text: string) => void;
+    detach?: () => void;
+    appendText?: (text: string) => void;
+    createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
+    createDiv?: (options?: CreateOptions) => HTMLElement;
+    createSpan?: (options?: CreateOptions) => HTMLElement;
+  };
+  proto.empty ??= function () { this.replaceChildren(); };
+  proto.addClass ??= function (...classes) { this.classList.add(...classes); };
+  proto.removeClass ??= function (...classes) { this.classList.remove(...classes); };
+  proto.toggleClass ??= function (className, force) {
+    this.classList.toggle(className, force);
+  };
+  proto.setText ??= function (text) { this.textContent = text; };
+  proto.detach ??= function () { this.remove(); };
+  proto.appendText ??= function (text) { this.append(text); };
+  proto.createEl ??= function (tag, options = {}) {
+    const element = document.createElement(tag);
+    if (options.cls) element.className = options.cls;
+    if (options.text) element.textContent = options.text;
+    if (options.type) element.setAttribute("type", options.type);
+    if (options.value !== undefined) {
+      (element as HTMLInputElement | HTMLOptionElement).value = options.value;
+    }
+    for (const [key, value] of Object.entries(options.attr ?? {})) {
+      element.setAttribute(key, value);
+    }
+    this.appendChild(element);
+    return element;
+  };
+  proto.createDiv ??= function (options = {}) { return this.createEl("div", options); };
+  proto.createSpan ??= function (options = {}) { return this.createEl("span", options); };
+});
+
+function makeLegacyApiKeyTab(
+  persistSettings: (candidate: typeof DEFAULT_SETTINGS) => Promise<void>,
+) {
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.llm.apiKey = "old-secret";
+  const refreshSensitiveValues = vi.fn();
+  const installOutputStores = vi.fn();
+  const settingsChanges = new SettingsChangeService({
+    settings,
+    persistSettings,
+    refreshSensitiveValues,
+    prepareOutputStores: vi.fn(async () => ({
+      stateStore: { name: "candidate-state" },
+      runHistoryStore: { name: "candidate-history" },
+    } as never)),
+    installOutputStores,
+  });
+  const plugin = {
+    settings,
+    settingsChanges,
+    saveSettings: () => settingsChanges.persistCurrent(),
+    setScheduleEnabled: (enabled: boolean) => settingsChanges
+      .changeValue("schedule.enabled", enabled)
+      .then(() => true),
+    logger: { error: vi.fn() },
+    stateStore: { snapshot: () => ({}) },
+    manifest: { version: "0.0.0-test" },
+  } as unknown as ArxivDailyPlugin;
+  const tab = new ArxivDailySettingTab({} as App, plugin);
+  vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);
+  return { tab, settings, refreshSensitiveValues, installOutputStores };
+}
+
+function renderLegacyApiKey(tab: ArxivDailySettingTab) {
+  const container = document.createElement("div");
+  const render = Reflect.get(tab, "renderApiKeySetting") as (
+    containerEl: HTMLElement,
+  ) => void;
+  render.call(tab, container);
+  const input = container.querySelector("input");
+  const buttons = [...container.querySelectorAll("button")];
+  if (!input || buttons.length !== 3) throw new Error("API key row did not render");
+  return {
+    input,
+    replace: buttons[0] as HTMLButtonElement,
+    cancel: buttons[1] as HTMLButtonElement,
+    clear: buttons[2] as HTMLButtonElement,
+  };
+}
+
+function renderLegacySettings(tab: ArxivDailySettingTab): Map<string, Setting> {
+  Setting.reset();
+  ToggleComponent.reset();
+  tab.display();
+  return new Map(
+    Setting.instances.map((setting) => [setting.nameEl.textContent ?? "", setting]),
+  );
+}
+
+function componentOf<T>(setting: Setting | undefined, ctor: new (...args: never[]) => T): T {
+  const component = setting?.components.find((item) => item instanceof ctor);
+  if (!component) throw new Error(`Missing ${ctor.name} component`);
+  return component as T;
+}
 
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
@@ -60,49 +183,225 @@ describe("llmHttpWarning", () => {
   });
 });
 
-describe("API key persistence", () => {
-  it("keeps a saved replacement and updates redaction", async () => {
-    const settings = { llm: { apiKey: "old-secret" } };
-    const logger = { setSensitiveValues: vi.fn() };
-    const saveSettings = vi.fn().mockResolvedValue(undefined);
+describe("legacy transactional renderers", () => {
+  it.each([
+    ["API base URL", TextComponent, "https://candidate.example/v1", "llm", "baseUrl"],
+    ["Model", DropdownComponent, "candidate-model", "llm", "model"],
+    ["Thinking mode", ToggleComponent, false, "llm", "thinkingMode"],
+    ["Reasoning effort", DropdownComponent, "high", "llm", "reasoningEffort"],
+    ["Link style", DropdownComponent, "relative", "output", "linkStyle"],
+    ["Summary language", DropdownComponent, "en", "output", "summaryLanguage"],
+    ["How to send", DropdownComponent, "hosted", "email", "mode"],
+    ["Your email", TextComponent, "new@example.com", "email", "to"],
+    ["From email", TextComponent, "sender@example.com", "email", "fromEmail"],
+    ["From name", TextComponent, "Candidate sender", "email", "fromName"],
+    ["Daily auto-send", ToggleComponent, true, "email", "enabled"],
+  ] as const)(
+    "keeps live and displayed %s unchanged when candidate persistence fails",
+    async (name, componentType, next, section, field) => {
+      const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+      const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+      const previous = (settings[section] as unknown as Record<string, unknown>)[field];
+      const rows = renderLegacySettings(tab);
+      const component = componentOf(rows.get(name), componentType as never) as {
+        trigger(value: never): Promise<void>;
+        inputEl?: HTMLInputElement;
+        selectEl?: HTMLSelectElement;
+        value?: boolean;
+      };
 
-    await persistApiKeyChange(settings, logger, saveSettings, "new-secret");
+      await component.trigger(next as never).catch(() => undefined);
 
-    expect(settings.llm.apiKey).toBe("new-secret");
-    expect(logger.setSensitiveValues).toHaveBeenCalledTimes(1);
-    expect(logger.setSensitiveValues).toHaveBeenCalledWith(["new-secret"]);
+      expect((settings[section] as unknown as Record<string, unknown>)[field]).toBe(previous);
+      const displayed = component.inputEl?.value ?? component.selectEl?.value ?? component.value;
+      expect(displayed).toBe(previous);
+      expect(persistSettings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("restores the complete named detail profile when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const previous = structuredClone(settings.detailSelection);
+    const rows = renderLegacySettings(tab);
+    const profile = componentOf(
+      rows.get("Automatic detail notes"),
+      DropdownComponent as never,
+    ) as DropdownComponent;
+
+    await profile.trigger("conservative").catch(() => undefined);
+
+    expect(settings.detailSelection).toEqual(previous);
+    expect(profile.selectEl.value).toBe(previous.profile);
+    expect(persistSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("restores the previous replacement and redaction when saving fails", async () => {
-    const settings = { llm: { apiKey: "old-secret" } };
-    const logger = { setSensitiveValues: vi.fn() };
-    const failure = new Error("disk full");
+  it("does not let an earlier failed text save overwrite a later queued draft or commit", async () => {
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: () => void;
+    const persistSettings = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      }));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(
+      rows.get("API base URL"),
+      TextComponent as never,
+    ) as TextComponent;
 
-    await expect(
-      persistApiKeyChange(settings, logger, async () => Promise.reject(failure), "new-secret"),
-    ).rejects.toBe(failure);
+    const first = input.trigger("https://rejected.example/v1");
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    const second = input.trigger("https://accepted.example/v1");
+    rejectFirst(new Error("first save failed"));
+    await first.catch(() => undefined);
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(2));
+    expect(input.inputEl.value).toBe("https://accepted.example/v1");
 
+    resolveSecond();
+    await second;
+    expect(settings.llm.baseUrl).toBe("https://accepted.example/v1");
+    expect(input.inputEl.value).toBe("https://accepted.example/v1");
+  });
+
+  it("coalesces change and blur into one rejected tick-interval transaction", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = document.createElement("input");
+    input.value = "5";
+
+    (tab as unknown as {
+      bindTickIntervalInput(inputEl: HTMLInputElement): void;
+    }).bindTickIntervalInput(input);
+    input.value = "5";
+    input.dispatchEvent(new Event("change"));
+    input.dispatchEvent(new Event("blur"));
+
+    await vi.waitFor(() => expect(input.value).toBe(
+      String(DEFAULT_SETTINGS.schedule.tickIntervalMin),
+    ));
+    expect(persistSettings).toHaveBeenCalledTimes(1);
+    expect(settings.schedule.tickIntervalMin).toBe(
+      DEFAULT_SETTINGS.schedule.tickIntervalMin,
+    );
+  });
+
+  it("persists a candidate before committing the live secret and redaction", async () => {
+    let finishSave: (() => void) | undefined;
+    const persistSettings = vi.fn(async (candidate: typeof DEFAULT_SETTINGS) => {
+      expect(candidate.llm.apiKey).toBe("new-secret");
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+    });
+    const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+      persistSettings,
+    );
+    const { input, replace } = renderLegacyApiKey(tab);
+
+    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
+    expect(input.value).not.toContain(settings.llm.apiKey);
+    replace.click();
+    input.value = "new-secret";
+    input.dispatchEvent(new Event("input"));
+    replace.click();
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
     expect(settings.llm.apiKey).toBe("old-secret");
-    expect(logger.setSensitiveValues.mock.calls).toEqual([
-      [["new-secret"]],
-      [["old-secret"]],
-    ]);
+    expect(refreshSensitiveValues).not.toHaveBeenCalled();
+    finishSave?.();
+
+    await vi.waitFor(() => expect(settings.llm.apiKey).toBe("new-secret"));
+    expect(refreshSensitiveValues).toHaveBeenCalledTimes(1);
+    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
+    expect(input.readOnly).toBe(true);
   });
 
-  it("restores a cleared key and redaction when saving fails", async () => {
-    const settings = { llm: { apiKey: "old-secret" } };
-    const logger = { setSensitiveValues: vi.fn() };
+  it("does not let an earlier failed legacy secret save hide a later queued draft", async () => {
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: () => void;
+    const persistSettings = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      }));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { input, replace } = renderLegacyApiKey(tab);
 
-    await expect(
-      persistApiKeyChange(settings, logger, async () => Promise.reject(new Error("read only")), ""),
-    ).rejects.toThrow("read only");
+    replace.click();
+    input.value = "rejected-secret";
+    input.dispatchEvent(new Event("input"));
+    replace.click();
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    input.value = "accepted-secret";
+    input.dispatchEvent(new Event("input"));
+    replace.click();
+    rejectFirst(new Error("first save failed"));
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(2));
+    expect(input.value).toBe("accepted-secret");
+    expect(input.readOnly).toBe(false);
 
+    resolveSecond();
+    await vi.waitFor(() => expect(settings.llm.apiKey).toBe("accepted-secret"));
+    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
+    expect(input.readOnly).toBe(true);
+  });
+
+  it("restores the hidden configured state when candidate persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+      persistSettings,
+    );
+    const { input, replace } = renderLegacyApiKey(tab);
+
+    replace.click();
+    input.value = "new-secret";
+    input.dispatchEvent(new Event("input"));
+    replace.click();
+
+    await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
     expect(settings.llm.apiKey).toBe("old-secret");
-    expect(logger.setSensitiveValues.mock.calls).toEqual([
-      [[]],
-      [["old-secret"]],
-    ]);
+    expect(refreshSensitiveValues).not.toHaveBeenCalled();
+    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
+    expect(input.readOnly).toBe(true);
+    expect(replace.textContent).toBe("Replace");
   });
+
+  it.each([
+    ["renderEmailApiKeySetting", "apiKey"],
+    ["renderHostedTokenSetting", "hostedToken"],
+  ] as const)(
+    "restores the hidden %s secret when candidate persistence fails",
+    async (renderMethod, settingKey) => {
+      const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+      const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+        persistSettings,
+      );
+      settings.email[settingKey] = "old-email-secret";
+      const container = document.createElement("div");
+      const render = Reflect.get(tab, renderMethod) as (
+        containerEl: HTMLElement,
+      ) => void;
+      render.call(tab, container);
+      const input = container.querySelector("input") as HTMLInputElement;
+      const replace = container.querySelector("button") as HTMLButtonElement;
+
+      replace.click();
+      input.value = "new-email-secret";
+      input.dispatchEvent(new Event("input"));
+      replace.click();
+
+      await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
+      expect(settings.email[settingKey]).toBe("old-email-secret");
+      expect(refreshSensitiveValues).not.toHaveBeenCalled();
+      expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
+      expect(input.readOnly).toBe(true);
+      expect(replace.textContent).toBe("Replace");
+    },
+  );
 });
 
 describe("settings tab regressions", () => {
@@ -205,9 +504,6 @@ describe("settings tab regressions", () => {
     expect(apiKeyBody).toContain('text: configured ? "Replace" : "Save"');
     expect(apiKeyBody).toContain('text: "Cancel"');
     expect(apiKeyBody).toContain('text: "Clear"');
-    expect(apiKeyBody).toContain("await persistApiKeyChange(");
-    expect(apiKeyBody).toContain("next,");
-    expect(apiKeyBody).toContain('          "",');
   });
 
   it("does not register a second change listener when models are fetched", () => {
@@ -312,16 +608,53 @@ describe("output path drafts", () => {
     expect(validateOutputDirectoryDraft(".obsidian/plugins").ok).toBe(false);
   });
 
-  it("reloads before persistence and restores the prior value on failure", () => {
-    const body = settingsTabSource.match(
-      /private async applyOutputDirectoryDraft[\s\S]*?\n  display\(\): void/,
-    )?.[0];
-    expect(body).toBeDefined();
-    expect(body!.indexOf("reloadStateStoreForOutputPaths()")).toBeLessThan(
-      body!.indexOf("saveSettings()"),
+  it("persists a legacy output candidate before committing and installing stores", async () => {
+    let finishSave: (() => void) | undefined;
+    const persistSettings = vi.fn(async (candidate: typeof DEFAULT_SETTINGS) => {
+      expect(candidate.output.dailyDir).toBe("reports/daily");
+      await new Promise<void>((resolve) => { finishSave = resolve; });
+    });
+    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(
+      persistSettings,
     );
-    expect(body).toContain("this.plugin.settings.output[key] = previous");
-    expect(body).toContain("await this.plugin.reloadStateStoreForOutputPaths()");
+    const input = document.createElement("input");
+    const apply = Reflect.get(tab, "applyOutputDirectoryDraft") as (
+      key: "dailyDir" | "papersDir",
+      draft: string,
+      inputEl: HTMLInputElement,
+    ) => Promise<void>;
+
+    const changing = apply.call(tab, "dailyDir", " reports\\daily ", input);
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledOnce());
+    expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
+    expect(installOutputStores).not.toHaveBeenCalled();
+    finishSave?.();
+    await changing;
+
+    expect(settings.output.dailyDir).toBe("reports/daily");
+    expect(input.value).toBe("reports/daily");
+    expect(installOutputStores).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the legacy output input without a second persistence rollback", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(
+      persistSettings,
+    );
+    const input = document.createElement("input");
+    input.value = "reports/daily";
+    const apply = Reflect.get(tab, "applyOutputDirectoryDraft") as (
+      key: "dailyDir" | "papersDir",
+      draft: string,
+      inputEl: HTMLInputElement,
+    ) => Promise<void>;
+
+    await apply.call(tab, "dailyDir", input.value, input);
+
+    expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
+    expect(input.value).toBe(DEFAULT_SETTINGS.output.dailyDir);
+    expect(persistSettings).toHaveBeenCalledTimes(1);
+    expect(installOutputStores).not.toHaveBeenCalled();
   });
 });
 

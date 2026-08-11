@@ -8,7 +8,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 - **Node CLI**（`apps/cli/`，npm 包名 `arxiv-daily`）读取固定路径 `config.toml`，提供单次运行、crontab 安装、数据导入导出与邮件命令；
 - **Cloudflare Worker 邮件中继**（`services/email-relay/`，不在根 npm workspaces，包版本独立）实现官方代发（Beta）的验证与投递；
 - 根目录 `arxiv_daily.py` 为兼容壳：若 `apps/cli/dist/arxiv-daily-cli.cjs` 存在则转发 argv（无参时默认 `run --today`）；
-- `extensions/vscode-arxiv-daily` 为独立配套扩展（未进 workspaces），提供 vault 探测与 webview 骨架，但当前仍调用已移除的 CLI 参数/子命令（`--config` / `--vault-root`、`run-pending`、`summarize`），与 0.4.x 固定路径 CLI **不兼容**，不能当作可用生产包装。
+- **VS Code companion**（`extensions/vscode-arxiv-daily/`，未进根 workspaces，版本独立）提供 vault 探测、Paper Index Dashboard，以及通过当前 CLI 契约执行今日运行和按 ID 摘要。
 
 业务核通过 `HostAdapters`（HTTP、存储、密钥、进度、资源打开、标记解析）与具体运行时解耦。插件与 CLI 分别注入 Obsidian / Node 适配层后，共享 `ArxivPipeline`、状态/索引与投递编排；调度语义在两端不同（见下文）。
 
@@ -17,10 +17,11 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 | 层次 | 技术 | 在本项目中的职责 |
 | --- | --- | --- |
 | 语言/运行时 | TypeScript（ES2022）、Node.js `>=20.11.0` | 全仓源码与 CLI/构建；CI 使用 Node 22.17.0 |
-| 包管理 | npm workspaces | 工作区：`packages/*`、`apps/*`、`plugin`；`services/email-relay` 独立 |
+| 包管理 | npm workspaces | 根工作区：`packages/*`、`apps/*`、`plugin`；email relay 与 VS Code companion 各用独立 manifest/lockfile |
 | 业务核 | `@arxiv-daily/core` | 流水线、LLM、调度、索引、设置、邮件编排；生产第三方依赖仅 `pako` |
 | Node 宿主 | `@arxiv-daily/node-runtime` | `fetch`、文件系统、`EnvSecretProvider`、linkedom 等 |
 | Obsidian 宿主 | Obsidian Plugin API + `obsidian` 类型 | Vault 读写、`requestUrl`、设置持久化、UI |
+| VS Code companion | VS Code Extension API `^1.90.0` | `workspace.fs` Dashboard 与 `ProcessExecution` CLI 任务 |
 | 构建 | esbuild | 插件打 `main.js`；CLI 打 `dist/arxiv-daily-cli.cjs`（并复制到 `plugin/arxiv-daily-cli.cjs`） |
 | 测试/类型 | Vitest、`tsc --noEmit`、ESLint（含 `eslint-plugin-obsidianmd`） | 工作区测试；边界检查脚本 |
 | 邮件 | Resend HTTP API；Cloudflare Workers + KV + Durable Objects | 自发送与官方代发 |
@@ -59,7 +60,7 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 `ArxivDailyPlugin`（`plugin/main.ts`）在 `onload` 中：加载设置与状态 → 构建 host → 状态栏进度 → `SchedulerService` → 注册设置页/Dashboard/命令；`schedule.enabled` 时启动进程内调度。卸载时停止调度并 `operations.cancelAll`。
 
-生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建；输出路径变更时由 `reloadStateStoreForOutputPaths` 替换 `StateStore`/`RunHistoryStore`；调度启停经 `restartScheduler` / `setScheduleEnabled`。
+生成路径**不**缓存单一 `ArxivPipeline`：调度与命令经 `buildPipeline()` / `buildManualFetch()` 按当前 settings 重建依赖。`HostAdapters` 仅在 onload 构建。插件设置变更经 `SettingsChangeService` 串行提交；输出目录候选会预加载新的 `StateStore` / `RunHistoryStore`，再由 Scheduler 通过一次同步 pair replacement 联合安装，调度启停与定时器更新在设置持久化和 live commit 后执行。
 
 ### Node CLI
 
@@ -68,6 +69,14 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 ### Email Relay Worker
 
 `services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理健康检查、验证起始/完成、`/v1/deliver` 与 operator-only cutover staging。认证后按设备路由到唯一 `DeliverGate` Durable Object，幂等 ledger 与 UTC 日配额在该对象的存储事务内更新；`DELIVER_GATE` 或 v2 cutover proof 不可用时自动投递 fail closed，不存在无 DO fallback。
+
+### VS Code companion
+
+`extensions/vscode-arxiv-daily/src/extension.js` 注册三个命令：打开 Reading Dashboard、运行今日流水线、按 arXiv ID 摘要。Dashboard 通过 `workspace.fs` 访问当前工作区内的 `arxiv-daily/.index/papers.json`；只有 Dashboard 和 Paper Index 编辑依赖工作区 vault 探测。
+
+两个流水线命令不读取工作区中的 Obsidian 配置或 SecretStorage。它们从 `arxivDaily.cliPath` 取得可执行文件名或路径，并通过 VS Code `ProcessExecution` 以独立 argv 启动进程任务：今日运行传入 `run --today`，按 ID 摘要传入 `run --id <canonical-id>`。扩展在派发前注册 task/process 结束监听，等待对应 `TaskExecution` 的进程退出；退出码 `0` 才视为成功，非零退出、无进程退出的任务结束和取消均返回错误并清理监听器。
+
+ID 输入只接受现代 arXiv ID 或字面量 `arxiv.org` / `www.arxiv.org` 的 HTTP(S) abs/PDF URL；校验月份、四位/五位序号时期边界、非零序号与 `v1+` 版本后，传给 CLI 的是去掉版本号的 canonical ID。流水线运行使用 CLI TOML 中的 `vault_root` 与密钥配置，因此没有打开 workspace 时仍可执行。
 
 ## Architecture and Module Boundaries
 
@@ -79,6 +88,7 @@ packages/node-runtime  → @arxiv-daily/core
 apps/cli               → @arxiv-daily/core, @arxiv-daily/node-runtime
 plugin                 → @arxiv-daily/core, obsidian
 services/email-relay   → 独立（不在 npm workspaces）
+extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces）
 ```
 
 禁止的旧路径（如 `plugin/src/pipeline`、`plugin/src/hosts/node`）不得存在。core 不得出现 `process`/`Buffer` 或 Node builtin import；plugin 源码不得 import Node builtin；禁止深层 `@arxiv-daily/*/…` 导入。
@@ -101,6 +111,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 | CLI | `apps/cli/src/main.ts` → `dist/arxiv-daily-cli.cjs`（bin `arxiv-daily`） | 子命令驱动的批处理/运维 |
 | 兼容 Python | `arxiv_daily.py` | `node apps/cli/dist/arxiv-daily-cli.cjs …` |
 | Worker | `services/email-relay/src/index.ts` | `fetch` 路由 `/health`、`/v1/verify/*`、`/v1/deliver` 与受 operator bearer 保护的 `/internal/delivery-v2/cutover` |
+| VS Code companion | `extensions/vscode-arxiv-daily/src/extension.js` | 命令注册、Reading Dashboard 与 CLI 进程任务桥接 |
 
 ### CLI 命令面
 
@@ -153,10 +164,12 @@ services/email-relay   → 独立（不在 npm workspaces）
 - 仅在 `runAtLocal`–`runUntilLocal` 本地时间窗内工作（多日 tick 时时间窗主要约束“今天”）；
 - 回看 `LOOKBACK_DAYS = 5` 个日历日；配置时区下的周末跳过；
 - `checkTickGate`：已完成 / 运行中 / 窗外 / 瞬态失败退避则跳过；
-- `RunLock` 保证同日互斥；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- 注入的 `RunLock` 串行化同日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- `StateStore` mutation 从权威 primary 重载 durable state，修改 candidate，保存后精确回读整个 run-state；只有回读与 candidate 完全相等才发布到内存。保存抛错但回读已等于 candidate 时提交仍成立，其余保存或确认失败保留 mutation 前的内存快照；
+- 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
 - 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_permanent`**（错误文案：`recovered stale running state after startup`）；
-- 完成时调用可选 `onDailyCompleted`（接邮件）；回调失败不得改写 run-state。
+- run history、进度/日志、取消清理和 `onDailyCompleted` 是 completed hard commit 之后的 best-effort effect，任一失败不撤销已确认的 run-state。pending completion 不持久化为 outbox；进程退出后不保证原 digest、history 或完成回调重放。
 
 **插件 vs CLI 调度：**
 
@@ -192,10 +205,10 @@ services/email-relay   → 独立（不在 npm workspaces）
 - 路由：`GET /|/health`、`POST /v1/verify/start`、`GET /v1/verify`、`POST /v1/deliver`，以及受 `DELIVERY_V2_CUTOVER_TOKEN` bearer 保护的 `POST /internal/delivery-v2/cutover`。
 - 验证限流仍是 KV best-effort counter：邮箱 3 次/小时、IP 10 次/小时；超限返回统一“已发送”形态。验证完成后 KV 以 secret-scoped token hash 为 key 保存绑定邮箱与 v2 创建时间，设备记录 TTL 约一年；验证页只展示 device token，不回显收件地址。
 - `/v1/deliver` 先认证 device token，检查 `to` 与绑定邮箱一致，再按 secret-scoped device identity 路由到单一 `DeliverGate`。`DELIVER_GATE` 缺失时返回 503，不执行 provider。
-- auto ledger identity 由服务端从 device identity、recipient identity 和 date 推导；客户端 auto key 的 hash 不参与 ledger/provider identity。test identity 另含每次测试的随机 logical key。relay provider key 只含有界哈希，不含明文收件人。
-- Durable Object ledger 状态为 `reserved | attempted | done | rejected`。请求 fingerprint 防止同一 identity 绑定不同内容；ledger 与按 auto/test、UTC 日期划分的 quota 在同一 storage transaction 中预占。`attempted`、`done` 和 `rejected` 重放都不再次调用 provider；测试终态保留 30 天后由 alarm 清理，automatic ledger 不做该清理。
+- auto ledger identity 由服务端从 device identity、recipient identity 和 date 推导；客户端 auto key 的 hash 不参与 ledger/provider identity。test identity 另含每次测试的随机 logical key。relay provider key 从服务端 identity 稳定推导，只含有界哈希，不含明文收件人。
+- Durable Object ledger 状态为 `reserved | attempted | done | rejected`。请求 fingerprint 防止同一 identity 绑定不同内容；ledger 与按 auto/test、UTC 日期划分的 quota 在同一设备对象的 storage transaction 中预占。`attempted`、`done` 和 `rejected` 重放都不再次调用 provider；测试终态保留 30 天后由 alarm 清理，automatic ledger 不做该清理。
 - Resend 明确拒绝映射为 relay 422/429 终态并回退 quota；transport、非白名单 HTTP、无效成功体，或 provider 接受后 completion storage 失败，均保留 `attempted` 阻断并返回 ambiguous。成功 ledger 与响应只保存 `{ "ok": true }`；provider response body 和 provider ID 验证后丢弃。
-- automatic 流量还要求 Durable Object 中的 v2 cutover proof ready。proof 合并旧 KV 的正向 delivered/attempted evidence，并经过 visibility 与 pending-TTL barrier；KV 空扫描不证明旧投递不存在。pre-cutover/legacy device 无法证明 absence 时永久 fail closed，只有 proof ready 后签发的 v2 device identity 可在无 legacy evidence 时开始新的 automatic delivery。该协议按 quiesced single-version cutover 设计，不提供 mixed-version 并行或安全回滚保证。
+- automatic 流量还要求对应设备 Durable Object 中的 v2 cutover observation ready。全局 proof 合并旧 KV 的正向 delivered/attempted evidence，并经过 visibility 与 pending-TTL barrier；KV 空扫描不证明旧投递不存在。pre-cutover/legacy device 无法证明 absence 时永久 fail closed，只有 proof ready 后签发的 v2 device identity 可在无 legacy evidence 时开始新的 automatic delivery。该协议按 quiesced single-version cutover 设计，不提供 mixed-version 并行或安全回滚保证。
 - 出站 Resend key 仅由 Worker secret 提供。系统没有邮件 outbox 或后台重试 daemon；最终 provider 去重仍依赖 Resend/relay 正确执行稳定 idempotency key，因此不声明严格 distributed exactly-once。
 
 ### Dashboard 与命令
@@ -211,7 +224,7 @@ services/email-relay   → 独立（不在 npm workspaces）
 | --- | --- |
 | `arxiv-daily/daily/YYYY-MM-DD.md` | 日报（权威提交物） |
 | `arxiv-daily/papers/<externalId>.md` | 详报（路径 stem 为 externalId，非 paperKey） |
-| `arxiv-daily/.index/papers.json` | 论文索引（schema v4；key 为 `paperKey` 如 `arxiv:…`） |
+| `arxiv-daily/.index/papers.json` | 论文索引（schema v4；key 为 `paperKey` 如 `arxiv:…`；同目录 `.bak` 为恢复副本） |
 | `arxiv-daily/.index/run-state.json` | 按日运行状态（原子写 + `.bak`） |
 | `arxiv-daily/.index/run-history.jsonl` | 运行历史（可轮转） |
 | `arxiv-daily/.index/delivery-state.json` | v1-compatible 邮件阻断投影；为旧 reader 保留 recipient，受支持宿主按 `0600` 处理 |
@@ -222,7 +235,10 @@ services/email-relay   → 独立（不在 npm workspaces）
 
 **设置持久化**
 
-- 插件：Obsidian `loadData`/`saveData` 存 `PluginSettings`；旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。  
+- 插件：Obsidian `loadData`/`saveData` 存 `PluginSettings`；旧版嵌在 data 里的 `runState` 可迁移进 `run-state.json`。启动合并设置时会校验输出目录和 IANA 时区；无效持久化值恢复默认并在 logger 初始化后记录 warning。
+- `SettingsChangeService`（`plugin/src/settings/change-service.ts`）对普通设置执行 serialized candidate transaction：克隆当前设置 → 字段及跨字段校验 → 准备候选资源 → 持久化 candidate → 原位提交 live settings → 安装 store 和 runtime effect。持久化前 live settings、调度器、logger 与输出 store 不变；live commit 失败时不安装候选资源或 effect。持久化后的 host/runtime effect 是 best effort，失败会记录但不会回滚 durable settings。
+- 输出目录切换从准备到安装完成期间持有 output transition；已有 output operation 或 scheduler run 会拒绝切换，transition 持有时也拒绝新的 operation。paper-index 状态修改和 paper-note 创建通过 `withOutputOperation` 持有 lease，避免旧 writer 跨目录切换继续写。
+- 设置页的 legacy 与 declarative renderer 共用同一 transaction service。timezone、run-window 与 schedule enabled 控件各自使用 revision/queue，旧异步结果不会覆盖后续用户意图；timezone 仅提交有效 IANA 标识。
 - CLI：见上文配置映射；schedule intent 与插件进程内 schedule 字段语义分离。
 
 **缓存**
@@ -266,11 +282,25 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 ### 操作与取消
 
-`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`；`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download` 及插件的 `paper-index` / `paper-note` output lease；`RunCancellationService` 与 scheduler 协作。设置输出 transition 与 operation registry 双向互斥。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+
+### Paper Index 持久化与 History Sync
+
+`PaperIndexStore`（`packages/core/src/services/paper-index.ts`）按 primary `papers.json` → `.bak` → legacy `index/papers.json` 的顺序选择首个有效文档；任一路径的真实读取错误直接失败，候选文件存在但均无法解析时也不会构造空索引。读取兼容 schema 1–4，内存归一为 schema 4，后续保存写 schema 4。
+
+索引写入先生成 `.tmp`，再把已验证的旧 primary 发布为 `.bak`，最后以 `.tmp → papers.json` rename 作为新内容的提交点。primary 缺失或损坏时不会用它覆盖有效 backup；提升失败时只尝试恢复提交前已验证的 primary、backup 或 legacy 内容。`PaperIndexStore` 的领域 mutation 在模块级、按 primary 路径共享的 Promise 队列中执行完整的读取、修改、校验和保存事务；该串行范围限于同一 JavaScript realm，不提供跨进程锁或 `fsync` 级掉电保证。
+
+Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫描日报和论文笔记，再在同一索引 mutation 中重读当前状态。日报证据可补建非详情索引投影；论文详情必须由无歧义、身份一致的受管笔记证明。重复或冲突的顶层 `arxiv_id` / `arxiv` 标量会保护涉及的全部论文身份，嵌套字段、数组和正文不参与身份判断。破坏性清理还会比较扫描基线与 mutation 开始时的当前投影；扫描期间被其他操作删除或修改的详情不会被陈旧候选复活或清理。
+
+插件 diagnostics 复用 `PaperIndexStore.inspect()` 的文档选择结果。索引解析、读取及后续笔记探测失败在可复制报告、日志、DiagnosticsModal 和 Hub 中只暴露稳定分类（如 `paper_index_invalid`、`paper_index_unavailable`），不传播底层异常 message 或 cause。
 
 ### 原子写与状态一致性
 
-`StateStore`、索引与 checkpoint 使用各自的原子替换或 mutation queue。邮件 automatic delivery 另以 immutable generation sidecar 作为 provider-attempt 的持久化依据，再重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian Linux 文件系统用 descriptor-anchored exclusive create 和私有原子替换保证 claim 与主状态边界，能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
+`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
+
+插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该协调和 pending completion 都是单进程语义，没有 Plugin/CLI 跨进程锁。
+
+Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian Linux 文件系统使用 descriptor-anchored exclusive create、claim namespace guard 和私有原子替换，能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
 
 ## External Integrations and Executable Configuration
 
@@ -297,17 +327,22 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 - Worker secrets：`RESEND_API_KEY`、`TOKEN_SECRET`、operator-only `DELIVERY_V2_CUTOVER_TOKEN`（均通过 `wrangler secret put` 配置）。
 - Worker vars：`PUBLIC_BASE_URL`、`FROM_EMAIL`、`FROM_NAME`、`DAILY_QUOTA`（默认 `"5"`）；`DELIVER_GATE` 是必需 Durable Object binding，`STORE` 用于验证设备、best-effort 验证限流与 cutover legacy evidence。
 
-### 清单与版本
+### 清单、版本与产品单元
 
-- 根与 `plugin/manifest.json`：插件 id、版本、`minAppVersion` `1.4.0`、`isDesktopOnly: true`  
-- `versions.json` / `plugin/versions.json`：插件版本到 Obsidian 最低版本映射  
-- 工作区版本由 `scripts/sync-release-version.mjs` / `check-release-version.mjs` 对齐；email-relay 版本独立
+`product-units.json` 是仓库产品单元闭集清单。`scripts/check-product-units.mjs` 递归发现 `packages`、`apps`、`plugin`、`services`、`extensions` 下的 package manifest，并要求每个单元声明 manifest、唯一 lockfile、版本策略与 workflow；未分类 manifest、嵌套新单元或缺失治理文件会使检查失败。
+
+- root release group 包含根、`packages/*`、`apps/*` 与 `plugin`，共用根 `package-lock.json` 和同步版本。`scripts/release-utils.mjs` 的结构化 `packageFiles` / `manifestFiles` 同时供版本同步、版本检查和产品清单 checker 使用；checker按完整集合拒绝遗漏、重复、非 root 路径以及独立产品越界。
+- 根与 `plugin/manifest.json`：插件 id、版本、`minAppVersion` `1.4.0`、`isDesktopOnly: true`；`versions.json` / `plugin/versions.json` 映射插件版本到 Obsidian 最低版本。
+- email relay 由 `services/email-relay/package.json` 与同目录 lockfile独立定版；VS Code companion 由 `extensions/vscode-arxiv-daily/package.json` 与同目录 lockfile独立定版。二者不属于根 workspace 或根版本同步组。
 
 ## Build, Test, Deployment, and Operations
 
 ### 本地脚本（根 `package.json`）
 
-- `npm run typecheck` / `test` / `build`：工作区透传（**不含** email-relay）  
+- `npm run typecheck` / `build`：根 workspace 透传（**不含** email-relay 与 VS Code companion）
+- `npm test`：无附加参数时经 `scripts/run-root-tests.mjs` 调用 `test:workspaces`，覆盖全部根 workspace；带测试路径或 Vitest 参数时只把原参数传给一次 `@arxiv-daily/core` 测试调用
+- `npm run test:workspaces -- <args>`：向全部根 workspace 传递测试参数，是 CI 与发布验证使用的全套测试入口
+- Core 的无参数测试由 `scripts/run-core-tests.mjs` 递归发现 `tests/**/*.test.ts`，按路径确定性排序后以每批最多 8 个文件、每个 Vitest 子进程一个 worker 执行；显式参数直接进入单个 Vitest 子进程
 - `npm run lint`：插件 ESLint  
 - `npm run check:boundaries`：分层边界  
 - `npm run smoke:build`：CLI/插件产物冒烟  
@@ -318,25 +353,28 @@ CLI `data export/import` 将逻辑目录 `daily`、`papers`、`.index` 打成 zi
 
 - 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）  
 - CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，构建时复制到 `plugin/arxiv-daily-cli.cjs`；`prepack` 先 build  
+- VS Code companion：清单直接以 `src/extension.js` 为 CommonJS 入口；`build` 校验清单/命令注册，`test` 覆盖 workspace adapter、Dashboard、CLI 任务契约与 smoke，`vsix:package` 生成独立 VSIX
 - smoke 检查含 help 退出码、坏配置、pako notice、插件包不泄漏 workspace 解析符号等
 
 ### CI / 发布
 
-- **Lint and typecheck**（`lint.yml`）：push/PR 上 `npm ci`、lint、typecheck（**不**跑 test / boundaries / smoke）。  
-- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → boundaries / lint / typecheck / test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。  
-- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。  
-- **email-relay**：独立目录提供 `typecheck`、Vitest 与 Wrangler `deploy` 脚本；根 workspace/默认 GitHub Actions 不包含该服务。验证配置可使用 `wrangler deploy --dry-run`，仓库状态本身不证明 Worker 已外部部署。
+- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
+- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → release tools / boundaries / lint / typecheck / 8 GiB 全 workspace test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。
+- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → 运行同一全 workspace 验证入口 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。
+- **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
+- **VS Code companion verification**（`vscode-companion.yml`）：companion、CLI command contract、workflow、产品清单及 checker 路径变更时，使用 companion 自身 lockfile 执行 build、tests、smoke，并把验证用 VSIX 写入 runner 临时目录；不发布扩展。
+- 两个独立 workflow 都在 pull request 和相应路径推送到 `main` 时运行，action 固定完整 commit SHA，权限仅 `contents: read`，checkout 不持久化凭据。
 
 ### 验证面
 
-core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；邮件定向面包含 Core claim/result/HTTP 分类、Node 与 Obsidian descriptor/权限/恢复，以及 CLI/Plugin consumer。email-relay 的独立 Vitest 覆盖认证路由、服务端 identity、Durable Object ledger/quota、provider 结果和 cutover proof。测试用于约束行为；生产路径以源码注册、构建入口和 Worker binding 为准。
+core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线集成测试使用包含两个论文条目的代表性 recent 页面输入，arXiv parser 与 source adapter 专项测试读取完整页面夹具。邮件定向面覆盖 Core claim/result/HTTP 分类、Node 与 Obsidian descriptor/权限/恢复，以及 CLI/Plugin consumer；email-relay 的独立 Vitest 覆盖认证路由、服务端 identity、Durable Object ledger/quota、provider 结果和 cutover proof。测试用于约束行为；生产路径以源码注册、构建入口和 Worker binding 为准。
 
 ## Security and Failure Behavior
 
 ### 密钥与脱敏
 
 - LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。  
-- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`）。  
+- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页只用 `Configured` 表示已有密钥；stored LLM/Resend/hosted secret 不写入输入 DOM，用户通过 Replace/Cancel/Clear 明确变更。
 - Worker 不向客户端暴露 Resend key；设备 token 只在验证完成页展示，KV key 使用 secret-scoped token hash。验证设备值仍保存规范化绑定邮箱以执行 recipient 校验；DO 名称、provider key、ledger、cutover/legacy sidecar 与公开成功响应使用哈希 identity 或无内容枚举，不保存 raw recipient、provider response body 或 provider ID。
 
 ### 输入与路径安全

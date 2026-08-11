@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "scanRoots": [
+    "packages",
+    "apps",
+    "plugin",
+    "services",
+    "extensions"
+  ],
+  "governancePaths": [
+    "product-units.json",
+    "scripts/check-product-units.mjs",
+    "scripts/tests/product-units.test.mjs",
+    "scripts/tests/independent-product-workflows.test.mjs"
+  ],
+  "units": [
+    {
+      "id": "root-release-group",
+      "classification": "root-release-group",
+      "roots": [
+        ".",
+        "packages/*",
+        "apps/*",
+        "plugin"
+      ],
+      "manifests": [
+        "package.json",
+        "packages/core/package.json",
+        "packages/node-runtime/package.json",
+        "apps/cli/package.json",
+        "plugin/package.json"
+      ],
+      "lockfiles": [
+        "package-lock.json"
+      ],
+      "workspaces": [
+        "packages/*",
+        "apps/*",
+        "plugin"
+      ],
+      "versionPolicy": {
+        "kind": "synchronized",
+        "authority": "package.json",
+        "releaseContract": "scripts/release-utils.mjs",
+        "releaseTools": [
+          "scripts/sync-release-version.mjs",
+          "scripts/check-release-version.mjs"
+        ]
+      },
+      "workflows": [
+        {
+          "path": ".github/workflows/lint.yml",
+          "role": "verification",
+          "pathPolicy": "all-changes"
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "role": "github-release",
+          "pathPolicy": "release-tags"
+        },
+        {
+          "path": ".github/workflows/publish-cli.yml",
+          "role": "npm-publish",
+          "pathPolicy": "verified-release"
+        }
+      ]
+    },
+    {
+      "id": "email-relay",
+      "classification": "independent-service",
+      "roots": [
+        "services/email-relay"
+      ],
+      "manifests": [
+        "services/email-relay/package.json"
+      ],
+      "lockfiles": [
+        "services/email-relay/package-lock.json"
+      ],
+      "workspaces": [],
+      "versionPolicy": {
+        "kind": "independent",
+        "authority": "services/email-relay/package.json",
+        "lockfile": "services/email-relay/package-lock.json"
+      },
+      "compatibilityInputs": [
+        "packages/core/src/delivery/hosted.ts",
+        "packages/core/src/delivery/deliver-email.ts",
+        "packages/core/src/delivery/types.ts",
+        "packages/core/tests/delivery/hosted-deliver.test.ts"
+      ],
+      "workflows": [
+        {
+          "path": ".github/workflows/email-relay.yml",
+          "role": "verification-dry-run",
+          "pathPolicy": "listed-paths",
+          "requiredPaths": [
+            "services/email-relay/**",
+            "packages/core/src/delivery/hosted.ts",
+            "packages/core/src/delivery/deliver-email.ts",
+            "packages/core/src/delivery/types.ts",
+            "packages/core/tests/delivery/hosted-deliver.test.ts",
+            ".github/workflows/email-relay.yml",
+            "product-units.json",
+            "scripts/check-product-units.mjs",
+            "scripts/tests/product-units.test.mjs",
+            "scripts/tests/independent-product-workflows.test.mjs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vscode-companion",
+      "classification": "independent-extension",
+      "roots": [
+        "extensions/vscode-arxiv-daily"
+      ],
+      "manifests": [
+        "extensions/vscode-arxiv-daily/package.json"
+      ],
+      "lockfiles": [
+        "extensions/vscode-arxiv-daily/package-lock.json"
+      ],
+      "workspaces": [],
+      "versionPolicy": {
+        "kind": "independent",
+        "authority": "extensions/vscode-arxiv-daily/package.json",
+        "lockfile": "extensions/vscode-arxiv-daily/package-lock.json"
+      },
+      "dependencies": [
+        "contracts/companion-cli-commands.json"
+      ],
+      "compatibilityInputs": [
+        "contracts/companion-cli-commands.json",
+        "apps/cli/package.json",
+        "apps/cli/src/main.ts",
+        "apps/cli/tests/cli-main.test.ts"
+      ],
+      "workflows": [
+        {
+          "path": ".github/workflows/vscode-companion.yml",
+          "role": "verification-package",
+          "pathPolicy": "listed-paths",
+          "requiredPaths": [
+            "extensions/vscode-arxiv-daily/**",
+            "contracts/companion-cli-commands.json",
+            "apps/cli/package.json",
+            "apps/cli/src/main.ts",
+            "apps/cli/tests/cli-main.test.ts",
+            ".github/workflows/vscode-companion.yml",
+            "product-units.json",
+            "scripts/check-product-units.mjs",
+            "scripts/tests/product-units.test.mjs",
+            "scripts/tests/independent-product-workflows.test.mjs"
+          ]
+        }
+      ]
+    }
+  ]
+}

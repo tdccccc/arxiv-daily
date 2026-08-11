@@ -15,9 +15,7 @@
   "activationEvents": [
     "onCommand:arxivDaily.openDashboard",
     "onCommand:arxivDaily.run",
-    "onCommand:arxivDaily.runPending",
-    "onCommand:arxivDaily.summarizeById",
-    "onCommand:arxivDaily.configureApiKey"
+    "onCommand:arxivDaily.summarizeById"
   ],
   "contributes": {
     "configuration": {
@@ -26,7 +24,7 @@
         "arxivDaily.cliPath": {
           "type": "string",
           "default": "arxiv-daily",
-          "description": "Command or path used to run the arXiv Daily Node CLI from VS Code."
+          "description": "Executable name or path used to run the arXiv Daily Node CLI from VS Code."
         }
       }
     },
@@ -40,23 +38,18 @@
         "title": "arXiv Daily: Run for Today"
       },
       {
-        "command": "arxivDaily.runPending",
-        "title": "arXiv Daily: Run Pending Dates"
-      },
-      {
         "command": "arxivDaily.summarizeById",
         "title": "arXiv Daily: Summarize by arXiv ID"
-      },
-      {
-        "command": "arxivDaily.configureApiKey",
-        "title": "arXiv Daily: Configure API Key"
       }
     ]
   },
   "scripts": {
     "build": "node scripts/check-package.mjs",
-    "test": "node scripts/check-package.mjs && node scripts/workspace-adapter-test.mjs && node scripts/secret-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
+    "test": "node scripts/check-package.mjs && node scripts/workspace-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
     "smoke": "node scripts/extension-smoke-test.mjs",
-    "vsix:package": "npx @vscode/vsce package --out dist/arxiv-daily-vscode-${npm_package_version}.vsix"
+    "vsix:package": "vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.9.2"
   }
 }
