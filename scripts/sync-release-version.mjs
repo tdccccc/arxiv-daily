@@ -1,6 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { root, validateSemVer } from "./release-utils.mjs";
+import {
+  manifestFiles,
+  packageFiles,
+  root,
+  validateSemVer,
+} from "./release-utils.mjs";
 
 const version = process.argv[2];
 try {
@@ -10,15 +15,6 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-
-const packageFiles = [
-  "package.json",
-  "plugin/package.json",
-  "packages/core/package.json",
-  "packages/node-runtime/package.json",
-  "apps/cli/package.json",
-];
-const manifestFiles = ["manifest.json", "plugin/manifest.json"];
 
 for (const file of [...packageFiles, ...manifestFiles]) {
   const path = resolve(root, file);

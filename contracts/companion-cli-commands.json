@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "commands": [
+    {
+      "id": "runForToday",
+      "argv": ["run", "--today"]
+    },
+    {
+      "id": "summarizeById",
+      "argv": ["run", "--id", "2606.12345"]
+    }
+  ],
+  "removedCommands": [
+    {
+      "id": "runPending",
+      "argv": ["run-pending"]
+    },
+    {
+      "id": "legacySummarizeById",
+      "argv": ["summarize", "--id", "2606.12345"]
+    },
+    {
+      "id": "configOverride",
+      "argv": ["run", "--today", "--config", "/tmp/arxiv-daily.json"]
+    },
+    {
+      "id": "configOverrideEquals",
+      "argv": ["run", "--today", "--config=/tmp/arxiv-daily.json"]
+    },
+    {
+      "id": "vaultRootOverride",
+      "argv": ["run", "--today", "--vault-root", "/tmp/vault"]
+    },
+    {
+      "id": "vaultRootOverrideEquals",
+      "argv": ["run", "--today", "--vault-root=/tmp/vault"]
+    },
+    {
+      "id": "cacheDirOverride",
+      "argv": ["run", "--today", "--cache-dir", "/tmp/cache"]
+    },
+    {
+      "id": "cacheDirOverrideEquals",
+      "argv": ["run", "--today", "--cache-dir=/tmp/cache"]
+    }
+  ]
+}
