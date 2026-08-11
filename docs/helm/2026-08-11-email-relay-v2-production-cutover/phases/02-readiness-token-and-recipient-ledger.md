@@ -26,11 +26,11 @@ Relay 的公开 readiness、v2 token 签发和 automatic delivery 使用同一�
 
 ## Tasks
 
-- [ ] 增加公开、无 secret/PII 的 readiness contract 与 build/protocol identity。
-- [ ] 让 verification completion 在消费 pending 前通过 authoritative ready generation gate。
-- [ ] 将 automatic DO、logical key、fingerprint、quota/ledger 改为 recipient scope，保留 test device scope。
-- [ ] 验证 legacy token、pre-ready token、generation mismatch 和多 token 竞态全部 fail closed。
-- [ ] 运行 relay 定向/完整回归、typecheck 与 Wrangler dry-run，接受 P2 chunk。
+- [x] 增加公开、无 secret/PII 的 readiness contract 与 build/protocol identity。
+- [x] 让 verification completion 在消费 pending 前通过 authoritative ready generation gate。
+- [x] 将 automatic DO、logical key、fingerprint、quota/ledger 改为 recipient scope，保留 test device scope。
+- [x] 验证 legacy token、pre-ready token、generation mismatch 和多 token 竞态全部 fail closed。
+- [x] 运行 relay 定向/完整回归、typecheck 与 Wrangler dry-run，接受 P2 chunk。
 
 ## Verification
 
