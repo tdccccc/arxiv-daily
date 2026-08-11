@@ -9,7 +9,12 @@ import {
 } from "./kv";
 import { sendResendEmail } from "./resend";
 import type { DeliverBody } from "./deliver-logic";
-import { stageDeliveryV2Cutover } from "./deliver-gate";
+import {
+  fetchCutoverStatus,
+  isCutoverOperationId,
+  postCutoverAction,
+  type CutoverAction,
+} from "./cutover-control";
 
 export type { Env };
 export { DeliverGate } from "./deliver-gate";
@@ -61,8 +66,11 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method === "POST" && path === "/v1/deliver") {
     return deliverViaGate(request, env);
   }
-  if (request.method === "POST" && path === "/internal/delivery-v2/cutover") {
-    return stageCutover(request, env);
+  if (
+    (request.method === "GET" || request.method === "POST") &&
+    path === "/internal/delivery-v2/cutover"
+  ) {
+    return cutoverControl(request, env);
   }
 
   return json({ error: "not found" }, 404);
@@ -218,7 +226,7 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function stageCutover(request: Request, env: Env): Promise<Response> {
+async function cutoverControl(request: Request, env: Env): Promise<Response> {
   const configuredToken = env.DELIVERY_V2_CUTOVER_TOKEN?.trim() ?? "";
   const auth = /^Bearer\s+(.+)$/i.exec(
     request.headers.get("Authorization") ?? "",
@@ -230,15 +238,60 @@ async function stageCutover(request: Request, env: Env): Promise<Response> {
   ) {
     return json({ error: "not found" }, 404);
   }
-  try {
-    await stageDeliveryV2Cutover(env);
-    return json({ ok: true });
-  } catch {
-    return json(
-      { error: "delivery cutover is not ready", ambiguous: false },
-      503,
-    );
+  if (!env.DELIVER_GATE || !env.TOKEN_SECRET?.trim()) {
+    return json({ error: "cutover control is unavailable" }, 503);
   }
+
+  try {
+    const response = request.method === "GET"
+      ? await fetchCutoverStatus(env)
+      : await forwardCutoverAction(request, env);
+    return relayJson(response);
+  } catch {
+    return json({ error: "cutover control is unavailable" }, 503);
+  }
+}
+
+async function forwardCutoverAction(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json() as Record<string, unknown>;
+  } catch {
+    return json({ error: "invalid cutover action" }, 400);
+  }
+  if (
+    Object.keys(body).some(
+      (key) => key !== "action" && key !== "operationId" && key !== "attestation",
+    ) ||
+    (body.action !== "inventory" &&
+      body.action !== "provider-fence" &&
+      body.action !== "observe" &&
+      body.action !== "seal" &&
+      body.action !== "repair") ||
+    !isCutoverOperationId(body.operationId) ||
+    (body.attestation !== undefined && typeof body.attestation !== "string")
+  ) {
+    return json({ error: "invalid cutover action" }, 400);
+  }
+  return postCutoverAction(
+    env,
+    body.action as CutoverAction,
+    body.operationId,
+    typeof body.attestation === "string" ? body.attestation : undefined,
+  );
+}
+
+async function relayJson(response: Response): Promise<Response> {
+  return new Response(await response.text(), {
+    status: response.status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...CORS_HEADERS,
+    },
+  });
 }
 
 function clientIp(request: Request): string {

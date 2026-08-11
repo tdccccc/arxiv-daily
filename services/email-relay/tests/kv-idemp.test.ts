@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
-import { DeliverGate, stageDeliveryV2Cutover } from "../src/deliver-gate";
+import { DeliverGate } from "../src/deliver-gate";
+import {
+  fetchCutoverStatus,
+  postCutoverAction,
+  type CutoverAction,
+} from "../src/cutover-control";
 import { sha256Hex } from "../src/crypto";
 import {
   hashDeviceToken,
   hashLegacyAutoDeliveryIdentity,
   putDevice,
   putPending,
+  scanLegacyAutoDeliveryEvidence,
   type Env,
 } from "../src/kv";
 
@@ -15,6 +21,7 @@ const AUTO_KEY_B = `arxiv-daily:auto:${"b".repeat(64)}`;
 const TEST_KEY_A = `arxiv-daily:test:${"c".repeat(32)}`;
 const TEST_KEY_B = `arxiv-daily:test:${"d".repeat(32)}`;
 const DELIVERY_V2_CUTOVER_KEY = "cutover:delivery-v2";
+const DELIVERY_V3_CUTOVER_AUDIT_KEY = "cutover:delivery-v3-audit";
 
 type MemoryDurable = ReturnType<typeof durableState>;
 
@@ -23,6 +30,8 @@ function memoryKv() {
   const failGet = new Set<string>();
   const hideFromList = new Set<string>();
   let failList = false;
+  let pageSize = Number.POSITIVE_INFINITY;
+  let beforeList: (() => Promise<void>) | undefined;
   return {
     async get(key: string) {
       if (failGet.has(key)) throw new Error("injected KV read marker");
@@ -34,15 +43,21 @@ function memoryKv() {
     async delete(key: string) {
       map.delete(key);
     },
-    async list(options: { prefix?: string } = {}) {
+    async list(options: { prefix?: string; cursor?: string } = {}) {
       if (failList) throw new Error("injected KV list failure");
+      await beforeList?.();
       const prefix = options.prefix ?? "";
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const names = Array.from(map.keys())
+        .filter((key) => key.startsWith(prefix) && !hideFromList.has(key))
+        .sort();
+      const page = names.slice(offset, offset + pageSize);
+      const nextOffset = offset + page.length;
+      const listComplete = nextOffset >= names.length;
       return {
-        keys: Array.from(map.keys())
-          .filter((key) => key.startsWith(prefix) && !hideFromList.has(key))
-          .sort()
-          .map((name) => ({ name })),
-        list_complete: true,
+        keys: page.map((name) => ({ name })),
+        list_complete: listComplete,
+        ...(listComplete ? {} : { cursor: String(nextOffset) }),
         cacheStatus: null,
       };
     },
@@ -51,6 +66,12 @@ function memoryKv() {
     _hideFromList: hideFromList,
     set _failList(value: boolean) {
       failList = value;
+    },
+    set _pageSize(value: number) {
+      pageSize = value;
+    },
+    set _beforeList(value: (() => Promise<void>) | undefined) {
+      beforeList = value;
     },
   };
 }
@@ -187,23 +208,11 @@ async function setLegacyEvidence(
   const date = "2026-08-10";
   const recipient = "recipient@example.com";
   const logicalKey = `arxiv-daily:auto:${await sha256Hex(`${date}\u0000${recipient}`)}`;
-  const identity = await hashLegacyAutoDeliveryIdentity(
-    "secret",
-    date,
-    recipient,
-  );
   if (legacyValue === undefined) {
     kv._map.delete(`idemp:${logicalKey}`);
   } else {
     kv._map.set(`idemp:${logicalKey}`, legacyValue);
   }
-  const evidence = legacyValue === undefined
-    ? undefined
-    : legacyValue.startsWith("pending:") ? "attempted" : "done";
-  kv._map.set(
-    DELIVERY_V2_CUTOVER_KEY,
-    JSON.stringify(cutoverMarker(evidence ? { [identity]: evidence } : {})),
-  );
 }
 
 function deliveryRequest(input: {
@@ -238,18 +247,41 @@ function deviceDurables(env: Env & { _namespace?: MemoryNamespace }): MemoryDura
     .map(([, durable]) => durable);
 }
 
+async function cutoverOperationId(
+  action: CutoverAction,
+  revision: number,
+): Promise<string> {
+  return sha256Hex(JSON.stringify(["test-cutover-v3", action, revision]));
+}
+
+async function applyCutoverAction(
+  env: Env,
+  action: CutoverAction,
+  revision: number,
+): Promise<Response> {
+  return postCutoverAction(
+    env,
+    action,
+    await cutoverOperationId(action, revision),
+    action === "provider-fence" ? "old-resend-credential-revoked" : undefined,
+  );
+}
+
 async function completeCutover(
   env: Env & { _namespace?: MemoryNamespace },
 ): Promise<void> {
-  await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-  env._namespace!.now = new Date(
-    env._namespace!.now.getTime() + 60 * 1000,
-  );
-  await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-  env._namespace!.now = new Date(
-    env._namespace!.now.getTime() + 120 * 1000,
-  );
-  await stageDeliveryV2Cutover(env);
+  expect((await applyCutoverAction(env, "inventory", 0)).status).toBe(200);
+  expect((await applyCutoverAction(env, "provider-fence", 1)).status).toBe(200);
+  env._namespace!.now = new Date(env._namespace!.now.getTime() + 60 * 1000);
+  expect((await applyCutoverAction(env, "observe", 2)).status).toBe(200);
+  env._namespace!.now = new Date(env._namespace!.now.getTime() + 60 * 1000);
+  expect((await applyCutoverAction(env, "observe", 3)).status).toBe(200);
+  env._namespace!.now = new Date(env._namespace!.now.getTime() + 60 * 1000);
+  expect((await applyCutoverAction(env, "observe", 4)).status).toBe(200);
+  expect((await applyCutoverAction(env, "seal", 5)).status).toBe(200);
+  const status = await fetchCutoverStatus(env);
+  expect(status.status).toBe(200);
+  expect(await status.json()).toMatchObject({ phase: "ready", automatic: "ready" });
 }
 
 async function authenticatedEnv(
@@ -297,165 +329,816 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("legacy KV delivery cutover", () => {
-  it("does not enable automatic traffic after only the first server observation", async () => {
-    const { env } = await authenticatedEnv({ stageCutover: false });
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
+describe("legacy automatic evidence scanner", () => {
+  it("recognizes both production automatic key generations across pages and ignores supported tests", async () => {
+    const kv = memoryKv();
+    kv._pageSize = 2;
+    const env = envWith(kv, { binding: false });
+    const plainKey = "idemp:2026-08-10|recipient@example.com";
+    const hashedKey = `idemp:arxiv-daily:auto:${"a".repeat(64)}`;
+    kv._map.set(plainKey, "done:private-provider-id");
+    kv._map.set(hashedKey, "pending:private-claim");
+    kv._map.set(
+      "idemp:test|2026-08-10|recipient@example.com|2026-08-10T00:00:00.000Z",
+      "done:private-test-id",
+    );
+    kv._map.set(`idemp:arxiv-daily:test:${"b".repeat(32)}`, "done:private-test-id");
+
+    const evidence = await scanLegacyAutoDeliveryEvidence(env);
+
+    expect(Object.values(evidence).sort()).toEqual(["attempted", "done"]);
+    expect(JSON.stringify(evidence)).not.toContain("recipient@example.com");
+    expect(JSON.stringify(evidence)).not.toContain(plainKey);
+    expect(JSON.stringify(evidence)).not.toContain(hashedKey);
+  });
+
+  it("fails closed on an unknown idemp key without exposing its raw key or recipient", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv, { binding: false });
+    const unknown = "idemp:private-recipient@example.com|unsupported";
+    kv._map.set(unknown, "private-value");
+
+    let message = "";
+    try {
+      await scanLegacyAutoDeliveryEvidence(env);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toBe("legacy automatic delivery scan encountered an unsupported key");
+    expect(message).not.toContain("private-recipient@example.com");
+    expect(message).not.toContain(unknown);
+  });
+});
+
+describe("cutover v3 safety contract", () => {
+  const TOKEN = "cutover-v3-token";
+  const ATTESTATION = "old-resend-credential-revoked";
+
+  function operationId(n: number): string {
+    return n.toString(16).padStart(64, "0");
+  }
+
+  function controlRequest(input: {
+    method?: "GET" | "POST";
+    token?: string;
+    action?: string;
+    operationId?: string;
+    attestation?: string;
+  } = {}): Request {
+    const method = input.method ?? "POST";
+    return new Request("https://relay.test/internal/delivery-v2/cutover", {
+      method,
+      headers: {
+        Authorization: `Bearer ${input.token ?? TOKEN}`,
+        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(method === "POST"
+        ? {
+          body: JSON.stringify({
+            action: input.action,
+            operationId: input.operationId,
+            ...(input.attestation ? { attestation: input.attestation } : {}),
+          }),
+        }
+        : {}),
+    });
+  }
+
+  async function apply(
+    env: Env,
+    action: string,
+    id: number,
+    attestation?: string,
+  ): Promise<Response> {
+    return worker.fetch(controlRequest({
+      action,
+      operationId: operationId(id),
+      attestation,
+    }), env);
+  }
+
+  async function readControl(env: Env): Promise<Record<string, unknown>> {
+    const response = await worker.fetch(controlRequest({ method: "GET" }), env);
+    expect([200, 503]).toContain(response.status);
+    return await response.json() as Record<string, unknown>;
+  }
+
+  it("hides unauthenticated control requests and rejects client marker material", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+
+    for (const request of [
+      controlRequest({ method: "GET", token: "wrong" }),
+      controlRequest({
+        token: "wrong",
+        action: "inventory",
+        operationId: operationId(230),
+      }),
+    ]) {
+      const response = await worker.fetch(request, env);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "not found" });
+    }
+
+    const privateValue = "private-recipient@example.com";
+    const invalidId = await worker.fetch(controlRequest({
+      action: "inventory",
+      operationId: privateValue,
+    }), env);
+    expect(invalidId.status).toBe(400);
+    expect(await invalidId.text()).not.toContain(privateValue);
+
+    const suppliedMarker = new Request(
+      "https://relay.test/internal/delivery-v2/cutover",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "inventory",
+          operationId: operationId(231),
+          marker: { recipient: privateValue },
+        }),
+      },
+    );
+    const rejected = await worker.fetch(suppliedMarker, env);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).not.toContain(privateValue);
+  });
+
+  it("defaults automatic to locked and ignores an old KV marker or old DO proof", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    await putDevice(env, "device-token", "recipient@example.com");
     const provider = providerSuccess("must_not_send");
     vi.stubGlobal("fetch", provider);
 
-    const response = await worker.fetch(deliveryRequest(), env);
+    expect(await readControl(env)).toMatchObject({ phase: "locked", automatic: "locked" });
+    expect((await worker.fetch(deliveryRequest(), env)).status).toBe(503);
+    expect(provider).not.toHaveBeenCalled();
 
+    const control = env._namespace!.get(
+      env._namespace!.idFromName("delivery-cutover:v3"),
+    );
+    const durable = env._namespace!.durables.get("delivery-cutover:v3")!;
+    durable.records.set("cutover-control:v3", {
+      schemaVersion: 2,
+      phase: "ready",
+      readyAt: "2026-08-01T00:00:00.000Z",
+    });
+    expect((await control.fetch(new Request("https://cutover-control/cutover/status"))).status)
+      .toBe(503);
+    expect((await worker.fetch(deliveryRequest(), env)).status).toBe(503);
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("requires inventory then explicit old-provider credential revocation attestation", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    await putDevice(env, "device-token", "recipient@example.com");
+    const provider = providerSuccess("must_not_send");
+    vi.stubGlobal("fetch", provider);
+
+    const inventory = await apply(env, "inventory", 1);
+    expect(inventory.status).toBe(200);
+    expect(await inventory.json()).toMatchObject({ phase: "inventoried", automatic: "locked" });
+
+    const missing = await apply(env, "provider-fence", 2);
+    expect(missing.status).toBe(400);
+    const wrong = await apply(env, "provider-fence", 3, "new-key-configured");
+    expect(wrong.status).toBe(400);
+
+    const fenced = await apply(env, "provider-fence", 4, ATTESTATION);
+    expect(fenced.status).toBe(200);
+    expect(await fenced.json()).toMatchObject({
+      phase: "observing",
+      automatic: "locked",
+      providerFence: {
+        attested: true,
+        boundary: "old_resend_credential_revoked",
+      },
+    });
+    expect((await worker.fetch(deliveryRequest(), env)).status).toBe(503);
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("treats a missed legacy pending window as terminal and never re-attests the old fence", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    expect((await apply(env, "inventory", 10)).status).toBe(200);
+    expect((await apply(env, "provider-fence", 11, ATTESTATION)).status).toBe(200);
+    const fenced = await readControl(env) as {
+      providerFence?: { attestedAt?: string };
+    };
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 121_000);
+
+    const missed = await apply(env, "observe", 12);
+    expect(missed.status).toBe(503);
+    expect(await missed.json()).toMatchObject({
+      phase: "blocked",
+      blocked: { code: "legacy_pending_window_missed" },
+      automatic: "locked",
+    });
+
+    const repeated = await apply(env, "provider-fence", 13, ATTESTATION);
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({
+      phase: "blocked",
+      providerFence: { attestedAt: fenced.providerFence?.attestedAt },
+    });
+  });
+
+  it("reuses the original fence timestamp when a pending attestation resumes", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    expect((await apply(env, "inventory", 16)).status).toBe(200);
+    const durable = env._namespace!.durables.get("delivery-cutover:v3")!;
+    const current = durable.records.get("cutover-control:v3") as Record<string, unknown>;
+    const attestedAt = env._namespace!.now.toISOString();
+    durable.records.set("cutover-control:v3", {
+      ...current,
+      updatedAt: attestedAt,
+      pendingOperation: {
+        operationId: operationId(17),
+        action: "provider-fence",
+        inputHash: await sha256Hex(JSON.stringify(["provider-fence", ATTESTATION])),
+        baseRevision: current.revision,
+        basePhase: "inventoried",
+        startedAt: attestedAt,
+        attestedAt,
+      },
+    });
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 5_000);
+
+    const resumed = await apply(env, "provider-fence", 17, ATTESTATION);
+
+    expect(resumed.status).toBe(200);
+    expect(await resumed.json()).toMatchObject({
+      phase: "observing",
+      providerFence: { attestedAt },
+      postFenceScan: { startedAt: env._namespace!.now.toISOString() },
+    });
+  });
+
+  it("counts every automatic key and blocks before provider fencing when the exact cap is exceeded", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    for (let index = 0; index < 518; index += 1) {
+      kv._map.set(
+        `idemp:arxiv-daily:auto:${index.toString(16).padStart(64, "0")}`,
+        "done:legacy",
+      );
+    }
+    const date = "2026-08-10";
+    const recipient = "duplicate@example.com";
+    const duplicateLogical = `arxiv-daily:auto:${await sha256Hex(
+      `${date}\u0000${recipient}`,
+    )}`;
+    kv._map.set(`idemp:${date}|${recipient}`, "done:legacy");
+    kv._map.set(`idemp:${duplicateLogical}`, "pending:legacy");
+
+    const inventory = await apply(env, "inventory", 14);
+
+    expect(inventory.status).toBe(503);
+    expect(await inventory.json()).toMatchObject({
+      phase: "blocked",
+      blocked: { code: "legacy_evidence_capacity_reached" },
+      preFenceInventory: {
+        automaticKeyCount: 520,
+        capacity: 512,
+        withinCapacity: false,
+        durationBudgetMs: 30_000,
+      },
+    });
+    expect(await readControl(env)).toMatchObject({
+      preFenceInventory: { safeBeforeCredentialRevocation: false },
+    });
+    expect((await apply(env, "provider-fence", 15, ATTESTATION)).status).toBe(409);
+  });
+
+  it("fails closed when a post-fence scan itself exceeds the legacy pending window", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    expect((await apply(env, "inventory", 14)).status).toBe(200);
+    let delayed = false;
+    kv._beforeList = async () => {
+      if (delayed) return;
+      delayed = true;
+      env._namespace!.now = new Date(env._namespace!.now.getTime() + 120_000);
+    };
+
+    const fenced = await apply(env, "provider-fence", 15, ATTESTATION);
+
+    expect(fenced.status).toBe(503);
+    expect(await fenced.json()).toMatchObject({
+      phase: "blocked",
+      automatic: "locked",
+      blocked: { code: "legacy_pending_window_missed" },
+    });
+  });
+
+  it("allows delayed marker observations without claiming global KV visibility", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    expect((await apply(env, "inventory", 20)).status).toBe(200);
+    expect((await apply(env, "provider-fence", 21, ATTESTATION)).status).toBe(200);
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 60_000);
+    expect((await apply(env, "observe", 22)).status).toBe(200);
+    const marker = kv._map.get(DELIVERY_V3_CUTOVER_AUDIT_KEY);
+    expect(marker).toBeDefined();
+    expect(JSON.parse(marker!)).toMatchObject({
+      schemaVersion: 3,
+      kind: "delivery-v2-cutover-audit",
+      providerFence: ATTESTATION,
+      legacyAutoEvidenceSnapshot: "exact-canonical-map",
+      legacyAutoEvidence: {},
+      proof: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(marker).not.toContain("recipient@example.com");
+    expect(marker).not.toContain("idemp:");
+
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 24 * 60 * 60 * 1000);
+    const first = await apply(env, "observe", 23);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      phase: "sealed",
+      markerAudit: { observations: 1, globalVisibilityClaimed: false },
+    });
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 60_000);
+    const second = await apply(env, "observe", 24);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({
+      markerAudit: { observations: 2, globalVisibilityClaimed: false },
+    });
+    const ready = await apply(env, "seal", 25);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toMatchObject({ phase: "ready", automatic: "ready" });
+  });
+
+  it("repairs a deleted marker from valid control and a corrupted control from a valid MACed marker", async () => {
+    const first = envWith(memoryKv());
+    first.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    await completeCutover(first);
+    await putDevice(
+      first,
+      "device-token",
+      "recipient@example.com",
+      new Date(first._namespace!.now.getTime() + 1),
+    );
+    await first.STORE.delete(DELIVERY_V3_CUTOVER_AUDIT_KEY);
+
+    const rewritten = await apply(first, "repair", 26);
+    expect(rewritten.status).toBe(200);
+    expect(await rewritten.json()).toMatchObject({
+      phase: "sealed",
+      automatic: "locked",
+      markerAudit: { observations: 0, globalVisibilityClaimed: false },
+    });
+    expect((await worker.fetch(deliveryRequest(), first)).status).toBe(503);
+    const mismatched = JSON.parse(
+      (await first.STORE.get(DELIVERY_V3_CUTOVER_AUDIT_KEY))!,
+    ) as Record<string, unknown>;
+    await first.STORE.put(DELIVERY_V3_CUTOVER_AUDIT_KEY, JSON.stringify({
+      ...mismatched,
+      constructedAt: "2026-01-01T00:00:00.000Z",
+    }));
+    const mismatchRepair = await apply(first, "repair", 28);
+    expect(mismatchRepair.status).toBe(200);
+    expect(await mismatchRepair.json()).toMatchObject({
+      phase: "sealed",
+      automatic: "locked",
+      markerAudit: { observations: 0 },
+    });
+
+    const secondKv = memoryKv();
+    const second = envWith(secondKv);
+    second.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    await completeCutover(second);
+    const control = second._namespace!.durables.get("delivery-cutover:v3")!;
+    const current = control.records.get("cutover-control:v3") as Record<string, unknown>;
+    control.records.set("cutover-control:v3", {
+      ...current,
+      legacyAutoEvidence: { invalid: "done" },
+    });
+
+    const rebuilt = await apply(second, "repair", 27);
+    expect(rebuilt.status).toBe(200);
+    expect(await rebuilt.json()).toMatchObject({
+      phase: "sealed",
+      automatic: "locked",
+      markerAudit: { observations: 0, globalVisibilityClaimed: false },
+    });
+
+    const thirdKv = memoryKv();
+    const third = envWith(thirdKv);
+    third.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    thirdKv._map.set(DELIVERY_V3_CUTOVER_AUDIT_KEY, "{invalid-marker");
+    const thirdControl = third._namespace!.get(
+      third._namespace!.idFromName("delivery-cutover:v3"),
+    );
+    const thirdDurable = third._namespace!.durables.get("delivery-cutover:v3")!;
+    thirdDurable.records.set("cutover-control:v3", { schemaVersion: 2, phase: "ready" });
+    const locked = await apply(third, "repair", 29);
+    expect(locked.status).toBe(503);
+    expect(await locked.json()).toMatchObject({ phase: "locked", automatic: "locked" });
+    expect((await apply(third, "inventory", 30)).status).toBe(200);
+    expect((await thirdControl.fetch(
+      new Request("https://cutover-control/cutover/status"),
+    )).status).toBe(200);
+  });
+
+  it("returns the exact stored operation result after response loss and later phase changes", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    const first = await apply(env, "inventory", 30);
+    const firstText = await first.text();
+    expect(JSON.parse(firstText)).toMatchObject({ phase: "inventoried", revision: 1 });
+    expect(await readControl(env)).toMatchObject({
+      lastOperation: {
+        operationId: operationId(30),
+        action: "inventory",
+        status: 200,
+      },
+    });
+    expect((await apply(env, "provider-fence", 31, ATTESTATION)).status).toBe(200);
+
+    const replay = await apply(env, "inventory", 30);
+    expect(replay.status).toBe(first.status);
+    expect(await replay.text()).toBe(firstText);
+  });
+
+  it("keeps every state change and successful monotonic no-op permanently bound", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    const first = await apply(env, "inventory", 100);
+    const firstText = await first.text();
+    expect(first.status).toBe(200);
+    expect((await apply(env, "provider-fence", 101, ATTESTATION)).status).toBe(200);
+    let firstNoopText = "";
+    for (let id = 102; id < 182; id += 1) {
+      const response = await apply(env, "inventory", id);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      if (id === 102) firstNoopText = text;
+    }
+    const controlRecords = env._namespace!.durables.get("delivery-cutover:v3")!.records;
+    expect(Array.from(controlRecords.keys()).filter((key) =>
+      key.startsWith("cutover-operation:v3:")
+    )).toHaveLength(82);
+
+    const stateChangeReplay = await apply(env, "inventory", 100);
+    expect(stateChangeReplay.status).toBe(200);
+    expect(await stateChangeReplay.text()).toBe(firstText);
+    const noopReplay = await apply(env, "inventory", 102);
+    expect(noopReplay.status).toBe(200);
+    expect(await noopReplay.text()).toBe(firstNoopText);
+    const rebound = await apply(env, "observe", 102);
+    expect(rebound.status).toBe(409);
+  });
+
+  it("uses fresh completion timestamps after a slow scan", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    const startedAt = env._namespace!.now.toISOString();
+    let delayed = false;
+    kv._beforeList = async () => {
+      if (delayed) return;
+      delayed = true;
+      env._namespace!.now = new Date(env._namespace!.now.getTime() + 5_000);
+    };
+
+    const response = await apply(env, "inventory", 200);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      preFenceInventory: {
+        startedAt,
+        completedAt: env._namespace!.now.toISOString(),
+        durationMs: 5_000,
+        durationBudgetMs: 30_000,
+      },
+    });
+    expect(await readControl(env)).toMatchObject({
+      preFenceInventory: { safeBeforeCredentialRevocation: true },
+    });
+  });
+
+  it("accepts the exact preflight duration budget boundary before fencing", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    let delayed = false;
+    kv._beforeList = async () => {
+      if (delayed) return;
+      delayed = true;
+      env._namespace!.now = new Date(env._namespace!.now.getTime() + 30_000);
+    };
+
+    const inventory = await apply(env, "inventory", 201);
+    expect(inventory.status).toBe(200);
+    const body = await inventory.json() as {
+      preFenceInventory?: { completedAt?: string };
+    };
+    expect(body).toMatchObject({
+      preFenceInventory: {
+        durationMs: 30_000,
+        durationBudgetMs: 30_000,
+      },
+    });
+    expect(body.preFenceInventory?.completedAt).toBe(env._namespace!.now.toISOString());
+    expect(await readControl(env)).toMatchObject({
+      preFenceInventory: { safeBeforeCredentialRevocation: true },
+    });
+    kv._beforeList = undefined;
+    expect((await apply(env, "provider-fence", 202, ATTESTATION)).status).toBe(200);
+  });
+
+  it("counts slow ignored test-key inventory time and rejects over-budget fencing", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    kv._map.set(
+      "idemp:test|2026-08-10|ignored@example.com|fixture",
+      "done:test",
+    );
+    kv._map.set(`idemp:arxiv-daily:test:${"e".repeat(32)}`, "done:test");
+    let delayed = false;
+    kv._beforeList = async () => {
+      if (delayed) return;
+      delayed = true;
+      env._namespace!.now = new Date(env._namespace!.now.getTime() + 30_001);
+    };
+
+    const inventory = await apply(env, "inventory", 203);
+    expect(inventory.status).toBe(200);
+    expect(await inventory.json()).toMatchObject({
+      preFenceInventory: {
+        automaticKeyCount: 0,
+        durationMs: 30_001,
+        durationBudgetMs: 30_000,
+      },
+    });
+    expect(await readControl(env)).toMatchObject({
+      preFenceInventory: { safeBeforeCredentialRevocation: false },
+    });
+    kv._beforeList = undefined;
+    const rejected = await apply(env, "provider-fence", 204, ATTESTATION);
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toMatchObject({
+      phase: "inventoried",
+      preFenceInventory: { safeBeforeCredentialRevocation: false },
+    });
+    const records = env._namespace!.durables.get("delivery-cutover:v3")!.records;
+    expect(records.has(`cutover-operation:v3:${operationId(204)}`)).toBe(false);
+    expect((await apply(env, "inventory", 205)).status).toBe(200);
+    expect(await readControl(env)).toMatchObject({
+      preFenceInventory: { safeBeforeCredentialRevocation: true },
+    });
+  });
+
+  it("computes inventory freshness at response time and rejects stale fencing read-only", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    const inventory = await apply(env, "inventory", 206);
+    const body = await inventory.json() as {
+      preFenceInventory?: { credentialRevocationDeadline?: string };
+    };
+    expect(body.preFenceInventory?.credentialRevocationDeadline).toBe(
+      new Date(env._namespace!.now.getTime() + 5 * 60_000).toISOString(),
+    );
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 5 * 60_000 + 1);
+    expect(await readControl(env)).toMatchObject({
+      phase: "inventoried",
+      preFenceInventory: { safeBeforeCredentialRevocation: false },
+    });
+    let scans = 0;
+    kv._beforeList = async () => {
+      scans += 1;
+    };
+
+    const rejected = await apply(env, "provider-fence", 207, ATTESTATION);
+    expect(rejected.status).toBe(409);
+    expect(scans).toBe(0);
+    expect(await rejected.json()).toMatchObject({
+      phase: "inventoried",
+      preFenceInventory: { safeBeforeCredentialRevocation: false },
+    });
+    const records = env._namespace!.durables.get("delivery-cutover:v3")!.records;
+    expect(records.has(`cutover-operation:v3:${operationId(207)}`)).toBe(false);
+    kv._beforeList = undefined;
+    expect((await apply(env, "inventory", 208)).status).toBe(200);
+  });
+
+  it("retries a failed stale inventory refresh before any provider attestation", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    expect((await apply(env, "inventory", 209)).status).toBe(200);
+    env._namespace!.now = new Date(env._namespace!.now.getTime() + 5 * 60_000 + 1);
+    const unsupportedKey = "idemp:unsupported-refresh-fixture";
+    kv._map.set(unsupportedKey, "private-fixture");
+
+    const failed = await apply(env, "inventory", 210);
+    const failedText = await failed.text();
+    expect(failed.status).toBe(503);
+    expect(JSON.parse(failedText)).toMatchObject({
+      phase: "blocked",
+      automatic: "locked",
+      blocked: { code: "legacy_scan_unsupported_key" },
+    });
+    expect((await apply(env, "provider-fence", 211, ATTESTATION)).status).toBe(409);
+
+    kv._map.delete(unsupportedKey);
+    const refreshed = await apply(env, "inventory", 212);
+    expect(refreshed.status).toBe(200);
+    expect(await readControl(env)).toMatchObject({
+      phase: "inventoried",
+      automatic: "locked",
+      preFenceInventory: { safeBeforeCredentialRevocation: true },
+    });
+    const failedReplay = await apply(env, "inventory", 210);
+    expect(failedReplay.status).toBe(503);
+    expect(await failedReplay.text()).toBe(failedText);
+    const records = env._namespace!.durables.get("delivery-cutover:v3")!.records;
+    expect(records.has(`cutover-operation:v3:${operationId(210)}`)).toBe(true);
+    expect(records.has(`cutover-operation:v3:${operationId(212)}`)).toBe(true);
+  });
+
+  it("keeps GET status responsive while an inventory scan is outside the DO long critical section", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let scanStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      scanStarted = resolve;
+    });
+    kv._beforeList = async () => {
+      scanStarted();
+      await held;
+    };
+
+    const inventory = apply(env, "inventory", 210);
+    await started;
+    const status = await Promise.race([
+      readControl(env),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("status blocked behind scan")), 100)
+      ),
+    ]);
+    expect(status).toMatchObject({
+      phase: "locked",
+      pendingOperation: { action: "inventory" },
+    });
+    release();
+    expect((await inventory).status).toBe(200);
+  });
+
+  it("blocks unknown idemp keys with safe status and no raw key or email", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
+    env.DELIVERY_V2_CUTOVER_TOKEN = TOKEN;
+    const privateKey = "idemp:private-recipient@example.com|unsupported";
+    kv._map.set(privateKey, "private-value");
+
+    const response = await apply(env, "inventory", 220);
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
+    const text = await response.text();
+    expect(JSON.parse(text)).toMatchObject({
+      phase: "blocked",
+      blocked: { code: "legacy_scan_unsupported_key" },
+    });
+    expect(text).not.toContain(privateKey);
+    expect(text).not.toContain("private-recipient@example.com");
+  });
+});
+
+describe("ready-only automatic cutover", () => {
+  it("keeps automatic locked until authoritative v3 state is ready", async () => {
+    const { env } = await authenticatedEnv({ stageCutover: false });
+    const provider = providerSuccess("must_not_send");
+    vi.stubGlobal("fetch", provider);
+
+    const locked = await worker.fetch(deliveryRequest(), env);
+
+    expect(locked.status).toBe(503);
+    expect(await locked.json()).toEqual({
       error: "delivery cutover is not ready",
       ambiguous: false,
     });
     expect(provider).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the server-side legacy scan is unavailable", async () => {
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
-    kv._failList = true;
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
+  it.each([
+    ["done:msg_done", "legacy_delivery_done", false],
+    ["pending:legacy-claim", "legacy_delivery_attempted", true],
+  ] as const)(
+    "imports scanned %s evidence into a permanent device ledger block",
+    async (legacyValue, error, ambiguous) => {
+      const { kv, env } = await authenticatedEnv({ quota: 5, legacyValue });
+      kv._map.clear();
+      await putDevice(
+        env,
+        "device-token",
+        "recipient@example.com",
+        new Date(env._namespace!.now.getTime() + 1),
+      );
+      const provider = providerSuccess("must_not_send");
+      vi.stubGlobal("fetch", provider);
+
+      const imported = await worker.fetch(deliveryRequest({ key: AUTO_KEY_A }), env);
+      const control = env._namespace!.durables.get("delivery-cutover:v3")!;
+      control.records.set("cutover-control:v3", { schemaVersion: 2, phase: "ready" });
+      const replay = await worker.fetch(deliveryRequest({ key: AUTO_KEY_B }), env);
+
+      expect(imported.status).toBe(409);
+      expect(await imported.json()).toEqual({ error, ambiguous });
+      expect(replay.status).toBe(409);
+      expect(await replay.json()).toEqual({ error, ambiguous });
+      expect(provider).not.toHaveBeenCalled();
+      const durable = deviceDurables(env)[0]!;
+      const index = durable.records.get("ledger:index:v2") as {
+        entries?: Array<{ keyHash?: string; keyKind?: string }>;
+      };
+      expect(index.entries).toHaveLength(1);
+      expect(index.entries?.[0]).toMatchObject({ keyKind: "auto" });
+      expect(Array.from(durable.records.keys()).some((key) =>
+        key.startsWith("legacy-import:")
+      )).toBe(false);
+      const stored = JSON.stringify(Array.from(durable.records));
+      expect(stored).not.toContain("recipient@example.com");
+      expect(stored).not.toContain(legacyValue);
+    },
+  );
+
+  it("enforces normal automatic quota before importing positive legacy evidence", async () => {
+    const { env } = await authenticatedEnv({ quota: 1, legacyValue: "done:legacy" });
+    const identity = await hashDeviceToken("device-token", env.TOKEN_SECRET);
+    env._namespace!.get(env._namespace!.idFromName(`device-v2:${identity}`));
+    const durable = env._namespace!.durables.get(`device-v2:${identity}`)!;
+    durable.records.set("quota:v2:auto:2026-08-10", 1);
     const provider = providerSuccess("must_not_send");
     vi.stubGlobal("fetch", provider);
 
     const response = await worker.fetch(deliveryRequest(), env);
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(429);
     expect(provider).not.toHaveBeenCalled();
+    expect(Array.from(durable.records.keys()).some((key) =>
+      key.startsWith("legacy-import:")
+    )).toBe(false);
   });
 
-  it("fails closed when legacy automatic evidence appears after the first observation", async () => {
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    const date = "2026-08-10";
-    const logicalKey = `arxiv-daily:auto:${await sha256Hex(
-      `${date}\u0000recipient@example.com`,
-    )}`;
-    kv._map.set(`idemp:${logicalKey}`, "pending:late-v1-claim");
-    env._namespace!.now = new Date(env._namespace!.now.getTime() + 60 * 1000);
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
+  it("enforces normal automatic ledger capacity before importing legacy evidence", async () => {
+    const { env } = await authenticatedEnv({ quota: 10, legacyValue: "done:legacy" });
+    const identity = await hashDeviceToken("device-token", env.TOKEN_SECRET);
+    env._namespace!.get(env._namespace!.idFromName(`device-v2:${identity}`));
+    const durable = env._namespace!.durables.get(`device-v2:${identity}`)!;
+    durable.records.set("ledger:index:v2", {
+      schemaVersion: 2,
+      entries: Array.from({ length: 5_000 }, (_, index) => ({
+        keyHash: index.toString(16).padStart(64, "0"),
+        keyKind: "auto",
+      })),
+    });
     const provider = providerSuccess("must_not_send");
     vi.stubGlobal("fetch", provider);
 
     const response = await worker.fetch(deliveryRequest(), env);
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(507);
     expect(provider).not.toHaveBeenCalled();
+    expect(Array.from(durable.records.keys()).some((key) =>
+      key.startsWith("legacy-import:")
+    )).toBe(false);
   });
 
-  it("blocks a pre-cutover identity when pending expires unseen during visibility wait", async () => {
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
+  it("keeps a pre-ready v2 identity without positive legacy evidence blocked", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
     await putDevice(
       env,
       "device-token",
       "recipient@example.com",
       new Date(env._namespace!.now.getTime() - 1),
     );
-    const logicalKey = `arxiv-daily:auto:${await sha256Hex(
-      "2026-08-10\u0000recipient@example.com",
-    )}`;
-    const legacyKey = `idemp:${logicalKey}`;
-    kv._map.set(legacyKey, "pending:invisible-v1-claim");
-    kv._hideFromList.add(legacyKey);
-
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    env._namespace!.now = new Date(env._namespace!.now.getTime() + 60 * 1000);
-    kv._map.delete(legacyKey);
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    env._namespace!.now = new Date(env._namespace!.now.getTime() + 120 * 1000);
-    await stageDeliveryV2Cutover(env);
-    const provider = providerSuccess("must_not_send");
-    vi.stubGlobal("fetch", provider);
-
-    const response = await worker.fetch(deliveryRequest(), env);
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: "delivery cutover is not ready",
-      ambiguous: false,
-    });
-    expect(provider).not.toHaveBeenCalled();
-  });
-
-  it("enforces the readiness propagation wait before accepting automatic traffic", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-10T00:00:30.000Z"));
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
-    kv._map.set(DELIVERY_V2_CUTOVER_KEY, JSON.stringify({
-      ...cutoverMarker(),
-      preQuiesceScanStartedAt: "2026-08-09T23:57:30.000Z",
-      preQuiesceScanCompletedAt: "2026-08-09T23:57:31.000Z",
-      oldWorkerWritesQuiescedAt: "2026-08-09T23:58:00.000Z",
-      postQuiesceScanStartedAt: "2026-08-09T23:59:00.000Z",
-      postQuiesceScanCompletedAt: "2026-08-09T23:59:01.000Z",
-      enabledAt: "2026-08-10T00:00:00.000Z",
-    }));
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    const provider = providerSuccess("must_not_send");
-    vi.stubGlobal("fetch", provider);
-
-    const response = await worker.fetch(deliveryRequest(), env);
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: "delivery cutover is not ready",
-      ambiguous: false,
-    });
-    expect(provider).not.toHaveBeenCalled();
-  });
-
-  it("rejects an enabledAt declared before the 120-second quiesce interval elapsed", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-10T00:00:00.000Z"));
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
-    kv._map.set(DELIVERY_V2_CUTOVER_KEY, JSON.stringify({
-      ...cutoverMarker(),
-      enabledAt: "2026-08-01T00:01:03.000Z",
-    }));
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    const provider = providerSuccess("must_not_send");
-    vi.stubGlobal("fetch", provider);
-
-    const response = await worker.fetch(deliveryRequest(), env);
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: "delivery cutover is not ready",
-      ambiguous: false,
-    });
-    expect(provider).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when the legacy scan cannot cover a 120-second pending lifetime", async () => {
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
-    kv._map.set(DELIVERY_V2_CUTOVER_KEY, JSON.stringify({
-      ...cutoverMarker(),
-      postQuiesceScanStartedAt: "2026-08-01T00:02:01.000Z",
-      postQuiesceScanCompletedAt: "2026-08-01T00:02:02.000Z",
-      enabledAt: "2026-08-01T00:02:02.000Z",
-    }));
-    await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-    const provider = providerSuccess("must_not_send");
-    vi.stubGlobal("fetch", provider);
-
-    const response = await worker.fetch(deliveryRequest(), env);
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: "delivery cutover is not ready",
-      ambiguous: false,
-    });
-    expect(provider).not.toHaveBeenCalled();
-  });
-
-  it("fails closed for a pre-cutover device when no legacy evidence is provable", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-31T00:00:00.000Z"));
-    const { env } = await authenticatedEnv({ stageCutover: false });
-    vi.setSystemTime(new Date("2026-08-10T00:00:00.000Z"));
     await completeCutover(env);
     const provider = providerSuccess("must_not_send");
     vi.stubGlobal("fetch", provider);
@@ -463,21 +1146,17 @@ describe("legacy KV delivery cutover", () => {
     const response = await worker.fetch(deliveryRequest(), env);
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: "delivery cutover is not ready",
-      ambiguous: false,
-    });
     expect(provider).not.toHaveBeenCalled();
   });
 
-  it("keeps a legacy device without v2 provenance blocked even with a future timestamp", async () => {
-    const { kv, env } = await authenticatedEnv({ stageCutover: false });
+  it("keeps a legacy identity without v2 provenance blocked after ready", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv);
     await completeCutover(env);
     const deviceHash = await hashDeviceToken("device-token", env.TOKEN_SECRET);
-    kv._map.delete(`device-v2:${deviceHash}`);
     kv._map.set(`device:${deviceHash}`, JSON.stringify({
       email: "recipient@example.com",
-      createdAt: new Date(env._namespace!.now.getTime() + 60 * 1000).toISOString(),
+      createdAt: new Date(env._namespace!.now.getTime() + 1).toISOString(),
     }));
     const provider = providerSuccess("must_not_send");
     vi.stubGlobal("fetch", provider);
@@ -487,152 +1166,6 @@ describe("legacy KV delivery cutover", () => {
     expect(response.status).toBe(503);
     expect(provider).not.toHaveBeenCalled();
   });
-
-  it.each([
-    ["msg_plain", "done"],
-    ["done:msg_done", "done"],
-    ["pending:legacy-claim", "attempted"],
-  ] as const)(
-    "imports legacy %s evidence into a permanent v2 block",
-    async (legacyValue, expectedStatus) => {
-      const { env } = await authenticatedEnv({
-        quota: 1,
-        legacyValue,
-      });
-      const provider = providerSuccess("must_not_send");
-      vi.stubGlobal("fetch", provider);
-
-      const blocked = await worker.fetch(deliveryRequest({ key: AUTO_KEY_A }), env);
-      const another = await worker.fetch(
-        deliveryRequest({
-          key: AUTO_KEY_B,
-          date: "2026-08-11",
-        }),
-        env,
-      );
-
-      expect(blocked.status).toBe(409);
-      expect(await blocked.json()).toMatchObject({
-        ambiguous: expectedStatus === "attempted",
-      });
-      expect(another.status).toBe(429);
-      expect(provider).not.toHaveBeenCalled();
-      const durable = deviceDurables(env)[0]!;
-      const imported = Array.from(durable.records.values()).find(
-        (value) => value && typeof value === "object" &&
-          (value as { legacyImported?: unknown }).legacyImported === true,
-      ) as { status?: unknown } | undefined;
-      expect(imported?.status).toBe(expectedStatus);
-      expect(JSON.stringify(imported)).not.toContain("recipient@example.com");
-      expect(JSON.stringify(imported)).not.toContain(legacyValue);
-    },
-  );
-
-  it.each([
-    ["done:msg_done", "legacy_delivery_done", false],
-    ["pending:legacy-claim", "legacy_delivery_attempted", true],
-  ] as const)(
-    "imports durable %s proof after old KV disappears before first request",
-    async (legacyValue, error, ambiguous) => {
-      const { kv, env } = await authenticatedEnv({ quota: 5, legacyValue });
-      kv._map.clear();
-      await putDevice(
-        env,
-        "device-token",
-        "recipient@example.com",
-        new Date(env._namespace!.now.getTime() + 1),
-      );
-      kv._failGet.add(DELIVERY_V2_CUTOVER_KEY);
-      const provider = providerSuccess("must_not_send");
-      vi.stubGlobal("fetch", provider);
-
-      const response = await worker.fetch(deliveryRequest({ key: AUTO_KEY_A }), env);
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ error, ambiguous });
-      expect(provider).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["done:msg_done", "legacy_delivery_done", false],
-    ["pending:legacy-claim", "legacy_delivery_attempted", true],
-  ] as const)(
-    "keeps imported %s blocked after old KV and cutover marker disappear",
-    async (legacyValue, error, ambiguous) => {
-      const { kv, env } = await authenticatedEnv({ quota: 5, legacyValue });
-      const provider = providerSuccess("must_not_send");
-      vi.stubGlobal("fetch", provider);
-
-      const imported = await worker.fetch(deliveryRequest({ key: AUTO_KEY_A }), env);
-      kv._map.clear();
-      const deviceHash = await hashDeviceToken("device-token", env.TOKEN_SECRET);
-      await putDevice(
-        env,
-        "device-token",
-        "recipient@example.com",
-        new Date(env._namespace!.now.getTime() + 1),
-      );
-      expect(kv._map.has(`device-v2:${deviceHash}`)).toBe(true);
-      kv._failGet.add(DELIVERY_V2_CUTOVER_KEY);
-      const replay = await worker.fetch(deliveryRequest({ key: AUTO_KEY_B }), env);
-
-      expect(imported.status).toBe(409);
-      expect(replay.status).toBe(409);
-      expect(await replay.json()).toEqual({ error, ambiguous });
-      expect(provider).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["missing", "malformed", "read-failure"] as const)(
-    "fails closed when readiness is %s",
-    async (scenario) => {
-      const { kv, env } = await authenticatedEnv({ stageCutover: false });
-      if (scenario === "missing") kv._map.delete(DELIVERY_V2_CUTOVER_KEY);
-      if (scenario === "malformed") {
-        kv._map.set(DELIVERY_V2_CUTOVER_KEY, "{not-ready");
-      }
-      if (scenario === "read-failure") kv._failGet.add(DELIVERY_V2_CUTOVER_KEY);
-      await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-      const provider = providerSuccess("must_not_send");
-      vi.stubGlobal("fetch", provider);
-
-      const response = await worker.fetch(deliveryRequest(), env);
-
-      expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({
-        error: "delivery cutover is not ready",
-        ambiguous: false,
-      });
-      expect(provider).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { "not-a-hash": "done" },
-    { ["a".repeat(64)]: "unknown" },
-  ] as const)(
-    "fails closed when the atomic legacy evidence snapshot is malformed",
-    async (legacyEvidence) => {
-      const { kv, env } = await authenticatedEnv({ stageCutover: false });
-      kv._map.set(DELIVERY_V2_CUTOVER_KEY, JSON.stringify({
-        ...cutoverMarker(),
-        legacyAutoEvidence: legacyEvidence,
-      }));
-      await expect(stageDeliveryV2Cutover(env)).rejects.toThrow();
-      const provider = providerSuccess("must_not_send");
-      vi.stubGlobal("fetch", provider);
-
-      const response = await worker.fetch(deliveryRequest(), env);
-
-      expect(response.status).toBe(503);
-      expect(await response.json()).toEqual({
-        error: "delivery cutover is not ready",
-        ambiguous: false,
-      });
-      expect(provider).not.toHaveBeenCalled();
-    },
-  );
 });
 
 describe("authenticated device routing", () => {
@@ -1056,6 +1589,7 @@ describe("device-scoped ledger and quota", () => {
     await worker.fetch(deliveryRequest({ key: AUTO_KEY_A }), env);
     await worker.fetch(deliveryRequest({ key: TEST_KEY_A }), env);
     vi.setSystemTime(new Date("2026-09-11T00:00:00.000Z"));
+    env._namespace!.now = new Date("2026-09-11T00:00:00.000Z");
     await worker.fetch(deliveryRequest({ key: TEST_KEY_B }), env);
 
     const durable = deviceDurables(env)[0]!;
