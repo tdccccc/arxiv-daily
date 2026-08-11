@@ -27,11 +27,11 @@ Relay 以单一 Durable Object 状态机管理可恢复 cutover，能够阻断�
 
 ## Tasks
 
-- [ ] 以 Red 测试锁定 cutover phase、operation idempotency 与 status contract。
-- [ ] 实现默认 automatic lock、旧 provider 凭据撤销 attestation 与新 build 激活边界。
-- [ ] 扫描两代真实 legacy key，服务端构建、写入并封存 marker。
-- [ ] 实现 authenticated GET status 与 action POST，保留安全错误分类。
-- [ ] 运行 relay 定向回归并接受 P1 chunk。
+- [x] 以 Red 测试锁定 cutover phase、operation idempotency 与 status contract。
+- [x] 实现默认 automatic lock、旧 provider 凭据撤销 attestation 与新 build 激活边界。
+- [x] 扫描两代真实 legacy key，服务端构建、写入并封存 marker。
+- [x] 实现 authenticated GET status 与 action POST，保留安全错误分类。
+- [x] 运行 relay 定向回归并接受 P1 chunk。
 
 ## Verification
 

@@ -32,6 +32,6 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — 可恢复 cutover 状态机与 legacy/quiesce proof — status: active
-2. P2 — Token/readiness gate 与 recipient 级幂等 — status: pending
+1. P1 — 可恢复 cutover 状态机与 legacy/provider-fence proof — status: done
+2. P2 — Token/readiness gate 与 recipient 级幂等 — status: active
 3. P3 — 半自动 operator 工具、runbook 与治理门禁 — status: pending
