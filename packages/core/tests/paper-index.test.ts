@@ -50,6 +50,27 @@ function makeStore(initialFiles: Record<string, string> = {}) {
   return { files, dirs, store };
 }
 
+function paperIndexJson(
+  id: string,
+  title: string,
+  status: "inbox" | "saved" = "inbox",
+): string {
+  return JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: "2026-06-10T00:00:00.000Z",
+    papers: {
+      [`arxiv:${id}`]: {
+        paperKey: `arxiv:${id}`,
+        source: "arxiv",
+        externalId: id,
+        arxivId: id,
+        title,
+        status,
+      },
+    },
+  });
+}
+
 describe("derivePaperInboxPaths", () => {
   it("uses the shared output root by default", () => {
     expect(derivePaperInboxPaths(DEFAULT_SETTINGS.output)).toEqual({
@@ -108,6 +129,100 @@ describe("PaperIndexStore", () => {
       updatedAt: "2026-06-11T01:30:00.000Z",
       papers: {},
     });
+  });
+
+  it("starts from a valid backup when the primary is missing", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json.bak": paperIndexJson(
+        "2606.10001",
+        "Backup only",
+        "saved",
+      ),
+    });
+
+    await expect(store.load()).resolves.toMatchObject({
+      papers: {
+        "arxiv:2606.10001": { title: "Backup only", status: "saved" },
+      },
+    });
+  });
+
+  it("recovers from a valid backup when the primary is corrupt", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": "{corrupt",
+      "arxiv-daily/.index/papers.json.bak": paperIndexJson(
+        "2606.10002",
+        "Recovered backup",
+      ),
+    });
+
+    await expect(store.load()).resolves.toMatchObject({
+      papers: {
+        "arxiv:2606.10002": { title: "Recovered backup" },
+      },
+    });
+  });
+
+  it("uses a valid primary before backup and legacy files", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": paperIndexJson("2606.10003", "Primary"),
+      "arxiv-daily/.index/papers.json.bak": paperIndexJson("2606.10004", "Backup"),
+      "arxiv-daily/index/papers.json": paperIndexJson("2606.10005", "Legacy"),
+    });
+
+    const loaded = await store.load();
+
+    expect(Object.keys(loaded.papers)).toEqual(["arxiv:2606.10003"]);
+    expect(loaded.papers["arxiv:2606.10003"]?.title).toBe("Primary");
+  });
+
+  it("falls back to legacy after invalid primary and backup documents", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": "{corrupt",
+      "arxiv-daily/.index/papers.json.bak": JSON.stringify({
+        schemaVersion: 5,
+        papers: {},
+      }),
+      "arxiv-daily/index/papers.json": paperIndexJson("2606.10006", "Legacy"),
+    });
+
+    await expect(store.load()).resolves.toMatchObject({
+      papers: { "arxiv:2606.10006": { title: "Legacy" } },
+    });
+  });
+
+  it("fails closed when the primary exists but cannot be read", async () => {
+    const base = makeStorage({
+      "arxiv-daily/.index/papers.json": paperIndexJson("2606.10007", "Unreadable"),
+      "arxiv-daily/.index/papers.json.bak": paperIndexJson("2606.10008", "Backup"),
+    });
+    const storage = {
+      ...base.storage,
+      async readText(path: string) {
+        if (path === "arxiv-daily/.index/papers.json") {
+          throw new Error("permission denied");
+        }
+        return base.storage.readText(path);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.load()).rejects.toMatchObject({
+      name: "PaperIndexError",
+      cause: expect.objectContaining({ message: "permission denied" }),
+    });
+  });
+
+  it("throws instead of returning an empty inbox when all existing copies are invalid", async () => {
+    const { store } = makeStore({
+      "arxiv-daily/.index/papers.json": "{corrupt",
+      "arxiv-daily/.index/papers.json.bak": JSON.stringify({
+        schemaVersion: 999,
+        papers: {},
+      }),
+    });
+
+    await expect(store.load()).rejects.toBeInstanceOf(PaperIndexError);
   });
 
   it.each([1, 2, 3, 4])("reads paper index schema %i", async (schemaVersion) => {
@@ -433,6 +548,367 @@ describe("PaperIndexStore", () => {
       coreProblem: "Problem",
       keyMethod: "Method",
       mainResult: "Result",
+    });
+  });
+
+  it("does not expose first-save content before primary promotion", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const backupPath = `${primaryPath}.bak`;
+    const base = makeStorage();
+    let reachPromotion!: () => void;
+    const promotionReached = new Promise<void>((resolve) => {
+      reachPromotion = resolve;
+    });
+    let releasePromotion!: () => void;
+    const promotionRelease = new Promise<void>((resolve) => {
+      releasePromotion = resolve;
+    });
+    const storage = {
+      ...base.storage,
+      async rename(from: string, to: string) {
+        if (from === `${primaryPath}.tmp` && to === primaryPath) {
+          reachPromotion();
+          await promotionRelease;
+          throw new Error("primary promotion blocked");
+        }
+        await base.storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+    const observer = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    const save = store.upsertFromDailyPaper({
+      arxivId: "2606.10024",
+      title: "Uncommitted first save",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await promotionReached;
+    const backupAtCommitBarrier = base.files[backupPath];
+    const observedAtCommitBarrier = await observer.load();
+    releasePromotion();
+
+    await expect(save).rejects.toMatchObject({
+      name: "PaperIndexError",
+      cause: expect.objectContaining({ message: "primary promotion blocked" }),
+    });
+    expect(backupAtCommitBarrier).toBeUndefined();
+    expect(observedAtCommitBarrier.papers["arxiv:2606.10024"]).toBeUndefined();
+    expect(base.files[backupPath]).toBeUndefined();
+    await expect(observer.load()).resolves.toMatchObject({ papers: {} });
+  });
+
+  it("keeps first-save promotion failure primary when rollback cleanup fails", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const backupPath = `${primaryPath}.bak`;
+    const base = makeStorage();
+    let promotionFailed = false;
+    const failedCleanupPaths: string[] = [];
+    const storage = {
+      ...base.storage,
+      async rename(from: string, to: string) {
+        if (from === `${primaryPath}.tmp` && to === primaryPath) {
+          promotionFailed = true;
+          throw new Error("original primary promotion failed");
+        }
+        await base.storage.rename(from, to);
+      },
+      async remove(path: string) {
+        if (promotionFailed) {
+          failedCleanupPaths.push(path);
+          throw new Error("rollback cleanup failed");
+        }
+        await base.storage.remove(path);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.upsertFromDailyPaper({
+      arxivId: "2606.10025",
+      title: "Failed first save",
+      authors: "A. Author",
+      date: "2026-06-11",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    })).rejects.toMatchObject({
+      name: "PaperIndexError",
+      cause: expect.objectContaining({ message: "original primary promotion failed" }),
+    });
+    expect(failedCleanupPaths).toContain(`${primaryPath}.tmp`);
+    expect(base.files[backupPath]).toBeUndefined();
+    await expect(store.load()).resolves.toMatchObject({ papers: {} });
+  });
+
+  it("mutates backup-derived state without losing the valid recovery copy", async () => {
+    const backup = paperIndexJson("2606.10009", "Backup state");
+    const { files, store } = makeStore({
+      "arxiv-daily/.index/papers.json": "{corrupt",
+      "arxiv-daily/.index/papers.json.bak": backup,
+    });
+
+    await store.setStatus("2606.10009", "saved");
+
+    expect(JSON.parse(files["arxiv-daily/.index/papers.json"]).papers[
+      "arxiv:2606.10009"
+    ].status).toBe("saved");
+    expect(JSON.parse(files["arxiv-daily/.index/papers.json.bak"]).papers[
+      "arxiv:2606.10009"
+    ].status).toBe("inbox");
+  });
+
+  it("restores valid recovery content when primary promotion fails", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const backupPath = `${primaryPath}.bak`;
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10010", "Before promotion"),
+    });
+    let failPromotion = true;
+    const storage = {
+      ...base.storage,
+      async rename(from: string, to: string) {
+        if (failPromotion && from === `${primaryPath}.tmp` && to === primaryPath) {
+          failPromotion = false;
+          throw new Error("promotion failed");
+        }
+        await base.storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10010", "saved")).rejects.toThrow(
+      /failed to save paper index/,
+    );
+
+    expect(JSON.parse(base.files[primaryPath]).papers["arxiv:2606.10010"].status)
+      .toBe("inbox");
+    expect(JSON.parse(base.files[backupPath]).papers["arxiv:2606.10010"].status)
+      .toBe("inbox");
+  });
+
+  it("keeps the valid primary when publishing its replacement backup fails", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const backupPath = `${primaryPath}.bak`;
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10011", "Current primary"),
+      [backupPath]: paperIndexJson("2606.10012", "Older backup"),
+    });
+    const storage = {
+      ...base.storage,
+      async rename(from: string, to: string) {
+        if (from === `${backupPath}.tmp` && to === backupPath) {
+          throw new Error("backup promotion failed");
+        }
+        await base.storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10011", "saved")).rejects.toThrow(
+      /failed to save paper index/,
+    );
+
+    expect(JSON.parse(base.files[primaryPath]).papers["arxiv:2606.10011"].status)
+      .toBe("inbox");
+    expect(JSON.parse(base.files[backupPath]).papers["arxiv:2606.10012"].title)
+      .toBe("Older backup");
+  });
+
+  it("treats temp exists cleanup failure after primary promotion as best effort", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const primaryTmp = `${primaryPath}.tmp`;
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10020", "Committed cleanup state"),
+    });
+    const operations: string[] = [];
+    let promotionComplete = false;
+    const storage = {
+      ...base.storage,
+      async exists(path: string) {
+        operations.push(`exists:${path}`);
+        if (promotionComplete && path === primaryTmp) {
+          throw new Error("post-commit temp exists failed");
+        }
+        return base.storage.exists(path);
+      },
+      async rename(from: string, to: string) {
+        operations.push(`rename:${from}->${to}`);
+        await base.storage.rename(from, to);
+        if (from === primaryTmp && to === primaryPath) promotionComplete = true;
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10020", "saved")).resolves.toMatchObject({
+      status: "saved",
+    });
+    await expect(store.load()).resolves.toMatchObject({
+      papers: { "arxiv:2606.10020": { status: "saved" } },
+    });
+    expect(operations).toContain(`rename:${primaryTmp}->${primaryPath}`);
+  });
+
+  it("treats temp remove cleanup failure after primary promotion as best effort", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const primaryTmp = `${primaryPath}.tmp`;
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10021", "Committed temp removal"),
+    });
+    const operations: string[] = [];
+    let promotedContent = "";
+    let promotionComplete = false;
+    const storage = {
+      ...base.storage,
+      async rename(from: string, to: string) {
+        operations.push(`rename:${from}->${to}`);
+        if (from === primaryTmp && to === primaryPath) {
+          promotedContent = base.files[from];
+        }
+        await base.storage.rename(from, to);
+        if (from === primaryTmp && to === primaryPath) {
+          promotionComplete = true;
+          base.files[primaryTmp] = promotedContent;
+        }
+      },
+      async remove(path: string) {
+        operations.push(`remove:${path}`);
+        if (promotionComplete && path === primaryTmp) {
+          throw new Error("post-commit temp remove failed");
+        }
+        await base.storage.remove(path);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10021", "saved")).resolves.toMatchObject({
+      status: "saved",
+    });
+    await expect(store.load()).resolves.toMatchObject({
+      papers: { "arxiv:2606.10021": { status: "saved" } },
+    });
+    expect(operations).toContain(`remove:${primaryTmp}`);
+  });
+
+  it.each(["exists", "remove"] as const)(
+    "treats legacy %s cleanup failure after commit as best effort",
+    async (failure) => {
+      const primaryPath = "arxiv-daily/.index/papers.json";
+      const legacyPath = "arxiv-daily/index/papers.json";
+      const base = makeStorage({
+        [primaryPath]: paperIndexJson("2606.10022", "Committed legacy cleanup"),
+        [legacyPath]: paperIndexJson("2606.19999", "Stale legacy"),
+      });
+      const operations: string[] = [];
+      let promotionComplete = false;
+      const storage = {
+        ...base.storage,
+        async exists(path: string) {
+          operations.push(`exists:${path}`);
+          if (failure === "exists" && promotionComplete && path === legacyPath) {
+            throw new Error("legacy exists failed");
+          }
+          return base.storage.exists(path);
+        },
+        async remove(path: string) {
+          operations.push(`remove:${path}`);
+          if (failure === "remove" && promotionComplete && path === legacyPath) {
+            throw new Error("legacy remove failed");
+          }
+          await base.storage.remove(path);
+        },
+        async rename(from: string, to: string) {
+          operations.push(`rename:${from}->${to}`);
+          await base.storage.rename(from, to);
+          if (from === `${primaryPath}.tmp` && to === primaryPath) {
+            promotionComplete = true;
+          }
+        },
+      } satisfies StorageAdapter;
+      const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+      await expect(store.setStatus("2606.10022", "saved")).resolves.toMatchObject({
+        status: "saved",
+      });
+      await expect(store.load()).resolves.toMatchObject({
+        papers: { "arxiv:2606.10022": { status: "saved" } },
+      });
+      expect(operations).toContain(`rename:${primaryPath}.tmp->${primaryPath}`);
+    },
+  );
+
+  it("does not let final cleanup failure replace the original promotion error", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const primaryTmp = `${primaryPath}.tmp`;
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10023", "Original promotion error"),
+    });
+    const operations: string[] = [];
+    let primaryTmpExistsCalls = 0;
+    let failPromotion = true;
+    const storage = {
+      ...base.storage,
+      async exists(path: string) {
+        operations.push(`exists:${path}`);
+        if (path === primaryTmp) {
+          primaryTmpExistsCalls += 1;
+          if (primaryTmpExistsCalls === 3) {
+            throw new Error("final cleanup failed");
+          }
+        }
+        return base.storage.exists(path);
+      },
+      async rename(from: string, to: string) {
+        operations.push(`rename:${from}->${to}`);
+        if (failPromotion && from === primaryTmp && to === primaryPath) {
+          failPromotion = false;
+          throw new Error("original promotion failed");
+        }
+        await base.storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10023", "saved")).rejects.toMatchObject({
+      name: "PaperIndexError",
+      cause: expect.objectContaining({ message: "original promotion failed" }),
+    });
+    await expect(store.load()).resolves.toMatchObject({
+      papers: { "arxiv:2606.10023": { status: "inbox" } },
+    });
+    expect(operations.filter((item) => item === `exists:${primaryTmp}`)).toHaveLength(3);
+  });
+
+  it("continues queued mutations after a failed job", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const base = makeStorage({
+      [primaryPath]: paperIndexJson("2606.10013", "Queue recovery"),
+    });
+    let failWrite = true;
+    const storage = {
+      ...base.storage,
+      async writeText(path: string, content: string) {
+        if (failWrite && path === `${primaryPath}.tmp`) {
+          failWrite = false;
+          throw new Error("one-shot write failure");
+        }
+        await base.storage.writeText(path, content);
+      },
+    } satisfies StorageAdapter;
+    const store = new PaperIndexStore(storage, DEFAULT_SETTINGS.output);
+
+    await expect(store.setStatus("2606.10013", "saved")).rejects.toThrow(
+      "one-shot write failure",
+    );
+    await expect(store.setPriority("2606.10013", "high")).resolves.toMatchObject({
+      priority: "high",
+    });
+
+    await expect(store.get("2606.10013")).resolves.toMatchObject({
+      status: "inbox",
+      priority: "high",
     });
   });
 

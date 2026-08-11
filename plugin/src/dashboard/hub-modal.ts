@@ -2,11 +2,8 @@ import { Modal, Notice, type App } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { DEFAULT_LOG_LEVELS, formatLogEntries } from "./log-format";
 import { errorMessage } from "./actions";
-import {
-  buildDiagnosticsReport,
-  formatRunHistoryRecords,
-  redactText,
-} from "@arxiv-daily/core";
+import { formatRunHistoryRecords } from "@arxiv-daily/core";
+import { buildSafePluginDiagnosticsReport } from "../services/paper-index-diagnostics";
 
 export type HubModalTab = "logs" | "history" | "state" | "diagnostics";
 
@@ -204,7 +201,7 @@ export class HubModal extends Modal {
     } else if (tab === "state") {
       this.loadRunState();
     } else {
-      this.loadDiagnostics();
+      void this.loadDiagnostics();
     }
   }
 
@@ -243,23 +240,17 @@ export class HubModal extends Modal {
     }
   }
 
-  private loadDiagnostics(): void {
+  private async loadDiagnostics(): Promise<void> {
     try {
       this.setPanelText(
         "diagnostics",
-        buildDiagnosticsReport({
-          settings: this.plugin.settings,
-          runState: this.plugin.stateStore.snapshot(),
-          version: this.plugin.manifest?.version,
-        }),
+        await buildSafePluginDiagnosticsReport(this.plugin),
       );
-    } catch (e) {
-      this.plugin.logger.warn("diagnostics load failed", e);
+    } catch (error) {
+      this.plugin.logger.warn("diagnostics render failed", error);
       this.setPanelText(
         "diagnostics",
-        `Failed to build diagnostics: ${redactText(e instanceof Error ? e.message : e, {
-          secrets: [this.plugin.settings.llm.apiKey],
-        })}`,
+        `Failed to build diagnostics: ${errorMessage(error)}`,
       );
     }
   }

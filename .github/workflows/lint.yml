@@ -1,7 +1,8 @@
-name: Lint and typecheck
+name: Root verification
 
 on:
   push:
+    branches: ["main"]
   pull_request:
 
 permissions:
@@ -25,7 +26,17 @@ jobs:
           cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Test release tools
+        run: npm run test:release-tools
+      - name: Check package boundaries
+        run: npm run check:boundaries
       - name: Lint Obsidian plugin
         run: npm run lint
       - name: Typecheck workspaces
         run: npm run typecheck
+      - name: Test workspaces
+        run: NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1
+      - name: Build workspaces
+        run: npm run build
+      - name: Smoke test build artifacts
+        run: npm run smoke:build

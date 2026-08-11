@@ -1,7 +1,6 @@
 const vscode = require("vscode");
 const { openDashboard } = require("./dashboard");
-const { runForToday, runPending, summarizeById } = require("./pipeline-commands");
-const { promptAndStoreApiKey } = require("./secrets");
+const { runForToday, summarizeById } = require("./pipeline-commands");
 
 function activate(context) {
   const commands = [
@@ -9,16 +8,10 @@ function activate(context) {
       await openDashboard(vscode, context);
     }),
     vscode.commands.registerCommand("arxivDaily.run", async () => {
-      await runForToday(vscode, context);
-    }),
-    vscode.commands.registerCommand("arxivDaily.runPending", async () => {
-      await runPending(vscode, context);
+      await runForToday(vscode);
     }),
     vscode.commands.registerCommand("arxivDaily.summarizeById", async () => {
-      await summarizeById(vscode, context);
-    }),
-    vscode.commands.registerCommand("arxivDaily.configureApiKey", async () => {
-      await promptAndStoreApiKey(vscode, context);
+      await summarizeById(vscode);
     }),
   ];
 
