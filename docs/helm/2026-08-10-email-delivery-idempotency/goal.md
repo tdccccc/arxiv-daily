@@ -1,6 +1,6 @@
 # Email Delivery Idempotency
 
-status: active
+status: done
 updated: 2026-08-11
 owner: zcode-main-session
 
@@ -10,11 +10,11 @@ owner: zcode-main-session
 
 ## Success criteria
 
-- [ ] 同一 `date + normalized recipient` 的并发自动投递最多产生一次 provider 请求。
-- [ ] BYOK 与 hosted relay 都使用稳定 provider idempotency key，测试发送不复用正式日报 key。
-- [ ] delivery state 损坏或不可读时不发信，provider 成功但状态未记录与传输结果不明均有阻断重复投递的明确结果。
-- [ ] 既有 v1 delivered/failed 记录保持兼容，旧客户端看到新阻断记录时不会自动重发。
-- [ ] Core、Host、relay 定向测试和仓库 release-equivalent 门禁通过，技术报告同步。
+- [x] 同一 `date + normalized recipient` 的并发自动投递最多产生一次 provider 请求。
+- [x] BYOK 与 hosted relay 都使用稳定 provider idempotency key，测试发送不复用正式日报 key。
+- [x] delivery state 损坏或不可读时不发信，provider 成功但状态未记录与传输结果不明均有阻断重复投递的明确结果。
+- [x] 既有 v1 delivered/failed 记录保持兼容，旧客户端看到新阻断记录时不会自动重发。
+- [x] Core、Host、relay 定向测试和仓库 release-equivalent 门禁通过，技术报告同步。
 
 ## Non-goals
 
@@ -31,4 +31,4 @@ owner: zcode-main-session
 ## Phases
 
 1. P1 — 以通用 DataAdapter copy 实现跨进程 claim — status: superseded
-2. P1b — 自动邮件在具备真实 OS claim 的客户端与租户隔离 relay 边界获得可验证防护 — status: active
+2. P1b — 自动邮件在具备真实 OS claim 的客户端与租户隔离 relay 边界获得可验证防护 — status: done

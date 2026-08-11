@@ -28,14 +28,14 @@ updated: 2026-08-11
 
 ## Tasks
 
-- [ ] 用 Red 测试替换对通用 DataAdapter copy 原子性的错误假设，并锁定桌面 OS claim、非桌面 fail-closed 与根路径/符号链接边界。
-- [ ] 为本地状态锁与 claim 实现可验证的有界恢复；只有可证明未开始 provider 调用的孤儿 claim 可释放，模糊或已开始记录继续阻断。
-- [ ] 收紧 Core 与 relay 的 provider 结果分类、内部重试和 pre-attempt cancellation，保持稳定 key 且不将 408/409/5xx 当明确未发送。
-- [ ] 将 relay DO 改为认证设备作用域，在同一串行边界内执行幂等、请求指纹和配额预占/结算；阻止跨租户抢占和不同 key 并发绕过。
-- [ ] 定义并测试 relay ledger 的 pending/done 保留与清理策略；发布采用显式 readiness barrier 的单版本 cutover，导入 legacy delivered/pending 证据，不宣称 eventual-consistent KV 可提供安全并存/回滚。
-- [ ] 将兼容主状态限制为私有 v1 阻断文件；generation sidecar、结果和日志只使用哈希 identity 与稳定安全错误码。
-- [ ] 更新所有结果消费者并运行定向、独立复核和完整回归。
-- [ ] 完成独立技术报告交接、提交和 Helm 收口。
+- [x] 用 Red 测试替换对通用 DataAdapter copy 原子性的错误假设，并锁定桌面 OS claim、非桌面 fail-closed 与根路径/符号链接边界。
+- [x] 为本地状态锁与 claim 实现可验证的有界恢复；只有可证明未开始 provider 调用的孤儿 claim 可释放，模糊或已开始记录继续阻断。
+- [x] 收紧 Core 与 relay 的 provider 结果分类、内部重试和 pre-attempt cancellation，保持稳定 key 且不将 408/409/5xx 当明确未发送。
+- [x] 将 relay DO 改为认证设备作用域，在同一串行边界内执行幂等、请求指纹和配额预占/结算；阻止跨租户抢占和不同 key 并发绕过。
+- [x] 定义并测试 relay ledger 的 pending/done 保留与清理策略；发布采用显式 readiness barrier 的单版本 cutover，导入 legacy delivered/pending 证据，不宣称 eventual-consistent KV 可提供安全并存/回滚。
+- [x] 将兼容主状态限制为私有 v1 阻断文件；generation sidecar、结果和日志只使用哈希 identity 与稳定安全错误码。
+- [x] 更新所有结果消费者并运行定向、独立复核和完整回归。
+- [x] 完成独立技术报告交接、提交和 Helm 收口。
 
 ## Verification
 
