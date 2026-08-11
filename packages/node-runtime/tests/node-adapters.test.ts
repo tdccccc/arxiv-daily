@@ -1,14 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir as fsReaddir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
+  deliveryStatePath,
+  deliverDailyEmailIfEnabled,
+  emptyDeliveryState,
   HttpTransportError,
+  markDelivered,
+  readDeliveryState,
   isCancellationError,
   prepareDailyFilterCheckpoint,
+  sampleDailyDigest,
   type DailyPaperResult,
   type DailySummaryCheckpointCompatibilityInput,
 } from "@arxiv-daily/core";
@@ -130,6 +147,7 @@ describe("NodeHttpClient", () => {
       expect.objectContaining<HttpTransportError>({
         name: "HttpTransportError",
         kind: "network",
+        retryableAttempt: false,
       }),
     );
   });
@@ -169,6 +187,431 @@ describe("NodeStorageAdapter", () => {
 
     expect(await storage.readText("daily/2026-06-13.md")).toBe("content");
     expect(await storage.exists("daily/2026-06-13.md.tmp")).toBe(false);
+  });
+
+  it("fails closed and preserves the target when atomic rename reports EXDEV", async () => {
+    const root = await makeTempDir();
+    await mkdir(join(root, "private"), { recursive: true });
+    await writeFile(join(root, "private/state.json"), "old", "utf8");
+    const storage = new NodeStorageAdapter(root, {
+      renameAtomic: async () => {
+        const error = new Error("cross-device rename") as NodeJS.ErrnoException;
+        error.code = "EXDEV";
+        throw error;
+      },
+    });
+
+    await expect(
+      storage.writeTextAtomic("private/state.json", "new", 0o600),
+    ).rejects.toMatchObject({ code: "EXDEV" });
+    expect(await readFile(join(root, "private/state.json"), "utf8")).toBe("old");
+    expect((await fsReaddir(join(root, "private"))).filter((entry) =>
+      entry.includes("state.json.tmp-") || entry.includes("state.json.bak-"),
+    )).toEqual([]);
+  });
+
+  it("exclusively creates one file across independent adapter instances", async () => {
+    const root = await makeTempDir();
+    const first = new NodeStorageAdapter(root) as NodeStorageAdapter & {
+      createTextExclusive(path: string, content: string): Promise<boolean>;
+    };
+    const second = new NodeStorageAdapter(root) as NodeStorageAdapter & {
+      createTextExclusive(path: string, content: string): Promise<boolean>;
+    };
+
+    const results = await Promise.all([
+      first.createTextExclusive("claims/daily.lock", "first"),
+      second.createTextExclusive("claims/daily.lock", "second"),
+    ]);
+
+    expect(results.sort()).toEqual([false, true]);
+    expect(["first", "second"]).toContain(
+      await first.readText("claims/daily.lock"),
+    );
+  });
+
+  it("rejects parent traversal and existing parent symlink escape for exclusive create", async () => {
+    const root = await makeTempDir();
+    const outside = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+    await symlink(outside, join(root, "escape"), "dir");
+
+    await expect(
+      storage.createTextExclusive?.("../outside.claim", "secret"),
+    ).rejects.toThrow(/escapes root/);
+    await expect(
+      storage.createTextExclusive?.("escape/outside.claim", "secret"),
+    ).rejects.toThrow(/symlink|escapes root/);
+    await expect(readFile(join(outside, "outside.claim"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("anchors exclusive create to opened parent descriptors across a symlink swap", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const outside = await makeTempDir();
+    const parent = join(root, "claims", "daily");
+    const movedParent = join(root, "claims", "daily-opened");
+    let resume!: () => void;
+    let validated!: () => void;
+    const reachedBarrier = new Promise<void>((resolve) => { validated = resolve; });
+    const barrier = new Promise<void>((resolve) => { resume = resolve; });
+    const storage = new NodeStorageAdapter(root, {
+      afterFinalParentOpened: async () => {
+        validated();
+        await barrier;
+      },
+    });
+
+    const creating = storage.createTextExclusive!("claims/daily/send.claim", "claimed");
+    await reachedBarrier;
+    await rename(parent, movedParent);
+    await symlink(outside, parent, "dir");
+    resume();
+    const result = await creating.then(
+      (created) => ({ created }),
+      (error) => ({ error }),
+    );
+
+    expect(await readFile(join(outside, "send.claim"), "utf8").catch(() => null))
+      .toBeNull();
+    expect(result).toHaveProperty("error");
+    expect(await readFile(join(movedParent, "send.claim"), "utf8").catch(() => null))
+      .toBeNull();
+  });
+
+  it("fails closed when an opened parent tree is moved outside root and linked back", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const outside = await makeTempDir();
+    const claims = join(root, "claims");
+    const movedClaims = join(outside, "claims-moved");
+    const storage = new NodeStorageAdapter(root, {
+      afterFinalParentOpened: async () => {
+        await rename(claims, movedClaims);
+        await symlink(movedClaims, claims, "dir");
+      },
+    });
+
+    const result = await storage
+      .createTextExclusive!("claims/daily/send.claim", "claimed")
+      .then(
+        (created) => ({ created }),
+        (error) => ({ error }),
+      );
+
+    expect(result).toHaveProperty("error");
+    expect(
+      await readFile(join(movedClaims, "daily/send.claim"), "utf8").catch(
+        () => null,
+      ),
+    ).toBeNull();
+  });
+
+  it("fails closed when an opened parent tree moves within root and is linked back", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const claims = join(root, "claims");
+    const movedClaims = join(root, "claims-moved-within-root");
+    const storage = new NodeStorageAdapter(root, {
+      afterFinalParentOpened: async () => {
+        await rename(claims, movedClaims);
+        await symlink(movedClaims, claims, "dir");
+      },
+    });
+
+    const result = await storage
+      .createTextExclusive!("claims/daily/send.claim", "claimed")
+      .then(
+        (created) => ({ created }),
+        (error) => ({ error }),
+      );
+
+    expect(result).toHaveProperty("error");
+    expect(
+      await readFile(join(movedClaims, "daily/send.claim"), "utf8").catch(
+        () => null,
+      ),
+    ).toBeNull();
+  });
+
+  it("removes a claim created just before its parent tree leaves root", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const outside = await makeTempDir();
+    const claims = join(root, "claims");
+    const movedClaims = join(outside, "claims-post-create");
+    const storage = new NodeStorageAdapter(root, {
+      afterTargetCreated: async () => {
+        await rename(claims, movedClaims);
+        await symlink(movedClaims, claims, "dir");
+      },
+    });
+
+    await expect(
+      storage.createTextExclusive!("claims/daily/send.claim", "claimed"),
+    ).rejects.toThrow(/escapes root|replaced/);
+    expect(
+      await readFile(join(movedClaims, "daily/send.claim"), "utf8").catch(
+        () => null,
+      ),
+    ).toBeNull();
+  });
+
+  it("never calls the provider twice when a claim parent is renamed after opening", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const claimParent = join(
+      root,
+      `${deliveryStatePath(DEFAULT_SETTINGS.output)}.claims`,
+    );
+    const movedParent = `${claimParent}-hidden`;
+    let swapped = false;
+    const firstStorage = new NodeStorageAdapter(root, {
+      afterFinalParentOpened: async () => {
+        if (swapped) return;
+        swapped = true;
+        await rename(claimParent, movedParent);
+        await mkdir(claimParent, { recursive: true });
+      },
+    });
+    const secondStorage = new NodeStorageAdapter(root);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ id: "msg_once" }),
+    }));
+    const digest = sampleDailyDigest({ date: "2026-08-10" });
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "rename@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_test",
+    };
+
+    const first = await deliverDailyEmailIfEnabled(digest, {
+      storage: firstStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+    const second = await deliverDailyEmailIfEnabled(digest, {
+      storage: secondStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+
+    expect(first).toMatchObject({ kind: "failed", attempts: 0 });
+    expect(second.kind).toBe("delivered");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never sends from a claim world hidden immediately after exclusive create", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const claimParent = join(
+      root,
+      `${deliveryStatePath(DEFAULT_SETTINGS.output)}.claims`,
+    );
+    const movedParent = `${claimParent}-post-create-hidden`;
+    const firstStorage = new NodeStorageAdapter(root);
+    const originalCreate = firstStorage.createTextExclusive!;
+    let swapped = false;
+    Object.defineProperty(firstStorage, "createTextExclusive", {
+      configurable: true,
+      value: async (storagePath: string, content: string) => {
+        const created = await originalCreate(storagePath, content);
+        if (created && storagePath.endsWith(".claim.json") && !swapped) {
+          swapped = true;
+          await rename(claimParent, movedParent);
+          await mkdir(claimParent, { recursive: true });
+        }
+        return created;
+      },
+    });
+    const secondStorage = new NodeStorageAdapter(root);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ id: "msg_once" }),
+    }));
+    const digest = sampleDailyDigest({ date: "2026-08-10" });
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "post-create-rename@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_test",
+    };
+
+    const first = await deliverDailyEmailIfEnabled(digest, {
+      storage: firstStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+    const second = await deliverDailyEmailIfEnabled(digest, {
+      storage: secondStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+
+    expect(first).toMatchObject({ kind: "failed", attempts: 0 });
+    expect(second).toEqual({
+      kind: "delivered",
+      attempts: 1,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed if the claim namespace is replaced after the final result absence read", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const statePath = deliveryStatePath(DEFAULT_SETTINGS.output);
+    const indexDir = join(root, dirname(statePath));
+    const movedIndex = `${indexDir}-old-world`;
+    const firstStorage = new NodeStorageAdapter(root);
+    const originalExists = firstStorage.exists.bind(firstStorage);
+    let resultAbsenceReads = 0;
+    firstStorage.exists = async (storagePath) => {
+      const exists = await originalExists(storagePath);
+      if (!exists && storagePath.endsWith(".result.json")) {
+        resultAbsenceReads += 1;
+        if (resultAbsenceReads === 4) {
+          await rename(indexDir, movedIndex);
+          await mkdir(indexDir, { recursive: true });
+        }
+      }
+      return exists;
+    };
+    const secondStorage = new NodeStorageAdapter(root);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ id: "msg_same_provider_key" }),
+    }));
+    const digest = sampleDailyDigest({ date: "2026-08-10" });
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "last-read-swap@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_test",
+    };
+
+    const first = await deliverDailyEmailIfEnabled(digest, {
+      storage: firstStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+    const second = await deliverDailyEmailIfEnabled(digest, {
+      storage: secondStorage,
+      http: { request },
+      output: DEFAULT_SETTINGS.output,
+      email,
+      sleep: async () => {},
+    });
+
+    expect({ first, second, providerCalls: request.mock.calls.length, resultAbsenceReads })
+      .toEqual({
+        first: {
+          kind: "ambiguous",
+          reason: "delivery_claim_storage_failed",
+          attempts: 0,
+        },
+        second: { kind: "delivered", attempts: 1 },
+        providerCalls: 1,
+        resultAbsenceReads: expect.any(Number),
+      });
+  });
+
+  it("tightens an existing legacy delivery-state primary to 0600 before reading it", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+    const statePath = deliveryStatePath(DEFAULT_SETTINGS.output);
+    const target = join(root, statePath);
+    await mkdir(dirname(target), { recursive: true });
+    const rawRecipient = "legacy-private@example.com";
+    const state = markDelivered(emptyDeliveryState(), {
+      date: "2026-08-10",
+      recipient: rawRecipient,
+      attempts: 1,
+    });
+    await writeFile(target, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o644,
+    });
+    await chmod(target, 0o644);
+
+    const read = await readDeliveryState(storage, DEFAULT_SETTINGS.output);
+
+    expect(read.kind).toBe("valid");
+    expect(await fileMode(target)).toBe(0o600);
+    expect(await readFile(target, "utf8")).toContain(rawRecipient);
+  });
+
+  it("coordinates concurrent automatic delivery across Node adapter instances", async () => {
+    const root = await makeTempDir();
+    const firstStorage = new NodeStorageAdapter(root);
+    const secondStorage = new NodeStorageAdapter(root);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ id: "msg_once" }),
+    }));
+    const digest = sampleDailyDigest({ date: "2026-08-10" });
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "shared@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_test",
+    };
+
+    const results = await Promise.all([
+      deliverDailyEmailIfEnabled(digest, {
+        storage: firstStorage,
+        http: { request },
+        output: DEFAULT_SETTINGS.output,
+        email,
+        sleep: async () => {},
+      }),
+      deliverDailyEmailIfEnabled(digest, {
+        storage: secondStorage,
+        http: { request },
+        output: DEFAULT_SETTINGS.output,
+        email,
+        sleep: async () => {},
+      }),
+    ]);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.kind).sort()).toEqual([
+      "delivered",
+      "skipped",
+    ]);
+
+    const statePath = deliveryStatePath(DEFAULT_SETTINGS.output);
+    expect(await fileMode(join(root, statePath))).toBe(0o600);
+    const claimDir = join(root, `${statePath}.claims`);
+    for (const entry of await fsReaddir(claimDir)) {
+      expect(await fileMode(join(claimDir, entry))).toBe(0o600);
+    }
+    const indexDir = join(root, dirname(statePath));
+    expect((await fsReaddir(indexDir)).filter((entry) =>
+      entry.includes("delivery-state.json.tmp-") ||
+      entry.includes("delivery-state.json.bak-")
+    )).toEqual([]);
   });
 
   it("preserves a recoverable checkpoint backup across consecutive real upserts", async () => {

@@ -56,14 +56,24 @@ for (const path of [pluginBundle, cli, pluginCli]) {
 }
 
 const bundle = await readFile(pluginBundle, "utf8");
-for (const forbidden of ["@arxiv-daily/", "linkedom", "canvas", "node:"]) {
+if (bundle.includes("getBuiltinModule")) {
+  throw new Error("plugin/main.js must not depend on process.getBuiltinModule");
+}
+for (const forbidden of ["@arxiv-daily/", "linkedom", "canvas"]) {
   if (bundle.includes(forbidden)) throw new Error(`plugin/main.js contains forbidden text: ${forbidden}`);
 }
 const runtimeRequires = new Set(
   Array.from(bundle.matchAll(/require\(["']([^"']+)["']\)/g), (match) => match[1]),
 );
+const allowedRuntimeRequires = new Set([
+  "obsidian",
+  "electron",
+  "node:fs",
+  "node:fs/promises",
+  "node:path",
+]);
 for (const specifier of runtimeRequires) {
-  if (specifier !== "obsidian" && specifier !== "electron") {
+  if (!allowedRuntimeRequires.has(specifier)) {
     throw new Error(`plugin/main.js contains unexpected runtime require: ${specifier}`);
   }
 }

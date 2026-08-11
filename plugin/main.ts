@@ -352,9 +352,14 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
       force: true,
     });
-    if (result.kind === "delivered") {
-      return `Test email delivered to ${email.to}` +
-        (result.providerMessageId ? ` (${result.providerMessageId})` : "");
+    if (
+      result.kind === "delivered" ||
+      result.kind === "delivered_unrecorded"
+    ) {
+      return "Test email delivered" +
+        (result.kind === "delivered_unrecorded"
+          ? `; delivery record unavailable: ${result.reason}`
+          : "");
     }
     throw new Error(`${result.kind}: ${result.reason}`);
   }
@@ -367,7 +372,7 @@ export default class ArxivDailyPlugin extends Plugin {
       baseUrl: this.settings.email.hostedBaseUrl,
       email: to,
     });
-    return `Verification email sent to ${to}. Open the link, then paste the code from that page into Verification code.`;
+    return "Verification email sent. Open the link, then paste the code from that page into Verification code.";
   }
 
   private buildPipeline(): ArxivPipeline {

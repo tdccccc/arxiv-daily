@@ -17,6 +17,7 @@ export class HostedDeliveryError extends Error {
     message: string,
     readonly status?: number,
     readonly cause?: unknown,
+    readonly ambiguous?: boolean,
   ) {
     super(message);
     this.name = "HostedDeliveryError";
@@ -34,7 +35,6 @@ export interface HostedDeliverRequest {
 }
 
 export interface HostedDeliverResult {
-  providerMessageId?: string;
   attempts: number;
 }
 
@@ -76,17 +76,14 @@ export async function startHostedEmailVerification(opts: {
       body: JSON.stringify({ email }),
       signal: opts.signal,
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+  } catch {
     throw new HostedDeliveryError(
-      `Cannot reach Official delivery at ${base} (${msg}). Check your network and try again later.`,
-      undefined,
-      e,
+      "Cannot reach Official delivery. Check your network and try again later.",
     );
   }
   if (res.status < 200 || res.status >= 300) {
     throw new HostedDeliveryError(
-      `Could not send verification email (HTTP ${res.status}): ${res.bodyText.slice(0, 300)}`,
+      `Could not send verification email (HTTP ${res.status}).`,
       res.status,
     );
   }
@@ -98,6 +95,8 @@ export async function sendViaHosted(opts: {
   token: string;
   request: HostedDeliverRequest;
   signal?: AbortSignal;
+  beforeProviderAttempt?: () => Promise<void>;
+  onProviderInvocation?: () => void;
 }): Promise<HostedDeliverResult> {
   if (!OFFICIAL_DELIVERY_AVAILABLE) {
     throw new HostedDeliveryError(
@@ -116,6 +115,8 @@ export async function sendViaHosted(opts: {
 
   let res;
   try {
+    await opts.beforeProviderAttempt?.();
+    opts.onProviderInvocation?.();
     res = await opts.http.request({
       url: `${base}/v1/deliver`,
       method: "POST",
@@ -134,44 +135,58 @@ export async function sendViaHosted(opts: {
       }),
       signal: opts.signal,
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+  } catch {
     throw new HostedDeliveryError(
-      `Cannot reach Official delivery at ${base} (${msg}).`,
+      "Cannot reach Official delivery.",
       undefined,
-      e,
+      undefined,
+      true,
     );
   }
 
   if (res.status < 200 || res.status >= 300) {
-    const body = res.bodyText.slice(0, 400);
+    const ambiguous =
+      res.status === 408 || res.status === 409 || res.status >= 500;
     let hint = "";
     if (res.status === 401) {
       hint =
-        " Verification code is invalid or expired. Send a new verification email, open the latest link, and paste the long code shown on the web page (not the short code in the email link).";
+        " Verification code is invalid or expired. Send a new verification email and use the latest code.";
     } else if (res.status === 403) {
-      hint =
-        " Your email must exactly match the address you verified.";
+      hint = " The requested recipient does not match the verified inbox.";
     } else if (res.status === 429) {
       hint = " Daily send limit reached for this verified inbox. Try again tomorrow.";
+    } else if (res.status === 422) {
+      hint = " The relay definitively rejected this delivery before acceptance.";
     }
     throw new HostedDeliveryError(
-      `Official delivery failed (HTTP ${res.status}): ${body}.${hint}`,
+      `Official delivery failed (HTTP ${res.status}).${hint}`,
       res.status,
+      undefined,
+      ambiguous,
     );
   }
 
-  let providerMessageId: string | undefined;
   try {
-    const parsed = JSON.parse(res.bodyText) as { id?: unknown };
-    if (typeof parsed.id === "string" && parsed.id) {
-      providerMessageId = parsed.id;
+    const parsed = JSON.parse(res.bodyText) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed as Record<string, unknown>).length !== 1 ||
+      (parsed as { ok?: unknown }).ok !== true
+    ) {
+      throw new Error("invalid safe success contract");
     }
   } catch {
-    // optional body
+    throw new HostedDeliveryError(
+      "Official delivery returned an invalid success response.",
+      res.status,
+      undefined,
+      true,
+    );
   }
 
-  return { providerMessageId, attempts: 1 };
+  return { attempts: 1 };
 }
 
 /** Map rendered mail into the shape the future relay expects (docs/contract). */
@@ -179,11 +194,12 @@ export function hostedPayloadFromRendered(
   to: string,
   digest: DailyDigest,
   mail: Pick<ResendEmailPayload, "subject" | "html" | "text">,
+  idempotencyKey: string,
 ): HostedDeliverRequest {
   return {
     to,
     digest,
-    idempotencyKey: `${digest.date}|${to.trim().toLowerCase()}`,
+    idempotencyKey,
     subject: mail.subject,
     html: mail.html,
     text: mail.text,

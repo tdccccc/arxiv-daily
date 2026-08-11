@@ -60,7 +60,7 @@ export class NodeHttpClient implements HttpClient {
       throw new HttpTransportError(
         "network",
         `HTTP network failure: ${req.url}`,
-        { cause: error, retryableAttempt: true },
+        { cause: error, retryableAttempt: false },
       );
     }
   }
@@ -104,7 +104,7 @@ function settleRequest(
         const error = new HttpTransportError(
           "timeout",
           `HTTP timeout after ${req.timeoutMs}ms: ${req.url}`,
-          { retryableAttempt: true },
+          { retryableAttempt: false },
         );
         controller.abort(error);
         settle(() => reject(error));

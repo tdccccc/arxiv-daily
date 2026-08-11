@@ -1,5 +1,6 @@
 import { isPlausibleEmail, normalizeEmail, randomToken, sha256Hex } from "./crypto";
 import {
+  authenticateDevice,
   checkAndIncrRateLimit,
   putDevice,
   putPending,
@@ -7,7 +8,8 @@ import {
   type Env,
 } from "./kv";
 import { sendResendEmail } from "./resend";
-import { runDeliver, type DeliverBody } from "./deliver-logic";
+import type { DeliverBody } from "./deliver-logic";
+import { stageDeliveryV2Cutover } from "./deliver-gate";
 
 export type { Env };
 export { DeliverGate } from "./deliver-gate";
@@ -28,9 +30,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       return await handle(request, env);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      return json({ error: message }, 500);
+    } catch {
+      return json({ error: "relay request failed" }, 500);
     }
   },
 };
@@ -59,6 +60,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   }
   if (request.method === "POST" && path === "/v1/deliver") {
     return deliverViaGate(request, env);
+  }
+  if (request.method === "POST" && path === "/internal/delivery-v2/cutover") {
+    return stageCutover(request, env);
   }
 
   return json({ error: "not found" }, 404);
@@ -119,9 +123,8 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
         `<p>Or copy: <code>${escapeHtml(link)}</code></p>` +
         `<p>Link expires in 1 hour. If you did not request this, ignore this email.</p>`,
     });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return json({ error: message }, 500);
+  } catch {
+    return json({ error: "verification delivery failed" }, 500);
   }
 
   return json({ ok: true, message: "verification email sent" });
@@ -147,7 +150,7 @@ async function verifyComplete(url: URL, env: Env): Promise<Response> {
 
   return htmlPage(
     "Email verified",
-    `<p>Verified <strong>${escapeHtml(pending.email)}</strong> for Official delivery (Beta).</p>` +
+    `<p>Your address is verified for Official delivery (Beta).</p>` +
       `<p>Copy this token into Obsidian → arXiv Daily → Email → <em>Hosted token</em>:</p>` +
       `<pre style="white-space:pre-wrap;word-break:break-all;background:#f4f4f5;padding:12px;border-radius:8px">${escapeHtml(deviceToken)}</pre>` +
       `<p>Keep this token private. You can close this tab after pasting it into the plugin.</p>`,
@@ -155,15 +158,17 @@ async function verifyComplete(url: URL, env: Env): Promise<Response> {
   );
 }
 
-/**
- * Route deliver through a Durable Object keyed by Idempotency-Key (or token),
- * so concurrent sends for the same logical mail are single-threaded.
- */
+/** Authenticate first, then route every delivery for one device to one DO. */
 async function deliverViaGate(request: Request, env: Env): Promise<Response> {
   assertSecrets(env);
+  const auth = request.headers.get("Authorization") ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(auth);
+  const rawToken = match?.[1]?.trim() ?? "";
+  if (!rawToken) return json({ error: "missing bearer token" }, 401);
 
-  // Clone body for possible fallback; DO gets a new Request.
-  const auth = request.headers.get("Authorization");
+  const device = await authenticateDevice(env, rawToken);
+  if (!device) return json({ error: "invalid or revoked token" }, 401);
+
   const idemp = request.headers.get("Idempotency-Key");
   let bodyText: string;
   try {
@@ -171,49 +176,69 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: "invalid body" }, 400);
   }
-
-  let parsed: DeliverBody = {};
   try {
-    parsed = JSON.parse(bodyText) as DeliverBody;
+    JSON.parse(bodyText) as DeliverBody;
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
 
   const gate = env.DELIVER_GATE;
-  if (gate) {
-    const keyMaterial =
-      idemp?.trim() ||
-      `${typeof parsed.date === "string" ? parsed.date : ""}|${typeof parsed.to === "string" ? parsed.to : ""}|${auth ?? ""}`;
-    const objectId = gate.idFromName(await sha256Hex(keyMaterial || "default"));
-    const stub = gate.get(objectId);
-    const doReq = new Request("https://deliver-gate/run", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(auth ? { Authorization: auth } : {}),
-        ...(idemp ? { "Idempotency-Key": idemp } : {}),
+  if (!gate) {
+    return json(
+      {
+        error: "DELIVER_GATE Durable Object binding is not configured",
+        ambiguous: false,
       },
-      body: bodyText,
-    });
-    const res = await stub.fetch(doReq);
-    const text = await res.text();
-    return new Response(text, {
-      status: res.status,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        ...CORS_HEADERS,
-      },
-    });
+      503,
+    );
   }
 
-  // Fallback if DO binding missing (local misconfig): still run logic (weaker).
-  const outcome = await runDeliver({
-    env,
-    authorizationHeader: auth,
-    idempotencyHeader: idemp,
-    body: parsed,
+  const objectId = gate.idFromName(`device-v2:${device.identity}`);
+  const stub = gate.get(objectId);
+  const doReq = new Request("https://deliver-gate/run", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Device-Identity": device.identity,
+      "X-Device-Created-At": device.createdAt,
+      "X-Device-Delivery-Generation": String(device.deliveryGeneration ?? ""),
+      "X-Recipient-Identity": device.recipientIdentity,
+      ...(idemp ? { "Idempotency-Key": idemp } : {}),
+    },
+    body: bodyText,
   });
-  return json(outcome.body, outcome.status);
+  const res = await stub.fetch(doReq);
+  const text = await res.text();
+  return new Response(text, {
+    status: res.status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
+async function stageCutover(request: Request, env: Env): Promise<Response> {
+  const configuredToken = env.DELIVERY_V2_CUTOVER_TOKEN?.trim() ?? "";
+  const auth = /^Bearer\s+(.+)$/i.exec(
+    request.headers.get("Authorization") ?? "",
+  )?.[1]?.trim() ?? "";
+  if (
+    !configuredToken ||
+    !auth ||
+    await sha256Hex(auth) !== await sha256Hex(configuredToken)
+  ) {
+    return json({ error: "not found" }, 404);
+  }
+  try {
+    await stageDeliveryV2Cutover(env);
+    return json({ ok: true });
+  } catch {
+    return json(
+      { error: "delivery cutover is not ready", ambiguous: false },
+      503,
+    );
+  }
 }
 
 function clientIp(request: Request): string {
