@@ -58,15 +58,20 @@ export interface DailyDigest {
 }
 
 export type DeliveryStatus = "delivered" | "failed";
+export type DeliveryPhase = "claimed" | "delivered" | "ambiguous";
 
 export interface DeliveryRecord {
   date: string;
   recipient: string;
   channel: EmailDeliveryChannel;
+  /**
+   * Claims intentionally use v1's delivered status so older clients fail closed.
+   * New clients use deliveryPhase to expose the more precise outcome.
+   */
   status: DeliveryStatus;
+  deliveryPhase?: DeliveryPhase;
   updatedAt: string;
   attempts: number;
-  providerMessageId?: string;
   lastError?: string;
 }
 
@@ -84,8 +89,35 @@ export interface ResendEmailPayload {
   text: string;
 }
 
+/** Stable, PII-free reason codes safe for state, logs, and caller output. */
+export type EmailDeliveryReason =
+  | "email_delivery_disabled"
+  | "recipient_missing"
+  | "official_delivery_unavailable"
+  | "verification_token_missing"
+  | "resend_api_key_missing"
+  | "email_render_failed"
+  | "already_delivered"
+  | "delivery_claim_active"
+  | "provider_attempt_started"
+  | "provider_outcome_ambiguous"
+  | "delivery_state_unavailable"
+  | "delivery_storage_unsupported"
+  | "delivery_claim_contention"
+  | "delivery_claim_storage_failed"
+  | "delivery_state_update_failed"
+  | "cancelled_before_provider_attempt"
+  | "provider_not_invoked"
+  | "provider_definitive_rejection";
+
 export type DeliverEmailResult =
-  | { kind: "delivered"; providerMessageId?: string; attempts: number }
-  | { kind: "skipped"; reason: string }
-  | { kind: "disabled"; reason: string }
-  | { kind: "failed"; reason: string; attempts: number };
+  | { kind: "delivered"; attempts: number }
+  | {
+      kind: "delivered_unrecorded";
+      reason: EmailDeliveryReason;
+      attempts: number;
+    }
+  | { kind: "ambiguous"; reason: EmailDeliveryReason; attempts: number }
+  | { kind: "skipped"; reason: EmailDeliveryReason }
+  | { kind: "disabled"; reason: EmailDeliveryReason }
+  | { kind: "failed"; reason: EmailDeliveryReason; attempts: number };

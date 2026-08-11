@@ -29,6 +29,7 @@ export interface Vault {
     exists(path: string): Promise<boolean>;
     mkdir(path: string): Promise<void>;
     rename(from: string, to: string): Promise<void>;
+    copy(from: string, to: string): Promise<void>;
     remove(path: string): Promise<void>;
     readBinary?(path: string): Promise<ArrayBuffer>;
     writeBinary?(path: string, content: ArrayBuffer): Promise<void>;

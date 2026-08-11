@@ -1,8 +1,52 @@
 import { normalizePath, type Vault } from "obsidian";
 import type { StorageAdapter, StorageEntry } from "@arxiv-daily/core";
+import {
+  createDesktopTextExclusive,
+  guardDesktopClaimNamespace,
+  isFileSystemDataAdapter,
+  recoverDesktopTextAtomicPrivate,
+  supportsDesktopExclusiveCreate,
+  writeDesktopTextAtomicPrivate,
+  type DesktopAtomicWriteOptions,
+  type FileSystemDataAdapter,
+} from "../../../node-fs-exclusive";
+
+export interface ObsidianStorageAdapterOptions {
+  /** Test-only seams for inspecting private atomic-write artifacts. */
+  privateAtomicWrite?: DesktopAtomicWriteOptions;
+}
 
 export class ObsidianStorageAdapter implements StorageAdapter {
-  constructor(private vault: Vault) {}
+  readonly createTextExclusive?: (
+    path: string,
+    content: string,
+  ) => Promise<boolean>;
+  readonly guardClaimNamespace?: StorageAdapter["guardClaimNamespace"];
+  readonly recoverTextAtomic?: StorageAdapter["recoverTextAtomic"];
+
+  constructor(
+    private vault: Vault,
+    private readonly options: ObsidianStorageAdapterOptions = {},
+  ) {
+    const adapter = vault.adapter as unknown as FileSystemDataAdapter;
+    if (isFileSystemDataAdapter(adapter) && supportsDesktopExclusiveCreate()) {
+      this.createTextExclusive = (path, content) =>
+        createDesktopTextExclusive(adapter, this.normalizePath(path), content);
+      this.guardClaimNamespace = (path) =>
+        guardDesktopClaimNamespace(adapter, this.normalizePath(path));
+      this.recoverTextAtomic = (path, mode) =>
+        recoverDesktopTextAtomicPrivate(adapter, this.normalizePath(path), mode)
+          .catch((error) => {
+            if (
+              error instanceof Error &&
+              /ENOENT|no such file/i.test(error.message)
+            ) {
+              return;
+            }
+            throw error;
+          });
+    }
+  }
 
   normalizePath(path: string): string {
     return normalizePath(path);
@@ -16,7 +60,25 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     await this.vault.adapter.write(this.normalizePath(path), content);
   }
 
-  async writeTextAtomic(path: string, content: string): Promise<void> {
+  async writeTextAtomic(
+    path: string,
+    content: string,
+    mode?: number,
+  ): Promise<void> {
+    if (mode !== undefined) {
+      const adapter = this.vault.adapter as unknown as FileSystemDataAdapter;
+      if (!isFileSystemDataAdapter(adapter) || !supportsDesktopExclusiveCreate()) {
+        throw new Error("private atomic storage is unavailable on this host");
+      }
+      await writeDesktopTextAtomicPrivate(
+        adapter,
+        this.normalizePath(path),
+        content,
+        mode,
+        this.options.privateAtomicWrite,
+      );
+      return;
+    }
     const target = this.normalizePath(path);
     const tmp = this.normalizePath(`${path}.tmp`);
     const bak = this.normalizePath(`${path}.bak`);
@@ -45,6 +107,20 @@ export class ObsidianStorageAdapter implements StorageAdapter {
 
   async exists(path: string): Promise<boolean> {
     return await this.vault.adapter.exists(this.normalizePath(path));
+  }
+
+  private async ensureDirDeep(path: string): Promise<void> {
+    const parts = this.normalizePath(path).split("/").filter(Boolean);
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      if (await this.vault.adapter.exists(current)) continue;
+      try {
+        await this.vault.adapter.mkdir(current);
+      } catch (error) {
+        if (!(await this.vault.adapter.exists(current))) throw error;
+      }
+    }
   }
 
   async mkdir(path: string): Promise<void> {

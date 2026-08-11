@@ -52,7 +52,7 @@ export class ObsidianHttpClient implements HttpClient {
       throw new HttpTransportError(
         "network",
         `HTTP network failure: ${req.url}`,
-        { cause: error, retryableAttempt: true },
+        { cause: error, retryableAttempt: false },
       );
     }
   }
