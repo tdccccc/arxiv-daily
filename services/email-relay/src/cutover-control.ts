@@ -1,26 +1,41 @@
 import { hmacSha256Hex, sha256Hex } from "./crypto";
 import {
+  authenticateDevice,
+  automaticRuntimeConfigured,
   DELIVERY_V2_KV_VISIBILITY_MS,
   DELIVERY_V2_LEGACY_PENDING_TTL_MS,
   DELIVERY_V3_CUTOVER_AUDIT_KEY,
+  configuredBuildIdentity,
+  configuredIdentitySecret,
+  deletePendingByIdentity,
+  DELIVERY_PROTOCOL_GENERATION,
+  hashRecipientIdentity,
+  peekPendingByIdentity,
+  putDevice,
   scanLegacyAutoDeliveryEvidence,
   writeDeliveryV3CutoverAuditMarker,
+  type AuthenticatedDevice,
   type DeliveryV3CutoverAuditMarker,
   type Env,
   type LegacyDeliveryEvidence,
+  type PendingVerify,
 } from "./kv";
 
 export const CUTOVER_CONTROL_OBJECT = "delivery-cutover:v3";
 export const CUTOVER_STATUS_PATH = "/cutover/status";
 export const CUTOVER_ACTION_PATH = "/cutover/action";
 export const CUTOVER_AUTOMATIC_PATH = "/cutover/automatic";
+export const CUTOVER_ISSUE_DEVICE_PATH = "/cutover/issue-device";
 export const PROVIDER_FENCE_ATTESTATION = "old-resend-credential-revoked";
 export const MAX_LEGACY_AUTO_EVIDENCE = 512;
 export const MAX_PREFLIGHT_SCAN_DURATION_MS = 30_000;
 export const INVENTORY_FRESHNESS_MS = 5 * 60_000;
 
 const CONTROL_KEY = "cutover-control:v3";
+const BINDING_KEY = "cutover-binding:v1";
+const STATE_INDEX_KEY = "cutover-state-index:v1";
 const OPERATION_PREFIX = "cutover-operation:v3:";
+const ISSUANCE_CLAIM_PREFIX = "issuance-claim:v1:";
 const MARKER_OBSERVATION_WAIT_MS = DELIVERY_V2_KV_VISIBILITY_MS;
 const activeOperations = new WeakMap<DurableObjectState, Set<string>>();
 
@@ -97,12 +112,28 @@ interface LastOperation {
   completedAt: string;
 }
 
+interface CutoverBindingRecord {
+  schemaVersion: 1;
+  identitySecretFingerprint: string;
+  buildIdentity: string;
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  boundAt: string;
+}
+
+interface CutoverStateIndex {
+  schemaVersion: 1;
+  stateCreatedAt: string;
+}
+
 interface CutoverControlRecord {
   schemaVersion: 3;
   phase: CutoverPhase;
   revision: number;
   updatedAt: string;
   legacyAutoEvidence: ExactEvidence;
+  identitySecretFingerprint?: string;
+  buildIdentity?: string;
+  protocolGeneration?: typeof DELIVERY_PROTOCOL_GENERATION;
   lastOperation?: LastOperation;
   preFenceInventory?: InventoryRecord;
   providerFence?: ProviderFenceRecord;
@@ -113,6 +144,18 @@ interface CutoverControlRecord {
   blocked?: SafeBlock;
   recoverPhase?: Exclude<CutoverPhase, "blocked">;
   pendingOperation?: PendingOperation;
+}
+
+interface IssuanceClaim {
+  schemaVersion: 1;
+  status: "claimed" | "issued";
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  buildIdentity: string;
+  readyGeneration: number;
+  createdAt: string;
+  pendingExpiresAt: string;
+  recipientIdentity: string;
+  pendingProof: string;
 }
 
 interface StoredOperation {
@@ -188,12 +231,217 @@ export async function postCutoverAction(
   );
 }
 
+export interface PublicReadiness {
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  buildIdentity: string;
+  phase: CutoverPhase;
+  automatic: "ready" | "locked";
+  readyGeneration: number | null;
+}
+
+async function currentIdentitySecretFingerprint(env: Env): Promise<string | null> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) return null;
+  return hmacSha256Hex(
+    identitySecret,
+    "delivery-v3-identity-secret-fingerprint\u0000v1",
+  );
+}
+
+async function currentBinding(
+  env: Env,
+  boundAt: Date,
+): Promise<CutoverBindingRecord | null> {
+  const identitySecretFingerprint = await currentIdentitySecretFingerprint(env);
+  const buildIdentity = configuredBuildIdentity(env);
+  if (!identitySecretFingerprint || !buildIdentity) return null;
+  return {
+    schemaVersion: 1,
+    identitySecretFingerprint,
+    buildIdentity,
+    protocolGeneration: DELIVERY_PROTOCOL_GENERATION,
+    boundAt: boundAt.toISOString(),
+  };
+}
+
+function normalizeBinding(raw: unknown): CutoverBindingRecord {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("cutover binding is invalid");
+  }
+  const value = raw as Partial<CutoverBindingRecord>;
+  if (
+    Object.keys(value).sort().join("|") !== [
+      "boundAt",
+      "buildIdentity",
+      "identitySecretFingerprint",
+      "protocolGeneration",
+      "schemaVersion",
+    ].sort().join("|") ||
+    value.schemaVersion !== 1 ||
+    !isHash(value.identitySecretFingerprint) ||
+    !isConfiguredBuildIdentity(value.buildIdentity) ||
+    value.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    !validTimestamp(value.boundAt)
+  ) {
+    throw new Error("cutover binding is invalid");
+  }
+  return value as CutoverBindingRecord;
+}
+
+function bindingMatches(
+  stored: CutoverBindingRecord,
+  current: CutoverBindingRecord | null,
+): boolean {
+  return Boolean(
+    current &&
+      stored.identitySecretFingerprint === current.identitySecretFingerprint &&
+      stored.buildIdentity === current.buildIdentity &&
+      stored.protocolGeneration === current.protocolGeneration,
+  );
+}
+
+function normalizeStateIndex(raw: unknown): CutoverStateIndex {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("cutover state index is invalid");
+  }
+  const value = raw as Partial<CutoverStateIndex>;
+  if (
+    Object.keys(value).sort().join("|") !== "schemaVersion|stateCreatedAt" ||
+    value.schemaVersion !== 1 ||
+    !validTimestamp(value.stateCreatedAt)
+  ) {
+    throw new Error("cutover state index is invalid");
+  }
+  return value as CutoverStateIndex;
+}
+
+function controlMatchesBinding(
+  control: CutoverControlRecord,
+  binding: CutoverBindingRecord,
+): boolean {
+  return control.identitySecretFingerprint === binding.identitySecretFingerprint &&
+    control.buildIdentity === binding.buildIdentity &&
+    control.protocolGeneration === binding.protocolGeneration;
+}
+
+async function readValidatedBinding(
+  state: DurableObjectState,
+  env: Env,
+): Promise<CutoverBindingRecord | null> {
+  try {
+    const [bindingRaw, indexRaw, markerState] = await Promise.all([
+      state.storage.get<unknown>(BINDING_KEY),
+      state.storage.get<unknown>(STATE_INDEX_KEY),
+      readAuditMarkerBinding(env),
+    ]);
+    const binding = normalizeBinding(bindingRaw);
+    normalizeStateIndex(indexRaw);
+    return bindingMatches(binding, await currentBinding(env, new Date(0))) &&
+        (!markerState.present ||
+          (markerState.binding && markerMatchesBinding(markerState.binding, binding)))
+      ? binding
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPublicReadiness(
+  env: Env,
+): Promise<PublicReadiness | null> {
+  if (!automaticRuntimeConfigured(env)) return null;
+  const buildIdentity = configuredBuildIdentity(env)!;
+  let response: Response;
+  try {
+    response = await fetchCutoverStatus(env);
+  } catch {
+    return null;
+  }
+  if (response.status !== 200) return null;
+  let body: {
+    schemaVersion?: unknown;
+    phase?: unknown;
+    revision?: unknown;
+    automatic?: unknown;
+  };
+  try {
+    body = await response.json() as typeof body;
+  } catch {
+    return null;
+  }
+  if (
+    body.schemaVersion !== 3 ||
+    !isPhase(body.phase) ||
+    !Number.isSafeInteger(body.revision) ||
+    (body.revision as number) < 0 ||
+    (body.automatic !== "ready" && body.automatic !== "locked")
+  ) {
+    return null;
+  }
+  const readyGeneration = body.phase === "ready" && body.automatic === "ready" &&
+      Number.isSafeInteger(body.revision) && (body.revision as number) > 0
+    ? body.revision as number
+    : null;
+  if (body.automatic === "ready" && readyGeneration === null) return null;
+  return {
+    protocolGeneration: DELIVERY_PROTOCOL_GENERATION,
+    buildIdentity,
+    phase: body.phase,
+    automatic: body.automatic,
+    readyGeneration,
+  };
+}
+
+export async function issueReadyBoundDevice(
+  env: Env,
+  pendingIdentity: string,
+): Promise<
+  | { status: "issued"; token: string }
+  | { status: "invalid" | "locked" | "unavailable" }
+> {
+  let response: Response;
+  try {
+    response = await controlStub(env).fetch(
+      new Request(`https://cutover-control${CUTOVER_ISSUE_DEVICE_PATH}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingIdentity }),
+      }),
+    );
+  } catch {
+    return { status: "unavailable" };
+  }
+  let body: { status?: unknown; token?: unknown };
+  try {
+    body = await response.json() as typeof body;
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (
+    response.status === 200 &&
+    body.status === "issued" &&
+    typeof body.token === "string" &&
+    /^[0-9a-f]{64}$/.test(body.token)
+  ) {
+    return { status: "issued", token: body.token };
+  }
+  if (response.status === 400 && body.status === "invalid") {
+    return { status: "invalid" };
+  }
+  if (response.status === 503 && body.status === "locked") {
+    return { status: "locked" };
+  }
+  return { status: "unavailable" };
+}
+
 export async function authorizeAutomaticDelivery(
   env: Env,
   input: {
     evidenceIdentity: string;
-    deviceCreatedAt: string;
     deliveryGeneration?: 2;
+    protocolGeneration?: number;
+    buildIdentity?: string;
+    readyGeneration?: number;
   },
 ): Promise<
   | { authorized: true; legacyEvidence: LegacyDeliveryEvidence }
@@ -234,7 +482,7 @@ export async function handleCutoverControlFetch(
   const path = new URL(request.url).pathname;
   if (path === CUTOVER_STATUS_PATH) {
     if (request.method !== "GET") return methodNotAllowed();
-    return state.blockConcurrencyWhile(() => readStatus(state, now()));
+    return state.blockConcurrencyWhile(() => readStatus(state, env, now()));
   }
   if (path === CUTOVER_ACTION_PATH) {
     if (request.method !== "POST") return methodNotAllowed();
@@ -242,29 +490,298 @@ export async function handleCutoverControlFetch(
   }
   if (path === CUTOVER_AUTOMATIC_PATH) {
     if (request.method !== "POST") return methodNotAllowed();
-    return state.blockConcurrencyWhile(() => authorizeAutomatic(state, request));
+    return state.blockConcurrencyWhile(() => authorizeAutomatic(state, env, request));
+  }
+  if (path === CUTOVER_ISSUE_DEVICE_PATH) {
+    if (request.method !== "POST") return methodNotAllowed();
+    const pendingIdentity = await parseIssuanceIdentity(request);
+    if (!pendingIdentity) return invalidIssuance();
+    return state.blockConcurrencyWhile(() =>
+      issueDevice(state, env, now, pendingIdentity)
+    );
   }
   return undefined;
 }
 
-async function readStatus(state: DurableObjectState, now: Date): Promise<Response> {
-  const raw = await state.storage.get<unknown>(CONTROL_KEY);
-  if (raw === undefined) return statusResponse(lockedControl(new Date(0)), now);
+async function readStatus(
+  state: DurableObjectState,
+  env: Env,
+  now: Date,
+): Promise<Response> {
+  const [
+    bindingRaw,
+    indexRaw,
+    controlRaw,
+    markerState,
+    operationArtifacts,
+    issuanceArtifacts,
+  ] = await Promise.all([
+    state.storage.get<unknown>(BINDING_KEY),
+    state.storage.get<unknown>(STATE_INDEX_KEY),
+    state.storage.get<unknown>(CONTROL_KEY),
+    readAuditMarkerBinding(env),
+    state.storage.list({ prefix: OPERATION_PREFIX, limit: 1 }),
+    state.storage.list({ prefix: ISSUANCE_CLAIM_PREFIX, limit: 1 }),
+  ]);
+  if (bindingRaw === undefined) {
+    if (
+      indexRaw !== undefined ||
+      controlRaw !== undefined ||
+      markerState.present ||
+      operationArtifacts.size > 0 ||
+      issuanceArtifacts.size > 0
+    ) return identityLockedStatusResponse();
+    return await currentBinding(env, new Date(0))
+      ? statusResponse(lockedControl(new Date(0)), now)
+      : identityLockedStatusResponse();
+  }
+  let binding: CutoverBindingRecord;
   try {
-    return statusResponse(normalizeControl(raw), now);
+    binding = normalizeBinding(bindingRaw);
+    normalizeStateIndex(indexRaw);
+  } catch {
+    return identityLockedStatusResponse();
+  }
+  if (
+    !bindingMatches(binding, await currentBinding(env, new Date(0))) ||
+    (markerState.present &&
+      (!markerState.binding || !markerMatchesBinding(markerState.binding, binding)))
+  ) {
+    return identityLockedStatusResponse();
+  }
+  if (controlRaw === undefined) return identityLockedStatusResponse();
+  try {
+    const control = normalizeControl(controlRaw);
+    const phase = effectivePhase(control);
+    const markerConsistent = phase === "sealed" || phase === "ready"
+      ? await authoritativeMarkerMatchesControl(env, control)
+      : !markerState.present;
+    return controlMatchesBinding(control, binding) && markerConsistent
+      ? statusResponse(control, now)
+      : identityLockedStatusResponse();
   } catch {
     return invalidControlResponse();
   }
 }
 
+async function parseIssuanceIdentity(request: Request): Promise<string | null> {
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json() as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return Object.keys(body).length === 1 && isHash(body.pendingIdentity)
+    ? body.pendingIdentity
+    : null;
+}
+
+async function issueDevice(
+  state: DurableObjectState,
+  env: Env,
+  now: () => Date,
+  pendingIdentity: string,
+): Promise<Response> {
+  if (!automaticRuntimeConfigured(env)) return lockedIssuance();
+  const binding = await readValidatedBinding(state, env);
+  if (!binding) return lockedIssuance();
+  let control: CutoverControlRecord;
+  try {
+    control = normalizeControl(await state.storage.get<unknown>(CONTROL_KEY));
+  } catch {
+    return lockedIssuance();
+  }
+  const buildIdentity = configuredBuildIdentity(env);
+  if (
+    !buildIdentity ||
+    !controlMatchesBinding(control, binding) ||
+    control.phase !== "ready" ||
+    !control.readyAt ||
+    control.pendingOperation?.action === "repair" ||
+    !await authoritativeMarkerMatchesControl(env, control)
+  ) {
+    return lockedIssuance();
+  }
+
+  const claimKey = `${ISSUANCE_CLAIM_PREFIX}${pendingIdentity}`;
+  let claim: IssuanceClaim;
+  const claimRaw = await state.storage.get<unknown>(claimKey);
+  if (claimRaw === undefined) {
+    const pending = await peekPendingByIdentity(env, pendingIdentity);
+    if (!pending) return invalidIssuance();
+    const claimedAt = now();
+    if (claimedAt.getTime() >= Date.parse(pending.expiresAt)) {
+      return invalidIssuance();
+    }
+    claim = {
+      schemaVersion: 1,
+      status: "claimed",
+      protocolGeneration: DELIVERY_PROTOCOL_GENERATION,
+      buildIdentity,
+      readyGeneration: control.revision,
+      createdAt: claimedAt.toISOString(),
+      pendingExpiresAt: pending.expiresAt,
+      recipientIdentity: await hashRecipientIdentity(
+        pending.email,
+        configuredIdentitySecret(env)!,
+      ),
+      pendingProof: await issuancePendingProof(
+        env,
+        pendingIdentity,
+        pending,
+      ),
+    };
+    await state.storage.put(claimKey, claim);
+  } else {
+    try {
+      claim = normalizeIssuanceClaim(claimRaw);
+    } catch {
+      return unavailableIssuance();
+    }
+  }
+
+  if (
+    claim.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    claim.buildIdentity !== buildIdentity ||
+    claim.readyGeneration !== control.revision
+  ) {
+    return lockedIssuance();
+  }
+  if (now().getTime() >= Date.parse(claim.pendingExpiresAt)) {
+    return invalidIssuance();
+  }
+
+  const deviceToken = await deterministicDeviceToken(env, pendingIdentity);
+  const existingDevice = await authenticateDevice(env, deviceToken);
+  if (claim.status === "issued") {
+    return validClaimDevice(existingDevice, claim)
+      ? Response.json({ status: "issued", token: deviceToken })
+      : unavailableIssuance();
+  }
+
+  const pending = await peekPendingByIdentity(env, pendingIdentity);
+  if (pending &&
+    await issuancePendingProof(env, pendingIdentity, pending) !==
+      claim.pendingProof) {
+    return unavailableIssuance();
+  }
+  if (existingDevice) {
+    if (!validClaimDevice(existingDevice, claim)) return unavailableIssuance();
+  } else {
+    if (!pending) return unavailableIssuance();
+    await putDevice(env, deviceToken, pending.email, {
+      protocolGeneration: claim.protocolGeneration,
+      buildIdentity: claim.buildIdentity,
+      readyGeneration: claim.readyGeneration,
+    }, new Date(claim.createdAt));
+  }
+
+  await deletePendingByIdentity(env, pendingIdentity);
+  const issued: IssuanceClaim = { ...claim, status: "issued" };
+  await state.storage.put(claimKey, issued);
+  return Response.json({ status: "issued", token: deviceToken });
+}
+
+async function deterministicDeviceToken(
+  env: Env,
+  pendingIdentity: string,
+): Promise<string> {
+  return hmacSha256Hex(
+    env.TOKEN_SECRET,
+    `delivery-v2-device-token\u0000${pendingIdentity}`,
+  );
+}
+
+async function issuancePendingProof(
+  env: Env,
+  pendingIdentity: string,
+  pending: PendingVerify,
+): Promise<string> {
+  return hmacSha256Hex(
+    env.TOKEN_SECRET,
+    `delivery-v2-pending-proof\u0000${JSON.stringify([
+      pendingIdentity,
+      pending.email,
+      pending.createdAt,
+      pending.expiresAt,
+    ])}`,
+  );
+}
+
+function normalizeIssuanceClaim(raw: unknown): IssuanceClaim {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("issuance claim is invalid");
+  }
+  const claim = raw as Partial<IssuanceClaim>;
+  const expectedKeys = [
+    "buildIdentity",
+    "createdAt",
+    "pendingExpiresAt",
+    "pendingProof",
+    "protocolGeneration",
+    "readyGeneration",
+    "recipientIdentity",
+    "schemaVersion",
+    "status",
+  ];
+  if (
+    Object.keys(claim).sort().join("|") !== expectedKeys.sort().join("|") ||
+    claim.schemaVersion !== 1 ||
+    (claim.status !== "claimed" && claim.status !== "issued") ||
+    claim.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    !isBuildIdentity(claim.buildIdentity) ||
+    !Number.isSafeInteger(claim.readyGeneration) ||
+    claim.readyGeneration! < 1 ||
+    !validTimestamp(claim.createdAt) ||
+    !validTimestamp(claim.pendingExpiresAt) ||
+    Date.parse(claim.pendingExpiresAt!) <= Date.parse(claim.createdAt!) ||
+    !isHash(claim.recipientIdentity) ||
+    !isHash(claim.pendingProof)
+  ) {
+    throw new Error("issuance claim is invalid");
+  }
+  return claim as IssuanceClaim;
+}
+
+function validClaimDevice(
+  device: AuthenticatedDevice | null,
+  claim: IssuanceClaim,
+): boolean {
+  return Boolean(
+    device &&
+      device.recipientIdentity === claim.recipientIdentity &&
+      device.createdAt === claim.createdAt &&
+      device.deliveryGeneration === 2 &&
+      device.protocolGeneration === claim.protocolGeneration &&
+      device.buildIdentity === claim.buildIdentity &&
+      device.readyGeneration === claim.readyGeneration,
+  );
+}
+
+function invalidIssuance(): Response {
+  return Response.json({ status: "invalid" }, { status: 400 });
+}
+
+function lockedIssuance(): Response {
+  return Response.json({ status: "locked" }, { status: 503 });
+}
+
+function unavailableIssuance(): Response {
+  return Response.json({ status: "unavailable" }, { status: 503 });
+}
+
 async function authorizeAutomatic(
   state: DurableObjectState,
+  env: Env,
   request: Request,
 ): Promise<Response> {
+  if (!automaticRuntimeConfigured(env)) return deniedAutomatic();
   let body: {
     evidenceIdentity?: unknown;
-    deviceCreatedAt?: unknown;
     deliveryGeneration?: unknown;
+    protocolGeneration?: unknown;
+    buildIdentity?: unknown;
+    readyGeneration?: unknown;
   };
   try {
     body = await request.json() as typeof body;
@@ -273,21 +790,33 @@ async function authorizeAutomatic(
   }
   if (
     !isHash(body.evidenceIdentity) ||
-    !validTimestamp(body.deviceCreatedAt) ||
-    (body.deliveryGeneration !== undefined && body.deliveryGeneration !== 2)
+    body.deliveryGeneration !== 2 ||
+    body.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    !isBuildIdentity(body.buildIdentity) ||
+    !Number.isSafeInteger(body.readyGeneration) ||
+    (body.readyGeneration as number) < 1
   ) {
     return deniedAutomatic();
   }
+  const binding = await readValidatedBinding(state, env);
+  if (!binding) return deniedAutomatic();
   let control: CutoverControlRecord;
   try {
     control = normalizeControl(await state.storage.get<unknown>(CONTROL_KEY));
   } catch {
     return deniedAutomatic();
   }
+  const buildIdentity = configuredBuildIdentity(env);
   if (
+    !buildIdentity ||
+    !controlMatchesBinding(control, binding) ||
     control.phase !== "ready" ||
     !control.readyAt ||
-    control.pendingOperation?.action === "repair"
+    control.pendingOperation?.action === "repair" ||
+    body.readyGeneration !== control.revision ||
+    body.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    body.buildIdentity !== buildIdentity ||
+    !await authoritativeMarkerMatchesControl(env, control)
   ) {
     return deniedAutomatic();
   }
@@ -296,13 +825,6 @@ async function authorizeAutomatic(
       | "done"
       | "attempted"
       | undefined) ?? "none";
-  if (
-    legacyEvidence === "none" &&
-    (body.deliveryGeneration !== 2 ||
-      Date.parse(body.deviceCreatedAt) <= Date.parse(control.readyAt))
-  ) {
-    return deniedAutomatic();
-  }
   return Response.json({ authorized: true, legacyEvidence });
 }
 
@@ -314,12 +836,14 @@ async function runAction(
 ): Promise<Response> {
   const input = await parseAction(request);
   if (input instanceof Response) return input;
+  const expectedBinding = await currentBinding(env, now());
+  if (!expectedBinding) return identityLockedStatusResponse();
   const inputHash = await sha256Hex(JSON.stringify([
     input.action,
     input.attestation ?? null,
   ]));
   const begun = await state.blockConcurrencyWhile(() =>
-    beginAction(state, now(), input, inputHash)
+    beginAction(state, env, now(), input, inputHash, expectedBinding)
   );
   if (begun.kind === "response") return begun.response;
 
@@ -374,13 +898,143 @@ async function parseAction(request: Request): Promise<ActionInput | Response> {
 
 async function beginAction(
   state: DurableObjectState,
+  env: Env,
   now: Date,
   input: ActionInput,
   inputHash: string,
+  expectedBinding: CutoverBindingRecord,
 ): Promise<BeginResult> {
-  const operationRaw = await state.storage.get<unknown>(
-    `${OPERATION_PREFIX}${input.operationId}`,
-  );
+  const operationKey = `${OPERATION_PREFIX}${input.operationId}`;
+  const markerState = await readAuditMarkerBinding(env);
+  const [bindingRaw, indexRaw, controlRaw, operationRaw] = await Promise.all([
+    state.storage.get<unknown>(BINDING_KEY),
+    state.storage.get<unknown>(STATE_INDEX_KEY),
+    state.storage.get<unknown>(CONTROL_KEY),
+    state.storage.get<unknown>(operationKey),
+  ]);
+
+  if (bindingRaw === undefined) {
+    if (
+      indexRaw !== undefined ||
+      controlRaw !== undefined ||
+      operationRaw !== undefined ||
+      markerState.present ||
+      input.action !== "inventory"
+    ) {
+      return { kind: "response", response: identityLockedStatusResponse() };
+    }
+    const pending: PendingOperation = {
+      operationId: input.operationId,
+      action: "inventory",
+      inputHash,
+      baseRevision: 0,
+      basePhase: "locked",
+      startedAt: now.toISOString(),
+    };
+    const pendingControl: CutoverControlRecord = {
+      ...lockedControl(now),
+      identitySecretFingerprint: expectedBinding.identitySecretFingerprint,
+      buildIdentity: expectedBinding.buildIdentity,
+      protocolGeneration: expectedBinding.protocolGeneration,
+      pendingOperation: pending,
+    };
+    const stateIndex: CutoverStateIndex = {
+      schemaVersion: 1,
+      stateCreatedAt: now.toISOString(),
+    };
+    const created = await state.storage.transaction(async (txn) => {
+      const [
+        bindingCheck,
+        indexCheck,
+        controlCheck,
+        operationArtifacts,
+        issuanceArtifacts,
+      ] = await Promise.all([
+        txn.get<unknown>(BINDING_KEY),
+        txn.get<unknown>(STATE_INDEX_KEY),
+        txn.get<unknown>(CONTROL_KEY),
+        txn.list({ prefix: OPERATION_PREFIX, limit: 1 }),
+        txn.list({ prefix: ISSUANCE_CLAIM_PREFIX, limit: 1 }),
+      ]);
+      if (
+        bindingCheck !== undefined ||
+        indexCheck !== undefined ||
+        controlCheck !== undefined ||
+        operationArtifacts.size > 0 ||
+        issuanceArtifacts.size > 0
+      ) return false;
+      await txn.put(BINDING_KEY, expectedBinding);
+      await txn.put(STATE_INDEX_KEY, stateIndex);
+      await txn.put(CONTROL_KEY, pendingControl);
+      return true;
+    });
+    if (!created) return { kind: "response", response: identityLockedStatusResponse() };
+    activeOperationSet(state).add(input.operationId);
+    return { kind: "execute", control: pendingControl, pending };
+  }
+
+  let binding: CutoverBindingRecord;
+  try {
+    binding = normalizeBinding(bindingRaw);
+    normalizeStateIndex(indexRaw);
+  } catch {
+    return { kind: "response", response: identityLockedStatusResponse() };
+  }
+  if (
+    !bindingMatches(binding, expectedBinding) ||
+    (markerState.present &&
+      (!markerState.binding || !markerMatchesBinding(markerState.binding, binding)))
+  ) {
+    return { kind: "response", response: identityLockedStatusResponse() };
+  }
+
+  let control: CutoverControlRecord;
+  let recoverFromMarker = false;
+  if (controlRaw === undefined) {
+    if (input.action !== "repair" || !markerState.binding) {
+      return { kind: "response", response: identityLockedStatusResponse() };
+    }
+    control = {
+      ...lockedControl(now),
+      identitySecretFingerprint: binding.identitySecretFingerprint,
+      buildIdentity: binding.buildIdentity,
+      protocolGeneration: binding.protocolGeneration,
+    };
+    recoverFromMarker = true;
+  } else {
+    try {
+      control = normalizeControl(controlRaw);
+      if (!controlMatchesBinding(control, binding)) {
+        return { kind: "response", response: identityLockedStatusResponse() };
+      }
+      recoverFromMarker = control.pendingOperation?.recoverFromMarker === true;
+    } catch {
+      if (input.action !== "repair" || !markerState.binding) {
+        return { kind: "response", response: invalidControlResponse() };
+      }
+      control = {
+        ...lockedControl(now),
+        identitySecretFingerprint: binding.identitySecretFingerprint,
+        buildIdentity: binding.buildIdentity,
+        protocolGeneration: binding.protocolGeneration,
+      };
+      recoverFromMarker = true;
+    }
+  }
+
+  const markerPhase = effectivePhase(control);
+  if (
+    ((markerPhase === "sealed" || markerPhase === "ready") &&
+      (markerState.present
+        ? !await authoritativeMarkerMatchesControl(env, control)
+        : input.action !== "repair")) ||
+    ((markerPhase === "locked" || markerPhase === "inventoried" ||
+      markerPhase === "observing") && markerState.present &&
+      !(recoverFromMarker && input.action === "repair"))
+  ) {
+    return { kind: "response", response: identityLockedStatusResponse() };
+  }
+
   if (operationRaw !== undefined) {
     try {
       const operation = normalizeOperation(operationRaw);
@@ -390,24 +1044,6 @@ async function beginAction(
       return { kind: "response", response: storedOperationResponse(operation) };
     } catch {
       return { kind: "response", response: invalidControlResponse() };
-    }
-  }
-
-  const raw = await state.storage.get<unknown>(CONTROL_KEY);
-  let control: CutoverControlRecord;
-  let recoverFromMarker = false;
-  if (raw === undefined) {
-    control = lockedControl(now);
-    recoverFromMarker = input.action === "repair";
-  } else {
-    try {
-      control = normalizeControl(raw);
-    } catch {
-      if (input.action !== "inventory" && input.action !== "repair") {
-        return { kind: "response", response: invalidControlResponse() };
-      }
-      control = lockedControl(now);
-      recoverFromMarker = input.action === "repair";
     }
   }
 
@@ -479,7 +1115,6 @@ async function beginAction(
   activeOperationSet(state).add(input.operationId);
   return { kind: "execute", control: pendingControl, pending };
 }
-
 async function persistSuccessfulNoop(
   state: DurableObjectState,
   completedAt: Date,
@@ -546,6 +1181,9 @@ async function executeAction(
         phase: "inventoried",
         revision: control.revision + 1,
         legacyAutoEvidence: scan.evidence,
+        identitySecretFingerprint: control.identitySecretFingerprint,
+        buildIdentity: control.buildIdentity,
+        protocolGeneration: control.protocolGeneration,
         preFenceInventory: inventory,
       },
     };
@@ -721,6 +1359,14 @@ async function executeAction(
         control: {
           ...lockedControl(now()),
           revision: control.revision + 1,
+          ...(control.identitySecretFingerprint && control.buildIdentity &&
+              control.protocolGeneration === DELIVERY_PROTOCOL_GENERATION
+            ? {
+              identitySecretFingerprint: control.identitySecretFingerprint,
+              buildIdentity: control.buildIdentity,
+              protocolGeneration: control.protocolGeneration,
+            }
+            : {}),
         },
       };
     }
@@ -879,7 +1525,12 @@ async function buildAuditMarker(
     !control.preFenceInventory ||
     !control.providerFence ||
     !control.postFenceScan ||
-    !control.followupScan
+    !control.followupScan ||
+    !isHash(control.identitySecretFingerprint) ||
+    !isConfiguredBuildIdentity(control.buildIdentity) ||
+    control.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    await currentIdentitySecretFingerprint(env) !== control.identitySecretFingerprint ||
+    configuredBuildIdentity(env) !== control.buildIdentity
   ) {
     throw new CutoverFailure("control_state_invalid");
   }
@@ -900,12 +1551,70 @@ async function buildAuditMarker(
     followupAutomaticKeyCount: control.followupScan.automaticKeyCount,
     legacyAutoEvidenceSnapshot: "exact-canonical-map" as const,
     legacyAutoEvidence: canonicalEvidence(control.legacyAutoEvidence),
+    identitySecretFingerprint: control.identitySecretFingerprint!,
+    buildIdentity: control.buildIdentity!,
+    protocolGeneration: control.protocolGeneration!,
     constructedAt: constructedAt.toISOString(),
   };
   return {
     ...core,
     proof: await markerProof(env, core),
   };
+}
+
+interface AuditMarkerBindingState {
+  present: boolean;
+  binding?: Pick<
+    CutoverBindingRecord,
+    "identitySecretFingerprint" | "buildIdentity" | "protocolGeneration"
+  >;
+}
+
+async function readAuditMarkerBinding(
+  env: Env,
+): Promise<AuditMarkerBindingState> {
+  try {
+    const raw = await env.STORE.get(DELIVERY_V3_CUTOVER_AUDIT_KEY);
+    if (!raw) return { present: false };
+    const parsed = JSON.parse(raw) as unknown;
+    const marker = await normalizeAuditMarker(env, parsed);
+    return marker && JSON.stringify(marker) === raw
+      ? {
+        present: true,
+        binding: {
+          identitySecretFingerprint: marker.identitySecretFingerprint,
+          buildIdentity: marker.buildIdentity,
+          protocolGeneration: marker.protocolGeneration,
+        },
+      }
+      : { present: true };
+  } catch {
+    return { present: true };
+  }
+}
+
+function markerMatchesBinding(
+  marker: Pick<
+    CutoverBindingRecord,
+    "identitySecretFingerprint" | "buildIdentity" | "protocolGeneration"
+  >,
+  binding: CutoverBindingRecord,
+): boolean {
+  return marker.identitySecretFingerprint === binding.identitySecretFingerprint &&
+    marker.buildIdentity === binding.buildIdentity &&
+    marker.protocolGeneration === binding.protocolGeneration;
+}
+
+async function authoritativeMarkerMatchesControl(
+  env: Env,
+  control: CutoverControlRecord,
+): Promise<boolean> {
+  const marker = await readValidAuditMarker(env);
+  return Boolean(
+    marker &&
+      control.markerAudit &&
+      marker.hash === control.markerAudit.markerHash,
+  );
 }
 
 async function readValidAuditMarker(env: Env): Promise<ValidMarker | undefined> {
@@ -935,6 +1644,7 @@ async function normalizeAuditMarker(
   const value = raw as Partial<DeliveryV3CutoverAuditMarker>;
   if (
     Object.keys(value).sort().join("|") !== [
+      "buildIdentity",
       "constructedAt",
       "followupAutomaticKeyCount",
       "followupScanCompletedAt",
@@ -942,6 +1652,7 @@ async function normalizeAuditMarker(
       "inventoryAutomaticKeyCount",
       "inventoryCompletedAt",
       "inventoryStartedAt",
+      "identitySecretFingerprint",
       "kind",
       "legacyAutoEvidence",
       "legacyAutoEvidenceSnapshot",
@@ -950,6 +1661,7 @@ async function normalizeAuditMarker(
       "postFenceScanStartedAt",
       "proof",
       "proofVersion",
+      "protocolGeneration",
       "providerFence",
       "providerFencedAt",
       "schemaVersion",
@@ -971,6 +1683,9 @@ async function normalizeAuditMarker(
     !validTimestamp(value.followupScanStartedAt) ||
     !validTimestamp(value.followupScanCompletedAt) ||
     !validEvidenceCount(value.followupAutomaticKeyCount) ||
+    !isHash(value.identitySecretFingerprint) ||
+    !isConfiguredBuildIdentity(value.buildIdentity) ||
+    value.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
     !validTimestamp(value.constructedAt) ||
     !isHash(value.proof)
   ) {
@@ -999,9 +1714,17 @@ async function normalizeAuditMarker(
     followupAutomaticKeyCount: value.followupAutomaticKeyCount!,
     legacyAutoEvidenceSnapshot: "exact-canonical-map" as const,
     legacyAutoEvidence: evidence,
+    identitySecretFingerprint: value.identitySecretFingerprint,
+    buildIdentity: value.buildIdentity,
+    protocolGeneration: value.protocolGeneration,
     constructedAt: value.constructedAt,
   };
-  if (await markerProof(env, core) !== value.proof) return undefined;
+  if (
+    await currentIdentitySecretFingerprint(env) !== core.identitySecretFingerprint ||
+    configuredBuildIdentity(env) !== core.buildIdentity ||
+    core.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION ||
+    await markerProof(env, core) !== value.proof
+  ) return undefined;
   return { ...core, proof: value.proof };
 }
 
@@ -1009,8 +1732,10 @@ async function markerProof(
   env: Env,
   core: Omit<DeliveryV3CutoverAuditMarker, "proof">,
 ): Promise<string> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) throw new Error("identity secret is unavailable");
   return hmacSha256Hex(
-    env.TOKEN_SECRET,
+    identitySecret,
     `delivery-v3-cutover-audit\u0000${JSON.stringify(core)}`,
   );
 }
@@ -1039,6 +1764,9 @@ function controlFromMarker(
     revision,
     updatedAt: now.toISOString(),
     legacyAutoEvidence: canonicalEvidence(marker.legacyAutoEvidence),
+    identitySecretFingerprint: marker.identitySecretFingerprint,
+    buildIdentity: marker.buildIdentity,
+    protocolGeneration: marker.protocolGeneration,
     preFenceInventory: inventory,
     providerFence: {
       attested: true,
@@ -1172,6 +1900,28 @@ function normalizeControl(raw: unknown): CutoverControlRecord {
   if (value.pendingOperation) normalizePending(value.pendingOperation);
   if (value.lastOperation) normalizeLastOperation(value.lastOperation);
   const phase = effectivePhase(value as CutoverControlRecord);
+  const hasBoundState = value.phase !== "locked" ||
+    value.preFenceInventory !== undefined ||
+    value.pendingOperation?.action === "inventory";
+  if (
+    (value.identitySecretFingerprint !== undefined &&
+      !isHash(value.identitySecretFingerprint)) ||
+    (value.buildIdentity !== undefined &&
+      !isConfiguredBuildIdentity(value.buildIdentity)) ||
+    (value.protocolGeneration !== undefined &&
+      value.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION) ||
+    (hasBoundState &&
+      (!isHash(value.identitySecretFingerprint) ||
+        !isConfiguredBuildIdentity(value.buildIdentity) ||
+        value.protocolGeneration !== DELIVERY_PROTOCOL_GENERATION)) ||
+    (!hasBoundState &&
+      ((value.identitySecretFingerprint === undefined) !==
+        (value.buildIdentity === undefined) ||
+        (value.identitySecretFingerprint === undefined) !==
+          (value.protocolGeneration === undefined)))
+  ) {
+    throw new Error("cutover identity binding is invalid");
+  }
   if (
     value.pendingOperation &&
     (value.pendingOperation.baseRevision !== value.revision ||
@@ -1276,7 +2026,10 @@ function actionAllowed(
 ): boolean {
   if (action === "inventory") {
     return control.providerFence === undefined &&
-      (phase === "locked" || phase === "inventoried");
+      (phase === "inventoried" ||
+        (phase === "locked" &&
+          (control.phase === "blocked" ||
+            control.identitySecretFingerprint === undefined)));
   }
   if (action === "provider-fence") {
     return control.phase !== "blocked" && phase === "inventoried";
@@ -1596,6 +2349,13 @@ function invalidControlResponse(): Response {
   );
 }
 
+function identityLockedStatusResponse(): Response {
+  return Response.json(
+    { schemaVersion: 3, phase: "locked", automatic: "locked" },
+    { status: 503 },
+  );
+}
+
 function deniedAutomatic(): Response {
   return Response.json({ authorized: false }, { status: 503 });
 }
@@ -1616,6 +2376,16 @@ function safeError(error: string, status: number): Response {
 
 function isHash(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isConfiguredBuildIdentity(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^email-relay-v2-[0-9a-f]{40}$/.test(value);
+}
+
+function isBuildIdentity(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
 function validTimestamp(value: unknown): value is string {

@@ -1,17 +1,34 @@
-import { normalizeEmail, sha256Hex } from "./crypto";
+import {
+  hmacSha256Hex,
+  isPlausibleEmail,
+  normalizeEmail,
+  sha256Hex,
+} from "./crypto";
 
 export interface Env {
   STORE: KVNamespace;
-  /** One Durable Object per authenticated device plus one cutover-control singleton. */
+  /** Recipient-scoped automatic gates, device-scoped test gates, and cutover control. */
   DELIVER_GATE?: DurableObjectNamespace;
   /** Operator-only bearer secret for the single-version cutover control API. */
   DELIVERY_V2_CUTOVER_TOKEN?: string;
   RESEND_API_KEY: string;
   TOKEN_SECRET: string;
+  /** Long-lived root for recipient routing and automatic delivery identity. */
+  IDENTITY_SECRET?: string;
   PUBLIC_BASE_URL: string;
   FROM_EMAIL: string;
   FROM_NAME: string;
   DAILY_QUOTA: string;
+  /** Non-secret immutable deployment/build identity supplied by Worker config. */
+  BUILD_IDENTITY?: string;
+}
+
+export const DELIVERY_PROTOCOL_GENERATION = 2 as const;
+
+export interface DeliveryBinding {
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  buildIdentity: string;
+  readyGeneration: number;
 }
 
 export interface DeviceRecord {
@@ -19,6 +36,9 @@ export interface DeviceRecord {
   createdAt: string;
   /** Present only on identities issued by the delivery-v2 Worker. */
   deliveryGeneration?: 2;
+  protocolGeneration?: number;
+  buildIdentity?: string;
+  readyGeneration?: number;
 }
 
 export interface AuthenticatedDevice {
@@ -29,6 +49,9 @@ export interface AuthenticatedDevice {
   recipientIdentity: string;
   createdAt: string;
   deliveryGeneration?: 2;
+  protocolGeneration?: number;
+  buildIdentity?: string;
+  readyGeneration?: number;
 }
 
 export interface PendingVerify {
@@ -69,6 +92,9 @@ export interface DeliveryV3CutoverAuditMarker {
   followupAutomaticKeyCount: number;
   legacyAutoEvidenceSnapshot: "exact-canonical-map";
   legacyAutoEvidence: Record<string, "done" | "attempted">;
+  identitySecretFingerprint: string;
+  buildIdentity: string;
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
   constructedAt: string;
   proof: string;
 }
@@ -98,9 +124,12 @@ export async function hashDeviceToken(
 
 export async function hashRecipientIdentity(
   normalizedEmail: string,
-  secret: string,
+  identitySecret: string,
 ): Promise<string> {
-  return sha256Hex(`${secret}:recipient:${normalizeEmail(normalizedEmail)}`);
+  return hmacSha256Hex(
+    identitySecret,
+    `delivery-v2-recipient\u0000${normalizeEmail(normalizedEmail)}`,
+  );
 }
 
 export async function hashPendingToken(
@@ -129,24 +158,33 @@ export async function putPending(
   });
 }
 
-export async function takePending(
+export async function peekPendingByIdentity(
   env: Env,
-  rawToken: string,
+  pendingIdentity: string,
 ): Promise<PendingVerify | null> {
-  const hash = await hashPendingToken(rawToken, env.TOKEN_SECRET);
-  const key = pendingKey(hash);
-  const raw = await env.STORE.get(key);
+  if (!isHash(pendingIdentity)) return null;
+  const raw = await env.STORE.get(pendingKey(pendingIdentity));
   if (!raw) return null;
-  await env.STORE.delete(key);
   const parsed = parsePending(raw);
   if (!parsed || Date.parse(parsed.expiresAt) <= Date.now()) return null;
   return parsed;
+}
+
+export async function deletePendingByIdentity(
+  env: Env,
+  pendingIdentity: string,
+): Promise<void> {
+  if (!isHash(pendingIdentity)) {
+    throw new Error("pending identity is invalid");
+  }
+  await env.STORE.delete(pendingKey(pendingIdentity));
 }
 
 export async function putDevice(
   env: Env,
   rawToken: string,
   email: string,
+  binding: DeliveryBinding,
   now: Date = new Date(),
 ): Promise<void> {
   const hash = await hashDeviceToken(rawToken, env.TOKEN_SECRET);
@@ -154,6 +192,7 @@ export async function putDevice(
     email: normalizeEmail(email),
     createdAt: now.toISOString(),
     deliveryGeneration: 2,
+    ...binding,
   };
   // Approximately one year; expiry revokes inactive devices.
   await env.STORE.put(deviceV2Key(hash), JSON.stringify(value), {
@@ -165,6 +204,8 @@ export async function authenticateDevice(
   env: Env,
   rawToken: string,
 ): Promise<AuthenticatedDevice | null> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) return null;
   const identity = await hashDeviceToken(rawToken, env.TOKEN_SECRET);
   const v2Raw = await env.STORE.get(deviceV2Key(identity));
   const legacyRaw = v2Raw === null
@@ -177,9 +218,12 @@ export async function authenticateDevice(
   return {
     identity,
     email: device.email,
-    recipientIdentity: await hashRecipientIdentity(device.email, env.TOKEN_SECRET),
+    recipientIdentity: await hashRecipientIdentity(device.email, identitySecret),
     createdAt: device.createdAt,
     deliveryGeneration: device.deliveryGeneration,
+    protocolGeneration: device.protocolGeneration,
+    buildIdentity: device.buildIdentity,
+    readyGeneration: device.readyGeneration,
   };
 }
 
@@ -242,6 +286,10 @@ export async function scanLegacyAutoDeliveryEvidence(
     ) => void | Promise<void>;
   } = {},
 ): Promise<Record<string, "done" | "attempted">> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) {
+    throw new Error("legacy automatic delivery scan is unavailable");
+  }
   const evidence: Record<string, "done" | "attempted"> = {};
   let cursor: string | undefined;
   do {
@@ -264,8 +312,9 @@ export async function scanLegacyAutoDeliveryEvidence(
 
       let identity: string;
       if (HASHED_LEGACY_AUTO_KEY.test(logicalKey)) {
-        identity = await sha256Hex(
-          `${env.TOKEN_SECRET}:legacy-auto-key:${logicalKey}`,
+        identity = await hashLegacyAutomaticLogicalIdentity(
+          identitySecret,
+          logicalKey,
         );
       } else {
         const plain = PLAIN_LEGACY_AUTO_KEY.exec(logicalKey);
@@ -275,7 +324,7 @@ export async function scanLegacyAutoDeliveryEvidence(
           );
         }
         identity = await hashLegacyAutoDeliveryIdentity(
-          env.TOKEN_SECRET,
+          identitySecret,
           plain[1]!,
           plain[2]!,
         );
@@ -301,14 +350,24 @@ export async function scanLegacyAutoDeliveryEvidence(
 }
 
 export async function hashLegacyAutoDeliveryIdentity(
-  secret: string,
+  identitySecret: string,
   date: string,
   normalizedRecipient: string,
 ): Promise<string> {
   const logicalKey = `arxiv-daily:auto:${await sha256Hex(
     `${date}\u0000${normalizeEmail(normalizedRecipient)}`,
   )}`;
-  return sha256Hex(`${secret}:legacy-auto-key:${logicalKey}`);
+  return hashLegacyAutomaticLogicalIdentity(identitySecret, logicalKey);
+}
+
+async function hashLegacyAutomaticLogicalIdentity(
+  identitySecret: string,
+  logicalKey: string,
+): Promise<string> {
+  return hmacSha256Hex(
+    identitySecret,
+    `delivery-v2-legacy-auto-key\u0000${logicalKey}`,
+  );
 }
 
 function validTimestamp(value: unknown): value is string {
@@ -322,7 +381,13 @@ function parseDevice(raw: string, expectV2: boolean): DeviceRecord | null {
     if (
       !email ||
       !validTimestamp(value.createdAt) ||
-      (expectV2 ? value.deliveryGeneration !== 2 : value.deliveryGeneration !== undefined)
+      (expectV2 ? value.deliveryGeneration !== 2 : value.deliveryGeneration !== undefined) ||
+      (value.protocolGeneration !== undefined &&
+        (!Number.isSafeInteger(value.protocolGeneration) || value.protocolGeneration < 1)) ||
+      (value.buildIdentity !== undefined &&
+        !isBuildIdentity(value.buildIdentity)) ||
+      (value.readyGeneration !== undefined &&
+        (!Number.isSafeInteger(value.readyGeneration) || value.readyGeneration < 1))
     ) {
       return null;
     }
@@ -330,10 +395,56 @@ function parseDevice(raw: string, expectV2: boolean): DeviceRecord | null {
       email,
       createdAt: value.createdAt,
       ...(value.deliveryGeneration === 2 ? { deliveryGeneration: 2 as const } : {}),
+      ...(value.protocolGeneration !== undefined
+        ? { protocolGeneration: value.protocolGeneration }
+        : {}),
+      ...(value.buildIdentity !== undefined
+        ? { buildIdentity: value.buildIdentity }
+        : {}),
+      ...(value.readyGeneration !== undefined
+        ? { readyGeneration: value.readyGeneration }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+export function configuredBuildIdentity(env: Env): string | null {
+  const value = env.BUILD_IDENTITY?.trim() ?? "";
+  return /^email-relay-v2-[0-9a-f]{40}$/.test(value) ? value : null;
+}
+
+export function configuredIdentitySecret(env: Env): string | null {
+  const value = env.IDENTITY_SECRET?.trim() ?? "";
+  return value.length >= 16 && value.length <= 1024 ? value : null;
+}
+
+export function automaticRuntimeConfigured(env: Env): boolean {
+  if (
+    !env.DELIVER_GATE ||
+    !env.STORE ||
+    !configuredBuildIdentity(env) ||
+    !env.TOKEN_SECRET?.trim() ||
+    !configuredIdentitySecret(env) ||
+    !env.RESEND_API_KEY?.trim() ||
+    !isPlausibleEmail(env.FROM_EMAIL ?? "")
+  ) return false;
+  try {
+    const publicUrl = new URL(env.PUBLIC_BASE_URL ?? "");
+    return publicUrl.protocol === "https:" && Boolean(publicUrl.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isBuildIdentity(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+}
+
+function isHash(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 function parsePending(raw: string): PendingVerify | null {

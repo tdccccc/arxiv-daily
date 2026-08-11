@@ -1,4 +1,4 @@
-import { sha256Hex, utcDateKey } from "./crypto";
+import { utcDateKey } from "./crypto";
 import {
   validateDeliverRequest,
   type DeliverBody,
@@ -6,8 +6,10 @@ import {
   type ValidatedDeliverRequest,
 } from "./deliver-logic";
 import {
+  configuredIdentitySecret,
   dailyQuotaLimit,
   hashLegacyAutoDeliveryIdentity,
+  hashRecipientIdentity,
   type AuthenticatedDevice,
   type Env,
   type LegacyDeliveryEvidence,
@@ -43,7 +45,8 @@ interface LedgerRecord {
   schemaVersion: 2;
   keyHash: string;
   keyKind: DeliveryKeyKind;
-  deviceIdentity: string;
+  /** Test-only binding; automatic records are recipient scoped. */
+  deviceIdentity?: string;
   recipientIdentity: string;
   fingerprint: string;
   status:
@@ -81,7 +84,7 @@ interface ImmediateResponse {
 
 type PrepareResult = PreparedDelivery | ImmediateResponse;
 
-/** One instance is routed per authenticated device, serializing quota + ledger. */
+/** Recipient automatic and device test requests serialize within their scope. */
 export class DeliverGate {
   constructor(
     private readonly state: DurableObjectState,
@@ -121,7 +124,7 @@ export class DeliverGate {
     if (raw === undefined) return undefined;
     const record = normalizeLedgerRecord(raw);
     if (
-      record.deviceIdentity !== device.identity ||
+      record.deviceIdentity !== undefined ||
       record.recipientIdentity !== device.recipientIdentity ||
       record.fingerprint !== request.fingerprint ||
       record.keyKind !== "auto"
@@ -142,6 +145,13 @@ export class DeliverGate {
     const deliveryGeneration = request.headers.get(
       "X-Device-Delivery-Generation",
     );
+    const protocolGeneration = request.headers.get(
+      "X-Device-Protocol-Generation",
+    );
+    const buildIdentity = request.headers.get("X-Device-Build-Identity") ?? "";
+    const readyGeneration = request.headers.get("X-Device-Ready-Generation");
+    const parsedProtocolGeneration = positiveInteger(protocolGeneration);
+    const parsedReadyGeneration = positiveInteger(readyGeneration);
     if (
       !isHash(deviceIdentity) ||
       !isHash(recipientIdentity) ||
@@ -160,10 +170,11 @@ export class DeliverGate {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
     const normalizedTo = typeof body.to === "string" ? body.to.trim().toLowerCase() : "";
-    const computedRecipient = await sha256Hex(
-      `${this.env.TOKEN_SECRET}:recipient:${normalizedTo}`,
-    );
-    if (!normalizedTo || computedRecipient !== recipientIdentity) {
+    const identitySecret = configuredIdentitySecret(this.env);
+    const computedRecipient = identitySecret && normalizedTo
+      ? await hashRecipientIdentity(normalizedTo, identitySecret)
+      : "";
+    if (!normalizedTo || !identitySecret || computedRecipient !== recipientIdentity) {
       return Response.json(
         { error: "authenticated recipient binding does not match" },
         { status: 403 },
@@ -176,6 +187,13 @@ export class DeliverGate {
       email: normalizedTo,
       createdAt: deviceCreatedAt,
       ...(deliveryGeneration === "2" ? { deliveryGeneration: 2 as const } : {}),
+      ...(parsedProtocolGeneration !== undefined
+        ? { protocolGeneration: parsedProtocolGeneration }
+        : {}),
+      ...(isBuildIdentity(buildIdentity) ? { buildIdentity } : {}),
+      ...(parsedReadyGeneration !== undefined
+        ? { readyGeneration: parsedReadyGeneration }
+        : {}),
     };
     const validated = await validateDeliverRequest({
       device,
@@ -192,19 +210,21 @@ export class DeliverGate {
     let legacyEvidence: LegacyDeliveryEvidence = "none";
     if (validated.value.keyKind === "auto") {
       try {
-        const imported = await this.readImportedLegacyLedger(validated.value, device);
-        if (imported) return imported.response;
         const evidenceIdentity = await hashLegacyAutoDeliveryIdentity(
-          this.env.TOKEN_SECRET,
+          identitySecret,
           validated.value.date,
           device.email,
         );
         const decision = await authorizeAutomaticDelivery(this.env, {
           evidenceIdentity,
-          deviceCreatedAt: device.createdAt,
           deliveryGeneration: device.deliveryGeneration,
+          protocolGeneration: device.protocolGeneration,
+          buildIdentity: device.buildIdentity,
+          readyGeneration: device.readyGeneration,
         });
         if (!decision.authorized) throw new Error("automatic delivery is locked");
+        const imported = await this.readImportedLegacyLedger(validated.value, device);
+        if (imported) return imported.response;
         legacyEvidence = decision.legacyEvidence;
       } catch {
         return Response.json(
@@ -330,7 +350,9 @@ export class DeliverGate {
         : normalizeLedgerRecord(existingRaw);
       if (existing) {
         if (
-          existing.deviceIdentity !== device.identity ||
+          (request.keyKind === "auto"
+            ? existing.deviceIdentity !== undefined
+            : existing.deviceIdentity !== device.identity) ||
           existing.recipientIdentity !== device.recipientIdentity ||
           existing.fingerprint !== request.fingerprint ||
           existing.keyKind !== request.keyKind
@@ -448,7 +470,6 @@ export class DeliverGate {
           schemaVersion: 2,
           keyHash: request.logicalKeyHash,
           keyKind: "auto",
-          deviceIdentity: device.identity,
           recipientIdentity: device.recipientIdentity,
           fingerprint: request.fingerprint,
           status: legacyEvidence === "attempted"
@@ -495,7 +516,7 @@ export class DeliverGate {
         schemaVersion: 2,
         keyHash: request.logicalKeyHash,
         keyKind: request.keyKind,
-        deviceIdentity: device.identity,
+        ...(request.keyKind === "test" ? { deviceIdentity: device.identity } : {}),
         recipientIdentity: device.recipientIdentity,
         fingerprint: request.fingerprint,
         status: "reserved",
@@ -618,7 +639,9 @@ function normalizeLedgerRecord(raw: unknown): LedgerRecord {
     value.schemaVersion !== 2 ||
     !isHash(value.keyHash ?? "") ||
     (value.keyKind !== "auto" && value.keyKind !== "test") ||
-    !isHash(value.deviceIdentity ?? "") ||
+    (value.keyKind === "auto"
+      ? value.deviceIdentity !== undefined
+      : !isHash(value.deviceIdentity ?? "")) ||
     !isHash(value.recipientIdentity ?? "") ||
     !isHash(value.fingerprint ?? "") ||
     (value.status !== "reserved" &&
@@ -712,6 +735,16 @@ function normalizeQuota(raw: unknown): number {
 
 function isHash(value: string): boolean {
   return /^[0-9a-f]{64}$/.test(value);
+}
+
+function positiveInteger(value: string | null): number | undefined {
+  if (!value || !/^[1-9]\d*$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function isBuildIdentity(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
 function validTimestamp(value: unknown): value is string {

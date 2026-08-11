@@ -1,17 +1,19 @@
 import { isPlausibleEmail, normalizeEmail, randomToken, sha256Hex } from "./crypto";
 import {
   authenticateDevice,
+  automaticRuntimeConfigured,
   checkAndIncrRateLimit,
-  putDevice,
+  hashPendingToken,
   putPending,
-  takePending,
   type Env,
 } from "./kv";
 import { sendResendEmail } from "./resend";
-import type { DeliverBody } from "./deliver-logic";
+import { deliveryKeyKind, type DeliverBody } from "./deliver-logic";
 import {
   fetchCutoverStatus,
+  fetchPublicReadiness,
   isCutoverOperationId,
+  issueReadyBoundDevice,
   postCutoverAction,
   type CutoverAction,
 } from "./cutover-control";
@@ -55,6 +57,15 @@ async function handle(request: Request, env: Env): Promise<Response> {
       service: "arxiv-daily-email-relay",
       beta: true,
     });
+  }
+  if (request.method === "GET" && path === "/ready") {
+    const readiness = await fetchPublicReadiness(env);
+    if (!readiness) return json({ automatic: "locked" }, 503);
+    const ready = readiness.phase === "ready" &&
+      readiness.automatic === "ready" &&
+      readiness.readyGeneration !== null &&
+      readiness.readyGeneration > 0;
+    return json(readiness, ready ? 200 : 503);
   }
 
   if (request.method === "POST" && path === "/v1/verify/start") {
@@ -144,17 +155,17 @@ async function verifyComplete(url: URL, env: Env): Promise<Response> {
   if (!token) {
     return htmlPage("Missing token", "<p>Invalid verification link.</p>", 400);
   }
-  const pending = await takePending(env, token);
-  if (!pending) {
+  const pendingIdentity = await hashPendingToken(token, env.TOKEN_SECRET);
+  const issuance = await issueReadyBoundDevice(env, pendingIdentity);
+  if (issuance.status === "invalid") return expiredVerificationPage();
+  if (issuance.status !== "issued") {
     return htmlPage(
-      "Link expired",
-      "<p>This verification link is invalid or expired. Request a new one from the plugin.</p>",
-      400,
+      "Verification unavailable",
+      "<p>Official delivery is not ready. This verification link remains valid; retry later.</p>",
+      503,
     );
   }
-
-  const deviceToken = randomToken(32);
-  await putDevice(env, deviceToken, pending.email);
+  const deviceToken = issuance.token;
 
   return htmlPage(
     "Email verified",
@@ -166,8 +177,17 @@ async function verifyComplete(url: URL, env: Env): Promise<Response> {
   );
 }
 
-/** Authenticate first, then route every delivery for one device to one DO. */
+/** Authenticate first, then route by automatic recipient or test device scope. */
 async function deliverViaGate(request: Request, env: Env): Promise<Response> {
+  const idemp = request.headers.get("Idempotency-Key");
+  const keyKind = deliveryKeyKind(idemp);
+  if (keyKind === "auto" && !automaticRuntimeConfigured(env)) {
+    return json(
+      { error: "automatic delivery is unavailable", ambiguous: false },
+      503,
+    );
+  }
+
   assertSecrets(env);
   const auth = request.headers.get("Authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(auth);
@@ -177,7 +197,21 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
   const device = await authenticateDevice(env, rawToken);
   if (!device) return json({ error: "invalid or revoked token" }, 401);
 
-  const idemp = request.headers.get("Idempotency-Key");
+  if (keyKind === "auto") {
+    const readiness = await fetchPublicReadiness(env);
+    if (
+      !readiness ||
+      readiness.phase !== "ready" ||
+      readiness.automatic !== "ready" ||
+      readiness.readyGeneration === null
+    ) {
+      return json(
+        { error: "delivery cutover is not ready", ambiguous: false },
+        503,
+      );
+    }
+  }
+
   let bodyText: string;
   try {
     bodyText = await request.text();
@@ -190,6 +224,13 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
     return json({ error: "invalid JSON body" }, 400);
   }
 
+  if (!keyKind) {
+    return json(
+      { error: "Idempotency-Key must be a supported bounded auto or test key" },
+      400,
+    );
+  }
+
   const gate = env.DELIVER_GATE;
   if (!gate) {
     return json(
@@ -200,8 +241,10 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
       503,
     );
   }
-
-  const objectId = gate.idFromName(`device-v2:${device.identity}`);
+  const scopeIdentity = keyKind === "auto"
+    ? `recipient-v2:${device.recipientIdentity}`
+    : `device-v2:${device.identity}`;
+  const objectId = gate.idFromName(scopeIdentity);
   const stub = gate.get(objectId);
   const doReq = new Request("https://deliver-gate/run", {
     method: "POST",
@@ -210,6 +253,9 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
       "X-Device-Identity": device.identity,
       "X-Device-Created-At": device.createdAt,
       "X-Device-Delivery-Generation": String(device.deliveryGeneration ?? ""),
+      "X-Device-Protocol-Generation": String(device.protocolGeneration ?? ""),
+      "X-Device-Build-Identity": device.buildIdentity ?? "",
+      "X-Device-Ready-Generation": String(device.readyGeneration ?? ""),
       "X-Recipient-Identity": device.recipientIdentity,
       ...(idemp ? { "Idempotency-Key": idemp } : {}),
     },
@@ -327,6 +373,14 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function expiredVerificationPage(): Response {
+  return htmlPage(
+    "Link expired",
+    "<p>This verification link is invalid or expired. Request a new one from the plugin.</p>",
+    400,
+  );
+}
+
 function htmlPage(title: string, body: string, status = 200): Response {
   const doc =
     `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>` +
@@ -338,6 +392,8 @@ function htmlPage(title: string, body: string, status = 200): Response {
     status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
       ...CORS_HEADERS,
     },
   });

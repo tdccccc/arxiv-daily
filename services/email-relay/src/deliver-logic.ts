@@ -32,6 +32,16 @@ const TEST_KEY = /^arxiv-daily:test:[0-9a-f]{32}$/;
 const MAX_SUBJECT_LENGTH = 500;
 const MAX_BODY_LENGTH = 2_000_000;
 
+export function deliveryKeyKind(
+  logicalKey: string | null,
+): DeliveryKeyKind | undefined {
+  const normalized = logicalKey?.trim() ?? "";
+  if (normalized.length > 128) return undefined;
+  return AUTO_KEY.test(normalized)
+    ? "auto"
+    : TEST_KEY.test(normalized) ? "test" : undefined;
+}
+
 export async function validateDeliverRequest(input: {
   device: AuthenticatedDevice;
   idempotencyHeader: string | null;
@@ -68,12 +78,8 @@ export async function validateDeliverRequest(input: {
   }
 
   const logicalKey = input.idempotencyHeader?.trim() ?? "";
-  const keyKind: DeliveryKeyKind | undefined = AUTO_KEY.test(logicalKey)
-    ? "auto"
-    : TEST_KEY.test(logicalKey)
-      ? "test"
-      : undefined;
-  if (!keyKind || logicalKey.length > 128) {
+  const keyKind = deliveryKeyKind(logicalKey);
+  if (!keyKind) {
     return {
       ok: false,
       status: 400,
@@ -86,18 +92,22 @@ export async function validateDeliverRequest(input: {
   // let one logical digest select multiple provider keys.
   const logicalKeyHash = await sha256Hex(JSON.stringify(
     keyKind === "auto"
-      ? ["delivery-v2", "auto", input.device.identity, input.device.recipientIdentity, date]
+      ? ["delivery-v2", "auto", input.device.recipientIdentity, date]
       : ["delivery-v2", "test", input.device.identity, input.device.recipientIdentity, logicalKey],
   ));
-  const fingerprint = await sha256Hex(JSON.stringify([
-    input.device.identity,
-    input.device.recipientIdentity,
-    date,
-    subject,
-    html,
-    text,
-    keyKind,
-  ]));
+  const fingerprint = await sha256Hex(JSON.stringify(
+    keyKind === "auto"
+      ? [input.device.recipientIdentity, date, subject, html, text, keyKind]
+      : [
+        input.device.identity,
+        input.device.recipientIdentity,
+        date,
+        subject,
+        html,
+        text,
+        keyKind,
+      ],
+  ));
   const providerKey = [
     "arxiv-daily:relay:v2",
     keyKind,
