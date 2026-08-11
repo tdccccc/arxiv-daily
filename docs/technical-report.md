@@ -68,7 +68,7 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 ### Email Relay Worker
 
-`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理健康检查、验证起始/完成、`/v1/deliver` 与 operator-only cutover staging。认证后按设备路由到唯一 `DeliverGate` Durable Object，幂等 ledger 与 UTC 日配额在该对象的存储事务内更新；`DELIVER_GATE` 或 v2 cutover proof 不可用时自动投递 fail closed，不存在无 DO fallback。
+`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理 liveness、automatic readiness、验证起始/完成、`/v1/deliver` 与 operator-only cutover control。`DELIVER_GATE` 同一 Durable Object 类承载 cutover singleton、按收件人划分的 automatic gate 和按设备划分的 test gate；幂等 ledger 与 UTC 日配额在相应对象的 storage transaction 内更新。automatic 路径还要求 singleton 中的永久 deployment binding、control 与 KV audit marker 一致并处于 ready；绑定或运行依赖不可验证时 fail closed，不存在无 DO fallback。
 
 ### VS Code companion
 
@@ -110,7 +110,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 | Obsidian 插件 | `plugin/main.ts` → 打包 `plugin/main.js` | 插件生命周期、命令、Dashboard、进程内调度 |
 | CLI | `apps/cli/src/main.ts` → `dist/arxiv-daily-cli.cjs`（bin `arxiv-daily`） | 子命令驱动的批处理/运维 |
 | 兼容 Python | `arxiv_daily.py` | `node apps/cli/dist/arxiv-daily-cli.cjs …` |
-| Worker | `services/email-relay/src/index.ts` | `fetch` 路由 `/health`、`/v1/verify/*`、`/v1/deliver` 与受 operator bearer 保护的 `/internal/delivery-v2/cutover` |
+| Worker | `services/email-relay/src/index.ts` | `fetch` 路由 `/health`、`/ready`、`/v1/verify/*`、`/v1/deliver` 与受 operator bearer 保护的 `/internal/delivery-v2/cutover` |
 | VS Code companion | `extensions/vscode-arxiv-daily/src/extension.js` | 命令注册、Reading Dashboard 与 CLI 进程任务桥接 |
 
 ### CLI 命令面
@@ -202,13 +202,17 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 
 **Worker：**
 
-- 路由：`GET /|/health`、`POST /v1/verify/start`、`GET /v1/verify`、`POST /v1/deliver`，以及受 `DELIVERY_V2_CUTOVER_TOKEN` bearer 保护的 `POST /internal/delivery-v2/cutover`。
-- 验证限流仍是 KV best-effort counter：邮箱 3 次/小时、IP 10 次/小时；超限返回统一“已发送”形态。验证完成后 KV 以 secret-scoped token hash 为 key 保存绑定邮箱与 v2 创建时间，设备记录 TTL 约一年；验证页只展示 device token，不回显收件地址。
-- `/v1/deliver` 先认证 device token，检查 `to` 与绑定邮箱一致，再按 secret-scoped device identity 路由到单一 `DeliverGate`。`DELIVER_GATE` 缺失时返回 503，不执行 provider。
-- auto ledger identity 由服务端从 device identity、recipient identity 和 date 推导；客户端 auto key 的 hash 不参与 ledger/provider identity。test identity 另含每次测试的随机 logical key。relay provider key 从服务端 identity 稳定推导，只含有界哈希，不含明文收件人。
-- Durable Object ledger 状态为 `reserved | attempted | done | rejected`。请求 fingerprint 防止同一 identity 绑定不同内容；ledger 与按 auto/test、UTC 日期划分的 quota 在同一设备对象的 storage transaction 中预占。`attempted`、`done` 和 `rejected` 重放都不再次调用 provider；测试终态保留 30 天后由 alarm 清理，automatic ledger 不做该清理。
+- 路由：`GET /|/health` 始终提供稳定 liveness；`GET /ready` 只有在 automatic runtime 配置完整，且 authoritative cutover 状态为 ready 时返回 200。验证与投递入口为 `POST /v1/verify/start`、`GET /v1/verify`、`POST /v1/deliver`；`GET|POST /internal/delivery-v2/cutover` 受 `DELIVERY_V2_CUTOVER_TOKEN` bearer 保护。
+- 验证起始限流是 KV best-effort counter：邮箱 3 次/小时、IP 10 次/小时；超限返回统一“已发送”形态。起始请求可在 automatic 尚未 ready 时发送 magic link，但完成入口不会提前消费 pending token 或签发 device token。
+- 验证完成把 pending token 的 secret-scoped hash 交给 cutover singleton 串行处理。singleton 只在永久 binding、ready control、KV marker 与当前 build/protocol/identity 一致时建立不可裁剪的 issuance claim；device token 由 `TOKEN_SECRET` 和 pending identity 确定性派生。KV 设备记录以 token hash 为 key，保存规范化邮箱及 protocol/build/ready generation，TTL 约一年；验证页只展示 device token，不回显收件地址。KV 写入、删除或响应结果不明时，同一有效 claim 只重放同一个 token；pending 到期或 generation 不匹配后不再披露。
+- `IDENTITY_SECRET` 独立派生 recipient identity、legacy evidence identity、automatic Durable Object 路由、provider identity、cutover identity fingerprint 与 marker proof。轮换 `TOKEN_SECRET` 会使既有 token 失效；相同邮箱重新验证后仍映射到原 recipient scope。`IDENTITY_SECRET`、合法 build identity 或 protocol generation 与永久 binding 不一致时，status、readiness、token issuance、automatic authorization 和 cutover action 都保持 locked。
+- `/v1/deliver` 先认证 device token并检查 `to` 与绑定邮箱一致。automatic 请求还会先读 readiness，再路由到 `recipient-v2:<recipientIdentity>`；同一邮箱的多个 token 因此共享 automatic ledger、quota 与 provider key。test 请求路由到 `device-v2:<deviceIdentity>`，使用客户端每次生成的随机 test logical key，不依赖 automatic cutover readiness。
+- automatic ledger identity 由服务端从 recipient identity 和请求日期推导，device identity 与客户端 auto key 的 digest 不参与 ledger、fingerprint 或 provider identity。test identity 另含 device identity、recipient identity 和完整 test logical key。relay provider key 只含服务端有界哈希，不含明文收件人。
+- Durable Object ledger 状态为 `reserved | attempted | done | rejected | legacy-done | legacy-attempted`。请求 fingerprint 防止同一 identity 绑定不同内容；ledger 与按 auto/test、当前 UTC 日期划分的 quota 在相应 recipient/device 对象的 storage transaction 中预占。automatic authorization 发生在 imported 或 existing ledger 重放之前；`attempted`、`done`、`rejected` 与 legacy 阻断记录的重放均不再次调用 provider。test 终态保留 30 天后由 alarm 清理，automatic ledger 不做该清理。
 - Resend 明确拒绝映射为 relay 422/429 终态并回退 quota；transport、非白名单 HTTP、无效成功体，或 provider 接受后 completion storage 失败，均保留 `attempted` 阻断并返回 ambiguous。成功 ledger 与响应只保存 `{ "ok": true }`；provider response body 和 provider ID 验证后丢弃。
-- automatic 流量还要求对应设备 Durable Object 中的 v2 cutover observation ready。全局 proof 合并旧 KV 的正向 delivered/attempted evidence，并经过 visibility 与 pending-TTL barrier；KV 空扫描不证明旧投递不存在。pre-cutover/legacy device 无法证明 absence 时永久 fail closed，只有 proof ready 后签发的 v2 device identity 可在无 legacy evidence 时开始新的 automatic delivery。该协议按 quiesced single-version cutover 设计，不提供 mixed-version 并行或安全回滚保证。
+- cutover singleton 固定为 `delivery-cutover:v3`。首次 inventory 在同一个 DO storage transaction 内建立 `cutover-binding:v1`、`cutover-state-index:v1` 与 pending control；binding 固定 `IDENTITY_SECRET` fingerprint、精确 `email-relay-v2-<40 hex source SHA>` build identity 和 protocol generation。后续 status/action/issue/automatic 以及 operation replay 都先验证该 binding；binding 缺失但 control、operation、issuance claim、marker 或 state index 任一存活时，不会把对象当作全新 cutover。
+- cutover 扫描两代 automatic KV key、忽略已知 test key，并把 exact secret-scoped `done | attempted` evidence 合并到 HMAC audit marker；未知 key、扫描失败、容量/时限超界和错过 provider-fence pending window 均阻断。operator 对旧 Resend credential 已撤销的精确 attestation 构成跨 Worker provider fence；marker 写入后需两次、每次至少间隔 60 秒的 observation，随后才可 seal 为 ready。KV marker 只用于审计/恢复，automatic readiness 的权威状态仍在 singleton DO。
+- cutover mutation 与返回 200 的 monotonic no-op 都用永久 operation ID 绑定 action/input/status/body；精确重放只能在 binding/control/marker 一致性检查后返回原响应。control 缺失或损坏时只允许与永久 binding 和有效 marker 一致的 repair；结果不明的 pending repair 只能由原 operation 恢复，其他 operation 不能接管。多个恢复载体同时永久丢失或损坏时保持 locked。
 - 出站 Resend key 仅由 Worker secret 提供。系统没有邮件 outbox 或后台重试 daemon；最终 provider 去重仍依赖 Resend/relay 正确执行稳定 idempotency key，因此不声明严格 distributed exactly-once。
 
 ### Dashboard 与命令
@@ -324,8 +328,8 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### 环境变量与 secrets
 
 - `resolveResendApiKey(email, env)` **支持** env `ARXIV_DAILY_RESEND_API_KEY` 优先于 `email.apiKey`，但当前 CLI/插件调用均传入空 env，**实际只读 settings 中的 apiKey**。  
-- Worker secrets：`RESEND_API_KEY`、`TOKEN_SECRET`、operator-only `DELIVERY_V2_CUTOVER_TOKEN`（均通过 `wrangler secret put` 配置）。
-- Worker vars：`PUBLIC_BASE_URL`、`FROM_EMAIL`、`FROM_NAME`、`DAILY_QUOTA`（默认 `"5"`）；`DELIVER_GATE` 是必需 Durable Object binding，`STORE` 用于验证设备、best-effort 验证限流与 cutover legacy evidence。
+- Worker runtime secrets：`RESEND_API_KEY`、`TOKEN_SECRET`、长期稳定的 `IDENTITY_SECRET`、operator-only `DELIVERY_V2_CUTOVER_TOKEN`。`TOKEN_SECRET` 用于 token/pending authentication；`IDENTITY_SECRET` 用于 recipient/automatic identity 与 cutover marker/binding。
+- Worker vars：`PUBLIC_BASE_URL`、`FROM_EMAIL`、`FROM_NAME`、`DAILY_QUOTA`（默认 `"5"`）以及必须满足 `email-relay-v2-<40 lowercase hex>` 的 `BUILD_IDENTITY`。仓库 `wrangler.toml` 不提供 build identity 默认值；bundle/deploy 调用方需按 source SHA 注入。`DELIVER_GATE` 是必需 Durable Object binding，`STORE` 用于验证 pending/device、best-effort 验证限流、legacy evidence 与 cutover audit marker。
 
 ### 清单、版本与产品单元
 
@@ -375,7 +379,7 @@ core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线�
 
 - LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。  
 - 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页只用 `Configured` 表示已有密钥；stored LLM/Resend/hosted secret 不写入输入 DOM，用户通过 Replace/Cancel/Clear 明确变更。
-- Worker 不向客户端暴露 Resend key；设备 token 只在验证完成页展示，KV key 使用 secret-scoped token hash。验证设备值仍保存规范化绑定邮箱以执行 recipient 校验；DO 名称、provider key、ledger、cutover/legacy sidecar 与公开成功响应使用哈希 identity 或无内容枚举，不保存 raw recipient、provider response body 或 provider ID。
+- Worker 不向客户端暴露 Resend key；设备 token 只在验证完成页展示，KV key 使用 `TOKEN_SECRET` 作用域的 token hash。验证 pending/device 值仍保存规范化绑定邮箱以执行 recipient 校验；recipient/legacy identity、DO 名称、provider key、ledger、cutover control/marker 与公开成功响应使用 `IDENTITY_SECRET` 作用域哈希或无内容枚举，不保存 raw recipient、raw token、provider response body 或 provider ID。cutover status 不公开 identity fingerprint。
 
 ### 输入与路径安全
 
