@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { noticeBanner, readPakoNotice, root, validateSemVer } from "../release-utils.mjs";
+import {
+  manifestFiles,
+  noticeBanner,
+  packageFiles,
+  readPakoNotice,
+  root,
+  validateSemVer,
+} from "../release-utils.mjs";
 
 const valid = [
   "0.0.0",
@@ -40,6 +47,17 @@ test("validateSemVer rejects prefixes, partials, whitespace, and leading zeroes"
   assert.throws(() => validateSemVer(undefined), /Invalid SemVer/);
 });
 
+test("release tools share the root release package contract", () => {
+  assert.deepEqual(packageFiles, [
+    "package.json",
+    "plugin/package.json",
+    "packages/core/package.json",
+    "packages/node-runtime/package.json",
+    "apps/cli/package.json",
+  ]);
+  assert.deepEqual(manifestFiles, ["manifest.json", "plugin/manifest.json"]);
+});
+
 test("the release workflow runs the release-tool tests during verification", async () => {
   const workflow = await readFile(`${root}/.github/workflows/release.yml`, "utf8");
   const verifyWorkspace = workflow.match(/- name: Verify workspace\n\s+run: \|\n(?<commands>(?:\s{10}.+\n)+)/);
@@ -48,7 +66,7 @@ test("the release workflow runs the release-tool tests during verification", asy
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run lint$/m);
   assert.match(
     verifyWorkspace.groups.commands,
-    /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m,
+    /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1$/m,
   );
 });
 
@@ -63,9 +81,35 @@ test("trusted CLI publishing is OIDC-only and constrained to immutable releases"
   assert.match(publishWorkflow, /^\s+run: npm install --global npm@\^11\.5\.1$/m);
   assert.match(publishWorkflow, /Refusing to overwrite existing npm version/);
   assert.match(publishWorkflow, /^\s+gh release view "\$version" >\/dev\/null$/m);
-  assert.match(publishWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1$/m);
+  assert.match(publishWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1$/m);
   assert.match(publishWorkflow, /^\s+run: npm publish --workspace apps\/cli --access public$/m);
 });
+
+test("release-equivalent workflows use the explicit full-workspace test entry", async () => {
+  const workflowDir = `${root}/.github/workflows`;
+  const workflowFiles = (await readdir(workflowDir))
+    .filter((file) => /\.ya?ml$/.test(file));
+  const workflows = new Map(
+    await Promise.all(workflowFiles.map(async (file) => [
+      file,
+      await readFile(`${workflowDir}/${file}`, "utf8"),
+    ])),
+  );
+  const fullSuiteCommand =
+    "NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1";
+
+  for (const [file, workflow] of workflows) {
+    assert.doesNotMatch(
+      workflow,
+      /NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1/,
+      `${file} must not route a full release suite through the focused root entry`,
+    );
+  }
+  for (const file of ["lint.yml", "release.yml", "publish-cli.yml"]) {
+    assert.match(workflows.get(file) ?? "", new RegExp(fullSuiteCommand));
+  }
+});
+
 
 test("the bundle banner contains the complete locked pako license exactly once", async () => {
   const notice = await readPakoNotice();
