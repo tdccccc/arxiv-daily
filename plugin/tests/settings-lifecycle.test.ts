@@ -6,8 +6,11 @@ import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
+  Logger,
   OperationRegistry,
   RunHistoryStore,
+  RunLock,
+  SchedulerService,
   StateStore,
   type StorageAdapter,
 } from "@arxiv-daily/core";
@@ -56,6 +59,22 @@ function memoryStorage(files: Record<string, string> = {}): StorageAdapter {
       data.delete(from);
     },
   };
+}
+
+function makeStateStore() {
+  const data: { runState: Record<string, any> } = { runState: {} };
+  return new StateStore(
+    async () => ({
+      runState: Object.fromEntries(
+        Object.entries(data.runState).map(([date, entry]) => [date, { ...entry }]),
+      ),
+    }),
+    async ({ runState }) => {
+      data.runState = Object.fromEntries(
+        Object.entries(runState).map(([date, entry]) => [date, { ...entry }]),
+      );
+    },
+  );
 }
 
 describe("plugin directory resolution", () => {
@@ -748,5 +767,170 @@ describe("plugin settings reload lifecycle", () => {
 
     expect(loaded.settings.schedule.runAtLocal).toBe("24:00");
     expect(loaded.settings.schedule.runUntilLocal).toBe("legacy-value");
+  });
+
+  it("keeps plugin, scheduler, and history on the old store when reload is rejected during an active pipeline", async () => {
+    const oldStore = makeStateStore();
+    await oldStore.load();
+    const oldHistory = {
+      records: [] as any[],
+      safeAppend: vi.fn(async (record: any) => {
+        oldHistory.records.push(record);
+      }),
+    };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let finishPipeline!: () => void;
+    const pipelineCanFinish = new Promise<void>((resolve) => {
+      finishPipeline = resolve;
+    });
+    const scheduler = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store: oldStore,
+      lock: new RunLock(),
+      logger: new Logger("error"),
+      runHistory: oldHistory,
+      runForDate: async () => {
+        markStarted();
+        await pipelineCanFinish;
+        return { kind: "completed", papersWritten: 2 };
+      },
+    });
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    Object.assign(plugin, {
+      settings: {
+        ...DEFAULT_SETTINGS,
+        output: {
+          ...DEFAULT_SETTINGS.output,
+          dailyDir: "replacement/daily",
+          papersDir: "replacement/papers",
+        },
+      },
+      logger: new Logger("error"),
+      host: {
+        storage: {
+          normalizePath: (path: string) => path,
+          exists: async () => false,
+          readText: async () => "",
+          writeText: async () => undefined,
+          mkdir: async () => undefined,
+          rename: async () => undefined,
+          remove: async () => undefined,
+        },
+      },
+      stateStore: oldStore,
+      runHistoryStore: oldHistory,
+      scheduler,
+      progress: { setIdle: vi.fn(), setDisabled: vi.fn() },
+    });
+
+    const run = scheduler.runForDateNow("2026-08-10");
+    await started;
+    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+      "cannot replace scheduler store while work is active",
+    );
+
+    expect(plugin.stateStore).toBe(oldStore);
+    expect(plugin.runHistoryStore).toBe(oldHistory);
+
+    finishPipeline();
+    await expect(run).resolves.toEqual({ kind: "completed", papersWritten: 2 });
+    expect(oldStore.get("2026-08-10")).toMatchObject({
+      status: "completed",
+      papersWritten: 2,
+    });
+    expect(oldHistory.records.map((record) => record.event)).toEqual([
+      "started",
+      "completed",
+    ]);
+  });
+
+  it("keeps plugin, scheduler, and history on the old store when reload is rejected for a pending completion", async () => {
+    const data: { runState: Record<string, any> } = { runState: {} };
+    let rejectCompletion = true;
+    const oldStore = new StateStore(
+      async () => ({
+        runState: Object.fromEntries(
+          Object.entries(data.runState).map(([date, entry]) => [date, { ...entry }]),
+        ),
+      }),
+      async ({ runState }) => {
+        if (
+          rejectCompletion &&
+          Object.values(runState).some((entry) => entry.status === "completed")
+        ) {
+          throw new Error("completion storage unavailable");
+        }
+        data.runState = Object.fromEntries(
+          Object.entries(runState).map(([date, entry]) => [date, { ...entry }]),
+        );
+      },
+    );
+    await oldStore.load();
+    const oldHistory = {
+      records: [] as any[],
+      safeAppend: vi.fn(async (record: any) => {
+        oldHistory.records.push(record);
+      }),
+    };
+    const scheduler = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store: oldStore,
+      lock: new RunLock(),
+      logger: new Logger("error"),
+      runHistory: oldHistory,
+      runForDate: async () => ({ kind: "completed", papersWritten: 3 }),
+    });
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    Object.assign(plugin, {
+      settings: {
+        ...DEFAULT_SETTINGS,
+        output: {
+          ...DEFAULT_SETTINGS.output,
+          dailyDir: "replacement/daily",
+          papersDir: "replacement/papers",
+        },
+      },
+      logger: new Logger("error"),
+      host: {
+        storage: {
+          normalizePath: (path: string) => path,
+          exists: async () => false,
+          readText: async () => "",
+          writeText: async () => undefined,
+          mkdir: async () => undefined,
+          rename: async () => undefined,
+          remove: async () => undefined,
+        },
+      },
+      stateStore: oldStore,
+      runHistoryStore: oldHistory,
+      scheduler,
+      progress: { setIdle: vi.fn(), setDisabled: vi.fn() },
+    });
+
+    await expect(scheduler.runForDateNow("2026-08-10")).resolves.toEqual({
+      kind: "failed_transient",
+      reason: "scheduler completion commit failed",
+    });
+    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+      "cannot replace scheduler store while work is active",
+    );
+
+    expect(plugin.stateStore).toBe(oldStore);
+    expect(plugin.runHistoryStore).toBe(oldHistory);
+
+    rejectCompletion = false;
+    await expect(scheduler.runForDateNow("2026-08-10")).resolves.toEqual({
+      kind: "completed",
+      papersWritten: 3,
+    });
+    expect(oldStore.get("2026-08-10")).toMatchObject({
+      status: "completed",
+      papersWritten: 3,
+    });
+    expect(oldHistory.records.at(-1)?.event).toBe("completed");
   });
 });

@@ -1,0 +1,57 @@
+name: Email relay verification
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - services/email-relay/**
+      - packages/core/src/delivery/hosted.ts
+      - packages/core/src/delivery/deliver-email.ts
+      - packages/core/src/delivery/types.ts
+      - packages/core/tests/delivery/hosted-deliver.test.ts
+      - .github/workflows/email-relay.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+  pull_request:
+    paths:
+      - services/email-relay/**
+      - packages/core/src/delivery/hosted.ts
+      - packages/core/src/delivery/deliver-email.ts
+      - packages/core/src/delivery/types.ts
+      - packages/core/tests/delivery/hosted-deliver.test.ts
+      - .github/workflows/email-relay.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/email-relay
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: services/email-relay/package-lock.json
+      - name: Install relay dependencies
+        run: npm ci
+      - name: Typecheck relay
+        run: npm run typecheck
+      - name: Test relay
+        run: npm test
+      - name: Dry-run relay bundle
+        run: npm exec -- wrangler deploy src/index.ts --dry-run --config wrangler.toml --outdir "$RUNNER_TEMP/email-relay-wrangler"

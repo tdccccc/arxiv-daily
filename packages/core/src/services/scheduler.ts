@@ -120,9 +120,8 @@ export class SchedulerService {
     stateStore: StateStore,
     runHistory: Pick<RunHistoryStore, "safeAppend">,
   ): void {
-    if (this.activeRuns().length > 0) {
-      throw new Error("Scheduler persistence stores cannot change while runs are active");
-    }
+    assertPersistenceStorePair(stateStore, runHistory);
+    this.driver.assertStoreReplacementAllowed();
     this.persistence.replace(stateStore, runHistory);
   }
 

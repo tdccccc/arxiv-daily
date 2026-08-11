@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyDailySelections,
   applySelectionsToIndex,
   DailySelectionSyncService,
   parseDailySelections,
@@ -145,6 +146,94 @@ describe("daily selection", () => {
     expect(data.papers["arxiv:2606.77777"].priority).toBe("normal");
     expect(data.papers["arxiv:2606.66666"].status).toBe("ignored");
     expect(data.papers["arxiv:2606.66666"].priority).toBe("normal");
+  });
+
+  it("preserves a concurrently added paper while applying selections", async () => {
+    const files: Record<string, string> = {};
+    const dirs = new Set<string>();
+    const baseStorage = {
+      normalizePath(path: string) {
+        return path.replace(/\\/g, "/");
+      },
+      async readText(path: string) {
+        if (!(path in files)) throw new Error(`missing ${path}`);
+        return files[path];
+      },
+      async writeText(path: string, content: string) {
+        files[path] = content;
+      },
+      async exists(path: string) {
+        return path in files || dirs.has(path);
+      },
+      async mkdir(path: string) {
+        dirs.add(path);
+      },
+      async rename(from: string, to: string) {
+        if (!(from in files)) throw new Error(`missing ${from}`);
+        files[to] = files[from];
+        delete files[from];
+      },
+      async remove(path: string) {
+        delete files[path];
+        dirs.delete(path);
+      },
+    } satisfies StorageAdapter;
+    const seed = new PaperIndexStore(baseStorage, DEFAULT_SETTINGS.output);
+    await seed.upsertFromDailyPaper({
+      arxivId: "2606.12001",
+      title: "Selected paper",
+      authors: "A",
+      date: "2026-06-12",
+      arxivCategory: "astro-ph",
+      primaryTopic: "ml-astro",
+      detail: false,
+    });
+
+    let releaseRead!: () => void;
+    let markRead!: () => void;
+    const readCaptured = new Promise<void>((resolve) => { markRead = resolve; });
+    const readRelease = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let delayed = false;
+    const delayedStorage = {
+      ...baseStorage,
+      async readText(path: string) {
+        const content = await baseStorage.readText(path);
+        if (!delayed && path.endsWith("papers.json")) {
+          delayed = true;
+          markRead();
+          await readRelease;
+        }
+        return content;
+      },
+    } satisfies StorageAdapter;
+    const selectionStore = new PaperIndexStore(delayedStorage, DEFAULT_SETTINGS.output);
+    const selection = applyDailySelections(selectionStore, [
+      { arxivId: "2606.12001", watch: true, highlight: true },
+    ]);
+    await readCaptured;
+
+    const concurrent = seed.upsertFromDailyPaper({
+      arxivId: "2606.12002",
+      title: "Concurrent paper",
+      authors: "B",
+      date: "2026-06-12",
+      arxivCategory: "astro-ph",
+      primaryTopic: "ml-astro",
+      detail: false,
+    });
+    await Promise.race([
+      concurrent,
+      new Promise((resolve) => setTimeout(resolve, 50)),
+    ]);
+    releaseRead();
+    await Promise.all([selection, concurrent]);
+
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.papers["arxiv:2606.12001"]).toMatchObject({
+      status: "to_read",
+      priority: "high",
+    });
+    expect(saved.papers["arxiv:2606.12002"]?.title).toBe("Concurrent paper");
   });
 
   it("syncs a daily file into papers.json", async () => {

@@ -630,6 +630,72 @@ describe("syncDashboardHistory", () => {
     expect(index.papers["arxiv:2606.00003"]).toBeUndefined();
   });
 
+  it("preserves concurrent status changes and newly indexed papers while pruning history", async () => {
+    const primaryPath = "arxiv/.index/papers.json";
+    const { files, storage } = makeStorage({
+      [primaryPath]: indexJson({
+        "2606.09001": {
+          title: "Existing paper",
+          seenDates: ["2026-06-10", "2026-06-11"],
+          dailyReports: [
+            "arxiv/daily/2026-06-10.md",
+            "arxiv/daily/2026-06-11.md",
+          ],
+        },
+      }),
+      "arxiv/daily/2026-06-10.md": [
+        "## Photo-z",
+        "### Existing paper",
+        "- **Authors**: A. Author",
+        "- **arXiv**: [2606.09001](https://arxiv.org/abs/2606.09001)",
+      ].join("\n"),
+      "arxiv/daily/2026-06-11.md": "# Report without the indexed paper",
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+    let releaseRead!: () => void;
+    let markRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markRead = resolve; });
+    const readRelease = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let delayed = false;
+    const originalRead = vault.adapter.read;
+    vault.adapter.read = async (path: string) => {
+      const content = await originalRead(path);
+      if (!delayed && path.startsWith("arxiv/daily/")) {
+        delayed = true;
+        markRead();
+        await readRelease;
+      }
+      return content;
+    };
+
+    const syncing = syncDashboardHistory({ vault, store, output, topics });
+    await readStarted;
+    await store.setStatus("2606.09001", "saved");
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.09002",
+      title: "Concurrent paper",
+      authors: "B. Author",
+      date: "2026-06-12",
+      arxivCategory: "astro-ph",
+      primaryTopic: "galaxy-cluster",
+      detail: false,
+    });
+    releaseRead();
+
+    const index = await syncing;
+
+    expect(index.papers["arxiv:2606.09001"]).toMatchObject({
+      status: "saved",
+      seenDates: ["2026-06-10", "2026-06-11"],
+      dailyReports: [
+        "arxiv/daily/2026-06-10.md",
+        "arxiv/daily/2026-06-11.md",
+      ],
+    });
+    expect(index.papers["arxiv:2606.09002"]?.title).toBe("Concurrent paper");
+  });
+
   it("prunes deleted daily report references from the paper index", async () => {
     const { files, storage } = makeStorage({
       "arxiv/.index/papers.json": indexJson({
@@ -743,6 +809,449 @@ describe("syncDashboardHistory", () => {
       detail: true,
       paperPath: "arxiv/papers/2606.20000.md",
       dailyReports: [],
+    });
+  });
+
+  it("preserves unrelated index-only papers across repeated history syncs", async () => {
+    const id = "2606.21001";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: {
+          title: "Unrelated index-only paper",
+          seenDates: [],
+          dailyReports: [],
+          detail: false,
+          paperPath: null,
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+
+    await syncDashboardHistory({ vault, store, output, topics });
+    const index = await syncDashboardHistory({ vault, store, output, topics });
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      title: "Unrelated index-only paper",
+      status: "inbox",
+      detail: false,
+      paperPath: null,
+    });
+  });
+
+  it("preserves saved and ignored index-only papers", async () => {
+    const savedId = "2606.21002";
+    const ignoredId = "2606.21003";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [savedId]: {
+          status: "saved",
+          seenDates: [],
+          dailyReports: [],
+        },
+        [ignoredId]: {
+          status: "ignored",
+          seenDates: [],
+          dailyReports: [],
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[`arxiv:${savedId}`]?.status).toBe("saved");
+    expect(index.papers[`arxiv:${ignoredId}`]?.status).toBe("ignored");
+  });
+
+  it("preserves concurrent paper path, daily report, and status changes during a scan", async () => {
+    const id = "2606.21004";
+    const primaryPath = "arxiv/.index/papers.json";
+    const scanPath = "arxiv/daily/2026-06-20.md";
+    const concurrentPath = "notes/manual-paper.md";
+    const concurrentReport = "arxiv/daily/2026-06-21.md";
+    const { files, storage } = makeStorage({
+      [primaryPath]: indexJson({
+        [id]: {
+          detail: true,
+          paperPath: `arxiv/papers/${id}.md`,
+          seenDates: ["2026-06-19"],
+          dailyReports: ["arxiv/daily/2026-06-19.md"],
+        },
+      }),
+      [scanPath]: "# Temporarily unrelated report",
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+    let releaseRead!: () => void;
+    let markRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markRead = resolve; });
+    const readRelease = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const originalRead = vault.adapter.read;
+    vault.adapter.read = async (path: string) => {
+      const content = await originalRead(path);
+      if (path === scanPath) {
+        markRead();
+        await readRelease;
+      }
+      return content;
+    };
+
+    const syncing = syncDashboardHistory({ vault, store, output, topics });
+    await readStarted;
+    await store.setPaperPath(id, concurrentPath);
+    await store.addDailyReports([id], concurrentReport);
+    await store.setStatus(id, "saved");
+    releaseRead();
+
+    const index = await syncing;
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      status: "saved",
+      detail: true,
+      paperPath: concurrentPath,
+      dailyReports: ["arxiv/daily/2026-06-19.md", concurrentReport],
+      seenDates: ["2026-06-19"],
+    });
+  });
+
+  it("does not overwrite a concurrent paper path with a valid scanned detail path", async () => {
+    const id = "2606.21006";
+    const scannedPath = `arxiv/papers/${id}.md`;
+    const concurrentPath = "notes/curated-paper.md";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: {
+          detail: true,
+          paperPath: scannedPath,
+          dailyReports: [],
+        },
+      }),
+      [scannedPath]: detailMarkdown(id, "Scanned managed detail"),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+    let releaseRead!: () => void;
+    let markRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markRead = resolve; });
+    const readRelease = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const originalRead = vault.adapter.read;
+    vault.adapter.read = async (path: string) => {
+      const content = await originalRead(path);
+      if (path === scannedPath) {
+        markRead();
+        await readRelease;
+      }
+      return content;
+    };
+
+    const syncing = syncDashboardHistory({ vault, store, output, topics });
+    await readStarted;
+    await store.setPaperPath(id, concurrentPath);
+    releaseRead();
+
+    const index = await syncing;
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      detail: true,
+      paperPath: concurrentPath,
+    });
+  });
+
+  it.each([
+    { label: "without independent daily evidence", withDailyEvidence: false },
+    { label: "with independent daily evidence", withDailyEvidence: true },
+  ])(
+    "does not revive a concurrently deleted scanned detail $label",
+    async ({ withDailyEvidence }) => {
+      const id = "2606.21007";
+      const scannedPath = `arxiv/papers/${id}.md`;
+      const dailyPath = "arxiv/daily/2026-06-24.md";
+      const initialFiles: Record<string, string> = {
+        "arxiv/.index/papers.json": indexJson({
+          [id]: {
+            detail: true,
+            paperPath: scannedPath,
+            dailyReports: [],
+          },
+        }),
+        [scannedPath]: detailMarkdown(id, "Concurrently deleted detail"),
+      };
+      if (withDailyEvidence) {
+        initialFiles[dailyPath] = [
+          "## Photo-z",
+          "### Independently reported paper",
+          "- **Authors**: A. Author",
+          `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+        ].join("\n");
+      }
+      const { files, storage } = makeStorage(initialFiles);
+      const store = new PaperIndexStore(storage, output);
+      const vault = makeVault(files);
+      let releaseRead!: () => void;
+      let markRead!: () => void;
+      const readStarted = new Promise<void>((resolve) => { markRead = resolve; });
+      const readRelease = new Promise<void>((resolve) => { releaseRead = resolve; });
+      const originalRead = vault.adapter.read;
+      let paperScanReads = 0;
+      vault.adapter.read = async (path: string) => {
+        const content = await originalRead(path);
+        if (path === scannedPath) {
+          paperScanReads += 1;
+          markRead();
+          await readRelease;
+        }
+        return content;
+      };
+
+      const syncing = syncDashboardHistory({ vault, store, output, topics });
+      await readStarted;
+      await expect(store.removePaperDetailsAtPath(
+        id,
+        scannedPath,
+        async () => { delete files[scannedPath]; },
+      )).resolves.toMatchObject({ kind: "removed" });
+      releaseRead();
+
+      const index = await syncing;
+
+      expect(paperScanReads).toBe(1);
+      if (!withDailyEvidence) {
+        expect(index.papers[`arxiv:${id}`]).toBeUndefined();
+      } else {
+        expect(index.papers[`arxiv:${id}`]).toMatchObject({
+          detail: false,
+          paperPath: null,
+          seenDates: ["2026-06-24"],
+          dailyReports: [dailyPath],
+        });
+      }
+    },
+  );
+
+  it("still prunes an unchanged stale managed daily reference", async () => {
+    const id = "2606.21005";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: {
+          seenDates: ["2026-06-22"],
+          dailyReports: ["arxiv/daily/2026-06-22.md"],
+          detail: false,
+          paperPath: null,
+        },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[`arxiv:${id}`]).toBeUndefined();
+  });
+
+  it("keeps an unreadable filename-owned detail path when a second note claims the same ID", async () => {
+    const id = "2606.12345";
+    const baselinePath = `arxiv/papers/${id}.md`;
+    const alternatePath = "arxiv/papers/readable-alternate.md";
+    const dailyPath = "arxiv/daily/2026-06-23.md";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: {
+          detail: true,
+          paperPath: baselinePath,
+          seenDates: ["2026-06-10"],
+          dailyReports: [],
+        },
+      }),
+      [baselinePath]: detailMarkdown(id, "Unreadable baseline detail"),
+      [alternatePath]: detailMarkdown(id, "Readable alternate detail"),
+      [dailyPath]: [
+        "## Photo-z",
+        "### Daily data remains safe",
+        "- **Authors**: A. Author",
+        `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+    const originalRead = vault.adapter.read;
+    vault.adapter.read = async (path: string) => {
+      if (path === baselinePath) throw new Error("permission denied");
+      return originalRead(path);
+    };
+
+    const index = await syncDashboardHistory({ vault, store, output, topics });
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      detail: true,
+      paperPath: baselinePath,
+      seenDates: ["2026-06-10", "2026-06-23"],
+      dailyReports: [dailyPath],
+    });
+  });
+
+  it("protects an indexed detail when its existing note is unreadable", async () => {
+    const id = "2606.22001";
+    const paperPath = `arxiv/papers/${id}.md`;
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: { detail: true, paperPath, dailyReports: [] },
+      }),
+      [paperPath]: detailMarkdown(id, "Unreadable detail"),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const vault = makeVault(files);
+    vault.adapter.read = async (path: string) => {
+      if (path === paperPath) throw new Error("permission denied");
+      return files[path];
+    };
+
+    const index = await syncDashboardHistory({ vault, store, output, topics });
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      detail: true,
+      paperPath,
+    });
+  });
+
+  it("protects an indexed detail when its note identity is malformed", async () => {
+    const id = "2606.22002";
+    const paperPath = `arxiv/papers/${id}.md`;
+    const malformed = detailMarkdown(id, "Malformed detail").replace(
+      `arxiv_id: "${id}"`,
+      'arxiv_id: "not-an-arxiv-id"',
+    );
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: { detail: true, paperPath, dailyReports: [] },
+      }),
+      [paperPath]: malformed,
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      detail: true,
+      paperPath,
+    });
+  });
+
+  it("protects every top-level duplicate identity while unrelated history still reconciles", async () => {
+    const firstId = "2606.22004";
+    const secondId = "2606.22005";
+    const unrelatedId = "2606.22006";
+    const firstBaselinePath = `arxiv/papers/${firstId}.md`;
+    const secondBaselinePath = `arxiv/papers/${secondId}.md`;
+    const unrelatedBaselinePath = `arxiv/papers/${unrelatedId}.md`;
+    const conflictingPath = "arxiv/papers/duplicate-identities.md";
+    const dailyPath = "arxiv/daily/2026-06-25.md";
+    const conflictingNote = detailMarkdown(firstId, "Duplicate identities")
+      .replace(
+        `arxiv_id: "${firstId}"`,
+        [
+          `arxiv_id: "${firstId}"`,
+          `arxiv_id: "${secondId}"`,
+          "metadata:",
+          `  arxiv_id: "${unrelatedId}"`,
+          "aliases:",
+          `  - arxiv: "${unrelatedId}"`,
+          `arxiv: ["${unrelatedId}"]`,
+        ].join("\n"),
+      )
+      .concat(`\n\narxiv_id: "${unrelatedId}"`);
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [firstId]: {
+          detail: true,
+          paperPath: firstBaselinePath,
+          dailyReports: [],
+        },
+        [secondId]: {
+          detail: true,
+          paperPath: secondBaselinePath,
+          dailyReports: [],
+        },
+        [unrelatedId]: {
+          detail: true,
+          paperPath: unrelatedBaselinePath,
+          dailyReports: [],
+        },
+      }),
+      [conflictingPath]: conflictingNote,
+      [dailyPath]: [
+        "## Photo-z",
+        "### Unrelated daily evidence",
+        "- **Authors**: C. Author",
+        `- **arXiv**: [${unrelatedId}](https://arxiv.org/abs/${unrelatedId})`,
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[`arxiv:${firstId}`]).toMatchObject({
+      detail: true,
+      paperPath: firstBaselinePath,
+    });
+    expect(index.papers[`arxiv:${secondId}`]).toMatchObject({
+      detail: true,
+      paperPath: secondBaselinePath,
+    });
+    expect(index.papers[`arxiv:${unrelatedId}`]).toMatchObject({
+      detail: false,
+      paperPath: null,
+      seenDates: ["2026-06-10", "2026-06-25"],
+      dailyReports: [dailyPath],
+    });
+  });
+
+  it("does not let a duplicate arXiv identity overwrite or clear a valid detail", async () => {
+    const id = "2606.22003";
+    const validPath = "arxiv/papers/verified-note.md";
+    const duplicatePath = "arxiv/papers/duplicate-note.md";
+    const { files, storage } = makeStorage({
+      "arxiv/.index/papers.json": indexJson({
+        [id]: { detail: true, paperPath: validPath, dailyReports: [] },
+      }),
+      [validPath]: detailMarkdown(id, "Verified duplicate detail"),
+      [duplicatePath]: [
+        "---",
+        `arxiv_id: "${id}"`,
+        "---",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(storage, output);
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers[`arxiv:${id}`]).toMatchObject({
+      detail: true,
+      paperPath: validPath,
     });
   });
 

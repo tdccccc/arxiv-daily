@@ -408,7 +408,7 @@ describe("SchedulerService", () => {
     expect(runForDate).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves an existing non-zero completed count when an existing daily short-circuits", async () => {
+  it("does not rerun a manually requested date that is durably completed", async () => {
     const store = makeStore();
     await store.load();
     await store.setRunning("2026-06-24");
@@ -425,10 +425,16 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-06-25T10:23:00Z"),
     });
 
-    await svc.runForDateNow("2026-06-24");
+    await expect(svc.runForDateNow("2026-06-24")).resolves.toEqual({
+      kind: "skipped",
+      reason: "already done",
+    });
 
-    expect(store.get("2026-06-24").status).toBe("completed");
-    expect(store.get("2026-06-24").papersWritten).toBe(10);
+    expect(runForDate).not.toHaveBeenCalled();
+    expect(store.get("2026-06-24")).toMatchObject({
+      status: "completed",
+      papersWritten: 10,
+    });
   });
 
   it("writes run history for started and completed outcomes", async () => {
@@ -469,6 +475,47 @@ describe("SchedulerService", () => {
         requestedPapersWritten: 4,
       },
     ]);
+  });
+
+  it("keeps confirmed completion and invokes its callback when completed history append fails", async () => {
+    const store = makeStore();
+    await store.load();
+    const onDailyCompleted = vi.fn(async () => undefined);
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), notice: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    };
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate: vi.fn(async () => ({
+        kind: "completed" as const,
+        papersWritten: 4,
+      })),
+      logger,
+      now: () => new Date("2026-06-25T10:23:00Z"),
+      runHistory: {
+        safeAppend: vi.fn(async (record: RunHistoryRecord) => {
+          if (record.event === "completed") throw new Error("history disk full");
+        }),
+      },
+      onDailyCompleted,
+    });
+
+    await expect(svc.runForDateNow("2026-06-24")).resolves.toEqual({
+      kind: "completed",
+      papersWritten: 4,
+    });
+
+    expect(store.get("2026-06-24")).toMatchObject({
+      status: "completed",
+      papersWritten: 4,
+    });
+    expect(onDailyCompleted).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "scheduler: run history append failed",
+      expect.any(Error),
+    );
   });
 
   it("does not invoke the completion callback for transient failures", async () => {
@@ -650,30 +697,40 @@ describe("SchedulerService", () => {
     });
   });
 
-  it("marks preserved paper counts in run history", async () => {
+  it("records a skipped manual attempt instead of duplicating completed history", async () => {
     const store = makeStore();
     await store.load();
     await store.setRunning("2026-06-24");
     await store.setCompleted("2026-06-24", 10);
     const history = makeHistory();
+    const runForDate = vi.fn(async () => ({
+      kind: "completed" as const,
+      papersWritten: 0,
+    }));
     const svc = new SchedulerService({
       getSettings: () => DEFAULT_SETTINGS,
       store,
       lock: new RunLock(),
-      runForDate: vi.fn(async () => ({ kind: "completed" as const, papersWritten: 0 })),
+      runForDate,
       logger: new Logger("error"),
       now: () => new Date("2026-06-25T10:23:00Z"),
       runHistory: history.store,
     });
 
-    await svc.runForDateNow("2026-06-24");
-
-    expect(history.records.at(-1)).toMatchObject({
-      event: "completed",
-      papersWritten: 10,
-      requestedPapersWritten: 0,
-      preservedPapersWritten: true,
+    await expect(svc.runForDateNow("2026-06-24")).resolves.toEqual({
+      kind: "skipped",
+      reason: "already done",
     });
+
+    expect(runForDate).not.toHaveBeenCalled();
+    expect(history.records).toEqual([
+      expect.objectContaining({
+        event: "skipped",
+        status: "completed",
+        resultKind: "skipped",
+        reason: "already done",
+      }),
+    ]);
   });
 
   it("writes skipped run history when manual run is already running", async () => {
