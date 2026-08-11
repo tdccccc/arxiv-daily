@@ -949,6 +949,8 @@ describe("device-scoped ledger and quota", () => {
   ] as const)(
     "permanently replays definitive HTTP %s rejection without another automatic attempt",
     async (providerStatus, relayStatus) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-10T00:00:00.000Z"));
       const { env } = await authenticatedEnv({ quota: 1 });
       const provider = vi
         .fn()
