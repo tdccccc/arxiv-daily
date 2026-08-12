@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "preflight": "node scripts/cutover-preflight.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250525.0",

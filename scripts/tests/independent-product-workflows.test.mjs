@@ -62,6 +62,10 @@ const expectedRelayWorkflow = {
         { name: "Typecheck relay", run: "npm run typecheck" },
         { name: "Test relay", run: "npm test" },
         {
+          name: "Verify preflight script is read-only",
+          run: "node scripts/cutover-preflight.mjs --check-readonly",
+        },
+        {
           name: "Dry-run relay bundle",
           run: 'npm exec -- wrangler deploy src/index.ts --dry-run --config wrangler.toml --outdir "$RUNNER_TEMP/email-relay-wrangler"',
         },
