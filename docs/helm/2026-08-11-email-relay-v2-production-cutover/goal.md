@@ -14,8 +14,8 @@ owner: zcode-main-session
 - [x] 旧 provider credential revocation 建立跨 Worker fence，并保守导入两代 legacy KV evidence。
 - [x] Proof ready 前不签发 v2 token；readiness 明确报告 build/protocol/automatic 状态。
 - [x] 同一收件人、日期在多个 v2 token 下共享 automatic ledger 和 provider key。
-- [ ] Operator 工具完成安全 preflight、dry-run、显式确认、私有 journal 和断点恢复，CI 保持 no-deploy。
-- [ ] Relay/Core 定向测试、独立产品 workflow invariants、完整门禁与技术报告同步通过。
+- [x] 只读 preflight/status 脚本与人工 cutover runbook 就绪；生产 mutation 由 operator 逐项确认执行，CI 保持 no-deploy。
+- [x] Relay/Core 定向测试、独立产品 workflow invariants、完整门禁与技术报告同步通过。
 
 ## Non-goals
 
@@ -34,4 +34,4 @@ owner: zcode-main-session
 
 1. P1 — 可恢复 cutover 状态机与 legacy/provider-fence proof — status: done
 2. P2 — Token/readiness gate 与 recipient 级幂等 — status: done
-3. P3 — 半自动 operator 工具、runbook 与治理门禁 — status: active
+3. P3 — 半自动 operator 工具、runbook 与治理门禁 — status: done
