@@ -1,6 +1,6 @@
 {
   "name": "@arxiv-daily/core",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "description": "Host-neutral business core for arXiv Daily",
   "license": "MIT",
@@ -20,7 +20,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --config vitest.config.mts"
+    "test": "node ../../scripts/run-core-tests.mjs"
   },
   "dependencies": {
     "pako": "^2.1.0"

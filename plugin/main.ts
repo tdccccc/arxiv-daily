@@ -31,63 +31,65 @@ import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { RunLock } from "@arxiv-daily/core";
 import {
-  ArxivLibraryMetadataResolver,
-  extractPdfIdentificationEvidence,
-  searchArxivTitle,
-  createPersonalLibraryIdentificationFingerprint,
-  createPersonalLibraryScopeFingerprint,
-  OperationRegistry,
-  PersonalLibraryCatalogStore,
-  PersonalLibraryDirectionProposalStore,
-  PersonalLibraryInterestProfileStore,
-  confirmPersonalLibraryDirectionWithStores,
-  buildChatCompletionsUrl,
-  createPersonalLibraryCatalogInputFingerprint,
-  disablePersonalLibraryConfirmedDirection,
-  enablePersonalLibraryConfirmedDirection,
-  evaluatePersonalLibraryInterestEligibility,
-  mergePersonalLibraryConfirmedDirections,
-  mergePersonalLibraryDirectionCandidates,
-  proposeClusteredPersonalLibraryDirections,
-  preparePersonalizedDiscoveryInput,
-  preparePersonalizedNoveltyRepresentatives,
-  preparePersonalNoveltyMatches,
-  PERSONAL_NOVELTY_MAX_AUTHORS,
-  PERSONAL_NOVELTY_MAX_CATEGORIES,
-  PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS,
-  removePersonalLibraryConfirmedDirection,
-  removePersonalLibraryDirectionCandidate,
-  selectPersonalLibraryDirectionPapers,
-  updatePersonalLibraryConfirmedDirection,
-  updatePersonalLibraryDirectionCandidate,
-  reconcilePersonalLibraryCatalog,
-  RunCancellationService,
-  normalizeArxivId,
-  FullTextKnowledgeBaseFileStore,
-  indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
-  searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
-  IncrementalSuggestionsStore,
-  applyAttachSuggestion,
-  applyMergeSuggestion,
-  applySplitSuggestion,
-  buildNewDirectionDraft,
-  createEmptyIncrementalSuggestionsDocument,
-  createPersonalLibraryCatalogInputManifestFingerprint,
-  createPersonalLibraryGenerationContractFingerprint,
-  createPersonalLibraryPaperEvidenceFingerprint,
-  createPersonalLibraryRepresentativeSetFingerprint,
-  centerCorpusChunks,
-  loadClusteringInput,
-  lockPersonalLibraryConfirmedDirection,
-  unlockPersonalLibraryConfirmedDirection,
-  PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
-  PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
-  PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
-  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
-  PDF_IDENTIFICATION_EVIDENCE_VERSION,
-  reclusterPool,
-  suggestDirectionDiff,
-  suggestIncrementalPlacement,
+ArxivLibraryMetadataResolver,
+extractPdfIdentificationEvidence,
+searchArxivTitle,
+createPersonalLibraryIdentificationFingerprint,
+createPersonalLibraryScopeFingerprint,
+OperationRegistry,
+PersonalLibraryCatalogStore,
+PersonalLibraryDirectionProposalStore,
+PersonalLibraryInterestProfileStore,
+confirmPersonalLibraryDirectionWithStores,
+buildChatCompletionsUrl,
+createPersonalLibraryCatalogInputFingerprint,
+disablePersonalLibraryConfirmedDirection,
+enablePersonalLibraryConfirmedDirection,
+evaluatePersonalLibraryInterestEligibility,
+mergePersonalLibraryConfirmedDirections,
+mergePersonalLibraryDirectionCandidates,
+proposeClusteredPersonalLibraryDirections,
+preparePersonalizedDiscoveryInput,
+preparePersonalizedNoveltyRepresentatives,
+preparePersonalNoveltyMatches,
+PERSONAL_NOVELTY_MAX_AUTHORS,
+PERSONAL_NOVELTY_MAX_CATEGORIES,
+PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS,
+removePersonalLibraryConfirmedDirection,
+removePersonalLibraryDirectionCandidate,
+selectPersonalLibraryDirectionPapers,
+updatePersonalLibraryConfirmedDirection,
+updatePersonalLibraryDirectionCandidate,
+reconcilePersonalLibraryCatalog,
+RunCancellationService,
+normalizeArxivId,
+FullTextKnowledgeBaseFileStore,
+indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
+searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
+IncrementalSuggestionsStore,
+applyAttachSuggestion,
+applyMergeSuggestion,
+applySplitSuggestion,
+buildNewDirectionDraft,
+createEmptyIncrementalSuggestionsDocument,
+createPersonalLibraryCatalogInputManifestFingerprint,
+createPersonalLibraryGenerationContractFingerprint,
+createPersonalLibraryPaperEvidenceFingerprint,
+createPersonalLibraryRepresentativeSetFingerprint,
+centerCorpusChunks,
+loadClusteringInput,
+lockPersonalLibraryConfirmedDirection,
+unlockPersonalLibraryConfirmedDirection,
+PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
+PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
+PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
+PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+PDF_IDENTIFICATION_EVIDENCE_VERSION,
+reclusterPool,
+suggestDirectionDiff,
+suggestIncrementalPlacement,
+type OperationHandle,
+type OperationKind,
 } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import { StatusBarController } from "./src/services/status-bar";
@@ -162,6 +164,10 @@ import {
   type LibraryInventoryPreview,
   type PersistedLibraryConnection,
 } from "./src/library/connection";
+import {
+  SettingsChangeService,
+  type PreparedOutputStores,
+} from "./src/settings/change-service";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -202,6 +208,38 @@ interface PersonalizedDailyDiscoverySnapshot {
   personalizedDiscovery: PersonalizedDiscoveryInput;
   personalizedNoveltyRepresentatives?: PersonalizedNoveltyRepresentativesInput;
   personalizedNoveltyMatches?: PersonalNoveltyMatchInput;
+}
+
+class SettingsOperationRegistry extends OperationRegistry {
+  private outputTransitionActive = false;
+
+  override begin(
+    kind: OperationKind,
+    label: string,
+    key?: string,
+  ): OperationHandle {
+    if (this.outputTransitionActive) {
+      throw new Error(
+        "Cannot start an operation while output directories are changing",
+      );
+    }
+    return super.begin(kind, label, key);
+  }
+
+  beginOutputTransition(): () => void {
+    if (this.outputTransitionActive || this.snapshot().length > 0) {
+      throw new Error(
+        "Output directories cannot change while operations or runs are active",
+      );
+    }
+    this.outputTransitionActive = true;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.outputTransitionActive = false;
+    };
+  }
 }
 
 let lastCacheCleanupDate: string | null = null;
@@ -245,15 +283,18 @@ export default class ArxivDailyPlugin extends Plugin {
   stateStore!: StateStore;
   runHistoryStore!: RunHistoryStore;
   scheduler!: SchedulerService;
+  settingsChanges!: SettingsChangeService;
   recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
-  readonly operations = new OperationRegistry();
+  readonly operations = new SettingsOperationRegistry();
   private runLock = new RunLock();
   private runCancellation = new RunCancellationService(this.operations);
   private unloading = false;
   private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
+  private scheduleIntentRevision = 0;
+  private scheduleIntentQueue: Promise<void> = Promise.resolve();
   private host!: HostAdapters;
   private libraryConnection?: PersistedLibraryConnection;
   private librarySource?: OpenedScopedLibrarySource;
@@ -296,7 +337,10 @@ export default class ArxivDailyPlugin extends Plugin {
     this.host = buildObsidianHostAdapters({
       app: this.app,
       getSettings: () => this.settings,
-      persistSettings: () => this.enqueueLibraryMutation(() => this.persistSettings()),
+      persistSettings: () =>
+        this.enqueueLibraryMutation(() => this.persistSettings()),
+      changeSettingValue: (key, value) =>
+        this.settingsChanges.changeValue(key, value),
     });
     if (!this.host.storage.writeTextAtomic) {
       throw new Error("Obsidian storage does not support atomic personal library catalog writes");
@@ -376,6 +420,37 @@ export default class ArxivDailyPlugin extends Plugin {
       dailyPathForDate: (date) => this.buildMarkdownWriter().dailyPath(date),
       onDailyCompleted: (date, result) => this.deliverCompletedDigest(date, result),
     });
+    this.settingsChanges = new SettingsChangeService({
+      settings: this.settings,
+      persistSettings: (candidate) =>
+        this.enqueueLibraryMutation(() => this.persistSettings(candidate)),
+      prepareOutputStores: (candidate) => this.prepareOutputStores(candidate),
+      installOutputStores: (prepared) => this.installOutputStores(prepared),
+      hasActiveOutputWork: () => this.hasActiveOutputWork(),
+      beginOutputTransition: () => this.beginOutputTransition(),
+      reportPostCommitError: (action, error) =>
+        this.logger.error(`settings: failed to ${action} after persistence`, error),
+      setLoggerLevel: (level) => this.logger.setLevel(level),
+      setLoggerTimezone: (timezone) => this.logger.setTimezone(timezone),
+      restartScheduler: () => this.restartScheduler(),
+      setScheduleEnabled: (enabled) => this.applyScheduleEnabledRuntime(enabled),
+      refreshSensitiveValues: () => this.refreshSensitiveValues(),
+      prepareCandidateChange: (previous, candidate, changedKeys) => {
+        if (!changedKeys.includes("llm.baseUrl")) return undefined;
+        const previousEndpoint = this.effectiveLlmEndpoint(previous.llm.baseUrl);
+        const nextEndpoint = this.effectiveLlmEndpoint(candidate.llm.baseUrl);
+        if (previousEndpoint === nextEndpoint) return undefined;
+        const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+          "model endpoint changed",
+        );
+        this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
+        return () => {
+          if (discoveryRevision !== undefined) {
+            this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
+          }
+        };
+      },
+    });
 
     // Wrap in an object that rebuilds dependencies on every call so settings
     // changes (model, key, paths) always take effect without needing to reload.
@@ -424,8 +499,13 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    this.settings.detailSelection = sanitizeDetailSelection(
+    if (this.settingsChanges) {
+      await this.settingsChanges.persistCurrent();
+      return;
+    }
+    Object.assign(
       this.settings.detailSelection,
+      sanitizeDetailSelection(this.settings.detailSelection),
     );
     this.refreshSensitiveValues();
     await this.enqueueLibraryMutation(() => this.persistSettings());
@@ -1761,79 +1841,182 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.schedule.enabled) this.scheduler.start();
   }
 
+  private async prepareOutputStores(
+    candidate: PluginSettings,
+  ): Promise<PreparedOutputStores> {
+    const stateStore = createStorageStateStore(
+      this.host.storage,
+      candidate.output,
+      this.logger,
+    );
+    await stateStore.load();
+    const runHistoryStore = RunHistoryStore.fromStorage(
+      this.host.storage,
+      candidate.output,
+      this.logger,
+    );
+    await runHistoryStore.readLatest(1);
+    return { stateStore, runHistoryStore };
+  }
+
+  private installOutputStores(prepared: PreparedOutputStores): void {
+    // Scheduler validates both references first, then publishes one immutable
+    // pair. A failure therefore leaves every old reference installed without a
+    // rollback path that could itself throw and split state from history.
+    // Hosts assembled before the paired API existed only implement the
+    // singular replaceStore / replaceRunHistory — keep that path working.
+    const scheduler = this.scheduler as {
+      replacePersistenceStores?: (
+        stateStore: StateStore,
+        runHistoryStore: RunHistoryStore,
+      ) => void;
+      replaceStore?: (store: StateStore) => void;
+      replaceRunHistory?: (runHistory: RunHistoryStore) => void;
+    };
+    if (scheduler.replacePersistenceStores) {
+      scheduler.replacePersistenceStores(
+        prepared.stateStore,
+        prepared.runHistoryStore,
+      );
+    } else {
+      scheduler.replaceStore?.(prepared.stateStore);
+      scheduler.replaceRunHistory?.(prepared.runHistoryStore);
+    }
+    this.stateStore = prepared.stateStore;
+    this.runHistoryStore = prepared.runHistoryStore;
+    if (this.settings.schedule.enabled) {
+      this.progress.setIdle(latestCompletedDate(prepared.stateStore));
+    } else {
+      this.progress.setDisabled();
+    }
+  }
+
   async reloadStateStoreForOutputPaths(): Promise<void> {
     this.libraryOutputRevision += 1;
     const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable("output paths changed");
     this.cancelPersonalLibraryOperations("output paths changed");
     await this.enqueueLibraryMutation(async () => {
-      const nextStore = createStorageStateStore(
-        this.host.storage,
-        this.settings.output,
-        this.logger,
-      );
-      await nextStore.load();
-      this.stateStore = nextStore;
-      this.scheduler.replaceStore(nextStore);
-      this.runHistoryStore = RunHistoryStore.fromStorage(
-        this.host.storage,
-        this.settings.output,
-        this.logger,
-      );
-      this.scheduler.replaceRunHistory(this.runHistoryStore);
+      this.installOutputStores(await this.prepareOutputStores(this.settings));
       await this.reloadPersonalLibraryCatalog(discoveryRevision);
       await this.reloadPersonalLibraryProfileDocuments(discoveryRevision);
       const identity = this.capturePersonalizedDiscoveryIdentity();
       if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
       if (this.settings.schedule.enabled) {
-        this.progress.setIdle(latestCompletedDate(nextStore));
+        this.progress.setIdle(latestCompletedDate(this.stateStore));
       } else {
         this.progress.setDisabled();
       }
     });
   }
 
-  async setScheduleEnabled(enabled: boolean): Promise<boolean> {
-    if (this.settings.schedule.enabled === enabled) return true;
+  hasActiveOutputWork(): boolean {
+    return this.operations.snapshot().length > 0 || this.scheduler.activeRuns().length > 0;
+  }
 
-    if (enabled) {
-      const v = validateSchedulerConfig(this.settings);
-      if (!v.ok) {
-        new Notice(`Cannot enable arXiv Daily:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
+  async withOutputOperation<T>(
+    kind: "paper-index" | "paper-note",
+    label: string,
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const handle = this.operations.begin(kind, label, key);
+    try {
+      return await operation();
+    } finally {
+      handle.finish();
+    }
+  }
+
+  private beginOutputTransition(): () => void {
+    if (this.scheduler.activeRuns().length > 0) {
+      throw new Error(
+        "Output directories cannot change while operations or runs are active",
+      );
+    }
+    return this.operations.beginOutputTransition();
+  }
+
+  async setScheduleEnabled(enabled: boolean): Promise<boolean> {
+    const revision = (this.scheduleIntentRevision ?? 0) + 1;
+    this.scheduleIntentRevision = revision;
+    let choice: "skip" | "run" | "none" | null = enabled ? "none" : null;
+    if (enabled && !this.settings.schedule.enabled) {
+      const candidate: PluginSettings = {
+        ...this.settings,
+        schedule: { ...this.settings.schedule, enabled: true },
+      };
+      const validation = validateSchedulerConfig(candidate);
+      if (!validation.ok) {
+        if (revision === this.scheduleIntentRevision) {
+          new Notice(
+            `Cannot enable arXiv Daily:\n${validation.reasons.map((reason) => "• " + reason).join("\n")}`,
+            10_000,
+          );
+        }
         return false;
       }
-      const choice = await chooseModal(
-        this.app,
-        "Enable arXiv Daily",
-        "Scheduler will check for new papers daily. Run today's summary right now?",
-        [
-          { label: "Cancel", value: "cancel" },
-          { label: "Skip today", value: "skip" },
-          { label: "Run today", value: "run", cta: true },
-        ],
-      );
-      if (choice === null || choice === "cancel") return false;
+      const selected = await this.chooseScheduleEnableAction();
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (selected === null || selected === "cancel") return false;
+      choice = selected === "run" ? "run" : "skip";
+    }
 
-      this.settings.schedule.enabled = true;
-      await this.saveSettings();
-      this.scheduler.start();
+    return this.enqueueScheduleIntent(async () => {
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (this.settings.schedule.enabled !== enabled) {
+        await this.settingsChanges.changeValue("schedule.enabled", enabled);
+      }
+      if (revision !== this.scheduleIntentRevision) return false;
+      if (!enabled || choice === "none") return true;
+
       if (choice === "skip") {
         const today = formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
         await this.stateStore.setSkipped(today, "user opted out at enable time");
-        this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+        if (revision === this.scheduleIntentRevision) {
+          this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+        }
       } else {
         const result = await this.scheduler.tickToday();
-        if (result?.kind === "skipped" && result.reason === "weekend") {
+        if (
+          revision === this.scheduleIntentRevision &&
+          result?.kind === "skipped" &&
+          result.reason === "weekend"
+        ) {
           this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
         }
       }
-      return true;
-    }
+      return revision === this.scheduleIntentRevision;
+    });
+  }
 
-    this.settings.schedule.enabled = false;
-    await this.saveSettings();
-    this.scheduler.stop();
-    this.progress.setDisabled();
-    return true;
+  private chooseScheduleEnableAction(): Promise<string | null> {
+    return chooseModal(
+      this.app,
+      "Enable arXiv Daily",
+      "Scheduler will check for new papers daily. Run today's summary right now?",
+      [
+        { label: "Cancel", value: "cancel" },
+        { label: "Skip today", value: "skip" },
+        { label: "Run today", value: "run", cta: true },
+      ],
+    );
+  }
+
+  private enqueueScheduleIntent(
+    operation: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const queued = (this.scheduleIntentQueue ?? Promise.resolve()).then(operation);
+    this.scheduleIntentQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  private applyScheduleEnabledRuntime(enabled: boolean): void {
+    if (enabled) {
+      this.scheduler.start();
+    } else {
+      this.scheduler.stop();
+      this.progress.setDisabled();
+    }
   }
 
   private async loadSettingsAndState(): Promise<string[]> {
@@ -2460,11 +2643,11 @@ export default class ArxivDailyPlugin extends Plugin {
       | "personal-library-fulltext-index"
     >,
   ): void {
-    const registry = this.operations as OperationRegistry & {
+    const registry = this.operations as (OperationRegistry & {
       snapshot?: OperationRegistry["snapshot"];
       cancel?: OperationRegistry["cancel"];
-    };
-    if (!registry.snapshot || !registry.cancel) return;
+    }) | undefined;
+    if (!registry || !registry.snapshot || !registry.cancel) return;
     for (const operation of registry.snapshot()) {
       if (kinds.includes(operation.kind as typeof kinds[number])) {
         registry.cancel(operation.id, reason);
@@ -2482,9 +2665,9 @@ export default class ArxivDailyPlugin extends Plugin {
     return result;
   }
 
-  private async persistSettings(): Promise<void> {
+  private async persistSettings(settings?: PluginSettings): Promise<void> {
     const data: PersistedData = {
-      settings: this.settings,
+      settings: settings ?? this.settings,
       ...(this.libraryConnection
         ? { libraryConnection: this.libraryConnection }
         : {}),
@@ -2498,6 +2681,7 @@ export default class ArxivDailyPlugin extends Plugin {
         this.settings.llm.apiKey,
         this.settings.email?.apiKey ?? "",
         this.settings.email?.hostedToken ?? "",
+        this.settings.embedding?.apiKey ?? "",
         this.libraryConnection?.selectedRoot ?? "",
       ].filter(Boolean),
     );
@@ -2541,9 +2725,14 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
       force: true,
     });
-    if (result.kind === "delivered") {
-      return `Test email delivered to ${email.to}` +
-        (result.providerMessageId ? ` (${result.providerMessageId})` : "");
+    if (
+      result.kind === "delivered" ||
+      result.kind === "delivered_unrecorded"
+    ) {
+      return "Test email delivered" +
+        (result.kind === "delivered_unrecorded"
+          ? `; delivery record unavailable: ${result.reason}`
+          : "");
     }
     throw new Error(`${result.kind}: ${result.reason}`);
   }
@@ -2556,7 +2745,7 @@ export default class ArxivDailyPlugin extends Plugin {
       baseUrl: this.settings.email.hostedBaseUrl,
       email: to,
     });
-    return `Verification email sent to ${to}. Open the link, then paste the code from that page into Verification code.`;
+    return "Verification email sent. Open the link, then paste the code from that page into Verification code.";
   }
 
   private buildPipeline(): ArxivPipeline {

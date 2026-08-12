@@ -9,11 +9,11 @@ Make the CLI a first-class **product** with a simple fixed TOML config and `init
 
 ## Success criteria
 
-- [ ] CLI reads only XDG `arxiv-daily/config.toml`; missing file fails with “run init”; no `ARXIV_DAILY_*` settings env; no config path override flags.
-- [ ] `arxiv-daily init` interactive flow writes a runnable config (vault, LLM, optional email, placeholder topic, arXiv fields) with overwrite/merge/cancel if present.
-- [ ] CLI email can be configured via TOML; test/status/verify paths work for Send yourself and Official delivery as designed; docs match.
-- [ ] Plugin and CLI can export/import zip of logical `daily` + `papers` + `.index` with mtime conflict preview and confirm/`--yes`.
-- [ ] Docs state two-product model: settings manual per product; vault data portable.
+- [x] CLI reads only XDG `arxiv-daily/config.toml`; missing file fails with “run init”; no `ARXIV_DAILY_*` settings env; no config path override flags.
+- [x] `arxiv-daily init` interactive flow writes a runnable config (vault, LLM, optional email, placeholder topic, arXiv fields) with overwrite/merge/cancel if present.
+- [x] CLI email can be configured via TOML; test/status/verify paths work for Send yourself and Official delivery as designed; docs match.
+- [x] CLI can export/import zip of logical `daily` + `papers` + `.index` with mtime conflict preview and confirm/`--yes`; plugin UI was explicitly waived as an optional follow-up.
+- [x] Docs state two-product model: settings manual per product; vault data portable.
 
 ## Non-goals
 

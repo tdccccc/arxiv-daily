@@ -99,6 +99,26 @@ export interface PaperInboxPaths {
   legacyPapersJsonPath: string;
 }
 
+export interface PaperIndexInspection {
+  inbox: PaperInbox;
+  /** Validated on-disk document before schema/key normalization. */
+  document: unknown | null;
+  sourcePath: string | null;
+  recoveredFromBackup: boolean;
+}
+
+export interface PaperIndexMutationResult<T> {
+  result: T;
+  changed: boolean;
+}
+
+export interface PaperIndexMutation {
+  upsertManyFromDailyPapers(
+    inputs: PaperIndexUpsert[],
+  ): Array<{ entry: PaperIndexEntry; wasNew: boolean }>;
+  setSummaries(summaries: Record<string, PaperSummary>): number;
+}
+
 export interface PaperIndexUpsert {
   arxivId: string;
   title: string;
@@ -127,10 +147,51 @@ export type PaperDetailsRemovalResult =
       error: unknown;
     };
 
+export type PaperIndexErrorCode =
+  | "configuration"
+  | "read_failed"
+  | "invalid_document"
+  | "save_failed"
+  | "invalid_input"
+  | "operation_failed";
+
+export type PaperIndexDiagnosticFailure =
+  | "paper_index_configuration_invalid"
+  | "paper_index_unreadable"
+  | "paper_index_invalid"
+  | "paper_index_save_failed"
+  | "paper_index_invalid_input"
+  | "paper_index_unavailable";
+
 export class PaperIndexError extends Error {
-  constructor(message: string, readonly cause?: unknown) {
+  constructor(
+    message: string,
+    readonly cause?: unknown,
+    readonly code: PaperIndexErrorCode = "operation_failed",
+  ) {
     super(message);
     this.name = "PaperIndexError";
+  }
+}
+
+/** Return a stable, content-free category suitable for diagnostics and logs. */
+export function classifyPaperIndexFailureForDiagnostics(
+  error: unknown,
+): PaperIndexDiagnosticFailure {
+  if (!(error instanceof PaperIndexError)) return "paper_index_unavailable";
+  switch (error.code) {
+    case "configuration":
+      return "paper_index_configuration_invalid";
+    case "read_failed":
+      return "paper_index_unreadable";
+    case "invalid_document":
+      return "paper_index_invalid";
+    case "save_failed":
+      return "paper_index_save_failed";
+    case "invalid_input":
+      return "paper_index_invalid_input";
+    default:
+      return "paper_index_unavailable";
   }
 }
 
@@ -143,7 +204,11 @@ export function derivePaperInboxPaths(
   const dailyDir = requireOutputDirectory("dailyDir", output.dailyDir);
   const papersDir = requireOutputDirectory("papersDir", output.papersDir);
   if (vaultRelativeDirectoriesCollide(dailyDir, papersDir)) {
-    throw new PaperIndexError("dailyDir and papersDir must be different");
+    throw new PaperIndexError(
+      "dailyDir and papersDir must be different",
+      undefined,
+      "configuration",
+    );
   }
   const dailyParent = parentDir(dailyDir, normalizePath);
   const papersParent = parentDir(papersDir, normalizePath);
@@ -178,44 +243,49 @@ export class PaperIndexStore {
   }
 
   async load(): Promise<PaperInbox> {
-    const path = await this.readableIndexPath();
-    if (!path) {
-      return emptyInbox(this.now());
-    }
-
-    let raw: string;
-    try {
-      raw = await this.storage.readText(path);
-    } catch (e) {
-      throw new PaperIndexError(
-        `failed to read paper index: ${path}`,
-        e,
-      );
-    }
-
-    try {
-      return normalizeInbox(JSON.parse(raw), this.now());
-    } catch (e) {
-      throw new PaperIndexError(
-        `failed to parse paper index: ${path}: ${(e as Error).message}`,
-        e,
-      );
-    }
+    return (await this.inspect()).inbox;
   }
 
-  async save(inbox: PaperInbox): Promise<void> {
-    const next: PaperInbox = {
-      ...inbox,
-      schemaVersion: PAPER_INBOX_SCHEMA_VERSION,
-      updatedAt: this.now().toISOString(),
-      papers: { ...inbox.papers },
+  /** Uses the same classified, validated source selection as production reads. */
+  async inspect(): Promise<PaperIndexInspection> {
+    const selected = await this.readSelectedIndex();
+    if (!selected) {
+      return {
+        inbox: emptyInbox(this.now()),
+        document: null,
+        sourcePath: null,
+        recoveredFromBackup: false,
+      };
+    }
+    return {
+      inbox: selected.inbox,
+      document: selected.document,
+      sourcePath: selected.path,
+      recoveredFromBackup: selected.path === `${this.paths.papersJsonPath}.bak`,
     };
-    await this.ensureDirDeep(this.paths.indexDir);
-    await this.writeAtomic(
-      this.paths.papersJsonPath,
-      `${JSON.stringify(next, null, 2)}\n`,
-    );
-    await this.removeLegacyIndexFile();
+  }
+
+  /**
+   * Queues a complete read-modify-validate-save transaction for this path.
+   * The callback must report whether it changed the normalized inbox.
+   */
+  mutate<T>(
+    mutation: (
+      inbox: PaperInbox,
+      operations: PaperIndexMutation,
+    ) => PaperIndexMutationResult<T>,
+  ): Promise<T> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const operations: PaperIndexMutation = {
+        upsertManyFromDailyPapers: (inputs) =>
+          inputs.map((input) => upsertEntry(inbox, input)),
+        setSummaries: (summaries) => setSummariesInInbox(inbox, summaries),
+      };
+      const { result, changed } = mutation(inbox, operations);
+      if (changed) await this.saveUnlocked(inbox);
+      return result;
+    });
   }
 
   async upsertFromDailyPaper(input: PaperIndexUpsert): Promise<{
@@ -225,7 +295,7 @@ export class PaperIndexStore {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       const { entry, wasNew } = upsertEntry(inbox, input);
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return { entry, wasNew };
     });
   }
@@ -236,7 +306,7 @@ export class PaperIndexStore {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       const results = inputs.map((input) => upsertEntry(inbox, input));
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return results;
     });
   }
@@ -261,7 +331,7 @@ export class PaperIndexStore {
       entry.detail = true;
       entry.paperPath = this.storage.normalizePath(paperPath);
       if (wasNew) entry.status = intendedStatusForNew;
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return { entry, wasNew };
     });
   }
@@ -274,7 +344,7 @@ export class PaperIndexStore {
         if (!entry) continue;
         entry.dailyReports = appendUnique(entry.dailyReports, dailyReport);
       }
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
     });
   }
 
@@ -304,7 +374,7 @@ export class PaperIndexStore {
           changed += 1;
         }
       }
-      if (changed > 0) await this.save(inbox);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -341,7 +411,7 @@ export class PaperIndexStore {
           changed += 1;
         }
       }
-      if (changed > 0) await this.save(inbox);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -352,7 +422,7 @@ export class PaperIndexStore {
       const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.status = status;
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return entry;
     });
   }
@@ -366,7 +436,7 @@ export class PaperIndexStore {
       const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.priority = priority;
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return entry;
     });
   }
@@ -376,16 +446,8 @@ export class PaperIndexStore {
   ): Promise<number> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
-      let changed = 0;
-      for (const [id, summary] of Object.entries(summaries)) {
-        const entry = findEntry(inbox, id);
-        if (!entry) continue;
-        const next = mergeSummaries(entry.summary, summary);
-        if (sameSummary(entry.summary, next)) continue;
-        entry.summary = next;
-        changed += 1;
-      }
-      if (changed > 0) await this.save(inbox);
+      const changed = setSummariesInInbox(inbox, summaries);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -397,7 +459,7 @@ export class PaperIndexStore {
       if (!entry) return null;
       entry.paperPath = this.storage.normalizePath(paperPath);
       entry.detail = true;
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return entry;
     });
   }
@@ -420,7 +482,7 @@ export class PaperIndexStore {
         entry.detail = detail;
         changed += 1;
       }
-      if (changed > 0) await this.save(inbox);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -436,7 +498,7 @@ export class PaperIndexStore {
         entry.paperPath = null;
         changed += 1;
       }
-      if (changed > 0) await this.save(inbox);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -469,7 +531,7 @@ export class PaperIndexStore {
         delete inbox.papers[entry.paperKey];
       }
       try {
-        await this.save(inbox);
+        await this.saveUnlocked(inbox);
       } catch (error) {
         return { kind: "index_failed", action, entry: snapshot, error };
       }
@@ -487,7 +549,7 @@ export class PaperIndexStore {
         delete inbox.papers[entry.paperKey];
         changed += 1;
       }
-      if (changed > 0) await this.save(inbox);
+      if (changed > 0) await this.saveUnlocked(inbox);
       return changed;
     });
   }
@@ -501,7 +563,7 @@ export class PaperIndexStore {
       const entry = findEntry(inbox, id);
       if (!entry) return null;
       entry.pdfPath = this.storage.normalizePath(pdfPath);
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return entry;
     });
   }
@@ -518,7 +580,7 @@ export class PaperIndexStore {
         entry.projects,
         normalizeStoragePath(projectPath),
       );
-      await this.save(inbox);
+      await this.saveUnlocked(inbox);
       return entry;
     });
   }
@@ -547,28 +609,106 @@ export class PaperIndexStore {
     }
   }
 
-  private async readableIndexPath(): Promise<string | null> {
-    if (await this.storage.exists(this.paths.papersJsonPath)) {
-      return this.paths.papersJsonPath;
+  private async readSelectedIndex(): Promise<SelectedPaperIndex | null> {
+    const candidates = [
+      this.paths.papersJsonPath,
+      `${this.paths.papersJsonPath}.bak`,
+      this.paths.legacyPapersJsonPath,
+    ];
+    let invalid: unknown;
+    let found = false;
+    for (const path of candidates) {
+      const result = await this.readIndexDocument(path);
+      if (result.kind === "missing") continue;
+      found = true;
+      if (result.kind === "unreadable") {
+        throw new PaperIndexError(
+          `failed to read paper index: ${path}`,
+          result.error,
+          "read_failed",
+        );
+      }
+      if (result.kind === "valid") {
+        return {
+          path,
+          raw: result.raw,
+          document: result.document,
+          inbox: result.inbox,
+        };
+      }
+      invalid ??= result.error;
     }
-    if (await this.storage.exists(this.paths.legacyPapersJsonPath)) {
-      return this.paths.legacyPapersJsonPath;
+    if (!found) return null;
+    throw new PaperIndexError(
+      `failed to load paper index: no valid document found${
+        invalid instanceof Error ? `: ${invalid.message}` : ""
+      }`,
+      invalid,
+      "invalid_document",
+    );
+  }
+
+  private async readIndexDocument(path: string): Promise<PaperIndexReadResult> {
+    let exists: boolean;
+    try {
+      exists = await this.storage.exists(path);
+    } catch (error) {
+      return { kind: "unreadable", error };
     }
-    return null;
+    if (!exists) return { kind: "missing" };
+
+    let raw: string;
+    try {
+      raw = await this.storage.readText(path);
+    } catch (error) {
+      return { kind: "unreadable", error };
+    }
+    try {
+      const document: unknown = JSON.parse(raw);
+      return {
+        kind: "valid",
+        raw,
+        document,
+        inbox: normalizeInbox(document, this.now()),
+      };
+    } catch (error) {
+      return { kind: "corrupt", error };
+    }
+  }
+
+  private async saveUnlocked(inbox: PaperInbox): Promise<void> {
+    const next = normalizeInbox({
+      ...inbox,
+      schemaVersion: PAPER_INBOX_SCHEMA_VERSION,
+      updatedAt: this.now().toISOString(),
+      papers: { ...inbox.papers },
+    }, this.now());
+    const content = `${JSON.stringify(next, null, 2)}\n`;
+    await this.ensureDirDeep(this.paths.indexDir);
+    try {
+      await this.replaceWithBackup(content);
+    } catch (error) {
+      if (error instanceof PaperIndexError) throw error;
+      throw new PaperIndexError(
+        `failed to save paper index: ${this.paths.papersJsonPath}${
+          error instanceof Error ? `: ${error.message}` : ""
+        }`,
+        error,
+        "save_failed",
+      );
+    }
+    await this.removeLegacyIndexFile();
   }
 
   private async removeLegacyIndexFile(): Promise<void> {
-    if (
-      this.paths.legacyPapersJsonPath === this.paths.papersJsonPath ||
-      !(await this.storage.exists(this.paths.legacyPapersJsonPath))
-    ) {
-      return;
-    }
+    if (this.paths.legacyPapersJsonPath === this.paths.papersJsonPath) return;
     try {
-      await this.storage.remove(this.paths.legacyPapersJsonPath);
+      if (await this.storage.exists(this.paths.legacyPapersJsonPath)) {
+        await this.storage.remove(this.paths.legacyPapersJsonPath);
+      }
     } catch {
-      // The hidden index has already been written; a stale legacy file should
-      // not make the main save operation fail.
+      // The hidden index has already been committed. Legacy existence checks
+      // and removal are both best effort after that point.
     }
   }
 
@@ -580,29 +720,124 @@ export class PaperIndexStore {
     );
   }
 
-  private async writeAtomic(path: string, content: string): Promise<void> {
-    const tmp = `${path}.tmp`;
-    const bak = `${path}.bak`;
-    await this.storage.writeText(tmp, content);
-    if (!(await this.storage.exists(path))) {
-      await this.storage.rename(tmp, path);
-      return;
-    }
+  private async replaceWithBackup(content: string): Promise<void> {
+    const primary = this.paths.papersJsonPath;
+    const backup = `${primary}.bak`;
+    const primaryTmp = `${primary}.tmp`;
+    const backupTmp = `${backup}.tmp`;
+    await this.removeIfExists(primaryTmp);
+    await this.removeIfExists(backupTmp);
 
-    if (await this.storage.exists(bak)) {
-      await this.storage.remove(bak);
-    }
-    await this.storage.rename(path, bak);
     try {
-      await this.storage.rename(tmp, path);
-      await this.storage.remove(bak);
-    } catch (e) {
-      if (await this.storage.exists(bak)) {
-        await this.storage.rename(bak, path);
+      await this.writePrivateText(primaryTmp, content);
+
+      const primaryRead = await this.readIndexDocument(primary);
+      if (primaryRead.kind === "unreadable") throw primaryRead.error;
+      let recovery = primaryRead.kind === "valid" ? primaryRead.raw : null;
+      if (recovery === null) {
+        const backupRead = await this.readIndexDocument(backup);
+        if (backupRead.kind === "unreadable") throw backupRead.error;
+        if (backupRead.kind === "valid") {
+          recovery = backupRead.raw;
+        } else {
+          const legacyRead = await this.readIndexDocument(this.paths.legacyPapersJsonPath);
+          if (legacyRead.kind === "unreadable") throw legacyRead.error;
+          if (legacyRead.kind === "valid") recovery = legacyRead.raw;
+        }
       }
-      throw new PaperIndexError(`failed to save paper index: ${path}`, e);
+
+      if (primaryRead.kind === "valid") {
+        await this.publishBackup(backup, backupTmp, primaryRead.raw);
+      }
+
+      await this.removeIfExists(primary);
+      try {
+        await this.storage.rename(primaryTmp, primary);
+      } catch (error) {
+        await this.restorePrimaryBestEffort(primaryTmp, primary, recovery);
+        throw error;
+      }
+    } finally {
+      await this.removeIfExistsBestEffort(primaryTmp);
+      await this.removeIfExistsBestEffort(backupTmp);
     }
   }
+
+  private async publishBackup(
+    backup: string,
+    backupTmp: string,
+    content: string,
+  ): Promise<void> {
+    await this.writePrivateText(backupTmp, content);
+    const existing = await this.readIndexDocument(backup);
+    if (existing.kind === "unreadable") throw existing.error;
+    const recovery = existing.kind === "valid" ? existing.raw : null;
+    await this.removeIfExists(backup);
+    try {
+      await this.storage.rename(backupTmp, backup);
+    } catch (error) {
+      if (recovery !== null) {
+        await this.removeIfExists(backupTmp);
+        await this.writePrivateText(backup, recovery);
+      }
+      throw error;
+    }
+  }
+
+  private async restorePrimaryBestEffort(
+    primaryTmp: string,
+    primary: string,
+    recovery: string | null,
+  ): Promise<void> {
+    try {
+      await this.removeIfExists(primaryTmp);
+      if (recovery === null) return;
+      await this.writePrivateText(primaryTmp, recovery);
+      await this.storage.rename(primaryTmp, primary);
+    } catch {
+      // Preserve the primary promotion error. Existing backup/legacy recovery
+      // remains available when rollback cleanup or restoration also fails.
+    }
+  }
+
+  private async writePrivateText(path: string, content: string): Promise<void> {
+    if (this.storage.writeTextWithMode) {
+      await this.storage.writeTextWithMode(path, content, 0o600);
+      return;
+    }
+    await this.storage.writeText(path, content);
+  }
+
+  private async removeIfExists(path: string): Promise<void> {
+    if (await this.storage.exists(path)) await this.storage.remove(path);
+  }
+
+  private async removeIfExistsBestEffort(path: string): Promise<void> {
+    try {
+      await this.removeIfExists(path);
+    } catch {
+      // Temporary cleanup must not turn a committed save into a failure or
+      // replace the primary error from an unsuccessful save.
+    }
+  }
+}
+
+type PaperIndexReadResult =
+  | { kind: "missing" }
+  | { kind: "unreadable"; error: unknown }
+  | { kind: "corrupt"; error: unknown }
+  | {
+      kind: "valid";
+      raw: string;
+      document: unknown;
+      inbox: PaperInbox;
+    };
+
+interface SelectedPaperIndex {
+  path: string;
+  raw: string;
+  document: unknown;
+  inbox: PaperInbox;
 }
 
 function enqueuePathMutation<T>(
@@ -630,7 +865,13 @@ function upsertEntry(
   input: PaperIndexUpsert,
 ): { entry: PaperIndexEntry; wasNew: boolean } {
   const resources = modernArxivResources(input.arxivId);
-  if (!resources) throw new PaperIndexError(`invalid arXiv ID: ${input.arxivId}`);
+  if (!resources) {
+    throw new PaperIndexError(
+      `invalid arXiv ID: ${input.arxivId}`,
+      undefined,
+      "invalid_input",
+    );
+  }
   const externalId = resources.id;
   const paperKey = formatPaperKey("arxiv", externalId);
   const existing = inbox.papers[paperKey];
@@ -692,8 +933,24 @@ function upsertEntry(
   return { entry, wasNew };
 }
 
+function setSummariesInInbox(
+  inbox: PaperInbox,
+  summaries: Record<string, PaperSummary>,
+): number {
+  let changed = 0;
+  for (const [id, summary] of Object.entries(summaries)) {
+    const entry = findEntry(inbox, id);
+    if (!entry) continue;
+    const next = mergeSummaries(entry.summary, summary);
+    if (sameSummary(entry.summary, next)) continue;
+    entry.summary = next;
+    changed += 1;
+  }
+  return changed;
+}
+
 function normalizeInbox(raw: unknown, now: Date): PaperInbox {
-  if (!raw || typeof raw !== "object") return emptyInbox(now);
+  if (!isPlainRecord(raw)) throw new Error("paper index must be an object");
   const obj = raw as any;
   if (
     obj.schemaVersion !== 1 &&
@@ -704,8 +961,9 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   ) {
     throw new Error(`unsupported schemaVersion: ${obj.schemaVersion}`);
   }
+  if (!isPlainRecord(obj.papers)) throw new Error("paper index papers must be an object");
   const papers: Record<string, PaperIndexEntry> = {};
-  for (const [id, value] of Object.entries(obj.papers ?? {})) {
+  for (const [id, value] of Object.entries(obj.papers)) {
     const entry = normalizeEntry(id, value);
     papers[entry.paperKey] = entry;
   }
@@ -859,7 +1117,11 @@ function findEntry(inbox: PaperInbox, id: string): PaperIndexEntry | null {
 function requireOutputDirectory(name: string, input: unknown): string {
   const result = validateVaultRelativeDirectory(input);
   if (!result.ok || !result.value) {
-    throw new PaperIndexError(`invalid ${name}: ${result.reason}`);
+    throw new PaperIndexError(
+      `invalid ${name}: ${result.reason}`,
+      undefined,
+      "configuration",
+    );
   }
   return result.value;
 }
@@ -1003,6 +1265,12 @@ function stringArray(value: unknown): string[] {
 
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 export function isPaperStatus(value: unknown): value is PaperStatus {

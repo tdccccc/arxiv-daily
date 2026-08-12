@@ -30,3 +30,4 @@ DAILY_QUOTA = "5"
 # Secrets (never commit):
 #   npx wrangler secret put RESEND_API_KEY
 #   npx wrangler secret put TOKEN_SECRET
+#   npx wrangler secret put DELIVERY_V2_CUTOVER_TOKEN

@@ -1,4 +1,4 @@
-import type { HttpClient } from "../core/adapters";
+import { isHttpTransportError, type HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ResendEmailPayload } from "./types";
 
@@ -8,6 +8,8 @@ export interface SendViaResendOptions {
   http: HttpClient;
   apiKey: string;
   payload: ResendEmailPayload;
+  /** Stable logical provider key, reused by every internal attempt. */
+  idempotencyKey: string;
   /** Total attempts including the first try. Default 3. */
   maxAttempts?: number;
   /** Base backoff between retries in ms. Default 400. */
@@ -15,10 +17,13 @@ export interface SendViaResendOptions {
   signal?: AbortSignal;
   /** Injectable sleep for tests. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Completes the durable local attempt marker before each physical request. */
+  beforeProviderAttempt?: () => Promise<void>;
+  /** Called synchronously immediately before HttpClient.request is invoked. */
+  onProviderInvocation?: () => void;
 }
 
 export interface SendViaResendResult {
-  providerMessageId?: string;
   attempts: number;
   status: number;
 }
@@ -29,6 +34,7 @@ export class ResendSendError extends Error {
     readonly status?: number,
     readonly permanent = false,
     readonly attempts = 1,
+    readonly ambiguous = false,
   ) {
     super(message);
     this.name = "ResendSendError";
@@ -45,17 +51,29 @@ export async function sendViaResend(
   if (!apiKey) {
     throw new ResendSendError("Resend API key is empty", undefined, true, 0);
   }
+  const idempotencyKey = opts.idempotencyKey.trim();
+  if (!idempotencyKey || idempotencyKey.length > 128) {
+    throw new ResendSendError(
+      "Resend Idempotency-Key must be 1-128 characters",
+      undefined,
+      true,
+      0,
+    );
+  }
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     throwIfCancelled(opts.signal);
+    await opts.beforeProviderAttempt?.();
     try {
+      opts.onProviderInvocation?.();
       const response = await opts.http.request({
         url: RESEND_API_URL,
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
         },
         body: JSON.stringify({
           from: formatFrom(opts.payload),
@@ -69,47 +87,77 @@ export async function sendViaResend(
       });
 
       if (response.status >= 200 && response.status < 300) {
+        if (!hasProviderAcceptance(response.bodyText)) {
+          throw new ResendSendError(
+            "Resend success response did not contain an acceptance marker",
+            response.status,
+            false,
+            attempt,
+            true,
+          );
+        }
         return {
-          providerMessageId: parseProviderMessageId(response.bodyText),
           attempts: attempt,
           status: response.status,
         };
       }
 
-      const permanent = response.status === 401 || response.status === 403;
-      const retryable =
-        !permanent &&
-        (response.status === 429 || response.status >= 500 || response.status === 408);
-      const message =
-        `Resend HTTP ${response.status}` +
-        (response.bodyText ? `: ${truncate(response.bodyText, 200)}` : "");
+      const ambiguous =
+        response.status === 408 ||
+        response.status === 409 ||
+        response.status >= 500;
+      const definitiveRejection =
+        response.status === 400 ||
+        response.status === 401 ||
+        response.status === 403 ||
+        response.status === 404 ||
+        response.status === 422 ||
+        response.status === 429;
+      const error = new ResendSendError(
+        `Resend HTTP ${response.status}`,
+        response.status,
+        definitiveRejection,
+        attempt,
+        ambiguous || !definitiveRejection,
+      );
 
-      if (!retryable || attempt >= maxAttempts) {
-        throw new ResendSendError(message, response.status, permanent, attempt);
-      }
-      lastError = new ResendSendError(message, response.status, permanent, attempt);
+      // Stable provider idempotency permits bounded retries for 408/409/5xx.
+      // The local claim remains blocking throughout, even after retry exhaustion.
+      if (!ambiguous || attempt >= maxAttempts) throw error;
+      lastError = error;
       await sleepFn(baseDelayMs * attempt, opts.signal);
       continue;
     } catch (error) {
       if (isCancellationError(error)) throw error;
       if (error instanceof ResendSendError) {
         if (error.permanent || attempt >= maxAttempts) {
-          throw new ResendSendError(error.message, error.status, error.permanent, attempt);
+          throw new ResendSendError(
+            error.message,
+            error.status,
+            error.permanent,
+            attempt,
+            error.ambiguous,
+          );
         }
         lastError = error;
         await sleepFn(baseDelayMs * attempt, opts.signal);
         continue;
       }
-      // Network / transport errors — retry.
-      lastError = error;
-      if (attempt >= maxAttempts) {
+      const message = isHttpTransportError(error)
+        ? `Resend ${error.kind} transport failure`
+        : "Resend transport outcome is unknown";
+      const canRetryPhysicalAttempt =
+        isHttpTransportError(error) && error.retryableAttempt;
+      if (!canRetryPhysicalAttempt || attempt >= maxAttempts) {
         throw new ResendSendError(
-          error instanceof Error ? error.message : String(error),
+          message,
           undefined,
           false,
           attempt,
+          true,
         );
       }
+      lastError = error;
       await sleepFn(baseDelayMs * attempt, opts.signal);
     }
   }
@@ -117,10 +165,11 @@ export async function sendViaResend(
   throw lastError instanceof ResendSendError
     ? lastError
     : new ResendSendError(
-        lastError instanceof Error ? lastError.message : String(lastError),
+        "Resend transport outcome is unknown",
         undefined,
         false,
         maxAttempts,
+        true,
       );
 }
 
@@ -138,19 +187,14 @@ export function formatResendFrom(fromEmail: string, fromName?: string): string {
   return `${safeName} <${email}>`;
 }
 
-function parseProviderMessageId(bodyText: string): string | undefined {
-  if (!bodyText.trim()) return undefined;
+function hasProviderAcceptance(bodyText: string): boolean {
+  if (!bodyText.trim()) return false;
   try {
     const parsed = JSON.parse(bodyText) as { id?: unknown };
-    return typeof parsed.id === "string" && parsed.id ? parsed.id : undefined;
+    return typeof parsed.id === "string" && parsed.id.length > 0;
   } catch {
-    return undefined;
+    return false;
   }
-}
-
-function truncate(value: string, max: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  return compact.length <= max ? compact : `${compact.slice(0, max)}…`;
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {

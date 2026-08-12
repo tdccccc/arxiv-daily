@@ -4,21 +4,47 @@ import {
   sampleDailyDigest,
 } from "../../src/delivery/deliver-email";
 import {
+  deliveryStatePath,
   loadDeliveryState,
   shouldSendEmail,
 } from "../../src/delivery/delivery-state";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { StorageAdapter } from "../../src/core/adapters";
+import { startHostedEmailVerification } from "../../src/delivery/hosted";
+
+async function persistedDeliveryText(
+  storage: StorageAdapter,
+): Promise<string> {
+  const statePath = deliveryStatePath(DEFAULT_SETTINGS.output);
+  const chunks: string[] = [];
+  if (await storage.exists(statePath)) chunks.push(await storage.readText(statePath));
+  for (const entry of (await storage.list?.(`${statePath}.claims`)) ?? []) {
+    if (entry.type === "file") chunks.push(await storage.readText(entry.path));
+  }
+  return chunks.join("\n");
+}
 
 function memoryStorage(): StorageAdapter {
   const files = new Map<string, string>();
   return {
     normalizePath: (p) => p.replace(/\\/g, "/"),
+    async createTextExclusive(path, content) {
+      if (files.has(path)) return false;
+      files.set(path, content);
+      return true;
+    },
+    async guardClaimNamespace() {
+      return { assertCurrent() {}, async release() {} };
+    },
     async readText(path) {
       if (!files.has(path)) throw new Error(`missing ${path}`);
       return files.get(path)!;
     },
     async writeText(path, content) {
+      files.set(path, content);
+    },
+    async writeTextAtomic(path, content, mode) {
+      if (mode !== 0o600) throw new Error("private mode is required");
       files.set(path, content);
     },
     async exists(path) {
@@ -34,27 +60,39 @@ function memoryStorage(): StorageAdapter {
     async remove(path) {
       files.delete(path);
     },
+    async list(dir) {
+      const prefix = dir ? `${dir}/` : "";
+      return Array.from(files.keys())
+        .filter((path) => path.startsWith(prefix))
+        .map((path) => ({ path, type: "file" as const }));
+    },
   };
 }
 
 describe("hosted deliverDailyEmailIfEnabled", () => {
   const output = DEFAULT_SETTINGS.output;
   const digest = sampleDailyDigest({ date: "2026-07-27", language: "zh" });
+  // Matches the existing 128-character delivery/provider boundary while keeping
+  // the transitional provider identifier strictly bounded.
+  const legacyProviderIdMaxLength = 128;
+  const escapedLegacyProviderId = 'private-"provider\\id,{braces}';
 
   it("force test-send uses test idempotency key and does not block auto-send", async () => {
     const storage = memoryStorage();
     const request = vi.fn(async (req: { url: string; headers?: Record<string, string> }) => {
       expect(req.url).toContain("/v1/deliver");
       const idemp = req.headers?.["Idempotency-Key"] ?? "";
-      if (request.mock.calls.length === 1) {
-        expect(idemp.startsWith("test|")).toBe(true);
-      } else {
-        expect(idemp).toBe("2026-07-27|you@example.com");
-      }
+      expect(idemp).toMatch(
+        request.mock.calls.length === 1
+          ? /^arxiv-daily:test:/
+          : /^arxiv-daily:auto:/,
+      );
+      expect(idemp.length).toBeLessThanOrEqual(128);
+      expect(idemp).not.toContain("you@example.com");
       return {
         status: 200,
         headers: {},
-        bodyText: JSON.stringify({ ok: true, id: `msg_${request.mock.calls.length}` }),
+        bodyText: JSON.stringify({ ok: true }),
       };
     });
 
@@ -93,6 +131,350 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     expect(shouldSendEmail(state2, digest.date, email.to)).toBe(false);
   });
 
+  it("keeps a hosted claim blocking when relay reports an ambiguous attempt", async () => {
+    const storage = memoryStorage();
+    const request = vi.fn(async () => ({
+      status: 502,
+      headers: {},
+      bodyText: JSON.stringify({
+        error: "Resend transport outcome is unknown",
+        ambiguous: true,
+      }),
+    }));
+    const email = {
+      enabled: true,
+      mode: "hosted" as const,
+      to: "you@example.com",
+      fromEmail: "",
+      hostedToken: "device_token_hex",
+      apiKey: "",
+    };
+
+    const first = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+    const second = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+
+    expect(first).toMatchObject({ kind: "ambiguous", attempts: 1 });
+    expect(second.kind).toBe("skipped");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose or persist a sensitive hosted error body", async () => {
+    const storage = memoryStorage();
+    const sensitive = [
+      "recipient@example.com",
+      "hosted_token_super_secret",
+      "private email body",
+    ];
+    const request = vi.fn(async () => ({
+      status: 422,
+      headers: {},
+      bodyText: sensitive.join(" | "),
+    }));
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const result = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email: {
+        enabled: true,
+        mode: "hosted",
+        to: "you@example.com",
+        hostedToken: "device_token_hex",
+        fromEmail: "",
+      },
+      logger,
+    });
+
+    expect(result).toMatchObject({ kind: "failed", attempts: 1 });
+    const exposed = [
+      result.kind === "failed" ? result.reason : "",
+      JSON.stringify(logger.warn.mock.calls),
+      JSON.stringify(logger.error.mock.calls),
+      await persistedDeliveryText(storage),
+    ].join("\n");
+    for (const value of sensitive) expect(exposed).not.toContain(value);
+  });
+
+  it.each([
+    ["canonical", JSON.stringify({ ok: true }), undefined],
+    [
+      "legacy provider ID",
+      JSON.stringify({ id: "private-provider-id", ok: true }),
+      "private-provider-id",
+    ],
+    [
+      "legacy deduplicated provider ID at the bound",
+      JSON.stringify({
+        deduped: true,
+        id: "d".repeat(legacyProviderIdMaxLength),
+        ok: true,
+      }),
+      "d".repeat(legacyProviderIdMaxLength),
+    ],
+    [
+      "legacy provider ID with escaped JSON characters",
+      JSON.stringify({ id: escapedLegacyProviderId, ok: true }),
+      escapedLegacyProviderId,
+    ],
+  ])(
+    "accepts the exact %s success shape and discards its provider ID",
+    async (_case, bodyText, providerId) => {
+      const storage = memoryStorage();
+      const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText }));
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+      const email = {
+        enabled: true,
+        mode: "hosted" as const,
+        to: "you@example.com",
+        hostedToken: "device_token_hex",
+        fromEmail: "",
+      };
+
+      const first = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+        logger,
+      });
+      const second = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+        logger,
+      });
+
+      expect(first).toEqual({ kind: "delivered", attempts: 1 });
+      expect(second.kind).toBe("skipped");
+      expect(request).toHaveBeenCalledTimes(1);
+      if (providerId) {
+        const exposed = [
+          JSON.stringify(first),
+          JSON.stringify(second),
+          JSON.stringify([
+            logger.info.mock.calls,
+            logger.warn.mock.calls,
+            logger.error.mock.calls,
+            logger.debug.mock.calls,
+          ]),
+          await persistedDeliveryText(storage),
+        ].join("\n");
+        expect(exposed).not.toContain(providerId);
+      }
+    },
+  );
+
+  it.each([
+    ["invalid JSON", "not-json"],
+    ["oversized success body", `${" ".repeat(4096)}{"ok":true}`],
+    ["null", "null"],
+    ["array", JSON.stringify([{ ok: true }])],
+    ["primitive", "true"],
+    ["empty object", JSON.stringify({})],
+    ["missing success marker", JSON.stringify({ id: "provider-id" })],
+    ["false success marker", JSON.stringify({ ok: false })],
+    ["string success marker", JSON.stringify({ ok: "true" })],
+    ["duplicate success marker", '{"ok":false,"ok":true}'],
+    [
+      "duplicate provider ID",
+      '{"ok":true,"id":"first-provider-id","id":"second-provider-id"}',
+    ],
+    [
+      "escaped duplicate provider ID member",
+      '{"ok":true,"\\u0069d":"first-provider-id","id":"second-provider-id"}',
+    ],
+    [
+      "duplicate deduped marker",
+      '{"ok":true,"id":"provider-id","deduped":false,"deduped":true}',
+    ],
+    ["empty provider ID", JSON.stringify({ ok: true, id: "" })],
+    ["blank provider ID", JSON.stringify({ ok: true, id: "   " })],
+    [
+      "oversized provider ID",
+      JSON.stringify({ ok: true, id: "p".repeat(legacyProviderIdMaxLength + 1) }),
+    ],
+    ["numeric provider ID", JSON.stringify({ ok: true, id: 1 })],
+    ["null provider ID", JSON.stringify({ ok: true, id: null })],
+    ["object provider ID", JSON.stringify({ ok: true, id: {} })],
+    ["array provider ID", JSON.stringify({ ok: true, id: ["provider-id"] })],
+    ["deduped without provider ID", JSON.stringify({ deduped: true, ok: true })],
+    [
+      "deduped false",
+      JSON.stringify({ deduped: false, id: "provider-id", ok: true }),
+    ],
+    [
+      "deduped string",
+      JSON.stringify({ deduped: "true", id: "provider-id", ok: true }),
+    ],
+    ["extra canonical field", JSON.stringify({ extra: true, ok: true })],
+    [
+      "extra legacy field",
+      JSON.stringify({ extra: true, id: "provider-id", ok: true }),
+    ],
+    [
+      "extra deduplicated field",
+      JSON.stringify({
+        deduped: true,
+        extra: true,
+        id: "provider-id",
+        ok: true,
+      }),
+    ],
+  ])("keeps an invalid hosted 2xx blocking (%s)", async (_case, bodyText) => {
+    const storage = memoryStorage();
+    const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText }));
+    const email = {
+      enabled: true,
+      mode: "hosted" as const,
+      to: "you@example.com",
+      hostedToken: "device_token_hex",
+      fromEmail: "",
+    };
+
+    const first = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+    const second = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+
+    expect(first).toMatchObject({ kind: "ambiguous", attempts: 1 });
+    expect(second.kind).toBe("skipped");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a relay definitive 422 decision without another provider call", async () => {
+    const storage = memoryStorage();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 422,
+        headers: {},
+        bodyText: JSON.stringify({ error: "provider rejected request", ambiguous: false }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        bodyText: JSON.stringify({ ok: true }),
+      });
+    const email = {
+      enabled: true,
+      mode: "hosted" as const,
+      to: "you@example.com",
+      hostedToken: "device_token_hex",
+      fromEmail: "",
+    };
+
+    const rejected = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+    const retry = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email,
+    });
+
+    expect(rejected).toMatchObject({ kind: "failed", attempts: 1 });
+    expect(retry).toMatchObject({
+      kind: "skipped",
+      reason: "provider_definitive_rejection",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([408, 418, 500])(
+    "does not trust ambiguous=false outside the explicit definitive contract on HTTP %s",
+    async (status) => {
+      const storage = memoryStorage();
+      const request = vi.fn(async () => ({
+        status,
+        headers: {},
+        bodyText: JSON.stringify({ error: "claimed definitive", ambiguous: false }),
+      }));
+      const email = {
+        enabled: true,
+        mode: "hosted" as const,
+        to: "you@example.com",
+        hostedToken: "device_token_hex",
+        fromEmail: "",
+      };
+
+      const first = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+      });
+      const second = await deliverDailyEmailIfEnabled(digest, {
+        storage,
+        http: { request },
+        output,
+        email,
+      });
+
+      expect(first).toMatchObject({ kind: "ambiguous", attempts: 1 });
+      expect(second.kind).toBe("skipped");
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not expose a sensitive verification response body", async () => {
+    const sensitiveBody =
+      "recipient@example.com hosted_token_super_secret private email body";
+
+    const error = await startHostedEmailVerification({
+      http: {
+        request: vi.fn(async () => ({
+          status: 400,
+          headers: {},
+          bodyText: sensitiveBody,
+        })),
+      },
+      baseUrl: "https://configurable-relay.example",
+      email: "recipient@example.com",
+    }).catch((value) => value);
+
+    expect(error).toMatchObject({
+      name: "HostedDeliveryError",
+      status: 400,
+    });
+    expect(error.message).not.toContain("recipient@example.com");
+    expect(error.message).not.toContain("hosted_token_super_secret");
+    expect(error.message).not.toContain("private email body");
+  });
+
   it("rejects hosted mode without token", async () => {
     const result = await deliverDailyEmailIfEnabled(digest, {
       storage: memoryStorage(),
@@ -109,7 +491,7 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     });
     expect(result.kind).toBe("disabled");
     if (result.kind === "disabled") {
-      expect(result.reason).toMatch(/verification code/i);
+      expect(result.reason).toBe("verification_token_missing");
     }
   });
 });

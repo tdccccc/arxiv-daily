@@ -24,6 +24,7 @@ import type { PaperMeta } from "./arxiv-parser";
 import {
   filterPapers,
   isPaperFilterCheckpointError,
+  isPaperFilterResponseValidationError,
   type DailyFilterCheckpointPort,
   type FilteredPaper,
 } from "./paper-filter";
@@ -259,6 +260,12 @@ export class ArxivPipeline {
         return {
           kind: "failed_transient",
           reason: `paper filter checkpoint failed: ${e.message}`,
+        };
+      }
+      if (isPaperFilterResponseValidationError(e)) {
+        return {
+          kind: "failed_transient",
+          reason: `paper filter response validation failed: ${e.message}`,
         };
       }
       return {

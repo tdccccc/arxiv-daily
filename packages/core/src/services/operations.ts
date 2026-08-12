@@ -4,7 +4,9 @@ export type OperationKind =
   | "pdf-download"
   | "personal-library-scan"
   | "personal-library-direction-generation"
-  | "personal-library-fulltext-index";
+  | "personal-library-fulltext-index"
+  | "paper-index"
+  | "paper-note";
 
 export interface OperationSnapshot {
   readonly id: string;

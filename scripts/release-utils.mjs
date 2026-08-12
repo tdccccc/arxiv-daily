@@ -3,6 +3,18 @@ import { resolve } from "node:path";
 
 export const root = resolve(import.meta.dirname, "..");
 
+export const packageFiles = [
+  "package.json",
+  "plugin/package.json",
+  "packages/core/package.json",
+  "packages/node-runtime/package.json",
+  "apps/cli/package.json",
+];
+export const manifestFiles = [
+  "manifest.json",
+  "plugin/manifest.json",
+];
+
 // SemVer 2.0.0, including the leading-zero rules for core and prerelease numbers.
 export const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 

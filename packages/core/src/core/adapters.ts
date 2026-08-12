@@ -65,13 +65,37 @@ export interface StorageEntry {
   type: "file" | "folder";
 }
 
+/**
+ * Descriptor-backed identity for a storage namespace used by delivery claims.
+ * assertCurrent must be synchronous so no async work can occur between the
+ * final namespace check and invoking the provider transport.
+ */
+export interface StorageNamespaceGuard {
+  assertCurrent(): void;
+  release(): Promise<void>;
+}
+
 export interface StorageAdapter {
   normalizePath(path: string): string;
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
   /** Writes host-private data with a restrictive mode when the host supports it. */
   writeTextWithMode?(path: string, content: string, mode: number): Promise<void>;
-  writeTextAtomic?(path: string, content: string): Promise<void>;
+  /**
+   * Atomically replaces text. When mode is provided, target and every transient
+   * file must use that mode; hosts unable to guarantee it must throw.
+   */
+  writeTextAtomic?(path: string, content: string, mode?: number): Promise<void>;
+  /** Recovers and cleans artifacts from a prior private atomic replacement. */
+  recoverTextAtomic?(path: string, mode: number): Promise<void>;
+  /**
+   * Creates a new text file without replacing an existing path.
+   * Returns false only when the target already exists; all other failures throw.
+   * Hosts implementing delivery must provide a system-wide atomic primitive.
+   */
+  createTextExclusive?(path: string, content: string): Promise<boolean>;
+  /** Pins and later revalidates the namespace containing a delivery claim. */
+  guardClaimNamespace?(claimPath: string): Promise<StorageNamespaceGuard>;
   appendText?(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;

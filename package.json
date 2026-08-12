@@ -1,6 +1,6 @@
 {
   "name": "arxiv-daily-workspace",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "private": true,
   "description": "Workspace for the arXiv Daily Obsidian plugin and Node CLI",
   "license": "MIT",
@@ -20,13 +20,16 @@
   ],
   "scripts": {
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:product-units": "node scripts/check-product-units.mjs",
     "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=60",
     "lint": "npm run lint:obsidian",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "node scripts/run-root-tests.mjs",
+    "test:workspaces": "npm run test --workspaces --if-present --",
     "build": "npm run build --workspaces --if-present",
     "smoke:build": "node scripts/smoke-build.mjs",
-    "test:release-tools": "node --test scripts/tests/*.test.mjs",
+    "test:release-tools": "node --test scripts/tests/*.test.mjs && npm run check:product-units",
+    "check:obsidian-submission": "node scripts/check-obsidian-submission.mjs",
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
@@ -44,6 +47,7 @@
     "obsidian": "^1.13.1",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.0"
   }
 }

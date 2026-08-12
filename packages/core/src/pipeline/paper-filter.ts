@@ -82,6 +82,38 @@ export function isPaperFilterCheckpointError(
   return error instanceof PaperFilterCheckpointError;
 }
 
+export const PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE =
+  "ARXIV_DAILY_PAPER_FILTER_RESPONSE_VALIDATION" as const;
+
+export type PaperFilterResponseValidationReasonCode =
+  | "invalid-json"
+  | "invalid-contract";
+
+export class PaperFilterResponseValidationError extends Error {
+  readonly name = "PaperFilterResponseValidationError";
+  readonly code = PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE;
+
+  constructor(
+    message: string,
+    readonly reasonCode: PaperFilterResponseValidationReasonCode,
+  ) {
+    super(message);
+  }
+}
+
+export function isPaperFilterResponseValidationError(
+  error: unknown,
+): error is PaperFilterResponseValidationError {
+  if (error instanceof PaperFilterResponseValidationError) return true;
+  if (!isErrorLike(error)) return false;
+  const candidate = error as Record<string, unknown>;
+  return candidate.name === "PaperFilterResponseValidationError" &&
+    candidate.code === PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE &&
+    (candidate.reasonCode === "invalid-json" ||
+      candidate.reasonCode === "invalid-contract") &&
+    typeof candidate.message === "string";
+}
+
 export async function filterPapers(
   papers: PaperMeta[],
   deps: PaperFilterDeps,
@@ -237,9 +269,11 @@ async function filterPapersManualOnly(
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
-    } catch (e) {
-      logger.error("paper-filter: response is not strict JSON", e);
-      return [];
+    } catch {
+      throw new PaperFilterResponseValidationError(
+        "response is not strict JSON",
+        "invalid-json",
+      );
     }
 
     const records = decodePaperFilterRecords(
@@ -248,8 +282,10 @@ async function filterPapersManualOnly(
       new Set(request.identity.validTags),
     );
     if (!records.ok) {
-      logger.warn(`paper-filter: invalid LLM response (${records.reason}); keeping no papers`);
-      return [];
+      throw new PaperFilterResponseValidationError(
+        `response violates the filter contract: ${records.reason}`,
+        "invalid-contract",
+      );
     }
     validatedRecords = records.value;
     try {
@@ -299,4 +335,13 @@ async function filterPapersManualOnly(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+function isErrorLike(value: unknown): value is Error & Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return Object.prototype.toString.call(value) === "[object Error]" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.message === "string" &&
+    typeof candidate.stack === "string";
 }

@@ -25,7 +25,7 @@ export async function emailStatus(
   const configured = isEmailDeliveryConfigured(email, apiKey);
   writeLine(io.stdout, `email.mode: ${mode}`);
   writeLine(io.stdout, `email.enabled: ${email.enabled}`);
-  writeLine(io.stdout, `email.to: ${email.to || "(empty)"}`);
+  writeLine(io.stdout, `email.recipient: ${email.to ? "configured" : "empty"}`);
   writeLine(
     io.stdout,
     `credentials: ${creds.ok ? "ready" : `not ready (${creds.reason})`}`,
@@ -62,11 +62,16 @@ export async function emailTest(
     apiKey: resolveResendApiKey(config.settings.email, {}),
     force: true,
   });
-  if (result.kind === "delivered") {
+  if (
+    result.kind === "delivered" ||
+    result.kind === "delivered_unrecorded"
+  ) {
     writeLine(
       io.stdout,
-      `email test: delivered to ${email.to}` +
-        (result.providerMessageId ? ` id=${result.providerMessageId}` : ""),
+      "email test: delivered" +
+        (result.kind === "delivered_unrecorded"
+          ? ` (delivery record unavailable: ${result.reason})`
+          : ""),
     );
     return 0;
   }
@@ -92,7 +97,7 @@ export async function emailVerifyStart(
     });
     writeLine(
       io.stdout,
-      `verification email requested for ${to}; open the link and paste the long code into email.hosted_token, set mode = "hosted"`,
+      "verification email requested; open the link and paste the long code into email.hosted_token, set mode = \"hosted\"",
     );
     return 0;
   } catch (e) {

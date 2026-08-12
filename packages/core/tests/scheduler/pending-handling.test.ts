@@ -7,6 +7,7 @@ import { RunLock } from "../../src/services/run-lock";
 function makeStore(overrides: Record<string, unknown> = {}) {
   const entries: Record<string, { status: string; lastAttempt: number; attempts: number }> = {};
   return {
+    loadAuthoritative: vi.fn(async () => {}),
     get: vi.fn((date: string) => entries[date] ?? { status: "pending", lastAttempt: 0, attempts: 0 }),
     isDone: vi.fn(() => false),
     setRunning: vi.fn(async (date: string) => {

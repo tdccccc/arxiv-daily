@@ -2,7 +2,7 @@
 
 <!-- Filename must be NN-<slug>.md with NN = N (e.g. P1 → 01-auth.md). -->
 goal_ref: ../goal.md
-status: active
+status: done
 
 ## Outcome
 
@@ -33,17 +33,17 @@ phase wants to narrow it.
 
 ## Tasks
 
-- [ ] T1: `constants.ts` — view id, timeouts, tabs, sort keys, page sizes
-- [ ] T2: `calendar.ts` — calendar cell types/state, whitelist, empty-reason,
+- [x] T1: `constants.ts` — view id, timeouts, tabs, sort keys, page sizes
+- [x] T2: `calendar.ts` — calendar cell types/state, whitelist, empty-reason,
       aria labels, month/date helpers, buildCalendarDailyReportMap
-- [ ] T3: `files.ts` + `pagination.ts` — vault path/markdown file filters,
+- [x] T3: `files.ts` + `pagination.ts` — vault path/markdown file filters,
       history path set, showingText, paginateDashboardRows
-- [ ] T4: `log-format.ts` + `detail-refs.ts` — log entry formatting; indexed
+- [x] T4: `log-format.ts` + `detail-refs.ts` — log entry formatting; indexed
       detail summary refs/expectations
-- [ ] T5: `actions.ts` — open/trash/star/command helpers, deferred actions,
+- [x] T5: `actions.ts` — open/trash/star/command helpers, deferred actions,
       topic options, status text
-- [ ] T6: `hub-modal.ts` — HubModal class + HubModalTab/HubPanel types
-- [ ] T7: slim view.ts to class + register + re-exports; full verification
+- [x] T6: `hub-modal.ts` — HubModal class + HubModalTab/HubPanel types
+- [x] T7: slim view.ts to class + register + re-exports; full verification
 
 ## Verification
 

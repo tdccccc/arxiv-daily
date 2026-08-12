@@ -11,6 +11,7 @@ import { ObsidianMarkupParser } from "./markup-parser";
 export interface ObsidianHostAdapterOptions {
   app: App;
   getSettings: () => PluginSettings;
+  changeSettingValue?: (key: string, value: unknown) => Promise<void> | void;
   persistSettings?: () => Promise<void> | void;
   progress?: ProgressReporter;
   request?: ObsidianRequestImpl;
@@ -25,6 +26,7 @@ export function buildObsidianHostAdapters(
     secrets: new ObsidianSettingsSecretProvider(
       opts.getSettings,
       opts.persistSettings,
+      opts.changeSettingValue,
     ),
     progress: opts.progress ?? new NoopProgressReporter(),
     opener: new ObsidianResourceOpener(opts.app),

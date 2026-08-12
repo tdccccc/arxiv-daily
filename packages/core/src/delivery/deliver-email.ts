@@ -1,12 +1,16 @@
 import type { HttpClient, StorageAdapter } from "../core/adapters";
 import type { Logger } from "../services/logger";
+import {
+  isCancellationError,
+  throwIfCancelled,
+} from "../services/cancellation";
 import type { EmailSettings, OutputSettings } from "../settings/types";
 import {
-  loadDeliveryState,
-  markDelivered,
-  markFailed,
-  saveDeliveryState,
-  shouldSendEmail,
+  claimAutomaticDelivery,
+  finalizeAutomaticDelivery,
+  markAutomaticDeliveryAttemptStarted,
+  releaseAutomaticDeliveryBeforeAttempt,
+  type DeliveryClaimHandle,
 } from "./delivery-state";
 import {
   HostedDeliveryError,
@@ -24,7 +28,12 @@ import {
   renderEmailSubject,
   renderEmailText,
 } from "./email-render";
-import type { DailyDigest, DeliverEmailResult, EmailDeliveryChannel } from "./types";
+import type {
+  DailyDigest,
+  DeliverEmailResult,
+  EmailDeliveryChannel,
+  EmailDeliveryReason,
+} from "./types";
 import {
   EMAIL_DELIVERY_CHANNEL,
   EMAIL_HOSTED_CHANNEL,
@@ -97,29 +106,28 @@ export function resolveEmailDeliveryMode(
 export function isEmailCredentialsReady(
   email: EmailSettings | undefined,
   apiKey?: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: EmailDeliveryReason } {
   if (!email?.to?.trim()) {
-    return { ok: false, reason: "Your email is empty" };
+    return { ok: false, reason: "recipient_missing" };
   }
   const mode = resolveEmailDeliveryMode(email);
   if (mode === "hosted") {
     if (!OFFICIAL_DELIVERY_AVAILABLE) {
       return {
         ok: false,
-        reason:
-          "Official delivery (Beta) is not available yet; choose Send yourself or try again later",
+        reason: "official_delivery_unavailable",
       };
     }
     if (!email.hostedToken?.trim()) {
       return {
         ok: false,
-        reason: "Verification code is missing",
+        reason: "verification_token_missing",
       };
     }
     return { ok: true };
   }
   if (!(apiKey ?? email.apiKey)?.trim()) {
-    return { ok: false, reason: "Resend API key is missing" };
+    return { ok: false, reason: "resend_api_key_missing" };
   }
   return { ok: true };
 }
@@ -128,9 +136,9 @@ export function isEmailCredentialsReady(
 export function isEmailDeliveryConfigured(
   email: EmailSettings | undefined,
   apiKey?: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: EmailDeliveryReason } {
   if (!email?.enabled) {
-    return { ok: false, reason: "email delivery disabled" };
+    return { ok: false, reason: "email_delivery_disabled" };
   }
   return isEmailCredentialsReady(email, apiKey);
 }
@@ -146,127 +154,257 @@ export async function deliverDailyEmailIfEnabled(
 ): Promise<DeliverEmailResult> {
   const email = deps.email;
   const apiKey = (deps.apiKey ?? email.apiKey ?? "").trim();
-  // force (test-send) only needs credentials; auto-send also needs enabled.
   const configured = deps.force
     ? isEmailCredentialsReady(email, apiKey)
     : isEmailDeliveryConfigured(email, apiKey);
-  if (!configured.ok) {
-    return { kind: "disabled", reason: configured.reason };
-  }
+  if (!configured.ok) return { kind: "disabled", reason: configured.reason };
 
   const recipient = email.to.trim();
   const now = deps.now ?? (() => new Date());
-
+  const mode = resolveEmailDeliveryMode(email);
+  const channel: EmailDeliveryChannel =
+    mode === "hosted" ? EMAIL_HOSTED_CHANNEL : EMAIL_DELIVERY_CHANNEL;
+  let subject: string;
+  let html: string;
+  let text: string;
+  let idempotencyKey: string;
   try {
-    let state = await loadDeliveryState(deps.storage, deps.output);
-    if (!deps.force && !shouldSendEmail(state, digest.date, recipient)) {
-      deps.logger?.info(
-        `email: skip ${digest.date} → ${recipient} (already delivered)`,
-      );
-      return { kind: "skipped", reason: "already delivered" };
-    }
-
-    const subject = renderEmailSubject(digest);
-    const html = renderEmailHtml(digest);
-    const text = renderEmailText(digest);
-    const mode = resolveEmailDeliveryMode(email);
-    const channel: EmailDeliveryChannel =
-      mode === "hosted" ? EMAIL_HOSTED_CHANNEL : EMAIL_DELIVERY_CHANNEL;
-
-    try {
-      let sent: { providerMessageId?: string; attempts: number };
-      if (mode === "hosted") {
-        const hostedReq = hostedPayloadFromRendered(recipient, digest, {
-          subject,
-          html,
-          text,
-        });
-        // Test-send must not reuse the same Idempotency-Key as a real daily
-        // (date|to), or the Worker would dedupe and skip a later real digest.
-        if (deps.force) {
-          hostedReq.idempotencyKey = `test|${digest.date}|${recipient.trim().toLowerCase()}|${now().toISOString()}`;
-        }
-        sent = await sendViaHosted({
-          http: deps.http,
-          baseUrl: email.hostedBaseUrl,
-          token: (email.hostedToken ?? "").replace(/\s+/g, ""),
-          request: hostedReq,
-          signal: deps.signal,
-        });
-      } else {
-        const from = formatResendFrom(
-          resolveResendFromEmail(email),
-          resolveResendFromName(email),
-        );
-        sent = await sendViaResend({
-          http: deps.http,
-          apiKey,
-          payload: { from, to: recipient, subject, html, text },
-          maxAttempts: deps.maxAttempts,
-          baseDelayMs: deps.baseDelayMs,
-          sleep: deps.sleep,
-          signal: deps.signal,
-        });
-      }
-      // force (test-send): deliver mail but do NOT mark the calendar day as
-      // delivered — otherwise a sample test blocks the real daily auto-send.
-      if (!deps.force) {
-        state = markDelivered(state, {
-          date: digest.date,
-          recipient,
-          channel,
-          attempts: sent.attempts,
-          providerMessageId: sent.providerMessageId,
-          now: now(),
-        });
-        await saveDeliveryState(deps.storage, deps.output, state, now());
-      }
-      deps.logger?.info(
-        `email: delivered ${digest.date} → ${recipient} via ${channel}` +
-          (deps.force ? " (test-send, not recorded as daily delivery)" : "") +
-          (sent.providerMessageId ? ` id=${sent.providerMessageId}` : ""),
-      );
-      return {
-        kind: "delivered",
-        providerMessageId: sent.providerMessageId,
-        attempts: sent.attempts,
-      };
-    } catch (error) {
-      const attempts =
-        error instanceof ResendSendError
-          ? error.attempts
-          : error instanceof HostedDeliveryError
-            ? 1
-            : deps.maxAttempts ?? 3;
-      const reason =
-        error instanceof Error ? error.message : String(error);
-      // Do not persist failed test-sends into daily delivery-state either.
-      if (!deps.force) {
-        state = markFailed(state, {
-          date: digest.date,
-          recipient,
-          channel,
-          attempts,
-          lastError: reason,
-          now: now(),
-        });
-        await saveDeliveryState(deps.storage, deps.output, state, now()).catch(
-          (saveError) => {
-            deps.logger?.error(
-              "email: failed to persist delivery failure state",
-              saveError,
-            );
-          },
-        );
-      }
-      deps.logger?.warn(`email: delivery failed for ${digest.date}: ${reason}`);
-      return { kind: "failed", reason, attempts };
-    }
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    deps.logger?.error(`email: unexpected delivery error for ${digest.date}`, error);
-    return { kind: "failed", reason, attempts: 0 };
+    subject = renderEmailSubject(digest);
+    html = renderEmailHtml(digest);
+    text = renderEmailText(digest);
+    idempotencyKey = deps.force
+      ? await testDeliveryIdempotencyKey()
+      : await automaticDeliveryIdempotencyKey(digest.date, recipient);
+  } catch {
+    return { kind: "failed", reason: "email_render_failed", attempts: 0 };
   }
+
+  let claim: DeliveryClaimHandle | undefined;
+  if (!deps.force) {
+    const claimed = await claimAutomaticDelivery(deps.storage, deps.output, {
+      date: digest.date,
+      recipient,
+      channel,
+      now: now(),
+    });
+    if (claimed.kind === "blocked") {
+      deps.logger?.info(`email: skip ${digest.date} (${claimed.reason})`);
+      return { kind: "skipped", reason: claimed.reason };
+    }
+    if (claimed.kind === "failed") {
+      deps.logger?.error(`email: cannot claim ${digest.date}: ${claimed.reason}`);
+      return { kind: "failed", reason: claimed.reason, attempts: 0 };
+    }
+    claim = claimed;
+  }
+
+  let providerInvoked = false;
+  let claimNamespaceLost = false;
+  let attemptMarked = false;
+  const beforeProviderAttempt = async () => {
+    throwIfCancelled(deps.signal);
+    if (claim && !attemptMarked) {
+      await markAutomaticDeliveryAttemptStarted(
+        deps.storage,
+        deps.output,
+        claim,
+        now(),
+      );
+      attemptMarked = true;
+    }
+    throwIfCancelled(deps.signal);
+  };
+  const onProviderInvocation = () => {
+    try {
+      if (claim && !claim.namespaceGuard) {
+        throw new Error("delivery claim namespace guard is unavailable");
+      }
+      claim?.namespaceGuard?.assertCurrent();
+    } catch (error) {
+      claimNamespaceLost = true;
+      throw error;
+    }
+    providerInvoked = true;
+  };
+  try {
+    throwIfCancelled(deps.signal);
+
+    let sent: { attempts: number };
+    if (mode === "hosted") {
+      const hostedReq = hostedPayloadFromRendered(
+        recipient,
+        digest,
+        { subject, html, text },
+        idempotencyKey,
+      );
+      sent = await sendViaHosted({
+        http: deps.http,
+        baseUrl: email.hostedBaseUrl,
+        token: (email.hostedToken ?? "").replace(/\s+/g, ""),
+        request: hostedReq,
+        signal: deps.signal,
+        beforeProviderAttempt,
+        onProviderInvocation,
+      });
+    } else {
+      const from = formatResendFrom(
+        resolveResendFromEmail(email),
+        resolveResendFromName(email),
+      );
+      sent = await sendViaResend({
+        http: deps.http,
+        apiKey,
+        idempotencyKey,
+        payload: { from, to: recipient, subject, html, text },
+        maxAttempts: deps.maxAttempts,
+        baseDelayMs: deps.baseDelayMs,
+        sleep: deps.sleep,
+        signal: deps.signal,
+        beforeProviderAttempt,
+        onProviderInvocation,
+      });
+    }
+
+    if (claim) {
+      try {
+        await finalizeAutomaticDelivery(deps.storage, deps.output, {
+          ...claim,
+          outcome: "delivered",
+          attempts: sent.attempts,
+          now: now(),
+        });
+      } catch {
+        deps.logger?.error("email: delivery_state_update_failed");
+        return {
+          kind: "delivered_unrecorded",
+          reason: "delivery_state_update_failed",
+          attempts: sent.attempts,
+        };
+      }
+    }
+
+    deps.logger?.info(
+      `email: delivered date=${digest.date} channel=${channel}` +
+        (deps.force ? " mode=test" : " mode=automatic"),
+    );
+    return {
+      kind: "delivered",
+      attempts: sent.attempts,
+    };
+  } catch (error) {
+    if (!providerInvoked) {
+      if (claimNamespaceLost) {
+        deps.logger?.error("email: delivery_claim_storage_failed");
+        return {
+          kind: "ambiguous",
+          reason: "delivery_claim_storage_failed",
+          attempts: 0,
+        };
+      }
+      const reason: EmailDeliveryReason = isCancellationError(error)
+        ? "cancelled_before_provider_attempt"
+        : "provider_not_invoked";
+      if (claim) {
+        try {
+          await releaseAutomaticDeliveryBeforeAttempt(
+            deps.storage,
+            deps.output,
+            claim,
+            reason,
+            now(),
+          );
+        } catch {
+          deps.logger?.error("email: delivery_claim_storage_failed");
+          return {
+            kind: "ambiguous",
+            reason: "delivery_claim_storage_failed",
+            attempts: 0,
+          };
+        }
+      }
+      deps.logger?.warn(`email: ${reason} date=${digest.date}`);
+      return { kind: "failed", reason, attempts: 0 };
+    }
+
+    const attempts = providerAttempts(error, deps.maxAttempts);
+    const ambiguous = isCancellationError(error) || providerOutcomeAmbiguous(error);
+    const reason: EmailDeliveryReason = ambiguous
+      ? "provider_outcome_ambiguous"
+      : "provider_definitive_rejection";
+    if (claim) {
+      try {
+        await finalizeAutomaticDelivery(deps.storage, deps.output, {
+          ...claim,
+          outcome: ambiguous ? "ambiguous" : "failed",
+          attempts,
+          errorCode: reason,
+          now: now(),
+        });
+      } catch {
+        deps.logger?.error("email: delivery_state_update_failed");
+        if (!ambiguous) {
+          return {
+            kind: "ambiguous",
+            reason: "delivery_state_update_failed",
+            attempts,
+          };
+        }
+      }
+    }
+
+    deps.logger?.warn(`email: ${reason} date=${digest.date}`);
+    return ambiguous
+      ? { kind: "ambiguous", reason, attempts }
+      : { kind: "failed", reason, attempts };
+  } finally {
+    await claim?.namespaceGuard?.release().catch(() => undefined);
+  }
+}
+
+export async function automaticDeliveryIdempotencyKey(
+  date: string,
+  recipient: string,
+): Promise<string> {
+  return `arxiv-daily:auto:${await sha256Hex(
+    `${date}\u0000${recipient.trim().toLowerCase()}`,
+  )}`;
+}
+
+export async function testDeliveryIdempotencyKey(): Promise<string> {
+  return `arxiv-daily:test:${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function providerAttempts(error: unknown, maxAttempts?: number): number {
+  if (error instanceof ResendSendError) return error.attempts;
+  if (error instanceof HostedDeliveryError) return 1;
+  return maxAttempts ?? 1;
+}
+
+function providerOutcomeAmbiguous(error: unknown): boolean {
+  if (error instanceof ResendSendError) return error.ambiguous;
+  if (error instanceof HostedDeliveryError) {
+    if (
+      error.status === undefined ||
+      error.status === 408 ||
+      error.status === 409 ||
+      error.status >= 500
+    ) {
+      return true;
+    }
+    if ([400, 401, 403, 404, 422, 429].includes(error.status)) return false;
+    return true;
+  }
+  return true;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const hash = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(input),
+  );
+  return Array.from(new Uint8Array(hash), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 /** Build a small sample digest for test-send without a pipeline run. */

@@ -1,20 +1,5 @@
-/**
- * Pure-ish deliver steps shared by the HTTP handler and Durable Object.
- * Callers must serialize concurrent calls for the same idempotency key
- * (Durable Object) — KV alone cannot CAS.
- */
-import { normalizeEmail, randomToken } from "./crypto";
-import {
-  clearIdempotent,
-  completeIdempotent,
-  dailyQuotaLimit,
-  getDevice,
-  getQuotaCount,
-  incrementQuota,
-  reserveIdempotent,
-  type Env,
-} from "./kv";
-import { sendResendEmail } from "./resend";
+import { normalizeEmail, sha256Hex } from "./crypto";
+import type { AuthenticatedDevice } from "./kv";
 
 export type DeliverBody = {
   to?: string;
@@ -24,131 +9,126 @@ export type DeliverBody = {
   text?: string;
 };
 
-export type DeliverOutcome =
-  | { status: number; body: Record<string, unknown> };
+export type DeliveryKeyKind = "auto" | "test";
 
-export async function runDeliver(opts: {
-  env: Env;
-  authorizationHeader: string | null;
+export interface ValidatedDeliverRequest {
+  to: string;
+  date: string;
+  subject: string;
+  html: string;
+  text: string;
+  logicalKeyHash: string;
+  fingerprint: string;
+  keyKind: DeliveryKeyKind;
+  providerKey: string;
+}
+
+export type DeliverValidationResult =
+  | { ok: true; value: ValidatedDeliverRequest }
+  | { ok: false; status: number; error: string };
+
+const AUTO_KEY = /^arxiv-daily:auto:[0-9a-f]{64}$/;
+const TEST_KEY = /^arxiv-daily:test:[0-9a-f]{32}$/;
+const MAX_SUBJECT_LENGTH = 500;
+const MAX_BODY_LENGTH = 2_000_000;
+
+export function deliveryKeyKind(
+  logicalKey: string | null,
+): DeliveryKeyKind | undefined {
+  const normalized = logicalKey?.trim() ?? "";
+  if (normalized.length > 128) return undefined;
+  return AUTO_KEY.test(normalized)
+    ? "auto"
+    : TEST_KEY.test(normalized) ? "test" : undefined;
+}
+
+export async function validateDeliverRequest(input: {
+  device: AuthenticatedDevice;
   idempotencyHeader: string | null;
   body: DeliverBody;
-}): Promise<DeliverOutcome> {
-  const { env } = opts;
-  const auth = opts.authorizationHeader ?? "";
-  const m = /^Bearer\s+(.+)$/i.exec(auth);
-  const deviceToken = m?.[1]?.trim() ?? "";
-  if (!deviceToken) {
-    return { status: 401, body: { error: "missing bearer token" } };
-  }
-
-  const device = await getDevice(env, deviceToken);
-  if (!device) {
-    return { status: 401, body: { error: "invalid or revoked token" } };
-  }
-
-  const to =
-    typeof opts.body.to === "string" ? normalizeEmail(opts.body.to) : "";
-  if (!to || to !== device.email) {
+}): Promise<DeliverValidationResult> {
+  const to = typeof input.body.to === "string"
+    ? normalizeEmail(input.body.to)
+    : "";
+  if (!to || to !== input.device.email) {
     return {
+      ok: false,
       status: 403,
-      body: { error: "to must match the verified email bound to this token" },
+      error: "to must match the verified email bound to this token",
     };
   }
 
+  const date = typeof input.body.date === "string" ? input.body.date.trim() : "";
   const subject =
-    typeof opts.body.subject === "string" ? opts.body.subject.trim() : "";
-  const html = typeof opts.body.html === "string" ? opts.body.html : "";
-  const text = typeof opts.body.text === "string" ? opts.body.text : "";
+    typeof input.body.subject === "string" ? input.body.subject.trim() : "";
+  const html = typeof input.body.html === "string" ? input.body.html : "";
+  const text = typeof input.body.text === "string" ? input.body.text : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, status: 400, error: "date must be YYYY-MM-DD" };
+  }
   if (!subject || (!html && !text)) {
-    return { status: 400, body: { error: "subject and html or text required" } };
+    return { ok: false, status: 400, error: "subject and html or text required" };
+  }
+  if (
+    subject.length > MAX_SUBJECT_LENGTH ||
+    html.length > MAX_BODY_LENGTH ||
+    text.length > MAX_BODY_LENGTH
+  ) {
+    return { ok: false, status: 413, error: "delivery payload is too large" };
   }
 
-  const idempotency =
-    opts.idempotencyHeader?.trim() ||
-    `${typeof opts.body.date === "string" ? opts.body.date : ""}|${to}`;
-
-  const claim = randomToken(16);
-  if (idempotency) {
-    const reserved = await reserveIdempotent(env, idempotency, claim);
-    if (reserved.status === "done") {
-      return {
-        status: 200,
-        body: { ok: true, id: reserved.id, deduped: true },
-      };
-    }
-    if (reserved.status === "pending_other") {
-      return {
-        status: 409,
-        body: {
-          error: "delivery already in progress for this idempotency key",
-        },
-      };
-    }
-  }
-
-  const limit = dailyQuotaLimit(env);
-  const used = await getQuotaCount(env, to);
-  if (used >= limit) {
-    if (idempotency) await clearIdempotent(env, idempotency);
+  const logicalKey = input.idempotencyHeader?.trim() ?? "";
+  const keyKind = deliveryKeyKind(logicalKey);
+  if (!keyKind) {
     return {
-      status: 429,
-      body: {
-        error: `daily quota exceeded (${limit} per UTC day)`,
-        quota: used,
-      },
+      ok: false,
+      status: 400,
+      error: "Idempotency-Key must be a supported bounded auto or test key",
     };
   }
 
-  // Re-check claim immediately before Resend (narrow race if not using DO).
-  if (idempotency) {
-    const again = await reserveIdempotent(env, idempotency, claim);
-    if (again.status === "done") {
-      return {
-        status: 200,
-        body: { ok: true, id: again.id, deduped: true },
-      };
-    }
-    if (again.status === "pending_other") {
-      return {
-        status: 409,
-        body: {
-          error: "delivery already in progress for this idempotency key",
-        },
-      };
-    }
+  // Automatic delivery identity is authoritative server state. The client key is
+  // only a kind marker; allowing its hash into the ledger/provider identity would
+  // let one logical digest select multiple provider keys.
+  const logicalKeyHash = await sha256Hex(JSON.stringify(
+    keyKind === "auto"
+      ? ["delivery-v2", "auto", input.device.recipientIdentity, date]
+      : ["delivery-v2", "test", input.device.identity, input.device.recipientIdentity, logicalKey],
+  ));
+  const fingerprint = await sha256Hex(JSON.stringify(
+    keyKind === "auto"
+      ? [input.device.recipientIdentity, date, subject, html, text, keyKind]
+      : [
+        input.device.identity,
+        input.device.recipientIdentity,
+        date,
+        subject,
+        html,
+        text,
+        keyKind,
+      ],
+  ));
+  const providerKey = [
+    "arxiv-daily:relay:v2",
+    keyKind,
+    logicalKeyHash,
+  ].join(":");
+  if (providerKey.length > 128) {
+    return { ok: false, status: 500, error: "provider key construction failed" };
   }
 
-  let sent: { id?: string };
-  try {
-    sent = await sendResendEmail(env, {
+  return {
+    ok: true,
+    value: {
       to,
+      date,
       subject,
-      html: html || `<pre>${escapeHtml(text)}</pre>`,
-      text: text || stripTags(html),
-    });
-  } catch (e) {
-    if (idempotency) await clearIdempotent(env, idempotency);
-    const message = e instanceof Error ? e.message : String(e);
-    return { status: 502, body: { error: message } };
-  }
-
-  await incrementQuota(env, to);
-  const messageId = sent.id?.trim() || `local:${claim}`;
-  if (idempotency) {
-    await completeIdempotent(env, idempotency, messageId);
-  }
-
-  return { status: 200, body: { ok: true, id: messageId } };
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      html,
+      text,
+      logicalKeyHash,
+      fingerprint,
+      keyKind,
+      providerKey,
+    },
+  };
 }

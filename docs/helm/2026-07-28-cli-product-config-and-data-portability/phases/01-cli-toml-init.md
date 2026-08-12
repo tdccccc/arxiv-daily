@@ -19,14 +19,14 @@ Replace CLI config loading with a single XDG TOML path. Map tables to existing `
 
 ## Tasks
 
-- [ ] Implement against `../cli-toml-schema.md` (tables: llm / arxiv / email / output / advanced / detail_selection + vault_root + cache_dir).
-- [ ] Implement XDG/APPDATA path resolution and TOML parse/serialize (dependency choice documented in PR).
-- [ ] Implement `init`: overwrite/merge/cancel; step order vault → LLM → optional email → placeholder topic → arXiv; write defaults including `cache_dir = <vault>/.cache/arxiv-daily`.
-- [ ] Gate `run` (`--today` / `--date` / `--id`), `email-*`, `schedule-*` (if present) on config presence with “run init” error.
-- [ ] Remove public `run-pending` and `summarize`; map pipeline to `run --today`/`--date` and deep-dive to `run --id`.
-- [ ] Remove `ARXIV_DAILY_*` settings/secrets env application and cwd JSON load; remove `--config` / `--vault-root` / `--cache-dir`.
-- [ ] Update CLI tests and README / getting-started CLI sections for hard cut + init.
-- [ ] Smoke: init → run --date (or dry validation) against a temp vault.
+- [x] Implement against `../cli-toml-schema.md` (tables: llm / arxiv / email / output / advanced / detail_selection + vault_root + cache_dir).
+- [x] Implement XDG/APPDATA path resolution and TOML parse/serialize (dependency choice documented in PR).
+- [x] Implement `init`: overwrite/merge/cancel; step order vault → LLM → optional email → placeholder topic → arXiv; write defaults including `cache_dir = <vault>/.cache/arxiv-daily`.
+- [x] Gate `run` (`--today` / `--date` / `--id`), `email-*`, `schedule-*` (if present) on config presence with “run init” error.
+- [x] Remove public `run-pending` and `summarize`; map pipeline to `run --today`/`--date` and deep-dive to `run --id`.
+- [x] Remove `ARXIV_DAILY_*` settings/secrets env application and cwd JSON load; remove `--config` / `--vault-root` / `--cache-dir`.
+- [x] Update CLI tests and README / getting-started CLI sections for hard cut + init.
+- [x] Smoke: init → run --date (or dry validation) against a temp vault.
 
 ## Verification
 

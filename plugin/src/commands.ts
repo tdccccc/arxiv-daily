@@ -7,16 +7,8 @@ import {
   formatFullTextRuntimeDiagnostics,
   summarizeFullTextRuntimeDiagnostics,
 } from "./services/fulltext-runtime-diagnostics";
-import {
-  buildDiagnosticsReport,
-  redactText,
-  type PaperIndexDiagnostics,
-} from "@arxiv-daily/core";
 import { normalizeArxivId } from "@arxiv-daily/core";
 import {
-  PAPER_INBOX_SCHEMA_VERSION,
-  isPaperPriority,
-  isPaperStatus,
   type PaperPriority,
   type PaperStatus,
 } from "@arxiv-daily/core";
@@ -24,8 +16,13 @@ import { openDashboardView, refreshOpenDashboardViews } from "./dashboard/view";
 import { ensurePaperNote } from "./services/paper-note";
 import { bindEnterToButton, openDatePickerModal } from "./date-picker-modal";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
+import { buildSafePluginDiagnosticsReport } from "./services/paper-index-diagnostics";
 
 export { bindEnterToButton, isValidCalendarDate } from "./date-picker-modal";
+export {
+  collectPaperIndexDiagnostics,
+  isSupportedPaperIndexSchemaVersion,
+} from "./services/paper-index-diagnostics";
 import {
   describeManualResult,
   describeResult,
@@ -209,22 +206,29 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       notice("Invalid arXiv ID");
       return;
     }
-    const store = plugin.buildPaperIndex();
-    const state = stateForMark(mark);
-    let entry = await store.setStatus(id, state.status);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    entry = await store.setPriority(id, state.priority);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    if (mark === "saved") {
-      await ensurePaperNote(plugin, store, entry);
-    }
-    notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
+    await plugin.withOutputOperation(
+      mark === "saved" ? "paper-note" : "paper-index",
+      `Set paper mark: ${id}`,
+      id,
+      async () => {
+        const store = plugin.buildPaperIndex();
+        const state = stateForMark(mark);
+        let entry = await store.setStatus(id, state.status);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        entry = await store.setPriority(id, state.priority);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        if (mark === "saved") {
+          await ensurePaperNote(plugin, store, entry);
+        }
+        notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
+      },
+    );
   }
 
   async function createPaperNote(rawId: string) {
@@ -233,15 +237,22 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       notice("Invalid arXiv ID");
       return;
     }
-    const store = plugin.buildPaperIndex();
-    const entry = await store.get(id);
-    if (!entry) {
-      notice(`arXiv Daily: ${id} is not in papers.json`);
-      return;
-    }
-    const path = await ensurePaperNote(plugin, store, entry);
-    await plugin.app.workspace.openLinkText(path, "", false);
-    notice(`arXiv Daily: paper note ready at ${path}`);
+    await plugin.withOutputOperation(
+      "paper-note",
+      `Create paper note: ${id}`,
+      id,
+      async () => {
+        const store = plugin.buildPaperIndex();
+        const entry = await store.get(id);
+        if (!entry) {
+          notice(`arXiv Daily: ${id} is not in papers.json`);
+          return;
+        }
+        const path = await ensurePaperNote(plugin, store, entry);
+        await plugin.app.workspace.openLinkText(path, "", false);
+        notice(`arXiv Daily: paper note ready at ${path}`);
+      },
+    );
   }
 
   function openArxivIdPicker() {
@@ -834,7 +845,7 @@ class RunHistoryModal extends Modal {
   }
 }
 
-class DiagnosticsModal extends Modal {
+export class DiagnosticsModal extends Modal {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
   }
@@ -847,30 +858,14 @@ class DiagnosticsModal extends Modal {
     textarea.value = "Loading diagnostics…";
     textarea.readOnly = true;
     let report = textarea.value;
-    void collectPaperIndexDiagnostics(this.plugin)
-      .then((paperIndex) => {
-        report = buildDiagnosticsReport({
-          settings: this.plugin.settings,
-          runState: this.plugin.stateStore.snapshot(),
-          version: this.plugin.manifest?.version,
-          paperIndex,
-        });
+    void buildSafePluginDiagnosticsReport(this.plugin)
+      .then((value) => {
+        report = value;
         textarea.value = report;
       })
-      .catch((e) => {
-        this.plugin.logger.warn("diagnostics load failed", e);
-        report = buildDiagnosticsReport({
-          settings: this.plugin.settings,
-          runState: this.plugin.stateStore.snapshot(),
-          version: this.plugin.manifest?.version,
-          paperIndex: {
-            path: this.plugin.buildPaperIndex().paths.papersJsonPath,
-            exists: false,
-            error: redactText(e instanceof Error ? e.message : e, {
-              secrets: [this.plugin.settings.llm.apiKey],
-            }),
-          },
-        });
+      .catch((error) => {
+        this.plugin.logger.warn("diagnostics render failed", error);
+        report = `Failed to build diagnostics: ${errorMessage(error)}`;
         textarea.value = report;
       });
     new Setting(contentEl).addButton((b) =>
@@ -957,137 +952,6 @@ function getCurrentPaperId(plugin: ArxivDailyPlugin): string | null {
       ? file.name.replace(/\.md$/i, "")
       : "";
   return normalizeArxivId(basename);
-}
-
-function recordOrEmpty(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-export function isSupportedPaperIndexSchemaVersion(
-  value: unknown,
-): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 1 &&
-    value <= PAPER_INBOX_SCHEMA_VERSION
-  );
-}
-
-async function collectPaperIndexDiagnostics(
-  plugin: ArxivDailyPlugin,
-): Promise<PaperIndexDiagnostics> {
-  const store = plugin.buildPaperIndex();
-  const path = (await plugin.app.vault.adapter.exists(store.paths.papersJsonPath))
-    ? store.paths.papersJsonPath
-    : (await plugin.app.vault.adapter.exists(store.paths.legacyPapersJsonPath))
-    ? store.paths.legacyPapersJsonPath
-    : null;
-  const diag: PaperIndexDiagnostics = {
-    path: store.paths.papersJsonPath,
-    exists: Boolean(path),
-  };
-  if (!path) return diag;
-  try {
-    const raw: unknown = JSON.parse(
-      await plugin.app.vault.adapter.read(path),
-    ) as unknown;
-    const obj = recordOrEmpty(raw);
-    const rawSchemaVersion = obj.schemaVersion;
-    const schemaVersion =
-      typeof rawSchemaVersion === "number" ? rawSchemaVersion : undefined;
-    const papers =
-      obj.papers && typeof obj.papers === "object"
-        ? (obj.papers as Record<string, unknown>)
-        : {};
-    const statusCounts: Record<string, number> = {};
-    const invalidStatuses: string[] = [];
-    const invalidPriorities: string[] = [];
-    const invalidSeenDates: string[] = [];
-    const missingPaperPaths: string[] = [];
-    const noteArxivIdMismatches: string[] = [];
-
-    for (const [id, value] of Object.entries(papers)) {
-      const entry = recordOrEmpty(value);
-      const arxivId = stringOr(entry.arxivId, id);
-      const status = stringOr(entry.status, "");
-      const priority = stringOr(entry.priority, "");
-      if (status) statusCounts[status] = (statusCounts[status] ?? 0) + 1;
-      if (!isPaperStatus(status)) {
-        invalidStatuses.push(`${arxivId}: ${status || "(missing)"}`);
-      }
-      if (!isPaperPriority(priority)) {
-        invalidPriorities.push(`${arxivId}: ${priority || "(missing)"}`);
-      }
-      if (!Array.isArray(entry.seenDates)) {
-        invalidSeenDates.push(`${arxivId}: seenDates is not an array`);
-      } else {
-        for (const date of entry.seenDates) {
-          if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-            invalidSeenDates.push(`${arxivId}: ${String(date)}`);
-          }
-        }
-      }
-
-      const paperPath = stringOr(entry.paperPath, "");
-      if (paperPath && !(await plugin.app.vault.adapter.exists(paperPath))) {
-        missingPaperPaths.push(`${arxivId}: ${paperPath}`);
-        continue;
-      }
-      if (paperPath) {
-        const noteArxivId = await readNoteArxivId(plugin, paperPath);
-        if (noteArxivId && noteArxivId !== arxivId) {
-          noteArxivIdMismatches.push(
-            `${arxivId}: ${paperPath} has arxiv_id ${noteArxivId}`,
-          );
-        }
-      }
-    }
-    return {
-      ...diag,
-      schemaVersion,
-      unsupportedSchemaVersion: isSupportedPaperIndexSchemaVersion(
-        rawSchemaVersion,
-      )
-        ? undefined
-        : String(rawSchemaVersion),
-      total: Object.keys(papers).length,
-      statusCounts,
-      invalidStatuses,
-      invalidPriorities,
-      invalidSeenDates,
-      missingPaperPaths,
-      noteArxivIdMismatches,
-    };
-  } catch (e) {
-    return {
-      ...diag,
-      error: (e as Error).message,
-    };
-  }
-}
-
-async function readNoteArxivId(
-  plugin: ArxivDailyPlugin,
-  path: string,
-): Promise<string | null> {
-  try {
-    const markdown = await plugin.app.vault.adapter.read(path);
-    const frontmatter = /^---\s*\n([\s\S]*?)\n---/.exec(markdown)?.[1] ?? "";
-    if (!frontmatter) return null;
-    const raw = /^arxiv_id:\s*(.+)$/m.exec(frontmatter)?.[1]?.trim() ?? "";
-    if (!raw) return null;
-    return normalizeArxivId(raw.replace(/^["']|["']$/g, ""));
-  } catch (e) {
-    plugin.logger.warn(`diagnostics: failed to read arXiv ID from ${path}`, e);
-    return null;
-  }
-}
-
-function stringOr(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
 function errorMessage(error: unknown): string {

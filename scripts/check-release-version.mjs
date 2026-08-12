@@ -1,6 +1,12 @@
 import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { readJson, root, validateSemVer } from "./release-utils.mjs";
+import {
+  manifestFiles,
+  packageFiles,
+  readJson,
+  root,
+  validateSemVer,
+} from "./release-utils.mjs";
 
 const expected = process.argv[2];
 try {
@@ -11,14 +17,6 @@ try {
   process.exit(2);
 }
 
-const packageFiles = [
-  "package.json",
-  "plugin/package.json",
-  "packages/core/package.json",
-  "packages/node-runtime/package.json",
-  "apps/cli/package.json",
-];
-const manifestFiles = ["manifest.json", "plugin/manifest.json"];
 const parsed = new Map();
 const errors = [];
 

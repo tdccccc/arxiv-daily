@@ -207,7 +207,7 @@ describe("Pipeline index 0 papers handling", () => {
       call: vi.fn().mockResolvedValue(
         JSON.stringify({
           papers: [
-            { id: "2605.00001", category: "photo-z" },
+            { id: "2605.08080", category: "test" },
           ],
         }),
       ),
@@ -487,6 +487,46 @@ describe("Pipeline partial failure consistency", () => {
       kind: "failed_transient",
       reason: "paper filter checkpoint failed: save failed for 2026-05-11: filter checkpoint disk full",
     });
+    expect(paperIndex.upsertManyFromDailyPapers).not.toHaveBeenCalled();
+    expect(paperFetcher.fetch).not.toHaveBeenCalled();
+    expect(summarizeDaily).not.toHaveBeenCalled();
+    expect(writer.writeDaily).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "non-strict JSON",
+      "not json",
+      "response is not strict JSON",
+    ],
+    [
+      "contract-invalid JSON",
+      JSON.stringify({ papers: [{ id: "2605.99999", category: "test" }] }),
+      "response violates the filter contract: paper record has an unknown id",
+    ],
+  ])("fails closed before downstream work for %s filter responses", async (
+    _label,
+    raw,
+    reason,
+  ) => {
+    const filterStore = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(),
+      removeAll: vi.fn(),
+    };
+    const summarizeDaily = vi.fn();
+    const { pipeline, writer, paperIndex, paperFetcher, llm } =
+      makeOnePaperPipeline({
+        checkpointStores: { filter: filterStore },
+        summarizeDaily,
+      });
+    llm.call = vi.fn(async () => raw);
+
+    expect(await pipeline.runForDate("2026-05-11")).toEqual({
+      kind: "failed_transient",
+      reason: `paper filter response validation failed: ${reason}`,
+    });
+    expect(filterStore.save).not.toHaveBeenCalled();
     expect(paperIndex.upsertManyFromDailyPapers).not.toHaveBeenCalled();
     expect(paperFetcher.fetch).not.toHaveBeenCalled();
     expect(summarizeDaily).not.toHaveBeenCalled();

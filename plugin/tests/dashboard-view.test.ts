@@ -23,6 +23,12 @@ import {
   shouldSkipDashboardHistorySync,
   trashFileWithUserPreference,
 } from "../src/dashboard/view";
+import { HubModal } from "../src/dashboard/hub-modal";
+import {
+  DEFAULT_SETTINGS,
+  PaperIndexStore,
+  type StorageAdapter,
+} from "@arxiv-daily/core";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
 
 const dashboardViewSource = readFileSync(
@@ -38,6 +44,31 @@ const hubModalSource = readFileSync(
   "utf-8",
 );
 const pluginStyles = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+
+function makeStorage(initialFiles: Record<string, string>) {
+  const files = { ...initialFiles };
+  return {
+    normalizePath: (path: string) => path.replace(/\\/g, "/"),
+    async readText(path: string) {
+      if (!(path in files)) throw new Error(`missing ${path}`);
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files;
+    },
+    async mkdir() {},
+    async rename(from: string, to: string) {
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+    },
+  } satisfies StorageAdapter;
+}
 
 describe("openDashboardView", () => {
   it("activates an existing dashboard leaf with the Obsidian 1.4 API", async () => {
@@ -391,6 +422,180 @@ describe("HubModal tabs", () => {
     expect(pluginStyles).toContain(".arxiv-daily-hub-modal__content");
     expect(pluginStyles).toContain("min-height: 0");
     expect(pluginStyles).toContain("max-height: min(82vh, 740px)");
+  });
+
+  it("loads diagnostics through the shared safe report helper", () => {
+    expect(hubModalSource).toContain("buildSafePluginDiagnosticsReport");
+    expect(hubModalSource).toContain("private async loadDiagnostics");
+  });
+
+  it("does not repeat colliding output path derivation in the Hub fallback", async () => {
+    let dailyDirDerivations = 0;
+    let papersDirDerivations = 0;
+    const output = {
+      get dailyDir() {
+        if (new Error().stack?.includes("derivePaperInboxPaths")) {
+          dailyDirDerivations += 1;
+        }
+        return "arxiv/collision";
+      },
+      get papersDir() {
+        if (new Error().stack?.includes("derivePaperInboxPaths")) {
+          papersDirDerivations += 1;
+        }
+        return "arxiv/collision";
+      },
+    };
+    const plugin = {
+      settings: { ...DEFAULT_SETTINGS, output },
+      manifest: { version: "0.4.1" },
+      stateStore: { snapshot: vi.fn(() => ({})) },
+      buildPaperIndex: vi.fn(() => new PaperIndexStore({
+        normalizePath: (path: string) => path,
+      } as StorageAdapter, output)),
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        getBuffer: vi.fn(() => []),
+        clearBuffer: vi.fn(),
+      },
+    };
+    const content = {
+      setText: vi.fn(),
+      scrollTop: 0,
+      scrollHeight: 0,
+    };
+    const modal = new HubModal({} as any, plugin as any);
+    (modal as any).panels.set("diagnostics", {
+      button: {},
+      content,
+      text: "Loading diagnostics…",
+    });
+
+    await (modal as any).loadDiagnostics();
+
+    const rendered = content.setText.mock.calls.at(-1)?.[0] as string;
+    expect(rendered).toContain("path: unavailable");
+    expect(rendered).toContain("error: paper_index_configuration_invalid");
+    expect(plugin.buildPaperIndex).toHaveBeenCalledTimes(1);
+    expect(dailyDirDerivations).toBe(1);
+    expect(papersDirDerivations).toBe(1);
+  });
+
+  it("renders a safe Hub report for a corrupt index with no valid fallback", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const privateMarker = "PRIVATE_HUB_INDEX_MARKER_9C2A";
+    const store = new PaperIndexStore(
+      makeStorage({ [primaryPath]: privateMarker }),
+      DEFAULT_SETTINGS.output,
+    );
+    const plugin = {
+      settings: DEFAULT_SETTINGS,
+      manifest: { version: "0.4.1" },
+      stateStore: { snapshot: vi.fn(() => ({})) },
+      buildPaperIndex: vi.fn(() => store),
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        getBuffer: vi.fn(() => []),
+        clearBuffer: vi.fn(),
+      },
+    };
+    const content = {
+      setText: vi.fn(),
+      scrollTop: 0,
+      scrollHeight: 0,
+    };
+    const modal = new HubModal({} as any, plugin as any);
+    (modal as any).panels.set("diagnostics", {
+      button: {},
+      content,
+      text: "Loading diagnostics…",
+    });
+
+    await (modal as any).loadDiagnostics();
+
+    const rendered = content.setText.mock.calls.at(-1)?.[0] as string;
+    const loggerText = plugin.logger.warn.mock.calls.flat().join("\n");
+    expect(rendered).toContain("arXiv Daily Diagnostics");
+    expect(rendered).toContain(`path: ${primaryPath}`);
+    expect(rendered).toContain("error: paper_index_invalid");
+    expect(rendered).not.toContain(privateMarker);
+    expect(rendered).not.toContain("Loading diagnostics");
+    expect(loggerText).toContain("paper_index_invalid");
+    expect(loggerText).not.toContain(privateMarker);
+    expect(plugin.buildPaperIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a safe Hub report when a post-parse adapter probe fails", async () => {
+    const primaryPath = "arxiv-daily/.index/papers.json";
+    const privateMarker = "PRIVATE_MARKER_HUB_PROBE";
+    const privateCauseMarker = `${privateMarker}_CAUSE`;
+    const plugin = {
+      settings: DEFAULT_SETTINGS,
+      manifest: { version: "0.4.1" },
+      stateStore: { snapshot: vi.fn(() => ({})) },
+      app: {
+        vault: {
+          adapter: {
+            exists: vi.fn(async () => {
+              throw new Error(privateMarker, {
+                cause: new Error(privateCauseMarker),
+              });
+            }),
+          },
+        },
+      },
+      buildPaperIndex: vi.fn(() => ({
+        paths: { papersJsonPath: primaryPath },
+        inspect: vi.fn(async () => ({
+          inbox: { schemaVersion: 4, updatedAt: "", papers: {} },
+          document: {
+            schemaVersion: 4,
+            papers: {
+              "arxiv:2608.10003": {
+                arxivId: "2608.10003",
+                status: "saved",
+                priority: "normal",
+                seenDates: ["2026-08-10"],
+                paperPath: "arxiv-daily/papers/2608.10003.md",
+              },
+            },
+          },
+          sourcePath: primaryPath,
+          recoveredFromBackup: false,
+        })),
+      })),
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        getBuffer: vi.fn(() => []),
+        clearBuffer: vi.fn(),
+      },
+    };
+    const content = {
+      setText: vi.fn(),
+      scrollTop: 0,
+      scrollHeight: 0,
+    };
+    const modal = new HubModal({} as any, plugin as any);
+    (modal as any).panels.set("diagnostics", {
+      button: {},
+      content,
+      text: "Loading diagnostics…",
+    });
+
+    await (modal as any).loadDiagnostics();
+
+    const rendered = content.setText.mock.calls.at(-1)?.[0] as string;
+    const loggerText = plugin.logger.warn.mock.calls.flat().join("\n");
+    expect(rendered).toContain(`path: ${primaryPath}`);
+    expect(rendered).toContain("error: paper_index_unavailable");
+    expect(rendered).not.toContain(privateMarker);
+    expect(rendered).not.toContain(privateCauseMarker);
+    expect(loggerText).toContain("paper_index_unavailable");
+    expect(loggerText).not.toContain(privateMarker);
+    expect(loggerText).not.toContain(privateCauseMarker);
   });
 });
 
