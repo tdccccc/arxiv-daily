@@ -38,5 +38,7 @@ jobs:
         run: NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1
       - name: Build workspaces
         run: npm run build
+      - name: Check Obsidian submission requirements
+        run: npm run check:obsidian-submission
       - name: Smoke test build artifacts
         run: npm run smoke:build
