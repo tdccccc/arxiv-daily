@@ -370,10 +370,10 @@ describe("manifest durability and recovery", () => {
 });
 
 describe("per-paper documents", () => {
-  it("round-trips paper documents including float vectors", async () => {
+  it("round-trips paper documents including title metadata and float vectors", async () => {
     const memory = makeStorage();
     const kb = store(memory.storage);
-    const document = paperDocument();
+    const document = paperDocument({ title: "Extracted Paper Title", titleVersion: 1 });
     await kb.savePaper(document);
     const path = createFullTextKnowledgeBasePaperPath(memory.storage, kb.paths, document.paperKey);
     expect(path).toContain(`${papersDirectory}/`);
@@ -381,6 +381,8 @@ describe("per-paper documents", () => {
     const loaded = await kb.loadPaper(document.paperKey);
     expect(loaded).not.toBeNull();
     expect(loaded!.paperKey).toBe(document.paperKey);
+    expect(loaded!.title).toBe(document.title);
+    expect(loaded!.titleVersion).toBe(document.titleVersion);
     expect(loaded!.chunks).toEqual(document.chunks);
     expect(loaded!.vectors).toBeInstanceOf(Float32Array);
     expect(Array.from(loaded!.vectors)).toEqual(Array.from(document.vectors));

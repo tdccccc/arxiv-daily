@@ -1,6 +1,5 @@
 import { Modal, setIcon, type App } from "obsidian";
 import type {
-  KnowledgeBaseChunkHit,
   PaperIndexEntry,
   PaperSearchResult,
 } from "@arxiv-daily/core";
@@ -8,8 +7,8 @@ import type {
 export interface LibrarySimilarMatch {
   paperKey: string;
   title: string;
+  filePath?: string;
   score: number;
-  hits: readonly KnowledgeBaseChunkHit[];
 }
 
 export interface SimilarPapersModalCallbacks {
@@ -141,14 +140,8 @@ async function loadLibraryPanel(
       });
       item.createDiv({
         cls: "arxiv-daily-similar-modal__meta",
-        text: `${match.paperKey} · similarity ${match.score.toFixed(3)}`,
+        text: `${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`,
       });
-      for (const hit of match.hits.slice(0, 2)) {
-        item.createDiv({
-          cls: "arxiv-daily-similar-modal__hit",
-          text: `p.${hit.page} · ${hit.text.slice(0, 160).replace(/\s+/g, " ")}…`,
-        });
-      }
     }
   } catch (error) {
     panel.empty();

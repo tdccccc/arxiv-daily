@@ -20,6 +20,20 @@
  * or merging passages does not lower the score of a paper that contains a
  * perfect passage, while means and top-k averages shift with the chunker.
  *
+ * Title fusion — short-query robustness:
+ * Short queries (a paper title, a few keywords) embed into a different
+ * region of the embedding space than long passage chunks, so a paper's
+ * highest chunk similarity can lose to an unrelated paper whose many chunks
+ * happen to include a coincidentally similar passage (observed with a
+ * 262-chunk model paper beating every title query). Embedding similarity is
+ * also collapsed for short texts with some remote models, so the title
+ * signal is computed lexically by the caller (`title-similarity.ts`): the
+ * paper score is the maximum of its best chunk similarity and its title
+ * score. A title-length query lands on its own paper; a free-text query
+ * scores 0 against every title and is unaffected. Title evidence only
+ * re-ranks papers that already have chunk evidence — it never surfaces an
+ * unindexed paper with empty hits.
+ *
  * Ordering: papers by score descending, ties by paperKey ascending; hits by
  * score descending, ties by chunk index ascending. Output is fully
  * deterministic. `limit: 0` or an empty papers list yields an empty result.
@@ -57,6 +71,28 @@ export interface KnowledgeBasePaperMatch {
 export interface SearchKnowledgeBaseInput {
   papers: readonly FullTextPaperDocument[];
   queryVector: Float32Array;
+  /**
+   * Optional per-paper title scores (paperKey → similarity in [0, 1],
+   * computed lexically by the caller; see `title-similarity.ts`). When
+   * present, a paper's score is the maximum of its best chunk similarity
+   * and its title score; see the module comment for the short-query
+   * rationale. Papers without an entry are scored by chunk similarity
+   * alone.
+   */
+  titleScores?: ReadonlyMap<string, number>;
+  /**
+   * Optional per-paper lexical token-hit scores (paperKey → hit ratio in
+   * [0, 1], computed by the caller; see `lexical-search.ts`). Keyword
+   * queries land here when embedding similarity is collapsed. Same max
+   * fusion as `titleScores`.
+   */
+  tokenScores?: ReadonlyMap<string, number>;
+  /**
+   * Subtract the corpus chunk mean and renormalize before scoring (same
+   * transform placement/clustering use). Default true. Disable only for
+   * diagnostics or pure unit tests of the raw cosine path.
+   */
+  centerCorpus?: boolean;
   /** Maximum number of matching papers to return. Default 10. 0 yields no matches. */
   limit?: number;
   /** Maximum number of hit chunks to report per paper. Default 3. */
@@ -94,20 +130,30 @@ export function searchKnowledgeBase(input: SearchKnowledgeBaseInput): KnowledgeB
   const maxHitsPerPaper = requirePositiveInteger(input.maxHitsPerPaper, "maxHitsPerPaper", DEFAULT_MAX_HITS_PER_PAPER);
   if (limit === 0 || input.papers.length === 0) return [];
 
+  const centerCorpus = input.centerCorpus !== false;
+  const centered = centerCorpus
+    ? centerSearchSpace(input.papers, input.queryVector)
+    : { papers: input.papers, queryVector: input.queryVector };
+
   const matches: KnowledgeBasePaperMatch[] = [];
-  for (const paper of input.papers) {
-    if (paper.dimension !== input.queryVector.length) {
+  for (const paper of centered.papers) {
+    if (paper.dimension !== centered.queryVector.length) {
       throw new Error(
-        `searchKnowledgeBase: query vector dimension ${input.queryVector.length} does not match paper ` +
+        `searchKnowledgeBase: query vector dimension ${centered.queryVector.length} does not match paper ` +
           `"${paper.paperKey}" dimension ${paper.dimension}; the knowledge base was built with a different ` +
           "embedding model and must be rebuilt",
       );
     }
-    const hits = rankChunkHits(paper, input.queryVector, maxHitsPerPaper);
+    const hits = rankChunkHits(paper, centered.queryVector, maxHitsPerPaper);
     if (hits.length === 0) continue;
+    let score = hits[0]!.score;
+    const titleScore = input.titleScores?.get(paper.paperKey);
+    if (titleScore !== undefined) score = Math.max(score, titleScore);
+    const tokenScore = input.tokenScores?.get(paper.paperKey);
+    if (tokenScore !== undefined) score = Math.max(score, tokenScore);
     matches.push({
       paperKey: paper.paperKey,
-      score: hits[0]!.score,
+      score,
       hits,
       chunkCount: paper.chunks.length,
     });
@@ -117,6 +163,79 @@ export function searchKnowledgeBase(input: SearchKnowledgeBaseInput): KnowledgeB
     return left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0;
   });
   return matches.slice(0, limit);
+}
+
+/**
+ * Corpus-level centering for retrieval: subtract the mean of every chunk in
+ * the candidate set from both the query and every chunk, then renormalize.
+ * Same transform used by clustering/placement; keeps similar-paper ranking in
+ * the space that already separates themes from the shared academic baseline.
+ */
+function centerSearchSpace(
+  papers: readonly FullTextPaperDocument[],
+  queryVector: Float32Array,
+): { papers: FullTextPaperDocument[]; queryVector: Float32Array } {
+  const dimension = queryVector.length;
+  let count = 0;
+  const mean = new Float64Array(dimension);
+  for (const paper of papers) {
+    if (paper.dimension !== dimension) {
+      throw new Error(
+        `searchKnowledgeBase: query vector dimension ${dimension} does not match paper ` +
+          `"${paper.paperKey}" dimension ${paper.dimension}; the knowledge base was built with a different ` +
+          "embedding model and must be rebuilt",
+      );
+    }
+    for (const chunk of paper.chunks) {
+      const offset = chunk.index * dimension;
+      for (let index = 0; index < dimension; index += 1) {
+        mean[index]! += paper.vectors[offset + index] ?? 0;
+      }
+      count += 1;
+    }
+  }
+  if (count === 0) {
+    return { papers: [...papers], queryVector: new Float32Array(queryVector) };
+  }
+  for (let index = 0; index < dimension; index += 1) mean[index]! /= count;
+
+  const centeredQuery = new Float32Array(dimension);
+  for (let index = 0; index < dimension; index += 1) {
+    centeredQuery[index] = queryVector[index]! - mean[index]!;
+  }
+  normalizeInPlace(centeredQuery);
+
+  const centeredPapers = papers.map((paper) => {
+    const vectors = new Float32Array(paper.vectors.length);
+    for (const chunk of paper.chunks) {
+      const offset = chunk.index * dimension;
+      for (let index = 0; index < dimension; index += 1) {
+        vectors[offset + index] = (paper.vectors[offset + index] ?? 0) - mean[index]!;
+      }
+      normalizeSliceInPlace(vectors, offset, dimension);
+    }
+    return { ...paper, vectors };
+  });
+  return { papers: centeredPapers, queryVector: centeredQuery };
+}
+
+function normalizeInPlace(vector: Float32Array): void {
+  let sum = 0;
+  for (let index = 0; index < vector.length; index += 1) sum += vector[index]! * vector[index]!;
+  if (sum === 0) return;
+  const scale = 1 / Math.sqrt(sum);
+  for (let index = 0; index < vector.length; index += 1) vector[index]! *= scale;
+}
+
+function normalizeSliceInPlace(vectors: Float32Array, offset: number, dimension: number): void {
+  let sum = 0;
+  for (let index = 0; index < dimension; index += 1) {
+    const value = vectors[offset + index]!;
+    sum += value * value;
+  }
+  if (sum === 0) return;
+  const scale = 1 / Math.sqrt(sum);
+  for (let index = 0; index < dimension; index += 1) vectors[offset + index]! *= scale;
 }
 
 /** Score every chunk of a paper against the query and keep the best `maxHitsPerPaper`. */

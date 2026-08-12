@@ -73,6 +73,11 @@ export function showPersonalLibraryCatalogSummary(
   addDisclosure(list, "Unrelated", String(summary.unrelated));
   addDisclosure(list, "Failed", String(summary.failed));
   addDisclosure(list, "Truncated", summary.truncated ? "Yes" : "No");
+  modal.contentEl.createEl("p", {
+    cls: "mod-hint",
+    text: "Unresolved files have no arXiv id; they are indexed and searchable as local "
+      + "documents by the full-text index (Run index-personal-library-fulltext).",
+  });
   const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
   actions.createEl("button", { text: "Close" }).onclick = () => modal.close();
   modal.open();

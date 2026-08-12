@@ -255,8 +255,11 @@ describe("reconcilePersonalLibraryCatalog", () => {
 
 describe("content-based file identification (strategy v2)", () => {
   it("identifies unresolved files through the injected identifier", async () => {
-    const identifyFile = { identify: vi.fn(async (path: string) =>
-      path.endsWith("Wadekar2023.pdf") ? "2001.04385" : null) };
+    const identifyFile = {
+      version: 1,
+      identify: vi.fn(async (path: string) =>
+        path.endsWith("Wadekar2023.pdf") ? "2001.04385" : null),
+    };
     const result = await reconcilePersonalLibraryCatalog({
       current: emptyCatalog(),
       inventory: { entries: [file("Wadekar2023.pdf")], truncated: false },
@@ -272,7 +275,7 @@ describe("content-based file identification (strategy v2)", () => {
   });
 
   it("keeps files unresolved when content identification fails or throws", async () => {
-    const identifyFile = { identify: vi.fn(async () => {
+    const identifyFile = { version: 1, identify: vi.fn(async () => {
       throw new Error("read failed");
     }) };
     const result = await reconcilePersonalLibraryCatalog({
@@ -287,8 +290,32 @@ describe("content-based file identification (strategy v2)", () => {
     expect(record.status).toBe("unresolved");
   });
 
+  it("treats identifier values unsupported by the catalog as unresolved", async () => {
+    const identifyFile = {
+      version: 1,
+      identify: vi.fn(async () => "astro-ph/0609591"),
+    };
+    const metadataResolver = resolver([]);
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("legacy.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: metadataResolver,
+      identifyFile,
+      now,
+    });
+
+    expect(result.resolvedArxivIds).toEqual([]);
+    expect(metadataResolver.resolve).not.toHaveBeenCalled();
+    expect(result.catalog.files["legacy.pdf"]).toMatchObject({
+      status: "unresolved",
+      contentIdentificationVersion: 1,
+    });
+    expect(result.catalog.papers).toEqual({});
+  });
+
   it("never calls the identifier for files whose names already carry an arXiv ID", async () => {
-    const identifyFile = { identify: vi.fn(async () => "2402.18634") };
+    const identifyFile = { version: 1, identify: vi.fn(async () => "2402.18634") };
     const result = await reconcilePersonalLibraryCatalog({
       current: emptyCatalog(),
       inventory: { entries: [file("2402.18634v2.pdf")], truncated: false },
@@ -300,5 +327,35 @@ describe("content-based file identification (strategy v2)", () => {
     expect(identifyFile.identify).not.toHaveBeenCalled();
     const record = Object.values(result.catalog.files)[0]!;
     expect(record.status).toBe("ready");
+  });
+
+  it("re-identifies unchanged content-derived records when identifier rules advance", async () => {
+    const path = "Planck Collaboration2016.pdf";
+    const oldIdentifier = { version: 1, identify: vi.fn(async () => "1008.4686") };
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("1008.4686")]),
+      identifyFile: oldIdentifier,
+      now,
+    });
+    expect(first.catalog.files[path]?.status).toBe("ready");
+    expect(decodePersonalLibraryCatalog(first.catalog)).toEqual(first.catalog);
+
+    const currentIdentifier = { version: 2, identify: vi.fn(async () => null) };
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: currentIdentifier,
+      now,
+    });
+
+    expect(currentIdentifier.identify).toHaveBeenCalledWith(path, undefined, 100);
+    expect(second.reusedFileCount).toBe(0);
+    expect(second.catalog.files[path]?.status).toBe("unresolved");
+    expect(second.catalog.papers["arxiv:1008.4686"]).toBeUndefined();
   });
 });

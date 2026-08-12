@@ -151,7 +151,11 @@ describe("searchKnowledgeBase", () => {
       chunks: [{ page: 1, text: "Even coverage one" }, { page: 2, text: "Even coverage two" }],
       vectors: [new Float32Array([0.6, 0.8]), new Float32Array([0.6, 0.8])],
     });
-    const matches = searchKnowledgeBase({ papers: [broadAverage, strongPassage], queryVector: query });
+    const matches = searchKnowledgeBase({
+      papers: [broadAverage, strongPassage],
+      queryVector: query,
+      centerCorpus: false,
+    });
     expect(matches[0]!.paperKey).toBe("strong-passage");
     expect(matches[0]!.score).toBeCloseTo(0.9, 6);
     expect(matches[0]!.hits[0]!.text).toBe("Highly relevant passage");
@@ -320,5 +324,145 @@ describe("searchKnowledgeBase", () => {
     expect(() => searchKnowledgeBase({ papers: [paper], queryVector: query, limit: 1.5 })).toThrow(TypeError);
     expect(() => searchKnowledgeBase({ papers: [paper], queryVector: query, maxHitsPerPaper: 0 })).toThrow(TypeError);
     expect(() => searchKnowledgeBase({ papers: [paper], queryVector: query, maxHitsPerPaper: 2.5 })).toThrow(TypeError);
+  });
+
+  it("lifts a paper whose title matches the query above stronger chunk evidence", () => {
+    // 2-D query; the chunk match scores 0.9, an exact lexical title match 1.
+    const query = new Float32Array([1, 0]);
+    const chunkMatch = makePaper({
+      paperKey: "chunk-match",
+      chunks: [{ page: 1, text: "Passage close to the query" }],
+      vectors: [new Float32Array([0.9, Math.sqrt(1 - 0.9 * 0.9)])],
+    });
+    const titleMatch = makePaper({
+      paperKey: "title-match",
+      chunks: [{ page: 1, text: "Unrelated passage" }],
+      vectors: [new Float32Array([0, 1])],
+    });
+    // Without title scores the best chunk wins, as before.
+    const without = searchKnowledgeBase({ papers: [chunkMatch, titleMatch], queryVector: query });
+    expect(without[0]!.paperKey).toBe("chunk-match");
+    // With a title score of 1 the title match outranks chunk evidence.
+    const withTitles = searchKnowledgeBase({
+      papers: [chunkMatch, titleMatch],
+      queryVector: query,
+      titleScores: new Map([["title-match", 1]]),
+    });
+    expect(withTitles[0]!.paperKey).toBe("title-match");
+    expect(withTitles[0]!.score).toBe(1);
+    expect(withTitles[1]!.paperKey).toBe("chunk-match");
+    // Chunk evidence stays the reason for the rank: hits are unchanged.
+    expect(withTitles[0]!.hits[0]!.text).toBe("Unrelated passage");
+  });
+
+  it("leaves ranking and scores unchanged when no title matches the query", () => {
+    const query = new Float32Array([1, 0]);
+    const a = makePaper({
+      paperKey: "a",
+      chunks: [{ page: 1, text: "A passage" }],
+      vectors: [new Float32Array([0.9, Math.sqrt(1 - 0.9 * 0.9)])],
+    });
+    const b = makePaper({
+      paperKey: "b",
+      chunks: [{ page: 1, text: "B passage" }],
+      vectors: [new Float32Array([0.5, Math.sqrt(1 - 0.5 * 0.5)])],
+    });
+    const base = searchKnowledgeBase({ papers: [a, b], queryVector: query, centerCorpus: false });
+    // Title scores (0 and 0.2) stay below each paper's chunk score.
+    const fused = searchKnowledgeBase({
+      papers: [a, b],
+      queryVector: query,
+      centerCorpus: false,
+      titleScores: new Map([
+        ["a", 0],
+        ["b", 0.2],
+      ]),
+    });
+    expect(fused.map((match) => match.paperKey)).toEqual(base.map((match) => match.paperKey));
+    expect(fused[0]!.score).toBeCloseTo(base[0]!.score, 6);
+    expect(fused[1]!.score).toBeCloseTo(base[1]!.score, 6);
+  });
+
+  it("lifts a paper with a literal token hit above stronger chunk evidence", () => {
+    const query = new Float32Array([1, 0]);
+    const chunkMatch = makePaper({
+      paperKey: "chunk-match",
+      chunks: [{ page: 1, text: "Passage close to the query" }],
+      vectors: [new Float32Array([0.9, Math.sqrt(1 - 0.9 * 0.9)])],
+    });
+    const tokenMatch = makePaper({
+      paperKey: "token-match",
+      chunks: [{ page: 1, text: "Unrelated passage" }],
+      vectors: [new Float32Array([0, 1])],
+    });
+    const matches = searchKnowledgeBase({
+      papers: [chunkMatch, tokenMatch],
+      queryVector: query,
+      tokenScores: new Map([["token-match", 1]]),
+    });
+    expect(matches[0]!.paperKey).toBe("token-match");
+    expect(matches[0]!.score).toBe(1);
+    expect(matches[1]!.paperKey).toBe("chunk-match");
+  });
+
+  it("never surfaces a paper with no chunks even when its title matches", () => {
+    const query = randomVector(1303);
+    const empty = makePaper({ paperKey: "no-chunks", chunks: [], vectors: [] });
+    const withChunk = makePaper({
+      paperKey: "has-chunks",
+      chunks: [{ page: 1, text: "Evidence" }],
+      vectors: [new Float32Array(query)],
+    });
+    const matches = searchKnowledgeBase({
+      papers: [empty, withChunk],
+      queryVector: query,
+      titleScores: new Map([["no-chunks", 1]]),
+    });
+    expect(matches.map((match) => match.paperKey)).toEqual(["has-chunks"]);
+  });
+
+  it("centers the corpus so a thematically aligned paper outranks a generic high-baseline chunk", () => {
+    // Shared academic baseline on x, theme on y. Raw cosine prefers near-baseline
+    // fillers; after centering, the theme paper rises to the top.
+    const query = new Float32Array([1, 0.3]);
+    const themeMatch = makePaper({
+      paperKey: "theme-match",
+      chunks: [{ page: 1, text: "Theme passage" }],
+      vectors: [new Float32Array([0.5, 1])],
+    });
+    const genericPopular = makePaper({
+      paperKey: "generic-popular",
+      chunks: [{ page: 1, text: "Generic academic filler" }],
+      vectors: [new Float32Array([1, 0])],
+    });
+    const filler = [
+      makePaper({
+        paperKey: "filler-a",
+        chunks: [{ page: 1, text: "Filler A" }],
+        vectors: [new Float32Array([0.95, 0.05])],
+      }),
+      makePaper({
+        paperKey: "filler-b",
+        chunks: [{ page: 1, text: "Filler B" }],
+        vectors: [new Float32Array([0.9, -0.05])],
+      }),
+      makePaper({
+        paperKey: "filler-c",
+        chunks: [{ page: 1, text: "Filler C" }],
+        vectors: [new Float32Array([0.98, 0.02])],
+      }),
+    ];
+    const raw = searchKnowledgeBase({
+      papers: [themeMatch, genericPopular, ...filler],
+      queryVector: query,
+      centerCorpus: false,
+    });
+    expect(raw[0]!.paperKey).not.toBe("theme-match");
+    const centered = searchKnowledgeBase({
+      papers: [themeMatch, genericPopular, ...filler],
+      queryVector: query,
+    });
+    expect(centered[0]!.paperKey).toBe("theme-match");
+    expect(centered[0]!.score).toBeGreaterThan(centered[1]!.score);
   });
 });

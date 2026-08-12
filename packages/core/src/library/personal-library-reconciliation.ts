@@ -32,10 +32,13 @@ export interface PersonalLibraryMetadataResolver {
  * Content-based file identification (identification strategy v2). The host
  * supplies evidence (e.g. PDF text extraction via the scoped source) for
  * files whose filenames carry no arXiv ID; the identifier returns a
- * canonical arXiv ID or null. Identity remains evidence-checked downstream:
- * the resolver still fetches canonical metadata before a file becomes ready.
+ * canonical arXiv ID or null. Returned values are normalized and rejected
+ * unless the catalog supports them, then the resolver still fetches canonical
+ * metadata before a file becomes ready.
  */
 export interface PersonalLibraryFileIdentifier {
+  /** Bump when content-evidence rules change so unchanged files are re-evaluated. */
+  readonly version: number;
   identify(
     logicalPath: string,
     signal?: AbortSignal,
@@ -65,6 +68,7 @@ interface IdentifiedFile {
   entry: LibrarySourceEntry;
   observationFingerprint: string;
   arxivId: string;
+  contentIdentificationVersion?: number;
 }
 
 export function identifyModernArxivIdFromFilename(logicalPath: string): string | null {
@@ -113,6 +117,11 @@ export async function reconcilePersonalLibraryCatalog(
   for (const entry of input.inventory.entries) {
     throwIfCancelled(input.signal);
     if (entry.type !== "file") continue;
+    const eligible = eligibleExtensions.has(extensionOf(entry.path));
+    const filenameArxivId = eligible ? identifyModernArxivIdFromFilename(entry.path) : null;
+    const contentIdentificationVersion = eligible && !filenameArxivId && input.identifyFile
+      ? requireIdentifierVersion(input.identifyFile.version)
+      : undefined;
     const observationFingerprint = createLibraryFileObservationFingerprint(
       entry,
       input.current.identificationFingerprint,
@@ -122,13 +131,14 @@ export async function reconcilePersonalLibraryCatalog(
       previous
       && previous.observationFingerprint === observationFingerprint
       && previous.status !== "failed"
+      && recordContentIdentificationVersion(previous) === contentIdentificationVersion
     ) {
       defineRecordEntry(files, entry.path, clone(previous));
       reusedFileCount += 1;
       continue;
     }
 
-    if (!eligibleExtensions.has(extensionOf(entry.path))) {
+    if (!eligible) {
       defineRecordEntry(files, entry.path, {
         path: entry.path,
         status: "unrelated",
@@ -139,13 +149,18 @@ export async function reconcilePersonalLibraryCatalog(
       continue;
     }
 
-    let arxivId = identifyModernArxivIdFromFilename(entry.path);
+    let arxivId = filenameArxivId;
     if (!arxivId && input.identifyFile) {
       try {
-        arxivId = await input.identifyFile.identify(entry.path, input.signal, entry.size) ?? null;
+        const identified = await input.identifyFile.identify(
+          entry.path,
+          input.signal,
+          entry.size,
+        );
+        arxivId = identified ? modernArxivResources(identified)?.id ?? null : null;
       } catch {
-        // Content identification is best-effort: any failure keeps the file
-        // unresolved instead of failing or blocking the scan.
+        // Content identification is best-effort: any failure or unsupported ID
+        // keeps the file unresolved instead of failing or blocking the scan.
         arxivId = null;
       }
     }
@@ -155,11 +170,17 @@ export async function reconcilePersonalLibraryCatalog(
         status: "unresolved",
         observationFingerprint,
         reason: "unrecognized-filename",
+        ...(contentIdentificationVersion === undefined ? {} : { contentIdentificationVersion }),
         updatedAt: nowIso,
       });
       continue;
     }
-    identified.push({ entry, observationFingerprint, arxivId });
+    identified.push({
+      entry,
+      observationFingerprint,
+      arxivId,
+      ...(contentIdentificationVersion === undefined ? {} : { contentIdentificationVersion }),
+    });
   }
 
   if (input.inventory.truncated) {
@@ -252,6 +273,9 @@ function readyFile(candidate: IdentifiedFile, updatedAt: string): PersonalLibrar
     observationFingerprint: candidate.observationFingerprint,
     paperKey: paperKeyFromArxivId(candidate.arxivId),
     arxivId: candidate.arxivId,
+    ...(candidate.contentIdentificationVersion === undefined
+      ? {}
+      : { contentIdentificationVersion: candidate.contentIdentificationVersion }),
     updatedAt,
   };
 }
@@ -309,6 +333,21 @@ function summarize(
   };
   for (const record of Object.values(catalog.files)) summary[record.status] += 1;
   return summary;
+}
+
+function recordContentIdentificationVersion(
+  record: PersonalLibraryFileRecord,
+): number | undefined {
+  return record.status === "ready" || record.status === "unresolved"
+    ? record.contentIdentificationVersion
+    : undefined;
+}
+
+function requireIdentifierVersion(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("identifyFile.version must be a positive safe integer");
+  }
+  return value;
 }
 
 function normalizeExtensions(extensions: readonly string[]): Set<string> {

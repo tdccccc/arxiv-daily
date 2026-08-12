@@ -15,6 +15,8 @@ export type PersonalLibraryFileRecord =
       observationFingerprint: string;
       paperKey: string;
       arxivId: string;
+      /** Rule version used when identity came from PDF content rather than the filename. */
+      contentIdentificationVersion?: number;
       updatedAt: string;
     }
   | {
@@ -22,6 +24,8 @@ export type PersonalLibraryFileRecord =
       status: "unresolved";
       observationFingerprint: string;
       reason: "unrecognized-filename";
+      /** Rule version used for the content-identification attempt. */
+      contentIdentificationVersion?: number;
       updatedAt: string;
     }
   | {
@@ -455,9 +459,12 @@ function decodeFileRecord(value: unknown, path: string): PersonalLibraryFileReco
   const common = isFingerprint(value.observationFingerprint) && isIsoDate(value.updatedAt);
   if (!common) return null;
   if (value.status === "ready") {
-    if (!isExactObject(value, [
-      "path", "status", "observationFingerprint", "paperKey", "arxivId", "updatedAt",
-    ])) return null;
+    const keys = value.contentIdentificationVersion === undefined
+      ? ["path", "status", "observationFingerprint", "paperKey", "arxivId", "updatedAt"]
+      : ["path", "status", "observationFingerprint", "paperKey", "arxivId", "contentIdentificationVersion", "updatedAt"];
+    if (!isExactObject(value, keys) || !isOptionalPositiveSafeInteger(value.contentIdentificationVersion)) {
+      return null;
+    }
     const resources = typeof value.arxivId === "string" ? modernArxivResources(value.arxivId) : null;
     if (!resources || value.arxivId !== resources.id || value.paperKey !== paperKeyFromArxivId(resources.id)) {
       return null;
@@ -465,8 +472,12 @@ function decodeFileRecord(value: unknown, path: string): PersonalLibraryFileReco
     return value as unknown as PersonalLibraryFileRecord;
   }
   if (value.status === "unresolved") {
-    if (!isExactObject(value, ["path", "status", "observationFingerprint", "reason", "updatedAt"])
-      || value.reason !== "unrecognized-filename") return null;
+    const keys = value.contentIdentificationVersion === undefined
+      ? ["path", "status", "observationFingerprint", "reason", "updatedAt"]
+      : ["path", "status", "observationFingerprint", "reason", "contentIdentificationVersion", "updatedAt"];
+    if (!isExactObject(value, keys)
+      || value.reason !== "unrecognized-filename"
+      || !isOptionalPositiveSafeInteger(value.contentIdentificationVersion)) return null;
     return value as unknown as PersonalLibraryFileRecord;
   }
   if (value.status === "unrelated") {
@@ -651,6 +662,10 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isOptionalPositiveSafeInteger(value: unknown): value is number | undefined {
+  return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {

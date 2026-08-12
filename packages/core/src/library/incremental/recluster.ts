@@ -35,13 +35,23 @@ export interface ReclusterPoolOptions extends ClusteringOptions {
 
 /**
  * Pure reclustering over already-centered papers. Deterministic.
+ *
+ * Clustering runs on one centroid vector per paper instead of the full chunk
+ * set: the buffer pool can hold hundreds of papers and chunk-level pairwise
+ * similarity is quadratic in chunks (with the per-paper 80-chunk cap that is
+ * ~1e4 chunks — minutes of synchronous CPU that freezes host UIs). The
+ * centroid of a paper's chunks in the centered space is its theme mean;
+ * multi-theme papers land in the middle, which the LLM-diff review stage
+ * catches. The drift reference still uses the full chunk sets.
  */
 export function reclusterPool(
   papers: readonly ClusteringInputPaper[],
   options: ReclusterPoolOptions,
 ): ReclusterPoolResult {
   const poolSet = new Set(options.poolPaperKeys);
-  const poolPapers = papers.filter((paper) => poolSet.has(paper.paperKey));
+  const poolPapers = papers
+    .filter((paper) => poolSet.has(paper.paperKey))
+    .map(centroidPaper);
   const clustering = clusterPaperVectors(poolPapers, {
     minClusterSize: options.minClusterSize,
     centerCorpus: false, // caller already centered the shared space
@@ -95,6 +105,26 @@ function maxChunkCosine(a: readonly Float32Array[], b: readonly Float32Array[]):
     }
   }
   return best;
+}
+
+/** Paper-level centroid: mean of the paper's chunks, renormalized (see the module comment). */
+function centroidPaper(paper: ClusteringInputPaper): ClusteringInputPaper {
+  const chunks = paper.chunks.filter((chunk) => chunk.length > 0);
+  if (chunks.length === 0) return { paperKey: paper.paperKey, chunks: [] };
+  const dimension = chunks[0]!.length;
+  const mean = new Float32Array(dimension);
+  for (const chunk of chunks) {
+    for (let index = 0; index < dimension; index += 1) {
+      mean[index] = (mean[index] ?? 0) + (chunk[index] ?? 0) / chunks.length;
+    }
+  }
+  let norm = 0;
+  for (const value of mean) norm += value * value;
+  if (norm > 0) {
+    const scale = 1 / Math.sqrt(norm);
+    for (let index = 0; index < dimension; index += 1) mean[index] = (mean[index] ?? 0) * scale;
+  }
+  return { paperKey: paper.paperKey, chunks: [mean] };
 }
 
 function dot(a: Float32Array, b: Float32Array): number {

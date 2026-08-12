@@ -11,8 +11,8 @@ export interface LibrarySearchMatch {
   paperKey: string;
   title: string;
   score: number;
-  /** First hit passage, already whitespace-collapsed and length-bounded. */
-  excerpt: string;
+  /** Relative library path for fallback-indexed files; unset for arXiv papers. */
+  filePath?: string;
 }
 
 export type LibrarySearchState =
@@ -66,9 +66,7 @@ export function renderLibrarySearchBlock(
     });
     item.createDiv({
       cls: "arxiv-daily-dashboard__library-meta",
-      text: `${match.paperKey} · similarity ${match.score.toFixed(3)}${
-        match.excerpt ? ` — ${match.excerpt}…` : ""
-      }`,
+      text: `${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`,
     });
   }
 }

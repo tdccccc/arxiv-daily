@@ -2330,8 +2330,8 @@ class ArxivDailyDashboardView extends ItemView {
         return matches.map((match) => ({
           paperKey: match.paperKey,
           title: match.title,
+          filePath: match.filePath,
           score: match.score,
-          hits: match.hits,
         }));
       },
     };
@@ -2367,7 +2367,7 @@ class ArxivDailyDashboardView extends ItemView {
             paperKey: match.paperKey,
             title: match.title,
             score: match.score,
-            excerpt: match.hits[0]?.text.slice(0, 120).replace(/\s+/g, " ") ?? "",
+            filePath: match.filePath,
           })),
         });
       },

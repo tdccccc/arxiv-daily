@@ -84,6 +84,7 @@ import {
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+  PDF_IDENTIFICATION_EVIDENCE_VERSION,
   reclusterPool,
   suggestDirectionDiff,
   suggestIncrementalPlacement,
@@ -1278,6 +1279,7 @@ export default class ArxivDailyPlugin extends Plugin {
         // no arXiv ID are identified from PDF text evidence, with an arXiv
         // title-search fallback. Failures keep files unresolved.
         identifyFile: {
+          version: PDF_IDENTIFICATION_EVIDENCE_VERSION,
           // Identification reads bounded ranges only (header + tail), never
           // the whole file: arXiv page headers, XMP, and Info metadata all
           // live there, and full-file reads made scans hang on large PDFs.
@@ -1299,11 +1301,33 @@ export default class ArxivDailyPlugin extends Plugin {
               combined.set(new Uint8Array(head), 0);
               combined.set(new Uint8Array(tail), head.byteLength);
               const evidence = extractPdfIdentificationEvidence(combined);
-              if (evidence.arxivId) return evidence.arxivId;
+              const directId = evidence.arxivId
+                ? normalizeArxivId(evidence.arxivId)
+                : null;
+              if (directId) {
+                // The document title is an independent witness: a title
+                // search that resolves to a DIFFERENT paper means the direct
+                // ID is a reference-list misidentification ("… arXiv:0912.0201
+                // …" in the references) — trust the title search. A failed or
+                // empty search keeps the direct ID (garbage document titles
+                // must not demote real papers).
+                if (evidence.title && !/^arxiv:/i.test(evidence.title)) {
+                  try {
+                    const result = await searchArxivTitle(this.host.http, evidence.title, signal);
+                    if (result.arxivId) {
+                      const searched = normalizeArxivId(result.arxivId);
+                      if (searched && searched !== directId) return searched;
+                    }
+                  } catch {
+                    // Search failure keeps the direct ID.
+                  }
+                }
+                return directId;
+              }
               if (evidence.title) {
                 try {
                   const result = await searchArxivTitle(this.host.http, evidence.title, signal);
-                  return result.arxivId;
+                  return result.arxivId ? normalizeArxivId(result.arxivId) : null;
                 } catch {
                   return null;
                 }
@@ -1464,16 +1488,21 @@ export default class ArxivDailyPlugin extends Plugin {
         signal: operation.signal,
       });
       operation.signal.throwIfAborted();
-      if (updateProgress) {
-        this.progress?.setComplete(
-          `Full-text index: ${summary.indexed} indexed, ${summary.reused} reused, `
-          + `${summary.failed} failed, ${summary.pruned} pruned`,
-        );
-      }
       // ADR 0007: new or changed papers trigger the incremental direction
       // update automatically (placement always; LLM diff only with consent).
-      // Failures never fail the index command.
-      await this.runIncrementalDirectionUpdateAfterIndex(summary);
+      // Failures never fail the index command. The completion notice is
+      // deferred until the update finishes, so the progress view does not
+      // read "done" while the update still holds the command open.
+      await this.runIncrementalDirectionUpdateAfterIndex(summary, updateProgress);
+      if (updateProgress) {
+        const refreshed = summary.titlesRefreshed > 0
+          ? `, ${summary.titlesRefreshed} titles refreshed`
+          : "";
+        this.progress?.setComplete(
+          `Full-text index: ${summary.indexed} indexed, ${summary.reused} reused, `
+          + `${summary.failed} failed, ${summary.pruned} pruned${refreshed}`,
+        );
+      }
       return summary;
     } catch (error) {
       if (updateProgress && !operation.signal.aborted) {
@@ -1492,7 +1521,14 @@ export default class ArxivDailyPlugin extends Plugin {
    */
   async searchPersonalLibraryFullText(
     queryText: string,
-  ): Promise<Array<{ paperKey: string; title: string; score: number; hits: KnowledgeBaseChunkHit[] }>> {
+  ): Promise<Array<{
+    paperKey: string;
+    title: string;
+    /** Relative library path for fallback-indexed files; arXiv papers leave it unset. */
+    filePath?: string;
+    score: number;
+    hits: KnowledgeBaseChunkHit[];
+  }>> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
     const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
@@ -1501,16 +1537,32 @@ export default class ArxivDailyPlugin extends Plugin {
       identificationFingerprint,
     );
     this.assertRemoteEmbeddingReady();
+    // Title fusion: catalog titles for arXiv papers, extracted first-page
+    // titles from the knowledge-base manifest for fallback-indexed files
+    // (see `title-similarity.ts`).
+    const titles = new Map<string, string>();
+    for (const [paperKey, paper] of Object.entries(catalog.papers)) {
+      if (paper.title) titles.set(paperKey, paper.title);
+    }
+    const store = this.buildFullTextKnowledgeBaseStore(connection);
+    const manifest = await store.loadManifest();
+    const fallbackPaths = new Map<string, string>();
+    for (const [paperKey, record] of Object.entries(manifest.papers)) {
+      if (record.title && !titles.has(paperKey)) titles.set(paperKey, record.title);
+      if (paperKey.startsWith("file:") && record.filePaths[0]) {
+        fallbackPaths.set(paperKey, record.filePaths[0]);
+      }
+    }
     const matches = await searchFullTextKnowledgeBaseCore({
-      store: this.buildFullTextKnowledgeBaseStore(connection),
+      store,
       embedding: this.buildEmbeddingModel(),
       queryText,
+      titles,
     });
-    const titles = new Map<string, string>();
-    for (const paper of Object.values(catalog.papers)) titles.set(paper.paperKey, paper.title);
     return matches.map((match) => ({
       paperKey: match.paperKey,
       title: titles.get(match.paperKey) ?? match.paperKey,
+      filePath: fallbackPaths.get(match.paperKey),
       score: match.score,
       hits: match.hits,
     }));
@@ -1565,7 +1617,7 @@ export default class ArxivDailyPlugin extends Plugin {
       loadPdfJsResolved = true;
       loaderReturnedLib =
         returned != null && (typeof returned === "object" || typeof returned === "function");
-      const win = globalThis as unknown as { pdfjsLib?: { version?: string } };
+      const win = window as unknown as { pdfjsLib?: { version?: string } };
       windowPdfJsLibPresent = win.pdfjsLib != null;
       windowPdfJsLibVersion = win.pdfjsLib?.version;
     } catch (error) {
@@ -1674,12 +1726,18 @@ export default class ArxivDailyPlugin extends Plugin {
    * (indexed > 0) trigger the incremental update. Runs the same update as
    * the manual command and surfaces the result with a Notice; any failure
    * (already active, no profile, transient LLM error) is logged and
-   * swallowed so the index command stays successful.
+   * swallowed so the index command stays successful. While it runs, the
+   * progress text moves to the direction update so the post-index wait
+   * (clustering, possibly an LLM diff) reads as work, not a stall.
    */
   private async runIncrementalDirectionUpdateAfterIndex(
     summary: FullTextIndexRunSummary,
+    updateProgress: boolean,
   ): Promise<void> {
     if (summary.indexed <= 0) return;
+    if (updateProgress) {
+      this.progress?.setTask("Updating paper directions", "Placing new papers");
+    }
     try {
       const update = await this.runIncrementalDirectionUpdate();
       const pending = update.pendingAuthorizationBuffered > 0

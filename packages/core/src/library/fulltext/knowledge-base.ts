@@ -33,8 +33,21 @@ export interface FullTextPaperDocument {
   paperKey: string;
   modelId: string;
   dimension: number;
-  /** SHA-256 of the normalized extracted full text; reuse key for incremental updates. */
+  /** SHA-256 of the normalized extracted full text. */
   textHash: string;
+  /** SHA-256 of source PDF bytes; present for content-addressed fallback papers. */
+  contentHash?: string;
+  /**
+   * Title extracted from the first page at index time. Present for papers
+   * without catalog metadata (fallback-indexed unresolved files); arXiv
+   * papers get their title from the catalog at query time.
+   */
+  title?: string;
+  /**
+   * Version of the extraction rules that produced `title`; reuse refreshes
+   * fallback titles when the rules advance (`TITLE_EXTRACTION_VERSION`).
+   */
+  titleVersion?: number;
   /** Catalog file paths observed at index time (change detection). */
   filePaths: readonly string[];
   /** Per-path observation fingerprints, same order as `filePaths`. */
@@ -53,6 +66,12 @@ export interface FullTextPaperKnowledgeRecord {
   dimension: number;
   /** Present when status is ready. */
   textHash?: string;
+  /** SHA-256 of source PDF bytes for content-addressed fallback papers. */
+  contentHash?: string;
+  /** Extracted title for fallback-indexed files; arXiv papers use the catalog. */
+  title?: string;
+  /** Extraction-rule version of `title`; see `FullTextPaperDocument`. */
+  titleVersion?: number;
   filePaths: readonly string[];
   observationFingerprints: readonly string[];
   chunkCount: number;
@@ -141,6 +160,9 @@ export interface FullTextPaperDocumentJson {
   modelId: string;
   dimension: number;
   textHash: string;
+  contentHash?: string;
+  title?: string;
+  titleVersion?: number;
   filePaths: string[];
   observationFingerprints: string[];
   chunks: FullTextChunk[];
@@ -159,7 +181,8 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
   if (typeof value.paperKey !== "string" || !isNonEmptyString(value.paperKey)) return null;
   if (typeof value.modelId !== "string" || !isNonEmptyString(value.modelId)) return null;
   if (!isPositiveInteger(value.dimension)) return null;
-  if (typeof value.textHash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.textHash)) return null;
+  if (typeof value.textHash !== "string" || !isFingerprint(value.textHash)) return null;
+  if (value.contentHash !== undefined && !isFingerprint(value.contentHash)) return null;
   if (!isLogicalPathArray(value.filePaths)) return null;
   if (!isFingerprintArray(value.observationFingerprints, value.filePaths.length)) return null;
   if (!isIsoDate(value.updatedAt)) return null;
@@ -176,12 +199,21 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
   }
   const vectors = decodeVectors(value.vectors, chunks.length * value.dimension);
   if (!vectors) return null;
+  if (value.title !== undefined && (typeof value.title !== "string" || value.title.length === 0)) {
+    return null;
+  }
+  if (value.titleVersion !== undefined && !isPositiveInteger(value.titleVersion)) {
+    return null;
+  }
   return {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
     paperKey: value.paperKey,
     modelId: value.modelId,
     dimension: value.dimension,
     textHash: value.textHash,
+    contentHash: value.contentHash,
+    title: value.title,
+    titleVersion: value.titleVersion,
     filePaths: [...value.filePaths],
     observationFingerprints: [...value.observationFingerprints],
     chunks,
@@ -208,10 +240,11 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
     if (typeof record.modelId !== "string" || !isNonEmptyString(record.modelId)) return null;
     if (!isPositiveInteger(record.dimension)) return null;
     if (record.status === "ready") {
-      if (typeof record.textHash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(record.textHash)) return null;
+      if (typeof record.textHash !== "string" || !isFingerprint(record.textHash)) return null;
+      if (record.contentHash !== undefined && !isFingerprint(record.contentHash)) return null;
       // A ready record must name the files it was indexed from.
       if (!isLogicalPathArray(record.filePaths)) return null;
-    } else if (record.textHash !== undefined) {
+    } else if (record.textHash !== undefined || record.contentHash !== undefined) {
       return null;
     } else if (!isOptionalLogicalPathArray(record.filePaths)) {
       // A failed record may carry no indexed files (first failure).
@@ -223,6 +256,12 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
     if (record.status === "failed" && !isOptionalFingerprintArray(record.observationFingerprints, record.filePaths.length)) {
       return null;
     }
+    if (record.title !== undefined && (typeof record.title !== "string" || record.title.length === 0)) {
+      return null;
+    }
+    if (record.titleVersion !== undefined && !isPositiveInteger(record.titleVersion)) {
+      return null;
+    }
     if (!isNonNegativeInteger(record.chunkCount)) return null;
     if (record.error !== undefined && typeof record.error !== "string") return null;
     if (!isIsoDate(record.updatedAt)) return null;
@@ -232,6 +271,9 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
       modelId: record.modelId,
       dimension: record.dimension,
       ...(record.textHash === undefined ? {} : { textHash: record.textHash }),
+      ...(record.contentHash === undefined ? {} : { contentHash: record.contentHash }),
+      ...(record.title === undefined ? {} : { title: record.title }),
+      ...(record.titleVersion === undefined ? {} : { titleVersion: record.titleVersion }),
       filePaths: [...record.filePaths],
       observationFingerprints: [...record.observationFingerprints],
       chunkCount: record.chunkCount,
@@ -263,6 +305,9 @@ function toJsonDocument(document: FullTextPaperDocument): FullTextPaperDocumentJ
     modelId: document.modelId,
     dimension: document.dimension,
     textHash: document.textHash,
+    contentHash: document.contentHash,
+    title: document.title,
+    titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],
     chunks: document.chunks.map((chunk) => ({ ...chunk })),

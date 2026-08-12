@@ -435,9 +435,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
           notice("arXiv Daily: indexing personal library full text…");
           try {
             const summary = await plugin.indexPersonalLibraryFullText();
+            const refreshed = summary.titlesRefreshed > 0
+              ? `, ${summary.titlesRefreshed} titles refreshed`
+              : "";
             notice(
               `arXiv Daily: full-text index — ${summary.indexed} indexed, `
-              + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned`,
+              + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}`,
               10_000,
             );
           } catch (error) {
@@ -464,8 +467,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
                 return;
               }
               const lines = matches.slice(0, 5).map((match) => {
-                const excerpt = match.hits[0]?.text.slice(0, 120).replace(/\s+/g, " ") ?? "";
-                return `${match.title}\n  similarity ${match.score.toFixed(3)} — ${excerpt}…`;
+                return `${match.title}\n  ${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`;
               });
               notice(`arXiv Daily: top ${Math.min(matches.length, 5)} matches\n${lines.join("\n")}`, 12_000);
             } catch (error) {

@@ -51,6 +51,30 @@ describe("pdf identification evidence", () => {
     expect(extractPdfIdentificationEvidence(pdf).arxivId).toBe("2302.05010");
   });
 
+  it("prefers the Info dict /arXivID over reference-list IDs in stream text", () => {
+    // A reference-list DOI ("arXiv.0912.0201" in a content stream) must not
+    // override the submission system's own identity claim (/arXivID): the
+    // citing file is the 2512.16010 paper, not the cited one.
+    const header = "(LSTM-MDNz: Estimating Quasar Photometric Redshifts) Tj";
+    const references = "(References) Tj\nsee doi.org/10.48550/arXiv.0912.0201";
+    const pdf = pdfWith(
+      [{ text: header }, { text: references }],
+      [
+        "/Title (LSTM-MDNz: Estimating Quasar Photometric Redshifts with an LSTM-Augmented Mixture Density Network) ",
+        "/arXivID (https://arxiv.org/abs/2512.16010v1) ",
+      ],
+    );
+    expect(extractPdfIdentificationEvidence(pdf).arxivId).toBe("2512.16010");
+  });
+
+  it("falls back to stream headers when the Info dict has no /arXivID", () => {
+    const pdf = pdfWith(
+      [{ text: "(arXiv:2302.05010v2 [astro-ph.CO]) Tj\n(Title) Tj" }],
+      ["/Title (Some Paper) "],
+    );
+    expect(extractPdfIdentificationEvidence(pdf).arxivId).toBe("2302.05010");
+  });
+
   it("extracts XMP dc:identifier arXiv URLs", () => {
     const xmp = '<x:xmpmeta><rdf:Description><dc:identifier><rdf:li>https://arxiv.org/abs/2309.03258v3</rdf:li></dc:identifier></rdf:Description></x:xmpmeta>';
     const pdf = pdfWith([{ text: "No header id here, just text" }, { text: xmp }]);

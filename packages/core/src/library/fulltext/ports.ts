@@ -10,6 +10,34 @@
 export interface PdfExtractionResult {
   /** Page texts in document order. Page 0 is the first page. */
   readonly pages: readonly string[];
+  /**
+   * Optional per-page typographic layout (line text + font size + vertical
+   * position), used by fallback title extraction to select the title by font
+   * structure instead of text heuristics. Pages align with `pages`; a page
+   * without measurable fonts contributes an empty array. Absent entirely when
+   * the host cannot provide geometry (plain-text hosts).
+   */
+  readonly layout?: readonly (readonly PdfLayoutLine[])[];
+  /**
+   * Optional document metadata title (`info.Title`), a machine-readable
+   * authoritative title when the producer wrote one. May be empty or garbage
+   * (paths, file names, arXiv stamps); core validates it before use.
+   */
+  readonly metadataTitle?: string;
+}
+
+/** One line of a page's typographic layout, in reading order. */
+export interface PdfLayoutLine {
+  /** Joined text of the line (same text as the corresponding line in `pages`). */
+  readonly text: string;
+  /** Maximum font size among the line's text items, in PDF points. */
+  readonly fontSize: number;
+  /**
+   * Baseline distance from the page top as a fraction of the page height
+   * (0 = top edge, 1 = bottom edge). Negative values mean the baseline is
+   * above the page box (running heads in the top margin).
+   */
+  readonly topFraction: number;
 }
 
 export interface PdfExtractionOptions {

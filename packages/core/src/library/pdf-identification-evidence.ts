@@ -6,7 +6,9 @@ import { inflate } from "pako";
  * Extracts just enough evidence from a PDF to identify the paper behind an
  * arbitrarily named file — it never parses the full document structure and
  * never returns body text:
- *   - arXiv IDs from decompressed content-stream headers and XMP identifiers;
+ *   - arXiv IDs from the Info dict /arXivID (the submission system's own
+ *     identity claim), decompressed content-stream headers, or XMP
+ *     identifiers — in that trust order;
  *   - a usable document title from the Info dict /Title (literal, hex, or
  *     UTF-16) or XMP dc:title, used only as a title-search candidate.
  *
@@ -27,11 +29,14 @@ export interface PdfIdentificationEvidence {
   title?: string;
 }
 
+/** Cache version for content-based identification evidence rules. */
+export const PDF_IDENTIFICATION_EVIDENCE_VERSION = 3 as const;
+
 const META_REGION_BYTES = 256 * 1024;
 const STREAM_REGEX = /(?:\r?\n)stream\r?\n/g;
 const MAX_INFLATED_STREAM_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_INFLATED_BYTES = 32 * 1024 * 1024;
-const STREAM_TEXT_PREFIX_CHARS = 4096;
+const STREAM_TEXT_PREFIX_CHARS = 512;
 const TITLE_MIN_LENGTH = 10;
 const TITLE_MAX_LENGTH = 300;
 
@@ -45,11 +50,14 @@ export function extractPdfIdentificationEvidence(bytes: Uint8Array): PdfIdentifi
     .map((text) => extractTextLiterals(text))
     .filter((text): text is string => typeof text === "string" && text.length > 0);
 
-  // arXiv IDs: header region of each content stream first (page headers come
-  // before body text), then XMP identifiers. Reference lists later in the
-  // document must not decide identity, so only the stream prefixes count.
+  // arXiv IDs: the Info dict's /arXivID is the submission system's own
+  // identity claim and outranks any stream text — content streams can cite
+  // other papers' IDs in reference lists ("… arXiv:0912.0201 …"), which would
+  // otherwise misidentify the file. Stream headers (arXiv page headers) come
+  // next, then XMP identifiers.
   const headerText = streamTexts.map((text) => text.slice(0, STREAM_TEXT_PREFIX_CHARS)).join("\n");
-  const arxivId = extractArxivIdsFromText(headerText)[0]?.canonicalId
+  const arxivId = infoDictArxivId(latin)
+    ?? extractArxivIdsFromText(headerText)[0]?.canonicalId
     ?? xmpArxivId(inflated.join("\n"));
 
   const title = findUsableTitle(latin, inflated.join("\n"));
@@ -155,6 +163,19 @@ function xmpArxivId(allInflatedText: string): string | undefined {
   if (!identifier) return undefined;
   const candidate = identifier[1]!;
   return modernArxivIdFromText(candidate);
+}
+
+/**
+ * The Info dict's /arXivID (or /arXiv) — written by the arXiv submission
+ * system — is the file's own identity claim, more authoritative than any
+ * stream text (references can cite other papers). Matched in the head
+ * metadata region, which is where Info dicts live.
+ */
+function infoDictArxivId(latin: string): string | undefined {
+  const region = latin.slice(0, META_REGION_BYTES);
+  const match = region.match(/\/arXivID\s*\(([^)]{5,200})\)/i)
+    ?? region.match(/\/arXiv\s*\(([^)]{5,200})\)/i);
+  return match ? modernArxivIdFromText(match[1]!) : undefined;
 }
 
 /** /Title from the head/tail metadata region (literal, hex, or UTF-16), filtered for usability. */

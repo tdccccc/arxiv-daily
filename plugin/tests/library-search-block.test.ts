@@ -35,7 +35,7 @@ describe("renderLibrarySearchBlock", () => {
     expect(container.textContent).not.toContain("Library matches");
   });
 
-  it("renders matches with similarity and excerpt evidence", () => {
+  it("renders matches with title, paper key, and similarity", () => {
     const container = render({
       kind: "matches",
       matches: [
@@ -43,15 +43,14 @@ describe("renderLibrarySearchBlock", () => {
           paperKey: "arxiv:2607.01001",
           title: "Library Paper",
           score: 0.812345,
-          excerpt: "A matching passage about retrieval.",
         },
-        { paperKey: "arxiv:2607.01002", title: "Second", score: 0.5, excerpt: "" },
+        { paperKey: "arxiv:2607.01002", title: "Second", score: 0.5 },
       ],
     });
     expect(container.textContent).toContain("Library matches");
     expect(container.textContent).toContain("Library Paper");
-    expect(container.textContent).toContain("similarity 0.812");
-    expect(container.textContent).toContain("— A matching passage about retrieval.…");
+    expect(container.textContent).toContain("arxiv:2607.01001 · similarity 0.812");
+    expect(container.textContent).not.toContain("—");
     expect(container.querySelectorAll("li")).toHaveLength(2);
   });
 

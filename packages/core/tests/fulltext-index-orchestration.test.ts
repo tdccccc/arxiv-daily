@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   indexPersonalLibraryFullText,
   searchFullTextKnowledgeBase,
+  TITLE_EXTRACTION_VERSION,
 } from "../src/library/fulltext/index-orchestration";
 import { chunkFullText } from "../src/library/fulltext/chunking";
 import type {
@@ -18,6 +19,7 @@ import {
 import type { EmbeddingModel, PdfTextExtractor } from "../src/library/fulltext/ports";
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
 import type { PersonalLibraryCatalog } from "../src/library/personal-library-catalog";
+import { sha256Hex } from "../src/utils/digest";
 
 const SCOPE = `sha256:${"a".repeat(64)}`;
 const IDENTIFICATION = `sha256:${"b".repeat(64)}`;
@@ -25,6 +27,10 @@ const NOW = "2026-08-05T00:00:00.000Z";
 
 function fingerprint(seed: string): string {
   return `sha256:${seed.padEnd(64, "0").slice(0, 64)}`;
+}
+
+function fallbackPaperKey(content: string): string {
+  return `file:sha256:${sha256Hex(content)}`;
 }
 
 /** In-memory store fake with the same CAS semantics the real store enforces. */
@@ -98,12 +104,14 @@ class MemoryStore implements FullTextKnowledgeBaseStore {
 }
 
 class FakeSource implements ScopedLibrarySource {
+  constructor(private readonly contents: Readonly<Record<string, string>> = {}) {}
+
   async inventory(): Promise<never> {
     throw new Error("not used in this test");
   }
 
   async readBinary(path: string): Promise<ArrayBuffer> {
-    return new TextEncoder().encode(path).buffer as ArrayBuffer;
+    return new TextEncoder().encode(this.contents[path] ?? path).buffer as ArrayBuffer;
   }
 }
 
@@ -137,6 +145,8 @@ class FakeEmbedding implements EmbeddingModel {
 
 function makeCatalog(
   papers: Array<{ paperKey: string; filePaths: string[]; fingerprint: string }>,
+  unresolved: Array<{ path: string; fingerprint: string }> = [],
+  titleOverrides: Record<string, string> = {},
 ): PersonalLibraryCatalog {
   const files: PersonalLibraryCatalog["files"] = Object.create(null);
   const paperRecords: PersonalLibraryCatalog["papers"] = Object.create(null);
@@ -155,7 +165,7 @@ function makeCatalog(
       paperKey: paper.paperKey,
       source: "arxiv",
       externalId: paper.paperKey.slice("arxiv:".length),
-      title: `Title of ${paper.paperKey}`,
+      title: titleOverrides[paper.paperKey] ?? `Title of ${paper.paperKey}`,
       authors: ["A. Author"],
       abstract: "Abstract text.",
       published: "2026-01-01T00:00:00.000Z",
@@ -164,6 +174,14 @@ function makeCatalog(
       categories: ["cs.LG"],
       evidenceDepth: "metadata-and-abstract",
       filePaths: [...paper.filePaths],
+    };
+  }
+  for (const file of unresolved) {
+    files[file.path] = {
+      path: file.path,
+      status: "unresolved",
+      observationFingerprint: file.fingerprint,
+      updatedAt: NOW,
     };
   }
   return {
@@ -410,6 +428,428 @@ describe("full-text indexing orchestration", () => {
     expect(matches[0]!.hits[0]!.text).toContain("alpha");
     expect(matches[0]!.hits[0]!.page).toBe(1);
     expect(matches[0]!.score).toBeCloseTo(1, 5);
+  });
+
+  it("fuses lexical title matches into ranking without extra embedding calls", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA], "lib/b.pdf": [LONG_BETA] });
+    // The alpha chunk scores 0.9 against the query; the second paper's title
+    // matches the query exactly ("Title of arxiv:2501.00001"), so the lexical
+    // fusion must outrank the chunk evidence.
+    const alphaChunk = chunkFullText([LONG_ALPHA]).find((chunk) => chunk.text.includes("alpha"))!;
+    const betaChunk = chunkFullText([LONG_BETA]).find((chunk) => chunk.text.includes("beta"))!;
+    const queryVec = new Float32Array([1, 0, 0, 0]);
+    const nearQuery = new Float32Array([0.9, Math.sqrt(1 - 0.9 * 0.9), 0, 0]);
+    const unrelated = new Float32Array([0, 1, 0, 0]);
+    const embedding = new FakeEmbedding({
+      [`query: ${alphaChunk.text}`]: queryVec,
+      [`passage: ${alphaChunk.text}`]: nearQuery,
+      [`passage: ${betaChunk.text}`]: unrelated,
+    });
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW) });
+
+    const callsBeforeSearch = embedding.calls;
+    const matches = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText: "Title of arxiv:2501.00001",
+      titles: new Map([
+        ["arxiv:2403.19236", "Title of arxiv:2403.19236"],
+        ["arxiv:2501.00001", "Title of arxiv:2501.00001"],
+      ]),
+    });
+
+    expect(matches.length).toBe(2);
+    expect(matches[0]!.paperKey).toBe("arxiv:2501.00001");
+    expect(matches[0]!.score).toBe(1);
+    expect(matches[1]!.paperKey).toBe("arxiv:2403.19236");
+    // Lexical fusion adds no extra embedding calls: exactly one for the query.
+    expect(embedding.calls).toBe(callsBeforeSearch + 1);
+  });
+
+  it("indexes unresolved files with content-addressed keys and extracted titles", async () => {
+    const catalog = makeCatalog(
+      [{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }],
+      [{ path: "lib/local.pdf", fingerprint: fingerprint("f2") }],
+    );
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({
+      "lib/a.pdf": [LONG_ALPHA],
+      "lib/local.pdf": ["Attention Local Paper\nAbstract body of the local paper."],
+    });
+    const embedding = new FakeEmbedding();
+    const summary = await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(summary.indexed).toBe(2);
+    const fallbackKey = fallbackPaperKey("lib/local.pdf");
+    const manifest = await store.loadManifest();
+    expect(manifest.papers[fallbackKey]?.status).toBe("ready");
+    expect(manifest.papers[fallbackKey]?.title).toBe("Attention Local Paper");
+    expect(manifest.papers[fallbackKey]?.filePaths).toEqual(["lib/local.pdf"]);
+    const document = await store.loadPaper(fallbackKey);
+    expect(document?.title).toBe("Attention Local Paper");
+    expect(document?.chunks.length).toBeGreaterThan(0);
+    // arXiv papers keep their catalog title and no extracted title.
+    expect(manifest.papers["arxiv:2403.19236"]?.title).toBeUndefined();
+  });
+
+  it("reuses unchanged unresolved files and prunes removed ones", async () => {
+    const makeCatalogWithLocal = (present: boolean) => makeCatalog(
+      [{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }],
+      present ? [{ path: "lib/local.pdf", fingerprint: fingerprint("f2") }] : [],
+    );
+    const run = async (catalog: PersonalLibraryCatalog, store: MemoryStore) => {
+      const extractor = new FakeExtractor({
+        "lib/a.pdf": [LONG_ALPHA],
+        "lib/local.pdf": ["Attention Local Paper\nAbstract body."],
+      });
+      return indexPersonalLibraryFullText({
+        catalog,
+        source: new FakeSource(),
+        extractor,
+        embedding: new FakeEmbedding(),
+        store,
+        now: () => new Date(NOW),
+      });
+    };
+    const store = new MemoryStore();
+    await run(makeCatalogWithLocal(true), store);
+    // Unchanged file reuses; nothing new indexed.
+    const second = await run(makeCatalogWithLocal(true), store);
+    expect(second.indexed).toBe(0);
+    expect(second.reused).toBe(2);
+    // Removed file prunes its fallback document.
+    const third = await run(makeCatalogWithLocal(false), store);
+    expect(third.pruned).toBe(1);
+    const manifest = await store.loadManifest();
+    expect(manifest.papers[fallbackPaperKey("lib/local.pdf")]).toBeUndefined();
+  });
+
+  it("migrates legacy observation-key fallback documents without re-embedding", async () => {
+    const path = "lib/legacy.pdf";
+    const pdfBytes = "legacy-pdf-bytes";
+    const observation = fingerprint("c3");
+    const legacyKey = `file:${observation}`;
+    const contentKey = fallbackPaperKey(pdfBytes);
+    const source = new FakeSource({ [path]: pdfBytes });
+    const store = new MemoryStore();
+    const legacyDocument: FullTextPaperDocument = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      paperKey: legacyKey,
+      modelId: "fake-e5-q8",
+      dimension: 4,
+      textHash: fingerprint("d4"),
+      title: "Legacy Local Paper",
+      titleVersion: TITLE_EXTRACTION_VERSION,
+      filePaths: [path],
+      observationFingerprints: [observation],
+      chunks: [{ index: 0, page: 1, text: "legacy chunk" }],
+      vectors: new Float32Array([1, 2, 3, 4]),
+      updatedAt: NOW,
+    };
+    await store.savePaper(legacyDocument);
+    await store.replaceManifest({
+      ...(await store.loadManifest()),
+      papers: { [legacyKey]: {
+        paperKey: legacyKey,
+        status: "ready",
+        modelId: legacyDocument.modelId,
+        dimension: legacyDocument.dimension,
+        textHash: legacyDocument.textHash,
+        title: legacyDocument.title,
+        titleVersion: legacyDocument.titleVersion,
+        filePaths: legacyDocument.filePaths,
+        observationFingerprints: legacyDocument.observationFingerprints,
+        chunkCount: legacyDocument.chunks.length,
+        updatedAt: NOW,
+      } },
+    }, 0);
+    const extractor = new FakeExtractor({ [pdfBytes]: ["should not extract"] });
+    const embedding = new FakeEmbedding();
+
+    const summary = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path, fingerprint: observation }]),
+      source,
+      extractor,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(summary).toMatchObject({ indexed: 0, reused: 1, failed: 0, pruned: 0 });
+    expect(extractor.calls).toBe(0);
+    expect(embedding.calls).toBe(0);
+    const manifest = await store.loadManifest();
+    expect(manifest.papers[legacyKey]).toBeUndefined();
+    expect(manifest.papers[contentKey]).toMatchObject({
+      status: "ready",
+      contentHash: `sha256:${sha256Hex(pdfBytes)}`,
+      filePaths: [path],
+      observationFingerprints: [observation],
+    });
+    expect(Array.from((await store.loadPaper(contentKey))!.vectors)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps a fallback paper key and vectors when the PDF is renamed", async () => {
+    const oldPath = "lib/old-name.pdf";
+    const newPath = "lib/renamed.pdf";
+    const pdfBytes = "same-pdf-bytes";
+    const source = new FakeSource({ [oldPath]: pdfBytes, [newPath]: pdfBytes });
+    const store = new MemoryStore();
+    const firstExtractor = new FakeExtractor({
+      [pdfBytes]: ["Stable Local Paper Title\nAbstract body."],
+    });
+    const firstEmbedding = new FakeEmbedding();
+    const first = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: oldPath, fingerprint: fingerprint("a1") }]),
+      source,
+      extractor: firstExtractor,
+      embedding: firstEmbedding,
+      store,
+      now: () => new Date(NOW),
+    });
+    const paperKey = fallbackPaperKey(pdfBytes);
+    expect(first.indexed).toBe(1);
+    expect((await store.loadManifest()).papers[paperKey]?.filePaths).toEqual([oldPath]);
+
+    const secondExtractor = new FakeExtractor({
+      [pdfBytes]: ["Stable Local Paper Title\nAbstract body."],
+    });
+    const secondEmbedding = new FakeEmbedding();
+    const second = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: newPath, fingerprint: fingerprint("b2") }]),
+      source,
+      extractor: secondExtractor,
+      embedding: secondEmbedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(second.indexed).toBe(0);
+    expect(second.reused).toBe(1);
+    expect(secondExtractor.calls).toBe(0);
+    expect(secondEmbedding.calls).toBe(0);
+    expect((await store.loadManifest()).papers[paperKey]?.filePaths).toEqual([newPath]);
+    expect((await store.loadPaper(paperKey))?.filePaths).toEqual([newPath]);
+  });
+
+  it("ranks a literal token hit above misleading chunk similarity", async () => {
+    const catalog = makeCatalog(
+      [
+        { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+        { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
+        { paperKey: "arxiv:2601.00001", filePaths: ["lib/c.pdf"], fingerprint: fingerprint("f3") },
+        { paperKey: "arxiv:2601.00002", filePaths: ["lib/d.pdf"], fingerprint: fingerprint("f4") },
+      ],
+      [],
+      { "arxiv:2403.19236": "The Pan-STARRS Survey" },
+    );
+    const store = new MemoryStore();
+    const alphaPage = "Pan-STARRS survey. Pan-STARRS data. Pan-STARRS imaging.";
+    const alphaChunk = chunkFullText([alphaPage]).find((chunk) => chunk.text.includes("Pan-STARRS"))!;
+    const betaChunk = chunkFullText([LONG_BETA]).find((chunk) => chunk.text.includes("beta"))!;
+    const extractor = new FakeExtractor({
+      "lib/a.pdf": [alphaPage],
+      "lib/b.pdf": [LONG_BETA],
+      "lib/c.pdf": [LONG_ALPHA],
+      "lib/d.pdf": [LONG_ALPHA],
+    });
+    // Only the alpha paper literally contains the query token; the beta chunk
+    // scores 0.9 against the query, so the lexical hit must win. Four papers
+    // keep the token's document frequency under the common-word cutoff.
+    const queryVec = new Float32Array([1, 0, 0, 0]);
+    const nearQuery = new Float32Array([0.9, Math.sqrt(1 - 0.9 * 0.9), 0, 0]);
+    const unrelated = new Float32Array([0, 1, 0, 0]);
+    const embedding = new FakeEmbedding({
+      [`query: panstarrs`]: queryVec,
+      [`passage: ${alphaChunk.text}`]: unrelated,
+      [`passage: ${betaChunk.text}`]: nearQuery,
+    });
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW) });
+
+    const matches = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText: "panstarrs",
+      titles: new Map([
+        ["arxiv:2403.19236", "The Pan-STARRS Survey"],
+        ["arxiv:2501.00001", "Title of arxiv:2501.00001"],
+        ["arxiv:2601.00001", "Title of arxiv:2601.00001"],
+        ["arxiv:2601.00002", "Title of arxiv:2601.00002"],
+      ]),
+    });
+
+    expect(matches[0]!.paperKey).toBe("arxiv:2403.19236");
+    expect(matches[0]!.score).toBeCloseTo(0.95);
+    expect(matches[1]!.paperKey).toBe("arxiv:2501.00001");
+  });
+
+  it("ignores body-token fusion for long title+abstract queries so vector ranking wins", async () => {
+    const catalog = makeCatalog(
+      [
+        { paperKey: "arxiv:2101.00001", filePaths: ["lib/theme.pdf"], fingerprint: fingerprint("a1") },
+        { paperKey: "arxiv:2101.00002", filePaths: ["lib/token.pdf"], fingerprint: fingerprint("a2") },
+        { paperKey: "arxiv:2101.00003", filePaths: ["lib/c.pdf"], fingerprint: fingerprint("a3") },
+        { paperKey: "arxiv:2101.00004", filePaths: ["lib/d.pdf"], fingerprint: fingerprint("a4") },
+      ],
+      [],
+    );
+    const store = new MemoryStore();
+    const themePage = "Theme-aligned methods and results for deep surveys of galaxies.";
+    const tokenPage = "This paper mentions galaxies once while discussing unrelated instrumentation.";
+    const themeChunk = chunkFullText([themePage])[0]!;
+    const tokenChunk = chunkFullText([tokenPage])[0]!;
+    const fillerChunk = chunkFullText([LONG_ALPHA])[0]!;
+    const extractor = new FakeExtractor({
+      "lib/theme.pdf": [themePage],
+      "lib/token.pdf": [tokenPage],
+      "lib/c.pdf": [LONG_ALPHA],
+      "lib/d.pdf": [LONG_ALPHA],
+    });
+    const longQuery = [
+      "Deep galaxy surveys with wide-field imaging",
+      "",
+      "We present a study of galaxies, surveys, imaging, photometry, and redshift",
+      "measurements across a wide field. Methods include calibration, catalogs,",
+      "and multi-band photometry of galaxies in deep fields.",
+    ].join("\n");
+    const queryVec = new Float32Array([1, 0, 0, 0]);
+    const themeVec = new Float32Array([0.95, Math.sqrt(1 - 0.95 * 0.95), 0, 0]);
+    const weakVec = new Float32Array([0.2, Math.sqrt(1 - 0.2 * 0.2), 0, 0]);
+    const embedding = new FakeEmbedding({
+      [`query: ${longQuery}`]: queryVec,
+      [`passage: ${themeChunk.text}`]: themeVec,
+      [`passage: ${tokenChunk.text}`]: weakVec,
+      [`passage: ${fillerChunk.text}`]: weakVec,
+    });
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const matches = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText: longQuery,
+      titles: new Map([
+        ["arxiv:2101.00001", "Theme paper"],
+        ["arxiv:2101.00002", "Token paper"],
+        ["arxiv:2101.00003", "Filler C"],
+        ["arxiv:2101.00004", "Filler D"],
+      ]),
+    });
+
+    expect(matches[0]!.paperKey).toBe("arxiv:2101.00001");
+    expect(matches[0]!.score).toBeGreaterThan(matches.find((match) => match.paperKey === "arxiv:2101.00002")!.score);
+  });
+
+  it("scores titles against the first paragraph of a title+abstract query", async () => {
+    const catalog = makeCatalog(
+      [
+        { paperKey: "arxiv:2102.00001", filePaths: ["lib/target.pdf"], fingerprint: fingerprint("b1") },
+        { paperKey: "arxiv:2102.00002", filePaths: ["lib/other.pdf"], fingerprint: fingerprint("b2") },
+        { paperKey: "arxiv:2102.00003", filePaths: ["lib/c.pdf"], fingerprint: fingerprint("b3") },
+        { paperKey: "arxiv:2102.00004", filePaths: ["lib/d.pdf"], fingerprint: fingerprint("b4") },
+      ],
+      [],
+    );
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({
+      "lib/target.pdf": [LONG_ALPHA],
+      "lib/other.pdf": [LONG_BETA],
+      "lib/c.pdf": [LONG_ALPHA],
+      "lib/d.pdf": [LONG_ALPHA],
+    });
+    const queryText = "The Pan-STARRS1 Surveys\n\nWe describe the surveys, data products, and calibration.";
+    const queryVec = new Float32Array([0, 1, 0, 0]);
+    const weakVec = new Float32Array([1, 0, 0, 0]);
+    const alphaChunk = chunkFullText([LONG_ALPHA])[0]!;
+    const betaChunk = chunkFullText([LONG_BETA])[0]!;
+    const embedding = new FakeEmbedding({
+      [`query: ${queryText}`]: queryVec,
+      [`passage: ${alphaChunk.text}`]: weakVec,
+      [`passage: ${betaChunk.text}`]: weakVec,
+    });
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const matches = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText,
+      titles: new Map([
+        ["arxiv:2102.00001", "The Pan-STARRS1 Surveys"],
+        ["arxiv:2102.00002", "Unrelated Instrumentation Paper"],
+        ["arxiv:2102.00003", "Filler C"],
+        ["arxiv:2102.00004", "Filler D"],
+      ]),
+    });
+
+    expect(matches[0]!.paperKey).toBe("arxiv:2102.00001");
+    expect(matches[0]!.score).toBe(1);
+  });
+
+  it("refreshes fallback titles when the extraction rules advanced", async () => {
+    const catalog = makeCatalog(
+      [],
+      [{ path: "lib/local.pdf", fingerprint: fingerprint("f2") }],
+    );
+    const store = new MemoryStore();
+    const run = async (firstPage: string) => indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/local.pdf": [`${firstPage}\nAbstract body.`] }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+    const fallbackKey = fallbackPaperKey("lib/local.pdf");
+
+    await run("Old Title Line");
+    expect((await store.loadManifest()).papers[fallbackKey]?.title).toBe("Old Title Line");
+
+    // Simulate a knowledge base indexed before the version field existed.
+    const manifest = await store.loadManifest();
+    const record = { ...manifest.papers[fallbackKey]! };
+    delete record.titleVersion;
+    await store.replaceManifest(
+      { ...manifest, papers: { ...manifest.papers, [fallbackKey]: record } },
+      manifest.revision,
+    );
+
+    // The same file re-runs; the title refresh re-reads the first page.
+    const second = await run("New Title Line");
+    expect(second.titlesRefreshed).toBe(1);
+    expect(second.reused).toBe(1);
+    const refreshed = await store.loadPaper(fallbackKey);
+    expect(refreshed?.title).toBe("New Title Line");
+    expect(refreshed?.chunks.length).toBeGreaterThan(0);
+
+    // A further run is a plain reuse (no re-read, no refresh).
+    const third = await run("New Title Line");
+    expect(third.titlesRefreshed).toBe(0);
+    expect(third.reused).toBe(1);
   });
 
   it("searches an empty knowledge base to an empty result", async () => {

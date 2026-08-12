@@ -185,8 +185,9 @@ describe("Similar Papers modal", () => {
   it("renders the library tab first and loads library matches asynchronously", async () => {
     const load = vi.fn(async () => [
       {
-        paperKey: "arxiv:2607.01001",
+        paperKey: `file:sha256:${"a".repeat(64)}`,
         title: "Library Paper",
+        filePath: "papers/library-paper.pdf",
         score: 0.812345,
         hits: [
           { chunkIndex: 3, page: 2, text: "A matching passage about retrieval.", score: 0.81 },
@@ -209,8 +210,9 @@ describe("Similar Papers modal", () => {
 
     expect(load).toHaveBeenCalledOnce();
     expect(content.textContent).toContain("Library Paper");
-    expect(content.textContent).toContain("similarity 0.812");
-    expect(content.textContent).toContain("p.2 · A matching passage about retrieval.");
+    expect(content.textContent).toContain("papers/library-paper.pdf · similarity 0.812");
+    expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
+    expect(content.textContent).not.toContain("A matching passage about retrieval.");
     const dailyPanel = content.querySelector('[role="tabpanel"][hidden]');
     expect(dailyPanel?.textContent).toContain("2607.00002");
   });

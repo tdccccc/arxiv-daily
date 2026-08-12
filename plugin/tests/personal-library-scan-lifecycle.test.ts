@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { deflateSync } from "node:zlib";
 import {
   DEFAULT_SETTINGS,
   OperationRegistry,
@@ -49,6 +50,31 @@ function metadata(arxivId: string) {
   };
 }
 
+function bytesOf(parts: Array<string | Uint8Array>): Uint8Array {
+  const chunks = parts.map((part) =>
+    typeof part === "string" ? new TextEncoder().encode(part) : part);
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function identificationPdf(streamText: string, title?: string): Uint8Array {
+  const compressed = deflateSync(streamText);
+  return bytesOf([
+    "%PDF-1.4\n",
+    `1 0 obj\n<< /Length ${compressed.length} /Filter /FlateDecode >>\nstream\n`,
+    compressed,
+    "\nendstream\nendobj\n",
+    title ? `2 0 obj\n<< /Title (${title}) >>\nendobj\n` : "",
+    "trailer\n<< /Info 2 0 R >>\n%%EOF\n",
+  ]);
+}
+
 function makePlugin(storage = makeStorage().storage) {
   const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
   const operations = new OperationRegistry();
@@ -66,7 +92,9 @@ function makePlugin(storage = makeStorage().storage) {
       ],
       truncated: false,
     }),
-    readBinary: vi.fn(() => { throw new Error("must not read PDF bytes"); }),
+    readBinary: vi.fn(async (_path: string, _options?: object): Promise<ArrayBuffer> => {
+      throw new Error("must not read PDF bytes");
+    }),
   };
   Object.assign(plugin, {
     settings: structuredClone(DEFAULT_SETTINGS),
@@ -123,6 +151,66 @@ describe("personal library scan lifecycle", () => {
 
     internals.libraryCatalog = null;
     await expect(plugin.reloadPersonalLibraryCatalog()).resolves.toEqual(scanned);
+  });
+
+  it("continues title search when PDF evidence contains an unsupported legacy arXiv ID", async () => {
+    const { plugin, internals, source, fetchMetadataByIds } = makePlugin();
+    const title = "Legacy Evidence Replacement Paper";
+    const pdf = identificationPdf(
+      "(arXiv:astro-ph/0609591 [astro-ph] 27 Sep 2006) Tj",
+      title,
+    );
+    source.inventory.mockResolvedValue({
+      entries: [{ path: "papers/legacy.pdf", type: "file", size: pdf.byteLength, mtimeMs: 10 }],
+      truncated: false,
+    });
+    source.readBinary.mockResolvedValue(pdf.buffer);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: `<feed><entry><id>https://arxiv.org/abs/2403.19236v1</id><title>${title}</title></entry></feed>`,
+    }));
+    internals.host.http = { request };
+
+    const scanned = await plugin.scanPersonalLibrary();
+
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      url: expect.stringContaining("search_query=ti:"),
+      signal: expect.any(AbortSignal),
+    }));
+    expect(fetchMetadataByIds).toHaveBeenCalledWith(["2403.19236"], expect.any(AbortSignal));
+    expect(scanned.files["papers/legacy.pdf"]).toMatchObject({
+      status: "ready",
+      paperKey: "arxiv:2403.19236",
+      arxivId: "2403.19236",
+    });
+    expect(scanned.papers["arxiv:2403.19236"]).toBeDefined();
+  });
+
+  it("keeps a legacy-only PDF unresolved without aborting the scan", async () => {
+    const { plugin, internals, source, fetchMetadataByIds } = makePlugin();
+    const pdf = identificationPdf("(arXiv:astro-ph/0609591 [astro-ph] 27 Sep 2006) Tj");
+    source.inventory.mockResolvedValue({
+      entries: [{ path: "papers/legacy.pdf", type: "file", size: pdf.byteLength, mtimeMs: 10 }],
+      truncated: false,
+    });
+    source.readBinary.mockResolvedValue(pdf.buffer);
+    const request = vi.fn();
+    internals.host.http = { request };
+
+    const scanned = await plugin.scanPersonalLibrary();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(fetchMetadataByIds).not.toHaveBeenCalled();
+    expect(scanned.lastScan).toEqual({
+      ready: 0,
+      papers: 0,
+      unresolved: 1,
+      unrelated: 0,
+      failed: 0,
+      truncated: false,
+    });
+    expect(scanned.files["papers/legacy.pdf"]).toMatchObject({ status: "unresolved" });
   });
 
   it("invalidates captured personalized discovery before catalog promotion and reload installs", async () => {
@@ -317,3 +405,97 @@ describe("personal library scan lifecycle", () => {
     expect(JSON.parse(fixture.files.get(nextPath)!)).toEqual(reloaded);
   });
 });
+
+  it("trusts a title search that disagrees with a direct arXiv ID (reference-list misidentification)", async () => {
+    // Chen2025-style: the reference list ("… arXiv:0912.0201 …" = LSST
+    // Science Book) sits in a content-stream header; the document title
+    // search resolves to the real paper, which must win.
+    const { plugin, internals, source, fetchMetadataByIds } = makePlugin();
+    const title = "LSTM-MDNz: Estimating Quasar Photometric Redshifts with an LSTM-Augmented Mixture Density Network";
+    const pdf = identificationPdf(
+      "(arXiv:0912.0201 [astro-ph.IM] 1 Dec 2009) Tj",
+      title,
+    );
+    source.inventory.mockResolvedValue({
+      entries: [{ path: "papers/chen.pdf", type: "file", size: pdf.byteLength, mtimeMs: 10 }],
+      truncated: false,
+    });
+    source.readBinary.mockResolvedValue(pdf.buffer);
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: `<feed><entry><id>https://arxiv.org/abs/2512.16010v1</id><title>${title}</title></entry></feed>`,
+    }));
+    internals.host.http = { request };
+
+    const scanned = await plugin.scanPersonalLibrary();
+
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      url: expect.stringContaining("search_query=ti:"),
+      signal: expect.any(AbortSignal),
+    }));
+    expect(fetchMetadataByIds).toHaveBeenCalledWith(["2512.16010"], expect.any(AbortSignal));
+    expect(scanned.files["papers/chen.pdf"]).toMatchObject({
+      status: "ready",
+      paperKey: "arxiv:2512.16010",
+      arxivId: "2512.16010",
+    });
+  });
+
+  it("keeps a direct arXiv ID when the title search agrees or finds nothing", async () => {
+    const { plugin, internals, source, fetchMetadataByIds } = makePlugin();
+    const title = "The Cluster Mass Calibration Project";
+    const pdf = identificationPdf(
+      "(arXiv:2302.05010v2 [astro-ph.CO] 10 Feb 2023) Tj",
+      title,
+    );
+    source.inventory.mockResolvedValue({
+      entries: [{ path: "papers/cluster.pdf", type: "file", size: pdf.byteLength, mtimeMs: 10 }],
+      truncated: false,
+    });
+    source.readBinary.mockResolvedValue(pdf.buffer);
+    // Title search returns the same paper: the direct ID stands.
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: `<feed><entry><id>https://arxiv.org/abs/2302.05010v2</id><title>${title}</title></entry></feed>`,
+    }));
+    internals.host.http = { request };
+
+    const scanned = await plugin.scanPersonalLibrary();
+
+    expect(request).toHaveBeenCalled();
+    expect(scanned.files["papers/cluster.pdf"]).toMatchObject({
+      status: "ready",
+      paperKey: "arxiv:2302.05010",
+      arxivId: "2302.05010",
+    });
+
+    // A failed title search (garbage document title) must not demote the
+    // real paper: the direct ID stands.
+    const { plugin: plugin2, internals: internals2, source: source2, fetchMetadataByIds: fetch2 } = makePlugin();
+    const pdf2 = identificationPdf(
+      "(arXiv:1601.00621v1 [astro-ph.CO] 5 Jan 2016) Tj",
+      "Graphics produced by IDL",
+    );
+    source2.inventory.mockResolvedValue({
+      entries: [{ path: "papers/redmapper.pdf", type: "file", size: pdf2.byteLength, mtimeMs: 10 }],
+      truncated: false,
+    });
+    source2.readBinary.mockResolvedValue(pdf2.buffer);
+    const request2 = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: "<feed></feed>",
+    }));
+    internals2.host.http = { request: request2 };
+
+    const scanned2 = await plugin2.scanPersonalLibrary();
+
+    expect(request2).toHaveBeenCalled();
+    expect(scanned2.files["papers/redmapper.pdf"]).toMatchObject({
+      status: "ready",
+      paperKey: "arxiv:1601.00621",
+      arxivId: "1601.00621",
+    });
+  });
