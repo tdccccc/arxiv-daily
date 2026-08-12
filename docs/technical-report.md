@@ -379,7 +379,7 @@ core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线�
 ### 密钥与脱敏
 
 - LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。  
-- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页只用 `Configured` 表示已有密钥；stored LLM/Resend/hosted secret 不写入输入 DOM，用户通过 Replace/Cancel/Clear 明确变更。
+- 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页的 LLM/Resend key 与 hosted token 以掩码输入框显示已保存值，可点按 Show/Hide 查看，编辑在 blur/Enter 时经事务提交，失败回滚显示旧值。
 - Worker 不向客户端暴露 Resend key；设备 token 只在验证完成页展示，KV key 使用 `TOKEN_SECRET` 作用域的 token hash。验证 pending/device 值仍保存规范化绑定邮箱以执行 recipient 校验；recipient/legacy identity、DO 名称、provider key、ledger、cutover control/marker 与公开成功响应使用 `IDENTITY_SECRET` 作用域哈希或无内容枚举，不保存 raw recipient、raw token、provider response body 或 provider ID。cutover status 不公开 identity fingerprint。
 
 ### 输入与路径安全

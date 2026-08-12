@@ -290,16 +290,14 @@ describe("declarative LLM and category rows", () => {
     const setting = renderSetting();
     renderApiKeyRow(tab, setting as never);
     const input = setting.controlEl.querySelector("input") as HTMLInputElement;
-    const replace = Array.from(setting.controlEl.querySelectorAll("button"))
-      .find((button) => button.textContent === "Save") as HTMLButtonElement;
 
     input.value = "rejected-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
     input.value = "accepted-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     firstSave.reject(new Error("first save failed"));
     await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
     expect(input.value).toBe("accepted-secret");
@@ -307,7 +305,7 @@ describe("declarative LLM and category rows", () => {
     secondSave.resolve();
     await vi.waitFor(() => {
       expect(settings.llm.apiKey).toBe("accepted-secret");
-      expect(input.value).toBe("Configured");
+      expect(input.value).toBe("accepted-secret");
     });
   });
 
@@ -359,56 +357,45 @@ describe("declarative LLM and category rows", () => {
       draft: "new-hosted-secret",
     },
   ])(
-    "never renders or reveals the persisted $name and replaces/clears it transactionally",
+    "reveals the persisted $name, masks it by default, and saves drafts transactionally",
     async ({ key, configure, current, render, draft }) => {
       const { tab, settings, saveSettings } = makeTab();
       configure(settings);
       vi.spyOn(tab, "refreshDeclarativeSetupGuide").mockImplementation(() => {});
-      vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
       const setting = renderSetting();
       render(tab, setting as never);
 
       const input = setting.controlEl.querySelector("input") as HTMLInputElement;
       const buttons = Array.from(setting.controlEl.querySelectorAll("button"));
-      const replace = buttons.find((button) => button.textContent === "Replace") as HTMLButtonElement;
-      const clear = buttons.find((button) => button.textContent === "Clear") as HTMLButtonElement;
+      const replace = buttons.find((button) => button.textContent === "Replace");
+      const clear = buttons.find((button) => button.textContent === "Clear");
       const reveal = buttons.find((button) =>
         button.getAttribute("aria-label")?.startsWith("Show"),
       ) as HTMLButtonElement;
 
-      expect(input.value).toBe("Configured");
-      expect(input.value).not.toContain("stored-");
-      expect(replace).toBeDefined();
-      expect(clear).toBeDefined();
+      expect(input.type).toBe("password");
+      expect(input.value).toContain("stored-");
+      expect(input.value).not.toBe("Configured");
+      expect(replace).toBeUndefined();
+      expect(clear).toBeUndefined();
       expect(reveal).toBeDefined();
-      reveal.click();
-      expect(input.value).toBe("Configured");
 
-      replace.click();
-      input.value = draft;
-      input.dispatchEvent(new Event("input"));
       reveal.click();
       expect(input.type).toBe("text");
-      expect(input.value).toBe(draft);
-      replace.click();
+      expect(input.value).toContain("stored-");
+      reveal.click();
+      expect(input.type).toBe("password");
+
+      input.value = draft;
+      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 
       await vi.waitFor(() => expect(current(settings)).toBe(draft));
-      expect(input.value).toBe("Configured");
-      expect(input.value).not.toBe(draft);
+      expect(input.value).toBe(draft);
       expect(saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           [key.split(".")[0]!]: expect.objectContaining({
             [key.split(".")[1]!]: draft,
-          }),
-        }),
-      );
-
-      clear.click();
-      await vi.waitFor(() => expect(current(settings)).toBe(""));
-      expect(saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          [key.split(".")[0]!]: expect.objectContaining({
-            [key.split(".")[1]!]: "",
           }),
         }),
       );
@@ -521,14 +508,11 @@ describe("declarative LLM and category rows", () => {
       item.getAttribute("aria-label") === "Show verification code",
     ) as HTMLButtonElement;
     const sendTest = buttons.find((item) => item.textContent === "Send test") as HTMLButtonElement;
-    expect(input.type).toBe("text");
-    expect(input.value).toBe("Configured");
-    expect(setting.controlEl.textContent).toContain("Replace");
-    expect(setting.controlEl.textContent).toContain("Clear");
-
-    const replace = buttons.find((item) => item.textContent === "Replace") as HTMLButtonElement;
-    replace.click();
     expect(input.type).toBe("password");
+    expect(input.value).toBe("old-token");
+    expect(setting.controlEl.textContent).not.toContain("Replace");
+    expect(setting.controlEl.textContent).not.toContain("Clear");
+
     reveal.click();
     expect(input.type).toBe("text");
     input.value = " new token \n value ";
@@ -538,7 +522,6 @@ describe("declarative LLM and category rows", () => {
     await vi.waitFor(() => {
       expect(settings.email.hostedToken).toBe("newtokenvalue");
       expect(saveSettings).toHaveBeenCalledTimes(1);
-      expect(plugin.refreshSensitiveValues).toHaveBeenCalled();
       expect(plugin.sendTestEmail).toHaveBeenCalledTimes(1);
     });
   });
@@ -551,16 +534,13 @@ describe("declarative LLM and category rows", () => {
     const setting = renderSetting();
     renderHostedTokenRow(tab, setting as never);
     const input = setting.controlEl.querySelector("input") as HTMLInputElement;
-    const replace = Array.from(setting.controlEl.querySelectorAll("button"))
-      .find((button) => button.textContent === "Replace") as HTMLButtonElement;
 
-    replace.click();
     input.value = "new-token";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await vi.waitFor(() => {
       expect(settings.email.hostedToken).toBe("old-token");
-      expect(input.value).toBe("Configured");
+      expect(input.value).toBe("old-token");
     });
     expect(plugin.refreshSensitiveValues).not.toHaveBeenCalled();
   });
@@ -582,20 +562,15 @@ describe("declarative LLM and category rows", () => {
     const setting = renderSetting();
     renderEmailApiKeyRow(tab, setting as never);
     const input = setting.controlEl.querySelector("input") as HTMLInputElement;
-    const replace = Array.from(setting.controlEl.querySelectorAll("button"))
-      .find((button) => button.textContent === "Replace") as HTMLButtonElement;
 
-    replace.click();
     input.value = "new-resend-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 
     await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
     expect(settings.email.apiKey).toBe("old-resend-secret");
     expect(plugin.refreshSensitiveValues).not.toHaveBeenCalled();
-    expect(input.value).toBe("Configured");
-    expect(input.readOnly).toBe(true);
-    expect(replace.textContent).toBe("Replace");
+    expect(input.value).toBe("old-resend-secret");
   });
 
   it("keeps a custom timezone as a local draft and rejects invalid commits", async () => {

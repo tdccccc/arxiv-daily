@@ -11,7 +11,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type ArxivDailyPlugin from "../main";
 import {
-  API_KEY_CONFIGURED_SENTINEL,
   ArxivDailySettingTab,
   isValidLocalTime,
   llmHttpWarning,
@@ -114,12 +113,10 @@ function renderLegacyApiKey(tab: ArxivDailySettingTab) {
   render.call(tab, container);
   const input = container.querySelector("input");
   const buttons = [...container.querySelectorAll("button")];
-  if (!input || buttons.length !== 3) throw new Error("API key row did not render");
+  if (!input || buttons.length !== 1) throw new Error("API key row did not render");
   return {
     input,
-    replace: buttons[0] as HTMLButtonElement,
-    cancel: buttons[1] as HTMLButtonElement,
-    clear: buttons[2] as HTMLButtonElement,
+    reveal: buttons[0] as HTMLButtonElement,
   };
 }
 
@@ -298,14 +295,12 @@ describe("legacy transactional renderers", () => {
     const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
       persistSettings,
     );
-    const { input, replace } = renderLegacyApiKey(tab);
+    const { input } = renderLegacyApiKey(tab);
 
-    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
-    expect(input.value).not.toContain(settings.llm.apiKey);
-    replace.click();
+    expect(input.value).toBe(settings.llm.apiKey);
     input.value = "new-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 
     await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
     expect(settings.llm.apiKey).toBe("old-secret");
@@ -314,8 +309,7 @@ describe("legacy transactional renderers", () => {
 
     await vi.waitFor(() => expect(settings.llm.apiKey).toBe("new-secret"));
     expect(refreshSensitiveValues).toHaveBeenCalledTimes(1);
-    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
-    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("new-secret");
   });
 
   it("does not let an earlier failed legacy secret save hide a later queued draft", async () => {
@@ -329,52 +323,46 @@ describe("legacy transactional renderers", () => {
         resolveSecond = resolve;
       }));
     const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
-    const { input, replace } = renderLegacyApiKey(tab);
+    const { input } = renderLegacyApiKey(tab);
 
-    replace.click();
     input.value = "rejected-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
     input.value = "accepted-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     rejectFirst(new Error("first save failed"));
     await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(2));
     expect(input.value).toBe("accepted-secret");
-    expect(input.readOnly).toBe(false);
 
     resolveSecond();
     await vi.waitFor(() => expect(settings.llm.apiKey).toBe("accepted-secret"));
-    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
-    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("accepted-secret");
   });
 
-  it("restores the hidden configured state when candidate persistence fails", async () => {
+  it("restores the masked value when candidate persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
     const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
       persistSettings,
     );
-    const { input, replace } = renderLegacyApiKey(tab);
+    const { input } = renderLegacyApiKey(tab);
 
-    replace.click();
     input.value = "new-secret";
     input.dispatchEvent(new Event("input"));
-    replace.click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 
     await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
     expect(settings.llm.apiKey).toBe("old-secret");
     expect(refreshSensitiveValues).not.toHaveBeenCalled();
-    expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
-    expect(input.readOnly).toBe(true);
-    expect(replace.textContent).toBe("Replace");
+    expect(input.value).toBe("old-secret");
   });
 
   it.each([
     ["renderEmailApiKeySetting", "apiKey"],
     ["renderHostedTokenSetting", "hostedToken"],
   ] as const)(
-    "restores the hidden %s secret when candidate persistence fails",
+    "restores the masked %s secret when candidate persistence fails",
     async (renderMethod, settingKey) => {
       const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
       const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
@@ -387,19 +375,15 @@ describe("legacy transactional renderers", () => {
       ) => void;
       render.call(tab, container);
       const input = container.querySelector("input") as HTMLInputElement;
-      const replace = container.querySelector("button") as HTMLButtonElement;
 
-      replace.click();
       input.value = "new-email-secret";
       input.dispatchEvent(new Event("input"));
-      replace.click();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 
       await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
       expect(settings.email[settingKey]).toBe("old-email-secret");
       expect(refreshSensitiveValues).not.toHaveBeenCalled();
-      expect(input.value).toBe(API_KEY_CONFIGURED_SENTINEL);
-      expect(input.readOnly).toBe(true);
-      expect(replace.textContent).toBe("Replace");
+      expect(input.value).toBe("old-email-secret");
     },
   );
 });
@@ -493,17 +477,17 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).not.toContain('"+ Add Category"');
   });
 
-  it("never renders the saved API key and requires explicit replace/save/cancel/clear actions", () => {
+  it("renders the saved API key masked with a Show/Hide toggle, no replace/clear actions", () => {
     const apiKeyBody = settingsTabSource.match(
       /private renderApiKeySetting\([\s\S]*?\n  private renderSetupGuide/,
     )?.[0];
     expect(apiKeyBody).toBeDefined();
-    expect(apiKeyBody).not.toContain("input.value = this.plugin.settings.llm.apiKey");
-    expect(apiKeyBody).not.toContain("setValue(s.llm.apiKey)");
-    expect(apiKeyBody).toContain("API_KEY_CONFIGURED_SENTINEL");
-    expect(apiKeyBody).toContain('text: configured ? "Replace" : "Save"');
-    expect(apiKeyBody).toContain('text: "Cancel"');
-    expect(apiKeyBody).toContain('text: "Clear"');
+    expect(apiKeyBody).toContain('renderSensitiveInput(this, setting, {');
+    expect(apiKeyBody).toContain('value: this.plugin.settings.llm.apiKey');
+    expect(apiKeyBody).not.toContain("API_KEY_CONFIGURED_SENTINEL");
+    expect(apiKeyBody).not.toContain('text: configured ? "Replace" : "Save"');
+    expect(apiKeyBody).not.toContain('text: "Cancel"');
+    expect(apiKeyBody).not.toContain('text: "Clear"');
   });
 
   it("does not register a second change listener when models are fetched", () => {

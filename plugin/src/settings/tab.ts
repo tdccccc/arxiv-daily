@@ -45,8 +45,7 @@ import {
   buildFeatureRequestUrl,
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
-
-export const API_KEY_CONFIGURED_SENTINEL = "Configured";
+import { renderSensitiveInput } from "./sensitive-input";
 
 export function validateOutputDirectoryDraft(
   draft: string,
@@ -1371,308 +1370,41 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private renderEmailApiKeySetting(containerEl: HTMLElement): void {
-    const configured = Boolean(this.plugin.settings.email.apiKey?.trim());
     const setting = new Setting(containerEl)
       .setName("Resend API key")
-      .setDesc(
-        "From your Resend account. Saved only on this device; not shown again after you save.",
-      );
-    let editing = !configured;
-    let draft = "";
-    const input = setting.controlEl.createEl("input", {
-      cls: "arxiv-daily-settings__llm-input",
-      type: editing ? "password" : "text",
-      attr: { placeholder: "Paste your Resend API key" },
-    });
-    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
-    input.readOnly = !editing;
-
-    const replace = setting.controlEl.createEl("button", {
-      text: configured ? "Replace" : "Save",
-      attr: { type: "button" },
-    });
-    const cancel = setting.controlEl.createEl("button", {
-      text: "Cancel",
-      attr: { type: "button" },
-    });
-    cancel.hidden = !configured;
-    const clear = setting.controlEl.createEl("button", {
-      text: "Clear",
-      attr: { type: "button" },
-    });
-    clear.hidden = !configured;
-
-    const enterEdit = () => {
-      editing = true;
-      draft = "";
-      input.type = "password";
-      input.readOnly = false;
-      input.value = "";
-      replace.textContent = "Save";
-      cancel.hidden = false;
-      input.focus();
-    };
-    const reset = () => {
-      editing = false;
-      draft = "";
-      input.type = "text";
-      input.readOnly = true;
-      input.value = API_KEY_CONFIGURED_SENTINEL;
-      replace.textContent = "Replace";
-      cancel.hidden = true;
-    };
-    input.addEventListener("input", () => {
-      if (editing) draft = input.value;
-    });
-    replace.addEventListener("click", () => {
-      if (!editing) {
-        enterEdit();
-        return;
-      }
-      const next = draft.trim();
-      if (!next) return;
-      const revision = this.beginControlChange(input);
-      this.runAction("save Resend API key", async () => {
-        try {
-          await this.changeSettingValue("email.apiKey", next);
-          if (this.isCurrentControlChange(input, revision)) {
-            reset();
-            clear.hidden = false;
-          }
-        } catch (error) {
-          if (this.isCurrentControlChange(input, revision)) {
-            if (this.plugin.settings.email.apiKey?.trim()) reset();
-            else {
-              draft = "";
-              input.value = "";
-            }
-          }
-          throw error;
-        }
-      });
-    });
-    cancel.addEventListener("click", () => {
-      if (configured || this.plugin.settings.email.apiKey?.trim()) reset();
-      else {
-        draft = "";
-        input.value = "";
-      }
-    });
-    clear.addEventListener("click", () => {
-      this.runAction("clear Resend API key", async () => {
-        const confirmed = await this.confirmReplace(
-          "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
-          "Clear",
-        );
-        if (!confirmed) return;
-        await this.changeSettingValue("email.apiKey", "");
-        this.display();
-      });
+      .setDesc("From your Resend account. Saved only on this device; masked in the input.");
+    renderSensitiveInput(this, setting, {
+      value: this.plugin.settings.email.apiKey ?? "",
+      placeholder: "Paste your Resend API key",
+      ariaLabel: "Resend API key",
+      save: (next) => this.changeSettingValue("email.apiKey", next),
     });
   }
-
   private renderHostedTokenSetting(containerEl: HTMLElement): void {
-    const configured = Boolean(this.plugin.settings.email.hostedToken?.trim());
     const setting = new Setting(containerEl)
       .setName("Verification code")
       .setDesc(
         "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above.",
       );
-    let editing = !configured;
-    let draft = "";
-    const input = setting.controlEl.createEl("input", {
-      cls: "arxiv-daily-settings__llm-input",
-      type: editing ? "password" : "text",
-      attr: { placeholder: "Paste the code from the verification page" },
-    });
-    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
-    input.readOnly = !editing;
-
-    const replace = setting.controlEl.createEl("button", {
-      text: configured ? "Replace" : "Save",
-      attr: { type: "button" },
-    });
-    const cancel = setting.controlEl.createEl("button", {
-      text: "Cancel",
-      attr: { type: "button" },
-    });
-    cancel.hidden = !configured;
-    const clear = setting.controlEl.createEl("button", {
-      text: "Clear",
-      attr: { type: "button" },
-    });
-    clear.hidden = !configured;
-
-    const enterEdit = () => {
-      editing = true;
-      draft = "";
-      input.type = "password";
-      input.readOnly = false;
-      input.value = "";
-      replace.textContent = "Save";
-      cancel.hidden = false;
-      input.focus();
-    };
-    const reset = () => {
-      editing = false;
-      draft = "";
-      input.type = "text";
-      input.readOnly = true;
-      input.value = API_KEY_CONFIGURED_SENTINEL;
-      replace.textContent = "Replace";
-      cancel.hidden = true;
-    };
-    input.addEventListener("input", () => {
-      if (editing) draft = input.value;
-    });
-    replace.addEventListener("click", () => {
-      if (!editing) {
-        enterEdit();
-        return;
-      }
-      const revision = this.beginControlChange(input);
-      this.runAction("save verification code", async () => {
-        const next = draft.replace(/\s+/g, "").trim();
-        if (!next) {
-          new Notice("Paste the verification code before saving.");
-          return;
-        }
-        try {
-          await this.changeSettingValue("email.hostedToken", next);
-          if (this.isCurrentControlChange(input, revision)) this.display();
-        } catch (error) {
-          if (this.isCurrentControlChange(input, revision)) {
-            if (this.plugin.settings.email.hostedToken?.trim()) reset();
-            else {
-              draft = "";
-              input.value = "";
-            }
-          }
-          throw error;
-        }
-      });
-    });
-    cancel.addEventListener("click", () => {
-      if (configured || this.plugin.settings.email.hostedToken?.trim()) reset();
-      else {
-        draft = "";
-        input.value = "";
-      }
-    });
-    clear.addEventListener("click", () => {
-      this.runAction("clear verification code", async () => {
-        const confirmed = await this.confirmReplace(
-          "Clear the verification code? You will need to verify your email again for Official delivery.",
-          "Clear",
-        );
-        if (!confirmed) return;
-        await this.changeSettingValue("email.hostedToken", "");
-        this.display();
-      });
+    renderSensitiveInput(this, setting, {
+      value: this.plugin.settings.email.hostedToken ?? "",
+      placeholder: "Paste the code from the verification page",
+      ariaLabel: "verification code",
+      normalize: (value) => value.replace(/\s+/g, "").trim(),
+      save: (next) => this.changeSettingValue("email.hostedToken", next),
     });
   }
-
   private renderApiKeySetting(containerEl: HTMLElement): void {
-    const configured = Boolean(this.plugin.settings.llm.apiKey.trim());
     const setting = new Setting(containerEl)
       .setName("API key")
-      .setDesc("Saved only on this device. After saving, the key is hidden.");
-    let editing = !configured;
-    let draft = "";
-    const input = setting.controlEl.createEl("input", {
-      cls: "arxiv-daily-settings__llm-input",
-      type: editing ? "password" : "text",
-      attr: { placeholder: "Enter API key" },
-    });
-    input.value = configured ? API_KEY_CONFIGURED_SENTINEL : "";
-    input.readOnly = !editing;
-
-    const replace = setting.controlEl.createEl("button", {
-      text: configured ? "Replace" : "Save",
-      attr: { type: "button" },
-    });
-    const cancel = setting.controlEl.createEl("button", {
-      text: "Cancel",
-      attr: { type: "button" },
-    });
-    cancel.hidden = !configured;
-    const clear = setting.controlEl.createEl("button", {
-      text: "Clear",
-      attr: { type: "button" },
-    });
-    clear.hidden = !configured;
-
-    const enterEdit = () => {
-      editing = true;
-      draft = "";
-      input.type = "password";
-      input.readOnly = false;
-      input.value = "";
-      replace.textContent = "Save";
-      cancel.hidden = false;
-      input.focus();
-    };
-    const reset = () => {
-      editing = false;
-      draft = "";
-      input.type = "text";
-      input.readOnly = true;
-      input.value = API_KEY_CONFIGURED_SENTINEL;
-      replace.textContent = "Replace";
-      cancel.hidden = true;
-    };
-    input.addEventListener("input", () => {
-      if (editing) draft = input.value;
-    });
-    replace.addEventListener("click", () => {
-      if (!editing) {
-        enterEdit();
-        return;
-      }
-      const next = draft.trim();
-      if (!next) return;
-      const revision = this.beginControlChange(input);
-      this.runAction("save API key", async () => {
-        try {
-          await this.changeSettingValue("llm.apiKey", next);
-          if (this.isCurrentControlChange(input, revision)) {
-            this.refreshSetupGuide();
-            reset();
-            clear.hidden = false;
-          }
-        } catch (error) {
-          if (this.isCurrentControlChange(input, revision)) {
-            if (this.plugin.settings.llm.apiKey.trim()) reset();
-            else {
-              draft = "";
-              input.value = "";
-            }
-          }
-          throw error;
-        }
-      });
-    });
-    cancel.addEventListener("click", () => {
-      if (configured || this.plugin.settings.llm.apiKey.trim()) reset();
-      else {
-        draft = "";
-        input.value = "";
-      }
-    });
-    clear.addEventListener("click", () => {
-      this.runAction("clear API key", async () => {
-        const confirmed = await this.confirmReplace(
-          "Clear the saved API key? AI features will stop until you save a new key.",
-          "Clear",
-        );
-        if (!confirmed) return;
-        await this.changeSettingValue("llm.apiKey", "");
-        this.refreshSetupGuide();
-        this.display();
-      });
+      .setDesc("Saved only on this device; masked in the input.");
+    renderSensitiveInput(this, setting, {
+      value: this.plugin.settings.llm.apiKey,
+      placeholder: "Enter API key",
+      ariaLabel: "LLM API key",
+      save: (next) => this.changeSettingValue("llm.apiKey", next),
     });
   }
-
   private renderSetupGuide(containerEl: HTMLElement): void {
     const guide = this.createSetupGuide();
     if (guide) containerEl.appendChild(guide);

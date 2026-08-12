@@ -5,8 +5,8 @@ import {
   type Setting,
 } from "obsidian";
 import type { ArxivDailySettingTab } from "./tab";
+import { renderSensitiveInput } from "./sensitive-input";
 import {
-  API_KEY_CONFIGURED_SENTINEL,
   addCategoryOptions,
   llmHttpWarning,
   modelFetchNoticeMessage,
@@ -79,175 +79,13 @@ export function renderLlmBaseUrlRow(
   });
 }
 
-interface SensitiveInputOptions {
-  configured: () => boolean;
-  placeholder: string;
-  ariaLabel: string;
-  normalize?: (value: string) => string;
-  save: (value: string) => Promise<void>;
-  clearConfirmation: string;
-  onCommitted?: () => void;
-}
-
-function renderSensitiveInput(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-  options: SensitiveInputOptions,
-): () => Promise<void> {
-  let editing = !options.configured();
-  let draft = "";
-  const input = setting.controlEl.createEl("input", {
-    cls: "arxiv-daily-settings__llm-input",
-    type: editing ? "password" : "text",
-    attr: {
-      placeholder: options.placeholder,
-      autocomplete: "off",
-      "aria-label": options.ariaLabel,
-    },
-  });
-  input.value = editing ? "" : API_KEY_CONFIGURED_SENTINEL;
-  input.readOnly = !editing;
-
-  const reveal = setting.controlEl.createEl("button", {
-    cls: "arxiv-daily-settings__reveal-key",
-    attr: {
-      type: "button",
-      "aria-label": `Show ${options.ariaLabel}`,
-      title: `Show ${options.ariaLabel}`,
-    },
-  });
-  setIcon(reveal, "eye");
-  const replace = setting.controlEl.createEl("button", {
-    text: editing ? "Save" : "Replace",
-    attr: { type: "button" },
-  });
-  const cancel = setting.controlEl.createEl("button", {
-    text: "Cancel",
-    attr: { type: "button" },
-  });
-  cancel.hidden = !options.configured();
-  const clear = setting.controlEl.createEl("button", {
-    text: "Clear",
-    attr: { type: "button" },
-  });
-  clear.hidden = !options.configured();
-
-  const setRevealed = (revealed: boolean) => {
-    input.type = editing && revealed ? "text" : editing ? "password" : "text";
-    const action = editing && revealed ? "Hide" : "Show";
-    reveal.setAttribute("aria-label", `${action} ${options.ariaLabel}`);
-    reveal.title = `${action} ${options.ariaLabel}`;
-    reveal.empty();
-    setIcon(reveal, editing && revealed ? "eye-off" : "eye");
-  };
-  const enterEdit = () => {
-    editing = true;
-    draft = "";
-    input.readOnly = false;
-    input.value = "";
-    replace.textContent = "Save";
-    cancel.hidden = false;
-    setRevealed(false);
-    input.focus();
-  };
-  const reset = () => {
-    editing = false;
-    draft = "";
-    input.readOnly = true;
-    input.value = API_KEY_CONFIGURED_SENTINEL;
-    replace.textContent = "Replace";
-    cancel.hidden = true;
-    clear.hidden = false;
-    setRevealed(false);
-  };
-  const resetEmpty = () => {
-    editing = true;
-    draft = "";
-    input.readOnly = false;
-    input.value = "";
-    replace.textContent = "Save";
-    cancel.hidden = true;
-    clear.hidden = true;
-    setRevealed(false);
-  };
-
-  reveal.addEventListener("pointerdown", (event) => event.preventDefault());
-  reveal.addEventListener("click", () => {
-    if (!editing) return;
-    setRevealed(input.type === "password");
-  });
-  input.addEventListener("input", () => {
-    if (editing) draft = input.value;
-  });
-
-  let saveQueue = Promise.resolve();
-  let latestSave: { value: string; promise: Promise<void> } | undefined;
-  const save = (): Promise<void> => {
-    if (!editing) return saveQueue;
-    const next = (options.normalize ?? ((value: string) => value.trim()))(draft);
-    if (!next) return Promise.resolve();
-    if (latestSave?.value === next) return latestSave.promise;
-    const revision = tab.beginControlChange(input);
-    const operation = saveQueue.then(async () => {
-      try {
-        await options.save(next);
-        if (tab.isCurrentControlChange(input, revision)) {
-          reset();
-          options.onCommitted?.();
-        }
-      } catch (error) {
-        if (tab.isCurrentControlChange(input, revision)) {
-          if (options.configured()) reset();
-          else resetEmpty();
-        }
-        throw error;
-      }
-    });
-    let tracked: Promise<void>;
-    tracked = operation.finally(() => {
-      if (latestSave?.promise === tracked) latestSave = undefined;
-    });
-    latestSave = { value: next, promise: tracked };
-    saveQueue = tracked.catch(() => undefined);
-    return tracked;
-  };
-  replace.addEventListener("click", () => {
-    if (!editing) {
-      enterEdit();
-      return;
-    }
-    tab.runAction(`save ${options.ariaLabel}`, save);
-  });
-  cancel.addEventListener("click", () => {
-    if (options.configured()) reset();
-    else resetEmpty();
-  });
-  clear.addEventListener("click", () => {
-    tab.runAction(`clear ${options.ariaLabel}`, async () => {
-      const confirmed = await tab.confirmReplace(options.clearConfirmation, "Clear");
-      if (!confirmed) return;
-      await options.save("");
-      resetEmpty();
-      options.onCommitted?.();
-    });
-  });
-  input.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    tab.runAction(`save ${options.ariaLabel}`, save);
-  });
-  return save;
-}
-
 export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
   renderSensitiveInput(tab, setting, {
-    configured: () => Boolean(tab.plugin.settings.llm.apiKey.trim()),
+    value: tab.plugin.settings.llm.apiKey,
     placeholder: "Enter API key",
     ariaLabel: "LLM API key",
     save: (next) => tab.changeSettingValue("llm.apiKey", next),
-    clearConfirmation:
-      "Clear the saved API key? AI features will stop until you save a new key.",
     onCommitted: () => tab.refreshDeclarativeSetupGuide(),
   });
 }
@@ -654,19 +492,18 @@ export function renderEmailToRow(
   }
 }
 
-/** Resend API key sentinel row (self mode). */
+/** Resend API key masked input row (self mode). */
 export function renderEmailApiKeyRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
   prepareRow(setting);
   renderSensitiveInput(tab, setting, {
-    configured: () => Boolean(tab.plugin.settings.email.apiKey?.trim()),
+    value: tab.plugin.settings.email.apiKey ?? "",
     placeholder: "Paste your Resend API key",
     ariaLabel: "Resend API key",
     save: (next) => tab.changeSettingValue("email.apiKey", next),
-    clearConfirmation:
-      "Clear the saved Resend API key? Email delivery will stop until a replacement is saved.",
+    onCommitted: () => tab.refreshDeclarativeSetupGuide(),
   });
   renderEmailActionButton(tab, setting, {
     label: "Send test",
@@ -684,13 +521,12 @@ export function renderHostedTokenRow(
 ): void {
   prepareRow(setting);
   const saveToken = renderSensitiveInput(tab, setting, {
-    configured: () => Boolean(tab.plugin.settings.email.hostedToken?.trim()),
+    value: tab.plugin.settings.email.hostedToken ?? "",
     placeholder: "Paste the code from the verification page",
     ariaLabel: "verification code",
     normalize: (value) => value.replace(/\s+/g, "").trim(),
     save: (next) => tab.changeSettingValue("email.hostedToken", next),
-    clearConfirmation:
-      "Clear the verification code? You will need to verify your email again for Official delivery.",
+    onCommitted: () => tab.refreshDeclarativeSetupGuide(),
   });
   renderEmailActionButton(tab, setting, {
     label: "Send test",
