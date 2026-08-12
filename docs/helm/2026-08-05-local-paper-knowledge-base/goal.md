@@ -1,7 +1,7 @@
 # 本地论文知识库（local paper knowledge base）
 
 status: done
-updated: 2026-08-10
+updated: 2026-08-13
 owner: current-session
 
 ## Intent
@@ -17,6 +17,7 @@ owner: current-session
 - [x] 用户确认、编辑、锁定方向的优先级最高：锁定的方向不参与自动合并/分裂/改名，但新论文仍可归入；机器建议永不覆盖用户决定。
 - [x] 现有隐私与 consent 边界保持：本地全文索引与向量化不经模型授权；任何全文内容进入 LLM 必须新增 processingDepth 授权；路径/PDF bytes/凭据不进入任何 LLM 输入。
 - [x] 与 P6 成果兼容：识别 v2（PDF 证据 + 标题搜索）、画像 store 的 CAS/版本机制、日报/新颖性管线不受影响；完整测试套件通过。
+- [x] 无法识别 arXiv ID 的 unresolved PDF 以 PDF bytes 内容寻址进入全文知识库和混合检索，改名可复用已有向量；测试 vault（Obsidian 运行时等价真实环境）完成 Scan、增量索引与代表性查询复验，用户确认关闭。
 
 ## Non-goals
 
@@ -45,6 +46,7 @@ owner: current-session
 5. P5 — 实现存疑项复核（P3 T5b 遗留）：centering 镜像去重、new 候选 discoveryCues 截断、增量更新 operation kind 复用（存疑项 1 已由 ADR 0007 关闭）—— 每项代码核对定论，可修复项修复并验收 —— status: done
 6. P6 — 检索入口与自动触发（ADR 0006/0007 实现）：行内按钮双页模态框（库内全文相似 + 日报词法相似）、Dashboard 单框双结果（词法过滤 + KB 相似区块）、索引完成自动触发增量更新（placement 免许可、LLM diff 授权拆分 + 待授权状态）、建议覆盖未审阅提示 —— status: done
 7. P7 — 远程嵌入可选开关（ADR 0008 实现）：core RemoteEmbeddingModel（OpenAI 兼容 /embeddings）、独立嵌入设置区（含 CLI 映射）、授权扩展（多端点指纹 + full-text 深度 + modal 披露）、首次引导选择（本地/远程 + 切换重建提示）、工厂接线（index/search 按 mode 选择）—— 134 篇库首次索引分钟级（远程）—— status: done
+8. P8 — Unresolved 文件兜底全文索引：无法识别 arXiv 编号的 PDF（本库基线 219 篇，如 `Abdullah2020.pdf`）也进入全文索引与检索——完整 PDF bytes 内容寻址（`file:sha256:<digest>`）、保留 pdf.js 行界的首页标题提取与版本刷新、向量/标题/正文频率 token 混合检索、相对路径展示；接入 placement 与论文质心 recluster—— status: done
 
 ## Open questions
 
