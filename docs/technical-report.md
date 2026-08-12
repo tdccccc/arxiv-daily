@@ -213,6 +213,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - cutover singleton 固定为 `delivery-cutover:v3`。首次 inventory 在同一个 DO storage transaction 内建立 `cutover-binding:v1`、`cutover-state-index:v1` 与 pending control；binding 固定 `IDENTITY_SECRET` fingerprint、精确 `email-relay-v2-<40 hex source SHA>` build identity 和 protocol generation。后续 status/action/issue/automatic 以及 operation replay 都先验证该 binding；binding 缺失但 control、operation、issuance claim、marker 或 state index 任一存活时，不会把对象当作全新 cutover。
 - cutover 扫描两代 automatic KV key、忽略已知 test key，并把 exact secret-scoped `done | attempted` evidence 合并到 HMAC audit marker；未知 key、扫描失败、容量/时限超界和错过 provider-fence pending window 均阻断。operator 对旧 Resend credential 已撤销的精确 attestation 构成跨 Worker provider fence；marker 写入后需两次、每次至少间隔 60 秒的 observation，随后才可 seal 为 ready。KV marker 只用于审计/恢复，automatic readiness 的权威状态仍在 singleton DO。
 - cutover mutation 与返回 200 的 monotonic no-op 都用永久 operation ID 绑定 action/input/status/body；精确重放只能在 binding/control/marker 一致性检查后返回原响应。control 缺失或损坏时只允许与永久 binding 和有效 marker 一致的 repair；结果不明的 pending repair 只能由原 operation 恢复，其他 operation 不能接管。多个恢复载体同时永久丢失或损坏时保持 locked。
+- cutover operator 面由只读 `scripts/cutover-preflight.mjs`（git HEAD、wrangler.toml 必需 binding/var 名称、wrangler 登录、secret 名称清单、注入 `email-relay-v2-<sha>` 的 Wrangler dry-run、远程 `/health` 与 `/ready` 状态）与人工 `docs/runbook-cutover.md`（部署、凭据撤销、逐步 action、readiness 确认、异常恢复）组成。脚本依赖注入便于测试，`--check-readonly` 静态自检证明源码不含非 dry-run deploy、KV 写或验证/投递/cutover 端点调用，CI 执行该自检；所有生产 mutation 由 operator 按 runbook 逐项授权手工执行，脚本不部署、不写 KV、不调用验证或投递端点。
 - 出站 Resend key 仅由 Worker secret 提供。系统没有邮件 outbox 或后台重试 daemon；最终 provider 去重仍依赖 Resend/relay 正确执行稳定 idempotency key，因此不声明严格 distributed exactly-once。
 
 ### Dashboard 与命令
@@ -371,7 +372,7 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 
 ### 验证面
 
-core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线集成测试使用包含两个论文条目的代表性 recent 页面输入，arXiv parser 与 source adapter 专项测试读取完整页面夹具。邮件定向面覆盖 Core claim/result/HTTP 分类、Node 与 Obsidian descriptor/权限/恢复，以及 CLI/Plugin consumer；email-relay 的独立 Vitest 覆盖认证路由、服务端 identity、Durable Object ledger/quota、provider 结果和 cutover proof。测试用于约束行为；生产路径以源码注册、构建入口和 Worker binding 为准。
+core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线集成测试使用包含两个论文条目的代表性 recent 页面输入，arXiv parser 与 source adapter 专项测试读取完整页面夹具。邮件定向面覆盖 Core claim/result/HTTP 分类、Node 与 Obsidian descriptor/权限/恢复，以及 CLI/Plugin consumer；email-relay 的独立 Vitest 覆盖认证路由、服务端 identity、Durable Object ledger/quota、provider 结果、cutover proof 和只读 preflight 脚本（fake 依赖注入、只读源码自检、无 secret 泄漏）。测试用于约束行为；生产路径以源码注册、构建入口和 Worker binding 为准。
 
 ## Security and Failure Behavior
 
