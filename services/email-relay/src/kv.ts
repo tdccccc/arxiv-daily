@@ -1,17 +1,34 @@
-import { normalizeEmail, sha256Hex } from "./crypto";
+import {
+  hmacSha256Hex,
+  isPlausibleEmail,
+  normalizeEmail,
+  sha256Hex,
+} from "./crypto";
 
 export interface Env {
   STORE: KVNamespace;
-  /** One Durable Object per authenticated device plus one cutover-proof singleton. */
+  /** Recipient-scoped automatic gates, device-scoped test gates, and cutover control. */
   DELIVER_GATE?: DurableObjectNamespace;
-  /** Operator-only bearer secret for staging the single-version cutover proof. */
+  /** Operator-only bearer secret for the single-version cutover control API. */
   DELIVERY_V2_CUTOVER_TOKEN?: string;
   RESEND_API_KEY: string;
   TOKEN_SECRET: string;
+  /** Long-lived root for recipient routing and automatic delivery identity. */
+  IDENTITY_SECRET?: string;
   PUBLIC_BASE_URL: string;
   FROM_EMAIL: string;
   FROM_NAME: string;
   DAILY_QUOTA: string;
+  /** Non-secret immutable deployment/build identity supplied by Worker config. */
+  BUILD_IDENTITY?: string;
+}
+
+export const DELIVERY_PROTOCOL_GENERATION = 2 as const;
+
+export interface DeliveryBinding {
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  buildIdentity: string;
+  readyGeneration: number;
 }
 
 export interface DeviceRecord {
@@ -19,6 +36,9 @@ export interface DeviceRecord {
   createdAt: string;
   /** Present only on identities issued by the delivery-v2 Worker. */
   deliveryGeneration?: 2;
+  protocolGeneration?: number;
+  buildIdentity?: string;
+  readyGeneration?: number;
 }
 
 export interface AuthenticatedDevice {
@@ -29,6 +49,9 @@ export interface AuthenticatedDevice {
   recipientIdentity: string;
   createdAt: string;
   deliveryGeneration?: 2;
+  protocolGeneration?: number;
+  buildIdentity?: string;
+  readyGeneration?: number;
 }
 
 export interface PendingVerify {
@@ -41,25 +64,39 @@ const PENDING_PREFIX = "pending:";
 const DEVICE_PREFIX = "device:";
 const DEVICE_V2_PREFIX = "device-v2:";
 const RL_PREFIX = "rl:";
-const DELIVERY_V2_CUTOVER_KEY = "cutover:delivery-v2";
+export const DELIVERY_V3_CUTOVER_AUDIT_KEY = "cutover:delivery-v3-audit";
 export const DELIVERY_V2_KV_VISIBILITY_MS = 60 * 1000;
 export const DELIVERY_V2_LEGACY_PENDING_TTL_MS = 120 * 1000;
-const LEGACY_AUTO_IDEMP_PREFIX = "idemp:arxiv-daily:auto:";
+const IDEMP_PREFIX = "idemp:";
+const HASHED_LEGACY_AUTO_KEY = /^arxiv-daily:auto:[0-9a-f]{64}$/;
+const PLAIN_LEGACY_AUTO_KEY = /^(\d{4}-\d{2}-\d{2})\|([^|\s]+@[^|\s]+)$/;
+const HASHED_TEST_KEY = /^arxiv-daily:test:[0-9a-f]{32}$/;
+const PLAIN_TEST_KEY = /^test\|\d{4}-\d{2}-\d{2}\|[^|\s]+@[^|\s]+\|[^|]+$/;
 
 export type LegacyDeliveryEvidence = "none" | "done" | "attempted";
 
-export interface DeliveryV2CutoverMarker {
-  schemaVersion: 2;
-  oldWorkerWritesQuiesced: true;
-  legacyAutoEvidenceSnapshot: "positive-evidence-only";
-  preQuiesceScanStartedAt: string;
-  preQuiesceScanCompletedAt: string;
-  oldWorkerWritesQuiescedAt: string;
-  postQuiesceScanStartedAt: string;
-  postQuiesceScanCompletedAt: string;
-  enabledAt: string;
-  /** Secret-scoped hashes of legacy automatic date + recipient identities only. */
+export interface DeliveryV3CutoverAuditMarker {
+  schemaVersion: 3;
+  kind: "delivery-v2-cutover-audit";
+  proofVersion: 1;
+  providerFence: "old-resend-credential-revoked";
+  providerFencedAt: string;
+  inventoryStartedAt: string;
+  inventoryCompletedAt: string;
+  inventoryAutomaticKeyCount: number;
+  postFenceScanStartedAt: string;
+  postFenceScanCompletedAt: string;
+  postFenceAutomaticKeyCount: number;
+  followupScanStartedAt: string;
+  followupScanCompletedAt: string;
+  followupAutomaticKeyCount: number;
+  legacyAutoEvidenceSnapshot: "exact-canonical-map";
   legacyAutoEvidence: Record<string, "done" | "attempted">;
+  identitySecretFingerprint: string;
+  buildIdentity: string;
+  protocolGeneration: typeof DELIVERY_PROTOCOL_GENERATION;
+  constructedAt: string;
+  proof: string;
 }
 
 export function pendingKey(tokenHash: string): string {
@@ -87,9 +124,12 @@ export async function hashDeviceToken(
 
 export async function hashRecipientIdentity(
   normalizedEmail: string,
-  secret: string,
+  identitySecret: string,
 ): Promise<string> {
-  return sha256Hex(`${secret}:recipient:${normalizeEmail(normalizedEmail)}`);
+  return hmacSha256Hex(
+    identitySecret,
+    `delivery-v2-recipient\u0000${normalizeEmail(normalizedEmail)}`,
+  );
 }
 
 export async function hashPendingToken(
@@ -118,24 +158,33 @@ export async function putPending(
   });
 }
 
-export async function takePending(
+export async function peekPendingByIdentity(
   env: Env,
-  rawToken: string,
+  pendingIdentity: string,
 ): Promise<PendingVerify | null> {
-  const hash = await hashPendingToken(rawToken, env.TOKEN_SECRET);
-  const key = pendingKey(hash);
-  const raw = await env.STORE.get(key);
+  if (!isHash(pendingIdentity)) return null;
+  const raw = await env.STORE.get(pendingKey(pendingIdentity));
   if (!raw) return null;
-  await env.STORE.delete(key);
   const parsed = parsePending(raw);
   if (!parsed || Date.parse(parsed.expiresAt) <= Date.now()) return null;
   return parsed;
+}
+
+export async function deletePendingByIdentity(
+  env: Env,
+  pendingIdentity: string,
+): Promise<void> {
+  if (!isHash(pendingIdentity)) {
+    throw new Error("pending identity is invalid");
+  }
+  await env.STORE.delete(pendingKey(pendingIdentity));
 }
 
 export async function putDevice(
   env: Env,
   rawToken: string,
   email: string,
+  binding: DeliveryBinding,
   now: Date = new Date(),
 ): Promise<void> {
   const hash = await hashDeviceToken(rawToken, env.TOKEN_SECRET);
@@ -143,6 +192,7 @@ export async function putDevice(
     email: normalizeEmail(email),
     createdAt: now.toISOString(),
     deliveryGeneration: 2,
+    ...binding,
   };
   // Approximately one year; expiry revokes inactive devices.
   await env.STORE.put(deviceV2Key(hash), JSON.stringify(value), {
@@ -154,6 +204,8 @@ export async function authenticateDevice(
   env: Env,
   rawToken: string,
 ): Promise<AuthenticatedDevice | null> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) return null;
   const identity = await hashDeviceToken(rawToken, env.TOKEN_SECRET);
   const v2Raw = await env.STORE.get(deviceV2Key(identity));
   const legacyRaw = v2Raw === null
@@ -166,9 +218,12 @@ export async function authenticateDevice(
   return {
     identity,
     email: device.email,
-    recipientIdentity: await hashRecipientIdentity(device.email, env.TOKEN_SECRET),
+    recipientIdentity: await hashRecipientIdentity(device.email, identitySecret),
     createdAt: device.createdAt,
     deliveryGeneration: device.deliveryGeneration,
+    protocolGeneration: device.protocolGeneration,
+    buildIdentity: device.buildIdentity,
+    readyGeneration: device.readyGeneration,
   };
 }
 
@@ -207,112 +262,39 @@ export function dailyQuotaLimit(env: Env): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
 
-/**
- * Parses the operator's single-version cutover declaration and positive legacy
- * evidence. Empty scans never prove absence: the Durable Object adds its own
- * observations, time barrier, and v2 device-provenance boundary before auto is
- * enabled. Mixed-version operation and rollback are intentionally unsupported.
- */
-export async function assertDeliveryV2CutoverReady(
+export async function writeDeliveryV3CutoverAuditMarker(
   env: Env,
-  now: Date = new Date(),
-): Promise<DeliveryV2CutoverMarker> {
-  const raw = await env.STORE.get(DELIVERY_V2_CUTOVER_KEY);
-  if (!raw) throw new Error("delivery-v2 cutover marker is missing");
-  return parseDeliveryV2CutoverMarker(raw, now);
-}
-
-export function parseDeliveryV2CutoverMarker(
-  raw: string,
-  now: Date = new Date(),
-): DeliveryV2CutoverMarker {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("delivery-v2 cutover marker is invalid");
-  }
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("delivery-v2 cutover marker is invalid");
-  }
-  const value = parsed as Partial<DeliveryV2CutoverMarker>;
-  if (
-    value.schemaVersion !== 2 ||
-    value.oldWorkerWritesQuiesced !== true ||
-    value.legacyAutoEvidenceSnapshot !== "positive-evidence-only" ||
-    !validTimestamp(value.preQuiesceScanStartedAt) ||
-    !validTimestamp(value.preQuiesceScanCompletedAt) ||
-    !validTimestamp(value.oldWorkerWritesQuiescedAt) ||
-    !validTimestamp(value.postQuiesceScanStartedAt) ||
-    !validTimestamp(value.postQuiesceScanCompletedAt) ||
-    !validTimestamp(value.enabledAt) ||
-    !value.legacyAutoEvidence ||
-    typeof value.legacyAutoEvidence !== "object" ||
-    Array.isArray(value.legacyAutoEvidence)
-  ) {
-    throw new Error("delivery-v2 cutover marker is invalid");
-  }
-
-  const preStartedAt = Date.parse(value.preQuiesceScanStartedAt);
-  const preCompletedAt = Date.parse(value.preQuiesceScanCompletedAt);
-  const quiescedAt = Date.parse(value.oldWorkerWritesQuiescedAt);
-  const postStartedAt = Date.parse(value.postQuiesceScanStartedAt);
-  const postCompletedAt = Date.parse(value.postQuiesceScanCompletedAt);
-  const enabledAt = Date.parse(value.enabledAt);
-  if (
-    preCompletedAt < preStartedAt ||
-    preCompletedAt > quiescedAt ||
-    postStartedAt < quiescedAt + DELIVERY_V2_KV_VISIBILITY_MS ||
-    postCompletedAt < postStartedAt ||
-    postCompletedAt >= preStartedAt + DELIVERY_V2_LEGACY_PENDING_TTL_MS ||
-    enabledAt < postCompletedAt ||
-    enabledAt < quiescedAt + DELIVERY_V2_LEGACY_PENDING_TTL_MS ||
-    now.getTime() < enabledAt + DELIVERY_V2_KV_VISIBILITY_MS
-  ) {
-    throw new Error("delivery-v2 cutover timing proof is invalid");
-  }
-
-  const legacyAutoEvidence: Record<string, "done" | "attempted"> = {};
-  for (const [identity, evidence] of Object.entries(value.legacyAutoEvidence)) {
-    if (
-      !/^[0-9a-f]{64}$/.test(identity) ||
-      (evidence !== "done" && evidence !== "attempted")
-    ) {
-      throw new Error("delivery-v2 legacy automatic evidence snapshot is invalid");
-    }
-    legacyAutoEvidence[identity] = evidence;
-  }
-  return { ...value, legacyAutoEvidence } as DeliveryV2CutoverMarker;
-}
-
-export async function hashDeliveryV2CutoverProof(
-  marker: DeliveryV2CutoverMarker,
+  marker: DeliveryV3CutoverAuditMarker,
 ): Promise<string> {
-  return sha256Hex(JSON.stringify([
-    marker.schemaVersion,
-    marker.oldWorkerWritesQuiesced,
-    marker.legacyAutoEvidenceSnapshot,
-    marker.preQuiesceScanStartedAt,
-    marker.preQuiesceScanCompletedAt,
-    marker.oldWorkerWritesQuiescedAt,
-    marker.postQuiesceScanStartedAt,
-    marker.postQuiesceScanCompletedAt,
-    marker.enabledAt,
-    Object.entries(marker.legacyAutoEvidence).sort(([left], [right]) =>
-      left.localeCompare(right)
-    ),
-  ]));
+  const serialized = JSON.stringify(marker);
+  await env.STORE.put(DELIVERY_V3_CUTOVER_AUDIT_KEY, serialized);
+  return sha256Hex(serialized);
 }
 
-/** Reads only the staged automatic snapshot; no expiring legacy KV key is trusted. */
+/**
+ * Scans the complete historical idempotency namespace. Every supported automatic
+ * generation is projected onto one secret-scoped logical identity. Supported
+ * test generations are ignored; any other idemp key makes the scan fail closed.
+ */
 export async function scanLegacyAutoDeliveryEvidence(
   env: Env,
+  options: {
+    collect?: boolean;
+    onEvidence?: (
+      identity: string,
+      evidence: "done" | "attempted",
+    ) => void | Promise<void>;
+  } = {},
 ): Promise<Record<string, "done" | "attempted">> {
+  const identitySecret = configuredIdentitySecret(env);
+  if (!identitySecret) {
+    throw new Error("legacy automatic delivery scan is unavailable");
+  }
   const evidence: Record<string, "done" | "attempted"> = {};
   let cursor: string | undefined;
   do {
     const page = await env.STORE.list({
-      prefix: LEGACY_AUTO_IDEMP_PREFIX,
+      prefix: IDEMP_PREFIX,
       ...(cursor ? { cursor } : {}),
     });
     if (!page || !Array.isArray(page.keys)) {
@@ -320,16 +302,43 @@ export async function scanLegacyAutoDeliveryEvidence(
     }
     for (const entry of page.keys) {
       const key = entry?.name ?? "";
-      const logicalKey = key.startsWith("idemp:") ? key.slice("idemp:".length) : "";
-      if (!/^arxiv-daily:auto:[0-9a-f]{64}$/.test(logicalKey)) {
-        throw new Error("legacy automatic delivery key is invalid");
+      if (!key.startsWith(IDEMP_PREFIX)) {
+        throw new Error("legacy automatic delivery scan encountered an unsupported key");
       }
-      const identity = await sha256Hex(`${env.TOKEN_SECRET}:legacy-auto-key:${logicalKey}`);
+      const logicalKey = key.slice(IDEMP_PREFIX.length);
+      if (HASHED_TEST_KEY.test(logicalKey) || PLAIN_TEST_KEY.test(logicalKey)) {
+        continue;
+      }
+
+      let identity: string;
+      if (HASHED_LEGACY_AUTO_KEY.test(logicalKey)) {
+        identity = await hashLegacyAutomaticLogicalIdentity(
+          identitySecret,
+          logicalKey,
+        );
+      } else {
+        const plain = PLAIN_LEGACY_AUTO_KEY.exec(logicalKey);
+        if (!plain) {
+          throw new Error(
+            "legacy automatic delivery scan encountered an unsupported key",
+          );
+        }
+        identity = await hashLegacyAutoDeliveryIdentity(
+          identitySecret,
+          plain[1]!,
+          plain[2]!,
+        );
+      }
       const raw = await env.STORE.get(key);
-      const observed = raw?.startsWith("pending:") ? "attempted" : raw ? "done" : "attempted";
-      evidence[identity] = evidence[identity] === "attempted" || observed === "attempted"
+      const observed = raw?.startsWith("pending:")
         ? "attempted"
-        : "done";
+        : raw ? "done" : "attempted";
+      if (options.collect !== false) {
+        evidence[identity] = evidence[identity] === "attempted" || observed === "attempted"
+          ? "attempted"
+          : "done";
+      }
+      await options.onEvidence?.(identity, observed);
     }
     if (page.list_complete) break;
     if (!page.cursor || page.cursor === cursor) {
@@ -340,41 +349,25 @@ export async function scanLegacyAutoDeliveryEvidence(
   return evidence;
 }
 
-export function assertLegacyAutoSnapshotCovers(
-  snapshot: Record<string, "done" | "attempted">,
-  observed: Record<string, "done" | "attempted">,
-): void {
-  for (const [identity, status] of Object.entries(observed)) {
-    const imported = snapshot[identity];
-    if (!imported || (status === "attempted" && imported !== "attempted")) {
-      throw new Error("legacy automatic evidence is missing from the snapshot");
-    }
-  }
-}
-
 export async function hashLegacyAutoDeliveryIdentity(
-  secret: string,
+  identitySecret: string,
   date: string,
   normalizedRecipient: string,
 ): Promise<string> {
-  const legacyAutoKey = `arxiv-daily:auto:${await sha256Hex(
+  const logicalKey = `arxiv-daily:auto:${await sha256Hex(
     `${date}\u0000${normalizeEmail(normalizedRecipient)}`,
   )}`;
-  return sha256Hex(`${secret}:legacy-auto-key:${legacyAutoKey}`);
+  return hashLegacyAutomaticLogicalIdentity(identitySecret, logicalKey);
 }
 
-export async function readLegacyDeliveryEvidence(
-  env: Env,
-  cutover: DeliveryV2CutoverMarker,
-  date: string,
-  normalizedRecipient: string,
-): Promise<LegacyDeliveryEvidence> {
-  const identity = await hashLegacyAutoDeliveryIdentity(
-    env.TOKEN_SECRET,
-    date,
-    normalizedRecipient,
+async function hashLegacyAutomaticLogicalIdentity(
+  identitySecret: string,
+  logicalKey: string,
+): Promise<string> {
+  return hmacSha256Hex(
+    identitySecret,
+    `delivery-v2-legacy-auto-key\u0000${logicalKey}`,
   );
-  return cutover.legacyAutoEvidence[identity] ?? "none";
 }
 
 function validTimestamp(value: unknown): value is string {
@@ -388,7 +381,13 @@ function parseDevice(raw: string, expectV2: boolean): DeviceRecord | null {
     if (
       !email ||
       !validTimestamp(value.createdAt) ||
-      (expectV2 ? value.deliveryGeneration !== 2 : value.deliveryGeneration !== undefined)
+      (expectV2 ? value.deliveryGeneration !== 2 : value.deliveryGeneration !== undefined) ||
+      (value.protocolGeneration !== undefined &&
+        (!Number.isSafeInteger(value.protocolGeneration) || value.protocolGeneration < 1)) ||
+      (value.buildIdentity !== undefined &&
+        !isBuildIdentity(value.buildIdentity)) ||
+      (value.readyGeneration !== undefined &&
+        (!Number.isSafeInteger(value.readyGeneration) || value.readyGeneration < 1))
     ) {
       return null;
     }
@@ -396,10 +395,56 @@ function parseDevice(raw: string, expectV2: boolean): DeviceRecord | null {
       email,
       createdAt: value.createdAt,
       ...(value.deliveryGeneration === 2 ? { deliveryGeneration: 2 as const } : {}),
+      ...(value.protocolGeneration !== undefined
+        ? { protocolGeneration: value.protocolGeneration }
+        : {}),
+      ...(value.buildIdentity !== undefined
+        ? { buildIdentity: value.buildIdentity }
+        : {}),
+      ...(value.readyGeneration !== undefined
+        ? { readyGeneration: value.readyGeneration }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+export function configuredBuildIdentity(env: Env): string | null {
+  const value = env.BUILD_IDENTITY?.trim() ?? "";
+  return /^email-relay-v2-[0-9a-f]{40}$/.test(value) ? value : null;
+}
+
+export function configuredIdentitySecret(env: Env): string | null {
+  const value = env.IDENTITY_SECRET?.trim() ?? "";
+  return value.length >= 16 && value.length <= 1024 ? value : null;
+}
+
+export function automaticRuntimeConfigured(env: Env): boolean {
+  if (
+    !env.DELIVER_GATE ||
+    !env.STORE ||
+    !configuredBuildIdentity(env) ||
+    !env.TOKEN_SECRET?.trim() ||
+    !configuredIdentitySecret(env) ||
+    !env.RESEND_API_KEY?.trim() ||
+    !isPlausibleEmail(env.FROM_EMAIL ?? "")
+  ) return false;
+  try {
+    const publicUrl = new URL(env.PUBLIC_BASE_URL ?? "");
+    return publicUrl.protocol === "https:" && Boolean(publicUrl.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isBuildIdentity(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+}
+
+function isHash(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 function parsePending(raw: string): PendingVerify | null {
