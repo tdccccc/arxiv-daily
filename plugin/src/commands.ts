@@ -382,6 +382,19 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "review-reading-candidates",
+    name: "Review reading candidates",
+    callback: () => {
+      try {
+        plugin.openReadingCandidatesReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open reading candidates review", error);
+        notice("arXiv Daily: reading candidates review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
     id: "review-personal-library-directions",
     name: "Review personal library directions",
     callback: () => {

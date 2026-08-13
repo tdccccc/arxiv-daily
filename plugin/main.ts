@@ -67,6 +67,7 @@ FullTextKnowledgeBaseFileStore,
 indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
 searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
 IncrementalSuggestionsStore,
+ReadingCandidatesStore,
 applyAttachSuggestion,
 applyMergeSuggestion,
 applySplitSuggestion,
@@ -87,6 +88,13 @@ PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
 PDF_IDENTIFICATION_EVIDENCE_VERSION,
 reclusterPool,
 suggestDirectionDiff,
+upsertReadingCandidate,
+decideReadingCandidate,
+removeReadingCandidate,
+readingCandidateFromRowSnapshot,
+type ReadingCandidateDecisionKind,
+type ReadingCandidateRowSnapshot,
+type ReadingCandidatesDocument,
 suggestIncrementalPlacement,
 type OperationHandle,
 type OperationKind,
@@ -150,6 +158,7 @@ import {
   type PdfJsDiagnostics,
   type PdfJsSmokeDiagnostics,
 } from "./src/services/fulltext-runtime-diagnostics";
+import { ReadingCandidatesModal } from "./src/library/reading-candidates-modal";
 import {
   authorizeLibraryConnection,
   type LibraryAuthorizationScope,
@@ -176,7 +185,7 @@ interface PersistedData {
 }
 
 export interface PersonalLibraryReviewLoadError {
-  kind: "catalog" | "proposal" | "profile" | "suggestions";
+  kind: "catalog" | "proposal" | "profile" | "suggestions" | "reading-candidates";
   code: string;
   message: string;
 }
@@ -186,12 +195,14 @@ export interface PersonalLibraryProfileSnapshot {
   proposal: PersonalLibraryDirectionProposal | null;
   profile: PersonalLibraryInterestProfile | null;
   suggestions: IncrementalSuggestionsDocument | null;
+  readingCandidates: ReadingCandidatesDocument | null;
   eligibility: PersonalLibraryInterestEligibility;
   authorization: LibraryConnectionStatus;
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
   profileLoadError: PersonalLibraryReviewLoadError | null;
   suggestionsLoadError: PersonalLibraryReviewLoadError | null;
+  readingCandidatesLoadError: PersonalLibraryReviewLoadError | null;
 }
 
 /**
@@ -311,9 +322,11 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryProposal: PersonalLibraryDirectionProposal | null = null;
   private libraryProfile: PersonalLibraryInterestProfile | null = null;
   private librarySuggestions: IncrementalSuggestionsDocument | null = null;
+  private libraryReadingCandidates: ReadingCandidatesDocument | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
   private libraryProfileLoadError: PersonalLibraryReviewLoadError | null = null;
   private librarySuggestionsLoadError: PersonalLibraryReviewLoadError | null = null;
+  private libraryReadingCandidatesLoadError: PersonalLibraryReviewLoadError | null = null;
   private personalizedDailyDiscoveryAvailable = true;
   private personalizedDailyDiscoveryRevision = 0;
   private personalizedDailyRunControllers = new Map<ArxivPipeline, AbortController>();
@@ -728,6 +741,22 @@ export default class ArxivDailyPlugin extends Plugin {
     openPersonalLibraryInterestProfileModal(this.app, this.personalLibraryReviewController());
   }
 
+  openReadingCandidatesReview(): void {
+    if (!this.libraryConnection) {
+      new Notice("arXiv Daily: Choose a personal library first", 10_000);
+      return;
+    }
+    new ReadingCandidatesModal(this.app, {
+      getCandidates: () => this.getReadingCandidates(),
+      decide: (paperKey, kind) => this.decideReadingCandidateForReview(paperKey, kind),
+      remove: (paperKey) => this.removeReadingCandidateForReview(paperKey),
+      onError: (action, error) => {
+        this.logger.warn(`reading candidates: ${action} failed`, error);
+        new Notice(`arXiv Daily: ${action} failed. Try again.`, 10_000);
+      },
+    }).open();
+  }
+
   private personalLibraryReviewController(): InterestProfileReviewController {
     return {
       snapshot: () => this.getPersonalLibraryProfileSnapshot(),
@@ -790,12 +819,14 @@ export default class ArxivDailyPlugin extends Plugin {
       proposal: this.libraryProposal,
       profile: this.libraryProfile,
       suggestions: this.librarySuggestions,
+      readingCandidates: this.libraryReadingCandidates,
       eligibility: evaluatePersonalLibraryInterestEligibility(this.libraryProfile, this.libraryCatalog),
       authorization: this.getLibraryConnectionStatus(),
       catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
       profileLoadError: this.libraryProfileLoadError,
       suggestionsLoadError: this.librarySuggestionsLoadError,
+      readingCandidatesLoadError: this.libraryReadingCandidatesLoadError,
     });
   }
 
@@ -818,9 +849,11 @@ export default class ArxivDailyPlugin extends Plugin {
       this.libraryProposal = null;
       this.libraryProfile = null;
       this.librarySuggestions = null;
+      this.libraryReadingCandidates = null;
       this.libraryProposalLoadError = null;
       this.libraryProfileLoadError = null;
       this.librarySuggestionsLoadError = null;
+      this.libraryReadingCandidatesLoadError = null;
       return this.getPersonalLibraryProfileSnapshot();
     }
     const connectionRevision = this.libraryConnectionRevision;
@@ -856,6 +889,16 @@ export default class ArxivDailyPlugin extends Plugin {
         this.librarySuggestions = null;
         this.librarySuggestionsLoadError = this.safeProfileLoadError("suggestions", error);
         this.logger?.error("incremental suggestions load failed", error);
+      }),
+      this.buildReadingCandidatesStore(connection).load().then((candidates) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryReadingCandidates = candidates;
+        this.libraryReadingCandidatesLoadError = null;
+      }).catch((error) => {
+        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
+        this.libraryReadingCandidates = null;
+        this.libraryReadingCandidatesLoadError = this.safeProfileLoadError("reading-candidates", error);
+        this.logger?.error("reading candidates load failed", error);
       }),
     ]);
     const identity = this.capturePersonalizedDiscoveryIdentity(connection);
@@ -2306,6 +2349,86 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  private buildReadingCandidatesStore(connection: PersistedLibraryConnection): ReadingCandidatesStore {
+    if (!this.host?.storage.writeTextAtomic) {
+      throw new Error("Reading candidates require atomic storage writes");
+    }
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    return new ReadingCandidatesStore(
+      this.host.storage,
+      this.settings.output,
+      scopeFingerprint,
+      identificationFingerprint,
+      { onWarning: (message, error) => this.logger.warn(message, error) },
+    );
+  }
+
+  /**
+   * Save a dashboard row as a reading candidate. The row must carry discovery
+   * provenance (the source that brought the paper in); rows without it cannot
+   * be saved.
+   */
+  async saveReadingCandidateForRow(
+    snapshot: ReadingCandidateRowSnapshot,
+  ): Promise<"saved" | "missing-source" | "unavailable"> {
+    const connection = this.libraryConnection;
+    if (!connection) return "unavailable";
+    const nowIso = new Date().toISOString();
+    const record = readingCandidateFromRowSnapshot(snapshot, nowIso);
+    if (!record) return "missing-source";
+    return this.enqueueLibraryMutation(async () => {
+      const store = this.buildReadingCandidatesStore(connection);
+      const current = await store.load();
+      const next = upsertReadingCandidate(current, record, nowIso);
+      if (!next.changed) return "saved" as const;
+      const saved = await store.replace(next.document, current.revision);
+      this.libraryReadingCandidates = saved;
+      this.libraryReadingCandidatesLoadError = null;
+      if (next.evicted.length > 0) {
+        this.logger.info(`reading candidates: evicted ${next.evicted.length} oldest undecided`);
+      }
+      return "saved" as const;
+    });
+  }
+
+  async decideReadingCandidateForReview(
+    paperKey: string,
+    kind: ReadingCandidateDecisionKind,
+    note?: string,
+  ): Promise<boolean> {
+    const connection = this.libraryConnection;
+    if (!connection) return false;
+    return this.enqueueLibraryMutation(async () => {
+      const store = this.buildReadingCandidatesStore(connection);
+      const current = await store.load();
+      const next = decideReadingCandidate(current, paperKey, kind, new Date().toISOString(), note);
+      if (!next.changed) return true;
+      const saved = await store.replace(next.document, current.revision);
+      this.libraryReadingCandidates = saved;
+      this.libraryReadingCandidatesLoadError = null;
+      return true;
+    });
+  }
+
+  async removeReadingCandidateForReview(paperKey: string): Promise<boolean> {
+    const connection = this.libraryConnection;
+    if (!connection) return false;
+    return this.enqueueLibraryMutation(async () => {
+      const store = this.buildReadingCandidatesStore(connection);
+      const current = await store.load();
+      const next = removeReadingCandidate(current, paperKey, new Date().toISOString());
+      if (!next.changed) return true;
+      const saved = await store.replace(next.document, current.revision);
+      this.libraryReadingCandidates = saved;
+      this.libraryReadingCandidatesLoadError = null;
+      return true;
+    });
+  }
+
+  getReadingCandidates(): ReadingCandidatesDocument | null {
+    return this.libraryReadingCandidates ? structuredClone(this.libraryReadingCandidates) : null;
+  }
+
   private buildIncrementalSuggestionsStore(connection: PersistedLibraryConnection): IncrementalSuggestionsStore {
     if (!this.host?.storage.writeTextAtomic) {
       throw new Error("Incremental suggestions require atomic storage writes");
@@ -2422,13 +2545,15 @@ export default class ArxivDailyPlugin extends Plugin {
     this.libraryProposal = null;
     this.libraryProfile = null;
     this.librarySuggestions = null;
+    this.libraryReadingCandidates = null;
     this.libraryProposalLoadError = null;
     this.libraryProfileLoadError = null;
     this.librarySuggestionsLoadError = null;
+    this.libraryReadingCandidatesLoadError = null;
   }
 
   private safeProfileLoadError(
-    kind: "catalog" | "proposal" | "profile" | "suggestions",
+    kind: "catalog" | "proposal" | "profile" | "suggestions" | "reading-candidates",
     error: unknown,
   ): PersonalLibraryReviewLoadError {
     const code = typeof error === "object" && error !== null && "code" in error
@@ -2438,7 +2563,8 @@ export default class ArxivDailyPlugin extends Plugin {
     const label = kind === "catalog"
       ? "catalog"
       : kind === "proposal" ? "direction proposal"
-        : kind === "suggestions" ? "incremental suggestions" : "confirmed profile";
+        : kind === "suggestions" ? "incremental suggestions"
+        : kind === "reading-candidates" ? "reading candidates" : "confirmed profile";
     return { kind, code, message: `Personal library ${label} could not be loaded (${code}).` };
   }
 
