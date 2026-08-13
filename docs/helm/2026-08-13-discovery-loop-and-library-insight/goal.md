@@ -34,13 +34,12 @@ owner: current-session
 ## Phases
 
 1. P1 — 修复方向选题偏置、搜索 modelId 校验与索引异常隔离 — status: done
-2. P2 — reading candidates：保存待读与按方向回顾 — status: pending
+2. P2 — reading candidates：保存待读与按方向回顾 — status: active
 3. P3 — reading dispositions：阅读反馈回流影响发现 — status: pending
 4. P4 — 检索规模加固：内存预算与分页/上限 — status: pending
 5. P5 — 文献库分析：库级概览与聚类浏览 — status: pending
 
 ## Open questions
 
-- P2：待读候选的存储位置与形态（新 CAS 文档 vs 复用 papers.json 字段），在 P2 计划时定。
 - P3：dispositions 回流的具体途径（过滤权重、novelty 展示、方向审核提示），在 P3 计划时定。
 - P5：分析的首个形态（概览 + 聚类浏览）与既有三个检索入口的关系，在 P5 计划时定。
