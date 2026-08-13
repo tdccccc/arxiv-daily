@@ -182,7 +182,14 @@ export function selectPersonalLibraryDirectionPapers(
 ): PersonalLibraryPaperRecord[] {
   return Object.values(catalog.papers)
     .slice()
-    .sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey))
+    .sort((left, right) => {
+      // Newest published papers first so direction proposals track current
+      // interests as the library grows; deterministic tiebreak on paperKey.
+      const leftDate = left.published || left.updated;
+      const rightDate = right.published || right.updated;
+      if (leftDate !== rightDate) return codeUnitCompare(rightDate, leftDate);
+      return codeUnitCompare(left.paperKey, right.paperKey);
+    })
     .slice(0, PERSONAL_LIBRARY_DIRECTION_MAX_SELECTED_PAPERS)
     .map(clonePaper);
 }

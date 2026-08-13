@@ -471,6 +471,34 @@ describe("full-text indexing orchestration", () => {
     expect(embedding.calls).toBe(callsBeforeSearch + 1);
   });
 
+  it("rejects a search before embedding when the knowledge base was built with a different model", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+    ]);
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW) });
+
+    // Same dimension, different modelId: cross-model cosine is meaningless and
+    // the query embedding must not be spent before the guard rejects.
+    let embedCalls = 0;
+    const otherModel: EmbeddingModel = {
+      modelId: "other-model",
+      dimension: 4,
+      prefixPolicy: "e5",
+      async embed(texts: readonly string[]) {
+        embedCalls += texts.length;
+        return texts.map(() => new Float32Array(4));
+      },
+    };
+
+    await expect(
+      searchFullTextKnowledgeBase({ store, embedding: otherModel, queryText: "anything" }),
+    ).rejects.toThrow(/built with model fake-e5-q8/);
+    expect(embedCalls).toBe(0);
+  });
+
   it("indexes unresolved files with content-addressed keys and extracted titles", async () => {
     const catalog = makeCatalog(
       [{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }],
@@ -642,6 +670,82 @@ describe("full-text indexing orchestration", () => {
     expect(secondEmbedding.calls).toBe(0);
     expect((await store.loadManifest()).papers[paperKey]?.filePaths).toEqual([newPath]);
     expect((await store.loadPaper(paperKey))?.filePaths).toEqual([newPath]);
+  });
+
+  it("fails only the affected fallback paper when its stored document is corrupt", async () => {
+    const oldPath = "lib/old-name.pdf";
+    const newPath = "lib/renamed.pdf";
+    const pdfBytes = "same-pdf-bytes";
+    const source = new FakeSource({ [oldPath]: pdfBytes, [newPath]: pdfBytes });
+    const store = new MemoryStore();
+    const first = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: oldPath, fingerprint: fingerprint("a1") }]),
+      source,
+      extractor: new FakeExtractor({ [pdfBytes]: ["Stable Local Paper Title\nAbstract body."] }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+    const paperKey = fallbackPaperKey(pdfBytes);
+    expect(first.indexed).toBe(1);
+
+    // The stored document for the fallback paper is now corrupt.
+    const originalLoadPaper = store.loadPaper.bind(store);
+    store.loadPaper = async (key: string) => {
+      if (key === paperKey) throw new Error("corrupt-or-unreadable");
+      return originalLoadPaper(key);
+    };
+
+    const second = await indexPersonalLibraryFullText({
+      catalog: makeCatalog(
+        [{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }],
+        [{ path: newPath, fingerprint: fingerprint("b2") }],
+      ),
+      source,
+      extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    // The corrupt fallback paper fails alone; the arXiv paper still indexes.
+    expect(second.failed).toBe(1);
+    expect(second.indexed).toBe(1);
+    const manifest = await store.loadManifest();
+    expect(manifest.papers[paperKey]?.status).toBe("failed");
+    expect(manifest.papers["arxiv:2403.19236"]?.status).toBe("ready");
+    // The overwritten ready document leaves no orphan behind.
+    expect(store.removed.has(paperKey)).toBe(true);
+  });
+
+  it("skips a corrupt ready document during search instead of failing the query", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+    ], [
+      { path: "lib/local.pdf", fingerprint: fingerprint("f2") },
+    ]);
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({
+      "lib/a.pdf": [LONG_ALPHA],
+      "lib/local.pdf": ["Local Paper Title\nAbstract body of the local paper."],
+    });
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW) });
+    const paperKey = fallbackPaperKey("lib/local.pdf");
+
+    const originalLoadPaper = store.loadPaper.bind(store);
+    store.loadPaper = async (key: string) => {
+      if (key === paperKey) throw new Error("corrupt-or-unreadable");
+      return originalLoadPaper(key);
+    };
+
+    const matches = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText: "alpha",
+    });
+    expect(matches.length).toBe(1);
+    expect(matches[0]!.paperKey).toBe("arxiv:2403.19236");
   });
 
   it("ranks a literal token hit above misleading chunk similarity", async () => {

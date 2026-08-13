@@ -1638,6 +1638,7 @@ export default class ArxivDailyPlugin extends Plugin {
       embedding: this.buildEmbeddingModel(),
       queryText,
       titles,
+      logger: this.logger,
     });
     return matches.map((match) => ({
       paperKey: match.paperKey,

@@ -296,6 +296,27 @@ describe("buildClusteringInput", () => {
     };
   }
 
+  it("orders clustering input newest arXiv papers first, fallback keys last", async () => {
+    const store = new MemoryStore();
+    const keys = ["arxiv:1501.00001", "arxiv:2608.00001", "file:sha256:aaaa", "arxiv:2305.00001"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    for (const paperKey of keys) {
+      await store.savePaper(documentWithChunks(paperKey, 1));
+    }
+    const papers = await buildClusteringInput(store);
+    expect(papers.map(({ paperKey }) => paperKey)).toEqual([
+      "arxiv:2608.00001",
+      "arxiv:2305.00001",
+      "arxiv:1501.00001",
+      "file:sha256:aaaa",
+    ]);
+  });
+
   it("collects ready papers with chunk vectors, skipping failures", async () => {
     const store = new MemoryStore();
     await store.savePaper(documentWithChunks("arxiv:1", 3));

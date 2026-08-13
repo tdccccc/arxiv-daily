@@ -22,9 +22,29 @@ export const MAX_CLUSTERING_INPUT_PAPERS = 2_000 as const;
 export const MAX_CLUSTERING_CHUNKS_PER_PAPER = 80 as const;
 
 /**
+ * Recency rank for a knowledge-base paperKey: arXiv keys carry a YYMM prefix
+ * (newest month sorts first; deterministic tiebreak on the full key), and
+ * undatable fallback (`file:sha256:…`) keys come last in stable hash order.
+ */
+export function comparePaperKeysByRecency(left: string, right: string): number {
+  const leftMatch = /^arxiv:(\d{4})\.\d{4,5}$/.exec(left);
+  const rightMatch = /^arxiv:(\d{4})\.\d{4,5}$/.exec(right);
+  if (leftMatch && rightMatch) {
+    const leftMonth = leftMatch[1] ?? "";
+    const rightMonth = rightMatch[1] ?? "";
+    if (leftMonth !== rightMonth) return rightMonth.localeCompare(leftMonth);
+    return left.localeCompare(right);
+  }
+  if (leftMatch) return -1;
+  if (rightMatch) return 1;
+  return left.localeCompare(right);
+}
+
+/**
  * Load every ready paper's chunk vectors from the knowledge base,
- * deterministically (paperKey order), up to `limit`. Papers without usable
- * chunks are skipped; long papers are truncated to the chunk cap.
+ * deterministically (newest arXiv papers first, fallback keys last), up to
+ * `limit`. Papers without usable chunks are skipped; long papers are
+ * truncated to the chunk cap.
  */
 export async function buildClusteringInput(
   store: FullTextKnowledgeBaseStore,
@@ -32,7 +52,7 @@ export async function buildClusteringInput(
 ): Promise<ClusteringInputPaper[]> {
   const manifest = await store.loadManifest();
   const papers: ClusteringInputPaper[] = [];
-  for (const paperKey of Object.keys(manifest.papers).sort()) {
+  for (const paperKey of Object.keys(manifest.papers).sort(comparePaperKeysByRecency)) {
     if (papers.length >= limit) break;
     const record = manifest.papers[paperKey];
     if (!record || record.status !== "ready") continue;

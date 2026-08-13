@@ -181,53 +181,72 @@ export async function indexPersonalLibraryFullText(
             return record?.status === "ready" && record.modelId === embedding.modelId;
           });
       if (reuseSourceKey) {
-        const sourceRecord = papers[reuseSourceKey]!;
-        const existing = await store.loadPaper(reuseSourceKey);
-        if (existing) {
-          const refreshTitle = sourceRecord.titleVersion !== TITLE_EXTRACTION_VERSION;
-          let rebound: FullTextPaperDocument;
-          let titleRefreshed = false;
-          try {
-            rebound = await rebindFallbackDocument({
-              document: existing,
-              paperKey,
-              filePaths: unit.filePaths,
-              observationFingerprints,
-              contentHash: unit.contentHash,
-              refreshTitle,
-              source,
-              extractor,
-              nowIso,
-              signal: input.signal,
-            });
-            titleRefreshed = refreshTitle;
-          } catch (caught) {
-            if (isCancellationErrorLike(caught, input.signal)) throw caught;
-            log?.warn(
-              `fulltext: fallback title refresh failed for ${paperKey}, keeping previous title: ${describeRefreshError(caught)}`,
-            );
-            rebound = await rebindFallbackDocument({
-              document: existing,
-              paperKey,
-              filePaths: unit.filePaths,
-              observationFingerprints,
-              contentHash: unit.contentHash,
-              refreshTitle: false,
-              source,
-              extractor,
-              nowIso,
-              signal: input.signal,
-            });
+        try {
+          const sourceRecord = papers[reuseSourceKey]!;
+          const existing = await store.loadPaper(reuseSourceKey);
+          if (existing) {
+            const refreshTitle = sourceRecord.titleVersion !== TITLE_EXTRACTION_VERSION;
+            let rebound: FullTextPaperDocument;
+            let titleRefreshed = false;
+            try {
+              rebound = await rebindFallbackDocument({
+                document: existing,
+                paperKey,
+                filePaths: unit.filePaths,
+                observationFingerprints,
+                contentHash: unit.contentHash,
+                refreshTitle,
+                source,
+                extractor,
+                nowIso,
+                signal: input.signal,
+              });
+              titleRefreshed = refreshTitle;
+            } catch (caught) {
+              if (isCancellationErrorLike(caught, input.signal)) throw caught;
+              log?.warn(
+                `fulltext: fallback title refresh failed for ${paperKey}, keeping previous title: ${describeRefreshError(caught)}`,
+              );
+              rebound = await rebindFallbackDocument({
+                document: existing,
+                paperKey,
+                filePaths: unit.filePaths,
+                observationFingerprints,
+                contentHash: unit.contentHash,
+                refreshTitle: false,
+                source,
+                extractor,
+                nowIso,
+                signal: input.signal,
+              });
+            }
+            await store.savePaper(rebound);
+            papers[paperKey] = recordFromDocument(rebound, nowIso);
+            for (const sourceKey of unit.migrationSourceKeys) {
+              completedMigrationKeys.add(sourceKey);
+            }
+            outcomes.push({ paperKey, status: "reused" });
+            if (titleRefreshed) {
+              log?.info(`fulltext: refreshed fallback title for ${paperKey}`);
+              titlesRefreshed += 1;
+            }
+            continue;
           }
-          await store.savePaper(rebound);
-          papers[paperKey] = recordFromDocument(rebound, nowIso);
-          for (const sourceKey of unit.migrationSourceKeys) {
-            completedMigrationKeys.add(sourceKey);
-          }
-          outcomes.push({ paperKey, status: "reused" });
-          if (titleRefreshed) {
-            log?.info(`fulltext: refreshed fallback title for ${paperKey}`);
-            titlesRefreshed += 1;
+        } catch (caught) {
+          if (isCancellationErrorLike(caught, input.signal)) throw caught;
+          const message = describeRefreshError(caught);
+          log?.warn(`fulltext: reusing ${reuseSourceKey} for ${paperKey} failed: ${message}`);
+          outcomes.push(recordFailed(
+            paperKey,
+            message,
+            nowIso,
+            papers,
+            embedding.modelId,
+            embedding.dimension,
+            unit,
+          ));
+          if (previous?.status === "ready") {
+            await discardOrphanedPaperDocument(store, paperKey, log);
           }
           continue;
         }
@@ -244,6 +263,9 @@ export async function indexPersonalLibraryFullText(
         embedding.dimension,
         unit,
       ));
+      if (previous?.status === "ready") {
+        await discardOrphanedPaperDocument(store, paperKey, log);
+      }
       continue;
     }
 
@@ -278,6 +300,9 @@ export async function indexPersonalLibraryFullText(
         embedding.dimension,
         unit,
       ));
+      if (previous?.status === "ready") {
+        await discardOrphanedPaperDocument(store, paperKey, log);
+      }
     }
     // Yield between papers so a long index run does not freeze host UIs (the
     // Obsidian renderer processes queued events between papers); harmless on
@@ -592,6 +617,26 @@ function describeRefreshError(error: unknown): string {
 }
 
 /**
+ * A previously ready paper that failed re-indexing no longer has a usable
+ * document; drop the orphaned file so the manifest never references stale
+ * on-disk state. Removal failures are logged, never fatal.
+ */
+async function discardOrphanedPaperDocument(
+  store: FullTextKnowledgeBaseStore,
+  paperKey: string,
+  log?: Logger,
+): Promise<void> {
+  try {
+    await store.removePaper(paperKey);
+  } catch (caught) {
+    log?.warn(
+      `fulltext: failed to remove orphaned paper document ${paperKey}: `
+      + describeRefreshError(caught),
+    );
+  }
+}
+
+/**
  * Query-time orchestration: embed the query (with the e5 `query:` prefix) and
  * brute-force search all ready papers. The embedding is the only model call at
  * query time; chunk vectors were precomputed at index time. Title fusion is
@@ -603,6 +648,7 @@ export interface SearchFullTextKnowledgeBaseInput {
   store: FullTextKnowledgeBaseStore;
   embedding: EmbeddingModel;
   queryText: string;
+  logger?: Logger;
   /**
    * Optional per-paper titles (paperKey → title). When present they are
    * scored lexically against the query; titles without an entry are ignored.
@@ -619,6 +665,13 @@ export async function searchFullTextKnowledgeBase(
   throwIfCancelled(input.signal);
   const manifest = await input.store.loadManifest();
   if (Object.keys(manifest.papers).length === 0) return [];
+  if (manifest.modelId && manifest.modelId !== input.embedding.modelId) {
+    throw new Error(
+      `full-text knowledge base was built with model ${manifest.modelId} but the `
+      + `current embedding model is ${input.embedding.modelId}; delete the knowledge `
+      + "base and re-index (rebuild) before searching",
+    );
+  }
   const queryVectors = await input.embedding.embed(
     [prefixFor("query", input.embedding, input.queryText)],
     { signal: input.signal },
@@ -629,7 +682,16 @@ export async function searchFullTextKnowledgeBase(
   for (const [paperKey, record] of Object.entries(manifest.papers)) {
     throwIfCancelled(input.signal);
     if (record.status !== "ready") continue;
-    const document = await input.store.loadPaper(paperKey);
+    let document: FullTextPaperDocument | null;
+    try {
+      document = await input.store.loadPaper(paperKey);
+    } catch (caught) {
+      input.logger?.warn(
+        `fulltext: skipping corrupt paper document ${paperKey} during search: `
+        + describeRefreshError(caught),
+      );
+      continue;
+    }
     if (document) papers.push(document);
   }
   // Title fusion uses the first paragraph only. Find-similar builds

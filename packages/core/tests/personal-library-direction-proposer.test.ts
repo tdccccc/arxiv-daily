@@ -150,6 +150,18 @@ describe("personal-library direction proposer evidence preparation", () => {
     expect(JSON.stringify(input)).toBe(before);
   });
 
+  it("prefers recently published papers when the catalog exceeds the selection limit", () => {
+    const entries = Array.from({ length: 205 }, (_, index) => paper(index + 1, {
+      published: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
+    }));
+    const selected = selectPersonalLibraryDirectionPapers(catalog(entries));
+    expect(selected).toHaveLength(PERSONAL_LIBRARY_DIRECTION_MAX_SELECTED_PAPERS);
+    // paper(1) is the oldest by published date and must be cut; paper(205) is the newest.
+    expect(selected.some(({ paperKey }) => paperKey === "arxiv:2608.00001")).toBe(false);
+    expect(selected.some(({ paperKey }) => paperKey === "arxiv:2608.00006")).toBe(true);
+    expect(selected.some(({ paperKey }) => paperKey === "arxiv:2608.00205")).toBe(true);
+  });
+
   it("greedily batches by paper count with exact actual-message accounting", () => {
     const batches = buildPersonalLibraryDirectionExtractionBatches(
       Array.from({ length: 41 }, (_, index) => paper(index + 1)),
