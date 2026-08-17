@@ -119,31 +119,41 @@ describe("generation vector binary block", () => {
     const encoded = encodeVectorBlock({
       rowStart: 9,
       dimension: 3,
+      paperOrdinals: new Uint32Array([4, 5]),
       vectors: new Float32Array([1.5, -2.25, 3.125, 4, 5, 6]),
     });
     const decoded = decodeVectorBlock(encoded);
     expect(decoded.rowStart).toBe(9);
     expect(decoded.rowCount).toBe(2);
     expect(decoded.dimension).toBe(3);
+    expect(Array.from(decoded.paperOrdinals)).toEqual([4, 5]);
     expect(Array.from(decoded.vectors)).toEqual([1.5, -2.25, 3.125, 4, 5, 6]);
-    expect(encoded.byteLength).toBe(BINARY_BLOCK_HEADER_BYTES + 8 + 6 * 4);
+    expect(encoded.byteLength).toBe(BINARY_BLOCK_HEADER_BYTES + 8 + 2 * 4 + 6 * 4);
     expect(blockObjectChecksum(encoded)).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("accepts an object exactly at the byte cap and rejects one byte over it", () => {
-    const floatCount = (MAX_BINARY_OBJECT_BYTES - BINARY_BLOCK_HEADER_BYTES - 8) / 4;
+    const floatCount = Math.floor((MAX_BINARY_OBJECT_BYTES - BINARY_BLOCK_HEADER_BYTES - 8) / 8);
     const encoded = encodeVectorBlock({
       rowStart: 0,
       dimension: 1,
+      paperOrdinals: new Uint32Array(floatCount),
       vectors: new Float32Array(floatCount),
     });
-    expect(encoded.byteLength).toBe(MAX_BINARY_OBJECT_BYTES);
+    expect(encoded.byteLength).toBeLessThanOrEqual(MAX_BINARY_OBJECT_BYTES);
+    expect(MAX_BINARY_OBJECT_BYTES - encoded.byteLength).toBeLessThan(8);
     expect(decodeVectorBlock(encoded).rowCount).toBe(floatCount);
+    expect(() => encodeVectorBlock({
+      rowStart: 0,
+      dimension: 1,
+      paperOrdinals: new Uint32Array(floatCount + 1),
+      vectors: new Float32Array(floatCount + 1),
+    })).toThrow(/byte limit/i);
     expect(() => decodeVectorBlock(new Uint8Array(MAX_BINARY_OBJECT_BYTES + 1))).toThrow(/byte limit/i);
   });
 
   it("rejects truncated, trailing, wrong-kind, future-version, checksum, count, and dimension tampering", () => {
-    const valid = encodeVectorBlock({ rowStart: 2, dimension: 2, vectors: new Float32Array([1, 2, 3, 4]) });
+    const valid = encodeVectorBlock({ rowStart: 2, dimension: 2, paperOrdinals: new Uint32Array([0, 1]), vectors: new Float32Array([1, 2, 3, 4]) });
     expect(() => decodeVectorBlock(valid.subarray(0, valid.length - 1))).toThrow(/truncated|length/i);
     const trailing = new Uint8Array(valid.length + 1);
     trailing.set(valid);
@@ -152,7 +162,9 @@ describe("generation vector binary block", () => {
       .toThrow(/kind/i);
     expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(4, 2, true))))
       .toThrow(/format version/i);
-    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 2, true))))
+    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 1, true))))
+      .toThrow(/schema version/i);
+    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 3, true))))
       .toThrow(/schema version/i);
     const badChecksum = valid.slice();
     badChecksum[badChecksum.length - 1]! ^= 0xff;
@@ -165,8 +177,44 @@ describe("generation vector binary block", () => {
       .toThrow(/row range/i);
   });
 
+  it("requires one little-endian paper ordinal per row with only same or +1 transitions", () => {
+    expect(() => encodeVectorBlock({
+      rowStart: 0,
+      dimension: 1,
+      paperOrdinals: new Uint32Array([0]),
+      vectors: new Float32Array([1, 2]),
+    })).toThrow(/one ordinal per row/i);
+    expect(() => encodeVectorBlock({
+      rowStart: 0,
+      dimension: 1,
+      paperOrdinals: new Uint32Array([0, 2]),
+      vectors: new Float32Array([1, 2]),
+    })).toThrow(/ordinals/i);
+    const encoded = encodeVectorBlock({
+      rowStart: 0,
+      dimension: 1,
+      paperOrdinals: new Uint32Array([0x01020304]),
+      vectors: new Float32Array([1]),
+    });
+    expect(Array.from(encoded.subarray(BINARY_BLOCK_HEADER_BYTES + 8, BINARY_BLOCK_HEADER_BYTES + 12)))
+      .toEqual([4, 3, 2, 1]);
+
+    const twoRows = encodeVectorBlock({
+      rowStart: 0,
+      dimension: 1,
+      paperOrdinals: new Uint32Array([0, 1]),
+      vectors: new Float32Array([1, 2]),
+    });
+    const skippedOrdinal = rewriteBlockHeader(twoRows, (view) => {
+      view.setUint32(BINARY_BLOCK_HEADER_BYTES + 12, 2, true);
+    });
+    expect(() => decodeVectorBlock(skippedOrdinal)).toThrow(/ordinals/i);
+    expect(() => decodeVectorBlock(rewriteBlockHeader(twoRows, (view) => view.setUint32(16, 1, true))))
+      .toThrow(/payload length|ordinals/i);
+  });
+
   it("rejects magic and payload-length tampering before payload loops", () => {
-    const valid = encodeVectorBlock({ rowStart: 0, dimension: 1, vectors: new Float32Array([1]) });
+    const valid = encodeVectorBlock({ rowStart: 0, dimension: 1, paperOrdinals: new Uint32Array([0]), vectors: new Float32Array([1]) });
     const badMagic = valid.slice();
     badMagic[0] = 0;
     expect(() => decodeVectorBlock(badMagic)).toThrow(/magic/i);
@@ -382,6 +430,9 @@ describe("generation descriptor codec and paths", () => {
 
   it("rejects future versions, unknown or missing index derivation, unsafe counts, dimensions, strings, refs, and trailing JSON", () => {
     const valid = JSON.parse(encodeGenerationDescriptor(makeDescriptor()));
+    const oldSchema = structuredClone(valid);
+    oldSchema.schemaVersion = 1;
+    expect(() => decodeGenerationDescriptor(JSON.stringify(oldSchema))).toThrow(/schema version/i);
     for (const mutation of [
       (value: any) => { value.formatVersion += 1; },
       (value: any) => { value.schemaVersion += 1; },

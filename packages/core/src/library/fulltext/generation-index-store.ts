@@ -493,11 +493,34 @@ export class FullTextGenerationIndexStore {
     const descriptor = opened.descriptor;
     let evidenceState: EvidenceStreamClosureState | null = null;
     const mean = createCanonicalMeanAccumulator(descriptor.dimension);
-    for await (const object of opened.iterateObjects()) {
-      if (object.reference.kind === "vector") mean.add(object.block as VectorBlock);
-      else evidenceState = validateEvidenceStreamClosure(evidenceState, (object.block as EvidenceBlock).records);
+    const vectors = descriptor.objects.filter((reference) => reference.kind === "vector");
+    const evidence = descriptor.objects.filter((reference) => reference.kind === "evidence");
+    let previousOrdinal: number | null = null;
+    for (let pairIndex = 0; pairIndex < vectors.length; pairIndex += 1) {
+      const vectorObject = await opened.readObject(vectors[pairIndex]!);
+      const evidenceObject = await opened.readObject(evidence[pairIndex]!);
+      const vectorBlock = vectorObject.block as VectorBlock;
+      const evidenceBlock = evidenceObject.block as EvidenceBlock;
+      mean.add(vectorBlock);
+      for (let row = 0; row < vectorBlock.rowCount; row += 1) {
+        const ordinal = vectorBlock.paperOrdinals[row]!;
+        if (ordinal !== evidenceBlock.records[row]!.paperIndex) {
+          throw new Error("vector paper ordinal does not match paired evidence paperIndex");
+        }
+        if (previousOrdinal === null) {
+          if (ordinal !== 0) throw new Error("first vector paper ordinal must be zero");
+        } else if (ordinal !== previousOrdinal && ordinal !== previousOrdinal + 1) {
+          throw new Error("vector paper ordinals must be continuous across blocks");
+        }
+        previousOrdinal = ordinal;
+      }
+      evidenceState = validateEvidenceStreamClosure(evidenceState, evidenceBlock.records);
     }
     finishEvidenceStreamClosure(evidenceState, descriptor.corpusStats.indexedPaperCount);
+    const actualPaperCount = previousOrdinal === null ? 0 : previousOrdinal + 1;
+    if (actualPaperCount !== descriptor.corpusStats.indexedPaperCount) {
+      throw new Error("vector paper ordinals do not match indexedPaperCount");
+    }
     const actualMean = mean.finish();
     if (mean.rowCount !== descriptor.corpusStats.chunkCount) {
       throw new Error("vector rows do not match chunkCount");

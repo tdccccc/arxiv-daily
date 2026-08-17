@@ -5,6 +5,8 @@ import {
   GENERATION_DESCRIPTOR_FORMAT_VERSION,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
   blockObjectChecksum,
+  decodeEvidenceBlock,
+  decodeVectorBlock,
   encodeEvidenceBlock,
   encodeGenerationDescriptor,
   encodeVectorBlock,
@@ -66,7 +68,7 @@ function emptyFixture(generationId: string, sourceRevision: number) {
 }
 
 function fixture(generationId: string, sourceRevision: number, values = [1, 2, 3, 4]) {
-  const vector = encodeVectorBlock({ rowStart: 0, dimension: 2, vectors: new Float32Array(values) });
+  const vector = encodeVectorBlock({ rowStart: 0, dimension: 2, paperOrdinals: new Uint32Array([0, 1]), vectors: new Float32Array(values) });
   const evidence = encodeEvidenceBlock({ rowStart: 0, records: [
     { paperIndex: 0, paperKey: "paper:a", vectorRow: 0, chunk: chunk(0) },
     { paperIndex: 1, paperKey: "paper:b", vectorRow: 1, chunk: chunk(0) },
@@ -893,6 +895,32 @@ describe("open and bounded reads", () => {
     expect(incomplete.text.get(CURRENT)).toBe("bad");
   });
 
+  it("rejects a locally valid paired ordinal mismatch for two papers in one block", async () => {
+    const memory = memoryStorage();
+    const id = "gen-paired-ordinal-mismatch";
+    await publish(store(memory.storage), id, 1);
+    const vector = encodeVectorBlock({
+      rowStart: 0,
+      dimension: 2,
+      paperOrdinals: new Uint32Array([0, 0]),
+      vectors: new Float32Array([1, 2, 3, 4]),
+    });
+    expect(() => decodeVectorBlock(vector)).not.toThrow();
+    const evidenceBytes = memory.binary.get(generationPath(id, "objects/000.evidence.bin"))!;
+    expect(decodeEvidenceBlock(evidenceBytes).records.map((record) => record.paperIndex)).toEqual([0, 1]);
+    memory.binary.set(generationPath(id, "objects/000.vector.bin"), vector);
+    const descriptor = JSON.parse(memory.text.get(generationPath(id, "descriptor.json"))!);
+    descriptor.objects[0].byteLength = vector.byteLength;
+    descriptor.objects[0].checksum = blockObjectChecksum(vector);
+    memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(descriptor));
+    resealPointer(memory, descriptor);
+    const opened = await store(memory.storage).openCurrent();
+    await expect(opened!.validateClosure()).rejects.toMatchObject({
+      code: "corrupt-or-unreadable",
+      cause: expect.objectContaining({ message: expect.stringMatching(/ordinal.*paperIndex/i) }),
+    });
+  });
+
   it("rejects missing/tampered/wrong kind/count/dimension/mean/evidence order and identity", async () => {
     const mutations: Array<(memory: ReturnType<typeof memoryStorage>, id: string) => void> = [
       (m, id) => { m.binary.delete(generationPath(id, "objects/000.vector.bin")); },
@@ -901,7 +929,7 @@ describe("open and bounded reads", () => {
       // Outer reference checksum is correct, but the block's embedded checksum is invalid.
       (m, id) => { const bytes = m.binary.get(generationPath(id, "objects/000.vector.bin"))!.slice(); bytes[60]! ^= 1; m.binary.set(generationPath(id, "objects/000.vector.bin"), bytes); const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.objects[0].checksum = blockObjectChecksum(bytes); m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
       (m, id) => { const bytes = m.binary.get(generationPath(id, "objects/000.evidence.bin"))!.slice(); m.binary.set(generationPath(id, "objects/000.vector.bin"), bytes); const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.objects[0].byteLength = bytes.byteLength; d.objects[0].checksum = blockObjectChecksum(bytes); m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
-      (m, id) => { const bytes = encodeVectorBlock({ rowStart: 0, dimension: 2, vectors: new Float32Array([1, 2]) }); m.binary.set(generationPath(id, "objects/000.vector.bin"), bytes); const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.objects[0].byteLength = bytes.byteLength; d.objects[0].checksum = blockObjectChecksum(bytes); m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
+      (m, id) => { const bytes = encodeVectorBlock({ rowStart: 0, dimension: 2, paperOrdinals: new Uint32Array([0]), vectors: new Float32Array([1, 2]) }); m.binary.set(generationPath(id, "objects/000.vector.bin"), bytes); const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.objects[0].byteLength = bytes.byteLength; d.objects[0].checksum = blockObjectChecksum(bytes); m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
       (m, id) => { const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.dimension = 3; d.corpusMean = [2, 3, 0]; m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
       (m, id) => { const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.corpusMean = [2.1, 3]; m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
       (m, id) => { const bad = fixture(id, 1); const records = [{ paperIndex: 1, paperKey: "paper:b", vectorRow: 0, chunk: chunk(0) }, { paperIndex: 1, paperKey: "paper:b", vectorRow: 1, chunk: chunk(1) }]; const bytes = encodeEvidenceBlock({ rowStart: 0, records }); m.binary.set(generationPath(id, bad.objects[1]!.path), bytes); const d = JSON.parse(m.text.get(generationPath(id, "descriptor.json"))!); d.objects[1].byteLength = bytes.byteLength; d.objects[1].checksum = blockObjectChecksum(bytes); m.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(d)); resealPointer(m, d); },
@@ -925,12 +953,12 @@ describe("open and bounded reads", () => {
 describe("canonical generation mean", () => {
   it("uses canonical ref/row float64 accumulation order and survives exact JSON roundtrip under cancellation", () => {
     const blocks = [
-      encodeVectorBlock({ rowStart: 0, dimension: 1, vectors: new Float32Array([1e20, 1]) }),
-      encodeVectorBlock({ rowStart: 2, dimension: 1, vectors: new Float32Array([-1e20, 3]) }),
-    ].map((bytes) => ({ dimension: 1, vectors: new Float32Array([
-      new DataView(bytes.buffer).getFloat32(60, true),
-      new DataView(bytes.buffer).getFloat32(64, true),
-    ]) }));
+      encodeVectorBlock({ rowStart: 0, dimension: 1, paperOrdinals: new Uint32Array([0, 0]), vectors: new Float32Array([1e20, 1]) }),
+      encodeVectorBlock({ rowStart: 2, dimension: 1, paperOrdinals: new Uint32Array([1, 1]), vectors: new Float32Array([-1e20, 3]) }),
+    ].map((bytes) => {
+      const decoded = decodeVectorBlock(bytes);
+      return { dimension: decoded.dimension, vectors: decoded.vectors };
+    });
     const mean = computeCanonicalVectorMean(blocks, 1);
     expect(mean).toEqual([0.75]);
     expect(JSON.parse(JSON.stringify(mean))).toEqual(mean);

@@ -6,9 +6,9 @@ import { createEvidenceChunkId, type EvidenceChunk, type EvidenceDerivation } fr
 export const MAX_BINARY_OBJECT_BYTES = 4 * 1024 * 1024;
 export const BINARY_BLOCK_HEADER_BYTES = 52;
 export const BINARY_BLOCK_FORMAT_VERSION = 1 as const;
-export const BINARY_BLOCK_SCHEMA_VERSION = 1 as const;
+export const BINARY_BLOCK_SCHEMA_VERSION = 2 as const;
 export const GENERATION_DESCRIPTOR_FORMAT_VERSION = 1 as const;
-export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 1 as const;
+export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 2 as const;
 export const MAX_GENERATION_DESCRIPTOR_BYTES = 1024 * 1024;
 export const MAX_GENERATION_OBJECTS = 4096;
 export const MAX_GENERATION_PAPERS = 1_000_000;
@@ -30,6 +30,8 @@ const MAX_HEADING_LENGTH = 1024;
 export interface VectorBlockInput {
   readonly rowStart: number;
   readonly dimension: number;
+  /** Paper ordinal for every vector row. */
+  readonly paperOrdinals: Uint32Array;
   readonly vectors: Float32Array;
 }
 
@@ -119,17 +121,23 @@ export function encodeVectorBlock(input: VectorBlockInput): Uint8Array {
   }
   const rowCount = input.vectors.length / input.dimension;
   requireIntegerInRange(rowCount, "vector record count", 1, MAX_GENERATION_CHUNKS);
+  if (!(input.paperOrdinals instanceof Uint32Array) || input.paperOrdinals.length !== rowCount) {
+    throw new Error("vector block paperOrdinals must contain exactly one ordinal per row");
+  }
+  validatePaperOrdinals(input.paperOrdinals);
   if (input.rowStart + rowCount > MAX_GENERATION_CHUNKS) throw new Error("vector row range exceeds the chunk limit");
-  const payloadLength = 8 + input.vectors.length * 4;
+  const payloadLength = 8 + rowCount * 4 + input.vectors.length * 4;
   requireObjectLength(BINARY_BLOCK_HEADER_BYTES + payloadLength);
   const payload = new Uint8Array(payloadLength);
   const view = new DataView(payload.buffer);
   view.setUint32(0, input.dimension, true);
   view.setUint32(4, input.rowStart, true);
+  for (let index = 0; index < rowCount; index += 1) view.setUint32(8 + index * 4, input.paperOrdinals[index]!, true);
+  const vectorOffset = 8 + rowCount * 4;
   for (let index = 0; index < input.vectors.length; index += 1) {
     const value = input.vectors[index]!;
     if (!Number.isFinite(value)) throw new Error("vector block values must be finite float32 numbers");
-    view.setFloat32(8 + index * 4, value, true);
+    view.setFloat32(vectorOffset + index * 4, value, true);
   }
   return encodeBlock(VECTOR_KIND, rowCount, payload);
 }
@@ -146,17 +154,21 @@ export function decodeVectorBlock(bytes: Uint8Array): VectorBlock {
     throw new Error("vector row range exceeds the chunk limit");
   }
   const valueCount = block.recordCount * dimension;
-  const expectedPayloadLength = 8 + valueCount * 4;
+  const expectedPayloadLength = 8 + block.recordCount * 4 + valueCount * 4;
   if (!Number.isSafeInteger(valueCount) || expectedPayloadLength !== block.payload.byteLength) {
-    throw new Error("vector block record count, dimension, and payload length disagree");
+    throw new Error("vector block record count, dimension, ordinals, and payload length disagree");
   }
+  const paperOrdinals = new Uint32Array(block.recordCount);
+  for (let index = 0; index < block.recordCount; index += 1) paperOrdinals[index] = view.getUint32(8 + index * 4, true);
+  validatePaperOrdinals(paperOrdinals);
   const vectors = new Float32Array(valueCount);
+  const vectorOffset = 8 + block.recordCount * 4;
   for (let index = 0; index < valueCount; index += 1) {
-    const value = view.getFloat32(8 + index * 4, true);
+    const value = view.getFloat32(vectorOffset + index * 4, true);
     if (!Number.isFinite(value)) throw new Error("vector block contains a non-finite value");
     vectors[index] = value;
   }
-  return { rowStart, rowCount: block.recordCount, dimension, vectors };
+  return { rowStart, rowCount: block.recordCount, dimension, paperOrdinals, vectors };
 }
 
 export function encodeEvidenceBlock(input: EvidenceBlock): Uint8Array {
@@ -356,6 +368,16 @@ function checksumInput(bytes: Uint8Array): Uint8Array {
   input.set(bytes.subarray(0, CHECKSUM_OFFSET));
   input.set(bytes.subarray(BINARY_BLOCK_HEADER_BYTES), CHECKSUM_OFFSET);
   return input;
+}
+
+function validatePaperOrdinals(ordinals: Uint32Array): void {
+  for (let index = 1; index < ordinals.length; index += 1) {
+    const previous = ordinals[index - 1]!;
+    const current = ordinals[index]!;
+    if (current !== previous && current !== previous + 1) {
+      throw new Error("vector paper ordinals must be non-decreasing and change only by one");
+    }
+  }
 }
 
 function validateEvidenceBlockOrder(rowStart: number, records: readonly EvidenceBlockRecord[]): void {
