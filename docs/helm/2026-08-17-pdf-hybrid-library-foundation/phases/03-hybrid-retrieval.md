@@ -28,24 +28,23 @@ updated: 2026-08-18
 
 ## Tasks
 
-- [ ] 实现并验收确定性 Unicode/CJK tokenizer、chunk-level BM25、论文聚合与有界 lexical top-k。
-- [ ] 实现并验收论文级 RRF、候选限制、稳定 tie-break 与 EvidenceChunk hit 去重合并。
-- [ ] 将 title exact/prefix 与短查询 compact alias 纳入 lexical rank，保留长 title+abstract 相似论文的 dense 语义。
-- [ ] 建立并验收固定 corpus/judgments、Recall@k、MRR、nDCG 与按类别对照；hybrid 总体不劣于 dense，且至少一个词法类别严格提升。
-- [ ] 查询 orchestration 默认接通 hybrid，保留 dense/lexical 模式及 model/cancel/corrupt/empty guards，完成阶段回归与规模检查。
+- [x] 实现并验收确定性 Unicode/CJK tokenizer、chunk-level BM25、论文聚合与有界 lexical top-k。
+- [x] 实现并验收论文级 RRF、候选限制、稳定 tie-break 与 EvidenceChunk hit 去重合并。
+- [x] 将 title exact/prefix 与短查询 compact alias 纳入 lexical rank，保留长 title+abstract 相似论文的 dense 语义。
+- [x] 建立并验收固定 corpus/judgments、Recall@k、MRR、nDCG 与按类别对照；hybrid 总体不劣于 dense，且至少一个词法类别严格提升。
+- [x] 查询 orchestration 默认接通 hybrid，保留 dense/lexical 模式及 model/cancel/corrupt/empty guards，完成阶段回归与规模检查。
 
 ## Verification
 
-- `npm test --workspace @arxiv-daily/core -- tests/bm25-retrieval.test.ts tests/lexical-search.test.ts tests/title-similarity.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/hybrid-retrieval.test.ts tests/fulltext-retrieval.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-retrieval-evaluation.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-index-orchestration.test.ts tests/fulltext-retrieval.test.ts tests/bm25-retrieval.test.ts tests/hybrid-retrieval.test.ts tests/fulltext-retrieval-evaluation.test.ts`
-- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`
-- `npm test --workspace obsidian-arxiv-daily`
-- `npm run typecheck`
-- `npm run check:boundaries`
-- `npm run build --workspace obsidian-arxiv-daily`
-- `git diff --check`
+- P3 定向 Core：最终 7 个文件、86 项测试通过；包含 tokenizer/BM25、RRF 去重后截断、独立 cursor 证据合并、显式 lexical query 和 guards。
+- 固定 corpus 由真实 `searchKnowledgeBase`、`searchKnowledgeBaseBm25`、`fusePaperRankingsRrf` 生成排名；$k=5$ 时 dense Recall/MRR/nDCG = 1/0.638889/0.726892，BM25 = 0.666667/0.666667/0.666667，hybrid = 1/1/1。
+- exact-title、compact-alias、CJK 三类 hybrid 严格提升；semantic-rewrite、title-abstract、hard-negative Recall 不低于 dense。
+- 合成规模 200 papers × 8 chunks：BM25 严格两遍、扫描 3,200 chunks，paper candidate 峰值 7、每篇 hit 峰值 2，均等于请求上限。
+- Plugin 定向 UI/调用回归通过；RRF 与 BM25 不再显示为 cosine similarity，Find Similar 显式传 title lexical query。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`：104 个文件、1,830 项测试通过。
+- `npm test --workspace obsidian-arxiv-daily`：37 个文件、591 项测试通过。
+- `npm run typecheck`、`npm run check:boundaries`、plugin production build、`git diff --check` 全部通过。
+- 多轮独立代码审查后无高/中严重问题。
 
 ## Abort / reshape triggers
 
