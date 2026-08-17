@@ -1,7 +1,7 @@
 import type { OutputSettings } from "../../settings/types";
 import { sha256Hex } from "../../utils/digest";
+import { derivePaperInboxPaths } from "../../services/paper-index";
 import { createEvidenceChunkId, type EvidenceChunk, type EvidenceDerivation } from "./evidence-chunk";
-import { deriveFullTextKnowledgeBasePaths } from "./knowledge-base";
 
 export const MAX_BINARY_OBJECT_BYTES = 4 * 1024 * 1024;
 export const BINARY_BLOCK_HEADER_BYTES = 52;
@@ -98,6 +98,11 @@ export interface GenerationDescriptor {
   };
   readonly indexDerivation: GenerationIndexDerivation;
   readonly objects: readonly GenerationObjectReference[];
+}
+
+export interface FullTextGenerationIndexPaths {
+  readonly directory: string;
+  readonly generationsDirectory: string;
 }
 
 export interface FullTextGenerationPaths {
@@ -270,6 +275,24 @@ export function decodeGenerationDescriptor(text: string): GenerationDescriptor {
   return validateDescriptor(value);
 }
 
+export function deriveFullTextGenerationIndexPaths(
+  storage: { normalizePath(path: string): string },
+  output: OutputSettings,
+  scopeFingerprint: string,
+  identificationFingerprint: string,
+): FullTextGenerationIndexPaths {
+  const scopeHex = fingerprintHex("scopeFingerprint", scopeFingerprint);
+  const identificationHex = fingerprintHex("identificationFingerprint", identificationFingerprint);
+  const { indexDir } = derivePaperInboxPaths(output, (path) => storage.normalizePath(path));
+  const directory = storage.normalizePath(
+    `${indexDir}/personal-library-search-index/${scopeHex}/${identificationHex}`,
+  );
+  return {
+    directory,
+    generationsDirectory: storage.normalizePath(`${directory}/generations`),
+  };
+}
+
 export function deriveFullTextGenerationPaths(
   storage: { normalizePath(path: string): string },
   output: OutputSettings,
@@ -278,13 +301,8 @@ export function deriveFullTextGenerationPaths(
   generationId: string,
 ): FullTextGenerationPaths {
   requireGenerationId(generationId);
-  const knowledgeBase = deriveFullTextKnowledgeBasePaths(
-    storage,
-    output,
-    scopeFingerprint,
-    identificationFingerprint,
-  );
-  const directory = storage.normalizePath(`${knowledgeBase.directory}/generations/${generationId}`);
+  const root = deriveFullTextGenerationIndexPaths(storage, output, scopeFingerprint, identificationFingerprint);
+  const directory = storage.normalizePath(`${root.generationsDirectory}/${generationId}`);
   return {
     directory,
     descriptorPath: storage.normalizePath(`${directory}/descriptor.json`),
@@ -644,6 +662,11 @@ function requireAllowedObject(
 
 function requireFingerprint(value: unknown, name: string): asserts value is string {
   if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) throw new Error(`${name} must be a SHA-256 fingerprint`);
+}
+
+function fingerprintHex(name: string, value: unknown): string {
+  requireFingerprint(value, name);
+  return value.slice("sha256:".length);
 }
 
 function boundedString(value: unknown, maximum: number): value is string {

@@ -418,7 +418,7 @@ describe("generation descriptor codec and paths", () => {
       IDENTIFICATION,
       "gen-20260817-a1",
     );
-    const base = `arxiv-daily/.index/personal-library-knowledge-base/${"a".repeat(64)}/${"b".repeat(64)}`;
+    const base = `arxiv-daily/.index/personal-library-search-index/${"a".repeat(64)}/${"b".repeat(64)}`;
     expect(paths).toEqual({
       directory: `${base}/generations/gen-20260817-a1`,
       descriptorPath: `${base}/generations/gen-20260817-a1/descriptor.json`,
