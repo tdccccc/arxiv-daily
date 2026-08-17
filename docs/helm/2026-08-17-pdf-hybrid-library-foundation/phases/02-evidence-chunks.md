@@ -28,24 +28,25 @@ updated: 2026-08-18
 
 ## Tasks
 
-- [ ] 定义并验收 parser provenance、`EvidenceChunk`、source locator、可选 normalized bbox、derivation versions 与稳定 host-neutral chunk ID。
-- [ ] 实现并验收结构感知 chunker；heading 作为上下文和 section 边界，PDF.js page-only 分支与旧 chunk/embedding 文本逐字段等价。
-- [ ] 实现并验收 manifest/paper schema v2、v1 双版本读取、legacy provenance/ID 提升、未知未来版本拒绝与混合版本渐进写入。
-- [ ] 索引编排接通 `ParsedDocument`，记录 derivation；当前 PDF.js、arXiv、unresolved rebind 和标题刷新保持 chunk/vector 兼容。
-- [ ] retrieval hit 投影 chunk ID、heading 和 locator，证明检索排序、聚类输入与现有插件搜索 UI 不变，并完成阶段回归。
+- [x] 定义并验收 parser provenance、`EvidenceChunk`、source locator、可选 normalized bbox、derivation versions 与稳定 host-neutral chunk ID。
+- [x] 实现并验收结构感知 chunker；heading 作为上下文和 section 边界，PDF.js page-only 分支与旧 chunk/embedding 文本逐字段等价。
+- [x] 实现并验收 manifest/paper schema v2、v1 双版本读取、legacy provenance/ID 提升、未知未来版本拒绝与混合版本渐进写入。
+- [x] 索引编排接通 `ParsedDocument`，记录 derivation；当前 PDF.js、arXiv、unresolved rebind 和标题刷新保持 chunk/vector 兼容。
+- [x] retrieval hit 投影 chunk ID、heading 和 locator，证明检索排序、聚类输入与现有插件搜索 UI 不变，并完成阶段回归。
 
 ## Verification
 
-- `npm test --workspace @arxiv-daily/core -- tests/evidence-chunk-contract.test.ts tests/parsed-document-contract.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-structured-chunking.test.ts tests/fulltext-chunking.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-knowledge-base.test.ts tests/fulltext-knowledge-base-store.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-index-orchestration.test.ts tests/fulltext-retrieval.test.ts tests/clustering.test.ts tests/clustered-direction-proposer.test.ts`
-- `npm test --workspace obsidian-arxiv-daily -- tests/pdf-document-parser.test.ts tests/pdf-text-extractor.test.ts tests/library-search-block.test.ts`
-- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`
-- `npm test --workspace obsidian-arxiv-daily`
-- `npm run typecheck`
-- `npm run check:boundaries`
-- `npm run build --workspace obsidian-arxiv-daily`
+- Evidence/ParsedDocument：2 个文件、6 项测试通过。
+- Structured/legacy chunking：2 个文件、19 项测试通过。
+- Knowledge-base schema/store：2 个文件、51 项测试通过。
+- Orchestration/retrieval/clustering/proposer：4 个文件、最终 78 项测试通过；包含 future-schema 拒写后不删 paper、不降级 manifest 的端到端回归。
+- Plugin parser/extractor/search block：3 个文件、14 项测试通过。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`：101 个文件、1,817 项测试通过。
+- `npm test --workspace obsidian-arxiv-daily`：37 个文件、591 项测试通过。
+- `npm run typecheck`：core、node-runtime、CLI 和 plugin 全部通过。
+- `npm run check:boundaries`：通过。
+- `npm run build --workspace obsidian-arxiv-daily`：production build 通过。
+- `git diff --check`：通过；三轮独立代码审查后无高/中严重问题。
 
 ## Abort / reshape triggers
 
