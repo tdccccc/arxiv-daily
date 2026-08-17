@@ -30,17 +30,17 @@ Core 拥有稳定、host-neutral、可序列化的结构化文档解析契约，
 - [x] 新增并验收 host-neutral `ParsedDocument`、block、locator、capability 与 `DocumentParser` 契约及根导出。
 - [x] 新增并验收 `ParsedDocument` 到旧 `PdfExtractionResult` 的无损兼容投影，固定空页、layout 能力和 metadata 语义。
 - [x] 新增并验收 `ObsidianPdfDocumentParser`，让旧 `ObsidianPdfTextExtractor` 通过 parser + 投影继续提供逐字段等价结果。
-- [ ] 以索引兼容回归证明现有 text hash、chunk、embedding 输入、标题和检索产物不受影响，并完成阶段检查。
+- [x] 以索引兼容回归证明现有 text hash、chunk、embedding 输入、标题和检索产物不受影响，并完成阶段检查。
 
 ## Verification
 
-- `npm test --workspace @arxiv-daily/core -- tests/parsed-document-contract.test.ts tests/pdf-text-compat.test.ts`
-- `npm test --workspace obsidian-arxiv-daily -- tests/pdf-document-parser.test.ts tests/pdf-text-extractor.test.ts`
-- `npm test --workspace @arxiv-daily/core -- tests/fulltext-index-orchestration.test.ts tests/chunking.test.ts tests/fulltext-retrieval.test.ts`
-- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`
-- `npm test --workspace obsidian-arxiv-daily`
-- `npm run typecheck`
-- `npm run check:boundaries`
+- `npm test --workspace @arxiv-daily/core -- tests/parsed-document-contract.test.ts tests/pdf-text-compat.test.ts`：2 个文件、7 项测试通过。
+- `npm test --workspace obsidian-arxiv-daily -- tests/pdf-document-parser.test.ts tests/pdf-text-extractor.test.ts`：2 个文件、9 项测试通过。
+- `npm test --workspace @arxiv-daily/core -- tests/fulltext-index-orchestration.test.ts tests/fulltext-chunking.test.ts`：2 个文件、36 项测试通过；计划中的 `tests/fulltext-title-extraction.test.ts` 不存在，未作为独立测试执行。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm test --workspace @arxiv-daily/core`：99 个文件、1,789 项测试通过。
+- `npm test --workspace obsidian-arxiv-daily`：37 个文件、591 项测试通过。
+- `npm run typecheck`：core、node-runtime、CLI 和 plugin 全部通过。
+- `npm run check:boundaries`：通过。
 
 ## Abort / reshape triggers
 

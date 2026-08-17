@@ -38,7 +38,7 @@ owner: zcode-main-session
 
 ## Phases
 
-1. P1 — 结构化解析契约与 PDF.js 兼容适配就绪，现有索引和检索产物保持不变 — status: active
+1. P1 — 结构化解析契约与 PDF.js 兼容适配就绪，现有索引和检索产物保持不变 — status: done
 2. P2 — 结构感知 EvidenceChunk、稳定 locator 与版本化迁移路径就绪 — status: pending
 3. P3 — 检索评测基线建立，BM25 与 dense 召回经 RRF 形成可验证的混合排序 — status: pending
 4. P4 — 有界、事务化的本地派生索引替代查询期全库 JSON/base64 装载 — status: pending
