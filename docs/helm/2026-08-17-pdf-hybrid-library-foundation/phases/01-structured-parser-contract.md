@@ -28,7 +28,7 @@ Core 拥有稳定、host-neutral、可序列化的结构化文档解析契约，
 ## Tasks
 
 - [x] 新增并验收 host-neutral `ParsedDocument`、block、locator、capability 与 `DocumentParser` 契约及根导出。
-- [ ] 新增并验收 `ParsedDocument` 到旧 `PdfExtractionResult` 的无损兼容投影，固定空页、layout 能力和 metadata 语义。
+- [x] 新增并验收 `ParsedDocument` 到旧 `PdfExtractionResult` 的无损兼容投影，固定空页、layout 能力和 metadata 语义。
 - [ ] 新增并验收 `ObsidianPdfDocumentParser`，让旧 `ObsidianPdfTextExtractor` 通过 parser + 投影继续提供逐字段等价结果。
 - [ ] 以索引兼容回归证明现有 text hash、chunk、embedding 输入、标题和检索产物不受影响，并完成阶段检查。
 
