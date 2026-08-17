@@ -29,7 +29,7 @@ updated: 2026-08-18
 
 ## Tasks
 
-- [ ] 定义并验收固定上限 binary block codec、严格 schema/checksum/offset 解码、generation descriptor 路径与未来版本 fail-closed。
+- [x] 定义并验收固定上限 binary block codec、严格 schema/checksum/offset 解码、generation descriptor 路径与未来版本 fail-closed。
 - [ ] 实现并验收 current/backup generation store、完整 object closure 校验、唯一目录 promotion、崩溃 seam 与上一代恢复。
 - [ ] 实现并验收逐 block exact centered dense reader：预计算 corpus mean、结果与 P3 等价、工作集/top-k 有界、查询不调用 legacy `loadPaper`。
 - [ ] 实现并验收预建 BM25 倒排 block：保持 Unicode/CJK/title alias 排名语义，只读取命中词项路由到的 block 并延迟物化 evidence。
@@ -38,7 +38,9 @@ updated: 2026-08-18
 
 ## Verification
 
-- 待执行：每个任务记录 observed Red、Green、相邻回归及 technical-report handoff 结果。
+- P4b.1 observed Red：初始测试因 `generation-index-format` API 缺失失败；随后 descriptor closure、空语料统计、跨 block chunk/paper 顺序和非相邻 paperKey 重复分别产生真实失败后修复。
+- P4b.1 Green：格式测试 17/17、相邻全文回归 8 文件 110/110、8 GiB heap 下完整 Core、全仓 typecheck、`check:boundaries` 与 `git diff --check` 通过；独立终审无高/中问题。
+- P4b.1 technical-report handoff：`no-impact`；新格式尚无生产 builder/store/reader 调用，现有报告继续准确描述当前 JSON/base64 查询路径。
 - 阶段硬门：已提交 generation 查询的 `legacyPaperLoads` 为 0；每个 binary object 与同时驻留 block 数有固定上限；lexical 不扫描无关 chunk text；dense 不创建 corpus-sized vector array。
 - 阶段质量门：P3 固定 corpus 的 dense、BM25、hybrid 排名和 Recall@k、MRR、nDCG 不回归。
 
