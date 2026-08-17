@@ -1,6 +1,7 @@
 /**
- * Obsidian host implementation of the core `PdfTextExtractor` port, backed by
- * Obsidian's built-in PDF.js (exposed as `window.pdfjsLib`).
+ * Obsidian host implementations of the core structured document parser and
+ * legacy `PdfTextExtractor` ports, backed by Obsidian's built-in PDF.js
+ * (exposed as `window.pdfjsLib`).
  *
  * Access mechanism: the official `obsidian` package (v1.13.1) declares
  * `loadPdfJs(): Promise<any>` — "Load PDF.js and return a promise to the
@@ -22,11 +23,16 @@
  * pure host boundary.
  */
 
-import type {
-  PdfExtractionOptions,
-  PdfExtractionResult,
-  PdfLayoutLine,
-  PdfTextExtractor,
+import {
+  parsedDocumentToPdfExtractionResult,
+  type DocumentParser,
+  type ParseDocumentOptions,
+  type ParsedDocument,
+  type ParsedTextLayoutLine,
+  type ParserCapability,
+  type PdfExtractionOptions,
+  type PdfExtractionResult,
+  type PdfTextExtractor,
 } from "@arxiv-daily/core";
 
 /**
@@ -99,7 +105,14 @@ export interface PdfJsTextItem {
   transform?: readonly number[];
 }
 
-export class ObsidianPdfTextExtractor implements PdfTextExtractor {
+export const OBSIDIAN_PDF_PARSER_CAPABILITIES = [
+  "page-text",
+  "text-layout",
+  "document-metadata",
+] as const satisfies readonly ParserCapability[];
+
+export class ObsidianPdfDocumentParser implements DocumentParser {
+  readonly capabilities = OBSIDIAN_PDF_PARSER_CAPABILITIES;
   private readonly pdfjsLib: PdfJsLib | undefined;
 
   /**
@@ -111,10 +124,10 @@ export class ObsidianPdfTextExtractor implements PdfTextExtractor {
     this.pdfjsLib = pdfjsLib ?? defaultPdfJsLib();
   }
 
-  async extractPdfText(
+  async parse(
     bytes: Uint8Array,
-    options?: PdfExtractionOptions,
-  ): Promise<PdfExtractionResult> {
+    options?: ParseDocumentOptions,
+  ): Promise<ParsedDocument> {
     const lib = this.requirePdfJs();
     const signal = options?.signal;
     if (signal?.aborted) throwAbortError(signal);
@@ -210,38 +223,61 @@ export class ObsidianPdfTextExtractor implements PdfTextExtractor {
     doc: PdfJsDocument,
     bytes: Uint8Array,
     signal?: AbortSignal,
-  ): Promise<PdfExtractionResult> {
-    const pages: string[] = [];
-    const layout: PdfLayoutLine[][] = [];
+  ): Promise<ParsedDocument> {
+    const blocks: ParsedDocument["blocks"][number][] = [];
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      let text = "";
+      let layout: ParsedTextLayoutLine[] = [];
       try {
         const page = await raceWithAbort(doc.getPage(pageNumber), signal);
         try {
-          const text = await raceWithAbort(page.getTextContent(), signal);
-          const built = buildPageLayout(text.items, page.view);
-          pages.push(built.text);
-          layout.push(built.lines);
+          const content = await raceWithAbort(page.getTextContent(), signal);
+          const built = buildPageLayout(content.items, page.view);
+          text = built.text;
+          layout = built.lines;
         } catch {
           if (signal?.aborted) throwAbortError(signal);
-          // Core contract: malformed pages degrade to empty strings; only
-          // document-level failures throw.
-          pages.push("");
-          layout.push([]);
         } finally {
           try {
             page.cleanup?.();
           } catch {
-            // Resource release must never fail the extraction: a cleanup
-            // error in a finally block would swallow the extracted text.
+            // Resource release must never fail parsing.
           }
         }
       } catch {
         if (signal?.aborted) throwAbortError(signal);
-        pages.push("");
-        layout.push([]);
       }
+      blocks.push({
+        kind: "page",
+        text,
+        locator: { page: pageNumber, block: pageNumber - 1 },
+        layout,
+      });
     }
-    return { pages, layout, metadataTitle: await this.metadataTitle(doc, bytes) };
+    const title = await this.metadataTitle(doc, bytes);
+    return {
+      mediaType: "application/pdf",
+      blocks,
+      ...(title === undefined ? {} : { metadata: { title } }),
+    };
+  }
+}
+
+export class ObsidianPdfTextExtractor implements PdfTextExtractor {
+  private readonly parser: ObsidianPdfDocumentParser;
+
+  constructor(pdfjsLib?: PdfJsLib) {
+    this.parser = new ObsidianPdfDocumentParser(pdfjsLib);
+  }
+
+  async extractPdfText(
+    bytes: Uint8Array,
+    options?: PdfExtractionOptions,
+  ): Promise<PdfExtractionResult> {
+    return parsedDocumentToPdfExtractionResult(
+      await this.parser.parse(bytes, options),
+      this.parser.capabilities,
+    );
   }
 }
 
@@ -326,7 +362,7 @@ function decodePdfStringLiteral(value: string): string {
 function buildPageLayout(
   items: readonly PdfJsTextItem[],
   view?: readonly [number, number, number, number],
-): { text: string; lines: PdfLayoutLine[] } {
+): { text: string; lines: ParsedTextLayoutLine[] } {
   const height = view ? view[3] - view[1] : undefined;
   const lines: Array<{ text: string; fontSize: number; y: number }> = [];
   let current: { text: string; fontSize: number; y: number } | null = null;

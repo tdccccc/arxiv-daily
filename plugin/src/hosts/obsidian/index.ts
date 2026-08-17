@@ -45,6 +45,8 @@ export { ObsidianStorageAdapter } from "./storage-adapter";
 export { ObsidianMarkupParser } from "./markup-parser";
 export { openObsidianLibrarySource } from "./library-source";
 export {
+  OBSIDIAN_PDF_PARSER_CAPABILITIES,
+  ObsidianPdfDocumentParser,
   ObsidianPdfTextExtractor,
   type PdfJsLib,
   type PdfJsLoadingTask,
