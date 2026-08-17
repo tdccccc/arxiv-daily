@@ -314,6 +314,14 @@ describe("manifest lifecycle", () => {
     expect(rebuilt).toMatchObject({ revision: 1, modelId: "other-model-q8" });
   });
 
+  it("reports an unknown future manifest version as incompatible without repairing or overwriting", async () => {
+    const memory = makeStorage();
+    memory.files[manifestPath] = `${JSON.stringify({ ...manifest(), schemaVersion: 3 }, null, 2)}\n`;
+    await expect(store(memory.storage).loadManifest())
+      .rejects.toMatchObject({ code: "incompatible" });
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
   it("rejects a persisted manifest with a different identity as incompatible", async () => {
     const memory = makeStorage();
     memory.files[manifestPath] = `${JSON.stringify({ ...manifest(), scopeFingerprint: otherScope }, null, 2)}\n`;
@@ -373,7 +381,12 @@ describe("per-paper documents", () => {
   it("round-trips paper documents including title metadata and float vectors", async () => {
     const memory = makeStorage();
     const kb = store(memory.storage);
-    const document = paperDocument({ title: "Extracted Paper Title", titleVersion: 1 });
+    const derivation = {
+      parser: { id: "fixture-parser", version: "2" },
+      chunkerVersion: 2,
+      embeddingInputVersion: 1,
+    } as const;
+    const document = paperDocument({ title: "Extracted Paper Title", titleVersion: 1, derivation });
     await kb.savePaper(document);
     const path = createFullTextKnowledgeBasePaperPath(memory.storage, kb.paths, document.paperKey);
     expect(path).toContain(`${papersDirectory}/`);
@@ -383,10 +396,48 @@ describe("per-paper documents", () => {
     expect(loaded!.paperKey).toBe(document.paperKey);
     expect(loaded!.title).toBe(document.title);
     expect(loaded!.titleVersion).toBe(document.titleVersion);
-    expect(loaded!.chunks).toEqual(document.chunks);
+    expect(loaded!.derivation).toEqual(derivation);
+    expect(loaded!.chunks.map(({ index, page, text }) => ({ index, page, text }))).toEqual(document.chunks);
+    expect(loaded!.chunks.every((chunk) => chunk.id && chunk.locator && chunk.derivation)).toBe(true);
     expect(loaded!.vectors).toBeInstanceOf(Float32Array);
     expect(Array.from(loaded!.vectors)).toEqual(Array.from(document.vectors));
     expect(loaded!.updatedAt).toBe(document.updatedAt);
+  });
+
+  it("refuses to overwrite a future-schema paper inside the per-paper queue", async () => {
+    const memory = makeStorage();
+    const kb = store(memory.storage);
+    const document = paperDocument();
+    const path = createFullTextKnowledgeBasePaperPath(memory.storage, kb.paths, document.paperKey);
+    const future = `${JSON.stringify({ schemaVersion: 3, sentinel: "keep" }, null, 2)}\n`;
+    memory.files[path] = future;
+    await expect(kb.savePaper(document)).rejects.toMatchObject({ code: "incompatible" });
+    expect(memory.files[path]).toBe(future);
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it("checks future-schema protection after an earlier queued write completes", async () => {
+    const memory = makeStorage();
+    const kb = store(memory.storage);
+    const document = paperDocument();
+    const path = createFullTextKnowledgeBasePaperPath(memory.storage, kb.paths, document.paperKey);
+    const gate = deferred();
+    let firstWrite = true;
+    memory.setAtomicImplementation(async (target, content) => {
+      if (target === path && firstWrite) {
+        firstWrite = false;
+        await gate.promise;
+        memory.files[target] = `${JSON.stringify({ schemaVersion: 3, sentinel: "concurrent" }, null, 2)}\n`;
+        return;
+      }
+      memory.files[target] = content;
+    });
+    const first = kb.savePaper(document);
+    const second = kb.savePaper({ ...document, updatedAt: secondTime.toISOString() });
+    gate.resolve();
+    await first;
+    await expect(second).rejects.toMatchObject({ code: "incompatible" });
+    expect(parse<any>(memory.files[path])).toMatchObject({ schemaVersion: 3, sentinel: "concurrent" });
   });
 
   it("writes idempotently without touching the manifest", async () => {
@@ -411,6 +462,15 @@ describe("per-paper documents", () => {
       { index: 0, page: 1, text: "First second" }];
     await expect(kb.savePaper(reordered)).rejects.toMatchObject({ code: "invalid" });
     expect(memory.files).toEqual({});
+  });
+
+  it("reports an unknown future paper version as incompatible", async () => {
+    const memory = makeStorage();
+    const kb = store(memory.storage);
+    const path = createFullTextKnowledgeBasePaperPath(memory.storage, kb.paths, "arxiv:2403.19236");
+    memory.files[path] = `${JSON.stringify({ schemaVersion: 3 }, null, 2)}\n`;
+    await expect(kb.loadPaper("arxiv:2403.19236"))
+      .rejects.toMatchObject({ code: "incompatible" });
   });
 
   it("throws a rebuildable corrupt error for an unreadable paper document", async () => {

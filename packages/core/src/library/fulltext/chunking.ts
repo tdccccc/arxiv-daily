@@ -30,6 +30,13 @@
  * `ceil(chars / 4) <= targetTokens` for every emitted chunk.
  */
 
+import type { ParsedDocument, ParserCapability } from "../../documents/parsed-document";
+import {
+  CHUNK_DERIVATION_VERSIONS,
+  createEvidenceChunkId,
+  type EvidenceChunk,
+  type ParserProvenance,
+} from "./evidence-chunk";
 import type { FullTextChunk } from "./knowledge-base";
 
 /** Options controlling full-text chunking. */
@@ -70,6 +77,193 @@ interface Unit {
  * @param options optional tuning knobs, see `ChunkingOptions`
  * @returns contiguous chunks; empty input yields an empty array
  */
+export function chunkParsedDocument(
+  document: ParsedDocument,
+  capabilities: readonly ParserCapability[],
+  parser: ParserProvenance,
+  options?: ChunkingOptions,
+): EvidenceChunk[] {
+  if (!capabilities.includes("document-structure")) {
+    const pages = document.blocks
+      .filter((block) => block.kind === "page")
+      .map((block) => block.text);
+    return chunkFullText(pages, options).map((legacy) => evidenceFromLegacy(legacy, parser));
+  }
+
+  const targetTokens = requirePositiveInteger(options?.targetTokens, "targetTokens", DEFAULT_TARGET_TOKENS);
+  const overlapTokens = requireNonNegativeInteger(
+    options?.overlapTokens,
+    "overlapTokens",
+    Math.max(1, Math.round(targetTokens / 10)),
+  );
+  const minChunkChars = requireNonNegativeInteger(options?.minChunkChars, "minChunkChars", DEFAULT_MIN_CHUNK_CHARS);
+  const sections = structuredSections(document, minChunkChars);
+  const chunks: EvidenceChunk[] = [];
+  for (const section of sections) {
+    for (const built of chunkStructuredSection(
+      section.units,
+      targetTokens * CHARS_PER_TOKEN,
+      overlapTokens * CHARS_PER_TOKEN,
+    )) {
+      const first = built[0]!;
+      const last = built[built.length - 1]!;
+      const locator = {
+        pageStart: first.page,
+        pageEnd: last.page,
+        ...(first.block === undefined ? {} : { blockStart: first.block }),
+        ...(last.block === undefined ? {} : { blockEnd: last.block }),
+      };
+      const identity = {
+        text: built.map((unit) => unit.text).join("\n"),
+        headings: [...section.headings],
+        locator,
+        derivation: { parser, ...CHUNK_DERIVATION_VERSIONS },
+      };
+      chunks.push({
+        id: createEvidenceChunkId(identity),
+        index: chunks.length,
+        page: locator.pageStart,
+        ...identity,
+      });
+    }
+  }
+  return chunks;
+}
+
+interface StructuredUnit extends Unit {
+  block?: number;
+}
+
+interface StructuredSection {
+  headings: string[];
+  units: StructuredUnit[];
+}
+
+function structuredSections(document: ParsedDocument, minChunkChars: number): StructuredSection[] {
+  const sections: StructuredSection[] = [];
+  const headingStack: Array<{ level: number; text: string }> = [];
+  let current: StructuredSection = { headings: [], units: [] };
+  const flush = (): void => {
+    if (current.units.length > 0) sections.push(current);
+    current = { headings: headingStack.map((heading) => heading.text), units: [] };
+  };
+  for (const block of document.blocks) {
+    if (block.kind === "heading") {
+      const text = normalizeBlockText(block.text);
+      if (!text) continue;
+      flush();
+      const level = Number.isSafeInteger(block.headingLevel) && block.headingLevel! > 0 ? block.headingLevel! : 1;
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1]!.level >= level) headingStack.pop();
+      headingStack.push({ level, text });
+      current = { headings: headingStack.map((heading) => heading.text), units: [] };
+      continue;
+    }
+    const text = normalizeBlockText(block.text);
+    const page = block.locator.page;
+    if (!text || page === undefined) continue;
+    current.units.push({ text, page, block: block.locator.block });
+  }
+  flush();
+  // Drop a section only when all of its blocks together are noise. This lets
+  // adjacent short structured blocks form useful evidence.
+  return sections.filter((section) => section.units.reduce((sum, unit) => sum + unit.text.length, 0) >= minChunkChars);
+}
+
+function chunkStructuredSection(
+  sourceUnits: readonly StructuredUnit[],
+  targetChars: number,
+  overlapChars: number,
+): StructuredUnit[][] {
+  const units = sourceUnits.flatMap((unit) => splitStructuredUnit(unit, targetChars));
+  const chunks: StructuredUnit[][] = [];
+  let previous: readonly StructuredUnit[] = [];
+  let cursor = 0;
+  while (cursor < units.length) {
+    const carried = structuredOverlap(previous, overlapChars, targetChars);
+    const parts = [...carried];
+    let chars = parts.length === 0 ? 0 : totalChars(parts) + parts.length - 1;
+    while (cursor < units.length) {
+      const unit = units[cursor]!;
+      const next = chars === 0 ? unit.text.length : chars + 1 + unit.text.length;
+      if (next > targetChars) {
+        if (parts.length === carried.length && carried.length > 0) {
+          const budget = targetChars - chars - 1;
+          const cut = boundaryCut(unit.text, budget);
+          parts.push({ ...unit, text: unit.text.slice(0, cut) });
+          units[cursor] = { ...unit, text: unit.text.slice(cut) };
+        }
+        break;
+      }
+      parts.push(unit);
+      chars = next;
+      cursor += 1;
+    }
+    if (parts.length === carried.length) {
+      // A carried suffix left no room for new content; discard it and always
+      // make progress with the already hard-split next unit.
+      parts.length = 0;
+      parts.push(units[cursor]!);
+      cursor += 1;
+    }
+    chunks.push(parts);
+    previous = parts;
+  }
+  return chunks;
+}
+
+function splitStructuredUnit(unit: StructuredUnit, targetChars: number): StructuredUnit[] {
+  const parts: StructuredUnit[] = [];
+  let remaining = unit.text;
+  while (remaining.length > targetChars) {
+    const cut = boundaryCut(remaining, targetChars);
+    parts.push({ ...unit, text: remaining.slice(0, cut) });
+    remaining = remaining.slice(cut);
+  }
+  if (remaining.length > 0) parts.push({ ...unit, text: remaining });
+  return parts;
+}
+
+function structuredOverlap(
+  previous: readonly StructuredUnit[],
+  overlapChars: number,
+  targetChars: number,
+): StructuredUnit[] {
+  if (previous.length === 0 || overlapChars <= 0) return [];
+  const carried: StructuredUnit[] = [];
+  let chars = 0;
+  for (let index = previous.length - 1; index >= 0; index -= 1) {
+    const unit = previous[index]!;
+    const next = chars === 0 ? unit.text.length : chars + 1 + unit.text.length;
+    if (next > overlapChars) break;
+    carried.unshift(unit);
+    chars = next;
+  }
+  if (carried.length === 0) {
+    carried.push(previous[previous.length - 1]!);
+    chars = carried[0]!.text.length;
+  }
+  return chars < targetChars - 1 ? carried : [];
+}
+
+function evidenceFromLegacy(chunk: FullTextChunk, parser: ParserProvenance): EvidenceChunk {
+  const identity = {
+    text: chunk.text,
+    headings: [] as string[],
+    locator: { pageStart: chunk.page },
+    derivation: { parser, ...CHUNK_DERIVATION_VERSIONS },
+  };
+  return {
+    id: createEvidenceChunkId(identity),
+    index: chunk.index,
+    page: chunk.page,
+    ...identity,
+  };
+}
+
+function normalizeBlockText(text: string): string {
+  return text.split("\n").map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean).join("\n");
+}
+
 export function chunkFullText(pages: readonly string[], options?: ChunkingOptions): FullTextChunk[] {
   const targetTokens = requirePositiveInteger(options?.targetTokens, "targetTokens", DEFAULT_TARGET_TOKENS);
   const overlapTokens = requireNonNegativeInteger(

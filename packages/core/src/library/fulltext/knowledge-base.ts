@@ -11,17 +11,28 @@
 import type { OutputSettings } from "../../settings/types";
 import { derivePaperInboxPaths } from "../../services/paper-index";
 import { sha256Hex } from "../../utils/digest";
+import {
+  CHUNK_DERIVATION_VERSIONS,
+  createEvidenceChunkId,
+  type EvidenceChunk,
+  type EvidenceDerivation,
+} from "./evidence-chunk";
 
-export const FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION = 1 as const;
+export const FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION = 2 as const;
+export const LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION = 1 as const;
 
-/** One extracted, embedded chunk of a paper's full text. */
-export interface FullTextChunk {
-  /** Zero-based chunk position within the paper. */
-  index: number;
-  /** One-based source page of the chunk (first page of the chunk span). */
-  page: number;
-  text: string;
-}
+/**
+ * In-memory compatibility shape. Decoded/new v2 documents populate every
+ * EvidenceChunk field; optional metadata keeps source-compatible legacy fakes.
+ */
+export type FullTextChunk = Pick<EvidenceChunk, "index" | "page" | "text">
+  & Partial<Pick<EvidenceChunk, "id" | "headings" | "locator" | "derivation">>;
+
+export const LEGACY_PARSER_PROVENANCE = { id: "legacy-pdf-text-extractor", version: "1" } as const;
+export const LEGACY_EVIDENCE_DERIVATION: EvidenceDerivation = {
+  parser: LEGACY_PARSER_PROVENANCE,
+  ...CHUNK_DERIVATION_VERSIONS,
+};
 
 /**
  * Per-paper full-text document: chunks plus their row-major vectors.
@@ -52,6 +63,8 @@ export interface FullTextPaperDocument {
   filePaths: readonly string[];
   /** Per-path observation fingerprints, same order as `filePaths`. */
   observationFingerprints: readonly string[];
+  /** Document-level derivation used for reuse compatibility (absent on promoted v1). */
+  derivation?: EvidenceDerivation;
   chunks: readonly FullTextChunk[];
   /** Row-major vectors; length === chunks.length * dimension. */
   vectors: Float32Array;
@@ -74,6 +87,7 @@ export interface FullTextPaperKnowledgeRecord {
   titleVersion?: number;
   filePaths: readonly string[];
   observationFingerprints: readonly string[];
+  derivation?: EvidenceDerivation;
   chunkCount: number;
   error?: string;
   updatedAt: string;
@@ -165,6 +179,7 @@ export interface FullTextPaperDocumentJson {
   titleVersion?: number;
   filePaths: string[];
   observationFingerprints: string[];
+  derivation?: EvidenceDerivation;
   chunks: FullTextChunk[];
   vectors: { encoding: "base64-float32-le"; data: string };
   updatedAt: string;
@@ -177,7 +192,9 @@ export function serializeFullTextPaperDocument(document: FullTextPaperDocument):
 
 export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocument | null {
   if (!isPlainObject(value)) return null;
-  if (value.schemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
+  const sourceSchemaVersion = value.schemaVersion;
+  if (sourceSchemaVersion !== LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
+    && sourceSchemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
   if (typeof value.paperKey !== "string" || !isNonEmptyString(value.paperKey)) return null;
   if (typeof value.modelId !== "string" || !isNonEmptyString(value.modelId)) return null;
   if (!isPositiveInteger(value.dimension)) return null;
@@ -194,7 +211,11 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
     if (!isNonNegativeInteger(chunk.index) || chunk.index !== expectedIndex) return null;
     if (!isPositiveInteger(chunk.page)) return null;
     if (typeof chunk.text !== "string") return null;
-    chunks.push({ index: chunk.index, page: chunk.page, text: chunk.text });
+    const promoted = sourceSchemaVersion === LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
+      ? promoteLegacyChunk(chunk.index, chunk.page, chunk.text)
+      : decodeEvidenceChunk(chunk);
+    if (!promoted) return null;
+    chunks.push(promoted);
     expectedIndex += 1;
   }
   const vectors = decodeVectors(value.vectors, chunks.length * value.dimension);
@@ -205,6 +226,8 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
   if (value.titleVersion !== undefined && !isPositiveInteger(value.titleVersion)) {
     return null;
   }
+  const derivation = value.derivation === undefined ? undefined : decodeDerivation(value.derivation);
+  if (value.derivation !== undefined && !derivation) return null;
   return {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
     paperKey: value.paperKey,
@@ -216,6 +239,7 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
     titleVersion: value.titleVersion,
     filePaths: [...value.filePaths],
     observationFingerprints: [...value.observationFingerprints],
+    ...(derivation ? { derivation } : {}),
     chunks,
     vectors,
     updatedAt: value.updatedAt,
@@ -224,7 +248,9 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
 
 export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKnowledgeBaseManifest | null {
   if (!isPlainObject(value)) return null;
-  if (value.schemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
+  const sourceSchemaVersion = value.schemaVersion;
+  if (sourceSchemaVersion !== LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
+    && sourceSchemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
   if (!isNonNegativeSafeInteger(value.revision)) return null;
   if (!isFingerprint(value.scopeFingerprint) || !isFingerprint(value.identificationFingerprint)) return null;
   if (typeof value.modelId !== "string" || !isNonEmptyString(value.modelId)) return null;
@@ -262,6 +288,8 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
     if (record.titleVersion !== undefined && !isPositiveInteger(record.titleVersion)) {
       return null;
     }
+    const derivation = record.derivation === undefined ? undefined : decodeDerivation(record.derivation);
+    if (record.derivation !== undefined && !derivation) return null;
     if (!isNonNegativeInteger(record.chunkCount)) return null;
     if (record.error !== undefined && typeof record.error !== "string") return null;
     if (!isIsoDate(record.updatedAt)) return null;
@@ -276,6 +304,7 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
       ...(record.titleVersion === undefined ? {} : { titleVersion: record.titleVersion }),
       filePaths: [...record.filePaths],
       observationFingerprints: [...record.observationFingerprints],
+      ...(derivation ? { derivation } : {}),
       chunkCount: record.chunkCount,
       ...(record.error === undefined ? {} : { error: record.error }),
       updatedAt: record.updatedAt,
@@ -310,10 +339,85 @@ function toJsonDocument(document: FullTextPaperDocument): FullTextPaperDocumentJ
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],
-    chunks: document.chunks.map((chunk) => ({ ...chunk })),
+    derivation: document.derivation,
+    chunks: document.chunks.map((chunk) => completeEvidenceChunk(chunk, document.derivation)),
     vectors: { encoding: "base64-float32-le", data: btoa(binary) },
     updatedAt: document.updatedAt,
   };
+}
+
+function promoteLegacyChunk(index: number, page: number, text: string): EvidenceChunk {
+  const identity = {
+    text,
+    headings: [] as string[],
+    locator: { pageStart: page },
+    derivation: LEGACY_EVIDENCE_DERIVATION,
+  };
+  return { id: createEvidenceChunkId(identity), index, page, ...identity };
+}
+
+function completeEvidenceChunk(chunk: FullTextChunk, documentDerivation?: EvidenceDerivation): EvidenceChunk {
+  const derivation = chunk.derivation ?? documentDerivation ?? LEGACY_EVIDENCE_DERIVATION;
+  const identity = {
+    text: chunk.text,
+    headings: [...(chunk.headings ?? [])],
+    locator: chunk.locator ?? { pageStart: chunk.page },
+    derivation,
+  };
+  const expectedId = createEvidenceChunkId(identity);
+  if (chunk.id !== undefined && chunk.id !== expectedId) {
+    throw new Error(`full-text paper chunk id does not match content and derivation at index ${chunk.index}`);
+  }
+  return { id: expectedId, index: chunk.index, page: chunk.page, ...identity };
+}
+
+function decodeEvidenceChunk(value: Record<string, any>): EvidenceChunk | null {
+  if (!isFingerprint(value.id) || !Array.isArray(value.headings) || !value.headings.every(isNonEmptyString)) return null;
+  if (!isPlainObject(value.locator) || !isPositiveInteger(value.locator.pageStart)) return null;
+  if (value.page !== value.locator.pageStart) return null;
+  if (value.locator.pageEnd !== undefined
+    && (!isPositiveInteger(value.locator.pageEnd) || value.locator.pageEnd < value.locator.pageStart)) return null;
+  if (value.locator.blockStart !== undefined && !isNonNegativeInteger(value.locator.blockStart)) return null;
+  if (value.locator.blockEnd !== undefined && !isNonNegativeInteger(value.locator.blockEnd)) return null;
+  if (value.locator.bbox !== undefined && !isNormalizedBoundingBox(value.locator.bbox)) return null;
+  const derivation = decodeDerivation(value.derivation);
+  if (!derivation) return null;
+  const locator = {
+    pageStart: value.locator.pageStart,
+    ...(value.locator.pageEnd === undefined ? {} : { pageEnd: value.locator.pageEnd }),
+    ...(value.locator.blockStart === undefined ? {} : { blockStart: value.locator.blockStart }),
+    ...(value.locator.blockEnd === undefined ? {} : { blockEnd: value.locator.blockEnd }),
+    ...(value.locator.bbox === undefined ? {} : { bbox: { ...value.locator.bbox } }),
+  };
+  const identity = { text: value.text, headings: [...value.headings], locator, derivation };
+  if (createEvidenceChunkId(identity) !== value.id) return null;
+  return {
+    id: value.id,
+    index: value.index,
+    page: value.page,
+    text: value.text,
+    headings: [...value.headings],
+    locator,
+    derivation,
+  };
+}
+
+function decodeDerivation(value: unknown): EvidenceDerivation | null {
+  if (!isPlainObject(value) || !isPlainObject(value.parser)) return null;
+  if (!isNonEmptyString(value.parser.id) || !isNonEmptyString(value.parser.version)) return null;
+  if (!isPositiveInteger(value.chunkerVersion) || !isPositiveInteger(value.embeddingInputVersion)) return null;
+  return {
+    parser: { id: value.parser.id, version: value.parser.version },
+    chunkerVersion: value.chunkerVersion,
+    embeddingInputVersion: value.embeddingInputVersion,
+  };
+}
+
+function isNormalizedBoundingBox(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  const numbers = [value.left, value.top, value.right, value.bottom];
+  return numbers.every((number) => typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 1)
+    && value.left <= value.right && value.top <= value.bottom;
 }
 
 function decodeVectors(value: unknown, expectedLength: number): Float32Array | null {

@@ -128,6 +128,9 @@ describe("searchKnowledgeBase", () => {
     expect(matches[0]!.chunkCount).toBe(3);
     expect(matches[0]!.hits).toHaveLength(3); // default maxHitsPerPaper
     expect(matches[0]!.hits[0]!.chunkIndex).toBe(0);
+    expect(matches[0]!.hits[0]!.chunkId).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(matches[0]!.hits[0]!.headings).toEqual([]);
+    expect(matches[0]!.hits[0]!.locator).toEqual({ pageStart: 2 });
     expect(matches[0]!.hits[0]!.page).toBe(2);
     expect(matches[0]!.hits[0]!.text).toBe("Beta target passage");
     expect(matches[0]!.hits[0]!.score).toBeCloseTo(1, 6);

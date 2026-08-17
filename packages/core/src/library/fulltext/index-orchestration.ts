@@ -20,7 +20,8 @@ import type { Logger } from "../../services/logger";
 import { sha256Hex } from "../../utils/digest";
 import type { PersonalLibraryCatalog } from "../personal-library-catalog";
 import type { ScopedLibrarySource } from "../scoped-library-source";
-import { chunkFullText } from "./chunking";
+import type { DocumentParser, ParsedDocument, ParserCapability } from "../../documents/parsed-document";
+import { chunkFullText, chunkParsedDocument } from "./chunking";
 import {
   FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
   type FullTextKnowledgeBaseManifest,
@@ -28,8 +29,12 @@ import {
   type FullTextPaperDocument,
   type FullTextPaperKnowledgeRecord,
 } from "./knowledge-base";
-import type { EmbeddingModel, PdfTextExtractor } from "./ports";
+import type { EmbeddingModel, PdfExtractionResult, PdfTextExtractor } from "./ports";
 import { applyEmbeddingPrefix } from "./ports";
+import { parsedDocumentToPdfExtractionResult } from "./pdf-text-compat";
+import { CHUNK_DERIVATION_VERSIONS, type EvidenceDerivation } from "./evidence-chunk";
+import { LEGACY_PARSER_PROVENANCE } from "./knowledge-base";
+import { FullTextKnowledgeBaseStoreError } from "./knowledge-base-store";
 import { searchKnowledgeBase, type KnowledgeBasePaperMatch } from "./retrieval";
 import { lexicalTitleSimilarity } from "./title-similarity";
 import { extractTitleFromFirstPage } from "./title-extraction";
@@ -74,7 +79,9 @@ export interface IndexPersonalLibraryFullTextInput {
   catalog: PersonalLibraryCatalog;
   /** Host file access for PDF bytes. */
   source: ScopedLibrarySource;
-  extractor: PdfTextExtractor;
+  /** Structured parser preferred for new writes; extractor remains a compatible legacy input. */
+  parser?: DocumentParser;
+  extractor?: PdfTextExtractor;
   embedding: EmbeddingModel;
   store: FullTextKnowledgeBaseStore;
   logger?: Logger;
@@ -88,8 +95,15 @@ export async function indexPersonalLibraryFullText(
   input: IndexPersonalLibraryFullTextInput,
 ): Promise<FullTextIndexRunSummary> {
   throwIfCancelled(input.signal);
-  const { catalog, source, extractor, embedding, store } = input;
+  const { catalog, source, embedding, store } = input;
+  if (!input.parser && !input.extractor) {
+    throw new Error("full-text indexing requires a parser or extractor");
+  }
   const log = input.logger;
+  const expectedDerivation: EvidenceDerivation = {
+    parser: input.parser?.provenance ?? LEGACY_PARSER_PROVENANCE,
+    ...CHUNK_DERIVATION_VERSIONS,
+  };
   const nowIso = (input.now ?? (() => new Date()))().toISOString();
 
   const loaded = await store.loadManifest();
@@ -158,7 +172,11 @@ export async function indexPersonalLibraryFullText(
     const exactReady = previous
       && previous.status === "ready"
       && previous.modelId === embedding.modelId
-      && sameFingerprints(previous, observationFingerprints);
+      && sameFingerprints(previous, observationFingerprints)
+      // Promoted v1 records intentionally have no derivation and remain reusable
+      // without touching PDF bytes/vectors. Once a v2 derivation exists, every
+      // derivation component participates in the reuse decision.
+      && (previous.derivation === undefined || sameDerivation(previous.derivation, expectedDerivation));
 
     if (exactReady && (!unit.fallback || previous.titleVersion === TITLE_EXTRACTION_VERSION)) {
       outcomes.push({ paperKey, status: "reused" });
@@ -175,10 +193,13 @@ export async function indexPersonalLibraryFullText(
           && previous.modelId === embedding.modelId
           && unit.contentHash !== undefined
           && previous.contentHash === unit.contentHash
+          && reusableDerivation(previous.derivation, expectedDerivation)
           ? paperKey
           : unit.migrationSourceKeys.find((candidate) => {
             const record = papers[candidate];
-            return record?.status === "ready" && record.modelId === embedding.modelId;
+            return record?.status === "ready"
+              && record.modelId === embedding.modelId
+              && reusableDerivation(record.derivation, expectedDerivation);
           });
       if (reuseSourceKey) {
         try {
@@ -197,7 +218,8 @@ export async function indexPersonalLibraryFullText(
                 contentHash: unit.contentHash,
                 refreshTitle,
                 source,
-                extractor,
+                parser: input.parser,
+                extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
               });
@@ -215,7 +237,8 @@ export async function indexPersonalLibraryFullText(
                 contentHash: unit.contentHash,
                 refreshTitle: false,
                 source,
-                extractor,
+                parser: input.parser,
+                extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
               });
@@ -233,7 +256,7 @@ export async function indexPersonalLibraryFullText(
             continue;
           }
         } catch (caught) {
-          if (isCancellationErrorLike(caught, input.signal)) throw caught;
+          if (isCancellationErrorLike(caught, input.signal) || isIncompatibleStoreError(caught)) throw caught;
           const message = describeRefreshError(caught);
           log?.warn(`fulltext: reusing ${reuseSourceKey} for ${paperKey} failed: ${message}`);
           outcomes.push(recordFailed(
@@ -277,7 +300,8 @@ export async function indexPersonalLibraryFullText(
         contentHash: unit.contentHash,
         extractTitle: unit.fallback,
         source,
-        extractor,
+        parser: input.parser,
+        extractor: input.extractor,
         embedding,
         nowIso,
         signal: input.signal,
@@ -288,7 +312,7 @@ export async function indexPersonalLibraryFullText(
       outcomes.push({ paperKey, status: "indexed", chunkCount: document.chunks.length });
       log?.info(`fulltext: indexed ${paperKey} (${document.chunks.length} chunks)`);
     } catch (caught) {
-      if (isCancellationErrorLike(caught, input.signal)) throw caught;
+      if (isCancellationErrorLike(caught, input.signal) || isIncompatibleStoreError(caught)) throw caught;
       const message = caught instanceof Error ? caught.message : String(caught);
       log?.warn(`fulltext: indexing failed for ${paperKey}: ${message}`);
       outcomes.push(recordFailed(
@@ -462,7 +486,8 @@ async function buildPaperDocument(input: {
   /** Extract a title from the first page (fallback papers have no catalog metadata). */
   extractTitle?: boolean;
   source: ScopedLibrarySource;
-  extractor: PdfTextExtractor;
+  parser?: DocumentParser;
+  extractor?: PdfTextExtractor;
   embedding: EmbeddingModel;
   nowIso: string;
   signal?: AbortSignal;
@@ -472,13 +497,17 @@ async function buildPaperDocument(input: {
     throw new Error("paper has no file paths to index");
   }
   const bytes = await input.source.readBinary(filePaths[0]!, { signal: input.signal });
-  const extraction = await input.extractor.extractPdfText(
-    new Uint8Array(bytes),
-    { signal: input.signal },
-  );
+  const parsed = await parseIndexDocument(input, new Uint8Array(bytes));
+  const { extraction, document, capabilities, derivation } = parsed;
   const pages = extraction.pages;
   const textHash = `sha256:${sha256Hex(pages.join("\n"))}`;
-  const chunks = chunkFullText(pages);
+  const chunks = document
+    ? chunkParsedDocument(document, capabilities, derivation.parser)
+    : chunkParsedDocument(
+      { mediaType: "application/pdf", blocks: pages.map((text, index) => ({ kind: "page", text, locator: { page: index + 1, block: index } })) },
+      ["page-text"],
+      derivation.parser,
+    );
   const vectors = await input.embedding.embed(
     chunks.map((chunk) => prefixFor("passage", input.embedding, chunk.text)),
     { signal: input.signal },
@@ -508,6 +537,7 @@ async function buildPaperDocument(input: {
     titleVersion: input.extractTitle ? TITLE_EXTRACTION_VERSION : undefined,
     filePaths: [...filePaths],
     observationFingerprints: [...observationFingerprints],
+    derivation,
     chunks,
     vectors: flat,
     updatedAt: input.nowIso,
@@ -523,7 +553,8 @@ async function rebindFallbackDocument(input: {
   contentHash?: string;
   refreshTitle: boolean;
   source: ScopedLibrarySource;
-  extractor: PdfTextExtractor;
+  parser?: DocumentParser;
+  extractor?: PdfTextExtractor;
   nowIso: string;
   signal?: AbortSignal;
 }): Promise<FullTextPaperDocument> {
@@ -532,10 +563,7 @@ async function rebindFallbackDocument(input: {
     const path = input.filePaths[0];
     if (!path) throw new Error("fallback paper has no file path for title refresh");
     const bytes = await input.source.readBinary(path, { signal: input.signal });
-    const extraction = await input.extractor.extractPdfText(
-      new Uint8Array(bytes),
-      { signal: input.signal },
-    );
+    const { extraction } = await parseIndexDocument(input, new Uint8Array(bytes));
     title = extractTitleFromFirstPage(extraction.pages, extraction.layout, extraction.metadataTitle) ?? undefined;
   }
   return {
@@ -547,6 +575,50 @@ async function rebindFallbackDocument(input: {
     filePaths: [...input.filePaths],
     observationFingerprints: [...input.observationFingerprints],
     updatedAt: input.nowIso,
+  };
+}
+
+async function parseIndexDocument(
+  input: { parser?: DocumentParser; extractor?: PdfTextExtractor; signal?: AbortSignal },
+  bytes: Uint8Array,
+): Promise<{
+  extraction: PdfExtractionResult;
+  document?: ParsedDocument;
+  capabilities: readonly ParserCapability[];
+  derivation: EvidenceDerivation;
+}> {
+  if (input.parser) {
+    const document = await input.parser.parse(bytes, { signal: input.signal });
+    return {
+      extraction: input.parser.capabilities.includes("document-structure")
+        ? structuredDocumentExtraction(document)
+        : parsedDocumentToPdfExtractionResult(document, input.parser.capabilities),
+      document,
+      capabilities: input.parser.capabilities,
+      derivation: { parser: input.parser.provenance, ...CHUNK_DERIVATION_VERSIONS },
+    };
+  }
+  if (!input.extractor) throw new Error("full-text indexing requires a parser or extractor");
+  return {
+    extraction: await input.extractor.extractPdfText(bytes, { signal: input.signal }),
+    capabilities: ["page-text"],
+    derivation: { parser: LEGACY_PARSER_PROVENANCE, ...CHUNK_DERIVATION_VERSIONS },
+  };
+}
+
+function structuredDocumentExtraction(document: ParsedDocument): PdfExtractionResult {
+  const byPage = new Map<number, string[]>();
+  for (const block of document.blocks) {
+    const page = block.locator.page;
+    if (page === undefined) continue;
+    const texts = byPage.get(page) ?? [];
+    texts.push(block.text);
+    byPage.set(page, texts);
+  }
+  const maxPage = Math.max(0, ...byPage.keys());
+  return {
+    pages: Array.from({ length: maxPage }, (_, index) => byPage.get(index + 1)?.join("\n") ?? ""),
+    ...(document.metadata?.title === undefined ? {} : { metadataTitle: document.metadata.title }),
   };
 }
 
@@ -565,6 +637,7 @@ function recordFromDocument(
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],
+    derivation: document.derivation,
     chunkCount: document.chunks.length,
     updatedAt: nowIso,
   };
@@ -598,12 +671,30 @@ function recordFailed(
   return { paperKey, status: "failed", error };
 }
 
+function reusableDerivation(
+  stored: EvidenceDerivation | undefined,
+  expected: EvidenceDerivation,
+): boolean {
+  return stored === undefined || sameDerivation(stored, expected);
+}
+
+function sameDerivation(left: EvidenceDerivation, right: EvidenceDerivation): boolean {
+  return left.parser.id === right.parser.id
+    && left.parser.version === right.parser.version
+    && left.chunkerVersion === right.chunkerVersion
+    && left.embeddingInputVersion === right.embeddingInputVersion;
+}
+
 function sameFingerprints(
   record: FullTextPaperKnowledgeRecord,
   fingerprints: readonly string[],
 ): boolean {
   return record.observationFingerprints.length === fingerprints.length
     && record.observationFingerprints.every((value, index) => value === fingerprints[index]);
+}
+
+function isIncompatibleStoreError(error: unknown): error is FullTextKnowledgeBaseStoreError {
+  return error instanceof FullTextKnowledgeBaseStoreError && error.code === "incompatible";
 }
 
 function isCancellationErrorLike(error: unknown, signal?: AbortSignal): boolean {

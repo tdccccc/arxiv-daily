@@ -84,6 +84,7 @@ type ReadResult<T> =
   | { kind: "missing" }
   | { kind: "valid"; document: T; raw: string }
   | { kind: "corrupt"; raw?: string; error?: unknown }
+  | { kind: "incompatible"; schemaVersion: number; raw: string }
   | { kind: "unreadable"; error: unknown };
 
 // Runtime-local serialization is guaranteed only for the same StorageAdapter object and
@@ -174,6 +175,10 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
     return enqueue(this.storage, path, async () => {
       const read = await readDocument(this.storage, path, decodeFullTextPaperDocument);
       if (read.kind === "missing") return null;
+      if (read.kind === "incompatible") {
+        throw error("incompatible",
+          `incompatible full-text paper schema version ${read.schemaVersion}: ${path}`);
+      }
       if (read.kind !== "valid") {
         // Paper files are derived data: the owner may re-index to rebuild them.
         throw error("corrupt-or-unreadable",
@@ -194,6 +199,11 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
     const path = createFullTextKnowledgeBasePaperPath(this.storage, this.paths, document.paperKey);
     return enqueue(this.storage, path, async () => {
       requireAtomic(this.storage);
+      const existing = await readDocument(this.storage, path, decodeFullTextPaperDocument);
+      if (existing.kind === "incompatible") {
+        throw error("incompatible",
+          `refusing to overwrite incompatible full-text paper schema version ${existing.schemaVersion}: ${path}`);
+      }
       try {
         await ensureDirDeep(this.storage, this.paths.papersDirectory);
         // Derived, content-addressed data: idempotent rewrite, no backup needed.
@@ -338,7 +348,15 @@ async function loadDurableManifest(input: {
     }
     return { document: primary.document, raw: primary.raw };
   }
+  if (primary.kind === "incompatible") {
+    throw error("incompatible",
+      `incompatible full-text knowledge base manifest schema version ${primary.schemaVersion}: ${input.paths.documentPath}`);
+  }
   const backup = await readDocument(input.storage, input.paths.backupPath, decodeFullTextKnowledgeBaseManifest);
+  if (backup.kind === "incompatible") {
+    throw error("incompatible",
+      `incompatible full-text knowledge base manifest backup schema version ${backup.schemaVersion}: ${input.paths.backupPath}`);
+  }
   if (backup.kind === "valid") {
     if (!compatible(backup.document, input)) {
       throw error("incompatible",
@@ -370,7 +388,13 @@ async function readDocument<T>(storage: StorageAdapter, path: string, decoder: D
     return { kind: "unreadable", error: caught };
   }
   try {
-    const document = decoder(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    if (isPlainObject(parsed)
+      && typeof parsed.schemaVersion === "number"
+      && parsed.schemaVersion > FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) {
+      return { kind: "incompatible", schemaVersion: parsed.schemaVersion, raw };
+    }
+    const document = decoder(parsed);
     return document ? { kind: "valid", document, raw } : { kind: "corrupt", raw };
   } catch (caught) {
     return { kind: "corrupt", error: caught };
@@ -507,6 +531,10 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function clone(value: FullTextKnowledgeBaseManifest): FullTextKnowledgeBaseManifest {
   return JSON.parse(JSON.stringify(value)) as FullTextKnowledgeBaseManifest;
 }
@@ -523,6 +551,11 @@ function clonePaperDocument(document: FullTextPaperDocument): FullTextPaperDocum
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],
+    derivation: document.derivation === undefined ? undefined : {
+      parser: { ...document.derivation.parser },
+      chunkerVersion: document.derivation.chunkerVersion,
+      embeddingInputVersion: document.derivation.embeddingInputVersion,
+    },
     chunks: document.chunks.map((chunk) => ({ ...chunk })),
     vectors: new Float32Array(document.vectors),
     updatedAt: document.updatedAt,

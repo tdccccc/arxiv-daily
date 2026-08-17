@@ -13,6 +13,7 @@ export * from "./library/arxiv-title-search";
 export * from "./library/clustering/clusterer";
 export * from "./library/clustering/paper-vector";
 export * from "./library/fulltext/chunking";
+export * from "./library/fulltext/evidence-chunk";
 export * from "./library/fulltext/index-orchestration";
 export * from "./library/fulltext/knowledge-base";
 export * from "./library/fulltext/knowledge-base-store";

@@ -40,6 +40,8 @@ export interface ParsedBlock {
   readonly kind: ParsedBlockKind;
   readonly text: string;
   readonly locator: SourceLocator;
+  /** Semantic heading depth (1 is top-level); meaningful for heading blocks. */
+  readonly headingLevel?: number;
   readonly layout?: readonly ParsedTextLayoutLine[];
 }
 
@@ -60,5 +62,6 @@ export interface ParseDocumentOptions {
 
 export interface DocumentParser {
   readonly capabilities: readonly ParserCapability[];
+  readonly provenance: { readonly id: string; readonly version: string };
   parse(bytes: Uint8Array, options?: ParseDocumentOptions): Promise<ParsedDocument>;
 }

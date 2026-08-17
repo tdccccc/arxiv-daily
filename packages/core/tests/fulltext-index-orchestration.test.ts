@@ -16,7 +16,9 @@ import {
   decodeFullTextPaperDocument,
   serializeFullTextPaperDocument,
 } from "../src/library/fulltext/knowledge-base";
+import type { DocumentParser } from "../src/documents/parsed-document";
 import type { EmbeddingModel, PdfTextExtractor } from "../src/library/fulltext/ports";
+import { FullTextKnowledgeBaseStoreError } from "../src/library/fulltext/knowledge-base-store";
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
 import type { PersonalLibraryCatalog } from "../src/library/personal-library-catalog";
 import { sha256Hex } from "../src/utils/digest";
@@ -234,6 +236,98 @@ describe("full-text indexing orchestration", () => {
     expect(manifest.papers["arxiv:2403.19236"]!.chunkCount).toBe(document!.chunks.length);
   });
 
+  it("indexes ParsedDocument input with parser derivation and structured headings", async () => {
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const parser: DocumentParser = {
+      capabilities: ["page-text", "document-structure"],
+      provenance: { id: "fixture-structured", version: "2" },
+      async parse() {
+        return {
+          mediaType: "application/pdf",
+          blocks: [
+            { kind: "heading", text: "Methods", headingLevel: 1, locator: { page: 2, block: 0 } },
+            { kind: "paragraph", text: "Structured method evidence with enough text.", locator: { page: 2, block: 1 } },
+          ],
+        };
+      },
+    };
+    const embedding = new FakeEmbedding();
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      parser,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const document = await store.loadPaper("arxiv:2403.19236");
+    expect(document?.derivation?.parser).toEqual(parser.provenance);
+    expect(document?.chunks[0]?.headings).toEqual(["Methods"]);
+    expect(document?.chunks[0]?.locator).toEqual({ pageStart: 2, pageEnd: 2, blockStart: 1, blockEnd: 1 });
+  });
+
+  it("re-indexes unchanged v2 content when parser derivation changes", async () => {
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const makeParser = (version: string, calls: { value: number }): DocumentParser => ({
+      capabilities: ["page-text"],
+      provenance: { id: "fixture-parser", version },
+      async parse() {
+        calls.value += 1;
+        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_ALPHA, locator: { page: 1, block: 0 } }] };
+      },
+    });
+    const firstCalls = { value: 0 };
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser: makeParser("1", firstCalls), embedding, store, now: () => new Date(NOW) });
+    const secondCalls = { value: 0 };
+    const embeddingCallsBefore = embedding.calls;
+    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser: makeParser("2", secondCalls), embedding, store, now: () => new Date(NOW) });
+    expect(summary.indexed).toBe(1);
+    expect(summary.reused).toBe(0);
+    expect(secondCalls.value).toBe(1);
+    expect(embedding.calls).toBe(embeddingCallsBefore + 1);
+    expect((await store.loadPaper("arxiv:2403.19236"))?.derivation?.parser.version).toBe("2");
+  });
+
+  it("reuses an unchanged promoted v1 paper without parsing or embedding", async () => {
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW) });
+    const stored = await store.loadPaper("arxiv:2403.19236");
+    expect(stored).not.toBeNull();
+    stored!.derivation = undefined;
+    await store.savePaper(stored!);
+    const record = store.manifest.papers["arxiv:2403.19236"]!;
+    record.derivation = undefined;
+    const parser: DocumentParser = {
+      capabilities: ["page-text"],
+      provenance: { id: "new-parser", version: "9" },
+      async parse() { throw new Error("must not parse legacy reuse"); },
+    };
+    const callsBefore = embedding.calls;
+    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser, embedding, store, now: () => new Date(NOW) });
+    expect(summary.reused).toBe(1);
+    expect(embedding.calls).toBe(callsBefore);
+  });
+
   it("reuses unchanged papers without re-extracting", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",
@@ -284,6 +378,35 @@ describe("full-text indexing orchestration", () => {
     expect(summary.reused).toBe(0);
     const manifest = await store.loadManifest();
     expect(manifest.papers["arxiv:2309.11425"]!.status).toBe("ready");
+  });
+
+  it("aborts without deleting or downgrading a ready paper when a normal save rejects a future schema", async () => {
+    const paperKey = "arxiv:2403.19236";
+    const initial = makeCatalog([{ paperKey, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore();
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({
+      catalog: initial, source: new FakeSource(), extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] }),
+      embedding, store, now: () => new Date(NOW),
+    });
+    const readyBefore = structuredClone(store.manifest.papers[paperKey]!);
+    const originalSave = store.savePaper.bind(store);
+    store.savePaper = async (document) => {
+      if (document.paperKey === paperKey) {
+        throw new FullTextKnowledgeBaseStoreError("future paper schema", "incompatible");
+      }
+      return originalSave(document);
+    };
+
+    await expect(indexPersonalLibraryFullText({
+      catalog: makeCatalog([{ paperKey, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f2") }]),
+      source: new FakeSource(), extractor: new FakeExtractor({ "lib/a.pdf": [LONG_BETA] }),
+      embedding, store, now: () => new Date(NOW),
+    })).rejects.toMatchObject({ code: "incompatible" });
+
+    expect(store.removed.has(paperKey)).toBe(false);
+    expect(store.manifest.papers[paperKey]).toEqual(readyBefore);
+    expect(store.manifest.papers[paperKey]?.status).toBe("ready");
   });
 
   it("records a failed paper without failing the run", async () => {
@@ -629,6 +752,120 @@ describe("full-text indexing orchestration", () => {
     expect(Array.from((await store.loadPaper(contentKey))!.vectors)).toEqual([1, 2, 3, 4]);
   });
 
+  it("aborts without deleting or downgrading a fallback when rebind save rejects a future schema", async () => {
+    const oldPath = "lib/original.pdf";
+    const newPath = "lib/renamed.pdf";
+    const bytes = "same-future-protected-pdf";
+    const paperKey = fallbackPaperKey(bytes);
+    const source = new FakeSource({ [oldPath]: bytes, [newPath]: bytes });
+    const store = new MemoryStore();
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: oldPath, fingerprint: fingerprint("a1") }]), source,
+      extractor: new FakeExtractor({ [bytes]: [LONG_ALPHA] }), embedding, store, now: () => new Date(NOW),
+    });
+    const readyBefore = structuredClone(store.manifest.papers[paperKey]!);
+    store.savePaper = async () => {
+      throw new FullTextKnowledgeBaseStoreError("future fallback schema", "incompatible");
+    };
+
+    await expect(indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: newPath, fingerprint: fingerprint("a2") }]), source,
+      extractor: new FakeExtractor({ [bytes]: [LONG_ALPHA] }), embedding, store, now: () => new Date(NOW),
+    })).rejects.toMatchObject({ code: "incompatible" });
+
+    expect(store.removed.has(paperKey)).toBe(false);
+    expect(store.manifest.papers[paperKey]).toEqual(readyBefore);
+    expect(store.manifest.papers[paperKey]?.status).toBe("ready");
+  });
+
+  it("does not content-reuse a v2 fallback when parser derivation changes", async () => {
+    const path = "lib/local.pdf";
+    const pdfBytes = "stable-fallback-bytes";
+    const source = new FakeSource({ [path]: pdfBytes });
+    const store = new MemoryStore();
+    const calls = { first: 0, second: 0 };
+    const parser = (version: string, key: keyof typeof calls): DocumentParser => ({
+      capabilities: ["page-text"],
+      provenance: { id: "fallback-parser", version },
+      async parse() {
+        calls[key] += 1;
+        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_ALPHA, locator: { page: 1, block: 0 } }] };
+      },
+    });
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path, fingerprint: fingerprint("a1") }]),
+      source,
+      parser: parser("1", "first"),
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+    const before = embedding.calls;
+    const summary = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path, fingerprint: fingerprint("a2") }]),
+      source,
+      parser: parser("2", "second"),
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+    expect(summary).toMatchObject({ indexed: 1, reused: 0 });
+    expect(calls.second).toBe(1);
+    expect(embedding.calls).toBe(before + 1);
+  });
+
+  it("does not reuse a v2 migration source when parser derivation changes", async () => {
+    const path = "lib/legacy.pdf";
+    const bytes = "migration-pdf-bytes";
+    const observation = fingerprint("c1");
+    const legacyKey = `file:${observation}`;
+    const source = new FakeSource({ [path]: bytes });
+    const store = new MemoryStore();
+    const legacyDocument: FullTextPaperDocument = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      paperKey: legacyKey,
+      modelId: "fake-e5-q8",
+      dimension: 4,
+      textHash: fingerprint("c2"),
+      titleVersion: TITLE_EXTRACTION_VERSION,
+      filePaths: [path],
+      observationFingerprints: [observation],
+      derivation: { parser: { id: "old-parser", version: "1" }, chunkerVersion: 2, embeddingInputVersion: 1 },
+      chunks: [{ index: 0, page: 1, text: "legacy chunk" }],
+      vectors: new Float32Array([1, 2, 3, 4]),
+      updatedAt: NOW,
+    };
+    await store.savePaper(legacyDocument);
+    await store.replaceManifest({
+      ...(await store.loadManifest()),
+      papers: { [legacyKey]: {
+        paperKey: legacyKey, status: "ready", modelId: legacyDocument.modelId,
+        dimension: legacyDocument.dimension, textHash: legacyDocument.textHash,
+        filePaths: legacyDocument.filePaths, observationFingerprints: legacyDocument.observationFingerprints,
+        derivation: legacyDocument.derivation, chunkCount: 1, titleVersion: TITLE_EXTRACTION_VERSION, updatedAt: NOW,
+      } },
+    }, 0);
+    let parseCalls = 0;
+    const parser: DocumentParser = {
+      capabilities: ["page-text"],
+      provenance: { id: "new-parser", version: "2" },
+      async parse() {
+        parseCalls += 1;
+        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_BETA, locator: { page: 1, block: 0 } }] };
+      },
+    };
+    const embedding = new FakeEmbedding();
+    const summary = await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path, fingerprint: observation }]), source, parser, embedding, store,
+      now: () => new Date(NOW),
+    });
+    expect(summary).toMatchObject({ indexed: 1, reused: 0 });
+    expect(parseCalls).toBe(1);
+    expect(embedding.calls).toBe(1);
+  });
+
   it("keeps a fallback paper key and vectors when the PDF is renamed", async () => {
     const oldPath = "lib/old-name.pdf";
     const newPath = "lib/renamed.pdf";
@@ -948,6 +1185,8 @@ describe("full-text indexing orchestration", () => {
     expect(second.reused).toBe(1);
     const refreshed = await store.loadPaper(fallbackKey);
     expect(refreshed?.title).toBe("New Title Line");
+    expect(refreshed?.derivation).toBeDefined();
+    expect((await store.loadManifest()).papers[fallbackKey]?.derivation).toEqual(refreshed?.derivation);
     expect(refreshed?.chunks.length).toBeGreaterThan(0);
 
     // A further run is a plain reuse (no re-read, no refresh).

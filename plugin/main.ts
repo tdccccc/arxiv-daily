@@ -139,6 +139,7 @@ import { registerDashboardView } from "./src/dashboard/view";
 import {
   buildObsidianHostAdapters,
   ObsidianLibraryDirectoryPicker,
+  ObsidianPdfDocumentParser,
   ObsidianPdfTextExtractor,
   createTransformersEmbeddingModel,
   describeRuntimeProbe,
@@ -1593,14 +1594,14 @@ export default class ArxivDailyPlugin extends Plugin {
       // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
-      const extractor = new ObsidianPdfTextExtractor();
+      const parser = new ObsidianPdfDocumentParser();
       this.assertRemoteEmbeddingReady();
       const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
       const summary = await indexFullTextKnowledgeBase({
         catalog,
         source,
-        extractor,
+        parser,
         embedding,
         store,
         logger: this.logger,

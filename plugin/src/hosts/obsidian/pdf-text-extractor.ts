@@ -113,6 +113,7 @@ export const OBSIDIAN_PDF_PARSER_CAPABILITIES = [
 
 export class ObsidianPdfDocumentParser implements DocumentParser {
   readonly capabilities = OBSIDIAN_PDF_PARSER_CAPABILITIES;
+  readonly provenance = { id: "obsidian-pdfjs", version: "1" } as const;
   private readonly pdfjsLib: PdfJsLib | undefined;
 
   /**

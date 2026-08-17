@@ -45,12 +45,16 @@
  * reported as an error rather than silently producing meaningless scores.
  */
 
-import type { FullTextPaperDocument } from "./knowledge-base";
+import { createEvidenceChunkId, type EvidenceLocator } from "./evidence-chunk";
+import { LEGACY_EVIDENCE_DERIVATION, type FullTextPaperDocument } from "./knowledge-base";
 
 /** One matching chunk of a paper, with its similarity score. */
 export interface KnowledgeBaseChunkHit {
   /** Index of the chunk within its paper (0-based, matches `chunks`). */
   chunkIndex: number;
+  chunkId: string;
+  headings: readonly string[];
+  locator: EvidenceLocator;
   /** One-based page of the chunk's first character. */
   page: number;
   text: string;
@@ -256,8 +260,14 @@ function rankChunkHits(
   });
   return scored.slice(0, maxHitsPerPaper).map((entry) => {
     const chunk = paper.chunks[entry.chunkIndex]!;
+    const locator = chunk.locator ?? { pageStart: chunk.page };
+    const headings = chunk.headings ?? [];
+    const derivation = chunk.derivation ?? paper.derivation ?? LEGACY_EVIDENCE_DERIVATION;
     return {
       chunkIndex: chunk.index,
+      chunkId: chunk.id ?? createEvidenceChunkId({ text: chunk.text, headings, locator, derivation }),
+      headings,
+      locator,
       page: chunk.page,
       text: chunk.text,
       score: entry.score,
