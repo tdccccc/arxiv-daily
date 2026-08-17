@@ -2356,12 +2356,17 @@ class ArxivDailyDashboardView extends ItemView {
     return {
       query,
       load: async () => {
-        const matches = await this.plugin.searchPersonalLibraryFullText(query);
+        const matches = await this.plugin.searchPersonalLibraryFullText(query, {
+          lexicalQueryText: entry.title,
+        });
         return matches.map((match) => ({
           paperKey: match.paperKey,
           title: match.title,
           filePath: match.filePath,
           score: match.score,
+          scoreKind: match.scoreKind,
+          rankingScore: match.rankingScore,
+          rankingScoreKind: match.rankingScoreKind,
         }));
       },
     };
@@ -2397,6 +2402,9 @@ class ArxivDailyDashboardView extends ItemView {
             paperKey: match.paperKey,
             title: match.title,
             score: match.score,
+            scoreKind: match.scoreKind,
+            rankingScore: match.rankingScore,
+            rankingScoreKind: match.rankingScoreKind,
             filePath: match.filePath,
           })),
         });

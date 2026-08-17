@@ -36,13 +36,9 @@ import { CHUNK_DERIVATION_VERSIONS, type EvidenceDerivation } from "./evidence-c
 import { LEGACY_PARSER_PROVENANCE } from "./knowledge-base";
 import { FullTextKnowledgeBaseStoreError } from "./knowledge-base-store";
 import { searchKnowledgeBase, type KnowledgeBasePaperMatch } from "./retrieval";
-import { lexicalTitleSimilarity } from "./title-similarity";
+import { searchKnowledgeBaseBm25 } from "./bm25-retrieval";
+import { fusePaperRankingsRrf } from "./hybrid-retrieval";
 import { extractTitleFromFirstPage } from "./title-extraction";
-import {
-  significantQueryTokens,
-  computeTokenHitScores,
-  isKeywordQuery,
-} from "./lexical-search";
 
 export interface FullTextIndexPaperOutcome {
   paperKey: string;
@@ -739,14 +735,20 @@ export interface SearchFullTextKnowledgeBaseInput {
   store: FullTextKnowledgeBaseStore;
   embedding: EmbeddingModel;
   queryText: string;
+  /** Optional lexical-only query; dense retrieval always embeds queryText. */
+  lexicalQueryText?: string;
   logger?: Logger;
   /**
    * Optional per-paper titles (paperKey → title). When present they are
    * scored lexically against the query; titles without an entry are ignored.
    */
   titles?: ReadonlyMap<string, string>;
+  /** Retrieval branch for production (hybrid) or diagnostics. Default hybrid. */
+  mode?: "dense" | "lexical" | "hybrid";
   limit?: number;
   maxHitsPerPaper?: number;
+  /** Per-branch paper candidates before RRF. Default max(50, limit * 5). */
+  candidateLimit?: number;
   signal?: AbortSignal;
 }
 
@@ -763,12 +765,9 @@ export async function searchFullTextKnowledgeBase(
       + "base and re-index (rebuild) before searching",
     );
   }
-  const queryVectors = await input.embedding.embed(
-    [prefixFor("query", input.embedding, input.queryText)],
-    { signal: input.signal },
-  );
-  const queryVector = queryVectors[0];
-  if (!queryVector) throw new Error("embedding model returned no query vector");
+  const mode = input.mode ?? "hybrid";
+  const limit = input.limit ?? 10;
+  const candidateLimit = input.candidateLimit ?? Math.max(50, limit * 5);
   const papers: FullTextPaperDocument[] = [];
   for (const [paperKey, record] of Object.entries(manifest.papers)) {
     throwIfCancelled(input.signal);
@@ -785,55 +784,35 @@ export async function searchFullTextKnowledgeBase(
     }
     if (document) papers.push(document);
   }
-  // Title fusion uses the first paragraph only. Find-similar builds
-  // `title\n\nabstract`; scoring the whole blob against short titles collapses
-  // Jaccard and never lifts the matching library paper.
-  const titleQuery = firstQueryParagraph(input.queryText);
-  let titleScores: Map<string, number> | undefined;
-  if (input.titles && input.titles.size > 0) {
-    titleScores = new Map();
-    for (const [paperKey, title] of input.titles) {
-      const score = lexicalTitleSimilarity(titleQuery, title);
-      if (score > 0) titleScores.set(paperKey, score);
-    }
-    if (titleScores.size === 0) titleScores = undefined;
-  }
-  // Lexical token hits: keyword queries embed into the collapsed region and
-  // need a literal signal; see `lexical-search.ts`. Long title+abstract queries
-  // keep vector ranking only — body-token fusion would reward incidental terms.
-  let tokenScores: Map<string, number> | undefined;
-  if (isKeywordQuery(input.queryText)) {
-    const tokens = significantQueryTokens(input.queryText);
-    if (tokens.length > 0) {
-      tokenScores = computeTokenHitScores(
-        papers.map((paper) => ({
-          paperKey: paper.paperKey,
-          text: paper.chunks.map((chunk) => chunk.text).join(" "),
-          title: input.titles?.get(paper.paperKey),
-        })),
-        tokens,
-      );
-      if (tokenScores.size === 0) tokenScores = undefined;
-    }
-  }
-  return searchKnowledgeBase({
+  const lexicalQuery = input.lexicalQueryText ?? input.queryText;
+  const lexical = mode === "dense" ? [] : searchKnowledgeBaseBm25({
     papers,
-    queryVector,
-    titleScores,
-    tokenScores,
-    limit: input.limit,
+    queryText: lexicalQuery,
+    titles: input.titles,
+    limit: mode === "lexical" ? limit : candidateLimit,
     maxHitsPerPaper: input.maxHitsPerPaper,
   });
-}
+  if (mode === "lexical") return lexical;
 
-/** First non-empty paragraph of a query (title line of a title+abstract blob). */
-function firstQueryParagraph(queryText: string): string {
-  const paragraphs = queryText.split(/\n\s*\n/);
-  for (const paragraph of paragraphs) {
-    const trimmed = paragraph.trim();
-    if (trimmed) return trimmed;
-  }
-  return queryText.trim();
+  const queryVectors = await input.embedding.embed(
+    [prefixFor("query", input.embedding, input.queryText)],
+    { signal: input.signal },
+  );
+  const queryVector = queryVectors[0];
+  if (!queryVector) throw new Error("embedding model returned no query vector");
+  const dense = searchKnowledgeBase({
+    papers,
+    queryVector,
+    limit: mode === "dense" ? limit : candidateLimit,
+    maxHitsPerPaper: input.maxHitsPerPaper,
+  });
+  if (mode === "dense") return dense;
+  return fusePaperRankingsRrf({
+    rankings: [dense, lexical],
+    limit,
+    candidateLimit,
+    maxHitsPerPaper: input.maxHitsPerPaper,
+  });
 }
 
 /**

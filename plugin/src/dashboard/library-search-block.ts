@@ -11,6 +11,9 @@ export interface LibrarySearchMatch {
   paperKey: string;
   title: string;
   score: number;
+  scoreKind: "cosine" | "bm25";
+  rankingScore: number;
+  rankingScoreKind: "cosine" | "bm25" | "rrf";
   /** Relative library path for fallback-indexed files; unset for arXiv papers. */
   filePath?: string;
 }
@@ -66,7 +69,13 @@ export function renderLibrarySearchBlock(
     });
     item.createDiv({
       cls: "arxiv-daily-dashboard__library-meta",
-      text: `${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`,
+      text: `${match.filePath ?? match.paperKey} · ${formatEvidenceScore(match)}`,
     });
   }
+}
+
+export function formatEvidenceScore(match: Pick<LibrarySearchMatch, "score" | "scoreKind">): string {
+  return match.scoreKind === "cosine"
+    ? `best semantic evidence ${match.score.toFixed(3)}`
+    : "lexical match";
 }

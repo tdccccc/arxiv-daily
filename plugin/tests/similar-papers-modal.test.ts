@@ -189,6 +189,9 @@ describe("Similar Papers modal", () => {
         title: "Library Paper",
         filePath: "papers/library-paper.pdf",
         score: 0.812345,
+        scoreKind: "cosine" as const,
+        rankingScore: 0.0325,
+        rankingScoreKind: "rrf" as const,
         hits: [
           { chunkIndex: 3, page: 2, text: "A matching passage about retrieval.", score: 0.81 },
         ],
@@ -210,7 +213,8 @@ describe("Similar Papers modal", () => {
 
     expect(load).toHaveBeenCalledOnce();
     expect(content.textContent).toContain("Library Paper");
-    expect(content.textContent).toContain("papers/library-paper.pdf · similarity 0.812");
+    expect(content.textContent).toContain("papers/library-paper.pdf · best semantic evidence 0.812");
+    expect(content.textContent).not.toContain("0.032");
     expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
     expect(content.textContent).not.toContain("A matching passage about retrieval.");
     const dailyPanel = content.querySelector('[role="tabpanel"][hidden]');

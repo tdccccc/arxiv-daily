@@ -491,7 +491,10 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
                 return;
               }
               const lines = matches.slice(0, 5).map((match) => {
-                return `${match.title}\n  ${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`;
+                const evidence = match.scoreKind === "cosine"
+                  ? `best semantic evidence ${match.score.toFixed(3)}`
+                  : "lexical match";
+                return `${match.title}\n  ${match.filePath ?? match.paperKey} · ${evidence}`;
               });
               notice(`arXiv Daily: top ${Math.min(matches.length, 5)} matches\n${lines.join("\n")}`, 12_000);
             } catch (error) {

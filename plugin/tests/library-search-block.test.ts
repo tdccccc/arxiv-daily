@@ -43,13 +43,21 @@ describe("renderLibrarySearchBlock", () => {
           paperKey: "arxiv:2607.01001",
           title: "Library Paper",
           score: 0.812345,
+          scoreKind: "cosine",
+          rankingScore: 0.0325,
+          rankingScoreKind: "rrf",
         },
-        { paperKey: "arxiv:2607.01002", title: "Second", score: 0.5 },
+        {
+          paperKey: "arxiv:2607.01002", title: "Second", score: 1.7, scoreKind: "bm25",
+          rankingScore: 0.016, rankingScoreKind: "rrf",
+        },
       ],
     });
     expect(container.textContent).toContain("Library matches");
     expect(container.textContent).toContain("Library Paper");
-    expect(container.textContent).toContain("arxiv:2607.01001 · similarity 0.812");
+    expect(container.textContent).toContain("arxiv:2607.01001 · best semantic evidence 0.812");
+    expect(container.textContent).toContain("arxiv:2607.01002 · lexical match");
+    expect(container.textContent).not.toContain("0.032");
     expect(container.textContent).not.toContain("—");
     expect(container.querySelectorAll("li")).toHaveLength(2);
   });

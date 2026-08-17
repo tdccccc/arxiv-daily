@@ -3,12 +3,16 @@ import type {
   PaperIndexEntry,
   PaperSearchResult,
 } from "@arxiv-daily/core";
+import { formatEvidenceScore } from "./library-search-block";
 
 export interface LibrarySimilarMatch {
   paperKey: string;
   title: string;
   filePath?: string;
   score: number;
+  scoreKind: "cosine" | "bm25";
+  rankingScore: number;
+  rankingScoreKind: "cosine" | "bm25" | "rrf";
 }
 
 export interface SimilarPapersModalCallbacks {
@@ -140,7 +144,7 @@ async function loadLibraryPanel(
       });
       item.createDiv({
         cls: "arxiv-daily-similar-modal__meta",
-        text: `${match.filePath ?? match.paperKey} · similarity ${match.score.toFixed(3)}`,
+        text: `${match.filePath ?? match.paperKey} · ${formatEvidenceScore(match)}`,
       });
     }
   } catch (error) {

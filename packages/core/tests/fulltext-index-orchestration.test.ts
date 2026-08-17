@@ -551,6 +551,7 @@ describe("full-text indexing orchestration", () => {
     expect(matches[0]!.hits[0]!.text).toContain("alpha");
     expect(matches[0]!.hits[0]!.page).toBe(1);
     expect(matches[0]!.score).toBeCloseTo(1, 5);
+    expect(matches[0]!.rankingScore).toBeCloseTo(2 / 61, 12);
   });
 
   it("fuses lexical title matches into ranking without extra embedding calls", async () => {
@@ -588,7 +589,8 @@ describe("full-text indexing orchestration", () => {
 
     expect(matches.length).toBe(2);
     expect(matches[0]!.paperKey).toBe("arxiv:2501.00001");
-    expect(matches[0]!.score).toBe(1);
+    expect(matches[0]!.score).toBeCloseTo(1, 5);
+    expect(matches[0]!.rankingScore).toBeCloseTo(1 / 62 + 1 / 61, 12);
     expect(matches[1]!.paperKey).toBe("arxiv:2403.19236");
     // Lexical fusion adds no extra embedding calls: exactly one for the query.
     expect(embedding.calls).toBe(callsBeforeSearch + 1);
@@ -1032,7 +1034,8 @@ describe("full-text indexing orchestration", () => {
     });
 
     expect(matches[0]!.paperKey).toBe("arxiv:2403.19236");
-    expect(matches[0]!.score).toBeCloseTo(0.95);
+    expect(matches[0]!.scoreKind).toBe("cosine");
+    expect(matches[0]!.rankingScore).toBeCloseTo(1 / 62 + 1 / 61, 12);
     expect(matches[1]!.paperKey).toBe("arxiv:2501.00001");
   });
 
@@ -1148,7 +1151,7 @@ describe("full-text indexing orchestration", () => {
     });
 
     expect(matches[0]!.paperKey).toBe("arxiv:2102.00001");
-    expect(matches[0]!.score).toBe(1);
+    expect(matches[0]!.rankingScore).toBeCloseTo(1 / 61, 12);
   });
 
   it("refreshes fallback titles when the extraction rules advanced", async () => {
@@ -1193,6 +1196,78 @@ describe("full-text indexing orchestration", () => {
     const third = await run("New Title Line");
     expect(third.titlesRefreshed).toBe(0);
     expect(third.reused).toBe(1);
+  });
+
+  it("defaults to hybrid and supports dense/lexical diagnostic modes", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    const store = new MemoryStore();
+    const exactPage = "rarelexeme rarelexeme rarelexeme";
+    const semanticPage = "semantic neighboring concept";
+    const exactChunk = chunkFullText([exactPage])[0]!;
+    const semanticChunk = chunkFullText([semanticPage])[0]!;
+    const query = new Float32Array([1, 0, 0, 0]);
+    const embedding = new FakeEmbedding({
+      "query: rarelexeme": query,
+      [`passage: ${exactChunk.text}`]: new Float32Array([0, 1, 0, 0]),
+      [`passage: ${semanticChunk.text}`]: query,
+    });
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/a.pdf": [exactPage], "lib/b.pdf": [semanticPage] }),
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const dense = await searchFullTextKnowledgeBase({ store, embedding, queryText: "rarelexeme", mode: "dense" });
+    const callsBeforeLexical = embedding.calls;
+    const lexical = await searchFullTextKnowledgeBase({ store, embedding, queryText: "rarelexeme", mode: "lexical" });
+    expect(embedding.calls).toBe(callsBeforeLexical);
+    const hybrid = await searchFullTextKnowledgeBase({ store, embedding, queryText: "rarelexeme" });
+    expect(dense[0]!.paperKey).toBe("arxiv:2501.00001");
+    expect(lexical[0]!.paperKey).toBe("arxiv:2403.19236");
+    expect(hybrid[0]!.paperKey).toBe("arxiv:2403.19236");
+  });
+
+  it("uses explicit lexicalQueryText while dense embeds the complete title and abstract", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    const store = new MemoryStore();
+    const lexicalPage = "laterterm laterterm evidence";
+    const semanticPage = `semantic target ${"context ".repeat(30)}`;
+    const lexicalChunk = chunkFullText([lexicalPage])[0]!;
+    const semanticChunk = chunkFullText([semanticPage])[0]!;
+    const queryText = `Unrelated title\n\n${"background ".repeat(30)}laterterm`;
+    const queryVector = new Float32Array([1, 0, 0, 0]);
+    const embedding = new FakeEmbedding({
+      [`query: ${queryText}`]: queryVector,
+      [`passage: ${lexicalChunk.text}`]: new Float32Array([0, 1, 0, 0]),
+      [`passage: ${semanticChunk.text}`]: queryVector,
+    });
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/a.pdf": [lexicalPage], "lib/b.pdf": [semanticPage] }),
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const ordinary = await searchFullTextKnowledgeBase({ store, embedding, queryText });
+    const findSimilar = await searchFullTextKnowledgeBase({
+      store,
+      embedding,
+      queryText,
+      lexicalQueryText: "Unrelated title",
+    });
+    expect(ordinary[0]!.paperKey).toBe("arxiv:2403.19236");
+    expect(findSimilar[0]!.paperKey).toBe("arxiv:2501.00001");
   });
 
   it("searches an empty knowledge base to an empty result", async () => {

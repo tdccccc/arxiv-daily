@@ -50,6 +50,10 @@ import { LEGACY_EVIDENCE_DERIVATION, type FullTextPaperDocument } from "./knowle
 
 /** One matching chunk of a paper, with its similarity score. */
 export interface KnowledgeBaseChunkHit {
+  /** Retrieval branch that produced this evidence score. */
+  source: "dense" | "lexical";
+  /** Hit scores are meaningful only within their source channel. */
+  scoreKind: "cosine" | "bm25";
   /** Index of the chunk within its paper (0-based, matches `chunks`). */
   chunkIndex: number;
   chunkId: string;
@@ -64,9 +68,17 @@ export interface KnowledgeBaseChunkHit {
 /** A paper-level match: the paper, its score, and its best evidence passages. */
 export interface KnowledgeBasePaperMatch {
   paperKey: string;
-  /** Maximum chunk similarity — the score of the best evidence passage. */
+  /** Best dense evidence similarity, retained for compatibility/display. */
   score: number;
-  /** Best evidence passages, score descending (ties by chunk index). */
+  scoreKind: "cosine" | "bm25";
+  /** Score that determines final ordering; RRF is never presented as similarity. */
+  rankingScore: number;
+  rankingScoreKind: "cosine" | "bm25" | "rrf";
+  /**
+   * Best evidence passages. Dense/lexical modes use channel score order;
+   * hybrid interleaves channel-local top hits deterministically. Hit scores are
+   * comparable only when their `scoreKind` and `source` match.
+   */
   hits: KnowledgeBaseChunkHit[];
   /** Total number of chunks in the paper. */
   chunkCount: number;
@@ -158,6 +170,9 @@ export function searchKnowledgeBase(input: SearchKnowledgeBaseInput): KnowledgeB
     matches.push({
       paperKey: paper.paperKey,
       score,
+      scoreKind: "cosine",
+      rankingScore: score,
+      rankingScoreKind: "cosine",
       hits,
       chunkCount: paper.chunks.length,
     });
@@ -264,6 +279,8 @@ function rankChunkHits(
     const headings = chunk.headings ?? [];
     const derivation = chunk.derivation ?? paper.derivation ?? LEGACY_EVIDENCE_DERIVATION;
     return {
+      source: "dense",
+      scoreKind: "cosine",
       chunkIndex: chunk.index,
       chunkId: chunk.id ?? createEvidenceChunkId({ text: chunk.text, headings, locator, derivation }),
       headings,

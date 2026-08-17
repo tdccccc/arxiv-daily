@@ -1645,12 +1645,16 @@ export default class ArxivDailyPlugin extends Plugin {
    */
   async searchPersonalLibraryFullText(
     queryText: string,
+    options?: { lexicalQueryText?: string },
   ): Promise<Array<{
     paperKey: string;
     title: string;
     /** Relative library path for fallback-indexed files; arXiv papers leave it unset. */
     filePath?: string;
     score: number;
+    scoreKind: "cosine" | "bm25";
+    rankingScore: number;
+    rankingScoreKind: "cosine" | "bm25" | "rrf";
     hits: KnowledgeBaseChunkHit[];
   }>> {
     const connection = this.libraryConnection;
@@ -1681,6 +1685,7 @@ export default class ArxivDailyPlugin extends Plugin {
       store,
       embedding: this.buildEmbeddingModel(),
       queryText,
+      lexicalQueryText: options?.lexicalQueryText,
       titles,
       logger: this.logger,
     });
@@ -1689,6 +1694,9 @@ export default class ArxivDailyPlugin extends Plugin {
       title: titles.get(match.paperKey) ?? match.paperKey,
       filePath: fallbackPaths.get(match.paperKey),
       score: match.score,
+      scoreKind: match.scoreKind,
+      rankingScore: match.rankingScore,
+      rankingScoreKind: match.rankingScoreKind,
       hits: match.hits,
     }));
   }
