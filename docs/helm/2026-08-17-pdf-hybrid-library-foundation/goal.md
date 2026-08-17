@@ -40,7 +40,7 @@ owner: zcode-main-session
 
 1. P1 — 结构化解析契约与 PDF.js 兼容适配就绪，现有索引和检索产物保持不变 — status: done
 2. P2 — 结构感知 EvidenceChunk、稳定 locator 与版本化迁移路径就绪 — status: done
-3. P3 — 检索评测基线建立，BM25 与 dense 召回经 RRF 形成可验证的混合排序 — status: pending
+3. P3 — 检索评测基线建立，BM25 与 dense 召回经 RRF 形成可验证的混合排序 — status: active
 4. P4 — 有界、事务化的本地派生索引替代查询期全库 JSON/base64 装载 — status: pending
 5. P5 — 搜索 UI 展示章节、原文片段和页码，并可打开 PDF 到证据位置 — status: pending
 6. P6 — 可选高质量 PDF 解析 sidecar 接入并完成复杂论文、隐私与降级验证 — status: pending
