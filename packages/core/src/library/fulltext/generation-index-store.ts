@@ -41,6 +41,14 @@ const STAGING_CLAIM_FILE = ".staging-claim.json";
 const PROMOTION_CLAIM_FORMAT_VERSION = 1 as const;
 const PROMOTION_CLAIM_SCHEMA_VERSION = 1 as const;
 const PROMOTION_CLAIM_FILE = ".current-promotion-claim.json";
+const CUTOVER_MARKER_FORMAT_VERSION = 1 as const;
+const CUTOVER_MARKER_SCHEMA_VERSION = 1 as const;
+const CUTOVER_MARKER_FILE = "generation-required.json";
+const MAX_CUTOVER_MARKER_BYTES = 16 * 1024;
+const LEGACY_MIGRATION_LEASE_FORMAT_VERSION = 1 as const;
+const LEGACY_MIGRATION_LEASE_SCHEMA_VERSION = 1 as const;
+const LEGACY_MIGRATION_LEASES_DIRECTORY = ".legacy-migration-leases";
+const MAX_LEGACY_MIGRATION_LEASE_BYTES = 16 * 1024;
 
 export interface CurrentGenerationPointer {
   readonly formatVersion: typeof CURRENT_GENERATION_POINTER_FORMAT_VERSION;
@@ -77,12 +85,28 @@ interface PromotionClaim {
   readonly identificationFingerprint: string;
 }
 
+interface LegacyMigrationLeaseRecord {
+  readonly formatVersion: typeof LEGACY_MIGRATION_LEASE_FORMAT_VERSION;
+  readonly schemaVersion: typeof LEGACY_MIGRATION_LEASE_SCHEMA_VERSION;
+  readonly writerToken: string;
+  readonly scopeFingerprint: string;
+  readonly identificationFingerprint: string;
+  readonly checksum: string;
+}
+
 export interface FullTextGenerationIndexStorePaths {
   readonly directory: string;
   readonly generationsDirectory: string;
   readonly currentPath: string;
   readonly backupPath: string;
   readonly promotionClaimPath: string;
+  readonly legacyMigrationLeasesDirectory: string;
+  readonly cutoverMarkerPath: string;
+}
+
+export interface FullTextLegacyMigrationLease {
+  assertOwned(): Promise<void>;
+  release(): Promise<void>;
 }
 
 export interface GenerationObjectWrite {
@@ -148,6 +172,8 @@ export interface FullTextGenerationIndexStoreOptions {
   readonly beforePointerPromotion?: () => void | Promise<void>;
   /** Test seam after system-wide promotion ownership is acquired. */
   readonly afterPromotionClaimAcquired?: () => void | Promise<void>;
+  /** Test seam after the immutable cutover marker is established and before final guards. */
+  readonly afterCutoverMarkerEstablished?: () => void | Promise<void>;
   readonly afterPointerPromotion?: () => void | Promise<void>;
   /** Failure-injection seam immediately before entering queued recovery. */
   readonly beforeRecoveryQueue?: () => void | Promise<void>;
@@ -191,6 +217,8 @@ const writerQueues = new WeakMap<StorageAdapter, Map<string, Promise<void>>>();
  * is system-wide for their shared backend. Fixed claims fail closed and are never
  * stolen by time. Task 5 still owns safe stale-claim repair and serialization with
  * the authoritative knowledge-base commit; these claims are not a cross-store transaction.
+ * Legacy migration leases additionally assume read-after-write/list visibility on
+ * one strongly consistent local backend, not eventual cross-device synchronization.
  */
 export class FullTextGenerationIndexStore {
   readonly paths: FullTextGenerationIndexStorePaths;
@@ -212,6 +240,71 @@ export class FullTextGenerationIndexStore {
       currentPath,
       backupPath: storage.normalizePath(`${currentPath}.backup`),
       promotionClaimPath: storage.normalizePath(`${base.directory}/${PROMOTION_CLAIM_FILE}`),
+      legacyMigrationLeasesDirectory: storage.normalizePath(
+        `${base.directory}/${LEGACY_MIGRATION_LEASES_DIRECTORY}`,
+      ),
+      cutoverMarkerPath: storage.normalizePath(`${base.directory}/${CUTOVER_MARKER_FILE}`),
+    };
+  }
+
+  /**
+   * Admit one legacy manifest writer. writerToken must be a fresh high-entropy
+   * value for every acquisition (the plugin uses a new 128-bit UUID); hosts
+   * without exclusive create cannot deterministically arbitrate token reuse.
+   */
+  async acquireLegacyMigrationLease(writerToken: string): Promise<FullTextLegacyMigrationLease> {
+    validateWriterToken(writerToken);
+    if (!this.storage.writeTextAtomic) {
+      throw wrap("capability-unsupported", "legacy migration admission requires writeTextAtomic capability");
+    }
+    await this.assertLegacyFallbackOpen();
+    await ensureDirDeep(this.storage, this.paths.legacyMigrationLeasesDirectory);
+    const leasePath = this.legacyMigrationLeasePath(writerToken);
+    const active = encodeLegacyMigrationLease(
+      writerToken, this.scopeFingerprint, this.identificationFingerprint,
+    );
+    let alreadyExists: boolean;
+    try {
+      alreadyExists = await this.storage.exists(leasePath);
+    } catch (caught) {
+      throw wrap("claim-uncertain", "legacy migration lease existence is unknown", caught);
+    }
+    if (alreadyExists) {
+      throw wrap("concurrent", "legacy migration lease token is already active");
+    }
+    try {
+      await this.storage.writeTextAtomic(leasePath, active);
+    } catch (caught) {
+      let actual: string;
+      try {
+        actual = await this.storage.readText(leasePath);
+      } catch (readbackError) {
+        throw wrap("claim-uncertain", "legacy migration lease write outcome is uncertain", readbackError);
+      }
+      if (actual !== active) {
+        throw wrap("claim-uncertain", "legacy migration lease write committed different bytes", caught);
+      }
+    }
+    await this.assertLegacyMigrationLease(leasePath, active);
+    try {
+      await this.assertLegacyFallbackOpen();
+    } catch (caught) {
+      await this.releaseLegacyMigrationLease(leasePath, active).catch(() => undefined);
+      throw caught;
+    }
+
+    let leaseReleased = false;
+    return {
+      assertOwned: async () => {
+        if (leaseReleased) throw wrap("stale-claim", "legacy migration lease is already released");
+        await this.assertLegacyMigrationLease(leasePath, active);
+        await this.assertLegacyFallbackOpen();
+      },
+      release: async () => {
+        if (leaseReleased) return;
+        await this.releaseLegacyMigrationLease(leasePath, active);
+        leaseReleased = true;
+      },
     };
   }
 
@@ -222,6 +315,9 @@ export class FullTextGenerationIndexStore {
   async openCurrent(): Promise<OpenedFullTextGeneration | null> {
     const primary = await this.readPointer(this.paths.currentPath);
     if (primary.kind === "incompatible") throw incompatible(`incompatible current generation pointer: ${this.paths.currentPath}`);
+    if (primary.kind === "unreadable") {
+      throw wrap("corrupt-or-unreadable", `cannot observe current generation pointer: ${this.paths.currentPath}`, primary.error);
+    }
     if (primary.kind === "valid") {
       try {
         return await this.openPinned(primary.pointer);
@@ -232,9 +328,51 @@ export class FullTextGenerationIndexStore {
     }
     if (primary.kind === "missing") {
       const backup = await this.readPointer(this.paths.backupPath);
-      if (backup.kind === "missing") return null;
+      if (backup.kind === "unreadable") {
+        throw wrap("corrupt-or-unreadable", `cannot observe backup generation pointer: ${this.paths.backupPath}`, backup.error);
+      }
+      if (backup.kind === "missing") {
+        return this.resolveMissingPointers();
+      }
     }
     return this.queueRecovery(primary.kind === "corrupt" ? primary.raw : null, primary.kind === "corrupt" ? primary.error : undefined);
+  }
+
+  private async resolveMissingPointers(): Promise<null> {
+    const cutover = await this.readCutoverMarker();
+    if (cutover.kind === "missing") return null;
+    if (cutover.kind === "incompatible") throw incompatible("incompatible full-text generation cutover marker");
+    if (cutover.kind === "corrupt") {
+      throw wrap("corrupt-or-unreadable", "full-text generation pointers are missing after cutover", cutover.error);
+    }
+    throw wrap("corrupt-or-unreadable", "full-text generation pointers are missing after cutover");
+  }
+
+  /** Establish the immutable boundary that ends the one-time legacy fallback window. */
+  private async establishCutoverMarker(): Promise<CutoverMarkerLease> {
+    const current = await this.readCutoverMarker();
+    if (current.kind === "valid") return { created: false, raw: current.raw };
+    if (current.kind === "incompatible") throw incompatible("incompatible full-text generation cutover marker");
+    if (current.kind === "corrupt") {
+      throw wrap("corrupt-or-unreadable", "full-text generation cutover marker is corrupt", current.error);
+    }
+    requireExclusiveCreate(this.storage);
+    const expected = encodeCutoverMarker(this.scopeFingerprint, this.identificationFingerprint);
+    await ensureDirDeep(this.storage, this.paths.directory);
+    let created: boolean;
+    try {
+      created = await this.storage.createTextExclusive!(this.paths.cutoverMarkerPath, expected);
+    } catch (caught) {
+      const resolved = await this.readCutoverMarker();
+      if (resolved.kind === "valid") return { created: false, raw: resolved.raw };
+      throw wrap("claim-uncertain", "full-text generation cutover marker create outcome is uncertain", caught);
+    }
+    const verified = await this.readCutoverMarker();
+    if (verified.kind !== "valid" || (created && verified.raw !== expected)) {
+      throw wrap("claim-uncertain", "full-text generation cutover marker readback failed",
+        verified.kind === "corrupt" ? verified.error : undefined);
+    }
+    return { created, raw: verified.raw };
   }
 
   private async stageAndPromoteSerial(input: StageAndPromoteGenerationInput): Promise<OpenedFullTextGeneration> {
@@ -280,7 +418,20 @@ export class FullTextGenerationIndexStore {
     // Exact committed replay precedes the exclusive-claim requirement so a
     // caller can acknowledge a previously committed generation idempotently.
     const replay = await this.tryExactCommittedReplay(descriptor);
-    if (replay) return replay;
+    if (replay) {
+      await this.assertNoActiveLegacyMigrationLease();
+      const replayMarker = await this.establishCutoverMarker();
+      await this.options.afterCutoverMarkerEstablished?.();
+      await this.assertCutoverMarker(replayMarker);
+      await this.assertNoActiveLegacyMigrationLease();
+      await this.assertCutoverMarker(replayMarker);
+      const latest = await this.readPointer(this.paths.currentPath);
+      if (!samePointerObservation(latest, replay.observation)) {
+        throw wrap("concurrent", "current generation changed during exact replay validation");
+      }
+      await this.assertSourceRevision(input.sourceCurrentRevision, descriptor.sourceRevision);
+      return replay.opened;
+    }
     requireExclusiveCreate(this.storage);
 
     const claimPath = this.storage.normalizePath(`${generation.directory}/${STAGING_CLAIM_FILE}`);
@@ -290,6 +441,7 @@ export class FullTextGenerationIndexStore {
     let ownershipLost = false;
     let committed = false;
     let cleanupWholeGeneration = true;
+    let cutoverMarker: CutoverMarkerLease | null = null;
 
     try {
       await ensureDirDeep(this.storage, generation.directory);
@@ -357,10 +509,19 @@ export class FullTextGenerationIndexStore {
 
       // The generation-local claim protects immutable staging. This root claim
       // separately owns only the final CURRENT/backup promotion window.
+      const observedCurrentRead = await this.readPointer(this.paths.currentPath);
+      const observedCurrent = this.pointerForGuard(observedCurrentRead);
+      if (!matchesExpected(observedCurrent, input.expectedCurrent)) {
+        throw new FullTextGenerationIndexStoreError(
+          "current generation changed before promotion claim", "stale-current",
+          input.expectedCurrent?.sourceRevision ?? null, observedCurrent?.sourceRevision ?? null,
+        );
+      }
       const promotionClaim = promotionClaimForCandidate(
         pinned,
         input.writerToken,
         input.expectedCurrent,
+        pointerReadRaw(observedCurrentRead),
         this.scopeFingerprint,
         this.identificationFingerprint,
       );
@@ -370,7 +531,8 @@ export class FullTextGenerationIndexStore {
         await this.options.afterPromotionClaimAcquired?.();
         const currentRead = await this.readPointer(this.paths.currentPath);
         const current = this.pointerForGuard(currentRead);
-        if (!matchesExpected(current, input.expectedCurrent)) {
+        if (!samePointerObservation(currentRead, observedCurrentRead)
+          || !matchesExpected(current, input.expectedCurrent)) {
           throw new FullTextGenerationIndexStoreError(
             "current generation changed before promotion", "stale-current",
             input.expectedCurrent?.sourceRevision ?? null, current?.sourceRevision ?? null,
@@ -379,16 +541,34 @@ export class FullTextGenerationIndexStore {
         await this.assertSourceRevision(input.sourceCurrentRevision, pinned.sourceRevision);
         await this.assertPromotionClaim(promotionClaimText);
         if (current !== null) {
-          await this.validateCompleteGeneration(current);
-          await this.storage.writeTextAtomic!(this.paths.backupPath, encodeCurrentGenerationPointer(current));
+          let validBackup = false;
+          try {
+            await this.validateCompleteGeneration(current);
+            validBackup = true;
+          } catch (caught) {
+            this.warn(
+              "current full-text generation is not a valid backup; preserving the existing backup during replacement",
+              caught,
+            );
+          }
+          if (validBackup) {
+            await this.storage.writeTextAtomic!(this.paths.backupPath, encodeCurrentGenerationPointer(current));
+          }
         }
+        await this.assertNoActiveLegacyMigrationLease();
+        cutoverMarker = await this.establishCutoverMarker();
+        await this.options.afterCutoverMarkerEstablished?.();
+        await this.assertCutoverMarker(cutoverMarker);
+        await this.assertNoActiveLegacyMigrationLease();
+        await this.assertCutoverMarker(cutoverMarker);
         await this.assertPromotionClaim(promotionClaimText);
         const latest = await this.readPointer(this.paths.currentPath);
         if (!samePointerObservation(latest, currentRead)) {
           throw wrap("concurrent", "current generation pointer changed while promotion claim was held");
         }
-        // This is the final awaited guard. The CURRENT commit invocation follows
-        // synchronously so no other asynchronous recheck can stale its result.
+        // This is the final pre-invocation source guard. The atomic adapter may
+        // still await before install, so orchestration postchecks and retries if
+        // the authoritative source advances during that commit window.
         await this.assertSourceRevision(input.sourceCurrentRevision, pinned.sourceRevision);
         try {
           await this.storage.writeTextAtomic!(this.paths.currentPath, encodeCurrentGenerationPointer(candidate.pointer));
@@ -410,12 +590,25 @@ export class FullTextGenerationIndexStore {
           this.warn("post-commit generation promotion observer failed", caught);
         }
         return candidate;
+      } catch (caught) {
+        let failure = caught;
+        const rollbackAllowed = !(failure instanceof FullTextGenerationIndexStoreError
+          && (failure.code === "claim-uncertain" || failure.code === "commit-uncertain"));
+        if (!committed && rollbackAllowed && cutoverMarker?.created) {
+          try {
+            await this.rollbackFirstCutoverMarkerIfSafe(cutoverMarker, promotionClaimText);
+          } catch (rollbackFailure) {
+            failure = rollbackFailure;
+          }
+        }
+        throw failure;
       } finally {
         await this.releasePromotionClaimIfOwned(promotionClaimText);
       }
     } catch (caught) {
-      const cleanupForbidden = caught instanceof FullTextGenerationIndexStoreError
-        && (caught.code === "claim-uncertain" || caught.code === "commit-uncertain");
+      const failure = caught;
+      const cleanupForbidden = failure instanceof FullTextGenerationIndexStoreError
+        && (failure.code === "claim-uncertain" || failure.code === "commit-uncertain");
       if (!committed && !cleanupForbidden && ownsClaim && !ownershipLost) {
         await this.cleanupGenerationIfOwned(
           generation,
@@ -425,8 +618,8 @@ export class FullTextGenerationIndexStore {
           cleanupWholeGeneration,
         );
       }
-      if (caught instanceof FullTextGenerationIndexStoreError) throw caught;
-      throw wrap("write-failed", `failed to stage generation ${descriptor.generationId}`, caught);
+      if (failure instanceof FullTextGenerationIndexStoreError) throw failure;
+      throw wrap("write-failed", `failed to stage generation ${descriptor.generationId}`, failure);
     }
   }
 
@@ -435,6 +628,9 @@ export class FullTextGenerationIndexStore {
     return enqueueWriter(this.storage, this.paths.currentPath, async () => {
       const current = await this.readPointer(this.paths.currentPath);
       if (current.kind === "incompatible") throw incompatible(`incompatible current generation pointer: ${this.paths.currentPath}`);
+      if (current.kind === "unreadable") {
+        throw wrap("corrupt-or-unreadable", "current generation pointer is unreadable during recovery", current.error);
+      }
       if (current.kind === "valid") {
         if (current.raw !== observedPrimaryRaw) {
           // A same-runtime writer won before recovery acquired the queue.
@@ -450,7 +646,10 @@ export class FullTextGenerationIndexStore {
       }
       const backup = await this.readPointer(this.paths.backupPath);
       if (backup.kind === "incompatible") throw incompatible(`incompatible backup generation pointer: ${this.paths.backupPath}`);
-      if (backup.kind === "missing" && current.kind === "missing") return null;
+      if (backup.kind === "unreadable") {
+        throw wrap("corrupt-or-unreadable", "backup generation pointer is unreadable during recovery", backup.error);
+      }
+      if (backup.kind === "missing" && current.kind === "missing") return this.resolveMissingPointers();
       if (backup.kind !== "valid") {
         throw wrap("corrupt-or-unreadable", "current and backup generation pointers are corrupt or unreadable",
           backup.kind === "corrupt" ? backup.error : primaryError);
@@ -476,6 +675,12 @@ export class FullTextGenerationIndexStore {
           if (isIncompatible(caught)) throw caught;
           throw wrap("corrupt-or-unreadable", "backup pointer generation is not complete and valid", caught);
         }
+        await this.assertNoActiveLegacyMigrationLease();
+        const recoveryMarker = await this.establishCutoverMarker();
+        await this.options.afterCutoverMarkerEstablished?.();
+        await this.assertCutoverMarker(recoveryMarker);
+        await this.assertNoActiveLegacyMigrationLease();
+        await this.assertCutoverMarker(recoveryMarker);
         await this.assertPromotionClaim(promotionClaimText);
         const immediatelyBeforeWrite = await this.readPointer(this.paths.currentPath);
         if (!samePointerObservation(immediatelyBeforeWrite, claimedCurrent)) {
@@ -915,7 +1120,30 @@ export class FullTextGenerationIndexStore {
         return { kind: "corrupt", error, raw };
       }
     } catch (error) {
-      return { kind: "corrupt", error, raw: null };
+      return { kind: "unreadable", error };
+    }
+  }
+
+  private async readCutoverMarker(): Promise<CutoverMarkerReadResult> {
+    try {
+      if (!(await this.storage.exists(this.paths.cutoverMarkerPath))) return { kind: "missing" };
+      const raw = await this.storage.readText(this.paths.cutoverMarkerPath);
+      try {
+        requireCutoverMarkerTextWithinLimit(raw);
+        const value = JSON.parse(raw) as Record<string, unknown>;
+        if (typeof value.formatVersion === "number" && value.formatVersion > CUTOVER_MARKER_FORMAT_VERSION) {
+          return { kind: "incompatible" };
+        }
+        if (typeof value.schemaVersion === "number" && value.schemaVersion > CUTOVER_MARKER_SCHEMA_VERSION) {
+          return { kind: "incompatible" };
+        }
+        decodeCutoverMarker(raw, this.scopeFingerprint, this.identificationFingerprint);
+        return { kind: "valid", raw };
+      } catch (error) {
+        return { kind: "corrupt", error };
+      }
+    } catch (error) {
+      return { kind: "corrupt", error };
     }
   }
 
@@ -950,7 +1178,7 @@ export class FullTextGenerationIndexStore {
   private pointerForGuard(result: PointerReadResult): CurrentGenerationPointer | null {
     if (result.kind === "missing") return null;
     if (result.kind === "incompatible") throw incompatible("incompatible current generation pointer");
-    if (result.kind === "corrupt") {
+    if (result.kind === "corrupt" || result.kind === "unreadable") {
       throw wrap("corrupt-or-unreadable", "current generation pointer is corrupt or unreadable", result.error);
     }
     this.assertPointerIdentity(result.pointer);
@@ -977,6 +1205,133 @@ export class FullTextGenerationIndexStore {
     if (actual !== expectedText) throw wrap("stale-claim", "generation promotion claim ownership changed");
   }
 
+  private async assertLegacyFallbackOpen(): Promise<void> {
+    const marker = await this.readCutoverMarker();
+    if (marker.kind === "incompatible") throw incompatible("incompatible full-text generation cutover marker");
+    if (marker.kind === "corrupt") {
+      throw wrap("corrupt-or-unreadable", "full-text generation cutover marker is corrupt or unreadable", marker.error);
+    }
+    if (marker.kind === "valid") {
+      throw wrap("capability-unsupported", "legacy full-text migration window is closed");
+    }
+
+    for (const [label, pointer] of [
+      ["current", await this.readPointer(this.paths.currentPath)],
+      ["backup", await this.readPointer(this.paths.backupPath)],
+    ] as const) {
+      if (pointer.kind === "incompatible") {
+        throw incompatible(`incompatible ${label} generation pointer`);
+      }
+      if (pointer.kind === "corrupt" || pointer.kind === "unreadable") {
+        throw wrap(
+          "corrupt-or-unreadable",
+          `${label} generation pointer is corrupt or unreadable before legacy migration`,
+          pointer.error,
+        );
+      }
+      if (pointer.kind === "valid") {
+        throw wrap("capability-unsupported", "legacy full-text migration window is closed");
+      }
+    }
+  }
+
+  private legacyMigrationLeasePath(writerToken: string): string {
+    const name = sha256Hex(`fulltext-legacy-migration-lease-v1\0${writerToken}`);
+    return this.storage.normalizePath(`${this.paths.legacyMigrationLeasesDirectory}/${name}.json`);
+  }
+
+  private async assertLegacyMigrationLease(path: string, expected: string): Promise<void> {
+    let actual: string;
+    try {
+      actual = await this.storage.readText(path);
+    } catch (caught) {
+      throw wrap("claim-uncertain", "legacy migration lease is unreadable", caught);
+    }
+    if (actual !== expected) throw wrap("stale-claim", "legacy migration lease ownership changed");
+  }
+
+  private async assertNoActiveLegacyMigrationLease(): Promise<void> {
+    if (!this.storage.list) {
+      throw wrap("capability-unsupported", "generation cutover requires storage list capability");
+    }
+    let exists: boolean;
+    try {
+      exists = await this.storage.exists(this.paths.legacyMigrationLeasesDirectory);
+    } catch (caught) {
+      throw wrap("claim-uncertain", "legacy migration lease directory existence is unknown", caught);
+    }
+    if (!exists) return;
+    let entries: Awaited<ReturnType<NonNullable<StorageAdapter["list"]>>>;
+    try {
+      entries = await this.storage.list(this.paths.legacyMigrationLeasesDirectory);
+    } catch (caught) {
+      throw wrap("claim-uncertain", "legacy migration lease directory is unreadable", caught);
+    }
+    const prefix = `${this.paths.legacyMigrationLeasesDirectory}/`;
+    for (const entry of entries) {
+      const path = this.storage.normalizePath(entry.path);
+      const name = path.startsWith(prefix) ? path.slice(prefix.length) : "";
+      if (entry.type !== "file" || path !== entry.path || !/^[a-f0-9]{64}\.json$/.test(name)) {
+        throw wrap("claim-uncertain", "legacy migration lease directory contains an invalid entry");
+      }
+      let lease: LegacyMigrationLeaseRecord;
+      try {
+        lease = decodeLegacyMigrationLease(await this.storage.readText(path));
+      } catch (caught) {
+        throw wrap("claim-uncertain", "legacy migration lease is invalid or unreadable", caught);
+      }
+      if (lease.scopeFingerprint !== this.scopeFingerprint
+        || lease.identificationFingerprint !== this.identificationFingerprint
+        || this.legacyMigrationLeasePath(lease.writerToken) !== path) {
+        throw wrap("claim-uncertain", "legacy migration lease identity or path is invalid");
+      }
+    }
+    if (entries.length > 0) {
+      throw wrap("concurrent", "legacy full-text migration is active during generation cutover");
+    }
+  }
+
+  private async releaseLegacyMigrationLease(path: string, expected: string): Promise<void> {
+    let actual: string;
+    try {
+      actual = await this.storage.readText(path);
+    } catch (caught) {
+      let exists: boolean;
+      try { exists = await this.storage.exists(path); }
+      catch (existenceError) {
+        throw wrap("claim-uncertain", "legacy migration lease release state is unknown", existenceError);
+      }
+      if (!exists) return;
+      throw wrap("claim-uncertain", "legacy migration lease is unreadable during release", caught);
+    }
+    if (actual !== expected) throw wrap("stale-claim", "legacy migration lease ownership changed before release");
+    try {
+      await this.storage.remove(path);
+    } catch (caught) {
+      let exists: boolean;
+      try { exists = await this.storage.exists(path); }
+      catch (existenceError) {
+        throw wrap("claim-uncertain", "legacy migration lease release outcome is uncertain", existenceError);
+      }
+      if (!exists) return;
+      throw wrap("claim-uncertain", "legacy migration lease release failed", caught);
+    }
+    let exists: boolean;
+    try { exists = await this.storage.exists(path); }
+    catch (caught) {
+      throw wrap("claim-uncertain", "legacy migration lease release could not be verified", caught);
+    }
+    if (exists) throw wrap("claim-uncertain", "legacy migration lease still exists after release");
+  }
+
+  private async assertCutoverMarker(expected: CutoverMarkerLease): Promise<void> {
+    const actual = await this.readCutoverMarker();
+    if (actual.kind !== "valid" || actual.raw !== expected.raw) {
+      throw wrap("stale-claim", "generation cutover marker changed before pointer commit",
+        actual.kind === "corrupt" ? actual.error : undefined);
+    }
+  }
+
   private async releasePromotionClaimIfOwned(expectedText: string): Promise<void> {
     const actual = await this.storage.readText(this.paths.promotionClaimPath).catch(() => null);
     if (actual !== expectedText) return;
@@ -987,6 +1342,43 @@ export class FullTextGenerationIndexStore {
 
   private warn(message: string, error?: unknown): void {
     try { this.options.onWarning?.(message, error); } catch { /* diagnostics must not change storage outcome */ }
+  }
+
+  private async rollbackFirstCutoverMarkerIfSafe(
+    marker: CutoverMarkerLease,
+    promotionClaimText: string,
+  ): Promise<void> {
+    try {
+      await this.assertPromotionClaim(promotionClaimText);
+    } catch (caught) {
+      throw wrap("commit-uncertain", "cannot roll back cutover marker after promotion ownership changed", caught);
+    }
+    const current = await this.readPointer(this.paths.currentPath);
+    const backup = await this.readPointer(this.paths.backupPath);
+    if (current.kind === "valid" || backup.kind === "valid") return;
+    if (current.kind !== "missing" || backup.kind !== "missing") {
+      throw wrap("commit-uncertain", "cannot roll back cutover marker while generation pointer state is uncertain");
+    }
+    const observed = await this.readCutoverMarker();
+    if (observed.kind === "missing") return;
+    if (observed.kind !== "valid" || observed.raw !== marker.raw) {
+      throw wrap("commit-uncertain", "cutover marker ownership changed before rollback");
+    }
+    try {
+      await this.assertPromotionClaim(promotionClaimText);
+    } catch (caught) {
+      throw wrap("commit-uncertain", "cannot roll back cutover marker after promotion ownership changed", caught);
+    }
+    try {
+      await this.storage.remove(this.paths.cutoverMarkerPath);
+    } catch (caught) {
+      throw wrap("commit-uncertain", "failed to roll back an uncommitted cutover marker", caught);
+    }
+    const verified = await this.readCutoverMarker();
+    if (verified.kind !== "missing") {
+      throw wrap("commit-uncertain", "cutover marker rollback could not be verified",
+        verified.kind === "corrupt" ? verified.error : undefined);
+    }
   }
 
   private async cleanupGenerationIfOwned(
@@ -1001,7 +1393,7 @@ export class FullTextGenerationIndexStore {
     const current = await this.readPointer(this.paths.currentPath);
     // Cleanup is permitted only for a conclusive safe observation. Corrupt,
     // incompatible, or unreadable CURRENT may already contain the candidate.
-    if (current.kind === "corrupt" || current.kind === "incompatible") return;
+    if (current.kind === "corrupt" || current.kind === "unreadable" || current.kind === "incompatible") return;
     if (current.kind === "valid" && current.pointer.generationId === generationId) return;
     const cleanupPath = cleanupWholeGeneration ? generation.directory : claimPath;
     await this.storage.remove(cleanupPath).catch(() => undefined);
@@ -1036,13 +1428,16 @@ export class FullTextGenerationIndexStore {
     return { kind: "committed", opened };
   }
 
-  private async tryExactCommittedReplay(descriptor: GenerationDescriptor): Promise<OpenedFullTextGeneration | null> {
+  private async tryExactCommittedReplay(descriptor: GenerationDescriptor): Promise<{
+    readonly opened: OpenedFullTextGeneration;
+    readonly observation: PointerReadResult;
+  } | null> {
     const current = await this.readPointer(this.paths.currentPath);
     if (current.kind !== "valid" || current.pointer.generationId !== descriptor.generationId
       || current.pointer.sourceRevision !== descriptor.sourceRevision) return null;
     const opened = await this.validateCompleteGeneration(current.pointer).catch(() => null);
     if (!opened || encodeGenerationDescriptor(opened.descriptor) !== encodeGenerationDescriptor(descriptor)) return null;
-    return opened;
+    return { opened, observation: current };
   }
 }
 
@@ -1050,7 +1445,94 @@ type PointerReadResult =
   | { kind: "missing" }
   | { kind: "valid"; pointer: CurrentGenerationPointer; raw: string }
   | { kind: "incompatible"; raw: string }
-  | { kind: "corrupt"; error: unknown; raw: string | null };
+  | { kind: "corrupt"; error: unknown; raw: string }
+  | { kind: "unreadable"; error: unknown };
+
+type CutoverMarkerReadResult =
+  | { kind: "missing" }
+  | { kind: "valid"; raw: string }
+  | { kind: "incompatible" }
+  | { kind: "corrupt"; error: unknown };
+
+interface CutoverMarkerLease {
+  readonly created: boolean;
+  readonly raw: string;
+}
+
+function encodeLegacyMigrationLease(
+  writerToken: string,
+  scopeFingerprint: string,
+  identificationFingerprint: string,
+): string {
+  const semantic = {
+    formatVersion: LEGACY_MIGRATION_LEASE_FORMAT_VERSION,
+    schemaVersion: LEGACY_MIGRATION_LEASE_SCHEMA_VERSION,
+    writerToken,
+    scopeFingerprint,
+    identificationFingerprint,
+  } as const;
+  const checksum = `sha256:${sha256Hex(JSON.stringify(semantic))}`;
+  return JSON.stringify({ ...semantic, checksum });
+}
+
+function decodeLegacyMigrationLease(raw: string): LegacyMigrationLeaseRecord {
+  if (utf8Length(raw) > MAX_LEGACY_MIGRATION_LEASE_BYTES) {
+    throw new Error("legacy migration lease exceeds its byte limit");
+  }
+  const value = JSON.parse(raw) as unknown;
+  if (!isPlainObject(value)) throw new Error("legacy migration lease must be an object");
+  const keys = ["formatVersion", "schemaVersion", "writerToken", "scopeFingerprint",
+    "identificationFingerprint", "checksum"];
+  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) {
+    throw new Error("legacy migration lease has an unknown or missing field");
+  }
+  if (value.formatVersion !== LEGACY_MIGRATION_LEASE_FORMAT_VERSION
+    || value.schemaVersion !== LEGACY_MIGRATION_LEASE_SCHEMA_VERSION) {
+    throw new Error("unsupported legacy migration lease version");
+  }
+  validateWriterToken(value.writerToken);
+  validateFingerprint(value.scopeFingerprint, "scopeFingerprint");
+  validateFingerprint(value.identificationFingerprint, "identificationFingerprint");
+  const expected = encodeLegacyMigrationLease(
+    value.writerToken,
+    value.scopeFingerprint,
+    value.identificationFingerprint,
+  );
+  if (raw !== expected) throw new Error("legacy migration lease checksum or encoding is invalid");
+  return value as unknown as LegacyMigrationLeaseRecord;
+}
+
+function encodeCutoverMarker(scopeFingerprint: string, identificationFingerprint: string): string {
+  const semantic = {
+    formatVersion: CUTOVER_MARKER_FORMAT_VERSION,
+    schemaVersion: CUTOVER_MARKER_SCHEMA_VERSION,
+    scopeFingerprint,
+    identificationFingerprint,
+  };
+  return JSON.stringify({ ...semantic, checksum: `sha256:${sha256Hex(JSON.stringify(semantic))}` });
+}
+
+function decodeCutoverMarker(
+  raw: string,
+  scopeFingerprint: string,
+  identificationFingerprint: string,
+): void {
+  const value = JSON.parse(raw) as Record<string, unknown>;
+  if (!isPlainObject(value)) throw new Error("generation cutover marker must be an object");
+  const keys = ["formatVersion", "schemaVersion", "scopeFingerprint", "identificationFingerprint", "checksum"];
+  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) {
+    throw new Error("generation cutover marker has an unknown or missing field");
+  }
+  if (value.formatVersion !== CUTOVER_MARKER_FORMAT_VERSION
+    || value.schemaVersion !== CUTOVER_MARKER_SCHEMA_VERSION) {
+    throw new Error("unsupported generation cutover marker version");
+  }
+  if (value.scopeFingerprint !== scopeFingerprint || value.identificationFingerprint !== identificationFingerprint) {
+    throw new Error("generation cutover marker identity does not match store binding");
+  }
+  const expected = encodeCutoverMarker(scopeFingerprint, identificationFingerprint);
+  if (raw !== expected) throw new Error("generation cutover marker checksum or encoding is invalid");
+}
 
 export function encodeCurrentGenerationPointer(pointer: CurrentGenerationPointer): string {
   const semantic = validatePointer(pointer, false);
@@ -1225,6 +1707,7 @@ function promotionClaimForCandidate(
   descriptor: GenerationDescriptor,
   writerToken: string,
   expectedCurrent: StageAndPromoteGenerationInput["expectedCurrent"],
+  observedPrimaryRaw: string | null,
   scopeFingerprint: string,
   identificationFingerprint: string,
 ): PromotionClaim {
@@ -1236,7 +1719,7 @@ function promotionClaimForCandidate(
     candidateGenerationId: descriptor.generationId,
     sourceRevision: descriptor.sourceRevision,
     expectedCurrent,
-    observedPrimaryChecksum: pointerObservationChecksum(null),
+    observedPrimaryChecksum: pointerObservationChecksum(observedPrimaryRaw),
     scopeFingerprint,
     identificationFingerprint,
   };
@@ -1286,15 +1769,25 @@ function validatePromotionClaim(value: unknown): PromotionClaim {
 }
 
 function pointerObservationChecksum(raw: string | null): string {
-  return `sha256:${sha256Hex(raw === null ? "missing" : raw)}`;
+  if (raw === null) return `sha256:${sha256Hex(new Uint8Array([0]))}`;
+  const encoded = new TextEncoder().encode(raw);
+  const bytes = new Uint8Array(encoded.length + 1);
+  bytes[0] = 1;
+  bytes.set(encoded, 1);
+  return `sha256:${sha256Hex(bytes)}`;
 }
 
 function samePointerObservation(actual: PointerReadResult, expected: PointerReadResult): boolean {
-  return pointerReadRaw(actual) === pointerReadRaw(expected);
+  if (actual.kind !== expected.kind || actual.kind === "unreadable") return false;
+  if (actual.kind === "missing") return true;
+  return actual.raw === (expected as Exclude<PointerReadResult, { kind: "missing" | "unreadable" }>).raw;
 }
 
 function pointerReadRaw(result: PointerReadResult): string | null {
-  return result.kind === "valid" || result.kind === "corrupt" || result.kind === "incompatible" ? result.raw : null;
+  if (result.kind === "unreadable") {
+    throw wrap("corrupt-or-unreadable", "generation pointer observation is unknown", result.error);
+  }
+  return result.kind === "missing" ? null : result.raw;
 }
 
 function encodeStagingClaim(claim: StagingClaim): string {
@@ -1379,14 +1872,20 @@ function requireExclusiveCreate(storage: StorageAdapter): void {
 }
 
 function requireWriteCapabilities(storage: StorageAdapter): void {
-  if (!storage.readBinary || !storage.writeBinary || !storage.writeTextAtomic) {
-    throw wrap("capability-unsupported", "generation promotion requires readBinary, writeBinary, and writeTextAtomic capabilities");
+  if (!storage.readBinary || !storage.writeBinary || !storage.writeTextAtomic || !storage.list) {
+    throw wrap(
+      "capability-unsupported",
+      "generation promotion requires readBinary, writeBinary, writeTextAtomic, and list capabilities",
+    );
   }
 }
 
 function requireRecoveryCapabilities(storage: StorageAdapter): void {
-  if (!storage.readBinary || !storage.writeTextAtomic) {
-    throw wrap("capability-unsupported", "generation recovery requires readBinary and writeTextAtomic capabilities");
+  if (!storage.readBinary || !storage.writeTextAtomic || !storage.list) {
+    throw wrap(
+      "capability-unsupported",
+      "generation recovery requires readBinary, writeTextAtomic, and list capabilities",
+    );
   }
 }
 
@@ -1440,6 +1939,12 @@ function requireCurrentPointerTextWithinLimit(value: unknown): asserts value is 
   if (typeof value !== "string" || value.length > MAX_CURRENT_POINTER_BYTES
     || utf8Length(value) > MAX_CURRENT_POINTER_BYTES) {
     throw new Error("current generation pointer exceeds its byte limit");
+  }
+}
+function requireCutoverMarkerTextWithinLimit(value: unknown): asserts value is string {
+  if (typeof value !== "string" || value.length > MAX_CUTOVER_MARKER_BYTES
+    || utf8Length(value) > MAX_CUTOVER_MARKER_BYTES) {
+    throw new Error("full-text generation cutover marker exceeds its byte limit");
   }
 }
 function validRevisionOrNull(value: unknown): number | null { return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null; }

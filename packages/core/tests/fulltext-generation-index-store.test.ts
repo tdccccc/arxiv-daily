@@ -32,6 +32,7 @@ import {
   type GenerationObjectWrite,
 } from "../src/library/fulltext/generation-index-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { sha256Hex } from "../src/utils/digest";
 
 const SCOPE = `sha256:${"a".repeat(64)}`;
 const IDENTIFICATION = `sha256:${"b".repeat(64)}`;
@@ -51,6 +52,15 @@ function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((settle) => { resolve = settle; });
   return { promise, resolve };
+}
+
+function pointerObservationChecksum(raw: string | null): string {
+  if (raw === null) return `sha256:${sha256Hex(new Uint8Array([0]))}`;
+  const encoded = new TextEncoder().encode(raw);
+  const bytes = new Uint8Array(encoded.length + 1);
+  bytes[0] = 1;
+  bytes.set(encoded, 1);
+  return `sha256:${sha256Hex(bytes)}`;
 }
 
 function chunk(index: number, text = `chunk ${index}`): EvidenceChunk {
@@ -258,6 +268,7 @@ function memoryStorage(capabilities = true, backend: MemoryBackend = {
   let binaryReadHook: ((path: string, bytes: Uint8Array) => Promise<ArrayBuffer>) | undefined;
   let exclusiveHook: ((path: string, content: string) => Promise<boolean>) | undefined;
   let removeHook: ((path: string) => Promise<void>) | undefined;
+  let listHook: ((dir: string) => Promise<void>) | undefined;
   const storage: StorageAdapter = {
     normalizePath: (path) => path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, ""),
     readText: vi.fn(async (path) => {
@@ -286,6 +297,21 @@ function memoryStorage(capabilities = true, backend: MemoryBackend = {
       for (const key of [...dirs]) if (key === path || key.startsWith(prefix)) dirs.delete(key);
     }),
     rename: vi.fn(async () => undefined),
+    list: vi.fn(async (dir) => {
+      if (listHook) await listHook(dir);
+      if (!dirs.has(dir)) throw new Error(`missing ${dir}`);
+      const prefix = `${dir}/`;
+      const entries = new Map<string, "file" | "folder">();
+      for (const path of [...text.keys(), ...binary.keys(), ...dirs]) {
+        if (!path.startsWith(prefix)) continue;
+        const remainder = path.slice(prefix.length);
+        if (!remainder) continue;
+        const child = remainder.split("/")[0]!;
+        const childPath = `${dir}/${child}`;
+        entries.set(childPath, remainder.includes("/") || dirs.has(childPath) ? "folder" : "file");
+      }
+      return [...entries].map(([path, type]) => ({ path, type }));
+    }),
     ...(capabilities ? {
       writeBinary: vi.fn(async (path: string, buffer: ArrayBuffer) => {
         const bytes = new Uint8Array(buffer).slice();
@@ -306,6 +332,7 @@ function memoryStorage(capabilities = true, backend: MemoryBackend = {
     setBinaryReadHook(hook?: typeof binaryReadHook) { binaryReadHook = hook; },
     setExclusiveHook(hook?: typeof exclusiveHook) { exclusiveHook = hook; },
     setRemoveHook(hook?: typeof removeHook) { removeHook = hook; },
+    setListHook(hook?: typeof listHook) { listHook = hook; },
   };
 }
 
@@ -353,6 +380,116 @@ describe("current generation pointer", () => {
 });
 
 describe("FullTextGenerationIndexStore promotion", () => {
+  it("tracks concurrent legacy fallback writers as an active set", async () => {
+    const backend: MemoryBackend = { text: new Map(), binary: new Map(), dirs: new Set() };
+    const firstMemory = memoryStorage(true, backend);
+    const secondMemory = memoryStorage(true, backend);
+    const first = store(firstMemory.storage);
+    const second = store(secondMemory.storage);
+    const firstLease = await first.acquireLegacyMigrationLease(
+      `writer-legacy-first-${"a".repeat(32)}`,
+    );
+    const secondLease = await second.acquireLegacyMigrationLease(
+      `writer-legacy-second-${"b".repeat(32)}`,
+    );
+
+    const active = await firstMemory.storage.list!(first.paths.legacyMigrationLeasesDirectory);
+    expect(active).toHaveLength(2);
+
+    await secondLease.release();
+    await expect(publish(store(memoryStorage(true, backend).storage), "gen-first-still-active", 1))
+      .rejects.toMatchObject({ code: "concurrent" });
+
+    await firstLease.release();
+    await expect(publish(store(memoryStorage(true, backend).storage), "gen-after-all-legacy", 1))
+      .resolves.toMatchObject({ descriptor: { generationId: "gen-after-all-legacy" } });
+  });
+
+  it("rejects sequential reuse of one legacy lease token", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const token = `writer-legacy-reused-${"a".repeat(32)}`;
+    const lease = await index.acquireLegacyMigrationLease(token);
+
+    await expect(store(memory.storage).acquireLegacyMigrationLease(token))
+      .rejects.toMatchObject({ code: "concurrent" });
+
+    await lease.release();
+  });
+
+  it("recovers a legacy lease write that commits before its response is lost", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    let responseLost = true;
+    memory.setAtomicHook(async (path, value) => {
+      memory.text.set(path, value);
+      if (responseLost && path.startsWith(`${index.paths.legacyMigrationLeasesDirectory}/`)) {
+        responseLost = false;
+        throw new Error("lease write response lost");
+      }
+    });
+
+    const lease = await index.acquireLegacyMigrationLease(
+      `writer-legacy-committed-${"b".repeat(32)}`,
+    );
+    await expect(lease.assertOwned()).resolves.toBeUndefined();
+    await expect(lease.release()).resolves.toBeUndefined();
+    await expect(memory.storage.list!(index.paths.legacyMigrationLeasesDirectory)).resolves.toEqual([]);
+  });
+
+  it("rejects a legacy lease after generation cutover is established", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    await publish(index, "gen-before-legacy-admission", 1);
+
+    await expect(index.acquireLegacyMigrationLease(
+      `writer-legacy-after-cutover-${"c".repeat(32)}`,
+    )).rejects.toMatchObject({ code: "capability-unsupported" });
+  });
+
+  it("arbitrates an active legacy fallback lease against first generation cutover", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const lease = await index.acquireLegacyMigrationLease(
+      `writer-legacy-fallback-${"f".repeat(32)}`,
+    );
+
+    await expect(publish(index, "gen-blocked-by-legacy", 1))
+      .rejects.toMatchObject({ code: "concurrent" });
+    expect(memory.text.has(index.paths.cutoverMarkerPath)).toBe(false);
+    expect(memory.text.has(CURRENT)).toBe(false);
+
+    await lease.release();
+    await expect(publish(index, "gen-after-legacy", 1)).resolves.toMatchObject({
+      descriptor: { generationId: "gen-after-legacy" },
+    });
+  });
+
+  it("rolls back a new cutover marker when a legacy lease appears after the first scan", async () => {
+    const backend: MemoryBackend = { text: new Map(), binary: new Map(), dirs: new Set() };
+    const cutoverMemory = memoryStorage(true, backend);
+    const fallbackMemory = memoryStorage(true, backend);
+    const cutover = store(cutoverMemory.storage);
+    let fallbackLease: Awaited<ReturnType<typeof cutover.acquireLegacyMigrationLease>> | undefined;
+    cutoverMemory.setExclusiveHook(async (path, value) => {
+      if (path === cutover.paths.cutoverMarkerPath) {
+        fallbackLease = await store(fallbackMemory.storage).acquireLegacyMigrationLease(
+          `writer-legacy-racing-${"c".repeat(32)}`,
+        );
+      }
+      if (backend.text.has(path) || backend.binary.has(path) || backend.dirs.has(path)) return false;
+      backend.text.set(path, value);
+      return true;
+    });
+
+    await expect(publish(cutover, "gen-raced-by-legacy", 1))
+      .rejects.toMatchObject({ code: "concurrent" });
+    expect(backend.text.has(cutover.paths.cutoverMarkerPath)).toBe(false);
+    expect(backend.text.has(CURRENT)).toBe(false);
+
+    await fallbackLease?.release();
+  });
+
   it("fails closed when binary or atomic capabilities are absent", async () => {
     const memory = memoryStorage(false);
     await expect(publish(store(memory.storage), "gen-a", 1)).rejects.toMatchObject({ code: "capability-unsupported" });
@@ -456,10 +593,13 @@ describe("FullTextGenerationIndexStore promotion", () => {
     const releaseSecondPromotion = deferred();
     const firstOwnsPromotion = deferred();
     const releaseFirstOwner = deferred();
+    let observedPrimaryChecksum: string | undefined;
     const firstRun = store(first.storage, {
       beforePointerPromotion: async () => { firstStaged.resolve(); await releaseFirstPromotion.promise; },
       afterPromotionClaimAcquired: async () => {
-        expect(JSON.parse(backend.text.get(PROMOTION_CLAIM)!)).toMatchObject({
+        const parsed = JSON.parse(backend.text.get(PROMOTION_CLAIM)!);
+        observedPrimaryChecksum = parsed.observedPrimaryChecksum;
+        expect(parsed).toMatchObject({
           formatVersion: 1,
           schemaVersion: 1,
           operation: "promote",
@@ -494,6 +634,7 @@ describe("FullTextGenerationIndexStore promotion", () => {
       (reason) => ({ status: "rejected" as const, reason }),
     );
     const results = [firstResult, secondResult];
+    expect(observedPrimaryChecksum).toBe(pointerObservationChecksum(backend.text.get(BACKUP)!));
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected" && result.reason.code === "concurrent")).toHaveLength(1);
     const winner = decodeCurrentGenerationPointer(backend.text.get(CURRENT)!);
@@ -822,16 +963,75 @@ describe("FullTextGenerationIndexStore promotion", () => {
     expect([...memory.text.keys()].every((path) => path.startsWith(BASE))).toBe(true);
   });
 
-  it("does not create a backup on first promotion or resurrect a candidate when current write fails", async () => {
+  it("rolls back its first cutover marker after a definitely failed CURRENT write", async () => {
     const memory = memoryStorage();
+    const index = store(memory.storage);
+    let rollbackHeldPromotionClaim = false;
     memory.setAtomicHook(async (path, value) => {
       if (path === CURRENT) throw new Error("current write failed");
       memory.text.set(path, value);
     });
-    await expect(publish(store(memory.storage), "gen-first", 1)).rejects.toMatchObject({ code: "write-failed" });
+    memory.setRemoveHook(async (path) => {
+      if (path !== index.paths.cutoverMarkerPath) return;
+      rollbackHeldPromotionClaim = memory.text.has(PROMOTION_CLAIM);
+      if (!rollbackHeldPromotionClaim) throw new Error("promotion claim released before marker rollback");
+    });
+    await expect(publish(index, "gen-first", 1)).rejects.toMatchObject({ code: "write-failed" });
+    expect(rollbackHeldPromotionClaim).toBe(true);
     expect(memory.text.has(BACKUP)).toBe(false);
     memory.setAtomicHook();
+    memory.setRemoveHook();
     await expect(store(memory.storage).openCurrent()).resolves.toBeNull();
+  });
+
+  it("keeps fallback closed and preserves the candidate when marker rollback is uncertain", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    memory.setAtomicHook(async (path, value) => {
+      if (path === CURRENT) throw new Error("current write failed");
+      memory.text.set(path, value);
+    });
+    memory.setRemoveHook(async (path) => {
+      if (path === index.paths.cutoverMarkerPath) throw new Error("marker remove failed");
+    });
+
+    await expect(publish(index, "gen-marker-rollback-uncertain", 1))
+      .rejects.toMatchObject({ code: "commit-uncertain" });
+    expect(memory.text.has(index.paths.cutoverMarkerPath)).toBe(true);
+    expect(memory.text.has(generationPath("gen-marker-rollback-uncertain", "descriptor.json"))).toBe(true);
+    memory.setAtomicHook();
+    memory.setRemoveHook();
+    await expect(store(memory.storage).openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+  });
+
+  it("does not roll back the cutover marker after promotion claim ownership changes", async () => {
+    const memory = memoryStorage();
+    const foreignClaim = JSON.stringify({ writerToken: `writer-foreign-${"e".repeat(32)}` });
+    const index = store(memory.storage, {
+      afterCutoverMarkerEstablished: () => { memory.text.set(PROMOTION_CLAIM, foreignClaim); },
+    });
+
+    await expect(publish(index, "gen-marker-foreign-claim", 1))
+      .rejects.toMatchObject({ code: "commit-uncertain" });
+    expect(memory.text.has(index.paths.cutoverMarkerPath)).toBe(true);
+    expect(memory.text.has(generationPath("gen-marker-foreign-claim", "descriptor.json"))).toBe(true);
+    expect(memory.text.get(PROMOTION_CLAIM)).toBe(foreignClaim);
+    await expect(store(memory.storage).openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+  });
+
+  it("fails closed for oversized and future cutover markers before legacy fallback", async () => {
+    const oversized = memoryStorage();
+    const oversizedStore = store(oversized.storage);
+    oversized.text.set(oversizedStore.paths.cutoverMarkerPath, "x".repeat(16 * 1024 + 1));
+    await expect(oversizedStore.openCurrent()).rejects.toMatchObject({
+      code: "corrupt-or-unreadable",
+      cause: { message: expect.stringMatching(/marker exceeds its byte limit/i) },
+    });
+
+    const future = memoryStorage();
+    const futureStore = store(future.storage);
+    future.text.set(futureStore.paths.cutoverMarkerPath, JSON.stringify({ formatVersion: 2, schemaVersion: 2 }));
+    await expect(futureStore.openCurrent()).rejects.toMatchObject({ code: "incompatible" });
   });
 
   it("treats current-write committed-then-thrown and exact complete replay as success", async () => {
@@ -845,6 +1045,180 @@ describe("FullTextGenerationIndexStore promotion", () => {
     const writesBefore = vi.mocked(memory.storage.writeBinary!).mock.calls.length;
     await expect(publish(store(memory.storage), "gen-committed", 1)).resolves.toMatchObject({ descriptor: { generationId: "gen-committed" } });
     expect(vi.mocked(memory.storage.writeBinary!).mock.calls.length).toBe(writesBefore);
+  });
+
+  it("rejects exact committed replay when the source revision advances during final validation", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const built = fixture("gen-replay-source-race", 1);
+    await index.stageAndPromote({
+      ...built,
+      writerToken: `writer-replay-first-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    });
+
+    let sourceRevision = 1;
+    const replaying = store(memory.storage, {
+      afterCutoverMarkerEstablished: () => { sourceRevision = 2; },
+    });
+    await expect(replaying.stageAndPromote({
+      ...built,
+      writerToken: `writer-replay-stale-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => sourceRevision,
+    })).rejects.toMatchObject({ code: "stale-source", expectedRevision: 1, currentRevision: 2 });
+  });
+
+  it.each([
+    {
+      change: "is replaced",
+      mutate: (memory: ReturnType<typeof memoryStorage>) => {
+        memory.text.set(CURRENT, encodeCurrentGenerationPointer(pointerFor(
+          fixture("gen-replay-current-replacement", 9).descriptor,
+        )));
+      },
+    },
+    {
+      change: "is deleted",
+      mutate: (memory: ReturnType<typeof memoryStorage>) => { memory.text.delete(CURRENT); },
+    },
+  ])("fails closed when CURRENT $change during exact replay", async ({ mutate }) => {
+    const memory = memoryStorage();
+    const built = fixture("gen-replay-current-race", 1);
+    await publish(store(memory.storage), built.descriptor.generationId, built.descriptor.sourceRevision);
+    const replaying = store(memory.storage, {
+      afterCutoverMarkerEstablished: () => { mutate(memory); },
+    });
+
+    await expect(replaying.stageAndPromote({
+      ...built,
+      writerToken: `writer-replay-current-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    })).rejects.toMatchObject({ code: "concurrent" });
+  });
+
+  it.each([
+    {
+      change: "is replaced",
+      mutate: (memory: ReturnType<typeof memoryStorage>, markerPath: string) => {
+        memory.text.set(markerPath, JSON.stringify({ formatVersion: 2, schemaVersion: 2 }));
+      },
+    },
+    {
+      change: "is deleted",
+      mutate: (memory: ReturnType<typeof memoryStorage>, markerPath: string) => {
+        memory.text.delete(markerPath);
+      },
+    },
+  ])("fails closed when the cutover marker $change during exact replay", async ({ mutate }) => {
+    const memory = memoryStorage();
+    const built = fixture("gen-replay-marker-race", 1);
+    const initial = store(memory.storage);
+    await publish(initial, built.descriptor.generationId, built.descriptor.sourceRevision);
+    const replaying = store(memory.storage, {
+      afterCutoverMarkerEstablished: () => { mutate(memory, initial.paths.cutoverMarkerPath); },
+    });
+
+    await expect(replaying.stageAndPromote({
+      ...built,
+      writerToken: `writer-replay-marker-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    })).rejects.toMatchObject({ code: "stale-claim" });
+  });
+
+  it("rechecks source and CURRENT after cutover marker I/O before promotion", async () => {
+    const sourceMemory = memoryStorage();
+    const sourceStore = store(sourceMemory.storage);
+    await publish(sourceStore, "gen-marker-source-old", 1);
+    const sourceOld = sourceMemory.text.get(CURRENT);
+    await sourceMemory.storage.remove(sourceStore.paths.cutoverMarkerPath);
+    let revision = 2;
+    const sourceRacingStore = store(sourceMemory.storage, {
+      afterCutoverMarkerEstablished: () => { revision = 3; },
+    });
+    await expect(sourceRacingStore.stageAndPromote({
+      ...fixture("gen-marker-source-new", 2),
+      writerToken: `writer-marker-source-${"f".repeat(32)}`,
+      expectedCurrent: { generationId: "gen-marker-source-old", sourceRevision: 1 },
+      sourceCurrentRevision: () => revision,
+    })).rejects.toMatchObject({ code: "stale-source", expectedRevision: 2, currentRevision: 3 });
+    expect(sourceMemory.text.get(CURRENT)).toBe(sourceOld);
+
+    const currentMemory = memoryStorage();
+    const currentStore = store(currentMemory.storage);
+    await publish(currentStore, "gen-marker-current-old", 1);
+    await currentMemory.storage.remove(currentStore.paths.cutoverMarkerPath);
+    const changedCurrent = encodeCurrentGenerationPointer(pointerFor(
+      fixture("gen-marker-current-concurrent", 9).descriptor,
+    ));
+    const currentRacingStore = store(currentMemory.storage, {
+      afterCutoverMarkerEstablished: () => { currentMemory.text.set(CURRENT, changedCurrent); },
+    });
+    await expect(currentRacingStore.stageAndPromote({
+      ...fixture("gen-marker-current-new", 2),
+      writerToken: `writer-marker-current-${"f".repeat(32)}`,
+      expectedCurrent: { generationId: "gen-marker-current-old", sourceRevision: 1 },
+      sourceCurrentRevision: () => 2,
+    })).rejects.toMatchObject({ code: "concurrent" });
+    expect(currentMemory.text.get(CURRENT)).toBe(changedCurrent);
+  });
+
+  it("rechecks the exact cutover marker before committing CURRENT", async () => {
+    const memory = memoryStorage();
+    const initial = store(memory.storage);
+    await publish(initial, "gen-marker-exact-old", 1);
+    const old = memory.text.get(CURRENT);
+    await memory.storage.remove(initial.paths.cutoverMarkerPath);
+    const racing = store(memory.storage, {
+      afterCutoverMarkerEstablished: async () => {
+        await memory.storage.remove(initial.paths.cutoverMarkerPath);
+      },
+    });
+
+    await expect(racing.stageAndPromote({
+      ...fixture("gen-marker-exact-new", 2),
+      writerToken: `writer-marker-exact-${"f".repeat(32)}`,
+      expectedCurrent: { generationId: "gen-marker-exact-old", sourceRevision: 1 },
+      sourceCurrentRevision: () => 2,
+    })).rejects.toMatchObject({ code: "stale-claim" });
+    expect(memory.text.get(CURRENT)).toBe(old);
+  });
+
+  it("rechecks the exact cutover marker after the final legacy lease scan", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    await memory.storage.mkdir(index.paths.legacyMigrationLeasesDirectory);
+    let leaseScans = 0;
+    memory.setListHook(async (dir) => {
+      if (dir !== index.paths.legacyMigrationLeasesDirectory || ++leaseScans !== 2) return;
+      memory.text.delete(index.paths.cutoverMarkerPath);
+    });
+
+    await expect(publish(index, "gen-marker-final-scan", 1))
+      .rejects.toMatchObject({ code: "stale-claim" });
+    expect(memory.text.has(CURRENT)).toBe(false);
+  });
+
+  it("rechecks CURRENT after cutover marker I/O before recovery", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    await publish(index, "gen-marker-recovery-old", 1);
+    await publish(index, "gen-marker-recovery-new", 2, {
+      generationId: "gen-marker-recovery-old",
+      sourceRevision: 1,
+    });
+    memory.text.set(CURRENT, "{original-corruption");
+    await memory.storage.remove(index.paths.cutoverMarkerPath);
+    const changedCurrent = "{concurrently-changed";
+    const recoveryStore = store(memory.storage, {
+      afterCutoverMarkerEstablished: () => { memory.text.set(CURRENT, changedCurrent); },
+    });
+
+    await expect(recoveryStore.openCurrent()).rejects.toMatchObject({ code: "concurrent" });
+    expect(memory.text.get(CURRENT)).toBe(changedCurrent);
   });
 
   it("keeps before/after promotion seams commit-aware and checks source revision immediately before write", async () => {
@@ -1015,6 +1389,28 @@ describe("open and bounded reads", () => {
     expect(decodeCurrentGenerationPointer(memory.text.get(CURRENT)!)).toMatchObject({ generationId: "gen-a" });
   });
 
+  it("never repairs an unreadable CURRENT whose actual value is unknown", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    await publish(index, "gen-unreadable-backup", 1);
+    await publish(index, "gen-unreadable-current", 2, {
+      generationId: "gen-unreadable-backup",
+      sourceRevision: 1,
+    });
+    const originalCurrent = memory.text.get(CURRENT);
+    vi.mocked(memory.storage.writeTextAtomic!).mockClear();
+    memory.setTextReadHook(async (path, value) => {
+      if (path === CURRENT) throw new Error("CURRENT read unavailable");
+      if (value === undefined) throw new Error(`missing ${path}`);
+      return value;
+    });
+
+    await expect(index.openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    expect(memory.text.get(CURRENT)).toBe(originalCurrent);
+    expect(vi.mocked(memory.storage.writeTextAtomic!).mock.calls
+      .some(([path]) => path === CURRENT)).toBe(false);
+  });
+
   it("does not repair current from a backup whose generation object or mean is corrupt", async () => {
     for (const corruption of ["object", "mean"] as const) {
       const memory = memoryStorage();
@@ -1073,6 +1469,22 @@ describe("open and bounded reads", () => {
     await expect(writing).resolves.toMatchObject({ descriptor: { generationId: "gen-c" } });
     await expect(recovering).resolves.toMatchObject({ descriptor: { generationId: "gen-c" } });
     expect(decodeCurrentGenerationPointer(memory.text.get(CURRENT)!)).toMatchObject({ generationId: "gen-c" });
+  });
+
+  it("rechecks the cutover marker when both pointers disappear in the recovery queue", async () => {
+    const memory = memoryStorage();
+    const initial = store(memory.storage);
+    await publish(initial, "gen-recovery-pointer-loss", 1);
+    await memory.storage.remove(CURRENT);
+    memory.text.set(BACKUP, "{corrupt-before-recovery");
+    const recovering = store(memory.storage, {
+      beforeRecoveryQueue: async () => {
+        await memory.storage.remove(CURRENT);
+        await memory.storage.remove(BACKUP);
+      },
+    });
+
+    await expect(recovering.openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
   });
 
   it("fails closed on a fixed residual promotion claim without time-based stealing", async () => {

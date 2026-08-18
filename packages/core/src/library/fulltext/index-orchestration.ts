@@ -38,6 +38,9 @@ import { FullTextKnowledgeBaseStoreError } from "./knowledge-base-store";
 import { searchKnowledgeBase, type KnowledgeBasePaperMatch } from "./retrieval";
 import { searchKnowledgeBaseBm25 } from "./bm25-retrieval";
 import { fusePaperRankingsRrf } from "./hybrid-retrieval";
+import { searchGenerationBm25 } from "./generation-bm25-index";
+import { FullTextGenerationIndexStoreError, type FullTextGenerationIndexStore } from "./generation-index-store";
+import { searchGenerationDense } from "./retrieval";
 import { extractTitleFromFirstPage } from "./title-extraction";
 
 export interface FullTextIndexPaperOutcome {
@@ -83,6 +86,9 @@ export interface IndexPersonalLibraryFullTextInput {
   logger?: Logger;
   /** Called with a short detail string before each paper. */
   onProgress?: (detail: string) => void;
+  /** Optional cross-runtime admission guard immediately around the manifest CAS. */
+  beforeManifestCommit?: () => void | Promise<void>;
+  afterManifestCommit?: () => void | Promise<void>;
   now?: () => Date;
   signal?: AbortSignal;
 }
@@ -344,7 +350,9 @@ export async function indexPersonalLibraryFullText(
     if (!completedMigrationKeys.has(paperKey)) pruned += 1;
   }
 
+  await input.beforeManifestCommit?.();
   const saved = await store.replaceManifest(next, loaded.revision);
+  await input.afterManifestCommit?.();
   log?.info(
     `fulltext: index run complete (revision ${saved.revision}, indexed ${outcomes.filter((o) => o.status === "indexed").length}, `
     + `reused ${outcomes.filter((o) => o.status === "reused").length}, failed ${outcomes.filter((o) => o.status === "failed").length}, pruned ${pruned})`,
@@ -733,6 +741,13 @@ async function discardOrphanedPaperDocument(
  */
 export interface SearchFullTextKnowledgeBaseInput {
   store: FullTextKnowledgeBaseStore;
+  /**
+   * Validated source snapshot already loaded by the host. When supplied, both
+   * generation validation and legacy traversal use this exact observation.
+   */
+  sourceManifest?: FullTextKnowledgeBaseManifest;
+  /** Preferred immutable generation backend; missing CURRENT alone permits legacy migration fallback. */
+  generationStore?: FullTextGenerationIndexStore;
   embedding: EmbeddingModel;
   queryText: string;
   /** Optional lexical-only query; dense retrieval always embeds queryText. */
@@ -756,7 +771,26 @@ export async function searchFullTextKnowledgeBase(
   input: SearchFullTextKnowledgeBaseInput,
 ): Promise<KnowledgeBasePaperMatch[]> {
   throwIfCancelled(input.signal);
-  const manifest = await input.store.loadManifest();
+  if (input.generationStore) {
+    const generation = await input.generationStore.openCurrent();
+    if (generation !== null) {
+      const source = input.sourceManifest ?? await input.store.loadManifest();
+      if (source.scopeFingerprint !== generation.descriptor.scopeFingerprint
+        || source.identificationFingerprint !== generation.descriptor.identificationFingerprint) {
+        throw new FullTextGenerationIndexStoreError(
+          "full-text generation and source manifest identities differ", "incompatible",
+        );
+      }
+      if (source.revision !== generation.descriptor.sourceRevision) {
+        throw new FullTextGenerationIndexStoreError(
+          "full-text generation is stale relative to the committed source manifest", "stale-source",
+          generation.descriptor.sourceRevision, source.revision,
+        );
+      }
+      return searchOpenedGeneration(input, generation);
+    }
+  }
+  const manifest = input.sourceManifest ?? await input.store.loadManifest();
   if (Object.keys(manifest.papers).length === 0) return [];
   if (manifest.modelId && manifest.modelId !== input.embedding.modelId) {
     throw new Error(
@@ -805,6 +839,53 @@ export async function searchFullTextKnowledgeBase(
     queryVector,
     limit: mode === "dense" ? limit : candidateLimit,
     maxHitsPerPaper: input.maxHitsPerPaper,
+  });
+  if (mode === "dense") return dense;
+  return fusePaperRankingsRrf({
+    rankings: [dense, lexical],
+    limit,
+    candidateLimit,
+    maxHitsPerPaper: input.maxHitsPerPaper,
+  });
+}
+
+async function searchOpenedGeneration(
+  input: SearchFullTextKnowledgeBaseInput,
+  generation: NonNullable<Awaited<ReturnType<FullTextGenerationIndexStore["openCurrent"]>>>,
+): Promise<KnowledgeBasePaperMatch[]> {
+  const descriptor = generation.descriptor;
+  if (descriptor.corpusStats.chunkCount === 0) return [];
+  if (descriptor.modelId !== input.embedding.modelId) {
+    throw new Error(
+      `full-text generation was built with model ${descriptor.modelId} but the `
+      + `current embedding model is ${input.embedding.modelId}; rebuild the full-text index before searching`,
+    );
+  }
+  const mode = input.mode ?? "hybrid";
+  const limit = input.limit ?? 10;
+  const candidateLimit = input.candidateLimit ?? Math.max(50, limit * 5);
+  const lexical = mode === "dense" ? [] : await searchGenerationBm25({
+    generation,
+    queryText: input.lexicalQueryText ?? input.queryText,
+    titles: input.titles,
+    limit: mode === "lexical" ? limit : candidateLimit,
+    maxHitsPerPaper: input.maxHitsPerPaper,
+    signal: input.signal,
+  });
+  if (mode === "lexical") return lexical;
+
+  const queryVectors = await input.embedding.embed(
+    [prefixFor("query", input.embedding, input.queryText)],
+    { signal: input.signal },
+  );
+  const queryVector = queryVectors[0];
+  if (!queryVector) throw new Error("embedding model returned no query vector");
+  const dense = await searchGenerationDense({
+    generation,
+    queryVector,
+    limit: mode === "dense" ? limit : candidateLimit,
+    maxHitsPerPaper: input.maxHitsPerPaper,
+    signal: input.signal,
   });
   if (mode === "dense") return dense;
   return fusePaperRankingsRrf({

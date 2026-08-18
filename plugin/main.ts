@@ -15,6 +15,7 @@ import type {
   PluginSettings,
   RunState,
   FullTextIndexRunSummary,
+  FullTextLegacyMigrationLease,
   KnowledgeBaseChunkHit,
   DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
@@ -64,8 +65,11 @@ reconcilePersonalLibraryCatalog,
 RunCancellationService,
 normalizeArxivId,
 FullTextKnowledgeBaseFileStore,
+FullTextGenerationIndexStore,
 indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
 searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
+preflightFullTextGenerationSynchronization,
+synchronizeFullTextGenerationIndex,
 IncrementalSuggestionsStore,
 ReadingCandidatesStore,
 applyAttachSuggestion,
@@ -1511,6 +1515,19 @@ export default class ArxivDailyPlugin extends Plugin {
     );
   }
 
+  private buildFullTextGenerationIndexStore(
+    connection: PersistedLibraryConnection,
+  ): FullTextGenerationIndexStore {
+    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+    return new FullTextGenerationIndexStore(
+      this.host.storage,
+      this.settings.output,
+      scopeFingerprint,
+      identificationFingerprint,
+      { onWarning: (message, error) => this.logger.warn(message, error) },
+    );
+  }
+
   /**
    * Embedding backend for the full-text knowledge base (ADR 0008): the
    * bundled local transformers.js model by default, or the remote
@@ -1572,6 +1589,7 @@ export default class ArxivDailyPlugin extends Plugin {
     if (updateProgress) {
       this.progress?.setTask("Indexing personal library full text", "Extracting and embedding PDF text");
     }
+    let legacyMigrationLease: FullTextLegacyMigrationLease | undefined;
     try {
       operation.signal.throwIfAborted();
       const catalog = await this.buildPersonalLibraryCatalogStore().load(
@@ -1598,6 +1616,17 @@ export default class ArxivDailyPlugin extends Plugin {
       this.assertRemoteEmbeddingReady();
       const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
+      const generationStore = this.buildFullTextGenerationIndexStore(connection);
+      const generationWriterToken = createFullTextGenerationWriterToken();
+      const generationMode = await preflightFullTextGenerationSynchronization({
+        storage: this.host.storage,
+        generationStore,
+      });
+      if (generationMode === "migration-fallback") {
+        legacyMigrationLease = await generationStore.acquireLegacyMigrationLease(
+          generationWriterToken,
+        );
+      }
       const summary = await indexFullTextKnowledgeBase({
         catalog,
         source,
@@ -1605,19 +1634,71 @@ export default class ArxivDailyPlugin extends Plugin {
         embedding,
         store,
         logger: this.logger,
+        beforeManifestCommit: legacyMigrationLease
+          ? () => legacyMigrationLease!.assertOwned()
+          : undefined,
+        afterManifestCommit: legacyMigrationLease
+          ? () => legacyMigrationLease!.assertOwned()
+          : undefined,
         onProgress: (detail) => {
           operation.signal.throwIfAborted();
           if (updateProgress) this.progress?.setTask("Indexing personal library full text", detail);
         },
         signal: operation.signal,
       });
+      if (legacyMigrationLease) {
+        const lease = legacyMigrationLease;
+        legacyMigrationLease = undefined;
+        await lease.release();
+      }
       operation.signal.throwIfAborted();
-      // ADR 0007: new or changed papers trigger the incremental direction
-      // update automatically (placement always; LLM diff only with consent).
-      // Failures never fail the index command. The completion notice is
-      // deferred until the update finishes, so the progress view does not
-      // read "done" while the update still holds the command open.
+      this.assertLibraryConnectionCurrent(connection, revision);
+      let generationFailed = false;
+      let generationFailure: unknown;
+      if (generationMode === "available") {
+        try {
+          const generation = await synchronizeFullTextGenerationIndex({
+            sourceStore: store,
+            generationStore,
+            storage: this.host.storage,
+            output: this.settings.output,
+            scopeFingerprint,
+            identificationFingerprint,
+            writerToken: generationWriterToken,
+            signal: operation.signal,
+            onProgress: (progress) => {
+              if (!updateProgress) return;
+              const label = progress.phase === "papers"
+                ? "Building bounded full-text blocks"
+                : progress.phase === "dictionary"
+                  ? "Building lexical routes"
+                  : "Validating full-text generation";
+              this.progress?.setTask("Indexing personal library full text", `${label} (${progress.completed}/${progress.total})`);
+            },
+          });
+          this.logger.info(
+            `fulltext: generation ${generation.kind} (${generation.generationId}, source revision ${generation.sourceRevision})`,
+          );
+        } catch (error) {
+          if (operation.signal.aborted) throw error;
+          generationFailed = true;
+          generationFailure = error;
+          this.logger.warn(
+            "fulltext: generation synchronization failed; running the post-commit direction update before reporting it",
+            error,
+          );
+        }
+      } else {
+        this.logger.warn(
+          "fulltext: immutable generation cutover is unavailable on this host; retaining the legacy migration fallback",
+        );
+      }
+      // ADR 0007: every durable legacy manifest commit remains a trigger even
+      // when rebuilding its derived generation fails.
+      operation.signal.throwIfAborted();
       await this.runIncrementalDirectionUpdateAfterIndex(summary, updateProgress);
+      operation.signal.throwIfAborted();
+      if (generationFailed) throw generationFailure;
       if (updateProgress) {
         const refreshed = summary.titlesRefreshed > 0
           ? `, ${summary.titlesRefreshed} titles refreshed`
@@ -1634,7 +1715,22 @@ export default class ArxivDailyPlugin extends Plugin {
       }
       throw error;
     } finally {
-      operation.finish();
+      try {
+        if (legacyMigrationLease) {
+          const lease = legacyMigrationLease;
+          legacyMigrationLease = undefined;
+          try {
+            await lease.release();
+          } catch (releaseError) {
+            this.logger.warn(
+              "fulltext: failed to release the legacy migration lease after indexing failed",
+              releaseError,
+            );
+          }
+        }
+      } finally {
+        operation.finish();
+      }
     }
   }
 
@@ -1665,33 +1761,35 @@ export default class ArxivDailyPlugin extends Plugin {
       identificationFingerprint,
     );
     this.assertRemoteEmbeddingReady();
-    // Title fusion: catalog titles for arXiv papers, extracted first-page
-    // titles from the knowledge-base manifest for fallback-indexed files
-    // (see `title-similarity.ts`).
-    const titles = new Map<string, string>();
+    // Ranking uses catalog titles only. Fallback titles from this exact source
+    // snapshot are display metadata; generation search uses its persisted title.
+    const rankingTitles = new Map<string, string>();
     for (const [paperKey, paper] of Object.entries(catalog.papers)) {
-      if (paper.title) titles.set(paperKey, paper.title);
+      if (paper.title) rankingTitles.set(paperKey, paper.title);
     }
     const store = this.buildFullTextKnowledgeBaseStore(connection);
     const manifest = await store.loadManifest();
+    const displayTitles = new Map(rankingTitles);
     const fallbackPaths = new Map<string, string>();
     for (const [paperKey, record] of Object.entries(manifest.papers)) {
-      if (record.title && !titles.has(paperKey)) titles.set(paperKey, record.title);
+      if (record.title && !displayTitles.has(paperKey)) displayTitles.set(paperKey, record.title);
       if (paperKey.startsWith("file:") && record.filePaths[0]) {
         fallbackPaths.set(paperKey, record.filePaths[0]);
       }
     }
     const matches = await searchFullTextKnowledgeBaseCore({
       store,
+      sourceManifest: manifest,
+      generationStore: this.buildFullTextGenerationIndexStore(connection),
       embedding: this.buildEmbeddingModel(),
       queryText,
       lexicalQueryText: options?.lexicalQueryText,
-      titles,
+      titles: rankingTitles,
       logger: this.logger,
     });
     return matches.map((match) => ({
       paperKey: match.paperKey,
-      title: titles.get(match.paperKey) ?? match.paperKey,
+      title: displayTitles.get(match.paperKey) ?? match.paperKey,
       filePath: fallbackPaths.get(match.paperKey),
       score: match.score,
       scoreKind: match.scoreKind,
@@ -3261,6 +3359,10 @@ function byOpaqueId(left: { id: string }, right: { id: string }): number {
 
 function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function createFullTextGenerationWriterToken(): string {
+  return `writer-${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
 function libraryFingerprints(connection: PersistedLibraryConnection): {

@@ -119,6 +119,16 @@ function memoryStorage() {
     mkdir: vi.fn(async (path) => { dirs.add(path); }),
     remove: vi.fn(async (path) => { const prefix = `${path}/`; for (const key of [...text.keys()]) if (key === path || key.startsWith(prefix)) text.delete(key); for (const key of [...binary.keys()]) if (key === path || key.startsWith(prefix)) binary.delete(key); }),
     rename: vi.fn(async () => undefined),
+    list: vi.fn(async (dir) => {
+      const prefix = `${dir}/`; const entries = new Map<string, "file" | "folder">();
+      for (const path of [...text.keys(), ...binary.keys(), ...dirs]) {
+        if (!path.startsWith(prefix)) continue;
+        const suffix = path.slice(prefix.length); if (!suffix) continue;
+        const child = suffix.split("/")[0]!; const childPath = `${dir}/${child}`;
+        entries.set(childPath, suffix.includes("/") || dirs.has(childPath) ? "folder" : "file");
+      }
+      return [...entries].map(([path, type]) => ({ path, type }));
+    }),
     writeBinary: vi.fn(async (path, value) => { binary.set(path, new Uint8Array(value).slice()); }),
     readBinary: vi.fn(async (path) => { const value = binary.get(path); if (!value) throw new Error(`missing ${path}`); return value.slice().buffer; }),
   };

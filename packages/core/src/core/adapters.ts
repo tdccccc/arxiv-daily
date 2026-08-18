@@ -101,6 +101,13 @@ export interface StorageAdapter {
   mkdir(path: string): Promise<void>;
   remove(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  /**
+   * Lists the complete set of immediate children of `dir` (never recursive).
+   * Returned paths are normalized adapter paths rooted directly below `dir`.
+   * Coordination protocols may use this capability only when the backing store
+   * provides read-after-write visibility and a point-in-time child listing;
+   * eventually synchronized replicas must not advertise it for those protocols.
+   */
   list?(dir: string): Promise<StorageEntry[]>;
   readBinary?(path: string): Promise<ArrayBuffer>;
   writeBinary?(path: string, content: ArrayBuffer): Promise<void>;

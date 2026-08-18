@@ -18,6 +18,8 @@ export * from "./library/fulltext/evidence-chunk";
 export * from "./library/fulltext/generation-bm25-index";
 export * from "./library/fulltext/generation-index-format";
 export * from "./library/fulltext/generation-index-builder";
+export * from "./library/fulltext/generation-index-orchestration";
+export * from "./library/fulltext/generation-index-spool";
 export * from "./library/fulltext/generation-lexical-derivation";
 export * from "./library/fulltext/generation-index-store";
 export * from "./library/fulltext/hybrid-retrieval";

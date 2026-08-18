@@ -32,6 +32,8 @@ export interface GenerationBm25Stats {
 export interface SearchGenerationBm25Input {
   readonly generation: OpenedFullTextGeneration; readonly queryText: string; readonly limit?: number;
   readonly maxHitsPerPaper?: number; readonly k1?: number; readonly b?: number;
+  /** Query-time catalog titles override persisted generation metadata. */
+  readonly titles?: ReadonlyMap<string, string>;
   readonly signal?: AbortSignal; readonly stats?: GenerationBm25Stats;
 }
 
@@ -151,7 +153,8 @@ export async function searchGenerationBm25(input: SearchGenerationBm25Input): Pr
         if (blockEnd <= paperEnd) { activePosting = null; routedIndex += 1; await yieldToTimer(input.signal); }
         if (blockEnd >= paperEnd) break;
       }
-      const priority = metadata.title === undefined ? 0 : titlePriority(input.queryText, metadata.title);
+      const title = input.titles?.get(metadata.paperKey) ?? metadata.title;
+      const priority = title === undefined ? 0 : titlePriority(input.queryText, title);
       if (best === 0 && priority === 0) continue;
       if (hits.length === 0) hits.push({ chunkOrdinal: metadata.chunkStart, chunkIndex: 0, score: 0 });
       if (input.stats) input.stats.peakHits = Math.max(input.stats.peakHits, retainedHits + hits.length);
