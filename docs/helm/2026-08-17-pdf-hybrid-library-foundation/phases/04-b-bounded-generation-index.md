@@ -33,7 +33,9 @@ updated: 2026-08-18
 - [x] 实现并验收 current/backup generation store、完整 object closure 校验、唯一目录 promotion、崩溃 seam 与上一代恢复。
 - [x] 实现并验收逐 block exact centered dense reader：预计算 corpus mean、结果与 P3 等价、工作集/top-k 有界、查询不调用 legacy `loadPaper`。
 - [x] 实现并验收预建 BM25 倒排 block：postings 以 chunk order 保存权威 occurrence stream，并在同一对象保存经 exact-permutation 校验的 term catalog；dictionary 以 posting range 保存权威 route stream和 query permutation，descriptor bucket mask只路由命中页。分别持久化基础与单 Han 查询长度、compact 原值与 gram 候选；reader 按 P3 query term 顺序累加，在论文跨 block 完整结束后进入有界 top-k。promotion 通过 evidence↔postings、postings↔dictionary 的 ordered zipper 与 exact EOF 线性证明完整性，最多同时驻留两个固定上限对象。
-- [ ] 实现并验收单 writer generation rebuild/incremental reuse、删除、source revision guard、失败隔离、首次迁移、dual-read 与索引/搜索编排接线。
+- [ ] 实现并验收 production generation builder：从 committed manifest snapshot 按 paperKey code-unit 顺序逐篇校验并读取 ready documents，经 bounded storage spool 生成 paired vector/evidence、metadata、postings、dictionary 与 descriptor，再 replay 到 transactional store；同 revision/derivation 整代复用，source revision 变化时流式重建，单篇 source 不一致使本代失败并保留旧 current。
+- [ ] 实现并验收首次迁移与生产编排：legacy manifest commit 后同步 generation，搜索 pin 单一 current 并使用 generation dense/BM25/RRF；仅从未存在 current 的迁移窗口允许 legacy fallback，valid/corrupt/incompatible current 不静默降级，已提交 generation 查询的 legacy `loadPaper` 为 0。
+- [ ] 实现并验收宿主静默期 maintenance：opened handle 显式释放和 process-local active tracking；宿主停止 admission 并等待操作 settle 后，保守修复可证明残留的 promotion claim，枚举并仅清理非 current/backup、无 claim、无 active reader 的已知 generation；不按时间偷取、不做未授权跨进程在线 GC。
 - [ ] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
 
 ## Verification
