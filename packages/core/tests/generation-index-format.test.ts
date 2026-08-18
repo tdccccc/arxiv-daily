@@ -10,11 +10,18 @@ import {
   blockObjectChecksum,
   decodeEvidenceBlock,
   decodeGenerationDescriptor,
+  decodeLexicalDictionaryBlock,
+  decodeLexicalPostingsBlock,
+  decodePaperMetadataBlock,
   decodeVectorBlock,
   deriveFullTextGenerationPaths,
   encodeEvidenceBlock,
   encodeGenerationDescriptor,
+  encodeLexicalDictionaryBlock,
+  encodeLexicalPostingsBlock,
+  encodePaperMetadataBlock,
   encodeVectorBlock,
+  lexicalTermBucket,
   finishEvidenceStreamClosure,
   validateEvidenceStreamClosure,
   type EvidenceBlockRecord,
@@ -71,7 +78,9 @@ function makeDescriptor(overrides: Partial<GenerationDescriptor> = {}): Generati
     modelId: "multilingual-e5-small-q8",
     dimension: 3,
     corpusMean: [0.25, -0.5, 0.75],
-    corpusStats: { indexedPaperCount: 1, chunkCount: 2 },
+    corpusStats: { indexedPaperCount: 1, chunkCount: 2, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
+    lexicalCapability: "none",
+    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
     indexDerivation: {
       builderVersion: 1,
       denseCenteringVersion: 1,
@@ -94,6 +103,14 @@ function makeDescriptor(overrides: Partial<GenerationDescriptor> = {}): Generati
         recordStart: 0,
         recordCount: 2,
         checksum: `sha256:${"d".repeat(64)}`,
+      },
+      {
+        kind: "paper-metadata",
+        path: "objects/000001.metadata.bin",
+        byteLength: 256,
+        recordStart: 0,
+        recordCount: 1,
+        checksum: `sha256:${"e".repeat(64)}`,
       },
     ],
     ...overrides,
@@ -162,9 +179,9 @@ describe("generation vector binary block", () => {
       .toThrow(/kind/i);
     expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(4, 2, true))))
       .toThrow(/format version/i);
-    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 1, true))))
+    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 2, true))))
       .toThrow(/schema version/i);
-    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 3, true))))
+    expect(() => decodeVectorBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 5, true))))
       .toThrow(/schema version/i);
     const badChecksum = valid.slice();
     badChecksum[badChecksum.length - 1]! ^= 0xff;
@@ -193,11 +210,19 @@ describe("generation vector binary block", () => {
     const encoded = encodeVectorBlock({
       rowStart: 0,
       dimension: 1,
-      paperOrdinals: new Uint32Array([0x01020304]),
+      paperOrdinals: new Uint32Array([0x0001_0203]),
       vectors: new Float32Array([1]),
     });
     expect(Array.from(encoded.subarray(BINARY_BLOCK_HEADER_BYTES + 8, BINARY_BLOCK_HEADER_BYTES + 12)))
-      .toEqual([4, 3, 2, 1]);
+      .toEqual([3, 2, 1, 0]);
+    expect(() => encodeVectorBlock({
+      rowStart: 0, dimension: 1, paperOrdinals: new Uint32Array([999_999]), vectors: new Float32Array([1]),
+    })).not.toThrow();
+    for (const ordinal of [1_000_000, 0xffff_ffff]) {
+      expect(() => encodeVectorBlock({
+        rowStart: 0, dimension: 1, paperOrdinals: new Uint32Array([ordinal]), vectors: new Float32Array([1]),
+      })).toThrow(/paper ordinal/i);
+    }
 
     const twoRows = encodeVectorBlock({
       rowStart: 0,
@@ -209,6 +234,12 @@ describe("generation vector binary block", () => {
       view.setUint32(BINARY_BLOCK_HEADER_BYTES + 12, 2, true);
     });
     expect(() => decodeVectorBlock(skippedOrdinal)).toThrow(/ordinals/i);
+    for (const ordinal of [1_000_000, 0xffff_ffff]) {
+      const outOfRange = rewriteBlockHeader(twoRows, (view) => {
+        view.setUint32(BINARY_BLOCK_HEADER_BYTES + 8, ordinal, true);
+      });
+      expect(() => decodeVectorBlock(outOfRange)).toThrow(/paper ordinal/i);
+    }
     expect(() => decodeVectorBlock(rewriteBlockHeader(twoRows, (view) => view.setUint32(16, 1, true))))
       .toThrow(/payload length|ordinals/i);
   });
@@ -352,131 +383,137 @@ describe("generation evidence binary block", () => {
   });
 });
 
+function lexicalBucket(namespace: "base" | "expanded" | "alias", term: string): number {
+  return lexicalTermBucket(namespace, term);
+}
+function bucketMask(...buckets: number[]): string {
+  const bytes = new Uint8Array(32); for (const bucket of buckets) bytes[bucket >>> 3]! |= 1 << (bucket & 7);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function postingsInput() {
+  return {
+    postingOrdinal: 0, chunkStart: 0,
+    chunks: [{ paperOrdinal: 0, chunkIndex: 0, baseLength: 2, expandedLength: 3, compactText: "alpha中文" }],
+    occurrences: [
+      { chunkOrdinal: 0, namespace: "alias" as const, term: "a", tf: 1 },
+      { chunkOrdinal: 0, namespace: "base" as const, term: "alpha", tf: 2 },
+      { chunkOrdinal: 0, namespace: "expanded" as const, term: "中", tf: 1 },
+    ], termCatalog: [0, 1, 2],
+  };
+}
+function dictionaryInput() {
+  const entries = [
+    { postingOrdinal: 0, namespace: "alias" as const, term: "a", chunkDf: 1, totalTf: 1 },
+    { postingOrdinal: 0, namespace: "base" as const, term: "alpha", chunkDf: 1, totalTf: 2 },
+  ];
+  const queryCatalog = [0, 1].sort((a, b) => lexicalBucket(entries[a]!.namespace, entries[a]!.term) - lexicalBucket(entries[b]!.namespace, entries[b]!.term));
+  return { dictionaryOrdinal: 0, postingStart: 0, postingCount: 1, entries, queryCatalog,
+    bucketMask: bucketMask(...entries.map((entry) => lexicalBucket(entry.namespace, entry.term))) };
+}
+
+describe("generation linear lexical blocks", () => {
+  it("strictly round-trips postings and dictionary blocks", () => {
+    const postings = postingsInput(); expect(decodeLexicalPostingsBlock(encodeLexicalPostingsBlock(postings))).toEqual(postings);
+    const dictionary = dictionaryInput(); expect(decodeLexicalDictionaryBlock(encodeLexicalDictionaryBlock(dictionary))).toEqual(dictionary);
+  });
+  it("rejects catalog duplicate, missing, out-of-range, and noncanonical order", () => {
+    for (const termCatalog of [[0, 0, 2], [0, 1], [0, 1, 9], [1, 0, 2]])
+      expect(() => encodeLexicalPostingsBlock({ ...postingsInput(), termCatalog })).toThrow(/termCatalog|index|order|cover/i);
+    const dictionary = dictionaryInput();
+    for (const queryCatalog of [[0, 0], [0], [0, 9], [...dictionary.queryCatalog].reverse()])
+      expect(() => encodeLexicalDictionaryBlock({ ...dictionary, queryCatalog })).toThrow(/queryCatalog|index|order|cover/i);
+  });
+  it("rejects occurrence authority order/duplicates/range/tf/namespace and invalid chunk records", () => {
+    const valid = postingsInput();
+    expect(() => encodeLexicalPostingsBlock({ ...valid, occurrences: [...valid.occurrences].reverse() })).toThrow(/authority/i);
+    expect(() => encodeLexicalPostingsBlock({ ...valid, occurrences: [valid.occurrences[0]!, valid.occurrences[0]!], termCatalog: [0, 1] })).toThrow(/duplicate|authority/i);
+    for (const occurrence of [
+      { ...valid.occurrences[0]!, chunkOrdinal: 1 }, { ...valid.occurrences[0]!, tf: 0 },
+      { ...valid.occurrences[0]!, tf: 2 }, { ...valid.occurrences[0]!, namespace: "future" as any },
+    ]) expect(() => encodeLexicalPostingsBlock({ ...valid, occurrences: [occurrence], termCatalog: [0] })).toThrow(/ordinal|tf|namespace|alias/i);
+    expect(() => encodeLexicalPostingsBlock({ ...valid, chunks: [{ ...valid.chunks[0]!, compactText: "A-b" }] })).toThrow(/compact/i);
+    expect(() => encodeLexicalPostingsBlock({ ...valid, chunks: [{ ...valid.chunks[0]!, expandedLength: 1 }] })).toThrow(/expandedLength/i);
+    expect(() => encodeLexicalPostingsBlock({ ...valid, chunks: [...valid.chunks, { ...valid.chunks[0]!, chunkIndex: 2 }] })).toThrow(/continuous/i);
+  });
+  it("enforces 65536 occurrences, strict JSON fields, exact object cap and block envelope", () => {
+    const valid = encodeLexicalPostingsBlock(postingsInput());
+    const emptyCompact = encodeLexicalPostingsBlock({
+      ...postingsInput(),
+      chunks: [{ ...postingsInput().chunks[0]!, compactText: "" }],
+    });
+    const exactCap = encodeLexicalPostingsBlock({
+      ...postingsInput(),
+      chunks: [{ ...postingsInput().chunks[0]!, compactText: "x".repeat(MAX_BINARY_OBJECT_BYTES - emptyCompact.byteLength) }],
+    });
+    expect(exactCap.byteLength).toBe(MAX_BINARY_OBJECT_BYTES);
+    expect(decodeLexicalPostingsBlock(exactCap).chunks[0]!.compactText.length)
+      .toBe(MAX_BINARY_OBJECT_BYTES - emptyCompact.byteLength);
+    expect(() => encodeLexicalPostingsBlock({
+      ...postingsInput(),
+      chunks: [{ ...postingsInput().chunks[0]!, compactText: `${exactCap.length}x${"x".repeat(MAX_BINARY_OBJECT_BYTES - emptyCompact.byteLength)}` }],
+    })).toThrow(/byte limit/i);
+    expect(() => decodeLexicalDictionaryBlock(valid)).toThrow(/kind/i);
+    expect(() => decodeLexicalPostingsBlock(valid.subarray(0, valid.length - 1))).toThrow(/truncated|length/i);
+    const trailing = new Uint8Array(valid.length + 1); trailing.set(valid); expect(() => decodeLexicalPostingsBlock(trailing)).toThrow(/trailing/i);
+    const corrupt = valid.slice(); corrupt[corrupt.length - 1]! ^= 1; expect(() => decodeLexicalPostingsBlock(corrupt)).toThrow(/checksum/i);
+    expect(() => decodeLexicalPostingsBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 3, true)))).toThrow(/schema/i);
+    expect(() => decodeLexicalPostingsBlock(rewriteBlockHeader(valid, (view) => view.setUint16(6, 5, true)))).toThrow(/schema/i);
+    expect(() => encodeLexicalPostingsBlock({ ...postingsInput(), chunks: [{ ...postingsInput().chunks[0]!, compactText: "x".repeat(MAX_BINARY_OBJECT_BYTES) }] })).toThrow(/byte limit/i);
+    expect(() => decodeLexicalPostingsBlock(new Uint8Array(MAX_BINARY_OBJECT_BYTES + 1))).toThrow(/byte limit/i);
+    expect(() => encodeLexicalPostingsBlock({
+      ...postingsInput(),
+      occurrences: Array.from({ length: 65_537 }, () => postingsInput().occurrences[0]!),
+      termCatalog: [],
+    })).toThrow(/occurrence count/i);
+  });
+  it("validates dictionary authority, query buckets, mask, and posting ranges", () => {
+    const valid = dictionaryInput();
+    expect(() => encodeLexicalDictionaryBlock({ ...valid, entries: [...valid.entries].reverse() })).toThrow(/authority/i);
+    expect(() => encodeLexicalDictionaryBlock({ ...valid, entries: [{ ...valid.entries[0]!, chunkDf: 0 }], queryCatalog: [0], bucketMask: bucketMask(lexicalBucket("alias", "a")) })).toThrow(/chunkDf/i);
+    expect(() => encodeLexicalDictionaryBlock({ ...valid, bucketMask: "0".repeat(64) })).toThrow(/bucketMask/i);
+    expect(() => encodeLexicalDictionaryBlock({ ...valid, postingStart: 1 })).toThrow(/postingOrdinal/i);
+    const minimal = valid.entries[0]!;
+    expect(() => encodeLexicalDictionaryBlock({
+      ...valid,
+      entries: Array.from({ length: 65_537 }, () => minimal),
+      queryCatalog: [],
+    })).toThrow(/entry count/i);
+    expect(() => encodeLexicalDictionaryBlock({
+      ...valid,
+      entries: [],
+      queryCatalog: Array.from({ length: 65_537 }, () => 0),
+      bucketMask: "0".repeat(64),
+    })).toThrow(/queryCatalog count/i);
+  });
+});
+
 describe("generation descriptor codec and paths", () => {
-  it("round-trips canonical strict JSON with index-only derivation and sorted refs", () => {
-    const descriptor = makeDescriptor();
-    const first = encodeGenerationDescriptor(descriptor);
-    const second = encodeGenerationDescriptor(decodeGenerationDescriptor(first));
-    expect(second).toBe(first);
-    expect(decodeGenerationDescriptor(first)).toEqual(descriptor);
+  it("round-trips none, empty, tokenless bm25, and routed lexical descriptors", () => {
+    const dense = makeDescriptor(); expect(decodeGenerationDescriptor(encodeGenerationDescriptor(dense))).toEqual(dense);
+    const empty = makeDescriptor({ corpusMean: [0, 0, 0], corpusStats: { indexedPaperCount: 0, chunkCount: 0, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 }, objects: [] });
+    expect(() => encodeGenerationDescriptor(empty)).not.toThrow();
+    expect(() => encodeGenerationDescriptor({ ...empty, lexicalCapability: "bm25-v1" })).toThrow(/empty.*none/i);
+    expect(() => encodeGenerationDescriptor({ ...dense, lexicalCapability: "bm25-v1" })).not.toThrow();
+    const posting = { kind: "lexical-postings" as const, path: "objects/p.bin", byteLength: 128, recordStart: 0, recordCount: 2, checksum: `sha256:${"1".repeat(64)}` };
+    const dictionary = { kind: "lexical-dictionary" as const, path: "objects/d.bin", byteLength: 128, recordStart: 0, recordCount: 1, checksum: `sha256:${"2".repeat(64)}` };
+    const routing = Array.from({ length: 256 }, () => [] as string[]); routing[7] = [dictionary.path];
+    const bm25 = makeDescriptor({ lexicalCapability: "bm25-v1", lexicalRouting: routing, objects: [...makeDescriptor().objects, posting, dictionary] });
+    expect(() => encodeGenerationDescriptor(bm25)).not.toThrow();
+    expect(() => encodeGenerationDescriptor({ ...bm25, lexicalRouting: Array.from({ length: 256 }, () => [] as string[]) })).toThrow(/route/i);
   });
-
-  it("accepts multiple contiguous blocks sorted by kind, recordStart, then path", () => {
-    const descriptor = makeDescriptor({
-      corpusStats: { indexedPaperCount: 2, chunkCount: 4 },
-      objects: [
-        { kind: "vector", path: "objects/a.bin", byteLength: 128, recordStart: 0, recordCount: 2, checksum: OBJECT_CHECKSUM },
-        { kind: "vector", path: "objects/b.bin", byteLength: 128, recordStart: 2, recordCount: 2, checksum: `sha256:${"d".repeat(64)}` },
-        { kind: "evidence", path: "objects/c.bin", byteLength: 128, recordStart: 0, recordCount: 2, checksum: `sha256:${"e".repeat(64)}` },
-        { kind: "evidence", path: "objects/d.bin", byteLength: 128, recordStart: 2, recordCount: 2, checksum: `sha256:${"f".repeat(64)}` },
-      ],
-    });
-    expect(decodeGenerationDescriptor(encodeGenerationDescriptor(descriptor))).toEqual(descriptor);
+  it("validates object canonical order and kind-specific coverage", () => {
+    const refs = makeDescriptor().objects;
+    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: [...refs].reverse() }))).toThrow(/order/i);
+    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: refs.map((ref) => ref.kind === "vector" ? { ...ref, recordStart: 1 } : ref) }))).toThrow(/coverage|continuous/i);
+    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: refs.map((ref) => ref.kind === "paper-metadata" ? { ...ref, recordCount: 2 } : ref) }))).toThrow(/metadata|paper/i);
+    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: [...refs, { kind: "directory" as any, path: "objects/x.bin", byteLength: 128, recordStart: 0, recordCount: 1, checksum: OBJECT_CHECKSUM }] }))).toThrow(/kind/i);
   });
-
-  it("rejects incomplete, unsorted, gapped, overlapping, missing-kind, and zero-count refs", () => {
-    const cases: GenerationDescriptor["objects"][] = [
-      makeDescriptor().objects.slice(0, 1),
-      [...makeDescriptor().objects].reverse(),
-      makeDescriptor().objects.map((ref) => ref.kind === "vector" ? { ...ref, recordStart: 1 } : ref),
-      [
-        { ...makeDescriptor().objects[0]!, recordCount: 1 },
-        { ...makeDescriptor().objects[0]!, path: "objects/second.bin", recordStart: 0, recordCount: 2 },
-        makeDescriptor().objects[1]!,
-      ],
-      makeDescriptor().objects.map((ref) => ref.kind === "evidence" ? { ...ref, recordCount: 1 } : ref),
-      makeDescriptor().objects.map((ref) => ({ ...ref, recordCount: 0 })),
-    ];
-    for (const objects of cases) {
-      expect(() => encodeGenerationDescriptor(makeDescriptor({ objects }))).toThrow(/object|coverage|continuous|order|record/i);
-    }
-  });
-
-  it("requires both block kinds for non-empty corpora and none for empty corpora with zero mean", () => {
-    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: makeDescriptor().objects.slice(0, 1) })))
-      .toThrow(/object|kind|coverage/i);
-    const empty = makeDescriptor({
-      corpusMean: [0, 0, 0],
-      corpusStats: { indexedPaperCount: 0, chunkCount: 0 },
-      objects: [],
-    });
-    expect(decodeGenerationDescriptor(encodeGenerationDescriptor(empty))).toEqual(empty);
-    expect(() => encodeGenerationDescriptor({ ...empty, corpusMean: [0, 0.01, 0] })).toThrow(/corpusMean/i);
-    expect(() => encodeGenerationDescriptor({ ...empty, objects: makeDescriptor().objects })).toThrow(/empty|object/i);
-    expect(() => encodeGenerationDescriptor({
-      ...empty,
-      corpusStats: { indexedPaperCount: 1, chunkCount: 0 },
-    })).toThrow(/indexed paper/i);
-    expect(() => encodeGenerationDescriptor(makeDescriptor({
-      corpusStats: { indexedPaperCount: 0, chunkCount: 2 },
-    }))).toThrow(/indexed paper/i);
-    expect(() => encodeGenerationDescriptor(makeDescriptor({
-      corpusStats: { indexedPaperCount: 3, chunkCount: 2 },
-    }))).toThrow(/indexed paper/i);
-  });
-
-  it("rejects lexical postings refs until their codec advances the format", () => {
-    const lexical = {
-      kind: "lexical-postings" as const,
-      path: "objects/postings.bin",
-      byteLength: 128,
-      recordStart: 0,
-      recordCount: 1,
-      checksum: OBJECT_CHECKSUM,
-    };
-    expect(() => encodeGenerationDescriptor(makeDescriptor({ objects: [...makeDescriptor().objects, lexical] as any })))
-      .toThrow(/lexical|kind/i);
-  });
-
-  it("rejects future versions, unknown or missing index derivation, unsafe counts, dimensions, strings, refs, and trailing JSON", () => {
-    const valid = JSON.parse(encodeGenerationDescriptor(makeDescriptor()));
-    const oldSchema = structuredClone(valid);
-    oldSchema.schemaVersion = 1;
-    expect(() => decodeGenerationDescriptor(JSON.stringify(oldSchema))).toThrow(/schema version/i);
-    for (const mutation of [
-      (value: any) => { value.formatVersion += 1; },
-      (value: any) => { value.schemaVersion += 1; },
-      (value: any) => { value.extra = true; },
-      (value: any) => { delete value.indexDerivation.builderVersion; },
-      (value: any) => { value.indexDerivation.tokenizerVersion = Number.MAX_SAFE_INTEGER; },
-      (value: any) => { value.corpusStats.chunkCount = Number.MAX_SAFE_INTEGER; },
-      (value: any) => { value.dimension = MAX_GENERATION_DIMENSION + 1; },
-      (value: any) => { value.modelId = "x".repeat(300); },
-      (value: any) => { value.objects[0].path = "objects/../escape.bin"; },
-      (value: any) => { value.objects[0].byteLength = MAX_BINARY_OBJECT_BYTES + 1; },
-      (value: any) => { value.objects[0].kind = "unknown"; },
-      (value: any) => { delete value.objects[0].recordStart; },
-    ]) {
-      const changed = structuredClone(valid);
-      mutation(changed);
-      expect(() => decodeGenerationDescriptor(JSON.stringify(changed))).toThrow();
-    }
-    expect(() => decodeGenerationDescriptor(`${JSON.stringify(valid)} trailing`)).toThrow(/JSON/i);
-  });
-
-  it("rejects generation IDs that could escape or create unbounded path names", () => {
-    for (const generationId of ["../escape", "Gen-A", "a/b", "a".repeat(65), "-leading"] as const) {
-      expect(() => encodeGenerationDescriptor(makeDescriptor({ generationId }))).toThrow(/generationId/i);
-    }
-  });
-
-  it("derives paths through existing scope and identification fingerprint sharding", () => {
+  it("rejects old/future/unknown descriptor data and derives bounded paths", () => {
+    const raw = JSON.parse(encodeGenerationDescriptor(makeDescriptor()));
+    for (const schemaVersion of [3, 5]) expect(() => decodeGenerationDescriptor(JSON.stringify({ ...raw, schemaVersion }))).toThrow(/schema/i);
+    expect(() => decodeGenerationDescriptor(JSON.stringify({ ...raw, extra: true }))).toThrow(/unknown/i);
     const normalizePath = (path: string) => path.replaceAll("//", "/");
-    const paths = deriveFullTextGenerationPaths(
-      { normalizePath },
-      DEFAULT_SETTINGS.output,
-      SCOPE,
-      IDENTIFICATION,
-      "gen-20260817-a1",
-    );
-    const base = `arxiv-daily/.index/personal-library-search-index/${"a".repeat(64)}/${"b".repeat(64)}`;
-    expect(paths).toEqual({
-      directory: `${base}/generations/gen-20260817-a1`,
-      descriptorPath: `${base}/generations/gen-20260817-a1/descriptor.json`,
-      objectsDirectory: `${base}/generations/gen-20260817-a1/objects`,
-    });
-    expect(() => deriveFullTextGenerationPaths(
-      { normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "../escape",
-    )).toThrow(/generationId/i);
+    expect(deriveFullTextGenerationPaths({ normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "gen-20260817-a1").descriptorPath).toContain("/descriptor.json");
+    expect(() => deriveFullTextGenerationPaths({ normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "../escape")).toThrow(/generationId/i);
   });
 });

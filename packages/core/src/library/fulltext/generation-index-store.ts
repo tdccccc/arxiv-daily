@@ -1,12 +1,16 @@
 import type { StorageAdapter } from "../../core/adapters";
 import type { OutputSettings } from "../../settings/types";
 import { sha256Hex } from "../../utils/digest";
+import { tokenizeUnicode, tokenizeUnicodeWithHanSingles } from "./bm25-retrieval";
 import {
   MAX_BINARY_OBJECT_BYTES,
   MAX_GENERATION_DESCRIPTOR_BYTES,
   blockObjectChecksum,
   decodeEvidenceBlock,
   decodeGenerationDescriptor,
+  decodeLexicalDictionaryBlock,
+  decodeLexicalPostingsBlock,
+  decodePaperMetadataBlock,
   decodeVectorBlock,
   deriveFullTextGenerationIndexPaths,
   deriveFullTextGenerationPaths,
@@ -14,10 +18,17 @@ import {
   finishEvidenceStreamClosure,
   validateEvidenceStreamClosure,
   type EvidenceBlock,
+  type EvidenceBlockRecord,
   type EvidenceStreamClosureState,
   type FullTextGenerationPaths,
   type GenerationDescriptor,
   type GenerationObjectReference,
+  type LexicalDictionaryBlock,
+  type LexicalDictionaryEntry,
+  type LexicalNamespace,
+  type LexicalOccurrence,
+  type LexicalPostingsBlock,
+  type PaperMetadataBlock,
   type VectorBlock,
 } from "./generation-index-format";
 
@@ -94,6 +105,8 @@ export interface GenerationStoreDiagnostics {
   maxObjectBytes: number;
   /** Number of complete object reads performed by this opened handle. */
   objectReads: number;
+  /** Test diagnostic: lexical closure never retains more than one block per zipper side. */
+  maxLiveBlocks: number;
 }
 
 export interface VerifiedGenerationObject {
@@ -103,19 +116,27 @@ export interface VerifiedGenerationObject {
 
 export type OpenedGenerationObject =
   | { readonly reference: GenerationObjectReference & { readonly kind: "vector" }; readonly block: VectorBlock }
-  | { readonly reference: GenerationObjectReference & { readonly kind: "evidence" }; readonly block: EvidenceBlock };
+  | { readonly reference: GenerationObjectReference & { readonly kind: "evidence" }; readonly block: EvidenceBlock }
+  | { readonly reference: GenerationObjectReference & { readonly kind: "paper-metadata" }; readonly block: PaperMetadataBlock }
+  | { readonly reference: GenerationObjectReference & { readonly kind: "lexical-dictionary" }; readonly block: LexicalDictionaryBlock }
+  | { readonly reference: GenerationObjectReference & { readonly kind: "lexical-postings" }; readonly block: LexicalPostingsBlock };
 
 export type OpenedVectorObject = Extract<OpenedGenerationObject, { readonly reference: { readonly kind: "vector" } }>;
 export type OpenedEvidenceObject = Extract<OpenedGenerationObject, { readonly reference: { readonly kind: "evidence" } }>;
+export type OpenedPaperMetadataObject = Extract<OpenedGenerationObject, { readonly reference: { readonly kind: "paper-metadata" } }>;
+export type OpenedLexicalDictionaryObject = Extract<OpenedGenerationObject, { readonly reference: { readonly kind: "lexical-dictionary" } }>;
+export type OpenedLexicalPostingsObject = Extract<OpenedGenerationObject, { readonly reference: { readonly kind: "lexical-postings" } }>;
 
 export interface OpenedFullTextGeneration {
   readonly pointer: CurrentGenerationPointer;
   readonly descriptor: GenerationDescriptor;
   readonly diagnostics: GenerationStoreDiagnostics;
-  /** Format-neutral verified bytes; remains usable when future formats add object kinds. */
   readRawObject(reference: GenerationObjectReference): Promise<VerifiedGenerationObject>;
   readObject(reference: GenerationObjectReference): Promise<OpenedGenerationObject>;
-  /** Explicit bounded full-closure scan; ordinary open does not call this. */
+  readPaperMetadata(reference: GenerationObjectReference & { readonly kind: "paper-metadata" }): Promise<OpenedPaperMetadataObject>;
+  readLexicalDictionary(reference: GenerationObjectReference & { readonly kind: "lexical-dictionary" }): Promise<OpenedLexicalDictionaryObject>;
+  readLexicalPostings(reference: GenerationObjectReference & { readonly kind: "lexical-postings" }): Promise<OpenedLexicalPostingsObject>;
+  /** Validate dense and, for schema v4 BM25 generations, exact cross-object lexical closure. */
   validateClosure(): Promise<void>;
   iterateObjects(kind?: GenerationObjectReference["kind"]): AsyncIterable<OpenedGenerationObject>;
   iterateVectorBlocks(): AsyncIterable<OpenedVectorObject>;
@@ -284,7 +305,7 @@ export class FullTextGenerationIndexStore {
         this.validateObjectWrite(descriptor, reference, object, objectIndex);
         const path = this.objectPath(generation, object.path);
         await this.storage.writeBinary!(path, exactArrayBuffer(object.bytes));
-        const verified = await this.readAndValidateObject(generation, reference!);
+        const verified = await this.readAndValidateObject(generation, reference!, undefined, descriptor.dimension, descriptor);
         if (verified.reference.kind === "vector"
           && (verified.block as VectorBlock).dimension !== descriptor.dimension) {
           throw new Error("vector block dimension does not match descriptor");
@@ -490,6 +511,11 @@ export class FullTextGenerationIndexStore {
   }
 
   private async validateGenerationClosure(opened: OpenedFullTextGeneration): Promise<void> {
+    await this.validateDenseClosure(opened);
+    await this.validateLexicalClosure(opened);
+  }
+
+  private async validateDenseClosure(opened: OpenedFullTextGeneration): Promise<void> {
     const descriptor = opened.descriptor;
     let evidenceState: EvidenceStreamClosureState | null = null;
     const mean = createCanonicalMeanAccumulator(descriptor.dimension);
@@ -497,10 +523,8 @@ export class FullTextGenerationIndexStore {
     const evidence = descriptor.objects.filter((reference) => reference.kind === "evidence");
     let previousOrdinal: number | null = null;
     for (let pairIndex = 0; pairIndex < vectors.length; pairIndex += 1) {
-      const vectorObject = await opened.readObject(vectors[pairIndex]!);
-      const evidenceObject = await opened.readObject(evidence[pairIndex]!);
-      const vectorBlock = vectorObject.block as VectorBlock;
-      const evidenceBlock = evidenceObject.block as EvidenceBlock;
+      const vectorBlock = (await opened.readObject(vectors[pairIndex]!)).block as VectorBlock;
+      const evidenceBlock = (await opened.readObject(evidence[pairIndex]!)).block as EvidenceBlock;
       mean.add(vectorBlock);
       for (let row = 0; row < vectorBlock.rowCount; row += 1) {
         const ordinal = vectorBlock.paperOrdinals[row]!;
@@ -522,11 +546,142 @@ export class FullTextGenerationIndexStore {
       throw new Error("vector paper ordinals do not match indexedPaperCount");
     }
     const actualMean = mean.finish();
-    if (mean.rowCount !== descriptor.corpusStats.chunkCount) {
-      throw new Error("vector rows do not match chunkCount");
+    if (mean.rowCount !== descriptor.corpusStats.chunkCount) throw new Error("vector rows do not match chunkCount");
+    if (!exactNumberArrayEqual(actualMean, descriptor.corpusMean)) throw new Error("vector arithmetic mean does not match descriptor corpusMean");
+  }
+
+  private async validateLexicalClosure(opened: OpenedFullTextGeneration): Promise<void> {
+    if (opened.descriptor.schemaVersion !== 4 || opened.descriptor.lexicalCapability === "none") return;
+    await this.validateLexicalMetadata(opened);
+    if (!opened.descriptor.objects.some((reference) => reference.kind === "lexical-postings")) return;
+    await this.validateEvidencePostings(opened);
+    await this.validatePostingsDictionary(opened);
+  }
+
+  private async validateLexicalMetadata(opened: OpenedFullTextGeneration): Promise<void> {
+    const metadataRefs = refsOfKind(opened.descriptor, "paper-metadata");
+    const evidenceRefs = refsOfKind(opened.descriptor, "evidence");
+    let metadataRefIndex = 0; let evidenceRefIndex = 0;
+    let metadataBlock: PaperMetadataBlock | null = null; let evidenceBlock: EvidenceBlock | null = null;
+    let metadataIndex = 0; let evidenceIndex = 0; let chunkOrdinal = 0;
+    let total = 0; let expandedTotal = 0;
+    while (metadataRefIndex < metadataRefs.length || metadataBlock !== null) {
+      if (metadataBlock === null) {
+        metadataBlock = (await opened.readPaperMetadata(metadataRefs[metadataRefIndex++]!)).block;
+        opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(evidenceBlock !== null));
+      }
+      const metadata = metadataBlock.records[metadataIndex]!;
+      let chunksSeen = 0;
+      while (chunksSeen < metadata.chunkCount) {
+        if (evidenceBlock === null) {
+          if (evidenceRefIndex >= evidenceRefs.length) throw new Error("metadata coverage exceeds evidence EOF");
+          evidenceBlock = (await opened.readObject(evidenceRefs[evidenceRefIndex++]!)).block as EvidenceBlock;
+          evidenceIndex = 0;
+          opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(metadataBlock !== null));
+        }
+        const evidence = evidenceBlock.records[evidenceIndex]!;
+        if (metadata.paperOrdinal !== evidence.paperIndex || metadata.paperKey !== evidence.paperKey
+          || metadata.chunkStart !== chunkOrdinal - chunksSeen || evidence.chunk.index !== chunksSeen) {
+          throw new Error("paper metadata identity or chunk coverage does not exactly match evidence");
+        }
+        total += tokenizeUnicode(evidence.chunk.text).length;
+        expandedTotal += tokenizeUnicodeWithHanSingles(evidence.chunk.text).length;
+        chunksSeen += 1; chunkOrdinal += 1; evidenceIndex += 1;
+        if (evidenceIndex === evidenceBlock.records.length) { evidenceBlock = null; evidenceIndex = 0; }
+      }
+      metadataIndex += 1;
+      if (metadataIndex === metadataBlock.records.length) { metadataBlock = null; metadataIndex = 0; }
     }
-    if (!exactNumberArrayEqual(actualMean, descriptor.corpusMean)) {
-      throw new Error("vector arithmetic mean does not match descriptor corpusMean");
+    if (metadataBlock !== null || evidenceBlock !== null || evidenceRefIndex !== evidenceRefs.length
+      || chunkOrdinal !== opened.descriptor.corpusStats.chunkCount) throw new Error("metadata/evidence closure has trailing or missing records");
+    const stats = opened.descriptor.corpusStats;
+    if (total !== stats.totalLexicalTokenCount || expandedTotal !== stats.totalLexicalTokenCountWithHanSingles
+      || !Object.is(stats.avgdl, total / stats.chunkCount)
+      || !Object.is(stats.avgdlWithHanSingles, expandedTotal / stats.chunkCount)) {
+      throw new Error("lexical statistics do not exactly match accepted tokenizer output");
+    }
+  }
+
+  private async validateEvidencePostings(opened: OpenedFullTextGeneration): Promise<void> {
+    const evidenceRefs = refsOfKind(opened.descriptor, "evidence");
+    const postingRefs = refsOfKind(opened.descriptor, "lexical-postings");
+    let evidenceRefIndex = 0; let postingRefIndex = 0;
+    let evidenceBlock: EvidenceBlock | null = null; let postingBlock: LexicalPostingsBlock | null = null;
+    let evidenceIndex = 0; let postingChunkIndex = 0; let occurrenceIndex = 0; let chunkOrdinal = 0;
+    while (evidenceRefIndex < evidenceRefs.length || evidenceBlock !== null) {
+      if (evidenceBlock === null) {
+        evidenceBlock = (await opened.readObject(evidenceRefs[evidenceRefIndex++]!)).block as EvidenceBlock;
+        evidenceIndex = 0;
+        opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(postingBlock !== null));
+      }
+      if (postingBlock === null) {
+        if (postingRefIndex >= postingRefs.length) throw new Error("postings reached EOF before evidence");
+        postingBlock = (await opened.readLexicalPostings(postingRefs[postingRefIndex++]!)).block;
+        postingChunkIndex = 0; occurrenceIndex = 0;
+        opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(evidenceBlock !== null));
+      }
+      const evidence = evidenceBlock.records[evidenceIndex]!;
+      const chunk = postingBlock.chunks[postingChunkIndex]!;
+      if (postingBlock.chunkStart + postingChunkIndex !== chunkOrdinal
+        || chunk.paperOrdinal !== evidence.paperIndex || chunk.chunkIndex !== evidence.chunk.index) {
+        throw new Error("postings chunk identity does not exactly match evidence");
+      }
+      const derived = deriveLexicalChunk(evidence.chunk.text, chunkOrdinal);
+      if (chunk.baseLength !== derived.baseLength || chunk.expandedLength !== derived.expandedLength
+        || chunk.compactText !== derived.compactText) throw new Error("postings chunk lexical metadata does not match evidence");
+      for (const expected of derived.occurrences) {
+        const actual = postingBlock.occurrences[occurrenceIndex++];
+        if (!actual || !sameOccurrence(actual, expected)) throw new Error("postings occurrence authority does not exactly match evidence");
+      }
+      if (postingBlock.occurrences[occurrenceIndex]?.chunkOrdinal === chunkOrdinal) {
+        throw new Error("postings contains an extra occurrence for evidence chunk");
+      }
+      evidenceIndex += 1; postingChunkIndex += 1; chunkOrdinal += 1;
+      if (evidenceIndex === evidenceBlock.records.length) { evidenceBlock = null; evidenceIndex = 0; }
+      if (postingChunkIndex === postingBlock.chunks.length) {
+        if (occurrenceIndex !== postingBlock.occurrences.length) throw new Error("postings occurrence stream has trailing records");
+        postingBlock = null; postingChunkIndex = 0; occurrenceIndex = 0;
+      }
+    }
+    if (postingBlock !== null || postingRefIndex !== postingRefs.length
+      || chunkOrdinal !== opened.descriptor.corpusStats.chunkCount) throw new Error("evidence/postings closure has trailing or missing chunks");
+  }
+
+  private async validatePostingsDictionary(opened: OpenedFullTextGeneration): Promise<void> {
+    const postingRefs = refsOfKind(opened.descriptor, "lexical-postings");
+    const dictionaryRefs = refsOfKind(opened.descriptor, "lexical-dictionary");
+    let dictionaryRefIndex = 0; let dictionaryBlock: LexicalDictionaryBlock | null = null; let dictionaryIndex = 0;
+    const nextDictionaryEntry = async (): Promise<LexicalDictionaryEntry | null> => {
+      while (dictionaryBlock === null || dictionaryIndex === dictionaryBlock.entries.length) {
+        dictionaryBlock = null; dictionaryIndex = 0;
+        if (dictionaryRefIndex >= dictionaryRefs.length) return null;
+        dictionaryBlock = (await opened.readLexicalDictionary(dictionaryRefs[dictionaryRefIndex++]!)).block;
+        opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 2);
+        if (dictionaryBlock.entries.length === 0) continue;
+      }
+      return dictionaryBlock.entries[dictionaryIndex++]!;
+    };
+    for (let postingOrdinal = 0; postingOrdinal < postingRefs.length; postingOrdinal += 1) {
+      const postings = (await opened.readLexicalPostings(postingRefs[postingOrdinal]!)).block;
+      opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(dictionaryBlock !== null));
+      let catalogIndex = 0;
+      while (catalogIndex < postings.termCatalog.length) {
+        const first = postings.occurrences[postings.termCatalog[catalogIndex]!]!;
+        let chunkDf = 0; let totalTf = 0;
+        do {
+          const occurrence = postings.occurrences[postings.termCatalog[catalogIndex]!]!;
+          chunkDf += 1; totalTf += occurrence.tf; catalogIndex += 1;
+        } while (catalogIndex < postings.termCatalog.length
+          && sameNamespaceTerm(first, postings.occurrences[postings.termCatalog[catalogIndex]!]!));
+        const actual = await nextDictionaryEntry();
+        if (!actual || actual.postingOrdinal !== postingOrdinal || actual.namespace !== first.namespace
+          || actual.term !== first.term || actual.chunkDf !== chunkDf || actual.totalTf !== totalTf) {
+          throw new Error("dictionary route authority does not exactly match postings term catalog");
+        }
+      }
+    }
+    if (await nextDictionaryEntry() !== null || dictionaryRefIndex !== dictionaryRefs.length) {
+      throw new Error("postings/dictionary closure has trailing entries or pages");
     }
   }
 
@@ -538,7 +693,7 @@ export class FullTextGenerationIndexStore {
     const privateDescriptor = deepFreeze(cloneDescriptor(descriptor));
     const publicDescriptor = privateDescriptor;
     const references = new Map(privateDescriptor.objects.map((reference) => [referenceIdentity(reference), reference]));
-    const diagnostics: GenerationStoreDiagnostics = { maxObjectBytes: 0, objectReads: 0 };
+    const diagnostics: GenerationStoreDiagnostics = { maxObjectBytes: 0, objectReads: 0, maxLiveBlocks: 0 };
     const pinnedReference = (requested: GenerationObjectReference): GenerationObjectReference => {
       let identity: string;
       try { identity = referenceIdentity(requested); } catch (caught) { throw wrap("invalid", "invalid generation object reference", caught); }
@@ -551,9 +706,19 @@ export class FullTextGenerationIndexStore {
       catch (caught) { throw normalizePublicReadError("failed to read generation object", caught); }
     };
     const readObject = async (requested: GenerationObjectReference): Promise<OpenedGenerationObject> => {
-      try { return await this.readAndValidateObject(generation, pinnedReference(requested), diagnostics, privateDescriptor.dimension); }
+      try { return await this.readAndValidateObject(generation, pinnedReference(requested), diagnostics, privateDescriptor.dimension, privateDescriptor); }
       catch (caught) { throw normalizePublicReadError("failed to decode generation object", caught); }
     };
+    const typedRead = async <K extends OpenedGenerationObject["reference"]["kind"]>(
+      reference: GenerationObjectReference & { readonly kind: K }, kind: K,
+    ): Promise<Extract<OpenedGenerationObject, { readonly reference: { readonly kind: K } }>> => {
+      const object = await readObject(reference);
+      if (object.reference.kind !== kind) throw wrap("invalid", `generation object is not ${kind}`);
+      return object as Extract<OpenedGenerationObject, { readonly reference: { readonly kind: K } }>;
+    };
+    const readPaperMetadata = (reference: GenerationObjectReference & { readonly kind: "paper-metadata" }) => typedRead(reference, "paper-metadata");
+    const readLexicalDictionary = (reference: GenerationObjectReference & { readonly kind: "lexical-dictionary" }) => typedRead(reference, "lexical-dictionary");
+    const readLexicalPostings = (reference: GenerationObjectReference & { readonly kind: "lexical-postings" }) => typedRead(reference, "lexical-postings");
     const iterate = (kind?: GenerationObjectReference["kind"]) =>
       this.iteratePublicGenerationObjects(generation, privateDescriptor, diagnostics, kind);
     return {
@@ -562,10 +727,14 @@ export class FullTextGenerationIndexStore {
       diagnostics,
       readRawObject,
       readObject,
+      readPaperMetadata,
+      readLexicalDictionary,
+      readLexicalPostings,
       validateClosure: async () => {
         try {
           await this.validateGenerationClosure({
             pointer, descriptor: privateDescriptor, diagnostics, readRawObject, readObject,
+            readPaperMetadata, readLexicalDictionary, readLexicalPostings,
             validateClosure: async () => undefined,
             iterateObjects: iterate,
             iterateVectorBlocks: () => iterate("vector") as AsyncIterable<OpenedVectorObject>,
@@ -602,7 +771,7 @@ export class FullTextGenerationIndexStore {
   ): AsyncIterable<OpenedGenerationObject> {
     for (const reference of descriptor.objects) {
       if (kind !== undefined && reference.kind !== kind) continue;
-      yield await this.readAndValidateObject(generation, reference, diagnostics, descriptor.dimension);
+      yield await this.readAndValidateObject(generation, reference, diagnostics, descriptor.dimension, descriptor);
     }
   }
 
@@ -633,12 +802,13 @@ export class FullTextGenerationIndexStore {
     reference: GenerationObjectReference,
     diagnostics?: GenerationStoreDiagnostics,
     descriptorDimension?: number,
+    descriptor?: GenerationDescriptor,
   ): Promise<OpenedGenerationObject> {
     const { bytes } = await this.readVerifiedObjectBytes(generation, reference, diagnostics);
     const path = this.objectPath(generation, reference.path);
     try {
       if (reference.kind === "vector") {
-        const block = decodeVectorBlock(bytes);
+        const block = decodeVectorBlock(bytes, descriptor?.schemaVersion === 2 ? 2 : 4);
         if (block.rowStart !== reference.recordStart || block.rowCount !== reference.recordCount) {
           throw new Error("vector block rowStart/count does not match reference");
         }
@@ -647,11 +817,31 @@ export class FullTextGenerationIndexStore {
         }
         return { reference: reference as GenerationObjectReference & { kind: "vector" }, block };
       }
-      const block = decodeEvidenceBlock(bytes);
-      if (block.rowStart !== reference.recordStart || block.records.length !== reference.recordCount) {
-        throw new Error("evidence block rowStart/count does not match reference");
+      if (reference.kind === "evidence") {
+        const block = decodeEvidenceBlock(bytes, descriptor?.schemaVersion === 2 ? 2 : 4);
+        if (block.rowStart !== reference.recordStart || block.records.length !== reference.recordCount) throw new Error("evidence block rowStart/count does not match reference");
+        return { reference: reference as GenerationObjectReference & { kind: "evidence" }, block };
       }
-      return { reference: reference as GenerationObjectReference & { kind: "evidence" }, block };
+      if (reference.kind === "paper-metadata") {
+        const block = decodePaperMetadataBlock(bytes);
+        if (block.paperStart !== reference.recordStart || block.records.length !== reference.recordCount) throw new Error("metadata block start/count does not match reference");
+        return { reference: reference as GenerationObjectReference & { kind: "paper-metadata" }, block };
+      }
+      if (reference.kind === "lexical-dictionary") {
+        const block = decodeLexicalDictionaryBlock(bytes);
+        if (block.postingStart !== reference.recordStart || block.postingCount !== reference.recordCount) throw new Error("dictionary block postingStart/count does not match reference");
+        const dictionaryRefs = descriptor?.objects.filter((candidate) => candidate.kind === "lexical-dictionary") ?? [];
+        const ordinal = dictionaryRefs.findIndex((candidate) => candidate.path === reference.path);
+        if (ordinal < 0 || block.dictionaryOrdinal !== ordinal) throw new Error("dictionary block dictionaryOrdinal does not match descriptor order");
+        if (descriptor) validateDictionaryRouting(block, reference, descriptor);
+        return { reference: reference as GenerationObjectReference & { kind: "lexical-dictionary" }, block };
+      }
+      const block = decodeLexicalPostingsBlock(bytes);
+      if (block.chunkStart !== reference.recordStart || block.chunks.length !== reference.recordCount) throw new Error("postings block chunkStart/count does not match reference");
+      const postingRefs = descriptor?.objects.filter((candidate) => candidate.kind === "lexical-postings") ?? [];
+      const ordinal = postingRefs.findIndex((candidate) => candidate.path === reference.path);
+      if (ordinal < 0 || block.postingOrdinal !== ordinal) throw new Error("postings block postingOrdinal does not match descriptor order");
+      return { reference: reference as GenerationObjectReference & { kind: "lexical-postings" }, block };
     } catch (caught) {
       throw wrap("corrupt-or-unreadable", `invalid ${reference.kind} generation object: ${path}`, caught);
     }
@@ -670,14 +860,22 @@ export class FullTextGenerationIndexStore {
       || blockObjectChecksum(write.bytes) !== reference.checksum) {
       throw new Error(`generation object write disagrees with reference: ${reference.path}`);
     }
-    const decoded = reference.kind === "vector" ? decodeVectorBlock(write.bytes) : decodeEvidenceBlock(write.bytes);
-    const count = reference.kind === "vector" ? (decoded as VectorBlock).rowCount : (decoded as EvidenceBlock).records.length;
-    if (decoded.rowStart !== reference.recordStart || count !== reference.recordCount) {
-      throw new Error("generation object metadata disagrees with reference");
-    }
-    if (reference.kind === "vector" && (decoded as VectorBlock).dimension !== descriptor.dimension) {
-      throw new Error("vector block dimension disagrees with descriptor");
-    }
+    const decoded = reference.kind === "vector" ? decodeVectorBlock(write.bytes)
+      : reference.kind === "evidence" ? decodeEvidenceBlock(write.bytes)
+        : reference.kind === "paper-metadata" ? decodePaperMetadataBlock(write.bytes)
+          : reference.kind === "lexical-dictionary" ? decodeLexicalDictionaryBlock(write.bytes)
+            : decodeLexicalPostingsBlock(write.bytes);
+    const count = reference.kind === "vector" ? (decoded as VectorBlock).rowCount
+      : reference.kind === "evidence" ? (decoded as EvidenceBlock).records.length
+        : reference.kind === "paper-metadata" ? (decoded as PaperMetadataBlock).records.length
+          : reference.kind === "lexical-dictionary" ? (decoded as LexicalDictionaryBlock).postingCount
+            : (decoded as LexicalPostingsBlock).chunks.length;
+    const start = reference.kind === "vector" || reference.kind === "evidence" ? (decoded as VectorBlock | EvidenceBlock).rowStart
+      : reference.kind === "paper-metadata" ? (decoded as PaperMetadataBlock).paperStart
+        : reference.kind === "lexical-dictionary" ? (decoded as LexicalDictionaryBlock).postingStart
+          : (decoded as LexicalPostingsBlock).chunkStart;
+    if (start !== reference.recordStart || count !== reference.recordCount) throw new Error("generation object metadata disagrees with reference");
+    if (reference.kind === "vector" && (decoded as VectorBlock).dimension !== descriptor.dimension) throw new Error("vector block dimension disagrees with descriptor");
   }
 
   private async loadCurrentForGuard(): Promise<CurrentGenerationPointer | null> {
@@ -694,6 +892,7 @@ export class FullTextGenerationIndexStore {
       if (!(await this.storage.exists(path))) return { kind: "missing" };
       const raw = await this.storage.readText(path);
       try {
+        requireCurrentPointerTextWithinLimit(raw);
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         if (typeof parsed.formatVersion === "number" && parsed.formatVersion > CURRENT_GENERATION_POINTER_FORMAT_VERSION) return { kind: "incompatible", raw };
         if (typeof parsed.schemaVersion === "number" && parsed.schemaVersion > CURRENT_GENERATION_POINTER_SCHEMA_VERSION) return { kind: "incompatible", raw };
@@ -846,9 +1045,7 @@ export function encodeCurrentGenerationPointer(pointer: CurrentGenerationPointer
 }
 
 export function decodeCurrentGenerationPointer(text: string): CurrentGenerationPointer {
-  if (typeof text !== "string" || text.length > MAX_CURRENT_POINTER_BYTES || utf8Length(text) > MAX_CURRENT_POINTER_BYTES) {
-    throw new Error("current generation pointer exceeds its byte limit");
-  }
+  requireCurrentPointerTextWithinLimit(text);
   let value: unknown;
   try { value = JSON.parse(text); } catch { throw new Error("current generation pointer is not valid JSON"); }
   const pointer = validatePointer(value, true);
@@ -943,6 +1140,73 @@ function exactNumberArrayEqual(left: readonly number[], right: readonly number[]
   return left.length === right.length && left.every((value, index) => Object.is(value, right[index]));
 }
 
+function refsOfKind<K extends GenerationObjectReference["kind"]>(
+  descriptor: GenerationDescriptor,
+  kind: K,
+): Array<GenerationObjectReference & { readonly kind: K }> {
+  return descriptor.objects.filter(
+    (reference): reference is GenerationObjectReference & { readonly kind: K } => reference.kind === kind,
+  );
+}
+
+function deriveLexicalChunk(text: string, chunkOrdinal: number): {
+  readonly baseLength: number;
+  readonly expandedLength: number;
+  readonly compactText: string;
+  readonly occurrences: readonly LexicalOccurrence[];
+} {
+  const base = tokenizeUnicode(text);
+  const expanded = tokenizeUnicodeWithHanSingles(text);
+  const compactText = text.normalize("NFKC").toLocaleLowerCase("und").replace(/[^\p{L}\p{N}]+/gu, "");
+  const occurrences: LexicalOccurrence[] = [];
+  const appendFrequencies = (namespace: LexicalNamespace, tokens: readonly string[]) => {
+    const frequencies = new Map<string, number>();
+    for (const token of tokens) {
+      frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
+      if (occurrences.length + frequencies.size > 65_536) {
+        throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
+      }
+    }
+    for (const [term, tf] of frequencies) occurrences.push({ chunkOrdinal, namespace, term, tf });
+  };
+  appendFrequencies("base", base);
+  appendFrequencies("expanded", expanded);
+  const characters = Array.from(compactText);
+  const grams = new Set<string>();
+  for (const size of [1, 2, 3]) {
+    for (let offset = 0; offset + size <= characters.length; offset += 1) {
+      grams.add(characters.slice(offset, offset + size).join(""));
+      if (occurrences.length + grams.size > 65_536) {
+        throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
+      }
+    }
+  }
+  for (const term of grams) occurrences.push({ chunkOrdinal, namespace: "alias", term, tf: 1 });
+  if (occurrences.length > 65_536) throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
+  occurrences.sort(compareLexicalOccurrences);
+  return { baseLength: base.length, expandedLength: expanded.length, compactText, occurrences };
+}
+
+const LEXICAL_NAMESPACE_ORDER: Record<LexicalNamespace, number> = { alias: 0, base: 1, expanded: 2 };
+function compareLexicalOccurrences(left: LexicalOccurrence, right: LexicalOccurrence): number {
+  return left.chunkOrdinal - right.chunkOrdinal
+    || LEXICAL_NAMESPACE_ORDER[left.namespace] - LEXICAL_NAMESPACE_ORDER[right.namespace]
+    || compareUtf8Strings(left.term, right.term);
+}
+function compareUtf8Strings(left: string, right: string): number {
+  const encoder = new TextEncoder(); const a = encoder.encode(left); const b = encoder.encode(right);
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
+  return a.length - b.length;
+}
+function sameOccurrence(left: LexicalOccurrence, right: LexicalOccurrence): boolean {
+  return left.chunkOrdinal === right.chunkOrdinal && left.namespace === right.namespace
+    && left.term === right.term && left.tf === right.tf;
+}
+function sameNamespaceTerm(left: LexicalOccurrence, right: LexicalOccurrence): boolean {
+  return left.namespace === right.namespace && left.term === right.term;
+}
+
 function validateReferencePath(reference: GenerationObjectReference): void {
   if (!reference || typeof reference !== "object"
     || typeof reference.path !== "string"
@@ -964,7 +1228,14 @@ function referenceIdentity(reference: GenerationObjectReference): string {
 }
 
 function cloneDescriptor(descriptor: GenerationDescriptor): GenerationDescriptor {
-  return JSON.parse(encodeGenerationDescriptor(descriptor)) as GenerationDescriptor;
+  return {
+    ...descriptor,
+    corpusMean: [...descriptor.corpusMean],
+    corpusStats: { ...descriptor.corpusStats },
+    lexicalRouting: descriptor.lexicalRouting.map((route) => [...route]),
+    indexDerivation: { ...descriptor.indexDerivation },
+    objects: descriptor.objects.map((reference) => ({ ...reference })),
+  };
 }
 
 function deepFreeze<T>(value: T): T {
@@ -1096,6 +1367,23 @@ function validateWriterToken(value: unknown): asserts value is string {
   }
 }
 
+function validateDictionaryRouting(block: LexicalDictionaryBlock, reference: GenerationObjectReference, descriptor: GenerationDescriptor): void {
+  const actual = new Set<number>();
+  for (const entryIndex of block.queryCatalog) {
+    const entry = block.entries[entryIndex]!;
+    actual.add(lexicalBucket(entry.namespace, entry.term));
+  }
+  const routed = new Set<number>();
+  for (let bucket = 0; bucket < descriptor.lexicalRouting.length; bucket += 1) {
+    if (descriptor.lexicalRouting[bucket]!.includes(reference.path)) routed.add(bucket);
+  }
+  if (actual.size !== routed.size || [...actual].some((bucket) => !routed.has(bucket))) throw new Error("dictionary routing membership does not exactly match queryCatalog buckets");
+}
+
+function lexicalBucket(namespace: string, term: string): number {
+  const encoder = new TextEncoder(); const a = encoder.encode(namespace); const b = encoder.encode(term); const bytes = new Uint8Array(a.length + 1 + b.length); bytes.set(a); bytes.set(b, a.length + 1); return Number.parseInt(sha256Hex(bytes).slice(0, 2), 16);
+}
+
 function validatePairedObjectCoverage(descriptor: GenerationDescriptor): void {
   const vectors = descriptor.objects.filter((reference) => reference.kind === "vector");
   const evidence = descriptor.objects.filter((reference) => reference.kind === "evidence");
@@ -1184,6 +1472,12 @@ function validateFingerprint(value: unknown, name: string): asserts value is str
 }
 
 function utf8Length(value: string): number { return new TextEncoder().encode(value).byteLength; }
+function requireCurrentPointerTextWithinLimit(value: unknown): asserts value is string {
+  if (typeof value !== "string" || value.length > MAX_CURRENT_POINTER_BYTES
+    || utf8Length(value) > MAX_CURRENT_POINTER_BYTES) {
+    throw new Error("current generation pointer exceeds its byte limit");
+  }
+}
 function validRevisionOrNull(value: unknown): number | null { return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null; }
 function isPlainObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function isIterable(value: unknown): value is Iterable<unknown> {

@@ -6,9 +6,9 @@ import { createEvidenceChunkId, type EvidenceChunk, type EvidenceDerivation } fr
 export const MAX_BINARY_OBJECT_BYTES = 4 * 1024 * 1024;
 export const BINARY_BLOCK_HEADER_BYTES = 52;
 export const BINARY_BLOCK_FORMAT_VERSION = 1 as const;
-export const BINARY_BLOCK_SCHEMA_VERSION = 2 as const;
+export const BINARY_BLOCK_SCHEMA_VERSION = 4 as const;
 export const GENERATION_DESCRIPTOR_FORMAT_VERSION = 1 as const;
-export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 2 as const;
+export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 4 as const;
 export const MAX_GENERATION_DESCRIPTOR_BYTES = 1024 * 1024;
 export const MAX_GENERATION_OBJECTS = 4096;
 export const MAX_GENERATION_PAPERS = 1_000_000;
@@ -20,6 +20,10 @@ const CHECKSUM_OFFSET = 20;
 const CHECKSUM_BYTES = 32;
 const VECTOR_KIND = 1;
 const EVIDENCE_KIND = 2;
+const PAPER_METADATA_KIND = 3;
+const LEXICAL_DICTIONARY_KIND = 4;
+const LEXICAL_POSTINGS_KIND = 5;
+export const LEXICAL_BUCKET_COUNT = 256;
 const MAX_MODEL_ID_LENGTH = 256;
 const MAX_PROVENANCE_LENGTH = 128;
 const MAX_PAPER_KEY_LENGTH = 256;
@@ -60,7 +64,63 @@ export interface EvidenceStreamClosureState {
   readonly vectorRow: number;
 }
 
-export type GenerationObjectKind = "vector" | "evidence";
+export interface PaperMetadataRecord {
+  readonly paperOrdinal: number;
+  readonly paperKey: string;
+  readonly chunkStart: number;
+  readonly chunkCount: number;
+  readonly title?: string;
+}
+
+export interface PaperMetadataBlock {
+  readonly paperStart: number;
+  readonly records: readonly PaperMetadataRecord[];
+}
+
+export type LexicalNamespace = "base" | "expanded" | "alias";
+
+export interface LexicalChunkRecord {
+  readonly paperOrdinal: number;
+  readonly chunkIndex: number;
+  readonly baseLength: number;
+  readonly expandedLength: number;
+  readonly compactText: string;
+}
+
+export interface LexicalOccurrence {
+  readonly chunkOrdinal: number;
+  readonly namespace: LexicalNamespace;
+  readonly term: string;
+  readonly tf: number;
+}
+
+export interface LexicalPostingsBlock {
+  readonly postingOrdinal: number;
+  readonly chunkStart: number;
+  readonly chunks: readonly LexicalChunkRecord[];
+  readonly occurrences: readonly LexicalOccurrence[];
+  readonly termCatalog: readonly number[];
+}
+
+export interface LexicalDictionaryEntry {
+  readonly postingOrdinal: number;
+  readonly namespace: LexicalNamespace;
+  readonly term: string;
+  readonly chunkDf: number;
+  readonly totalTf: number;
+}
+
+export interface LexicalDictionaryBlock {
+  readonly dictionaryOrdinal: number;
+  readonly postingStart: number;
+  readonly postingCount: number;
+  readonly entries: readonly LexicalDictionaryEntry[];
+  readonly queryCatalog: readonly number[];
+  /** Canonical 256-bit bucket membership, lowercase hexadecimal. */
+  readonly bucketMask: string;
+}
+
+export type GenerationObjectKind = "vector" | "evidence" | "paper-metadata" | "lexical-postings" | "lexical-dictionary";
 
 export interface GenerationObjectReference {
   readonly kind: GenerationObjectKind;
@@ -80,7 +140,8 @@ export interface GenerationIndexDerivation {
 
 export interface GenerationDescriptor {
   readonly formatVersion: typeof GENERATION_DESCRIPTOR_FORMAT_VERSION;
-  readonly schemaVersion: typeof GENERATION_DESCRIPTOR_SCHEMA_VERSION;
+  /** Persisted source schema; v2 is accepted read-only and projected to the current dense shape. */
+  readonly schemaVersion: 2 | typeof GENERATION_DESCRIPTOR_SCHEMA_VERSION;
   readonly generationId: string;
   readonly sourceRevision: number;
   readonly scopeFingerprint: string;
@@ -97,7 +158,13 @@ export interface GenerationDescriptor {
      */
     readonly indexedPaperCount: number;
     readonly chunkCount: number;
+    readonly totalLexicalTokenCount: number;
+    readonly avgdl: number;
+    readonly totalLexicalTokenCountWithHanSingles: number;
+    readonly avgdlWithHanSingles: number;
   };
+  readonly lexicalCapability: "none" | "bm25-v1";
+  readonly lexicalRouting: readonly (readonly string[])[];
   readonly indexDerivation: GenerationIndexDerivation;
   readonly objects: readonly GenerationObjectReference[];
 }
@@ -142,8 +209,8 @@ export function encodeVectorBlock(input: VectorBlockInput): Uint8Array {
   return encodeBlock(VECTOR_KIND, rowCount, payload);
 }
 
-export function decodeVectorBlock(bytes: Uint8Array): VectorBlock {
-  const block = decodeBlock(bytes, VECTOR_KIND);
+export function decodeVectorBlock(bytes: Uint8Array, schemaVersion: 2 | 4 = BINARY_BLOCK_SCHEMA_VERSION): VectorBlock {
+  const block = decodeBlock(bytes, VECTOR_KIND, schemaVersion);
   if (block.payload.byteLength < 8) throw new Error("vector block payload is truncated");
   const view = new DataView(block.payload.buffer, block.payload.byteOffset, block.payload.byteLength);
   const dimension = view.getUint32(0, true);
@@ -185,8 +252,68 @@ export function encodeEvidenceBlock(input: EvidenceBlock): Uint8Array {
   return encodeBlock(EVIDENCE_KIND, records.length, payload);
 }
 
-export function decodeEvidenceBlock(bytes: Uint8Array): EvidenceBlock {
-  const block = decodeBlock(bytes, EVIDENCE_KIND);
+export function encodePaperMetadataBlock(input: PaperMetadataBlock): Uint8Array {
+  requireIntegerInRange(input.paperStart, "metadata paperStart", 0, MAX_GENERATION_PAPERS - 1);
+  if (!Array.isArray(input.records) || input.records.length === 0) throw new Error("metadata records must be non-empty");
+  const records = input.records.map((record, offset) => validatePaperMetadataRecord(record, input.paperStart + offset));
+  const payload = new TextEncoder().encode(JSON.stringify({ paperStart: input.paperStart, records }));
+  requireObjectLength(BINARY_BLOCK_HEADER_BYTES + payload.byteLength);
+  return encodeBlock(PAPER_METADATA_KIND, records.length, payload);
+}
+
+export function decodePaperMetadataBlock(bytes: Uint8Array): PaperMetadataBlock {
+  const block = decodeBlock(bytes, PAPER_METADATA_KIND);
+  const value = decodeStrictJson(block.payload, "paper metadata block");
+  requireExactObject(value, ["paperStart", "records"], "paper metadata block");
+  requireIntegerInRange(value.paperStart, "metadata paperStart", 0, MAX_GENERATION_PAPERS - 1);
+  if (!Array.isArray(value.records) || value.records.length !== block.recordCount || value.records.length === 0) {
+    throw new Error("metadata record count does not match payload");
+  }
+  const records = value.records.map((record, offset) => validatePaperMetadataRecord(record, value.paperStart + offset));
+  return { paperStart: value.paperStart, records };
+}
+
+export function encodeLexicalPostingsBlock(input: LexicalPostingsBlock): Uint8Array {
+  const validated = validateLexicalPostings(input);
+  const payload = new TextEncoder().encode(JSON.stringify(validated));
+  requireObjectLength(BINARY_BLOCK_HEADER_BYTES + payload.byteLength);
+  return encodeBlock(LEXICAL_POSTINGS_KIND, validated.occurrences.length, payload);
+}
+
+export function decodeLexicalPostingsBlock(bytes: Uint8Array): LexicalPostingsBlock {
+  const block = decodeBlock(bytes, LEXICAL_POSTINGS_KIND);
+  const value = decodeStrictJson(block.payload, "lexical postings block");
+  const validated = validateLexicalPostings(value);
+  if (block.recordCount !== validated.occurrences.length) throw new Error("postings occurrence count does not match header");
+  return validated;
+}
+
+export function encodeLexicalDictionaryBlock(input: LexicalDictionaryBlock): Uint8Array {
+  const validated = validateLexicalDictionary(input);
+  const payload = new TextEncoder().encode(JSON.stringify(validated));
+  requireObjectLength(BINARY_BLOCK_HEADER_BYTES + payload.byteLength);
+  return encodeBlock(LEXICAL_DICTIONARY_KIND, validated.entries.length, payload);
+}
+
+export function decodeLexicalDictionaryBlock(bytes: Uint8Array): LexicalDictionaryBlock {
+  const block = decodeBlock(bytes, LEXICAL_DICTIONARY_KIND);
+  const value = decodeStrictJson(block.payload, "lexical dictionary block");
+  const validated = validateLexicalDictionary(value);
+  if (block.recordCount !== validated.entries.length) throw new Error("dictionary entry count does not match header");
+  return validated;
+}
+
+export function lexicalTermBucket(namespace: LexicalNamespace, term: string): number {
+  const ns = validateNamespace(namespace);
+  const termBytes = strictTermBytes(term);
+  const nsBytes = new TextEncoder().encode(ns);
+  const input = new Uint8Array(nsBytes.length + 1 + termBytes.length);
+  input.set(nsBytes); input.set(termBytes, nsBytes.length + 1);
+  return Number.parseInt(sha256Hex(input).slice(0, 2), 16);
+}
+
+export function decodeEvidenceBlock(bytes: Uint8Array, schemaVersion: 2 | 4 = BINARY_BLOCK_SCHEMA_VERSION): EvidenceBlock {
+  const block = decodeBlock(bytes, EVIDENCE_KIND, schemaVersion);
   requireIntegerInRange(block.recordCount, "evidence record count", 1, MAX_GENERATION_CHUNKS);
   let text: string;
   try {
@@ -262,6 +389,9 @@ export function blockObjectChecksum(bytes: Uint8Array): string {
 }
 
 export function encodeGenerationDescriptor(descriptor: GenerationDescriptor): string {
+  if (descriptor.schemaVersion !== GENERATION_DESCRIPTOR_SCHEMA_VERSION) {
+    throw new Error("only generation descriptor schema v4 can be encoded");
+  }
   const validated = validateDescriptor(descriptor);
   const encoded = JSON.stringify(validated);
   if (new TextEncoder().encode(encoded).byteLength > MAX_GENERATION_DESCRIPTOR_BYTES) {
@@ -283,6 +413,11 @@ export function decodeGenerationDescriptor(text: string): GenerationDescriptor {
     value = JSON.parse(text);
   } catch {
     throw new Error("generation descriptor is not valid JSON");
+  }
+  if (!isPlainObject(value)) throw new Error("generation descriptor must be an object");
+  if (value.schemaVersion === 2) return validateDescriptorV2(value);
+  if (value.schemaVersion !== GENERATION_DESCRIPTOR_SCHEMA_VERSION) {
+    throw new Error("unsupported generation descriptor schema version");
   }
   return validateDescriptor(value);
 }
@@ -337,7 +472,7 @@ function encodeBlock(kind: number, recordCount: number, payload: Uint8Array): Ui
   return bytes;
 }
 
-function decodeBlock(bytes: Uint8Array, expectedKind: number): { payload: Uint8Array; recordCount: number } {
+function decodeBlock(bytes: Uint8Array, expectedKind: number, expectedSchemaVersion: 2 | 4 = BINARY_BLOCK_SCHEMA_VERSION): { payload: Uint8Array; recordCount: number } {
   if (!(bytes instanceof Uint8Array)) throw new Error("binary block must be a Uint8Array");
   requireObjectLength(bytes.byteLength);
   if (bytes.byteLength < BINARY_BLOCK_HEADER_BYTES) throw new Error("binary block header is truncated");
@@ -346,7 +481,7 @@ function decodeBlock(bytes: Uint8Array, expectedKind: number): { payload: Uint8A
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint16(4, true) !== BINARY_BLOCK_FORMAT_VERSION) throw new Error("unsupported binary block format version");
-  if (view.getUint16(6, true) !== BINARY_BLOCK_SCHEMA_VERSION) throw new Error("unsupported binary block schema version");
+  if (view.getUint16(6, true) !== expectedSchemaVersion) throw new Error("unsupported binary block schema version");
   if (view.getUint16(8, true) !== expectedKind) throw new Error("binary block kind does not match decoder");
   if (view.getUint16(10, true) !== 0) throw new Error("binary block reserved header field must be zero");
   const payloadLength = view.getUint32(12, true);
@@ -371,9 +506,11 @@ function checksumInput(bytes: Uint8Array): Uint8Array {
 }
 
 function validatePaperOrdinals(ordinals: Uint32Array): void {
-  for (let index = 1; index < ordinals.length; index += 1) {
-    const previous = ordinals[index - 1]!;
+  for (let index = 0; index < ordinals.length; index += 1) {
     const current = ordinals[index]!;
+    if (current >= MAX_GENERATION_PAPERS) throw new Error("vector paper ordinal exceeds the paper limit");
+    if (index === 0) continue;
+    const previous = ordinals[index - 1]!;
     if (current !== previous && current !== previous + 1) {
       throw new Error("vector paper ordinals must be non-decreasing and change only by one");
     }
@@ -416,6 +553,144 @@ function closureState(record: EvidenceBlockRecord): EvidenceStreamClosureState {
   };
 }
 
+function decodeStrictUtf8(bytes: Uint8Array, name: string): string {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new Error(`${name} is not valid UTF-8`); }
+}
+
+function decodeStrictJson(bytes: Uint8Array, name: string): Record<string, any> {
+  let value: unknown;
+  try { value = JSON.parse(decodeStrictUtf8(bytes, name)); }
+  catch (caught) { if (caught instanceof Error && /UTF-8/.test(caught.message)) throw caught; throw new Error(`${name} is not valid JSON`); }
+  if (!isPlainObject(value)) throw new Error(`${name} must be an object`);
+  return value;
+}
+
+function strictTermBytes(term: unknown): Uint8Array {
+  if (typeof term !== "string" || term.length === 0 || term.normalize("NFKC").toLocaleLowerCase("und") !== term) {
+    throw new Error("lexical term must be non-empty canonical NFKC lowercase text");
+  }
+  const bytes = new TextEncoder().encode(term);
+  if (bytes.length === 0 || bytes.length > 65_536 || decodeStrictUtf8(bytes, "lexical term") !== term) throw new Error("lexical term bytes are invalid or too long");
+  return bytes;
+}
+
+function compactNormalizedText(text: string): string {
+  return text.normalize("NFKC").toLocaleLowerCase("und").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function compareBytes(left: Uint8Array, right: Uint8Array): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) if (left[index] !== right[index]) return left[index]! - right[index]!;
+  return left.length - right.length;
+}
+
+const NAMESPACE_ORDER: Record<LexicalNamespace, number> = { alias: 0, base: 1, expanded: 2 };
+function validateNamespace(value: unknown): LexicalNamespace {
+  if (value !== "base" && value !== "expanded" && value !== "alias") throw new Error("lexical namespace is invalid");
+  return value;
+}
+function compareNamespaceTerm(a: { namespace: LexicalNamespace; term: string }, b: { namespace: LexicalNamespace; term: string }): number {
+  return NAMESPACE_ORDER[a.namespace] - NAMESPACE_ORDER[b.namespace] || compareBytes(strictTermBytes(a.term), strictTermBytes(b.term));
+}
+function compareOccurrenceAuthority(a: LexicalOccurrence, b: LexicalOccurrence): number {
+  return a.chunkOrdinal - b.chunkOrdinal || compareNamespaceTerm(a, b);
+}
+function compareOccurrenceCatalog(a: LexicalOccurrence, b: LexicalOccurrence): number {
+  return compareNamespaceTerm(a, b) || a.chunkOrdinal - b.chunkOrdinal;
+}
+
+function validateObjectLogicalPath(value: unknown, name: string): string {
+  if (typeof value !== "string" || !/^objects\/[a-z0-9][a-z0-9._-]{0,127}$/.test(value)) throw new Error(`${name} is invalid`);
+  return value;
+}
+
+function validateLexicalPostings(value: unknown): LexicalPostingsBlock {
+  requireExactObject(value, ["postingOrdinal", "chunkStart", "chunks", "occurrences", "termCatalog"], "lexical postings block");
+  requireIntegerInRange(value.postingOrdinal, "postingOrdinal", 0, MAX_GENERATION_OBJECTS - 1);
+  requireIntegerInRange(value.chunkStart, "postings chunkStart", 0, MAX_GENERATION_CHUNKS - 1);
+  if (!Array.isArray(value.chunks) || value.chunks.length === 0 || value.chunkStart + value.chunks.length > MAX_GENERATION_CHUNKS) throw new Error("postings chunks must be a bounded non-empty array");
+  const chunks: LexicalChunkRecord[] = []; let prior: LexicalChunkRecord | undefined;
+  for (const raw of value.chunks) {
+    requireExactObject(raw, ["paperOrdinal", "chunkIndex", "baseLength", "expandedLength", "compactText"], "lexical chunk");
+    requireIntegerInRange(raw.paperOrdinal, "lexical chunk paperOrdinal", 0, MAX_GENERATION_PAPERS - 1);
+    requireIntegerInRange(raw.chunkIndex, "lexical chunk chunkIndex", 0, MAX_GENERATION_CHUNKS - 1);
+    requireIntegerInRange(raw.baseLength, "lexical chunk baseLength", 0, 0xffff_ffff);
+    requireIntegerInRange(raw.expandedLength, "lexical chunk expandedLength", 0, 0xffff_ffff);
+    if (raw.expandedLength < raw.baseLength) throw new Error("expandedLength must not be less than baseLength");
+    if (typeof raw.compactText !== "string" || compactNormalizedText(raw.compactText) !== raw.compactText) throw new Error("compactText must be canonical compact NFKC lowercase text");
+    if (prior && (raw.paperOrdinal === prior.paperOrdinal ? raw.chunkIndex !== prior.chunkIndex + 1 : raw.paperOrdinal !== prior.paperOrdinal + 1 || raw.chunkIndex !== 0)) throw new Error("lexical chunk identity must be continuous");
+    const chunk = { paperOrdinal: raw.paperOrdinal, chunkIndex: raw.chunkIndex, baseLength: raw.baseLength, expandedLength: raw.expandedLength, compactText: raw.compactText }; chunks.push(chunk); prior = chunk;
+  }
+  if (!Array.isArray(value.occurrences) || value.occurrences.length > 65_536) throw new Error("postings occurrence count exceeds 65536");
+  const occurrences: LexicalOccurrence[] = []; let previous: LexicalOccurrence | undefined;
+  for (const raw of value.occurrences) {
+    requireExactObject(raw, ["chunkOrdinal", "namespace", "term", "tf"], "lexical occurrence");
+    requireIntegerInRange(raw.chunkOrdinal, "occurrence chunkOrdinal", value.chunkStart, value.chunkStart + chunks.length - 1);
+    const namespace = validateNamespace(raw.namespace); strictTermBytes(raw.term); requireIntegerInRange(raw.tf, "occurrence tf", 1, 0xffff_ffff);
+    if (namespace === "alias" && raw.tf !== 1) throw new Error("alias occurrence tf must equal one");
+    const occurrence = { chunkOrdinal: raw.chunkOrdinal, namespace, term: raw.term, tf: raw.tf };
+    if (previous && compareOccurrenceAuthority(previous, occurrence) >= 0) throw new Error("occurrence authority must strictly increase without duplicates");
+    occurrences.push(occurrence); previous = occurrence;
+  }
+  const termCatalog = validateExactPermutation(value.termCatalog, occurrences.length, "termCatalog");
+  let catalogPrevious: LexicalOccurrence | undefined;
+  for (const index of termCatalog) { const occurrence = occurrences[index]!; if (catalogPrevious && compareOccurrenceCatalog(catalogPrevious, occurrence) >= 0) throw new Error("termCatalog order must strictly increase"); catalogPrevious = occurrence; }
+  return { postingOrdinal: value.postingOrdinal, chunkStart: value.chunkStart, chunks, occurrences, termCatalog };
+}
+
+function validateLexicalDictionary(value: unknown): LexicalDictionaryBlock {
+  requireExactObject(value, ["dictionaryOrdinal", "postingStart", "postingCount", "entries", "queryCatalog", "bucketMask"], "lexical dictionary block");
+  requireIntegerInRange(value.dictionaryOrdinal, "dictionaryOrdinal", 0, MAX_GENERATION_OBJECTS - 1);
+  requireIntegerInRange(value.postingStart, "dictionary postingStart", 0, MAX_GENERATION_OBJECTS - 1);
+  requireIntegerInRange(value.postingCount, "dictionary postingCount", 1, MAX_GENERATION_OBJECTS);
+  if (value.postingStart + value.postingCount > MAX_GENERATION_OBJECTS) throw new Error("dictionary posting range exceeds object limit");
+  if (!Array.isArray(value.entries)) throw new Error("dictionary entries must be an array");
+  if (value.entries.length > 65_536) throw new Error("dictionary entry count exceeds 65536");
+  if (!Array.isArray(value.queryCatalog) || value.queryCatalog.length > 65_536) {
+    throw new Error("dictionary queryCatalog count exceeds 65536");
+  }
+  const entries: LexicalDictionaryEntry[] = []; let previous: LexicalDictionaryEntry | undefined;
+  for (const raw of value.entries) {
+    requireExactObject(raw, ["postingOrdinal", "namespace", "term", "chunkDf", "totalTf"], "dictionary entry");
+    requireIntegerInRange(raw.postingOrdinal, "dictionary postingOrdinal", value.postingStart, value.postingStart + value.postingCount - 1);
+    const namespace = validateNamespace(raw.namespace); strictTermBytes(raw.term);
+    requireIntegerInRange(raw.chunkDf, "dictionary chunkDf", 1, MAX_GENERATION_CHUNKS); requireIntegerInRange(raw.totalTf, "dictionary totalTf", 1, Number.MAX_SAFE_INTEGER);
+    if (raw.totalTf < raw.chunkDf) throw new Error("dictionary totalTf must be at least chunkDf");
+    const entry = { postingOrdinal: raw.postingOrdinal, namespace, term: raw.term, chunkDf: raw.chunkDf, totalTf: raw.totalTf };
+    const order = previous ? previous.postingOrdinal - entry.postingOrdinal || compareNamespaceTerm(previous, entry) : -1;
+    if (previous && order >= 0) throw new Error("dictionary authority must strictly increase without duplicates"); entries.push(entry); previous = entry;
+  }
+  const queryCatalog = validateExactPermutation(value.queryCatalog, entries.length, "queryCatalog");
+  let catalogPrevious: LexicalDictionaryEntry | undefined; let previousBucket = -1; const buckets = new Set<number>();
+  for (const index of queryCatalog) { const entry = entries[index]!; const bucket = lexicalTermBucket(entry.namespace, entry.term); buckets.add(bucket);
+    const order = catalogPrevious ? previousBucket - bucket || compareNamespaceTerm(catalogPrevious, entry) || catalogPrevious.postingOrdinal - entry.postingOrdinal : -1;
+    if (catalogPrevious && order >= 0) throw new Error("queryCatalog order must strictly increase"); catalogPrevious = entry; previousBucket = bucket; }
+  const bucketMask = bucketMaskHex(buckets); if (value.bucketMask !== bucketMask) throw new Error("dictionary bucketMask does not match queryCatalog");
+  return { dictionaryOrdinal: value.dictionaryOrdinal, postingStart: value.postingStart, postingCount: value.postingCount, entries, queryCatalog, bucketMask };
+}
+
+function validateExactPermutation(value: unknown, count: number, name: string): number[] {
+  if (!Array.isArray(value) || value.length !== count) throw new Error(`${name} must cover every authority index exactly once`);
+  const bitmap = new Uint8Array(Math.ceil(count / 8)); const result: number[] = [];
+  for (const raw of value) { requireIntegerInRange(raw, `${name} index`, 0, count - 1); const byte = raw >>> 3, mask = 1 << (raw & 7); if ((bitmap[byte]! & mask) !== 0) throw new Error(`${name} contains a duplicate index`); bitmap[byte]! |= mask; result.push(raw); }
+  return result;
+}
+function bucketMaskHex(buckets: ReadonlySet<number>): string {
+  const bytes = new Uint8Array(32); for (const bucket of buckets) bytes[bucket >>> 3]! |= 1 << (bucket & 7); return bytesToHex(bytes);
+}
+
+function validatePaperMetadataRecord(value: unknown, expectedOrdinal: number): PaperMetadataRecord {
+  requireAllowedObject(value, ["paperOrdinal", "paperKey", "chunkStart", "chunkCount", "title"], ["paperOrdinal", "paperKey", "chunkStart", "chunkCount"], "paper metadata record");
+  if (value.paperOrdinal !== expectedOrdinal) throw new Error("paper metadata ordinals must be continuous");
+  if (!boundedString(value.paperKey, MAX_PAPER_KEY_LENGTH)) throw new Error("paper metadata paperKey is invalid");
+  requireIntegerInRange(value.chunkStart, "paper metadata chunkStart", 0, MAX_GENERATION_CHUNKS - 1);
+  requireIntegerInRange(value.chunkCount, "paper metadata chunkCount", 1, MAX_GENERATION_CHUNKS);
+  if (value.chunkStart + value.chunkCount > MAX_GENERATION_CHUNKS) throw new Error("paper metadata chunk range exceeds corpus bounds");
+  if (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 16_384)) throw new Error("paper metadata title is invalid");
+  return { paperOrdinal: value.paperOrdinal, paperKey: value.paperKey, chunkStart: value.chunkStart, chunkCount: value.chunkCount, ...(value.title === undefined ? {} : { title: value.title }) };
+}
+
 function validateEvidenceRecord(value: unknown): EvidenceBlockRecord {
   requireExactObject(value, ["paperIndex", "paperKey", "vectorRow", "chunk"], "evidence record");
   requireIntegerInRange(value.paperIndex, "evidence paper index", 0, MAX_GENERATION_PAPERS - 1);
@@ -454,10 +729,37 @@ function requireEvidenceShapeBounds(value: unknown): void {
   }
 }
 
-function validateDescriptor(value: unknown): GenerationDescriptor {
+function validateDescriptorV2(value: Record<string, any>): GenerationDescriptor {
   requireExactObject(value, [
     "formatVersion", "schemaVersion", "generationId", "sourceRevision", "scopeFingerprint",
     "identificationFingerprint", "modelId", "dimension", "corpusMean", "corpusStats", "indexDerivation", "objects",
+  ], "generation descriptor schema v2");
+  if (!Array.isArray(value.objects) || value.objects.some((object: unknown) => !isPlainObject(object)
+    || (object.kind !== "vector" && object.kind !== "evidence"))) {
+    throw new Error("generation descriptor schema v2 accepts dense vector/evidence objects only");
+  }
+  requireExactObject(value.corpusStats, ["indexedPaperCount", "chunkCount"], "generation schema v2 corpusStats");
+  const projected = validateDescriptor({
+    ...value,
+    schemaVersion: GENERATION_DESCRIPTOR_SCHEMA_VERSION,
+    corpusStats: {
+      indexedPaperCount: value.corpusStats.indexedPaperCount,
+      chunkCount: value.corpusStats.chunkCount,
+      totalLexicalTokenCount: 0,
+      avgdl: 0,
+      totalLexicalTokenCountWithHanSingles: 0,
+      avgdlWithHanSingles: 0,
+    },
+    lexicalCapability: "none",
+    lexicalRouting: Array.from({ length: LEXICAL_BUCKET_COUNT }, () => []),
+  });
+  return { ...projected, schemaVersion: 2 };
+}
+
+function validateDescriptor(value: unknown): GenerationDescriptor {
+  requireExactObject(value, [
+    "formatVersion", "schemaVersion", "generationId", "sourceRevision", "scopeFingerprint",
+    "identificationFingerprint", "modelId", "dimension", "corpusMean", "corpusStats", "lexicalCapability", "lexicalRouting", "indexDerivation", "objects",
   ], "generation descriptor");
   if (value.formatVersion !== GENERATION_DESCRIPTOR_FORMAT_VERSION) throw new Error("unsupported generation descriptor format version");
   if (value.schemaVersion !== GENERATION_DESCRIPTOR_SCHEMA_VERSION) throw new Error("unsupported generation descriptor schema version");
@@ -471,9 +773,26 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
     || value.corpusMean.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
     throw new Error("generation corpusMean must contain the finite per-dimension mean of all vector rows");
   }
-  requireExactObject(value.corpusStats, ["indexedPaperCount", "chunkCount"], "generation corpusStats");
+  requireExactObject(value.corpusStats, ["indexedPaperCount", "chunkCount", "totalLexicalTokenCount", "avgdl", "totalLexicalTokenCountWithHanSingles", "avgdlWithHanSingles"], "generation corpusStats");
   requireIntegerInRange(value.corpusStats.indexedPaperCount, "generation indexed paper count", 0, MAX_GENERATION_PAPERS);
   requireIntegerInRange(value.corpusStats.chunkCount, "generation chunk count", 0, MAX_GENERATION_CHUNKS);
+  requireIntegerInRange(value.corpusStats.totalLexicalTokenCount, "generation total lexical token count", 0, Number.MAX_SAFE_INTEGER);
+  requireIntegerInRange(value.corpusStats.totalLexicalTokenCountWithHanSingles, "generation expanded lexical token count", 0, Number.MAX_SAFE_INTEGER);
+  const expectedAvgdl = value.corpusStats.chunkCount === 0 ? 0 : value.corpusStats.totalLexicalTokenCount / value.corpusStats.chunkCount;
+  const expectedExpandedAvgdl = value.corpusStats.chunkCount === 0 ? 0 : value.corpusStats.totalLexicalTokenCountWithHanSingles / value.corpusStats.chunkCount;
+  if (!Object.is(value.corpusStats.avgdl, expectedAvgdl) || !Object.is(value.corpusStats.avgdlWithHanSingles, expectedExpandedAvgdl)) {
+    throw new Error("generation avgdl values must exactly match their token totals/chunkCount");
+  }
+  if (value.lexicalCapability !== "none" && value.lexicalCapability !== "bm25-v1") throw new Error("generation lexicalCapability is unknown");
+  if (!Array.isArray(value.lexicalRouting) || value.lexicalRouting.length !== LEXICAL_BUCKET_COUNT) throw new Error("generation lexicalRouting must contain exactly 256 route arrays");
+  const lexicalRouting: string[][] = []; let routeRefs = 0;
+  for (const route of value.lexicalRouting) {
+    if (!Array.isArray(route)) throw new Error("generation lexicalRouting bucket must be an array");
+    const paths: string[] = []; let previous = "";
+    for (const raw of route) { const path = validateObjectLogicalPath(raw, "lexical routing path"); if (path <= previous) throw new Error("lexical routing paths must strictly increase"); previous = path; paths.push(path); }
+    routeRefs += paths.length; lexicalRouting.push(paths);
+  }
+  if (routeRefs > MAX_GENERATION_OBJECTS) throw new Error("lexical routing exceeds its total reference limit");
   if ((value.corpusStats.chunkCount === 0) !== (value.corpusStats.indexedPaperCount === 0)
     || value.corpusStats.indexedPaperCount > value.corpusStats.chunkCount) {
     throw new Error("generation indexed paper count must be positive only for a non-empty corpus and cannot exceed chunkCount");
@@ -502,10 +821,8 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
       ["kind", "path", "byteLength", "recordStart", "recordCount", "checksum"],
       "generation object reference",
     );
-    if (object.kind === "lexical-postings") {
-      throw new Error("lexical-postings references require a future format version with its postings codec");
-    }
-    if (object.kind !== "vector" && object.kind !== "evidence") throw new Error("generation object kind is unknown");
+    if (object.kind !== "vector" && object.kind !== "evidence" && object.kind !== "paper-metadata"
+      && object.kind !== "lexical-dictionary" && object.kind !== "lexical-postings") throw new Error("generation object kind is unknown");
     if (typeof object.path !== "string" || !/^objects\/[a-z0-9][a-z0-9._-]{0,127}$/.test(object.path)) {
       throw new Error("generation object path must be a bounded logical child of objects/");
     }
@@ -527,7 +844,26 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
       checksum: object.checksum,
     };
   });
-  validateObjectCoverage(objects, value.corpusStats.chunkCount);
+  const lexicalKinds: readonly GenerationObjectKind[] = ["lexical-postings", "lexical-dictionary"];
+  const hasLexicalObjects = objects.some((object) => lexicalKinds.includes(object.kind));
+  const dictionaryPaths = new Set(objects.filter((object) => object.kind === "lexical-dictionary").map((object) => object.path));
+  const routedPaths = new Set(lexicalRouting.flat());
+  if (value.corpusStats.chunkCount === 0 && value.lexicalCapability !== "none") throw new Error("empty generation lexicalCapability must be none");
+  if (value.lexicalCapability === "none" && (hasLexicalObjects || routeRefs !== 0 || value.corpusStats.totalLexicalTokenCount !== 0 || value.corpusStats.totalLexicalTokenCountWithHanSingles !== 0)) throw new Error("dense-only generation cannot declare lexical objects, routing, or statistics");
+  if (value.lexicalCapability === "bm25-v1") {
+    if (!objects.some((object) => object.kind === "paper-metadata")) throw new Error("bm25 generation is missing paper metadata");
+    const hasPostings = objects.some((object) => object.kind === "lexical-postings");
+    const hasDictionaries = objects.some((object) => object.kind === "lexical-dictionary");
+    if (hasPostings !== hasDictionaries) throw new Error("bm25 postings and dictionary objects must appear together");
+    const hasIndexedTerms = value.corpusStats.totalLexicalTokenCount > 0
+      || value.corpusStats.totalLexicalTokenCountWithHanSingles > 0;
+    if (hasIndexedTerms && (!hasPostings || !hasDictionaries || routeRefs === 0)) {
+      throw new Error("bm25 generation with lexical tokens requires postings, dictionary, and routing");
+    }
+    for (const path of routedPaths) if (!dictionaryPaths.has(path)) throw new Error("lexical routing path must reference a dictionary object");
+    for (const path of dictionaryPaths) if (!routedPaths.has(path)) throw new Error("every dictionary object requires at least one bucket route");
+  }
+  validateObjectCoverage(objects, value.corpusStats.chunkCount, value.corpusStats.indexedPaperCount);
   return {
     formatVersion: GENERATION_DESCRIPTOR_FORMAT_VERSION,
     schemaVersion: GENERATION_DESCRIPTOR_SCHEMA_VERSION,
@@ -541,26 +877,33 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
     corpusStats: {
       indexedPaperCount: value.corpusStats.indexedPaperCount,
       chunkCount: value.corpusStats.chunkCount,
+      totalLexicalTokenCount: value.corpusStats.totalLexicalTokenCount,
+      avgdl: value.corpusStats.avgdl,
+      totalLexicalTokenCountWithHanSingles: value.corpusStats.totalLexicalTokenCountWithHanSingles,
+      avgdlWithHanSingles: value.corpusStats.avgdlWithHanSingles,
     },
+    lexicalCapability: value.lexicalCapability,
+    lexicalRouting,
     indexDerivation,
     objects,
   };
 }
 
-function validateObjectCoverage(objects: readonly GenerationObjectReference[], chunkCount: number): void {
+function validateObjectCoverage(objects: readonly GenerationObjectReference[], chunkCount: number, paperCount: number): void {
   if (chunkCount === 0) {
-    if (objects.length !== 0) throw new Error("empty generation cannot reference vector or evidence objects");
+    if (objects.length !== 0) throw new Error("empty generation cannot reference objects");
     return;
   }
-  let previousKind = "";
+  const kindOrder: Record<GenerationObjectKind, number> = {
+    vector: 0, evidence: 1, "paper-metadata": 2, "lexical-postings": 3, "lexical-dictionary": 4,
+  };
+  let previousKind: GenerationObjectKind | null = null;
   let previousStart = -1;
   let previousPath = "";
   for (const object of objects) {
-    const kindOrder = object.kind === "vector" ? 0 : 1;
-    const previousKindOrder = previousKind === "" ? -1 : previousKind === "vector" ? 0 : 1;
-    if (kindOrder < previousKindOrder
+    if (previousKind !== null && (kindOrder[object.kind] < kindOrder[previousKind]
       || (object.kind === previousKind && object.recordStart < previousStart)
-      || (object.kind === previousKind && object.recordStart === previousStart && object.path <= previousPath)) {
+      || (object.kind === previousKind && object.recordStart === previousStart && object.path <= previousPath))) {
       throw new Error("generation object references must use canonical kind, recordStart, and path order");
     }
     previousKind = object.kind;
@@ -572,13 +915,24 @@ function validateObjectCoverage(objects: readonly GenerationObjectReference[], c
     if (refs.length === 0) throw new Error(`non-empty generation is missing ${kind} object coverage`);
     let nextStart = 0;
     for (const ref of refs) {
-      if (ref.recordStart !== nextStart) {
-        throw new Error(`${kind} object coverage must be continuous from zero without gaps or overlaps`);
-      }
+      if (ref.recordStart !== nextStart) throw new Error(`${kind} object coverage must be continuous from zero without gaps or overlaps`);
       nextStart += ref.recordCount;
     }
     if (nextStart !== chunkCount) throw new Error(`${kind} object coverage must equal chunkCount`);
   }
+  const metadata = objects.filter((object) => object.kind === "paper-metadata");
+  if (metadata.length > 0) {
+    let nextPaper = 0;
+    for (const ref of metadata) {
+      if (ref.recordStart !== nextPaper) throw new Error("paper-metadata object coverage must be continuous from zero");
+      nextPaper += ref.recordCount;
+    }
+    if (nextPaper !== paperCount) throw new Error("paper-metadata object coverage must equal indexedPaperCount");
+  }
+  const postings = objects.filter((object) => object.kind === "lexical-postings");
+  if (postings.length > 0) { let nextChunk = 0; for (const ref of postings) { if (ref.recordStart !== nextChunk) throw new Error("lexical-postings chunk coverage must be continuous from zero"); nextChunk += ref.recordCount; } if (nextChunk !== chunkCount) throw new Error("lexical-postings chunk coverage must equal chunkCount"); }
+  const dictionaries = objects.filter((object) => object.kind === "lexical-dictionary");
+  if (dictionaries.length > 0) { let nextPosting = 0; for (const ref of dictionaries) { if (ref.recordStart !== nextPosting) throw new Error("lexical-dictionary posting ranges must be continuous from zero"); nextPosting += ref.recordCount; } if (nextPosting !== postings.length) throw new Error("lexical-dictionary posting ranges must cover all postings ordinals"); }
 }
 
 function requireBoundedVersion(value: unknown, name: string): number {

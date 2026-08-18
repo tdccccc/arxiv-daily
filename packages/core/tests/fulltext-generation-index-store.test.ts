@@ -1,16 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StorageAdapter } from "../src/core/adapters";
 import { createEvidenceChunkId, type EvidenceChunk } from "../src/library/fulltext/evidence-chunk";
+import { tokenizeUnicode, tokenizeUnicodeWithHanSingles } from "../src/library/fulltext/bm25-retrieval";
 import {
   GENERATION_DESCRIPTOR_FORMAT_VERSION,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
   blockObjectChecksum,
   decodeEvidenceBlock,
+  decodeLexicalDictionaryBlock,
+  decodeLexicalPostingsBlock,
   decodeVectorBlock,
   encodeEvidenceBlock,
   encodeGenerationDescriptor,
+  encodeLexicalDictionaryBlock,
+  encodeLexicalPostingsBlock,
+  encodePaperMetadataBlock,
   encodeVectorBlock,
+  lexicalTermBucket,
   type GenerationDescriptor,
+  type GenerationObjectReference,
 } from "../src/library/fulltext/generation-index-format";
 import {
   CURRENT_GENERATION_POINTER_FORMAT_VERSION,
@@ -32,6 +40,12 @@ const BASE = `arxiv-daily/.index/personal-library-search-index/${"a".repeat(64)}
 const CURRENT = `${BASE}/current.json`;
 const BACKUP = `${CURRENT}.backup`;
 const PROMOTION_CLAIM = `${BASE}/.current-promotion-claim.json`;
+
+const V2_VECTOR_HEX = "41444749010002000100000014000000010000001ad0a1687cfe2e882fa9b0a1bf16d579795fa2627cd1782cb8f8431f0fe536b60200000000000000000000000000c03f000000c0";
+const V2_EVIDENCE_HEX = "4144474901000200020000006e01000001000000976008a44bb6a088e42207007a7cc2079905b3eff60a625c7694c4d7271b895e7b22726f775374617274223a302c227265636f726473223a5b7b227061706572496e646578223a302c2270617065724b6579223a2270617065723a61222c22766563746f72526f77223a302c226368756e6b223a7b226964223a227368613235363a31613337646138643535336130336237383065396539663230376233366335626165306661326634656333346637323363626365633539663661366464393837222c22696e646578223a302c2270616765223a312c2274657874223a226c65676163792064656e73652065766964656e6365222c2268656164696e6773223a5b224d6574686f6473225d2c226c6f6361746f72223a7b22706167655374617274223a317d2c2264657269766174696f6e223a7b22706172736572223a7b226964223a2266697874757265222c2276657273696f6e223a2231227d2c226368756e6b657256657273696f6e223a322c22656d62656464696e67496e70757456657273696f6e223a317d7d7d5d7d";
+const V2_DESCRIPTOR = "{\"formatVersion\":1,\"schemaVersion\":2,\"generationId\":\"legacy-v2\",\"sourceRevision\":7,\"scopeFingerprint\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"identificationFingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"modelId\":\"legacy-model\",\"dimension\":2,\"corpusMean\":[1.5,-2],\"corpusStats\":{\"indexedPaperCount\":1,\"chunkCount\":1},\"indexDerivation\":{\"builderVersion\":1,\"denseCenteringVersion\":1,\"tokenizerVersion\":1,\"postingsVersion\":1},\"objects\":[{\"kind\":\"vector\",\"path\":\"objects/vector-v2.bin\",\"byteLength\":72,\"recordStart\":0,\"recordCount\":1,\"checksum\":\"sha256:210554f1efccfebd1ea4ddfa40c680f24ab5a815d3e5736173de0ff55c46e2bf\"},{\"kind\":\"evidence\",\"path\":\"objects/evidence-v2.bin\",\"byteLength\":418,\"recordStart\":0,\"recordCount\":1,\"checksum\":\"sha256:d127617e404d4e1c38033b3cb75ac8c3a3dae7e2fc581c8e74b1c50fe324ab6a\"}]}";
+const V2_POINTER = "{\"formatVersion\":1,\"schemaVersion\":1,\"generationId\":\"legacy-v2\",\"sourceRevision\":7,\"scopeFingerprint\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"identificationFingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"descriptorChecksum\":\"sha256:71a8e7cc0593076dcb9c2da2d9a976dde2d5bc82eeeeefa3837197847ed82e2e\",\"checksum\":\"sha256:cbf5b5fec57318218d5242beaf8ec9cd23133f09bdb850884c09b161fbdc144c\"}";
+function bytesFromHex(hex: string): Uint8Array { const bytes = new Uint8Array(hex.length / 2); for (let index = 0; index < bytes.length; index += 1) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16); return bytes; }
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -60,7 +74,9 @@ function emptyFixture(generationId: string, sourceRevision: number) {
     modelId: "model-a",
     dimension: 2,
     corpusMean: [0, 0],
-    corpusStats: { indexedPaperCount: 0, chunkCount: 0 },
+    corpusStats: { indexedPaperCount: 0, chunkCount: 0, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
+    lexicalCapability: "none",
+    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [],
   };
@@ -87,7 +103,9 @@ function fixture(generationId: string, sourceRevision: number, values = [1, 2, 3
     modelId: "model-a",
     dimension: 2,
     corpusMean: [(values[0]! + values[2]!) / 2, (values[1]! + values[3]!) / 2],
-    corpusStats: { indexedPaperCount: 2, chunkCount: 2 },
+    corpusStats: { indexedPaperCount: 2, chunkCount: 2, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
+    lexicalCapability: "none",
+    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [
       { kind: "vector", path: objects[0]!.path, byteLength: vector.byteLength, recordStart: 0, recordCount: 2, checksum: blockObjectChecksum(vector) },
@@ -95,6 +113,133 @@ function fixture(generationId: string, sourceRevision: number, values = [1, 2, 3
     ],
   };
   return { descriptor, objects };
+}
+
+function compareUtf8(left: string, right: string): number {
+  const a = new TextEncoder().encode(left); const b = new TextEncoder().encode(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
+  return a.length - b.length;
+}
+function compareNamespace(left: string, right: string): number { return ["alias", "base", "expanded"].indexOf(left) - ["alias", "base", "expanded"].indexOf(right); }
+function maskHex(buckets: ReadonlySet<number>): string { const bytes = new Uint8Array(32); for (const bucket of buckets) bytes[bucket >>> 3]! |= 1 << (bucket & 7); return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+function lexicalFixture(generationId: string, sourceRevision: number, input: string | readonly string[] = "哈哈 alpha") {
+  const texts = typeof input === "string" ? [input] : [...input];
+  const chunks = texts.map((text, index) => chunk(index, text));
+  const vector = encodeVectorBlock({ rowStart: 0, dimension: 2, paperOrdinals: new Uint32Array(texts.length), vectors: new Float32Array(texts.flatMap((_, index) => [index + 1, index + 2])) });
+  const evidence = encodeEvidenceBlock({ rowStart: 0, records: chunks.map((entry, vectorRow) => ({ paperIndex: 0, paperKey: "paper:a", vectorRow, chunk: entry })) });
+  const metadata = encodePaperMetadataBlock({ paperStart: 0, records: [{ paperOrdinal: 0, paperKey: "paper:a", chunkStart: 0, chunkCount: texts.length, title: "A" }] });
+  const occurrences: Array<{ chunkOrdinal: number; namespace: "alias" | "base" | "expanded"; term: string; tf: number }> = [];
+  const chunkRecords = texts.map((text, chunkOrdinal) => {
+    const base = tokenizeUnicode(text); const expanded = tokenizeUnicodeWithHanSingles(text);
+    const frequencies = (tokens: readonly string[]) => { const map = new Map<string, number>(); for (const token of tokens) map.set(token, (map.get(token) ?? 0) + 1); return map; };
+    for (const [term, tf] of frequencies(base)) occurrences.push({ chunkOrdinal, namespace: "base", term, tf });
+    for (const [term, tf] of frequencies(expanded)) occurrences.push({ chunkOrdinal, namespace: "expanded", term, tf });
+    const compactText = text.normalize("NFKC").toLocaleLowerCase("und").replace(/[^\p{L}\p{N}]+/gu, ""); const chars = Array.from(compactText); const grams = new Set<string>();
+    for (const size of [1, 2, 3]) for (let offset = 0; offset + size <= chars.length; offset += 1) grams.add(chars.slice(offset, offset + size).join(""));
+    for (const term of grams) occurrences.push({ chunkOrdinal, namespace: "alias", term, tf: 1 });
+    return { paperOrdinal: 0, chunkIndex: chunkOrdinal, baseLength: base.length, expandedLength: expanded.length, compactText };
+  });
+  occurrences.sort((a, b) => a.chunkOrdinal - b.chunkOrdinal || compareNamespace(a.namespace, b.namespace) || compareUtf8(a.term, b.term));
+  const termCatalog = occurrences.map((_, index) => index).sort((a, b) => compareNamespace(occurrences[a]!.namespace, occurrences[b]!.namespace) || compareUtf8(occurrences[a]!.term, occurrences[b]!.term) || occurrences[a]!.chunkOrdinal - occurrences[b]!.chunkOrdinal);
+  const postings = encodeLexicalPostingsBlock({ postingOrdinal: 0, chunkStart: 0, chunks: chunkRecords, occurrences, termCatalog });
+  const aggregate = new Map<string, { postingOrdinal: number; namespace: "alias" | "base" | "expanded"; term: string; chunkDf: number; totalTf: number }>();
+  for (const occurrence of occurrences) { const key = `${occurrence.namespace}\0${occurrence.term}`; const old = aggregate.get(key); aggregate.set(key, old ? { ...old, chunkDf: old.chunkDf + 1, totalTf: old.totalTf + occurrence.tf } : { postingOrdinal: 0, namespace: occurrence.namespace, term: occurrence.term, chunkDf: 1, totalTf: occurrence.tf }); }
+  const entries = [...aggregate.values()].sort((a, b) => compareNamespace(a.namespace, b.namespace) || compareUtf8(a.term, b.term));
+  const queryCatalog = entries.map((_, index) => index).sort((a, b) => lexicalTermBucket(entries[a]!.namespace, entries[a]!.term) - lexicalTermBucket(entries[b]!.namespace, entries[b]!.term) || compareNamespace(entries[a]!.namespace, entries[b]!.namespace) || compareUtf8(entries[a]!.term, entries[b]!.term));
+  const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
+  const dictionary = encodeLexicalDictionaryBlock({ dictionaryOrdinal: 0, postingStart: 0, postingCount: 1, entries, queryCatalog, bucketMask: maskHex(buckets) });
+  const postingPath = "objects/postings.bin", dictionaryPath = "objects/dictionary.bin";
+  const routing = Array.from({ length: 256 }, () => [] as string[]); for (const bucket of buckets) routing[bucket] = [dictionaryPath];
+  const objects: GenerationObjectWrite[] = [{ path: "objects/vector.bin", bytes: vector }, { path: "objects/evidence.bin", bytes: evidence }, { path: "objects/metadata.bin", bytes: metadata }, { path: postingPath, bytes: postings }, { path: dictionaryPath, bytes: dictionary }];
+  const ref = (kind: GenerationObjectReference["kind"], path: string, bytes: Uint8Array, recordStart: number, recordCount: number): GenerationObjectReference => ({ kind, path, byteLength: bytes.length, recordStart, recordCount, checksum: blockObjectChecksum(bytes) });
+  const total = chunkRecords.reduce((sum, row) => sum + row.baseLength, 0), expandedTotal = chunkRecords.reduce((sum, row) => sum + row.expandedLength, 0);
+  const descriptor: GenerationDescriptor = { formatVersion: GENERATION_DESCRIPTOR_FORMAT_VERSION, schemaVersion: GENERATION_DESCRIPTOR_SCHEMA_VERSION, generationId, sourceRevision, scopeFingerprint: SCOPE, identificationFingerprint: IDENTIFICATION, modelId: "model-a", dimension: 2, corpusMean: [(texts.length + 1) / 2, (texts.length + 3) / 2], corpusStats: { indexedPaperCount: 1, chunkCount: texts.length, totalLexicalTokenCount: total, avgdl: total / texts.length, totalLexicalTokenCountWithHanSingles: expandedTotal, avgdlWithHanSingles: expandedTotal / texts.length }, lexicalCapability: "bm25-v1", lexicalRouting: routing, indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 }, objects: [ref("vector", objects[0]!.path, vector, 0, texts.length), ref("evidence", objects[1]!.path, evidence, 0, texts.length), ref("paper-metadata", objects[2]!.path, metadata, 0, 1), ref("lexical-postings", postingPath, postings, 0, texts.length), ref("lexical-dictionary", dictionaryPath, dictionary, 0, 1)] };
+  return { descriptor, objects, postings, dictionary, buckets };
+}
+
+function multiBlockLexicalFixture(generationId: string, sourceRevision: number) {
+  const base = lexicalFixture(generationId, sourceRevision, ["哈哈 alpha", "beta", "gamma gamma", "delta", "epsilon", "zeta"]);
+  const decodedVector = decodeVectorBlock(base.objects[0]!.bytes);
+  const decodedEvidence = decodeEvidenceBlock(base.objects[1]!.bytes);
+  const decodedPostings = decodeLexicalPostingsBlock(base.postings);
+  const paperForChunk = (ordinal: number) => ordinal < 3 ? 0 : 1;
+  const indexForChunk = (ordinal: number) => ordinal < 3 ? ordinal : ordinal - 3;
+  const writes: GenerationObjectWrite[] = [];
+  const refs: GenerationObjectReference[] = [];
+  const add = (kind: GenerationObjectReference["kind"], path: string, bytes: Uint8Array, start: number, count: number) => {
+    writes.push({ path, bytes });
+    refs.push({ kind, path, byteLength: bytes.length, recordStart: start, recordCount: count, checksum: blockObjectChecksum(bytes) });
+  };
+  for (const [block, start] of [[2, 0], [2, 2], [2, 4]] as const) {
+    const count = block;
+    add("vector", `objects/vector-${start}.bin`, encodeVectorBlock({
+      rowStart: start,
+      dimension: 2,
+      paperOrdinals: new Uint32Array(Array.from({ length: count }, (_, offset) => paperForChunk(start + offset))),
+      vectors: decodedVector.vectors.slice(start * 2, (start + count) * 2),
+    }), start, count);
+  }
+  for (const [count, start] of [[2, 0], [2, 2], [2, 4]] as const) {
+    add("evidence", `objects/evidence-${start}.bin`, encodeEvidenceBlock({
+      rowStart: start,
+      records: decodedEvidence.records.slice(start, start + count).map((record, offset) => ({
+        ...record,
+        paperIndex: paperForChunk(start + offset),
+        paperKey: paperForChunk(start + offset) === 0 ? "paper:a" : "paper:b",
+        chunk: { ...record.chunk, index: indexForChunk(start + offset) },
+      })),
+    }), start, count);
+  }
+  add("paper-metadata", "objects/metadata-0.bin", encodePaperMetadataBlock({ paperStart: 0, records: [{ paperOrdinal: 0, paperKey: "paper:a", chunkStart: 0, chunkCount: 3, title: "A" }] }), 0, 1);
+  add("paper-metadata", "objects/metadata-1.bin", encodePaperMetadataBlock({ paperStart: 1, records: [{ paperOrdinal: 1, paperKey: "paper:b", chunkStart: 3, chunkCount: 3, title: "B" }] }), 1, 1);
+  const postingCuts = [[1, 0], [2, 1], [2, 3], [1, 5]] as const;
+  const postingBlocks = postingCuts.map(([count, start], postingOrdinal) => {
+    const occurrences = decodedPostings.occurrences.filter((entry) => entry.chunkOrdinal >= start && entry.chunkOrdinal < start + count);
+    const termCatalog = occurrences.map((_, index) => index).sort((a, b) => compareNamespace(occurrences[a]!.namespace, occurrences[b]!.namespace) || compareUtf8(occurrences[a]!.term, occurrences[b]!.term) || occurrences[a]!.chunkOrdinal - occurrences[b]!.chunkOrdinal);
+    const bytes = encodeLexicalPostingsBlock({
+      postingOrdinal,
+      chunkStart: start,
+      chunks: decodedPostings.chunks.slice(start, start + count).map((chunkRecord, offset) => ({
+        ...chunkRecord,
+        paperOrdinal: paperForChunk(start + offset),
+        chunkIndex: indexForChunk(start + offset),
+      })),
+      occurrences,
+      termCatalog,
+    });
+    add("lexical-postings", `objects/postings-${postingOrdinal}.bin`, bytes, start, count);
+    return decodeLexicalPostingsBlock(bytes);
+  });
+  const dictionaryPaths: string[] = [];
+  const routing = Array.from({ length: 256 }, () => [] as string[]);
+  for (const [postingCount, postingStart] of [[3, 0], [1, 3]] as const) {
+    const entries = postingBlocks.slice(postingStart, postingStart + postingCount).flatMap((postings) => {
+      const result: Array<{ postingOrdinal: number; namespace: "alias" | "base" | "expanded"; term: string; chunkDf: number; totalTf: number }> = [];
+      let catalog = 0;
+      while (catalog < postings.termCatalog.length) {
+        const first = postings.occurrences[postings.termCatalog[catalog]!]!;
+        let chunkDf = 0; let totalTf = 0;
+        do { const occurrence = postings.occurrences[postings.termCatalog[catalog]!]!; chunkDf += 1; totalTf += occurrence.tf; catalog += 1; }
+        while (catalog < postings.termCatalog.length && postings.occurrences[postings.termCatalog[catalog]!]!.namespace === first.namespace && postings.occurrences[postings.termCatalog[catalog]!]!.term === first.term);
+        result.push({ postingOrdinal: postings.postingOrdinal, namespace: first.namespace, term: first.term, chunkDf, totalTf });
+      }
+      return result;
+    });
+    const queryCatalog = entries.map((_, index) => index).sort((a, b) => lexicalTermBucket(entries[a]!.namespace, entries[a]!.term) - lexicalTermBucket(entries[b]!.namespace, entries[b]!.term) || compareNamespace(entries[a]!.namespace, entries[b]!.namespace) || compareUtf8(entries[a]!.term, entries[b]!.term) || entries[a]!.postingOrdinal - entries[b]!.postingOrdinal);
+    const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
+    const path = `objects/dictionary-${postingStart}.bin`;
+    dictionaryPaths.push(path);
+    add("lexical-dictionary", path, encodeLexicalDictionaryBlock({ dictionaryOrdinal: dictionaryPaths.length - 1, postingStart, postingCount, entries, queryCatalog, bucketMask: maskHex(buckets) }), postingStart, postingCount);
+    for (const bucket of buckets) routing[bucket]!.push(path);
+  }
+  for (const route of routing) route.sort();
+  const descriptor: GenerationDescriptor = {
+    ...base.descriptor,
+    corpusStats: { ...base.descriptor.corpusStats, indexedPaperCount: 2 },
+    lexicalRouting: routing,
+    objects: refs,
+  };
+  return { descriptor, objects: writes };
 }
 
 interface MemoryBackend {
@@ -734,6 +879,41 @@ describe("FullTextGenerationIndexStore promotion", () => {
   });
 });
 
+describe("accepted schema-v2 generation compatibility", () => {
+  it("opens fixed P4b.3 bytes, reads dense objects, and validates closure without rewriting source schema", async () => {
+    const memory = memoryStorage();
+    memory.text.set(CURRENT, V2_POINTER);
+    memory.text.set(generationPath("legacy-v2", "descriptor.json"), V2_DESCRIPTOR);
+    memory.binary.set(generationPath("legacy-v2", "objects/vector-v2.bin"), bytesFromHex(V2_VECTOR_HEX));
+    memory.binary.set(generationPath("legacy-v2", "objects/evidence-v2.bin"), bytesFromHex(V2_EVIDENCE_HEX));
+    const opened = await store(memory.storage).openCurrent();
+    expect(opened!.descriptor).toMatchObject({ schemaVersion: 2, lexicalCapability: "none", corpusStats: {
+      indexedPaperCount: 1, chunkCount: 1, totalLexicalTokenCount: 0, avgdl: 0,
+      totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0,
+    } });
+    expect(opened!.descriptor.lexicalRouting).toEqual(Array.from({ length: 256 }, () => []));
+    await expect(opened!.readObject(opened!.descriptor.objects[0]!)).resolves.toMatchObject({
+      reference: { kind: "vector" }, block: { rowStart: 0, rowCount: 1, dimension: 2 },
+    });
+    await expect(opened!.readObject(opened!.descriptor.objects[1]!)).resolves.toMatchObject({
+      reference: { kind: "evidence" }, block: { rowStart: 0, records: [{ paperKey: "paper:a" }] },
+    });
+    await expect(opened!.validateClosure()).resolves.toBeUndefined();
+    expect(() => encodeGenerationDescriptor(opened!.descriptor)).toThrow(/only.*v4/i);
+    expect(memory.text.get(generationPath("legacy-v2", "descriptor.json"))).toBe(V2_DESCRIPTOR);
+  });
+
+  it("rejects unaccepted schema v3 and future v5 descriptors", async () => {
+    for (const schemaVersion of [3, 5]) {
+      const memory = memoryStorage(); const raw = V2_DESCRIPTOR.replace('"schemaVersion":2', `"schemaVersion":${schemaVersion}`);
+      const descriptorChecksum = blockObjectChecksum(new TextEncoder().encode(raw));
+      const pointer = encodeCurrentGenerationPointer({ ...JSON.parse(V2_POINTER), descriptorChecksum, checksum: `sha256:${"0".repeat(64)}` });
+      memory.text.set(CURRENT, pointer); memory.text.set(generationPath("legacy-v2", "descriptor.json"), raw);
+      await expect(store(memory.storage).openCurrent()).rejects.toMatchObject({ code: "incompatible" });
+    }
+  });
+});
+
 describe("open and bounded reads", () => {
   it("opens a healthy generation with readText only and defers stronger capability gates", async () => {
     const memory = memoryStorage();
@@ -769,6 +949,35 @@ describe("open and bounded reads", () => {
     await expect(store(memory.storage).openCurrent()).resolves.toMatchObject({
       descriptor: { generationId: "gen-empty", objects: [], corpusStats: { chunkCount: 0, indexedPaperCount: 0 } },
     });
+  });
+
+  it("validates and decodes linear lexical objects through typed reads", async () => {
+    const memory = memoryStorage(); const built = lexicalFixture("gen-lexical-healthy", 1);
+    const opened = await store(memory.storage).stageAndPromote({ ...built, writerToken: `writer-lexical-${"f".repeat(32)}`, expectedCurrent: null, sourceCurrentRevision: () => 1 });
+    const postingRef = opened.descriptor.objects.find((ref): ref is GenerationObjectReference & { kind: "lexical-postings" } => ref.kind === "lexical-postings")!;
+    const dictionaryRef = opened.descriptor.objects.find((ref): ref is GenerationObjectReference & { kind: "lexical-dictionary" } => ref.kind === "lexical-dictionary")!;
+    await expect(opened.readLexicalPostings(postingRef)).resolves.toMatchObject({ block: { postingOrdinal: 0, chunkStart: 0 } });
+    await expect(opened.readLexicalDictionary(dictionaryRef)).resolves.toMatchObject({ block: { dictionaryOrdinal: 0, postingStart: 0, postingCount: 1 } });
+    await expect(opened.validateClosure()).resolves.toBeUndefined();
+  });
+
+  it("checks postings reference metadata while staging typed blocks", async () => {
+    const memory = memoryStorage(); const built = lexicalFixture("gen-lexical-ref-mismatch", 1);
+    const badPosting = encodeLexicalPostingsBlock({ ...decodeLexicalPostingsBlock(built.postings), postingOrdinal: 1 });
+    const postingWrite = built.objects.find((object) => object.path === "objects/postings.bin")!;
+    (postingWrite as { bytes: Uint8Array }).bytes = badPosting;
+    const postingRef = built.descriptor.objects.find((ref) => ref.kind === "lexical-postings")!;
+    Object.assign(postingRef, { byteLength: badPosting.length, checksum: blockObjectChecksum(badPosting) });
+    await expect(store(memory.storage).stageAndPromote({ ...built, writerToken: `writer-lexical-ref-${"f".repeat(32)}`, expectedCurrent: null, sourceCurrentRevision: () => 1 }))
+      .rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+  });
+
+  it("rejects dictionary routing membership that is not exact", async () => {
+    const memory = memoryStorage(); const built = lexicalFixture("gen-routing-mismatch", 1);
+    const extraBucket = [...Array(256).keys()].find((bucket) => !built.buckets.has(bucket))!;
+    (built.descriptor.lexicalRouting[extraBucket] as string[]).push("objects/dictionary.bin");
+    await expect(store(memory.storage).stageAndPromote({ ...built, writerToken: `writer-routing-${"f".repeat(32)}`, expectedCurrent: null, sourceCurrentRevision: () => 1 }))
+      .rejects.toMatchObject({ code: "corrupt-or-unreadable" });
   });
 
   it("opens from pointer+descriptor without object scans, freezes its private snapshot, and reads bounded objects on demand", async () => {
@@ -887,6 +1096,21 @@ describe("open and bounded reads", () => {
     raw.schemaVersion += 1; future.text.set(CURRENT, JSON.stringify(raw));
     await expect(store(future.storage).openCurrent()).rejects.toMatchObject({ code: "incompatible" });
 
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const oversizedPrimary = memoryStorage();
+      oversizedPrimary.text.set(CURRENT, JSON.stringify({ formatVersion: 2, schemaVersion: 2, padding: "x".repeat(17_000) }));
+      await expect(store(oversizedPrimary.storage).openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+      expect(parse).not.toHaveBeenCalled();
+
+      const oversizedBackup = memoryStorage();
+      oversizedBackup.text.set(BACKUP, JSON.stringify({ formatVersion: 2, schemaVersion: 2, padding: "界".repeat(9_000) }));
+      await expect(store(oversizedBackup.storage).openCurrent()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+
     const incomplete = memoryStorage();
     await publish(store(incomplete.storage), "gen-a", 1);
     incomplete.text.set(CURRENT, "bad");
@@ -947,6 +1171,216 @@ describe("open and bounded reads", () => {
         await expect(opened!.validateClosure()).rejects.toBeTruthy();
       }
     }
+  });
+});
+
+describe("schema-v4 lexical semantic closure", () => {
+  async function openedLexical(id: string, texts: readonly string[] = ["哈哈 alpha", "beta beta"]) {
+    const memory = memoryStorage();
+    const built = lexicalFixture(id, 1, texts);
+    const opened = await store(memory.storage).stageAndPromote({
+      ...built,
+      writerToken: `writer-${id}-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    });
+    return { memory, built, opened };
+  }
+
+  function replaceGenerationObject(
+    memory: ReturnType<typeof memoryStorage>,
+    id: string,
+    descriptor: GenerationDescriptor,
+    kind: GenerationObjectReference["kind"],
+    bytes: Uint8Array,
+  ) {
+    const reference = descriptor.objects.find((candidate) => candidate.kind === kind)!;
+    memory.binary.set(generationPath(id, reference.path), bytes);
+    Object.assign(reference, { byteLength: bytes.byteLength, checksum: blockObjectChecksum(bytes) });
+    memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(descriptor));
+    resealPointer(memory, descriptor);
+  }
+
+  it("rejects metadata identity/coverage and exact lexical statistics mismatches", async () => {
+    for (const mutation of ["metadata", "total", "expanded-total"] as const) {
+      const id = `gen-lexical-${mutation}`;
+      const { memory, built } = await openedLexical(id);
+      if (mutation === "metadata") {
+        const bytes = encodePaperMetadataBlock({ paperStart: 0, records: [{ paperOrdinal: 0, paperKey: "paper:wrong", chunkStart: 0, chunkCount: 2 }] });
+        replaceGenerationObject(memory, id, built.descriptor, "paper-metadata", bytes);
+      } else {
+        const stats = built.descriptor.corpusStats as { totalLexicalTokenCount: number; avgdl: number; totalLexicalTokenCountWithHanSingles: number; avgdlWithHanSingles: number };
+        if (mutation === "total") { stats.totalLexicalTokenCount += 1; stats.avgdl = stats.totalLexicalTokenCount / 2; }
+        else { stats.totalLexicalTokenCountWithHanSingles += 1; stats.avgdlWithHanSingles = stats.totalLexicalTokenCountWithHanSingles / 2; }
+        memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(built.descriptor));
+        resealPointer(memory, built.descriptor);
+      }
+      const opened = await store(memory.storage).openCurrent();
+      await expect(opened!.validateClosure()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    }
+  });
+
+  it("rejects wrong chunk metadata and missing, extra, or wrong lexical occurrences", async () => {
+    for (const mutation of ["compact", "base", "expanded", "identity", "missing", "extra", "tf"] as const) {
+      const id = `gen-postings-${mutation}`;
+      const { memory, built } = await openedLexical(id);
+      const decoded = decodeLexicalPostingsBlock(built.postings);
+      const chunks = decoded.chunks.map((entry) => ({ ...entry }));
+      const occurrences = decoded.occurrences.map((entry) => ({ ...entry }));
+      if (mutation === "compact") chunks[0]!.compactText += "x";
+      if (mutation === "base") chunks[0]!.baseLength += 1;
+      if (mutation === "expanded") chunks[0]!.expandedLength += 1;
+      if (mutation === "identity") for (const chunkRecord of chunks) chunkRecord.paperOrdinal = 1;
+      if (mutation === "missing") occurrences.splice(0, 1);
+      if (mutation === "extra") occurrences.push({ chunkOrdinal: 1, namespace: "expanded", term: "zzz", tf: 1 });
+      if (mutation === "tf") occurrences.find((entry) => entry.namespace === "base")!.tf += 1;
+      occurrences.sort((a, b) => a.chunkOrdinal - b.chunkOrdinal || compareNamespace(a.namespace, b.namespace) || compareUtf8(a.term, b.term));
+      const termCatalog = occurrences.map((_, index) => index).sort((a, b) => compareNamespace(occurrences[a]!.namespace, occurrences[b]!.namespace) || compareUtf8(occurrences[a]!.term, occurrences[b]!.term) || occurrences[a]!.chunkOrdinal - occurrences[b]!.chunkOrdinal);
+      const bytes = encodeLexicalPostingsBlock({ ...decoded, chunks, occurrences, termCatalog });
+      replaceGenerationObject(memory, id, built.descriptor, "lexical-postings", bytes);
+      const opened = await store(memory.storage).openCurrent();
+      await expect(opened!.validateClosure()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    }
+  });
+
+  it("rejects locally synchronized deletion of a complete term or one chunk posting", async () => {
+    for (const deletion of ["term", "chunk"] as const) {
+      const id = `gen-synchronized-${deletion}`;
+      const { memory, built } = await openedLexical(id, ["alpha alpha", "alpha beta"]);
+      const postings = decodeLexicalPostingsBlock(built.postings);
+      const occurrences = postings.occurrences.filter((entry) => deletion === "term"
+        ? !(entry.namespace === "base" && entry.term === "alpha")
+        : !(entry.namespace === "base" && entry.term === "alpha" && entry.chunkOrdinal === 1));
+      const termCatalog = occurrences.map((_, index) => index).sort((a, b) => compareNamespace(occurrences[a]!.namespace, occurrences[b]!.namespace) || compareUtf8(occurrences[a]!.term, occurrences[b]!.term) || occurrences[a]!.chunkOrdinal - occurrences[b]!.chunkOrdinal);
+      const postingBytes = encodeLexicalPostingsBlock({ ...postings, occurrences, termCatalog });
+      replaceGenerationObject(memory, id, built.descriptor, "lexical-postings", postingBytes);
+
+      const dictionary = decodeLexicalDictionaryBlock(built.dictionary);
+      const entries = dictionary.entries.flatMap((entry) => {
+        if (entry.namespace !== "base" || entry.term !== "alpha") return [{ ...entry }];
+        if (deletion === "term") return [];
+        return [{ ...entry, chunkDf: entry.chunkDf - 1, totalTf: entry.totalTf - 1 }];
+      });
+      const queryCatalog = entries.map((_, index) => index).sort((a, b) => lexicalTermBucket(entries[a]!.namespace, entries[a]!.term) - lexicalTermBucket(entries[b]!.namespace, entries[b]!.term) || compareNamespace(entries[a]!.namespace, entries[b]!.namespace) || compareUtf8(entries[a]!.term, entries[b]!.term));
+      const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
+      const dictionaryBytes = encodeLexicalDictionaryBlock({ ...dictionary, entries, queryCatalog, bucketMask: maskHex(buckets) });
+      replaceGenerationObject(memory, id, built.descriptor, "lexical-dictionary", dictionaryBytes);
+      const dictionaryPath = built.descriptor.objects.find((entry) => entry.kind === "lexical-dictionary")!.path;
+      for (const route of built.descriptor.lexicalRouting as string[][]) route.splice(0);
+      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as string[]).push(dictionaryPath);
+      memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(built.descriptor));
+      resealPointer(memory, built.descriptor);
+      const opened = await store(memory.storage).openCurrent();
+      await expect(opened!.validateClosure()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    }
+  });
+
+  it("rejects missing/extra dictionary routes and wrong df or totalTf", async () => {
+    for (const mutation of ["missing", "extra", "df", "tf"] as const) {
+      const id = `gen-dictionary-${mutation}`;
+      const { memory, built } = await openedLexical(id);
+      const decoded = decodeLexicalDictionaryBlock(built.dictionary);
+      const entries = decoded.entries.map((entry) => ({ ...entry }));
+      if (mutation === "missing") entries.splice(0, 1);
+      if (mutation === "extra") entries.push({ postingOrdinal: 0, namespace: "expanded", term: "zzz", chunkDf: 1, totalTf: 1 });
+      if (mutation === "df") { entries[0]!.chunkDf += 1; entries[0]!.totalTf += 1; }
+      if (mutation === "tf") entries[0]!.totalTf += 1;
+      entries.sort((a, b) => a.postingOrdinal - b.postingOrdinal || compareNamespace(a.namespace, b.namespace) || compareUtf8(a.term, b.term));
+      const queryCatalog = entries.map((_, index) => index).sort((a, b) => lexicalTermBucket(entries[a]!.namespace, entries[a]!.term) - lexicalTermBucket(entries[b]!.namespace, entries[b]!.term) || compareNamespace(entries[a]!.namespace, entries[b]!.namespace) || compareUtf8(entries[a]!.term, entries[b]!.term));
+      const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
+      const bytes = encodeLexicalDictionaryBlock({ ...decoded, entries, queryCatalog, bucketMask: maskHex(buckets) });
+      replaceGenerationObject(memory, id, built.descriptor, "lexical-dictionary", bytes);
+      const dictionaryPath = built.descriptor.objects.find((entry) => entry.kind === "lexical-dictionary")!.path;
+      for (const route of built.descriptor.lexicalRouting as string[][]) route.splice(0);
+      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as string[]).push(dictionaryPath);
+      memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(built.descriptor));
+      resealPointer(memory, built.descriptor);
+      const opened = await store(memory.storage).openCurrent();
+      await expect(opened!.validateClosure()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    }
+  });
+
+  it("typed-rejects an adjacent postings block whose content is shifted across a continuous ref boundary", async () => {
+    const memory = memoryStorage();
+    const id = "gen-shifted-postings-content";
+    const built = multiBlockLexicalFixture(id, 1);
+    const healthy = await store(memory.storage).stageAndPromote({
+      ...built,
+      writerToken: `writer-shifted-postings-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    });
+    await expect(healthy.validateClosure()).resolves.toBeUndefined();
+
+    const descriptor = built.descriptor;
+    const postingRefs = descriptor.objects.filter(
+      (reference): reference is GenerationObjectReference & { kind: "lexical-postings" } => reference.kind === "lexical-postings",
+    );
+    const sourceRef = postingRefs[1]!;
+    const targetRef = postingRefs[2]!;
+    expect([sourceRef.recordStart, sourceRef.recordCount, targetRef.recordStart, targetRef.recordCount]).toEqual([1, 2, 3, 2]);
+    const source = decodeLexicalPostingsBlock(memory.binary.get(generationPath(id, sourceRef.path))!);
+    const shift = targetRef.recordStart - sourceRef.recordStart;
+    const shifted = encodeLexicalPostingsBlock({
+      postingOrdinal: 2,
+      chunkStart: targetRef.recordStart,
+      chunks: source.chunks.map((chunkRecord) => ({ ...chunkRecord })),
+      occurrences: source.occurrences.map((occurrence) => ({ ...occurrence, chunkOrdinal: occurrence.chunkOrdinal + shift })),
+      termCatalog: [...source.termCatalog],
+    });
+    memory.binary.set(generationPath(id, targetRef.path), shifted);
+    Object.assign(targetRef, { byteLength: shifted.byteLength, checksum: blockObjectChecksum(shifted) });
+    memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(descriptor));
+    resealPointer(memory, descriptor);
+
+    vi.mocked(memory.storage.readBinary!).mockClear();
+    const opened = await store(memory.storage).openCurrent();
+    expect(memory.storage.readBinary).not.toHaveBeenCalled();
+    await expect(opened!.validateClosure()).rejects.toMatchObject({
+      code: "corrupt-or-unreadable",
+      cause: expect.objectContaining({ message: expect.stringMatching(/postings chunk identity/i) }),
+    });
+  });
+
+  it("accepts misaligned evidence/postings/dictionary boundaries with linear exact reads", async () => {
+    const memory = memoryStorage();
+    const built = multiBlockLexicalFixture("gen-misaligned-lexical", 1);
+    const opened = await store(memory.storage).stageAndPromote({
+      ...built,
+      writerToken: `writer-misaligned-lexical-${"f".repeat(32)}`,
+      expectedCurrent: null,
+      sourceCurrentRevision: () => 1,
+    });
+    const before = opened.diagnostics.objectReads;
+    await opened.validateClosure();
+    expect(opened.diagnostics.objectReads - before).toBe(24); // 3V + 9E + 8P + 2M + 2D.
+    expect(opened.diagnostics.maxLiveBlocks).toBe(2);
+  });
+
+  it("reads each lexical object only once per ordered pass and keeps at most two blocks live", async () => {
+    const { memory } = await openedLexical("gen-linear-reads", ["哈哈 alpha", "beta beta"]);
+    const opened = await store(memory.storage).openCurrent();
+    const before = opened!.diagnostics.objectReads;
+    await opened!.validateClosure();
+    expect(opened!.diagnostics.objectReads - before).toBe(8); // V + 3E + 2P + M + D for one ref of each kind.
+    expect(opened!.diagnostics.maxLiveBlocks).toBe(2);
+  });
+
+  it("accepts duplicate Han text and a tokenless metadata-only BM25 generation", async () => {
+    const duplicate = await openedLexical("gen-duplicate-han", ["哈哈"]);
+    await expect(duplicate.opened.validateClosure()).resolves.toBeUndefined();
+
+    const memory = memoryStorage();
+    const built = lexicalFixture("gen-tokenless", 1, ["---"]);
+    const descriptor: GenerationDescriptor = {
+      ...built.descriptor,
+      corpusStats: { ...built.descriptor.corpusStats, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
+      lexicalRouting: Array.from({ length: 256 }, () => []),
+      objects: built.descriptor.objects.filter((reference) => reference.kind !== "lexical-postings" && reference.kind !== "lexical-dictionary"),
+    };
+    const objects = built.objects.filter((object) => object.path !== "objects/postings.bin" && object.path !== "objects/dictionary.bin");
+    const opened = await store(memory.storage).stageAndPromote({ descriptor, objects, writerToken: `writer-tokenless-${"f".repeat(32)}`, expectedCurrent: null, sourceCurrentRevision: () => 1 });
+    await expect(opened.validateClosure()).resolves.toBeUndefined();
   });
 });
 

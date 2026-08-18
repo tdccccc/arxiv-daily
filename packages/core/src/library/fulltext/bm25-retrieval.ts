@@ -37,6 +37,11 @@ export function tokenizeUnicode(text: string): string[] {
   return tokenize(text, false);
 }
 
+/** Builder-only expansion used to precompute the single-Han query token stream. */
+export function tokenizeUnicodeWithHanSingles(text: string): string[] {
+  return tokenize(text, true);
+}
+
 function tokenize(text: string, includeHanSingles: boolean): string[] {
   const normalized = text.normalize("NFKC").toLocaleLowerCase("und");
   const tokens: string[] = [];
@@ -152,7 +157,7 @@ export function searchKnowledgeBaseBm25(input: SearchKnowledgeBaseBm25Input): Kn
   return paperTop.map(({ lexicalPriority: _priority, ...match }) => match);
 }
 
-function titlePriority(query: string, title: string): number {
+export function titlePriority(query: string, title: string): number {
   const queryWords = tokenizeUnicode(query);
   const titleWords = tokenizeUnicode(title);
   if (queryWords.length === 0 || titleWords.length === 0) return 0;
