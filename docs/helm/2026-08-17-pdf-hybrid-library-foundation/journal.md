@@ -39,3 +39,10 @@
 - change: centralize real codec/lexical invocation instrumentation, budget rows incrementally and encode only on flush, make replay one-shot, and assign iterator-close ownership to `stageAndPromote` on every return or throw path. Spool cleanup now preserves the primary error, shares a concurrent attempt, retries after synchronous throw or immediate rejection, and is idempotent after success.
 - disposition: accept the production generation builder and shared lexical derivation as a host-neutral Core capability. The executable plugin search path is unchanged, so the technical report handoff is `no-impact`; whole-generation reuse, durable storage-backed spool composition, migration/search cutover and maintenance remain in the following P4b.5 tasks.
 - next: implement a generation-scoped `StorageAdapter` spool and synchronization orchestration that reuses an exact current generation or builds and promotes from a durable manifest snapshot while preserving the prior current on failure.
+
+## 2026-08-18 — handoff to codex-main-session
+
+- evidence: the user explicitly requested takeover of the active initiative and completion of every `goal.md` success criterion. The worktree is clean at `f4f97b9`; P4b remains the only active phase, and the accepted P4b.5 builder checkpoint is the latest implementation state.
+- change: transferred initiative ownership from `zcode-main-session` to `codex-main-session` without changing the goal, phase outcome, accepted implementation, or verification record.
+- disposition: retain all accepted P1-P4b.5 builder work. Continue isolating changes from the parallel `2026-08-13-discovery-loop-and-library-insight` initiative and do not modify its Helm state.
+- next: observe Red for a generation-scoped durable `StorageAdapter` spool and production synchronization/search-cutover orchestration, then implement exact whole-generation reuse, snapshot rebuild and prior-current preservation on failure.

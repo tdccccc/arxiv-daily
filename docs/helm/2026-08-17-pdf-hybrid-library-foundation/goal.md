@@ -2,7 +2,7 @@
 
 status: active
 updated: 2026-08-18
-owner: zcode-main-session
+owner: codex-main-session
 
 ## Intent
 
