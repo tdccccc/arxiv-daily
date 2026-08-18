@@ -32,7 +32,7 @@ export function fusePaperRankingsRrf(input: FusePaperRankingsInput): KnowledgeBa
 
   const papers = new Map<string, Accumulator>();
   input.rankings.forEach((ranking, channelIndex) => {
-    const unique = uniquePapers(ranking).slice(0, candidateLimit);
+    const unique = mergeDuplicatePapers(ranking).slice(0, candidateLimit);
     unique.forEach((match, index) => {
       let accumulator = papers.get(match.paperKey);
       if (!accumulator) {
@@ -70,13 +70,19 @@ export function fusePaperRankingsRrf(input: FusePaperRankingsInput): KnowledgeBa
     });
 }
 
-function uniquePapers(ranking: readonly KnowledgeBasePaperMatch[]): KnowledgeBasePaperMatch[] {
-  const seen = new Set<string>();
+function mergeDuplicatePapers(ranking: readonly KnowledgeBasePaperMatch[]): KnowledgeBasePaperMatch[] {
   const unique: KnowledgeBasePaperMatch[] = [];
+  const byPaper = new Map<string, KnowledgeBasePaperMatch>();
   for (const match of ranking) {
-    if (seen.has(match.paperKey)) continue;
-    seen.add(match.paperKey);
-    unique.push(match);
+    const existing = byPaper.get(match.paperKey);
+    if (!existing) {
+      const representative = { ...match, hits: [...match.hits] };
+      byPaper.set(match.paperKey, representative);
+      unique.push(representative);
+      continue;
+    }
+    existing.chunkCount = Math.max(existing.chunkCount, match.chunkCount);
+    existing.hits.push(...match.hits);
   }
   return unique;
 }

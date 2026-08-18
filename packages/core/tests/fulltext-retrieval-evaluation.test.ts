@@ -148,7 +148,9 @@ function fixedGeneration(papers: readonly FullTextPaperDocument[], rowsPerBlock 
     modelId: "fixed-evaluation-model",
     dimension: DIMENSION,
     corpusMean: Array.from(sums, (sum) => sum / rows.length),
-    corpusStats: { indexedPaperCount: canonical.length, chunkCount: rows.length },
+    corpusStats: { indexedPaperCount: canonical.length, chunkCount: rows.length, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
+    lexicalCapability: "none",
+    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [...vectorRefs, ...evidenceRefs],
   };
@@ -265,6 +267,140 @@ describe("retrieval evaluation", () => {
       mrr: 0.5555555555555555,
       ndcg: 7 / 12,
     });
+  });
+
+  it("defines empty judgments, modes, and all-irrelevant judgments as zero metrics", () => {
+    expect(evaluateRetrieval({ judgments: [], rankings: { dense: {} }, k: 5 })).toEqual({
+      k: 5,
+      modes: { dense: { overall: { recall: 0, mrr: 0, ndcg: 0 }, categories: {} } },
+    });
+    expect(evaluateRetrieval({ judgments: [], rankings: {}, k: 5 })).toEqual({ k: 5, modes: {} });
+    expect(evaluateRetrieval({
+      judgments: [{ queryId: "query", category: "category", grades: { paper: 0 } }],
+      rankings: { dense: { query: ["paper"] } },
+      k: 5,
+    }).modes.dense).toEqual({
+      overall: { recall: 0, mrr: 0, ndcg: 0 },
+      categories: { category: { recall: 0, mrr: 0, ndcg: 0 } },
+    });
+  });
+
+  it("rejects invalid graded relevance values outside the explicit integer range 0 through 3", () => {
+    for (const grade of [-1, Number.NaN, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, 4, Number.MAX_VALUE, 1.5]) {
+      expect(() => evaluateRetrieval({
+        judgments: [{ queryId: "query", category: "category", grades: { paper: grade } }],
+        rankings: { dense: { query: ["paper"] } },
+        k: 5,
+      })).toThrowError(/grade.*finite integer.*0.*3/);
+    }
+  });
+
+  it("rejects malformed judgment query IDs and paper keys", () => {
+    expect(() => evaluateRetrieval({
+      judgments: [{ queryId: "", category: "category", grades: { paper: 3 } }],
+      rankings: {},
+      k: 5,
+    })).toThrowError(/queryId.*non-empty string/);
+    expect(() => evaluateRetrieval({
+      judgments: [{ queryId: "query", category: "category", grades: { "": 3 } }],
+      rankings: {},
+      k: 5,
+    })).toThrowError(/paper key.*non-empty string/);
+  });
+
+  it("fails fast when judgments repeat a query ID", () => {
+    expect(() => evaluateRetrieval({
+      judgments: [
+        { queryId: "query", category: "first", grades: { relevant: 3 } },
+        { queryId: "query", category: "second", grades: { other: 3 } },
+      ],
+      rankings: { dense: { query: ["relevant", "other"] } },
+      k: 5,
+    })).toThrowError(new TypeError("evaluateRetrieval: duplicate judgment queryId query"));
+  });
+
+  it("fails fast when a ranking repeats a relevant or nonrelevant paper, including beyond k", () => {
+    const judgments: readonly RetrievalJudgment[] = [
+      { queryId: "query", category: "category", grades: { relevant: 3, other: 1 } },
+    ];
+    expect(() => evaluateRetrieval({
+      judgments,
+      rankings: { duplicateRelevant: { query: ["relevant", "relevant"] } },
+      k: 5,
+    })).toThrowError(new TypeError("evaluateRetrieval: duplicate paper key relevant in mode duplicateRelevant query query"));
+    expect(() => evaluateRetrieval({
+      judgments,
+      rankings: { duplicateNonrelevant: { query: ["irrelevant", "irrelevant"] } },
+      k: 5,
+    })).toThrowError(new TypeError("evaluateRetrieval: duplicate paper key irrelevant in mode duplicateNonrelevant query query"));
+    expect(() => evaluateRetrieval({
+      judgments,
+      rankings: { beyondK: { query: ["relevant", "a", "b", "c", "d", "outside", "outside"] } },
+      k: 5,
+    })).toThrowError(new TypeError("evaluateRetrieval: duplicate paper key outside in mode beyondK query query"));
+  });
+
+  it("keeps every calculated metric finite and within zero and one", () => {
+    const report = evaluateRetrieval({ judgments: JUDGMENTS, rankings: actualRankings(), k: 5 });
+    for (const mode of Object.values(report.modes)) {
+      for (const metrics of [mode.overall, ...Object.values(mode.categories)]) {
+        for (const value of Object.values(metrics)) {
+          expect(Number.isFinite(value)).toBe(true);
+          expect(value).toBeGreaterThanOrEqual(0);
+          expect(value).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+  });
+
+  it("rejects non-finite or out-of-range metrics at the final gate boundary", () => {
+    const report = evaluateRetrieval({ judgments: JUDGMENTS, rankings: actualRankings(), k: 5 });
+    const invalidReport = {
+      ...report,
+      modes: {
+        ...report.modes,
+        hybrid: { ...report.modes.hybrid, overall: { ...report.modes.hybrid.overall, ndcg: Number.NaN } },
+      },
+    };
+    expect(() => assertHybridRetrievalGates(invalidReport, {
+      denseMode: "dense",
+      lexicalMode: "bm25",
+      hybridMode: "hybrid",
+      lexicalCategories: ["exact-title"],
+      semanticCategories: ["semantic-rewrite"],
+    })).toThrowError(/metric.*finite.*0.*1/);
+  });
+
+  it("requires semantic recall tolerance to be finite and between zero and one", () => {
+    const report = evaluateRetrieval({ judgments: JUDGMENTS, rankings: actualRankings(), k: 5 });
+    const gates = {
+      denseMode: "dense",
+      lexicalMode: "bm25",
+      hybridMode: "hybrid",
+      lexicalCategories: ["exact-title", "compact-alias", "cjk-keyword"],
+      semanticCategories: ["semantic-rewrite", "title-abstract", "hard-negative"],
+    } as const;
+    for (const semanticRecallTolerance of [-0.01, 1.01, Number.NaN, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY]) {
+      expect(() => assertHybridRetrievalGates(report, { ...gates, semanticRecallTolerance }))
+        .toThrowError(/semanticRecallTolerance.*finite.*0.*1/);
+    }
+    expect(() => assertHybridRetrievalGates(report, { ...gates, semanticRecallTolerance: 0 })).not.toThrow();
+    expect(() => assertHybridRetrievalGates(report, { ...gates, semanticRecallTolerance: 1 })).not.toThrow();
+  });
+
+  it("propagates duplicate-ranking failure before hybrid gates can accept inflated metrics", () => {
+    const rankings = actualRankings();
+    rankings.hybrid.exact = ["attention", "attention", ...rankings.hybrid.exact];
+    expect(() => {
+      const report = evaluateRetrieval({ judgments: JUDGMENTS, rankings, k: 5 });
+      assertHybridRetrievalGates(report, {
+        denseMode: "dense",
+        lexicalMode: "bm25",
+        hybridMode: "hybrid",
+        lexicalCategories: ["exact-title", "compact-alias", "cjk-keyword"],
+        semanticCategories: ["semantic-rewrite", "title-abstract", "hard-negative"],
+      });
+    }).toThrowError(/duplicate paper key attention in mode hybrid query exact/);
   });
 
   it("fails a semantic category gate on an independently supplied regression", () => {

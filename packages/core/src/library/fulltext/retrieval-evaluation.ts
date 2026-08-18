@@ -39,8 +39,10 @@ export interface HybridRetrievalGateInput {
 /** Pure deterministic evaluation over fixed judgments and supplied rankings. */
 export function evaluateRetrieval(input: EvaluateRetrievalInput): RetrievalEvaluationReport {
   if (!Number.isSafeInteger(input.k) || input.k < 1) throw new TypeError("evaluateRetrieval: k must be positive");
+  assertJudgments(input.judgments);
   const modes: Record<string, RetrievalModeReport> = {};
   for (const [mode, rankings] of Object.entries(input.rankings)) {
+    assertUniqueRankings(mode, rankings);
     const byCategory = new Map<string, RetrievalMetrics[]>();
     const all: RetrievalMetrics[] = [];
     for (const judgment of input.judgments) {
@@ -55,7 +57,9 @@ export function evaluateRetrieval(input: EvaluateRetrievalInput): RetrievalEvalu
       categories: Object.fromEntries([...byCategory].map(([category, metrics]) => [category, average(metrics)])),
     };
   }
-  return { k: input.k, modes };
+  const report = { k: input.k, modes };
+  assertReportMetrics(report);
+  return report;
 }
 
 /** Acceptance gates from P3: parity overall, one lexical win, semantic recall preserved. */
@@ -66,7 +70,11 @@ export function assertHybridRetrievalGates(
   const dense = requireMode(report, gates.denseMode);
   const lexical = requireMode(report, gates.lexicalMode);
   const hybrid = requireMode(report, gates.hybridMode);
+  assertReportMetrics(report);
   const tolerance = gates.semanticRecallTolerance ?? 0.05;
+  if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 1) {
+    throw new TypeError("semanticRecallTolerance must be finite and between 0 and 1");
+  }
   for (const category of gates.semanticCategories) {
     const hybridMetric = hybrid.categories[category];
     const denseMetric = dense.categories[category];
@@ -90,6 +98,54 @@ export function assertHybridRetrievalGates(
   });
   if (!improved) throw new Error("no lexical category strictly improves over dense");
 
+}
+
+function assertJudgments(judgments: readonly RetrievalJudgment[]): void {
+  const queryIds = new Set<string>();
+  for (const judgment of judgments) {
+    if (typeof judgment.queryId !== "string" || judgment.queryId.length === 0) {
+      throw new TypeError("evaluateRetrieval: judgment queryId must be a non-empty string");
+    }
+    if (queryIds.has(judgment.queryId)) {
+      throw new TypeError(`evaluateRetrieval: duplicate judgment queryId ${judgment.queryId}`);
+    }
+    queryIds.add(judgment.queryId);
+    for (const [paperKey, grade] of Object.entries(judgment.grades)) {
+      if (paperKey.length === 0) {
+        throw new TypeError("evaluateRetrieval: judgment paper key must be a non-empty string");
+      }
+      if (!Number.isFinite(grade) || !Number.isInteger(grade) || grade < 0 || grade > 3) {
+        throw new TypeError(`evaluateRetrieval: grade for ${paperKey} must be a finite integer between 0 and 3`);
+      }
+    }
+  }
+}
+
+function assertReportMetrics(report: RetrievalEvaluationReport): void {
+  for (const [modeName, mode] of Object.entries(report.modes)) {
+    for (const [scope, metrics] of [["overall", mode.overall], ...Object.entries(mode.categories)] as const) {
+      for (const [metric, value] of Object.entries(metrics)) {
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          throw new TypeError(`retrieval metric ${modeName}.${scope}.${metric} must be finite and between 0 and 1`);
+        }
+      }
+    }
+  }
+}
+
+function assertUniqueRankings(
+  mode: string,
+  rankings: Readonly<Record<string, readonly string[]>>,
+): void {
+  for (const [queryId, ranking] of Object.entries(rankings)) {
+    const seen = new Set<string>();
+    for (const paperKey of ranking) {
+      if (seen.has(paperKey)) {
+        throw new TypeError(`evaluateRetrieval: duplicate paper key ${paperKey} in mode ${mode} query ${queryId}`);
+      }
+      seen.add(paperKey);
+    }
+  }
 }
 
 function queryMetrics(grades: Readonly<Record<string, number>>, ranking: readonly string[], k: number): RetrievalMetrics {

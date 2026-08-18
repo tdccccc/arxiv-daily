@@ -38,10 +38,16 @@ describe("fusePaperRankingsRrf", () => {
       match("both", 8, ["b1", "b2", "b3"]),
       match("both", 7, ["b4"]),
     ];
-    const fused = fusePaperRankingsRrf({ rankings: [dense, lexical], rrfK: 60, limit: 3 });
+    const fused = fusePaperRankingsRrf({
+      rankings: [dense, lexical],
+      rrfK: 60,
+      limit: 3,
+      maxHitsPerPaper: 4,
+    });
+    const both = fused.find((entry) => entry.paperKey === "both")!;
     expect(fused[0]!.paperKey).toBe("both");
-    expect(fused.find((entry) => entry.paperKey === "both")!.rankingScore)
-      .toBeCloseTo(1 / 62 + 1 / 62, 12);
+    expect(both.rankingScore).toBeCloseTo(1 / 62 + 1 / 62, 12);
+    expect(both.hits.map((hit) => hit.chunkId)).toEqual(["b1", "b2", "b3", "b4"]);
   });
 
   it("deduplicates EvidenceChunk hits and fills the limit from later channel hits", () => {
@@ -61,13 +67,45 @@ describe("fusePaperRankingsRrf", () => {
     ]);
   });
 
-  it("deduplicates each branch before applying candidateLimit", () => {
+  it("merges every duplicate match in input order while retaining the first paper representative", () => {
+    const first = match("duplicate", 0.91, ["shared", "first-only"]);
+    first.chunkCount = 2;
+    const second = match("duplicate", 0.12, ["shared", "second-only"]);
+    second.chunkCount = 7;
+    const third = match("duplicate", 0.11, ["third-only"]);
+    third.chunkCount = 4;
     const fused = fusePaperRankingsRrf({
-      rankings: [[match("duplicate", 3, ["d1"]), match("duplicate", 2, ["d2"]), match("next", 1, ["n1"])]],
+      rankings: [[first, second, third]],
+      maxHitsPerPaper: 4,
+    });
+    expect(fused[0]).toMatchObject({
+      paperKey: "duplicate",
+      score: 0.91,
+      scoreKind: "cosine",
+      rankingScoreKind: "rrf",
+      chunkCount: 7,
+    });
+    expect(fused[0]!.rankingScore).toBeCloseTo(1 / 61, 12);
+    expect(fused[0]!.hits.map((hit) => hit.chunkId)).toEqual([
+      "shared", "first-only", "second-only", "third-only",
+    ]);
+  });
+
+  it("applies candidateLimit after paper deduplication without dropping later duplicate evidence", () => {
+    const fused = fusePaperRankingsRrf({
+      rankings: [[
+        match("duplicate", 3, ["d1"]),
+        match("duplicate", 2, ["d2"]),
+        match("next", 1, ["n1"]),
+        match("duplicate", 0.5, ["d3"]),
+        match("excluded", 0.4, ["x1"]),
+      ]],
       candidateLimit: 2,
+      maxHitsPerPaper: 3,
       limit: 2,
     });
     expect(fused.map((entry) => entry.paperKey)).toEqual(["duplicate", "next"]);
+    expect(fused[0]!.hits.map((hit) => hit.chunkId)).toEqual(["d1", "d2", "d3"]);
   });
 
   it("round-robins cross-channel evidence and identifies incomparable hit scores", () => {
@@ -83,13 +121,17 @@ describe("fusePaperRankingsRrf", () => {
     expect(fused[0]!.score).toBe(0.9);
   });
 
-  it("bounds candidates and breaks ties by paperKey", () => {
+  it("bounds candidates and breaks ties by paperKey even with multiple same-channel duplicates", () => {
     const fused = fusePaperRankingsRrf({
-      rankings: [[match("z", 1, ["z1"]), match("a", 0.9, ["a1"])], [match("a", 4, ["a2"]), match("z", 3, ["z2"])]],
-      limit: 1,
+      rankings: [
+        [match("z", 1, ["z1"]), match("z", 0.8, ["z-extra"]), match("a", 0.9, ["a1"])],
+        [match("a", 4, ["a2"]), match("a", 3.5, ["a-extra"]), match("z", 3, ["z2"])],
+      ],
+      limit: 2,
       candidateLimit: 1,
     });
-    expect(fused.map((entry) => entry.paperKey)).toEqual(["a"]);
+    expect(fused.map((entry) => entry.paperKey)).toEqual(["a", "z"]);
+    expect(fused[0]!.rankingScore).toBeCloseTo(fused[1]!.rankingScore, 12);
   });
 
   it("validates bounds and handles empty rankings", () => {
