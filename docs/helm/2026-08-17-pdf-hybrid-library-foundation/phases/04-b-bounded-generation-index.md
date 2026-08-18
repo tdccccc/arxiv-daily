@@ -32,7 +32,7 @@ updated: 2026-08-18
 - [x] 定义并验收固定上限 binary block codec、严格 schema/checksum/offset 解码、generation descriptor 路径与未来版本 fail-closed。
 - [x] 实现并验收 current/backup generation store、完整 object closure 校验、唯一目录 promotion、崩溃 seam 与上一代恢复。
 - [x] 实现并验收逐 block exact centered dense reader：预计算 corpus mean、结果与 P3 等价、工作集/top-k 有界、查询不调用 legacy `loadPaper`。
-- [ ] 实现并验收预建 BM25 倒排 block：按固定 chunk window 打包可分页词典/postings，分别持久化基础与单 Han 查询长度统计，以 gram 候选加原值复核保持正文 compact alias；reader 按 P3 query term 顺序累加、在论文跨 window 完整结束后进入有界 top-k，只读取命中路由和最终 evidence；closure 以 evidence 派生 canonical stream 双向证明 postings/alias 完整性。
+- [ ] 实现并验收预建 BM25 倒排 block：postings 以 chunk order 保存权威 occurrence stream，并在同一对象保存经 exact-permutation 校验的 term catalog；dictionary 以 posting range 保存权威 route stream和 query permutation，descriptor bucket mask只路由命中页。分别持久化基础与单 Han 查询长度、compact 原值与 gram 候选；reader 按 P3 query term 顺序累加，在论文跨 block 完整结束后进入有界 top-k。promotion 通过 evidence↔postings、postings↔dictionary 的 ordered zipper 与 exact EOF 线性证明完整性，最多同时驻留两个固定上限对象。
 - [ ] 实现并验收单 writer generation rebuild/incremental reuse、删除、source revision guard、失败隔离、首次迁移、dual-read 与索引/搜索编排接线。
 - [ ] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
 
