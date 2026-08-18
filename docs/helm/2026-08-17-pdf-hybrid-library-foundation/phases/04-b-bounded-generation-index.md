@@ -33,8 +33,8 @@ updated: 2026-08-18
 - [x] 实现并验收 current/backup generation store、完整 object closure 校验、唯一目录 promotion、崩溃 seam 与上一代恢复。
 - [x] 实现并验收逐 block exact centered dense reader：预计算 corpus mean、结果与 P3 等价、工作集/top-k 有界、查询不调用 legacy `loadPaper`。
 - [x] 实现并验收预建 BM25 倒排 block：postings 以 chunk order 保存权威 occurrence stream，并在同一对象保存经 exact-permutation 校验的 term catalog；dictionary 以 posting range 保存权威 route stream和 query permutation，descriptor bucket mask只路由命中页。分别持久化基础与单 Han 查询长度、compact 原值与 gram 候选；reader 按 P3 query term 顺序累加，在论文跨 block 完整结束后进入有界 top-k。promotion 通过 evidence↔postings、postings↔dictionary 的 ordered zipper 与 exact EOF 线性证明完整性，最多同时驻留两个固定上限对象。
-- [ ] 实现并验收 production generation builder：从 committed manifest snapshot 按 paperKey code-unit 顺序逐篇校验并读取 ready documents，经 bounded storage spool 生成 paired vector/evidence、metadata、postings、dictionary 与 descriptor，再 replay 到 transactional store；同 revision/derivation 整代复用，source revision 变化时流式重建，单篇 source 不一致使本代失败并保留旧 current。
-- [ ] 实现并验收首次迁移与生产编排：legacy manifest commit 后同步 generation，搜索 pin 单一 current 并使用 generation dense/BM25/RRF；仅从未存在 current 的迁移窗口允许 legacy fallback，valid/corrupt/incompatible current 不静默降级，已提交 generation 查询的 legacy `loadPaper` 为 0。
+- [x] 实现并验收 production generation builder：从 committed manifest snapshot 按 paperKey code-unit 顺序逐篇校验并读取 ready documents，经 bounded storage spool 生成 paired vector/evidence、metadata、postings、dictionary 与 descriptor，再以 one-shot iterator replay 到 transactional store；单篇 source 不一致使本代失败，所有完成、拒绝和失败路径关闭 iterator 并释放 spool。
+- [ ] 实现并验收首次迁移与生产编排：legacy manifest commit 后同步 generation；同 revision/derivation 整代复用，source revision 变化时流式重建，失败保留旧 current。搜索 pin 单一 current 并使用 generation dense/BM25/RRF；仅从未存在 current 的迁移窗口允许 legacy fallback，valid/corrupt/incompatible current 不静默降级，已提交 generation 查询的 legacy `loadPaper` 为 0。
 - [ ] 实现并验收宿主静默期 maintenance：opened handle 显式释放和 process-local active tracking；宿主停止 admission 并等待操作 settle 后，保守修复可证明残留的 promotion claim，枚举并仅清理非 current/backup、无 claim、无 active reader 的已知 generation；不按时间偷取、不做未授权跨进程在线 GC。
 - [ ] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
 
@@ -52,6 +52,9 @@ updated: 2026-08-18
 - P4b.4 observed Red：第一版 lexical candidate 改写了 P3 Han 长度 oracle、提前裁剪跨 window 论文、遗漏正文 compact alias且无法反向证明 postings 完整；第二版正确性 closure 因逐 term 重扫造成二次复杂度和多对象驻留。线性 schema v4 随后分别由 occurrence/catalog API 缺失、跨对象 closure 缺失、reader unavailable、真实 I/O/peak-hit stats、RRF evidence 丢失和评测非有限输入产生失败后修复。
 - P4b.4 Green：schema v4 以 chunk-order postings、exact-permutation term/query catalogs 与两个 ordered zipper 线性验证 lexical closure；真实 store promotion/open/search、schema-v2 dense只读兼容、路由碰撞、mixed Han、compact alias、跨 block、selected/unselected corruption与取消边界通过。定向 119/119，8 GiB heap 下完整 Core 108 files / 1,919 tests，全仓 typecheck、`check:boundaries`、`git diff --check` 通过；BM25 固定指标保持 $2/3$，generation hybrid保持 1；多轮终审无 P4b.4 高/中问题。
 - P4b.4 technical-report handoff：`no-impact`；generation builder、迁移和插件/CLI search orchestration尚未接线，当前生产仍使用 legacy per-paper JSON/base64与 P3 reader，现有报告准确。
+- P4b.5 builder observed Red：首版 append 对候选整块反复 codec/sort，表现为二次工作；exact replay 与 promotion 前拒绝不消费 iterator 会遗留整代 spool；清理缺少显式 endpoint、失败后不能可靠重试，spool 边界异常还可泄漏原生 `TypeError`。后续测试分别捕获真实 codec invocation、4 MiB cap 自动分块、iterator 关闭时序、同步 throw/立即 reject cleanup 重试与 typed spool failure。
+- P4b.5 builder Green：builder 深拷贝 committed manifest snapshot，按 UTF-16 code-unit paperKey 顺序逐篇绑定并派生固定上限 objects，以增量 byte budget 在 flush 时编码；one-shot replay 在正常、exact reuse、前置拒绝、部分消费与错误路径释放 spool，并保持主错误优先。真实 store promotion/open/closure 与 generation dense/BM25/RRF 对 P3 oracle 通过；完整 Core 109 files / 1,949 tests、全仓 typecheck、`check:boundaries` 与 `git diff --check` 通过；两轮独立终审无遗留高/中问题。
+- P4b.5 builder technical-report handoff：`no-impact`；builder 仍无 executable production caller，现有报告继续准确描述 legacy load-all 搜索路径。
 - 阶段硬门：已提交 generation 查询的 `legacyPaperLoads` 为 0；每个 binary object 与同时驻留 block 数有固定上限；lexical 不扫描无关 chunk text；dense 不创建 corpus-sized vector array。
 - 阶段质量门：P3 固定 corpus 的 dense、BM25、hybrid 排名和 Recall@k、MRR、nDCG 不回归。
 

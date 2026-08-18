@@ -2,6 +2,7 @@ import type { StorageAdapter } from "../../core/adapters";
 import type { OutputSettings } from "../../settings/types";
 import { sha256Hex } from "../../utils/digest";
 import { tokenizeUnicode, tokenizeUnicodeWithHanSingles } from "./bm25-retrieval";
+import { deriveLexicalChunk, deriveLexicalDictionaryEntries } from "./generation-lexical-derivation";
 import {
   MAX_BINARY_OBJECT_BYTES,
   MAX_GENERATION_DESCRIPTOR_BYTES,
@@ -25,7 +26,6 @@ import {
   type GenerationObjectReference,
   type LexicalDictionaryBlock,
   type LexicalDictionaryEntry,
-  type LexicalNamespace,
   type LexicalOccurrence,
   type LexicalPostingsBlock,
   type PaperMetadataBlock,
@@ -238,6 +238,26 @@ export class FullTextGenerationIndexStore {
   }
 
   private async stageAndPromoteSerial(input: StageAndPromoteGenerationInput): Promise<OpenedFullTextGeneration> {
+    let iterator: AsyncIterator<GenerationObjectWrite> | undefined;
+    let failure: unknown;
+    try {
+      iterator = generationObjectIterator(input.objects);
+      return await this.stageAndPromoteWithIterator(input, iterator);
+    } catch (caught) {
+      failure = caught;
+      throw caught;
+    } finally {
+      if (iterator?.return) {
+        try { await iterator.return(); }
+        catch (cleanup) { if (failure === undefined) throw cleanup; }
+      }
+    }
+  }
+
+  private async stageAndPromoteWithIterator(
+    input: StageAndPromoteGenerationInput,
+    objects: AsyncIterator<GenerationObjectWrite>,
+  ): Promise<OpenedFullTextGeneration> {
     requireWriteCapabilities(this.storage);
     let descriptor: GenerationDescriptor;
     let descriptorText: string;
@@ -249,7 +269,6 @@ export class FullTextGenerationIndexStore {
       validateWriterToken(input.writerToken);
       validateExpectedCurrent(input.expectedCurrent);
       if (typeof input.sourceCurrentRevision !== "function") throw new Error("sourceCurrentRevision callback is required");
-      if (!isIterable(input.objects) && !isAsyncIterable(input.objects)) throw new Error("generation objects must be iterable");
     } catch (caught) {
       if (isIncompatible(caught)) throw caught;
       throw wrap("invalid", "invalid generation promotion input", caught);
@@ -300,7 +319,10 @@ export class FullTextGenerationIndexStore {
 
       await ensureDirDeep(this.storage, generation.objectsDirectory);
       let objectIndex = 0;
-      for await (const object of input.objects) {
+      while (true) {
+        const next = await objects.next();
+        if (next.done) break;
+        const object = next.value;
         const reference = descriptor.objects[objectIndex];
         this.validateObjectWrite(descriptor, reference, object, objectIndex);
         const path = this.objectPath(generation, object.path);
@@ -664,18 +686,10 @@ export class FullTextGenerationIndexStore {
     for (let postingOrdinal = 0; postingOrdinal < postingRefs.length; postingOrdinal += 1) {
       const postings = (await opened.readLexicalPostings(postingRefs[postingOrdinal]!)).block;
       opened.diagnostics.maxLiveBlocks = Math.max(opened.diagnostics.maxLiveBlocks, 1 + Number(dictionaryBlock !== null));
-      let catalogIndex = 0;
-      while (catalogIndex < postings.termCatalog.length) {
-        const first = postings.occurrences[postings.termCatalog[catalogIndex]!]!;
-        let chunkDf = 0; let totalTf = 0;
-        do {
-          const occurrence = postings.occurrences[postings.termCatalog[catalogIndex]!]!;
-          chunkDf += 1; totalTf += occurrence.tf; catalogIndex += 1;
-        } while (catalogIndex < postings.termCatalog.length
-          && sameNamespaceTerm(first, postings.occurrences[postings.termCatalog[catalogIndex]!]!));
+      for (const expected of deriveLexicalDictionaryEntries(postings)) {
         const actual = await nextDictionaryEntry();
-        if (!actual || actual.postingOrdinal !== postingOrdinal || actual.namespace !== first.namespace
-          || actual.term !== first.term || actual.chunkDf !== chunkDf || actual.totalTf !== totalTf) {
+        if (!actual || actual.postingOrdinal !== postingOrdinal || actual.namespace !== expected.namespace
+          || actual.term !== expected.term || actual.chunkDf !== expected.chunkDf || actual.totalTf !== expected.totalTf) {
           throw new Error("dictionary route authority does not exactly match postings term catalog");
         }
       }
@@ -1149,56 +1163,6 @@ function refsOfKind<K extends GenerationObjectReference["kind"]>(
   );
 }
 
-function deriveLexicalChunk(text: string, chunkOrdinal: number): {
-  readonly baseLength: number;
-  readonly expandedLength: number;
-  readonly compactText: string;
-  readonly occurrences: readonly LexicalOccurrence[];
-} {
-  const base = tokenizeUnicode(text);
-  const expanded = tokenizeUnicodeWithHanSingles(text);
-  const compactText = text.normalize("NFKC").toLocaleLowerCase("und").replace(/[^\p{L}\p{N}]+/gu, "");
-  const occurrences: LexicalOccurrence[] = [];
-  const appendFrequencies = (namespace: LexicalNamespace, tokens: readonly string[]) => {
-    const frequencies = new Map<string, number>();
-    for (const token of tokens) {
-      frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
-      if (occurrences.length + frequencies.size > 65_536) {
-        throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
-      }
-    }
-    for (const [term, tf] of frequencies) occurrences.push({ chunkOrdinal, namespace, term, tf });
-  };
-  appendFrequencies("base", base);
-  appendFrequencies("expanded", expanded);
-  const characters = Array.from(compactText);
-  const grams = new Set<string>();
-  for (const size of [1, 2, 3]) {
-    for (let offset = 0; offset + size <= characters.length; offset += 1) {
-      grams.add(characters.slice(offset, offset + size).join(""));
-      if (occurrences.length + grams.size > 65_536) {
-        throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
-      }
-    }
-  }
-  for (const term of grams) occurrences.push({ chunkOrdinal, namespace: "alias", term, tf: 1 });
-  if (occurrences.length > 65_536) throw new Error("evidence-derived lexical occurrences exceed 65536 per chunk");
-  occurrences.sort(compareLexicalOccurrences);
-  return { baseLength: base.length, expandedLength: expanded.length, compactText, occurrences };
-}
-
-const LEXICAL_NAMESPACE_ORDER: Record<LexicalNamespace, number> = { alias: 0, base: 1, expanded: 2 };
-function compareLexicalOccurrences(left: LexicalOccurrence, right: LexicalOccurrence): number {
-  return left.chunkOrdinal - right.chunkOrdinal
-    || LEXICAL_NAMESPACE_ORDER[left.namespace] - LEXICAL_NAMESPACE_ORDER[right.namespace]
-    || compareUtf8Strings(left.term, right.term);
-}
-function compareUtf8Strings(left: string, right: string): number {
-  const encoder = new TextEncoder(); const a = encoder.encode(left); const b = encoder.encode(right);
-  const length = Math.min(a.length, b.length);
-  for (let index = 0; index < length; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
-  return a.length - b.length;
-}
 function sameOccurrence(left: LexicalOccurrence, right: LexicalOccurrence): boolean {
   return left.chunkOrdinal === right.chunkOrdinal && left.namespace === right.namespace
     && left.term === right.term && left.tf === right.tf;
@@ -1480,11 +1444,31 @@ function requireCurrentPointerTextWithinLimit(value: unknown): asserts value is 
 }
 function validRevisionOrNull(value: unknown): number | null { return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null; }
 function isPlainObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-function isIterable(value: unknown): value is Iterable<unknown> {
-  return typeof value === "object" && value !== null && Symbol.iterator in value;
-}
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
+function generationObjectIterator(value: unknown): AsyncIterator<GenerationObjectWrite> {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    throw wrap("invalid", "generation objects must be iterable");
+  }
+  try {
+    const candidate = value as { [Symbol.asyncIterator]?: () => AsyncIterator<GenerationObjectWrite>; [Symbol.iterator]?: () => Iterator<GenerationObjectWrite> };
+    const asyncFactory = candidate[Symbol.asyncIterator];
+    if (typeof asyncFactory === "function") {
+      const iterator = asyncFactory.call(candidate);
+      if (!iterator || typeof iterator.next !== "function") throw new Error("generation object iterator is invalid");
+      return iterator;
+    }
+    const syncFactory = candidate[Symbol.iterator];
+    if (typeof syncFactory !== "function") throw new Error("generation object iterator is invalid");
+    const iterator = syncFactory.call(candidate);
+    if (!iterator || typeof iterator.next !== "function") throw new Error("generation object iterator is invalid");
+    return {
+      next: async (value?: unknown) => iterator.next(value as never),
+      return: iterator.return ? async (value?: unknown) => iterator.return!(value) : undefined,
+      throw: iterator.throw ? async (error?: unknown) => iterator.throw!(error) : undefined,
+    };
+  } catch (caught) {
+    if (caught instanceof FullTextGenerationIndexStoreError) throw caught;
+    throw wrap("invalid", "generation objects must provide a valid iterator", caught);
+  }
 }
 function isIncompatible(value: unknown): boolean { return value instanceof FullTextGenerationIndexStoreError && value.code === "incompatible"; }
 function incompatible(message: string, cause?: unknown): FullTextGenerationIndexStoreError { return wrap("incompatible", message, cause); }
