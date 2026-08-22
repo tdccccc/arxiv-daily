@@ -115,3 +115,10 @@
 - change: accepted Docling-only as the first provider, committed the byte-only loopback sidecar as `964e650`, marked P6 done, and activated `phases/07-final-acceptance.md`. GROBID is rejected because no reproducible quality gap justifies a second provider or its expanded operational/privacy boundary.
 - disposition: retain explicit user enablement, literal loopback endpoints, byte-only transport, strict request/response caps and PDF.js fallback. Keep the known lint/smoke/submission release gates and the unverified desktop UI interaction as P7 acceptance work; no user PDF was transmitted remotely.
 - next: establish the P7 acceptance matrix from existing migration, bounded-scale, host-composition and release-gate checks, then add only missing stable contracts before running the final matrix.
+
+## 2026-08-22 — P7 migration/scale checkpoint
+
+- evidence: current-branch targeted migration/scale/host suites passed; the full workspace run under the required 8 GiB Core heap passed Core 113 files / 2,015 tests, Node 45, CLI 71, Plugin 622 (2,753 total). Typecheck, boundaries, product units and build passed. Release checks reproduced only the existing lint warning cap, plugin `canvas` smoke baseline and 1 MiB Obsidian bundle limit; CLI help itself passed outside the sandbox.
+- change: checked off P7 migration, bounded-scale/RRF, and automated host compatibility tasks. A bundle-size reduction experiment was rejected after ESM source bundling grew the plugin to 1.6 MiB and excluding the embedding runtime still left 1,025,387 bytes before required local inference behavior; all uncommitted experiment files were removed.
+- disposition: retain the existing Transformers web runtime and three-asset release contract. Do not silently remove local embeddings or ship an unapproved extra asset. Desktop interaction and a formal release-gate repair/waiver remain open; temporary Obsidian Vault was deleted after the launch attempt.
+- next: either run the desktop acceptance with an approved GUI automation path and decide release-gate disposition, or record an explicit P7 waiver and close only the success criteria that are demonstrably met.

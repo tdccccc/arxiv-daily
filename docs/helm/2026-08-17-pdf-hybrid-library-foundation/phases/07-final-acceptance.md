@@ -28,9 +28,9 @@ updated: 2026-08-22
 ## Tasks
 
 - [x] 建立 P7 验收矩阵：将现有迁移、generation reuse/rebuild、受限 heap、路径和 PDF 页面降级证据映射到成功标准，并指出仍未覆盖的可执行契约。
-- [ ] 补齐并验收旧版 knowledge-base 到 generation 的真实迁移、失败保留 prior current、parser/sidecar derivation 改变后的重建与搜索兼容性；不删除唯一 legacy source。
-- [ ] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。
-- [ ] 完成 Node、Plugin 与 CLI 的自动化兼容性和权限边界回归；确认 sidecar 默认关闭、失败回退和页码降级不扩大 consent 或路径权限。
+- [x] 补齐并验收旧版 knowledge-base 到 generation 的真实迁移、失败保留 prior current、parser/sidecar derivation 改变后的重建与搜索兼容性；不删除唯一 legacy source。
+- [x] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。
+- [x] 完成 Node、Plugin 与 CLI 的自动化兼容性和权限边界回归；确认 sidecar 默认关闭、失败回退和页码降级不扩大 consent 或路径权限。
 - [ ] 在隔离桌面 Obsidian Vault 完成 PDF `#page=N`、sidecar settings/probe/fallback、旧 settings migration 与无控制台错误的实际验证；无法执行时记录环境阻塞和可复现步骤。
 - [ ] 复现并处置或正式豁免 lint、smoke build 与 Obsidian submission release-gate 基线，完成最终全量验收与 success criteria closeout。
 
@@ -40,6 +40,9 @@ updated: 2026-08-22
 - 已知基线：lint 65 warnings / cap 60；elevated smoke build 的 plugin bundle `canvas` forbidden-text；Obsidian submission 的约 1.53 MiB bundle 超过 1 MiB 限制。
 - P7.1 acceptance matrix (2026-08-22): Core migration/reuse/rebuild、prior-current preservation、schema/cutover fail-closed 和 parser derivation 由 4 files / 79 tests 复现；其中 `generation-index-orchestration` 覆盖 exact reuse、derivation/source change、prior current、stale source 与 pinned reader，`fulltext-index-orchestration` 覆盖 legacy source 与 v2 derivation rebuild。4 MiB split、linear builder work、fixed dense/BM25/RRF metrics 由同次 Core suite 覆盖。
 - P7.1 acceptance matrix (continued): Node 2 files / 20 tests 复现 durable spool/generation composition 和 scoped-library path boundary。Plugin 3 files / 64 tests 复现旧 settings 的 disabled sidecar migration、disabled no-probe/enabled probe-fallback、sidecar change cancellation、PDF `#page=N` action 与 host-rejected page navigation fallback。Core/Node/Plugin automated coverage is Green; remaining evidence gaps are an isolated real Obsidian desktop interaction, current full workspace/release-gate results, and a decision to repair or waive each release baseline.
+- P7.2 migration/scale/compatibility Green (2026-08-22): 受限 targeted suites 已通过 Core 4 files / 79 tests、Node 2 files / 20 tests、Plugin 3 files / 64 tests。随后 `NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces` 全量通过 Core 113 files / 2,015 tests、Node 3 / 45、CLI 7 / 71、Plugin 41 / 622，共 2,753 tests；workspace typecheck、`check:boundaries`、`check:product-units` 和 production build 通过。
+- P7.2 release-gate evidence (2026-08-22): `npm run lint` 复现 65 warnings / 60-cap（0 errors）；`npm run smoke:build` 在非 sandbox 中只复现 plugin bundle 禁止文本 `canvas`；`npm run check:obsidian-submission` 只复现 `plugin/main.js` 1,544,930 bytes 超过 1 MiB。CLI help 子进程在非 sandbox smoke 中正常输出 Usage；此前 sandbox 空输出是执行环境限制，不是 CLI 缺陷。
+- P7.2 desktop attempt (2026-08-22): 本机 `/opt/Obsidian/obsidian` 以临时 XDG 配置启动并识别隔离 Vault，但旧 CLI 不支持 `--vault`，窗口读取自动化随后受审批限流而停止；临时 Vault 已删除，未触碰用户现有 Vault。实际 PDF viewer/settings 无控制台错误仍未取得证据。
 
 ## Abort / reshape triggers
 
