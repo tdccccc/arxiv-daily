@@ -43,8 +43,8 @@ owner: codex-main-session
 3. P3 — 检索评测基线建立，BM25 与 dense 召回经 RRF 形成可验证的混合排序 — status: done
 4. P4 — range/exclusive filesystem primitive 路径无法跨当前宿主兑现一致权限边界 — status: superseded
 4. P4b — 固定上限 block 与事务化 generation 替代查询期全库 JSON/base64 装载 — status: done
-5. P5 — 搜索 UI 展示章节、原文片段和页码，并可打开 PDF 到证据位置 — status: active
-6. P6 — 可选高质量 PDF 解析 sidecar 接入并完成复杂论文、隐私与降级验证 — status: pending
+5. P5 — 搜索 UI 展示章节、原文片段和页码，并可打开 PDF 到证据位置 — status: done
+6. P6 — 可选高质量 PDF 解析 sidecar 接入并完成复杂论文、隐私与降级验证 — status: active
 7. P7 — 旧库迁移、规模性能、跨平台运行与全量兼容性验收完成 — status: pending
 
 ## Open questions

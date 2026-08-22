@@ -69,3 +69,11 @@
 - change: accepted the final P4b verification task, marked P4b done, and started P5 evidence-result UI. P5 will consume existing `KnowledgeBaseChunkHit` metadata rather than change index format or ranking semantics.
 - disposition: retain immutable generations, opt-in maintenance and all P3 retrieval contracts. The two release-gate baselines belong to P7/repository governance rather than a false P4b implementation fix.
 - next: observe Red for evidence snippets/section/page rendering and the PDF open action, then implement only the display and host-opening path with a page-number fallback.
+
+## 2026-08-22 — P5 evidence-result UI checkpoint
+
+- evidence: existing Core matches already carried headings, original passage text, locators and pages, but every plugin surface reduced them to title/score output. The accepted projection now preserves the existing ranking and hit objects, renders evidence through DOM text APIs in Dashboard, Library similar and command-result surfaces, and keeps page numbers visible even when a host cannot honor a page fragment.
+- verification: focused Plugin 6 files / 40 tests, complete Plugin 41 files / 616 tests, 8 GiB Core 111 files / 2,000 tests, Node runtime 3 files / 45 tests and CLI 7 files / 71 tests passed. Workspace typecheck, `check:boundaries`, `check:product-units`, production build and `git diff --check` passed. Lint has no error but retains the known 65-warning/60-cap baseline; elevated smoke build reaches only the known plugin-bundle `canvas` baseline, while Obsidian submission remains blocked by the known 1.53 MB bundle size.
+- change: accepted P5 and committed the implementation as `a490274` (`feat(fulltext): surface evidence in search results`). Before every open action, the plugin rechecks the current manifest plus the selected source's root/logical-path/no-symlink boundary. Vault PDF page subpaths and external encoded file URLs both retain a visible page-number fallback.
+- disposition: keep the PDF viewer fragment as a best-effort host capability, not a coordinate/highlight claim. P7 owns actual cross-platform Obsidian viewer confirmation and release-gate baselines.
+- next: P6 begins with sidecar capability/protocol discovery: select Docling-only or Docling plus GROBID from complex-paper evidence, and define a per-document byte transport that cannot expose arbitrary library traversal.
