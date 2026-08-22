@@ -1,26 +1,27 @@
 import { Modal, setIcon, type App } from "obsidian";
 import type {
+  KnowledgeBaseChunkHit,
   PaperIndexEntry,
   PaperSearchResult,
 } from "@arxiv-daily/core";
-import { formatEvidenceScore } from "./library-search-block";
+import {
+  renderLibrarySearchBlock,
+  type LibrarySearchMatch,
+} from "./library-search-block";
 
-export interface LibrarySimilarMatch {
-  paperKey: string;
-  title: string;
-  filePath?: string;
-  score: number;
-  scoreKind: "cosine" | "bm25";
-  rankingScore: number;
-  rankingScoreKind: "cosine" | "bm25" | "rrf";
-}
+export type LibrarySimilarMatch = LibrarySearchMatch;
 
 export interface SimilarPapersModalCallbacks {
   openDetail(entry: PaperIndexEntry): void | Promise<void>;
   openDaily(entry: PaperIndexEntry): void | Promise<void>;
   openArxiv(entry: PaperIndexEntry): void | Promise<void>;
   openPdf(entry: PaperIndexEntry): void | Promise<void>;
+  openLibraryEvidence?: (
+    match: LibrarySimilarMatch,
+    hit: KnowledgeBaseChunkHit,
+  ) => void | Promise<void>;
   onActionError?(error: unknown, action: string, entry: PaperIndexEntry): void;
+  onLibraryActionError?(error: unknown, action: string): void;
 }
 
 export interface SimilarPapersModalOptions extends SimilarPapersModalCallbacks {
@@ -103,7 +104,7 @@ export function renderSimilarPapersModal(
     dailyPanel.toggleAttribute("hidden", isLibrary);
     if (isLibrary && !libraryLoaded) {
       libraryLoaded = true;
-      void loadLibraryPanel(libraryPanel, library);
+      void loadLibraryPanel(libraryPanel, library, options);
     }
   };
   libraryButton.addEventListener("click", () => select("library"));
@@ -116,6 +117,7 @@ export function renderSimilarPapersModal(
 async function loadLibraryPanel(
   panel: HTMLElement,
   library: NonNullable<SimilarPapersModalOptions["library"]>,
+  options: SimilarPapersModalOptions,
 ): Promise<void> {
   panel.empty();
   panel.createEl("p", {
@@ -132,21 +134,19 @@ async function loadLibraryPanel(
       });
       return;
     }
-    const list = panel.createEl("ol", {
-      cls: "arxiv-daily-similar-modal__list",
-      attr: { "aria-label": "Similar library papers" },
+    renderLibrarySearchBlock(panel, {
+      kind: "matches",
+      matches,
+    }, {
+      openEvidence: options.openLibraryEvidence,
+      onActionError: (error, action) => {
+        try {
+          options.onLibraryActionError?.(error, action);
+        } catch {
+          // Action failures must not escape modal event handlers.
+        }
+      },
     });
-    for (const match of matches.slice(0, 10)) {
-      const item = list.createEl("li", { cls: "arxiv-daily-similar-modal__item" });
-      item.createDiv({
-        cls: "arxiv-daily-similar-modal__title",
-        text: match.title,
-      });
-      item.createDiv({
-        cls: "arxiv-daily-similar-modal__meta",
-        text: `${match.filePath ?? match.paperKey} · ${formatEvidenceScore(match)}`,
-      });
-    }
   } catch (error) {
     panel.empty();
     panel.createEl("p", {

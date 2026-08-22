@@ -17,6 +17,11 @@ import { ensurePaperNote } from "./services/paper-note";
 import { bindEnterToButton, openDatePickerModal } from "./date-picker-modal";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
 import { buildSafePluginDiagnosticsReport } from "./services/paper-index-diagnostics";
+import {
+  renderLibrarySearchBlock,
+  type LibrarySearchBlockOptions,
+} from "./dashboard/library-search-block";
+import type { LibraryFullTextMatch } from "./library/fulltext-results";
 
 export { bindEnterToButton, isValidCalendarDate } from "./date-picker-modal";
 export {
@@ -490,13 +495,20 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
                 notice("arXiv Daily: no similar papers found in the full-text index", 10_000);
                 return;
               }
-              const lines = matches.slice(0, 5).map((match) => {
-                const evidence = match.scoreKind === "cosine"
-                  ? `best semantic evidence ${match.score.toFixed(3)}`
-                  : "lexical match";
-                return `${match.title}\n  ${match.filePath ?? match.paperKey} · ${evidence}`;
-              });
-              notice(`arXiv Daily: top ${Math.min(matches.length, 5)} matches\n${lines.join("\n")}`, 12_000);
+              new FullTextSearchResultsModal(plugin.app, matches, {
+                openEvidence: async (match, hit) => {
+                  if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
+                  await plugin.openPersonalLibraryFullTextEvidence({
+                    paperKey: match.paperKey,
+                    filePath: match.filePath,
+                    page: hit.page,
+                  });
+                },
+                onActionError: (error, action) => {
+                  plugin.logger.error(`commands: ${action.toLowerCase()} failed for library evidence`, error);
+                  notice(`arXiv Daily: ${action} failed`);
+                },
+              }).open();
             } catch (error) {
               plugin.logger.error("commands: personal library full-text search failed", error);
               notice(`arXiv Daily: full-text search failed: ${errorMessage(error)}`, 10_000);
@@ -675,6 +687,29 @@ class FullTextQueryModal extends Modal {
     if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
+    this.contentEl.empty();
+  }
+}
+
+export class FullTextSearchResultsModal extends Modal {
+  constructor(
+    app: App,
+    private readonly matches: readonly LibraryFullTextMatch[],
+    private readonly options: LibrarySearchBlockOptions,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.createEl("h2", { text: "Full-text search results" });
+    const results = this.contentEl.createDiv({ cls: "arxiv-daily-fulltext-search-results" });
+    renderLibrarySearchBlock(results, {
+      kind: "matches",
+      matches: this.matches,
+    }, this.options);
+  }
+
+  onClose(): void {
     this.contentEl.empty();
   }
 }

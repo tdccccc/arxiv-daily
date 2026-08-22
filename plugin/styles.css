@@ -1531,6 +1531,48 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   font-size: var(--font-ui-small);
 }
 
+.arxiv-daily-dashboard__library-evidence {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--background-modifier-border-hover);
+}
+
+.arxiv-daily-dashboard__library-section {
+  overflow-wrap: anywhere;
+  color: var(--text-accent);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.arxiv-daily-dashboard__library-passage {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+.arxiv-daily-dashboard__library-evidence-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.arxiv-daily-dashboard__library-page {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-dashboard__library-open-evidence {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: var(--font-ui-small);
+}
+
 @media (max-width: 520px) {
   .arxiv-daily-similar-modal {
     padding-inline: 12px;

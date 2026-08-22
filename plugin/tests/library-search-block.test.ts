@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   renderLibrarySearchBlock,
   type LibrarySearchState,
@@ -19,6 +19,9 @@ beforeAll(() => {
   };
   proto.createDiv ??= function (options: Options = {}) {
     return this.createEl!("div", options);
+  };
+  proto.createSpan ??= function (options: Options = {}) {
+    return this.createEl!("span", options);
   };
 });
 
@@ -46,10 +49,12 @@ describe("renderLibrarySearchBlock", () => {
           scoreKind: "cosine",
           rankingScore: 0.0325,
           rankingScoreKind: "rrf",
+          hits: [],
         },
         {
           paperKey: "arxiv:2607.01002", title: "Second", score: 1.7, scoreKind: "bm25",
           rankingScore: 0.016, rankingScoreKind: "rrf",
+          hits: [],
         },
       ],
     });
@@ -60,6 +65,77 @@ describe("renderLibrarySearchBlock", () => {
     expect(container.textContent).not.toContain("0.032");
     expect(container.textContent).not.toContain("—");
     expect(container.querySelectorAll("li")).toHaveLength(2);
+  });
+
+  it("renders a safe evidence passage with its section and page, and delegates its open action", () => {
+    const openEvidence = vi.fn();
+    const container = document.createElement("div");
+    renderLibrarySearchBlock(container, {
+      kind: "matches",
+      matches: [{
+        paperKey: "arxiv:2607.01001",
+        title: "Evidence paper",
+        filePath: "papers/evidence paper.pdf",
+        score: 0.812345,
+        scoreKind: "cosine",
+        rankingScore: 0.0325,
+        rankingScoreKind: "rrf",
+        hits: [{
+          source: "dense",
+          scoreKind: "cosine",
+          score: 0.812345,
+          chunkIndex: 3,
+          chunkId: "chunk-3",
+          headings: ["Methods", "Retrieval"],
+          locator: { pageStart: 7 },
+          page: 7,
+          text: "A matching passage about retrieval evidence.",
+        }],
+      }],
+    }, { openEvidence });
+
+    expect(container.textContent).toContain("Methods / Retrieval");
+    expect(container.textContent).toContain("A matching passage about retrieval evidence.");
+    expect(container.textContent).toContain("Page 7");
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 7"]');
+    button?.click();
+    expect(openEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ paperKey: "arxiv:2607.01001" }),
+      expect.objectContaining({ chunkId: "chunk-3", page: 7 }),
+    );
+  });
+
+  it("contains evidence action and error-handler failures", () => {
+    const container = document.createElement("div");
+    renderLibrarySearchBlock(container, {
+      kind: "matches",
+      matches: [{
+        paperKey: "arxiv:2607.01001",
+        title: "Evidence paper",
+        filePath: "papers/evidence.pdf",
+        score: 0.8,
+        scoreKind: "cosine",
+        rankingScore: 0.03,
+        rankingScoreKind: "rrf",
+        hits: [{
+          source: "dense",
+          scoreKind: "cosine",
+          score: 0.8,
+          chunkIndex: 0,
+          chunkId: "chunk-0",
+          headings: [],
+          locator: { pageStart: 1 },
+          page: 1,
+          text: "Evidence",
+        }],
+      }],
+    }, {
+      openEvidence: () => { throw new Error("open failure"); },
+      onActionError: () => { throw new Error("handler failure"); },
+    });
+
+    expect(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 1"]')?.click())
+      .not.toThrow();
   });
 
   it("renders the empty state", () => {

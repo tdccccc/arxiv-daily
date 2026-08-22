@@ -242,6 +242,41 @@ function fixture(storage: StorageAdapter) {
 }
 
 describe("personal library full-text index lifecycle", () => {
+  it("revalidates a current indexed PDF before opening its evidence page", async () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    const connection = runtime.connection;
+    connection.selectedRoot = "/vault/library";
+    const openLinkText = vi.fn(async () => undefined);
+    runtime.internals.app = {
+      workspace: { openLinkText },
+      vault: { adapter: { getBasePath: () => "/vault" } },
+    };
+    runtime.internals.librarySource = {
+      canonicalRoot: connection.selectedRoot,
+      rootIdentity: connection.rootIdentity,
+      inventory: vi.fn(async () => ({ entries: [], truncated: false })),
+      readBinary: vi.fn(async () => new ArrayBuffer(1)),
+    };
+    runtime.legacy.loadManifest.mockResolvedValue({
+      papers: {
+        "arxiv:2607.00001": { filePaths: ["papers/evidence.pdf"] },
+      },
+    });
+
+    await expect(runtime.plugin.openPersonalLibraryFullTextEvidence({
+      paperKey: "arxiv:2607.00001",
+      filePath: "papers/evidence.pdf",
+      page: 7,
+    })).resolves.toBe("page-targeted");
+
+    expect(runtime.internals.librarySource.readBinary).toHaveBeenCalledWith(
+      "papers/evidence.pdf",
+      { start: 0, end: 1, maxBytes: Number.MAX_SAFE_INTEGER },
+    );
+    expect(openLinkText).toHaveBeenCalledWith("library/papers/evidence.pdf#page=7", "", false);
+  });
+
   it("uses one manifest snapshot for full-text search orchestration", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);

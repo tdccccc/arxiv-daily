@@ -179,10 +179,15 @@ import {
   type LibraryInventoryPreview,
   type PersistedLibraryConnection,
 } from "./src/library/connection";
+import { projectLibraryFullTextMatches } from "./src/library/fulltext-results";
 import {
   SettingsChangeService,
   type PreparedOutputStores,
 } from "./src/settings/change-service";
+import {
+  openLibraryPdfAtPage,
+  resolveLibraryPdfOpenTarget,
+} from "./src/library/pdf-opener";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -1758,7 +1763,7 @@ export default class ArxivDailyPlugin extends Plugin {
     scoreKind: "cosine" | "bm25";
     rankingScore: number;
     rankingScoreKind: "cosine" | "bm25" | "rrf";
-    hits: KnowledgeBaseChunkHit[];
+    hits: readonly KnowledgeBaseChunkHit[];
   }>> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
@@ -1776,14 +1781,6 @@ export default class ArxivDailyPlugin extends Plugin {
     }
     const store = this.buildFullTextKnowledgeBaseStore(connection);
     const manifest = await store.loadManifest();
-    const displayTitles = new Map(rankingTitles);
-    const fallbackPaths = new Map<string, string>();
-    for (const [paperKey, record] of Object.entries(manifest.papers)) {
-      if (record.title && !displayTitles.has(paperKey)) displayTitles.set(paperKey, record.title);
-      if (paperKey.startsWith("file:") && record.filePaths[0]) {
-        fallbackPaths.set(paperKey, record.filePaths[0]);
-      }
-    }
     const matches = await searchFullTextKnowledgeBaseCore({
       store,
       sourceManifest: manifest,
@@ -1794,16 +1791,44 @@ export default class ArxivDailyPlugin extends Plugin {
       titles: rankingTitles,
       logger: this.logger,
     });
-    return matches.map((match) => ({
-      paperKey: match.paperKey,
-      title: displayTitles.get(match.paperKey) ?? match.paperKey,
-      filePath: fallbackPaths.get(match.paperKey),
-      score: match.score,
-      scoreKind: match.scoreKind,
-      rankingScore: match.rankingScore,
-      rankingScoreKind: match.rankingScoreKind,
-      hits: match.hits,
-    }));
+    return projectLibraryFullTextMatches({ catalogTitles: rankingTitles, manifest, matches });
+  }
+
+  async openPersonalLibraryFullTextEvidence(input: {
+    paperKey: string;
+    filePath: string;
+    page: number;
+  }): Promise<"page-targeted" | "file-fallback"> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+    const record = manifest.papers[input.paperKey];
+    if (!record?.filePaths.includes(input.filePath)) {
+      throw new Error("The selected evidence PDF is no longer part of this library index");
+    }
+    const source = this.librarySource ?? await this.openLibrarySource(connection.selectedRoot);
+    if (
+      source.canonicalRoot !== connection.selectedRoot
+      || source.rootIdentity !== connection.rootIdentity
+    ) {
+      throw new Error("Library folder identity changed; choose it again");
+    }
+    // Revalidate the selected root, logical path, and no-symlink boundary just
+    // before handing the user-selected file to the host opener.
+    await source.readBinary(input.filePath, {
+      start: 0,
+      end: 1,
+      maxBytes: Number.MAX_SAFE_INTEGER,
+    });
+    return await openLibraryPdfAtPage({
+      app: this.app,
+      target: resolveLibraryPdfOpenTarget({
+        canonicalRoot: source.canonicalRoot,
+        logicalPath: input.filePath,
+        page: input.page,
+        vaultRoot: desktopVaultRoot(this.app.vault.adapter),
+      }),
+    });
   }
 
   /**
@@ -3396,6 +3421,14 @@ function codeUnitCompare(left: string, right: string): number {
 
 function createFullTextGenerationWriterToken(): string {
   return `writer-${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+function desktopVaultRoot(adapter: unknown): string | undefined {
+  if (!adapter || typeof adapter !== "object" || !("getBasePath" in adapter)) return undefined;
+  const getBasePath = (adapter as { getBasePath?: () => unknown }).getBasePath;
+  if (typeof getBasePath !== "function") return undefined;
+  const root = getBasePath();
+  return typeof root === "string" && root ? root : undefined;
 }
 
 function libraryFingerprints(connection: PersistedLibraryConnection): {

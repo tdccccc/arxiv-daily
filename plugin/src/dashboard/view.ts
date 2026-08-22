@@ -2331,6 +2331,7 @@ class ArxivDailyDashboardView extends ItemView {
       openArxiv: (candidate) =>
         openArxivResource(candidate.arxivId, "abs", this.plugin),
       openPdf: (candidate) => this.openPdf(candidate),
+      openLibraryEvidence: (match, hit) => this.openLibraryEvidence(match, hit),
       onActionError: (error, action, candidate) => {
         this.plugin.logger.error(
           `dashboard: similar papers ${action.toLowerCase()} failed for ${candidate.arxivId}`,
@@ -2338,6 +2339,7 @@ class ArxivDailyDashboardView extends ItemView {
         );
         this.notice(`arXiv Daily: ${action} failed`);
       },
+      onLibraryActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
     }).open();
   }
 
@@ -2367,6 +2369,7 @@ class ArxivDailyDashboardView extends ItemView {
           scoreKind: match.scoreKind,
           rankingScore: match.rankingScore,
           rankingScoreKind: match.rankingScoreKind,
+          hits: match.hits,
         }));
       },
     };
@@ -2406,7 +2409,11 @@ class ArxivDailyDashboardView extends ItemView {
             rankingScore: match.rankingScore,
             rankingScoreKind: match.rankingScoreKind,
             filePath: match.filePath,
+            hits: match.hits,
           })),
+        }, {
+          openEvidence: (match, hit) => this.openLibraryEvidence(match, hit),
+          onActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
         });
       },
       (error: unknown) => {
@@ -2417,6 +2424,23 @@ class ArxivDailyDashboardView extends ItemView {
         });
       },
     );
+  }
+
+  private async openLibraryEvidence(
+    match: { paperKey: string; filePath?: string },
+    hit: { page: number },
+  ): Promise<void> {
+    if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
+    await this.plugin.openPersonalLibraryFullTextEvidence({
+      paperKey: match.paperKey,
+      filePath: match.filePath,
+      page: hit.page,
+    });
+  }
+
+  private reportLibraryEvidenceActionError(error: unknown, action: string): void {
+    this.plugin.logger.error(`dashboard: ${action.toLowerCase()} failed for library evidence`, error);
+    this.notice(`arXiv Daily: ${action} failed`);
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {
