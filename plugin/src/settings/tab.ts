@@ -122,6 +122,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  private declarativeSetupGuideRow: Setting | undefined;
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -1419,13 +1420,23 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
+  /** Remember the host row so the guide can update without replacing active inputs. */
+  public setDeclarativeSetupGuideRow(setting: Setting): void {
+    this.declarativeSetupGuideRow = setting;
+  }
+
   public refreshDeclarativeSetupGuide(): void {
+    const setting = this.declarativeSetupGuideRow;
+    if (setting?.settingEl.isConnected) {
+      declarativeRows.renderSetupGuideRow(this, setting);
+      return;
+    }
     this.refreshSettings();
   }
 
   public refreshSetupGuide(): void {
     if (requireApiVersion("1.13.0")) {
-      this.refreshSettings();
+      this.refreshDeclarativeSetupGuide();
       return;
     }
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
