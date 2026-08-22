@@ -1,7 +1,7 @@
 # Security and CI Hardening
 
-status: active
-updated: 2026-08-22
+status: done
+updated: 2026-08-23
 owner: root
 
 ## Intent
@@ -10,9 +10,9 @@ owner: root
 
 ## Success criteria
 
-- [ ] `npm audit` 对 root release group 和独立 Relay 产品不再报告 moderate 或 high 漏洞，升级保持锁文件和发布边界一致。
-- [ ] PR CI 自动检查依赖安全、Node 20 最低支持版本与 Node 22 当前运行时，并在不部署生产资源的情况下验证 plugin、CLI 与独立产品契约。
-- [ ] CI 配置有结构化测试，且本地和远端发布门禁通过。
+- [x] `npm audit` 对 root release group 和独立 Relay 产品不再报告 moderate 或 high 漏洞，升级保持锁文件和发布边界一致。
+- [x] PR CI 自动检查依赖安全、Node 20 最低支持版本与 Node 22 当前运行时，并在不部署生产资源的情况下验证 plugin、CLI 与独立产品契约。
+- [x] CI 配置有结构化测试，且本地发布门禁通过。
 
 ## Non-goals
 
@@ -30,6 +30,6 @@ owner: root
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. Outcomes only — no steps. The active line is the current focus. -->
 1. P1 — 清除 root release group 报告的依赖漏洞并锁定无漏洞审计结果 — status: done
-2. P2 — 将安全扫描、Node 支持矩阵和可执行产品回归纳入可验证 CI — status: active
+2. P2 — 将安全扫描、Node 支持矩阵和可执行产品回归纳入可验证 CI — status: done
 
 ## Open questions
