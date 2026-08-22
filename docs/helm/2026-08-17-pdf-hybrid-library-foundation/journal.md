@@ -85,3 +85,10 @@
 - change: accepted protocol v1 decoder and loopback client as `7ec3e2e` (`feat(parser): add sidecar protocol decoder`) and `3a5426a` (`feat(parser): add loopback sidecar client`). Parser provenance and declared capabilities are rechecked after every parse response, giving the host a typed failure boundary for PDF.js fallback.
 - disposition: keep the client unselected and inert until an explicit host configuration and capability probe exist. The contract intentionally permits only `127.0.0.1`/`[::1]`, one shared origin, HTTP without credentials/query/hash, and bounded JSON/PDF payloads.
 - next: write failing selector tests showing no endpoint activity when sidecar is disabled and PDF.js fallback after every sidecar failure; do not install a provider until the contract is connected and the user authorizes dependency acquisition.
+
+## 2026-08-22 — P6.2 L2 reshape
+
+- evidence: `DocumentParser` exposes one static capability/provenance pair, and current index orchestration derives persisted document identity from it. A direct sidecar→PDF.js fallback wrapper would return a fallback document with sidecar identity or declare structural capabilities that its fallback output did not provide, breaking incremental derivation/reindex correctness.
+- change: retain P6.1 protocol and loopback client, but replace the unaccepted static-wrapper path with a host-neutral per-parse selector that returns the actual document plus its selected parser identity. Existing `DocumentParser` callers remain unchanged; index orchestration gains an opt-in selector path.
+- disposition: no unaccepted production fallback code exists to discard. Sidecar success and PDF.js fallback must be distinguishable in the same index run; cancellation remains non-degradable.
+- next: observe Red for selector identity, sidecar failure fallback and cancellation; then wire the selector into the existing indexing derivation boundary before any user setting or real provider install.
