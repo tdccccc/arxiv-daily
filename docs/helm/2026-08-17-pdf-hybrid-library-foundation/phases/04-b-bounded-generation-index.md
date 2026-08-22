@@ -1,7 +1,7 @@
 # P4b — 有界 block 的事务化分代索引
 
 goal_ref: ../goal.md
-updated: 2026-08-18
+updated: 2026-08-22
 
 ## Outcome
 
@@ -35,7 +35,7 @@ updated: 2026-08-18
 - [x] 实现并验收预建 BM25 倒排 block：postings 以 chunk order 保存权威 occurrence stream，并在同一对象保存经 exact-permutation 校验的 term catalog；dictionary 以 posting range 保存权威 route stream和 query permutation，descriptor bucket mask只路由命中页。分别持久化基础与单 Han 查询长度、compact 原值与 gram 候选；reader 按 P3 query term 顺序累加，在论文跨 block 完整结束后进入有界 top-k。promotion 通过 evidence↔postings、postings↔dictionary 的 ordered zipper 与 exact EOF 线性证明完整性，最多同时驻留两个固定上限对象。
 - [x] 实现并验收 production generation builder：从 committed manifest snapshot 按 paperKey code-unit 顺序逐篇校验并读取 ready documents，经 bounded storage spool 生成 paired vector/evidence、metadata、postings、dictionary 与 descriptor，再以 one-shot iterator replay 到 transactional store；单篇 source 不一致使本代失败，所有完成、拒绝和失败路径关闭 iterator 并释放 spool。
 - [x] 实现并验收首次迁移与生产编排：legacy manifest commit 后同步 generation；同 revision/derivation 整代复用，source revision 变化时流式重建，失败保留旧 current。搜索 pin 单一 current 并使用 generation dense/BM25/RRF；仅从未存在 current 的迁移窗口允许 legacy fallback，valid/corrupt/incompatible current 不静默降级，已提交 generation 查询的 legacy `loadPaper` 为 0。
-- [ ] 实现并验收宿主静默期 maintenance：opened handle 显式释放和 process-local active tracking；宿主停止 admission 并等待操作 settle 后，保守修复可证明残留的 promotion claim，枚举并仅清理非 current/backup、无 claim、无 active reader 的已知 generation；不按时间偷取、不做未授权跨进程在线 GC。
+- [x] 实现并验收宿主静默期 maintenance：opened handle 显式释放和 process-local active tracking；宿主停止 admission 并等待操作 settle 后，保守修复可证明残留的 promotion claim，枚举并仅清理非 current/backup、无 claim、无 active reader 的已知 generation；不按时间偷取、不做未授权跨进程在线 GC。
 - [ ] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
 
 ## Verification
@@ -59,6 +59,10 @@ updated: 2026-08-18
 - P4b.6 Green：active-set lease 使用独立路径、exact readback、双扫描和 fail-closed malformed-entry 检查；cutover marker 在 pointer promotion 前后复核，首次失败可安全回滚，已切换状态不会静默回到 legacy。插件在 manifest CAS 前后持有 lease、所有成功/失败/取消路径释放 lease，capable host 在 CAS 后同步 generation；同 revision/derivation 整代 exact reuse，source 推进时最多三次 post-commit convergence，重试 token 不复用。generation search 使用单一 committed manifest snapshot，catalog title 只作排名覆盖，已提交 generation 的 legacy `loadPaper` 为 0。
 - P4b.6 verification：Core 111 files / 1,994 tests、Plugin 38 files / 601 tests、Node runtime 3 files / 45 tests；workspace typecheck、`check:boundaries`、`check:product-units`、生产 build 与 `git diff --check` 全部通过。`npm run lint` 当前仍受仓库既有 65 条 Obsidian/style warnings（上限 60）阻止，未新增 error；升级权限执行 `smoke:build` 后只发现既有 plugin bundle `canvas` forbidden-text 基线，未由本 chunk 引入，留给 P4b.8/P7 的全仓门禁收敛。
 - P4b.6 technical-report handoff：`no-impact`；production generation/search 接线仍只改变全文索引的派生查询路径，不改变 catalog、方向、日报或 consent 领域契约。
+- P4b.7 observed Red：原有 opened generation handle 不带生命周期，host 无法等待 pinned reader；promotion claim 清理失败后既不能证明可修复，也不能安全启动 orphan cleanup。新增 maintenance seam 先复现 opened handle 未关闭时 admission 必须停止、旧 generation reader 必须阻塞 maintenance、未证明 claim 必须保留所有 candidate，以及两 pointer 丢失后必须 fail-closed。
+- P4b.7 Green：opened handle 有显式且幂等的 `close()`，所有 production synchronization/search/preflight 路径在 `finally` 中释放；runtime-local admission gate 会等待 active operation 和 reader settle。插件仅在 scheduler idle、operations 独占且 scheduler 已停止的宿主静默期调用 maintenance。maintenance 只删除非 current/backup、无 staging/promotion claim、无 active reader 的已知 generation；仅在 candidate 已是完整可验证的 CURRENT 且 claim/pointer 双次读回一致时修复 promotion claim，任何不确定性均保留并禁止收集。
+- P4b.7 verification：定向 Core 96 项和 Plugin lifecycle 11 项通过；8 GiB heap 下完整 Core 111 files / 2,000 tests、Plugin 38 files / 602 tests、Node runtime 3 files / 45 tests 通过；workspace typecheck、`check:boundaries`、`check:product-units`、production build 与 `git diff --check` 通过。默认 Node heap 的完整 Core 运行在无断言失败后达到 heap 上限；8 GiB 是本阶段既定的受限 heap 验收配置，最终 Green 以该运行取得。
+- P4b.7 technical-report handoff：`no-impact`；宿主授权的 generation maintenance 只维护可删除的全文派生投影，不改变 catalog、方向、日报或 consent 领域契约。
 - 阶段硬门：已提交 generation 查询的 `legacyPaperLoads` 为 0；每个 binary object 与同时驻留 block 数有固定上限；lexical 不扫描无关 chunk text；dense 不创建 corpus-sized vector array。
 - 阶段质量门：P3 固定 corpus 的 dense、BM25、hybrid 排名和 Recall@k、MRR、nDCG 不回归。
 
