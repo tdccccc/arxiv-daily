@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ToggleComponent, type App } from "obsidian";
+import { Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { ArxivDailySettingTab } from "../src/settings/tab";
@@ -21,6 +21,7 @@ import {
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderScheduleEnabledRow,
+  renderSetupGuideRow,
   renderTickIntervalRow,
   renderTimezoneRow,
 } from "../src/settings/declarative-rows";
@@ -40,8 +41,11 @@ beforeAll(() => {
     removeClass?: (...classes: string[]) => void;
     toggleClass?: (className: string, force?: boolean) => void;
     setText?: (text: string) => void;
+    appendText?: (text: string) => void;
+    detach?: () => void;
     createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
     createDiv?: (options?: CreateOptions) => HTMLElement;
+    createSpan?: (options?: CreateOptions) => HTMLElement;
   };
   proto.empty ??= function () { this.replaceChildren(); };
   proto.addClass ??= function (...classes) { this.classList.add(...classes); };
@@ -50,6 +54,8 @@ beforeAll(() => {
     this.classList.toggle(className, force);
   };
   proto.setText ??= function (text) { this.textContent = text; };
+  proto.appendText ??= function (text) { this.append(text); };
+  proto.detach ??= function () { this.remove(); };
   proto.createEl ??= function (tag, options = {}) {
     const element = document.createElement(tag);
     if (options.cls) element.className = options.cls;
@@ -66,6 +72,9 @@ beforeAll(() => {
   };
   proto.createDiv ??= function (options = {}) {
     return this.createEl("div", options);
+  };
+  proto.createSpan ??= function (options = {}) {
+    return this.createEl("span", options);
   };
 });
 
@@ -818,6 +827,54 @@ describe("declarative LLM and category rows", () => {
     expect(settings.schedule.enabled).toBe(false);
     expect(toggle.value).toBe(false);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("declarative topic cards", () => {
+  it("keeps topic fields focused while updating the setup guide", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push({
+      id: "topic-1",
+      name: "",
+      tag: "topic-1",
+      description: "",
+      detail: false,
+    });
+    const refresh = vi.spyOn(tab, "refreshSettings");
+    document.body.appendChild(tab.containerEl);
+    const guideSetting = new Setting(tab.containerEl);
+    renderSetupGuideRow(tab, guideSetting);
+    const topicSetting = new Setting(tab.containerEl);
+    tab.renderTopicRow(topicSetting, 0);
+
+    const header = topicSetting.settingEl.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    ) as HTMLButtonElement;
+    header.click();
+    const fields = [
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-name-input",
+      ),
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-tag-input",
+      ),
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-description",
+      ),
+    ] as Array<HTMLInputElement | HTMLTextAreaElement>;
+
+    for (const [index, field] of fields.entries()) {
+      field.focus();
+      field.value = `draft-${index}`;
+      field.dispatchEvent(new Event("input"));
+      await vi.waitFor(() => {
+        expect(saveSettings).toHaveBeenCalledTimes(index + 1);
+      });
+      expect(document.activeElement).toBe(field);
+    }
+
+    expect(refresh).not.toHaveBeenCalled();
+    tab.containerEl.remove();
   });
 });
 
