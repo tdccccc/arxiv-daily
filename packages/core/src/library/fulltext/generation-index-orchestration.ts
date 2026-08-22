@@ -52,15 +52,19 @@ export async function preflightFullTextGenerationSynchronization(input: {
   readonly generationStore: FullTextGenerationIndexStore;
 }): Promise<"available" | "migration-fallback"> {
   const current = await input.generationStore.openCurrent();
-  if (input.storage.readBinary && input.storage.writeBinary
-    && input.storage.writeTextAtomic && input.storage.createTextExclusive
-    && input.storage.list) {
-    return "available";
+  try {
+    if (input.storage.readBinary && input.storage.writeBinary
+      && input.storage.writeTextAtomic && input.storage.createTextExclusive
+      && input.storage.list) {
+      return "available";
+    }
+    if (current === null) return "migration-fallback";
+    throw new FullTextGenerationIndexStoreError(
+      "this host cannot update a full-text generation after cutover", "capability-unsupported",
+    );
+  } finally {
+    await current?.close();
   }
-  if (current === null) return "migration-fallback";
-  throw new FullTextGenerationIndexStoreError(
-    "this host cannot update a full-text generation after cutover", "capability-unsupported",
-  );
 }
 
 /**
@@ -119,59 +123,70 @@ async function synchronizeFullTextGenerationIndexOnce(
     assertSourceIdentity(input, latest);
     return latest.revision;
   };
-  const current = await input.generationStore.openCurrent();
-  throwIfCancelled(input.signal);
+  let current = await input.generationStore.openCurrent();
+  try {
+    throwIfCancelled(input.signal);
 
-  if (current
-    && current.descriptor.schemaVersion === GENERATION_DESCRIPTOR_SCHEMA_VERSION
-    && current.descriptor.sourceRevision === manifest.revision
-    && current.descriptor.modelId === manifest.modelId
-    && current.descriptor.dimension === manifest.dimension
-    && sameIndexDerivation(current.descriptor.indexDerivation, indexDerivation)) {
-    const replay = await input.generationStore.stageAndPromote({
-      descriptor: current.descriptor,
-      objects: [],
-      writerToken: input.writerToken,
-      expectedCurrent: {
-        generationId: current.pointer.generationId,
-        sourceRevision: current.pointer.sourceRevision,
-      },
-      sourceCurrentRevision,
-    });
-    return resultFromDescriptor("reused", replay.descriptor);
-  }
+    if (current
+      && current.descriptor.schemaVersion === GENERATION_DESCRIPTOR_SCHEMA_VERSION
+      && current.descriptor.sourceRevision === manifest.revision
+      && current.descriptor.modelId === manifest.modelId
+      && current.descriptor.dimension === manifest.dimension
+      && sameIndexDerivation(current.descriptor.indexDerivation, indexDerivation)) {
+      const replay = await input.generationStore.stageAndPromote({
+        descriptor: current.descriptor,
+        objects: [],
+        writerToken: input.writerToken,
+        expectedCurrent: {
+          generationId: current.pointer.generationId,
+          sourceRevision: current.pointer.sourceRevision,
+        },
+        sourceCurrentRevision,
+      });
+      const result = resultFromDescriptor("reused", replay.descriptor);
+      await replay.close();
+      return result;
+    }
 
-  const generationId = deriveGenerationId(manifest, indexDerivation, input.writerToken);
-  const spool = new StorageGenerationObjectSpool(
-    input.storage,
-    input.output,
-    input.scopeFingerprint,
-    input.identificationFingerprint,
-    { generationId, writerToken: input.writerToken },
-  );
-  const built = await buildFullTextGeneration({
-    manifest,
-    loadPaper: (paperKey) => input.sourceStore.loadPaper(paperKey),
-    generationId,
-    indexDerivation,
-    spool,
-    signal: input.signal,
-    onProgress: input.onProgress,
-  });
-  const opened = await input.generationStore.stageAndPromote({
-    descriptor: built.descriptor,
-    objects: built.objects(),
-    writerToken: input.writerToken,
-    expectedCurrent: current === null ? null : {
+    const expectedCurrent = current === null ? null : {
       generationId: current.pointer.generationId,
       sourceRevision: current.pointer.sourceRevision,
-    },
-    sourceCurrentRevision,
-  });
-  return {
-    ...resultFromDescriptor("rebuilt", opened.descriptor),
-    diagnostics: { ...built.diagnostics },
-  };
+    };
+    await current?.close();
+    current = null;
+    const generationId = deriveGenerationId(manifest, indexDerivation, input.writerToken);
+    const spool = new StorageGenerationObjectSpool(
+      input.storage,
+      input.output,
+      input.scopeFingerprint,
+      input.identificationFingerprint,
+      { generationId, writerToken: input.writerToken },
+    );
+    const built = await buildFullTextGeneration({
+      manifest,
+      loadPaper: (paperKey) => input.sourceStore.loadPaper(paperKey),
+      generationId,
+      indexDerivation,
+      spool,
+      signal: input.signal,
+      onProgress: input.onProgress,
+    });
+    const opened = await input.generationStore.stageAndPromote({
+      descriptor: built.descriptor,
+      objects: built.objects(),
+      writerToken: input.writerToken,
+      expectedCurrent,
+      sourceCurrentRevision,
+    });
+    const result = {
+      ...resultFromDescriptor("rebuilt", opened.descriptor),
+      diagnostics: { ...built.diagnostics },
+    };
+    await opened.close();
+    return result;
+  } finally {
+    await current?.close();
+  }
 }
 
 function deriveGenerationId(

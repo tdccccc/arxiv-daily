@@ -16,6 +16,7 @@ import type {
   RunState,
   FullTextIndexRunSummary,
   FullTextLegacyMigrationLease,
+  FullTextGenerationMaintenanceReport,
   KnowledgeBaseChunkHit,
   DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
@@ -243,10 +244,16 @@ class SettingsOperationRegistry extends OperationRegistry {
   }
 
   beginOutputTransition(): () => void {
+    return this.beginExclusiveTransition("Output directories cannot change while operations are active");
+  }
+
+  beginFullTextMaintenanceTransition(): () => void {
+    return this.beginExclusiveTransition("Full-text generation maintenance cannot start while operations are active");
+  }
+
+  private beginExclusiveTransition(message: string): () => void {
     if (this.outputTransitionActive || this.snapshot().length > 0) {
-      throw new Error(
-        "Output directories cannot change while operations or runs are active",
-      );
+      throw new Error(message);
     }
     this.outputTransitionActive = true;
     let released = false;
@@ -1797,6 +1804,32 @@ export default class ArxivDailyPlugin extends Plugin {
       rankingScoreKind: match.rankingScoreKind,
       hits: match.hits,
     }));
+  }
+
+  /**
+   * Host-authorized quiet-period maintenance for immutable full-text
+   * generations. The caller must arrange that other Obsidian/Node processes
+   * using the same vault have also stopped admission; Core only tracks this
+   * plugin process and never performs online cross-process GC automatically.
+   */
+  async maintainPersonalLibraryFullTextGenerations(): Promise<FullTextGenerationMaintenanceReport> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    if (this.scheduler.activeRuns().length > 0) {
+      throw new Error("Full-text generation maintenance requires the scheduler to be idle");
+    }
+    const releaseAdmission = this.operations.beginFullTextMaintenanceTransition();
+    try {
+      this.scheduler.stop();
+      const generationStore = this.buildFullTextGenerationIndexStore(connection);
+      return await generationStore.runHostAuthorizedMaintenance();
+    } finally {
+      try {
+        if (this.settings.schedule.enabled && !this.unloading) this.scheduler.start();
+      } finally {
+        releaseAdmission();
+      }
+    }
   }
 
   /**

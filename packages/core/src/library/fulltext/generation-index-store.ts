@@ -45,6 +45,7 @@ const CUTOVER_MARKER_FORMAT_VERSION = 1 as const;
 const CUTOVER_MARKER_SCHEMA_VERSION = 1 as const;
 const CUTOVER_MARKER_FILE = "generation-required.json";
 const MAX_CUTOVER_MARKER_BYTES = 16 * 1024;
+const MAX_PROMOTION_CLAIM_BYTES = 16 * 1024;
 const LEGACY_MIGRATION_LEASE_FORMAT_VERSION = 1 as const;
 const LEGACY_MIGRATION_LEASE_SCHEMA_VERSION = 1 as const;
 const LEGACY_MIGRATION_LEASES_DIRECTORY = ".legacy-migration-leases";
@@ -155,6 +156,12 @@ export interface OpenedFullTextGeneration {
   readonly pointer: CurrentGenerationPointer;
   readonly descriptor: GenerationDescriptor;
   readonly diagnostics: GenerationStoreDiagnostics;
+  /**
+   * Release the runtime-local reader claim. Idempotent. A handle must be
+   * closed after its last query/iteration; host-authorized maintenance waits
+   * for every outstanding handle before deleting an old generation.
+   */
+  close(): Promise<void>;
   readRawObject(reference: GenerationObjectReference): Promise<VerifiedGenerationObject>;
   readObject(reference: GenerationObjectReference): Promise<OpenedGenerationObject>;
   readPaperMetadata(reference: GenerationObjectReference & { readonly kind: "paper-metadata" }): Promise<OpenedPaperMetadataObject>;
@@ -165,6 +172,39 @@ export interface OpenedFullTextGeneration {
   iterateObjects(kind?: GenerationObjectReference["kind"]): AsyncIterable<OpenedGenerationObject>;
   iterateVectorBlocks(): AsyncIterable<OpenedVectorObject>;
   iterateEvidenceBlocks(): AsyncIterable<OpenedEvidenceObject>;
+}
+
+export type FullTextGenerationMaintenancePromotionClaim =
+  | "absent"
+  | "repaired-committed"
+  | "retained-unproven";
+
+export type FullTextGenerationMaintenanceSkipReason =
+  | "current"
+  | "backup"
+  | "active-reader"
+  | "promotion-claim"
+  | "staging-claim"
+  | "invalid-or-unreadable"
+  | "remove-failed";
+
+export interface FullTextGenerationMaintenanceReport {
+  readonly promotionClaim: FullTextGenerationMaintenancePromotionClaim;
+  readonly removedGenerationIds: readonly string[];
+  readonly retainedGenerations: readonly {
+    readonly generationId: string;
+    readonly reason: FullTextGenerationMaintenanceSkipReason;
+  }[];
+}
+
+/**
+ * A host-authorized, runtime-local quiescence lease. The host must stop
+ * admission in every runtime that can access the namespace before requesting
+ * this lease; Core can only stop this runtime and account for its own readers.
+ */
+export interface FullTextGenerationMaintenanceLease {
+  run(): Promise<FullTextGenerationMaintenanceReport>;
+  release(): void;
 }
 
 export interface FullTextGenerationIndexStoreOptions {
@@ -210,18 +250,30 @@ export class FullTextGenerationIndexStoreError extends Error {
 
 const writerQueues = new WeakMap<StorageAdapter, Map<string, Promise<void>>>();
 
+interface GenerationRuntimeState {
+  activeOperations: number;
+  activeReaders: Map<string, number>;
+  admissionOpen: boolean;
+  maintenanceActive: boolean;
+  idleWaiters: Set<() => void>;
+}
+
+const generationRuntimeStates = new WeakMap<StorageAdapter, Map<string, GenerationRuntimeState>>();
+
 /**
  * Immutable generation store. A generation-local staging claim owns writes and
  * cleanup for one immutable directory. A separate root promotion claim serializes
  * CURRENT/backup mutation across adapters/runtimes only when createTextExclusive
  * is system-wide for their shared backend. Fixed claims fail closed and are never
- * stolen by time. Task 5 still owns safe stale-claim repair and serialization with
- * the authoritative knowledge-base commit; these claims are not a cross-store transaction.
+ * stolen by time. Host-authorized maintenance can repair only a claim whose
+ * candidate is provably the complete committed CURRENT; these claims are not a
+ * cross-store transaction and maintenance is never started automatically.
  * Legacy migration leases additionally assume read-after-write/list visibility on
  * one strongly consistent local backend, not eventual cross-device synchronization.
  */
 export class FullTextGenerationIndexStore {
   readonly paths: FullTextGenerationIndexStorePaths;
+  private readonly runtimeState: GenerationRuntimeState;
 
   constructor(
     private readonly storage: StorageAdapter,
@@ -245,6 +297,268 @@ export class FullTextGenerationIndexStore {
       ),
       cutoverMarkerPath: storage.normalizePath(`${base.directory}/${CUTOVER_MARKER_FILE}`),
     };
+    this.runtimeState = generationRuntimeState(storage, this.paths.directory);
+  }
+
+  /**
+   * Stop this runtime from admitting new generation readers/writers and wait
+   * until all locally tracked operations and opened handles have settled.
+   * This is intentionally host-authorized rather than an automatic online GC:
+   * Core cannot observe readers in another runtime or on another adapter.
+   */
+  async beginHostAuthorizedMaintenance(): Promise<FullTextGenerationMaintenanceLease> {
+    if (!this.runtimeState.admissionOpen || this.runtimeState.maintenanceActive) {
+      throw wrap("concurrent", "full-text generation maintenance is already active");
+    }
+    this.runtimeState.admissionOpen = false;
+    this.runtimeState.maintenanceActive = true;
+    await waitForGenerationRuntimeIdle(this.runtimeState);
+    let released = false;
+    let ran = false;
+    return {
+      run: async () => {
+        if (released) throw wrap("invalid", "full-text generation maintenance lease is released");
+        if (ran) throw wrap("invalid", "full-text generation maintenance lease was already used");
+        ran = true;
+        return this.runGenerationMaintenance();
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        this.runtimeState.maintenanceActive = false;
+        this.runtimeState.admissionOpen = true;
+        notifyGenerationRuntimeIdle(this.runtimeState);
+      },
+    };
+  }
+
+  /** Convenience wrapper for hosts that want one acquire/run/release call. */
+  async runHostAuthorizedMaintenance(): Promise<FullTextGenerationMaintenanceReport> {
+    const lease = await this.beginHostAuthorizedMaintenance();
+    try {
+      return await lease.run();
+    } finally {
+      lease.release();
+    }
+  }
+
+  private acquireAdmission(): () => void {
+    if (!this.runtimeState.admissionOpen) {
+      throw wrap("concurrent", "full-text generation admission is stopped for maintenance");
+    }
+    this.runtimeState.activeOperations += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.runtimeState.activeOperations -= 1;
+      notifyGenerationRuntimeIdle(this.runtimeState);
+    };
+  }
+
+  private async runGenerationMaintenance(): Promise<FullTextGenerationMaintenanceReport> {
+    if (!this.storage.list) {
+      throw wrap("capability-unsupported", "generation maintenance requires storage list capability");
+    }
+    await this.assertNoActiveLegacyMigrationLease();
+    const current = await this.readMaintenancePointer(this.paths.currentPath, "current");
+    const backup = await this.readMaintenancePointer(this.paths.backupPath, "backup");
+    const cutover = await this.readCutoverMarker();
+    if (cutover.kind === "incompatible") throw incompatible("incompatible full-text generation cutover marker");
+    if (cutover.kind === "corrupt") {
+      throw wrap("corrupt-or-unreadable", "full-text generation cutover marker is not safely observable", cutover.error);
+    }
+    if (current === null && backup === null && cutover.kind === "valid") {
+      throw wrap("corrupt-or-unreadable", "both generation pointers are missing after cutover");
+    }
+    const currentRaw = await this.readMaintenancePointerRaw(this.paths.currentPath);
+    const backupRaw = await this.readMaintenancePointerRaw(this.paths.backupPath);
+    const promotionClaim = await this.repairPromotionClaimForMaintenance(current);
+    const retained: Array<{
+      readonly generationId: string;
+      readonly reason: FullTextGenerationMaintenanceSkipReason;
+    }> = [];
+    const removed: string[] = [];
+    if (promotionClaim === "retained-unproven") {
+      // A root claim may still belong to a live writer in another runtime. It
+      // is never safe to collect any generation while that uncertainty remains.
+      const claimed = await this.listKnownGenerationIds();
+      for (const generationId of claimed) retained.push({ generationId, reason: "promotion-claim" });
+      return { promotionClaim, removedGenerationIds: removed, retainedGenerations: retained };
+    }
+
+    const generationIds = await this.listKnownGenerationIds();
+    for (const generationId of generationIds) {
+      if (generationId === current?.generationId) {
+        retained.push({ generationId, reason: "current" });
+        continue;
+      }
+      if (generationId === backup?.generationId) {
+        retained.push({ generationId, reason: "backup" });
+        continue;
+      }
+      const generation = deriveFullTextGenerationPaths(
+        this.storage, this.output, this.scopeFingerprint, this.identificationFingerprint, generationId,
+      );
+      if (generationReaderCount(this.runtimeState, generation.directory) > 0) {
+        retained.push({ generationId, reason: "active-reader" });
+        continue;
+      }
+      let hasStagingClaim: boolean;
+      try {
+        hasStagingClaim = await this.storage.exists(
+          this.storage.normalizePath(`${generation.directory}/${STAGING_CLAIM_FILE}`),
+        );
+      } catch (caught) {
+        retained.push({ generationId, reason: "invalid-or-unreadable" });
+        this.warn(`cannot inspect staging claim for generation ${generationId}`, caught);
+        continue;
+      }
+      if (hasStagingClaim) {
+        retained.push({ generationId, reason: "staging-claim" });
+        continue;
+      }
+      const latestCurrent = await this.readMaintenancePointer(this.paths.currentPath, "current");
+      const latestBackup = await this.readMaintenancePointer(this.paths.backupPath, "backup");
+      const latestCurrentRaw = await this.readMaintenancePointerRaw(this.paths.currentPath);
+      const latestBackupRaw = await this.readMaintenancePointerRaw(this.paths.backupPath);
+      if (latestCurrentRaw !== currentRaw || latestBackupRaw !== backupRaw) {
+        throw wrap("concurrent", "generation pointers changed during host-authorized maintenance");
+      }
+      if (latestCurrent?.generationId === generationId || latestBackup?.generationId === generationId) {
+        retained.push({ generationId, reason: latestCurrent?.generationId === generationId ? "current" : "backup" });
+        continue;
+      }
+      if (await this.safeExists(this.paths.promotionClaimPath)) {
+        retained.push({ generationId, reason: "promotion-claim" });
+        continue;
+      }
+      if (await this.storage.exists(this.storage.normalizePath(`${generation.directory}/${STAGING_CLAIM_FILE}`))) {
+        retained.push({ generationId, reason: "staging-claim" });
+        continue;
+      }
+      try {
+        await this.storage.remove(generation.directory);
+        if (await this.storage.exists(generation.directory)) {
+          retained.push({ generationId, reason: "remove-failed" });
+        } else {
+          removed.push(generationId);
+        }
+      } catch (caught) {
+        retained.push({ generationId, reason: "remove-failed" });
+        this.warn(`failed to remove orphan full-text generation ${generationId}`, caught);
+      }
+    }
+    const finalCurrentRaw = await this.readMaintenancePointerRaw(this.paths.currentPath);
+    const finalBackupRaw = await this.readMaintenancePointerRaw(this.paths.backupPath);
+    if (finalCurrentRaw !== currentRaw || finalBackupRaw !== backupRaw) {
+      throw wrap("concurrent", "generation pointers changed before maintenance completed");
+    }
+    if (await this.safeExists(this.paths.promotionClaimPath)) {
+      throw wrap("concurrent", "a full-text promotion claim appeared during maintenance");
+    }
+    await this.assertNoActiveLegacyMigrationLease();
+    return { promotionClaim, removedGenerationIds: removed, retainedGenerations: retained };
+  }
+
+  private async readMaintenancePointer(path: string, label: string): Promise<CurrentGenerationPointer | null> {
+    const result = await this.readPointer(path);
+    if (result.kind === "missing") return null;
+    if (result.kind === "incompatible") throw incompatible(`incompatible ${label} generation pointer`);
+    if (result.kind === "corrupt" || result.kind === "unreadable") {
+      throw wrap("corrupt-or-unreadable", `${label} generation pointer is not safely observable`, result.error);
+    }
+    this.assertPointerIdentity(result.pointer);
+    return result.pointer;
+  }
+
+  private async readMaintenancePointerRaw(path: string): Promise<string | null> {
+    const result = await this.readPointer(path);
+    if (result.kind === "missing") return null;
+    if (result.kind === "incompatible") throw incompatible("incompatible generation pointer during maintenance");
+    if (result.kind === "corrupt" || result.kind === "unreadable") {
+      throw wrap("corrupt-or-unreadable", "generation pointer is not safely observable during maintenance", result.error);
+    }
+    this.assertPointerIdentity(result.pointer);
+    return result.raw;
+  }
+
+  private async listKnownGenerationIds(): Promise<string[]> {
+    if (!this.storage.list) throw wrap("capability-unsupported", "generation maintenance requires storage list capability");
+    const exists = await this.storage.exists(this.paths.generationsDirectory);
+    if (!exists) return [];
+    let entries: Awaited<ReturnType<NonNullable<StorageAdapter["list"]>>>;
+    try {
+      entries = await this.storage.list(this.paths.generationsDirectory);
+    } catch (caught) {
+      throw wrap("corrupt-or-unreadable", "generation directory is not safely listable", caught);
+    }
+    const prefix = `${this.paths.generationsDirectory}/`;
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of entries) {
+      const path = this.storage.normalizePath(entry.path);
+      const id = path.startsWith(prefix) ? path.slice(prefix.length) : "";
+      if (entry.type !== "folder" || path !== entry.path || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(id)) {
+        throw wrap("corrupt-or-unreadable", "generation directory contains an invalid child entry");
+      }
+      if (seen.has(id)) throw wrap("corrupt-or-unreadable", "generation directory listing contains a duplicate child");
+      seen.add(id);
+      ids.push(id);
+    }
+    ids.sort();
+    return ids;
+  }
+
+  private async repairPromotionClaimForMaintenance(
+    current: CurrentGenerationPointer | null,
+  ): Promise<FullTextGenerationMaintenancePromotionClaim> {
+    let exists: boolean;
+    try {
+      exists = await this.storage.exists(this.paths.promotionClaimPath);
+    } catch (caught) {
+      this.warn("cannot observe the full-text promotion claim during maintenance", caught);
+      return "retained-unproven";
+    }
+    if (!exists) return "absent";
+    let raw: string;
+    try {
+      raw = await this.storage.readText(this.paths.promotionClaimPath);
+      if (utf8Length(raw) > MAX_PROMOTION_CLAIM_BYTES) throw new Error("promotion claim exceeds its byte limit");
+      const claim = validatePromotionClaim(JSON.parse(raw));
+      if (claim.scopeFingerprint !== this.scopeFingerprint || claim.identificationFingerprint !== this.identificationFingerprint) {
+        throw new Error("promotion claim identity does not match store binding");
+      }
+      if (!current || current.generationId !== claim.candidateGenerationId || current.sourceRevision !== claim.sourceRevision) {
+        return "retained-unproven";
+      }
+      const observedCurrent = await this.readPointer(this.paths.currentPath);
+      if (observedCurrent.kind !== "valid"
+        || observedCurrent.pointer.generationId !== current.generationId
+        || observedCurrent.pointer.sourceRevision !== current.sourceRevision) {
+        return "retained-unproven";
+      }
+      const observedCurrentRaw = observedCurrent.raw;
+      const opened = await this.validateCompleteGeneration(current).catch(() => null);
+      if (!opened) return "retained-unproven";
+      await opened.close();
+      const reread = await this.storage.readText(this.paths.promotionClaimPath).catch(() => null);
+      const latest = await this.readPointer(this.paths.currentPath);
+      if (reread !== raw || latest.kind !== "valid" || latest.raw !== observedCurrentRaw) {
+        return "retained-unproven";
+      }
+    } catch (caught) {
+      this.warn("full-text promotion claim is not safely repairable", caught);
+      return "retained-unproven";
+    }
+    try {
+      await this.storage.remove(this.paths.promotionClaimPath);
+      if (await this.storage.exists(this.paths.promotionClaimPath)) return "retained-unproven";
+      return "repaired-committed";
+    } catch (caught) {
+      this.warn("failed to repair a committed full-text promotion claim", caught);
+      return "retained-unproven";
+    }
   }
 
   /**
@@ -253,89 +567,114 @@ export class FullTextGenerationIndexStore {
    * without exclusive create cannot deterministically arbitrate token reuse.
    */
   async acquireLegacyMigrationLease(writerToken: string): Promise<FullTextLegacyMigrationLease> {
-    validateWriterToken(writerToken);
-    if (!this.storage.writeTextAtomic) {
-      throw wrap("capability-unsupported", "legacy migration admission requires writeTextAtomic capability");
-    }
-    await this.assertLegacyFallbackOpen();
-    await ensureDirDeep(this.storage, this.paths.legacyMigrationLeasesDirectory);
-    const leasePath = this.legacyMigrationLeasePath(writerToken);
-    const active = encodeLegacyMigrationLease(
-      writerToken, this.scopeFingerprint, this.identificationFingerprint,
-    );
-    let alreadyExists: boolean;
+    const releaseAdmission = this.acquireAdmission();
+    let handedOffAdmission = false;
     try {
-      alreadyExists = await this.storage.exists(leasePath);
-    } catch (caught) {
-      throw wrap("claim-uncertain", "legacy migration lease existence is unknown", caught);
-    }
-    if (alreadyExists) {
-      throw wrap("concurrent", "legacy migration lease token is already active");
-    }
-    try {
-      await this.storage.writeTextAtomic(leasePath, active);
-    } catch (caught) {
-      let actual: string;
-      try {
-        actual = await this.storage.readText(leasePath);
-      } catch (readbackError) {
-        throw wrap("claim-uncertain", "legacy migration lease write outcome is uncertain", readbackError);
+      validateWriterToken(writerToken);
+      if (!this.storage.writeTextAtomic) {
+        throw wrap("capability-unsupported", "legacy migration admission requires writeTextAtomic capability");
       }
-      if (actual !== active) {
-        throw wrap("claim-uncertain", "legacy migration lease write committed different bytes", caught);
-      }
-    }
-    await this.assertLegacyMigrationLease(leasePath, active);
-    try {
       await this.assertLegacyFallbackOpen();
-    } catch (caught) {
-      await this.releaseLegacyMigrationLease(leasePath, active).catch(() => undefined);
-      throw caught;
-    }
-
-    let leaseReleased = false;
-    return {
-      assertOwned: async () => {
-        if (leaseReleased) throw wrap("stale-claim", "legacy migration lease is already released");
-        await this.assertLegacyMigrationLease(leasePath, active);
+      await ensureDirDeep(this.storage, this.paths.legacyMigrationLeasesDirectory);
+      const leasePath = this.legacyMigrationLeasePath(writerToken);
+      const active = encodeLegacyMigrationLease(
+        writerToken, this.scopeFingerprint, this.identificationFingerprint,
+      );
+      let alreadyExists: boolean;
+      try {
+        alreadyExists = await this.storage.exists(leasePath);
+      } catch (caught) {
+        throw wrap("claim-uncertain", "legacy migration lease existence is unknown", caught);
+      }
+      if (alreadyExists) {
+        throw wrap("concurrent", "legacy migration lease token is already active");
+      }
+      try {
+        await this.storage.writeTextAtomic(leasePath, active);
+      } catch (caught) {
+        let actual: string;
+        try {
+          actual = await this.storage.readText(leasePath);
+        } catch (readbackError) {
+          throw wrap("claim-uncertain", "legacy migration lease write outcome is uncertain", readbackError);
+        }
+        if (actual !== active) {
+          throw wrap("claim-uncertain", "legacy migration lease write committed different bytes", caught);
+        }
+      }
+      await this.assertLegacyMigrationLease(leasePath, active);
+      try {
         await this.assertLegacyFallbackOpen();
-      },
-      release: async () => {
-        if (leaseReleased) return;
-        await this.releaseLegacyMigrationLease(leasePath, active);
-        leaseReleased = true;
-      },
-    };
+      } catch (caught) {
+        await this.releaseLegacyMigrationLease(leasePath, active).catch(() => undefined);
+        throw caught;
+      }
+
+      let leaseReleased = false;
+      handedOffAdmission = true;
+      return {
+        assertOwned: async () => {
+          if (leaseReleased) throw wrap("stale-claim", "legacy migration lease is already released");
+          await this.assertLegacyMigrationLease(leasePath, active);
+          await this.assertLegacyFallbackOpen();
+        },
+        release: async () => {
+          if (leaseReleased) return;
+          await this.releaseLegacyMigrationLease(leasePath, active);
+          leaseReleased = true;
+          releaseAdmission();
+        },
+      };
+    } finally {
+      if (!handedOffAdmission) releaseAdmission();
+    }
   }
 
   stageAndPromote(input: StageAndPromoteGenerationInput): Promise<OpenedFullTextGeneration> {
-    return enqueueWriter(this.storage, this.paths.currentPath, () => this.stageAndPromoteSerial(input));
+    let releaseAdmission: (() => void) | undefined;
+    try {
+      releaseAdmission = this.acquireAdmission();
+    } catch (caught) {
+      return Promise.reject(caught);
+    }
+    try {
+      return enqueueWriter(this.storage, this.paths.currentPath, () => this.stageAndPromoteSerial(input))
+        .finally(() => releaseAdmission!());
+    } catch (caught) {
+      releaseAdmission();
+      return Promise.reject(caught);
+    }
   }
 
   async openCurrent(): Promise<OpenedFullTextGeneration | null> {
-    const primary = await this.readPointer(this.paths.currentPath);
-    if (primary.kind === "incompatible") throw incompatible(`incompatible current generation pointer: ${this.paths.currentPath}`);
-    if (primary.kind === "unreadable") {
-      throw wrap("corrupt-or-unreadable", `cannot observe current generation pointer: ${this.paths.currentPath}`, primary.error);
-    }
-    if (primary.kind === "valid") {
-      try {
-        return await this.openPinned(primary.pointer);
-      } catch (caught) {
-        if (isIncompatible(caught)) throw caught;
-        return this.queueRecovery(primary.raw, caught);
+    const releaseAdmission = this.acquireAdmission();
+    try {
+      const primary = await this.readPointer(this.paths.currentPath);
+      if (primary.kind === "incompatible") throw incompatible(`incompatible current generation pointer: ${this.paths.currentPath}`);
+      if (primary.kind === "unreadable") {
+        throw wrap("corrupt-or-unreadable", `cannot observe current generation pointer: ${this.paths.currentPath}`, primary.error);
       }
-    }
-    if (primary.kind === "missing") {
-      const backup = await this.readPointer(this.paths.backupPath);
-      if (backup.kind === "unreadable") {
-        throw wrap("corrupt-or-unreadable", `cannot observe backup generation pointer: ${this.paths.backupPath}`, backup.error);
+      if (primary.kind === "valid") {
+        try {
+          return await this.openPinned(primary.pointer);
+        } catch (caught) {
+          if (isIncompatible(caught)) throw caught;
+          return this.queueRecovery(primary.raw, caught);
+        }
       }
-      if (backup.kind === "missing") {
-        return this.resolveMissingPointers();
+      if (primary.kind === "missing") {
+        const backup = await this.readPointer(this.paths.backupPath);
+        if (backup.kind === "unreadable") {
+          throw wrap("corrupt-or-unreadable", `cannot observe backup generation pointer: ${this.paths.backupPath}`, backup.error);
+        }
+        if (backup.kind === "missing") {
+          return this.resolveMissingPointers();
+        }
       }
+      return await this.queueRecovery(primary.kind === "corrupt" ? primary.raw : null, primary.kind === "corrupt" ? primary.error : undefined);
+    } finally {
+      releaseAdmission();
     }
-    return this.queueRecovery(primary.kind === "corrupt" ? primary.raw : null, primary.kind === "corrupt" ? primary.error : undefined);
   }
 
   private async resolveMissingPointers(): Promise<null> {
@@ -419,18 +758,23 @@ export class FullTextGenerationIndexStore {
     // caller can acknowledge a previously committed generation idempotently.
     const replay = await this.tryExactCommittedReplay(descriptor);
     if (replay) {
-      await this.assertNoActiveLegacyMigrationLease();
-      const replayMarker = await this.establishCutoverMarker();
-      await this.options.afterCutoverMarkerEstablished?.();
-      await this.assertCutoverMarker(replayMarker);
-      await this.assertNoActiveLegacyMigrationLease();
-      await this.assertCutoverMarker(replayMarker);
-      const latest = await this.readPointer(this.paths.currentPath);
-      if (!samePointerObservation(latest, replay.observation)) {
-        throw wrap("concurrent", "current generation changed during exact replay validation");
+      try {
+        await this.assertNoActiveLegacyMigrationLease();
+        const replayMarker = await this.establishCutoverMarker();
+        await this.options.afterCutoverMarkerEstablished?.();
+        await this.assertCutoverMarker(replayMarker);
+        await this.assertNoActiveLegacyMigrationLease();
+        await this.assertCutoverMarker(replayMarker);
+        const latest = await this.readPointer(this.paths.currentPath);
+        if (!samePointerObservation(latest, replay.observation)) {
+          throw wrap("concurrent", "current generation changed during exact replay validation");
+        }
+        await this.assertSourceRevision(input.sourceCurrentRevision, descriptor.sourceRevision);
+        return replay.opened;
+      } catch (caught) {
+        await replay.opened.close().catch((closeError) => this.warn("failed to close replayed generation reader", closeError));
+        throw caught;
       }
-      await this.assertSourceRevision(input.sourceCurrentRevision, descriptor.sourceRevision);
-      return replay.opened;
     }
     requireExclusiveCreate(this.storage);
 
@@ -442,6 +786,8 @@ export class FullTextGenerationIndexStore {
     let committed = false;
     let cleanupWholeGeneration = true;
     let cutoverMarker: CutoverMarkerLease | null = null;
+    let candidate: OpenedFullTextGeneration | undefined;
+    let transferredHandle: OpenedFullTextGeneration | undefined;
 
     try {
       await ensureDirDeep(this.storage, generation.directory);
@@ -496,7 +842,7 @@ export class FullTextGenerationIndexStore {
       this.assertDescriptorIdentity(pinned);
       if (descriptorDigest(reread) !== descriptorDigest(descriptorText)) throw new Error("generation descriptor readback differs");
 
-      const candidate = this.createOpenedHandle(pointerFromDescriptor(pinned, reread), pinned, generation);
+      candidate = this.createOpenedHandle(pointerFromDescriptor(pinned, reread), pinned, generation);
       await this.validateGenerationClosure(candidate);
       await this.assertSourceRevision(input.sourceCurrentRevision, pinned.sourceRevision);
       await this.options.beforePointerPromotion?.();
@@ -542,8 +888,9 @@ export class FullTextGenerationIndexStore {
         await this.assertPromotionClaim(promotionClaimText);
         if (current !== null) {
           let validBackup = false;
+          let validatedBackup: OpenedFullTextGeneration | undefined;
           try {
-            await this.validateCompleteGeneration(current);
+            validatedBackup = await this.validateCompleteGeneration(current);
             validBackup = true;
           } catch (caught) {
             this.warn(
@@ -551,6 +898,7 @@ export class FullTextGenerationIndexStore {
               caught,
             );
           }
+          await validatedBackup?.close();
           if (validBackup) {
             await this.storage.writeTextAtomic!(this.paths.backupPath, encodeCurrentGenerationPointer(current));
           }
@@ -577,6 +925,9 @@ export class FullTextGenerationIndexStore {
           const outcome = await this.resolveCommitOutcome(pinned);
           if (outcome.kind === "committed") {
             committed = true;
+            await candidate?.close();
+            candidate = undefined;
+            transferredHandle = outcome.opened;
             return outcome.opened;
           }
           if (outcome.kind === "uncertain") {
@@ -589,6 +940,8 @@ export class FullTextGenerationIndexStore {
         } catch (caught) {
           this.warn("post-commit generation promotion observer failed", caught);
         }
+        await this.releaseStagingClaimIfOwned(claimPath, claimText);
+        transferredHandle = candidate;
         return candidate;
       } catch (caught) {
         let failure = caught;
@@ -609,6 +962,11 @@ export class FullTextGenerationIndexStore {
       const failure = caught;
       const cleanupForbidden = failure instanceof FullTextGenerationIndexStoreError
         && (failure.code === "claim-uncertain" || failure.code === "commit-uncertain");
+      if (candidate && candidate !== transferredHandle) {
+        await candidate.close().catch((closeError) => {
+          this.warn("failed to close an unreturned generation reader", closeError);
+        });
+      }
       if (!committed && !cleanupForbidden && ownsClaim && !ownershipLost) {
         await this.cleanupGenerationIfOwned(
           generation,
@@ -658,6 +1016,8 @@ export class FullTextGenerationIndexStore {
       requireExclusiveCreate(this.storage);
       const promotionClaimText = encodePromotionClaim(recoveryPromotionClaim(backup.pointer, currentRaw));
       await this.acquirePromotionClaim(promotionClaimText);
+      let opened: OpenedFullTextGeneration | undefined;
+      let transferred = false;
       try {
         const claimedCurrent = await this.readPointer(this.paths.currentPath);
         if (!samePointerObservation(claimedCurrent, current)) {
@@ -668,7 +1028,6 @@ export class FullTextGenerationIndexStore {
         if (claimedBackup.kind !== "valid" || !samePointerObservation(claimedBackup, backup)) {
           throw wrap("concurrent", "backup generation pointer changed during recovery");
         }
-        let opened: OpenedFullTextGeneration;
         try {
           opened = await this.validateCompleteGeneration(claimedBackup.pointer);
         } catch (caught) {
@@ -692,8 +1051,12 @@ export class FullTextGenerationIndexStore {
           throw wrap("repair-failed", `failed to repair current generation pointer: ${this.paths.currentPath}`, caught);
         }
         this.warn(`full-text generation pointer recovered from backup: ${this.paths.backupPath}`, primaryError);
+        transferred = true;
         return opened;
       } finally {
+        if (opened && !transferred) {
+          await opened.close().catch((closeError) => this.warn("failed to close an unrecovered generation reader", closeError));
+        }
         await this.releasePromotionClaimIfOwned(promotionClaimText);
       }
     });
@@ -733,8 +1096,13 @@ export class FullTextGenerationIndexStore {
 
   private async validateCompleteGeneration(pointer: CurrentGenerationPointer): Promise<OpenedFullTextGeneration> {
     const opened = await this.openPinned(pointer);
-    await this.validateGenerationClosure(opened);
-    return opened;
+    try {
+      await this.validateGenerationClosure(opened);
+      return opened;
+    } catch (caught) {
+      await opened.close();
+      throw caught;
+    }
   }
 
   private async validateGenerationClosure(opened: OpenedFullTextGeneration): Promise<void> {
@@ -911,8 +1279,47 @@ export class FullTextGenerationIndexStore {
   ): OpenedFullTextGeneration {
     const privateDescriptor = deepFreeze(cloneDescriptor(descriptor));
     const publicDescriptor = privateDescriptor;
+    const publicPointer = deepFreeze({ ...pointer });
     const references = new Map(privateDescriptor.objects.map((reference) => [referenceIdentity(reference), reference]));
     const diagnostics: GenerationStoreDiagnostics = { maxObjectBytes: 0, objectReads: 0, maxLiveBlocks: 0 };
+    const releaseReader = retainGenerationReader(this.runtimeState, generation.directory);
+    let closeRequested = false;
+    let closePromise: Promise<void> | null = null;
+    let resolveClose: (() => void) | undefined;
+    let inFlight = 0;
+    const finishClose = () => {
+      if (!closeRequested || inFlight !== 0 || !resolveClose) return;
+      releaseReader();
+      const resolve = resolveClose;
+      resolveClose = undefined;
+      resolve();
+    };
+    const beginOperation = (): (() => void) => {
+      if (closeRequested) throw wrap("invalid", "opened full-text generation is closed");
+      inFlight += 1;
+      let finished = false;
+      return () => {
+        if (finished) return;
+        finished = true;
+        inFlight -= 1;
+        finishClose();
+      };
+    };
+    const withOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
+      const finish = beginOperation();
+      try {
+        return await operation();
+      } finally {
+        finish();
+      }
+    };
+    const close = (): Promise<void> => {
+      if (closePromise) return closePromise;
+      closeRequested = true;
+      closePromise = new Promise<void>((resolve) => { resolveClose = resolve; });
+      finishClose();
+      return closePromise;
+    };
     const pinnedReference = (requested: GenerationObjectReference): GenerationObjectReference => {
       let identity: string;
       try { identity = referenceIdentity(requested); } catch (caught) { throw wrap("invalid", "invalid generation object reference", caught); }
@@ -920,52 +1327,72 @@ export class FullTextGenerationIndexStore {
       if (!pinned) throw wrap("invalid", "generation object reference is not part of the opened descriptor snapshot");
       return pinned;
     };
-    const readRawObject = async (requested: GenerationObjectReference): Promise<VerifiedGenerationObject> => {
+    const rawReadRawObject = async (requested: GenerationObjectReference): Promise<VerifiedGenerationObject> => {
       try { return await this.readVerifiedObjectBytes(generation, pinnedReference(requested), diagnostics); }
       catch (caught) { throw normalizePublicReadError("failed to read generation object", caught); }
     };
-    const readObject = async (requested: GenerationObjectReference): Promise<OpenedGenerationObject> => {
+    const rawReadObject = async (requested: GenerationObjectReference): Promise<OpenedGenerationObject> => {
       try { return await this.readAndValidateObject(generation, pinnedReference(requested), diagnostics, privateDescriptor.dimension, privateDescriptor); }
       catch (caught) { throw normalizePublicReadError("failed to decode generation object", caught); }
     };
-    const typedRead = async <K extends OpenedGenerationObject["reference"]["kind"]>(
+    const rawTypedRead = async <K extends OpenedGenerationObject["reference"]["kind"]>(
       reference: GenerationObjectReference & { readonly kind: K }, kind: K,
     ): Promise<Extract<OpenedGenerationObject, { readonly reference: { readonly kind: K } }>> => {
-      const object = await readObject(reference);
+      const object = await rawReadObject(reference);
       if (object.reference.kind !== kind) throw wrap("invalid", `generation object is not ${kind}`);
       return object as Extract<OpenedGenerationObject, { readonly reference: { readonly kind: K } }>;
     };
-    const readPaperMetadata = (reference: GenerationObjectReference & { readonly kind: "paper-metadata" }) => typedRead(reference, "paper-metadata");
-    const readLexicalDictionary = (reference: GenerationObjectReference & { readonly kind: "lexical-dictionary" }) => typedRead(reference, "lexical-dictionary");
-    const readLexicalPostings = (reference: GenerationObjectReference & { readonly kind: "lexical-postings" }) => typedRead(reference, "lexical-postings");
-    const iterate = (kind?: GenerationObjectReference["kind"]) =>
+    const rawReadPaperMetadata = (reference: GenerationObjectReference & { readonly kind: "paper-metadata" }) => rawTypedRead(reference, "paper-metadata");
+    const rawReadLexicalDictionary = (reference: GenerationObjectReference & { readonly kind: "lexical-dictionary" }) => rawTypedRead(reference, "lexical-dictionary");
+    const rawReadLexicalPostings = (reference: GenerationObjectReference & { readonly kind: "lexical-postings" }) => rawTypedRead(reference, "lexical-postings");
+    const rawIterate = (kind?: GenerationObjectReference["kind"]) =>
       this.iteratePublicGenerationObjects(generation, privateDescriptor, diagnostics, kind);
-    return {
-      pointer: deepFreeze({ ...pointer }),
+    const rawHandle: OpenedFullTextGeneration = {
+      pointer: publicPointer,
       descriptor: publicDescriptor,
       diagnostics,
-      readRawObject,
-      readObject,
-      readPaperMetadata,
-      readLexicalDictionary,
-      readLexicalPostings,
-      validateClosure: async () => {
+      close: async () => undefined,
+      readRawObject: rawReadRawObject,
+      readObject: rawReadObject,
+      readPaperMetadata: rawReadPaperMetadata,
+      readLexicalDictionary: rawReadLexicalDictionary,
+      readLexicalPostings: rawReadLexicalPostings,
+      validateClosure: async () => undefined,
+      iterateObjects: rawIterate,
+      iterateVectorBlocks: () => rawIterate("vector") as AsyncIterable<OpenedVectorObject>,
+      iterateEvidenceBlocks: () => rawIterate("evidence") as AsyncIterable<OpenedEvidenceObject>,
+    };
+    const guardedIterate = (kind?: GenerationObjectReference["kind"]): AsyncIterable<OpenedGenerationObject> => {
+      const self = this;
+      return (async function* () {
+        const finish = beginOperation();
         try {
-          await this.validateGenerationClosure({
-            pointer, descriptor: privateDescriptor, diagnostics, readRawObject, readObject,
-            readPaperMetadata, readLexicalDictionary, readLexicalPostings,
-            validateClosure: async () => undefined,
-            iterateObjects: iterate,
-            iterateVectorBlocks: () => iterate("vector") as AsyncIterable<OpenedVectorObject>,
-            iterateEvidenceBlocks: () => iterate("evidence") as AsyncIterable<OpenedEvidenceObject>,
-          });
+          yield* self.iteratePublicGenerationObjects(generation, privateDescriptor, diagnostics, kind);
+        } finally {
+          finish();
+        }
+      })();
+    };
+    return {
+      pointer: publicPointer,
+      descriptor: publicDescriptor,
+      diagnostics,
+      close,
+      readRawObject: (reference) => withOperation(() => rawReadRawObject(reference)),
+      readObject: (reference) => withOperation(() => rawReadObject(reference)),
+      readPaperMetadata: (reference) => withOperation(() => rawReadPaperMetadata(reference)),
+      readLexicalDictionary: (reference) => withOperation(() => rawReadLexicalDictionary(reference)),
+      readLexicalPostings: (reference) => withOperation(() => rawReadLexicalPostings(reference)),
+      validateClosure: () => withOperation(async () => {
+        try {
+          await this.validateGenerationClosure(rawHandle);
         } catch (caught) {
           throw normalizePublicReadError("generation closure validation failed", caught);
         }
-      },
-      iterateObjects: iterate,
-      iterateVectorBlocks: () => iterate("vector") as AsyncIterable<OpenedVectorObject>,
-      iterateEvidenceBlocks: () => iterate("evidence") as AsyncIterable<OpenedEvidenceObject>,
+      }),
+      iterateObjects: guardedIterate,
+      iterateVectorBlocks: () => guardedIterate("vector") as AsyncIterable<OpenedVectorObject>,
+      iterateEvidenceBlocks: () => guardedIterate("evidence") as AsyncIterable<OpenedEvidenceObject>,
     };
   }
 
@@ -1340,6 +1767,17 @@ export class FullTextGenerationIndexStore {
     });
   }
 
+  private async releaseStagingClaimIfOwned(path: string, expectedText: string): Promise<void> {
+    try {
+      const actual = await this.storage.readText(path).catch(() => null);
+      if (actual !== expectedText) return;
+      await this.storage.remove(path);
+      if (await this.storage.exists(path)) throw new Error("staging claim still exists after release");
+    } catch (caught) {
+      this.warn("failed to release a committed generation staging claim", caught);
+    }
+  }
+
   private warn(message: string, error?: unknown): void {
     try { this.options.onWarning?.(message, error); } catch { /* diagnostics must not change storage outcome */ }
   }
@@ -1422,7 +1860,15 @@ export class FullTextGenerationIndexStore {
       return { kind: "not-committed" };
     }
     const opened = await this.validateCompleteGeneration(current.pointer).catch(() => null);
-    if (!opened || encodeGenerationDescriptor(opened.descriptor) !== encodeGenerationDescriptor(descriptor)) {
+    if (!opened) return { kind: "uncertain" };
+    let matches = false;
+    try {
+      matches = encodeGenerationDescriptor(opened.descriptor) === encodeGenerationDescriptor(descriptor);
+    } catch {
+      matches = false;
+    }
+    if (!matches) {
+      await opened.close();
       return { kind: "uncertain" };
     }
     return { kind: "committed", opened };
@@ -1436,7 +1882,17 @@ export class FullTextGenerationIndexStore {
     if (current.kind !== "valid" || current.pointer.generationId !== descriptor.generationId
       || current.pointer.sourceRevision !== descriptor.sourceRevision) return null;
     const opened = await this.validateCompleteGeneration(current.pointer).catch(() => null);
-    if (!opened || encodeGenerationDescriptor(opened.descriptor) !== encodeGenerationDescriptor(descriptor)) return null;
+    if (!opened) return null;
+    let matches = false;
+    try {
+      matches = encodeGenerationDescriptor(opened.descriptor) === encodeGenerationDescriptor(descriptor);
+    } catch {
+      matches = false;
+    }
+    if (!matches) {
+      await opened.close();
+      return null;
+    }
     return { opened, observation: current };
   }
 }
@@ -1909,6 +2365,54 @@ function enqueueWriter<T>(storage: StorageAdapter, path: string, operation: () =
   queues.set(path, tail);
   void tail.finally(() => { if (queues?.get(path) === tail) queues.delete(path); });
   return next;
+}
+
+function generationRuntimeState(storage: StorageAdapter, namespace: string): GenerationRuntimeState {
+  let namespaces = generationRuntimeStates.get(storage);
+  if (!namespaces) {
+    namespaces = new Map();
+    generationRuntimeStates.set(storage, namespaces);
+  }
+  let state = namespaces.get(namespace);
+  if (!state) {
+    state = {
+      activeOperations: 0,
+      activeReaders: new Map(),
+      admissionOpen: true,
+      maintenanceActive: false,
+      idleWaiters: new Set(),
+    };
+    namespaces.set(namespace, state);
+  }
+  return state;
+}
+
+function retainGenerationReader(state: GenerationRuntimeState, generationDirectory: string): () => void {
+  state.activeReaders.set(generationDirectory, (state.activeReaders.get(generationDirectory) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const count = state.activeReaders.get(generationDirectory) ?? 0;
+    if (count <= 1) state.activeReaders.delete(generationDirectory);
+    else state.activeReaders.set(generationDirectory, count - 1);
+    notifyGenerationRuntimeIdle(state);
+  };
+}
+
+function generationReaderCount(state: GenerationRuntimeState, generationDirectory: string): number {
+  return state.activeReaders.get(generationDirectory) ?? 0;
+}
+
+function notifyGenerationRuntimeIdle(state: GenerationRuntimeState): void {
+  if (state.activeOperations !== 0 || state.activeReaders.size !== 0) return;
+  for (const resolve of [...state.idleWaiters]) resolve();
+  state.idleWaiters.clear();
+}
+
+function waitForGenerationRuntimeIdle(state: GenerationRuntimeState): Promise<void> {
+  if (state.activeOperations === 0 && state.activeReaders.size === 0) return Promise.resolve();
+  return new Promise<void>((resolve) => { state.idleWaiters.add(resolve); });
 }
 
 async function ensureDirDeep(storage: StorageAdapter, dir: string): Promise<void> {

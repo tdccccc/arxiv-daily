@@ -527,6 +527,9 @@ describe("full-text generation production orchestration", () => {
       expect(model.embed).not.toHaveBeenCalled();
     }
     expect(source.loadPaper).not.toHaveBeenCalled();
+    const maintenance = await generations.beginHostAuthorizedMaintenance();
+    await expect(maintenance.run()).resolves.toMatchObject({ removedGenerationIds: [] });
+    maintenance.release();
   });
 
   it("keeps one pinned generation while a concurrent promotion changes CURRENT", async () => {

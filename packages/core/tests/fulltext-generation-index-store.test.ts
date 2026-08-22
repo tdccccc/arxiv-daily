@@ -670,16 +670,7 @@ describe("FullTextGenerationIndexStore promotion", () => {
     expect(memory.text.has(CURRENT)).toBe(true);
     expect(memory.text.has(BACKUP)).toBe(false);
     expect(memory.binary.has(generationPath("gen-a", "objects/000.vector.bin"))).toBe(true);
-    expect(JSON.parse(memory.text.get(generationPath("gen-a", ".staging-claim.json"))!)).toMatchObject({
-      formatVersion: 1,
-      schemaVersion: 1,
-      generationId: "gen-a",
-      sourceRevision: 1,
-      scopeFingerprint: SCOPE,
-      identificationFingerprint: IDENTIFICATION,
-      descriptorChecksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      writerToken: `writer-gen-a-${"f".repeat(32)}`,
-    });
+    expect(memory.text.has(generationPath("gen-a", ".staging-claim.json"))).toBe(false);
     expect(memory.storage.readBinary).toHaveBeenCalledTimes(4); // write verification plus full pre-promotion closure validation
     expect(memory.storage.readText).toHaveBeenCalledWith(generationPath("gen-a", "descriptor.json"));
     const second = await publish(index, "gen-b", 2, { generationId: "gen-a", sourceRevision: 1 });
@@ -1809,6 +1800,151 @@ describe("canonical generation mean", () => {
     expect(mean).toEqual([0.75]);
     expect(JSON.parse(JSON.stringify(mean))).toEqual(mean);
     expect(computeCanonicalVectorMean([...blocks].reverse(), 1)).toEqual([0.25]);
+  });
+});
+
+describe("host-authorized generation maintenance", () => {
+  it("keeps local admission closed until an opened reader is explicitly closed", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const opened = await publish(index, "gen-maintenance-live", 1);
+
+    const pending = index.beginHostAuthorizedMaintenance();
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await expect(index.openCurrent()).rejects.toMatchObject({ code: "concurrent" });
+
+    await opened.close();
+    const session = await pending;
+    await expect(opened.close()).resolves.toBeUndefined();
+    await expect(opened.validateClosure()).rejects.toMatchObject({ code: "invalid" });
+    session.release();
+    await expect(index.openCurrent()).resolves.toMatchObject({ descriptor: { generationId: "gen-maintenance-live" } });
+  });
+
+  it("repairs a committed promotion claim and removes only unreferenced claimless generations", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const first = await publish(index, "gen-maintenance-first", 1);
+    await first.close();
+    const second = await publish(index, "gen-maintenance-second", 2, {
+      generationId: "gen-maintenance-first", sourceRevision: 1,
+    });
+    await second.close();
+    const third = await publish(index, "gen-maintenance-third", 3, {
+      generationId: "gen-maintenance-second", sourceRevision: 2,
+    });
+    await third.close();
+
+    memory.text.set("legacy/papers/keep.json", "authoritative legacy data");
+    memory.dirs.add("legacy/papers");
+    const orphan = "gen-maintenance-claimed-orphan";
+    memory.dirs.add(generationPath(orphan, "").replace(/\/$/, ""));
+    memory.text.set(generationPath(orphan, ".staging-claim.json"), "foreign claim");
+
+    const session = await index.beginHostAuthorizedMaintenance();
+    const report = await session.run();
+    session.release();
+
+    expect(report.removedGenerationIds).toContain("gen-maintenance-first");
+    expect(report.removedGenerationIds).not.toContain("gen-maintenance-second");
+    expect(report.removedGenerationIds).not.toContain("gen-maintenance-third");
+    expect(report.removedGenerationIds).not.toContain(orphan);
+    await expect(memory.storage.exists(generationPath(orphan, "").replace(/\/$/, ""))).resolves.toBe(true);
+    expect(memory.text.has("legacy/papers/keep.json")).toBe(true);
+    expect(report.promotionClaim).toBe("absent");
+  });
+
+  it("repairs a promotion claim only after proving that its candidate is committed", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const first = await publish(index, "gen-claim-repair-first", 1);
+    await first.close();
+    memory.setRemoveHook(async (path) => {
+      if (path === PROMOTION_CLAIM) throw new Error("promotion claim cleanup lost");
+    });
+    const second = await publish(index, "gen-claim-repair-second", 2, {
+      generationId: "gen-claim-repair-first", sourceRevision: 1,
+    });
+    await second.close();
+    memory.setRemoveHook();
+    expect(memory.text.has(PROMOTION_CLAIM)).toBe(true);
+
+    const session = await index.beginHostAuthorizedMaintenance();
+    const report = await session.run();
+    session.release();
+    expect(report.promotionClaim).toBe("repaired-committed");
+    expect(memory.text.has(PROMOTION_CLAIM)).toBe(false);
+  });
+
+  it("retains an unproven promotion claim and performs no age-based orphan cleanup", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const first = await publish(index, "gen-unproven-claim-first", 1);
+    await first.close();
+    const firstPointer = memory.text.get(CURRENT)!;
+    memory.setRemoveHook(async (path) => {
+      if (path === PROMOTION_CLAIM) throw new Error("promotion claim cleanup lost");
+    });
+    const second = await publish(index, "gen-unproven-claim-second", 2, {
+      generationId: "gen-unproven-claim-first", sourceRevision: 1,
+    });
+    await second.close();
+    memory.setRemoveHook();
+    memory.text.set(CURRENT, firstPointer);
+
+    const session = await index.beginHostAuthorizedMaintenance();
+    const report = await session.run();
+    session.release();
+
+    expect(report.promotionClaim).toBe("retained-unproven");
+    expect(report.removedGenerationIds).toEqual([]);
+    expect(memory.text.has(PROMOTION_CLAIM)).toBe(true);
+    await expect(memory.storage.exists(generationPath("gen-unproven-claim-second", "").replace(/\/$/, "")))
+      .resolves.toBe(true);
+  });
+
+  it("fails closed instead of collecting recovery candidates when cutover lost both pointers", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const opened = await publish(index, "gen-missing-pointer-maintenance", 1);
+    await opened.close();
+    await memory.storage.remove(CURRENT);
+    await memory.storage.remove(BACKUP);
+
+    const session = await index.beginHostAuthorizedMaintenance();
+    await expect(session.run()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    session.release();
+    await expect(memory.storage.exists(generationPath("gen-missing-pointer-maintenance", "").replace(/\/$/, "")))
+      .resolves.toBe(true);
+  });
+
+  it("waits for a pinned old-generation reader before collecting that generation", async () => {
+    const memory = memoryStorage();
+    const index = store(memory.storage);
+    const oldReader = await publish(index, "gen-active-old-reader", 1);
+    const current = await publish(index, "gen-active-new-reader", 2, {
+      generationId: "gen-active-old-reader", sourceRevision: 1,
+    });
+    await current.close();
+    const newest = await publish(index, "gen-active-newest-reader", 3, {
+      generationId: "gen-active-new-reader", sourceRevision: 2,
+    });
+    await newest.close();
+
+    const pending = index.beginHostAuthorizedMaintenance();
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(memory.text.has(generationPath("gen-active-old-reader", "descriptor.json"))).toBe(true);
+    await oldReader.close();
+    const session = await pending;
+    const report = await session.run();
+    session.release();
+    expect(report.removedGenerationIds).toContain("gen-active-old-reader");
   });
 });
 

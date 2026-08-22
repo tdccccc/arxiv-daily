@@ -485,4 +485,28 @@ describe("personal library full-text index lifecycle", () => {
       runtime.internals.runIncrementalDirectionUpdateAfterIndex.mock.invocationCallOrder[0],
     );
   });
+
+  it("runs generation maintenance only through an explicit host quiet-period gate", async () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    runtime.internals.scheduler = {
+      activeRuns: vi.fn(() => []),
+      stop: vi.fn(),
+      start: vi.fn(),
+    };
+    const generations = new FullTextGenerationIndexStore(
+      memory.storage,
+      runtime.internals.settings.output,
+      runtime.scopeFingerprint,
+      runtime.identificationFingerprint,
+    );
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => generations);
+    runtime.internals.operations.beginFullTextMaintenanceTransition = vi.fn(() => vi.fn());
+
+    await expect(runtime.plugin.maintainPersonalLibraryFullTextGenerations()).resolves.toMatchObject({
+      promotionClaim: "absent",
+      removedGenerationIds: [],
+    });
+    expect(runtime.internals.operations.beginFullTextMaintenanceTransition).toHaveBeenCalledTimes(1);
+  });
 });

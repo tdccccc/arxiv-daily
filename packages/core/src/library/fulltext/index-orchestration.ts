@@ -774,20 +774,24 @@ export async function searchFullTextKnowledgeBase(
   if (input.generationStore) {
     const generation = await input.generationStore.openCurrent();
     if (generation !== null) {
-      const source = input.sourceManifest ?? await input.store.loadManifest();
-      if (source.scopeFingerprint !== generation.descriptor.scopeFingerprint
-        || source.identificationFingerprint !== generation.descriptor.identificationFingerprint) {
-        throw new FullTextGenerationIndexStoreError(
-          "full-text generation and source manifest identities differ", "incompatible",
-        );
+      try {
+        const source = input.sourceManifest ?? await input.store.loadManifest();
+        if (source.scopeFingerprint !== generation.descriptor.scopeFingerprint
+          || source.identificationFingerprint !== generation.descriptor.identificationFingerprint) {
+          throw new FullTextGenerationIndexStoreError(
+            "full-text generation and source manifest identities differ", "incompatible",
+          );
+        }
+        if (source.revision !== generation.descriptor.sourceRevision) {
+          throw new FullTextGenerationIndexStoreError(
+            "full-text generation is stale relative to the committed source manifest", "stale-source",
+            generation.descriptor.sourceRevision, source.revision,
+          );
+        }
+        return await searchOpenedGeneration(input, generation);
+      } finally {
+        await generation.close();
       }
-      if (source.revision !== generation.descriptor.sourceRevision) {
-        throw new FullTextGenerationIndexStoreError(
-          "full-text generation is stale relative to the committed source manifest", "stale-source",
-          generation.descriptor.sourceRevision, source.revision,
-        );
-      }
-      return searchOpenedGeneration(input, generation);
     }
   }
   const manifest = input.sourceManifest ?? await input.store.loadManifest();
