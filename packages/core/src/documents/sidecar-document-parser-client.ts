@@ -1,5 +1,5 @@
 import type { HttpClient } from "../core/adapters";
-import type { DocumentParser, ParseDocumentOptions, ParsedDocument } from "./parsed-document";
+import type { DocumentParser, DocumentParserSelector, ParseDocumentOptions, ParsedDocument } from "./parsed-document";
 import {
   MAX_SIDECAR_RESPONSE_BYTES,
   decodeSidecarParseResponse,
@@ -118,6 +118,28 @@ export class LoopbackSidecarDocumentParser implements DocumentParser {
       throw new SidecarDocumentParserError("invalid-response", "sidecar response exceeds its declared capabilities", { cause: caught });
     }
     return parsed.document;
+  }
+}
+
+/** Per-document sidecar fallback that preserves the identity of the parser that won. */
+export class SidecarFallbackDocumentParserSelector implements DocumentParserSelector {
+  readonly preferredParser: Pick<DocumentParser, "capabilities" | "provenance">;
+
+  constructor(
+    private readonly sidecar: LoopbackSidecarDocumentParser,
+    private readonly fallback: DocumentParser,
+  ) {
+    this.preferredParser = sidecar;
+  }
+
+  async parse(bytes: Uint8Array, options?: ParseDocumentOptions) {
+    try {
+      return { document: await this.sidecar.parse(bytes, options), parser: this.sidecar };
+    } catch (caught) {
+      options?.signal?.throwIfAborted();
+      if (!(caught instanceof SidecarDocumentParserError)) throw caught;
+      return { document: await this.fallback.parse(bytes, options), parser: this.fallback };
+    }
   }
 }
 

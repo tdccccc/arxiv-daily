@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HttpClient, HttpRequest, HttpResponse } from "../src/core/adapters";
 import {
+  SidecarFallbackDocumentParserSelector,
   SidecarDocumentParserError,
   probeLoopbackSidecarParser,
 } from "../src/documents/sidecar-document-parser-client";
+import type { DocumentParser } from "../src/documents/parsed-document";
 
 const parser = { id: "docling", version: "2.0" };
 
@@ -107,5 +109,81 @@ describe("loopback sidecar document parser", () => {
       parseUrl: "http://127.0.0.1:5001/v1/parse",
     });
     await expect(sidecar.parse(new Uint8Array([1]))).rejects.toMatchObject({ kind: "invalid-response" });
+  });
+
+  it("falls back after a sidecar failure and returns the fallback parser identity", async () => {
+    const fixture = http([
+      {
+        status: 200,
+        headers: {},
+        bodyText: JSON.stringify({
+          protocolVersion: 1,
+          parser,
+          capabilities: ["page-text", "document-structure"],
+          maxRequestBytes: 1_000,
+          maxResponseBytes: 1_000,
+        }),
+      },
+      { status: 503, headers: {}, bodyText: "unavailable" },
+    ]);
+    const sidecar = await probeLoopbackSidecarParser({
+      http: fixture.client,
+      capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+      parseUrl: "http://127.0.0.1:5001/v1/parse",
+    });
+    const fallback: DocumentParser = {
+      capabilities: ["page-text"],
+      provenance: { id: "pdfjs", version: "4.10" },
+      parse: vi.fn(async () => ({
+        mediaType: "application/pdf",
+        blocks: [{ kind: "page", text: "Fallback page", locator: { page: 1, block: 0 } }],
+      })),
+    };
+
+    const selected = await new SidecarFallbackDocumentParserSelector(sidecar, fallback)
+      .parse(new Uint8Array([1]));
+
+    expect(selected.parser.provenance).toEqual(fallback.provenance);
+    expect(selected.document.blocks).toMatchObject([{ kind: "page", text: "Fallback page" }]);
+    expect(fallback.parse).toHaveBeenCalledOnce();
+  });
+
+  it("does not fall back when the sidecar parse is cancelled", async () => {
+    const controller = new AbortController();
+    const client: HttpClient = {
+      request: vi.fn(async (request: HttpRequest) => {
+        if (request.method === "GET") {
+          return {
+            status: 200,
+            headers: {},
+            bodyText: JSON.stringify({
+              protocolVersion: 1,
+              parser,
+              capabilities: ["page-text"],
+              maxRequestBytes: 1_000,
+              maxResponseBytes: 1_000,
+            }),
+          };
+        }
+        controller.abort();
+        throw new DOMException("cancelled", "AbortError");
+      }),
+    };
+    const sidecar = await probeLoopbackSidecarParser({
+      http: client,
+      capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+      parseUrl: "http://127.0.0.1:5001/v1/parse",
+    });
+    const fallback: DocumentParser = {
+      capabilities: ["page-text"],
+      provenance: { id: "pdfjs", version: "4.10" },
+      parse: vi.fn(async () => ({ mediaType: "application/pdf", blocks: [] })),
+    };
+
+    await expect(new SidecarFallbackDocumentParserSelector(sidecar, fallback).parse(
+      new Uint8Array([1]),
+      { signal: controller.signal },
+    )).rejects.toMatchObject({ name: "AbortError" });
+    expect(fallback.parse).not.toHaveBeenCalled();
   });
 });

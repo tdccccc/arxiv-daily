@@ -16,7 +16,7 @@ import {
   decodeFullTextPaperDocument,
   serializeFullTextPaperDocument,
 } from "../src/library/fulltext/knowledge-base";
-import type { DocumentParser } from "../src/documents/parsed-document";
+import type { DocumentParser, DocumentParserSelector } from "../src/documents/parsed-document";
 import type { EmbeddingModel, PdfTextExtractor } from "../src/library/fulltext/ports";
 import { FullTextKnowledgeBaseStoreError } from "../src/library/fulltext/knowledge-base-store";
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
@@ -271,6 +271,65 @@ describe("full-text indexing orchestration", () => {
     expect(document?.derivation?.parser).toEqual(parser.provenance);
     expect(document?.chunks[0]?.headings).toEqual(["Methods"]);
     expect(document?.chunks[0]?.locator).toEqual({ pageStart: 2, pageEnd: 2, blockStart: 1, blockEnd: 1 });
+  });
+
+  it("persists the actual parser selected for each indexed document", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/sidecar.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2501.00001", filePaths: ["lib/fallback.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    const sidecar: DocumentParser = {
+      capabilities: ["page-text", "document-structure"],
+      provenance: { id: "docling", version: "2.0" },
+      async parse() { throw new Error("selector owns sidecar parsing"); },
+    };
+    const fallback: DocumentParser = {
+      capabilities: ["page-text"],
+      provenance: { id: "pdfjs", version: "4.10" },
+      async parse() { throw new Error("selector owns fallback parsing"); },
+    };
+    const selector: DocumentParserSelector = {
+      preferredParser: sidecar,
+      async parse(bytes) {
+        const path = new TextDecoder().decode(bytes);
+        if (path === "lib/sidecar.pdf") {
+          return {
+            parser: sidecar,
+            document: {
+              mediaType: "application/pdf",
+              blocks: [
+                { kind: "heading", text: "Methods", headingLevel: 1, locator: { page: 2, block: 0 } },
+                { kind: "paragraph", text: LONG_ALPHA, locator: { page: 2, block: 1 } },
+              ],
+            },
+          };
+        }
+        return {
+          parser: fallback,
+          document: {
+            mediaType: "application/pdf",
+            blocks: [{ kind: "page", text: LONG_BETA, locator: { page: 1, block: 0 } }],
+          },
+        };
+      },
+    };
+    const store = new MemoryStore();
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      parserSelector: selector,
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const sidecarDocument = await store.loadPaper("arxiv:2403.19236");
+    const fallbackDocument = await store.loadPaper("arxiv:2501.00001");
+    expect(sidecarDocument?.derivation?.parser).toEqual(sidecar.provenance);
+    expect(sidecarDocument?.chunks[0]?.headings).toEqual(["Methods"]);
+    expect(fallbackDocument?.derivation?.parser).toEqual(fallback.provenance);
+    expect(fallbackDocument?.chunks[0]?.headings).toEqual([]);
   });
 
   it("re-indexes unchanged v2 content when parser derivation changes", async () => {

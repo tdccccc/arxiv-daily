@@ -20,7 +20,7 @@ import type { Logger } from "../../services/logger";
 import { sha256Hex } from "../../utils/digest";
 import type { PersonalLibraryCatalog } from "../personal-library-catalog";
 import type { ScopedLibrarySource } from "../scoped-library-source";
-import type { DocumentParser, ParsedDocument, ParserCapability } from "../../documents/parsed-document";
+import type { DocumentParser, DocumentParserSelector, ParsedDocument, ParserCapability } from "../../documents/parsed-document";
 import { chunkFullText, chunkParsedDocument } from "./chunking";
 import {
   FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
@@ -80,6 +80,8 @@ export interface IndexPersonalLibraryFullTextInput {
   source: ScopedLibrarySource;
   /** Structured parser preferred for new writes; extractor remains a compatible legacy input. */
   parser?: DocumentParser;
+  /** Per-document parser selection for optional parser fallback paths. */
+  parserSelector?: DocumentParserSelector;
   extractor?: PdfTextExtractor;
   embedding: EmbeddingModel;
   store: FullTextKnowledgeBaseStore;
@@ -98,12 +100,12 @@ export async function indexPersonalLibraryFullText(
 ): Promise<FullTextIndexRunSummary> {
   throwIfCancelled(input.signal);
   const { catalog, source, embedding, store } = input;
-  if (!input.parser && !input.extractor) {
+  if (!input.parser && !input.parserSelector && !input.extractor) {
     throw new Error("full-text indexing requires a parser or extractor");
   }
   const log = input.logger;
   const expectedDerivation: EvidenceDerivation = {
-    parser: input.parser?.provenance ?? LEGACY_PARSER_PROVENANCE,
+    parser: input.parserSelector?.preferredParser.provenance ?? input.parser?.provenance ?? LEGACY_PARSER_PROVENANCE,
     ...CHUNK_DERIVATION_VERSIONS,
   };
   const nowIso = (input.now ?? (() => new Date()))().toISOString();
@@ -221,6 +223,7 @@ export async function indexPersonalLibraryFullText(
                 refreshTitle,
                 source,
                 parser: input.parser,
+                parserSelector: input.parserSelector,
                 extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
@@ -240,6 +243,7 @@ export async function indexPersonalLibraryFullText(
                 refreshTitle: false,
                 source,
                 parser: input.parser,
+                parserSelector: input.parserSelector,
                 extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
@@ -303,6 +307,7 @@ export async function indexPersonalLibraryFullText(
         extractTitle: unit.fallback,
         source,
         parser: input.parser,
+        parserSelector: input.parserSelector,
         extractor: input.extractor,
         embedding,
         nowIso,
@@ -491,6 +496,7 @@ async function buildPaperDocument(input: {
   extractTitle?: boolean;
   source: ScopedLibrarySource;
   parser?: DocumentParser;
+  parserSelector?: DocumentParserSelector;
   extractor?: PdfTextExtractor;
   embedding: EmbeddingModel;
   nowIso: string;
@@ -558,6 +564,7 @@ async function rebindFallbackDocument(input: {
   refreshTitle: boolean;
   source: ScopedLibrarySource;
   parser?: DocumentParser;
+  parserSelector?: DocumentParserSelector;
   extractor?: PdfTextExtractor;
   nowIso: string;
   signal?: AbortSignal;
@@ -583,7 +590,7 @@ async function rebindFallbackDocument(input: {
 }
 
 async function parseIndexDocument(
-  input: { parser?: DocumentParser; extractor?: PdfTextExtractor; signal?: AbortSignal },
+  input: { parser?: DocumentParser; parserSelector?: DocumentParserSelector; extractor?: PdfTextExtractor; signal?: AbortSignal },
   bytes: Uint8Array,
 ): Promise<{
   extraction: PdfExtractionResult;
@@ -591,6 +598,19 @@ async function parseIndexDocument(
   capabilities: readonly ParserCapability[];
   derivation: EvidenceDerivation;
 }> {
+  if (input.parserSelector) {
+    const selected = await input.parserSelector.parse(bytes, { signal: input.signal });
+    const document = selected.document;
+    const parser = selected.parser;
+    return {
+      extraction: parser.capabilities.includes("document-structure")
+        ? structuredDocumentExtraction(document)
+        : parsedDocumentToPdfExtractionResult(document, parser.capabilities),
+      document,
+      capabilities: parser.capabilities,
+      derivation: { parser: parser.provenance, ...CHUNK_DERIVATION_VERSIONS },
+    };
+  }
   if (input.parser) {
     const document = await input.parser.parse(bytes, { signal: input.signal });
     return {

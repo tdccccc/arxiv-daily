@@ -65,3 +65,21 @@ export interface DocumentParser {
   readonly provenance: { readonly id: string; readonly version: string };
   parse(bytes: Uint8Array, options?: ParseDocumentOptions): Promise<ParsedDocument>;
 }
+
+export interface ParsedDocumentSelection {
+  readonly document: ParsedDocument;
+  readonly parser: Pick<DocumentParser, "capabilities" | "provenance">;
+}
+
+/** A parser that may choose a different declared identity for each document. */
+export interface DocumentParserSelector {
+  readonly preferredParser: Pick<DocumentParser, "capabilities" | "provenance">;
+  parse(bytes: Uint8Array, options?: ParseDocumentOptions): Promise<ParsedDocumentSelection>;
+}
+
+export function selectDocumentParser(parser: DocumentParser): DocumentParserSelector {
+  return {
+    preferredParser: parser,
+    parse: async (bytes, options) => ({ document: await parser.parse(bytes, options), parser }),
+  };
+}
