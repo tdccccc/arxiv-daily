@@ -10,7 +10,7 @@ updated: 2026-08-22
 ## Assumptions
 
 - P4b 的 immutable generation、一次性 legacy fallback 与按 document derivation 重建已具备充分的单元和组合测试；P7 的重点是补齐端到端迁移、规模和真实宿主证据，而不是重写索引格式或检索排序。
-- 当前容器可运行 Node、Core、Plugin 和 CLI 自动化测试，但无法启动并人工操作桌面 Obsidian；实际桌面验证需要具有该宿主的隔离 Vault 环境。
+- 当前机器可运行 Node、Core、Plugin、CLI 自动化测试和本地 Obsidian desktop；仓库中没有现成隔离 Vault，实际 UI 验收必须在 `/tmp` 下创建并在结束后删除的最小环境执行。
 - 既有 lint warning cap、smoke `canvas` 文本和 1 MiB submission bundle 限制均是已经记录的仓库基线，是否修复或正式豁免必须通过可复现检查决定。
 
 ## Approach
@@ -27,7 +27,7 @@ updated: 2026-08-22
 
 ## Tasks
 
-- [ ] 建立 P7 验收矩阵：将现有迁移、generation reuse/rebuild、受限 heap、路径和 PDF 页面降级证据映射到成功标准，并指出仍未覆盖的可执行契约。
+- [x] 建立 P7 验收矩阵：将现有迁移、generation reuse/rebuild、受限 heap、路径和 PDF 页面降级证据映射到成功标准，并指出仍未覆盖的可执行契约。
 - [ ] 补齐并验收旧版 knowledge-base 到 generation 的真实迁移、失败保留 prior current、parser/sidecar derivation 改变后的重建与搜索兼容性；不删除唯一 legacy source。
 - [ ] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。
 - [ ] 完成 Node、Plugin 与 CLI 的自动化兼容性和权限边界回归；确认 sidecar 默认关闭、失败回退和页码降级不扩大 consent 或路径权限。
@@ -36,8 +36,10 @@ updated: 2026-08-22
 
 ## Verification
 
-- P7 尚未开始执行；P6 移交时自动化回归为 Core 113 files / 2,015 tests、Plugin 41 files / 622 tests、Node runtime 3 files / 45 tests、CLI 7 files / 71 tests，且 typecheck、boundaries、product units、production build 与 diff check 全部通过。
+- P7 initial baseline: P6 移交时自动化回归为 Core 113 files / 2,015 tests、Plugin 41 files / 622 tests、Node runtime 3 files / 45 tests、CLI 7 files / 71 tests，且 typecheck、boundaries、product units、production build 与 diff check 全部通过。
 - 已知基线：lint 65 warnings / cap 60；elevated smoke build 的 plugin bundle `canvas` forbidden-text；Obsidian submission 的约 1.53 MiB bundle 超过 1 MiB 限制。
+- P7.1 acceptance matrix (2026-08-22): Core migration/reuse/rebuild、prior-current preservation、schema/cutover fail-closed 和 parser derivation 由 4 files / 79 tests 复现；其中 `generation-index-orchestration` 覆盖 exact reuse、derivation/source change、prior current、stale source 与 pinned reader，`fulltext-index-orchestration` 覆盖 legacy source 与 v2 derivation rebuild。4 MiB split、linear builder work、fixed dense/BM25/RRF metrics 由同次 Core suite 覆盖。
+- P7.1 acceptance matrix (continued): Node 2 files / 20 tests 复现 durable spool/generation composition 和 scoped-library path boundary。Plugin 3 files / 64 tests 复现旧 settings 的 disabled sidecar migration、disabled no-probe/enabled probe-fallback、sidecar change cancellation、PDF `#page=N` action 与 host-rejected page navigation fallback。Core/Node/Plugin automated coverage is Green; remaining evidence gaps are an isolated real Obsidian desktop interaction, current full workspace/release-gate results, and a decision to repair or waive each release baseline.
 
 ## Abort / reshape triggers
 
