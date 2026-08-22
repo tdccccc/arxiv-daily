@@ -28,7 +28,7 @@ updated: 2026-08-22
 
 ## Tasks
 
-- [ ] 定义并验收 loopback-only sidecar capability 与 parse transport contract：无 path/root 字段、严格 byte/response 上限、version/capability/provenance 验证和 fail-closed decode。
+- [x] 定义并验收 loopback-only sidecar capability 与 parse transport contract：无 path/root 字段、严格 byte/response 上限、version/capability/provenance 验证和 fail-closed decode。
 - [ ] 实现并验收可选 client/parser adapter：未启用时不调用 endpoint，probe/transport/schema/cancel failure 全部回退 PDF.js，sidecar 不影响 Core 或 default local path。
 - [ ] 将用户显式 enable、endpoint loopback 校验、能力诊断与 parser selection 接入 host，并验证 consent/配置改变会停用或重建派生索引而不扫描任意目录。
 - [ ] 在获授权的本地 Docling-only environment 对真实复杂论文 corpus 运行预先定义的结构/定位评测，记录选择证据；仅在缺口可复现时评估 GROBID enrichment。
@@ -38,6 +38,8 @@ updated: 2026-08-22
 ## Verification
 
 - Capability baseline (2026-08-22): Python 3.12.3、Docker/Podman 命令可用；`docling`、`grobid` 与现成 sidecar 均不可用。尚未取得 provider-choice 或 real-corpus evidence。
+- P6.1 observed Red：Core 没有 sidecar contract/client，无法证明 capability probe 不带 PDF/path，或 parse request 不会传递 library root/logical path；未经 schema、response-size、provenance 与 declared capability 验证的 JSON 不能进入 `ParsedDocument`。
+- P6.1 Green：Core 定义 protocol v1 capability/parse decoder 和同 origin、IP-literal loopback HTTP client。capability probe 为无 body GET；parse 为含 `application/pdf` body 的单一 `ArrayBuffer` POST。未知字段（含 path）、非 loopback/cross-origin、越界 request/response、HTTP/JSON/schema/provenance/capability mismatch 均 typed fail-closed。定向 Core 2 files / 8 tests、Core typecheck、`check:boundaries` 与 `git diff --check` 通过。实现提交为 `7ec3e2e` 与 `3a5426a`。
 
 ## Abort / reshape triggers
 

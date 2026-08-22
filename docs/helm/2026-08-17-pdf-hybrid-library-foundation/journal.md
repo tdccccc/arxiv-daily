@@ -77,3 +77,11 @@
 - change: accepted P5 and committed the implementation as `a490274` (`feat(fulltext): surface evidence in search results`). Before every open action, the plugin rechecks the current manifest plus the selected source's root/logical-path/no-symlink boundary. Vault PDF page subpaths and external encoded file URLs both retain a visible page-number fallback.
 - disposition: keep the PDF viewer fragment as a best-effort host capability, not a coordinate/highlight claim. P7 owns actual cross-platform Obsidian viewer confirmation and release-gate baselines.
 - next: P6 begins with sidecar capability/protocol discovery: select Docling-only or Docling plus GROBID from complex-paper evidence, and define a per-document byte transport that cannot expose arbitrary library traversal.
+
+## 2026-08-22 — P6.1 loopback contract checkpoint
+
+- evidence: no real Docling/GROBID provider is installed, but the existing host-neutral `HttpClient` accepts `ArrayBuffer` request bodies and Core already owns the structured `DocumentParser` contract. The accepted protocol separates probe from parse: probe sends no body; parse sends only one PDF byte buffer and never a root, path, glob, or inventory.
+- verification: Core sidecar protocol/client tests passed 2 files / 8 tests; Core typecheck, `check:boundaries` and `git diff --check` passed.
+- change: accepted protocol v1 decoder and loopback client as `7ec3e2e` (`feat(parser): add sidecar protocol decoder`) and `3a5426a` (`feat(parser): add loopback sidecar client`). Parser provenance and declared capabilities are rechecked after every parse response, giving the host a typed failure boundary for PDF.js fallback.
+- disposition: keep the client unselected and inert until an explicit host configuration and capability probe exist. The contract intentionally permits only `127.0.0.1`/`[::1]`, one shared origin, HTTP without credentials/query/hash, and bounded JSON/PDF payloads.
+- next: write failing selector tests showing no endpoint activity when sidecar is disabled and PDF.js fallback after every sidecar failure; do not install a provider until the contract is connected and the user authorizes dependency acquisition.
