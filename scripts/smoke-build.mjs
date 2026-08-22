@@ -59,8 +59,18 @@ const bundle = await readFile(pluginBundle, "utf8");
 if (bundle.includes("getBuiltinModule")) {
   throw new Error("plugin/main.js must not depend on process.getBuiltinModule");
 }
-for (const forbidden of ["@arxiv-daily/", "linkedom", "canvas"]) {
+for (const forbidden of ["@arxiv-daily/", "linkedom"]) {
   if (bundle.includes(forbidden)) throw new Error(`plugin/main.js contains forbidden text: ${forbidden}`);
+}
+for (const forbidden of [
+  /(?:require|import)\(["']canvas["']\)/,
+  /from\s+["']canvas["']/,
+  /(?:require|import)\(["']onnxruntime-node["']\)/,
+  /from\s+["']onnxruntime-node["']/,
+]) {
+  if (forbidden.test(bundle)) {
+    throw new Error(`plugin/main.js contains forbidden native dependency import: ${forbidden}`);
+  }
 }
 const runtimeRequires = new Set(
   Array.from(bundle.matchAll(/require\(["']([^"']+)["']\)/g), (match) => match[1]),

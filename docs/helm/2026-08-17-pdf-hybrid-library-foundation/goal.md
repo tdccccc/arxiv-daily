@@ -1,7 +1,7 @@
 # PDF 解析与混合检索基础（PDF parsing and hybrid retrieval foundation）
 
 status: active
-updated: 2026-08-22
+updated: 2026-08-23
 owner: codex-main-session
 
 ## Intent

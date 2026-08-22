@@ -6,7 +6,7 @@ import {
   checkBundle,
   checkManifest,
   checkRepoFiles,
-  OBSIDIAN_BUNDLE_LIMIT_BYTES,
+  OBSIDIAN_BUNDLE_BUDGET_BYTES,
   OBSIDIAN_DESCRIPTION_LIMIT,
   root,
 } from "../check-obsidian-submission.mjs";
@@ -94,7 +94,7 @@ test("checkBundle flags unsafe DOM injection and global app access", () => {
 });
 
 test("checkBundle flags an oversized bundle", () => {
-  const big = "x".repeat(OBSIDIAN_BUNDLE_LIMIT_BYTES + 1);
+  const big = "x".repeat(OBSIDIAN_BUNDLE_BUDGET_BYTES + 1);
   assert.ok(checkBundle(big).some((i) => i.includes("exceeds")));
 });
 

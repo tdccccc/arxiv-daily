@@ -1,6 +1,5 @@
 import {
   Notice,
-  setIcon,
   ToggleComponent,
   type Setting,
 } from "obsidian";
