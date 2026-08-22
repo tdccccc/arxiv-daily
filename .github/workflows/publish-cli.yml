@@ -77,11 +77,13 @@ jobs:
         run: |
           npm run check:release-version -- "$VERSION"
           npm run test:release-tools
+          npm audit --audit-level=moderate
           npm run check:boundaries
           npm run lint
           npm run typecheck
           NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1
           npm run build
           npm run smoke:build
+          npm run smoke:install
       - name: Publish CLI with trusted publishing
         run: npm publish --workspace apps/cli --access public

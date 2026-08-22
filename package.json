@@ -30,6 +30,7 @@
     "smoke:build": "node scripts/smoke-build.mjs",
     "test:release-tools": "node --test scripts/tests/*.test.mjs && npm run check:product-units",
     "check:obsidian-submission": "node scripts/check-obsidian-submission.mjs",
+    "smoke:install": "node scripts/install-smoke.mjs",
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
