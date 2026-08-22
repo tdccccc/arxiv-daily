@@ -36,7 +36,7 @@ updated: 2026-08-22
 - [x] 实现并验收 production generation builder：从 committed manifest snapshot 按 paperKey code-unit 顺序逐篇校验并读取 ready documents，经 bounded storage spool 生成 paired vector/evidence、metadata、postings、dictionary 与 descriptor，再以 one-shot iterator replay 到 transactional store；单篇 source 不一致使本代失败，所有完成、拒绝和失败路径关闭 iterator 并释放 spool。
 - [x] 实现并验收首次迁移与生产编排：legacy manifest commit 后同步 generation；同 revision/derivation 整代复用，source revision 变化时流式重建，失败保留旧 current。搜索 pin 单一 current 并使用 generation dense/BM25/RRF；仅从未存在 current 的迁移窗口允许 legacy fallback，valid/corrupt/incompatible current 不静默降级，已提交 generation 查询的 legacy `loadPaper` 为 0。
 - [x] 实现并验收宿主静默期 maintenance：opened handle 显式释放和 process-local active tracking；宿主停止 admission 并等待操作 settle 后，保守修复可证明残留的 promotion claim，枚举并仅清理非 current/backup、无 claim、无 active reader 的已知 generation；不按时间偷取、不做未授权跨进程在线 GC。
-- [ ] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
+- [x] 完成固定评测、受限 heap 合成规模、Node/Obsidian composition、跨平台路径语义和全量回归验收。
 
 ## Verification
 
@@ -63,6 +63,8 @@ updated: 2026-08-22
 - P4b.7 Green：opened handle 有显式且幂等的 `close()`，所有 production synchronization/search/preflight 路径在 `finally` 中释放；runtime-local admission gate 会等待 active operation 和 reader settle。插件仅在 scheduler idle、operations 独占且 scheduler 已停止的宿主静默期调用 maintenance。maintenance 只删除非 current/backup、无 staging/promotion claim、无 active reader 的已知 generation；仅在 candidate 已是完整可验证的 CURRENT 且 claim/pointer 双次读回一致时修复 promotion claim，任何不确定性均保留并禁止收集。
 - P4b.7 verification：定向 Core 96 项和 Plugin lifecycle 11 项通过；8 GiB heap 下完整 Core 111 files / 2,000 tests、Plugin 38 files / 602 tests、Node runtime 3 files / 45 tests 通过；workspace typecheck、`check:boundaries`、`check:product-units`、production build 与 `git diff --check` 通过。默认 Node heap 的完整 Core 运行在无断言失败后达到 heap 上限；8 GiB 是本阶段既定的受限 heap 验收配置，最终 Green 以该运行取得。
 - P4b.7 technical-report handoff：`no-impact`；宿主授权的 generation maintenance 只维护可删除的全文派生投影，不改变 catalog、方向、日报或 consent 领域契约。
+- P4b final acceptance：固定 graded corpus 继续锁定 dense/BM25/RRF 的 Recall@k、MRR、nDCG 和 P3 等价；120-paper BM25 fixture 锁定 candidate/hit/block 上限，builder 的 7 个大 chunk fixture 迫使 4 MiB object 切分并以真实 store closure 证明覆盖。Node composition 持久化 spool、promotion 和 generation search，plugin lifecycle 保持 manifest snapshot 与 cutover fail-closed；Node adapter 将反斜杠规范为 vault-relative `/` 路径。8 GiB heap 下完整 Core 111 files / 2,000 tests、Node runtime 3 files / 45 tests、CLI 7 files / 71 tests、Plugin 38 files / 602 tests、typecheck、boundary、product-unit 与 production build 通过。根 `npm test` 的 Core 子任务在默认 Node heap 触顶，使用本阶段既定 8 GiB 配置通过；lint 仍为无新增 error 的既有 65 warnings/60 cap 基线，升级权限的 smoke build 仅复现既有 plugin bundle `canvas` forbidden-text 基线。
+- P4b final technical-report handoff：`no-impact`；P4b 只替换全文派生索引的持久化和查询实现，未改变 catalog、方向、日报或 consent 的领域关系。
 - 阶段硬门：已提交 generation 查询的 `legacyPaperLoads` 为 0；每个 binary object 与同时驻留 block 数有固定上限；lexical 不扫描无关 chunk text；dense 不创建 corpus-sized vector array。
 - 阶段质量门：P3 固定 corpus 的 dense、BM25、hybrid 排名和 Recall@k、MRR、nDCG 不回归。
 
