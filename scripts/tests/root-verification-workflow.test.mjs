@@ -58,7 +58,7 @@ const expectedWorkflow = {
       "runs-on": "ubuntu-latest",
       strategy: {
         "fail-fast": false,
-        matrix: { "node-version": ["20.11.0", "22.17.0"] },
+        matrix: { "node-version": ["20.19.0", "22.17.0"] },
       },
       steps: [
         {

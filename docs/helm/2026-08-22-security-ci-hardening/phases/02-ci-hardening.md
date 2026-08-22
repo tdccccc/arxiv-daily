@@ -10,7 +10,7 @@ PR 和发布 CI 持续验证依赖安全、Node 20/22 兼容性、CLI 安装产�
 
 ## Assumptions
 
-- GitHub Actions runner 可使用 Node 20.11.0 和 Node 22.17.0，并允许 CodeQL security-events 写入。
+- GitHub Actions runner 可使用 Node 20.19.0 和 Node 22.17.0，并允许 CodeQL security-events 写入。
 - Obsidian 没有可在 GitHub-hosted runner 中稳定启动的官方 headless GUI；现有 happy-dom renderer contract 是 settings UI 的可执行回归边界。
 
 ## Approach
@@ -21,7 +21,7 @@ PR 和发布 CI 持续验证依赖安全、Node 20/22 兼容性、CLI 安装产�
 
 - change kind: CI/product governance
 - strategy: strict Red-Green-Refactor
-- Red / baseline signal: root audit 为 1 moderate / 4 high，Relay audit 为 2 moderate / 5 high；workflow invariant 不包含 audit、matrix、CodeQL、Dependabot 或 package-install contract。
+- Red / baseline signal: root audit 为 1 moderate / 4 high，Relay audit 为 2 moderate / 5 high；Node 20.11.0 兼容 job 暴露 Vite/Clack 的实际 engine 约束；workflow invariant 不包含 audit、matrix、CodeQL、Dependabot 或 package-install contract。
 - Green / regression checks: 58 个 release/CI invariant、root/Relay audit 0、完整 workspace suite、topic UI 定向测试、Relay 141 tests、typecheck、build、Obsidian submission、build smoke 和 CLI install smoke 全部通过。
 - exception: 未增加真实 Obsidian GUI E2E，因为仓库没有可复现的 headless Obsidian runtime；以 production settings renderer 的 happy-dom contract 定向测试和发布 submission/build checks 作为补偿验证。
 
