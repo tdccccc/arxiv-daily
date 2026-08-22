@@ -30,7 +30,7 @@ updated: 2026-08-22
 
 - [x] 定义并验收 loopback-only sidecar capability 与 parse transport contract：无 path/root 字段、严格 byte/response 上限、version/capability/provenance 验证和 fail-closed decode。
 - [x] 实现并验收 host-neutral per-parse selector 与可选 client/parser adapter：每次 parse 持久化实际获胜的 capabilities/provenance，per-parse sidecar failure 以 PDF.js identity 回退，cancel 不降级，旧 `DocumentParser` 路径保持兼容。
-- [ ] 将用户显式 enable、endpoint loopback 校验、能力诊断与 parser selection 接入 host：未启用时绝不 probe/request，probe/transport/schema failure 以 PDF.js identity 继续，并验证 consent/配置改变会停用或重建派生索引而不扫描任意目录。
+- [x] 将用户显式 enable、endpoint loopback 校验、能力诊断与 parser selection 接入 host：未启用时绝不 probe/request，probe/transport/schema failure 以 PDF.js identity 继续；sidecar 是本地 byte-only 处理，不扩大 remote consent，配置改变会取消活跃 index，后续运行按实际 parser derivation 重建受影响投影且不扫描任意目录。
 - [ ] 在获授权的本地 Docling-only environment 对真实复杂论文 corpus 运行预先定义的结构/定位评测，记录选择证据；仅在缺口可复现时评估 GROBID enrichment。
 - [ ] 如评测选择保留 Docling-only，完成 production hardening；如选择 enrichment，先 L2 reshape P6 protocol/operation plan，再实现第二 provider。
 - [ ] 完成 P6 全量回归与实际 host validation。
