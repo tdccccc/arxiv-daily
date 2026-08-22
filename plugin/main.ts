@@ -69,6 +69,9 @@ FullTextKnowledgeBaseFileStore,
 FullTextGenerationIndexStore,
 indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
 searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
+probeLoopbackSidecarParser,
+SidecarDocumentParserError,
+SidecarFallbackDocumentParserSelector,
 preflightFullTextGenerationSynchronization,
 synchronizeFullTextGenerationIndex,
 IncrementalSuggestionsStore,
@@ -466,19 +469,24 @@ export default class ArxivDailyPlugin extends Plugin {
       setScheduleEnabled: (enabled) => this.applyScheduleEnabledRuntime(enabled),
       refreshSensitiveValues: () => this.refreshSensitiveValues(),
       prepareCandidateChange: (previous, candidate, changedKeys) => {
-        if (!changedKeys.includes("llm.baseUrl")) return undefined;
-        const previousEndpoint = this.effectiveLlmEndpoint(previous.llm.baseUrl);
-        const nextEndpoint = this.effectiveLlmEndpoint(candidate.llm.baseUrl);
-        if (previousEndpoint === nextEndpoint) return undefined;
-        const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
-          "model endpoint changed",
-        );
-        this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
-        return () => {
-          if (discoveryRevision !== undefined) {
-            this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
+        let rollback: (() => void) | undefined;
+        if (changedKeys.includes("llm.baseUrl")) {
+          const previousEndpoint = this.effectiveLlmEndpoint(previous.llm.baseUrl);
+          const nextEndpoint = this.effectiveLlmEndpoint(candidate.llm.baseUrl);
+          if (previousEndpoint !== nextEndpoint) {
+            const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+              "model endpoint changed",
+            );
+            this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
+            rollback = () => {
+              if (discoveryRevision !== undefined) {
+                this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
+              }
+            };
           }
-        };
+        }
+        this.preparePdfParserSidecarSettingsChange(changedKeys);
+        return rollback;
       },
     });
 
@@ -1558,6 +1566,29 @@ export default class ArxivDailyPlugin extends Plugin {
     return createTransformersEmbeddingModel();
   }
 
+  /** Build the selected local parser without exposing library paths to a sidecar. */
+  private async buildFullTextDocumentParser(signal?: AbortSignal) {
+    const fallback = new ObsidianPdfDocumentParser();
+    const sidecar = this.settings.pdfParserSidecar;
+    if (!sidecar.enabled) return { parser: fallback };
+    try {
+      const probed = await probeLoopbackSidecarParser({
+        http: this.host.http,
+        capabilitiesUrl: sidecar.capabilitiesUrl,
+        parseUrl: sidecar.parseUrl,
+        signal,
+      });
+      return {
+        parserSelector: new SidecarFallbackDocumentParserSelector(probed, fallback),
+      };
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!(error instanceof SidecarDocumentParserError)) throw error;
+      this.logger.warn("fulltext: local PDF parser sidecar probe failed; using PDF.js", error);
+      return { parser: fallback };
+    }
+  }
+
   /**
    * Remote embedding sends full-text chunks to a named endpoint, so it needs
    * a valid remote configuration AND full-text processing authorization
@@ -1624,7 +1655,7 @@ export default class ArxivDailyPlugin extends Plugin {
       // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
-      const parser = new ObsidianPdfDocumentParser();
+      const parser = await this.buildFullTextDocumentParser(operation.signal);
       this.assertRemoteEmbeddingReady();
       const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
@@ -1642,7 +1673,7 @@ export default class ArxivDailyPlugin extends Plugin {
       const summary = await indexFullTextKnowledgeBase({
         catalog,
         source,
-        parser,
+        ...parser,
         embedding,
         store,
         logger: this.logger,
@@ -2917,6 +2948,14 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private cancelPersonalLibraryDirectionGeneration(reason: string): void {
     this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-direction-generation"]);
+  }
+
+  private preparePdfParserSidecarSettingsChange(changedKeys: readonly string[]): void {
+    if (!changedKeys.some((key) => key.startsWith("pdfParserSidecar."))) return;
+    this.cancelPersonalLibraryOperationKinds(
+      "local PDF parser sidecar settings changed",
+      ["personal-library-fulltext-index"],
+    );
   }
 
   private cancelPersonalLibraryOperations(reason: string): void {

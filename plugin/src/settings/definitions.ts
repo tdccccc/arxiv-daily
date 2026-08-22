@@ -42,6 +42,11 @@ export const SETTING_KEYS = {
     model: "embedding.model",
     dimension: "embedding.dimension",
   },
+  pdfParserSidecar: {
+    enabled: "pdfParserSidecar.enabled",
+    capabilitiesUrl: "pdfParserSidecar.capabilitiesUrl",
+    parseUrl: "pdfParserSidecar.parseUrl",
+  },
   advanced: {
     requestDelayMs: "advanced.requestDelayMs",
     cacheExpiryDays: "advanced.cacheExpiryDays",
@@ -146,6 +151,9 @@ export interface SettingDefinitionsHost {
   renderEmbeddingApiKeyRow?: (setting: Setting) => void;
   renderEmbeddingModelRow?: (setting: Setting) => void;
   renderEmbeddingDimensionRow?: (setting: Setting) => void;
+  renderPdfParserSidecarEnabledRow?: (setting: Setting) => void;
+  renderPdfParserSidecarCapabilitiesUrlRow?: (setting: Setting) => void;
+  renderPdfParserSidecarParseUrlRow?: (setting: Setting) => void;
 }
 
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
@@ -265,6 +273,33 @@ export function buildSettingDefinitions(
               name: "Embedding dimension",
               desc: "Vector width of the remote model. Must match the model.",
               render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+      ],
+    },
+    {
+      type: "group",
+      heading: "PDF parsing",
+      items: [
+        ...(host.renderPdfParserSidecarEnabledRow
+          ? [{
+              name: "Use local parser sidecar",
+              desc: "Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.",
+              render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderPdfParserSidecarCapabilitiesUrlRow
+          ? [{
+              name: "Sidecar capability URL",
+              desc: "Local loopback endpoint that reports parser capabilities.",
+              render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderPdfParserSidecarParseUrlRow
+          ? [{
+              name: "Sidecar parse URL",
+              desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
+              render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
             } satisfies SettingDefinitionItem]
           : []),
       ],

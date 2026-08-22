@@ -57,4 +57,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     dimension: 384,
     initialChoiceDone: false,
   },
+  pdfParserSidecar: {
+    enabled: false,
+    capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+    parseUrl: "http://127.0.0.1:5001/v1/parse",
+  },
 };

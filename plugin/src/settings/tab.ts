@@ -167,6 +167,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderEmbeddingModelRow(this, setting),
       renderEmbeddingDimensionRow: (setting) =>
         declarativeRows.renderEmbeddingDimensionRow(this, setting),
+      renderPdfParserSidecarEnabledRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarEnabledRow(this, setting),
+      renderPdfParserSidecarCapabilitiesUrlRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarCapabilitiesUrlRow(this, setting),
+      renderPdfParserSidecarParseUrlRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
       renderCategoryRow: (setting, index) =>
@@ -353,7 +359,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced" | "embedding",
+    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced" | "embedding" | "pdf-parsing",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -1094,6 +1100,37 @@ export class ArxivDailySettingTab extends PluginSettingTab {
               s.embedding.dimension = parsed;
               await this.plugin.saveSettings();
             }
+          });
+      });
+
+    // ─── PDF parsing ──────────────────────────────────
+    this.sectionHeading(containerEl, "PDF parsing", "pdf-parsing");
+    new Setting(containerEl)
+      .setName("Use local parser sidecar")
+      .setDesc("Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.")
+      .addToggle((toggle) => {
+        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
+          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
+        });
+      });
+    new Setting(containerEl)
+      .setName("Sidecar capability URL")
+      .setDesc("Local loopback endpoint that reports parser capabilities.")
+      .addText((text) => {
+        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
+          .setValue(s.pdfParserSidecar.capabilitiesUrl)
+          .onChange(async (value) => {
+            await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
+          });
+      });
+    new Setting(containerEl)
+      .setName("Sidecar parse URL")
+      .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
+      .addText((text) => {
+        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
+          .setValue(s.pdfParserSidecar.parseUrl)
+          .onChange(async (value) => {
+            await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
           });
       });
 

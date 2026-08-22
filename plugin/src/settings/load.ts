@@ -53,6 +53,20 @@ function mergeSettings(
     advanced: { ...defaults.advanced, ...(partial.advanced ?? {}) },
     email: migrateEmailSettings(partial.email ?? defaults.email),
     embedding: { ...defaults.embedding, ...(partial.embedding ?? {}) },
+    pdfParserSidecar: migratePdfParserSidecarSettings(partial.pdfParserSidecar),
+  };
+}
+
+/** Only a literal persisted true enables the local PDF-byte transport. */
+function migratePdfParserSidecarSettings(raw: unknown): PluginSettings["pdfParserSidecar"] {
+  const defaults = DEFAULT_SETTINGS.pdfParserSidecar;
+  if (!isRecord(raw)) return { ...defaults };
+  return {
+    enabled: raw.enabled === true,
+    capabilitiesUrl: typeof raw.capabilitiesUrl === "string"
+      ? raw.capabilitiesUrl
+      : defaults.capabilitiesUrl,
+    parseUrl: typeof raw.parseUrl === "string" ? raw.parseUrl : defaults.parseUrl,
   };
 }
 

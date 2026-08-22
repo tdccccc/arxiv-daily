@@ -693,6 +693,32 @@ describe("plugin settings reload lifecycle", () => {
     });
   });
 
+  it("adds a disabled local parser sidecar to old persisted configs", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: { arxiv: persistedData(["cs.CL"]).settings.arxiv },
+    });
+
+    expect(loaded.settings.pdfParserSidecar).toEqual(DEFAULT_SETTINGS.pdfParserSidecar);
+  });
+
+  it("requires a literal persisted true before enabling the local parser sidecar", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        pdfParserSidecar: {
+          enabled: "true",
+          capabilitiesUrl: "http://127.0.0.1:9000/v1/capabilities",
+          parseUrl: "http://127.0.0.1:9000/v1/parse",
+        },
+      },
+    });
+
+    expect(loaded.settings.pdfParserSidecar).toEqual({
+      enabled: false,
+      capabilitiesUrl: "http://127.0.0.1:9000/v1/capabilities",
+      parseUrl: "http://127.0.0.1:9000/v1/parse",
+    });
+  });
+
   it("canonicalizes conflicting persisted values under a named profile", () => {
     const loaded = settingsAndStateFromPersistedData({
       settings: {

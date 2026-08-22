@@ -636,3 +636,68 @@ export function renderEmbeddingDimensionRow(
     });
   });
 }
+
+export function renderPdfParserSidecarEnabledRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  new ToggleComponent(setting.controlEl)
+    .setValue(tab.plugin.settings.pdfParserSidecar.enabled)
+    .onChange((enabled) => {
+      tab.runAction("save local parser sidecar", () =>
+        tab.changeSettingValue("pdfParserSidecar.enabled", enabled));
+    });
+}
+
+export function renderPdfParserSidecarCapabilitiesUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderPdfParserSidecarUrlRow(
+    tab,
+    setting,
+    "pdfParserSidecar.capabilitiesUrl",
+    "HTTP://127.0.0.1:5001/v1/capabilities",
+  );
+}
+
+export function renderPdfParserSidecarParseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderPdfParserSidecarUrlRow(
+    tab,
+    setting,
+    "pdfParserSidecar.parseUrl",
+    "HTTP://127.0.0.1:5001/v1/parse",
+  );
+}
+
+function renderPdfParserSidecarUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
+  placeholder: string,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", { type: "url", attr: { placeholder } });
+  input.value = key === "pdfParserSidecar.capabilitiesUrl"
+    ? tab.plugin.settings.pdfParserSidecar.capabilitiesUrl
+    : tab.plugin.settings.pdfParserSidecar.parseUrl;
+  input.addEventListener("change", () => {
+    const next = input.value.trim();
+    const revision = tab.beginControlChange(input);
+    tab.runAction("save local parser sidecar URL", async () => {
+      try {
+        await tab.changeSettingValue(key, next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, key);
+        }
+        throw error;
+      }
+    });
+  });
+}

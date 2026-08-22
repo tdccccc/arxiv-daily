@@ -31,6 +31,16 @@ export interface EmbeddingSettings {
   initialChoiceDone: boolean;
 }
 
+/** Explicit opt-in configuration for a local structured PDF parser sidecar. */
+export interface LocalPdfParserSidecarSettings {
+  /** Disabled by default: no capability probe or PDF transfer occurs. */
+  enabled: boolean;
+  /** Loopback capability endpoint, with no query, hash, or credentials. */
+  capabilitiesUrl: string;
+  /** Same-origin loopback endpoint that accepts one PDF byte buffer. */
+  parseUrl: string;
+}
+
 export interface Topic {
   id: string;
   name: string;
@@ -117,6 +127,7 @@ export interface PluginSettings {
   advanced: AdvancedSettings;
   email: EmailSettings;
   embedding: EmbeddingSettings;
+  pdfParserSidecar: LocalPdfParserSidecarSettings;
 }
 
 export type RunStatus =

@@ -63,6 +63,23 @@ describe("SettingsChangeService", () => {
     expect(persistSettings).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-loopback local parser sidecar before persistence", async () => {
+    const settings = makeSettings();
+    const persistSettings = vi.fn();
+    const service = new SettingsChangeService({ settings, persistSettings });
+
+    await expect(service.change({
+      changes: [
+        { key: "pdfParserSidecar.enabled", value: true },
+        { key: "pdfParserSidecar.capabilitiesUrl", value: "https://parser.example/v1/capabilities" },
+        { key: "pdfParserSidecar.parseUrl", value: "https://parser.example/v1/parse" },
+      ],
+    })).rejects.toThrow(/loopback/i);
+
+    expect(settings.pdfParserSidecar).toEqual(DEFAULT_SETTINGS.pdfParserSidecar);
+    expect(persistSettings).not.toHaveBeenCalled();
+  });
+
   it("leaves stores, settings, and persistence untouched when prepared store loading fails", async () => {
     const settings = makeSettings();
     const oldStateStore = { name: "old-state" };

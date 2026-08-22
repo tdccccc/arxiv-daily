@@ -5,6 +5,7 @@ import {
   validateScheduleConfig,
   validateVaultRelativeDirectory,
   validateEmbeddingConfig,
+  validateLocalPdfParserSidecarConfig,
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
@@ -17,6 +18,10 @@ function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
     arxiv: { ...DEFAULT_SETTINGS.arxiv, ...(overrides.arxiv ?? {}) },
     output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
     email: { ...DEFAULT_SETTINGS.email, ...(overrides.email ?? {}) },
+    pdfParserSidecar: {
+      ...DEFAULT_SETTINGS.pdfParserSidecar,
+      ...(overrides.pdfParserSidecar ?? {}),
+    },
   };
 }
 
@@ -303,5 +308,37 @@ describe("validateEmbeddingConfig", () => {
       },
     }));
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("validateLocalPdfParserSidecarConfig", () => {
+  it("accepts the disabled loopback default without enabling a sidecar", () => {
+    expect(validateLocalPdfParserSidecarConfig(makeSettings())).toEqual({ ok: true, reasons: [] });
+  });
+
+  it("requires same-origin literal loopback endpoints when enabled", () => {
+    const r = validateLocalPdfParserSidecarConfig(makeSettings({
+      pdfParserSidecar: {
+        enabled: true,
+        capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+        parseUrl: "http://127.0.0.1:5002/v1/parse",
+      },
+    }));
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join(" ")).toMatch(/same.*origin/i);
+  });
+
+  it("rejects a non-loopback parser endpoint", () => {
+    const r = validateLocalPdfParserSidecarConfig(makeSettings({
+      pdfParserSidecar: {
+        enabled: true,
+        capabilitiesUrl: "https://parser.example/v1/capabilities",
+        parseUrl: "https://parser.example/v1/parse",
+      },
+    }));
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join(" ")).toMatch(/loopback/i);
   });
 });

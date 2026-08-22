@@ -33,12 +33,14 @@ export interface LoopbackSidecarParserProbeInput {
   readonly capabilitiesUrl: string;
   readonly parseUrl: string;
   readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 /** Probe an explicit local sidecar without sending a PDF or any library path. */
 export async function probeLoopbackSidecarParser(
   input: LoopbackSidecarParserProbeInput,
 ): Promise<LoopbackSidecarDocumentParser> {
+  input.signal?.throwIfAborted();
   let capabilitiesUrl: URL;
   let parseUrl: URL;
   try {
@@ -58,10 +60,13 @@ export async function probeLoopbackSidecarParser(
       method: "GET",
       headers: { Accept: "application/json" },
       timeoutMs,
+      signal: input.signal,
     });
   } catch (caught) {
+    input.signal?.throwIfAborted();
     throw new SidecarDocumentParserError("unavailable", "sidecar capability probe failed", { cause: caught });
   }
+  input.signal?.throwIfAborted();
   if (response.status !== 200) {
     throw new SidecarDocumentParserError("unavailable", `sidecar capability probe returned HTTP ${response.status}`);
   }

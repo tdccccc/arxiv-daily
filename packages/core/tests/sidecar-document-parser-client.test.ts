@@ -111,6 +111,24 @@ describe("loopback sidecar document parser", () => {
     await expect(sidecar.parse(new Uint8Array([1]))).rejects.toMatchObject({ kind: "invalid-response" });
   });
 
+  it("passes cancellation through the capability probe instead of converting it to a fallback error", async () => {
+    const controller = new AbortController();
+    const client: HttpClient = {
+      request: vi.fn(async (request: HttpRequest) => {
+        expect(request.signal).toBe(controller.signal);
+        controller.abort(new DOMException("cancelled", "AbortError"));
+        throw new DOMException("cancelled", "AbortError");
+      }),
+    };
+
+    await expect(probeLoopbackSidecarParser({
+      http: client,
+      capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+      parseUrl: "http://127.0.0.1:5001/v1/parse",
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("falls back after a sidecar failure and returns the fallback parser identity", async () => {
     const fixture = http([
       {

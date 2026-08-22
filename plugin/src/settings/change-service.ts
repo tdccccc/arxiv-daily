@@ -1,5 +1,6 @@
 import {
   sanitizeDetailSelection,
+  validateLocalPdfParserSidecarConfig,
   validateScheduleConfig,
   validateSchedulerConfig,
   validateVaultRelativeDirectory,
@@ -251,6 +252,11 @@ export class SettingsChangeService {
       }
     }
 
+    if (changedKeys.some((key) => key.startsWith("pdfParserSidecar."))) {
+      const validation = validateLocalPdfParserSidecarConfig(candidate);
+      if (!validation.ok) throw new Error(validation.reasons.join("; "));
+    }
+
     if (changedKeys.some((key) => key.startsWith("schedule."))) {
       const validation = candidate.schedule.enabled
         ? validateSchedulerConfig(candidate)
@@ -348,6 +354,7 @@ function cloneSettings(settings: PluginSettings): PluginSettings {
     advanced: { ...settings.advanced },
     email: { ...settings.email },
     embedding: { ...settings.embedding },
+    pdfParserSidecar: { ...settings.pdfParserSidecar },
   };
 }
 
