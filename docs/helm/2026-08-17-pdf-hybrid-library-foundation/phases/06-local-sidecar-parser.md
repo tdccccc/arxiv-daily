@@ -31,9 +31,9 @@ updated: 2026-08-22
 - [x] 定义并验收 loopback-only sidecar capability 与 parse transport contract：无 path/root 字段、严格 byte/response 上限、version/capability/provenance 验证和 fail-closed decode。
 - [x] 实现并验收 host-neutral per-parse selector 与可选 client/parser adapter：每次 parse 持久化实际获胜的 capabilities/provenance，per-parse sidecar failure 以 PDF.js identity 回退，cancel 不降级，旧 `DocumentParser` 路径保持兼容。
 - [x] 将用户显式 enable、endpoint loopback 校验、能力诊断与 parser selection 接入 host：未启用时绝不 probe/request，probe/transport/schema failure 以 PDF.js identity 继续；sidecar 是本地 byte-only 处理，不扩大 remote consent，配置改变会取消活跃 index，后续运行按实际 parser derivation 重建受影响投影且不扫描任意目录。
-- [ ] 在获授权的本地 Docling-only environment 对真实复杂论文 corpus 运行预先定义的结构/定位评测，记录选择证据；仅在缺口可复现时评估 GROBID enrichment。
-- [ ] 如评测选择保留 Docling-only，完成 production hardening；如选择 enrichment，先 L2 reshape P6 protocol/operation plan，再实现第二 provider。
-- [ ] 完成 P6 全量回归与实际 host validation。
+- [x] 在获授权的本地 Docling-only environment 对真实复杂论文 corpus 运行预先定义的结构/定位评测，记录选择证据；仅在缺口可复现时评估 GROBID enrichment。
+- [x] 如评测选择保留 Docling-only，完成 production hardening；如选择 enrichment，先 L2 reshape P6 protocol/operation plan，再实现第二 provider。
+- [x] 完成 P6 自动化全量回归与实际 loopback host validation；桌面 Obsidian 交互验证留给 P7 跨平台验收。
 
 ## Verification
 
@@ -41,6 +41,10 @@ updated: 2026-08-22
 - P6.1 observed Red：Core 没有 sidecar contract/client，无法证明 capability probe 不带 PDF/path，或 parse request 不会传递 library root/logical path；未经 schema、response-size、provenance 与 declared capability 验证的 JSON 不能进入 `ParsedDocument`。
 - P6.1 Green：Core 定义 protocol v1 capability/parse decoder 和同 origin、IP-literal loopback HTTP client。capability probe 为无 body GET；parse 为含 `application/pdf` body 的单一 `ArrayBuffer` POST。未知字段（含 path）、非 loopback/cross-origin、越界 request/response、HTTP/JSON/schema/provenance/capability mismatch 均 typed fail-closed。定向 Core 2 files / 8 tests、Core typecheck、`check:boundaries` 与 `git diff --check` 通过。实现提交为 `7ec3e2e` 与 `3a5426a`。
 - P6.2 L2 evidence：现有 `DocumentParser` 将 capabilities/provenance 固定在实例上，`index-orchestration` 也从该静态字段派生 document identity。简单 try-sidecar/catch-PDF.js wrapper 会把 fallback document 错标为 sidecar 或用 union capability 错误驱动 chunker，破坏 P2 的 derivation/reindex contract。保留 P6.1 协议/client；重划为每次 parse 返回实际 parser identity 的 selector，旧 parser API 不变。
+- Provider evaluation (2026-08-22): 在临时、CPU-only 的 Docling 2.121.0 / torch 2.7.1+cpu / torchvision 0.22.1+cpu environment 中，以 byte stream 解析 `1706.03762`（15 页、21.562 s、511 text / 4 table / 6 picture / 28 heading / 9 caption）、`1810.04805`（16 页、18.973 s、622 / 8 / 5 / 33 / 13）和 `2206.01062`（9 页、17.984 s、543 / 5 / 6 / 18 / 10）。与 `pdftotext` 页级基线对照，标题、heading、table/figure caption 与页码均一致，没有 locator 超过文档页数；记录位于临时评测输出，未写入用户文献库。
+- Provider decision (2026-08-22): Docling-only 已满足结构、表格、caption、heading 和页定位要求，未观察到可复现的质量缺口；不引入会扩大操作和隐私边界的 GROBID。
+- Production hardening (2026-08-22): 实际 service 在 `127.0.0.1:5001` 启动、probe 后解析 Attention PDF，返回 53,656 bytes、156 blocks、27 headings、4 tables、9 captions，block id 连续且页 locator 有效。服务只接受 `DocumentStream` 内存 PDF bytes，拒绝 query/path-like route、非 PDF、transfer encoding、空/缺失/超限 body，request/response 上限为 25 MiB / 16 MiB；`python3 -m py_compile tools/docling-sidecar/server.py` 和 `python3 -m unittest tools/docling-sidecar/tests/test_server.py`（5 tests）通过。
+- P6 final regression (2026-08-22): Core 113 files / 2,015 tests、Plugin 41 files / 622 tests、Node runtime 3 files / 45 tests、CLI 7 files / 71 tests 通过；workspace typecheck、`check:boundaries`、`check:product-units`、production build 和 `git diff --check` 通过。lint 无新 error，仍为仓库既有 65 warnings / 60-cap baseline；桌面 Obsidian 的实际 viewer 与 setting interaction 不可在本容器运行，明确移交 P7。
 
 ## Abort / reshape triggers
 
