@@ -6,7 +6,7 @@ updated: 2026-08-23
 
 ## Outcome
 
-PR 和发布 CI 持续验证依赖安全、Node 20/22 兼容性、CLI 安装产物、topic settings renderer 回归、CodeQL 和所有独立产品 lockfile。
+PR 和发布 CI 持续验证依赖安全、Node 20.19/22 兼容性、CLI 安装产物、topic settings renderer 回归、CodeQL 和所有独立产品 lockfile。
 
 ## Assumptions
 

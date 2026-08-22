@@ -11,7 +11,7 @@ owner: root
 ## Success criteria
 
 - [x] `npm audit` 对 root release group 和独立 Relay 产品不再报告 moderate 或 high 漏洞，升级保持锁文件和发布边界一致。
-- [x] PR CI 自动检查依赖安全、Node 20 最低支持版本与 Node 22 当前运行时，并在不部署生产资源的情况下验证 plugin、CLI 与独立产品契约。
+- [x] PR CI 自动检查依赖安全、Node 20.19 compatibility floor 与 Node 22 当前运行时，并在不部署生产资源的情况下验证 plugin、CLI 与独立产品契约。
 - [x] CI 配置有结构化测试，且本地发布门禁通过。
 
 ## Non-goals
@@ -22,7 +22,7 @@ owner: root
 
 ## Constraints
 
-- 根 release group 的最低 Node 支持版本继续是 `20.11.0`；CI 保留 Node 22 发布环境。
+- 当前 root 工具链的可验证 Node 20 floor 是 `20.19.0`（Vite/Clack 的实际 engine 约束）；CI 同时保留 Node 22 发布环境。公开 package engine metadata 的 `20.11.0` 声明需在后续 release metadata 变更中同步收紧。
 - GitHub Actions 继续使用固定 commit SHA 和最小权限。
 - UI 回归必须可在 CI 无 Obsidian GUI 的环境中执行，真实宿主集成仍由 Obsidian submission check 与发布资产检查覆盖。
 
