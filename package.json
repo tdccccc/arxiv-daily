@@ -1,6 +1,6 @@
 {
   "name": "arxiv-daily-workspace",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "description": "Workspace for the arXiv Daily Obsidian plugin and Node CLI",
   "license": "MIT",
