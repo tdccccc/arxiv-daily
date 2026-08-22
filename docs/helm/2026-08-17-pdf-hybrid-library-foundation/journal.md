@@ -92,3 +92,11 @@
 - change: retain P6.1 protocol and loopback client, but replace the unaccepted static-wrapper path with a host-neutral per-parse selector that returns the actual document plus its selected parser identity. Existing `DocumentParser` callers remain unchanged; index orchestration gains an opt-in selector path.
 - disposition: no unaccepted production fallback code exists to discard. Sidecar success and PDF.js fallback must be distinguishable in the same index run; cancellation remains non-degradable.
 - next: observe Red for selector identity, sidecar failure fallback and cancellation; then wire the selector into the existing indexing derivation boundary before any user setting or real provider install.
+
+## 2026-08-22 — P6.2 parser selector checkpoint
+
+- evidence: the resumed selector candidate initially failed Core typecheck because its legacy parser branch referenced a nonexistent derivation constant. After correcting that incomplete connection, focused Core tests proved one indexing run can persist Docling structural chunks and PDF.js page chunks with their respective actual derivations; client tests prove a typed sidecar failure returns PDF.js identity and a cancelled parse never invokes fallback.
+- verification: targeted Core 2 files / 36 tests, then Core 113 files / 2,011 tests with the phase's 8 GiB heap configuration, Core typecheck, `check:boundaries`, `check:product-units`, and `git diff --check` passed. The direct Vitest invocation without the Core config failed only because it skipped the repository's Markdown-as-text loader; the Core test wrapper passed the same target.
+- change: accepted host-neutral `DocumentParserSelector`, the sidecar-to-PDF.js selector adapter, and index orchestration that derives each stored document from its actual selected parser. Committed as `82a94f6` (`feat(parser): select fallback parser per document`).
+- disposition: retain the existing `DocumentParser` and PDF.js path unchanged. Probe and explicit-enable behavior remain intentionally outside the accepted Core selector: the Plugin must decide whether it is permitted to construct/probe a sidecar at all.
+- next: write host-level Red tests for disabled no-request and enabled probe failure fallback, then add the minimal persisted loopback-only setting and reindex invalidation path.
