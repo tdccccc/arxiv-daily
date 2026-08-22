@@ -9,6 +9,7 @@ export * from "./dashboard/paper-search-index";
 export * from "./dashboard/paper-note-classifier";
 export * from "./documents/parsed-document";
 export * from "./documents/sidecar-document-parser";
+export * from "./documents/sidecar-document-parser-client";
 export * from "./library/arxiv-library-metadata-resolver";
 export * from "./library/arxiv-title-search";
 export * from "./library/clustering/clusterer";
