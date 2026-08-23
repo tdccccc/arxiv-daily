@@ -1,6 +1,6 @@
 {
   "name": "@arxiv-daily/core",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "description": "Host-neutral business core for arXiv Daily",
   "license": "MIT",
@@ -12,7 +12,7 @@
   "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
   "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=20.19.0"
   },
   "type": "module",
   "exports": {

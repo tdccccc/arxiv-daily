@@ -44,7 +44,7 @@ for (const file of packageFiles) {
     errors.push(`${file} must be private`);
   }
   if (value.license !== "MIT") errors.push(`${file} license must be MIT`);
-  if (value.engines?.node !== ">=20.11.0") errors.push(`${file} engines.node must be >=20.11.0`);
+  if (value.engines?.node !== ">=20.19.0") errors.push(`${file} engines.node must be >=20.19.0`);
   if (value.repository?.type !== "git" || value.repository?.url !== "git+https://github.com/tdccccc/arxiv-daily.git") {
     errors.push(`${file} repository metadata is not canonical`);
   }

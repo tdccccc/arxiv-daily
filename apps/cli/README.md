@@ -6,7 +6,7 @@ Works standalone on a server or always-on machine. The Obsidian plugin is separa
 
 ## Requirements
 
-- Node.js **20.11.0** or newer
+- Node.js **20.19.0** or newer
 
 ## Install
 
