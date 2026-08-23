@@ -28,7 +28,7 @@ jobs:
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Check out release commit
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.version || github.event.workflow_run.head_sha }}
           fetch-depth: 0
