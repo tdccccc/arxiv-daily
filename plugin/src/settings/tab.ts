@@ -123,6 +123,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private declarativeSetupGuideRow: Setting | undefined;
+  private pendingTopicFocusId: string | undefined;
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -395,6 +396,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
   public refreshSettings(): void {
+    const scrollSnapshot = this.captureSettingsScroll();
     if (
       requireApiVersion("1.13.0") &&
       this.getSettingDefinitions().length > 0
@@ -403,6 +405,49 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     } else {
       this.renderLegacySettings();
     }
+    if (!this.pendingTopicFocusId) {
+      this.restoreSettingsScroll(scrollSnapshot);
+    }
+  }
+
+  private captureSettingsScroll(): Array<{
+    element: HTMLElement;
+    top: number;
+    left: number;
+  }> {
+    const snapshot: Array<{ element: HTMLElement; top: number; left: number }> = [];
+    const view = this.containerEl.ownerDocument.defaultView;
+    for (
+      let element: HTMLElement | null = this.containerEl;
+      element;
+      element = element.parentElement
+    ) {
+      const overflowY = view?.getComputedStyle(element).overflowY;
+      if (
+        element.scrollTop !== 0 ||
+        element.scrollLeft !== 0 ||
+        overflowY === "auto" ||
+        overflowY === "scroll"
+      ) {
+        snapshot.push({ element, top: element.scrollTop, left: element.scrollLeft });
+      }
+    }
+    return snapshot;
+  }
+
+  private restoreSettingsScroll(
+    snapshot: Array<{ element: HTMLElement; top: number; left: number }>,
+  ): void {
+    if (snapshot.length === 0) return;
+    const restore = () => {
+      for (const { element, top, left } of snapshot) {
+        element.scrollTop = top;
+        element.scrollLeft = left;
+      }
+    };
+    restore();
+    queueMicrotask(restore);
+    this.containerEl.ownerDocument.defaultView?.requestAnimationFrame?.(restore);
   }
 
   /** Keep the Obsidian <1.13 fallback behind one explicit deprecated API call. */
@@ -441,8 +486,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       detail: false,
     });
     this.expandedTopics.add(newId);
+    this.pendingTopicFocusId = newId;
     await this.plugin.saveSettings();
     this.refreshSettings();
+    this.focusPendingTopic();
   }
 
   /** Delete a topic after confirmation; returns whether it was deleted. */
@@ -1659,6 +1706,47 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.refreshSetupGuide();
   }
 
+  /** Reveal and focus a topic created by Add topic after the settings list updates. */
+  private focusPendingTopic(): void {
+    const topicId = this.pendingTopicFocusId;
+    if (!topicId) return;
+
+    const focus = () => {
+      const card = Array.from(
+        this.containerEl.querySelectorAll<HTMLElement>(
+          ".arxiv-daily-settings__topic-card",
+        ),
+      ).find((candidate) => candidate.dataset.arxivDailyTopicId === topicId);
+      if (!card) return;
+      this.pendingTopicFocusId = undefined;
+
+      const view = card.ownerDocument.defaultView;
+      const reduceMotion =
+        view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      card.scrollIntoView?.({
+        block: "center",
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+      const nameInput = card.querySelector<HTMLInputElement>(
+        ".arxiv-daily-settings__topic-name-input",
+      );
+      nameInput?.focus({ preventScroll: true });
+    };
+
+    queueMicrotask(() => {
+      if (this.pendingTopicFocusId !== topicId) return;
+      if (this.containerEl.querySelector(
+        `[data-arxiv-daily-topic-id="${topicId}"]`,
+      )) {
+        focus();
+        return;
+      }
+      const view = this.containerEl.ownerDocument.defaultView;
+      if (view?.requestAnimationFrame) view.requestAnimationFrame(focus);
+      else setTimeout(focus, 0);
+    });
+  }
+
   /** Render the topic card for one index into a declarative list row. */
   public renderTopicRow(setting: Setting, index: number): void {
     // Re-renders reuse the same row; drop the previous card first.
@@ -1692,6 +1780,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const card = container.createDiv({
       cls: "arxiv-daily-settings__topic-card",
+      attr: { "data-arxiv-daily-topic-id": topic.id },
     });
 
     // ─── Header row (always visible, clickable) ────────────

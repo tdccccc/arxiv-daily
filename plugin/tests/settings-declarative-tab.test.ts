@@ -831,6 +831,44 @@ describe("declarative LLM and category rows", () => {
 });
 
 describe("declarative topic cards", () => {
+  it("preserves the settings viewport across a declarative refresh", () => {
+    const { tab } = makeTab();
+    const viewport = document.createElement("div");
+    viewport.style.overflowY = "auto";
+    viewport.appendChild(tab.containerEl);
+    document.body.appendChild(viewport);
+    viewport.scrollTop = 180;
+    vi.spyOn(tab, "update").mockImplementation(() => {});
+
+    tab.refreshSettings();
+
+    expect(viewport.scrollTop).toBe(180);
+    viewport.remove();
+  });
+
+  it("reveals and focuses a newly added topic after the list refreshes", async () => {
+    const { tab, settings } = makeTab();
+    document.body.appendChild(tab.containerEl);
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {
+      const topic = settings.arxiv.topics.at(-1)!;
+      const card = document.createElement("div");
+      card.className = "arxiv-daily-settings__topic-card";
+      card.dataset.arxivDailyTopicId = topic.id;
+      const input = document.createElement("input");
+      input.className = "arxiv-daily-settings__topic-name-input";
+      card.appendChild(input);
+      tab.containerEl.appendChild(card);
+    });
+
+    await tab.addTopic();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(document.activeElement).toBe(
+      tab.containerEl.querySelector(".arxiv-daily-settings__topic-name-input"),
+    );
+    tab.containerEl.remove();
+  });
+
   it("keeps topic fields focused while updating the setup guide", async () => {
     const { tab, settings, saveSettings } = makeTab();
     settings.arxiv.topics.push({
