@@ -1,6 +1,5 @@
 import {
   Notice,
-  setIcon,
   ToggleComponent,
   type Setting,
 } from "obsidian";
@@ -47,7 +46,7 @@ export function renderLlmBaseUrlRow(
   const input = setting.controlEl.createEl("input", {
     cls: "arxiv-daily-settings__llm-url-input",
     type: "url",
-    attr: { placeholder: "https://api.deepseek.com/v1" },
+    attr: { placeholder: "Provider URL" },
   });
   input.value = tab.plugin.settings.llm.baseUrl;
   const warningEl = setting.controlEl.createDiv({
@@ -364,7 +363,7 @@ export function renderEmailModeRow(
   selfOption.textContent = "Send yourself";
   const hostedOption = select.createEl("option");
   hostedOption.value = "hosted";
-  hostedOption.textContent = "Official delivery (Beta)";
+  hostedOption.textContent = "Official delivery (beta)";
   select.value = tab.plugin.settings.email.mode === "hosted" ? "hosted" : "self";
   select.addEventListener("change", () => {
     const next = select.value === "hosted" ? "hosted" : "self";

@@ -198,8 +198,8 @@ export async function openDashboardView(
 
   const leaf = workspace.getLeaf(true);
   if (!leaf) {
-    plugin.logger.info("ArXiv Daily: no workspace leaf available");
-    new Notice("arXiv Daily: no workspace leaf available");
+    plugin.logger.info("No workspace leaf available");
+    new Notice("No workspace leaf available");
     return;
   }
   await leaf.setViewState({
@@ -244,7 +244,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "arXiv Daily Dashboard";
+    return "Reading dashboard";
   }
 
   getIcon(): string {
@@ -692,7 +692,7 @@ class ArxivDailyDashboardView extends ItemView {
     const titleGroup = header.createDiv({
       cls: "arxiv-daily-dashboard__header-main",
     });
-    titleGroup.createEl("h2", { text: "arXiv Daily Dashboard" });
+    titleGroup.createEl("h2", { text: "Reading dashboard" });
     titleGroup.createDiv({
       cls: "arxiv-daily-dashboard__status-line",
       text: dashboardHeaderStatusText({
