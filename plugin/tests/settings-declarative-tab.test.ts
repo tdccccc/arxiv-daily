@@ -854,6 +854,8 @@ describe("declarative topic cards", () => {
       const card = document.createElement("div");
       card.className = "arxiv-daily-settings__topic-card";
       card.dataset.arxivDailyTopicId = topic.id;
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(card, "scrollIntoView", { value: scrollIntoView });
       const input = document.createElement("input");
       input.className = "arxiv-daily-settings__topic-name-input";
       card.appendChild(input);
@@ -866,6 +868,11 @@ describe("declarative topic cards", () => {
     expect(document.activeElement).toBe(
       tab.containerEl.querySelector(".arxiv-daily-settings__topic-name-input"),
     );
+    expect(
+      tab.containerEl.querySelector<HTMLElement>(
+        ".arxiv-daily-settings__topic-card",
+      )?.scrollIntoView,
+    ).toHaveBeenCalledWith({ block: "nearest", behavior: "auto" });
     tab.containerEl.remove();
   });
 

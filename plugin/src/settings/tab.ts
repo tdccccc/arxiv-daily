@@ -446,8 +446,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
     };
     restore();
-    queueMicrotask(restore);
-    this.containerEl.ownerDocument.defaultView?.requestAnimationFrame?.(restore);
   }
 
   /** Keep the Obsidian <1.13 fallback behind one explicit deprecated API call. */
@@ -1720,12 +1718,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       if (!card) return;
       this.pendingTopicFocusId = undefined;
 
-      const view = card.ownerDocument.defaultView;
-      const reduceMotion =
-        view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
       card.scrollIntoView?.({
-        block: "center",
-        behavior: reduceMotion ? "auto" : "smooth",
+        block: "nearest",
+        behavior: "auto",
       });
       const nameInput = card.querySelector<HTMLInputElement>(
         ".arxiv-daily-settings__topic-name-input",
@@ -1743,7 +1738,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
       const view = this.containerEl.ownerDocument.defaultView;
       if (view?.requestAnimationFrame) view.requestAnimationFrame(focus);
-      else setTimeout(focus, 0);
+      else if (view?.setTimeout) view.setTimeout(focus, 0);
+      else queueMicrotask(focus);
     });
   }
 
