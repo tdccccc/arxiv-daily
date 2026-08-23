@@ -16,7 +16,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 
 | 层次 | 技术 | 在本项目中的职责 |
 | --- | --- | --- |
-| 语言/运行时 | TypeScript（ES2022）、Node.js `>=20.11.0` | 全仓源码与 CLI/构建；CI 使用 Node 22.17.0 |
+| 语言/运行时 | TypeScript（ES2022）、Node.js `>=20.19.0` | 全仓源码与 CLI/构建；CI 使用 Node 20.19.0 与 22.17.0 |
 | 包管理 | npm workspaces | 根工作区：`packages/*`、`apps/*`、`plugin`；email relay 与 VS Code companion 各用独立 manifest/lockfile |
 | 业务核 | `@arxiv-daily/core` | 流水线、LLM、调度、索引、设置、邮件编排；生产第三方依赖仅 `pako` |
 | Node 宿主 | `@arxiv-daily/node-runtime` | `fetch`、文件系统、`EnvSecretProvider`、linkedom 等 |

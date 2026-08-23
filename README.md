@@ -81,11 +81,11 @@ The guide stays until a report completes. Details: [Getting Started](docs/gettin
 
 ## CLI
 
-For cron or a machine that stays online. Requires Node.js 20.11.0+.
+For cron or a machine that stays online. Requires Node.js 20.19.0+.
 
 ### Install (npm)
 
-Requires Node.js 20.11+.
+Requires Node.js 20.19+.
 
 ```bash
 npm install -g arxiv-daily

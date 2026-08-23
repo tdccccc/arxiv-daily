@@ -81,11 +81,11 @@ arxiv-daily/
 
 ## CLI
 
-适合 cron 或长期在线的机器。需要 Node.js 20.11.0+。
+适合 cron 或长期在线的机器。需要 Node.js 20.19.0+。
 
 ### 安装（npm）
 
-需要 Node.js 20.11+。
+需要 Node.js 20.19+。
 
 ```bash
 npm install -g arxiv-daily

@@ -22,7 +22,7 @@ Production plugin and CLI bundles contain the complete locked pako notice from
 
 ## Prepare metadata
 
-Use Node.js 20.11.0 or newer from a clean checkout. Create the curated notes
+Use Node.js 20.19.0 or newer from a clean checkout. Create the curated notes
 before tagging, then synchronize metadata with the repository tool:
 
 ```bash

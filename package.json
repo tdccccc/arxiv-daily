@@ -1,6 +1,6 @@
 {
   "name": "arxiv-daily-workspace",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "description": "Workspace for the arXiv Daily Obsidian plugin and Node CLI",
   "license": "MIT",
@@ -11,7 +11,7 @@
   "homepage": "https://github.com/tdccccc/arxiv-daily#readme",
   "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=20.19.0"
   },
   "workspaces": [
     "packages/*",
