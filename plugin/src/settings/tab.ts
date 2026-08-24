@@ -124,6 +124,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private declarativeSetupGuideRow: Setting | undefined;
   private pendingTopicFocusId: string | undefined;
+  private pendingTopicDeletionAnchor:
+    | { topicId: string; scroller: HTMLElement; top: number }
+    | undefined;
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -405,7 +408,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     } else {
       this.renderLegacySettings();
     }
-    if (!this.pendingTopicFocusId) {
+    if (!this.pendingTopicFocusId && !this.pendingTopicDeletionAnchor) {
       this.restoreSettingsScroll(scrollSnapshot);
     }
   }
@@ -501,10 +504,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Delete",
     );
     if (!confirmed) return false;
+    this.pendingTopicDeletionAnchor = this.captureTopicDeletionAnchor(
+      topics[index + 1]?.id ?? topics[index - 1]?.id,
+    );
     topics.splice(index, 1);
     this.expandedTopics.delete(topic.id);
     await this.plugin.saveSettings();
     this.refreshSettings();
+    this.restoreTopicDeletionAnchor();
     return true;
   }
 
@@ -1741,6 +1748,48 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       else if (view?.setTimeout) view.setTimeout(focus, 0);
       else queueMicrotask(focus);
     });
+  }
+
+  /** Keep a surviving neighbor visually fixed when a topic card is removed. */
+  private captureTopicDeletionAnchor(topicId?: string):
+    | { topicId: string; scroller: HTMLElement; top: number }
+    | undefined {
+    if (!topicId) return undefined;
+    const card = this.findTopicCard(topicId);
+    if (!card) return undefined;
+    const scroller = this.captureSettingsScroll().find(({ element }) =>
+      element.contains(card),
+    )?.element;
+    if (!scroller) return undefined;
+    return { topicId, scroller, top: card.getBoundingClientRect().top };
+  }
+
+  private restoreTopicDeletionAnchor(): void {
+    const anchor = this.pendingTopicDeletionAnchor;
+    if (!anchor) return;
+    const restore = (): boolean => {
+      const card = this.findTopicCard(anchor.topicId);
+      if (!card) return false;
+      this.pendingTopicDeletionAnchor = undefined;
+      anchor.scroller.scrollTop += card.getBoundingClientRect().top - anchor.top;
+      return true;
+    };
+    if (restore()) return;
+    queueMicrotask(() => {
+      if (restore()) return;
+      const view = this.containerEl.ownerDocument.defaultView;
+      if (view?.requestAnimationFrame) view.requestAnimationFrame(() => {
+        restore();
+      });
+    });
+  }
+
+  private findTopicCard(topicId: string): HTMLElement | undefined {
+    return Array.from(
+      this.containerEl.querySelectorAll<HTMLElement>(
+        ".arxiv-daily-settings__topic-card",
+      ),
+    ).find((candidate) => candidate.dataset.arxivDailyTopicId === topicId);
   }
 
   /** Render the topic card for one index into a declarative list row. */
