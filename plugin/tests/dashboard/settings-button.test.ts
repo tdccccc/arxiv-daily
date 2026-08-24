@@ -37,7 +37,7 @@ describe("Settings Button", () => {
     const parent = createParent();
     appendSettingsButton(parent, () => {});
     const button = parent.querySelector("button")!;
-    expect(button.getAttribute("aria-label")).toBe("Open arXiv Daily settings");
+    expect(button.getAttribute("aria-label")).toBe("Open settings");
   });
 
   it("renders a Settings text label inside the button", () => {

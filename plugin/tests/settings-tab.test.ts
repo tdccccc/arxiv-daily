@@ -470,7 +470,7 @@ describe("settings tab regressions", () => {
   });
 
   it("uses clear sentence-case labels", () => {
-    expect(settingsTabSource).toContain('"arXiv categories"');
+    expect(settingsTabSource).toContain('"Paper categories"');
     expect(settingsTabSource).toContain('"Research topics"');
     expect(settingsTabSource).toContain('"Output & schedule"');
     expect(settingsTabSource).toContain('"API key"');
@@ -529,7 +529,7 @@ describe("settings tab regressions", () => {
     expect(policyIndex).toBeGreaterThan(headingIndex);
     expect(policyIndex).toBeLessThan(timezoneIndex);
     expect(settingsTabSource).toContain(
-      "Only topics with Detail report turned on are considered",
+      "Only topics with detail report turned on are considered",
     );
     expect(settingsTabSource).toContain(
       'Manual “summarize paper” is unchanged',

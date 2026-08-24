@@ -102,7 +102,7 @@ export class StatusBarController implements ProgressReporter {
     if (this.disposed) return;
     this.disabled = false;
     this.stage = null;
-    this.el.textContent = "arXiv: complete";
+    this.el.textContent = "Complete";
     this.renderPanel(message, "Done", 100, "complete");
     this.scheduleHide(AUTO_HIDE_COMPLETE_MS);
   }
@@ -111,7 +111,7 @@ export class StatusBarController implements ProgressReporter {
     if (this.disposed) return;
     this.disabled = false;
     this.stage = null;
-    this.el.textContent = "arXiv: failed";
+    this.el.textContent = "Failed";
     this.renderPanel("Stopped", message, 100, "error");
     this.scheduleHide(AUTO_HIDE_ERROR_MS);
   }

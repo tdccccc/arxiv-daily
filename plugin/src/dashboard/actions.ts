@@ -86,7 +86,7 @@ export function appendSettingsButton(
     cls: "arxiv-daily-dashboard__settings-btn",
     attr: {
       type: "button",
-      "aria-label": "Open arXiv Daily settings",
+      "aria-label": "Open settings",
     },
   });
   setIcon(button, "settings");
