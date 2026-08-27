@@ -34,3 +34,17 @@
 - change: 记录 release-tools 的验收基线为「仅允许上述既有 flaky 失败」。版本漂移修复使该聚合运行从 2 个失败降为 1 个。
 - disposition: 不在本 initiative 修复该 flaky，它属于 root test runner 的并发行为，不在桌面 harness 范围内。后续验收引用本基线而非声称 release-tools 全绿。
 - next: 继续 P1，实现测试 vault 状态保护分块。
+
+## 2026-08-27 — P1 complete, P2 started
+
+- evidence: 五个分块各自观察到 Red 后转 Green，定向目标 61/61。两次真实运行在独立选取的空闲端口 40655 与 46347 上启动 Obsidian 1.11.5，CDP 应答、vault 页面打开、退出码 0。运行后测试 vault 的 `data.json`、`main.js`、`manifest.json`、`workspace.json` 四个文件 md5 与运行前完全一致，vault 回到自带的 0.4.5 构建，29 个 `main.js.bak-*` 历史备份未被读写，沙箱目录与 Xvfb 均无残留，用户真实 Obsidian 会话 4 个进程全程存活。`lint` 0 errors / 64 warnings、`check:boundaries`、`check:product-units` 通过，`test:release-tools` 仅剩既有 flaky。
+- change: P1 标记 done，P2 转 active 并写入 `phases/02-cdp-session-layer.md`。
+- disposition: 保留全部五个分块。部署产物纳入状态守卫的 `additionalPaths` 是本阶段的关键修正——若不纳入，每轮运行都会用被测构建永久覆盖 vault 自带的 0.4.5 构建。
+- next: P2 先实现可注入 transport 的 CDP 客户端与求值能力，再定性启动期诊断的时间窗口问题。
+
+## 2026-08-27 — note: 自匹配陷阱第二次出现
+
+- evidence: 验证回收结果时用 `pgrep -f 'obsidian-acceptance-'` 统计残留，得到 2 个进程，一度判断回收失败。实际匹配到的是执行该命令的 shell 自身——其命令行包含该模式字符串。改用逐进程读取 `/proc/<pid>/cmdline` 并按 `user-data-dir` 前缀分类后，harness 残留为 0，用户真实会话 2 个渲染进程健在。
+- change: 无生产代码变更；确认 harness 本身不含任何按模式匹配的进程逻辑，该陷阱只影响人工验证命令。
+- disposition: 后续验证一律用 `/proc/<pid>/cmdline` 按 `user-data-dir` 分类，不用 `pgrep -f`。这与 goal 中「禁止按进程名或命令行模式回收」是同一条约束的两面：它既会误杀，也会误报。
+- next: 无阻塞，继续 P2。

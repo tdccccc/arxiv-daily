@@ -41,8 +41,8 @@ owner: claude-code-session
 ## Phases
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. Outcomes only — no steps. -->
-1. P1 — 隔离启动、进程组回收与测试 vault 状态保护具备可复现证据 — status: active
-2. P2 — CDP 会话层（连接、求值、诊断收集、信任对话框）稳定可复用 — status: pending
+1. P1 — 隔离启动、进程组回收与测试 vault 状态保护具备可复现证据 — status: done
+2. P2 — CDP 会话层（连接、求值、诊断收集、信任对话框）稳定可复用 — status: active
 3. P3 — P7 四项桌面验收场景在真实宿主产出断言级证据 — status: pending
 4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: pending
 
