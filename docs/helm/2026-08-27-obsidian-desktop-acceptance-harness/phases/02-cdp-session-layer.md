@@ -30,9 +30,9 @@ harness 提供一个可复用的 CDP 会话对象：连接到 vault 渲染进程
 
 - [x] CDP 客户端：连接指定 target、请求/响应按 id 配对、事件分发、连接失败与关闭的可诊断错误；拒绝非 vault 页面 target。
 - [x] 求值能力：`Runtime.evaluate` 的返回值与抛出异常映射为可断言结果，异常携带原始描述而非静默返回 undefined。
-- [ ] 诊断收集：收集 console error/warning 与 pageerror，提供「零错误」断言；并确定启动期时间窗口是否需要重载重放，把结论写进 journal。
-- [ ] 信任对话框：检测并接受，无对话框时为 no-op；以插件出现在 `app.plugins.plugins` 作为等待条件，而非固定 sleep。
-- [ ] 会话整合：`runDesktopSession` 的 body 收到已就绪的 session 对象，并在真实运行中断言插件版本等于被测版本。
+- [x] 诊断收集：收集 console error/warning 与 pageerror，提供「零错误」断言；并确定启动期时间窗口是否需要重载重放，把结论写进 journal。
+- [x] 信任对话框：检测并接受，无对话框时为 no-op；以插件出现在 `app.plugins.plugins` 作为等待条件，而非固定 sleep。
+- [x] 会话整合：`runDesktopSession` 的 body 收到已就绪的 session 对象，并在真实运行中断言插件版本等于被测版本。
 
 ## Verification
 

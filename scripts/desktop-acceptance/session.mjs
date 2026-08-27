@@ -2,9 +2,12 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
+import { createCdpClient, evaluate, selectVaultTarget } from "./cdp.mjs";
+import { createDiagnostics } from "./diagnostics.mjs";
 import { buildIsolatedEnv, buildLaunchCommand, pickFreePort, waitForCdp } from "./launch.mjs";
 import { reclaimProcessGroup, spawnInProcessGroup } from "./process-group.mjs";
 import { assertIsolatedConfigHome, composeVaultConfig } from "./vault-config.mjs";
+import { waitForPluginReady } from "./trust.mjs";
 import { createVaultStateGuard } from "./vault-state.mjs";
 
 /**
@@ -35,6 +38,7 @@ export async function runDesktopSession({
   sourceDir,
   obsidianPath = "/opt/Obsidian/obsidian",
   virtualDisplay = true,
+  ignoreDiagnostics = [],
   body,
   fs = fsPromises,
   homeDir = os.homedir(),
@@ -73,16 +77,40 @@ export async function runDesktopSession({
 
       const ownProcessGroupId = await readOwnProcessGroupId(fs);
       const handle = spawnInProcessGroup({ command, args, env, stdio: "ignore" });
+      let client;
       try {
-        const browser = await waitForCdp({ port });
+        await waitForCdp({ port });
+        const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+        const target = selectVaultTarget(targets);
+
+        client = createCdpClient({ url: target.webSocketDebuggerUrl });
+        await client.ready();
+
+        // Order matters: diagnostics are enabled before the trust prompt is
+        // accepted, and community plugins do not load until it is, so the whole
+        // plugin startup falls inside the collection window.
+        const diagnostics = await createDiagnostics(client, { ignore: ignoreDiagnostics });
+        const evaluateInRenderer = (expression) => evaluate(client, expression);
+
+        const { version: pluginVersion, trustPromptAccepted, loadedBeforeAttach } =
+          await waitForPluginReady({ evaluate: evaluateInRenderer, pluginId });
+        assertVersionUnderTest({ expected: version, reported: pluginVersion });
+
         return await body({
           port,
-          browser,
-          expectedVersion: version,
           sandbox,
-          assertVersion: (reported) => assertVersionUnderTest({ expected: version, reported }),
+          expectedVersion: version,
+          session: {
+            evaluate: evaluateInRenderer,
+            diagnostics,
+            client,
+            pluginVersion,
+            trustPromptAccepted,
+            diagnosticsComplete: !loadedBeforeAttach,
+          },
         });
       } finally {
+        client?.close();
         await reclaimProcessGroup(
           { pgid: handle.pgid, ownProcessGroupId },
           {
