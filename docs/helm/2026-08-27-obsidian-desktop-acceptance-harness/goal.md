@@ -49,4 +49,3 @@ owner: claude-code-session
 ## Open questions
 
 - 信任对话框状态能否预置到隔离配置以省去每轮 DOM 点击；可行性探针未在隔离配置目录中定位到其持久化位置。
-- 测试 vault 的 plugin settings store 每轮应重置为固定 fixture，还是保留用户现状并在结束时还原。

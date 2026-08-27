@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@arxiv-daily/core": "0.4.3",
-    "@arxiv-daily/node-runtime": "0.4.1",
+    "@arxiv-daily/node-runtime": "0.4.3",
     "@huggingface/transformers": "^4.2.0"
   },
   "devDependencies": {
