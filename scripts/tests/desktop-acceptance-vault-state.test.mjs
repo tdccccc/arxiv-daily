@@ -204,3 +204,27 @@ test("the guard never touches historical build backups next to the settings stor
   assert.equal(fs.calls.some(([, path]) => path === backup), false);
   assert.equal(fs.files.get(backup).toString(), "old build");
 });
+
+test("the guard also protects artifacts the harness itself deploys", async () => {
+  const mainJs = `${vaultPath}/.obsidian/plugins/${pluginId}/main.js`;
+  const fs = fakeFs({ [settingsPath]: "{}", [workspacePath]: "{}", [mainJs]: "vault's own 0.4.5 build" });
+  const guard = createVaultStateGuard({
+    vaultPath,
+    pluginId,
+    fs,
+    additionalPaths: [mainJs],
+  });
+  await guard.protect(async () => {
+    await fs.writeFile(mainJs, "branch build under test");
+  });
+  assert.equal(fs.files.get(mainJs).toString(), "vault's own 0.4.5 build");
+});
+
+test("additionalPaths must be absolute and inside the vault", () => {
+  for (const bad of ["relative/main.js", "/elsewhere/main.js"]) {
+    assert.throws(
+      () => createVaultStateGuard({ vaultPath, pluginId, fs: fakeFs(), additionalPaths: [bad] }),
+      /absolute|inside the vault/i,
+    );
+  }
+});

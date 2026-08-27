@@ -27,11 +27,23 @@ export function createVaultStateGuard({
   pluginId,
   fs = fsPromises,
   process: proc = process,
+  additionalPaths = [],
 }) {
   if (typeof vaultPath !== "string" || !path.isAbsolute(vaultPath)) {
     throw new TypeError(`vault path must be absolute: ${String(vaultPath)}`);
   }
-  const paths = vaultStatePaths(vaultPath, { pluginId });
+  const vaultRoot = path.resolve(vaultPath);
+  const extra = additionalPaths.map((candidate) => {
+    if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
+      throw new TypeError(`protected path must be absolute: ${String(candidate)}`);
+    }
+    const resolved = path.resolve(candidate);
+    if (!resolved.startsWith(`${vaultRoot}${path.sep}`)) {
+      throw new Error(`protected path must be inside the vault: ${resolved}`);
+    }
+    return resolved;
+  });
+  const paths = [...vaultStatePaths(vaultPath, { pluginId }), ...extra];
   let snapshot = null;
   let installed = null;
 
