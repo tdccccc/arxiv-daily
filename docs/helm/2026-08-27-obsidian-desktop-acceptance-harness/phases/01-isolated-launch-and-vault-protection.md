@@ -32,7 +32,7 @@ harness 能以隔离配置启动一个只挂载 `plugin_test` 的真实 Obsidian
 - [x] 测试 vault 状态保护：备份并还原 plugin settings store 与 `workspace.json`；成功、抛错与信号中断三条退出路径都完成还原，且还原具备幂等性。
 - [x] 进程组生命周期：以 `setsid` 启动并记录 PGID，按 `kill -PGID` 分级回收（TERM→KILL）；任何按进程名或命令行模式的回收路径在测试中被显式拒绝。
 - [x] 被测构建部署与版本断言：把当前分支构建的 `main.js` 与 `manifest.json` 部署进测试 vault，并在运行前断言加载版本等于被测版本；不触碰 vault 中既有的历史构建备份文件。
-- [ ] 端到端骨架：串联上述四项，实际启动一次真实 Obsidian、确认 CDP 端口可达后干净回收，并在空闲端口选择下可重复执行。
+- [x] 端到端骨架：串联上述四项，实际启动一次真实 Obsidian、确认 CDP 端口可达后干净回收，并在空闲端口选择下可重复执行。
 
 ## Verification
 
