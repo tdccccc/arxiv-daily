@@ -48,3 +48,17 @@
 - change: 无生产代码变更；确认 harness 本身不含任何按模式匹配的进程逻辑，该陷阱只影响人工验证命令。
 - disposition: 后续验证一律用 `/proc/<pid>/cmdline` 按 `user-data-dir` 分类，不用 `pgrep -f`。这与 goal 中「禁止按进程名或命令行模式回收」是同一条约束的两面：它既会误杀，也会误报。
 - next: 无阻塞，继续 P2。
+
+## 2026-08-27 — L1 adjust: 还原范围收敛为「不可重新生成的状态」
+
+- evidence: 用户指出测试 vault 本就是用来测试的，替换其中的 `main.js` 不构成副作用。这否定了「部署产物必须还原」的前提本身，而不只是权衡其成本。据此重新划线：`main.js` / `manifest.json` 由 `npm run build` 一条命令即可重建；`data.json` 保存手工配置的 endpoint、密钥、topics 与输出路径，重新生成不了。P3 会真实切换 sidecar 设置，若不还原将永久改变用户配置。
+- change: `runDesktopSession` 不再把部署产物纳入状态守卫，跑完保留分支构建；`data.json` 与 `workspace.json` 继续还原。守卫的 `additionalPaths` 能力与其测试保留，它表达的「受保护路径必须在 vault 内」约束仍可能被 P3 使用。
+- disposition: 保留 P1 全部实现。此前把「构建产物」与「用户状态」当作同一类文件是设计错误，本次收敛而非新增能力。测试 vault 中原有的 0.4.5 构建已被 0.4.3 覆盖且未单独备份；它可由 `release/0.4.5` 分支重新构建，符合本次划定的可重建标准。
+- next: 无阻塞，继续 P2 的 CDP 客户端与求值能力。
+
+## 2026-08-27 — note: 符号链接部署方案实测可行但被否决
+
+- evidence: 在 `/tmp` 一次性 vault 中把 `main.js` 与 `manifest.json` 符号链接到仓库构建，Obsidian 1.11.5 正常加载并报告版本 `0.4.3`，证明「零拷贝、永远运行当前构建」在技术上成立。实验全程未触碰 `plugin_test`。
+- change: 仍采用复制部署。符号链接是对 vault 的持久改动，且本 initiative 运行在临时 worktree 中，worktree 删除后 vault 内插件即为断链，用户下次手动打开会遇到加载失败。
+- disposition: 记录该方案可行以备将来在长期 checkout 中重新考虑；当前不实现。无论采用哪种部署方式，运行前的版本断言都必须保留——它防的是 Obsidian 加载陈旧 bundle，与部署方式无关。
+- next: 无。

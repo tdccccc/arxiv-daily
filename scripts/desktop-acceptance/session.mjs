@@ -1,11 +1,7 @@
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  assertVersionUnderTest,
-  deployBuildUnderTest,
-  deployedArtifactPaths,
-} from "./build-deploy.mjs";
+import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
 import { buildIsolatedEnv, buildLaunchCommand, pickFreePort, waitForCdp } from "./launch.mjs";
 import { reclaimProcessGroup, spawnInProcessGroup } from "./process-group.mjs";
 import { assertIsolatedConfigHome, composeVaultConfig } from "./vault-config.mjs";
@@ -48,12 +44,11 @@ export async function runDesktopSession({
   const configHome = path.join(sandbox, "config");
   assertIsolatedConfigHome(configHome, { realConfigHome: path.join(homeDir, ".config") });
 
-  const guard = createVaultStateGuard({
-    vaultPath,
-    pluginId,
-    fs,
-    additionalPaths: deployedArtifactPaths(vaultPath, { pluginId }),
-  });
+  // Only state that cannot be regenerated is restored. The deployed build is
+  // not: `npm run build` reproduces it, and leaving the branch build in place
+  // matches the ordinary plugin development loop and keeps a failed run open
+  // for manual inspection.
+  const guard = createVaultStateGuard({ vaultPath, pluginId, fs });
 
   try {
     return await guard.protect(async () => {
