@@ -1,7 +1,7 @@
 # Obsidian 桌面验收自动化 harness（Obsidian desktop acceptance harness）
 
-status: active
-updated: 2026-08-27
+status: done
+updated: 2026-08-28
 owner: claude-code-session
 
 ## Intent
@@ -10,14 +10,14 @@ owner: claude-code-session
 
 ## Success criteria
 
-- [ ] harness 以隔离 XDG 配置启动真实 Obsidian，vault 列表只含指定测试 vault；用户真实 vault 与 `~/.config/obsidian` 全程不读不写。
-- [ ] 进程生命周期按 `setsid` 进程组建立与回收；用户常驻的真实 Obsidian 会话在 harness 运行前后均存活且未被影响。
-- [ ] 测试 vault 的可变状态（plugin settings store、workspace）在每轮运行前备份、运行后还原，失败路径同样还原。
-- [ ] harness 将当前分支构建部署进测试 vault，断言运行的是被测版本而非 vault 中的历史构建。
-- [ ] CDP 会话可断言插件完成加载，并收集全程 console error 与 pageerror；零错误是可检查的通过条件。
-- [ ] P7 四项桌面验收在真实宿主可断言：PDF `#page=N` 打开动作与页码降级、sidecar 默认关闭、启用后探测失败回退 PDF.js、旧 settings migration。
-- [ ] 单条命令可复现执行；不进入默认 `npm test`，不进入 plugin bundle，`check:boundaries`、`check:product-units`、lint 与 bundle 预算门禁维持通过。
-- [ ] 环境不具备（无显示、Obsidian 缺失、CDP 端口被占）时给出明确的阻塞原因并非零退出；脚本本身即等价的可复现手工步骤。
+- [x] harness 以隔离 XDG 配置启动真实 Obsidian，vault 列表只含指定测试 vault；用户真实 vault 与 `~/.config/obsidian` 全程不读不写。
+- [x] 进程生命周期按 `setsid` 进程组建立与回收；用户常驻的真实 Obsidian 会话在 harness 运行前后均存活且未被影响。
+- [x] 测试 vault 的可变状态（plugin settings store、workspace）在每轮运行前备份、运行后还原，失败路径同样还原。
+- [x] harness 将当前分支构建部署进测试 vault，断言运行的是被测版本而非 vault 中的历史构建。
+- [x] CDP 会话可断言插件完成加载，并收集全程 console error 与 pageerror；零错误是可检查的通过条件。
+- [x] P7 四项桌面验收在真实宿主可断言：PDF `#page=N` 打开动作与页码降级、sidecar 默认关闭、启用后探测失败回退 PDF.js、旧 settings migration。
+- [x] 单条命令可复现执行；不进入默认 `npm test`，不进入 plugin bundle，`check:boundaries`、`check:product-units`、lint 与 bundle 预算门禁维持通过。
+- [x] 环境不具备（无显示、Obsidian 缺失、CDP 端口被占）时给出明确的阻塞原因并非零退出；脚本本身即等价的可复现手工步骤。
 
 ## Non-goals
 
@@ -44,8 +44,8 @@ owner: claude-code-session
 1. P1 — 隔离启动、进程组回收与测试 vault 状态保护具备可复现证据 — status: done
 2. P2 — CDP 会话层（连接、求值、诊断收集、信任对话框）稳定可复用 — status: done
 3. P3 — P7 四项桌面验收场景在真实宿主产出断言级证据 — status: done
-4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: active
+4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: done
 
 ## Open questions
 
-- 信任对话框状态能否预置到隔离配置以省去每轮 DOM 点击；可行性探针未在隔离配置目录中定位到其持久化位置。
+- 已解决：不预置信任状态。每轮出现的信任对话框正是诊断完整性的保证——插件在接受前不加载，harness 在接受前已启用诊断，因此整个插件启动期都在收集窗口内。`waitForPluginReady` 会在插件于 attach 前就已运行时报出 `loadedBeforeAttach`，把这条前提变成可检测项。
