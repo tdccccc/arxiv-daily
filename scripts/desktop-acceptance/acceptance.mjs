@@ -11,6 +11,7 @@ import {
   sidecarFallbackScenario,
 } from "./scenarios.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
+import { startProbeListener } from "./probe-listener.mjs";
 import { runDesktopSession } from "./session.mjs";
 import { installSettingsFixture, legacySettingsFixture } from "./settings-fixture.mjs";
 
@@ -39,9 +40,11 @@ if (!environment.ok) {
   process.exit(EXIT_BLOCKED);
 }
 
-// Port 1 is privileged and never listening, so a probe against it fails the way
-// an absent sidecar provider would.
-const UNREACHABLE_PORT = 1;
+// A listener we own is the only way to observe the plugin's HTTP: it goes out
+// through Obsidian's requestUrl in the Electron main process, invisible to the
+// renderer's debugging protocol. It refuses every request, which is exactly the
+// condition the probe-failure fallback exists for.
+const listener = await startProbeListener();
 
 let outcome;
 try {
@@ -55,29 +58,30 @@ try {
     async body({ session }) {
       const results = await runScenarios([
         () => settingsMigrationScenario({ session }),
-        () => sidecarDisabledScenario({ session, requests: session.requests.networkUrls() }),
+        () => sidecarDisabledScenario({ session, listener }),
         () => pdfPageLocationScenario({ session }),
-        () => sidecarFallbackScenario({ session, unreachablePort: UNREACHABLE_PORT }),
+        () => sidecarFallbackScenario({ session, listener }),
       ]);
       return {
         results,
         pluginVersion: session.pluginVersion,
         diagnosticsComplete: session.diagnosticsComplete,
         errors: session.diagnostics.errors(),
-        observedRequests: session.requests.networkUrls(),
       };
     },
   });
 } catch (error) {
+  await listener.close();
   console.error(`desktop acceptance could not run: ${error.message}`);
   process.exit(1);
 }
+await listener.close();
 
 console.log(`build under test   ${outcome.pluginVersion}`);
 console.log(
   `diagnostics        ${outcome.diagnosticsComplete ? "complete" : "INCOMPLETE — the plugin was already running when we attached"}`,
 );
-console.log(`network requests   ${outcome.observedRequests.length}`);
+console.log(`sidecar requests   ${listener.requests().length} (to the harness's own listener)`);
 console.log("");
 for (const scenario of outcome.results.scenarios) {
   console.log(`${scenario.passed ? "PASS" : "FAIL"}  ${scenario.name}`);

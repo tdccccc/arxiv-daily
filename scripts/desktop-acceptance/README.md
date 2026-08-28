@@ -59,8 +59,11 @@ If the harness cannot run, these steps are the equivalent record:
    page 4, not merely open the file.
 5. In settings, confirm the PDF parser sidecar is **off** after loading settings
    that predate it.
-6. Point the sidecar at an unreachable loopback port and enable it. Nothing may
-   be logged as an error.
+6. Point the sidecar at a loopback port you control and enable it. The probe
+   must reach it, fail, and leave PDF.js selected with nothing logged as an
+   error. Note that the plugin's HTTP goes out through Obsidian's `requestUrl`
+   in the Electron main process, so the developer console's network tab will
+   not show it — bind an actual socket.
 7. Restore `data.json` and `workspace.json` from your backups.
 
 ## Layout
@@ -77,7 +80,7 @@ If the harness cannot run, these steps are the equivalent record:
 | `launch.mjs` | Command, isolated env, free port, CDP wait |
 | `cdp.mjs` | Dependency-free CDP client and evaluator |
 | `diagnostics.mjs` | Console and page-error collection |
-| `network.mjs` | Request observation |
+| `probe-listener.mjs` | Real loopback socket that observes the plugin's HTTP |
 | `trust.mjs` | Trust prompt and plugin readiness |
 | `scenarios.mjs` | The four acceptance scenarios |
 | `settings-fixture.mjs` | Legacy settings the migration must handle |

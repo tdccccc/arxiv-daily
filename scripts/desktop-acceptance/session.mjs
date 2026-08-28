@@ -4,7 +4,6 @@ import path from "node:path";
 import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
 import { createCdpClient, evaluate, selectVaultTarget } from "./cdp.mjs";
 import { createDiagnostics } from "./diagnostics.mjs";
-import { createRequestLog } from "./network.mjs";
 import { buildIsolatedEnv, buildLaunchCommand, pickFreePort, waitForCdp } from "./launch.mjs";
 import { reclaimProcessGroup, spawnInProcessGroup } from "./process-group.mjs";
 import { assertIsolatedConfigHome, composeVaultConfig } from "./vault-config.mjs";
@@ -123,7 +122,6 @@ export async function runDesktopSession({
         // accepted, and community plugins do not load until it is, so the whole
         // plugin startup falls inside the collection window.
         const diagnostics = await createDiagnostics(client, { ignore: ignoreDiagnostics });
-        const requests = await createRequestLog(client);
         const evaluateInRenderer = (expression) => evaluate(client, expression);
 
         const { version: pluginVersion, trustPromptAccepted, loadedBeforeAttach } =
@@ -137,7 +135,6 @@ export async function runDesktopSession({
           session: {
             evaluate: evaluateInRenderer,
             diagnostics,
-            requests,
             client,
             pluginVersion,
             trustPromptAccepted,

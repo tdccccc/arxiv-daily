@@ -111,3 +111,17 @@
 - change: 将 goal 由 done 改回 active，P3 改回 active，并取消勾选 success criterion 6。场景将改为经真实设置事务启用，再调用 `buildFullTextDocumentParser()`，断言探测请求确实发出、返回 PDF.js fallback 而非 sidecar selector、且未产生 console 错误。
 - disposition: 其余三项场景不受影响，其证据（迁移、默认关闭无请求、PDF 第 4 页定位与负向对照）依然成立。此处的教训是负向对照只做了两项：`pdf-page-location` 与 `sidecar-disabled-by-default` 各有反向证据，而 `sidecar-unreachable-falls-back` 没有——缺的恰好是它。
 - next: 重写该场景并取得真实探测证据，然后重新收尾 goal。
+
+## 2026-08-28 — 探测证据必须来自真实 socket，而非渲染进程网络域
+
+- evidence: 强化后的场景在真实运行中如实失败：`no probe request to http://127.0.0.1:1 was ever attempted`。追查发现插件的 HTTP 经 `plugin/src/hosts/obsidian/http-client.ts` 走 Obsidian 的 `requestUrl`，在 Electron 主进程发起，渲染进程的 CDP `Network` 域结构上就看不到。因此 `sidecar-disabled-by-default` 的「0 个请求」同样是空洞的——它观察的那一层本就不会有插件流量。
+- change: 新增 `probe-listener.mjs`，在 harness 进程内绑定真实 loopback socket 并对所有请求返回 503。两个 sidecar 场景改为把设置指向该监听器：关闭时断言构建 parser 未发出任何���求，启用时断言探测确实到达、被拒绝、且结构上返回 PDF.js 而非 sidecar selector（生产 bundle 类名被压缩，只能用结构判别）。删除 `network.mjs` 及其渲染进程观察，避免它再次诱发同类误判。
+- disposition: 一次真实运行同时提供了两侧对照——同一监听器在关闭场景收到 0 个请求、在启用场景收到 1 个并拒绝。这比任何单侧断言都强，且不依赖渲染进程网络栈。
+- next: 重新收尾 goal。
+
+## 2026-08-28 — 修复前的中断竞态确实造成了真实数据丢失
+
+- evidence: 最终校验时发现测试 vault 的 `workspace.json` 与原始基线不符，缺少 `showSearch`、`searchQuery` 与一个 ribbon 条目。连续两次运行前后该文件逐字节稳定，说明当前还原正常；漂移来自修复前的那次中断实验——当时信号处理器先还原了文件，而 Obsidian 仍在运行并随后再次写入，正是「必须先回收宿主再还原状态」所要防止的顺序问题。
+- change: 从 `/tmp/plugin_test-backup-1787835341/workspace.json` 还原该文件，已确认与 harness 运行前的备份逐字节一致。
+- disposition: 该事件把先前记为「理论风险」的竞态变成了已发生的事实，`onInterrupt` 先于 restore 执行的修复因此有真实依据而非推测。保留修复。
+- next: 无。

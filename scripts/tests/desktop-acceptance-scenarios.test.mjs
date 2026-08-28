@@ -68,32 +68,123 @@ test("the PDF scenario reports honestly when the vault holds no PDF", async () =
   assert.match(result.detail, /no pdf/i);
 });
 
-test("the disabled-sidecar scenario passes when the setting is off and nothing was requested", async () => {
-  const session = fakeSession([
-    ["pdfParserSidecar", JSON.stringify({ enabled: false, capabilitiesUrl: "http://127.0.0.1:8765/capabilities", parseUrl: "http://127.0.0.1:8765/parse" })],
-  ]);
-  const result = await sidecarDisabledScenario({ session, requests: [] });
+/** Stand-in for the real loopback listener: records what the plugin sent. */
+function fakeListener() {
+  const requests = [];
+  return {
+    origin: "http://127.0.0.1:45001",
+    capabilitiesUrl: "http://127.0.0.1:45001/v1/capabilities",
+    parseUrl: "http://127.0.0.1:45001/v1/parse",
+    requests: () => [...requests],
+    record: () => requests.push({ method: "GET", path: "/v1/capabilities" }),
+  };
+}
+
+/** Session stub whose parser build reaches the listener only when enabled. */
+function sidecarSession({ enabled, built, probes, errorsOnChange = [], preexisting = [] }, listener) {
+  const errors = [...preexisting];
+  return {
+    evaluate: async (expression) => {
+      if (expression.includes("pdfParserSidecar ?? null")) {
+        return JSON.stringify({
+          enabled,
+          capabilitiesUrl: listener.capabilitiesUrl,
+          parseUrl: listener.parseUrl,
+        });
+      }
+      if (expression.includes("settingsChanges.changeValue")) {
+        errors.push(...errorsOnChange);
+        return "changed";
+      }
+      if (expression.includes("buildFullTextDocumentParser")) {
+        if (probes) listener.record();
+        return JSON.stringify(built);
+      }
+      return "waited";
+    },
+    diagnostics: { errors: () => errors },
+  };
+}
+
+const pdfjsOnly = { parser: true, parserSelector: false };
+const sidecarAdopted = { parser: false, parserSelector: true };
+
+test("the disabled scenario passes when building the parser sends nothing", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: false, built: pdfjsOnly, probes: false }, listener);
+  const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, true);
 });
 
-test("the disabled-sidecar scenario fails when a request reached the sidecar endpoint", async () => {
-  const session = fakeSession([
-    ["pdfParserSidecar", JSON.stringify({ enabled: false, capabilitiesUrl: "http://127.0.0.1:8765/capabilities", parseUrl: "http://127.0.0.1:8765/parse" })],
-  ]);
-  const result = await sidecarDisabledScenario({
-    session,
-    requests: ["http://127.0.0.1:8765/capabilities"],
-  });
+test("the disabled scenario fails when a request still reached the listener", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: false, built: pdfjsOnly, probes: true }, listener);
+  const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, false);
-  assert.match(result.detail, /8765/);
+  assert.match(result.detail, /capabilities/);
 });
 
-test("the disabled-sidecar scenario fails when the setting defaulted to enabled", async () => {
-  const session = fakeSession([
-    ["pdfParserSidecar", JSON.stringify({ enabled: true, capabilitiesUrl: "http://127.0.0.1:8765/c", parseUrl: "http://127.0.0.1:8765/p" })],
-  ]);
-  const result = await sidecarDisabledScenario({ session, requests: [] });
+test("the disabled scenario fails when the setting defaulted to enabled", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: false }, listener);
+  const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, false);
+});
+
+test("the fallback scenario passes when a refused probe produced PDF.js", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: true }, listener);
+  const result = await sidecarFallbackScenario({ session, listener });
+  assert.equal(result.passed, true);
+  assert.match(result.detail, /probe request reached/);
+});
+
+test("the fallback scenario fails when no request ever reached the endpoint", async () => {
+  // Without an observed request the pass would be vacuous: building returns the
+  // PDF.js parser whenever the sidecar is off.
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: false }, listener);
+  const result = await sidecarFallbackScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /no request reached/);
+});
+
+test("the fallback scenario fails when the sidecar was adopted despite a refusal", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: true, built: sidecarAdopted, probes: true }, listener);
+  const result = await sidecarFallbackScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /selector/);
+});
+
+test("the fallback scenario fails when the settings transaction rejected the change", async () => {
+  const listener = fakeListener();
+  const session = {
+    evaluate: async (expression) =>
+      expression.includes("settingsChanges.changeValue")
+        ? "ERROR: Invalid sidecar configuration"
+        : "waited",
+    diagnostics: { errors: () => [] },
+  };
+  const result = await sidecarFallbackScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /Invalid sidecar configuration/);
+});
+
+test("the fallback scenario fails when the failed probe raised a console error", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession(
+    {
+      enabled: true,
+      built: pdfjsOnly,
+      probes: true,
+      errorsOnChange: [{ source: "console", level: "error", text: "sidecar probe exploded" }],
+    },
+    listener,
+  );
+  const result = await sidecarFallbackScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /exploded/);
 });
 
 test("the migration scenario passes when old settings gained the sidecar defaults", async () => {
@@ -112,40 +203,6 @@ test("the migration scenario fails when the migrated settings are missing a sect
   ]);
   const result = await settingsMigrationScenario({ session });
   assert.equal(result.passed, false);
-});
-
-test("the fallback scenario passes when an unreachable sidecar produced no console error", async () => {
-  const session = fakeSession([["pdfParserSidecar", JSON.stringify({ enabled: true })], ["setTimeout", "waited"]], []);
-  const result = await sidecarFallbackScenario({ session, unreachablePort: 1 });
-  assert.equal(result.passed, true);
-});
-
-test("the fallback scenario fails when enabling the sidecar produced a console error", async () => {
-  // The error must appear as a consequence of enabling, so the scenario can
-  // attribute it rather than inheriting an unrelated startup error.
-  const raised = [];
-  const session = {
-    evaluate: async (expression) => {
-      if (expression.includes("pdfParserSidecar")) {
-        raised.push({ source: "console", level: "error", text: "sidecar probe exploded" });
-        return "configured";
-      }
-      return "waited";
-    },
-    diagnostics: { errors: () => raised },
-  };
-  const result = await sidecarFallbackScenario({ session, unreachablePort: 1 });
-  assert.equal(result.passed, false);
-  assert.match(result.detail, /exploded/);
-});
-
-test("the fallback scenario ignores an error that predates it", async () => {
-  const session = fakeSession(
-    [["pdfParserSidecar", "configured"], ["setTimeout", "waited"]],
-    [{ source: "console", level: "error", text: "unrelated startup error" }],
-  );
-  const result = await sidecarFallbackScenario({ session, unreachablePort: 1 });
-  assert.equal(result.passed, true);
 });
 
 test("runScenarios reports every scenario and fails overall if any failed", async () => {
