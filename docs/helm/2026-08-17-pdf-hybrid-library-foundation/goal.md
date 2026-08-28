@@ -45,7 +45,8 @@ owner: codex-main-session
 4. P4b — 固定上限 block 与事务化 generation 替代查询期全库 JSON/base64 装载 — status: done
 5. P5 — 搜索 UI 展示章节、原文片段和页码，并可打开 PDF 到证据位置 — status: done
 6. P6 — 可选高质量 PDF 解析 sidecar 接入并完成复杂论文、隐私与降级验证 — status: done
-7. P7 — 旧库迁移、规模性能、跨平台运行与全量兼容性验收完成 — status: done
+7. P7 — 旧库迁移、规模性能、跨平台运行与全量兼容性验收完成 — status: blocked
+8. P8 — generation 路由记账与真实语料规模缺陷修复完成 — status: active
 
 ## Open questions
 

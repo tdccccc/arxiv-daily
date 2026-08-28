@@ -29,7 +29,7 @@ updated: 2026-08-23
 
 - [x] 建立 P7 验收矩阵：将现有迁移、generation reuse/rebuild、受限 heap、路径和 PDF 页面降级证据映射到成功标准，并指出仍未覆盖的可执行契约。
 - [x] 补齐并验收旧版 knowledge-base 到 generation 的真实迁移、失败保留 prior current、parser/sidecar derivation 改变后的重建与搜索兼容性；不删除唯一 legacy source。
-- [x] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。
+- [ ] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。（2026-08-28 撤销：合成语料掩盖了真实语料下的 routing 记账缺陷，见 journal）
 - [x] 完成 Node、Plugin 与 CLI 的自动化兼容性和权限边界回归；确认 sidecar 默认关闭、失败回退和页码降级不扩大 consent 或路径权限。
 - [x] 在隔离桌面 Obsidian Vault 完成 PDF `#page=N`、sidecar settings/probe/fallback、旧 settings migration 与无控制台错误的实际验证；无法执行时记录环境阻塞和可复现步骤。
 - [x] 复现并处置 lint、smoke build 与 Obsidian submission release-gate 基线；最终全量验收仍等待桌面 UI 证据。

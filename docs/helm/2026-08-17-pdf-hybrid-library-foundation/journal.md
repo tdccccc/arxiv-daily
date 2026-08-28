@@ -143,3 +143,13 @@
 - change: P7 由 active 改为 done。goal 的 status 与 success criteria 未改动。
 - disposition: 本 goal 的七个 phase 现已全部 done 或 superseded。是否逐条勾选 success criteria 并关闭 goal 属于 owner 的独立判断，本次不代为决定。
 - next: 由 owner 决定是否收尾本 goal。
+
+## 2026-08-28 — L2 reshape: generation 索引在真实语料上无法构建
+
+- evidence: 用测试 vault 中真实使用产生的 legacy 知识库（schema v1，199 篇、22,819 chunk）执行 `synchronizeFullTextGenerationIndex`，在 dictionary 阶段以 `object-limit` 失败。逐级缩小语料测得确切边界：1 篇 / 116 chunk 成功（objects=8/4096，routeRefs=256）；2 篇 / 252 chunk 成功（objects=13/4096，routeRefs=512）；3 篇 / 850 chunk 失败。对象预算几乎未被使用，撞死的是路由引用计数。
+- evidence（机制）: `generation-index-builder.ts:505` 以 `routeRefCount + buckets.size > MAX_GENERATION_OBJECTS` 判定，`generation-index-format.ts:795` 用同一常量校验 descriptor。但每个 dictionary block 是一个对象，却因真实词汇散布于全部 256 个桶而消耗 256 个「对象」额度——实测每 block 恰好 256，线性吻合。因此硬上限是 16 个 dictionary block，约 2,000 chunk，与语料规模无关。本库超出约一个数量级。
+- evidence（为何 fixture 未发现）: 既有单元测试的 chunk 文本形如 `"alpha telescope survey"`，三个词，词法字典永远触不到边界。`object-limit` 有测试（`generation-index-builder.test.ts:393`），但断言的是「超限会抛错」，而非「真实语料不会超限」。P7 该任务的措辞「固定合成语料」正是掩盖问题的条件。
+- change: 撤销 P7「在固定合成语料和受限 heap 下复验……block 上限」的勾选，P7 置为 blocked。新增 P8 处理路由记账缺陷与真实语料规模验收。
+- disposition: 不调大 `MAX_GENERATION_OBJECTS`。按实测外推，22,819 chunk 需要约 182 个 block、约 46,592 个路由引用；以对象路径存储约 1,638 KiB，超过 `MAX_GENERATION_DESCRIPTOR_BYTES`（1 MiB），因此放宽常量只会把失败从对象上限推到 descriptor 上限。以对象序号存储约 228 KiB 可容纳。修复需要区分两个预算并改变路由表的表示，属格式变更。
+- disposition（未收敛项）: 现有真实语料均为 legacy v1 经 `promoteLegacyChunk` 提升，无法据此区分触发因素是真实文本词汇量还是 legacy 提升路径；P8 需以当前解析器/分块器产出的 v2 语料复核。另观察到重投影性能异常：3 篇 197 秒、40 篇 379 秒，不重新嵌入却如此耗时，需单独定位。
+- next: 按 P8 计划先以真实词汇密度的 fixture 复现 Red，再修改路由表示与预算。
