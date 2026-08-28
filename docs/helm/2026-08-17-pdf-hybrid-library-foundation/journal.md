@@ -136,3 +136,10 @@
 - change: 勾选 P7 最后一项任务并记录验收证据、覆盖边界与安全边界。未改动本 goal 的 status、success criteria 或 P7 的 phase status。
 - disposition: 2026-08-22 记录的「窗口读取自动化受审批限流」不再是阻塞——该路线已被否决，改用 CDP 直连渲染进程。此前预留的「记录桌面证据为显式豁免」不再需要，P7 取得的是实际证据而非豁免。桌面覆盖限于 Linux 宿主与宿主接线层；Core 解析回退语义仍由 P6 单元测试覆盖。
 - next: 是否据此关闭 P7 与本 goal 由 owner 决定；harness 所在分支为 `test/obsidian-desktop-harness`，尚未合入。
+
+## 2026-08-28 — P7 done
+
+- evidence: P7 的六项任务全部完成。迁移、受限 heap 规模、Node/Plugin/CLI 自动化兼容性与 release-gate 处置此前已取得证据；最后一项桌面 UI 验收现由 CDP harness 在真实 Obsidian 1.11.5 上产出，四项场景各带反向对照，详见 `phases/07-final-acceptance.md` 的 P7.4 条目。
+- change: P7 由 active 改为 done。goal 的 status 与 success criteria 未改动。
+- disposition: 本 goal 的七个 phase 现已全部 done 或 superseded。是否逐条勾选 success criteria 并关闭 goal 属于 owner 的独立判断，本次不代为决定。
+- next: 由 owner 决定是否收尾本 goal。
