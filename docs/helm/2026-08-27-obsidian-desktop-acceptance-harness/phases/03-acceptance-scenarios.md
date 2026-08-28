@@ -40,7 +40,7 @@ P7 遗留的四项桌面验收在真实 Obsidian 宿主中产出断言级证据�
 - 定向：`node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿，且每个任务的 Red 曾被观察到。
 - 端到端：一次真实运行四项场景全部通过，诊断为 complete 且零错误；反向证据表明断言在错误页码下确实失败。
 - 安全边界：运行前后用户真实 Obsidian 会话存活；`data.json` 与 `workspace.json` 逐字节还原；无 harness 进程或沙箱残留。
-- 门禁：`lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 仅出现既有 flaky；`git diff --check` 干净。
+- 门禁：`lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 全绿；`git diff --check` 干净。
 
 ## Abort / reshape triggers
 

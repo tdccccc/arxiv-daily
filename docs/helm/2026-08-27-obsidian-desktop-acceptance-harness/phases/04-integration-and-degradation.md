@@ -38,7 +38,7 @@ updated: 2026-08-28
 - 定向：`node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿，且 preflight 的 Red 曾被观察到。
 - 阻塞降级：在缺少 vault、缺少构建与不存在的 Obsidian 路径三种情况下各观察到指名阻塞原因与非零退出。
 - 集成：一次 `OBSIDIAN_TEST_VAULT=... npm run test:desktop` 真实通过；`npm test` 不执行桌面验收。
-- 门禁：`lint`、`check:boundaries`、`check:product-units`、`npm run build`、`check:obsidian-submission` 通过；`test:release-tools` 仅出现既有 flaky。
+- 门禁：`lint`、`check:boundaries`、`check:product-units`、`npm run build`、`check:obsidian-submission` 通过；`test:release-tools` 全绿。
 
 ## Abort / reshape triggers
 

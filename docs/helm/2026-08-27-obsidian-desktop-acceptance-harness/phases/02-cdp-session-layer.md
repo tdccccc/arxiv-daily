@@ -23,7 +23,7 @@ harness 提供一个可复用的 CDP 会话对象：连接到 vault 渲染进程
 - change kind: behavior change（新增 harness 能力）
 - strategy: 协议与能力层走 strict Red–Green–Refactor（注入假 transport）；真实连接走 Green characterization
 - Red / baseline signal: `node --test scripts/tests/desktop-acceptance-cdp*.test.mjs` 在实现前因模块缺失或断言不满足而失败
-- Green / regression checks: `node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿；`npm run lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 仅出现既有 flaky；`git diff --check` 干净
+- Green / regression checks: `node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿；`npm run lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 全绿；`git diff --check` 干净
 - exception: 真实渲染进程的连接与对话框形态无法在单元层制造有意义的 Red，改为一次可观察的端到端 Green，并以「插件版本断言为被测版本」作为补偿验证
 
 ## Tasks
@@ -39,7 +39,7 @@ harness 提供一个可复用的 CDP 会话对象：连接到 vault 渲染进程
 - 定向：`node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿，且每个任务的 Red 曾被观察到。
 - 端到端：一次真实运行中 session 报告插件版本为当前分支构建版本（当前为 `0.4.3`，与 vault 自带的 `0.4.5` 不同，因此该断言能真正区分被测构建），且诊断收集器返回可读的错误列表。
 - 安全边界：运行前后用户真实 Obsidian 会话存活；测试 vault 的受保护文件逐字节还原；无 harness 进程或沙箱目录残留。
-- 门禁：`npm run lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 仅出现既有 flaky；`git diff --check` 干净。
+- 门禁：`npm run lint`、`check:boundaries`、`check:product-units` 通过；`test:release-tools` 全绿；`git diff --check` 干净。
 
 ## Abort / reshape triggers
 

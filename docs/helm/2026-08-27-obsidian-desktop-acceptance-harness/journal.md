@@ -132,3 +132,10 @@
 - change: goal 与 P3 重新标记 done，success criterion 6 重新勾选。
 - disposition: 本次重开的教训值得留存——四项场景第一次全绿时，其中两项实际在测量一个结构上不可能观察到目标行为的地方。识破它靠的不是再跑一次，而是追问「这条断言在什么情况下会失败」。负向对照现已覆盖全部四项。
 - next: 无。桌面验收结论可供 `2026-08-17-pdf-hybrid-library-foundation` 的 P7 引用；本 initiative 不修改其状态。
+
+## 2026-08-28 — 更正：所谓「既有 flaky」是我的调用方式造成的
+
+- evidence: 本 initiative 多处记录 `test:release-tools` 存在一个既有 flaky——`the real root npm entry sends a Core focus to Core only` 在聚合运行时失败、单独运行通过，并称在干净对照 worktree 上复现。该结论是错的。真实机制是 `npm run <script> --silent` 会为子进程设置 `npm_config_loglevel=silent`，使子 npm 不再打印 `> @arxiv-daily/core@x.y.z test` 这行 banner，而该测试的正向断言恰好匹配 banner 中的 `@arxiv-daily/core`。单独运行之所以通过，是因为没有 npm 父进程注入该变量；对照 worktree 之所以「复现」，是因为我在那里同样加了 `--silent`。不加 `--silent` 时套件 exit 0、0 失败。`npm_config_loglevel=silent node --test scripts/tests/root-test-runner.test.mjs` 可单独复现，确认机制。
+- change: 将该测试的正向断言从 npm banner 改为 vitest 自己打印的 `packages/core` 运行路径——它不受调用方日志级别影响；三条反向路由断言保持不变。修改后在有无 `npm_config_loglevel=silent` 两种条件下均通过，完整套件在两种调用方式下均为 0 失败。同时更正各 phase 文件中「仅出现既有 flaky」的验收表述。
+- disposition: 此前所有以「仅剩既有 flaky」描述的验收结论应读作「全绿」。这条错误的根源与本 initiative 反复出现的模式相同——观察到一个失败后，我为它编了一个合理的解释（并发敏感），并用一次同样带缺陷的对照实验确认了它，而没有追问「什么条件下它会通过」。
+- next: 无。
