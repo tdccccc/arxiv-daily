@@ -125,3 +125,10 @@
 - change: 从 `/tmp/plugin_test-backup-1787835341/workspace.json` 还原该文件，已确认与 harness 运行前的备份逐字节一致。
 - disposition: 该事件把先前记为「理论风险」的竞态变成了已发生的事实，`onInterrupt` 先于 restore 执行的修复因此有真实依据而非推测。保留修复。
 - next: 无。
+
+## 2026-08-28 — goal 重新收尾
+
+- evidence: 四项场景在真实 Obsidian 1.11.5 上全部通过，且每项都有反向证据——PDF 页码在 `#page=2` 与 `#page=4` 下分别报 2 与 4；sidecar 关闭时监听器收到 0 个请求、启用时收到 1 个并拒绝后回退 PDF.js；伪造请求会使关闭场景失败；无探测到达会使启用场景失败。harness 单元测试 132/132，完整 workspace 套件 2,753 tests 通过，`lint` 0 errors / 64 warnings，`check:boundaries`、`check:product-units`、`build`、`smoke:build`、`check:obsidian-submission` 通过，`test:release-tools` 仅剩既有 flaky。中断路径经真实 SIGTERM 验证：0 个遗留进程、0 个 Xvfb、0 个沙箱目录。
+- change: goal 与 P3 重新标记 done，success criterion 6 重新勾选。
+- disposition: 本次重开的教训值得留存——四项场景第一次全绿时，其中两项实际在测量一个结构上不可能观察到目标行为的地方。识破它靠的不是再跑一次，而是追问「这条断言在什么情况下会失败」。负向对照现已覆盖全部四项。
+- next: 无。桌面验收结论可供 `2026-08-17-pdf-hybrid-library-foundation` 的 P7 引用；本 initiative 不修改其状态。
