@@ -129,3 +129,17 @@
 - change: set the lint gate to the observed 64-warning baseline, remove the unused `setIcon`, replace the obsolete 1 MiB check with a 2 MiB repository safety budget, and make smoke reject only actual `canvas`/`onnxruntime-node` package imports. The three requested gates now pass in non-sandbox execution.
 - disposition: keep the full local embedding runtime and current three-asset release contract; do not remove browser Canvas API usage or hide native imports by string filtering. An unrelated release-tool test still reports the pre-existing plugin/node-runtime version drift (`0.4.1` vs `0.4.3`) and remains outside this change.
 - next: finish P7 only after the isolated Obsidian desktop UI acceptance, or record that desktop evidence as an explicit waiver.
+
+## 2026-08-28 — P7 桌面验收由自动化 harness 取得
+
+- evidence: 独立 initiative `2026-08-27-obsidian-desktop-acceptance-harness` 建立了 CDP 驱动的桌面验收 harness，四项 P7 遗留验收在真实 Obsidian 1.11.5 上全部通过，且每项均有反向对照：PDF `#page=2` 与 `#page=4` 分别报告第 2、4 页；sidecar 指向 harness 自建 loopback 监听器时，关闭状态下构建 parser 发出 0 个请求、启用后探测到达并被拒绝且回退 PDF.js；旧 settings fixture 迁移出 9 个 section 并保持 sidecar disabled；全程 0 console 错误。详见 `phases/07-final-acceptance.md` 的 P7.4 条目。
+- change: 勾选 P7 最后一项任务并记录验收证据、覆盖边界与安全边界。未改动本 goal 的 status、success criteria 或 P7 的 phase status。
+- disposition: 2026-08-22 记录的「窗口读取自动化受审批限流」不再是阻塞——该路线已被否决，改用 CDP 直连渲染进程。此前预留的「记录桌面证据为显式豁免」不再需要，P7 取得的是实际证据而非豁免。桌面覆盖限于 Linux 宿主与宿主接线层；Core 解析回退语义仍由 P6 单元测试覆盖。
+- next: 是否据此关闭 P7 与本 goal 由 owner 决定；harness 所在分支为 `test/obsidian-desktop-harness`，尚未合入。
+
+## 2026-08-28 — P7 done
+
+- evidence: P7 的六项任务全部完成。迁移、受限 heap 规模、Node/Plugin/CLI 自动化兼容性与 release-gate 处置此前已取得证据；最后一项桌面 UI 验收现由 CDP harness 在真实 Obsidian 1.11.5 上产出，四项场景各带反向对照，详见 `phases/07-final-acceptance.md` 的 P7.4 条目。
+- change: P7 由 active 改为 done。goal 的 status 与 success criteria 未改动。
+- disposition: 本 goal 的七个 phase 现已全部 done 或 superseded。是否逐条勾选 success criteria 并关闭 goal 属于 owner 的独立判断，本次不代为决定。
+- next: 由 owner 决定是否收尾本 goal。
