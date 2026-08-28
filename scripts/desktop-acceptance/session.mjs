@@ -4,6 +4,7 @@ import path from "node:path";
 import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
 import { createCdpClient, evaluate, selectVaultTarget } from "./cdp.mjs";
 import { createDiagnostics } from "./diagnostics.mjs";
+import { createRequestLog } from "./network.mjs";
 import { buildIsolatedEnv, buildLaunchCommand, pickFreePort, waitForCdp } from "./launch.mjs";
 import { reclaimProcessGroup, spawnInProcessGroup } from "./process-group.mjs";
 import { assertIsolatedConfigHome, composeVaultConfig } from "./vault-config.mjs";
@@ -39,6 +40,7 @@ export async function runDesktopSession({
   obsidianPath = "/opt/Obsidian/obsidian",
   virtualDisplay = true,
   ignoreDiagnostics = [],
+  beforeLaunch,
   body,
   fs = fsPromises,
   homeDir = os.homedir(),
@@ -67,6 +69,11 @@ export async function runDesktopSession({
         JSON.stringify(composeVaultConfig({ vaultPath, timestamp: Date.now() })),
       );
 
+      // Scenarios that need a specific persisted state install it here, after
+      // the build is in place and before Obsidian reads it. The state guard
+      // restores whatever the fixture replaced.
+      if (beforeLaunch) await beforeLaunch({ vaultPath, pluginId, fs });
+
       const port = await pickFreePort();
       const { command, args } = buildLaunchCommand({ obsidianPath, port, virtualDisplay });
       const env = buildIsolatedEnv({
@@ -90,6 +97,7 @@ export async function runDesktopSession({
         // accepted, and community plugins do not load until it is, so the whole
         // plugin startup falls inside the collection window.
         const diagnostics = await createDiagnostics(client, { ignore: ignoreDiagnostics });
+        const requests = await createRequestLog(client);
         const evaluateInRenderer = (expression) => evaluate(client, expression);
 
         const { version: pluginVersion, trustPromptAccepted, loadedBeforeAttach } =
@@ -103,6 +111,7 @@ export async function runDesktopSession({
           session: {
             evaluate: evaluateInRenderer,
             diagnostics,
+            requests,
             client,
             pluginVersion,
             trustPromptAccepted,

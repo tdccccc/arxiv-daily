@@ -62,3 +62,24 @@
 - change: 仍采用复制部署。符号链接是对 vault 的持久改动，且本 initiative 运行在临时 worktree 中，worktree 删除后 vault 内插件即为断链，用户下次手动打开会遇到加载失败。
 - disposition: 记录该方案可行以备将来在长期 checkout 中重新考虑；当前不实现。无论采用哪种部署方式，运行前的版本断言都必须保留——它防的是 Obsidian 加载陈旧 bundle，与部署方式无关。
 - next: 无。
+
+## 2026-08-28 — note: PDF 视图页码的可读取路径
+
+- evidence: 实测 `app.workspace.openLinkText("<pdf>#page=4", "", false)` 后，`activeLeaf.getViewState().type` 为 `pdf`，但 `getEphemeralState()` 为空、`viewer.child.subpath` 与 `pdfViewer.currentPageNumber` 均为 undefined。真正承载页码的是 `viewer.child.pdfViewer.page` 与 pdf.js 自身的 `viewer.child.pdfViewer.pdfViewer.currentPageNumber`，两者在 `#page=4` 时均为 4。
+- change: `pdfPageLocationScenario` 优先读 pdf.js 的 `currentPageNumber`，回退到 Obsidian 设置的 `pdfViewer.page`。
+- disposition: 该断言证明的是「宿主真的定位到了指定页」，不是「文件被打开」。P7 的桌面证据缺口据此可以按实际强度描述，不需要降级为部分证据。
+- next: 用负向对照确认断言非空洞。
+
+## 2026-08-28 — note: 验收断言的负向对照
+
+- evidence: 同一场景在 `#page=2` 下观察到 viewer 报第 2 页、在 `#page=4` 下报第 4 页，说明断言跟踪的是请求页码而非常量。向 `sidecarDisabledScenario` 伪造一条指向 capabilities 端点的请求后，场景如实失败并点名该 URL。
+- change: 无生产逻辑变更；对照过程发现 `networkUrls()` ��� Obsidian 自身的 `data:` SVG 图标计为网络请求，导致「network requests 2」措辞失实，已改为同时排除 `data:` 与 `blob:`，真实运行后计数为 0。
+- disposition: 保留负向对照作为「断言有效」的证据记录。四项场景的通过结论以此为前提，而非仅凭一次全绿。
+- next: P4 集成为单条命令并处理环境阻塞降级。
+
+## 2026-08-28 — P3 complete
+
+- evidence: 一次真实运行中四项场景全部通过——旧 settings 迁移出 9 个 section 且 sidecar 保持关闭；sidecar 关闭时 0 个离开进程的请求触及其端点；`test_library/york_sloan_2000.pdf` 在嵌入式 viewer 中定位到第 4 页；启用指向不可达 `127.0.0.1:1` 的 sidecar 未引发渲染进程错误。诊断为 complete，零 console 错误。定向测试 116/116，`lint`、`check:boundaries`、`check:product-units` 通过，`git diff --check` 干净。运行后 `data.json` 与 `workspace.json` 校验和不变，29 个历史备份未动，无 harness 进程或沙箱残留，用户真实会话存活。
+- change: P3 五项任务全部勾选。
+- disposition: 保留全部场景实现。`sidecar-unreachable-falls-back` 断言的是「启用不可达端点不产生渲染错误」，不是「完整索引流程回退到 PDF.js」——后者需要真实索引运行，超出桌面验收范围，已在场景 detail 中如实表述。
+- next: P4 把验收接成单条命令，处理环境不具备时的阻塞降级，并确认门禁隔离。

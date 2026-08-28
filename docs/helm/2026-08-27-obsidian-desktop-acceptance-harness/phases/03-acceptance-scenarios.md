@@ -29,11 +29,11 @@ P7 遗留的四项桌面验收在真实 Obsidian 宿主中产出断言级证据�
 
 ## Tasks
 
-- [ ] session `beforeLaunch` 钩子与 settings fixture 安装：fixture 在启动前写入，运行后由既有守卫还原。
-- [ ] 实测确定 Obsidian PDF 视图当前页的可读取路径，并把结论写入 journal；据此实现 `#page=N` 断言与页码降级断言。
-- [ ] 网络观察：`Network.enable` 记录请求，断言 sidecar 关闭时无任何指向 sidecar 端点的请求。
-- [ ] sidecar 场景：旧 settings 迁移后默认关闭；启用并指向不可达 loopback 端点后，探测失败不产生 console 错误且插件继续可用。
-- [ ] 验收编排：一条命令运行全部场景，逐项报告通过与否，任一失败即非零退出。
+- [x] session `beforeLaunch` 钩子与 settings fixture 安装：fixture 在启动前写入，运行后由既有守卫还原。
+- [x] 实测确定 Obsidian PDF 视图当前页的可读取路径，并把结论写入 journal；据此实现 `#page=N` 断言与页码降级断言。
+- [x] 网络观察：`Network.enable` 记录请求，断言 sidecar 关闭时无任何指向 sidecar 端点的请求。
+- [x] sidecar 场景：旧 settings 迁移后默认关闭；启用并指向不可达 loopback 端点后，探测失败不产生 console 错误且插件继续可用。
+- [x] 验收编排：一条命令运行全部场景，逐项报告通过与否，任一失败即非零退出。
 
 ## Verification
 
