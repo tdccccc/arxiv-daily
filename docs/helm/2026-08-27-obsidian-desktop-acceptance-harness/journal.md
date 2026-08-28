@@ -104,3 +104,10 @@
 - change: P4 五项任务勾选，goal 的八条 success criteria 全部满足。
 - disposition: 保留全部四个阶段的实现。harness 位于 `scripts/` 下，不被 plugin bundle 引用，因此 bundle 预算与 boundaries 均不受影响。
 - next: 关闭 goal；桌面验收结论可供 `2026-08-17-pdf-hybrid-library-foundation` 的 P7 引用，但本 initiative 不修改其状态。
+
+## 2026-08-28 — L1 adjust: `sidecar-unreachable-falls-back` 是空洞断言，重开 P3
+
+- evidence: 回答分支去留问题时复查该场景，发现两处使其无法支撑 success criterion 6。其一，它直接给 `plugin.settings.pdfParserSidecar.enabled` 赋值，绕过了 `plugin.settingsChanges.changeValue` 这条承载校验、持久化与索引取消的真实事务路径。其二，真实探测发生在 `buildFullTextDocumentParser()` 中，仅赋值不会触发它——该次运行的网络请求计数为 0 即为佐证。因此场景实际证明的只是「改字段不崩」，而非「探测失败回退 PDF.js」。
+- change: 将 goal 由 done 改回 active，P3 改回 active，并取消勾选 success criterion 6。场景将改为经真实设置事务启用，再调用 `buildFullTextDocumentParser()`，断言探测请求确实发出、返回 PDF.js fallback 而非 sidecar selector、且未产生 console 错误。
+- disposition: 其余三项场景不受影响，其证据（迁移、默认关闭无请求、PDF 第 4 页定位与负向对照）依然成立。此处的教训是负向对照只做了两项：`pdf-page-location` 与 `sidecar-disabled-by-default` 各有反向证据，而 `sidecar-unreachable-falls-back` 没有——缺的恰好是它。
+- next: 重写该场景并取得真实探测证据，然后重新收尾 goal。

@@ -1,6 +1,6 @@
 # Obsidian 桌面验收自动化 harness（Obsidian desktop acceptance harness）
 
-status: done
+status: active
 updated: 2026-08-28
 owner: claude-code-session
 
@@ -15,7 +15,7 @@ owner: claude-code-session
 - [x] 测试 vault 的可变状态（plugin settings store、workspace）在每轮运行前备份、运行后还原，失败路径同样还原。
 - [x] harness 将当前分支构建部署进测试 vault，断言运行的是被测版本而非 vault 中的历史构建。
 - [x] CDP 会话可断言插件完成加载，并收集全程 console error 与 pageerror；零错误是可检查的通过条件。
-- [x] P7 四项桌面验收在真实宿主可断言：PDF `#page=N` 打开动作与页码降级、sidecar 默认关闭、启用后探测失败回退 PDF.js、旧 settings migration。
+- [ ] P7 四项桌面验收在真实宿主可断言：PDF `#page=N` 打开动作与页码降级、sidecar 默认关闭、启用后探测失败回退 PDF.js、旧 settings migration。
 - [x] 单条命令可复现执行；不进入默认 `npm test`，不进入 plugin bundle，`check:boundaries`、`check:product-units`、lint 与 bundle 预算门禁维持通过。
 - [x] 环境不具备（无显示、Obsidian 缺失、CDP 端口被占）时给出明确的阻塞原因并非零退出；脚本本身即等价的可复现手工步骤。
 
@@ -43,7 +43,7 @@ owner: claude-code-session
 <!-- Single source of truth for phase status. PN ↔ filename NN. Outcomes only — no steps. -->
 1. P1 — 隔离启动、进程组回收与测试 vault 状态保护具备可复现证据 — status: done
 2. P2 — CDP 会话层（连接、求值、诊断收集、信任对话框）稳定可复用 — status: done
-3. P3 — P7 四项桌面验收场景在真实宿主产出断言级证据 — status: done
+3. P3 — P7 四项桌面验收场景在真实宿主产出断言级证据 — status: active
 4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: done
 
 ## Open questions
