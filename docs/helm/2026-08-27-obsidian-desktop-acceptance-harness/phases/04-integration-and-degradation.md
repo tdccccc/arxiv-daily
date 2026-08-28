@@ -22,7 +22,7 @@ updated: 2026-08-28
 - change kind: behavior change（新增 preflight 与集成入口）
 - strategy: preflight 判定走 strict Red–Green–Refactor（注入假 fs 与假探测）；门禁隔离走实际运行的 Green 证据
 - Red / baseline signal: `node --test scripts/tests/desktop-acceptance-preflight.test.mjs` 在实现前因模块缺失或断言不满足而失败
-- Green / regression checks: `node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿；`npm test`、`npm run lint`、`check:boundaries`、`check:product-units`、`test:release-tools`（仅既有 flaky）、`npm run build` 通过；一次真实 `npm run test:desktop` 通过
+- Green / regression checks: `node --test scripts/tests/desktop-acceptance-*.test.mjs` 全绿；`npm test`、`npm run lint`、`check:boundaries`、`check:product-units`、`test:release-tools`、`npm run build` 通过；一次真实 `npm run test:desktop` 通过
 - exception: 无
 
 ## Tasks
