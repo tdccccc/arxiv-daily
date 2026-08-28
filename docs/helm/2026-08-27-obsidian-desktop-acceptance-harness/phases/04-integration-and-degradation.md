@@ -27,11 +27,11 @@ updated: 2026-08-28
 
 ## Tasks
 
-- [ ] preflight：逐项检查 vault、Obsidian 可执行文件、虚拟显示、分支构建与 vault 内 PDF，返回结构化阻塞清单而非首个错误。
-- [ ] 验收入口接入 preflight：阻塞时打印可操作指引并以专用退出码结束，不打印栈追踪。
-- [ ] 接入 `npm run test:desktop`，确认它不进入默认 `npm test`，且 `scripts/tests/` 的 harness 单元测试在 `test:release-tools` 中保持全绿。
-- [ ] 确认门禁隔离：`lint`、`check:boundaries`、`check:product-units`、production build 与 bundle 预算在 harness 存在下全部通过。
-- [ ] 写入 harness README：运行方式、环境要求、安全约束与不可自动执行时的等价手工步骤。
+- [x] preflight：逐项检查 vault、Obsidian 可执行文件、虚拟显示、分支构建与 vault 内 PDF，返回结构化阻塞清单而非首个错误。
+- [x] 验收入口接入 preflight：阻塞时打印可操作指引并以专用退出码结束，不打印栈追踪。
+- [x] 接入 `npm run test:desktop`，确认它不进入默认 `npm test`，且 `scripts/tests/` 的 harness 单元测试在 `test:release-tools` 中保持全绿。
+- [x] 确认门禁隔离：`lint`、`check:boundaries`、`check:product-units`、production build 与 bundle 预算在 harness 存在下全部通过。
+- [x] 写入 harness README：运行方式、环境要求、安全约束与不可自动执行时的等价手工步骤。
 
 ## Verification
 

@@ -10,22 +10,33 @@ import {
   sidecarDisabledScenario,
   sidecarFallbackScenario,
 } from "./scenarios.mjs";
+import { describeBlockers, preflight } from "./preflight.mjs";
 import { runDesktopSession } from "./session.mjs";
 import { installSettingsFixture, legacySettingsFixture } from "./settings-fixture.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const vaultPath = process.env.OBSIDIAN_TEST_VAULT;
+const pluginId = process.env.OBSIDIAN_TEST_PLUGIN_ID ?? "arxiv-daily";
+const sourceDir = path.join(repoRoot, "plugin");
+const obsidianPath = process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian";
 
-if (!vaultPath) {
+// Exit code 2 means "this environment cannot run the acceptance"; exit code 1
+// means "the acceptance ran and something failed". Conflating them would let a
+// missing dependency read as a product defect, and vice versa.
+const EXIT_BLOCKED = 2;
+
+const environment = await preflight({ vaultPath, obsidianPath, sourceDir });
+if (!environment.ok) {
+  console.error("desktop acceptance cannot run in this environment:\n");
+  console.error(describeBlockers(environment.blockers));
   console.error(
-    "OBSIDIAN_TEST_VAULT is not set.\n\n" +
-      "Point it at a disposable Obsidian vault holding at least one PDF:\n" +
+    "\nOnce those are resolved:\n" +
       "  OBSIDIAN_TEST_VAULT=/path/to/test_vault npm run test:desktop\n\n" +
       "The harness deploys this branch's build into that vault and leaves it there;\n" +
       "the plugin settings store and workspace layout are captured first and restored\n" +
       "on every exit path, including Ctrl-C.",
   );
-  process.exit(2);
+  process.exit(EXIT_BLOCKED);
 }
 
 // Port 1 is privileged and never listening, so a probe against it fails the way
@@ -36,9 +47,9 @@ let outcome;
 try {
   outcome = await runDesktopSession({
     vaultPath,
-    pluginId: process.env.OBSIDIAN_TEST_PLUGIN_ID ?? "arxiv-daily",
-    sourceDir: path.join(repoRoot, "plugin"),
-    obsidianPath: process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian",
+    pluginId,
+    sourceDir,
+    obsidianPath,
     beforeLaunch: ({ vaultPath: vault, pluginId, fs }) =>
       installSettingsFixture({ vaultPath: vault, pluginId, fs, data: legacySettingsFixture() }),
     async body({ session }) {

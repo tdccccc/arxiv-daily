@@ -26,6 +26,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node scripts/run-root-tests.mjs",
     "test:workspaces": "npm run test --workspaces --if-present --",
+    "test:desktop": "node scripts/desktop-acceptance/acceptance.mjs",
     "build": "npm run build --workspaces --if-present",
     "smoke:build": "node scripts/smoke-build.mjs",
     "test:release-tools": "node --test scripts/tests/*.test.mjs && npm run check:product-units",

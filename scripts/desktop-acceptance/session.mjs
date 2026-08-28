@@ -56,6 +56,15 @@ export async function runDesktopSession({
   // for manual inspection.
   const guard = createVaultStateGuard({ vaultPath, pluginId, fs });
 
+  // An interrupt skips every pending finally, so the launched host and the
+  // sandbox have to be reclaimed from the signal handler too. The reclaimer is
+  // published once the child exists.
+  let reclaimLaunched = null;
+  const cleanupAfterInterrupt = async () => {
+    await reclaimLaunched?.();
+    await fs.rm(sandbox, { recursive: true, force: true });
+  };
+
   try {
     return await guard.protect(async () => {
       const { version } = await deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs });
@@ -84,6 +93,23 @@ export async function runDesktopSession({
 
       const ownProcessGroupId = await readOwnProcessGroupId(fs);
       const handle = spawnInProcessGroup({ command, args, env, stdio: "ignore" });
+      const reclaim = () =>
+        reclaimProcessGroup(
+          { pgid: handle.pgid, ownProcessGroupId },
+          {
+            kill: process.kill.bind(process),
+            isAlive: (pgid) => {
+              try {
+                process.kill(-pgid, 0);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+          },
+        );
+      reclaimLaunched = reclaim;
       let client;
       try {
         await waitForCdp({ port });
@@ -120,23 +146,10 @@ export async function runDesktopSession({
         });
       } finally {
         client?.close();
-        await reclaimProcessGroup(
-          { pgid: handle.pgid, ownProcessGroupId },
-          {
-            kill: process.kill.bind(process),
-            isAlive: (pgid) => {
-              try {
-                process.kill(-pgid, 0);
-                return true;
-              } catch {
-                return false;
-              }
-            },
-            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-          },
-        );
+        await reclaim();
+        reclaimLaunched = null;
       }
-    });
+    }, { onInterrupt: cleanupAfterInterrupt });
   } finally {
     await fs.rm(sandbox, { recursive: true, force: true });
   }

@@ -77,12 +77,20 @@ export function createVaultStateGuard({
     installed = null;
   }
 
-  function installSignalRestore() {
+  function installSignalRestore(onInterrupt) {
     if (installed !== null) return;
     installed = Object.entries(INTERRUPT_SIGNALS).map(([signal, exitCode]) => {
       const handler = async () => {
-        // A signal arrives once; restore best-effort so an interrupted run can
-        // never leave the vault rewritten, then stop being a handler.
+        // process.exit skips every pending finally, so the caller's own cleanup
+        // has to run here. It runs first: whatever it stops - a launched host,
+        // for instance - could otherwise rewrite the files being restored.
+        if (onInterrupt) {
+          try {
+            await onInterrupt();
+          } catch {
+            /* restoring the vault matters more than reporting this */
+          }
+        }
         try {
           await restore();
         } catch {
@@ -96,9 +104,9 @@ export function createVaultStateGuard({
     });
   }
 
-  async function protect(body) {
+  async function protect(body, { onInterrupt } = {}) {
     await capture();
-    installSignalRestore();
+    installSignalRestore(onInterrupt);
     let bodyError;
     let result;
     try {

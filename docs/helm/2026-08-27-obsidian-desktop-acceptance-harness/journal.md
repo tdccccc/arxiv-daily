@@ -83,3 +83,24 @@
 - change: P3 五项任务全部勾选。
 - disposition: 保留全部场景实现。`sidecar-unreachable-falls-back` 断言的是「启用不可达端点不产生渲染错误」，不是「完整索引流程回退到 PDF.js」——后者需要真实索引运行，超出桌面验收范围，已在场景 detail 中如实表述。
 - next: P4 把验收接成单条命令，处理环境不具备时的阻塞降级，并确认门禁隔离。
+
+## 2026-08-28 — 真实中断暴露孤儿进程缺陷
+
+- evidence: 单元层早已覆盖信号还原，但从未在真实运行中触发过。实际向运行中的验收进程发送 SIGTERM 后，`data.json` 确实被还原，却留下 2 个 Obsidian 进程、1 个 Xvfb 与 1 个沙箱目录。原因是信号处理器调用 `process.exit()` 会跳过所有 `finally`，而进程组回收与沙箱清理都写在 `finally` 里。顺序也不安全：还原 `data.json` 时 Obsidian 仍在运行，可能在还原后再次写入。
+- change: `protect` 增加 `onInterrupt` 回调，信号处理器先执行调用方清理再还原，且清理失败不阻止还原；`runDesktopSession` 通过可变引用发布进程组回收器与沙箱清理。修复后重做同一中断实验：0 个遗留进程、0 个 Xvfb、0 个沙箱目录，`data.json` 已还原，用户真实会话未受影响。
+- disposition: 保留该修复。这条缺陷说明「单元测试覆盖了信号路径」不等于「信号路径在真实进程中正确」——本 initiative 的其余安全断言都已有真实运行证据，唯独这条此前只有单元证据。
+- next: 完成 P4 剩余集成并收尾 goal。
+
+## 2026-08-28 — note: 自匹配陷阱第三次出现
+
+- evidence: 清理上述孤儿进程时，我在脚本首行写了 `pkill -f 'obsidian-acceptance-'`，再次以退出码 144 杀掉脚本自身——与 P1 期间记录的完全相同，且我当时刚把这条写进 harness README。
+- change: 无生产代码变更；harness 自身不含任何按模式匹配的进程逻辑，缺陷仅存在于人工命令。
+- disposition: 该陷阱三次出现均发生在人工验证命令而非产品代码中，说明防线正确地建在 API 形状上（`assertProcessGroupTarget` 只接受数字进程组）。人工清理一律改为读 `/proc/<pid>/cmdline` 定位后按 PGID 回收。
+- next: 无。
+
+## 2026-08-28 — P4 complete, goal 达成
+
+- evidence: preflight 在三种阻塞下均以退出码 2 指名原因并给出补救动作，且一次列全（缺 vault、缺 Obsidian、无 PDF 同时报出）；`npm run test:desktop` 真实通过四项场景；默认 `npm test` 不含桌面验收。门禁全部通过：`lint` 0 errors / 64 warnings、`check:boundaries`、`check:product-units`、`npm run build`、`smoke:build`、`check:obsidian-submission`，`test:release-tools` 仅剩既有 flaky，`git diff --check` 干净。完整 workspace 套件 2,753 tests 通过，与 P7 记录基线一致。harness 单元测试 129/129。
+- change: P4 五项任务勾选，goal 的八条 success criteria 全部满足。
+- disposition: 保留全部四个阶段的实现。harness 位于 `scripts/` 下，不被 plugin bundle 引用，因此 bundle 预算与 boundaries 均不受影响。
+- next: 关闭 goal；桌面验收结论可供 `2026-08-17-pdf-hybrid-library-foundation` 的 P7 引用，但本 initiative 不修改其状态。

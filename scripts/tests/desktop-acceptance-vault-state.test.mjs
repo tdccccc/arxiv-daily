@@ -228,3 +228,45 @@ test("additionalPaths must be absolute and inside the vault", () => {
     );
   }
 });
+
+test("an interrupt runs the caller's cleanup before restoring, then exits", async () => {
+  // Ordering matters: the launched host must be reclaimed before its state is
+  // put back, or it can rewrite the file after restoration.
+  const order = [];
+  const fs = fakeFs({ [settingsPath]: '{"a":1}', [workspacePath]: "{}" });
+  const originalWrite = fs.writeFile.bind(fs);
+  fs.writeFile = async (path, data) => {
+    order.push("restore");
+    return originalWrite(path, data);
+  };
+  const proc = fakeProcess();
+  const guard = createVaultStateGuard({ vaultPath, pluginId, fs, process: proc });
+  const body = new Promise(() => {});
+  const running = guard.protect(() => body, {
+    onInterrupt: async () => {
+      order.push("cleanup");
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await proc.raise("SIGTERM");
+  assert.equal(order[0], "cleanup");
+  assert.ok(order.includes("restore"));
+  assert.notEqual(proc.exitCode, undefined);
+  void running;
+});
+
+test("a failing interrupt cleanup still restores the vault", async () => {
+  const fs = fakeFs({ [settingsPath]: '{"a":1}', [workspacePath]: "{}" });
+  const proc = fakeProcess();
+  const guard = createVaultStateGuard({ vaultPath, pluginId, fs, process: proc });
+  const running = guard.protect(() => new Promise(() => {}), {
+    onInterrupt: async () => {
+      throw new Error("reclaim failed");
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await fs.writeFile(settingsPath, "mutated");
+  await proc.raise("SIGTERM");
+  assert.equal(fs.files.get(settingsPath).toString(), '{"a":1}');
+  void running;
+});
