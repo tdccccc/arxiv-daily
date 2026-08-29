@@ -23,7 +23,8 @@
   "dependencies": {
     "@arxiv-daily/core": "0.4.6",
     "@arxiv-daily/node-runtime": "0.4.6",
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-common": "1.24.0-dev.20251116-b39e144322"
   },
   "devDependencies": {
     "pdfjs-dist": "^6.2.108"

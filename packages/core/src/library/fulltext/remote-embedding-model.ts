@@ -43,7 +43,7 @@ export function remoteEmbeddingModelId(model: string, dimension: number): string
 export function createRemoteEmbeddingModel(
   options: RemoteEmbeddingModelOptions,
 ): EmbeddingModel {
-  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(options.baseUrl);
   const apiKey = options.apiKey;
   const model = options.model;
   const dimension = options.dimension;
@@ -153,4 +153,10 @@ function abortError(signal: AbortSignal): Error {
   const error = new Error(message);
   error.name = "AbortError";
   return error;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
 }

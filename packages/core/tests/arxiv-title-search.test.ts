@@ -53,6 +53,12 @@ describe("arxiv title search matching", () => {
     expect(matchBestTitle("abc", atom([{ id: "1.1", title: "abc" }])).arxivId).toBeNull();
     expect(matchBestTitle("A real title here", "").arxivId).toBeNull();
   });
+
+  it("reads Atom titles with attributes without a nested regular expression", () => {
+    const xml = `<feed><entry><id>http://arxiv.org/abs/2403.19236</id><title type="html">Measuring the baryon fraction using galaxy clustering</title></entry></feed>`;
+    expect(matchBestTitle("Measuring the baryon fraction using galaxy clustering", xml).arxivId)
+      .toBe("2403.19236");
+  });
 });
 
 describe("arxiv title search over HTTP", () => {

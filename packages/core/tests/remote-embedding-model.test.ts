@@ -75,6 +75,15 @@ describe("createRemoteEmbeddingModel", () => {
     expect(JSON.parse(String(requests[0]!.body))).toEqual({ model: MODEL, input: ["a", "b"] });
   });
 
+  it("trims trailing slashes from the endpoint without a regular expression", async () => {
+    const http = makeHttp(() => embeddingResponse(["a"], 0));
+    const model = createRemoteEmbeddingModel(modelOptions(http, {
+      baseUrl: `${BASE_URL}///`,
+    }));
+    await model.embed(["a"]);
+    expect(vi.mocked(http.request).mock.calls[0]![0].url).toBe(`${BASE_URL}/embeddings`);
+  });
+
   it("orders vectors by the response index, not array position", async () => {
     const http = makeHttp(() => ({
       status: 200,

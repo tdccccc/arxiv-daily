@@ -618,7 +618,7 @@ function stableModelCandidateJson(candidate: PersonalLibraryDirectionModelCandid
 
 function escapePersonalLibraryPaperDataFence(value: string): string {
   return value.replace(PAPER_DATA_CLOSE_TAG, (match) =>
-    match.replace("<", "&lt;").replace(">", "&gt;"),
+    match.replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
   );
 }
 

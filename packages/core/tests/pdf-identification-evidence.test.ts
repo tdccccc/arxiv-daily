@@ -140,4 +140,9 @@ describe("pdf text arXiv ID extraction", () => {
   it("does not invent IDs from plain numbers", () => {
     expect(extractArxivIdsFromText("version 2.3.4 of the catalog")).toEqual([]);
   });
+
+  it("still matches spaced arXiv prefixes without unbounded whitespace", () => {
+    expect(extractArxivIdsFromText("arXiv:  2302.05010").map((item) => item.canonicalId))
+      .toEqual(["2302.05010"]);
+  });
 });

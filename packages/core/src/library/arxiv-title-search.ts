@@ -67,15 +67,33 @@ interface AtomEntry {
 
 function parseAtomEntries(xml: string): AtomEntry[] {
   const entries: AtomEntry[] = [];
-  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-  let match: RegExpExecArray | null;
-  while ((match = entryRegex.exec(xml)) !== null) {
-    const body = match[1]!;
+  let cursor = 0;
+  while (cursor < xml.length) {
+    const entryStart = xml.indexOf("<entry>", cursor);
+    if (entryStart < 0) break;
+    const entryEnd = xml.indexOf("</entry>", entryStart + "<entry>".length);
+    if (entryEnd < 0) break;
+    const body = xml.slice(entryStart + "<entry>".length, entryEnd);
+    cursor = entryEnd + "</entry>".length;
     const id = extractArxivIdsFromText(body)[0]?.canonicalId;
-    const title = /<title[^>]*>([\s\S]*?)<\/title>/.exec(body)?.[1];
+    const title = extractAtomTitle(body);
     if (id && title) entries.push({ id, title: decodeXml(title).replace(/\s+/g, " ").trim() });
   }
   return entries;
+}
+
+function extractAtomTitle(body: string): string | undefined {
+  let cursor = 0;
+  while (cursor < body.length) {
+    const open = body.indexOf("<title", cursor);
+    if (open < 0) return undefined;
+    const openEnd = body.indexOf(">", open);
+    if (openEnd < 0) return undefined;
+    const close = body.indexOf("</title>", openEnd + 1);
+    if (close < 0) return undefined;
+    return body.slice(openEnd + 1, close);
+  }
+  return undefined;
 }
 
 function normalizeTitle(title: string): string[] {

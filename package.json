@@ -36,6 +36,10 @@
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
   },
+  "overrides": {
+    "onnxruntime-node": "npm:empty-npm-package@1.0.0",
+    "sharp": "npm:empty-npm-package@1.0.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@eslint/json": "^0.14.0",
