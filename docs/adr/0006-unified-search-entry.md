@@ -22,7 +22,7 @@ The two corpora are not the same set of papers: daily-report papers live in the 
 The Dashboard search box remains the single text input. On a query it:
 
 - (a) filters daily-report rows lexically — existing behavior, unchanged and instant;
-- (b) when a knowledge base exists, asynchronously embeds the query and renders library matches as a separate results block (similarity score + best-passage evidence + open actions), following the existing SimilarPapersModal conventions.
+- (b) when a knowledge base exists, asynchronously embeds the query and renders library matches as a separate results block (ranked papers + open-PDF actions), following the existing SimilarPapersModal conventions. Passage snippets are not part of the default product surface until they have a measured quality bar.
 
 No mode switch. If the KB is absent or not authorized, only (a) is shown.
 

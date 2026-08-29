@@ -18,3 +18,10 @@
 - change: P2 done。P3 仍 pending：版权页、`<EOS>`/`<pad>`、参考文献作为默认主证据。
 - disposition: 测试 vault 的 `plugin_test` 插件文件未从本会话覆盖；用户需拷贝 worktree 的 `plugin/main.js` 与 `plugin/styles.css` 后重载。
 - next: 等用户看过 P1+P2 再决定是否做 P3 的噪声 hit 选择。
+
+## 2026-08-29 — L3 steer
+
+- evidence: 用户确认卡片和打开可用，但匹配质量没有量化。现有评测只锁论文排序（Recall/MRR/nDCG），不锁段落。用户选择：只展示相关论文并打开整份 PDF，不展示具体内容、不跳到对应页，避免把半成品当产品。
+- change: 修订 intent 与成功标准。P3 噪声 hit 选择 superseded。新 P3b：产品面论文列表 + 打开整份 PDF。CONTEXT.md「Library similarity」与 ADR 0006 改为检索仍可有 hit，默认 UI 不展示段落。
+- disposition: 保留 P1 opener 绑定与失败通知。P2 卡片层次可复用标题/文件名，段落/页码/Open page N 从产品面移除。Core 检索与论文排序不改。
+- next: 改 renderer 与 opener，先观察段落断言的 Red。
