@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import type { LibraryFullTextMatch } from "../library/fulltext-results";
 
 /**
@@ -65,29 +66,33 @@ export function renderLibrarySearchBlock(
     const item = list.createEl("li", {
       cls: "arxiv-daily-dashboard__library-item",
     });
-    item.createDiv({
+    const header = item.createDiv({
+      cls: "arxiv-daily-dashboard__library-header",
+    });
+    header.createDiv({
       cls: "arxiv-daily-dashboard__library-title",
       text: match.title,
     });
+    if (match.filePath && options.openLibraryPdf) {
+      const action = "Open PDF";
+      const button = header.createEl("button", {
+        cls: "clickable-icon arxiv-daily-dashboard__library-open",
+        attr: { type: "button", "aria-label": action, title: action },
+      });
+      setIcon(button, "file-down");
+      button.addEventListener("click", () => {
+        try {
+          void Promise.resolve(options.openLibraryPdf?.(match)).catch((error) => {
+            reportActionError(options, error, action);
+          });
+        } catch (error) {
+          reportActionError(options, error, action);
+        }
+      });
+    }
     item.createDiv({
       cls: "arxiv-daily-dashboard__library-meta",
       text: match.filePath ?? match.paperKey,
-    });
-    if (!match.filePath || !options.openLibraryPdf) continue;
-    const action = "Open PDF";
-    const button = item.createEl("button", {
-      cls: "arxiv-daily-dashboard__library-open-evidence",
-      text: action,
-      attr: { type: "button", "aria-label": action },
-    });
-    button.addEventListener("click", () => {
-      try {
-        void Promise.resolve(options.openLibraryPdf?.(match)).catch((error) => {
-          reportActionError(options, error, action);
-        });
-      } catch (error) {
-        reportActionError(options, error, action);
-      }
     });
   }
 }

@@ -98,12 +98,16 @@ describe("renderLibrarySearchBlock", () => {
 
     expect(container.textContent).toContain("Evidence paper");
     expect(container.textContent).toContain("papers/evidence paper.pdf");
-    expect(container.textContent).toContain("Open PDF");
+    expect(container.textContent).not.toContain("Open PDF");
     expect(container.textContent).not.toContain("Methods / Retrieval");
     expect(container.textContent).not.toContain("A matching passage about retrieval evidence.");
     expect(container.textContent).not.toContain("Page 7");
     expect(container.textContent).not.toContain("Open page 7");
     const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]');
+    expect(button?.classList.contains("clickable-icon")).toBe(true);
+    expect(button?.closest(".arxiv-daily-dashboard__library-header")).not.toBeNull();
+    expect(button?.parentElement?.querySelector(".arxiv-daily-dashboard__library-title")?.textContent)
+      .toBe("Evidence paper");
     button?.click();
     expect(openLibraryPdf).toHaveBeenCalledWith(
       expect.objectContaining({ paperKey: "arxiv:2607.01001", filePath: "papers/evidence paper.pdf" }),

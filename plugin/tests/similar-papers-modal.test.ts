@@ -229,7 +229,7 @@ describe("Similar Papers modal", () => {
     expect(content.textContent).not.toContain("best semantic evidence");
     expect(content.textContent).not.toContain("0.032");
     expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
-    expect(content.textContent).toContain("Open PDF");
+    expect(content.querySelector('button[aria-label="Open PDF"]')).not.toBeNull();
     expect(content.textContent).not.toContain("Methods");
     expect(content.textContent).not.toContain("A matching passage about retrieval.");
     expect(content.textContent).not.toContain("Page 2");
