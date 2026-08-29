@@ -185,3 +185,11 @@
 - evidence（剩余成本归因）: 再次 profile 后 `sha256Hex` 占 65.1%，但按调用方拆分显示它并非来自桶派生（仅 2.4%，缓存有效；把缓存上限由 20 万提到 100 万无改善且 RSS 达 930MB，已回退）。真实分布是对象字节被重复哈希：`blockObjectChecksum` 合计 38.1%——spool 计算一次（14.0%）、builder 立即重算验证同一批字节（14.0%）、`readVerifiedSpool` 读回再验（10.1%）——另有 23.6% 来自 block 信封在编码与解码时各自的校验和。
 - disposition: 已落地的两轮优化均为行为保持，未改变桶函数、排序语义或格式。剩余两项属设计权衡而非实现缺陷，不在本轮单方面更改：其一，对象字节按现设计被哈希三到四次；其二，`deriveLexicalChunk` 为每个 chunk 生成全部 1/2/3-gram，alias 占全部词法 occurrence 的 63.5%（20 篇即 530 万 occurrence、46.9 万不同词项），而查询侧 `selectAliasGram` 在查询超过 2 字符时只取一个 3-gram，1-gram 与 2-gram 合计 46.5% 的 alias 索引量仅服务 1–2 字符查询。
 - next: 按线性外推，199 篇约 13–14 分钟（原 64 分钟）。是否进一步降低取决于上述两个设计取舍，需 owner 决定。
+
+## 2026-08-29 — handoff
+
+- evidence: P8 的容量缺陷已修复并在真实语料上验收（199 篇 / 22,819 chunk 构建成功，`objects=978/4096`、`routeRefs=44032`，generation 与 legacy 两条检索路径排序逐项一致）；构建吞吐经两轮行为保持的优化由 20 篇 216.7 秒降至 82.1 秒，199 篇按线性外推约 13–14 分钟（原 3,843 秒）。Core 2,028 tests、完整工作区 2,766 tests、typecheck、`check:boundaries` 通过，工作区干净。
+- change: 交出 owner。P8 余两项任务未完成：以 v2 语料复核缺陷与 legacy 提升路径无关，以及判定构建耗时是否可接受。
+- disposition: 剩余吞吐成本已归因完毕，且**不是实现缺陷**，接手者不应把它当 bug 修。两处均为设计取舍，需 owner 决策：其一，对象字节按现设计被 SHA-256 三到四次（spool 计算 14.0%、builder 重算验证 14.0%、读回再验 10.1%、block 信封编解码各一次 23.6%）；其二，`deriveLexicalChunk` 索引每个 chunk 的全部 1/2/3-gram，alias 占词法 occurrence 的 63.5%，而查询侧 `selectAliasGram` 在查询超过 2 字符时只取一个 3-gram，1-gram 与 2-gram 合计 46.5% 的 alias 索引量仅服务 1–2 字符查询（该语料 1,173 个 chunk 中 598 个含汉字，故「非 CJK 跳过 alias」不成立）。
+- disposition: P7 仍为 blocked，其规模任务的勾选已撤销——原措辞「固定合成语料」正是掩盖该缺陷的���件。P7 其余任务（含桌面 UI 验收）已完成，桌面验收由 `npm run test:desktop` 自动执行。
+- next: 接手者先读本条与前四条 journal，再决定是否推进两个设计取舍；两者均不阻塞已取得的容量与等价性结论。

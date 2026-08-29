@@ -2,7 +2,7 @@
 
 status: active
 updated: 2026-08-23
-owner: codex-main-session
+owner: unassigned — see the 2026-08-29 handoff entry
 
 ## Intent
 
