@@ -160,3 +160,11 @@
 - change: 调整 P8 任务顺序，把吞吐定位与修复置于容量修复之前。理由是测量而非偏好：dictionary block 由 65,536 条目上限驱动，触发 16-block 上限的测试必须处理约 110 万词项，按当前速率约需 8 分钟，使容量缺陷的回归测试无法在可接受时间内运行。
 - disposition: 保留合成密集 fixture 作为复现手段——它证明该缺陷本可在没有用户真实语料的情况下被发现，缺的只是 fixture 的词汇密度。真实语料仍用于最终验收，不作为唯一复现途径。
 - next: 定位吞吐热点（`jsonBytes` 在每个词项上被调用约三次：builder 第 339、403、519 行），修复后再处理路由表示与预算。
+
+## 2026-08-29 — P8.1 构建吞吐：3.6× 且热点已定位
+
+- evidence: CPU profile（esbuild 打包后直接以 `node --cpu-prof` 运行，绕开 vitest worker 未被采样的问题）显示 `sha256Hex` 与 `strictTermBytes` 合计约 57% 自身时间。根因是 `lexicalQueryCatalog` 在排序比较器内部每次比较调用两次 `lexicalTermBucket`，而该函数对每个词项做 NFKC 规范化、locale 小写、UTF-8 编码、解码回比对，再算一次完整 SHA-256 只为取 8 位桶号——80,000 词项约需 270 万次哈希。`compareUtf8Strings` 同样在比较器内每次新建 `TextEncoder` 并编码两侧字符串。
+- change: 桶号改为每条目预计算一次后传入比较器；新增 `lexicalTermBuckets` 供 builder 的 flush 一次性派生并由路由集合、query catalog 与 bucket mask 共享（此前各算一遍）；`compareUtf8Strings` 与 `strictTermBytes` 改用模块级编码器；`lexicalTermBucket` 增加有界记忆化，使独立重算的校验路径不再付出重复代价。
+- verification: 同一 40 chunk × 2000 词项基准由 32.1 秒降至 8.9 秒（3.6×），三次改动分别为 32.1→12.1→9.9→8.9。Core 全量 113 files / 2,020 tests 通过（1 skipped 为需真实语料的 opt-in 检查），typecheck 与 `check:boundaries` 通过。新增契约测试断言预计算与内联派生产出相同的 query catalog 与 bucket mask。
+- disposition: 这是行为保持的优化，未改变桶函数、排序语义或任何格式。剩余成本仍以每个不同词项一次 SHA-256 为主，属格式定义的固有开销；合成语料词项几乎不重复因而缓存收益有限，真实文本复用多、收益更高。
+- next: P8.2 以真实词汇密度的 fixture 复现 `object-limit`，随后拆分预算并把路由表改为对象序号。

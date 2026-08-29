@@ -69,20 +69,37 @@ export function deriveLexicalDictionaryEntries(block: LexicalPostingsBlock): Lex
   return entries;
 }
 
-export function lexicalQueryCatalog(entries: readonly LexicalDictionaryEntry[]): number[] {
+/**
+ * Bucket per entry. The bucket is the first byte of a SHA-256 over canonicalized
+ * term bytes, so it is far too expensive to recompute: callers that need it more
+ * than once derive it here and pass it along.
+ */
+export function lexicalTermBuckets(entries: readonly LexicalDictionaryEntry[]): number[] {
+  return entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term));
+}
+
+export function lexicalQueryCatalog(
+  entries: readonly LexicalDictionaryEntry[],
+  precomputed?: readonly number[],
+): number[] {
+  // Computing the bucket inside the comparator would cost O(n log n) hashes.
+  const buckets = precomputed ?? lexicalTermBuckets(entries);
   return entries.map((_, index) => index).sort((leftIndex, rightIndex) => {
     const left = entries[leftIndex]!;
     const right = entries[rightIndex]!;
-    return lexicalTermBucket(left.namespace, left.term) - lexicalTermBucket(right.namespace, right.term)
+    return buckets[leftIndex]! - buckets[rightIndex]!
       || compareNamespaceTerm(left, right)
       || left.postingOrdinal - right.postingOrdinal;
   });
 }
 
-export function lexicalBucketMask(entries: readonly LexicalDictionaryEntry[]): string {
+export function lexicalBucketMask(
+  entries: readonly LexicalDictionaryEntry[],
+  precomputed?: readonly number[],
+): string {
   const bytes = new Uint8Array(32);
-  for (const entry of entries) {
-    const bucket = lexicalTermBucket(entry.namespace, entry.term);
+  const buckets = precomputed ?? lexicalTermBuckets(entries);
+  for (const bucket of buckets) {
     bytes[bucket >>> 3]! |= 1 << (bucket & 7);
   }
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -97,9 +114,10 @@ export function compareNamespaceTerm(left: Pick<LexicalOccurrence, "namespace" |
 }
 
 function compareUtf8Strings(left: string, right: string): number {
-  const encoder = new TextEncoder();
-  const a = encoder.encode(left);
-  const b = encoder.encode(right);
+  // Called from sort comparators, so the encoder is hoisted rather than
+  // allocated per comparison.
+  const a = textEncoder.encode(left);
+  const b = textEncoder.encode(right);
   const length = Math.min(a.length, b.length);
   for (let index = 0; index < length; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
   return a.length - b.length;

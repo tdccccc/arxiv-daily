@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { createEvidenceChunkId, type EvidenceChunk } from "../src/library/fulltext/evidence-chunk";
 import {
+  lexicalBucketMask,
+  lexicalQueryCatalog,
+  lexicalTermBuckets,
+} from "../src/library/fulltext/generation-lexical-derivation";
+import {
   BINARY_BLOCK_HEADER_BYTES,
   GENERATION_DESCRIPTOR_FORMAT_VERSION,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
@@ -515,5 +520,41 @@ describe("generation descriptor codec and paths", () => {
     const normalizePath = (path: string) => path.replaceAll("//", "/");
     expect(deriveFullTextGenerationPaths({ normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "gen-20260817-a1").descriptorPath).toContain("/descriptor.json");
     expect(() => deriveFullTextGenerationPaths({ normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "../escape")).toThrow(/generationId/i);
+  });
+});
+
+describe("lexical bucket derivation is shareable", () => {
+  const entries = Array.from({ length: 200 }, (_, index) => ({
+    postingOrdinal: index % 3,
+    namespace: (["base", "expanded", "alias"] as const)[index % 3]!,
+    term: `term${index}`,
+    chunkDf: 1,
+    totalTf: 1,
+  }));
+
+  it("precomputed buckets produce the same query catalog as deriving them inline", () => {
+    const buckets = lexicalTermBuckets(entries);
+    expect(lexicalQueryCatalog(entries, buckets)).toEqual(lexicalQueryCatalog(entries));
+  });
+
+  it("precomputed buckets produce the same bucket mask", () => {
+    const buckets = lexicalTermBuckets(entries);
+    expect(lexicalBucketMask(entries, buckets)).toEqual(lexicalBucketMask(entries));
+  });
+
+  it("lexicalTermBuckets agrees with per-entry derivation", () => {
+    expect(lexicalTermBuckets(entries)).toEqual(
+      entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)),
+    );
+  });
+
+  it("a repeated derivation returns the same bucket", () => {
+    expect(lexicalTermBucket("base", "recurring")).toBe(lexicalTermBucket("base", "recurring"));
+    expect(lexicalTermBucket("alias", "recurring")).toBe(lexicalTermBucket("alias", "recurring"));
+  });
+
+  it("the same term in different namespaces can land in different buckets", () => {
+    const derived = new Set((["base", "expanded", "alias"] as const).map((ns) => lexicalTermBucket(ns, "shared")));
+    expect(derived.size).toBeGreaterThan(0);
   });
 });

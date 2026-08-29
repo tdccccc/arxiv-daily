@@ -39,6 +39,7 @@ import {
   deriveLexicalDictionaryEntries,
   lexicalBucketMask,
   lexicalQueryCatalog,
+  lexicalTermBuckets,
   type DerivedLexicalChunk,
 } from "./generation-lexical-derivation";
 
@@ -501,10 +502,13 @@ async function buildDictionaries(
     if (postingCount === 0) return;
     reserve(1);
     const dictionaryOrdinal = refs["lexical-dictionary"].length;
-    const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
+    // One hash per entry, shared by the routing set, the query catalog and the
+    // bucket mask; each of those used to derive it independently.
+    const entryBuckets = lexicalTermBuckets(entries);
+    const buckets = new Set(entryBuckets);
     if (routeRefCount + buckets.size > MAX_GENERATION_OBJECTS) throw buildError("object-limit", "generation lexical routing reference limit exceeded");
     const bytes = encodeDictionary(() => encodeLexicalDictionaryBlock({ dictionaryOrdinal, postingStart, postingCount, entries,
-      queryCatalog: lexicalQueryCatalog(entries), bucketMask: lexicalBucketMask(entries) }));
+      queryCatalog: lexicalQueryCatalog(entries, entryBuckets), bucketMask: lexicalBucketMask(entries, entryBuckets) }));
     trackOneBuffer(diagnostics, bytes);
     const reference = await put("lexical-dictionary", `objects/dictionary-${pad(dictionaryOrdinal)}.bin`, bytes, postingStart, postingCount);
     for (const bucket of buckets) routing[bucket]!.push(reference.path);

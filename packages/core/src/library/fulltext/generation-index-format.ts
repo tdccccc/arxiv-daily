@@ -16,6 +16,7 @@ export const MAX_GENERATION_CHUNKS = 10_000_000;
 export const MAX_GENERATION_DIMENSION = 4096;
 
 const MAGIC = new Uint8Array([0x41, 0x44, 0x47, 0x49]); // ADGI
+const textEncoder = new TextEncoder();
 const CHECKSUM_OFFSET = 20;
 const CHECKSUM_BYTES = 32;
 const VECTOR_KIND = 1;
@@ -303,10 +304,33 @@ export function decodeLexicalDictionaryBlock(bytes: Uint8Array): LexicalDictiona
   return validated;
 }
 
+/**
+ * Deriving a bucket costs a canonicalization pass plus a SHA-256, and the same
+ * terms recur across posting blocks and again through validation, which
+ * independently re-derives them. The function is pure, so a bounded cache keyed
+ * on its exact inputs returns the identical value for a fraction of the cost.
+ */
+const BUCKET_CACHE_LIMIT = 200_000;
+const bucketCache = new Map<string, number>();
+
 export function lexicalTermBucket(namespace: LexicalNamespace, term: string): number {
+  const cacheKey = typeof term === "string" ? `${String(namespace)}\u0000${term}` : null;
+  if (cacheKey !== null) {
+    const cached = bucketCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+  }
+  const bucket = computeLexicalTermBucket(namespace, term);
+  if (cacheKey !== null) {
+    if (bucketCache.size >= BUCKET_CACHE_LIMIT) bucketCache.clear();
+    bucketCache.set(cacheKey, bucket);
+  }
+  return bucket;
+}
+
+function computeLexicalTermBucket(namespace: LexicalNamespace, term: string): number {
   const ns = validateNamespace(namespace);
   const termBytes = strictTermBytes(term);
-  const nsBytes = new TextEncoder().encode(ns);
+  const nsBytes = textEncoder.encode(ns);
   const input = new Uint8Array(nsBytes.length + 1 + termBytes.length);
   input.set(nsBytes); input.set(termBytes, nsBytes.length + 1);
   return Number.parseInt(sha256Hex(input).slice(0, 2), 16);
@@ -570,7 +594,7 @@ function strictTermBytes(term: unknown): Uint8Array {
   if (typeof term !== "string" || term.length === 0 || term.normalize("NFKC").toLocaleLowerCase("und") !== term) {
     throw new Error("lexical term must be non-empty canonical NFKC lowercase text");
   }
-  const bytes = new TextEncoder().encode(term);
+  const bytes = textEncoder.encode(term);
   if (bytes.length === 0 || bytes.length > 65_536 || decodeStrictUtf8(bytes, "lexical term") !== term) throw new Error("lexical term bytes are invalid or too long");
   return bytes;
 }
