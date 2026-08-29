@@ -36,7 +36,7 @@ generation 索引能够为真实规模的个人文献库构建并服务；路由
 - [x] 拆分预算：为路由引用引入独立上限（由 descriptor 字节约束反推），不再复用 `MAX_GENERATION_OBJECTS`；对象数仍按对象计。
 - [x] 路由表由对象路径改为对象序号，升 `GENERATION_DESCRIPTOR_SCHEMA_VERSION`，同步更新编解码、校验与读取侧路由匹配，保持 BM25 结果不变。
 - [x] 版本兼容：旧版 descriptor 的处理路径明确（拒绝并重建，或就地升级），不得静默误读。
-- [ ] 以真实 legacy 语料（199 篇 / 22,819 chunk）完成构建，并验证 generation 与 legacy 两条检索路径的排序等价。
+- [x] 以真实 legacy 语料（199 篇 / 22,819 chunk）完成构建，并验证 generation 与 legacy 两条检索路径的排序等价。
 - [ ] 用当前解析器/分块器产出的 v2 语料复核，确认缺陷与 legacy 提升路径无关。
 - [ ] 复核修复后的真实语料构建耗时，确认其与语料规模的关系可接受。
 

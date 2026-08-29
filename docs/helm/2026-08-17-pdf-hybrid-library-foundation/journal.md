@@ -168,3 +168,11 @@
 - verification: 同一 40 chunk × 2000 词项基准由 32.1 秒降至 8.9 秒（3.6×），三次改动分别为 32.1→12.1→9.9→8.9。Core 全量 113 files / 2,020 tests 通过（1 skipped 为需真实语料的 opt-in 检查），typecheck 与 `check:boundaries` 通过。新增契约测试断言预计算与内联派生产出相同的 query catalog 与 bucket mask。
 - disposition: 这是行为保持的优化，未改变桶函数、排序语义或任何格式。剩余成本仍以每个不同词项一次 SHA-256 为主，属格式定义的固有开销；合成语料词项几乎不重复因而缓存收益有限，真实文本复用多、收益更高。
 - next: P8.2 以真实词汇密度的 fixture 复现 `object-limit`，随后拆分预算并把路由表改为对象序号。
+
+## 2026-08-29 — P8 容量修复经真实语料验收
+
+- evidence: 测试 vault 的真实 legacy 知识库（schema v1，rev32，199 篇 / 22,819 chunk）完整迁移为 generation 索引：`objects=978/4096`、`routeRefs=44032`、耗时 3,843 秒。路由引用达旧上限 4,096 的 10.7 倍，而对象预算仅用去 978——这是「路由引用与对象数是两个量」在真实数据上的最终证据，且与按小语料外推的 46,592 相差 6%。随后六组检索（两个查询 × dense/lexical/hybrid）中 generation 与 legacy 两条路径返回的 paperKey 序列逐项相等，每个 generation 命中均带证据片段。
+- change: 勾选 P8 真实语料构建任务，并新增 `packages/core/tests/real-corpus-migration.test.ts` 作为 opt-in 验收（`REAL_KB_DIR` 未设置时整体跳过）。
+- disposition: 该测试固定了一条 fixture 无法替代的契约——路由引用数必须允许超过对象数。首次运行因 60 分钟超时被杀且清理写在 `finally` 中而泄漏了 5.2 GB 沙箱；已改为固定路径并在启动时先清空，超时最多留下一份而非每次泄漏。此形态与桌面 harness 早前的中断泄漏相同：中断路径不走 `finally`。
+- disposition（未解决）: 构建耗时 3,843 秒对 199 篇个人文献库不可接受。这不是回归——修复前构建在第 16 个 block 即中止，172 个 dictionary block 的工作从未运行过——但仍需继续优化。3.6× 提速后的剩余成本以每个不同词项一次 SHA-256 为主，属格式定义开销，需从别处入手。
+- next: P8 余下 v2 语料复核与构建耗时可接受性；两者均不阻塞已取得的容量与等价性结论。
