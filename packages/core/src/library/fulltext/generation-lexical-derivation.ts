@@ -1,5 +1,5 @@
 import { tokenizeUnicode, tokenizeUnicodeWithHanSingles } from "./bm25-retrieval";
-import { lexicalTermBucket, type LexicalDictionaryEntry, type LexicalNamespace, type LexicalOccurrence, type LexicalPostingsBlock } from "./generation-index-format";
+import { compareTermCodePoints, lexicalTermBucket, type LexicalDictionaryEntry, type LexicalNamespace, type LexicalOccurrence, type LexicalPostingsBlock } from "./generation-index-format";
 
 export interface DerivedLexicalChunk {
   readonly baseLength: number;
@@ -114,13 +114,8 @@ export function compareNamespaceTerm(left: Pick<LexicalOccurrence, "namespace" |
 }
 
 function compareUtf8Strings(left: string, right: string): number {
-  // Called from sort comparators, so the encoder is hoisted rather than
-  // allocated per comparison.
-  const a = textEncoder.encode(left);
-  const b = textEncoder.encode(right);
-  const length = Math.min(a.length, b.length);
-  for (let index = 0; index < length; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
-  return a.length - b.length;
+  // UTF-8 preserves code point order, so the comparison needs no encoding.
+  return compareTermCodePoints(left, right);
 }
 
 function sameNamespaceTerm(left: Pick<LexicalOccurrence, "namespace" | "term">, right: Pick<LexicalOccurrence, "namespace" | "term">): boolean {

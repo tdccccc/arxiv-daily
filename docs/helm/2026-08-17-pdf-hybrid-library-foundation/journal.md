@@ -176,3 +176,12 @@
 - disposition: 该测试固定了一条 fixture 无法替代的契约——路由引用数必须允许超过对象数。首次运行因 60 分钟超时被杀且清理写在 `finally` 中而泄漏了 5.2 GB 沙箱；已改为固定路径并在启动时先清空，超时最多留下一份而非每次泄漏。此形态与桌面 harness 早前的中断泄漏相同：中断路径不走 `finally`。
 - disposition（未解决）: 构建耗时 3,843 秒对 199 篇个人文献库不可接受。这不是回归——修复前构建在第 16 个 block 即中止，172 个 dictionary block 的工作从未运行过——但仍需继续优化。3.6× 提速后的剩余成本以每个不同词项一次 SHA-256 为主，属格式定义开销，需从别处入手。
 - next: P8 余下 v2 语料复核与构建耗时可接受性；两者均不阻塞已取得的容量与等价性结论。
+
+## 2026-08-29 — P8.7 构建吞吐第二轮：真实语料 2.64×，并定位剩余成本
+
+- evidence: 在真实语料子集（20 篇 / 2,459 chunk）上 profile，热点与合成语料不同。`strictTermBytes` 占 29.2%，因为 `compareNamespaceTerm` 在校验的逐对比较中每次调用两次完整规范化（NFKC、locale 小写、UTF-8 编码、解码回比对），而校验在编码与解码时各跑一遍——与此前 `lexicalQueryCatalog` 的桶派生是同一形态。
+- change: 为 `strictTermBytes` 增加有界记忆化并提升 `TextDecoder`；随后利用「UTF-8 保持码点序」这一性质，把词项排序改为 `compareTermCodePoints` 的码点比较，完全不再编码。新增测试对 28 个覆盖 ASCII、重音、Han、希腊字母、数字与增补平面的词项穷举验证两种比较结果逐对一致。
+- verification: 真实语料 20 篇由 216.7 秒降至 82.1 秒（2.64×）。Core 113 files / 2,028 tests、完整工作区 2,766 tests、typecheck 与 `check:boundaries` 通过。
+- evidence（剩余成本归因）: 再次 profile 后 `sha256Hex` 占 65.1%，但按调用方拆分显示它并非来自桶派生（仅 2.4%，缓存有效；把缓存上限由 20 万提到 100 万无改善且 RSS 达 930MB，已回退）。真实分布是对象字节被重复哈希：`blockObjectChecksum` 合计 38.1%——spool 计算一次（14.0%）、builder 立即重算验证同一批字节（14.0%）、`readVerifiedSpool` 读回再验（10.1%）——另有 23.6% 来自 block 信封在编码与解码时各自的校验和。
+- disposition: 已落地的两轮优化均为行为保持，未改变桶函数、排序语义或格式。剩余两项属设计权衡而非实现缺陷，不在本轮单方面更改：其一，对象字节按现设计被哈希三到四次；其二，`deriveLexicalChunk` 为每个 chunk 生成全部 1/2/3-gram，alias 占全部词法 occurrence 的 63.5%（20 篇即 530 万 occurrence、46.9 万不同词项），而查询侧 `selectAliasGram` 在查询超过 2 字符时只取一个 3-gram，1-gram 与 2-gram 合计 46.5% 的 alias 索引量仅服务 1–2 字符查询。
+- next: 按线性外推，199 篇约 13–14 分钟（原 64 分钟）。是否进一步降低取决于上述两个设计取舍，需 owner 决定。

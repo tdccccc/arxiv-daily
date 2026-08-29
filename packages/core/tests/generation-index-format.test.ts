@@ -28,6 +28,7 @@ import {
   encodeLexicalPostingsBlock,
   encodePaperMetadataBlock,
   encodeVectorBlock,
+  compareTermCodePoints,
   lexicalTermBucket,
   finishEvidenceStreamClosure,
   validateEvidenceStreamClosure,
@@ -631,5 +632,44 @@ describe("lexical routing capacity is independent of the object budget", () => {
     const perBucket = Math.ceil(MAX_GENERATION_ROUTE_REFS / 256) + 1;
     const routing = Array.from({ length: 256 }, () => Array.from({ length: perBucket }, () => 0));
     expect(() => encodeGenerationDescriptor(withDictionaries(blocks, routing))).toThrow(/routing/i);
+  });
+});
+
+describe("term ordering does not require encoding", () => {
+  const encoder = new TextEncoder();
+  const byUtf8Bytes = (left: string, right: string) => {
+    const a = encoder.encode(left);
+    const b = encoder.encode(right);
+    for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+      if (a[index] !== b[index]) return Math.sign(a[index]! - b[index]!);
+    }
+    return Math.sign(a.length - b.length);
+  };
+
+  const terms = [
+    "a", "ab", "abc", "b", "z", "za",
+    "é", "e", "ü", "ss",
+    "中", "中文", "文", "国", "漢字",
+    "α", "β", "ω",
+    "0", "1", "9", "10",
+    "𝄞", "😀", "a😀", "😀a",
+    "ﬁ", "ｆｕｌｌ",
+  ];
+
+  it("code point order matches UTF-8 byte order for every pair", () => {
+    for (const left of terms) {
+      for (const right of terms) {
+        expect(Math.sign(compareTermCodePoints(left, right))).toBe(byUtf8Bytes(left, right));
+      }
+    }
+  });
+
+  it("orders supplementary-plane terms the way their bytes do", () => {
+    expect(Math.sign(compareTermCodePoints("😀", "中"))).toBe(byUtf8Bytes("😀", "中"));
+    expect(Math.sign(compareTermCodePoints("中", "😀"))).toBe(byUtf8Bytes("中", "😀"));
+  });
+
+  it("treats equal terms as equal", () => {
+    for (const term of terms) expect(compareTermCodePoints(term, term)).toBe(0);
   });
 });

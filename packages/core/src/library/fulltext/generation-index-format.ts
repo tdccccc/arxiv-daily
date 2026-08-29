@@ -587,8 +587,9 @@ function closureState(record: EvidenceBlockRecord): EvidenceStreamClosureState {
   };
 }
 
+const strictTextDecoder = new TextDecoder("utf-8", { fatal: true });
 function decodeStrictUtf8(bytes: Uint8Array, name: string): string {
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  try { return strictTextDecoder.decode(bytes); }
   catch { throw new Error(`${name} is not valid UTF-8`); }
 }
 
@@ -600,7 +601,30 @@ function decodeStrictJson(bytes: Uint8Array, name: string): Record<string, any> 
   return value;
 }
 
+/**
+ * Canonicalizing a term costs an NFKC pass, a locale lowercase, a UTF-8 encode
+ * and a decode back for comparison. Validation walks every occurrence and then
+ * compares neighbours pairwise, on both encode and decode, so the same terms are
+ * re-derived several times per block and again across blocks. The function is
+ * pure and no caller mutates the bytes it returns, so results are cached.
+ */
+const TERM_BYTES_CACHE_LIMIT = 200_000;
+const termBytesCache = new Map<string, Uint8Array>();
+
 function strictTermBytes(term: unknown): Uint8Array {
+  if (typeof term === "string") {
+    const cached = termBytesCache.get(term);
+    if (cached !== undefined) return cached;
+  }
+  const bytes = computeStrictTermBytes(term);
+  if (typeof term === "string") {
+    if (termBytesCache.size >= TERM_BYTES_CACHE_LIMIT) termBytesCache.clear();
+    termBytesCache.set(term, bytes);
+  }
+  return bytes;
+}
+
+function computeStrictTermBytes(term: unknown): Uint8Array {
   if (typeof term !== "string" || term.length === 0 || term.normalize("NFKC").toLocaleLowerCase("und") !== term) {
     throw new Error("lexical term must be non-empty canonical NFKC lowercase text");
   }
@@ -624,8 +648,28 @@ function validateNamespace(value: unknown): LexicalNamespace {
   if (value !== "base" && value !== "expanded" && value !== "alias") throw new Error("lexical namespace is invalid");
   return value;
 }
+/**
+ * UTF-8 preserves code point order, so terms can be ordered without encoding
+ * them. This matters because ordering is checked pairwise across every
+ * occurrence on both encode and decode, and encoding a term also costs an NFKC
+ * pass and a decode back for validation. Validation of the terms themselves
+ * still happens where each occurrence is checked.
+ */
+export function compareTermCodePoints(left: string, right: string): number {
+  if (left === right) return 0;
+  const leftPoints = Array.from(left);
+  const rightPoints = Array.from(right);
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = leftPoints[index]!.codePointAt(0)!;
+    const b = rightPoints[index]!.codePointAt(0)!;
+    if (a !== b) return a - b;
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
 function compareNamespaceTerm(a: { namespace: LexicalNamespace; term: string }, b: { namespace: LexicalNamespace; term: string }): number {
-  return NAMESPACE_ORDER[a.namespace] - NAMESPACE_ORDER[b.namespace] || compareBytes(strictTermBytes(a.term), strictTermBytes(b.term));
+  return NAMESPACE_ORDER[a.namespace] - NAMESPACE_ORDER[b.namespace] || compareTermCodePoints(a.term, b.term);
 }
 function compareOccurrenceAuthority(a: LexicalOccurrence, b: LexicalOccurrence): number {
   return a.chunkOrdinal - b.chunkOrdinal || compareNamespaceTerm(a, b);
