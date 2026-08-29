@@ -28,7 +28,7 @@ export class HubModal extends Modal {
     const { contentEl, modalEl } = this;
     modalEl.addClass("arxiv-daily-hub-modal");
     contentEl.addClass("arxiv-daily-hub-modal__content");
-    contentEl.createEl("h2", { text: "arXiv Daily — Logs & History" });
+    contentEl.createEl("h2", { text: "Logs and history" });
 
     const tabs = contentEl.createDiv({ cls: "arxiv-daily-hub-modal__tabs" });
     tabs.setAttribute("role", "tablist");
@@ -278,10 +278,10 @@ export class HubModal extends Modal {
         const selection = ownerWindow?.getSelection();
         selection?.removeAllRanges();
         selection?.addRange(range);
-        ownerDocument.execCommand("copy");
-        selection?.removeAllRanges();
+        new Notice("Clipboard unavailable; text is selected");
+        return;
       }
-      new Notice("arXiv Daily: copied");
+      new Notice("Copied");
     } catch (e) {
       this.plugin.logger.warn("Could not copy hub modal text", e);
       if (panel) {

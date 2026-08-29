@@ -63,7 +63,9 @@ test("the release workflow runs the release-tool tests during verification", asy
   const verifyWorkspace = workflow.match(/- name: Verify workspace\n\s+run: \|\n(?<commands>(?:\s{10}.+\n)+)/);
   assert.ok(verifyWorkspace, "release workflow must define the workspace verification step");
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run test:release-tools$/m);
+  assert.match(verifyWorkspace.groups.commands, /^\s+npm audit --audit-level=moderate$/m);
   assert.match(verifyWorkspace.groups.commands, /^\s+npm run lint$/m);
+  assert.match(verifyWorkspace.groups.commands, /^\s+npm run smoke:install$/m);
   assert.match(
     verifyWorkspace.groups.commands,
     /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1$/m,
@@ -82,6 +84,8 @@ test("trusted CLI publishing is OIDC-only and constrained to immutable releases"
   assert.match(publishWorkflow, /Refusing to overwrite existing npm version/);
   assert.match(publishWorkflow, /^\s+gh release view "\$version" >\/dev\/null$/m);
   assert.match(publishWorkflow, /^\s+NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1$/m);
+  assert.match(publishWorkflow, /^\s+npm audit --audit-level=moderate$/m);
+  assert.match(publishWorkflow, /^\s+npm run smoke:install$/m);
   assert.match(publishWorkflow, /^\s+run: npm publish --workspace apps\/cli --access public$/m);
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "arxiv-daily",
-  "version": "0.4.3",
+  "version": "0.4.6",
   "private": false,
   "description": "CLI for arXiv Daily: filter papers by research topics and write Markdown daily reports",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "llm"
   ],
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=20.19.0"
   },
   "type": "module",
   "bin": {
@@ -40,8 +40,8 @@
     "access": "public"
   },
   "devDependencies": {
-    "@arxiv-daily/core": "0.4.3",
-    "@arxiv-daily/node-runtime": "0.4.3",
+    "@arxiv-daily/core": "0.4.6",
+    "@arxiv-daily/node-runtime": "0.4.6",
     "@clack/prompts": "^1.7.0",
     "jszip": "^3.10.1",
     "smol-toml": "^1.7.1"

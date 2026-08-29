@@ -130,6 +130,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  private declarativeSetupGuideRow: Setting | undefined;
+  private pendingTopicFocusId: string | undefined;
+  private pendingTopicDeletionAnchor:
+    | { topicId: string; scroller: HTMLElement; top: number }
+    | undefined;
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -557,14 +562,62 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
   public refreshSettings(): void {
+    const scrollSnapshot = this.captureSettingsScroll();
     if (
       requireApiVersion("1.13.0") &&
       this.getSettingDefinitions().length > 0
     ) {
       this.update();
     } else {
-      this.display();
+      this.renderLegacySettings();
     }
+    if (!this.pendingTopicFocusId && !this.pendingTopicDeletionAnchor) {
+      this.restoreSettingsScroll(scrollSnapshot);
+    }
+  }
+
+  private captureSettingsScroll(): Array<{
+    element: HTMLElement;
+    top: number;
+    left: number;
+  }> {
+    const snapshot: Array<{ element: HTMLElement; top: number; left: number }> = [];
+    const view = this.containerEl.ownerDocument.defaultView;
+    for (
+      let element: HTMLElement | null = this.containerEl;
+      element;
+      element = element.parentElement
+    ) {
+      const overflowY = view?.getComputedStyle(element).overflowY;
+      if (
+        element.scrollTop !== 0 ||
+        element.scrollLeft !== 0 ||
+        overflowY === "auto" ||
+        overflowY === "scroll"
+      ) {
+        snapshot.push({ element, top: element.scrollTop, left: element.scrollLeft });
+      }
+    }
+    return snapshot;
+  }
+
+  private restoreSettingsScroll(
+    snapshot: Array<{ element: HTMLElement; top: number; left: number }>,
+  ): void {
+    if (snapshot.length === 0) return;
+    const restore = () => {
+      for (const { element, top, left } of snapshot) {
+        element.scrollTop = top;
+        element.scrollLeft = left;
+      }
+    };
+    restore();
+  }
+
+  /** Keep the Obsidian <1.13 fallback behind one explicit deprecated API call. */
+  private renderLegacySettings(): void {
+    const display = Reflect.get(this, "display") as (() => void) | undefined;
+    display?.call(this);
   }
 
   /** Append a category (the first arXiv option not already in the list). */
@@ -597,8 +650,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       detail: false,
     });
     this.expandedTopics.add(newId);
+    this.pendingTopicFocusId = newId;
     await this.plugin.saveSettings();
     this.refreshSettings();
+    this.focusPendingTopic();
   }
 
   /** Delete a topic after confirmation; returns whether it was deleted. */
@@ -612,10 +667,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Delete",
     );
     if (!confirmed) return false;
+    this.pendingTopicDeletionAnchor = this.captureTopicDeletionAnchor(
+      topics[index + 1]?.id ?? topics[index - 1]?.id,
+    );
     topics.splice(index, 1);
     this.expandedTopics.delete(topic.id);
     await this.plugin.saveSettings();
     this.refreshSettings();
+    this.restoreTopicDeletionAnchor();
     return true;
   }
 
@@ -860,7 +919,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
               this.reportActionError("save schedule enabled", error);
             }
           } finally {
-            if (this.isCurrentControlChange(t, revision)) this.display();
+            if (this.isCurrentControlChange(t, revision)) this.renderLegacySettings();
           }
         }),
       );
@@ -871,10 +930,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Base URL — always editable, default to DeepSeek
     new Setting(containerEl)
       .setName("API base URL")
-      .setDesc("Where chat requests are sent. Default is DeepSeek; change only if you use another provider.")
+      .setDesc("Where chat requests are sent. Change this only if you use another provider.")
       .addText((t) => {
         t.inputEl.addClass("arxiv-daily-settings__llm-input");
-        t.setPlaceholder("https://api.deepseek.com/v1")
+        t.setPlaceholder("Provider URL")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
           .onChange(async (v) => {
             const next = v.trim();
@@ -908,7 +967,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // Model — Get Models button + dropdown
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Choose a model, or click Get models to load the list from your provider.");
+      .setDesc("Choose a model, or click get models to load the list from your provider.");
 
     // Get models button
     modelSetting.addButton((b) => {
@@ -1149,8 +1208,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
-      .setName("arXiv categories")
-      .setDesc("Which arXiv subject areas to watch. You can add several; the same paper is only kept once.")
+      .setName("Paper categories")
+      .setDesc("Which paper subject areas to watch. You can add several; the same paper is only kept once.")
       .setHeading();
 
     for (let i = 0; i < categories.length; i++) {
@@ -1164,7 +1223,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             const next = [...categories];
             next[i] = v;
             await this.setArxivCategories(next);
-            this.display();
+            this.renderLegacySettings();
           });
         })
         .addText((t) => {
@@ -1175,7 +1234,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
                 const next = [...categories];
                 next[i] = v.trim();
                 await this.setArxivCategories(next);
-                this.display();
+                this.renderLegacySettings();
               }
             });
         })
@@ -1234,7 +1293,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Automatic detail notes")
       .setDesc(
-        "How often the plugin writes a longer note for a paper. Only topics with Detail report turned on are considered. Manual “summarize paper” is unchanged.",
+        "How often the plugin writes a longer note for a paper. Only topics with detail report turned on are considered. Manual “summarize paper” is unchanged.",
       )
       .addDropdown((d) => {
         d.addOption("conservative", "Fewer")
@@ -1264,7 +1323,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
               d.setValue(typeof value === "string" ? value : "balanced");
             },
           );
-          if (saved) this.display();
+          if (saved) this.renderLegacySettings();
         });
       });
 
@@ -1416,7 +1475,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       )
       .addDropdown((d) => {
         d.addOption("self", "Send yourself");
-        d.addOption("hosted", "Official delivery (Beta)");
+        d.addOption("hosted", "Official delivery (beta)");
         d.setValue(hostedMode ? "hosted" : "self");
         d.onChange(async (value) => {
           const saved = await this.saveLegacyControl(
@@ -1431,7 +1490,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
               d.setValue(restored === "hosted" ? "hosted" : "self");
             },
           );
-          if (saved) this.display();
+          if (saved) this.renderLegacySettings();
         });
       });
 
@@ -1478,7 +1537,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("From email")
         .setDesc(
-          "Optional. Leave blank for the simplest setup (mail may only go to your Resend account email). Use an address on a domain you verified in Resend to send more freely.",
+          "Optional. Leave blank for the simplest setup (mail may only go to your provider account email). Use an address on a verified domain to send more freely.",
         )
         .addText((t) => {
           t.setPlaceholder("Leave blank for simplest setup")
@@ -1498,9 +1557,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("From name")
-        .setDesc('Optional name shown as the sender. Default is "arXiv Daily".')
+        .setDesc('Optional name shown as the sender. Leave blank to use the default.')
         .addText((t) => {
-          t.setPlaceholder("arXiv Daily")
+          t.setPlaceholder("Sender name")
             .setValue(s.email.fromName ?? "")
             .onChange(async (v) => {
               await this.saveLegacyControl(
@@ -1644,7 +1703,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private renderEmailApiKeySetting(containerEl: HTMLElement): void {
     const setting = new Setting(containerEl)
       .setName("Resend API key")
-      .setDesc("From your Resend account. Saved only on this device; masked in the input.");
+      .setDesc("From your mail provider account. Saved only on this device; masked in the input.");
     renderSensitiveInput(this, setting, {
       value: this.plugin.settings.email.apiKey ?? "",
       placeholder: "Paste your Resend API key",
@@ -1691,13 +1750,23 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
+  /** Remember the host row so the guide can update without replacing active inputs. */
+  public setDeclarativeSetupGuideRow(setting: Setting): void {
+    this.declarativeSetupGuideRow = setting;
+  }
+
   public refreshDeclarativeSetupGuide(): void {
+    const setting = this.declarativeSetupGuideRow;
+    if (setting?.settingEl.isConnected) {
+      declarativeRows.renderSetupGuideRow(this, setting);
+      return;
+    }
     this.refreshSettings();
   }
 
   public refreshSetupGuide(): void {
     if (requireApiVersion("1.13.0")) {
-      this.refreshSettings();
+      this.refreshDeclarativeSetupGuide();
       return;
     }
     const current = this.containerEl.querySelector(".arxiv-daily-setup");
@@ -1914,6 +1983,87 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.refreshSetupGuide();
   }
 
+  /** Reveal and focus a topic created by Add topic after the settings list updates. */
+  private focusPendingTopic(): void {
+    const topicId = this.pendingTopicFocusId;
+    if (!topicId) return;
+
+    const focus = () => {
+      const card = Array.from(
+        this.containerEl.querySelectorAll<HTMLElement>(
+          ".arxiv-daily-settings__topic-card",
+        ),
+      ).find((candidate) => candidate.dataset.arxivDailyTopicId === topicId);
+      if (!card) return;
+      this.pendingTopicFocusId = undefined;
+
+      card.scrollIntoView?.({
+        block: "nearest",
+        behavior: "auto",
+      });
+      const nameInput = card.querySelector<HTMLInputElement>(
+        ".arxiv-daily-settings__topic-name-input",
+      );
+      nameInput?.focus({ preventScroll: true });
+    };
+
+    queueMicrotask(() => {
+      if (this.pendingTopicFocusId !== topicId) return;
+      if (this.containerEl.querySelector(
+        `[data-arxiv-daily-topic-id="${topicId}"]`,
+      )) {
+        focus();
+        return;
+      }
+      const view = this.containerEl.ownerDocument.defaultView;
+      if (view?.requestAnimationFrame) view.requestAnimationFrame(focus);
+      else if (view?.setTimeout) view.setTimeout(focus, 0);
+      else queueMicrotask(focus);
+    });
+  }
+
+  /** Keep a surviving neighbor visually fixed when a topic card is removed. */
+  private captureTopicDeletionAnchor(topicId?: string):
+    | { topicId: string; scroller: HTMLElement; top: number }
+    | undefined {
+    if (!topicId) return undefined;
+    const card = this.findTopicCard(topicId);
+    if (!card) return undefined;
+    const scroller = this.captureSettingsScroll().find(({ element }) =>
+      element.contains(card),
+    )?.element;
+    if (!scroller) return undefined;
+    return { topicId, scroller, top: card.getBoundingClientRect().top };
+  }
+
+  private restoreTopicDeletionAnchor(): void {
+    const anchor = this.pendingTopicDeletionAnchor;
+    if (!anchor) return;
+    const restore = (): boolean => {
+      const card = this.findTopicCard(anchor.topicId);
+      if (!card) return false;
+      this.pendingTopicDeletionAnchor = undefined;
+      anchor.scroller.scrollTop += card.getBoundingClientRect().top - anchor.top;
+      return true;
+    };
+    if (restore()) return;
+    queueMicrotask(() => {
+      if (restore()) return;
+      const view = this.containerEl.ownerDocument.defaultView;
+      if (view?.requestAnimationFrame) view.requestAnimationFrame(() => {
+        restore();
+      });
+    });
+  }
+
+  private findTopicCard(topicId: string): HTMLElement | undefined {
+    return Array.from(
+      this.containerEl.querySelectorAll<HTMLElement>(
+        ".arxiv-daily-settings__topic-card",
+      ),
+    ).find((candidate) => candidate.dataset.arxivDailyTopicId === topicId);
+  }
+
   /** Render the topic card for one index into a declarative list row. */
   public renderTopicRow(setting: Setting, index: number): void {
     // Re-renders reuse the same row; drop the previous card first.
@@ -1947,6 +2097,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     const card = container.createDiv({
       cls: "arxiv-daily-settings__topic-card",
+      attr: { "data-arxiv-daily-topic-id": topic.id },
     });
 
     // ─── Header row (always visible, clickable) ────────────
@@ -2050,7 +2201,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         : { id: tagId, "aria-describedby": tagHintId },
     });
     tagInput.value = topic.tag;
-    tagInput.placeholder = "topic-tag";
+    tagInput.placeholder = "Topic tag";
     const autoBadge = compact
       ? null
       : tagRow.createSpan({

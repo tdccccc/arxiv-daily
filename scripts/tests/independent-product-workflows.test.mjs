@@ -59,6 +59,7 @@ const expectedRelayWorkflow = {
           },
         },
         { name: "Install relay dependencies", run: "npm ci" },
+        { name: "Audit relay dependencies", run: "npm audit --audit-level=moderate" },
         { name: "Typecheck relay", run: "npm run typecheck" },
         { name: "Test relay", run: "npm test" },
         {

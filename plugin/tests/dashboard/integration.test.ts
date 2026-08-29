@@ -39,7 +39,7 @@ describe("Dashboard Integration", () => {
     appendSettingsButton(parent, () => {});
     const button = parent.querySelector("button.arxiv-daily-dashboard__settings-btn");
     expect(button).not.toBeNull();
-    expect(button!.getAttribute("aria-label")).toBe("Open arXiv Daily settings");
+    expect(button!.getAttribute("aria-label")).toBe("Open settings");
     expect(button!.querySelector("span")!.textContent).toBe("Settings");
   });
 

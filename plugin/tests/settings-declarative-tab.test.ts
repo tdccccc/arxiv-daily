@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { MenuItem, ToggleComponent, type App } from "obsidian";
+import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { ArxivDailySettingTab } from "../src/settings/tab";
@@ -21,6 +21,7 @@ import {
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderScheduleEnabledRow,
+  renderSetupGuideRow,
   renderTickIntervalRow,
   renderTimezoneRow,
 } from "../src/settings/declarative-rows";
@@ -40,8 +41,11 @@ beforeAll(() => {
     removeClass?: (...classes: string[]) => void;
     toggleClass?: (className: string, force?: boolean) => void;
     setText?: (text: string) => void;
+    appendText?: (text: string) => void;
+    detach?: () => void;
     createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
     createDiv?: (options?: CreateOptions) => HTMLElement;
+    createSpan?: (options?: CreateOptions) => HTMLElement;
   };
   proto.empty ??= function () { this.replaceChildren(); };
   proto.addClass ??= function (...classes) { this.classList.add(...classes); };
@@ -50,6 +54,8 @@ beforeAll(() => {
     this.classList.toggle(className, force);
   };
   proto.setText ??= function (text) { this.textContent = text; };
+  proto.appendText ??= function (text) { this.append(text); };
+  proto.detach ??= function () { this.remove(); };
   proto.createEl ??= function (tag, options = {}) {
     const element = document.createElement(tag);
     if (options.cls) element.className = options.cls;
@@ -66,6 +72,9 @@ beforeAll(() => {
   };
   proto.createDiv ??= function (options = {}) {
     return this.createEl("div", options);
+  };
+  proto.createSpan ??= function (options = {}) {
+    return this.createEl("span", options);
   };
 });
 
@@ -936,6 +945,134 @@ describe("declarative LLM and category rows", () => {
     expect(settings.schedule.enabled).toBe(false);
     expect(toggle.value).toBe(false);
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("declarative topic cards", () => {
+  it("preserves the settings viewport across a declarative refresh", () => {
+    const { tab } = makeTab();
+    const viewport = document.createElement("div");
+    viewport.style.overflowY = "auto";
+    viewport.appendChild(tab.containerEl);
+    document.body.appendChild(viewport);
+    viewport.scrollTop = 180;
+    vi.spyOn(tab, "update").mockImplementation(() => {});
+
+    tab.refreshSettings();
+
+    expect(viewport.scrollTop).toBe(180);
+    viewport.remove();
+  });
+
+  it("reveals and focuses a newly added topic after the list refreshes", async () => {
+    const { tab, settings } = makeTab();
+    document.body.appendChild(tab.containerEl);
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {
+      const topic = settings.arxiv.topics.at(-1)!;
+      const card = document.createElement("div");
+      card.className = "arxiv-daily-settings__topic-card";
+      card.dataset.arxivDailyTopicId = topic.id;
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(card, "scrollIntoView", { value: scrollIntoView });
+      const input = document.createElement("input");
+      input.className = "arxiv-daily-settings__topic-name-input";
+      card.appendChild(input);
+      tab.containerEl.appendChild(card);
+    });
+
+    await tab.addTopic();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(document.activeElement).toBe(
+      tab.containerEl.querySelector(".arxiv-daily-settings__topic-name-input"),
+    );
+    expect(
+      tab.containerEl.querySelector<HTMLElement>(
+        ".arxiv-daily-settings__topic-card",
+      )?.scrollIntoView,
+    ).toHaveBeenCalledWith({ block: "nearest", behavior: "auto" });
+    tab.containerEl.remove();
+  });
+
+  it("keeps the next topic fixed in the viewport when deleting a topic", async () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.topics.push(
+      { id: "first", name: "First", tag: "first", description: "First", detail: false },
+      { id: "next", name: "Next", tag: "next", description: "Next", detail: false },
+    );
+    const viewport = document.createElement("div");
+    viewport.style.overflowY = "auto";
+    viewport.scrollTop = 500;
+    viewport.appendChild(tab.containerEl);
+    document.body.appendChild(viewport);
+    const makeCard = (topicId: string, top: number) => {
+      const card = document.createElement("div");
+      card.className = "arxiv-daily-settings__topic-card";
+      card.dataset.arxivDailyTopicId = topicId;
+      Object.defineProperty(card, "getBoundingClientRect", {
+        value: () => ({ top }),
+      });
+      return card;
+    };
+    tab.containerEl.append(
+      makeCard("first", 0),
+      makeCard("next", 200),
+    );
+    vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {
+      tab.containerEl.replaceChildren(makeCard("next", 0));
+    });
+
+    await tab.deleteTopic(0);
+
+    expect(viewport.scrollTop).toBe(300);
+    viewport.remove();
+  });
+
+  it("keeps topic fields focused while updating the setup guide", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push({
+      id: "topic-1",
+      name: "",
+      tag: "topic-1",
+      description: "",
+      detail: false,
+    });
+    const refresh = vi.spyOn(tab, "refreshSettings");
+    document.body.appendChild(tab.containerEl);
+    const guideSetting = new Setting(tab.containerEl);
+    renderSetupGuideRow(tab, guideSetting);
+    const topicSetting = new Setting(tab.containerEl);
+    tab.renderTopicRow(topicSetting, 0);
+
+    const header = topicSetting.settingEl.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    ) as HTMLButtonElement;
+    header.click();
+    const fields = [
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-name-input",
+      ),
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-tag-input",
+      ),
+      topicSetting.settingEl.querySelector(
+        ".arxiv-daily-settings__topic-description",
+      ),
+    ] as Array<HTMLInputElement | HTMLTextAreaElement>;
+
+    for (const [index, field] of fields.entries()) {
+      field.focus();
+      field.value = `draft-${index}`;
+      field.dispatchEvent(new Event("input"));
+      await vi.waitFor(() => {
+        expect(saveSettings).toHaveBeenCalledTimes(index + 1);
+      });
+      expect(document.activeElement).toBe(field);
+    }
+
+    expect(refresh).not.toHaveBeenCalled();
+    tab.containerEl.remove();
   });
 });
 

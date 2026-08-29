@@ -292,7 +292,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "run-now",
-    name: "Run Today",
+    name: "Run today",
     callback: () => runDetached(runToday(), "run today"),
   });
 
@@ -335,7 +335,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "summarize-by-id",
-    name: "Summarize by arXiv ID…",
+    name: "Summarize by paper ID…",
     callback: openArxivIdPicker,
   });
 
@@ -563,7 +563,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   const dashboardRibbonIcon = plugin.addRibbonIcon(
     "book-open-check",
-    "arXiv Daily Dashboard",
+    "Reading dashboard",
     () => {
       runDetached(openDashboardView(plugin), "open dashboard from ribbon");
     },
@@ -612,12 +612,12 @@ class ArxivIdModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Summarize paper by arXiv ID" });
+    contentEl.createEl("h2", { text: "Summarize paper by ID" });
     let inputEl: HTMLInputElement | null = null;
     let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
-      .setName("arXiv ID or URL")
-      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
+      .setName("Paper ID or URL")
+      .setDesc("For example, paper ID 2605.08080 or its source URL.")
       .addText((t) => {
         inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
@@ -732,7 +732,7 @@ class PaperIdModal extends Modal {
     let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName(this.fieldName)
-      .setDesc("e.g. 2605.08080, arXiv:2605.08080v1, https://arxiv.org/abs/2605.08080")
+      .setDesc("For example, paper ID 2605.08080 or its source URL.")
       .addText((t) => {
         inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
@@ -772,12 +772,12 @@ class PaperMarkModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Set arXiv Daily paper mark" });
+    contentEl.createEl("h2", { text: "Set paper mark" });
     let inputEl: HTMLInputElement | null = null;
     let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
-      .setName("arXiv ID or URL")
-      .setDesc("Paper must already exist in the internal arXiv Daily paper index")
+      .setName("Paper ID or URL")
+      .setDesc("Paper must already exist in the internal paper index")
       .addText((t) => {
         inputEl = t.inputEl;
         t.setPlaceholder("2605.08080").onChange((v) => {
@@ -819,7 +819,7 @@ class StateModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "arXiv Daily — Recent state" });
+    contentEl.createEl("h2", { text: "Recent run state" });
     const snap = this.plugin.stateStore.snapshot();
     const entries = Object.entries(snap).sort((a, b) => (a[0] < b[0] ? 1 : -1));
     if (entries.length === 0) {
@@ -848,7 +848,7 @@ class RunHistoryModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "arXiv Daily run history" });
+    contentEl.createEl("h2", { text: "Run history" });
     const textarea = contentEl.createEl("textarea", {
       cls: "arxiv-daily-diagnostics-textarea",
     });
@@ -872,16 +872,15 @@ class RunHistoryModal extends Modal {
         .setCta()
         .onClick(async () => {
           try {
-            const ownerDocument = textarea.ownerDocument;
-            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
-            if (clipboard?.writeText) {
-              await clipboard.writeText(report);
-            } else {
+            const clipboard = textarea.ownerDocument.defaultView?.navigator.clipboard;
+            if (!clipboard?.writeText) {
               textarea.select();
-              ownerDocument.execCommand("copy");
+              new Notice("Clipboard unavailable; run history text is selected");
+              return;
             }
-            this.plugin.logger.info("arXiv Daily: run history copied");
-            new Notice("arXiv Daily: run history copied");
+            await clipboard.writeText(report);
+            this.plugin.logger.info("Run history copied");
+            new Notice("Run history copied");
           } catch (e) {
             this.plugin.logger.warn("Could not copy run history; text is selectable", e);
             textarea.select();
@@ -901,7 +900,7 @@ export class DiagnosticsModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "arXiv Daily diagnostics" });
+    contentEl.createEl("h2", { text: "Diagnostics" });
     const textarea = contentEl.createEl("textarea", {
       cls: "arxiv-daily-diagnostics-textarea",
     });
@@ -924,16 +923,15 @@ export class DiagnosticsModal extends Modal {
         .setCta()
         .onClick(async () => {
           try {
-            const ownerDocument = textarea.ownerDocument;
-            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
-            if (clipboard?.writeText) {
-              await clipboard.writeText(report);
-            } else {
+            const clipboard = textarea.ownerDocument.defaultView?.navigator.clipboard;
+            if (!clipboard?.writeText) {
               textarea.select();
-              ownerDocument.execCommand("copy");
+              new Notice("Clipboard unavailable; diagnostics text is selected");
+              return;
             }
-            this.plugin.logger.info("arXiv Daily: diagnostics copied");
-            new Notice("arXiv Daily: diagnostics copied");
+            await clipboard.writeText(report);
+            this.plugin.logger.info("Diagnostics copied");
+            new Notice("Diagnostics copied");
           } catch (e) {
             this.plugin.logger.warn("Could not copy diagnostics; text is selectable", e);
             textarea.select();
