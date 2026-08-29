@@ -27,10 +27,10 @@ updated: 2026-08-29
 
 ## Tasks
 
-- [ ] 用依赖 `this` 的 FileSystemAdapter mock 复现 `desktopVaultRoot` / 证据打开的 `basePath` TypeError。
-- [ ] 以绑定 `this` 的方式读取 vault root，使 Vault 内目标解析为 `small_library/<file>#page=N`。
-- [ ] Dashboard 与命令入口的失败通知带上具体错误信息。
-- [ ] 隔离 Obsidian 复验插件打开路径（不是裸 `openLinkText`）。
+- [x] 用依赖 `this` 的 FileSystemAdapter mock 复现 `desktopVaultRoot` / 证据打开的 `basePath` TypeError。
+- [x] 以绑定 `this` 的方式读取 vault root，使 Vault 内目标解析为 `small_library/<file>#page=N`。
+- [x] Dashboard 与命令入口的失败通知带上具体错误信息。
+- [x] 隔离 Obsidian 复验插件打开路径（不是裸 `openLinkText`）。
 
 ## Verification
 
@@ -38,6 +38,8 @@ updated: 2026-08-29
 - Green：同一 mock 返回 vault root；lifecycle 仍把 vault 内路径解析为相对 `#page=N`。
 - 桌面：插件打开 Attention PDF 第 4 页报 4，第 2 页报 2。
 - 通知：失败文案含原始 `error.message`。
+- Observed Red (2026-08-29): method-style `getBasePath` mock 抛 `TypeError: Cannot read properties of undefined (reading 'basePath')` at `desktopVaultRoot`；arrow-function mock 仍绿。
+- Observed Green: 同一测试与 32 项相邻 plugin 测试通过。隔离 Obsidian（`/tmp/arxiv-daily-open-vault`，selectedRoot 在 vault 内）上 `openPersonalLibraryFullTextEvidence` 打开 `1706.03762.pdf` 第 4 页报 4、第 2 页报 2；`outcome=page-targeted`；0 renderer 错误。
 
 ## Abort / reshape triggers
 

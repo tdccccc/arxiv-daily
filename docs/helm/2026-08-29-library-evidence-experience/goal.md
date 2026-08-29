@@ -10,8 +10,8 @@ owner: claude-code-main-session
 
 ## Success criteria
 
-- [ ] 在 Vault 内的个人文献库上，Dashboard「Library matches」和 Similar papers 的「Open PDF at page N」能打开嵌入式 PDF 到该页；换一页会落到另一页。
-- [ ] 打开失败时，通知里能看到具体原因，而不是只写 `Open PDF at page N failed`。
+- [x] 在 Vault 内的个人文献库上，Dashboard「Library matches」和 Similar papers 的「Open PDF at page N」能打开嵌入式 PDF 到该页；换一页会落到另一页。
+- [x] 打开失败时，通知里能看到具体原因，而不是只写 `Open PDF at page N failed`。
 - [ ] 证据结果能一眼看到论文标题、可用的章节、一段可读正文和页码；版权页、目录点线、参考文献列表不再作为默认主证据。
 - [ ] Dashboard 与 Similar papers 共用同一套证据呈现；不改变混合检索的论文排序。
 
@@ -31,8 +31,8 @@ owner: claude-code-main-session
 
 ## Phases
 
-1. P1 — Vault 内证据 PDF 能打开到对应页，失败原因可见 — status: active
-2. P2 — 证据卡片可读：正文、章节、页码和打开动作层次清楚 — status: pending
+1. P1 — Vault 内证据 PDF 能打开到对应页，失败原因可见 — status: done
+2. P2 — 证据卡片可读：正文、章节、页码和打开动作层次清楚 — status: active
 3. P3 — 默认主证据不再是版权页、目录点线或参考文献列表 — status: pending
 
 ## Open questions
