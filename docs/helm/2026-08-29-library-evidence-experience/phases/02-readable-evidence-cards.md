@@ -26,16 +26,17 @@ Dashboard 与 Similar papers 的文献证据看起来像一张结果卡片：标
 
 ## Tasks
 
-- [ ] 固定卡片结构：标题、文件名、每条证据的章节/正文/页码/打开。
-- [ ] 打开按钮改为短文案，页码仍单独可见；aria-label 保留页码。
-- [ ] 正文做空白折叠与点线压缩，截断到可读长度。
-- [ ] 样式让证据块像引用而不是又一段正文。
+- [x] 固定卡片结构：标题、文件名、每条证据的章节/正文/页码/打开。
+- [x] 打开按钮改为短文案，页码仍单独可见；aria-label 保留页码。
+- [x] 正文做空白折叠与点线压缩，截断到可读长度。
+- [x] 样式让证据块像引用而不是又一段正文。
 
 ## Verification
 
 - 同一 fixture：标题、文件名、章节、正文、`Page N`、打开动作都在，且按钮不再重复整句 `Open PDF at page N`。
 - Similar papers 与 Dashboard 仍走同一 renderer。
 - 不改变 match 顺序或 hit 条数。
+- Observed Green (2026-08-29): plugin 19 tests（library-search-block / similar-papers / command modal）与 typecheck 通过。按钮可见文案为 `Open page N`，aria-label 仍为 `Open PDF at page N`；目录点线压缩为 `…`；分数调试文案不再出现。
 
 ## Abort / reshape triggers
 

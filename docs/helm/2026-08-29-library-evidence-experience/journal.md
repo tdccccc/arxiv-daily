@@ -11,3 +11,10 @@
 - change: P1 done，激活 P2。勾选打开与失败可见性两条成功标准。
 - disposition: 生产改动仅 vault-root 绑定与通知文案。不改检索。P2 只改共享 evidence renderer 的层次与样式。
 - next: 把证据块改成卡片结构，按钮短文案，正文压缩空白与点线。
+
+## 2026-08-29 — P2 done
+
+- evidence: 共享 renderer 改为标题 / 文件名 / 引用式证据块；按钮可见文案 `Open page N`，aria-label 仍带页码；正文空白折叠、点线压成省略号、截断 180 字。定向 plugin 19 tests 与 typecheck 通过。未改 hit 选择或论文排序。
+- change: P2 done。P3 仍 pending：版权页、`<EOS>`/`<pad>`、参考文献作为默认主证据。
+- disposition: 测试 vault 的 `plugin_test` 插件文件未从本会话覆盖；用户需拷贝 worktree 的 `plugin/main.js` 与 `plugin/styles.css` 后重载。
+- next: 等用户看过 P1+P2 再决定是否做 P3 的噪声 hit 选择。

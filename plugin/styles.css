@@ -1515,8 +1515,8 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-dashboard__library-item {
   min-width: 0;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 10px 12px;
 }
 
 .arxiv-daily-dashboard__library-title {
@@ -1525,22 +1525,24 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 .arxiv-daily-dashboard__library-meta {
-  margin-top: 4px;
+  margin-top: 2px;
   overflow-wrap: anywhere;
   color: var(--text-muted);
-  font-size: var(--font-ui-small);
+  font-size: var(--font-ui-smaller);
 }
 
 .arxiv-daily-dashboard__library-evidence {
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--background-modifier-border-hover);
+  padding: 8px 10px;
+  border-left: 2px solid var(--interactive-accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--background-secondary);
 }
 
 .arxiv-daily-dashboard__library-section {
   overflow-wrap: anywhere;
-  color: var(--text-accent);
-  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
   font-weight: var(--font-semibold);
 }
 
@@ -1549,7 +1551,7 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   overflow-wrap: anywhere;
   color: var(--text-normal);
   font-size: var(--font-ui-small);
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 .arxiv-daily-dashboard__library-evidence-actions {
@@ -1568,9 +1570,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-dashboard__library-open-evidence {
   flex: 0 0 auto;
-  min-height: 28px;
-  padding: 3px 8px;
-  font-size: var(--font-ui-small);
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
 }
 
 @media (max-width: 520px) {

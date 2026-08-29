@@ -72,18 +72,12 @@ export function renderLibrarySearchBlock(
     });
     item.createDiv({
       cls: "arxiv-daily-dashboard__library-meta",
-      text: `${match.filePath ?? match.paperKey} · ${formatEvidenceScore(match)}`,
+      text: match.filePath ?? match.paperKey,
     });
     for (const hit of match.hits) {
       renderEvidence(item, match, hit, options);
     }
   }
-}
-
-export function formatEvidenceScore(match: Pick<LibrarySearchMatch, "score" | "scoreKind">): string {
-  return match.scoreKind === "cosine"
-    ? `best semantic evidence ${match.score.toFixed(3)}`
-    : "lexical match";
 }
 
 function renderEvidence(
@@ -112,7 +106,7 @@ function renderEvidence(
   const action = `Open PDF at page ${hit.page}`;
   const button = actions.createEl("button", {
     cls: "arxiv-daily-dashboard__library-open-evidence",
-    text: action,
+    text: `Open page ${hit.page}`,
     attr: { type: "button", "aria-label": action },
   });
   button.addEventListener("click", () => {
@@ -138,10 +132,15 @@ function reportActionError(
   }
 }
 
-function evidenceSnippet(text: string): string {
-  const normalized = text.replace(/\s+/gu, " ").trim();
-  const maxCodeUnits = 360;
+export function evidenceSnippet(text: string): string {
+  const normalized = text
+    .replace(/\s+/gu, " ")
+    .replace(/[.·•․∙]{3,}/gu, "…")
+    .replace(/(?:\s?\.){3,}/gu, "…")
+    .replace(/…{2,}/gu, "…")
+    .trim();
+  const maxCodeUnits = 180;
   return normalized.length <= maxCodeUnits
     ? normalized
-    : `${normalized.slice(0, maxCodeUnits).trimEnd()}...`;
+    : `${normalized.slice(0, maxCodeUnits).trimEnd()}…`;
 }

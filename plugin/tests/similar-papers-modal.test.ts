@@ -225,12 +225,14 @@ describe("Similar Papers modal", () => {
 
     expect(load).toHaveBeenCalledOnce();
     expect(content.textContent).toContain("Library Paper");
-    expect(content.textContent).toContain("papers/library-paper.pdf · best semantic evidence 0.812");
+    expect(content.textContent).toContain("papers/library-paper.pdf");
+    expect(content.textContent).not.toContain("best semantic evidence");
     expect(content.textContent).not.toContain("0.032");
     expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
     expect(content.textContent).toContain("Methods");
     expect(content.textContent).toContain("A matching passage about retrieval.");
     expect(content.textContent).toContain("Page 2");
+    expect(content.textContent).toContain("Open page 2");
     content.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 2"]')?.click();
     expect(openLibraryEvidence).toHaveBeenCalledWith(
       expect.objectContaining({ paperKey: `file:sha256:${"a".repeat(64)}` }),

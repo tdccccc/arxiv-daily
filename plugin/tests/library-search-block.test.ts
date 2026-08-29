@@ -60,8 +60,10 @@ describe("renderLibrarySearchBlock", () => {
     });
     expect(container.textContent).toContain("Library matches");
     expect(container.textContent).toContain("Library Paper");
-    expect(container.textContent).toContain("arxiv:2607.01001 · best semantic evidence 0.812");
-    expect(container.textContent).toContain("arxiv:2607.01002 · lexical match");
+    expect(container.textContent).toContain("arxiv:2607.01001");
+    expect(container.textContent).toContain("arxiv:2607.01002");
+    expect(container.textContent).not.toContain("best semantic evidence");
+    expect(container.textContent).not.toContain("lexical match");
     expect(container.textContent).not.toContain("0.032");
     expect(container.textContent).not.toContain("—");
     expect(container.querySelectorAll("li")).toHaveLength(2);
@@ -97,6 +99,8 @@ describe("renderLibrarySearchBlock", () => {
     expect(container.textContent).toContain("Methods / Retrieval");
     expect(container.textContent).toContain("A matching passage about retrieval evidence.");
     expect(container.textContent).toContain("Page 7");
+    expect(container.textContent).toContain("Open page 7");
+    expect(container.textContent).not.toContain("Open PDF at page 7");
     const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 7"]');
     button?.click();
     expect(openEvidence).toHaveBeenCalledWith(
@@ -136,6 +140,35 @@ describe("renderLibrarySearchBlock", () => {
 
     expect(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 1"]')?.click())
       .not.toThrow();
+  });
+
+  it("compresses leader dots in evidence snippets", () => {
+    const container = document.createElement("div");
+    renderLibrarySearchBlock(container, {
+      kind: "matches",
+      matches: [{
+        paperKey: "arxiv:2607.01001",
+        title: "Evidence paper",
+        filePath: "papers/evidence.pdf",
+        score: 0.8,
+        scoreKind: "cosine",
+        rankingScore: 0.03,
+        rankingScoreKind: "rrf",
+        hits: [{
+          source: "dense",
+          scoreKind: "cosine",
+          score: 0.8,
+          chunkIndex: 0,
+          chunkId: "chunk-0",
+          headings: [],
+          locator: { pageStart: 2 },
+          page: 2,
+          text: "Contents 1 Introduction ............... 8 2 Approach ............... 12",
+        }],
+      }],
+    });
+    expect(container.textContent).toContain("Contents 1 Introduction … 8 2 Approach … 12");
+    expect(container.textContent).not.toContain("....");
   });
 
   it("renders the empty state", () => {
