@@ -150,7 +150,7 @@ function fixedGeneration(papers: readonly FullTextPaperDocument[], rowsPerBlock 
     corpusMean: Array.from(sums, (sum) => sum / rows.length),
     corpusStats: { indexedPaperCount: canonical.length, chunkCount: rows.length, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
     lexicalCapability: "none",
-    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
+    lexicalRouting: Array.from({ length: 256 }, () => [] as number[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [...vectorRefs, ...evidenceRefs],
   };

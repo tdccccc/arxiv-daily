@@ -1,6 +1,8 @@
 import { titlePriority, tokenizeUnicode } from "./bm25-retrieval";
 import type { EvidenceBlock, GenerationObjectReference, LexicalNamespace, LexicalPostingsBlock, PaperMetadataRecord } from "./generation-index-format";
-import { lexicalTermBucket } from "./generation-index-format";
+import { lexicalTermBucket,
+  GENERATION_DESCRIPTOR_SCHEMA_VERSION,
+} from "./generation-index-format";
 import { FullTextGenerationIndexStoreError, type OpenedFullTextGeneration } from "./generation-index-store";
 import type { KnowledgeBaseChunkHit, KnowledgeBasePaperMatch } from "./retrieval";
 
@@ -53,7 +55,7 @@ export async function searchGenerationBm25(input: SearchGenerationBm25Input): Pr
   resetStats(input.stats);
   throwIfCancelled(input.signal);
   const descriptor = input.generation.descriptor;
-  if (descriptor.schemaVersion !== 4 || descriptor.lexicalCapability !== "bm25-v1") {
+  if (descriptor.schemaVersion !== GENERATION_DESCRIPTOR_SCHEMA_VERSION || descriptor.lexicalCapability !== "bm25-v1") {
     throw new FullTextGenerationIndexStoreError("generation BM25 is unavailable for this generation", "capability-unsupported");
   }
   if (limit === 0 || descriptor.corpusStats.chunkCount === 0) return [];
@@ -75,18 +77,18 @@ export async function searchGenerationBm25(input: SearchGenerationBm25Input): Pr
   if (aliasSelector) targets.push({ namespace: "alias", term: aliasSelector, queryIndex: null });
 
   const postingRefs = refsOfKind(descriptor.objects, "lexical-postings");
-  const dictionaryByPath = new Map(refsOfKind(descriptor.objects, "lexical-dictionary").map((ref) => [ref.path, ref]));
-  const routedDictionaryPaths = new Set<string>();
-  for (const target of targets) for (const path of descriptor.lexicalRouting[lexicalTermBucket(target.namespace, target.term)]!) routedDictionaryPaths.add(path);
-  const routedDictionaries = [...routedDictionaryPaths].map((path) => {
-    const reference = dictionaryByPath.get(path);
+  const dictionaryRefs = refsOfKind(descriptor.objects, "lexical-dictionary");
+  const routedOrdinals = new Set<number>();
+  for (const target of targets) for (const ordinal of descriptor.lexicalRouting[lexicalTermBucket(target.namespace, target.term)]!) routedOrdinals.add(ordinal);
+  const routedDictionaries = [...routedOrdinals].map((ordinal) => {
+    const reference = dictionaryRefs[ordinal];
     if (!reference) throw corruption("lexical routing references an unknown dictionary");
-    return reference;
-  }).sort((left, right) => left.recordStart - right.recordStart || left.path.localeCompare(right.path));
+    return { ordinal, reference };
+  }).sort((left, right) => left.reference.recordStart - right.reference.recordStart || left.reference.path.localeCompare(right.reference.path));
   const df = new Array<number>(queryTerms.length).fill(0);
   const postingTargets = new Map<number, Set<number>>();
   let routeRefCount = 0;
-  for (const reference of routedDictionaries) {
+  for (const { ordinal, reference } of routedDictionaries) {
     throwIfCancelled(input.signal);
     const object = await input.generation.readLexicalDictionary(reference);
     if (input.stats) input.stats.dictionaryReads += 1;
@@ -94,7 +96,7 @@ export async function searchGenerationBm25(input: SearchGenerationBm25Input): Pr
     const block = object.block;
     for (const target of targets) {
       const bucket = lexicalTermBucket(target.namespace, target.term);
-      if (!descriptor.lexicalRouting[bucket]!.includes(reference.path)) continue;
+      if (!descriptor.lexicalRouting[bucket]!.includes(ordinal)) continue;
       for (const catalogIndex of block.queryCatalog) {
         const entry = block.entries[catalogIndex]!;
         const entryBucket = lexicalTermBucket(entry.namespace, entry.term);

@@ -8,9 +8,18 @@ export const BINARY_BLOCK_HEADER_BYTES = 52;
 export const BINARY_BLOCK_FORMAT_VERSION = 1 as const;
 export const BINARY_BLOCK_SCHEMA_VERSION = 4 as const;
 export const GENERATION_DESCRIPTOR_FORMAT_VERSION = 1 as const;
-export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 4 as const;
+export const GENERATION_DESCRIPTOR_SCHEMA_VERSION = 5 as const;
 export const MAX_GENERATION_DESCRIPTOR_BYTES = 1024 * 1024;
 export const MAX_GENERATION_OBJECTS = 4096;
+/**
+ * Routing references are not objects. Every dictionary block is one object, yet
+ * real prose spreads its terms across all 256 buckets, so a block contributes
+ * 256 references. Sharing the object budget therefore capped the index at
+ * sixteen dictionary blocks - roughly two thousand chunks - regardless of how
+ * few objects it actually used. References are bounded here instead, by what
+ * the descriptor can hold once they are stored as ordinals rather than paths.
+ */
+export const MAX_GENERATION_ROUTE_REFS = 100_000;
 export const MAX_GENERATION_PAPERS = 1_000_000;
 export const MAX_GENERATION_CHUNKS = 10_000_000;
 export const MAX_GENERATION_DIMENSION = 4096;
@@ -165,7 +174,8 @@ export interface GenerationDescriptor {
     readonly avgdlWithHanSingles: number;
   };
   readonly lexicalCapability: "none" | "bm25-v1";
-  readonly lexicalRouting: readonly (readonly string[])[];
+  /** Per bucket, the ordinals of the lexical-dictionary objects that carry it. */
+  readonly lexicalRouting: readonly (readonly number[])[];
   readonly indexDerivation: GenerationIndexDerivation;
   readonly objects: readonly GenerationObjectReference[];
 }
@@ -775,7 +785,7 @@ function validateDescriptorV2(value: Record<string, any>): GenerationDescriptor 
       avgdlWithHanSingles: 0,
     },
     lexicalCapability: "none",
-    lexicalRouting: Array.from({ length: LEXICAL_BUCKET_COUNT }, () => []),
+    lexicalRouting: Array.from({ length: LEXICAL_BUCKET_COUNT }, () => [] as number[]),
   });
   return { ...projected, schemaVersion: 2 };
 }
@@ -809,14 +819,20 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
   }
   if (value.lexicalCapability !== "none" && value.lexicalCapability !== "bm25-v1") throw new Error("generation lexicalCapability is unknown");
   if (!Array.isArray(value.lexicalRouting) || value.lexicalRouting.length !== LEXICAL_BUCKET_COUNT) throw new Error("generation lexicalRouting must contain exactly 256 route arrays");
-  const lexicalRouting: string[][] = []; let routeRefs = 0;
+  const lexicalRouting: number[][] = []; let routeRefs = 0;
   for (const route of value.lexicalRouting) {
     if (!Array.isArray(route)) throw new Error("generation lexicalRouting bucket must be an array");
-    const paths: string[] = []; let previous = "";
-    for (const raw of route) { const path = validateObjectLogicalPath(raw, "lexical routing path"); if (path <= previous) throw new Error("lexical routing paths must strictly increase"); previous = path; paths.push(path); }
-    routeRefs += paths.length; lexicalRouting.push(paths);
+    const ordinals: number[] = []; let previous = -1;
+    for (const raw of route) {
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+        throw new Error("lexical routing entry must be a dictionary ordinal");
+      }
+      if (raw <= previous) throw new Error("lexical routing ordinals must strictly increase");
+      previous = raw; ordinals.push(raw);
+    }
+    routeRefs += ordinals.length; lexicalRouting.push(ordinals);
   }
-  if (routeRefs > MAX_GENERATION_OBJECTS) throw new Error("lexical routing exceeds its total reference limit");
+  if (routeRefs > MAX_GENERATION_ROUTE_REFS) throw new Error("lexical routing exceeds its reference limit");
   if ((value.corpusStats.chunkCount === 0) !== (value.corpusStats.indexedPaperCount === 0)
     || value.corpusStats.indexedPaperCount > value.corpusStats.chunkCount) {
     throw new Error("generation indexed paper count must be positive only for a non-empty corpus and cannot exceed chunkCount");
@@ -870,8 +886,8 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
   });
   const lexicalKinds: readonly GenerationObjectKind[] = ["lexical-postings", "lexical-dictionary"];
   const hasLexicalObjects = objects.some((object) => lexicalKinds.includes(object.kind));
-  const dictionaryPaths = new Set(objects.filter((object) => object.kind === "lexical-dictionary").map((object) => object.path));
-  const routedPaths = new Set(lexicalRouting.flat());
+  const dictionaryOrdinals = new Set(objects.filter((object) => object.kind === "lexical-dictionary").map((_, index) => index));
+  const routedOrdinals = new Set(lexicalRouting.flat());
   if (value.corpusStats.chunkCount === 0 && value.lexicalCapability !== "none") throw new Error("empty generation lexicalCapability must be none");
   if (value.lexicalCapability === "none" && (hasLexicalObjects || routeRefs !== 0 || value.corpusStats.totalLexicalTokenCount !== 0 || value.corpusStats.totalLexicalTokenCountWithHanSingles !== 0)) throw new Error("dense-only generation cannot declare lexical objects, routing, or statistics");
   if (value.lexicalCapability === "bm25-v1") {
@@ -884,10 +900,18 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
     if (hasIndexedTerms && (!hasPostings || !hasDictionaries || routeRefs === 0)) {
       throw new Error("bm25 generation with lexical tokens requires postings, dictionary, and routing");
     }
-    for (const path of routedPaths) if (!dictionaryPaths.has(path)) throw new Error("lexical routing path must reference a dictionary object");
-    for (const path of dictionaryPaths) if (!routedPaths.has(path)) throw new Error("every dictionary object requires at least one bucket route");
+    for (const ordinal of routedOrdinals) if (!dictionaryOrdinals.has(ordinal)) throw new Error("lexical routing must reference a dictionary object");
+    for (const ordinal of dictionaryOrdinals) if (!routedOrdinals.has(ordinal)) throw new Error("every dictionary object requires at least one bucket route");
   }
   validateObjectCoverage(objects, value.corpusStats.chunkCount, value.corpusStats.indexedPaperCount);
+
+  const dictionaryCount = objects.filter((object) => object.kind === "lexical-dictionary").length;
+  for (const route of lexicalRouting) {
+    for (const ordinal of route) {
+      if (ordinal >= dictionaryCount) throw new Error("lexical routing names a dictionary ordinal that does not exist");
+    }
+  }
+
   return {
     formatVersion: GENERATION_DESCRIPTOR_FORMAT_VERSION,
     schemaVersion: GENERATION_DESCRIPTOR_SCHEMA_VERSION,

@@ -30,6 +30,7 @@ import {
   type LexicalPostingsBlock,
   type PaperMetadataBlock,
   type VectorBlock,
+  GENERATION_DESCRIPTOR_SCHEMA_VERSION,
 } from "./generation-index-format";
 
 export const CURRENT_GENERATION_POINTER_FORMAT_VERSION = 1 as const;
@@ -1146,7 +1147,7 @@ export class FullTextGenerationIndexStore {
   }
 
   private async validateLexicalClosure(opened: OpenedFullTextGeneration): Promise<void> {
-    if (opened.descriptor.schemaVersion !== 4 || opened.descriptor.lexicalCapability === "none") return;
+    if (opened.descriptor.schemaVersion !== GENERATION_DESCRIPTOR_SCHEMA_VERSION || opened.descriptor.lexicalCapability === "none") return;
     await this.validateLexicalMetadata(opened);
     if (!opened.descriptor.objects.some((reference) => reference.kind === "lexical-postings")) return;
     await this.validateEvidencePostings(opened);
@@ -2286,9 +2287,13 @@ function validateDictionaryRouting(block: LexicalDictionaryBlock, reference: Gen
     const entry = block.entries[entryIndex]!;
     actual.add(lexicalBucket(entry.namespace, entry.term));
   }
+  const dictionaryOrdinal = descriptor.objects
+    .filter((object) => object.kind === "lexical-dictionary")
+    .findIndex((object) => object.path === reference.path);
+  if (dictionaryOrdinal < 0) throw new Error("dictionary object is absent from the generation descriptor");
   const routed = new Set<number>();
   for (let bucket = 0; bucket < descriptor.lexicalRouting.length; bucket += 1) {
-    if (descriptor.lexicalRouting[bucket]!.includes(reference.path)) routed.add(bucket);
+    if (descriptor.lexicalRouting[bucket]!.includes(dictionaryOrdinal)) routed.add(bucket);
   }
   if (actual.size !== routed.size || [...actual].some((bucket) => !routed.has(bucket))) throw new Error("dictionary routing membership does not exactly match queryCatalog buckets");
 }

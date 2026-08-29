@@ -32,6 +32,7 @@ import {
   type LexicalOccurrence,
   type LexicalPostingsBlock,
   type PaperMetadataRecord,
+  MAX_GENERATION_ROUTE_REFS,
 } from "./generation-index-format";
 import {
   compareNamespaceTerm,
@@ -414,7 +415,7 @@ async function buildGeneration(
   if (hasLexicalTerms) await flushPostings();
   else postingRows = [];
 
-  const routing = Array.from({ length: LEXICAL_BUCKET_COUNT }, () => [] as string[]);
+  const routing = Array.from({ length: LEXICAL_BUCKET_COUNT }, () => [] as number[]);
   if (hasLexicalTerms) await buildDictionaries(input, refsByKind, diagnostics, reserve, putObject, routing,
     (operation) => encode("lexical-dictionary", "lexical dictionary block", operation));
   const objects = [...refsByKind.vector, ...refsByKind.evidence, ...refsByKind["paper-metadata"],
@@ -493,7 +494,7 @@ async function buildDictionaries(
   diagnostics: GenerationIndexBuildDiagnostics,
   reserve: (slots: number) => void,
   put: (kind: GenerationObjectReference["kind"], path: string, bytes: Uint8Array, start: number, count: number) => Promise<GenerationObjectReference>,
-  routing: string[][],
+  routing: number[][],
   encodeDictionary: (operation: () => Uint8Array) => Uint8Array,
 ): Promise<void> {
   let entries: LexicalDictionaryEntry[] = []; let entryItemsBytes = 0; let queryCatalogItemsBytes = 0;
@@ -506,12 +507,12 @@ async function buildDictionaries(
     // bucket mask; each of those used to derive it independently.
     const entryBuckets = lexicalTermBuckets(entries);
     const buckets = new Set(entryBuckets);
-    if (routeRefCount + buckets.size > MAX_GENERATION_OBJECTS) throw buildError("object-limit", "generation lexical routing reference limit exceeded");
+    if (routeRefCount + buckets.size > MAX_GENERATION_ROUTE_REFS) throw buildError("object-limit", "generation lexical routing reference limit exceeded");
     const bytes = encodeDictionary(() => encodeLexicalDictionaryBlock({ dictionaryOrdinal, postingStart, postingCount, entries,
       queryCatalog: lexicalQueryCatalog(entries, entryBuckets), bucketMask: lexicalBucketMask(entries, entryBuckets) }));
     trackOneBuffer(diagnostics, bytes);
     const reference = await put("lexical-dictionary", `objects/dictionary-${pad(dictionaryOrdinal)}.bin`, bytes, postingStart, postingCount);
-    for (const bucket of buckets) routing[bucket]!.push(reference.path);
+    for (const bucket of buckets) routing[bucket]!.push(dictionaryOrdinal);
     routeRefCount += buckets.size; entries = []; entryItemsBytes = 0; queryCatalogItemsBytes = 0; postingStart += postingCount; postingCount = 0;
   };
   for (let index = 0; index < refs["lexical-postings"].length; index += 1) {

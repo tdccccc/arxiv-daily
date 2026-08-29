@@ -86,7 +86,7 @@ function emptyFixture(generationId: string, sourceRevision: number) {
     corpusMean: [0, 0],
     corpusStats: { indexedPaperCount: 0, chunkCount: 0, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
     lexicalCapability: "none",
-    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
+    lexicalRouting: Array.from({ length: 256 }, () => [] as number[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [],
   };
@@ -115,7 +115,7 @@ function fixture(generationId: string, sourceRevision: number, values = [1, 2, 3
     corpusMean: [(values[0]! + values[2]!) / 2, (values[1]! + values[3]!) / 2],
     corpusStats: { indexedPaperCount: 2, chunkCount: 2, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
     lexicalCapability: "none",
-    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
+    lexicalRouting: Array.from({ length: 256 }, () => [] as number[]),
     indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 },
     objects: [
       { kind: "vector", path: objects[0]!.path, byteLength: vector.byteLength, recordStart: 0, recordCount: 2, checksum: blockObjectChecksum(vector) },
@@ -159,7 +159,7 @@ function lexicalFixture(generationId: string, sourceRevision: number, input: str
   const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
   const dictionary = encodeLexicalDictionaryBlock({ dictionaryOrdinal: 0, postingStart: 0, postingCount: 1, entries, queryCatalog, bucketMask: maskHex(buckets) });
   const postingPath = "objects/postings.bin", dictionaryPath = "objects/dictionary.bin";
-  const routing = Array.from({ length: 256 }, () => [] as string[]); for (const bucket of buckets) routing[bucket] = [dictionaryPath];
+  const routing = Array.from({ length: 256 }, () => [] as number[]); for (const bucket of buckets) routing[bucket] = [0];
   const objects: GenerationObjectWrite[] = [{ path: "objects/vector.bin", bytes: vector }, { path: "objects/evidence.bin", bytes: evidence }, { path: "objects/metadata.bin", bytes: metadata }, { path: postingPath, bytes: postings }, { path: dictionaryPath, bytes: dictionary }];
   const ref = (kind: GenerationObjectReference["kind"], path: string, bytes: Uint8Array, recordStart: number, recordCount: number): GenerationObjectReference => ({ kind, path, byteLength: bytes.length, recordStart, recordCount, checksum: blockObjectChecksum(bytes) });
   const total = chunkRecords.reduce((sum, row) => sum + row.baseLength, 0), expandedTotal = chunkRecords.reduce((sum, row) => sum + row.expandedLength, 0);
@@ -238,11 +238,12 @@ function multiBlockLexicalFixture(generationId: string, sourceRevision: number) 
     const queryCatalog = entries.map((_, index) => index).sort((a, b) => lexicalTermBucket(entries[a]!.namespace, entries[a]!.term) - lexicalTermBucket(entries[b]!.namespace, entries[b]!.term) || compareNamespace(entries[a]!.namespace, entries[b]!.namespace) || compareUtf8(entries[a]!.term, entries[b]!.term) || entries[a]!.postingOrdinal - entries[b]!.postingOrdinal);
     const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term)));
     const path = `objects/dictionary-${postingStart}.bin`;
+    const dictionaryOrdinal = dictionaryPaths.length;
     dictionaryPaths.push(path);
-    add("lexical-dictionary", path, encodeLexicalDictionaryBlock({ dictionaryOrdinal: dictionaryPaths.length - 1, postingStart, postingCount, entries, queryCatalog, bucketMask: maskHex(buckets) }), postingStart, postingCount);
-    for (const bucket of buckets) routing[bucket]!.push(path);
+    add("lexical-dictionary", path, encodeLexicalDictionaryBlock({ dictionaryOrdinal, postingStart, postingCount, entries, queryCatalog, bucketMask: maskHex(buckets) }), postingStart, postingCount);
+    for (const bucket of buckets) routing[bucket]!.push(dictionaryOrdinal);
   }
-  for (const route of routing) route.sort();
+  for (const route of routing) route.sort((left, right) => left - right);
   const descriptor: GenerationDescriptor = {
     ...base.descriptor,
     corpusStats: { ...base.descriptor.corpusStats, indexedPaperCount: 2 },
@@ -1268,8 +1269,10 @@ describe("accepted schema-v2 generation compatibility", () => {
     expect(memory.text.get(generationPath("legacy-v2", "descriptor.json"))).toBe(V2_DESCRIPTOR);
   });
 
-  it("rejects unaccepted schema v3 and future v5 descriptors", async () => {
-    for (const schemaVersion of [3, 5]) {
+  it("rejects unaccepted schema v3, superseded v4 and future v6 descriptors", async () => {
+    // v4 stored lexical routing as object paths. It must be refused, not
+    // misread as ordinals, so a store holding one rebuilds instead.
+    for (const schemaVersion of [3, 4, 6]) {
       const memory = memoryStorage(); const raw = V2_DESCRIPTOR.replace('"schemaVersion":2', `"schemaVersion":${schemaVersion}`);
       const descriptorChecksum = blockObjectChecksum(new TextEncoder().encode(raw));
       const pointer = encodeCurrentGenerationPointer({ ...JSON.parse(V2_POINTER), descriptorChecksum, checksum: `sha256:${"0".repeat(64)}` });
@@ -1340,7 +1343,7 @@ describe("open and bounded reads", () => {
   it("rejects dictionary routing membership that is not exact", async () => {
     const memory = memoryStorage(); const built = lexicalFixture("gen-routing-mismatch", 1);
     const extraBucket = [...Array(256).keys()].find((bucket) => !built.buckets.has(bucket))!;
-    (built.descriptor.lexicalRouting[extraBucket] as string[]).push("objects/dictionary.bin");
+    (built.descriptor.lexicalRouting[extraBucket] as number[]).push(0);
     await expect(store(memory.storage).stageAndPromote({ ...built, writerToken: `writer-routing-${"f".repeat(32)}`, expectedCurrent: null, sourceCurrentRevision: () => 1 }))
       .rejects.toMatchObject({ code: "corrupt-or-unreadable" });
   });
@@ -1669,8 +1672,8 @@ describe("schema-v4 lexical semantic closure", () => {
       const dictionaryBytes = encodeLexicalDictionaryBlock({ ...dictionary, entries, queryCatalog, bucketMask: maskHex(buckets) });
       replaceGenerationObject(memory, id, built.descriptor, "lexical-dictionary", dictionaryBytes);
       const dictionaryPath = built.descriptor.objects.find((entry) => entry.kind === "lexical-dictionary")!.path;
-      for (const route of built.descriptor.lexicalRouting as string[][]) route.splice(0);
-      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as string[]).push(dictionaryPath);
+      for (const route of built.descriptor.lexicalRouting as number[][]) route.splice(0);
+      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as number[]).push(0);
       memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(built.descriptor));
       resealPointer(memory, built.descriptor);
       const opened = await store(memory.storage).openCurrent();
@@ -1694,8 +1697,8 @@ describe("schema-v4 lexical semantic closure", () => {
       const bytes = encodeLexicalDictionaryBlock({ ...decoded, entries, queryCatalog, bucketMask: maskHex(buckets) });
       replaceGenerationObject(memory, id, built.descriptor, "lexical-dictionary", bytes);
       const dictionaryPath = built.descriptor.objects.find((entry) => entry.kind === "lexical-dictionary")!.path;
-      for (const route of built.descriptor.lexicalRouting as string[][]) route.splice(0);
-      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as string[]).push(dictionaryPath);
+      for (const route of built.descriptor.lexicalRouting as number[][]) route.splice(0);
+      for (const bucket of buckets) (built.descriptor.lexicalRouting[bucket] as number[]).push(0);
       memory.text.set(generationPath(id, "descriptor.json"), encodeGenerationDescriptor(built.descriptor));
       resealPointer(memory, built.descriptor);
       const opened = await store(memory.storage).openCurrent();

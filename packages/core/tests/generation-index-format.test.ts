@@ -12,6 +12,8 @@ import {
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
   MAX_BINARY_OBJECT_BYTES,
   MAX_GENERATION_DIMENSION,
+  MAX_GENERATION_OBJECTS,
+  MAX_GENERATION_ROUTE_REFS,
   blockObjectChecksum,
   decodeEvidenceBlock,
   decodeGenerationDescriptor,
@@ -85,7 +87,7 @@ function makeDescriptor(overrides: Partial<GenerationDescriptor> = {}): Generati
     corpusMean: [0.25, -0.5, 0.75],
     corpusStats: { indexedPaperCount: 1, chunkCount: 2, totalLexicalTokenCount: 0, avgdl: 0, totalLexicalTokenCountWithHanSingles: 0, avgdlWithHanSingles: 0 },
     lexicalCapability: "none",
-    lexicalRouting: Array.from({ length: 256 }, () => [] as string[]),
+    lexicalRouting: Array.from({ length: 256 }, () => [] as number[]),
     indexDerivation: {
       builderVersion: 1,
       denseCenteringVersion: 1,
@@ -501,10 +503,10 @@ describe("generation descriptor codec and paths", () => {
     expect(() => encodeGenerationDescriptor({ ...dense, lexicalCapability: "bm25-v1" })).not.toThrow();
     const posting = { kind: "lexical-postings" as const, path: "objects/p.bin", byteLength: 128, recordStart: 0, recordCount: 2, checksum: `sha256:${"1".repeat(64)}` };
     const dictionary = { kind: "lexical-dictionary" as const, path: "objects/d.bin", byteLength: 128, recordStart: 0, recordCount: 1, checksum: `sha256:${"2".repeat(64)}` };
-    const routing = Array.from({ length: 256 }, () => [] as string[]); routing[7] = [dictionary.path];
+    const routing = Array.from({ length: 256 }, () => [] as number[]); routing[7] = [0];
     const bm25 = makeDescriptor({ lexicalCapability: "bm25-v1", lexicalRouting: routing, objects: [...makeDescriptor().objects, posting, dictionary] });
     expect(() => encodeGenerationDescriptor(bm25)).not.toThrow();
-    expect(() => encodeGenerationDescriptor({ ...bm25, lexicalRouting: Array.from({ length: 256 }, () => [] as string[]) })).toThrow(/route/i);
+    expect(() => encodeGenerationDescriptor({ ...bm25, lexicalRouting: Array.from({ length: 256 }, () => [] as number[]) })).toThrow(/route/i);
   });
   it("validates object canonical order and kind-specific coverage", () => {
     const refs = makeDescriptor().objects;
@@ -515,7 +517,9 @@ describe("generation descriptor codec and paths", () => {
   });
   it("rejects old/future/unknown descriptor data and derives bounded paths", () => {
     const raw = JSON.parse(encodeGenerationDescriptor(makeDescriptor()));
-    for (const schemaVersion of [3, 5]) expect(() => decodeGenerationDescriptor(JSON.stringify({ ...raw, schemaVersion }))).toThrow(/schema/i);
+    // Schema 4 stored routing as object paths; it is refused rather than
+    // misread, so a store holding one rebuilds instead of reusing it.
+    for (const schemaVersion of [3, 4, 6]) expect(() => decodeGenerationDescriptor(JSON.stringify({ ...raw, schemaVersion }))).toThrow(/schema/i);
     expect(() => decodeGenerationDescriptor(JSON.stringify({ ...raw, extra: true }))).toThrow(/unknown/i);
     const normalizePath = (path: string) => path.replaceAll("//", "/");
     expect(deriveFullTextGenerationPaths({ normalizePath }, DEFAULT_SETTINGS.output, SCOPE, IDENTIFICATION, "gen-20260817-a1").descriptorPath).toContain("/descriptor.json");
@@ -556,5 +560,76 @@ describe("lexical bucket derivation is shareable", () => {
   it("the same term in different namespaces can land in different buckets", () => {
     const derived = new Set((["base", "expanded", "alias"] as const).map((ns) => lexicalTermBucket(ns, "shared")));
     expect(derived.size).toBeGreaterThan(0);
+  });
+});
+
+describe("lexical routing capacity is independent of the object budget", () => {
+  /**
+   * A consistent bm25 descriptor with `count` dictionary blocks: one postings
+   * object per block, and vector/evidence coverage matching the chunk count the
+   * postings declare.
+   */
+  function withDictionaries(count: number, routing: number[][]): GenerationDescriptor {
+    const object = (kind: GenerationObjectReference["kind"], name: string, recordStart: number, recordCount: number, seed: string) => ({
+      kind, path: `objects/${name}`, byteLength: 128, recordStart, recordCount,
+      checksum: `sha256:${seed.repeat(64).slice(0, 64)}`,
+    });
+    const postings = Array.from({ length: count }, (_, index) =>
+      object("lexical-postings", `postings-${String(index).padStart(10, "0")}.bin`, index, 1, "f"));
+    const dictionaries = Array.from({ length: count }, (_, index) =>
+      object("lexical-dictionary", `dictionary-${String(index).padStart(10, "0")}.bin`, index, 1, "e"));
+    return {
+      ...makeDescriptor(),
+      lexicalCapability: "bm25-v1",
+      corpusStats: {
+        indexedPaperCount: 1, chunkCount: count,
+        totalLexicalTokenCount: count, avgdl: 1,
+        totalLexicalTokenCountWithHanSingles: count, avgdlWithHanSingles: 1,
+      },
+      lexicalRouting: routing,
+      objects: [
+        object("vector", "000001.vectors.bin", 0, count, "a"),
+        object("evidence", "000001.evidence.bin", 0, count, "d"),
+        object("paper-metadata", "000001.metadata.bin", 0, 1, "e"),
+        ...postings,
+        ...dictionaries,
+      ],
+    };
+  }
+
+  it("accepts a routing table larger than the object budget", () => {
+    // Every dictionary block touches all 256 buckets in real prose, so a corpus
+    // needing more than 16 blocks exceeds MAX_GENERATION_OBJECTS in references
+    // while using only a handful of objects. That must not be an error.
+    const blocks = 40;
+    const routing = Array.from({ length: 256 }, () => Array.from({ length: blocks }, (_, index) => index));
+    const total = routing.reduce((sum, bucket) => sum + bucket.length, 0);
+    expect(total).toBeGreaterThan(MAX_GENERATION_OBJECTS);
+    expect(() => encodeGenerationDescriptor(withDictionaries(blocks, routing))).not.toThrow();
+  });
+
+  it("round-trips routing entries as dictionary ordinals", () => {
+    const routing = Array.from({ length: 256 }, (_, bucket) => (bucket % 2 === 0 ? [0, 1] : [1]));
+    const descriptor = withDictionaries(2, routing);
+    expect(decodeGenerationDescriptor(encodeGenerationDescriptor(descriptor))).toEqual(descriptor);
+  });
+
+  it("refuses a routing entry that names no dictionary object", () => {
+    const routing = Array.from({ length: 256 }, () => [] as number[]);
+    routing[0] = [7];
+    expect(() => encodeGenerationDescriptor(withDictionaries(2, routing))).toThrow(/routing/i);
+  });
+
+  it("refuses a routing entry that is not a dictionary ordinal", () => {
+    const routing = Array.from({ length: 256 }, () => [] as number[]);
+    (routing[0] as unknown[])[0] = "objects/dictionary-0000000000.bin";
+    expect(() => encodeGenerationDescriptor(withDictionaries(2, routing as number[][]))).toThrow(/routing/i);
+  });
+
+  it("still bounds the routing table by its own limit", () => {
+    const blocks = 8;
+    const perBucket = Math.ceil(MAX_GENERATION_ROUTE_REFS / 256) + 1;
+    const routing = Array.from({ length: 256 }, () => Array.from({ length: perBucket }, () => 0));
+    expect(() => encodeGenerationDescriptor(withDictionaries(blocks, routing))).toThrow(/routing/i);
   });
 });

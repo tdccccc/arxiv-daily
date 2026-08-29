@@ -89,7 +89,7 @@ function generationFixture(papers: readonly FullTextPaperDocument[], postingSize
   const buckets = new Set(entries.map((entry) => lexicalTermBucket(entry.namespace, entry.term))); const mask = new Uint8Array(32); for (const bucket of buckets) mask[bucket >>> 3]! |= 1 << (bucket & 7);
   const dictionaryPath = "objects/dictionary.bin"; const dictionary = encodeLexicalDictionaryBlock({ dictionaryOrdinal: 0, postingStart: 0, postingCount: postingBlocks.length, entries, queryCatalog, bucketMask: Array.from(mask, (byte) => byte.toString(16).padStart(2, "0")).join("") });
   add("lexical-dictionary", dictionaryPath, dictionary, 0, postingBlocks.length);
-  const routing = Array.from({ length: 256 }, () => [] as string[]); for (const bucket of buckets) routing[bucket] = [dictionaryPath];
+  const routing = Array.from({ length: 256 }, () => [] as number[]); for (const bucket of buckets) routing[bucket] = [0];
   const total = rows.reduce((sum, row) => sum + tokenizeUnicode(row.chunk.text).length, 0); const expandedTotal = rows.reduce((sum, row) => sum + tokenizeUnicodeWithHanSingles(row.chunk.text).length, 0);
   const sums = new Float64Array(dimension); for (let offset = 0; offset < vectorValues.length; offset += dimension) for (let column = 0; column < dimension; column += 1) sums[column]! += vectorValues[offset + column]!;
   const descriptor: GenerationDescriptor = { formatVersion: GENERATION_DESCRIPTOR_FORMAT_VERSION, schemaVersion: GENERATION_DESCRIPTOR_SCHEMA_VERSION, generationId: "bm25-fixture", sourceRevision: 1, scopeFingerprint: `sha256:${"a".repeat(64)}`, identificationFingerprint: `sha256:${"b".repeat(64)}`, modelId: "fixture", dimension, corpusMean: Array.from(sums, (sum) => sum / rows.length), corpusStats: { indexedPaperCount: papers.length, chunkCount: rows.length, totalLexicalTokenCount: total, avgdl: total / rows.length, totalLexicalTokenCountWithHanSingles: expandedTotal, avgdlWithHanSingles: expandedTotal / rows.length }, lexicalCapability: "bm25-v1", lexicalRouting: routing, indexDerivation: { builderVersion: 1, denseCenteringVersion: 1, tokenizerVersion: 1, postingsVersion: 1 }, objects: refs };
@@ -169,7 +169,7 @@ describe("generation BM25 reader", () => {
   it("routes unknown terms without postings reads, enforces caps, and reports real bounded stats", async () => {
     const papers = Array.from({ length: 120 }, (_, index) => paper(`paper:${String(index).padStart(3, "0")}`, `Title ${index}`, [index % 2 === 0 ? "hot alpha" : "cold beta"]));
     const fixture = generationFixture(papers, 3);
-    const occupied = new Set(fixture.opened.descriptor.lexicalRouting.flatMap((paths, bucket) => paths.length > 0 ? [bucket] : []));
+    const occupied = new Set(fixture.opened.descriptor.lexicalRouting.flatMap((ordinals, bucket) => ordinals.length > 0 ? [bucket] : []));
     let unknown = "unknown"; while (occupied.has(lexicalTermBucket("base", unknown)) || occupied.has(lexicalTermBucket("alias", Array.from(unknown).sort().slice(0, 3).join("")))) unknown += "x";
     const emptyStats = { dictionaryReads: 0, postingsReads: 0, metadataReads: 0, evidenceReads: 0, peakChunkAccumulators: 0, peakCandidates: 0, peakHits: 0, totalRetainedHits: 0, maxLiveBlocks: 0 };
     expect(await searchGenerationBm25({ generation: fixture.opened, queryText: unknown, stats: emptyStats })).toEqual([]);
