@@ -193,3 +193,10 @@
 - disposition: 剩余吞吐成本已归因完毕，且**不是实现缺陷**，接手者不应把它当 bug 修。两处均为设计取舍，需 owner 决策：其一，对象字节按现设计被 SHA-256 三到四次（spool 计算 14.0%、builder 重算验证 14.0%、读回再验 10.1%、block 信封编解码各一次 23.6%）；其二，`deriveLexicalChunk` 索引每个 chunk 的全部 1/2/3-gram，alias 占词法 occurrence 的 63.5%，而查询侧 `selectAliasGram` 在查询超过 2 字符时只取一个 3-gram，1-gram 与 2-gram 合计 46.5% 的 alias 索引量仅服务 1–2 字符查询（该语料 1,173 个 chunk 中 598 个含汉字，故「非 CJK 跳过 alias」不成立）。
 - disposition: P7 仍为 blocked，其规模任务的勾选已撤销——原措辞「固定合成语料」正是掩盖该缺陷的���件。P7 其余任务（含桌面 UI 验收）已完成，桌面验收由 `npm run test:desktop` 自动执行。
 - next: 接手者先读本条与前四条 journal，再决定是否推进两个设计取舍；两者均不阻塞已取得的容量与等价性结论。
+
+## 2026-08-29 — resume: owner judgment, not more implementation
+
+- evidence: 接手后对照 goal 七条成功标准与 P1–P8 验收。用户可见能力（结构化解析、结构感知 chunk 与迁移、BM25+dense+RRF、有界 generation 查询、证据 UI 与 PDF 页码打开、可选 sidecar、既有 catalog/方向/consent 兼容）均已有证据。P8 容量与排序等价已在 199 篇真实语料上成立。未完成项是 v2 语料卫生检查、构建耗时是否可接受、以及两条设计取舍（对象字节重复哈希、alias 1/2-gram 索引量）。成功标准第 4 条的「增量更新」在实现上是整代复用 / 源变化整代重建，不是按篇增量。
+- change: 接手 owner 为 `claude-code-main-session`。未改 phase status、未勾选 success criteria、未开始剩余实现。暂停执行，等 owner 判断是否收口。
+- disposition: 不把剩余吞吐成本当 bug 修。不在本轮推进 SHA-256 次数或 alias gram 范围，除非用户明确要改产品取舍。
+- next: 与用户对齐三件事——(1) 七条成功标准哪些可勾选、(2) 13–14 分钟整库重建是否可接受、(3) 是否还要做 v2 语料复核 / 手动 vault 验证，或直接进入 Close。

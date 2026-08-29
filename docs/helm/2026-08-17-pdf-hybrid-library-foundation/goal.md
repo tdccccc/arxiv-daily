@@ -1,8 +1,8 @@
 # PDF 解析与混合检索基础（PDF parsing and hybrid retrieval foundation）
 
 status: active
-updated: 2026-08-23
-owner: unassigned — see the 2026-08-29 handoff entry
+updated: 2026-08-29
+owner: claude-code-main-session
 
 ## Intent
 
