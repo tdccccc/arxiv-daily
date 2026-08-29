@@ -2337,7 +2337,7 @@ class ArxivDailyDashboardView extends ItemView {
           `dashboard: similar papers ${action.toLowerCase()} failed for ${candidate.arxivId}`,
           error,
         );
-        this.notice(`arXiv Daily: ${action} failed`);
+        this.notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
       },
       onLibraryActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
     }).open();
@@ -2440,7 +2440,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private reportLibraryEvidenceActionError(error: unknown, action: string): void {
     this.plugin.logger.error(`dashboard: ${action.toLowerCase()} failed for library evidence`, error);
-    this.notice(`arXiv Daily: ${action} failed`);
+    this.notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {

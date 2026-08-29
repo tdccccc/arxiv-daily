@@ -506,7 +506,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
                 },
                 onActionError: (error, action) => {
                   plugin.logger.error(`commands: ${action.toLowerCase()} failed for library evidence`, error);
-                  notice(`arXiv Daily: ${action} failed`);
+                  notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
                 },
               }).open();
             } catch (error) {

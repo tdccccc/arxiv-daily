@@ -3466,7 +3466,7 @@ function desktopVaultRoot(adapter: unknown): string | undefined {
   if (!adapter || typeof adapter !== "object" || !("getBasePath" in adapter)) return undefined;
   const getBasePath = (adapter as { getBasePath?: () => unknown }).getBasePath;
   if (typeof getBasePath !== "function") return undefined;
-  const root = getBasePath();
+  const root = getBasePath.call(adapter);
   return typeof root === "string" && root ? root : undefined;
 }
 
