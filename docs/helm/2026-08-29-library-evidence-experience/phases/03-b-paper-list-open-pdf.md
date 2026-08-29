@@ -28,16 +28,17 @@ Dashboard、Similar papers 和命令搜索的文献结果只列出相关论文�
 
 ## Tasks
 
-- [ ] Renderer 只渲染论文行，隐藏 hits。
-- [ ] 打开动作打开整份 PDF；失败通知仍带具体原因。
-- [ ] 改写断言段落/页码的测试，并加反向对照。
-- [ ] 保留 P1 的 `getBasePath.call(adapter)` 回归。
+- [x] Renderer 只渲染论文行，隐藏 hits。
+- [x] 打开动作打开整份 PDF；失败通知仍带具体原因。
+- [x] 改写断言段落/页码的测试，并加反向对照。
+- [x] 保留 P1 的 `getBasePath.call(adapter)` 回归。
 
 ## Verification
 
 - 有 hits 的 fixture 不出现段落、章节、`Page N`。
 - `Open PDF` 调用 opener 时不带页码。
 - 无 `filePath` 时没有打开按钮。
+- Observed Green (2026-08-29): plugin 44 tests（renderer / similar-papers / command modal / pdf-opener / lifecycle）与 typecheck 通过。有 hits 的 fixture 不出现段落、`Page N` 或 `Open page N`；opener 默认无 `#page=`。
 
 ## Abort / reshape triggers
 

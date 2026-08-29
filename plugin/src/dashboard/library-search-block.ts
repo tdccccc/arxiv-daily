@@ -1,4 +1,3 @@
-import type { KnowledgeBaseChunkHit } from "@arxiv-daily/core";
 import type { LibraryFullTextMatch } from "../library/fulltext-results";
 
 /**
@@ -8,15 +7,15 @@ import type { LibraryFullTextMatch } from "../library/fulltext-results";
  * knowledge-base matches for the same query. Pure rendering — the view owns
  * the async orchestration (debounce, staleness token) and calls this with a
  * state snapshot.
+ *
+ * Passage hits may exist on the match objects; this surface lists papers and
+ * opens the PDF as a whole until passage quality has a measured bar.
  */
 
 export type LibrarySearchMatch = LibraryFullTextMatch;
 
 export interface LibrarySearchBlockOptions {
-  openEvidence?: (
-    match: LibrarySearchMatch,
-    hit: KnowledgeBaseChunkHit,
-  ) => void | Promise<void>;
+  openLibraryPdf?: (match: LibrarySearchMatch) => void | Promise<void>;
   onActionError?: (error: unknown, action: string) => void;
 }
 
@@ -74,50 +73,23 @@ export function renderLibrarySearchBlock(
       cls: "arxiv-daily-dashboard__library-meta",
       text: match.filePath ?? match.paperKey,
     });
-    for (const hit of match.hits) {
-      renderEvidence(item, match, hit, options);
-    }
-  }
-}
-
-function renderEvidence(
-  parent: HTMLElement,
-  match: LibrarySearchMatch,
-  hit: KnowledgeBaseChunkHit,
-  options: LibrarySearchBlockOptions,
-): void {
-  const evidence = parent.createDiv({ cls: "arxiv-daily-dashboard__library-evidence" });
-  if (hit.headings.length > 0) {
-    evidence.createDiv({
-      cls: "arxiv-daily-dashboard__library-section",
-      text: hit.headings.join(" / "),
+    if (!match.filePath || !options.openLibraryPdf) continue;
+    const action = "Open PDF";
+    const button = item.createEl("button", {
+      cls: "arxiv-daily-dashboard__library-open-evidence",
+      text: action,
+      attr: { type: "button", "aria-label": action },
+    });
+    button.addEventListener("click", () => {
+      try {
+        void Promise.resolve(options.openLibraryPdf?.(match)).catch((error) => {
+          reportActionError(options, error, action);
+        });
+      } catch (error) {
+        reportActionError(options, error, action);
+      }
     });
   }
-  evidence.createDiv({
-    cls: "arxiv-daily-dashboard__library-passage",
-    text: evidenceSnippet(hit.text),
-  });
-  const actions = evidence.createDiv({ cls: "arxiv-daily-dashboard__library-evidence-actions" });
-  actions.createSpan({
-    cls: "arxiv-daily-dashboard__library-page",
-    text: `Page ${hit.page}`,
-  });
-  if (!match.filePath || !options.openEvidence) return;
-  const action = `Open PDF at page ${hit.page}`;
-  const button = actions.createEl("button", {
-    cls: "arxiv-daily-dashboard__library-open-evidence",
-    text: `Open page ${hit.page}`,
-    attr: { type: "button", "aria-label": action },
-  });
-  button.addEventListener("click", () => {
-    try {
-      void Promise.resolve(options.openEvidence?.(match, hit)).catch((error) => {
-        reportActionError(options, error, action);
-      });
-    } catch (error) {
-      reportActionError(options, error, action);
-    }
-  });
 }
 
 function reportActionError(
@@ -130,17 +102,4 @@ function reportActionError(
   } catch {
     // Action failures must not escape DOM event handlers.
   }
-}
-
-export function evidenceSnippet(text: string): string {
-  const normalized = text
-    .replace(/\s+/gu, " ")
-    .replace(/[.·•․∙]{3,}/gu, "…")
-    .replace(/(?:\s?\.){3,}/gu, "…")
-    .replace(/…{2,}/gu, "…")
-    .trim();
-  const maxCodeUnits = 180;
-  return normalized.length <= maxCodeUnits
-    ? normalized
-    : `${normalized.slice(0, maxCodeUnits).trimEnd()}…`;
 }

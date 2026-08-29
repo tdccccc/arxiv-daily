@@ -2331,7 +2331,7 @@ class ArxivDailyDashboardView extends ItemView {
       openArxiv: (candidate) =>
         openArxivResource(candidate.arxivId, "abs", this.plugin),
       openPdf: (candidate) => this.openPdf(candidate),
-      openLibraryEvidence: (match, hit) => this.openLibraryEvidence(match, hit),
+      openLibraryPdf: (match) => this.openLibraryPdf(match),
       onActionError: (error, action, candidate) => {
         this.plugin.logger.error(
           `dashboard: similar papers ${action.toLowerCase()} failed for ${candidate.arxivId}`,
@@ -2412,7 +2412,7 @@ class ArxivDailyDashboardView extends ItemView {
             hits: match.hits,
           })),
         }, {
-          openEvidence: (match, hit) => this.openLibraryEvidence(match, hit),
+          openLibraryPdf: (match) => this.openLibraryPdf(match),
           onActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
         });
       },
@@ -2426,15 +2426,13 @@ class ArxivDailyDashboardView extends ItemView {
     );
   }
 
-  private async openLibraryEvidence(
+  private async openLibraryPdf(
     match: { paperKey: string; filePath?: string },
-    hit: { page: number },
   ): Promise<void> {
     if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
     await this.plugin.openPersonalLibraryFullTextEvidence({
       paperKey: match.paperKey,
       filePath: match.filePath,
-      page: hit.page,
     });
   }
 

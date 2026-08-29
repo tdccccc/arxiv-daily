@@ -1828,7 +1828,7 @@ export default class ArxivDailyPlugin extends Plugin {
   async openPersonalLibraryFullTextEvidence(input: {
     paperKey: string;
     filePath: string;
-    page: number;
+    page?: number;
   }): Promise<"page-targeted" | "file-fallback"> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");

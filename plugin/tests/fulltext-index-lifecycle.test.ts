@@ -319,14 +319,13 @@ describe("personal library full-text index lifecycle", () => {
     await expect(runtime.plugin.openPersonalLibraryFullTextEvidence({
       paperKey: "arxiv:2607.00001",
       filePath: "papers/evidence.pdf",
-      page: 7,
     })).resolves.toBe("page-targeted");
 
     expect(runtime.internals.librarySource.readBinary).toHaveBeenCalledWith(
       "papers/evidence.pdf",
       { start: 0, end: 1, maxBytes: Number.MAX_SAFE_INTEGER },
     );
-    expect(openLinkText).toHaveBeenCalledWith("library/papers/evidence.pdf#page=7", "", false);
+    expect(openLinkText).toHaveBeenCalledWith("library/papers/evidence.pdf", "", false);
   });
 
   it("opens a vault PDF even when getBasePath must keep its adapter this", async () => {
@@ -361,10 +360,9 @@ describe("personal library full-text index lifecycle", () => {
     await expect(runtime.plugin.openPersonalLibraryFullTextEvidence({
       paperKey: "arxiv:2607.00001",
       filePath: "papers/evidence.pdf",
-      page: 4,
     })).resolves.toBe("page-targeted");
 
-    expect(openLinkText).toHaveBeenCalledWith("library/papers/evidence.pdf#page=4", "", false);
+    expect(openLinkText).toHaveBeenCalledWith("library/papers/evidence.pdf", "", false);
   });
 
   it("uses one manifest snapshot for full-text search orchestration", async () => {

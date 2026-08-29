@@ -25,3 +25,11 @@
 - change: 修订 intent 与成功标准。P3 噪声 hit 选择 superseded。新 P3b：产品面论文列表 + 打开整份 PDF。CONTEXT.md「Library similarity」与 ADR 0006 改为检索仍可有 hit，默认 UI 不展示段落。
 - disposition: 保留 P1 opener 绑定与失败通知。P2 卡片层次可复用标题/文件名，段落/页码/Open page N 从产品面移除。Core 检索与论文排序不改。
 - next: 改 renderer 与 opener，先观察段落断言的 Red。
+
+## 2026-08-29 — P3b done, close
+
+- evidence: 共享 renderer 只列出标题、文件名和 `Open PDF`。有 hits 的 fixture 反向对照不含段落、章节、页码。Vault 打开路径不再带 `#page=`；P1 的 adapter `this` 绑定仍在。plugin 44 tests 与 typecheck 通过。
+- change: 勾选剩余成功标准；P3b done；goal `status: done`。
+- disposition: Core 检索与论文排序未改。段落证据仍在索引里，只是产品面不展示。
+- next: 本 initiative 关闭。段落级证据需另开带评测的 goal。
+

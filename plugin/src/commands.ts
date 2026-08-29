@@ -496,12 +496,11 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
                 return;
               }
               new FullTextSearchResultsModal(plugin.app, matches, {
-                openEvidence: async (match, hit) => {
+                openLibraryPdf: async (match) => {
                   if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
                   await plugin.openPersonalLibraryFullTextEvidence({
                     paperKey: match.paperKey,
                     filePath: match.filePath,
-                    page: hit.page,
                   });
                 },
                 onActionError: (error, action) => {

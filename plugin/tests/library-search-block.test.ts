@@ -69,8 +69,8 @@ describe("renderLibrarySearchBlock", () => {
     expect(container.querySelectorAll("li")).toHaveLength(2);
   });
 
-  it("renders a safe evidence passage with its section and page, and delegates its open action", () => {
-    const openEvidence = vi.fn();
+  it("opens the whole PDF and hides passage evidence even when hits are present", () => {
+    const openLibraryPdf = vi.fn();
     const container = document.createElement("div");
     renderLibrarySearchBlock(container, {
       kind: "matches",
@@ -94,19 +94,21 @@ describe("renderLibrarySearchBlock", () => {
           text: "A matching passage about retrieval evidence.",
         }],
       }],
-    }, { openEvidence });
+    }, { openLibraryPdf });
 
-    expect(container.textContent).toContain("Methods / Retrieval");
-    expect(container.textContent).toContain("A matching passage about retrieval evidence.");
-    expect(container.textContent).toContain("Page 7");
-    expect(container.textContent).toContain("Open page 7");
-    expect(container.textContent).not.toContain("Open PDF at page 7");
-    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 7"]');
+    expect(container.textContent).toContain("Evidence paper");
+    expect(container.textContent).toContain("papers/evidence paper.pdf");
+    expect(container.textContent).toContain("Open PDF");
+    expect(container.textContent).not.toContain("Methods / Retrieval");
+    expect(container.textContent).not.toContain("A matching passage about retrieval evidence.");
+    expect(container.textContent).not.toContain("Page 7");
+    expect(container.textContent).not.toContain("Open page 7");
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]');
     button?.click();
-    expect(openEvidence).toHaveBeenCalledWith(
-      expect.objectContaining({ paperKey: "arxiv:2607.01001" }),
-      expect.objectContaining({ chunkId: "chunk-3", page: 7 }),
+    expect(openLibraryPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ paperKey: "arxiv:2607.01001", filePath: "papers/evidence paper.pdf" }),
     );
+    expect(openLibraryPdf.mock.calls[0]?.length).toBe(1);
   });
 
   it("contains evidence action and error-handler failures", () => {
@@ -134,41 +136,12 @@ describe("renderLibrarySearchBlock", () => {
         }],
       }],
     }, {
-      openEvidence: () => { throw new Error("open failure"); },
+      openLibraryPdf: () => { throw new Error("open failure"); },
       onActionError: () => { throw new Error("handler failure"); },
     });
 
-    expect(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 1"]')?.click())
+    expect(() => container.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]')?.click())
       .not.toThrow();
-  });
-
-  it("compresses leader dots in evidence snippets", () => {
-    const container = document.createElement("div");
-    renderLibrarySearchBlock(container, {
-      kind: "matches",
-      matches: [{
-        paperKey: "arxiv:2607.01001",
-        title: "Evidence paper",
-        filePath: "papers/evidence.pdf",
-        score: 0.8,
-        scoreKind: "cosine",
-        rankingScore: 0.03,
-        rankingScoreKind: "rrf",
-        hits: [{
-          source: "dense",
-          scoreKind: "cosine",
-          score: 0.8,
-          chunkIndex: 0,
-          chunkId: "chunk-0",
-          headings: [],
-          locator: { pageStart: 2 },
-          page: 2,
-          text: "Contents 1 Introduction ............... 8 2 Approach ............... 12",
-        }],
-      }],
-    });
-    expect(container.textContent).toContain("Contents 1 Introduction … 8 2 Approach … 12");
-    expect(container.textContent).not.toContain("....");
   });
 
   it("renders the empty state", () => {

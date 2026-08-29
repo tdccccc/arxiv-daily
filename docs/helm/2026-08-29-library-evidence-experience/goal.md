@@ -1,6 +1,6 @@
 # 文献检索结果可用（library evidence experience）
 
-status: active
+status: done
 updated: 2026-08-29
 owner: claude-code-main-session
 
@@ -12,8 +12,8 @@ owner: claude-code-main-session
 
 - [x] 在 Vault 内的个人文献库上，Dashboard「Library matches」和 Similar papers 能打开对应 PDF；打开失败时通知带具体原因。
 - [x] Dashboard 与 Similar papers 共用同一套结果呈现；不改变混合检索的论文排序。
-- [ ] 结果只展示相关论文（标题、文件名、打开 PDF）；不展示段落、章节或页码。
-- [ ] 打开动作打开整份 PDF，不声称跳到某一页。
+- [x] 结果只展示相关论文（标题、文件名、打开 PDF）；不展示段落、章节或页码。
+- [x] 打开动作打开整份 PDF，不声称跳到某一页。
 
 ## Non-goals
 
@@ -34,7 +34,7 @@ owner: claude-code-main-session
 1. P1 — Vault 内证据 PDF 能打开到对应页，失败原因可见 — status: done
 2. P2 — 证据卡片可读：正文、章节、页码和打开动作层次清楚 — status: done
 3. P3 — 默认主证据不再是版权页、目录点线或参考文献列表 — status: superseded
-4. P3b — 产品面只列出相关论文并打开整份 PDF — status: active
+4. P3b — 产品面只列出相关论文并打开整份 PDF — status: done
 
 ## Open questions
 

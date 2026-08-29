@@ -19,8 +19,8 @@ beforeAll(() => {
 });
 
 describe("FullTextSearchResultsModal", () => {
-  it("renders evidence results and delegates the PDF page action", () => {
-    const openEvidence = vi.fn();
+  it("renders ranked papers and delegates opening the whole PDF", () => {
+    const openLibraryPdf = vi.fn();
     const modal = new FullTextSearchResultsModal({} as any, [{
       paperKey: "arxiv:2607.00001",
       title: "Evidence paper",
@@ -40,17 +40,17 @@ describe("FullTextSearchResultsModal", () => {
         page: 9,
         text: "Evidence from the evaluated method.",
       }],
-    }], { openEvidence });
+    }], { openLibraryPdf });
 
     modal.onOpen();
 
     expect(modal.contentEl.textContent).toContain("Full-text search results");
-    expect(modal.contentEl.textContent).toContain("Results");
-    expect(modal.contentEl.textContent).toContain("Page 9");
-    modal.contentEl.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 9"]')?.click();
-    expect(openEvidence).toHaveBeenCalledWith(
+    expect(modal.contentEl.textContent).toContain("Evidence paper");
+    expect(modal.contentEl.textContent).not.toContain("Results");
+    expect(modal.contentEl.textContent).not.toContain("Page 9");
+    modal.contentEl.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]')?.click();
+    expect(openLibraryPdf).toHaveBeenCalledWith(
       expect.objectContaining({ paperKey: "arxiv:2607.00001" }),
-      expect.objectContaining({ chunkId: "chunk-0" }),
     );
   });
 });

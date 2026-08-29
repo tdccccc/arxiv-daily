@@ -7,17 +7,18 @@ export type LibraryPdfOpenTarget =
 export function resolveLibraryPdfOpenTarget(input: {
   readonly canonicalRoot: string;
   readonly logicalPath: string;
-  readonly page: number;
+  readonly page?: number;
   readonly vaultRoot?: string;
 }): LibraryPdfOpenTarget {
   const segments = logicalPathSegments(input.logicalPath);
-  if (!Number.isSafeInteger(input.page) || input.page < 1) {
+  if (input.page !== undefined && (!Number.isSafeInteger(input.page) || input.page < 1)) {
     throw new TypeError("The PDF page must be a positive integer");
   }
   const absolutePath = joinLibraryPath(input.canonicalRoot, segments);
   const vaultPath = vaultRelativePath(input.vaultRoot, absolutePath);
+  const pageSuffix = input.page === undefined ? "" : `#page=${input.page}`;
   if (vaultPath !== null) {
-    return { kind: "vault", path: `${vaultPath}#page=${input.page}` };
+    return { kind: "vault", path: `${vaultPath}${pageSuffix}` };
   }
   return { kind: "external", url: externalFileUrl(absolutePath, input.page) };
 }
@@ -86,14 +87,15 @@ function vaultRelativePath(vaultRoot: string | undefined, absolutePath: string):
   return relativePath || null;
 }
 
-function externalFileUrl(absolutePath: string, page: number): string {
+function externalFileUrl(absolutePath: string, page?: number): string {
+  const pageSuffix = page === undefined ? "" : `#page=${page}`;
   if (absolutePath.startsWith("//")) {
     const [host, ...segments] = absolutePath.slice(2).split("/");
     if (!host || segments.length === 0) throw new TypeError("The selected library root must be absolute");
-    return `file://${encodeURIComponent(host)}/${encodeFilePath(segments)}#page=${page}`;
+    return `file://${encodeURIComponent(host)}/${encodeFilePath(segments)}${pageSuffix}`;
   }
   const path = absolutePath.startsWith("/") ? absolutePath.slice(1) : absolutePath;
-  return `file:///${encodeFilePath(path.split("/"))}#page=${page}`;
+  return `file:///${encodeFilePath(path.split("/"))}${pageSuffix}`;
 }
 
 function encodeFilePath(segments: readonly string[]): string {

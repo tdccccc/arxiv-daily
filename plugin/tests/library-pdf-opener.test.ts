@@ -5,7 +5,15 @@ import {
 } from "../src/library/pdf-opener";
 
 describe("resolveLibraryPdfOpenTarget", () => {
-  it("uses Obsidian's vault-relative PDF page subpath when the selected library is inside the vault", () => {
+  it("uses Obsidian's vault-relative PDF path when the selected library is inside the vault", () => {
+    expect(resolveLibraryPdfOpenTarget({
+      canonicalRoot: "/vault/library",
+      logicalPath: "papers/evidence paper.pdf",
+      vaultRoot: "/vault",
+    })).toEqual({ kind: "vault", path: "library/papers/evidence paper.pdf" });
+  });
+
+  it("keeps an explicit page fragment when a caller still requests one", () => {
     expect(resolveLibraryPdfOpenTarget({
       canonicalRoot: "/vault/library",
       logicalPath: "papers/evidence paper.pdf",
@@ -14,7 +22,18 @@ describe("resolveLibraryPdfOpenTarget", () => {
     })).toEqual({ kind: "vault", path: "library/papers/evidence paper.pdf#page=7" });
   });
 
-  it("uses an encoded external file URL with a page fragment outside the vault", () => {
+  it("uses an encoded external file URL without a page fragment by default", () => {
+    expect(resolveLibraryPdfOpenTarget({
+      canonicalRoot: "/private/library",
+      logicalPath: "papers/evidence paper.pdf",
+      vaultRoot: "/vault",
+    })).toEqual({
+      kind: "external",
+      url: "file:///private/library/papers/evidence%20paper.pdf",
+    });
+  });
+
+  it("keeps an encoded external file URL page fragment when a caller still requests one", () => {
     expect(resolveLibraryPdfOpenTarget({
       canonicalRoot: "/private/library",
       logicalPath: "papers/evidence paper.pdf",

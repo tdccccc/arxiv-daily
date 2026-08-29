@@ -1,6 +1,5 @@
 import { Modal, setIcon, type App } from "obsidian";
 import type {
-  KnowledgeBaseChunkHit,
   PaperIndexEntry,
   PaperSearchResult,
 } from "@arxiv-daily/core";
@@ -16,9 +15,8 @@ export interface SimilarPapersModalCallbacks {
   openDaily(entry: PaperIndexEntry): void | Promise<void>;
   openArxiv(entry: PaperIndexEntry): void | Promise<void>;
   openPdf(entry: PaperIndexEntry): void | Promise<void>;
-  openLibraryEvidence?: (
+  openLibraryPdf?: (
     match: LibrarySimilarMatch,
-    hit: KnowledgeBaseChunkHit,
   ) => void | Promise<void>;
   onActionError?(error: unknown, action: string, entry: PaperIndexEntry): void;
   onLibraryActionError?(error: unknown, action: string): void;
@@ -138,7 +136,7 @@ async function loadLibraryPanel(
       kind: "matches",
       matches,
     }, {
-      openEvidence: options.openLibraryEvidence,
+      openLibraryPdf: options.openLibraryPdf,
       onActionError: (error, action) => {
         try {
           options.onLibraryActionError?.(error, action);

@@ -183,7 +183,7 @@ describe("Similar Papers modal", () => {
   });
 
   it("renders the library tab first and loads library matches asynchronously", async () => {
-    const openLibraryEvidence = vi.fn();
+    const openLibraryPdf = vi.fn();
     const load = vi.fn(async () => [
       {
         paperKey: `file:sha256:${"a".repeat(64)}`,
@@ -214,7 +214,7 @@ describe("Similar Papers modal", () => {
       results: [{ entry: paper("2607.00002"), score: 1, reasons: [] }],
       library: { query: "Title\n\nAbstract", load },
       openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
-      openLibraryEvidence,
+      openLibraryPdf,
     });
 
     // Library tab selected by default; daily panel hidden.
@@ -229,14 +229,14 @@ describe("Similar Papers modal", () => {
     expect(content.textContent).not.toContain("best semantic evidence");
     expect(content.textContent).not.toContain("0.032");
     expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
-    expect(content.textContent).toContain("Methods");
-    expect(content.textContent).toContain("A matching passage about retrieval.");
-    expect(content.textContent).toContain("Page 2");
-    expect(content.textContent).toContain("Open page 2");
-    content.querySelector<HTMLButtonElement>('button[aria-label="Open PDF at page 2"]')?.click();
-    expect(openLibraryEvidence).toHaveBeenCalledWith(
+    expect(content.textContent).toContain("Open PDF");
+    expect(content.textContent).not.toContain("Methods");
+    expect(content.textContent).not.toContain("A matching passage about retrieval.");
+    expect(content.textContent).not.toContain("Page 2");
+    expect(content.textContent).not.toContain("Open page 2");
+    content.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]')?.click();
+    expect(openLibraryPdf).toHaveBeenCalledWith(
       expect.objectContaining({ paperKey: `file:sha256:${"a".repeat(64)}` }),
-      expect.objectContaining({ chunkId: "library-chunk-3", page: 2 }),
     );
     const dailyPanel = content.querySelector('[role="tabpanel"][hidden]');
     expect(dailyPanel?.textContent).toContain("2607.00002");
