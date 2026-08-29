@@ -1,6 +1,7 @@
 import type { PluginSettings } from "./types";
 import { arxivCategories } from "./categories";
 import { minutesFromHHMM } from "../utils/time";
+import { requireLoopbackSidecarUrl } from "../documents/sidecar-document-parser";
 
 export interface ValidationResult {
   ok: boolean;
@@ -166,4 +167,43 @@ export function validateSchedulerConfig(settings: PluginSettings): ValidationRes
     ok: filter.ok && schedule.ok,
     reasons: [...filter.reasons, ...schedule.reasons],
   };
+}
+
+/**
+ * Remote embedding configuration is only required when the embedding mode
+ * is `remote` (ADR 0008); the local mode needs none of it.
+ */
+export function validateEmbeddingConfig(settings: PluginSettings): ValidationResult {
+  const reasons: string[] = [];
+  if (settings.embedding.mode === "remote") {
+    if (!settings.embedding.baseUrl.trim()) reasons.push("Embedding Base URL is empty");
+    if (!settings.embedding.apiKey.trim()) reasons.push("Embedding API Key is empty");
+    if (!settings.embedding.model.trim()) reasons.push("Embedding Model is empty");
+    if (!Number.isInteger(settings.embedding.dimension) || settings.embedding.dimension <= 0) {
+      reasons.push("Embedding dimension must be a positive integer");
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** Validate the optional local parser endpoints before the host can probe them. */
+export function validateLocalPdfParserSidecarConfig(settings: PluginSettings): ValidationResult {
+  const sidecar = settings.pdfParserSidecar;
+  if (!sidecar.enabled) return { ok: true, reasons: [] };
+  try {
+    const capabilitiesUrl = requireLoopbackSidecarUrl(sidecar.capabilitiesUrl);
+    const parseUrl = requireLoopbackSidecarUrl(sidecar.parseUrl);
+    if (capabilitiesUrl.origin !== parseUrl.origin) {
+      return {
+        ok: false,
+        reasons: ["Local PDF parser capability and parse endpoints must share the same loopback origin"],
+      };
+    }
+  } catch {
+    return {
+      ok: false,
+      reasons: ["Local PDF parser endpoints must be literal HTTP loopback URLs"],
+    };
+  }
+  return { ok: true, reasons: [] };
 }

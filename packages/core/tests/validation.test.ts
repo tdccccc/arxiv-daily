@@ -4,6 +4,8 @@ import {
   validateFilterConfig,
   validateScheduleConfig,
   validateVaultRelativeDirectory,
+  validateEmbeddingConfig,
+  validateLocalPdfParserSidecarConfig,
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
@@ -16,6 +18,10 @@ function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
     arxiv: { ...DEFAULT_SETTINGS.arxiv, ...(overrides.arxiv ?? {}) },
     output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
     email: { ...DEFAULT_SETTINGS.email, ...(overrides.email ?? {}) },
+    pdfParserSidecar: {
+      ...DEFAULT_SETTINGS.pdfParserSidecar,
+      ...(overrides.pdfParserSidecar ?? {}),
+    },
   };
 }
 
@@ -259,5 +265,80 @@ describe("schedule defaults", () => {
 
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/run window/i);
+  });
+});
+
+describe("validateEmbeddingConfig", () => {
+  it("passes in local mode without any remote fields", () => {
+    const r = validateEmbeddingConfig(makeSettings({ embedding: { ...DEFAULT_SETTINGS.embedding, mode: "local" } }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("requires the remote fields when mode is remote", () => {
+    const r = validateEmbeddingConfig(makeSettings({ embedding: { ...DEFAULT_SETTINGS.embedding, mode: "remote" } }));
+    expect(r.ok).toBe(false);
+    expect(r.reasons).toEqual(
+      expect.arrayContaining(["Embedding Base URL is empty", "Embedding API Key is empty", "Embedding Model is empty"]),
+    );
+  });
+
+  it("rejects a non-positive dimension in remote mode", () => {
+    const r = validateEmbeddingConfig(makeSettings({
+      embedding: {
+        mode: "remote",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-embed",
+        model: "text-embedding-3-small",
+        dimension: 0,
+      },
+    }));
+    expect(r.reasons).toContain("Embedding dimension must be a positive integer");
+  });
+
+  it("passes with a complete remote configuration", () => {
+    const r = validateEmbeddingConfig(makeSettings({
+      embedding: {
+        mode: "remote",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-embed",
+        model: "text-embedding-3-small",
+        dimension: 1536,
+      },
+    }));
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("validateLocalPdfParserSidecarConfig", () => {
+  it("accepts the disabled loopback default without enabling a sidecar", () => {
+    expect(validateLocalPdfParserSidecarConfig(makeSettings())).toEqual({ ok: true, reasons: [] });
+  });
+
+  it("requires same-origin literal loopback endpoints when enabled", () => {
+    const r = validateLocalPdfParserSidecarConfig(makeSettings({
+      pdfParserSidecar: {
+        enabled: true,
+        capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
+        parseUrl: "http://127.0.0.1:5002/v1/parse",
+      },
+    }));
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join(" ")).toMatch(/same.*origin/i);
+  });
+
+  it("rejects a non-loopback parser endpoint", () => {
+    const r = validateLocalPdfParserSidecarConfig(makeSettings({
+      pdfParserSidecar: {
+        enabled: true,
+        capabilitiesUrl: "https://parser.example/v1/capabilities",
+        parseUrl: "https://parser.example/v1/parse",
+      },
+    }));
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join(" ")).toMatch(/loopback/i);
   });
 });

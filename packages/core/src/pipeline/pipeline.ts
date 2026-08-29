@@ -28,13 +28,34 @@ import {
   type DailyFilterCheckpointPort,
   type FilteredPaper,
 } from "./paper-filter";
+import type {
+  PersonalizedDiscoveryInput,
+  PersonalizedFilterCheckpointPort,
+} from "./personalized-paper-filter";
+import {
+  runPersonalNoveltyStage,
+  attachPersonalNoveltyBasis,
+  PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS,
+  PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS,
+  type NoveltyCheckpointPort,
+  type NoveltyDailyPaper,
+  type PersonalNoveltyMatchInput,
+  type PersonalNoveltyStageOutcome,
+  type PersonalizedNoveltyInput,
+  type PersonalizedNoveltyRepresentativesInput,
+} from "./personalized-novelty";
+import { paperKeyFromArxivId } from "../services/paper-key";
 import {
   summarizeDaily,
   summarizePaperDetail,
   type DailyPaperWithContent,
   type DailySummaryCheckpointPort,
 } from "./summarizer";
-import { extractPaperSummaries } from "./daily-summary-parser";
+import {
+  parseDailyReportDiscoveryProvenance,
+  parseDailyReportPersonalNovelty,
+  extractPaperSummaries,
+} from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import {
@@ -81,6 +102,8 @@ export interface DailySummaryCheckpointLifecyclePort
 
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
+    PersonalizedFilterCheckpointPort,
+    NoveltyCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
 export interface DailyGenerationCheckpointStores {
@@ -104,6 +127,24 @@ export interface PipelineDeps {
   output: OutputSettings;
   llmSettings: LlmSettings;
   detailSelection: DetailSelectionPolicy;
+  /** Immutable, host-authorized discovery input captured for this pipeline run. */
+  personalizedDiscovery?: PersonalizedDiscoveryInput;
+  /** Host lifecycle cancellation for a run that captured personalized discovery. */
+  personalizedDiscoverySignal?: AbortSignal;
+  /**
+   * Immutable host-authorized novelty representative evidence (library-derived
+   * catalog metadata and abstracts). Daily paper evidence is per-run fetch
+   * output, so the host snapshot supplies representatives only and the
+   * pipeline joins the run's papers into the full novelty input. When absent
+   * the novelty stage is skipped entirely and manual-only behavior stays
+   * byte-compatible.
+   */
+  personalizedNoveltyRepresentatives?: PersonalizedNoveltyRepresentativesInput;
+  /**
+   * Direction→representative mapping for novelty. Per-paper matched directions
+   * are derived from the validated discovery provenance of filtered papers.
+   */
+  personalizedNoveltyMatches?: PersonalNoveltyMatchInput;
   progress?: ProgressReporter;
   summarizeDaily?: typeof summarizeDaily;
   /**
@@ -134,8 +175,9 @@ export class ArxivPipeline {
     dateStr: string,
     signal?: AbortSignal,
   ): Promise<PipelineResult> {
+    const runSignal = combineAbortSignals(signal, this.deps.personalizedDiscoverySignal);
     try {
-      return await this.runForDateInner(dateStr, signal);
+      return await this.runForDateInner(dateStr, runSignal);
     } catch (e) {
       if (isCancellationError(e)) {
         return { kind: "cancelled", reason: (e as Error).message };
@@ -207,6 +249,8 @@ export class ArxivPipeline {
         reportDate: dateStr,
         llmSettings: this.deps.llmSettings,
         checkpointStore: this.deps.checkpointStores?.filter,
+        personalizedDiscovery: this.deps.personalizedDiscovery,
+        personalizedCheckpointStore: this.deps.checkpointStores?.filter,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
       });
@@ -239,6 +283,123 @@ export class ArxivPipeline {
         papersWritten: 0,
         digest: this.buildZeroDigest(dateStr),
       };
+    }
+
+    // 5b. Best-effort personal novelty for library-derived papers only. The
+    // per-paper matched-direction mapping is derived from the validated
+    // discovery provenance of filtered papers; direction→representatives come
+    // from the host's novelty matches. Strict daily paper evidence (paperKey,
+    // title, abstract) is derived here from this run's fetched source papers —
+    // the host snapshot has no knowledge of the per-run fetch — and joined
+    // with the host's library-derived representative evidence into the full
+    // novelty input. Novelty is additive evidence that must never fail, block,
+    // or rewrite the reliable daily run: every failure class degrades to
+    // no-novelty inside the stage and PipelineResult semantics stay unchanged.
+    const noveltyRepresentatives = this.deps.personalizedNoveltyRepresentatives;
+    const noveltyMatchInput = this.deps.personalizedNoveltyMatches;
+    if (noveltyRepresentatives && noveltyMatchInput) {
+      const libraryDerived = filtered.filter(
+        (paper) => (paper.discoveryProvenance?.directions.length ?? 0) > 0,
+      );
+      if (libraryDerived.length > 0) {
+        stageStart("personal-novelty");
+        this.progress.setStage("personal-novelty");
+        try {
+          const paperMatches = libraryDerived
+            .map((paper) => ({
+              paperKey: paperKeyFromArxivId(paper.id),
+              directionIds: paper.discoveryProvenance!.directions.map(({ id }) => id),
+            }))
+            .sort((left, right) =>
+              left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
+            );
+          const sourceByKey = new Map(
+            sourcePapers.map((paper) => [paper.paperKey, paper]),
+          );
+          const papers: NoveltyDailyPaper[] = [];
+          for (const match of paperMatches) {
+            const source = sourceByKey.get(match.paperKey);
+            if (!source) continue;
+            // Strict daily paper evidence is derived from the fetched source
+            // papers with trim-first bounds: only papers whose title and
+            // abstract are non-empty and within the DTO bounds join the
+            // input. Papers excluded here keep their provenance match and are
+            // marked per-paper no-novelty ("input-invalid") by the stage's
+            // reference validation, so one empty-evidence paper can never
+            // degrade the whole novelty stage.
+            const title = source.title.trim();
+            const abstract = source.abstract.trim();
+            if (title.length === 0 || abstract.length === 0
+              || title.length > PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS
+              || abstract.length > PERSONAL_NOVELTY_MAX_ABSTRACT_CODE_UNITS) {
+              continue;
+            }
+            papers.push({ paperKey: match.paperKey, title, abstract });
+          }
+          papers.sort((left, right) =>
+            left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0,
+          );
+          const stage = await runPersonalNoveltyStage({
+            input: {
+              papers,
+              representatives: noveltyRepresentatives.representatives,
+            },
+            matches: {
+              paperMatches,
+              directionRepresentatives: noveltyMatchInput.directionRepresentatives,
+            },
+            llm: this.deps.llm,
+            llmSettings: this.deps.llmSettings,
+            reportDate: dateStr,
+            checkpointStore: this.deps.checkpointStores?.filter,
+            signal,
+            onMetrics: (metrics) => runMetrics.record(metrics),
+            onWarning: (message, error) => {
+              this.deps.logger.warn(
+                `pipeline: personal novelty degraded: ${message}`,
+                error,
+              );
+            },
+          });
+          const noveltyByKey = new Map(
+            stage.outcomes
+              .filter(
+                (outcome): outcome is Extract<PersonalNoveltyStageOutcome, { status: "novelty" }> =>
+                  outcome.status === "novelty",
+              )
+              .map((outcome) => [outcome.paperKey, outcome.novelty]),
+          );
+          if (noveltyByKey.size > 0) {
+            filtered = filtered.map((paper) => {
+              const novelty = noveltyByKey.get(paperKeyFromArxivId(paper.id));
+              if (!novelty) return paper;
+              try {
+                // Resolve display titles from the same trusted representative
+                // evidence the novelty stage validated against. A contract
+                // violation degrades only this paper to no-novelty; it must
+                // never fail, block, or rewrite the reliable daily run.
+                return {
+                  ...paper,
+                  personalNovelty: attachPersonalNoveltyBasis(
+                    novelty,
+                    noveltyRepresentatives.representatives,
+                  ),
+                };
+              } catch (error) {
+                if (isCancellationError(error)) throw error;
+                this.deps.logger.warn(
+                  `pipeline: personal novelty basis enrichment failed for ${paper.id}`,
+                  error,
+                );
+                return paper;
+              }
+            });
+          }
+        } finally {
+          stageEnd("personal-novelty");
+        }
+        throwIfCancelled(signal);
+      }
     }
 
     throwIfCancelled(signal);
@@ -463,6 +624,26 @@ export class ArxivPipeline {
           dailyPath,
         );
         throwIfCancelled(signal);
+        const provenance = parseDailyReportDiscoveryProvenance(dailySummary, dateStr);
+        if (provenance.kind === "valid") {
+          await this.deps.paperIndex.reconcileDailyReportOccurrenceProvenance?.(
+            dailyPath,
+            provenance.occurrences,
+          );
+        } else {
+          logger.warn(`pipeline: committed provenance projection invalid: ${provenance.reason}`);
+        }
+        throwIfCancelled(signal);
+        const novelty = parseDailyReportPersonalNovelty(dailySummary, dateStr);
+        if (novelty.kind === "valid") {
+          await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
+            dailyPath,
+            novelty.occurrences,
+          );
+        } else {
+          logger.warn(`pipeline: committed novelty projection invalid: ${novelty.reason}`);
+        }
+        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
@@ -585,6 +766,26 @@ export class ArxivPipeline {
       await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);
       throwIfCancelled(signal);
       await this.deps.paperIndex.addDailyReports(arxivIds, dailyPath);
+      throwIfCancelled(signal);
+      const provenance = parseDailyReportDiscoveryProvenance(markdown, dateStr);
+      if (provenance.kind === "valid") {
+        await this.deps.paperIndex.reconcileDailyReportOccurrenceProvenance?.(
+          dailyPath,
+          provenance.occurrences,
+        );
+      } else {
+        this.deps.logger.warn(`pipeline: existing daily provenance invalid: ${provenance.reason}`);
+      }
+      throwIfCancelled(signal);
+      const novelty = parseDailyReportPersonalNovelty(markdown, dateStr);
+      if (novelty.kind === "valid") {
+        await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
+          dailyPath,
+          novelty.occurrences,
+        );
+      } else {
+        this.deps.logger.warn(`pipeline: existing daily novelty invalid: ${novelty.reason}`);
+      }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);
       throwIfCancelled(signal);
@@ -710,6 +911,15 @@ export class ArxivPipeline {
       dateWindow: "recent",
     };
   }
+}
+
+function combineAbortSignals(
+  primary?: AbortSignal,
+  lifecycle?: AbortSignal,
+): AbortSignal | undefined {
+  if (!primary) return lifecycle;
+  if (!lifecycle) return primary;
+  return AbortSignal.any([primary, lifecycle]);
 }
 
 function extractDailyArxivIds(markdown: string): string[] {

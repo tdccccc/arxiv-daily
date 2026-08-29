@@ -18,6 +18,17 @@ export function requireApiVersion(_version: string): boolean {
 
 export function setIcon(_parent: HTMLElement, _iconId: string): void {}
 
+/**
+ * Mirrors the official loader's contract: resolves to a pdf.js library
+ * object and makes it reachable via `window.pdfjsLib` (the production path
+ * reads the window global, so the mock sets it like the real loader does).
+ */
+export async function loadPdfJs(): Promise<{ version: string }> {
+  const lib = { version: "mock-pdfjs" };
+  (globalThis as unknown as { pdfjsLib?: { version: string } }).pdfjsLib = lib;
+  return lib;
+}
+
 export class TFile {
   constructor(readonly path: string = "") {}
 }
@@ -293,10 +304,17 @@ export class ToggleComponent {
 }
 
 export class Modal {
+  static opened: Modal[] = [];
+  titleEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   contentEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   constructor(_app: App) {}
-  open(): void {}
-  close(): void {}
+  open(): void {
+    Modal.opened.push(this);
+    this.onOpen();
+  }
+  close(): void {
+    this.onClose();
+  }
   onOpen(): void {}
   onClose(): void {}
 }

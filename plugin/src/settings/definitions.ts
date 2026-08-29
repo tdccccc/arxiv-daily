@@ -35,6 +35,18 @@ export const SETTING_KEYS = {
     runUntilLocal: "schedule.runUntilLocal",
     tickIntervalMin: "schedule.tickIntervalMin",
   },
+  embedding: {
+    mode: "embedding.mode",
+    baseUrl: "embedding.baseUrl",
+    apiKey: "embedding.apiKey",
+    model: "embedding.model",
+    dimension: "embedding.dimension",
+  },
+  pdfParserSidecar: {
+    enabled: "pdfParserSidecar.enabled",
+    capabilitiesUrl: "pdfParserSidecar.capabilitiesUrl",
+    parseUrl: "pdfParserSidecar.parseUrl",
+  },
   advanced: {
     requestDelayMs: "advanced.requestDelayMs",
     cacheExpiryDays: "advanced.cacheExpiryDays",
@@ -117,6 +129,7 @@ export interface SettingDefinitionsHost {
   renderApiKeyRow?: (setting: Setting) => void;
   renderModelRow?: (setting: Setting) => void;
   renderReasoningEffortRow?: (setting: Setting) => void;
+  renderLibraryConnectionRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
   showSetupGuide?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
@@ -133,6 +146,14 @@ export interface SettingDefinitionsHost {
   renderEmailToRow?: (setting: Setting) => void;
   renderEmailApiKeyRow?: (setting: Setting) => void;
   renderHostedTokenRow?: (setting: Setting) => void;
+  renderEmbeddingModeRow?: (setting: Setting) => void;
+  renderEmbeddingBaseUrlRow?: (setting: Setting) => void;
+  renderEmbeddingApiKeyRow?: (setting: Setting) => void;
+  renderEmbeddingModelRow?: (setting: Setting) => void;
+  renderEmbeddingDimensionRow?: (setting: Setting) => void;
+  renderPdfParserSidecarEnabledRow?: (setting: Setting) => void;
+  renderPdfParserSidecarCapabilitiesUrlRow?: (setting: Setting) => void;
+  renderPdfParserSidecarParseUrlRow?: (setting: Setting) => void;
 }
 
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
@@ -213,6 +234,88 @@ export function buildSettingDefinitions(
           : []),
       ],
     },
+    {
+      type: "group",
+      heading: "Embedding",
+      items: [
+        ...(host.renderEmbeddingModeRow
+          ? [{
+              name: "Embedding mode",
+              desc: "Local embeds offline on this device (slow for large libraries). "
+                + "Remote sends full-text chunks to an embeddings API (fast; requires "
+                + "full-text authorization; switching modes rebuilds the index).",
+              render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingBaseUrlRow
+          ? [{
+              name: "Embedding API base URL",
+              desc: "OpenAI-compatible embeddings endpoint.",
+              render: (setting: Setting) => host.renderEmbeddingBaseUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingApiKeyRow
+          ? [{
+              name: "Embedding API key",
+              desc: "Saved only on this device.",
+              render: (setting: Setting) => host.renderEmbeddingApiKeyRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingModelRow
+          ? [{
+              name: "Embedding model",
+              desc: "Model name sent to the endpoint.",
+              render: (setting: Setting) => host.renderEmbeddingModelRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderEmbeddingDimensionRow
+          ? [{
+              name: "Embedding dimension",
+              desc: "Vector width of the remote model. Must match the model.",
+              render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+      ],
+    },
+    {
+      type: "group",
+      heading: "PDF parsing",
+      items: [
+        ...(host.renderPdfParserSidecarEnabledRow
+          ? [{
+              name: "Use local parser sidecar",
+              desc: "Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.",
+              render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderPdfParserSidecarCapabilitiesUrlRow
+          ? [{
+              name: "Sidecar capability URL",
+              desc: "Local loopback endpoint that reports parser capabilities.",
+              render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+        ...(host.renderPdfParserSidecarParseUrlRow
+          ? [{
+              name: "Sidecar parse URL",
+              desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
+              render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
+            } satisfies SettingDefinitionItem]
+          : []),
+      ],
+    },
+    ...(host.renderLibraryConnectionRow
+      ? [{
+          type: "group",
+          heading: "Personal library",
+          items: [{
+            name: "Library connection",
+            desc: "Choose one local paper library. Scanning is read-only and separate from daily reports.",
+            render: (setting: Setting) =>
+              host.renderLibraryConnectionRow?.(setting),
+          }],
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       type: "list",
       heading: "arXiv categories",

@@ -37,6 +37,14 @@ function clearSettingEl(setting: Setting, ...classes: string[]): void {
  * Lives in its own module (not definitions.ts) so the shared sentinel
  * state machines can reach tab internals via the tab instance.
  */
+export function renderLibraryConnectionRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  tab.renderLibraryConnectionControls(setting);
+}
+
 export function renderLlmBaseUrlRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
@@ -538,5 +546,158 @@ export function renderHostedTokenRow(
       await saveToken();
     },
     run: () => tab.plugin.sendTestEmail(),
+  });
+}
+
+export function renderEmbeddingModeRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const select = setting.controlEl.createEl("select");
+  const local = select.createEl("option", { text: "Local (offline, default)" });
+  local.value = "local";
+  const remote = select.createEl("option", { text: "Remote (fast, full text leaves this device)" });
+  remote.value = "remote";
+  select.value = tab.plugin.settings.embedding.mode;
+  select.addEventListener("change", () => {
+    tab.runAction("save embedding mode", async () => {
+      tab.plugin.settings.embedding.mode = select.value === "remote" ? "remote" : "local";
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingBaseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "url",
+    attr: { placeholder: "https://api.openai.com/v1" },
+  });
+  input.value = tab.plugin.settings.embedding.baseUrl;
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding base url", async () => {
+      tab.plugin.settings.embedding.baseUrl = input.value.trim();
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingApiKeyRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  renderSensitiveInput(tab, setting, {
+    value: tab.plugin.settings.embedding.apiKey,
+    placeholder: "Enter API key",
+    ariaLabel: "Embedding API key",
+    save: (next) => tab.changeSettingValue("embedding.apiKey", next),
+  });
+}
+
+export function renderEmbeddingModelRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    attr: { placeholder: "text-embedding-3-small" },
+  });
+  input.value = tab.plugin.settings.embedding.model;
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding model", async () => {
+      tab.plugin.settings.embedding.model = input.value.trim();
+      await tab.plugin.saveSettings();
+    });
+  });
+}
+
+export function renderEmbeddingDimensionRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "number",
+    attr: { placeholder: "1536", min: "1", step: "1" },
+  });
+  input.value = String(tab.plugin.settings.embedding.dimension);
+  input.addEventListener("change", () => {
+    tab.runAction("save embedding dimension", async () => {
+      const parsed = Number(input.value.trim());
+      if (Number.isInteger(parsed) && parsed > 0) {
+        tab.plugin.settings.embedding.dimension = parsed;
+        await tab.plugin.saveSettings();
+      }
+    });
+  });
+}
+
+export function renderPdfParserSidecarEnabledRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  new ToggleComponent(setting.controlEl)
+    .setValue(tab.plugin.settings.pdfParserSidecar.enabled)
+    .onChange((enabled) => {
+      tab.runAction("save local parser sidecar", () =>
+        tab.changeSettingValue("pdfParserSidecar.enabled", enabled));
+    });
+}
+
+export function renderPdfParserSidecarCapabilitiesUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderPdfParserSidecarUrlRow(
+    tab,
+    setting,
+    "pdfParserSidecar.capabilitiesUrl",
+    "HTTP://127.0.0.1:5001/v1/capabilities",
+  );
+}
+
+export function renderPdfParserSidecarParseUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderPdfParserSidecarUrlRow(
+    tab,
+    setting,
+    "pdfParserSidecar.parseUrl",
+    "HTTP://127.0.0.1:5001/v1/parse",
+  );
+}
+
+function renderPdfParserSidecarUrlRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
+  placeholder: string,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", { type: "url", attr: { placeholder } });
+  input.value = key === "pdfParserSidecar.capabilitiesUrl"
+    ? tab.plugin.settings.pdfParserSidecar.capabilitiesUrl
+    : tab.plugin.settings.pdfParserSidecar.parseUrl;
+  input.addEventListener("change", () => {
+    const next = input.value.trim();
+    const revision = tab.beginControlChange(input);
+    tab.runAction("save local parser sidecar URL", async () => {
+      try {
+        await tab.changeSettingValue(key, next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, key);
+        }
+        throw error;
+      }
+    });
   });
 }

@@ -160,6 +160,9 @@ export function isAtomPaperMeta(value: unknown): value is AtomPaperMeta {
     canonicalId === paper.id &&
     isNonEmptyString(paper.title) &&
     isNonEmptyString(paper.authors) &&
+    Array.isArray(paper.authorNames) &&
+    paper.authorNames.length > 0 &&
+    paper.authorNames.every(isNonEmptyString) &&
     isNonEmptyString(paper.abstract) &&
     isNonEmptyString(paper.published) &&
     isNonEmptyString(paper.updated) &&

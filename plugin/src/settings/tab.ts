@@ -1,5 +1,6 @@
 import {
   App,
+  Menu,
   Modal,
   Notice,
   PluginSettingTab,
@@ -45,7 +46,14 @@ import {
   buildFeatureRequestUrl,
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
+import {
+  confirmEmbeddingMode,
+  confirmLibraryAuthorization,
+  showLibraryInventoryPreview,
+  showPersonalLibraryCatalogSummary,
+} from "../library/modal";
 import { renderSensitiveInput } from "./sensitive-input";
+
 
 export function validateOutputDirectoryDraft(
   draft: string,
@@ -154,6 +162,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderModelRow(this, setting),
       renderReasoningEffortRow: (setting) =>
         declarativeRows.renderReasoningEffortRow(this, setting),
+      renderEmbeddingModeRow: (setting) =>
+        declarativeRows.renderEmbeddingModeRow(this, setting),
+      renderEmbeddingBaseUrlRow: (setting) =>
+        declarativeRows.renderEmbeddingBaseUrlRow(this, setting),
+      renderEmbeddingApiKeyRow: (setting) =>
+        declarativeRows.renderEmbeddingApiKeyRow(this, setting),
+      renderEmbeddingModelRow: (setting) =>
+        declarativeRows.renderEmbeddingModelRow(this, setting),
+      renderEmbeddingDimensionRow: (setting) =>
+        declarativeRows.renderEmbeddingDimensionRow(this, setting),
+      renderPdfParserSidecarEnabledRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarEnabledRow(this, setting),
+      renderPdfParserSidecarCapabilitiesUrlRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarCapabilitiesUrlRow(this, setting),
+      renderPdfParserSidecarParseUrlRow: (setting) =>
+        declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
+      renderLibraryConnectionRow: (setting) =>
+        declarativeRows.renderLibraryConnectionRow(this, setting),
       renderCategoryRow: (setting, index) =>
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
@@ -338,7 +364,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
+    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced" | "embedding" | "pdf-parsing",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -388,6 +414,143 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         text: line,
       });
     }
+  }
+
+  public renderLibraryConnectionControls(setting: Setting): void {
+    const status = this.plugin.getLibraryConnectionStatus();
+    const descriptions = {
+      disconnected: "No personal library selected.",
+      "authorization-required": `Selected: ${status.kind === "authorization-required" ? status.rootLabel : ""}. Authorization required.`,
+      "authorization-invalidated": `Selected: ${status.kind === "authorization-invalidated" ? status.rootLabel : ""}. Authorization expired after configuration changed.`,
+      authorized: `Connected: ${status.kind === "authorized" ? status.rootLabel : ""}. Metadata and abstracts authorized.`,
+    } as const;
+    setting.setDesc(descriptions[status.kind]);
+    setting.controlEl.addClass("arxiv-daily-settings__library-controls");
+    setting.addButton((button) =>
+      button
+        .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
+        .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
+    );
+    if (status.kind === "authorization-required" || status.kind === "authorization-invalidated") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Review & authorize")
+          .setCta()
+          .onClick(() => this.runAction("authorize personal library", () => this.reviewLibraryAuthorization())),
+      );
+    }
+    if (status.kind === "authorized") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Revoke")
+          .setWarning()
+          .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
+      );
+    }
+    if (status.kind !== "disconnected") {
+      setting.addButton((button) =>
+        button
+          .setButtonText("Manage…")
+          .onClick(() => {
+            const rect = button.buttonEl.getBoundingClientRect();
+            this.openLibraryManageMenu({ x: rect.left, y: rect.bottom });
+          }),
+      );
+    }
+  }
+
+  /** Secondary library actions behind one menu so the row stays compact. */
+  private openLibraryManageMenu(position: { x: number; y: number }): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("Review directions")
+        .onClick(() => this.runAction("open direction review", async () => {
+          this.plugin.openPersonalLibraryDirectionReview();
+        })),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Preview library files")
+        .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Scan library")
+        .onClick(() => this.runAction("scan personal library", () => this.scanPersonalLibrary())),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Reload catalog")
+        .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
+    );
+    menu.showAtPosition(position);
+  }
+
+  public async chooseLibraryRoot(): Promise<void> {
+    const result = await this.plugin.selectLibraryRoot();
+    if (result === "unsupported") {
+      new Notice("arXiv Daily: system folder selection is unavailable in this Obsidian desktop version.", 10_000);
+      return;
+    }
+    if (result === "selected") {
+      new Notice("arXiv Daily: personal library selected. You can preview files locally before authorizing model processing.");
+      this.refreshSettings();
+      await this.offerEmbeddingModeChoice();
+    }
+  }
+
+  /**
+   * First-time guided choice between local and remote embedding (ADR 0008),
+   * offered once when a library is first connected. Dismissing keeps local;
+   * the mode stays changeable in settings (switching rebuilds the index).
+   */
+  private async offerEmbeddingModeChoice(): Promise<void> {
+    if (this.plugin.settings.embedding.initialChoiceDone) return;
+    const mode = await confirmEmbeddingMode(this.app);
+    this.plugin.settings.embedding.mode = mode;
+    this.plugin.settings.embedding.initialChoiceDone = true;
+    await this.plugin.saveSettings();
+    this.refreshSettings();
+    new Notice(
+      mode === "remote"
+        ? "arXiv Daily: remote embedding enabled — review & authorize at full-text depth before indexing."
+        : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
+      10_000,
+    );
+  }
+
+  public async reviewLibraryAuthorization(): Promise<void> {
+    const disclosure = this.plugin.getLibraryAuthorizationDisclosure();
+    if (!disclosure) throw new Error("Choose a personal library first");
+    if (!await confirmLibraryAuthorization(this.app, disclosure)) return;
+    await this.plugin.authorizeLibraryProcessing(
+      disclosure.authorizationFingerprint,
+    );
+    new Notice("arXiv Daily: personal library processing authorized.");
+    this.refreshSettings();
+  }
+
+  public async previewLibraryInventory(): Promise<void> {
+    const preview = await this.plugin.previewLibraryInventory();
+    showLibraryInventoryPreview(this.app, preview);
+  }
+
+  public async scanPersonalLibrary(): Promise<void> {
+    const catalog = await this.plugin.scanPersonalLibrary();
+    showPersonalLibraryCatalogSummary(this.app, catalog);
+  }
+
+  public async reloadPersonalLibraryCatalog(): Promise<void> {
+    const catalog = await this.plugin.reloadPersonalLibraryCatalog();
+    if (!catalog) throw new Error("Choose a personal library first");
+    showPersonalLibraryCatalogSummary(this.app, catalog);
+  }
+
+  public async revokeLibraryAuthorization(): Promise<void> {
+    await this.plugin.revokeLibraryProcessing();
+    new Notice("arXiv Daily: personal library authorization revoked.");
+    this.refreshSettings();
   }
 
   public async setArxivCategories(categories: string[]): Promise<void> {
@@ -930,6 +1093,115 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             );
           });
       });
+
+    // ─── Embedding ────────────────────────────────────
+    this.sectionHeading(containerEl, "Embedding", "embedding");
+    new Setting(containerEl)
+      .setName("Embedding mode")
+      .setDesc(
+        "How library full text becomes similarity vectors. Local embeds offline on this device "
+          + "(slow for large libraries). Remote sends full-text chunks to an embeddings API "
+          + "(fast; requires model-processing authorization at full-text depth; "
+          + "switching modes rebuilds the index).",
+      )
+      .addDropdown((d) => {
+        d.addOption("local", "Local (offline, default)");
+        d.addOption("remote", "Remote (fast, full text leaves this device)");
+        d.setValue(s.embedding.mode);
+        d.onChange(async (v) => {
+          s.embedding.mode = v === "remote" ? "remote" : "local";
+          await this.plugin.saveSettings();
+        });
+      });
+    new Setting(containerEl)
+      .setName("Embedding API base URL")
+      .setDesc("OpenAI-compatible embeddings endpoint, e.g. https://api.openai.com/v1.")
+      .addText((t) => {
+        t.setPlaceholder("https://api.openai.com/v1")
+          .setValue(s.embedding.baseUrl)
+          .onChange(async (v) => {
+            s.embedding.baseUrl = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding API key")
+      .setDesc("Saved only on this device.")
+      .addText((t) => {
+        t.inputEl.type = "password";
+        t.setPlaceholder("Enter API key")
+          .setValue(s.embedding.apiKey)
+          .onChange(async (v) => {
+            s.embedding.apiKey = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding model")
+      .setDesc("Model name sent to the endpoint, e.g. text-embedding-3-small.")
+      .addText((t) => {
+        t.setPlaceholder("text-embedding-3-small")
+          .setValue(s.embedding.model)
+          .onChange(async (v) => {
+            s.embedding.model = v.trim();
+            await this.plugin.saveSettings();
+          });
+      });
+    new Setting(containerEl)
+      .setName("Embedding dimension")
+      .setDesc("Vector width of the remote model, e.g. 1536. Must match the model.")
+      .addText((t) => {
+        t.setPlaceholder("1536")
+          .setValue(String(s.embedding.dimension))
+          .onChange(async (v) => {
+            const parsed = Number(v.trim());
+            if (Number.isInteger(parsed) && parsed > 0) {
+              s.embedding.dimension = parsed;
+              await this.plugin.saveSettings();
+            }
+          });
+      });
+
+    // ─── PDF parsing ──────────────────────────────────
+    this.sectionHeading(containerEl, "PDF parsing", "pdf-parsing");
+    new Setting(containerEl)
+      .setName("Use local parser sidecar")
+      .setDesc("Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.")
+      .addToggle((toggle) => {
+        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
+          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
+        });
+      });
+    new Setting(containerEl)
+      .setName("Sidecar capability URL")
+      .setDesc("Local loopback endpoint that reports parser capabilities.")
+      .addText((text) => {
+        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
+          .setValue(s.pdfParserSidecar.capabilitiesUrl)
+          .onChange(async (value) => {
+            await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
+          });
+      });
+    new Setting(containerEl)
+      .setName("Sidecar parse URL")
+      .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
+      .addText((text) => {
+        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
+          .setValue(s.pdfParserSidecar.parseUrl)
+          .onChange(async (value) => {
+            await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
+          });
+      });
+
+    // ─── Personal library ─────────────────────────────
+    this.sectionHeading(
+      containerEl,
+      "Personal library",
+      "library",
+      "Connect one local paper library through read-only access.",
+    );
+    const librarySetting = new Setting(containerEl).setName("Library connection");
+    this.renderLibraryConnectionControls(librarySetting);
 
     // ─── arXiv ────────────────────────────────────────
     this.sectionHeading(containerEl, "arXiv", "arxiv");

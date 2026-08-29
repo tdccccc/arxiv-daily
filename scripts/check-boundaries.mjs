@@ -7,7 +7,12 @@ const layers = [
   { dir: "packages/core", workspace: new Set(), thirdParty: new Set(["pako"]) },
   { dir: "packages/node-runtime", workspace: new Set(["@arxiv-daily/core"]) },
   { dir: "apps/cli", workspace: new Set(["@arxiv-daily/core", "@arxiv-daily/node-runtime"]) },
-  { dir: "plugin", workspace: new Set(["@arxiv-daily/core"]), thirdParty: new Set(["obsidian"]) },
+  {
+    dir: "plugin",
+    workspace: new Set(["@arxiv-daily/core", "@arxiv-daily/node-runtime"]),
+    workspaceSubpaths: new Set(["@arxiv-daily/node-runtime/scoped-library-source"]),
+    thirdParty: new Set(["obsidian"]),
+  },
 ];
 const forbiddenOldPaths = [
   "plugin/src/core", "plugin/src/llm", "plugin/src/pipeline", "plugin/src/prompts",
@@ -32,7 +37,16 @@ for (const layer of layers) {
       const owner = packageOwner(specifier);
       if (owner.startsWith("@arxiv-daily/")) {
         if (!layer.workspace.has(owner)) errors.push(`${display}: forbidden dependency ${specifier}`);
-        if (specifier !== owner) errors.push(`${display}: deep workspace import ${specifier}`);
+        if (specifier !== owner && !layer.workspaceSubpaths?.has(specifier)) {
+          errors.push(`${display}: deep workspace import ${specifier}`);
+        }
+        if (
+          layer.dir === "plugin"
+          && owner === "@arxiv-daily/node-runtime"
+          && specifier === owner
+        ) {
+          errors.push(`${display}: broad node-runtime import is forbidden`);
+        }
         continue;
       }
       if (layer.dir === "packages/core" && file.includes("/src/") && !layer.thirdParty.has(owner)) {

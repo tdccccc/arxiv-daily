@@ -29,5 +29,9 @@ export default defineConfig({
   resolve: { alias: {
     obsidian: resolve(here, "tests/__mocks__/obsidian.ts"),
     "@arxiv-daily/core": resolve(here, "../packages/core/src/index.ts"),
+    "@arxiv-daily/node-runtime/scoped-library-source": resolve(
+      here,
+      "../packages/node-runtime/src/scoped-library-source.ts",
+    ),
   } },
 });

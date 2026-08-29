@@ -9,7 +9,15 @@ import type { OutputSettings, Topic } from "../settings/types";
 import {
   extractFallbackAbstracts,
   extractPaperSummaries,
+  parseDailyReportDiscoveryProvenance,
+  parseDailyReportPersonalNovelty,
 } from "../pipeline/daily-summary-parser";
+import type {
+  DailyReportDiscoveryProvenanceParseResult,
+} from "../pipeline/discovery-provenance-marker";
+import type {
+  DailyReportPersonalNoveltyParseResult,
+} from "../pipeline/personal-novelty-marker";
 import { classifyPaperNote } from "./paper-note-classifier";
 import { modernArxivResources } from "../utils/arxiv";
 
@@ -79,6 +87,8 @@ interface DailyCandidateCollection {
   paperIdsByReport: Map<string, Set<string>>;
   parsedReports: Set<string>;
   summaries: Record<string, PaperSummary>;
+  provenanceByReport: Map<string, DailyReportDiscoveryProvenanceParseResult>;
+  noveltyByReport: Map<string, DailyReportPersonalNoveltyParseResult>;
 }
 
 export async function syncDashboardHistory(
@@ -139,6 +149,59 @@ export async function syncDashboardHistory(
     };
   });
 
+  const invalidProvenanceReports = new Set(
+    [...dailyCollection.provenanceByReport]
+      .filter(([, result]) => result.kind === "invalid")
+      .map(([report]) => report),
+  );
+  const invalidNoveltyReports = new Set(
+    [...dailyCollection.noveltyByReport]
+      .filter(([, result]) => result.kind === "invalid")
+      .map(([report]) => report),
+  );
+
+  for (const report of dailyCollection.parsedReports) {
+    const provenance = dailyCollection.provenanceByReport.get(report);
+    if (provenance?.kind === "valid") {
+      await deps.store.reconcileDailyReportOccurrenceProvenance(
+        report,
+        provenance.occurrences,
+      );
+    } else if (provenance?.kind === "invalid") {
+      deps.logger?.warn(
+        `dashboard: skipped invalid provenance in ${report}: ${provenance.reason}`,
+      );
+    }
+  }
+  for (const report of dailyCollection.parsedReports) {
+    const novelty = dailyCollection.noveltyByReport.get(report);
+    if (novelty?.kind === "valid") {
+      await deps.store.reconcileDailyReportOccurrenceNovelty(
+        report,
+        novelty.occurrences,
+      );
+    } else if (novelty?.kind === "invalid") {
+      deps.logger?.warn(
+        `dashboard: skipped invalid personal novelty in ${report}: ${novelty.reason}`,
+      );
+    }
+  }
+
+  const markerChanged = await deps.store.mutate((index) => {
+    const changed = pruneStaleMarkerReferences(
+      index,
+      invalidProvenanceReports,
+      invalidNoveltyReports,
+      deps.output,
+    );
+    return { result: changed, changed: changed > 0 };
+  });
+  if (markerChanged > 0) {
+    deps.logger?.info(
+      `dashboard: pruned ${markerChanged} stale discovery markers`,
+    );
+  }
+
   if (final.inputs > 0) {
     deps.logger?.info(`dashboard: synced ${final.inputs} historical papers`);
   }
@@ -162,7 +225,7 @@ export async function syncDashboardHistory(
       `dashboard: pruned ${final.pruned.changed} stale daily references and removed ${final.pruned.removed} orphan daily papers`,
     );
   }
-  return final.index;
+  return deps.store.load();
 }
 
 async function collectPaperCandidates(
@@ -303,6 +366,8 @@ async function collectDailyCandidates(
   const paperIdsByReport = new Map<string, Set<string>>();
   const parsedReports = new Set<string>();
   const summaries: Record<string, PaperSummary> = {};
+  const provenanceByReport = new Map<string, DailyReportDiscoveryProvenanceParseResult>();
+  const noveltyByReport = new Map<string, DailyReportPersonalNoveltyParseResult>();
   const seen = new Set<string>();
   const dailyFiles = markdownFiles
     .map((file) => ({ file, path: normalizeVaultPath(file.path) }))
@@ -314,6 +379,8 @@ async function collectDailyCandidates(
     try {
       const markdown = await deps.vault.adapter.read(path);
       mergePaperSummaries(summaries, extractPaperSummaries(markdown));
+      provenanceByReport.set(path, parseDailyReportDiscoveryProvenance(markdown, date));
+      noveltyByReport.set(path, parseDailyReportPersonalNovelty(markdown, date));
       const fallbackAbstracts = extractFallbackAbstracts(markdown);
       const parsed = parseDailyCandidates(
         markdown,
@@ -337,7 +404,14 @@ async function collectDailyCandidates(
       deps.logger?.warn(`dashboard: failed to inspect daily file ${path}`, e);
     }
   }
-  return { candidates, paperIdsByReport, parsedReports, summaries };
+  return {
+    candidates,
+    paperIdsByReport,
+    parsedReports,
+    summaries,
+    provenanceByReport,
+    noveltyByReport,
+  };
 }
 
 function mergePaperSummaries(
@@ -657,6 +731,44 @@ function pruneStaleDailyReports(
   }
 
   return { changed, removed };
+}
+
+function pruneStaleMarkerReferences(
+  inbox: PaperInbox,
+  invalidProvenanceReports: Set<string>,
+  invalidNoveltyReports: Set<string>,
+  output: OutputSettings,
+): number {
+  const dailyDir = normalizeVaultPath(output.dailyDir);
+  let changed = 0;
+  for (const entry of Object.values(inbox.papers)) {
+    const dailyReports = new Set(entry.dailyReports.map(normalizeVaultPath));
+    for (const report of Object.keys(entry.discoveryProvenanceByReport)) {
+      const normalizedReport = normalizeVaultPath(report);
+      const managed = Boolean(dailyDateFromPath(normalizedReport, dailyDir));
+      if (
+        managed &&
+        !invalidProvenanceReports.has(normalizedReport) &&
+        !dailyReports.has(normalizedReport)
+      ) {
+        delete entry.discoveryProvenanceByReport[report];
+        changed += 1;
+      }
+    }
+    for (const report of Object.keys(entry.noveltyByReport)) {
+      const normalizedReport = normalizeVaultPath(report);
+      const managed = Boolean(dailyDateFromPath(normalizedReport, dailyDir));
+      if (
+        managed &&
+        !invalidNoveltyReports.has(normalizedReport) &&
+        !dailyReports.has(normalizedReport)
+      ) {
+        delete entry.noveltyByReport[report];
+        changed += 1;
+      }
+    }
+  }
+  return changed;
 }
 
 function snapshotInbox(inbox: PaperInbox): PaperInbox {

@@ -43,3 +43,30 @@ export { ObsidianResourceOpener } from "./resource-opener";
 export { ObsidianSettingsSecretProvider } from "./secrets";
 export { ObsidianStorageAdapter } from "./storage-adapter";
 export { ObsidianMarkupParser } from "./markup-parser";
+export { openObsidianLibrarySource } from "./library-source";
+export {
+  OBSIDIAN_PDF_PARSER_CAPABILITIES,
+  ObsidianPdfDocumentParser,
+  ObsidianPdfTextExtractor,
+  type PdfJsLib,
+  type PdfJsLoadingTask,
+  type PdfJsDocument,
+  type PdfJsPage,
+  type PdfJsTextContent,
+  type PdfJsTextItem,
+} from "./pdf-text-extractor";
+export {
+  ObsidianLibraryDirectoryPicker,
+  type DirectoryDialog,
+  type DirectoryDialogResult,
+  type LibraryDirectorySelection,
+} from "./library-directory-picker";
+export {
+  createTransformersEmbeddingModel,
+  EMBEDDING_MODEL_ID,
+  inspectTransformersEnv,
+  alignElectronReleaseProbe,
+  describeRuntimeProbe,
+  type TransformersEmbeddingModelOptions,
+  type TransformersEnvFacts,
+} from "./embedding-model";

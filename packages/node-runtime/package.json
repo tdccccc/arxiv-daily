@@ -16,7 +16,8 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./scoped-library-source": "./src/scoped-library-source.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

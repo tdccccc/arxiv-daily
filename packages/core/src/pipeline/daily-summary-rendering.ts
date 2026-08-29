@@ -5,6 +5,15 @@ import type {
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
 import { neutralizeRawHtml } from "./raw-html";
+import {
+  escapeDiscoveryProvenancePlainText,
+  renderDiscoveryProvenanceMarker,
+} from "./discovery-provenance-marker";
+import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
+import type {
+  PersonalNoveltyDifferenceType,
+  PersonalNoveltyWithBasis,
+} from "./personalized-novelty";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
   "<!-- arxiv-daily-emergency-report:v1 -->";
@@ -32,6 +41,29 @@ export const DAILY_SUMMARY_FIELD_LABELS: Record<
     ["whyRelevant", "Research value"],
     ["limitations", "Scope and limits"],
   ],
+};
+
+/** Localized difference-type labels for the visible novelty line. */
+export const PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS: Record<
+  SummaryLanguage,
+  Record<PersonalNoveltyDifferenceType, string>
+> = {
+  zh: {
+    "new-task": "新任务",
+    "new-method": "新方法",
+    "new-dataset": "新数据集",
+    "new-experiment": "新实验",
+    "efficiency-result": "效率结果",
+    "counter-evidence": "反例证据",
+  },
+  en: {
+    "new-task": "new task",
+    "new-method": "new method",
+    "new-dataset": "new dataset",
+    "new-experiment": "new experiment",
+    "efficiency-result": "efficiency result",
+    "counter-evidence": "counter-evidence",
+  },
 };
 
 /**
@@ -134,6 +166,7 @@ export function renderPaperHeader(
   paper: DailySummaryAssemblyPaper,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
+  reportDate?: string,
 ): string[] {
   const detailLink = safeDetailLink(
     paper.id,
@@ -146,10 +179,90 @@ export function renderPaperHeader(
   return [
     ...leadingMarkers,
     `### ${normalizeMarkdownLine(paper.title)}${detailLink ? ` → ${detailLink}` : ""}`,
+    ...(paper.discoveryProvenance
+      ? [
+          renderDiscoveryProvenanceMarker(
+            paper.discoveryProvenance,
+            paper.id,
+            requireReportDate(reportDate),
+          ),
+          renderVisibleDiscoveryProvenance(paper.discoveryProvenance, language),
+        ]
+      : []),
+    ...(paper.personalNovelty
+      ? [
+          renderPersonalNoveltyMarker(
+            paper.personalNovelty,
+            paper.id,
+            requireReportDate(reportDate),
+          ),
+          renderVisiblePersonalNovelty(paper.personalNovelty, language),
+        ]
+      : []),
     `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
   ];
+}
+
+function renderVisibleDiscoveryProvenance(
+  provenance: NonNullable<DailySummaryAssemblyPaper["discoveryProvenance"]>,
+  language: SummaryLanguage,
+): string {
+  const manual = provenance.manualTopicTags.map(escapeDiscoveryProvenancePlainText);
+  const directions = provenance.directions.map((direction) => {
+    const representatives = direction.representatives.map((representative) =>
+      `${escapeDiscoveryProvenancePlainText(representative.title)} (${escapeDiscoveryProvenancePlainText(representative.paperKey)})`
+    ).join(language === "en" ? "; " : "；");
+    return `${escapeDiscoveryProvenancePlainText(direction.name)} [${representatives}]`;
+  });
+  const sources = [
+    ...(manual.length > 0
+      ? [language === "en" ? `manual topics: ${manual.join(", ")}` : `手动主题：${manual.join("、")}`]
+      : []),
+    ...(directions.length > 0
+      ? [language === "en"
+          ? `library directions: ${directions.join("; ")}`
+          : `个人文献库方向：${directions.join("；")}`]
+      : []),
+  ];
+  const depth = directions.length > 0
+    ? language === "en" ? "; evidence depth: metadata and abstract" : "；证据深度：元数据与摘要"
+    : "";
+  return language === "en"
+    ? `> Discovery source: ${sources.join("; ")}${depth}`
+    : `> 发现来源：${sources.join("；")}${depth}`;
+}
+
+/**
+ * Deterministic localized novelty line: localized difference-type label,
+ * named representative prior papers (paperKey + trusted title carried on the
+ * assembly paper), the explicit metadata-and-abstract evidence depth, and the
+ * bounded explanation. Every literal is escaped to plain text like the
+ * discovery-provenance projection.
+ */
+function renderVisiblePersonalNovelty(
+  novelty: NonNullable<DailySummaryAssemblyPaper["personalNovelty"]>,
+  language: SummaryLanguage,
+): string {
+  const typeLabel = PERSONAL_NOVELTY_DIFFERENCE_TYPE_LABELS[language][novelty.differenceType];
+  const basis = novelty.comparisonBasis.map((paperKey) => {
+    const title = novelty.comparisonBasisTitles[paperKey];
+    const name = title
+      ? escapeDiscoveryProvenancePlainText(title)
+      : escapeDiscoveryProvenancePlainText(paperKey);
+    return `${name} (${escapeDiscoveryProvenancePlainText(paperKey)})`;
+  }).join(language === "en" ? "; " : "；");
+  const depth = language === "en" ? "metadata and abstract" : "元数据与摘要";
+  const explanation = escapeDiscoveryProvenancePlainText(novelty.explanation);
+  return language === "en"
+    ? `> Personal novelty: ${typeLabel} vs. prior papers: ${basis}; evidence depth: ${depth}; ${explanation}`
+    : `> 个人新颖性：${typeLabel}，对比先验文献：${basis}；证据深度：${depth}；${explanation}`;
+}
+
+function requireReportDate(reportDate?: string): string {
+  if (!reportDate) throw new TypeError("report date is required for paper markers");
+  return reportDate;
 }
 
 export function renderStructuredFields(
@@ -166,8 +279,9 @@ export function renderFallbackBlock(
   originalAbstract: string,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
+  reportDate?: string,
 ): string {
-  const lines = renderPaperHeader(paper, language, leadingMarkers);
+  const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
   const warning = language === "en"
     ? `> **Summary unavailable.** Read the [original paper on arXiv](${arxivUrl}) directly.`
@@ -177,7 +291,9 @@ export function renderFallbackBlock(
   const abstract = normalizeMarkdownLine(originalAbstract);
   const headingIndex = leadingMarkers.length;
   lines.splice(
-    headingIndex + 1,
+    headingIndex + 1
+      + (paper.discoveryProvenance ? 2 : 0)
+      + (paper.personalNovelty ? 2 : 0),
     0,
     warning,
     `<!-- ${DAILY_SUMMARY_FALLBACK_MARKER_PREFIX}:${paper.id} -->`,

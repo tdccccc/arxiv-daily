@@ -18,6 +18,7 @@ import {
   runWindowTimeOptions,
   validateOutputDirectoryDraft,
 } from "../src/settings/tab";
+import { confirmEmbeddingMode } from "../src/library/modal";
 import { SettingsChangeService } from "../src/settings/change-service";
 
 const settingsTabSource = readFileSync(
@@ -99,6 +100,7 @@ function makeLegacyApiKeyTab(
     logger: { error: vi.fn() },
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
+    getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);
@@ -665,5 +667,50 @@ describe("run window time options", () => {
     });
     expect(isValidLocalTime("24:00")).toBe(false);
     expect(isValidLocalTime("9:00 AM")).toBe(false);
+  });
+});
+
+describe("confirmEmbeddingMode", () => {
+  beforeAll(() => {
+    const proto = HTMLElement.prototype as any;
+    proto.empty ??= function () { this.replaceChildren(); };
+    proto.setText ??= function (text: string) { this.textContent = text; };
+    proto.addClass ??= function (...classes: string[]) { this.classList.add(...classes); };
+    proto.createEl ??= function (tag: string, options: { cls?: string; text?: string; attr?: Record<string, string> } = {}) {
+      const element = document.createElement(tag);
+      if (options.cls) element.className = options.cls;
+      if (options.text !== undefined) element.textContent = options.text;
+      for (const [key, value] of Object.entries(options.attr ?? {})) element.setAttribute(key, value);
+      this.appendChild(element);
+      return element;
+    };
+    proto.createDiv ??= function (options: { cls?: string; text?: string } = {}) {
+      return this.createEl!("div", options);
+    };
+  });
+
+  it("returns remote when the remote button is clicked", async () => {
+    const { Modal } = await import("obsidian");
+    Modal.opened.length = 0;
+    const promise = confirmEmbeddingMode({} as any);
+    const modal = Modal.opened.at(-1)!;
+    [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Remote")!.click();
+    await expect(promise).resolves.toBe("remote");
+  });
+
+  it("keeps the local default when the modal is dismissed", async () => {
+    const { Modal } = await import("obsidian");
+    Modal.opened.length = 0;
+    const promise = confirmEmbeddingMode({} as any);
+    Modal.opened.at(-1)!.close();
+    await expect(promise).resolves.toBe("local");
+  });
+
+  it("wires the guided choice into the library connection flow once", () => {
+    expect(settingsTabSource).toContain("offerEmbeddingModeChoice()");
+    expect(settingsTabSource).toContain("confirmEmbeddingMode(this.app)");
+    expect(settingsTabSource).toContain("initialChoiceDone");
+    expect(settingsTabSource).toContain('"arXiv Daily: local embedding (offline)');
   });
 });

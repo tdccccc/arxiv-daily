@@ -1,4 +1,10 @@
 import type { StorageAdapter } from "../core/adapters";
+import {
+  normalizePaperDiscoveryProvenance,
+} from "../pipeline/discovery-provenance-marker";
+import type { PaperDiscoveryProvenance } from "../pipeline/personalized-paper-filter";
+import { normalizePersonalNovelty } from "../pipeline/personalized-novelty";
+import type { PersonalNovelty } from "../pipeline/personalized-novelty";
 import type { OutputSettings } from "../settings/types";
 import {
   portablePathCollisionKey,
@@ -15,7 +21,7 @@ import {
 } from "./paper-key";
 
 /** On-disk schema: map keys are paperKey (`source:externalId`). */
-export const PAPER_INBOX_SCHEMA_VERSION = 4;
+export const PAPER_INBOX_SCHEMA_VERSION = 5;
 
 export type PaperStatus =
   | "inbox"
@@ -69,6 +75,10 @@ export interface PaperIndexEntry {
   priority: PaperPriority;
   seenDates: string[];
   dailyReports: string[];
+  /** Occurrence projection keyed by normalized committed daily-report path. */
+  discoveryProvenanceByReport: Record<string, PaperDiscoveryProvenance>;
+  /** Validated personal-novelty occurrence projection keyed by normalized committed daily-report path. */
+  noveltyByReport: Record<string, PersonalNovelty>;
   /** Vault-relative note path; stem is externalId, not paperKey. */
   paperPath: string | null;
   arxivUrl: string;
@@ -335,6 +345,74 @@ export class PaperIndexStore {
         entry.dailyReports = appendUnique(entry.dailyReports, dailyReport);
       }
       await this.saveUnlocked(inbox);
+    });
+  }
+
+  async reconcileDailyReportOccurrenceProvenance(
+    dailyReport: string,
+    occurrences: Array<{ arxivId: string; provenance: PaperDiscoveryProvenance }>,
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const report = normalizeStoragePath(dailyReport);
+      const next = new Map<string, PaperDiscoveryProvenance>();
+      for (const occurrence of occurrences) {
+        const provenance = normalizePaperDiscoveryProvenance(occurrence.provenance);
+        if (!provenance) throw new PaperIndexError("invalid occurrence discovery provenance");
+        next.set(paperKeyFromArxivId(occurrence.arxivId), provenance);
+      }
+      let changed = 0;
+      for (const entry of Object.values(inbox.papers)) {
+        const provenance = next.get(entry.paperKey);
+        if (provenance) {
+          if (JSON.stringify(entry.discoveryProvenanceByReport[report]) !== JSON.stringify(provenance)) {
+            entry.discoveryProvenanceByReport[report] = provenance;
+            changed += 1;
+          }
+        } else if (Object.prototype.hasOwnProperty.call(entry.discoveryProvenanceByReport, report)) {
+          delete entry.discoveryProvenanceByReport[report];
+          changed += 1;
+        }
+      }
+      if (changed > 0) await this.saveUnlocked(inbox);
+      return changed;
+    });
+  }
+
+  /**
+   * Sets or clears the per-report personal-novelty occurrence for every indexed
+   * entry, mirroring reconcileDailyReportOccurrenceProvenance. Occurrences are
+   * strictly normalized; a malformed occurrence rejects the whole mutation so
+   * the derived index never persists partial projection state.
+   */
+  async reconcileDailyReportOccurrenceNovelty(
+    dailyReport: string,
+    occurrences: Array<{ arxivId: string; novelty: PersonalNovelty }>,
+  ): Promise<number> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      const report = normalizeStoragePath(dailyReport);
+      const next = new Map<string, PersonalNovelty>();
+      for (const occurrence of occurrences) {
+        const novelty = normalizePersonalNovelty(occurrence.novelty);
+        if (!novelty) throw new PaperIndexError("invalid occurrence personal novelty");
+        next.set(paperKeyFromArxivId(occurrence.arxivId), novelty);
+      }
+      let changed = 0;
+      for (const entry of Object.values(inbox.papers)) {
+        const novelty = next.get(entry.paperKey);
+        if (novelty) {
+          if (JSON.stringify(entry.noveltyByReport[report]) !== JSON.stringify(novelty)) {
+            entry.noveltyByReport[report] = novelty;
+            changed += 1;
+          }
+        } else if (Object.prototype.hasOwnProperty.call(entry.noveltyByReport, report)) {
+          delete entry.noveltyByReport[report];
+          changed += 1;
+        }
+      }
+      if (changed > 0) await this.saveUnlocked(inbox);
+      return changed;
     });
   }
 
@@ -840,6 +918,8 @@ function upsertEntry(
     dailyReports: input.dailyReport
       ? appendUnique(existing?.dailyReports ?? [], input.dailyReport)
       : existing?.dailyReports ?? [],
+    discoveryProvenanceByReport: existing?.discoveryProvenanceByReport ?? {},
+    noveltyByReport: existing?.noveltyByReport ?? {},
     paperPath,
     arxivUrl: resources.absUrl,
     pdfUrl: resources.pdfUrl,
@@ -876,6 +956,7 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
     obj.schemaVersion !== 1 &&
     obj.schemaVersion !== 2 &&
     obj.schemaVersion !== 3 &&
+    obj.schemaVersion !== 4 &&
     obj.schemaVersion !== PAPER_INBOX_SCHEMA_VERSION
   ) {
     throw new Error(`unsupported schemaVersion: ${obj.schemaVersion}`);
@@ -929,6 +1010,8 @@ function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
     priority,
     seenDates: stringArray(obj.seenDates),
     dailyReports: stringArray(obj.dailyReports),
+    discoveryProvenanceByReport: normalizeProvenanceByReport(obj.discoveryProvenanceByReport),
+    noveltyByReport: normalizeNoveltyByReport(obj.noveltyByReport),
     paperPath: obj.paperPath ? normalizeStoragePath(String(obj.paperPath)) : null,
     arxivUrl: resources?.absUrl ?? stringOr(obj.arxivUrl, ""),
     pdfUrl: resources?.pdfUrl ?? stringOr(obj.pdfUrl, ""),
@@ -1092,6 +1175,33 @@ function normalizeCategories(values: string[]): string[] {
   for (const value of values) {
     const category = value.trim();
     if (category && !out.includes(category)) out.push(category);
+  }
+  return out;
+}
+
+function normalizeProvenanceByReport(value: unknown): Record<string, PaperDiscoveryProvenance> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, PaperDiscoveryProvenance> = {};
+  for (const [path, raw] of Object.entries(value)) {
+    const normalizedPath = normalizeStoragePath(path);
+    const provenance = normalizePaperDiscoveryProvenance(raw);
+    if (normalizedPath && provenance) out[normalizedPath] = provenance;
+  }
+  return out;
+}
+
+/**
+ * Strict per-report novelty normalization: structurally invalid novelty records
+ * are omitted without failing the whole document (the discovery-provenance
+ * precedent); only valid occurrences survive into the derived index.
+ */
+function normalizeNoveltyByReport(value: unknown): Record<string, PersonalNovelty> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, PersonalNovelty> = {};
+  for (const [path, raw] of Object.entries(value)) {
+    const normalizedPath = normalizeStoragePath(path);
+    const novelty = normalizePersonalNovelty(raw);
+    if (normalizedPath && novelty) out[normalizedPath] = novelty;
   }
   return out;
 }

@@ -14,7 +14,31 @@ import {
   createDailyFilterCompatibilityFingerprint,
   deriveDailyFilterCheckpointPaths,
   prepareDailyFilterCheckpoint,
+  PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
+  NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
 } from "../src/services/daily-filter-checkpoint-store";
+import {
+  planPersonalizedFilterCalls,
+  preparePersonalizedFilterCheckpoint,
+  type PersonalizedDiscoveryInput,
+  type PersonalizedDirectionRecord,
+} from "../src/pipeline/personalized-paper-filter";
+import {
+  PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
+  PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
+  decodeNoveltyCheckpointRecords,
+  decodeNoveltyFingerprintInput,
+  fingerprintNoveltyCheckpointInput,
+  isPreparedNoveltyCheckpoint,
+  planPersonalNoveltyCalls,
+  prepareNoveltyCheckpoint,
+  type NoveltyCheckpointRecord,
+  type NoveltyDailyPaper,
+  type NoveltyRepresentativePaper,
+  type PersonalNoveltyMatchInput,
+  type PersonalNoveltyPaperOutcome,
+  type PersonalizedNoveltyInput,
+} from "../src/pipeline/personalized-novelty";
 import {
   DailyFilterCheckpointStore as ExportedDailyFilterCheckpointStore,
   buildDailyFilterCheckpointFingerprintInput as exportedBuildFingerprintInput,
@@ -104,10 +128,169 @@ function makeStore(storage: StorageAdapter, warning = vi.fn()) {
   });
 }
 
+const personalizedDiscovery: PersonalizedDiscoveryInput = {
+  directions: [{
+    id: "direction.001",
+    name: "Direction one",
+    description: "Strict personalized direction",
+    discoveryCues: ["strict discovery"],
+    representatives: [{
+      paperKey: "arxiv:2501.00001",
+      title: "Representative one",
+      evidenceDepth: "metadata-and-abstract",
+    }],
+  }],
+};
+
+function personalizedPrepared() {
+  const planned = planPersonalizedFilterCalls(papers, personalizedDiscovery);
+  if (!planned.ok) throw new Error("unexpected plan-too-large");
+  return preparePersonalizedFilterCheckpoint({ plan: planned.value, llm: compatibility().llm as any });
+}
+
+const personalizedResult: PersonalizedDirectionRecord[] = [
+  { paperKey: "arxiv:2608.00001", directionIds: ["direction.001"] },
+  { paperKey: "arxiv:2608.00002", directionIds: [] },
+];
+
 function recomputeDocumentFingerprint(document: any): void {
   document.fingerprint = `sha256:${sha256ForCheckpointTests(
     JSON.stringify(document.fingerprintInput),
   )}`;
+}
+
+function noveltyDailyPaper(index: number): NoveltyDailyPaper {
+  return {
+    paperKey: `arxiv:2608.${String(index).padStart(5, "0")}`,
+    title: `New paper ${index}`,
+    abstract: `Abstract ${index}`,
+  };
+}
+
+function noveltyRepresentative(
+  index: number,
+  overrides: Partial<NoveltyRepresentativePaper> = {},
+): NoveltyRepresentativePaper {
+  return {
+    paperKey: `arxiv:2501.${String(index).padStart(5, "0")}`,
+    title: `Prior paper ${index}`,
+    authors: [`Author ${index}`],
+    abstract: `Prior abstract ${index}`,
+    published: "2026-08-01T00:00:00.000Z",
+    categories: ["cs.AI", "cs.LG"],
+    ...overrides,
+  };
+}
+
+function noveltyInput(
+  overrides: Partial<PersonalizedNoveltyInput> = {},
+): PersonalizedNoveltyInput {
+  return {
+    papers: [noveltyDailyPaper(1)],
+    representatives: [noveltyRepresentative(1), noveltyRepresentative(2), noveltyRepresentative(3)],
+    ...overrides,
+  };
+}
+
+function noveltyMatches(
+  overrides: Partial<PersonalNoveltyMatchInput> = {},
+): PersonalNoveltyMatchInput {
+  return {
+    paperMatches: [{
+      paperKey: "arxiv:2608.00001",
+      directionIds: ["direction.001", "direction.002"],
+    }],
+    directionRepresentatives: [
+      { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
+      { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002", "arxiv:2501.00003"] },
+    ],
+    ...overrides,
+  };
+}
+
+function noveltyPrepared(overrides: {
+  input?: Partial<PersonalizedNoveltyInput>;
+  matches?: Partial<PersonalNoveltyMatchInput>;
+  llm?: Record<string, unknown>;
+  promptContractVersion?: number;
+  resultContractVersion?: number;
+} = {}) {
+  const input = noveltyInput(overrides.input);
+  const matches = noveltyMatches(overrides.matches);
+  const planned = planPersonalNoveltyCalls(input, matches);
+  if (!planned.ok) throw new Error("unexpected novelty plan-too-large");
+  return prepareNoveltyCheckpoint({
+    plan: planned.value,
+    matches,
+    llm: (overrides.llm ?? compatibility().llm) as any,
+    promptContractVersion: overrides.promptContractVersion,
+    resultContractVersion: overrides.resultContractVersion,
+  });
+}
+
+const noveltyRecord: NoveltyCheckpointRecord = {
+  paperKey: "arxiv:2608.00001",
+  status: "novelty",
+  novelty: {
+    differenceType: "new-method",
+    comparisonBasis: ["arxiv:2501.00001"],
+    evidenceDepth: "metadata-and-abstract",
+    explanation: "Introduces a method absent from the representative abstracts.",
+  },
+};
+
+const noveltyOutcome: PersonalNoveltyPaperOutcome = {
+  paperKey: "arxiv:2608.00001",
+  status: "novelty",
+  novelty: noveltyRecord.novelty,
+};
+
+const noNoveltyOutcome: PersonalNoveltyPaperOutcome = {
+  paperKey: "arxiv:2608.00001",
+  status: "no-novelty",
+  reason: "validation-exhausted",
+};
+
+const secondPaperNoNoveltyOutcome: PersonalNoveltyPaperOutcome = {
+  paperKey: "arxiv:2608.00002",
+  status: "no-novelty",
+  reason: "validation-exhausted",
+};
+
+function noveltyInputTwoPapers(): PersonalizedNoveltyInput {
+  return {
+    papers: [noveltyDailyPaper(1), noveltyDailyPaper(2)],
+    representatives: [noveltyRepresentative(1), noveltyRepresentative(2)],
+  };
+}
+
+function noveltyMatchesTwoPapers(): PersonalNoveltyMatchInput {
+  return {
+    paperMatches: [
+      { paperKey: "arxiv:2608.00001", directionIds: ["direction.001"] },
+      { paperKey: "arxiv:2608.00002", directionIds: ["direction.002"] },
+    ],
+    directionRepresentatives: [
+      { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
+      { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002"] },
+    ],
+  };
+}
+
+function noveltyPreparedTwoPapers(overrides: {
+  llm?: Record<string, unknown>;
+  promptContractVersion?: number;
+  resultContractVersion?: number;
+} = {}) {
+  const planned = planPersonalNoveltyCalls(noveltyInputTwoPapers(), noveltyMatchesTwoPapers());
+  if (!planned.ok) throw new Error("unexpected novelty plan-too-large");
+  return prepareNoveltyCheckpoint({
+    plan: planned.value,
+    matches: noveltyMatchesTwoPapers(),
+    llm: (overrides.llm ?? compatibility().llm) as any,
+    promptContractVersion: overrides.promptContractVersion,
+    resultContractVersion: overrides.resultContractVersion,
+  });
 }
 
 describe("daily filter checkpoint public contract", () => {
@@ -238,6 +421,10 @@ describe("DailyFilterCheckpointStore", () => {
   it("derives its independent date-scoped path and validates dates", () => {
     expect(deriveDailyFilterCheckpointPaths({ normalizePath: (path) => path }, DEFAULT_SETTINGS.output, reportDate)).toEqual({
       directory: "arxiv-daily/.index/filter-checkpoints", documentPath, backupPath,
+      personalizedDocumentPath: "arxiv-daily/.index/filter-checkpoints/2026-08-01.personalized.json",
+      personalizedBackupPath: "arxiv-daily/.index/filter-checkpoints/2026-08-01.personalized.json.bak",
+      noveltyDocumentPath: "arxiv-daily/.index/filter-checkpoints/2026-08-01.novelty.json",
+      noveltyBackupPath: "arxiv-daily/.index/filter-checkpoints/2026-08-01.novelty.json.bak",
     });
     expect(() => deriveDailyFilterCheckpointPaths({ normalizePath: (path) => path }, DEFAULT_SETTINGS.output, "2026-02-30")).toThrow(/invalid checkpoint report date/);
   });
@@ -474,14 +661,451 @@ describe("DailyFilterCheckpointStore", () => {
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
   });
 
-  it("removes primary, backup, and temp artifacts", async () => {
+  it("persists and reconstructs a strict independent personalized checkpoint privately", async () => {
+    const { files, storage } = makeStorage();
+    const writeTextWithMode = vi.fn(async (path: string, content: string) => {
+      files[path] = content;
+    });
+    storage.writeTextWithMode = writeTextWithMode;
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+
+    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+
+    expect(JSON.parse(files[paths.personalizedDocumentPath]!)).toMatchObject({
+      schemaVersion: PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
+      reportDate,
+      result: personalizedResult,
+    });
+    expect(writeTextWithMode).toHaveBeenCalledWith(
+      expect.stringContaining(".personalized.json.tmp"), expect.any(String), 0o600,
+    );
+    expect(await makeStore(storage).lookupPersonalizedReusable(
+      reportDate, personalizedPrepared(),
+    )).toEqual(personalizedResult);
+  });
+
+  it("rejects arbitrary snapshots, unknown/duplicate/partial results, and fingerprint tampering", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const snapshot = personalizedPrepared();
+    await expect(store.savePersonalized(
+      reportDate, JSON.parse(JSON.stringify(snapshot)) as any, personalizedResult,
+    ))
+      .rejects.toThrow(/prepared exact call-plan snapshot/);
+    for (const invalid of [
+      personalizedResult.slice(0, 1),
+      [{ paperKey: "arxiv:2608.99999", directionIds: [] }, personalizedResult[1]],
+      [{ paperKey: personalizedResult[0]!.paperKey, directionIds: ["unknown"] }, personalizedResult[1]],
+      [{ ...personalizedResult[0], extra: true }, personalizedResult[1]],
+    ]) {
+      await expect(store.savePersonalized(reportDate, snapshot, invalid))
+        .rejects.toThrow(/invalid personalized filter checkpoint/);
+    }
+    await store.savePersonalized(reportDate, snapshot, personalizedResult);
+    const paths = store.pathsFor(reportDate);
+    const document = JSON.parse(files[paths.personalizedDocumentPath]!);
+    document.fingerprintInput.plan.batches[0].request.messages[1].content = "tampered";
+    document.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(document.fingerprintInput))}`;
+    files[paths.personalizedDocumentPath] = JSON.stringify(document);
+    expect(await makeStore(storage).loadPersonalized(reportDate)).toBeNull();
+  });
+
+  it("recovers personalized backup, rotates atomically, and serializes same-path saves", async () => {
+    const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+    const first = files[paths.personalizedDocumentPath]!;
+    await Promise.all([
+      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), personalizedResult),
+      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), [
+        { ...personalizedResult[0]!, directionIds: [] }, personalizedResult[1]!,
+      ]),
+    ]);
+    expect(files[paths.personalizedBackupPath]).toBeTruthy();
+    expect(files[`${paths.personalizedDocumentPath}.tmp`]).toBeUndefined();
+    expect(files[`${paths.personalizedBackupPath}.tmp`]).toBeUndefined();
+    files[paths.personalizedBackupPath] = first;
+    files[paths.personalizedDocumentPath] = "corrupt";
+    expect(await makeStore(storage).lookupPersonalizedReusable(
+      reportDate, personalizedPrepared(),
+    )).toEqual(personalizedResult);
+  });
+
+  it("fails personalized lookup closed on unreadable primary", async () => {
+    const { files, storage, readText } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+    files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
+    readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
+    await expect(store.lookupPersonalizedReusable(reportDate, personalizedPrepared()))
+      .rejects.toThrow(/cannot read personalized filter checkpoint/);
+    expect(readText).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes manual and personalized primary, backup, and temp artifacts", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.save(reportDate, prepared(), result);
+    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+    const paths = store.pathsFor(reportDate);
     files[backupPath] = files[documentPath]!;
-    files[`${documentPath}.tmp`] = "tmp";
-    files[`${backupPath}.tmp`] = "tmp";
+    files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
+    for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
+      paths.personalizedBackupPath]) files[`${path}.tmp`] = "tmp";
     await store.removeAll(reportDate);
     expect(Object.keys(files)).toEqual([]);
+  });
+});
+
+describe("novelty filter checkpoint", () => {
+  it("persists every planned paper's terminal outcome privately with strict schema and reuse", async () => {
+    const { files, storage } = makeStorage();
+    const writeTextWithMode = vi.fn(async (path: string, content: string) => {
+      files[path] = content;
+    });
+    storage.writeTextWithMode = writeTextWithMode;
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+
+    await store.saveNovelty(reportDate, noveltyPreparedTwoPapers(), [
+      noveltyOutcome, secondPaperNoNoveltyOutcome,
+    ]);
+
+    const persisted = JSON.parse(files[paths.noveltyDocumentPath]!);
+    expect(persisted).toMatchObject({
+      schemaVersion: NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
+      reportDate,
+      result: [
+        noveltyRecord,
+        { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "validation-exhausted" },
+      ],
+    });
+    // Typed no-novelty terminal outcomes are durable state, unlike degraded
+    // transport/output-limit outcomes which are never persisted.
+    expect(JSON.stringify(persisted)).toContain("validation-exhausted");
+    expect(JSON.stringify(persisted)).not.toContain("never-persist");
+    expect(JSON.stringify(persisted)).not.toContain("example.test");
+    expect(writeTextWithMode).toHaveBeenCalledWith(
+      expect.stringContaining(".novelty.json.tmp"), expect.any(String), 0o600,
+    );
+    expect(await makeStore(storage).lookupNoveltyReusable(
+      reportDate, noveltyPreparedTwoPapers(),
+    )).toEqual([
+      noveltyRecord,
+      { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "validation-exhausted" },
+    ]);
+    expect(await makeStore(storage).loadNovelty(reportDate)).toMatchObject({
+      schemaVersion: NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
+      result: [
+        noveltyRecord,
+        { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "validation-exhausted" },
+      ],
+    });
+  });
+
+  it("misses on any rendered identity change: basis evidence, directions, model, contracts", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    const hit = () => makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared());
+    expect(await hit()).toEqual([noveltyRecord]);
+
+    // Representative evidence change alters the rendered basis evidence.
+    const evidenceInput = noveltyInput({
+      representatives: [noveltyRepresentative(1, { abstract: "changed evidence" }),
+        noveltyRepresentative(2), noveltyRepresentative(3)],
+    });
+    const evidencePlanned = planPersonalNoveltyCalls(evidenceInput, noveltyMatches());
+    if (!evidencePlanned.ok) throw new Error("unexpected plan-too-large");
+    const evidencePrepared = prepareNoveltyCheckpoint({
+      plan: evidencePlanned.value, matches: noveltyMatches(),
+      llm: compatibility().llm as any,
+    });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, evidencePrepared)).toBeNull();
+
+    // Direction identity change (direction→representatives) invalidates.
+    const directionPrepared = noveltyPrepared({
+      matches: {
+        directionRepresentatives: [
+          { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
+          { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002"] },
+        ],
+      },
+    });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, directionPrepared)).toBeNull();
+
+    // Model identity change invalidates.
+    const modelPrepared = noveltyPrepared({ llm: { ...compatibility().llm, model: "model-b" } });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, modelPrepared)).toBeNull();
+
+    // Contract version changes invalidate (and cannot be persisted as new).
+    const contractPrepared = noveltyPrepared({
+      promptContractVersion: PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION + 1,
+    });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, contractPrepared)).toBeNull();
+    await expect(store.saveNovelty(reportDate, contractPrepared, [noveltyOutcome]))
+      .rejects.toThrow(/unsupported personal novelty contract/);
+  });
+
+  it("does not invalidate on unrelated catalog entries or non-rendered changes", async () => {
+    const { storage } = makeStorage();
+    await makeStore(storage).saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    // An unreferenced representative and an unmatched daily paper are not part
+    // of any rendered call, so the fingerprint is unchanged.
+    const extended = noveltyPrepared({
+      input: {
+        papers: [noveltyDailyPaper(1), noveltyDailyPaper(2)],
+        representatives: [noveltyRepresentative(1), noveltyRepresentative(2),
+          noveltyRepresentative(3), noveltyRepresentative(4)],
+      },
+    });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, extended))
+      .toEqual([noveltyRecord]);
+    // API key is not part of the generation identity.
+    const otherSecret = noveltyPrepared({
+      llm: { ...compatibility().llm, apiKey: "different-secret" },
+    });
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, otherSecret))
+      .toEqual([noveltyRecord]);
+  });
+
+  it("rejects caller-constructed snapshots, unknown paperKeys, and malformed novelty", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const snapshot = noveltyPrepared();
+    await expect(store.saveNovelty(
+      reportDate, JSON.parse(JSON.stringify(snapshot)) as any, [noveltyOutcome],
+    )).rejects.toThrow(/prepared exact call-plan snapshot/);
+    await expect(store.lookupNoveltyReusable(
+      reportDate, JSON.parse(JSON.stringify(snapshot)) as any,
+    )).rejects.toThrow(/prepared exact call-plan snapshot/);
+    for (const invalid of [
+      [{ ...noveltyOutcome, paperKey: "arxiv:2608.99999" }],
+      [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, differenceType: "invented" } }],
+      [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, comparisonBasis: ["arxiv:2501.99999"] } }],
+      [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, evidenceDepth: "full-text" } }],
+      [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, explanation: "" } }],
+      [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, extra: true } }],
+      // Transport/output-limit/checkpoint/input-invalid reasons are never durable.
+      [{ ...noveltyOutcome, status: "no-novelty", reason: "transport" }],
+      // A call entry can only terminate validation-exhausted, never plan-too-large.
+      [{ ...noveltyOutcome, status: "no-novelty", reason: "plan-too-large" }],
+    ]) {
+      await expect(store.saveNovelty(reportDate, snapshot, invalid))
+        .rejects.toThrow(/invalid personal novelty checkpoint/);
+    }
+    const paths = store.pathsFor(reportDate);
+    expect(files[paths.noveltyDocumentPath]).toBeUndefined();
+  });
+
+  it("strictly revalidates persisted records on load and treats tampering as corrupt", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    const document = JSON.parse(files[paths.noveltyDocumentPath]!);
+    document.result[0].novelty.explanation = "tampered trailing space ";
+    files[paths.noveltyDocumentPath] = JSON.stringify(document);
+    expect(await makeStore(storage).loadNovelty(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared())).toBeNull();
+  });
+
+  it("recovers a valid backup, misses on corrupt both, and fails closed on unreadable", async () => {
+    const { files, storage, readText } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    files[paths.noveltyBackupPath] = files[paths.noveltyDocumentPath]!;
+    files[paths.noveltyDocumentPath] = "corrupt";
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .toEqual([noveltyRecord]);
+    files[paths.noveltyBackupPath] = "{bad-backup";
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared())).toBeNull();
+    files[paths.noveltyDocumentPath] = "still corrupt";
+    files[paths.noveltyBackupPath] = "still bad";
+    readText.mockClear();
+    readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
+    await expect(store.lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .rejects.toThrow(/cannot read personal novelty checkpoint/);
+    expect(readText).toHaveBeenCalledTimes(1);
+  });
+
+  it("rotates novelty backups atomically and cleans temp artifacts", async () => {
+    const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    const first = files[paths.noveltyDocumentPath]!;
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    expect(files[paths.noveltyBackupPath]).toBe(first);
+    expect(files[`${paths.noveltyDocumentPath}.tmp`]).toBeUndefined();
+    expect(files[`${paths.noveltyBackupPath}.tmp`]).toBeUndefined();
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .toEqual([noveltyRecord]);
+  });
+
+  it("serializes same-path novelty saves and permits replacement from a valid backup", async () => {
+    const { files, storage } = makeStorage();
+    await Promise.all([
+      makeStore(storage).saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]),
+      makeStore(storage).saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]),
+    ]);
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .toEqual([noveltyRecord]);
+    const paths = makeStore(storage).pathsFor(reportDate);
+    files[paths.noveltyBackupPath] = files[paths.noveltyDocumentPath]!;
+    files[paths.noveltyDocumentPath] = "corrupt";
+    await makeStore(storage).saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .toEqual([noveltyRecord]);
+  });
+
+  it("rejects a result array longer than the planned call entries", async () => {
+    const { storage } = makeStorage();
+    const store = makeStore(storage);
+    const snapshot = noveltyPreparedTwoPapers();
+    await expect(store.saveNovelty(reportDate, snapshot, [
+      noveltyOutcome,
+      secondPaperNoNoveltyOutcome,
+      { ...noveltyOutcome, paperKey: "arxiv:2608.00003", novelty: {
+        ...noveltyRecord.novelty, comparisonBasis: ["arxiv:2501.00001"],
+      } },
+    ])).rejects.toThrow(/exceeds the planned call entries/);
+  });
+
+  it("rejects partial persisted results at load and replaces them with complete coverage", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    await store.saveNovelty(reportDate, noveltyPreparedTwoPapers(), [
+      noveltyOutcome, secondPaperNoNoveltyOutcome,
+    ]);
+    const document = JSON.parse(files[paths.noveltyDocumentPath]!);
+    // Drop the second paper's terminal outcome: partial coverage must never be
+    // reused as a hit.
+    document.result = [document.result[0]];
+    files[paths.noveltyDocumentPath] = JSON.stringify(document);
+    expect(await makeStore(storage).loadNovelty(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupNoveltyReusable(
+      reportDate, noveltyPreparedTwoPapers(),
+    )).toBeNull();
+    await makeStore(storage).saveNovelty(reportDate, noveltyPreparedTwoPapers(), [
+      noveltyOutcome, secondPaperNoNoveltyOutcome,
+    ]);
+    expect(await makeStore(storage).lookupNoveltyReusable(
+      reportDate, noveltyPreparedTwoPapers(),
+    )).toEqual([
+      noveltyRecord,
+      { paperKey: "arxiv:2608.00002", status: "no-novelty", reason: "validation-exhausted" },
+    ]);
+  });
+
+  it("never serves the original identity after recomputed fingerprint identity tampering", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    const snapshot = noveltyPrepared();
+    await store.saveNovelty(reportDate, snapshot, [noveltyOutcome]);
+    const document = JSON.parse(files[paths.noveltyDocumentPath]!);
+    document.fingerprintInput.matches.directionRepresentatives[0].representativePaperKeys =
+      ["arxiv:2501.00003"];
+    document.fingerprint = fingerprintNoveltyCheckpointInput(document.fingerprintInput);
+    files[paths.noveltyDocumentPath] = JSON.stringify(document);
+    // The tampered document is internally consistent (its fingerprint
+    // recomputes) but its identity no longer matches the original prepared
+    // snapshot, so it can never be reused for the original rendered calls.
+    expect(document.fingerprint).not.toBe(snapshot.fingerprint);
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, snapshot)).toBeNull();
+  });
+
+  it("removes novelty artifacts together with manual and personalized artifacts", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.save(reportDate, prepared(), result);
+    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+    const paths = store.pathsFor(reportDate);
+    for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
+      paths.personalizedBackupPath, paths.noveltyDocumentPath, paths.noveltyBackupPath]) {
+      files[`${path}.tmp`] = "tmp";
+    }
+    files[backupPath] = files[documentPath]!;
+    files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
+    files[paths.noveltyBackupPath] = files[paths.noveltyDocumentPath]!;
+    await store.removeAll(reportDate);
+    expect(Object.keys(files)).toEqual([]);
+  });
+
+  it("exposes strict record decoding and public snapshot branding helpers", () => {
+    const planned = planPersonalNoveltyCalls(noveltyInput(), noveltyMatches());
+    if (!planned.ok) throw new Error("unexpected plan-too-large");
+    expect(decodeNoveltyCheckpointRecords([noveltyRecord], planned.value)).toEqual({
+      ok: true,
+      value: [noveltyRecord],
+    });
+    expect(decodeNoveltyCheckpointRecords(
+      [noveltyRecord, noveltyRecord], planned.value,
+    )).toMatchObject({ ok: false });
+    expect(decodeNoveltyCheckpointRecords(
+      [{ ...noveltyRecord, paperKey: "arxiv:2608.00002" }], planned.value,
+    )).toMatchObject({ ok: false, reason: expect.stringContaining("unknown or unplanned") });
+    expect(decodeNoveltyCheckpointRecords("not-an-array", planned.value))
+      .toMatchObject({ ok: false });
+    expect(decodeNoveltyCheckpointRecords([], planned.value))
+      .toMatchObject({ ok: false, reason: expect.stringContaining("cover every planned paper") });
+    // A call entry can only terminate validation-exhausted, never plan-too-large.
+    expect(decodeNoveltyCheckpointRecords([
+      { paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "plan-too-large" },
+    ], planned.value)).toMatchObject({ ok: false, reason: expect.stringContaining("planned entry") });
+    const twoPapers = planPersonalNoveltyCalls(noveltyInputTwoPapers(), noveltyMatchesTwoPapers());
+    if (!twoPapers.ok) throw new Error("unexpected plan-too-large");
+    expect(decodeNoveltyCheckpointRecords([
+      noveltyRecord, secondPaperNoNoveltyOutcome,
+    ], twoPapers.value)).toEqual({
+      ok: true,
+      value: [noveltyRecord, secondPaperNoNoveltyOutcome],
+    });
+    // Partial coverage of a two-paper plan is invalid (treated as a miss).
+    expect(decodeNoveltyCheckpointRecords([noveltyRecord], twoPapers.value))
+      .toMatchObject({ ok: false, reason: expect.stringContaining("cover every planned paper") });
+    // More records than planned call entries are rejected by the bound.
+    expect(decodeNoveltyCheckpointRecords([
+      noveltyRecord, secondPaperNoNoveltyOutcome,
+      { ...noveltyRecord, paperKey: "arxiv:2608.00003" },
+    ], twoPapers.value)).toMatchObject({ ok: false, reason: expect.stringContaining("exceeds the planned call entries") });
+    const snapshot = noveltyPrepared();
+    expect(isPreparedNoveltyCheckpoint(snapshot)).toBe(true);
+    expect(isPreparedNoveltyCheckpoint(JSON.parse(JSON.stringify(snapshot)))).toBe(false);
+    expect(snapshot.fingerprint).toBe(fingerprintNoveltyCheckpointInput(snapshot.fingerprintInput));
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.fingerprintInput)).toBe(true);
+    expect(() => prepareNoveltyCheckpoint({
+      plan: JSON.parse(JSON.stringify(planned.value)),
+      matches: noveltyMatches(),
+      llm: compatibility().llm as any,
+    })).toThrow(/exact prepared call plan/);
+  });
+
+  it("rejects a plan whose request options drift from the bounded call contract", async () => {
+    const planned = planPersonalNoveltyCalls(noveltyInput(), noveltyMatches());
+    if (!planned.ok) throw new Error("unexpected plan-too-large");
+    const tampered = JSON.parse(JSON.stringify(planned.value));
+    tampered.entries[0].request.options.maxCompletionTokens = 1;
+    expect(decodeNoveltyFingerprintInput({
+      fingerprintVersion: 1,
+      promptContractVersion: PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
+      resultContractVersion: PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
+      matches: noveltyMatches(),
+      plan: tampered,
+      generation: {
+        provider: "custom",
+        endpointDigest: `sha256:${"a".repeat(64)}`,
+        model: "model-a",
+        mode: { kind: "temperature", temperature: 0 },
+      },
+    })).toBeNull();
   });
 });

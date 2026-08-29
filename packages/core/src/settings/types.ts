@@ -9,6 +9,38 @@ export interface LlmSettings {
   reasoningEffort: string;
 }
 
+export type EmbeddingMode = "local" | "remote";
+
+/**
+ * Embedding backend for the personal library full-text knowledge base
+ * (ADR 0008). `local` embeds offline with the bundled multilingual-e5-small
+ * model; `remote` sends full-text chunks to an OpenAI-compatible embeddings
+ * endpoint (requires full-text processing consent).
+ */
+export interface EmbeddingSettings {
+  mode: EmbeddingMode;
+  provider: string;
+  /** OpenAI-compatible embeddings endpoint base URL, e.g. `https://api.openai.com/v1`. */
+  baseUrl: string;
+  apiKey: string;
+  /** Model name sent to the endpoint, e.g. `text-embedding-3-small`. */
+  model: string;
+  /** Expected vector width of the remote model, e.g. 1536. */
+  dimension: number;
+  /** Whether the first-time local/remote choice was already offered (ADR 0008). */
+  initialChoiceDone: boolean;
+}
+
+/** Explicit opt-in configuration for a local structured PDF parser sidecar. */
+export interface LocalPdfParserSidecarSettings {
+  /** Disabled by default: no capability probe or PDF transfer occurs. */
+  enabled: boolean;
+  /** Loopback capability endpoint, with no query, hash, or credentials. */
+  capabilitiesUrl: string;
+  /** Same-origin loopback endpoint that accepts one PDF byte buffer. */
+  parseUrl: string;
+}
+
 export interface Topic {
   id: string;
   name: string;
@@ -94,6 +126,8 @@ export interface PluginSettings {
   schedule: ScheduleSettings;
   advanced: AdvancedSettings;
   email: EmailSettings;
+  embedding: EmbeddingSettings;
+  pdfParserSidecar: LocalPdfParserSidecarSettings;
 }
 
 export type RunStatus =

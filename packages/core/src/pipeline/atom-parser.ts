@@ -2,6 +2,7 @@ import type { MarkupParser } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
 
 export interface AtomPaperMeta extends PaperMeta {
+  authorNames: string[];
   published: string;
   updated: string;
   primaryCategory: string;
@@ -61,6 +62,7 @@ export function parseAtomPapers(
       id: baseId,
       title,
       authors: formatAuthors(authors),
+      authorNames: authors,
       abstract,
       published: text(entry.querySelector("published")),
       updated: text(entry.querySelector("updated")),

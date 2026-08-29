@@ -3,6 +3,10 @@ import type ArxivDailyPlugin from "../main";
 import { todayInTz, formatDate } from "@arxiv-daily/core";
 import { validateFilterConfig, validateLlmConfig } from "@arxiv-daily/core";
 import { chooseModal } from "./services/modal";
+import {
+  formatFullTextRuntimeDiagnostics,
+  summarizeFullTextRuntimeDiagnostics,
+} from "./services/fulltext-runtime-diagnostics";
 import { normalizeArxivId } from "@arxiv-daily/core";
 import {
   type PaperPriority,
@@ -13,6 +17,11 @@ import { ensurePaperNote } from "./services/paper-note";
 import { bindEnterToButton, openDatePickerModal } from "./date-picker-modal";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
 import { buildSafePluginDiagnosticsReport } from "./services/paper-index-diagnostics";
+import {
+  renderLibrarySearchBlock,
+  type LibrarySearchBlockOptions,
+} from "./dashboard/library-search-block";
+import type { LibraryFullTextMatch } from "./library/fulltext-results";
 
 export { bindEnterToButton, isValidCalendarDate } from "./date-picker-modal";
 export {
@@ -378,6 +387,163 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "review-reading-candidates",
+    name: "Review reading candidates",
+    callback: () => {
+      try {
+        plugin.openReadingCandidatesReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open reading candidates review", error);
+        notice("arXiv Daily: reading candidates review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "review-personal-library-directions",
+    name: "Review personal library directions",
+    callback: () => {
+      try {
+        plugin.openPersonalLibraryDirectionReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open personal library direction review", error);
+        notice("arXiv Daily: direction review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "check-incremental-direction-updates",
+    name: "Check incremental direction updates",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: checking incremental direction updates…");
+          try {
+            const summary = await plugin.runIncrementalDirectionUpdate();
+            const pending = summary.pendingAuthorizationBuffered > 0
+              ? `, ${summary.pendingAuthorizationBuffered} awaiting model authorization`
+              : "";
+            const superseded = summary.superseded > 0
+              ? `, ${summary.superseded} un-reviewed suggestion(s) superseded by new evidence`
+              : "";
+            notice(
+              `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
+              + `stored (${summary.attachments} attachment(s)), `
+              + `${summary.buffered} paper(s) buffered${pending}${superseded}`,
+              10_000,
+            );
+          } catch (error) {
+            plugin.logger.error("commands: incremental direction update failed", error);
+            notice(`arXiv Daily: incremental update failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "check incremental direction updates",
+      ),
+  });
+
+  plugin.addCommand({
+    id: "review-incremental-suggestions",
+    name: "Review incremental direction suggestions",
+    callback: () => {
+      try {
+        plugin.openPersonalLibraryDirectionReview();
+      } catch (error) {
+        plugin.logger.error("commands: failed to open incremental suggestion review", error);
+        notice("arXiv Daily: suggestion review could not be opened. Try again.", 10_000);
+      }
+    },
+  });
+
+  plugin.addCommand({
+    id: "index-personal-library-fulltext",
+    name: "Index personal library full text (local embeddings)",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: indexing personal library full text…");
+          try {
+            const summary = await plugin.indexPersonalLibraryFullText();
+            const refreshed = summary.titlesRefreshed > 0
+              ? `, ${summary.titlesRefreshed} titles refreshed`
+              : "";
+            notice(
+              `arXiv Daily: full-text index — ${summary.indexed} indexed, `
+              + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}`,
+              10_000,
+            );
+          } catch (error) {
+            plugin.logger.error("commands: personal library full-text indexing failed", error);
+            notice(`arXiv Daily: full-text indexing failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "index personal library full text",
+      ),
+  });
+
+  plugin.addCommand({
+    id: "search-personal-library-fulltext",
+    name: "Search personal library full text…",
+    callback: () =>
+      new FullTextQueryModal(plugin.app, (query) => {
+        if (!query) return;
+        runDetached(
+          (async () => {
+            try {
+              const matches = await plugin.searchPersonalLibraryFullText(query);
+              if (matches.length === 0) {
+                notice("arXiv Daily: no similar papers found in the full-text index", 10_000);
+                return;
+              }
+              new FullTextSearchResultsModal(plugin.app, matches, {
+                openLibraryPdf: async (match) => {
+                  if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
+                  await plugin.openPersonalLibraryFullTextEvidence({
+                    paperKey: match.paperKey,
+                    filePath: match.filePath,
+                  });
+                },
+                onActionError: (error, action) => {
+                  plugin.logger.error(`commands: ${action.toLowerCase()} failed for library evidence`, error);
+                  notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
+                },
+              }).open();
+            } catch (error) {
+              plugin.logger.error("commands: personal library full-text search failed", error);
+              notice(`arXiv Daily: full-text search failed: ${errorMessage(error)}`, 10_000);
+            }
+          })(),
+          "search personal library full text",
+        );
+      }, notice).open(),
+  });
+
+  plugin.addCommand({
+    id: "diagnose-fulltext-runtime",
+    name: "Diagnose full-text runtime (pdf.js + embeddings)",
+    callback: () =>
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: diagnosing full-text runtime…");
+          try {
+            const report = await plugin.diagnoseFullTextRuntime();
+            const text = formatFullTextRuntimeDiagnostics(report);
+            plugin.logger.info(`full-text runtime diagnostics:\n${text}`);
+            notice(
+              `arXiv Daily: full-text runtime — ${summarizeFullTextRuntimeDiagnostics(report)}`,
+              15_000,
+            );
+            new FullTextRuntimeDiagnosticsModal(plugin.app, text).open();
+          } catch (error) {
+            plugin.logger.error("commands: full-text runtime diagnostics failed", error);
+            notice(`arXiv Daily: full-text runtime diagnostics failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "diagnose full-text runtime",
+      ),
+  });
+
+  plugin.addCommand({
     id: "show-state",
     name: "Show recent run state",
     callback: () => new StateModal(plugin.app, plugin).open(),
@@ -475,6 +641,74 @@ class ArxivIdModal extends Modal {
     if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
   }
   onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class FullTextQueryModal extends Modal {
+  private value = "";
+  constructor(
+    app: App,
+    private onSubmit: (query: string | null) => void,
+    private notice: CommandNotice,
+  ) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Search personal library full text" });
+    let inputEl: HTMLInputElement | null = null;
+    let submitButton: HTMLButtonElement | null = null;
+    new Setting(contentEl)
+      .setName("Query")
+      .setDesc("A research question or description; matched against local full-text embeddings")
+      .addText((t) => {
+        inputEl = t.inputEl;
+        t.setPlaceholder("e.g. graph neural networks for node classification")
+          .onChange((v) => {
+            this.value = v.trim();
+          });
+      });
+    new Setting(contentEl).addButton((b) => {
+      submitButton = b.buttonEl;
+      b
+        .setButtonText("Search")
+        .setCta()
+        .onClick(() => {
+          if (!this.value) {
+            this.notice("Please enter a query");
+            return;
+          }
+          this.close();
+          this.onSubmit(this.value);
+        });
+    });
+    if (inputEl && submitButton) bindEnterToButton(inputEl, submitButton);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+export class FullTextSearchResultsModal extends Modal {
+  constructor(
+    app: App,
+    private readonly matches: readonly LibraryFullTextMatch[],
+    private readonly options: LibrarySearchBlockOptions,
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.createEl("h2", { text: "Full-text search results" });
+    const results = this.contentEl.createDiv({ cls: "arxiv-daily-fulltext-search-results" });
+    renderLibrarySearchBlock(results, {
+      kind: "matches",
+      matches: this.matches,
+    }, this.options);
+  }
+
+  onClose(): void {
     this.contentEl.empty();
   }
 }
@@ -700,6 +934,45 @@ export class DiagnosticsModal extends Modal {
             new Notice("Diagnostics copied");
           } catch (e) {
             this.plugin.logger.warn("Could not copy diagnostics; text is selectable", e);
+            textarea.select();
+            new Notice("Could not copy diagnostics; text is selectable");
+          }
+        }),
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class FullTextRuntimeDiagnosticsModal extends Modal {
+  constructor(app: App, private readonly report: string) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "arXiv Daily full-text runtime diagnostics" });
+    const textarea = contentEl.createEl("textarea", {
+      cls: "arxiv-daily-diagnostics-textarea",
+    });
+    textarea.value = this.report;
+    textarea.readOnly = true;
+    new Setting(contentEl).addButton((b) =>
+      b
+        .setButtonText("Copy")
+        .setCta()
+        .onClick(async () => {
+          try {
+            const ownerDocument = textarea.ownerDocument;
+            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
+            if (clipboard?.writeText) {
+              await clipboard.writeText(this.report);
+            } else {
+              textarea.select();
+              ownerDocument.execCommand("copy");
+            }
+            new Notice("arXiv Daily: diagnostics copied");
+          } catch {
             textarea.select();
             new Notice("Could not copy diagnostics; text is selectable");
           }

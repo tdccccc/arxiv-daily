@@ -1,5 +1,6 @@
 import {
   sanitizeDetailSelection,
+  validateLocalPdfParserSidecarConfig,
   validateScheduleConfig,
   validateSchedulerConfig,
   validateVaultRelativeDirectory,
@@ -42,6 +43,13 @@ export interface SettingsChangeDependencies {
   restartScheduler?: () => void;
   setScheduleEnabled?: (enabled: boolean) => void;
   refreshSensitiveValues?: () => void;
+  /** Pre-persist runtime side effects for a candidate change; returns a
+   * rollback invoked when the change fails before persistence. */
+  prepareCandidateChange?: (
+    previous: PluginSettings,
+    candidate: PluginSettings,
+    changedKeys: readonly string[],
+  ) => void | (() => void);
 }
 
 /** A rejected change includes the pre-change values a renderer can restore. */
@@ -117,6 +125,7 @@ export class SettingsChangeService {
     let preparedOutput: PreparedOutputStores | undefined;
     let prepared: TPrepared | undefined;
     let releaseOutputTransition: (() => void) | undefined;
+    let rollbackCandidateChange: (() => void) | undefined;
     try {
       try {
         const requestedKeys = Array.from(new Set(request.changes.map(({ key }) => key)));
@@ -139,6 +148,14 @@ export class SettingsChangeService {
         if (commitPaths.length === 0) return;
         assertLiveCommitEligible(this.deps.settings, candidate, commitPaths);
 
+        const preparedRollback = this.deps.prepareCandidateChange?.(
+          previous,
+          candidate,
+          changedKeys,
+        );
+        rollbackCandidateChange =
+          typeof preparedRollback === "function" ? preparedRollback : undefined;
+
         const outputDirectoryChanged = changedKeys.some(isOutputDirectoryKey);
         if (outputDirectoryChanged) {
           if (this.deps.hasActiveOutputWork?.()) {
@@ -159,6 +176,13 @@ export class SettingsChangeService {
         }
         await this.deps.persistSettings(candidate);
       } catch (error) {
+        if (rollbackCandidateChange) {
+          try {
+            rollbackCandidateChange();
+          } catch {
+            // Side-effect rollback must not mask the original failure.
+          }
+        }
         if (error instanceof SettingsChangeError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         throw new SettingsChangeError(message, previous, { cause: error });
@@ -226,6 +250,11 @@ export class SettingsChangeService {
       if (!Number.isFinite(interval) || interval < 1) {
         throw new Error(`Invalid scheduler tick interval: ${String(interval)}`);
       }
+    }
+
+    if (changedKeys.some((key) => key.startsWith("pdfParserSidecar."))) {
+      const validation = validateLocalPdfParserSidecarConfig(candidate);
+      if (!validation.ok) throw new Error(validation.reasons.join("; "));
     }
 
     if (changedKeys.some((key) => key.startsWith("schedule."))) {
@@ -324,6 +353,8 @@ function cloneSettings(settings: PluginSettings): PluginSettings {
     schedule: { ...settings.schedule },
     advanced: { ...settings.advanced },
     email: { ...settings.email },
+    embedding: { ...settings.embedding },
+    pdfParserSidecar: { ...settings.pdfParserSidecar },
   };
 }
 

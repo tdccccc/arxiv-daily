@@ -12,6 +12,7 @@ import type ArxivDailyPlugin from "../../main";
 import {
   PaperSearchIndex,
   normalizeArxivId,
+  personalNoveltyDifferenceTypeLabel,
   planDashboardAction,
   queryDashboard,
   type DashboardAction,
@@ -31,7 +32,11 @@ import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/c
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
-import { SimilarPapersModal } from "./similar-papers-modal";
+import {
+  SimilarPapersModal,
+  type SimilarPapersModalOptions,
+} from "./similar-papers-modal";
+import { renderLibrarySearchBlock } from "./library-search-block";
 import { HubModal } from "./hub-modal";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -113,6 +118,53 @@ export {
 } from "./calendar";
 export type { CalendarRunWhitelistInput } from "./calendar";
 export type { DashboardPage, DailyReportDay } from "./types";
+
+export function dashboardOccurrenceProvenanceLines(row: DashboardRow): string[] {
+  const provenance = row.occurrenceProvenance;
+  if (!provenance) return [];
+  const source = provenance.source === "both"
+    ? "Manual + library"
+    : provenance.source === "manual" ? "Manual" : "Library";
+  const lines = [`Discovery source: ${source}`];
+  if (provenance.manualTopics.length > 0) {
+    lines.push(`Manual topics: ${provenance.manualTopics.map(({ tag, name }) =>
+      name && name !== tag ? `${name} (${tag})` : tag
+    ).join(", ")}`);
+  }
+  if (provenance.directions.length > 0) {
+    lines.push(`Library directions: ${provenance.directions.map((direction) =>
+      `${direction.name}: ${direction.representatives.map((representative) =>
+        `${representative.title} (${representative.paperKey})`
+      ).join(", ")}`
+    ).join("; ")}`);
+    lines.push("Evidence depth: metadata and abstract");
+  }
+  return lines;
+}
+
+/**
+ * Deterministic plain-text Dashboard novelty block, clearly labeled and fully
+ * distinct from the discovery provenance block: a localized difference-type
+ * label with the persisted comparison-basis paperKeys (titles are never
+ * persisted in the index and are never invented; the label explains the basis
+ * papers are the direction's representative prior papers), the explicit
+ * metadata-and-abstract evidence-depth disclosure, and the bounded explanation
+ * with whitespace collapsed. Every line is rendered literally through DOM text
+ * APIs — no tooltips, no truncation, and the full text is visible and
+ * keyboard/touch accessible without hover.
+ */
+export function dashboardPersonalNoveltyLines(row: DashboardRow): string[] {
+  const novelty = row.personalNovelty;
+  if (!novelty) return [];
+  const typeLabel = personalNoveltyDifferenceTypeLabel(novelty.differenceType, "en");
+  const basis = novelty.comparisonBasis.map(({ paperKey }) => paperKey).join(", ");
+  const explanation = novelty.explanation.replace(/\s+/gu, " ").trim();
+  return [
+    `Personal novelty: ${typeLabel} vs. prior papers: ${basis}`,
+    "Evidence depth: metadata and abstract",
+    explanation,
+  ];
+}
 export {
   collectIndexedDetailSummaryRefs,
   expectedDetailSummaryPath,
@@ -172,6 +224,29 @@ export function registerDashboardView(plugin: ArxivDailyPlugin): void {
   );
 }
 
+/**
+ * One-click clear for the dashboard search box: the × button is visible only
+ * while the input has text, clears the input and runs `onClear` immediately
+ * (no debounce), and keeps focus in the input. The native search-cancel
+ * affordance is suppressed in CSS so exactly one clear control exists.
+ */
+export function bindSearchClearButton(
+  input: HTMLInputElement,
+  button: HTMLButtonElement,
+  onClear: () => void,
+): void {
+  button.hidden = input.value.trim().length === 0;
+  button.addEventListener("click", () => {
+    input.value = "";
+    onClear();
+    button.hidden = true;
+    input.focus();
+  });
+  input.addEventListener("input", () => {
+    button.hidden = input.value.trim().length === 0;
+  });
+}
+
 export async function refreshOpenDashboardViews(
   plugin: ArxivDailyPlugin,
 ): Promise<void> {
@@ -225,6 +300,8 @@ class ArxivDailyDashboardView extends ItemView {
   private batchEl: HTMLElement | null = null;
   private statsEl: HTMLElement | null = null;
   private resultsEl: HTMLElement | null = null;
+  private libraryResultsEl: HTMLElement | null = null;
+  private librarySearchToken = 0;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: number | null = null;
@@ -470,6 +547,7 @@ class ArxivDailyDashboardView extends ItemView {
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
       searchIndex: this.searchIndex,
+      topics: this.plugin.settings.arxiv.topics,
     });
     this.renderToolbar(contentEl, result);
     this.renderRecentDatesNotice(contentEl);
@@ -489,7 +567,11 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.batchEl = contentEl.createDiv();
     this.resultsEl = contentEl.createDiv();
+    this.libraryResultsEl = contentEl.createDiv({
+      cls: "arxiv-daily-dashboard__library-results",
+    });
     this.renderCurrentResults(result);
+    this.refreshLibrarySearch();
   }
 
   private renderRecentDatesNotice(contentEl: HTMLElement): void {
@@ -509,6 +591,7 @@ class ArxivDailyDashboardView extends ItemView {
       queryDashboard(this.entries, this.query, {
         detailSummaryIds: this.detailSummaryIds,
         searchIndex: this.searchIndex,
+        topics: this.plugin.settings.arxiv.topics,
       });
     this.statsEl.empty();
     this.batchEl.empty();
@@ -1233,17 +1316,37 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__filters",
     });
 
-    const search = this.createFilterField(
+    const searchField = this.createFilterField(
       filters,
       "Search",
       "arxiv-daily-dashboard__filter--search",
-    ).createEl("input", {
+    );
+    const searchBox = searchField.createDiv({
+      cls: "arxiv-daily-dashboard__search-box",
+    });
+    const search = searchBox.createEl("input", {
       attr: {
         type: "search",
         placeholder: "ID, title, author, topic, summary",
       },
     });
+    const clearButton = searchBox.createEl("button", {
+      // clickable-icon is Obsidian's icon-button chrome (no border, no
+      // background); the custom class only positions the button inside the
+      // search box.
+      cls: "clickable-icon arxiv-daily-dashboard__search-clear",
+      attr: { type: "button", "aria-label": "Clear search" },
+    });
+    setIcon(clearButton, "x");
     search.value = this.query.search ?? "";
+    bindSearchClearButton(search, clearButton, () => {
+      this.clearSearchDebounce();
+      this.searchDebounceTimer = null;
+      this.query = { ...this.query, search: undefined };
+      this.currentPage = 0;
+      this.renderCurrentResults();
+      this.refreshLibrarySearch();
+    });
     search.addEventListener("input", () => {
       this.clearSearchDebounce();
       this.searchDebounceTimer = window.setTimeout(() => {
@@ -1251,6 +1354,7 @@ class ArxivDailyDashboardView extends ItemView {
         this.query = { ...this.query, search: search.value.trim() || undefined };
         this.currentPage = 0;
         this.renderCurrentResults();
+        this.refreshLibrarySearch();
       }, DASHBOARD_SEARCH_DEBOUNCE_MS);
     });
 
@@ -1444,10 +1548,16 @@ class ArxivDailyDashboardView extends ItemView {
         cls: "arxiv-daily-dashboard__meta",
         text: `${row.arxivId} · ${row.authors || "Unknown authors"}`,
       });
-      if (this.isActiveRelevanceSearch() && row.matchReasons?.length) {
+      for (const line of dashboardOccurrenceProvenanceLines(row)) {
         titleCell.createDiv({
-          cls: "arxiv-daily-dashboard__match-reason",
-          text: row.matchReasons.slice(0, 2).map((reason) => reason.text).join(" · "),
+          cls: "arxiv-daily-dashboard__provenance",
+          text: line,
+        });
+      }
+      for (const line of dashboardPersonalNoveltyLines(row)) {
+        titleCell.createDiv({
+          cls: "arxiv-daily-dashboard__novelty",
+          text: line,
         });
       }
 
@@ -1456,6 +1566,36 @@ class ArxivDailyDashboardView extends ItemView {
       const actionCell = tr.createEl("td", {
         cls: "arxiv-daily-dashboard__actions",
       });
+      if (row.occurrenceProvenance) {
+        this.createIconButton(actionCell, "bookmark", "Save for later", (button) => {
+          void this.runControlAction(button, async () => {
+            const novelty = row.personalNovelty
+              ? {
+                differenceType: row.personalNovelty.differenceType,
+                comparisonBasis: row.personalNovelty.comparisonBasis
+                  .map(({ paperKey }) => paperKey),
+                evidenceDepth: row.personalNovelty.evidenceDepth,
+                explanation: row.personalNovelty.explanation,
+              }
+              : undefined;
+            const result = await this.plugin.saveReadingCandidateForRow({
+              paperKey: row.entry.paperKey,
+              arxivId: row.arxivId,
+              title: row.title,
+              authors: row.authors,
+              topic: row.topic,
+              occurrenceProvenance: row.occurrenceProvenance,
+              personalNovelty: novelty,
+            });
+            if (result === "saved") this.notice("arXiv Daily: saved for later reading");
+            else if (result === "missing-source") {
+              this.notice("arXiv Daily: this paper has no discovery source to save", 10_000);
+            } else {
+              this.notice("arXiv Daily: choose a personal library first", 10_000);
+            }
+          });
+        });
+      }
       this.createIconButton(actionCell, "scan-search", "Find similar papers", () => {
         this.openSimilarPapers(row.entry);
       });
@@ -1510,6 +1650,7 @@ class ArxivDailyDashboardView extends ItemView {
     const result = queryDashboard(this.entries, this.query, {
       detailSummaryIds: this.detailSummaryIds,
       searchIndex: this.searchIndex,
+      topics: this.plugin.settings.arxiv.topics,
     });
     const page = paginateDashboardRows(
       result.rows,
@@ -2168,10 +2309,6 @@ class ArxivDailyDashboardView extends ItemView {
     );
   }
 
-  private isActiveRelevanceSearch(): boolean {
-    return Boolean(this.query.search?.trim()) && (!this.query.sort || this.query.sort.key === "relevance");
-  }
-
   private openSimilarPapers(entry: DashboardRow["entry"]): void {
     let index = this.searchIndex;
     if (!index) {
@@ -2184,22 +2321,124 @@ class ArxivDailyDashboardView extends ItemView {
       }
     }
     const results = index.similar(entry, { limit: 10 });
+    const library = this.buildLibrarySimilarOption(entry);
     new SimilarPapersModal(this.plugin.app, {
       source: entry,
       results,
+      ...(library ? { library } : {}),
       openDetail: (candidate) => this.openDetailSummary(candidate),
       openDaily: (candidate) => this.openDailyReport(candidate),
       openArxiv: (candidate) =>
         openArxivResource(candidate.arxivId, "abs", this.plugin),
       openPdf: (candidate) => this.openPdf(candidate),
+      openLibraryPdf: (match) => this.openLibraryPdf(match),
       onActionError: (error, action, candidate) => {
         this.plugin.logger.error(
           `dashboard: similar papers ${action.toLowerCase()} failed for ${candidate.arxivId}`,
           error,
         );
-        this.notice(`arXiv Daily: ${action} failed`);
+        this.notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
       },
+      onLibraryActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
     }).open();
+  }
+
+  /**
+   * Library full-text similarity tab for the row button: the query is the
+   * paper's title + abstract (title-only fallback), loaded asynchronously
+   * inside the modal. Returns undefined when there is nothing queryable, in
+   * which case the modal renders only the daily-report similarity list.
+   */
+  private buildLibrarySimilarOption(
+    entry: DashboardRow["entry"],
+  ): SimilarPapersModalOptions["library"] | undefined {
+    const abstract = entry.abstract?.trim() ?? "";
+    const query = abstract ? `${entry.title}\n\n${abstract}` : entry.title;
+    if (!query.trim()) return undefined;
+    return {
+      query,
+      load: async () => {
+        const matches = await this.plugin.searchPersonalLibraryFullText(query, {
+          lexicalQueryText: entry.title,
+        });
+        return matches.map((match) => ({
+          paperKey: match.paperKey,
+          title: match.title,
+          filePath: match.filePath,
+          score: match.score,
+          scoreKind: match.scoreKind,
+          rankingScore: match.rankingScore,
+          rankingScoreKind: match.rankingScoreKind,
+          hits: match.hits,
+        }));
+      },
+    };
+  }
+
+  /**
+   * Second result surface of the single search box (ADR 0006): the library
+   * full-text knowledge base is queried with the same search text, asynchron-
+   * ously, and its matches render in a block below the filters. Short queries
+   * (< 2 chars) skip the KB; a staleness token drops responses from queries
+   * that were already superseded. Failures (no connection, no index, model
+   * errors) degrade to an inline message and never affect row filtering.
+   */
+  private refreshLibrarySearch(): void {
+    if (!this.libraryResultsEl) return;
+    const query = this.query.search?.trim() ?? "";
+    const token = ++this.librarySearchToken;
+    if (query.length < 2) {
+      this.libraryResultsEl.empty();
+      return;
+    }
+    renderLibrarySearchBlock(this.libraryResultsEl, { kind: "loading" });
+    void this.plugin.searchPersonalLibraryFullText(query).then(
+      (matches) => {
+        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+        if (matches.length === 0) {
+          renderLibrarySearchBlock(this.libraryResultsEl, { kind: "empty" });
+          return;
+        }
+        renderLibrarySearchBlock(this.libraryResultsEl, {
+          kind: "matches",
+          matches: matches.slice(0, 5).map((match) => ({
+            paperKey: match.paperKey,
+            title: match.title,
+            score: match.score,
+            scoreKind: match.scoreKind,
+            rankingScore: match.rankingScore,
+            rankingScoreKind: match.rankingScoreKind,
+            filePath: match.filePath,
+            hits: match.hits,
+          })),
+        }, {
+          openLibraryPdf: (match) => this.openLibraryPdf(match),
+          onActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
+        });
+      },
+      (error: unknown) => {
+        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+        renderLibrarySearchBlock(this.libraryResultsEl, {
+          kind: "error",
+          message: errorMessage(error),
+        });
+      },
+    );
+  }
+
+  private async openLibraryPdf(
+    match: { paperKey: string; filePath?: string },
+  ): Promise<void> {
+    if (!match.filePath) throw new Error("The matching library PDF path is unavailable");
+    await this.plugin.openPersonalLibraryFullTextEvidence({
+      paperKey: match.paperKey,
+      filePath: match.filePath,
+    });
+  }
+
+  private reportLibraryEvidenceActionError(error: unknown, action: string): void {
+    this.plugin.logger.error(`dashboard: ${action.toLowerCase()} failed for library evidence`, error);
+    this.notice(`arXiv Daily: ${action} failed: ${errorMessage(error)}`);
   }
 
   private async openDetailSummary(entry: DashboardRow["entry"]): Promise<void> {

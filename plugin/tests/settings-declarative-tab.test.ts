@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { Setting, ToggleComponent, type App } from "obsidian";
+import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { ArxivDailySettingTab } from "../src/settings/tab";
@@ -111,6 +111,10 @@ function makeTab() {
   const plugin = {
     settings,
     saveSettings,
+    setLlmBaseUrl: vi.fn(async (value: string) => {
+      settings.llm.baseUrl = value.trim();
+      await saveSettings();
+    }),
     manifest: { version: "0.0.0-test" },
     app: {},
     stateStore: { snapshot: () => ({}) },
@@ -124,6 +128,20 @@ function makeTab() {
     restartScheduler: vi.fn(),
     sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
+    getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
+    selectLibraryRoot: vi.fn().mockResolvedValue("cancelled"),
+    getLibraryAuthorizationDisclosure: vi.fn().mockReturnValue(null),
+    authorizeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    previewLibraryInventory: vi.fn().mockResolvedValue({
+      eligible: [],
+      ignored: [],
+      folders: 0,
+      truncated: false,
+    }),
+    scanPersonalLibrary: vi.fn().mockResolvedValue({}),
+    reloadPersonalLibraryCatalog: vi.fn().mockResolvedValue({}),
+    revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    openPersonalLibraryDirectionReview: vi.fn(),
   } as unknown as ArxivDailyPlugin;
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =
     new SettingsChangeService({
@@ -233,6 +251,106 @@ describe("wired getSettingDefinitions", () => {
     expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
 
     expect(topicsList?.onReorder).toBeUndefined();
+  });
+});
+
+describe("personal library settings row", () => {
+  function renderLibraryButtons(tab: ArxivDailySettingTab) {
+    const buttons: Array<{
+      text: string;
+      cta: boolean;
+      warning: boolean;
+      click?: () => void;
+    }> = [];
+    const setting = {
+      controlEl: { addClass: vi.fn() },
+      setDesc: vi.fn().mockReturnThis(),
+      addButton(callback: (button: any) => void) {
+        const state = { text: "", cta: false, warning: false } as {
+          text: string;
+          cta: boolean;
+          warning: boolean;
+          click?: () => void;
+        };
+        const button = {
+          buttonEl: { getBoundingClientRect: vi.fn(() => ({ left: 0, bottom: 0 })) },
+          setButtonText(text: string) { state.text = text; return button; },
+          setCta() { state.cta = true; return button; },
+          setWarning() { state.warning = true; return button; },
+          onClick(click: () => void) { state.click = click; return button; },
+        };
+        callback(button);
+        buttons.push(state);
+        return setting;
+      },
+    };
+    tab.renderLibraryConnectionControls(setting as never);
+    return { buttons, setting };
+  }
+
+  it("shows only folder selection while disconnected", () => {
+    const { tab } = makeTab();
+    const { buttons } = renderLibraryButtons(tab);
+    expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
+  });
+
+  it("shows authorization after selection and a compact manage menu after approval", () => {
+    const { tab, plugin } = makeTab();
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const pending = renderLibraryButtons(tab).buttons;
+    expect(pending.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Review & authorize",
+      "Manage…",
+    ]);
+    expect(pending[1]?.cta).toBe(true);
+    pending[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "authorize personal library",
+      expect.any(Function),
+    );
+
+    // The secondary actions live in the Manage… menu.
+    const menuTitles: string[] = [];
+    const menuClicks: Array<() => void> = [];
+    const setTitle = vi.spyOn(MenuItem.prototype, "setTitle")
+      .mockImplementation(function (this: unknown, title: string) {
+        menuTitles.push(title);
+        return this;
+      });
+    const onClick = vi.spyOn(MenuItem.prototype, "onClick")
+      .mockImplementation(function (this: unknown, cb: () => void) {
+        menuClicks.push(cb);
+        return this;
+      });
+    pending[2]?.click?.();
+    expect(menuTitles).toEqual([
+      "Review directions",
+      "Preview library files",
+      "Scan library",
+      "Reload catalog",
+    ]);
+    menuClicks[0]?.();
+    expect(runAction).toHaveBeenCalledWith("open direction review", expect.any(Function));
+    setTitle.mockRestore();
+    onClick.mockRestore();
+
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    });
+    const authorized = renderLibraryButtons(tab).buttons;
+    expect(authorized.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Revoke",
+      "Manage…",
+    ]);
+    expect(authorized[1]?.warning).toBe(true);
   });
 });
 
@@ -991,6 +1109,7 @@ describe("wired getControlValue", () => {
       renderApiKeyRow: () => {},
       renderModelRow: () => {},
       renderReasoningEffortRow: () => {},
+      renderLibraryConnectionRow: () => {},
       renderCategoryRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},

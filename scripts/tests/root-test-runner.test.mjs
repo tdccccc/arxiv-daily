@@ -90,7 +90,10 @@ test("the real root npm entry sends a Core focus to Core only", () => {
     0,
     `focused root test failed\nstdout=${result.stdout}\nstderr=${result.stderr}`,
   );
-  assert.match(result.stdout, /@arxiv-daily\/core/);
+  // Vitest names the package it ran in; unlike npm's "> pkg@version script"
+  // banner, that line survives a caller running us under --silent, which sets
+  // npm_config_loglevel=silent for every child npm.
+  assert.match(result.stdout, /packages[/\\]core/);
   assert.doesNotMatch(result.stdout, /@arxiv-daily\/node-runtime|arxiv-daily@0\.4\.1 test|obsidian-arxiv-daily/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /No test files found/);
 });

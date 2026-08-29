@@ -2,6 +2,9 @@ export type OperationKind =
   | "daily-run"
   | "detail-summary"
   | "pdf-download"
+  | "personal-library-scan"
+  | "personal-library-direction-generation"
+  | "personal-library-fulltext-index"
   | "paper-index"
   | "paper-note";
 

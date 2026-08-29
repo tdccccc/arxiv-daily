@@ -122,7 +122,7 @@ describe("ArxivFetcher", () => {
     const storage = memoryStorage();
     const cache = new AtomMetadataCache({ rootDir: "cache", expiryDays: 7, storage });
     const cachedPaper = {
-      id: "2606.11111", title: "Cached", authors: "A. Author", abstract: "Cached abstract.",
+      id: "2606.11111", title: "Cached", authors: "A. Author", authorNames: ["A. Author"], abstract: "Cached abstract.",
       published: "2026-06-01T00:00:00Z", updated: "2026-06-02T00:00:00Z",
       primaryCategory: "astro-ph", categories: ["astro-ph"],
     };

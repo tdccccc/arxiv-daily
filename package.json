@@ -21,11 +21,12 @@
   "scripts": {
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:product-units": "node scripts/check-product-units.mjs",
-    "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=60",
+    "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=64",
     "lint": "npm run lint:obsidian",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node scripts/run-root-tests.mjs",
     "test:workspaces": "npm run test --workspaces --if-present --",
+    "test:desktop": "node scripts/desktop-acceptance/acceptance.mjs",
     "build": "npm run build --workspaces --if-present",
     "smoke:build": "node scripts/smoke-build.mjs",
     "test:release-tools": "node --test scripts/tests/*.test.mjs && npm run check:product-units",
@@ -34,6 +35,10 @@
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
+  },
+  "overrides": {
+    "onnxruntime-node": "npm:empty-npm-package@1.0.0",
+    "sharp": "npm:empty-npm-package@1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

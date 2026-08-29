@@ -12,7 +12,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const OBSIDIAN_BUNDLE_LIMIT_BYTES = 1024 * 1024;
+// Obsidian's current submission documentation does not define a 1 MiB limit.
+// Keep a repository safety budget so accidental bundle explosions still fail,
+// without rejecting valid plugins that include a local ML runtime.
+export const OBSIDIAN_BUNDLE_BUDGET_BYTES = 2 * 1024 * 1024;
 export const OBSIDIAN_DESCRIPTION_LIMIT = 250;
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -65,8 +68,8 @@ export function checkManifest(manifest) {
 export function checkBundle(bundleText) {
   const issues = [];
   const bytes = Buffer.byteLength(bundleText, "utf8");
-  if (bytes > OBSIDIAN_BUNDLE_LIMIT_BYTES) {
-    issues.push(`main.js exceeds ${OBSIDIAN_BUNDLE_LIMIT_BYTES} bytes (${bytes})`);
+  if (bytes > OBSIDIAN_BUNDLE_BUDGET_BYTES) {
+    issues.push(`main.js exceeds repository budget ${OBSIDIAN_BUNDLE_BUDGET_BYTES} bytes (${bytes})`);
   }
   for (const forbidden of [
     "eval(",

@@ -255,6 +255,31 @@ describe("daily summary checkpoint fingerprint", () => {
     expect(createDailySummaryCompatibilityFingerprint(mutate(input)))
       .not.toBe(createDailySummaryCompatibilityFingerprint(input));
   });
+
+  it("never includes personal novelty in the summary checkpoint compatibility input", () => {
+    const input = compatibility();
+    const withNovelty = {
+      ...input,
+      paper: {
+        ...input.paper,
+        personalNovelty: {
+          differenceType: "new-method" as const,
+          comparisonBasis: ["arxiv:2501.00001"],
+          evidenceDepth: "metadata-and-abstract" as const,
+          explanation: "Introduces a method absent from the representative abstracts.",
+        },
+      },
+    };
+    // The fingerprint is byte-identical with or without the novelty attachment,
+    // and the canonical persisted input never serializes the field.
+    expect(createDailySummaryCompatibilityFingerprint(withNovelty))
+      .toBe(createDailySummaryCompatibilityFingerprint(input));
+    const canonical = buildDailySummaryCheckpointFingerprintInput(withNovelty);
+    const raw = JSON.stringify(canonical);
+    expect(raw).not.toContain("novelty");
+    expect(raw).not.toContain("metadata-and-abstract");
+    expect(raw).not.toContain("Introduces a method");
+  });
 });
 
 describe("strict DailyPaperResult decoding", () => {

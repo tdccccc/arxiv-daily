@@ -168,6 +168,20 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
     );
   }
 
+  const embedding = asTable(root.embedding);
+  if (embedding) {
+    const mode = stringField(embedding, "mode", base.embedding.mode);
+    base.embedding.mode = mode === "remote" ? "remote" : "local";
+    base.embedding.provider = stringField(embedding, "provider", base.embedding.provider);
+    base.embedding.baseUrl = stringField(embedding, "base_url", base.embedding.baseUrl);
+    base.embedding.apiKey = stringField(embedding, "api_key", base.embedding.apiKey);
+    base.embedding.model = stringField(embedding, "model", base.embedding.model);
+    const dimension = embedding.dimension;
+    if (typeof dimension === "number" && Number.isInteger(dimension) && dimension > 0) {
+      base.embedding.dimension = dimension;
+    }
+  }
+
   const arxiv = asTable(root.arxiv);
   if (arxiv) {
     if (Array.isArray(arxiv.categories)) {

@@ -76,6 +76,7 @@ describe("parseAtomPapers", () => {
       id: "2605.08080",
       title: "Paper one",
       authors: "A. Author et al.",
+      authorNames: ["A. Author", "B. Author"],
       abstract: "This is the first abstract with some whitespace.",
       published: "2026-05-11T00:00:00Z",
       updated: "2026-05-12T00:00:00Z",

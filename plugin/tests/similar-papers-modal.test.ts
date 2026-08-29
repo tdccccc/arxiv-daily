@@ -58,7 +58,7 @@ function paper(id: string): PaperIndexEntry {
 }
 
 describe("Similar Papers modal", () => {
-  it("renders local reasons without percentage scores and exposes accessible callbacks", () => {
+  it("renders results without match-reason noise and exposes accessible callbacks", () => {
     const source = paper("2607.00001");
     const candidate = paper("2607.00002");
     const result: PaperSearchResult = {
@@ -76,7 +76,10 @@ describe("Similar Papers modal", () => {
 
     renderSimilarPapersModal(content, { source, results: [result], ...callbacks });
 
-    expect(content.textContent).toContain("Matched title: retrieval");
+    // The reason text is carried in the data but deliberately not rendered:
+    // users see the result directly, without per-item match-reason noise.
+    expect(content.textContent).not.toContain("Matched");
+    expect(content.textContent).not.toContain("Shared indexed terms");
     expect(content.textContent).not.toContain("%");
     const buttons = [...content.querySelectorAll<HTMLButtonElement>("button")];
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
@@ -177,5 +180,118 @@ describe("Similar Papers modal", () => {
       openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
     });
     expect(content.textContent).toContain("local paper index");
+  });
+
+  it("renders the library tab first and loads library matches asynchronously", async () => {
+    const openLibraryPdf = vi.fn();
+    const load = vi.fn(async () => [
+      {
+        paperKey: `file:sha256:${"a".repeat(64)}`,
+        title: "Library Paper",
+        filePath: "papers/library-paper.pdf",
+        score: 0.812345,
+        scoreKind: "cosine" as const,
+        rankingScore: 0.0325,
+        rankingScoreKind: "rrf" as const,
+        hits: [
+          {
+            source: "dense" as const,
+            scoreKind: "cosine" as const,
+            chunkIndex: 3,
+            chunkId: "library-chunk-3",
+            headings: ["Methods"],
+            locator: { pageStart: 2 },
+            page: 2,
+            text: "A matching passage about retrieval.",
+            score: 0.81,
+          },
+        ],
+      },
+    ]);
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [{ entry: paper("2607.00002"), score: 1, reasons: [] }],
+      library: { query: "Title\n\nAbstract", load },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+      openLibraryPdf,
+    });
+
+    // Library tab selected by default; daily panel hidden.
+    expect(content.querySelector('button[aria-selected="true"]')?.textContent).toBe("Library similar");
+    expect(content.textContent).toContain("Searching your library…");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(content.textContent).toContain("Library Paper");
+    expect(content.textContent).toContain("papers/library-paper.pdf");
+    expect(content.textContent).not.toContain("best semantic evidence");
+    expect(content.textContent).not.toContain("0.032");
+    expect(content.textContent).not.toContain(`file:sha256:${"a".repeat(64)}`);
+    expect(content.querySelector('button[aria-label="Open PDF"]')).not.toBeNull();
+    expect(content.textContent).not.toContain("Methods");
+    expect(content.textContent).not.toContain("A matching passage about retrieval.");
+    expect(content.textContent).not.toContain("Page 2");
+    expect(content.textContent).not.toContain("Open page 2");
+    content.querySelector<HTMLButtonElement>('button[aria-label="Open PDF"]')?.click();
+    expect(openLibraryPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ paperKey: `file:sha256:${"a".repeat(64)}` }),
+    );
+    const dailyPanel = content.querySelector('[role="tabpanel"][hidden]');
+    expect(dailyPanel?.textContent).toContain("2607.00002");
+  });
+
+  it("switches to the daily tab and back without reloading the library", async () => {
+    const load = vi.fn(async () => []);
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [{ entry: paper("2607.00002"), score: 1, reasons: [] }],
+      library: { query: "Title", load },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+
+    const dailyTab = [...content.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find((button) => button.textContent === "Daily similar");
+    dailyTab?.click();
+    expect(content.querySelector('[role="tabpanel"]:not([hidden])')?.textContent)
+      .toContain("2607.00002");
+    const libraryTab = [...content.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find((button) => button.textContent === "Library similar");
+    libraryTab?.click();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders library load failures without escaping the modal", async () => {
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [],
+      library: {
+        query: "Title",
+        load: async () => { throw new Error("no full-text index"); },
+      },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(content.textContent).toContain("Library full-text search unavailable: no full-text index");
+  });
+
+  it("renders an empty library result", async () => {
+    const content = document.createElement("div");
+    renderSimilarPapersModal(content, {
+      source: paper("2607.00001"),
+      results: [],
+      library: { query: "Title", load: async () => [] },
+      openDetail: vi.fn(), openDaily: vi.fn(), openArxiv: vi.fn(), openPdf: vi.fn(),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(content.textContent).toContain("No similar papers found in your library.");
   });
 });
