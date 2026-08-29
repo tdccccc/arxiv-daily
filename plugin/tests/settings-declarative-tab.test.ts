@@ -290,31 +290,90 @@ describe("personal library settings row", () => {
 
   it("shows only folder selection while disconnected", () => {
     const { tab } = makeTab();
-    const { buttons } = renderLibraryButtons(tab);
+    const { buttons, setting } = renderLibraryButtons(tab);
     expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
+    expect(setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Choose a folder of PDFs/i),
+    );
   });
 
-  it("shows authorization after selection and a compact manage menu after approval", () => {
+  it("offers Build index after a local folder is selected without requiring authorization", () => {
     const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "local";
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const { buttons, setting } = renderLibraryButtons(tab);
+    expect(buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Build index",
+      "Manage…",
+    ]);
+    expect(buttons[1]?.cta).toBe(true);
+    expect(setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Local embedding stays on this device/i),
+    );
+    buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+  });
+
+  it("requires authorization before indexing when remote embedding is enabled", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "remote";
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const pending = renderLibraryButtons(tab);
+    expect(pending.buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Review & authorize",
+      "Manage…",
+    ]);
+    expect(pending.buttons[1]?.cta).toBe(true);
+    expect(pending.setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Remote embedding sends full text/i),
+    );
+    pending.buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "authorize personal library",
+      expect.any(Function),
+    );
+
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    });
+    const authorized = renderLibraryButtons(tab);
+    expect(authorized.buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Build index",
+      "Manage…",
+    ]);
+    expect(authorized.buttons[1]?.cta).toBe(true);
+    authorized.buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+  });
+
+  it("keeps secondary library actions in the Manage menu", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "local";
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorization-required",
       rootLabel: "papers",
     });
     const pending = renderLibraryButtons(tab).buttons;
-    expect(pending.map((button) => button.text)).toEqual([
-      "Change folder",
-      "Review & authorize",
-      "Manage…",
-    ]);
-    expect(pending[1]?.cta).toBe(true);
-    pending[1]?.click?.();
-    expect(runAction).toHaveBeenCalledWith(
-      "authorize personal library",
-      expect.any(Function),
-    );
-
-    // The secondary actions live in the Manage… menu.
     const menuTitles: string[] = [];
     const menuClicks: Array<() => void> = [];
     const setTitle = vi.spyOn(MenuItem.prototype, "setTitle")
@@ -336,8 +395,6 @@ describe("personal library settings row", () => {
     ]);
     menuClicks[0]?.();
     expect(runAction).toHaveBeenCalledWith("open direction review", expect.any(Function));
-    setTitle.mockRestore();
-    onClick.mockRestore();
 
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
@@ -345,12 +402,17 @@ describe("personal library settings row", () => {
       grantedAt: "2026-08-02T12:00:00.000Z",
     });
     const authorized = renderLibraryButtons(tab).buttons;
-    expect(authorized.map((button) => button.text)).toEqual([
-      "Change folder",
-      "Revoke",
-      "Manage…",
+    menuTitles.length = 0;
+    authorized[2]?.click?.();
+    expect(menuTitles).toEqual([
+      "Review directions",
+      "Preview library files",
+      "Scan library",
+      "Reload catalog",
+      "Revoke authorization",
     ]);
-    expect(authorized[1]?.warning).toBe(true);
+    setTitle.mockRestore();
+    onClick.mockRestore();
   });
 });
 

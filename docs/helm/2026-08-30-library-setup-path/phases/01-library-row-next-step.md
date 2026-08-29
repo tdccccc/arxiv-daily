@@ -27,10 +27,10 @@ updated: 2026-08-30
 
 ## Tasks
 
-- [ ] 用测试固定：local + 已选文件夹 → Build index；remote + 未授权 → Review & authorize；remote + 已授权 → Build index。
-- [ ] 文献库行按该判定渲染主按钮与说明。
-- [ ] Build index 从设置页启动现有索引命令路径。
-- [ ] 授权说明区分本地不离机 / 远程发全文。
+- [x] 用测试固定：local + 已选文件夹 → Build index；remote + 未授权 → Review & authorize；remote + 已授权 → Build index。
+- [x] 文献库行按该判定渲染主按钮与说明。
+- [x] Build index 从设置页启动现有索引命令路径。
+- [x] 授权说明区分本地不离机 / 远程发全文。
 
 ## Verification
 

@@ -44,6 +44,41 @@ export type LibraryConnectionStatus =
   | { kind: "authorization-invalidated"; rootLabel: string }
   | { kind: "authorized"; rootLabel: string; grantedAt: string };
 
+export type LibrarySetupNextStep =
+  | { action: "choose-folder"; description: string }
+  | { action: "authorize"; description: string; rootLabel: string }
+  | { action: "index"; description: string; rootLabel: string };
+
+export function librarySetupNextStep(
+  status: LibraryConnectionStatus,
+  embeddingMode: "local" | "remote",
+): LibrarySetupNextStep {
+  if (status.kind === "disconnected") {
+    return {
+      action: "choose-folder",
+      description: "Choose a folder of PDFs. Searching uses this library, not the daily report list.",
+    };
+  }
+  const rootLabel = status.rootLabel;
+  if (embeddingMode === "remote" && status.kind !== "authorized") {
+    const expired = status.kind === "authorization-invalidated";
+    return {
+      action: "authorize",
+      rootLabel,
+      description: expired
+        ? `Selected: ${rootLabel}. Remote embedding sends full text off this device — review and authorize again.`
+        : `Selected: ${rootLabel}. Remote embedding sends full text off this device — review and authorize before indexing.`,
+    };
+  }
+  return {
+    action: "index",
+    rootLabel,
+    description: embeddingMode === "remote"
+      ? `Connected: ${rootLabel}. Authorized for remote full-text embedding. Build the search index next.`
+      : `Selected: ${rootLabel}. Local embedding stays on this device. Build the search index to search these PDFs.`,
+  };
+}
+
 export interface LibraryAuthorizationDisclosure {
   selectedRoot: string;
   eligibleExtensions: string[];

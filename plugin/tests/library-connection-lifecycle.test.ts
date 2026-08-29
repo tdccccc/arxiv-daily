@@ -8,6 +8,7 @@ import ArxivDailyPlugin from "../main.ts";
 import {
   createLibraryConnection,
   libraryAuthorizationDisclosure,
+  librarySetupNextStep,
 } from "../src/library/connection";
 
 function makePlugin() {
@@ -56,6 +57,31 @@ function sourceWithInventory(
     readBinary: vi.fn(),
   };
 }
+
+describe("librarySetupNextStep", () => {
+  it("asks for a folder when nothing is selected", () => {
+    expect(librarySetupNextStep({ kind: "disconnected" }, "local").action).toBe("choose-folder");
+  });
+
+  it("indexes immediately for a local library even before authorization", () => {
+    expect(librarySetupNextStep({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    }, "local").action).toBe("index");
+  });
+
+  it("authorizes remote embedding before indexing, then indexes once authorized", () => {
+    expect(librarySetupNextStep({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    }, "remote").action).toBe("authorize");
+    expect(librarySetupNextStep({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    }, "remote").action).toBe("index");
+  });
+});
 
 describe("personal library plugin lifecycle", () => {
   it("loads valid sibling state and ignores malformed persisted connections", async () => {

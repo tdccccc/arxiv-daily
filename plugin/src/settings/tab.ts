@@ -47,6 +47,9 @@ import {
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import {
+  librarySetupNextStep,
+} from "../library/connection";
+import {
   confirmEmbeddingMode,
   confirmLibraryAuthorization,
   showLibraryInventoryPreview,
@@ -418,20 +421,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public renderLibraryConnectionControls(setting: Setting): void {
     const status = this.plugin.getLibraryConnectionStatus();
-    const descriptions = {
-      disconnected: "No personal library selected.",
-      "authorization-required": `Selected: ${status.kind === "authorization-required" ? status.rootLabel : ""}. Authorization required.`,
-      "authorization-invalidated": `Selected: ${status.kind === "authorization-invalidated" ? status.rootLabel : ""}. Authorization expired after configuration changed.`,
-      authorized: `Connected: ${status.kind === "authorized" ? status.rootLabel : ""}. Metadata and abstracts authorized.`,
-    } as const;
-    setting.setDesc(descriptions[status.kind]);
+    const next = librarySetupNextStep(status, this.plugin.settings.embedding.mode);
+    setting.setDesc(next.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
     setting.addButton((button) =>
       button
         .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
         .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
     );
-    if (status.kind === "authorization-required" || status.kind === "authorization-invalidated") {
+    if (next.action === "authorize") {
       setting.addButton((button) =>
         button
           .setButtonText("Review & authorize")
@@ -439,12 +437,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onClick(() => this.runAction("authorize personal library", () => this.reviewLibraryAuthorization())),
       );
     }
-    if (status.kind === "authorized") {
+    if (next.action === "index") {
       setting.addButton((button) =>
         button
-          .setButtonText("Revoke")
-          .setWarning()
-          .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
+          .setButtonText("Build index")
+          .setCta()
+          .onClick(() => this.runAction("index personal library full text", () => this.indexPersonalLibraryFullText())),
       );
     }
     if (status.kind !== "disconnected") {
@@ -484,6 +482,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setTitle("Reload catalog")
         .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
     );
+    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") {
+      menu.addItem((item) =>
+        item
+          .setTitle("Revoke authorization")
+          .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
+      );
+    }
     menu.showAtPosition(position);
   }
 
@@ -551,6 +556,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     await this.plugin.revokeLibraryProcessing();
     new Notice("arXiv Daily: personal library authorization revoked.");
     this.refreshSettings();
+  }
+
+  public async indexPersonalLibraryFullText(): Promise<void> {
+    new Notice("arXiv Daily: indexing personal library full text…");
+    try {
+      const summary = await this.plugin.indexPersonalLibraryFullText();
+      const refreshed = summary.titlesRefreshed > 0
+        ? `, ${summary.titlesRefreshed} titles refreshed`
+        : "";
+      new Notice(
+        `arXiv Daily: full-text index — ${summary.indexed} indexed, `
+          + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}. Search from the Dashboard.`,
+        10_000,
+      );
+    } catch (error) {
+      this.plugin.logger.error("settings: personal library full-text indexing failed", error);
+      throw error;
+    }
   }
 
   public async setArxivCategories(categories: string[]): Promise<void> {

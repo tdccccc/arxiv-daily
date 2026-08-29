@@ -310,7 +310,7 @@ export function buildSettingDefinitions(
           heading: "Personal library",
           items: [{
             name: "Library connection",
-            desc: "Choose one local paper library. Scanning is read-only and separate from daily reports.",
+            desc: "Choose a folder of PDFs, then build a search index. This is separate from daily reports.",
             render: (setting: Setting) =>
               host.renderLibraryConnectionRow?.(setting),
           }],
