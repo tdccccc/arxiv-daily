@@ -1,7 +1,7 @@
 # P7 — 最终迁移、规模与跨平台验收
 
 goal_ref: ../goal.md
-updated: 2026-08-23
+updated: 2026-08-29
 
 ## Outcome
 
@@ -29,7 +29,7 @@ updated: 2026-08-23
 
 - [x] 建立 P7 验收矩阵：将现有迁移、generation reuse/rebuild、受限 heap、路径和 PDF 页面降级证据映射到成功标准，并指出仍未覆盖的可执行契约。
 - [x] 补齐并验收旧版 knowledge-base 到 generation 的真实迁移、失败保留 prior current、parser/sidecar derivation 改变后的重建与搜索兼容性；不删除唯一 legacy source。
-- [ ] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。（2026-08-28 撤销：合成语料掩盖了真实语料下的 routing 记账缺陷，见 journal）
+- [x] 在固定合成语料和受限 heap 下复验查询内存、block 上限、增量同步与 RRF 指标，必要时用测试固定实际上限。（2026-08-28 曾因合成三词语料掩盖 routing 记账缺陷而撤销；2026-08-29 由 P8 真实 199 篇语料与密集词汇 fixture 补上规模证据后重新勾选。）
 - [x] 完成 Node、Plugin 与 CLI 的自动化兼容性和权限边界回归；确认 sidecar 默认关闭、失败回退和页码降级不扩大 consent 或路径权限。
 - [x] 在隔离桌面 Obsidian Vault 完成 PDF `#page=N`、sidecar settings/probe/fallback、旧 settings migration 与无控制台错误的实际验证；无法执行时记录环境阻塞和可复现步骤。
 - [x] 复现并处置 lint、smoke build 与 Obsidian submission release-gate 基线；最终全量验收仍等待桌面 UI 证据。
@@ -53,6 +53,7 @@ updated: 2026-08-23
   - 无控制台错误：全程收集 `Runtime.consoleAPICalled` 与 `Runtime.exceptionThrown`，0 错误。诊断窗口完整性由「插件在信任对话框接受前不加载、harness 在接受前已启用诊断」保证，harness 在插件于 attach 前已运行时会报出该前提不成立。
 - P7.4 覆盖边界：桌面验收证明的是宿主接线层——真实 Obsidian 中设置事务、参数选择与 PDF 定位的实际行为。Core 层的解析器回退语义与 typed failure 由 P6 既有单元测试覆盖，两者是分工而非缺口。本机验收覆盖 Linux 桌面宿主；Windows 与 macOS 宿主不在其范围内。
 - P7.4 安全边界：验收使用独立 vault，隔离 XDG 配置中的 vault 列表仅含该 vault，用户既有 Obsidian 会话在每次运行前后均存活；不可重新生成的 vault 状态（plugin settings store、workspace 布局）在成功、异常与 SIGTERM 三条退出路径上均逐字节还原，实测中断后无遗留进程、虚拟显示或沙箱目录。
+- P7.5 scale re-check (2026-08-29): 合成三词语料不再作为规模证据。P8 在真实 199 篇 / 22,819 chunk 上构建成功（`objects=978/4096`、`routeRefs=44032`），generation 与 legacy 排序逐项相等；查询内存与 block 上限仍由既有受限 heap 与 4 MiB object 测试覆盖。本任务重新勾选。
 
 ## Abort / reshape triggers
 

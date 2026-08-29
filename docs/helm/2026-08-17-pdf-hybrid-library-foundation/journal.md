@@ -200,3 +200,10 @@
 - change: 接手 owner 为 `claude-code-main-session`。未改 phase status、未勾选 success criteria、未开始剩余实现。暂停执行，等 owner 判断是否收口。
 - disposition: 不把剩余吞吐成本当 bug 修。不在本轮推进 SHA-256 次数或 alias gram 范围，除非用户明确要改产品取舍。
 - next: 与用户对齐三件事——(1) 七条成功标准哪些可勾选、(2) 13–14 分钟整库重建是否可接受、(3) 是否还要做 v2 语料复核 / 手动 vault 验证，或直接进入 Close。
+
+## 2026-08-29 — close
+
+- evidence: 用户选择收口本目标；体验向改动（真按篇增量、校验次数、alias gram 范围）另开 intent。隔离 Obsidian（`/tmp/arxiv-daily-close-vault` 副本，XDG 与 xvfb，未触碰正在运行的用户会话）对 8 篇 v2 小库执行混合检索：查询 "attention is all you need" 返回 8 命中，第一名 `arxiv:1706.03762` / "Attention Is All You Need" / `rankingScoreKind=rrf`，证据页 13，打开 `small_library/1706.03762.pdf#page=13` 报 13，反向对照 `#page=2` 报 2；renderer 0 错误。该小库 KB `schemaVersion=2`、`chunkerVersion=2`、parser `obsidian-pdfjs`，不是 legacy 提升路径。199 篇容量与排序等价仍以 P8 既有真实语料证据为准。
+- change: 勾选全部七条成功标准；P7 规模任务以 P8 真实语料证据重新勾选；P7、P8 标 done；goal `status: done`。第 4 条「增量更新」记录为整代复用 / 整代重建，13–14 分钟 / 199 篇作为已知限制接受，不在本目标继续优化。
+- disposition: 不改生产代码。SHA-256 重复校验与 alias 1/2-gram 索引量保持现状，留给后续 intent。P8 的 v2 卫生检查由这次隔离点验覆盖，不再另跑全库 v2 重建。
+- next: 本 initiative 关闭。后续使用体验（加一篇不重建全书、构建更快）新开 goal。

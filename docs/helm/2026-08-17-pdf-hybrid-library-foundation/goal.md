@@ -1,6 +1,6 @@
 # PDF 解析与混合检索基础（PDF parsing and hybrid retrieval foundation）
 
-status: active
+status: done
 updated: 2026-08-29
 owner: claude-code-main-session
 
@@ -10,13 +10,13 @@ owner: claude-code-main-session
 
 ## Success criteria
 
-- [ ] Core 提供 host-neutral 的结构化文档解析契约；PDF.js 保持零配置 fast path，后续高质量解析器可通过同一端口接入。
-- [ ] 全文 chunk 感知文档结构并携带稳定来源定位、解析器和分块器版本；现有知识库可安全迁移或重建。
-- [ ] 文献搜索同时使用词法/BM25 与 dense vector 召回，以 RRF 融合，并通过固定评测集验证其优于或不劣于现有检索基线。
-- [ ] 派生索引具有有界内存、增量更新、失败隔离、版本兼容检测和可恢复切换；不再要求查询时加载并重算全库向量。
-- [ ] 搜索结果展示论文、章节、PDF 原文片段和页码；用户可打开本地 PDF 到对应页面，坐标高亮不可用时可靠降级到页码。
-- [ ] 可选高质量 PDF 解析 sidecar 完成能力探测、隐私边界、失败降级和真实复杂论文对照验证；sidecar 不获得任意目录扫描权限。
-- [ ] 现有 catalog、方向聚类、增量方向建议、阅读候选、日报和 consent 行为保持兼容，相关测试与边界检查通过。
+- [x] Core 提供 host-neutral 的结构化文档解析契约；PDF.js 保持零配置 fast path，后续高质量解析器可通过同一端口接入。
+- [x] 全文 chunk 感知文档结构并携带稳定来源定位、解析器和分块器版本；现有知识库可安全迁移或重建。
+- [x] 文献搜索同时使用词法/BM25 与 dense vector 召回，以 RRF 融合，并通过固定评测集验证其优于或不劣于现有检索基线。
+- [x] 派生索引具有有界内存、增量更新、失败隔离、版本兼容检测和可恢复切换；不再要求查询时加载并重算全库向量。（「增量更新」= 同 revision 整代复用，源变化整代重建，不是按篇增量；199 篇首次/变更重建约 13–14 分钟，作为已知限制接受。见 journal 2026-08-29 close。）
+- [x] 搜索结果展示论文、章节、PDF 原文片段和页码；用户可打开本地 PDF 到对应页面，坐标高亮不可用时可靠降级到页码。
+- [x] 可选高质量 PDF 解析 sidecar 完成能力探测、隐私边界、失败降级和真实复杂论文对照验证；sidecar 不获得任意目录扫描权限。
+- [x] 现有 catalog、方向聚类、增量方向建议、阅读候选、日报和 consent 行为保持兼容，相关测试与边界检查通过。
 
 ## Non-goals
 
@@ -45,10 +45,10 @@ owner: claude-code-main-session
 4. P4b — 固定上限 block 与事务化 generation 替代查询期全库 JSON/base64 装载 — status: done
 5. P5 — 搜索 UI 展示章节、原文片段和页码，并可打开 PDF 到证据位置 — status: done
 6. P6 — 可选高质量 PDF 解析 sidecar 接入并完成复杂论文、隐私与降级验证 — status: done
-7. P7 — 旧库迁移、规模性能、跨平台运行与全量兼容性验收完成 — status: blocked
-8. P8 — generation 路由记账与真实语料规模缺陷修复完成 — status: active
+7. P7 — 旧库迁移、规模性能、跨平台运行与全量兼容性验收完成 — status: done
+8. P8 — generation 路由记账与真实语料规模缺陷修复完成 — status: done
 
 ## Open questions
 
-- P3 计划时用真实语料基线决定中文 FTS tokenizer、BM25 字段权重和 RRF 参数，不在目标层提前锁死。
-- P6 计划时以解析评测决定首个 sidecar 使用 Docling，还是 Docling 加 GROBID enrichment。
+- （已关闭）P3 tokenizer / BM25 / RRF 参数以固定评测集落地，不在本目标继续开放。
+- （已关闭）P6 首个 sidecar 选定 Docling-only；GROBID 因无可复现质量缺口被拒绝。

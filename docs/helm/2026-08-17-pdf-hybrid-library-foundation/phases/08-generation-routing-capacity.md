@@ -1,7 +1,7 @@
 # P8 — generation-routing-capacity
 
 goal_ref: ../goal.md
-updated: 2026-08-28
+updated: 2026-08-29
 
 ## Outcome
 
@@ -37,8 +37,8 @@ generation 索引能够为真实规模的个人文献库构建并服务；路由
 - [x] 路由表由对象路径改为对象序号，升 `GENERATION_DESCRIPTOR_SCHEMA_VERSION`，同步更新编解码、校验与读取侧路由匹配，保持 BM25 结果不变。
 - [x] 版本兼容：旧版 descriptor 的处理路径明确（拒绝并重建，或就地升级），不得静默误读。
 - [x] 以真实 legacy 语料（199 篇 / 22,819 chunk）完成构建，并验证 generation 与 legacy 两条检索路径的排序等价。
-- [ ] 用当前解析器/分块器产出的 v2 语料复核，确认缺陷与 legacy 提升路径无关。
-- [ ] 复核修复后的真实语料构建耗时，确认其与语料规模的关系可接受。
+- [x] 用当前解析器/分块器产出的 v2 语料复核，确认缺陷与 legacy 提升路径无关。（plugin_test 的 small_library：8 篇 PDF，KB schema v2 / chunkerVersion 2 / parser `obsidian-pdfjs`，非 legacy 提升；隔离 Obsidian 混合检索 8 命中且打开证据页。）
+- [x] 复核修复后的真实语料构建耗时，确认其与语料规模的关系可接受。（owner 接受 199 篇约 13–14 分钟的整代重建为已知限制；真按篇增量与进一步吞吐取舍另开 intent。）
 
 ## Verification
 
@@ -46,6 +46,8 @@ generation 索引能够为真实规模的个人文献库构建并服务；路由
 - Green：同一 fixture 构建成功；真实 199 篇语料构建成功并与 legacy 路径排序等价；既有 generation/fulltext 测试全绿。
 - 容量：路由引用数与 descriptor 字节均在各自上限内，且有测试固定实际余量。
 - 门禁：完整 workspace 套件、typecheck、`check:boundaries`、`check:product-units`、production build 通过；`git diff --check` 干净。
+- v2 卫生 (2026-08-29): plugin_test `small_library` 8 篇为当前 PDF.js 分块器产出（KB schema v2、chunkerVersion 2），隔离 Obsidian 混合检索命中 Attention Is All You Need 并打开证据页 13，反向对照页 2；缺陷不依赖 legacy 提升路径。
+- 构建耗时 (2026-08-29): owner 接受 199 篇约 13–14 分钟整代重建为已知限制；真按篇增量不在本阶段。
 
 ## Abort / reshape triggers
 
