@@ -44,6 +44,6 @@
     "@arxiv-daily/node-runtime": "0.4.6",
     "@clack/prompts": "^1.7.0",
     "jszip": "^3.10.1",
-    "smol-toml": "^1.7.1"
+    "smol-toml": "^1.8.0"
   }
 }
