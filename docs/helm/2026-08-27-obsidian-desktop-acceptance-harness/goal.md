@@ -47,6 +47,7 @@ owner: claude-code-session
 3. P3 — P7 四项桌面验收场景在真实宿主产出断言级证据 — status: done
 4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: done
 5. P5 — 个人文献库设置页场景与截图能力：分组顺序、按钮集合、两种面板宽度下的布局几何、就地授权对话框的出现与取消 — status: active
+6. P6 — 验收部署清单与发布资产清单出自同一常量，其余副本被逐份解析比对；单边改动必红且信息指名道姓 — status: done
 
 ## Open questions
 

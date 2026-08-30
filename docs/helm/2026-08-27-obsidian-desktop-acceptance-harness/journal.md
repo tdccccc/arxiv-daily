@@ -146,3 +146,11 @@
 - change: goal 由 done 改回 active，新增 P5 与一条对应的 success criterion。原 non-goal「截图比对、像素级视觉回归与主题渲染验收」表述不准——它把「落盘截图」和「拿截图做自动比对」混为一谈。改写为：像素级视觉回归与主题渲染验收仍不做（不存基线、不比对、无断言读图），但落盘截图作为人工判断的输入是做的。不装作 non-goal 没变。
 - disposition: 新增两个 harness 模块（`library-settings.mjs`、`screenshots.mjs`）与一个新 session；既有四项场景与它们的 fixture 一字未动。截图落 `.acceptance-out/`，已被 `.gitignore` 的 `.*` 覆盖，不入库。零新增依赖，仍用 Node 内置 WebSocket 与 CDP。
 - next: P5 的布局几何断言当前为红，原因是被测分支的 CSS 缺陷而非断言问题；按 abort trigger 停在这里汇报，不在本 initiative 内改产品代码。
+
+## 2026-08-30 — P6：`styles.css` 那次堵的是洞，这次堵的是类别
+
+- evidence: 发布资产清单在仓库里有三份互不相干的硬编码——`build-deploy.mjs` 的 `ARTIFACTS`、`docs/release.md` 的 bullet 列表、`release.yml` 的 provenance `subject-path` 与 `gh release create` 位置参数。实测确认「只改一处」的两个危险方向都是静默通过的：只往 `docs/release.md` 加一条 `- \`plugin/extra.js\``，`test:release-tools` 报 `235 / 235 / 0`；只往工作流两处加 `plugin/extra.js`，同样 `235 / 235 / 0`。只改 `ARTIFACTS` 那一侧确实会红，但红在一句写死三条路径的 deep-equal 上——那是清单的第四份副本，它说的是「数组变了」，不是「和发布不一致」。
+- change: 新增 `scripts/release-assets.mjs`（`RELEASE_ASSETS` 冻结常量，零 import，验收 harness 直接引用）与 `scripts/release-asset-sources.mjs`（解析文档 bullet 与工作流两份清单，按集合比对，失败信息点名两侧标签、两侧完整清单与多/少的具体文件）。`ARTIFACTS` 改为引用常量。`scripts/tests/release-assets.test.mjs` 32 例。
+- disposition: 关键设计点是「解析失败绝不能表现为通过」。一个找不到清单就返回空数组的解析器，会在文档改版当天悄悄变成恒真断言——和它要防的失败模式一模一样。因此 marker 消失 / 重复、bullet 变散文或表格、bullet 形状不对、清单为空、工作流 YAML 不合法或步骤不唯一，一律抛异常；`verifyReleaseAssetSources()` 把异常收成 issue，返回空数组的唯一含义是「每一处都读出了非空清单且互相一致」。常量本身为空也记为缺陷而非「大家都没有资产所以一致」。
+- disposition: 三份副本里只有一份成了来源，另两份仍是人写的。`docs/release.md` 没有变成生成物——只在清单下方加了一段说明它被机器读、与哪几处绑定。
+- next: 无。P5 不受影响；真实桌面验收在改动后跑过一次，16 条断言全绿，几何数字与 P5 记录逐字一致，说明样式表照旧被部署进去。

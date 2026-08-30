@@ -17,6 +17,13 @@ The Obsidian release assets remain exactly:
 - `plugin/main.js`
 - `plugin/styles.css`
 
+That list is not decorative. `npm run test:release-tools` reads it back and holds
+it to `RELEASE_ASSETS` in `scripts/release-assets.mjs`, which is also what
+`.github/workflows/release.yml` attests and uploads and what the desktop
+acceptance harness deploys into the test vault. Changing the assets means
+changing all of them in the same commit; changing only one of them fails the
+check by name.
+
 Production plugin and CLI bundles contain the complete locked pako notice from
 `THIRD_PARTY_NOTICES.md`.
 
