@@ -41,6 +41,7 @@ export const SETTING_KEYS = {
     apiKey: "embedding.apiKey",
     model: "embedding.model",
     dimension: "embedding.dimension",
+    initialChoiceDone: "embedding.initialChoiceDone",
   },
   pdfParserSidecar: {
     enabled: "pdfParserSidecar.enabled",
@@ -235,88 +236,6 @@ export function buildSettingDefinitions(
       ],
     },
     {
-      type: "group",
-      heading: "Embedding",
-      items: [
-        ...(host.renderEmbeddingModeRow
-          ? [{
-              name: "Embedding mode",
-              desc: "Local embeds offline on this device (slow for large libraries). "
-                + "Remote sends full-text chunks to an embeddings API (fast; requires "
-                + "full-text authorization; switching modes rebuilds the index).",
-              render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderEmbeddingBaseUrlRow
-          ? [{
-              name: "Embedding API base URL",
-              desc: "OpenAI-compatible embeddings endpoint.",
-              render: (setting: Setting) => host.renderEmbeddingBaseUrlRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderEmbeddingApiKeyRow
-          ? [{
-              name: "Embedding API key",
-              desc: "Saved only on this device.",
-              render: (setting: Setting) => host.renderEmbeddingApiKeyRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderEmbeddingModelRow
-          ? [{
-              name: "Embedding model",
-              desc: "Model name sent to the endpoint.",
-              render: (setting: Setting) => host.renderEmbeddingModelRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderEmbeddingDimensionRow
-          ? [{
-              name: "Embedding dimension",
-              desc: "Vector width of the remote model. Must match the model.",
-              render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-      ],
-    },
-    {
-      type: "group",
-      heading: "PDF parsing",
-      items: [
-        ...(host.renderPdfParserSidecarEnabledRow
-          ? [{
-              name: "Use local parser sidecar",
-              desc: "Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.",
-              render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderPdfParserSidecarCapabilitiesUrlRow
-          ? [{
-              name: "Sidecar capability URL",
-              desc: "Local loopback endpoint that reports parser capabilities.",
-              render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-        ...(host.renderPdfParserSidecarParseUrlRow
-          ? [{
-              name: "Sidecar parse URL",
-              desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
-              render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
-            } satisfies SettingDefinitionItem]
-          : []),
-      ],
-    },
-    ...(host.renderLibraryConnectionRow
-      ? [{
-          type: "group",
-          heading: "Personal library",
-          items: [{
-            name: "Library connection",
-            desc: "Choose a folder of PDFs, then build a search index. This is separate from daily reports.",
-            render: (setting: Setting) =>
-              host.renderLibraryConnectionRow?.(setting),
-          }],
-        } satisfies SettingDefinitionItem]
-      : []),
-    {
       type: "list",
       heading: "arXiv categories",
       emptyState: "No categories yet — use Add category to add one.",
@@ -436,6 +355,78 @@ export function buildSettingDefinitions(
           : []),
       ],
     },
+    ...(host.renderLibraryConnectionRow
+      ? [{
+          type: "group",
+          heading: "Personal library",
+          items: [
+            {
+              name: "Library",
+              desc: "Choose a folder of PDFs, then build a search index. Separate from daily reports.",
+              render: (setting: Setting) =>
+                host.renderLibraryConnectionRow?.(setting),
+            },
+            ...(host.renderEmbeddingModeRow
+              ? [{
+                  name: "Embedding",
+                  desc: plugin.settings.embedding.mode === "remote"
+                    ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
+                    : "Local embeds on this device. Switch to remote only if you have an embeddings API.",
+                  render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.embedding.mode === "remote" && host.renderEmbeddingBaseUrlRow
+              ? [{
+                  name: "Embedding API base URL",
+                  desc: "OpenAI-compatible embeddings endpoint.",
+                  render: (setting: Setting) => host.renderEmbeddingBaseUrlRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.embedding.mode === "remote" && host.renderEmbeddingApiKeyRow
+              ? [{
+                  name: "Embedding API key",
+                  desc: "Saved only on this device.",
+                  render: (setting: Setting) => host.renderEmbeddingApiKeyRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.embedding.mode === "remote" && host.renderEmbeddingModelRow
+              ? [{
+                  name: "Embedding model",
+                  desc: "Model name sent to the endpoint.",
+                  render: (setting: Setting) => host.renderEmbeddingModelRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.embedding.mode === "remote" && host.renderEmbeddingDimensionRow
+              ? [{
+                  name: "Embedding dimension",
+                  desc: "Vector width of the remote model. Must match the model.",
+                  render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(host.renderPdfParserSidecarEnabledRow
+              ? [{
+                  name: "Better PDF parser",
+                  desc: "Optional local sidecar. Off by default; PDFs stay on this device either way.",
+                  render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarCapabilitiesUrlRow
+              ? [{
+                  name: "Sidecar capability URL",
+                  desc: "Local loopback endpoint that reports parser capabilities.",
+                  render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarParseUrlRow
+              ? [{
+                  name: "Sidecar parse URL",
+                  desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
+                  render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
+          ],
+        } satisfies SettingDefinitionItem]
+      : []),
     {
       type: "group",
       heading: "Email delivery",

@@ -31,8 +31,8 @@ export function confirmLibraryAuthorization(
     }
     modal.contentEl.createEl("p", {
       text: disclosure.processingDepth === "full-text"
-        ? "Authorizing permits full-text chunks to be sent to the endpoints above for similarity indexing in later steps. Changing the folder, endpoints, file types, or depth invalidates it."
-        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoint in later profile-building steps. Changing the folder, endpoint, file types, or depth invalidates it.",
+        ? "Authorizing permits full-text chunks from that folder to be sent to the endpoints above, where they are turned into similarity vectors for library search. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoints, file types, or depth invalidates it."
+        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoint in later profile-building steps. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoint, file types, or depth invalidates it.",
     });
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
     let settled = false;
@@ -46,6 +46,50 @@ export function confirmLibraryAuthorization(
     const authorize = actions.createEl("button", { text: "Authorize" });
     authorize.addClass("mod-cta");
     authorize.onclick = () => finish(true);
+    modal.onClose = () => finish(false);
+    modal.open();
+  });
+}
+
+/**
+ * Confirms revoking the personal-library grant. Revoking a remote-embedding
+ * grant also returns embedding to local, so no configuration is left in the
+ * dead "remote but unauthorized" state; that consequence — including the
+ * invalidated index — is disclosed here before anything changes.
+ */
+export function confirmLibraryRevocation(
+  app: App,
+  options: { switchesToLocal: boolean },
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const modal = new Modal(app);
+    modal.titleEl.setText(
+      options.switchesToLocal
+        ? "Revoke authorization and return to local embedding?"
+        : "Revoke personal library authorization?",
+    );
+    modal.contentEl.createEl("p", {
+      text: options.switchesToLocal
+        ? "arXiv Daily stops sending anything from your library folder to the model endpoints, and embedding returns to local (offline) on this device."
+        : "arXiv Daily stops sending anything from your library folder to the model endpoints. Local embedding keeps working offline.",
+    });
+    if (options.switchesToLocal) {
+      modal.contentEl.createEl("p", {
+        text: "The existing search index was built with the remote embedding model. Local and remote vectors cannot be mixed, so the index stops being usable and has to be rebuilt on this device (that takes hours for a large library).",
+      });
+    }
+    const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+      modal.close();
+    };
+    actions.createEl("button", { text: "Cancel" }).onclick = () => finish(false);
+    const revoke = actions.createEl("button", { text: "Revoke" });
+    revoke.addClass("mod-warning");
+    revoke.onclick = () => finish(true);
     modal.onClose = () => finish(false);
     modal.open();
   });

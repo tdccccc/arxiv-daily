@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Modal, type App } from "obsidian";
 import {
   confirmLibraryAuthorization,
+  confirmLibraryRevocation,
   showLibraryInventoryPreview,
   showPersonalLibraryCatalogSummary,
 } from "../src/library/modal";
@@ -61,6 +62,25 @@ describe("personal library authorization modal", () => {
     await expect(result).resolves.toBe(true);
   });
 
+  it("discloses destination, purpose, containment, and reversibility at full-text depth", async () => {
+    const result = confirmLibraryAuthorization({} as App, {
+      ...disclosure,
+      processingDepth: "full-text",
+      embeddingEndpoint: "https://embed.example.com/v1/embeddings",
+    });
+    const modal = Modal.opened.at(-1)!;
+    const text = modal.contentEl.textContent ?? "";
+
+    expect(text).toContain("/private/papers");
+    expect(text).toContain("Full text");
+    expect(text).toContain("https://embed.example.com/v1/embeddings");
+    expect(text).toMatch(/similarity vectors/i);
+    expect(text).toMatch(/nothing else/i);
+    expect(text).toMatch(/revoke/i);
+    modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+    await expect(result).resolves.toBe(true);
+  });
+
   it("resolves false when cancelled or closed outside the buttons", async () => {
     const cancelled = confirmLibraryAuthorization({} as App, disclosure);
     Modal.opened.at(-1)!.contentEl.querySelector<HTMLButtonElement>("button")!.click();
@@ -69,6 +89,35 @@ describe("personal library authorization modal", () => {
     const closed = confirmLibraryAuthorization({} as App, disclosure);
     Modal.opened.at(-1)!.close();
     await expect(closed).resolves.toBe(false);
+  });
+});
+
+describe("personal library revocation modal", () => {
+  it("says revoking also switches embedding back to local and invalidates the index", async () => {
+    const result = confirmLibraryRevocation({} as App, { switchesToLocal: true });
+    const modal = Modal.opened.at(-1)!;
+    const text = `${modal.titleEl.textContent ?? ""}\n${modal.contentEl.textContent ?? ""}`;
+
+    expect(text).toMatch(/local embedding/i);
+    expect(text).toMatch(/rebuilt/i);
+    const buttons = [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.map((button) => button.textContent)).toEqual(["Cancel", "Revoke"]);
+    buttons[1]?.click();
+    await expect(result).resolves.toBe(true);
+  });
+
+  it("omits the embedding switch for a library that is already local", async () => {
+    const result = confirmLibraryRevocation({} as App, { switchesToLocal: false });
+    const modal = Modal.opened.at(-1)!;
+    expect(modal.contentEl.textContent ?? "").not.toMatch(/switch/i);
+    modal.contentEl.querySelector<HTMLButtonElement>("button")!.click();
+    await expect(result).resolves.toBe(false);
+  });
+
+  it("treats dismissal as cancel", async () => {
+    const result = confirmLibraryRevocation({} as App, { switchesToLocal: true });
+    Modal.opened.at(-1)!.close();
+    await expect(result).resolves.toBe(false);
   });
 });
 

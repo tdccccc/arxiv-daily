@@ -44,10 +44,22 @@ export type LibraryConnectionStatus =
   | { kind: "authorization-invalidated"; rootLabel: string }
   | { kind: "authorized"; rootLabel: string; grantedAt: string };
 
+/**
+ * The one next step the library row offers. Remote consent is never a step of
+ * its own: it is asked in place when remote embedding is switched on, or —
+ * when that moment could not name the folder and endpoint — as a confirmation
+ * in front of indexing. `remoteConsentPending` exists so the row's description
+ * can still say a remote grant is missing without a second button implying it
+ * is a separate chore.
+ */
 export type LibrarySetupNextStep =
   | { action: "choose-folder"; description: string }
-  | { action: "authorize"; description: string; rootLabel: string }
-  | { action: "index"; description: string; rootLabel: string };
+  | {
+      action: "index";
+      description: string;
+      rootLabel: string;
+      remoteConsentPending: boolean;
+    };
 
 export function librarySetupNextStep(
   status: LibraryConnectionStatus,
@@ -63,16 +75,18 @@ export function librarySetupNextStep(
   if (embeddingMode === "remote" && status.kind !== "authorized") {
     const expired = status.kind === "authorization-invalidated";
     return {
-      action: "authorize",
+      action: "index",
       rootLabel,
+      remoteConsentPending: true,
       description: expired
-        ? `Selected: ${rootLabel}. Remote embedding sends full text off this device — review and authorize again.`
-        : `Selected: ${rootLabel}. Remote embedding sends full text off this device — review and authorize before indexing.`,
+        ? `Selected: ${rootLabel}. The embedding endpoint changed, so building the index asks you to confirm what full text leaves this device.`
+        : `Selected: ${rootLabel}. Remote embedding sends full text off this device — building the index asks you to confirm first.`,
     };
   }
   return {
     action: "index",
     rootLabel,
+    remoteConsentPending: false,
     description: embeddingMode === "remote"
       ? `Connected: ${rootLabel}. Authorized for remote full-text embedding. Build the search index next.`
       : `Selected: ${rootLabel}. Local embedding stays on this device. Build the search index to search these PDFs.`,
@@ -196,10 +210,12 @@ export function libraryAuthorizationDisclosure(
   return {
     selectedRoot: connection.selectedRoot,
     eligibleExtensions: [...connection.eligibleExtensions],
-    processingDepth: connection.processingDepth,
+    // The depth disclosed is the depth of the scope being asked about, not the
+    // depth a previous grant stored: consent is asked before the grant exists.
+    processingDepth: scope.embeddingEndpoint ? "full-text" : connection.processingDepth,
     endpoint: displayChatEndpoint(scope.llmBaseUrl),
     ...(scope.embeddingEndpoint
-      ? { embeddingEndpoint: displayChatEndpoint(scope.embeddingEndpoint.baseUrl) }
+      ? { embeddingEndpoint: displayEmbeddingsEndpoint(scope.embeddingEndpoint.baseUrl) }
       : {}),
     authorizationFingerprint: libraryAuthorizationFingerprint(connection, scope),
   };
@@ -263,7 +279,20 @@ export function buildLibraryInventoryPreview(
 }
 
 function displayChatEndpoint(baseUrl: string): string {
-  const url = new URL(buildChatCompletionsUrl(baseUrl));
+  return redactEndpoint(buildChatCompletionsUrl(baseUrl));
+}
+
+/**
+ * The URL remote embedding actually posts full text to (`{baseUrl}/embeddings`,
+ * see `createRemoteEmbeddingModel`). Disclosing the chat-completions URL here
+ * would name a destination nothing is ever sent to.
+ */
+function displayEmbeddingsEndpoint(baseUrl: string): string {
+  return redactEndpoint(`${baseUrl.trim().replace(/\/+$/, "")}/embeddings`);
+}
+
+function redactEndpoint(effectiveUrl: string): string {
+  const url = new URL(effectiveUrl);
   url.username = "";
   url.password = "";
   for (const key of Array.from(url.searchParams.keys())) {

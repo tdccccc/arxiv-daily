@@ -182,6 +182,69 @@ describe("llmHttpWarning", () => {
   });
 });
 
+describe("legacy section order", () => {
+  it("renders Personal library after Output & schedule and before Email delivery", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    renderLegacySettings(tab);
+    const headings = Setting.instances
+      .filter((setting) => setting.settingEl.hasAttribute("data-arxiv-daily-section"))
+      .map((setting) => setting.nameEl.textContent ?? "");
+    expect(headings).toEqual([
+      "AI model",
+      "arXiv",
+      "Research topics",
+      "Output & schedule",
+      "Personal library",
+      "Email delivery",
+      "Advanced",
+      "Help & feedback",
+    ]);
+    const scheduleIndex = headings.indexOf("Output & schedule");
+    expect(headings[scheduleIndex + 1]).toBe("Personal library");
+    expect(headings[scheduleIndex + 2]).toBe("Email delivery");
+  });
+});
+
+describe("legacy embedding rows", () => {
+  it("routes the mode dropdown through the same in-place consent as the 1.13+ row", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const apply = vi
+      .spyOn(tab, "applyEmbeddingModeChange")
+      .mockImplementation(async () => false);
+    const rows = renderLegacySettings(tab);
+    const dropdown = componentOf(rows.get("Embedding"), DropdownComponent as never) as DropdownComponent;
+
+    await dropdown.trigger("remote");
+
+    expect(apply).toHaveBeenCalledWith("remote");
+    // Declined switches leave both the setting and the dropdown on local.
+    expect(settings.embedding.mode).toBe("local");
+    expect(dropdown.selectEl.value).toBe("local");
+  });
+
+  it("routes the endpoint field through the shared re-ask on change", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.embedding.mode = "remote";
+    settings.embedding.baseUrl = "https://embed.example.com/v1";
+    const save = vi
+      .spyOn(tab, "saveEmbeddingEndpointField")
+      .mockResolvedValue("https://embed.example.com/v1");
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(
+      rows.get("Embedding API base URL"),
+      TextComponent as never,
+    ) as TextComponent;
+
+    await input.trigger("https://elsewhere.example.com/v1");
+
+    expect(save).toHaveBeenCalledWith(
+      "embedding.baseUrl",
+      "https://elsewhere.example.com/v1",
+    );
+    expect(input.inputEl.value).toBe("https://embed.example.com/v1");
+  });
+});
+
 describe("legacy transactional renderers", () => {
   it.each([
     ["API base URL", TextComponent, "https://candidate.example/v1", "llm", "baseUrl"],
@@ -714,3 +777,13 @@ describe("confirmEmbeddingMode", () => {
     expect(settingsTabSource).toContain('"arXiv Daily: local embedding (offline)');
   });
 });
+
+describe("personal library settings layout", () => {
+  it("keeps library action buttons on one right-aligned row", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    expect(css).toMatch(
+      /\.arxiv-daily-settings \.setting-item-control\.arxiv-daily-settings__library-controls \{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?justify-content:\s*flex-end;/,
+    );
+  });
+});
+

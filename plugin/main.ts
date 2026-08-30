@@ -556,19 +556,28 @@ export default class ArxivDailyPlugin extends Plugin {
     );
   }
 
-  getLibraryAuthorizationDisclosure(): LibraryAuthorizationDisclosure | null {
+  /**
+   * The scope a grant would cover. `embeddingMode` may name a mode that is not
+   * applied yet, so consent for switching to remote embedding can be disclosed
+   * and decided before anything changes (ADR 0008).
+   */
+  getLibraryAuthorizationDisclosure(
+    options?: { embeddingMode?: "local" | "remote" },
+  ): LibraryAuthorizationDisclosure | null {
     if (!this.libraryConnection) return null;
     return libraryAuthorizationDisclosure(
       this.libraryConnection,
-      this.libraryAuthorizationScope(),
+      this.libraryAuthorizationScope(options?.embeddingMode),
     );
   }
 
   /** Authorization scope: the LLM endpoint plus the embedding endpoint when remote embedding is enabled. */
-  private libraryAuthorizationScope(): LibraryAuthorizationScope {
+  private libraryAuthorizationScope(
+    embeddingMode: "local" | "remote" = this.settings.embedding.mode,
+  ): LibraryAuthorizationScope {
     return {
       llmBaseUrl: this.settings.llm.baseUrl,
-      ...(this.settings.embedding.mode === "remote" && this.settings.embedding.baseUrl.trim()
+      ...(embeddingMode === "remote" && this.settings.embedding.baseUrl.trim()
         ? { embeddingEndpoint: { baseUrl: this.settings.embedding.baseUrl } }
         : {}),
     };

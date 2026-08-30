@@ -1,6 +1,5 @@
 import {
   App,
-  Menu,
   Modal,
   Notice,
   PluginSettingTab,
@@ -52,8 +51,7 @@ import {
 import {
   confirmEmbeddingMode,
   confirmLibraryAuthorization,
-  showLibraryInventoryPreview,
-  showPersonalLibraryCatalogSummary,
+  confirmLibraryRevocation,
 } from "../library/modal";
 import { renderSensitiveInput } from "./sensitive-input";
 
@@ -367,7 +365,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced" | "embedding" | "pdf-parsing",
+    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
@@ -429,14 +427,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
         .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
     );
-    if (next.action === "authorize") {
-      setting.addButton((button) =>
-        button
-          .setButtonText("Review & authorize")
-          .setCta()
-          .onClick(() => this.runAction("authorize personal library", () => this.reviewLibraryAuthorization())),
-      );
-    }
+    // There is no authorization button: remote consent is asked in place when
+    // remote embedding is switched on, and otherwise in front of indexing.
     if (next.action === "index") {
       setting.addButton((button) =>
         button
@@ -445,51 +437,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .onClick(() => this.runAction("index personal library full text", () => this.indexPersonalLibraryFullText())),
       );
     }
-    if (status.kind !== "disconnected") {
+    // Secondary library actions (preview / scan / reload / direction review)
+    // live in the command palette only, so this row never grows past three
+    // buttons and needs no menu.
+    if (status.kind === "authorized") {
       setting.addButton((button) =>
         button
-          .setButtonText("Manage…")
-          .onClick(() => {
-            const rect = button.buttonEl.getBoundingClientRect();
-            this.openLibraryManageMenu({ x: rect.left, y: rect.bottom });
-          }),
-      );
-    }
-  }
-
-  /** Secondary library actions behind one menu so the row stays compact. */
-  private openLibraryManageMenu(position: { x: number; y: number }): void {
-    const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle("Review directions")
-        .onClick(() => this.runAction("open direction review", async () => {
-          this.plugin.openPersonalLibraryDirectionReview();
-        })),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Preview library files")
-        .onClick(() => this.runAction("preview personal library", () => this.previewLibraryInventory())),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Scan library")
-        .onClick(() => this.runAction("scan personal library", () => this.scanPersonalLibrary())),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle("Reload catalog")
-        .onClick(() => this.runAction("reload personal library catalog", () => this.reloadPersonalLibraryCatalog())),
-    );
-    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") {
-      menu.addItem((item) =>
-        item
-          .setTitle("Revoke authorization")
+          .setButtonText("Revoke")
           .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
       );
     }
-    menu.showAtPosition(position);
   }
 
   public async chooseLibraryRoot(): Promise<void> {
@@ -509,56 +466,152 @@ export class ArxivDailySettingTab extends PluginSettingTab {
    * First-time guided choice between local and remote embedding (ADR 0008),
    * offered once when a library is first connected. Dismissing keeps local;
    * the mode stays changeable in settings (switching rebuilds the index).
+   *
+   * This is also where a remote switch made before any folder existed gets its
+   * disclosure: selecting the folder is the first moment the modal can name
+   * what would be sent.
    */
   private async offerEmbeddingModeChoice(): Promise<void> {
-    if (this.plugin.settings.embedding.initialChoiceDone) return;
-    const mode = await confirmEmbeddingMode(this.app);
-    this.plugin.settings.embedding.mode = mode;
-    this.plugin.settings.embedding.initialChoiceDone = true;
-    await this.plugin.saveSettings();
-    this.refreshSettings();
-    new Notice(
-      mode === "remote"
-        ? "arXiv Daily: remote embedding enabled — review & authorize at full-text depth before indexing."
-        : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
-      10_000,
-    );
+    if (!this.plugin.settings.embedding.initialChoiceDone) {
+      const mode = await confirmEmbeddingMode(this.app);
+      this.plugin.settings.embedding.mode = mode;
+      this.plugin.settings.embedding.initialChoiceDone = true;
+      await this.plugin.saveSettings();
+      this.refreshSettings();
+      new Notice(
+        mode === "remote"
+          ? "arXiv Daily: remote embedding enabled — confirm what leaves this device next."
+          : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
+        10_000,
+      );
+    }
+    if (this.plugin.settings.embedding.mode !== "remote") return;
+    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") return;
+    // Declining here leaves remote embedding ungranted on purpose: the same
+    // disclosure is asked again in front of indexing, so nothing is stuck.
+    await this.requestRemoteFullTextConsent();
   }
 
-  public async reviewLibraryAuthorization(): Promise<void> {
-    const disclosure = this.plugin.getLibraryAuthorizationDisclosure();
-    if (!disclosure) throw new Error("Choose a personal library first");
-    if (!await confirmLibraryAuthorization(this.app, disclosure)) return;
+  /**
+   * The single full-text disclosure for remote embedding (ADR 0008), reached
+   * from whichever moment comes first: switching to remote, selecting a folder
+   * afterwards, moving the endpoint, or building the index while a legacy
+   * remote configuration is still ungranted. `undisclosable` means the folder
+   * or the endpoint is not known yet, so there is nothing honest to disclose.
+   */
+  private async requestRemoteFullTextConsent(
+    options: { applyBeforeGrant?: () => Promise<void> } = {},
+  ): Promise<"granted" | "declined" | "undisclosable"> {
+    let disclosure;
+    try {
+      disclosure = this.plugin.getLibraryAuthorizationDisclosure({
+        embeddingMode: "remote",
+      });
+    } catch {
+      // An endpoint that cannot even be rendered as a URL cannot be disclosed;
+      // the existing configuration check reports it when indexing runs.
+      return "undisclosable";
+    }
+    if (!disclosure?.embeddingEndpoint) return "undisclosable";
+    if (!await confirmLibraryAuthorization(this.app, disclosure)) return "declined";
+    await options.applyBeforeGrant?.();
     await this.plugin.authorizeLibraryProcessing(
       disclosure.authorizationFingerprint,
     );
-    new Notice("arXiv Daily: personal library processing authorized.");
     this.refreshSettings();
+    return "granted";
   }
 
-  public async previewLibraryInventory(): Promise<void> {
-    const preview = await this.plugin.previewLibraryInventory();
-    showLibraryInventoryPreview(this.app, preview);
+  /**
+   * Apply an Embedding mode change from either settings path. Turning remote
+   * embedding on asks for full-text disclosure in place: confirming switches
+   * and authorizes in one step, declining leaves the mode and the grant alone.
+   */
+  public async applyEmbeddingModeChange(next: "local" | "remote"): Promise<boolean> {
+    const settings = this.plugin.settings;
+    if (next === settings.embedding.mode) return false;
+    const markChosen: SettingsValueChange[] = settings.embedding.initialChoiceDone
+      ? []
+      : [{ key: SETTING_KEYS.embedding.initialChoiceDone, value: true }];
+    const applyMode = async () => {
+      await this.changeSettingValues([
+        { key: SETTING_KEYS.embedding.mode, value: next },
+        ...markChosen,
+      ]);
+    };
+    if (next === "local") {
+      await applyMode();
+      return true;
+    }
+    const consent = await this.requestRemoteFullTextConsent({
+      // The grant is written against the live settings, so the mode has to be
+      // remote before authorizing — but only once the disclosure is accepted.
+      applyBeforeGrant: applyMode,
+    });
+    if (consent === "declined") return false;
+    if (consent === "undisclosable") {
+      // No folder or no endpoint to name yet: switch now, disclose at the
+      // first moment that can name them (folder selection, or indexing).
+      await applyMode();
+      return true;
+    }
+    new Notice("arXiv Daily: remote embedding enabled and full-text processing authorized.");
+    return true;
   }
 
-  public async scanPersonalLibrary(): Promise<void> {
-    const catalog = await this.plugin.scanPersonalLibrary();
-    showPersonalLibraryCatalogSummary(this.app, catalog);
-  }
-
-  public async reloadPersonalLibraryCatalog(): Promise<void> {
-    const catalog = await this.plugin.reloadPersonalLibraryCatalog();
-    if (!catalog) throw new Error("Choose a personal library first");
-    showPersonalLibraryCatalogSummary(this.app, catalog);
+  /**
+   * Save an embedding field that can move where full text is sent. When the
+   * change invalidates a live grant, the same disclosure is shown for the new
+   * destination; declining restores the authorized value, so an authorized
+   * library never silently points somewhere the user did not agree to.
+   * Returns the value the control should display.
+   */
+  public async saveEmbeddingEndpointField(
+    key: typeof SETTING_KEYS.embedding.baseUrl | typeof SETTING_KEYS.embedding.model,
+    next: string,
+  ): Promise<string> {
+    const read = () => key === SETTING_KEYS.embedding.baseUrl
+      ? this.plugin.settings.embedding.baseUrl
+      : this.plugin.settings.embedding.model;
+    const previous = read();
+    if (next === previous) return previous;
+    const wasAuthorized = this.plugin.getLibraryConnectionStatus().kind === "authorized";
+    await this.changeSettingValue(key, next);
+    if (!wasAuthorized || this.plugin.settings.embedding.mode !== "remote") return read();
+    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") return read();
+    const consent = await this.requestRemoteFullTextConsent();
+    // `undisclosable` means the field was emptied, leaving no destination to
+    // disclose; keep the edit and let the indexing gate report the gap.
+    if (consent !== "declined") return read();
+    await this.changeSettingValue(key, previous);
+    this.refreshSettings();
+    new Notice(
+      "arXiv Daily: embedding endpoint change cancelled — the authorized endpoint is unchanged.",
+      10_000,
+    );
+    return read();
   }
 
   public async revokeLibraryAuthorization(): Promise<void> {
+    // Revoking a remote grant also returns embedding to local, so the plugin
+    // is never left in a remote-but-unauthorized state nobody asked for.
+    const switchesToLocal = this.plugin.settings.embedding.mode === "remote";
+    if (!await confirmLibraryRevocation(this.app, { switchesToLocal })) return;
     await this.plugin.revokeLibraryProcessing();
-    new Notice("arXiv Daily: personal library authorization revoked.");
+    if (switchesToLocal) {
+      await this.changeSettingValue(SETTING_KEYS.embedding.mode, "local");
+    }
+    new Notice(
+      switchesToLocal
+        ? "arXiv Daily: authorization revoked and embedding switched back to local. Rebuild the index when you want to search again."
+        : "arXiv Daily: personal library authorization revoked.",
+      10_000,
+    );
     this.refreshSettings();
   }
 
   public async indexPersonalLibraryFullText(): Promise<void> {
+    if (!await this.ensureRemoteEmbeddingConsent()) return;
     new Notice("arXiv Daily: indexing personal library full text…");
     try {
       const summary = await this.plugin.indexPersonalLibraryFullText();
@@ -574,6 +627,27 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.plugin.logger.error("settings: personal library full-text indexing failed", error);
       throw error;
     }
+  }
+
+  /**
+   * Last gate in front of remote full-text indexing. Configurations that were
+   * remote before this consent flow existed — or whose grant an endpoint edit
+   * invalidated — are asked here instead of being blocked by an error.
+   */
+  private async ensureRemoteEmbeddingConsent(): Promise<boolean> {
+    if (this.plugin.settings.embedding.mode !== "remote") return true;
+    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") return true;
+    const consent = await this.requestRemoteFullTextConsent();
+    if (consent === "declined") {
+      new Notice(
+        "arXiv Daily: indexing cancelled. Remote embedding needs your confirmation before full text can leave this device.",
+        10_000,
+      );
+      return false;
+    }
+    // `undisclosable` means the remote endpoint is not configured yet; let the
+    // existing configuration check report that instead of inventing a modal.
+    return true;
   }
 
   public async setArxivCategories(categories: string[]): Promise<void> {
@@ -1117,115 +1191,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
       });
 
-    // ─── Embedding ────────────────────────────────────
-    this.sectionHeading(containerEl, "Embedding", "embedding");
-    new Setting(containerEl)
-      .setName("Embedding mode")
-      .setDesc(
-        "How library full text becomes similarity vectors. Local embeds offline on this device "
-          + "(slow for large libraries). Remote sends full-text chunks to an embeddings API "
-          + "(fast; requires model-processing authorization at full-text depth; "
-          + "switching modes rebuilds the index).",
-      )
-      .addDropdown((d) => {
-        d.addOption("local", "Local (offline, default)");
-        d.addOption("remote", "Remote (fast, full text leaves this device)");
-        d.setValue(s.embedding.mode);
-        d.onChange(async (v) => {
-          s.embedding.mode = v === "remote" ? "remote" : "local";
-          await this.plugin.saveSettings();
-        });
-      });
-    new Setting(containerEl)
-      .setName("Embedding API base URL")
-      .setDesc("OpenAI-compatible embeddings endpoint, e.g. https://api.openai.com/v1.")
-      .addText((t) => {
-        t.setPlaceholder("https://api.openai.com/v1")
-          .setValue(s.embedding.baseUrl)
-          .onChange(async (v) => {
-            s.embedding.baseUrl = v.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-    new Setting(containerEl)
-      .setName("Embedding API key")
-      .setDesc("Saved only on this device.")
-      .addText((t) => {
-        t.inputEl.type = "password";
-        t.setPlaceholder("Enter API key")
-          .setValue(s.embedding.apiKey)
-          .onChange(async (v) => {
-            s.embedding.apiKey = v.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-    new Setting(containerEl)
-      .setName("Embedding model")
-      .setDesc("Model name sent to the endpoint, e.g. text-embedding-3-small.")
-      .addText((t) => {
-        t.setPlaceholder("text-embedding-3-small")
-          .setValue(s.embedding.model)
-          .onChange(async (v) => {
-            s.embedding.model = v.trim();
-            await this.plugin.saveSettings();
-          });
-      });
-    new Setting(containerEl)
-      .setName("Embedding dimension")
-      .setDesc("Vector width of the remote model, e.g. 1536. Must match the model.")
-      .addText((t) => {
-        t.setPlaceholder("1536")
-          .setValue(String(s.embedding.dimension))
-          .onChange(async (v) => {
-            const parsed = Number(v.trim());
-            if (Number.isInteger(parsed) && parsed > 0) {
-              s.embedding.dimension = parsed;
-              await this.plugin.saveSettings();
-            }
-          });
-      });
-
-    // ─── PDF parsing ──────────────────────────────────
-    this.sectionHeading(containerEl, "PDF parsing", "pdf-parsing");
-    new Setting(containerEl)
-      .setName("Use local parser sidecar")
-      .setDesc("Optional. Probes only a configured loopback service; each PDF is sent as bytes without its path or library details.")
-      .addToggle((toggle) => {
-        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
-          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
-        });
-      });
-    new Setting(containerEl)
-      .setName("Sidecar capability URL")
-      .setDesc("Local loopback endpoint that reports parser capabilities.")
-      .addText((text) => {
-        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
-          .setValue(s.pdfParserSidecar.capabilitiesUrl)
-          .onChange(async (value) => {
-            await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
-          });
-      });
-    new Setting(containerEl)
-      .setName("Sidecar parse URL")
-      .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
-      .addText((text) => {
-        text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
-          .setValue(s.pdfParserSidecar.parseUrl)
-          .onChange(async (value) => {
-            await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
-          });
-      });
-
-    // ─── Personal library ─────────────────────────────
-    this.sectionHeading(
-      containerEl,
-      "Personal library",
-      "library",
-      "Connect one local paper library through read-only access.",
-    );
-    const librarySetting = new Setting(containerEl).setName("Library connection");
-    this.renderLibraryConnectionControls(librarySetting);
-
     // ─── arXiv ────────────────────────────────────────
     this.sectionHeading(containerEl, "arXiv", "arxiv");
 
@@ -1481,6 +1446,133 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }),
       "How often the plugin looks for a day that still needs a report. Default is 20 minutes.",
     );
+
+    // ─── Personal library ─────────────────────────────
+    this.sectionHeading(containerEl, "Personal library", "library");
+    const librarySetting = new Setting(containerEl)
+      .setName("Library")
+      .setDesc("Choose a folder of PDFs, then build a search index. Separate from daily reports.");
+    this.renderLibraryConnectionControls(librarySetting);
+
+    new Setting(containerEl)
+      .setName("Embedding")
+      .setDesc(
+        s.embedding.mode === "remote"
+          ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
+          : "Local embeds on this device. Switch to remote only if you have an embeddings API.",
+      )
+      .addDropdown((d) => {
+        d.addOption("local", "Local (offline, default)");
+        d.addOption("remote", "Remote (fast, full text leaves this device)");
+        d.setValue(s.embedding.mode);
+        d.onChange(async (v) => {
+          const next = v === "remote" ? "remote" : "local";
+          try {
+            const changed = await this.applyEmbeddingModeChange(next);
+            d.setValue(this.plugin.settings.embedding.mode);
+            if (changed) this.renderLegacySettings();
+          } catch (error) {
+            d.setValue(this.plugin.settings.embedding.mode);
+            this.reportActionError("save embedding mode", error);
+          }
+        });
+      });
+    if (s.embedding.mode === "remote") {
+      new Setting(containerEl)
+        .setName("Embedding API base URL")
+        .setDesc("OpenAI-compatible embeddings endpoint.")
+        .addText((t) => {
+          t.setPlaceholder("https://api.openai.com/v1")
+            .setValue(s.embedding.baseUrl)
+            .onChange(async (v) => {
+              try {
+                t.setValue(await this.saveEmbeddingEndpointField(
+                  SETTING_KEYS.embedding.baseUrl,
+                  v.trim(),
+                ));
+              } catch (error) {
+                t.setValue(this.plugin.settings.embedding.baseUrl);
+                this.reportActionError("save embedding base url", error);
+              }
+            });
+        });
+      new Setting(containerEl)
+        .setName("Embedding API key")
+        .setDesc("Saved only on this device.")
+        .addText((t) => {
+          t.inputEl.type = "password";
+          t.setPlaceholder("Enter API key")
+            .setValue(s.embedding.apiKey)
+            .onChange(async (v) => {
+              s.embedding.apiKey = v.trim();
+              await this.plugin.saveSettings();
+            });
+        });
+      new Setting(containerEl)
+        .setName("Embedding model")
+        .setDesc("Model name sent to the endpoint.")
+        .addText((t) => {
+          t.setPlaceholder("text-embedding-3-small")
+            .setValue(s.embedding.model)
+            .onChange(async (v) => {
+              try {
+                t.setValue(await this.saveEmbeddingEndpointField(
+                  SETTING_KEYS.embedding.model,
+                  v.trim(),
+                ));
+              } catch (error) {
+                t.setValue(this.plugin.settings.embedding.model);
+                this.reportActionError("save embedding model", error);
+              }
+            });
+        });
+      new Setting(containerEl)
+        .setName("Embedding dimension")
+        .setDesc("Vector width of the remote model. Must match the model.")
+        .addText((t) => {
+          t.setPlaceholder("1536")
+            .setValue(String(s.embedding.dimension))
+            .onChange(async (v) => {
+              const parsed = Number(v.trim());
+              if (Number.isInteger(parsed) && parsed > 0) {
+                s.embedding.dimension = parsed;
+                await this.plugin.saveSettings();
+              }
+            });
+        });
+    }
+
+    new Setting(containerEl)
+      .setName("Better PDF parser")
+      .setDesc("Optional local sidecar. Off by default; PDFs stay on this device either way.")
+      .addToggle((toggle) => {
+        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
+          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
+          this.renderLegacySettings();
+        });
+      });
+    if (s.pdfParserSidecar.enabled) {
+      new Setting(containerEl)
+        .setName("Sidecar capability URL")
+        .setDesc("Local loopback endpoint that reports parser capabilities.")
+        .addText((text) => {
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
+            .setValue(s.pdfParserSidecar.capabilitiesUrl)
+            .onChange(async (value) => {
+              await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
+            });
+        });
+      new Setting(containerEl)
+        .setName("Sidecar parse URL")
+        .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
+        .addText((text) => {
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
+            .setValue(s.pdfParserSidecar.parseUrl)
+            .onChange(async (value) => {
+              await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
+            });
+        });
+    }
 
     // ─── Email ───────────────────────────────────────────
     this.sectionHeading(containerEl, "Email delivery", "email");

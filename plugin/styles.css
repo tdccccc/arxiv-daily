@@ -1832,8 +1832,17 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   }
 }
 
-.arxiv-daily-settings__library-controls {
+.arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls button {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
 }
