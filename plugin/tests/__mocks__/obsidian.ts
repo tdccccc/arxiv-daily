@@ -305,6 +305,8 @@ export class ToggleComponent {
 
 export class Modal {
   static opened: Modal[] = [];
+  /** The dialog root Obsidian renders as `.modal`; carries any plugin classes. */
+  modalEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   titleEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   contentEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
   constructor(_app: App) {}

@@ -5,13 +5,37 @@ import type {
   LibraryInventoryPreview,
 } from "./connection";
 
+/**
+ * Stable handle on the disclosure dialog, for anything that has to find it
+ * from the outside (the desktop acceptance run drives it through this).
+ * Deliberately not derived from the heading: the heading is product copy that
+ * follows the processing depth, so locating by it would turn every wording
+ * change into a "dialog not found" failure instead of a wording failure.
+ */
+export const LIBRARY_AUTHORIZATION_MODAL_CLASS = "arxiv-daily-library-authorization-modal";
+
+/**
+ * The heading names what leaves the device, and it has to name the depth the
+ * grant actually covers: a fixed "full text" heading would misdescribe a
+ * metadata-and-abstracts grant exactly the way the depth and endpoint fields
+ * used to before they were made to follow the scope being asked about.
+ */
+export function libraryAuthorizationTitle(
+  processingDepth: LibraryAuthorizationDisclosure["processingDepth"],
+): string {
+  return processingDepth === "full-text"
+    ? "Send full text off this device?"
+    : "Send titles and abstracts off this device?";
+}
+
 export function confirmLibraryAuthorization(
   app: App,
   disclosure: LibraryAuthorizationDisclosure,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
-    modal.titleEl.setText("Authorize personal library");
+    modal.modalEl.addClass(LIBRARY_AUTHORIZATION_MODAL_CLASS);
+    modal.titleEl.setText(libraryAuthorizationTitle(disclosure.processingDepth));
     modal.contentEl.createEl("p", {
       text: "Review exactly what arXiv Daily may process through your configured model endpoints.",
     });

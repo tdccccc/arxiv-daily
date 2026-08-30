@@ -779,11 +779,67 @@ describe("confirmEmbeddingMode", () => {
 });
 
 describe("personal library settings layout", () => {
-  it("keeps library action buttons on one right-aligned row", () => {
+  // Whether the buttons actually land on one line is a question for a layout
+  // engine, and happy-dom has none: it is settled by the desktop acceptance
+  // harness (`library-row-geometry`), which measures the real renderer. What
+  // can be settled here is the declaration that made the row overflow — a
+  // control box allowed to shrink under buttons that refuse to shrink with it.
+  const libraryControlsBlock = (): string => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
-    expect(css).toMatch(
-      /\.arxiv-daily-settings \.setting-item-control\.arxiv-daily-settings__library-controls \{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?justify-content:\s*flex-end;/,
+    const match = css.match(
+      /\.arxiv-daily-settings \.setting-item-control\.arxiv-daily-settings__library-controls \{([^}]*)\}/,
     );
+    expect(match).not.toBeNull();
+    return match![1];
+  };
+
+  it("keeps the library action buttons hugging the right edge", () => {
+    expect(libraryControlsBlock()).toMatch(/justify-content:\s*flex-end;/);
+  });
+
+  it("caps the button strip so the description column always keeps a reading width", () => {
+    const block = libraryControlsBlock();
+    // The cap, not a panel-width threshold, is what decides whether the buttons
+    // wrap — so the strip must be capped and must be the one thing that cannot
+    // shrink out from under it. The cap is stated as the reading floor rather
+    // than as a number of its own, so the two cannot drift apart.
+    expect(block).toMatch(
+      /max-width:\s*calc\(100% - var\(--arxiv-daily-library-description-floor\) - \d+px\);/,
+    );
+    expect(block).toMatch(/flex-shrink:\s*0;/);
+    expect(block).toMatch(/flex-wrap:\s*wrap;/);
+  });
+
+  it("derives the whole bargain from one declared reading floor", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    // The floor is declared exactly once, and it is a real width — the desktop
+    // harness refuses anything under 150px as unreadable.
+    const declarations = css.match(/--arxiv-daily-library-description-floor:\s*(\d+)px;/g) ?? [];
+    expect(declarations).toHaveLength(1);
+    const floor = Number(/(\d+)px/.exec(declarations[0])![1]);
+    expect(floor).toBeGreaterThanOrEqual(150);
+  });
+
+  it("never keys the layout off how many buttons the row happens to carry", () => {
+    // The two states used to get different caps, which made the three-button
+    // row read better than the two-button one. Readability is one invariant,
+    // so there is one rule.
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    expect(css).not.toMatch(/library-controls[^{]*nth-of-type/);
+  });
+
+  it("gives the description column a floor rather than letting it collapse", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    const match = css.match(
+      /\.arxiv-daily-settings \.setting-item:has\(> \.arxiv-daily-settings__library-controls\) \.setting-item-info \{([^}]*)\}/,
+    );
+    expect(match).not.toBeNull();
+    expect(match![1]).toMatch(/min-width:\s*var\(--arxiv-daily-library-description-floor\);/);
+  });
+
+  it("drops the cap where Obsidian stacks the row and there is no second column", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    expect(css).toMatch(/@container \(max-width: 340px\) \{[\s\S]*?max-width:\s*100%;/);
   });
 });
 

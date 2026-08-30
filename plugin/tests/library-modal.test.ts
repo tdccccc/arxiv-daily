@@ -48,7 +48,7 @@ describe("personal library authorization modal", () => {
     const result = confirmLibraryAuthorization({} as App, disclosure);
     const modal = Modal.opened.at(-1)!;
 
-    expect(modal.titleEl.textContent).toBe("Authorize personal library");
+    expect(modal.titleEl.textContent).toBe("Send titles and abstracts off this device?");
     expect(modal.contentEl.textContent).toContain("/private/papers");
     expect(modal.contentEl.textContent).toContain(".pdf");
     expect(modal.contentEl.textContent).toContain("Metadata and abstracts only");
@@ -71,6 +71,7 @@ describe("personal library authorization modal", () => {
     const modal = Modal.opened.at(-1)!;
     const text = modal.contentEl.textContent ?? "";
 
+    expect(modal.titleEl.textContent).toBe("Send full text off this device?");
     expect(text).toContain("/private/papers");
     expect(text).toContain("Full text");
     expect(text).toContain("https://embed.example.com/v1/embeddings");
@@ -79,6 +80,23 @@ describe("personal library authorization modal", () => {
     expect(text).toMatch(/revoke/i);
     modal.contentEl.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
     await expect(result).resolves.toBe(true);
+  });
+
+  /**
+   * The desktop acceptance run finds this dialog by this class, precisely so it
+   * does not have to find it by its heading — the heading is copy that follows
+   * the processing depth. The literal is spelled out here rather than imported
+   * so that renaming the class fails here instead of silently agreeing with
+   * itself, and the acceptance run's own literal is checked in
+   * `scripts/tests/desktop-acceptance-library-settings.test.mjs`.
+   */
+  it("marks its root with the stable class the acceptance run locates it by", async () => {
+    const result = confirmLibraryAuthorization({} as App, disclosure);
+    const modal = Modal.opened.at(-1)!;
+
+    expect(modal.modalEl.classList.contains("arxiv-daily-library-authorization-modal")).toBe(true);
+    modal.close();
+    await expect(result).resolves.toBe(false);
   });
 
   it("resolves false when cancelled or closed outside the buttons", async () => {

@@ -1832,17 +1832,93 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   }
 }
 
+/*
+ * The library row's buttons hug the right edge of the row, on one line for as
+ * long as one line leaves the description something to read, and wrapping when
+ * it does not.
+ *
+ * One number decides the whole arrangement, and it is a property of the
+ * sentence rather than of the buttons: how narrow the description column may
+ * get and still read as a sentence instead of a column of letters. The strip's
+ * cap and the description's floor are that one number said from opposite sides,
+ * so the description keeps exactly that much at every panel width, the strip
+ * gets whatever is left, and a strip that fits in what is left stays on one
+ * line while one that does not wraps.
+ *
+ * Nothing below counts buttons, on purpose. An earlier version capped the
+ * two-button and three-button states separately and produced the absurd result
+ * that adding a button improved the row: only the three-button cap reserved a
+ * reading column, so the two-button row — with more space to spare — was the
+ * one whose description came out as an 81px ribbon. Readability is the
+ * invariant; one line is what happens when readability leaves room for it.
+ */
+.arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) {
+  /*
+   * The only knob. The desktop acceptance harness calls the sentence unreadable
+   * below 150px, or below twelve characters a line; this floor sits above both
+   * rather than on them, so a theme with wider type or a longer sentence has
+   * somewhere to go before the row stops reading. Raising it widens the reading
+   * column and makes the buttons wrap at wider panels; lowering it does the
+   * reverse. Both rules below derive from it, so neither has to be retuned.
+   */
+  --arxiv-daily-library-description-floor: 176px;
+}
+
+/*
+ * `max-width` states the floor as what the strip must leave behind — the floor
+ * plus the 16px gutter Obsidian puts between the two columns of a setting row —
+ * so the leftover is that floor exactly, whatever the panel width.
+ *
+ * `flex-shrink: 0` is what makes the cap the only thing that can narrow the
+ * strip: `.setting-item-control` is `flex: 1 1 auto`, and shrinking it in
+ * proportion to the description's much longer intrinsic width would wrap the
+ * buttons at panel widths where they fit comfortably. So the strip is either at
+ * its natural one-line width or at the cap, never in between, and wrapping is
+ * decided by whether those two are the same — not by a panel-width threshold,
+ * which cannot know how many buttons the row is carrying.
+ */
 .arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  min-width: 0;
+  max-width: calc(100% - var(--arxiv-daily-library-description-floor) - 16px);
+}
+
+/*
+ * The other half of the same bargain, stated rather than inherited: the name and
+ * description column is the one the strip may not encroach on. Its floor is the
+ * strip's cap read from the left, so the two rules cannot drift apart.
+ */
+.arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) .setting-item-info {
+  min-width: var(--arxiv-daily-library-description-floor);
 }
 
 .arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls button {
   flex: 0 0 auto;
   margin: 0;
   white-space: nowrap;
+}
+
+/*
+ * Below Obsidian's own stacking breakpoint — `.vertical-tab-content` is an
+ * inline-size container, and under 340px Obsidian turns each setting row into a
+ * column and stretches every button to the full row width — there is no second
+ * column to reserve anything for. The description sits above the buttons with
+ * the whole row to itself, so the bargain has nothing left to arbitrate: the
+ * cap would only shrink buttons that are supposed to span the row, and the
+ * floor would only risk pushing a full-width column past a very narrow panel.
+ * Both halves are lifted together, because both describe the same two-column
+ * layout that no longer exists here.
+ */
+@container (max-width: 340px) {
+  .arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls {
+    max-width: 100%;
+  }
+
+  .arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) .setting-item-info {
+    min-width: 0;
+  }
 }
