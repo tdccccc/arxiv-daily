@@ -217,12 +217,19 @@ export async function settingsMigrationScenario({ session }) {
   return pass(name, `legacy settings migrated with ${sections.length} sections and the sidecar left disabled`);
 }
 
-/** Run scenarios in order, converting a thrown scenario into a reported failure. */
+/**
+ * Run scenarios in order, converting a thrown scenario into a reported failure.
+ *
+ * A scenario may return several results: a walk through one settings page
+ * checks several independent things, and reporting them as one verdict would
+ * hide which behaviour actually broke.
+ */
 export async function runScenarios(scenarios) {
   const results = [];
   for (const [index, scenario] of scenarios.entries()) {
     try {
-      results.push(await scenario());
+      const produced = await scenario();
+      results.push(...(Array.isArray(produced) ? produced : [produced]));
     } catch (error) {
       results.push(fail(`scenario-${index + 1}`, `threw: ${error.message}`));
     }

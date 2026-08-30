@@ -139,3 +139,10 @@
 - change: 将该测试的正向断言从 npm banner 改为 vitest 自己打印的 `packages/core` 运行路径——它不受调用方日志级别影响；三条反向路由断言保持不变。修改后在有无 `npm_config_loglevel=silent` 两种条件下均通过，完整套件在两种调用方式下均为 0 失败。同时更正各 phase 文件中「仅出现既有 flaky」的验收表述。
 - disposition: 此前所有以「仅剩既有 flaky」描述的验收结论应读作「全绿」。这条错误的根源与本 initiative 反复出现的模式相同——观察到一个失败后，我为它编了一个合理的解释（并发敏感），并用一次同样带缺陷的对照实验确认了它，而没有追问「什么条件下它会通过」。
 - next: 无。
+
+## 2026-08-30 — L1 adjust: 加 P5（设置页场景 + 截图），并改写「不做截图」这条 non-goal
+
+- evidence: `2026-08-30-library-setup-path` 的 P1c / P1d 改完后只有 happy-dom 单元测试覆盖，用户仍需手动开 Obsidian 肉眼确认分组顺序、按钮集合与就地授权对话框。happy-dom 没有布局引擎也没有 Obsidian 样式表，结构上无法回答「按钮是否在同一行、是否右对齐、是否溢出容器」，而这恰是本次改动最容易出问题的部分。
+- change: goal 由 done 改回 active，新增 P5 与一条对应的 success criterion。原 non-goal「截图比对、像素级视觉回归与主题渲染验收」表述不准——它把「落盘截图」和「拿截图做自动比对」混为一谈。改写为：像素级视觉回归与主题渲染验收仍不做（不存基线、不比对、无断言读图），但落盘截图作为人工判断的输入是做的。不装作 non-goal 没变。
+- disposition: 新增两个 harness 模块（`library-settings.mjs`、`screenshots.mjs`）与一个新 session；既有四项场景与它们的 fixture 一字未动。截图落 `.acceptance-out/`，已被 `.gitignore` 的 `.*` 覆盖，不入库。零新增依赖，仍用 Node 内置 WebSocket 与 CDP。
+- next: P5 的布局几何断言当前为红，原因是被测分支的 CSS 缺陷而非断言问题；按 abort trigger 停在这里汇报，不在本 initiative 内改产品代码。

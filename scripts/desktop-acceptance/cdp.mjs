@@ -79,6 +79,31 @@ export function createCdpClient({ url, createSocket = (target) => new WebSocket(
 }
 
 /**
+ * Resize the renderer's viewport so a layout assertion can be made at more than
+ * one width. Emulating device metrics keeps Obsidian's own responsive rules in
+ * charge — the alternative, injecting a width onto the settings modal, would
+ * assert about a layout no user can reach.
+ */
+export function setViewport(client, { width, height, deviceScaleFactor = 1 }) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new TypeError(
+      `viewport needs positive integer dimensions, received ${JSON.stringify({ width, height })}`,
+    );
+  }
+  return client.send("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor,
+    mobile: false,
+  });
+}
+
+/** Hand the viewport back to the real window. */
+export function clearViewport(client) {
+  return client.send("Emulation.clearDeviceMetricsOverride");
+}
+
+/**
  * Evaluate in the renderer and surface a thrown expression as a rejection. A
  * silent `undefined` would let a broken assertion look like a passing one.
  */

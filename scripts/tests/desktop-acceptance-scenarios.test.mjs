@@ -214,6 +214,18 @@ test("runScenarios reports every scenario and fails overall if any failed", asyn
   assert.deepEqual(results.scenarios.map((s) => s.name), ["a", "b"]);
 });
 
+test("a scenario that walks one page may report each of its checks separately", async () => {
+  const results = await runScenarios([
+    async () => [
+      { name: "a", passed: true, detail: "fine" },
+      { name: "b", passed: false, detail: "broken" },
+    ],
+    async () => ({ name: "c", passed: true, detail: "fine" }),
+  ]);
+  assert.equal(results.passed, false);
+  assert.deepEqual(results.scenarios.map((s) => s.name), ["a", "b", "c"]);
+});
+
 test("runScenarios turns a thrown scenario into a failure rather than aborting the run", async () => {
   const results = await runScenarios([
     async () => {

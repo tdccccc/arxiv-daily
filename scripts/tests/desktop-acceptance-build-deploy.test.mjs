@@ -39,12 +39,14 @@ function fakeFs(initial = {}) {
 const goodSource = () => ({
   [`${sourceDir}/main.js`]: "/* built bundle */",
   [`${sourceDir}/manifest.json`]: JSON.stringify({ id: pluginId, version: "0.4.6" }),
+  [`${sourceDir}/styles.css`]: "/* built stylesheet */",
 });
 
-test("deployedArtifactPaths names only the two release artifacts", () => {
+test("deployedArtifactPaths names only the three release artifacts", () => {
   assert.deepEqual(deployedArtifactPaths(vaultPath, { pluginId }), [
     `${pluginDir}/main.js`,
     `${pluginDir}/manifest.json`,
+    `${pluginDir}/styles.css`,
   ]);
 });
 
@@ -54,6 +56,24 @@ test("deploy copies the branch build into the vault and reports its version", as
   assert.equal(result.version, "0.4.6");
   assert.equal(fs.files.get(`${pluginDir}/main.js`).toString(), "/* built bundle */");
   assert.deepEqual(result.deployed, deployedArtifactPaths(vaultPath, { pluginId }));
+});
+
+// The settings-page geometry assertions measure what the stylesheet lays out,
+// so a run that left the vault's own styles.css in place would be judging a
+// layout no build on the branch produces.
+test("deploy replaces the vault's stylesheet with the branch's", async () => {
+  const fs = fakeFs({ ...goodSource(), [`${pluginDir}/styles.css`]: "/* stale stylesheet */" });
+  await deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs });
+  assert.equal(fs.files.get(`${pluginDir}/styles.css`).toString(), "/* built stylesheet */");
+});
+
+test("deploy fails clearly when the branch stylesheet is missing", async () => {
+  const source = goodSource();
+  delete source[`${sourceDir}/styles.css`];
+  await assert.rejects(
+    () => deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs: fakeFs(source) }),
+    /styles\.css/,
+  );
 });
 
 test("deploy never reads or writes historical build backups", async () => {
@@ -76,6 +96,7 @@ test("deploy refuses a manifest without a usable version", async () => {
     const fs = fakeFs({
       [`${sourceDir}/main.js`]: "bundle",
       [`${sourceDir}/manifest.json`]: manifest,
+      [`${sourceDir}/styles.css`]: "stylesheet",
     });
     await assert.rejects(
       () => deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs }),

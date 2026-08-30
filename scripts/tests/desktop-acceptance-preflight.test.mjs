@@ -29,6 +29,7 @@ const allPresent = [
   "/opt/Obsidian/obsidian",
   "/repo/plugin/main.js",
   "/repo/plugin/manifest.json",
+  "/repo/plugin/styles.css",
   "xvfb-run",
 ];
 

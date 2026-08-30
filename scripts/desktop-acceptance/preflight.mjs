@@ -72,7 +72,7 @@ export async function preflight(
     add(`Obsidian was not found at ${obsidianPath}`, "install Obsidian or set OBSIDIAN_BINARY to its path");
   }
 
-  for (const artifact of ["main.js", "manifest.json"]) {
+  for (const artifact of ["main.js", "manifest.json", "styles.css"]) {
     if (!(await exists(fs, path.join(sourceDir, artifact)))) {
       add(
         `the branch build is missing: ${path.join(sourceDir, artifact)} does not exist`,

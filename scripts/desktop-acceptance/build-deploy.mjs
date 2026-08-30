@@ -1,7 +1,13 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 
-const ARTIFACTS = ["main.js", "manifest.json"];
+/**
+ * `styles.css` is deployed alongside the bundle because the settings-page
+ * geometry assertions measure what the stylesheet lays out. Without it the run
+ * would read the vault's leftover stylesheet and report a layout that no build
+ * on this branch produces.
+ */
+const ARTIFACTS = ["main.js", "manifest.json", "styles.css"];
 
 /**
  * The files the harness overwrites in the test vault. The vault also holds
