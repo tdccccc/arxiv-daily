@@ -6,6 +6,7 @@ import {
   PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
+  isThinEvidenceDirectionCandidate,
   type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
   type PersonalLibraryClusterMember,
@@ -44,6 +45,14 @@ export interface InterestProfileReviewController {
     candidateId: string;
     draft: PersonalLibraryReviewedDirectionDraft;
     status: "active" | "disabled";
+  }): Promise<InterestProfileReviewSnapshot>;
+  /** Confirms a whole group as one transaction; see the core group confirmation. */
+  confirmProposals(input: {
+    confirmations: {
+      candidateId: string;
+      draft: PersonalLibraryReviewedDirectionDraft;
+      status: "active" | "disabled";
+    }[];
   }): Promise<InterestProfileReviewSnapshot>;
   updateConfirmed(input: {
     directionId: string;
@@ -85,6 +94,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private errorMessage = "";
   private selectedProposals = new Set<string>();
   private selectedConfirmed = new Set<string>();
+  /** Identity of the proposal whose selection has already been seeded. */
+  private preselectedProposal: string | null = null;
   private fields = new Map<string, DirectionFields>();
 
   constructor(app: App, private readonly controller: InterestProfileReviewController) {
@@ -216,11 +227,21 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "This proposal contains no directions." });
       return;
     }
+    // A load error can leave no proposal at all while still rendering the tab.
+    if (snapshot.proposal) this.preselectProposals(snapshot.proposal, candidates);
     const allowedKeys = proposalPaperKeys(snapshot);
     for (const candidate of candidates) {
       this.renderDirectionCard(parent, candidate, allowedKeys, "proposal", snapshot);
     }
     if (candidates.length > 0) {
+      const accept = parent.createEl("button", { text: "Accept selected", attr: { type: "button" } });
+      accept.addClass("mod-cta");
+      accept.disabled = this.pending || this.selectedProposals.size === 0;
+      accept.addEventListener("click", () => void this.acceptSelectedProposals());
+      parent.createSpan({
+        cls: "arxiv-daily-interest-review__hint",
+        text: "Accepting confirms every selected direction as active in one step. Directions can be edited, disabled, or removed afterwards.",
+      });
       const merge = parent.createEl("button", { text: "Merge selected proposals", attr: { type: "button" } });
       merge.disabled = this.pending || this.selectedProposals.size < 2;
       merge.addEventListener("click", () => void this.mergeSelectedProposals(snapshot));
@@ -282,13 +303,20 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const checkbox = selectLabel.createEl("input", { type: "checkbox" });
     checkbox.checked = selected.has(direction.id);
     checkbox.disabled = this.pending || !terminal;
-    selectLabel.appendText("Select for merge");
+    selectLabel.appendText(kind === "proposal" ? "Select" : "Select for merge");
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) selected.add(direction.id);
       else selected.delete(direction.id);
       this.render();
     });
     heading.createEl("strong", { text: direction.name });
+    if (kind === "proposal" && isThinEvidenceDirectionCandidate(direction)) {
+      heading.createSpan({
+        text: "thin evidence",
+        cls: "arxiv-daily-interest-review__status is-thin",
+        attr: { title: "Only one representative paper. Select it explicitly to include it." },
+      });
+    }
     if ("status" in direction) heading.createSpan({ text: direction.status, cls: `arxiv-daily-interest-review__status is-${direction.status}` });
     if ("lockedAt" in direction && direction.lockedAt !== undefined) {
       heading.createSpan({ text: "locked", cls: "arxiv-daily-interest-review__status is-locked" });
@@ -615,6 +643,48 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (choice !== "discard" || this.closed) return;
     this.selectedProposals.delete(id);
     await this.run("discard proposed direction", () => this.controller.discardProposal(id));
+  }
+
+  /**
+   * Seed the selection once per proposal: everything starts selected so that
+   * accepting the whole set is one action, except candidates marked thin,
+   * which stay out until the researcher opts them in (ADR 0009 §3). Re-seeding
+   * only when the proposal identity changes preserves de-selections made since.
+   */
+  private preselectProposals(
+    proposal: PersonalLibraryDirectionProposal,
+    candidates: readonly PersonalLibraryDirectionCandidate[],
+  ): void {
+    const identity = `${proposal.proposalId}:${proposal.revision}`;
+    if (this.preselectedProposal === identity) return;
+    this.preselectedProposal = identity;
+    this.selectedProposals = new Set(
+      candidates
+        .filter((candidate) => !isThinEvidenceDirectionCandidate(candidate))
+        .map(({ id }) => id),
+    );
+  }
+
+  /**
+   * No extra confirmation dialog here: unlike the per-card confirm buttons,
+   * which act on one unguarded click, the selection itself is the researcher's
+   * deliberation, and every accepted direction stays editable, disablable, and
+   * removable afterwards.
+   */
+  private async acceptSelectedProposals(): Promise<void> {
+    const ids = Array.from(this.selectedProposals).sort(codeUnitCompare);
+    if (ids.length === 0) return;
+    const confirmations: {
+      candidateId: string;
+      draft: PersonalLibraryReviewedDirectionDraft;
+      status: "active" | "disabled";
+    }[] = [];
+    for (const candidateId of ids) {
+      const draft = this.draft(candidateId);
+      if (!draft) return;
+      confirmations.push({ candidateId, draft, status: "active" as const });
+    }
+    await this.run("accept selected directions", () => this.controller.confirmProposals({ confirmations }));
   }
 
   private async mergeSelectedProposals(snapshot: InterestProfileReviewSnapshot): Promise<void> {

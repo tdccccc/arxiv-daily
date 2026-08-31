@@ -61,6 +61,21 @@ export interface PersonalLibraryDirectionCandidate {
   clusterMembers?: PersonalLibraryClusterMember[];
 }
 
+/**
+ * A research direction needs more than one paper behind it: a single
+ * representative is a paper, not a direction. Candidates below this bar are
+ * still proposed and still confirmable one by one, but they are marked and
+ * left unselected when a group is accepted at once, so including one stays a
+ * deliberate act (ADR 0009 §3).
+ */
+export const PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES = 2 as const;
+
+export function isThinEvidenceDirectionCandidate(
+  candidate: Pick<PersonalLibraryDirectionCandidate, "representatives">,
+): boolean {
+  return candidate.representatives.length < PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES;
+}
+
 export interface PersonalLibraryDirectionProposal {
   schemaVersion: typeof PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION;
   revision: number;

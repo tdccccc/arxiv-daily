@@ -42,7 +42,7 @@ OperationRegistry,
 PersonalLibraryCatalogStore,
 PersonalLibraryDirectionProposalStore,
 PersonalLibraryInterestProfileStore,
-confirmPersonalLibraryDirectionWithStores,
+confirmPersonalLibraryDirectionsWithStores,
 buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 disablePersonalLibraryConfirmedDirection,
@@ -791,6 +791,7 @@ export default class ArxivDailyPlugin extends Plugin {
       mergeProposals: (input) => this.mergePersonalLibraryProposalCandidates(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       confirmProposal: (input) => this.confirmPersonalLibraryProposalCandidate(input),
+      confirmProposals: (input) => this.confirmPersonalLibraryProposalCandidates(input),
       updateConfirmed: (input) => this.updatePersonalLibraryConfirmedDirection(input),
       mergeConfirmed: (input) => this.mergePersonalLibraryConfirmedDirections(input),
       enable: (directionId) => this.enablePersonalLibraryConfirmedDirection(directionId),
@@ -1009,11 +1010,32 @@ export default class ArxivDailyPlugin extends Plugin {
       removePersonalLibraryDirectionCandidate({ proposal, candidateId }));
   }
 
+  /** A single confirmation is the one-element case of confirming a group. */
   async confirmPersonalLibraryProposalCandidate(input: {
     candidateId: string;
     draft: PersonalLibraryReviewedDirectionDraft;
     status: "active" | "disabled";
     directionId?: string;
+    now?: Date;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return await this.confirmPersonalLibraryProposalCandidates({
+      confirmations: [{
+        candidateId: input.candidateId,
+        draft: input.draft,
+        status: input.status,
+        ...(input.directionId === undefined ? {} : { directionId: input.directionId }),
+      }],
+      ...(input.now === undefined ? {} : { now: input.now }),
+    });
+  }
+
+  async confirmPersonalLibraryProposalCandidates(input: {
+    confirmations: readonly {
+      candidateId: string;
+      draft: PersonalLibraryReviewedDirectionDraft;
+      status: "active" | "disabled";
+      directionId?: string;
+    }[];
     now?: Date;
   }): Promise<PersonalLibraryProfileSnapshot> {
     const guard = this.capturePersonalLibraryReviewGuard();
@@ -1026,16 +1048,18 @@ export default class ArxivDailyPlugin extends Plugin {
       const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, true);
       try {
         this.assertPersonalLibraryReviewGuard(guard);
-        const saved = await confirmPersonalLibraryDirectionWithStores({
+        const saved = await confirmPersonalLibraryDirectionsWithStores({
           proposalStore: stores.proposal,
           profileStore: stores.profile,
           proposal: current.proposal!,
           profile: current.profile,
           catalog: current.catalog,
-          candidateId: input.candidateId,
-          directionId: input.directionId ?? crypto.randomUUID(),
-          status: input.status,
-          draft: input.draft,
+          confirmations: input.confirmations.map((confirmation) => ({
+            candidateId: confirmation.candidateId,
+            directionId: confirmation.directionId ?? crypto.randomUUID(),
+            status: confirmation.status,
+            draft: confirmation.draft,
+          })),
           now: input.now ?? new Date(),
           expectedProposalRevision: current.proposal!.revision,
           expectedProfileRevision: current.profile.revision,

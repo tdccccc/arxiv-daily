@@ -96,6 +96,7 @@ function controller(initial = snapshot()) {
     snapshot: () => current,
     reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
     updateProposal: update, mergeProposals: update, discardProposal: update, confirmProposal: update,
+    confirmProposals: vi.fn(async () => current),
     updateConfirmed: update, mergeConfirmed: update, enable: update, disable: update, remove: update,
     applySuggestion: update, dismissSuggestion: update, lock: update, unlock: update,
   };
@@ -119,6 +120,55 @@ async function confirmChoice(text: string): Promise<void> {
   button(Modal.opened.at(-1)!.contentEl, text).click();
   await Promise.resolve();
 }
+
+describe("bulk acceptance of proposed directions", () => {
+  const secondPaper = {
+    paperKey: "arxiv:2608.00002", source: "arxiv", externalId: "2608.00002", title: "Second paper",
+    authors: ["B"], abstract: "Second abstract", published: "2026-08-01T00:00:00.000Z",
+    updated: "2026-08-01T00:00:00.000Z", primaryCategory: "cs.AI", categories: ["cs.AI"],
+    evidenceDepth: "metadata-and-abstract", filePaths: ["second.pdf"],
+  };
+  const thick = {
+    ...candidate, id: "candidate-thick", name: "Well evidenced",
+    representatives: [
+      { paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence },
+      { paperKey: "arxiv:2608.00002", evidenceFingerprint: evidence },
+    ],
+  };
+  const thin = { ...candidate, id: "candidate-thin", name: "Single paper" };
+
+  function twoCandidates() {
+    const base = snapshot();
+    return snapshot({
+      catalog: {
+        ...base.catalog,
+        papers: { ...base.catalog!.papers, "arxiv:2608.00002": secondPaper },
+      } as any,
+      proposal: {
+        ...base.proposal!,
+        catalogInputPapers: thick.representatives,
+        candidates: [thick, thin],
+      },
+    });
+  }
+
+  it("preselects every candidate except the ones with thin evidence", () => {
+    const modal = open(controller(twoCandidates()).mock);
+    const boxes = Array.from(modal.contentEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    expect(boxes.map((box) => box.checked)).toEqual([true, false]);
+    expect(modal.contentEl.textContent).toContain("thin evidence");
+  });
+
+  it("accepts only the selected candidates in one call", async () => {
+    const { mock } = controller(twoCandidates());
+    const modal = open(mock);
+    button(modal.contentEl, "Accept selected").click();
+    await vi.waitFor(() => expect(mock.confirmProposals).toHaveBeenCalledTimes(1));
+    const [input] = vi.mocked(mock.confirmProposals).mock.calls[0]!;
+    expect(input.confirmations.map(({ candidateId }) => candidateId)).toEqual(["candidate-thick"]);
+    expect(input.confirmations.every(({ status }) => status === "active")).toBe(true);
+  });
+});
 
 describe("personal library interest profile modal", () => {
   it("renders accessible tabs, authority disclosure, diagnostics, and hostile text as text only", () => {
