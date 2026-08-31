@@ -108,3 +108,10 @@
 - validation: 桌面验收由 17 项加到 21 项（新增 `library-row-shows-the-run`、`library-row-indexing-geometry`、`library-row-progress-updates-in-place`、`library-row-cancels-the-run`、`library-row-keeps-the-index-trace`，其中一条是替换了原先不存在的覆盖），21/21 全绿，零 console / pageerror。**先取红**：把 `libraryRowPresentation` 的运行分支与痕迹拼接临时去掉重跑，五条各自红在自己的原因上且措辞互不混淆——`the row shows [Change folder, Build index], expected [Change folder, Indexing… (12/40), Cancel]` / `the row has no Indexing… (12/40) button to keep visible` / `the buttons were replaced (marks mark-0,mark-1 → ,), so the page re-rendered instead of updating the row` / `the Library row has no Cancel button` / `the row does not say when the index was last built`；布局那条的红更早，是验收自己第一次跑就抓到的，不是构造的。`npm test` 全工作区绿（plugin 702 tests / 43 files，core 各分片全绿）；`npm run test:release-tools` 317/317 + product units OK；`npm run typecheck` 通过；`npm run lint` 0 error；`npm run check:boundaries` OK。产物已覆盖到 plugin_test（md5 一致）。截图新增 `library-row-indexing.png` / `-narrow-panel.png` / `-wide-panel.png`、`library-row-cancelling.png`、`library-row-last-indexed.png`。
 - boundary: 验收里那次索引是**真的 operation**（走插件自己的注册表，所以 Cancel 中止的是真信号），但**不跑真的嵌入**——那需要本地模型和几分钟的 PDF 抽取，且不影响这一行长什么样。"真运行会报告到同一个 store"由 `plugin/tests/fulltext-index-lifecycle.test.ts` 断言；只有渲染器能回答的是这一行拿它做了什么。同理，metadata 深度那类够不到验收的分支仍在插件单测里覆盖。
 - next: 三个可以由人判断的点。其一，索引期间 Change folder 被禁用——这是本次自行做的判断（防止几小时的任务被误点打掉），若觉得管得太宽，放开它只需去掉 `chooseFolder.disabled`。其二，取消后什么都不留是 manifest 只在运行末尾提交一次导致的，文案已如实写明；要让取消可续跑是索引协议的改动，不在本 helm 范围内。其三，痕迹用的是本地时间到分钟的绝对时间戳；若更想要"3 小时前"这类相对说法，改 `lastIndexedSentence` 一处即可，验收的 `judgeIndexTraceSentence` 会红在格式上而不是红在别处。
+
+## 2026-08-31 — P2 经用户在 plugin_test 看过，goal 全部达成
+
+- evidence: 用户重载后看过设置页，判断当前交互可以。至此 goal 的全部成功标准勾完，五个阶段全 done。此前几轮反复出现的失败模式是「测试绿就当交付」——本轮的证据链是断言 + 截图 + 人眼三层，最后一层到此才补上。
+- change: 无产品代码改动。本条只记录验收归属：索引期间禁用 Change folder、隐藏 Revoke 这两条自行做的判断，以及窄面板下 `Indexing… (12/40)` 折成两行的取舍，都已由用户看过并接受，不再是待确认项。
+- disposition: goal 置 done。Search library 按钮确定不做（搜索时本来就看得到，完成提示够了）。harness 的四条遗留隐患仍在 `2026-08-27-obsidian-desktop-acceptance-harness` 里，不属本 goal。
+- next: 分支 `feat/library-setup-path` 领先 origin/main 十个提交，等推送与 PR。
