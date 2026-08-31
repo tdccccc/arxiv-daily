@@ -845,7 +845,13 @@ export async function proposeClusteredPersonalLibraryDirections(
     throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal id provider failed");
   }
 
-  const candidates: PersonalLibraryDirectionCandidate[] = [];
+  // Per-cluster extraction: a cluster is one thematic unit and its extraction
+  // message sees only that cluster's members. Clusters therefore cannot see
+  // each other, and two clusters covering one research direction each name it
+  // independently; the synthesis stage below is the only place able to tell
+  // that they are the same direction (ADR 0009).
+  const provisional: PersonalLibraryDirectionModelCandidate[] = [];
+  const clusterMembersByPaperKey = new Map<string, readonly PersonalLibraryClusterMember[]>();
   for (const cluster of clustering.clusters) {
     throwIfCancelled(options.signal);
     const clusterPapers = cluster.paperKeys.map((paperKey) => catalog.papers[paperKey]!);
@@ -857,7 +863,7 @@ export async function proposeClusteredPersonalLibraryDirections(
       "extraction", extractionSystemPrompt, userMessage, allowed, options,
     );
     throwIfCancelled(options.signal);
-    if (candidates.length + result.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) {
+    if (provisional.length + result.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) {
       throw new ClusteredDirectionsProposerError(
         "output-too-large",
         `combined cluster candidates exceed the proposal limit of ${PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES}`,
@@ -873,30 +879,62 @@ export async function proposeClusteredPersonalLibraryDirections(
         confidence: Math.min(1, Math.max(0, confidence)),
       }))
       .sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
-    for (let index = 0; index < result.candidates.length; index += 1) {
-      const candidate = result.candidates[index]!;
-      const ordinal = candidates.length + index;
-      let id: string;
-      try {
-        id = options.createId("candidate", ordinal);
-      } catch {
-        throw new ClusteredDirectionsProposerError("proposal-invariant", "candidate id provider failed");
-      }
-      const representatives = candidate.representativePaperKeys.map((paperKey) => ({
-        paperKey,
-        evidenceFingerprint: evidenceByKey.get(paperKey)!,
-      }));
-      candidates.push({
-        id,
-        name: candidate.name,
-        description: candidate.description,
-        discoveryCues: [...candidate.discoveryCues],
-        representatives,
-        representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
-        lineage: { candidateIds: [id] },
-        clusterMembers: clusterMembers.map((member) => ({ ...member })),
-      });
+    // Clusters partition the clustering input, so each paper belongs to
+    // exactly one member set and a synthesized candidate can recover its
+    // members from the clusters its representatives came from.
+    for (const paperKey of cluster.paperKeys) clusterMembersByPaperKey.set(paperKey, clusterMembers);
+    provisional.push(...result.candidates);
+  }
+
+  throwIfCancelled(options.signal);
+  // Synthesis merges candidates that express the same direction. It reuses the
+  // unclustered proposer's canonicalization, prompt, and validated stage; the
+  // allowed-key set is likewise the representative keys extraction surfaced,
+  // intersected with the clustering input so nothing outside the evidence can
+  // enter. Synthesis may merge and may rename, but it never drops a candidate
+  // the researcher would otherwise have been able to correct (ADR 0009 §2).
+  const synthesisInput = canonicalizeSynthesisInput(provisional);
+  const clusteringInputKeys = new Set(clusteringInput.map(({ paperKey }) => paperKey));
+  const allowedFinal = new Set(
+    synthesisInput
+      .flatMap(({ representativePaperKeys }) => representativePaperKeys)
+      .filter((paperKey) => clusteringInputKeys.has(paperKey)),
+  );
+  const synthesisMessage = renderPersonalLibrarySynthesisUserMessage(synthesisInput);
+  if (synthesisMessage.length > PERSONAL_LIBRARY_DIRECTION_MAX_SYNTHESIS_CODE_UNITS) {
+    throw new ClusteredDirectionsProposerError(
+      "synthesis-too-large",
+      "combined cluster candidates exceed the synthesis message bound",
+    );
+  }
+  const synthesized = await callValidatedStage(
+    "synthesis", synthesisSystemPrompt, synthesisMessage, allowedFinal, options,
+  );
+  throwIfCancelled(options.signal);
+
+  const candidates: PersonalLibraryDirectionCandidate[] = [];
+  for (let ordinal = 0; ordinal < synthesized.candidates.length; ordinal += 1) {
+    const candidate = synthesized.candidates[ordinal]!;
+    let id: string;
+    try {
+      id = options.createId("candidate", ordinal);
+    } catch {
+      throw new ClusteredDirectionsProposerError("proposal-invariant", "candidate id provider failed");
     }
+    const representatives = candidate.representativePaperKeys.map((paperKey) => ({
+      paperKey,
+      evidenceFingerprint: evidenceByKey.get(paperKey)!,
+    }));
+    candidates.push({
+      id,
+      name: candidate.name,
+      description: candidate.description,
+      discoveryCues: [...candidate.discoveryCues],
+      representatives,
+      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+      lineage: { candidateIds: [id] },
+      clusterMembers: mergeClusterMembers(candidate.representativePaperKeys, clusterMembersByPaperKey),
+    });
   }
   candidates.sort((left, right) => codeUnitCompare(left.id, right.id));
 
@@ -930,6 +968,33 @@ export async function proposeClusteredPersonalLibraryDirections(
     throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal failed strict decode");
   }
   return decoded;
+}
+
+/**
+ * A synthesized candidate may merge candidates that came from several
+ * clusters, so its cluster members are the union of the member sets of every
+ * cluster its representatives came from. Clusters partition the clustering
+ * input, so the union double-counts nothing; should it still exceed the schema
+ * bound, the highest-confidence members are kept rather than failing a
+ * proposal that is otherwise sound.
+ */
+function mergeClusterMembers(
+  representativePaperKeys: readonly string[],
+  membersByPaperKey: ReadonlyMap<string, readonly PersonalLibraryClusterMember[]>,
+): PersonalLibraryClusterMember[] {
+  const byPaperKey = new Map<string, PersonalLibraryClusterMember>();
+  for (const paperKey of representativePaperKeys) {
+    for (const member of membersByPaperKey.get(paperKey) ?? []) {
+      if (!byPaperKey.has(member.paperKey)) byPaperKey.set(member.paperKey, { ...member });
+    }
+  }
+  const merged = [...byPaperKey.values()];
+  if (merged.length > PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS) {
+    merged.sort((left, right) => right.confidence - left.confidence
+      || codeUnitCompare(left.paperKey, right.paperKey));
+    merged.length = PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS;
+  }
+  return merged.sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
 }
 
 /**

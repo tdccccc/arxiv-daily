@@ -662,7 +662,9 @@ describe("personal library profile lifecycle", () => {
     release();
     const saved = await first;
     expect(saved.revision).toBe(0);
-    expect(call).toHaveBeenCalledTimes(1);
+    // One extraction for the single cluster, then one synthesis across the
+    // clusters' combined candidates — and nothing from the daily pipeline.
+    expect(call).toHaveBeenCalledTimes(2);
     expect(internals.buildSharedDeps).not.toHaveBeenCalled();
     expect(internals.buildPipeline).not.toHaveBeenCalled();
   });
@@ -712,7 +714,9 @@ describe("personal library profile lifecycle", () => {
 
     call.mockImplementationOnce(() => new Promise<string>((resolve) => { release = () => resolve(modelResult()); }));
     const stale = plugin.generatePersonalLibraryDirections();
-    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+    // The first generation already spent two calls (extraction + synthesis),
+    // so the third call is this generation's blocked extraction.
+    await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(3));
     internals.libraryCatalog.papers["arxiv:2608.00001"].abstract = "Changed selected evidence";
     release();
     await expect(stale).rejects.toThrow("Selected personal library catalog evidence changed");

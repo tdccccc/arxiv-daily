@@ -180,15 +180,25 @@ function standardEntries(): Array<readonly [number, Float32Array]> {
 }
 
 type PaperDatum = { paperKey: string };
+/** The synthesis stage is handed the provisional candidates, not papers. */
+type SynthesisDatum = { candidates: unknown[] };
+type StageDatum = PaperDatum[] | SynthesisDatum;
 
-function paperData(messages: ChatMessage[]): PaperDatum[] {
+function paperData(messages: ChatMessage[]): StageDatum {
   const content = messages.find(({ role }) => role === "user")!.content;
   const match = /<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(content);
   if (!match) throw new Error("missing paper_data");
   return JSON.parse(match[1]!.replaceAll("&lt;/paper_data&gt;", "</paper_data>"));
 }
 
-function defaultCandidate(data: readonly PaperDatum[]): string {
+/**
+ * Extraction answers one candidate per cluster. The synthesis call is handed
+ * those provisional candidates and, by default, hands them back unchanged, so
+ * a test that is not about merging still sees exactly what the per-cluster
+ * extractions produced.
+ */
+function defaultCandidate(data: StageDatum): string {
+  if (!Array.isArray(data)) return JSON.stringify({ candidates: data.candidates });
   const key = data[0]!.paperKey;
   return JSON.stringify({ candidates: [{
     name: "Theme direction",
@@ -201,7 +211,7 @@ function defaultCandidate(data: readonly PaperDatum[]): string {
 class ScriptedLlm implements PersonalLibraryDirectionLlmPort {
   calls: Array<{ messages: ChatMessage[]; options?: CallOptions }> = [];
   constructor(
-    private readonly responder: (data: readonly PaperDatum[], callIndex: number) => string = defaultCandidate,
+    private readonly responder: (data: StageDatum, callIndex: number) => string = defaultCandidate,
   ) {}
   async call(messages: ChatMessage[], options?: CallOptions): Promise<string> {
     this.calls.push({ messages, options });
@@ -239,9 +249,13 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
     const clusters = await expectedClusters(store);
     expect(clusters).toHaveLength(2);
-    expect(llm.calls).toHaveLength(2);
-    const messageKeys = llm.calls.map(({ messages }) =>
-      paperData(messages).map(({ paperKey }) => paperKey).sort(),
+    // One extraction per cluster, then exactly one synthesis call over their
+    // combined output — the synthesis call is handed candidates, not papers.
+    expect(llm.calls).toHaveLength(3);
+    const extractionCalls = llm.calls.slice(0, clusters.length);
+    expect(paperData(llm.calls.at(-1)!.messages)).toHaveProperty("candidates");
+    const messageKeys = extractionCalls.map(({ messages }) =>
+      (paperData(messages) as PaperDatum[]).map(({ paperKey }) => paperKey).sort(),
     );
     expect(messageKeys).toEqual(clusters.map((cluster) => [...cluster.paperKeys].sort()));
     // no member leaks into another cluster's extraction message
@@ -253,6 +267,37 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
       && options.maxOutputCodeUnits === PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS
       && options.maxCompletionTokens === PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS)).toBe(true);
     expect(result.candidates).toHaveLength(2);
+  });
+
+  it("merges same-direction candidates across clusters before proposing them", async () => {
+    const store = makeKnowledgeBase(standardEntries());
+    // Each cluster names the one direction both of them cover, seeing only its
+    // own members; synthesis is the only stage that can tell they are the same.
+    const surfaced: string[] = [];
+    const llm = new ScriptedLlm((data, callIndex) => {
+      if (callIndex < 2) {
+        const key = (data as readonly PaperDatum[])[0]!.paperKey;
+        surfaced.push(key);
+        return JSON.stringify({ candidates: [{
+          name: `Cluster ${callIndex}: shared direction`,
+          description: "One cluster's view of a direction the other cluster also covers.",
+          discoveryCues: ["shared cue"],
+          representativePaperKeys: [key],
+        }] });
+      }
+      return JSON.stringify({ candidates: [{
+        name: "Shared direction",
+        description: "The single direction both clusters were describing.",
+        discoveryCues: ["shared cue"],
+        representativePaperKeys: [...surfaced].sort(),
+      }] });
+    });
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
+    expect(llm.calls).toHaveLength(3);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]!.name).toBe("Shared direction");
+    expect(result.candidates[0]!.representatives.map(({ paperKey }) => paperKey))
+      .toEqual([...surfaced].sort());
   });
 
   it("attaches every cluster member with its clustering confidence to each candidate", async () => {
