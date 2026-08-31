@@ -1,9 +1,9 @@
 # 文献库方向驱动日报（library directions drive the daily）
 
-status: proposed
+status: active
 created: 2026-08-31T22:05:18+08:00
-updated: 2026-08-31T22:29:33+08:00
-revision: 2
+updated: 2026-08-31T22:41:07+08:00
+revision: 3
 owner: claude-code-main-session
 
 ## Intent
@@ -41,7 +41,7 @@ owner: claude-code-main-session
 ## Phases
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
-1. P1 — 方向候选生成时跨簇综合，同义方向不再各占一条 — status: pending
+1. P1 — 方向候选生成时跨簇综合，同义方向不再各占一条 — status: active
 2. P2 — 候选可一次成组确认，证据单薄的默认不勾，确认后画像非空 — status: pending
 3. P3 — 已确认方向可独立满足日报的前置检查 — status: pending
 4. P4 — 待复核的条目数量与入口出现在 Dashboard 上 — status: pending
