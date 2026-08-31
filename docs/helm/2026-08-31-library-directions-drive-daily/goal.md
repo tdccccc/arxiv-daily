@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-08-31T22:05:18+08:00
-updated: 2026-08-31T23:04:00+08:00
-revision: 4
+updated: 2026-08-31T22:59:11+08:00
+revision: 5
 owner: claude-code-main-session
 
 ## Intent
@@ -42,7 +42,7 @@ owner: claude-code-main-session
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
 1. P1 — 方向候选生成时跨簇综合，同义方向不再各占一条 — status: done
-2. P2 — 候选可一次成组确认，证据单薄的默认不勾，确认后画像非空 — status: pending
+2. P2 — 候选可一次成组确认，证据单薄的默认不勾，确认后画像非空 — status: active
 3. P3 — 已确认方向可独立满足日报的前置检查 — status: pending
 4. P4 — 待复核的条目数量与入口出现在 Dashboard 上 — status: pending
 5. P5 — 端到端跑出一篇带文献库来源的真实日报 — status: pending
