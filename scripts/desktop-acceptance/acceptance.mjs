@@ -10,16 +10,26 @@ import {
   sidecarDisabledScenario,
   sidecarFallbackScenario,
 } from "./scenarios.mjs";
+import { blockersFromError } from "./app-state.mjs";
+import { librarySettingsScenarios } from "./library-settings.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
 import { startProbeListener } from "./probe-listener.mjs";
 import { runDesktopSession } from "./session.mjs";
-import { installSettingsFixture, legacySettingsFixture } from "./settings-fixture.mjs";
+import { createScreenshotWriter, resolveScreenshotDir } from "./screenshots.mjs";
+import {
+  connectedLibraryFixture,
+  installSettingsFixture,
+  legacySettingsFixture,
+  readRootIdentity,
+  resolveLibraryRoot,
+} from "./settings-fixture.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const vaultPath = process.env.OBSIDIAN_TEST_VAULT;
 const pluginId = process.env.OBSIDIAN_TEST_PLUGIN_ID ?? "arxiv-daily";
 const sourceDir = path.join(repoRoot, "plugin");
 const obsidianPath = process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian";
+const screenshotDir = resolveScreenshotDir({ repoRoot });
 
 // Exit code 2 means "this environment cannot run the acceptance"; exit code 1
 // means "the acceptance ran and something failed". Conflating them would let a
@@ -46,6 +56,7 @@ if (!environment.ok) {
 // condition the probe-failure fallback exists for.
 const listener = await startProbeListener();
 
+const sessions = [];
 let outcome;
 try {
   outcome = await runDesktopSession({
@@ -70,29 +81,90 @@ try {
       };
     },
   });
+  sessions.push({ name: "sidecar, migration and PDF location", ...outcome });
+
+  // The personal library settings page needs a library already connected, which
+  // the legacy fixture above deliberately does not have. A second session is
+  // the honest way to hold two different persisted states: the state guard
+  // brackets each run on its own.
+  const libraryRoot = await resolveLibraryRoot({ vaultPath });
+  const rootIdentity = await readRootIdentity(libraryRoot);
+  const libraryOutcome = await runDesktopSession({
+    vaultPath,
+    pluginId,
+    sourceDir,
+    obsidianPath,
+    beforeLaunch: ({ vaultPath: vault, pluginId, fs }) =>
+      installSettingsFixture({
+        vaultPath: vault,
+        pluginId,
+        fs,
+        data: connectedLibraryFixture({ libraryRoot, rootIdentity }),
+      }),
+    async body({ session }) {
+      const screenshots = await createScreenshotWriter({
+        client: session.client,
+        evaluate: session.evaluate,
+        outputDir: screenshotDir,
+      });
+      const results = await runScenarios([
+        () => librarySettingsScenarios({ session, screenshots }),
+      ]);
+      return {
+        results,
+        libraryRoot,
+        screenshots: screenshots.written(),
+        pluginVersion: session.pluginVersion,
+        diagnosticsComplete: session.diagnosticsComplete,
+        errors: session.diagnostics.errors(),
+      };
+    },
+  });
+  sessions.push({ name: "personal library settings page", ...libraryOutcome });
 } catch (error) {
   await listener.close();
+  // An unusable application is an environment problem, not a product one, so it
+  // exits the way a preflight blocker does. Any results computed before it was
+  // noticed were discarded by the session guard and are deliberately not
+  // printed: a run that ends here reports no verdict at all.
+  const blockers = blockersFromError(error);
+  if (blockers) {
+    console.error("desktop acceptance stopped: the application was not in a state where a walk means anything\n");
+    console.error(describeBlockers(blockers));
+    console.error("\nNo assertion result is reported from this run: every check that had already been made was\nmade against a renderer that was not showing the vault.");
+    process.exit(EXIT_BLOCKED);
+  }
   console.error(`desktop acceptance could not run: ${error.message}`);
   process.exit(1);
 }
 await listener.close();
 
-console.log(`build under test   ${outcome.pluginVersion}`);
-console.log(
-  `diagnostics        ${outcome.diagnosticsComplete ? "complete" : "INCOMPLETE — the plugin was already running when we attached"}`,
-);
+console.log(`build under test   ${sessions[0].pluginVersion}`);
 console.log(`sidecar requests   ${listener.requests().length} (to the harness's own listener)`);
-console.log("");
-for (const scenario of outcome.results.scenarios) {
-  console.log(`${scenario.passed ? "PASS" : "FAIL"}  ${scenario.name}`);
-  console.log(`      ${scenario.detail}`);
+const libraryRun = sessions.find((run) => run.screenshots);
+if (libraryRun) {
+  console.log(`library folder     ${libraryRun.libraryRoot}`);
+  console.log(`screenshots        ${screenshotDir}`);
+  for (const entry of libraryRun.screenshots) console.log(`  ${entry.name}.png`);
 }
 console.log("");
-if (outcome.errors.length > 0) {
-  console.log(`renderer errors    ${outcome.errors.length}`);
-  for (const entry of outcome.errors) console.log(`  [${entry.source}] ${entry.text.slice(0, 200)}`);
+
+let clean = true;
+for (const run of sessions) {
+  console.log(
+    `session ${run.name}: diagnostics ${run.diagnosticsComplete ? "complete" : "INCOMPLETE — the plugin was already running when we attached"}`,
+  );
+  for (const scenario of run.results.scenarios) {
+    console.log(`${scenario.passed ? "PASS" : "FAIL"}  ${scenario.name}`);
+    console.log(`      ${scenario.detail}`);
+  }
+  if (run.errors.length > 0) {
+    console.log(`renderer errors    ${run.errors.length}`);
+    for (const entry of run.errors) console.log(`  [${entry.source}] ${entry.text.slice(0, 200)}`);
+  }
+  console.log("");
+  clean &&= run.results.passed && run.errors.length === 0 && run.diagnosticsComplete;
 }
 
-const clean = outcome.results.passed && outcome.errors.length === 0 && outcome.diagnosticsComplete;
 console.log(clean ? "desktop acceptance PASSED" : "desktop acceptance FAILED");
 process.exitCode = clean ? 0 : 1;

@@ -8,6 +8,7 @@ import ArxivDailyPlugin from "../main.ts";
 import {
   createLibraryConnection,
   libraryAuthorizationDisclosure,
+  librarySetupNextStep,
 } from "../src/library/connection";
 
 function makePlugin() {
@@ -56,6 +57,67 @@ function sourceWithInventory(
     readBinary: vi.fn(),
   };
 }
+
+describe("librarySetupNextStep", () => {
+  it("asks for a folder when nothing is selected", () => {
+    expect(librarySetupNextStep({ kind: "disconnected" }, "local").action).toBe("choose-folder");
+  });
+
+  it("indexes immediately for a local library even before authorization", () => {
+    const step = librarySetupNextStep({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    }, "local");
+    expect(step.action).toBe("index");
+    expect(step).toMatchObject({ remoteConsentPending: false });
+  });
+
+  it("keeps indexing as the next step for remote, flagging pending consent for the description", () => {
+    const pending = librarySetupNextStep({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    }, "remote");
+    expect(pending.action).toBe("index");
+    expect(pending).toMatchObject({ remoteConsentPending: true });
+    expect(pending.description).toMatch(/full text/i);
+    expect(pending.description).toMatch(/confirm/i);
+
+    const invalidated = librarySetupNextStep({
+      kind: "authorization-invalidated",
+      rootLabel: "papers",
+    }, "remote");
+    expect(invalidated.action).toBe("index");
+    expect(invalidated).toMatchObject({ remoteConsentPending: true });
+    expect(invalidated.description).toMatch(/changed/i);
+
+    const authorized = librarySetupNextStep({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    }, "remote");
+    expect(authorized.action).toBe("index");
+    expect(authorized).toMatchObject({ remoteConsentPending: false });
+  });
+
+  it("never proposes a standalone authorization step", () => {
+    for (const mode of ["local", "remote"] as const) {
+      for (const status of [
+        { kind: "disconnected" } as const,
+        { kind: "authorization-required", rootLabel: "papers" } as const,
+        { kind: "authorization-invalidated", rootLabel: "papers" } as const,
+        {
+          kind: "authorized",
+          rootLabel: "papers",
+          grantedAt: "2026-08-02T12:00:00.000Z",
+        } as const,
+      ]) {
+        expect(["choose-folder", "index"]).toContain(
+          librarySetupNextStep(status, mode).action,
+        );
+      }
+    }
+  });
+});
 
 describe("personal library plugin lifecycle", () => {
   it("loads valid sibling state and ignores malformed persisted connections", async () => {

@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type ArxivDailyPlugin from "../main";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   ArxivDailySettingTab,
   isValidLocalTime,
@@ -101,6 +102,7 @@ function makeLegacyApiKeyTab(
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
     getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
+    libraryIndexStatus: new LibraryIndexStatusStore(),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);
@@ -179,6 +181,69 @@ describe("llmHttpWarning", () => {
   it("does not warn for HTTPS or invalid partial input", () => {
     expect(llmHttpWarning("https://api.deepseek.com/v1")).toBeNull();
     expect(llmHttpWarning("59.64.32.247:5001/v1")).toBeNull();
+  });
+});
+
+describe("legacy section order", () => {
+  it("renders Personal library after Output & schedule and before Email delivery", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    renderLegacySettings(tab);
+    const headings = Setting.instances
+      .filter((setting) => setting.settingEl.hasAttribute("data-arxiv-daily-section"))
+      .map((setting) => setting.nameEl.textContent ?? "");
+    expect(headings).toEqual([
+      "AI model",
+      "arXiv",
+      "Research topics",
+      "Output & schedule",
+      "Personal library",
+      "Email delivery",
+      "Advanced",
+      "Help & feedback",
+    ]);
+    const scheduleIndex = headings.indexOf("Output & schedule");
+    expect(headings[scheduleIndex + 1]).toBe("Personal library");
+    expect(headings[scheduleIndex + 2]).toBe("Email delivery");
+  });
+});
+
+describe("legacy embedding rows", () => {
+  it("routes the mode dropdown through the same in-place consent as the 1.13+ row", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const apply = vi
+      .spyOn(tab, "applyEmbeddingModeChange")
+      .mockImplementation(async () => false);
+    const rows = renderLegacySettings(tab);
+    const dropdown = componentOf(rows.get("Embedding"), DropdownComponent as never) as DropdownComponent;
+
+    await dropdown.trigger("remote");
+
+    expect(apply).toHaveBeenCalledWith("remote");
+    // Declined switches leave both the setting and the dropdown on local.
+    expect(settings.embedding.mode).toBe("local");
+    expect(dropdown.selectEl.value).toBe("local");
+  });
+
+  it("routes the endpoint field through the shared re-ask on change", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.embedding.mode = "remote";
+    settings.embedding.baseUrl = "https://embed.example.com/v1";
+    const save = vi
+      .spyOn(tab, "saveEmbeddingEndpointField")
+      .mockResolvedValue("https://embed.example.com/v1");
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(
+      rows.get("Embedding API base URL"),
+      TextComponent as never,
+    ) as TextComponent;
+
+    await input.trigger("https://elsewhere.example.com/v1");
+
+    expect(save).toHaveBeenCalledWith(
+      "embedding.baseUrl",
+      "https://elsewhere.example.com/v1",
+    );
+    expect(input.inputEl.value).toBe("https://embed.example.com/v1");
   });
 });
 
@@ -714,3 +779,69 @@ describe("confirmEmbeddingMode", () => {
     expect(settingsTabSource).toContain('"arXiv Daily: local embedding (offline)');
   });
 });
+
+describe("personal library settings layout", () => {
+  // Whether the buttons actually land on one line is a question for a layout
+  // engine, and happy-dom has none: it is settled by the desktop acceptance
+  // harness (`library-row-geometry`), which measures the real renderer. What
+  // can be settled here is the declaration that made the row overflow — a
+  // control box allowed to shrink under buttons that refuse to shrink with it.
+  const libraryControlsBlock = (): string => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    const match = css.match(
+      /\.arxiv-daily-settings \.setting-item-control\.arxiv-daily-settings__library-controls \{([^}]*)\}/,
+    );
+    expect(match).not.toBeNull();
+    return match![1];
+  };
+
+  it("keeps the library action buttons hugging the right edge", () => {
+    expect(libraryControlsBlock()).toMatch(/justify-content:\s*flex-end;/);
+  });
+
+  it("caps the button strip so the description column always keeps a reading width", () => {
+    const block = libraryControlsBlock();
+    // The cap, not a panel-width threshold, is what decides whether the buttons
+    // wrap — so the strip must be capped and must be the one thing that cannot
+    // shrink out from under it. The cap is stated as the reading floor rather
+    // than as a number of its own, so the two cannot drift apart.
+    expect(block).toMatch(
+      /max-width:\s*calc\(100% - var\(--arxiv-daily-library-description-floor\) - \d+px\);/,
+    );
+    expect(block).toMatch(/flex-shrink:\s*0;/);
+    expect(block).toMatch(/flex-wrap:\s*wrap;/);
+  });
+
+  it("derives the whole bargain from one declared reading floor", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    // The floor is declared exactly once, and it is a real width — the desktop
+    // harness refuses anything under 150px as unreadable.
+    const declarations = css.match(/--arxiv-daily-library-description-floor:\s*(\d+)px;/g) ?? [];
+    expect(declarations).toHaveLength(1);
+    const floor = Number(/(\d+)px/.exec(declarations[0])![1]);
+    expect(floor).toBeGreaterThanOrEqual(150);
+  });
+
+  it("never keys the layout off how many buttons the row happens to carry", () => {
+    // The two states used to get different caps, which made the three-button
+    // row read better than the two-button one. Readability is one invariant,
+    // so there is one rule.
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    expect(css).not.toMatch(/library-controls[^{]*nth-of-type/);
+  });
+
+  it("gives the description column a floor rather than letting it collapse", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    const match = css.match(
+      /\.arxiv-daily-settings \.setting-item:has\(> \.arxiv-daily-settings__library-controls\) \.setting-item-info \{([^}]*)\}/,
+    );
+    expect(match).not.toBeNull();
+    expect(match![1]).toMatch(/min-width:\s*var\(--arxiv-daily-library-description-floor\);/);
+  });
+
+  it("drops the cap where Obsidian stacks the row and there is no second column", () => {
+    const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+    expect(css).toMatch(/@container \(max-width: 340px\) \{[\s\S]*?max-width:\s*100%;/);
+  });
+});
+

@@ -139,3 +139,27 @@
 - change: 将该测试的正向断言从 npm banner 改为 vitest 自己打印的 `packages/core` 运行路径——它不受调用方日志级别影响；三条反向路由断言保持不变。修改后在有无 `npm_config_loglevel=silent` 两种条件下均通过，完整套件在两种调用方式下均为 0 失败。同时更正各 phase 文件中「仅出现既有 flaky」的验收表述。
 - disposition: 此前所有以「仅剩既有 flaky」描述的验收结论应读作「全绿」。这条错误的根源与本 initiative 反复出现的模式相同——观察到一个失败后，我为它编了一个合理的解释（并发敏感），并用一次同样带缺陷的对照实验确认了它，而没有追问「什么条件下它会通过」。
 - next: 无。
+
+## 2026-08-30 — L1 adjust: 加 P5（设置页场景 + 截图），并改写「不做截图」这条 non-goal
+
+- evidence: `2026-08-30-library-setup-path` 的 P1c / P1d 改完后只有 happy-dom 单元测试覆盖，用户仍需手动开 Obsidian 肉眼确认分组顺序、按钮集合与就地授权对话框。happy-dom 没有布局引擎也没有 Obsidian 样式表，结构上无法回答「按钮是否在同一行、是否右对齐、是否溢出容器」，而这恰是本次改动最容易出问题的部分。
+- change: goal 由 done 改回 active，新增 P5 与一条对应的 success criterion。原 non-goal「截图比对、像素级视觉回归与主题渲染验收」表述不准——它把「落盘截图」和「拿截图做自动比对」混为一谈。改写为：像素级视觉回归与主题渲染验收仍不做（不存基线、不比对、无断言读图），但落盘截图作为人工判断的输入是做的。不装作 non-goal 没变。
+- disposition: 新增两个 harness 模块（`library-settings.mjs`、`screenshots.mjs`）与一个新 session；既有四项场景与它们的 fixture 一字未动。截图落 `.acceptance-out/`，已被 `.gitignore` 的 `.*` 覆盖，不入库。零新增依赖，仍用 Node 内置 WebSocket 与 CDP。
+- next: P5 的布局几何断言当前为红，原因是被测分支的 CSS 缺陷而非断言问题；按 abort trigger 停在这里汇报，不在本 initiative 内改产品代码。
+
+## 2026-08-30 — P6：`styles.css` 那次堵的是洞，这次堵的是类别
+
+- evidence: 发布资产清单在仓库里有三份互不相干的硬编码——`build-deploy.mjs` 的 `ARTIFACTS`、`docs/release.md` 的 bullet 列表、`release.yml` 的 provenance `subject-path` 与 `gh release create` 位置参数。实测确认「只改一处」的两个危险方向都是静默通过的：只往 `docs/release.md` 加一条 `- \`plugin/extra.js\``，`test:release-tools` 报 `235 / 235 / 0`；只往工作流两处加 `plugin/extra.js`，同样 `235 / 235 / 0`。只改 `ARTIFACTS` 那一侧确实会红，但红在一句写死三条路径的 deep-equal 上——那是清单的第四份副本，它说的是「数组变了」，不是「和发布不一致」。
+- change: 新增 `scripts/release-assets.mjs`（`RELEASE_ASSETS` 冻结常量，零 import，验收 harness 直接引用）与 `scripts/release-asset-sources.mjs`（解析文档 bullet 与工作流两份清单，按集合比对，失败信息点名两侧标签、两侧完整清单与多/少的具体文件）。`ARTIFACTS` 改为引用常量。`scripts/tests/release-assets.test.mjs` 32 例。
+- disposition: 关键设计点是「解析失败绝不能表现为通过」。一个找不到清单就返回空数组的解析器，会在文档改版当天悄悄变成恒真断言——和它要防的失败模式一模一样。因此 marker 消失 / 重复、bullet 变散文或表格、bullet 形状不对、清单为空、工作流 YAML 不合法或步骤不唯一，一律抛异常；`verifyReleaseAssetSources()` 把异常收成 issue，返回空数组的唯一含义是「每一处都读出了非空清单且互相一致」。常量本身为空也记为缺陷而非「大家都没有资产所以一致」。
+- disposition: 三份副本里只有一份成了来源，另两份仍是人写的。`docs/release.md` 没有变成生成物——只在清单下方加了一段说明它被机器读、与哪几处绑定。
+- next: 无。P5 不受影响；真实桌面验收在改动后跑过一次，16 条断言全绿，几何数字与 P5 记录逐字一致，说明样式表照旧被部署进去。
+
+## 2026-08-31 — P7：一次被证实的假绿，以及它暴露的三个洞
+
+- evidence: 本机 inotify 配额（上限 65536）被用满，Obsidian 起来后显示自己的错误页——正文 `ENOSPC: System limit for number of file watchers reached, watch '/home/tiandc/Desktop/plugin_test/'`，下面是 `Reload app` / `Open another vault`，设置页根本没渲染。那一轮**17 项断言全部 PASS**（还带着 `description 176px wide, 26.8 characters over 4 lines` 这种精确测量值），**10 张截图全部静静落盘**（内容是错误页文字或纯色空白），整轮只因「渲染进程零错误」判红，退出码是 **1（失败）**而不是 **2（阻塞）**。把配额提到 524288 后同机重跑 17/17 真绿、截图正常——产品一直是好的，坏的是验收看不出环境已经塌了。
+- change: 三条守卫。(1) `preflight` 用**功能探测**判监视器余量：`/proc/sys/fs/inotify/max_user_watches` 只给上限不给用量，用满的 524288 和空闲的 524288 读起来一模一样，所以改为在临时目录上真的建 128 个监视再全部释放，`ENOSPC` 判阻塞并给出 `sysctl -w` 与 `/etc/sysctl.d/` 两步修复。(2) 截图改为**先判定后写盘**：目标要在文档里、可见、有尺寸、至少一半落在被拍摄的视口内，回来的 PNG 还要不是整幅一色；拒绝时零文件落盘。(3) 新增 `app-state.mjs`，走查**前后各一次**确认应用处于可走查状态，判据是「有没有挂出 vault 窗口」这一正向能力，错误页文案只被转述不参与判定；后一次检查失败会把已经算出来的结果整个丢弃，因此坏掉的宿主结构上产不出一条 PASS。
+- disposition: 纯色判据做了，且只做「整幅一色」这一条——不是比例阈值，不是基线比对。这些截图每张都必然含文字或控件，整幅一色不可能是它声称的状态；而合法的纯色**区域**不受影响，因为规则只在整帧再无他物时触发。为此写了个只用 `node:zlib` 的 PNG 解码器，并实测确认它能读渲染进程真实产出的十张图（8 位 RGB），而不是对每张真图静默弃权——后者等于这条判据不存在。
+- disposition: **真实 ENOSPC 本轮未复现**：复现需要 sudo 调低配额，本 initiative 不修改系统配置。三条守卫的红全部来自注入。为补上「守卫是否真的接在真实路径上」这一层，在错误态判据里临时插入一条永不存在的能力跑了一次真实验收，得到退出码 **2**、全程零 PASS、页面内容如实转述；临时改动已撤回。
+- disposition: 这与 P6 那次「漏拷 `styles.css` 却一直在量旧样式」是同一类问题，但更危险——那次是漏了一项证据，这次是伪造了一整套，而且带着精确到小数的数字。识破它靠的仍然不是再跑一次，而是追问「这条断言在什么情况下会失败」。
+- next: 无。既有 17 项断言与其判据、三个几何常量一字未改，加固后真实验收仍 17/17、退出码 0。

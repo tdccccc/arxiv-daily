@@ -191,6 +191,7 @@ import {
   openLibraryPdfAtPage,
   resolveLibraryPdfOpenTarget,
 } from "./src/library/pdf-opener";
+import { LibraryIndexStatusStore } from "./src/library/index-status";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -328,6 +329,12 @@ export default class ArxivDailyPlugin extends Plugin {
   private scheduleIntentQueue: Promise<void> = Promise.resolve();
   private host!: HostAdapters;
   private libraryConnection?: PersistedLibraryConnection;
+  /**
+   * Full-text indexing as the settings page can see it. Public because the
+   * Library row subscribes to it: the run reports here, the row renders it, and
+   * neither has to know whether the other exists.
+   */
+  readonly libraryIndexStatus = new LibraryIndexStatusStore();
   private librarySource?: OpenedScopedLibrarySource;
   private libraryDirectoryPicker = new ObsidianLibraryDirectoryPicker();
   private openLibrarySource: (selectedRoot: string) => Promise<OpenedScopedLibrarySource>
@@ -386,6 +393,9 @@ export default class ArxivDailyPlugin extends Plugin {
         new Notice(`arXiv Daily: personal library catalog could not be loaded: ${error instanceof Error ? error.message : String(error)}`, 10_000);
       });
       await this.reloadPersonalLibraryProfileDocuments();
+      // So a settings page opened before anything else happens can already say
+      // when the library was last indexed.
+      await this.refreshLibraryIndexTrace();
     }
     this.recentDates = new RecentDatesCache({
       getSettings: () => this.settings,
@@ -556,19 +566,28 @@ export default class ArxivDailyPlugin extends Plugin {
     );
   }
 
-  getLibraryAuthorizationDisclosure(): LibraryAuthorizationDisclosure | null {
+  /**
+   * The scope a grant would cover. `embeddingMode` may name a mode that is not
+   * applied yet, so consent for switching to remote embedding can be disclosed
+   * and decided before anything changes (ADR 0008).
+   */
+  getLibraryAuthorizationDisclosure(
+    options?: { embeddingMode?: "local" | "remote" },
+  ): LibraryAuthorizationDisclosure | null {
     if (!this.libraryConnection) return null;
     return libraryAuthorizationDisclosure(
       this.libraryConnection,
-      this.libraryAuthorizationScope(),
+      this.libraryAuthorizationScope(options?.embeddingMode),
     );
   }
 
   /** Authorization scope: the LLM endpoint plus the embedding endpoint when remote embedding is enabled. */
-  private libraryAuthorizationScope(): LibraryAuthorizationScope {
+  private libraryAuthorizationScope(
+    embeddingMode: "local" | "remote" = this.settings.embedding.mode,
+  ): LibraryAuthorizationScope {
     return {
       llmBaseUrl: this.settings.llm.baseUrl,
-      ...(this.settings.embedding.mode === "remote" && this.settings.embedding.baseUrl.trim()
+      ...(embeddingMode === "remote" && this.settings.embedding.baseUrl.trim()
         ? { embeddingEndpoint: { baseUrl: this.settings.embedding.baseUrl } }
         : {}),
     };
@@ -618,6 +637,9 @@ export default class ArxivDailyPlugin extends Plugin {
         this.logger.error?.("personal library catalog load failed after folder selection", error);
       });
       await this.reloadPersonalLibraryProfileDocuments(discoveryRevision);
+      // A new folder has its own knowledge base, so the previous folder's "last
+      // indexed" sentence must not survive the switch.
+      await this.refreshLibraryIndexTrace();
       this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision);
       return "selected" as const;
     });
@@ -1632,6 +1654,10 @@ export default class ArxivDailyPlugin extends Plugin {
     if (updateProgress) {
       this.progress?.setTask("Indexing personal library full text", "Extracting and embedding PDF text");
     }
+    // The status bar is gated on being the only operation; the settings row is
+    // not. It shows this run and nothing else, and it is the surface that hides
+    // the status bar when a person starts the run from it.
+    this.libraryIndexStatus.beginRun(operation.id, "reading the library catalog");
     let legacyMigrationLease: FullTextLegacyMigrationLease | undefined;
     try {
       operation.signal.throwIfAborted();
@@ -1683,9 +1709,15 @@ export default class ArxivDailyPlugin extends Plugin {
         afterManifestCommit: legacyMigrationLease
           ? () => legacyMigrationLease!.assertOwned()
           : undefined,
-        onProgress: (detail) => {
+        onProgress: (detail, progress) => {
           operation.signal.throwIfAborted();
           if (updateProgress) this.progress?.setTask("Indexing personal library full text", detail);
+          this.libraryIndexStatus.report({
+            phase: progress?.phase === "preparing"
+              ? "preparing local documents"
+              : "extracting and embedding PDF text",
+            ...(progress ? { completed: progress.completed, total: progress.total } : {}),
+          });
         },
         signal: operation.signal,
       });
@@ -1710,12 +1742,17 @@ export default class ArxivDailyPlugin extends Plugin {
             writerToken: generationWriterToken,
             signal: operation.signal,
             onProgress: (progress) => {
-              if (!updateProgress) return;
               const label = progress.phase === "papers"
                 ? "Building bounded full-text blocks"
                 : progress.phase === "dictionary"
                   ? "Building lexical routes"
                   : "Validating full-text generation";
+              this.libraryIndexStatus.report({
+                phase: label.charAt(0).toLowerCase() + label.slice(1),
+                completed: progress.completed,
+                total: progress.total,
+              });
+              if (!updateProgress) return;
               this.progress?.setTask("Indexing personal library full text", `${label} (${progress.completed}/${progress.total})`);
             },
           });
@@ -1736,6 +1773,13 @@ export default class ArxivDailyPlugin extends Plugin {
           "fulltext: immutable generation cutover is unavailable on this host; retaining the legacy migration fallback",
         );
       }
+      // The trace comes from the commit that just happened rather than from a
+      // fresh manifest read: the summary already names the revision this run
+      // wrote, and re-reading would be a second answer to a settled question.
+      this.libraryIndexStatus.setLastRun({
+        updatedAt: summary.manifestUpdatedAt,
+        papers: summary.searchablePapers,
+      });
       // ADR 0007: every durable legacy manifest commit remains a trigger even
       // when rebuilding its derived generation fails.
       operation.signal.throwIfAborted();
@@ -1773,7 +1817,48 @@ export default class ArxivDailyPlugin extends Plugin {
         }
       } finally {
         operation.finish();
+        this.libraryIndexStatus.endRun();
       }
+    }
+  }
+
+  /**
+   * Ask the settings row's in-flight indexing run to stop. Reports whether
+   * there was one: the row can be a frame behind the run it is describing.
+   */
+  cancelPersonalLibraryIndexing(): boolean {
+    const activity = this.libraryIndexStatus.snapshot().activity;
+    if (!activity) return false;
+    if (!this.operations.cancel(activity.operationId, "cancelled from settings")) return false;
+    this.libraryIndexStatus.markCancelling();
+    return true;
+  }
+
+  /**
+   * Republish what the knowledge base manifest holds.
+   *
+   * The manifest is read rather than the last run summary remembered, because
+   * only the manifest can say what a search would find right now — a summary
+   * would keep claiming an index that a rebuild, a folder change or a deletion
+   * has since taken away. Revision 0 is the empty manifest the store invents
+   * when nothing was ever committed; its `updatedAt` is the clock, not a run.
+   */
+  async refreshLibraryIndexTrace(): Promise<void> {
+    const connection = this.libraryConnection;
+    if (!connection) {
+      this.libraryIndexStatus.setLastRun(undefined);
+      return;
+    }
+    try {
+      const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+      const ready = Object.values(manifest.papers).filter((paper) => paper.status === "ready").length;
+      this.libraryIndexStatus.setLastRun(
+        manifest.revision > 0 ? { updatedAt: manifest.updatedAt, papers: ready } : undefined,
+      );
+    } catch (error) {
+      // A row that cannot read the manifest says nothing about past runs; it
+      // must not say the index is gone.
+      this.logger.warn("fulltext: could not read the index manifest for the settings row", error);
     }
   }
 

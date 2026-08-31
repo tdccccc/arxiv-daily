@@ -172,6 +172,32 @@ describe("personal library connection", () => {
     expect(localDisclosure.processingDepth).toBe("metadata-and-abstracts");
   });
 
+  it("discloses full-text depth for a remote scope before any grant exists", () => {
+    // The in-place consent asks before the grant is written, so the depth in
+    // the disclosure has to come from the scope being asked about, not from
+    // the depth a previous (metadata-level) grant happened to store.
+    const connection = createLibraryConnection("/papers", "1:2");
+    const disclosure = libraryAuthorizationDisclosure(
+      connection,
+      scope(endpoint, "https://embed.example.com/v1"),
+    );
+    expect(connection.processingDepth).toBe("metadata-and-abstracts");
+    expect(disclosure.processingDepth).toBe("full-text");
+    expect(disclosure.embeddingEndpoint).toContain("embed.example.com");
+  });
+
+  it("names the URL full text is actually posted to, not the chat URL", () => {
+    const connection = createLibraryConnection("/papers", "1:2");
+    const disclosure = libraryAuthorizationDisclosure(
+      connection,
+      scope(endpoint, "https://embed.example.com/v1/"),
+    );
+    // The remote embedding model POSTs to `{baseUrl}/embeddings`; disclosing a
+    // chat-completions URL would name a destination nothing is sent to.
+    expect(disclosure.embeddingEndpoint).toBe("https://embed.example.com/v1/embeddings");
+    expect(disclosure.embeddingEndpoint).not.toContain("chat/completions");
+  });
+
   it("decodes persisted full-text connections", () => {
     const connection = createLibraryConnection("/papers", "1:2");
     const remote = authorizeLibraryConnection(connection, scope(endpoint, "https://embed.example.com/v1"));

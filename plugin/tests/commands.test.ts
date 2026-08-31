@@ -39,6 +39,13 @@ elementPrototype.createEl ??= function (tag, options = {}) {
 elementPrototype.setText ??= function (text) {
   this.textContent = text;
 };
+(elementPrototype as HTMLElement & {
+  createDiv?: (options?: { text?: string; cls?: string }) => HTMLElement;
+}).createDiv ??= function (options = {}) {
+  return (this as unknown as {
+    createEl: (tag: string, options?: { text?: string; cls?: string }) => HTMLElement;
+  }).createEl("div", options);
+};
 
 /** Canned pass report for the full-text runtime diagnostics command. */
 function passRuntimeDiagnostics(): FullTextRuntimeDiagnostics {
@@ -131,7 +138,36 @@ function makePlugin() {
     addRibbonIcon: vi.fn(() => ({ addClass: vi.fn() })),
     openPersonalLibraryDirectionReview: vi.fn(),
     diagnoseFullTextRuntime: vi.fn(async () => passRuntimeDiagnostics()),
+    getLibraryConnectionStatus: vi.fn(() => ({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    })),
+    previewLibraryInventory: vi.fn(async () => ({
+      eligible: [{ path: "papers/a.pdf", size: 10 }],
+      ignored: [],
+      folders: 1,
+      truncated: false,
+    })),
+    scanPersonalLibrary: vi.fn(async () => makeCatalog()),
+    reloadPersonalLibraryCatalog: vi.fn(async () => makeCatalog()),
   };
+}
+
+/** Minimal catalog shape the summary modal renders. */
+function makeCatalog() {
+  return {
+    revision: 3,
+    papers: {},
+    lastScan: {
+      ready: 4,
+      papers: 4,
+      unresolved: 1,
+      unrelated: 0,
+      failed: 0,
+      truncated: false,
+    },
+  } as any;
 }
 
 function makeDiagnosticsProbeFailurePlugin(
@@ -377,6 +413,105 @@ describe("registerCommands", () => {
       "arXiv Daily: direction review could not be opened. Try again.",
     );
     expect(Notice.calls.at(-1)?.message).not.toContain("/Users/alice");
+  });
+
+  describe("personal library maintenance commands (moved off the settings Manage menu)", () => {
+    function findCommand(plugin: ReturnType<typeof makePlugin>, id: string) {
+      return vi.mocked(plugin.addCommand).mock.calls
+        .map(([value]) => value)
+        .find((value) => value.id === id);
+    }
+
+    it("registers preview, scan and reload as distinct commands", () => {
+      const plugin = makePlugin();
+      registerCommands(plugin as any);
+
+      expect(findCommand(plugin, "preview-personal-library-files")?.name).toBe(
+        "Preview personal library files",
+      );
+      expect(findCommand(plugin, "scan-personal-library")?.name).toBe(
+        "Scan personal library folder (rebuild catalog)",
+      );
+      expect(findCommand(plugin, "reload-personal-library-catalog")?.name).toBe(
+        "Reload personal library catalog from disk",
+      );
+    });
+
+    it("routes preview to the plugin inventory preview and shows the modal", async () => {
+      Notice.calls = [];
+      Modal.opened.length = 0;
+      const plugin = makePlugin();
+      registerCommands(plugin as any);
+
+      findCommand(plugin, "preview-personal-library-files")?.callback?.();
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+
+      expect(plugin.previewLibraryInventory).toHaveBeenCalledOnce();
+      expect(Modal.opened.at(-1)?.titleEl.textContent).toBe(
+        "Personal library inventory",
+      );
+    });
+
+    it("routes scan to a folder rescan and reload to a catalog reload", async () => {
+      Modal.opened.length = 0;
+      const plugin = makePlugin();
+      registerCommands(plugin as any);
+
+      findCommand(plugin, "scan-personal-library")?.callback?.();
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(plugin.scanPersonalLibrary).toHaveBeenCalledOnce();
+      expect(plugin.reloadPersonalLibraryCatalog).not.toHaveBeenCalled();
+
+      findCommand(plugin, "reload-personal-library-catalog")?.callback?.();
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(plugin.reloadPersonalLibraryCatalog).toHaveBeenCalledOnce();
+      expect(plugin.scanPersonalLibrary).toHaveBeenCalledOnce();
+      expect(Modal.opened.at(-1)?.titleEl.textContent).toBe(
+        "Personal library catalog",
+      );
+    });
+
+    it("asks for a folder instead of throwing when no library is connected", async () => {
+      Notice.calls = [];
+      const plugin = makePlugin();
+      plugin.getLibraryConnectionStatus.mockReturnValue({ kind: "disconnected" } as any);
+      registerCommands(plugin as any);
+
+      for (const id of [
+        "preview-personal-library-files",
+        "scan-personal-library",
+        "reload-personal-library-catalog",
+      ]) {
+        Notice.calls = [];
+        expect(() => findCommand(plugin, id)?.callback?.()).not.toThrow();
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+        expect(Notice.calls.at(-1)?.message).toBe(
+          "arXiv Daily: choose a personal library folder in settings first.",
+        );
+      }
+      expect(plugin.previewLibraryInventory).not.toHaveBeenCalled();
+      expect(plugin.scanPersonalLibrary).not.toHaveBeenCalled();
+      expect(plugin.reloadPersonalLibraryCatalog).not.toHaveBeenCalled();
+    });
+
+    it("notices and logs a failed scan without throwing", async () => {
+      Notice.calls = [];
+      const plugin = makePlugin();
+      const failure = new Error("folder identity changed");
+      plugin.scanPersonalLibrary.mockRejectedValue(failure);
+      registerCommands(plugin as any);
+
+      expect(() => findCommand(plugin, "scan-personal-library")?.callback?.()).not.toThrow();
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+
+      expect(plugin.logger.error).toHaveBeenCalledWith(
+        "commands: personal library scan failed",
+        failure,
+      );
+      expect(Notice.calls.at(-1)?.message).toBe(
+        "arXiv Daily: personal library scan failed: folder identity changed",
+      );
+    });
   });
 
   it("registers the full-text runtime diagnostics command and renders its report", async () => {

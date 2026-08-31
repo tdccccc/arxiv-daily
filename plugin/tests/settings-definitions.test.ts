@@ -102,6 +102,9 @@ describe("buildSettingDefinitions structure", () => {
       renderEmbeddingApiKeyRow: () => {},
       renderEmbeddingModelRow: () => {},
       renderEmbeddingDimensionRow: () => {},
+      renderPdfParserSidecarEnabledRow: () => {},
+      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
+      renderPdfParserSidecarParseUrlRow: () => {},
     };
   }
 
@@ -110,8 +113,10 @@ describe("buildSettingDefinitions structure", () => {
     expect(items.length).toBeGreaterThanOrEqual(4);
     const groups = items.filter((item) => item.type === "group");
     expect(groups.map((g) => g.heading)).toEqual(
-      expect.arrayContaining(["LLM", "Embedding", "Output & schedule", "Advanced", "Help & feedback"]),
+      expect.arrayContaining(["LLM", "Output & schedule", "Advanced", "Help & feedback"]),
     );
+    expect(groups.map((g) => g.heading)).not.toContain("Embedding");
+    expect(groups.map((g) => g.heading)).not.toContain("PDF parsing");
   });
 
   it("orders the compact LLM rows and removes obsolete controls", () => {
@@ -130,24 +135,53 @@ describe("buildSettingDefinitions structure", () => {
     expect(items.some((item) => item.name === "Quick start")).toBe(false);
   });
 
-  it("orders the embedding rows for remote configuration", () => {
-    const items = buildSettingDefinitions(makeFullHost());
-    const embedding = items.find(
-      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
-        item.type === "group" && item.heading === "Embedding",
+  it("folds embedding and PDF parser into Personal library and hides extras by default", () => {
+    const host = makeFullHost();
+    const items = buildSettingDefinitions(host);
+    expect(items.map((item) => ("heading" in item ? item.heading : item.name))).toEqual(
+      expect.arrayContaining(["LLM", "Personal library"]),
     );
-    expect(embedding?.items.map((item) => item.name)).toEqual([
-      "Embedding mode",
+    const llmIndex = items.findIndex((item) => item.type === "group" && item.heading === "LLM");
+    const libraryIndex = items.findIndex(
+      (item) => item.type === "group" && item.heading === "Personal library",
+    );
+    expect(llmIndex).toBeGreaterThanOrEqual(0);
+    expect(libraryIndex).toBeGreaterThan(llmIndex);
+    expect(items.some((item) => item.type === "group" && item.heading === "Embedding")).toBe(false);
+    expect(items.some((item) => item.type === "group" && item.heading === "PDF parsing")).toBe(false);
+
+    const library = items.find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "Personal library",
+    );
+    expect(library?.items.map((item) => item.name)).toEqual([
+      "Library",
+      "Embedding",
+      "Better PDF parser",
+    ]);
+
+    host.plugin.settings.embedding.mode = "remote";
+    host.plugin.settings.pdfParserSidecar.enabled = true;
+    const expanded = buildSettingDefinitions(host).find(
+      (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+        item.type === "group" && item.heading === "Personal library",
+    );
+    expect(expanded?.items.map((item) => item.name)).toEqual([
+      "Library",
+      "Embedding",
       "Embedding API base URL",
       "Embedding API key",
       "Embedding model",
       "Embedding dimension",
+      "Better PDF parser",
+      "Sidecar capability URL",
+      "Sidecar parse URL",
     ]);
-    // Without the render callbacks the group carries no rows.
+
     const bare = buildSettingDefinitions(makeHost()).find(
-      (item) => item.type === "group" && item.heading === "Embedding",
+      (item) => item.type === "group" && item.heading === "Personal library",
     );
-    expect(bare?.items ?? []).toHaveLength(0);
+    expect(bare).toBeUndefined();
   });
 
   it("only includes Getting started while setup is incomplete", () => {

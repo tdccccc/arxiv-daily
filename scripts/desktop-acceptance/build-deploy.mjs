@@ -1,7 +1,18 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { RELEASE_ASSETS } from "../release-assets.mjs";
 
-const ARTIFACTS = ["main.js", "manifest.json"];
+/**
+ * The harness deploys exactly what a release ships, from the one list both read.
+ *
+ * `styles.css` is on that list because the settings-page geometry assertions
+ * measure what the stylesheet lays out. While the harness kept its own copy of
+ * the list, omitting `styles.css` made the run read the vault's leftover
+ * stylesheet and report a layout no build on the branch produces — silently.
+ * Sharing the list means a fourth release asset reaches the harness by the same
+ * edit that adds it to the release.
+ */
+const ARTIFACTS = RELEASE_ASSETS;
 
 /**
  * The files the harness overwrites in the test vault. The vault also holds

@@ -2,7 +2,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
-import { ArxivDailySettingTab } from "../src/settings/tab";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
+import {
+  ArxivDailySettingTab,
+  LIBRARY_INDEX_PROGRESS_INTERVAL_MS,
+} from "../src/settings/tab";
 import {
   allSettingKeys,
   buildSettingDefinitions,
@@ -15,6 +19,8 @@ import {
   renderEmailApiKeyRow,
   renderEmailModeRow,
   renderEmailToRow,
+  renderEmbeddingBaseUrlRow,
+  renderEmbeddingModeRow,
   renderHostedTokenRow,
   renderLlmBaseUrlRow,
   renderModelRow,
@@ -129,6 +135,7 @@ function makeTab() {
     sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
     getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     selectLibraryRoot: vi.fn().mockResolvedValue("cancelled"),
     getLibraryAuthorizationDisclosure: vi.fn().mockReturnValue(null),
     authorizeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
@@ -141,6 +148,7 @@ function makeTab() {
     scanPersonalLibrary: vi.fn().mockResolvedValue({}),
     reloadPersonalLibraryCatalog: vi.fn().mockResolvedValue({}),
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    cancelPersonalLibraryIndexing: vi.fn().mockReturnValue(true),
     openPersonalLibraryDirectionReview: vi.fn(),
   } as unknown as ArxivDailyPlugin;
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =
@@ -180,12 +188,39 @@ describe("wired getSettingDefinitions", () => {
     expect(groups.map((g) => g.heading)).toEqual(
       expect.arrayContaining([
         "LLM",
+        "Personal library",
         "Output & schedule",
         "Email delivery",
         "Advanced",
         "Help & feedback",
       ]),
     );
+    expect(groups.map((g) => g.heading)).not.toContain("Embedding");
+    expect(groups.map((g) => g.heading)).not.toContain("PDF parsing");
+    const llmIndex = groups.findIndex((g) => g.heading === "LLM");
+    const libraryIndex = groups.findIndex((g) => g.heading === "Personal library");
+    expect(libraryIndex).toBeGreaterThan(llmIndex);
+  });
+
+  it("keeps the personal library section after Output & schedule and before Email delivery", () => {
+    const { tab } = makeTab();
+    const headings = tab
+      .getSettingDefinitions()
+      .filter((item) => item.type === "group" || item.type === "list")
+      .map((item) => item.heading);
+    expect(headings).toEqual([
+      "LLM",
+      "arXiv categories",
+      "Research topics",
+      "Output & schedule",
+      "Personal library",
+      "Email delivery",
+      "Advanced",
+      "Help & feedback",
+    ]);
+    const scheduleIndex = headings.indexOf("Output & schedule");
+    expect(headings[scheduleIndex + 1]).toBe("Personal library");
+    expect(headings[scheduleIndex + 2]).toBe("Email delivery");
   });
 
   it("contains the api key row, model row, topics list, and email to control", () => {
@@ -225,6 +260,9 @@ describe("wired getSettingDefinitions", () => {
       expect.arrayContaining([
         "Getting started",
         "Enable · Paused",
+        "Library",
+        "Embedding",
+        "Better PDF parser",
         "Timezone",
         "Run window",
         "Check every (minutes)",
@@ -234,6 +272,11 @@ describe("wired getSettingDefinitions", () => {
         "Daily auto-send",
       ]),
     );
+    expect(names).not.toContain("Embedding API base URL");
+    expect(names).not.toContain("Sidecar capability URL");
+    expect(names).not.toContain("Library connection");
+    expect(names).not.toContain("Embedding mode");
+    expect(names).not.toContain("Use local parser sidecar");
   });
 
   it("routes list mutations and actions to the tab's public methods", async () => {
@@ -260,16 +303,24 @@ describe("personal library settings row", () => {
       text: string;
       cta: boolean;
       warning: boolean;
+      disabled: boolean;
       click?: () => void;
     }> = [];
+    // Attached to the document because the row refuses to write progress into
+    // a description that is no longer on screen, and a detached node is exactly
+    // what that check is for.
+    const descEl = document.createElement("div");
+    document.body.appendChild(descEl);
     const setting = {
       controlEl: { addClass: vi.fn() },
+      descEl,
       setDesc: vi.fn().mockReturnThis(),
       addButton(callback: (button: any) => void) {
-        const state = { text: "", cta: false, warning: false } as {
+        const state = { text: "", cta: false, warning: false, disabled: false } as {
           text: string;
           cta: boolean;
           warning: boolean;
+          disabled: boolean;
           click?: () => void;
         };
         const button = {
@@ -277,6 +328,7 @@ describe("personal library settings row", () => {
           setButtonText(text: string) { state.text = text; return button; },
           setCta() { state.cta = true; return button; },
           setWarning() { state.warning = true; return button; },
+          setDisabled(disabled: boolean) { state.disabled = disabled; return button; },
           onClick(click: () => void) { state.click = click; return button; },
         };
         callback(button);
@@ -288,56 +340,105 @@ describe("personal library settings row", () => {
     return { buttons, setting };
   }
 
-  it("shows only folder selection while disconnected", () => {
-    const { tab } = makeTab();
-    const { buttons } = renderLibraryButtons(tab);
-    expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
+  it("keeps the library buttons on one right-aligned row", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "local";
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const { setting } = renderLibraryButtons(tab);
+    expect(setting.controlEl.addClass).toHaveBeenCalledWith(
+      "arxiv-daily-settings__library-controls",
+    );
   });
 
-  it("shows authorization after selection and a compact manage menu after approval", () => {
+  it("shows only folder selection while disconnected", () => {
+    const { tab } = makeTab();
+    const { buttons, setting } = renderLibraryButtons(tab);
+    expect(buttons.map((button) => button.text)).toEqual(["Choose folder"]);
+    expect(setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Choose a folder of PDFs/i),
+    );
+  });
+
+  it("offers Build index after a local folder is selected without requiring authorization", () => {
     const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "local";
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const { buttons, setting } = renderLibraryButtons(tab);
+    expect(buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Build index",
+    ]);
+    expect(buttons[1]?.cta).toBe(true);
+    expect(setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Local embedding stays on this device/i),
+    );
+    buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+  });
+
+  it("keeps Build index as the main action while remote consent is still pending", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "remote";
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const pending = renderLibraryButtons(tab);
+    expect(pending.buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Build index",
+    ]);
+    expect(pending.buttons[1]?.cta).toBe(true);
+    // The row still says the remote grant is missing; only the button changed.
+    expect(pending.setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/Remote embedding sends full text/i),
+    );
+    pending.buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: "2026-08-02T12:00:00.000Z",
+    });
+    const authorized = renderLibraryButtons(tab);
+    expect(authorized.buttons.map((button) => button.text)).toEqual([
+      "Change folder",
+      "Build index",
+      "Revoke",
+    ]);
+    expect(authorized.buttons[1]?.cta).toBe(true);
+    authorized.buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+  });
+
+  it("exposes Revoke as a direct button only while authorized", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "local";
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorization-required",
       rootLabel: "papers",
     });
     const pending = renderLibraryButtons(tab).buttons;
-    expect(pending.map((button) => button.text)).toEqual([
-      "Change folder",
-      "Review & authorize",
-      "Manage…",
-    ]);
-    expect(pending[1]?.cta).toBe(true);
-    pending[1]?.click?.();
-    expect(runAction).toHaveBeenCalledWith(
-      "authorize personal library",
-      expect.any(Function),
-    );
-
-    // The secondary actions live in the Manage… menu.
-    const menuTitles: string[] = [];
-    const menuClicks: Array<() => void> = [];
-    const setTitle = vi.spyOn(MenuItem.prototype, "setTitle")
-      .mockImplementation(function (this: unknown, title: string) {
-        menuTitles.push(title);
-        return this;
-      });
-    const onClick = vi.spyOn(MenuItem.prototype, "onClick")
-      .mockImplementation(function (this: unknown, cb: () => void) {
-        menuClicks.push(cb);
-        return this;
-      });
-    pending[2]?.click?.();
-    expect(menuTitles).toEqual([
-      "Review directions",
-      "Preview library files",
-      "Scan library",
-      "Reload catalog",
-    ]);
-    menuClicks[0]?.();
-    expect(runAction).toHaveBeenCalledWith("open direction review", expect.any(Function));
-    setTitle.mockRestore();
-    onClick.mockRestore();
+    expect(pending.map((button) => button.text)).not.toContain("Revoke");
 
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
@@ -345,12 +446,213 @@ describe("personal library settings row", () => {
       grantedAt: "2026-08-02T12:00:00.000Z",
     });
     const authorized = renderLibraryButtons(tab).buttons;
-    expect(authorized.map((button) => button.text)).toEqual([
+    const revoke = authorized.find((button) => button.text === "Revoke");
+    expect(revoke).toBeDefined();
+    expect(revoke?.cta).toBe(false);
+    revoke?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "revoke personal library",
+      expect.any(Function),
+    );
+  });
+
+  it("never renders a Manage menu or an authorization button on the library row", () => {
+    const { tab, plugin } = makeTab();
+    const openMenu = vi.spyOn(MenuItem.prototype, "setTitle");
+    for (const status of [
+      { kind: "disconnected" } as const,
+      { kind: "authorization-required", rootLabel: "papers" } as const,
+      { kind: "authorization-invalidated", rootLabel: "papers" } as const,
+      {
+        kind: "authorized",
+        rootLabel: "papers",
+        grantedAt: "2026-08-02T12:00:00.000Z",
+      } as const,
+    ]) {
+      for (const mode of ["local", "remote"] as const) {
+        plugin.settings.embedding.mode = mode;
+        vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue(status);
+        const { buttons } = renderLibraryButtons(tab);
+        const labels = buttons.map((button) => button.text);
+        expect(labels).not.toContain("Manage…");
+        expect(buttons.length).toBeLessThanOrEqual(3);
+        for (const label of labels) {
+          expect(label.toLowerCase()).not.toContain("authoriz");
+        }
+        // The main action is always folder selection or indexing.
+        expect(["Choose folder", "Build index"]).toContain(labels.at(-1) === "Revoke"
+          ? labels.at(-2)
+          : labels.at(-1));
+      }
+    }
+    expect(openMenu).not.toHaveBeenCalled();
+    openMenu.mockRestore();
+  });
+
+  it("shows Build index for a legacy remote library that was never granted", () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "remote";
+    const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-invalidated",
+      rootLabel: "papers",
+    });
+    const { buttons, setting } = renderLibraryButtons(tab);
+
+    expect(buttons.map((button) => button.text)).toEqual([
       "Change folder",
-      "Revoke",
-      "Manage…",
+      "Build index",
     ]);
-    expect(authorized[1]?.warning).toBe(true);
+    expect(setting.setDesc).toHaveBeenCalledWith(
+      expect.stringMatching(/changed/i),
+    );
+    buttons[1]?.click?.();
+    expect(runAction).toHaveBeenCalledWith(
+      "index personal library full text",
+      expect.any(Function),
+    );
+  });
+
+  /**
+   * Indexing already reported itself to the status bar, which the settings
+   * modal covers. These say the row that started the run is now the row that
+   * shows it, and that it can stop it.
+   */
+  describe("while an index run is in flight", () => {
+    function connectedTab() {
+      const made = makeTab();
+      made.plugin.settings.embedding.mode = "local";
+      vi.mocked(made.plugin.getLibraryConnectionStatus).mockReturnValue({
+        kind: "authorization-required",
+        rootLabel: "papers",
+      });
+      vi.spyOn(made.tab, "refreshSettings").mockImplementation(() => {});
+      return made;
+    }
+
+    it("shows the run on the row and stops it from there", () => {
+      const { tab, plugin } = connectedTab();
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      plugin.libraryIndexStatus.report({
+        phase: "extracting and embedding PDF text",
+        completed: 4,
+        total: 40,
+      });
+
+      const { buttons } = renderLibraryButtons(tab);
+      expect(buttons.map((button) => button.text)).toEqual([
+        "Change folder",
+        "Indexing… (4/40)",
+        "Cancel",
+      ]);
+      expect(buttons[1]?.disabled).toBe(true);
+      expect(buttons[0]?.disabled).toBe(true);
+
+      buttons[2]?.click?.();
+      expect(plugin.cancelPersonalLibraryIndexing).toHaveBeenCalled();
+    });
+
+    /**
+     * A run reports once per paper. Re-rendering the settings page at that rate
+     * would throw away whatever else is being edited on it, so a report that
+     * only changes text writes straight into the row that is already drawn —
+     * and is paced, because the reports arrive faster than they can be read.
+     */
+    it("rewrites the row in place rather than re-rendering the page", async () => {
+      vi.useFakeTimers();
+      try {
+        const { tab, plugin } = connectedTab();
+        plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+        const { setting } = renderLibraryButtons(tab);
+        vi.mocked(tab.refreshSettings).mockClear();
+
+        for (let paper = 1; paper <= 20; paper += 1) {
+          plugin.libraryIndexStatus.report({
+            phase: "extracting and embedding PDF text",
+            completed: paper,
+            total: 40,
+          });
+        }
+        expect(tab.refreshSettings).not.toHaveBeenCalled();
+        expect(setting.descEl.textContent).toBe("");
+
+        vi.advanceTimersByTime(LIBRARY_INDEX_PROGRESS_INTERVAL_MS);
+        // One write, carrying the newest report rather than the first.
+        expect(setting.descEl.textContent).toContain("extracting and embedding PDF text");
+        expect(tab.refreshSettings).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /** Starting and stopping change which buttons exist, which text cannot do. */
+    it("re-renders when the run appears and when it is over", () => {
+      const { tab, plugin } = connectedTab();
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
+
+      // The re-render the tab would have done is stubbed out here, so tell the
+      // row what it would have learned: the run is on it now.
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      plugin.libraryIndexStatus.endRun();
+      expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops following the run once the tab is closed", () => {
+      const { tab, plugin } = connectedTab();
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      tab.hide();
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      expect(tab.refreshSettings).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("declarative embedding rows delegate the consent flow", () => {
+  it("routes the mode dropdown through the shared in-place consent", async () => {
+    const { tab, plugin } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const apply = vi
+      .spyOn(tab, "applyEmbeddingModeChange")
+      .mockImplementation(async () => false);
+    const setting = renderSetting();
+    renderEmbeddingModeRow(tab, setting as never);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+
+    select.value = "remote";
+    select.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith("remote"));
+    // A declined switch leaves the dropdown showing the unchanged mode.
+    await vi.waitFor(() => expect(select.value).toBe(plugin.settings.embedding.mode));
+    expect(select.value).toBe("local");
+  });
+
+  it("routes the endpoint field through the shared re-ask on change", async () => {
+    const { tab, plugin } = makeTab();
+    plugin.settings.embedding.mode = "remote";
+    plugin.settings.embedding.baseUrl = "https://embed.example.com/v1";
+    const save = vi
+      .spyOn(tab, "saveEmbeddingEndpointField")
+      .mockResolvedValue("https://embed.example.com/v1");
+    const setting = renderSetting();
+    renderEmbeddingBaseUrlRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+
+    input.value = "https://elsewhere.example.com/v1";
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(save).toHaveBeenCalledWith(
+      "embedding.baseUrl",
+      "https://elsewhere.example.com/v1",
+    ));
+    // A declined change puts the authorized endpoint back on screen.
+    await vi.waitFor(() => expect(input.value).toBe("https://embed.example.com/v1"));
   });
 });
 
@@ -1124,6 +1426,14 @@ describe("wired getControlValue", () => {
       renderEmailToRow: () => {},
       renderEmailApiKeyRow: () => {},
       renderHostedTokenRow: () => {},
+      renderEmbeddingModeRow: () => {},
+      renderEmbeddingBaseUrlRow: () => {},
+      renderEmbeddingApiKeyRow: () => {},
+      renderEmbeddingModelRow: () => {},
+      renderEmbeddingDimensionRow: () => {},
+      renderPdfParserSidecarEnabledRow: () => {},
+      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
+      renderPdfParserSidecarParseUrlRow: () => {},
     });
     const tabItems = tab.getSettingDefinitions();
     expect(tabItems.length).toBe(hostItems.length);

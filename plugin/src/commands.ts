@@ -22,6 +22,10 @@ import {
   type LibrarySearchBlockOptions,
 } from "./dashboard/library-search-block";
 import type { LibraryFullTextMatch } from "./library/fulltext-results";
+import {
+  showLibraryInventoryPreview,
+  showPersonalLibraryCatalogSummary,
+} from "./library/modal";
 
 export { bindEnterToButton, isValidCalendarDate } from "./date-picker-modal";
 export {
@@ -452,6 +456,86 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         plugin.logger.error("commands: failed to open incremental suggestion review", error);
         notice("arXiv Daily: suggestion review could not be opened. Try again.", 10_000);
       }
+    },
+  });
+
+  /**
+   * Secondary personal library actions used to sit behind a "Manage…" menu in
+   * settings. The settings row now shows at most three buttons, so these live
+   * in the command palette only.
+   */
+  const requireLibraryFolder = (): boolean => {
+    if (plugin.getLibraryConnectionStatus().kind !== "disconnected") return true;
+    notice("arXiv Daily: choose a personal library folder in settings first.", 10_000);
+    return false;
+  };
+
+  plugin.addCommand({
+    id: "preview-personal-library-files",
+    name: "Preview personal library files",
+    callback: () => {
+      if (!requireLibraryFolder()) return;
+      runDetached(
+        (async () => {
+          try {
+            const preview = await plugin.previewLibraryInventory();
+            showLibraryInventoryPreview(plugin.app, preview);
+          } catch (error) {
+            plugin.logger.error("commands: personal library preview failed", error);
+            notice(`arXiv Daily: personal library preview failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "preview personal library files",
+      );
+    },
+  });
+
+  // Scan walks the library folder, re-identifies files (arXiv id resolution,
+  // including title lookups) and rewrites the stored catalog — it does work and
+  // can take a while. Reload only re-reads the already-stored catalog from
+  // disk; it never touches the folder.
+  plugin.addCommand({
+    id: "scan-personal-library",
+    name: "Scan personal library folder (rebuild catalog)",
+    callback: () => {
+      if (!requireLibraryFolder()) return;
+      runDetached(
+        (async () => {
+          notice("arXiv Daily: scanning personal library folder…");
+          try {
+            const catalog = await plugin.scanPersonalLibrary();
+            showPersonalLibraryCatalogSummary(plugin.app, catalog);
+          } catch (error) {
+            plugin.logger.error("commands: personal library scan failed", error);
+            notice(`arXiv Daily: personal library scan failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "scan personal library folder",
+      );
+    },
+  });
+
+  plugin.addCommand({
+    id: "reload-personal-library-catalog",
+    name: "Reload personal library catalog from disk",
+    callback: () => {
+      if (!requireLibraryFolder()) return;
+      runDetached(
+        (async () => {
+          try {
+            const catalog = await plugin.reloadPersonalLibraryCatalog();
+            if (!catalog) {
+              notice("arXiv Daily: choose a personal library folder in settings first.", 10_000);
+              return;
+            }
+            showPersonalLibraryCatalogSummary(plugin.app, catalog);
+          } catch (error) {
+            plugin.logger.error("commands: personal library catalog reload failed", error);
+            notice(`arXiv Daily: personal library catalog reload failed: ${errorMessage(error)}`, 10_000);
+          }
+        })(),
+        "reload personal library catalog",
+      );
     },
   });
 

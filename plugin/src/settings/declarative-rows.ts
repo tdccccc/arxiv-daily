@@ -561,9 +561,27 @@ export function renderEmbeddingModeRow(
   remote.value = "remote";
   select.value = tab.plugin.settings.embedding.mode;
   select.addEventListener("change", () => {
+    const next = select.value === "remote" ? "remote" : "local";
+    const revision = tab.beginControlChange(select);
     tab.runAction("save embedding mode", async () => {
-      tab.plugin.settings.embedding.mode = select.value === "remote" ? "remote" : "local";
-      await tab.plugin.saveSettings();
+      try {
+        // Switching to remote asks for full-text consent in place; a declined
+        // switch leaves the mode alone, so the dropdown snaps back to it.
+        await tab.applyEmbeddingModeChange(next);
+        if (tab.isCurrentControlChange(select, revision)) {
+          select.value = tab.plugin.settings.embedding.mode;
+        }
+        tab.refreshSettings();
+      } catch (error) {
+        if (tab.isCurrentControlChange(select, revision)) {
+          select.value = tab.restoreCurrentStringControlValue(
+            error,
+            "embedding.mode",
+            "local",
+          );
+        }
+        throw error;
+      }
     });
   });
 }
@@ -579,9 +597,20 @@ export function renderEmbeddingBaseUrlRow(
   });
   input.value = tab.plugin.settings.embedding.baseUrl;
   input.addEventListener("change", () => {
+    const next = input.value.trim();
+    const revision = tab.beginControlChange(input);
     tab.runAction("save embedding base url", async () => {
-      tab.plugin.settings.embedding.baseUrl = input.value.trim();
-      await tab.plugin.saveSettings();
+      try {
+        // Moving an authorized destination re-asks; a declined move restores
+        // the endpoint the grant actually covers.
+        const displayed = await tab.saveEmbeddingEndpointField("embedding.baseUrl", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = displayed;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, "embedding.baseUrl");
+        }
+        throw error;
+      }
     });
   });
 }
@@ -609,9 +638,18 @@ export function renderEmbeddingModelRow(
   });
   input.value = tab.plugin.settings.embedding.model;
   input.addEventListener("change", () => {
+    const next = input.value.trim();
+    const revision = tab.beginControlChange(input);
     tab.runAction("save embedding model", async () => {
-      tab.plugin.settings.embedding.model = input.value.trim();
-      await tab.plugin.saveSettings();
+      try {
+        const displayed = await tab.saveEmbeddingEndpointField("embedding.model", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = displayed;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, "embedding.model");
+        }
+        throw error;
+      }
     });
   });
 }
@@ -645,8 +683,10 @@ export function renderPdfParserSidecarEnabledRow(
   new ToggleComponent(setting.controlEl)
     .setValue(tab.plugin.settings.pdfParserSidecar.enabled)
     .onChange((enabled) => {
-      tab.runAction("save local parser sidecar", () =>
-        tab.changeSettingValue("pdfParserSidecar.enabled", enabled));
+      tab.runAction("save local parser sidecar", async () => {
+        await tab.changeSettingValue("pdfParserSidecar.enabled", enabled);
+        tab.refreshSettings();
+      });
     });
 }
 
