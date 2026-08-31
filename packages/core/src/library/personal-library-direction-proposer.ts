@@ -901,20 +901,34 @@ export async function proposeClusteredPersonalLibraryDirections(
       .filter((paperKey) => clusteringInputKeys.has(paperKey)),
   );
   const synthesisMessage = renderPersonalLibrarySynthesisUserMessage(synthesisInput);
-  if (synthesisMessage.length > PERSONAL_LIBRARY_DIRECTION_MAX_SYNTHESIS_CODE_UNITS) {
-    throw new ClusteredDirectionsProposerError(
-      "synthesis-too-large",
-      "combined cluster candidates exceed the synthesis message bound",
-    );
+  // A synthesis that cannot be validated falls back to the un-synthesized
+  // candidates instead of failing the proposal. This is a deliberate
+  // difference from the unclustered proposer, which throws: by this point one
+  // extraction call per cluster has already been spent, and a fragmented
+  // proposal the researcher can still merge by hand beats no proposal at all.
+  // Synthesis merges and marks; its failure must not drop candidates either
+  // (ADR 0009 §2). Cancellation is not a synthesis failure and propagates.
+  let merged: readonly PersonalLibraryDirectionModelCandidate[] = synthesisInput;
+  // The size guard is unreachable while the loop above bounds provisional
+  // candidates to PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES: twelve maximal
+  // candidates render to roughly 46k code units against a 60k bound. It is
+  // kept so that raising the candidate bound degrades here rather than sending
+  // an oversized message.
+  if (synthesisMessage.length <= PERSONAL_LIBRARY_DIRECTION_MAX_SYNTHESIS_CODE_UNITS) {
+    try {
+      merged = (await callValidatedStage(
+        "synthesis", synthesisSystemPrompt, synthesisMessage, allowedFinal, options,
+      )).candidates;
+    } catch (error) {
+      if (!(error instanceof PersonalLibraryDirectionValidationError)
+        && !(error instanceof PersonalLibraryDirectionProposerError)) throw error;
+    }
   }
-  const synthesized = await callValidatedStage(
-    "synthesis", synthesisSystemPrompt, synthesisMessage, allowedFinal, options,
-  );
   throwIfCancelled(options.signal);
 
   const candidates: PersonalLibraryDirectionCandidate[] = [];
-  for (let ordinal = 0; ordinal < synthesized.candidates.length; ordinal += 1) {
-    const candidate = synthesized.candidates[ordinal]!;
+  for (let ordinal = 0; ordinal < merged.length; ordinal += 1) {
+    const candidate = merged[ordinal]!;
     let id: string;
     try {
       id = options.createId("candidate", ordinal);

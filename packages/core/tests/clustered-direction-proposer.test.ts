@@ -4,6 +4,7 @@ import {
   PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION,
   PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS,
   PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
+  PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS,
   createPersonalLibraryClusteredDirectionGenerationContract,
   proposeClusteredPersonalLibraryDirections,
   resolvePersonalLibraryClusteringOptions,
@@ -298,6 +299,23 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     expect(result.candidates[0]!.name).toBe("Shared direction");
     expect(result.candidates[0]!.representatives.map(({ paperKey }) => paperKey))
       .toEqual([...surfaced].sort());
+  });
+
+  it("keeps the un-synthesized candidates when synthesis cannot be validated", async () => {
+    const store = makeKnowledgeBase(standardEntries());
+    // Extraction succeeds per cluster; every synthesis attempt comes back
+    // unusable. The per-cluster work is already paid for, so a fragmented
+    // proposal beats no proposal at all (ADR 0009 §2).
+    const llm = new ScriptedLlm((data, callIndex) =>
+      callIndex < 2 ? defaultCandidate(data) : "not a JSON result");
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
+    expect(llm.calls).toHaveLength(2 + PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS);
+    expect(result.candidates).toHaveLength(2);
+    expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
+    // the fallback candidates still carry their own cluster's members
+    const covered = result.candidates.flatMap((candidate) =>
+      candidate.clusterMembers!.map(({ paperKey }) => paperKey));
+    expect(new Set(covered).size).toBe(6);
   });
 
   it("attaches every cluster member with its clustering confidence to each candidate", async () => {
