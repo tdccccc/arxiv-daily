@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-08-31T22:41:07+08:00
-updated: 2026-08-31T22:41:07+08:00
-revision: 1
+updated: 2026-08-31T22:52:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -23,27 +23,21 @@ revision: 1
 
 ## Chunks
 
-### Chunk 1 — 聚类提案跑综合阶段，同义候选合并为一条
+### Chunk 1 — 聚类提案跑综合阶段，合并后的候选携带来源簇成员的并集
+
+> **L1 就地调整（2026-08-31）**：原计划把「跑综合」与「簇成员归谁」拆成两个 chunk。动手时发现拆不开——综合一旦合并候选，`clusterMembers` 必须同时有定义，否则提案通不过严格解码，第一个 chunk 无法独立验收。两者合为一个 chunk，阶段目标与后续 chunk 不变。
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
 - Red / baseline signal: 新增一条测试——两个簇各产出讲同一件事的候选，脚本化 LLM 在第三次调用（综合）返回合并后的单条；断言最终 proposal 只有 1 个候选。当前实现不发起第三次调用，红在「候选数为 2，期望 1」。同时现有断言 `expect(llm.calls).toHaveLength(2)` 会红在调用数上——那条断言编码的是「只有抽取、没有综合」的旧契约，属预期变红。
 - Green check: `npm run test --workspace @arxiv-daily/core -- clustered-direction-proposer`，新测试转绿；「每簇恰好一次抽取且不串簇」这条契约仍绿（它仍然成立，只是总调用数从 2 变 3）。
 - regression checks: `npm run test --workspace @arxiv-daily/core -- personal-library-direction-proposer`（老路径综合行为不得改变）；`npm run typecheck`。
+- **observed**: 红的原文 `expected [ … ] to have a length of 2 but got 3`（新测试先红在调用数为 2）。绿之后 clustered-direction-proposer 14/14、老路径 23/23 逐字未变、core 各分片全绿、plugin 694/694、typecheck 四包、lint 0 error、check:boundaries OK。合并的簇成员规则：取代表论文所属各簇成员的并集（簇是划分，不重复计数），超 schema 上限时按置信度保留最高的若干条。
+- **顺带更新的既有断言，均非契约变更**：`clustered-direction-proposer` 里「每簇一次抽取」那条的总调用数 2 → 3，判据限定到抽取调用；`plugin/tests/personal-library-profile-lifecycle` 两条把「生成方向 = 恰好一次 LLM 调用」当成脚手架常量，改为 2 次（抽取 + 综合）。授权闸、CAS、证据陈旧检测的判据一字未动。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
-### Chunk 2 — 合并后的候选携带来源簇成员的并集，超限按置信度截断
-
-- change kind: behavior change
-- strategy: strict Red-Green-Refactor
-- Red / baseline signal: 新增测试——两个簇的候选被综合合并后，断言结果候选的 `clusterMembers` 覆盖两个簇的成员；再加一条构造超过 schema 上限的用例，断言按置信度保留最高的若干条且严格 decode 通过。红在成员只来自其中一个簇 / decode 失败。
-- Green check: 同上测试文件转绿。
-- regression checks: 现有「把每个簇成员连同聚类置信度附到候选上」的断言仍绿；`npm run typecheck`。
-- exception: 无
-- [ ] implementation and tests accepted
-
-### Chunk 3 — 综合失败或过大时退回未综合的候选集，不丢弃整个提案
+### Chunk 2 — 综合失败或过大时退回未综合的候选集，不丢弃整个提案
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
