@@ -41,18 +41,19 @@ revision: 2
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
-- Red / baseline signal: 新增测试——脚本化 LLM 在综合调用上连续返回不合法输出直到重试耗尽，断言仍返回一个严格 decode 通过、含全部未综合候选的 proposal；另一条用例让综合输入超过 `PERSONAL_LIBRARY_DIRECTION_MAX_SYNTHESIS_CODE_UNITS`，断言同样退回而不是抛 `synthesis-too-large`。红在抛错。
+- Red / baseline signal: 新增测试——脚本化 LLM 在综合调用上连续返回不合法输出直到重试耗尽，断言仍返回一个严格 decode 通过、含全部未综合候选的 proposal。红在抛错。
 - Green check: 同上测试文件转绿。
 - regression checks: 取消语义不变——综合阶段前后各有一次 `throwIfCancelled`，已有取消测试仍绿；`npm run test --workspace @arxiv-daily/core -- personal-library-direction-proposer` 确认老路径仍然抛错（差异是有意的）。
+- **observed**: 红的原文 `PersonalLibraryDirectionValidationError: personal library direction synthesis validation failed: not-json after 3 attempts`。绿之后 clustered-direction-proposer 15/15；老路径 23/23，其中 `fails before synthesis when the complete valid provisional set exceeds its prompt budget` 仍断言 `code: "synthesis-too-large"`——两条路径的相反行为各有一条绿测试守着；core 各分片全绿、plugin 694/694、typecheck 四包、lint 0 error、check:boundaries OK。
+- **计划里的第二条用例作废，原因是它构造不出来**：综合消息的上限是 60k code units，而聚类路径在抽取循环里已把候选数限死在 `PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12`，12 个撑满边界的候选也只渲染出约 46k。该分支在当前边界下不可达，已折进同一条退路并在代码注释里写明它只是「将来放宽候选上限时的降级点」，不是有测试保证的行为。（老路径可达，因为它的 provisional 在综合前不受该上限约束。）
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
-- `npm run test --workspace @arxiv-daily/core`（core 全绿；本机需 8 GiB 堆 + 单 fork）。
-- `npm run typecheck` 四包通过；`npm run lint` 0 error；`npm run check:boundaries` OK。
-- 授权面未变：综合仍在 `personal-library-direction-generation` 的授权与取消范围内，未新增 consent 分支——由既有授权测试仍绿佐证。
-- **不构成本阶段验收的**：22 → 6–8 的真实收敛。那需要对测试库重跑一次方向生成，依赖 LLM 端点可达，属 P5 的端到端验证。
+- **observed 2026-08-31**：`npm run test --workspace @arxiv-daily/core` 各分片全绿；`npm run test --workspace obsidian-arxiv-daily` 694/694（41 文件）；`npm run typecheck` 四包通过；`npm run lint` 0 error（20 warning，既有）；`npm run check:boundaries` OK。
+- 授权面未变：综合仍在 `personal-library-direction-generation` 的授权与取消范围内，未新增 consent 分支——`personal-library-profile-lifecycle` 里的授权闸与 CAS 断言仍绿佐证，那两条只改了调用次数这个脚手架常量。
+- **不构成本阶段验收的**：22 → 6–8 的真实收敛。那需要对测试库重跑一次方向生成，依赖 LLM 端点可达，属 P5 的端到端验证。本阶段能证明的只是「综合确实发生、合并结果能落盘、失败不丢候选」。
 
 ## Abort / reshape triggers
 
