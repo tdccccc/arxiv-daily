@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DISCLOSURE_CANCEL_BUTTON_CLASS,
+  DISCLOSURE_CANCEL_LABEL,
+  DISCLOSURE_CONFIRM_BUTTON_CLASS,
+  DISCLOSURE_CONFIRM_LABELS,
   DISCLOSURE_MODAL_CLASS,
   DISCLOSURE_TITLES,
   EXPECTED_GROUP_ORDER,
+  judgeDisclosureButtons,
   judgeDisclosureTitle,
   judgeGroupOrder,
   judgeLibraryButtons,
@@ -274,11 +279,10 @@ test("a declined disclosure has to leave the mode and the grant exactly as they 
   );
 });
 
-test("the interaction expressions address elements by their visible text", () => {
+test("the settings-page interaction expressions address elements by their visible text", () => {
   assert.match(selectEmbeddingModeExpression("remote"), /select.value = "remote"/);
   assert.match(selectEmbeddingModeExpression("remote"), /dispatchEvent\(new Event\("change"\)\)/);
   assert.match(clickLibraryRowButtonExpression("Build index"), /"Build index"/);
-  assert.match(clickModalButtonExpression("Cancel"), /"Cancel"/);
 });
 
 /*
@@ -289,7 +293,10 @@ test("the interaction expressions address elements by their visible text", () =>
  */
 test("the disclosure dialog is located by a stable class, never by its heading", () => {
   assert.equal(DISCLOSURE_MODAL_CLASS, "arxiv-daily-library-authorization-modal");
-  for (const expression of [modalExpression(), clickModalButtonExpression("Cancel")]) {
+  for (const expression of [
+    modalExpression(),
+    clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS),
+  ]) {
     assert.match(expression, /\.modal-container \.modal/);
     assert.match(expression, /"arxiv-daily-library-authorization-modal"/);
     // A heading match in the lookup is what made a reworded title read as a
@@ -298,8 +305,33 @@ test("the disclosure dialog is located by a stable class, never by its heading",
   }
 });
 
-test("the reader reports the heading as data so it can be judged separately", () => {
-  assert.match(modalExpression(), /title: \(modal\.querySelector\("\.modal-title"\)/);
+/*
+ * Same rule, one level down. The class literals are spelled out here rather
+ * than imported from the module under test, so renaming one is caught instead
+ * of agreed with; the plugin actually marking the buttons is guarded by
+ * `plugin/tests/library-modal.test.ts`.
+ */
+test("the disclosure's answers are clicked by a stable mark, never by their label", () => {
+  assert.equal(DISCLOSURE_CONFIRM_BUTTON_CLASS, "arxiv-daily-library-authorization-confirm");
+  assert.equal(DISCLOSURE_CANCEL_BUTTON_CLASS, "arxiv-daily-library-authorization-cancel");
+
+  const confirmClick = clickModalButtonExpression(DISCLOSURE_CONFIRM_BUTTON_CLASS);
+  assert.match(confirmClick, /querySelector\("button\." \+ "arxiv-daily-library-authorization-confirm"\)/);
+  // Selecting on the label is what would make a reworded button read as a
+  // missing one — the failure this whole arrangement exists to prevent.
+  assert.doesNotMatch(confirmClick, /textContent[^\n]*===/);
+  assert.doesNotMatch(confirmClick, /"Authorize"|"Send full text"/);
+
+  const cancelClick = clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS);
+  assert.match(cancelClick, /querySelector\("button\." \+ "arxiv-daily-library-authorization-cancel"\)/);
+  assert.doesNotMatch(cancelClick, /textContent[^\n]*===/);
+});
+
+test("the reader reports the heading and both labels as data, to be judged separately", () => {
+  const expression = modalExpression();
+  assert.match(expression, /title: \(modal\.querySelector\("\.modal-title"\)/);
+  assert.match(expression, /confirm: marked\("arxiv-daily-library-authorization-confirm"\)/);
+  assert.match(expression, /cancel: marked\("arxiv-daily-library-authorization-cancel"\)/);
 });
 
 test("each processing depth has its own heading, and neither claims the other's", () => {
@@ -335,4 +367,71 @@ test("a depth with no specified heading is a failure rather than a silent pass",
   const verdict = judgeDisclosureTitle({ present: true, title: "anything" }, "invented-depth");
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /no heading is specified/);
+});
+
+const dialog = (depth) => ({
+  present: true,
+  title: DISCLOSURE_TITLES[depth],
+  confirm: DISCLOSURE_CONFIRM_LABELS[depth],
+  cancel: DISCLOSURE_CANCEL_LABEL,
+});
+
+test("the confirm button answers the heading in the heading's own words", () => {
+  for (const depth of Object.keys(DISCLOSURE_TITLES)) {
+    assert.equal(
+      DISCLOSURE_TITLES[depth],
+      `${DISCLOSURE_CONFIRM_LABELS[depth]} off this device?`,
+      `the ${depth} heading and confirm button do not speak of the same scope`,
+    );
+    assert.equal(judgeDisclosureButtons(dialog(depth), depth).ok, true);
+  }
+  assert.doesNotMatch(DISCLOSURE_CONFIRM_LABELS["metadata-and-abstracts"], /full text/i);
+  for (const label of Object.values(DISCLOSURE_CONFIRM_LABELS)) {
+    assert.doesNotMatch(label, /authoriz/i);
+  }
+});
+
+test("the retired Authorize label fails as wording, not as a missing button", () => {
+  const verdict = judgeDisclosureButtons(
+    { ...dialog("full-text"), confirm: "Authorize" },
+    "full-text",
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /the confirm button reads "Authorize", expected "Send full text"/);
+  assert.doesNotMatch(verdict.reason, /has no|not found|missing/i);
+});
+
+test("the metadata label on a full-text dialog is a wording failure too", () => {
+  const verdict = judgeDisclosureButtons(
+    { ...dialog("full-text"), confirm: DISCLOSURE_CONFIRM_LABELS["metadata-and-abstracts"] },
+    "full-text",
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /reads "Send titles and abstracts", expected "Send full text"/);
+});
+
+test("a genuinely missing button says so, distinctly from a reworded one", () => {
+  const verdict = judgeDisclosureButtons({ ...dialog("full-text"), confirm: null }, "full-text");
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /has no \.arxiv-daily-library-authorization-confirm button/);
+  assert.doesNotMatch(verdict.reason, /reads/);
+});
+
+test("the way out keeps its own label, and its absence is reported", () => {
+  const reworded = judgeDisclosureButtons(
+    { ...dialog("full-text"), cancel: "Nope" },
+    "full-text",
+  );
+  assert.equal(reworded.ok, false);
+  assert.match(reworded.reason, /the cancel button reads "Nope", expected "Cancel"/);
+
+  const missing = judgeDisclosureButtons({ ...dialog("full-text"), cancel: null }, "full-text");
+  assert.equal(missing.ok, false);
+  assert.match(missing.reason, /has no \.arxiv-daily-library-authorization-cancel button/);
+});
+
+test("a depth with no specified confirm label is a failure rather than a silent pass", () => {
+  const verdict = judgeDisclosureButtons(dialog("full-text"), "invented-depth");
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /no confirm label is specified/);
 });

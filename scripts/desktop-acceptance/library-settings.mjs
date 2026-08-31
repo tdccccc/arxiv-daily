@@ -26,6 +26,18 @@ const PLUGIN = `app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]`;
 export const DISCLOSURE_MODAL_CLASS = "arxiv-daily-library-authorization-modal";
 
 /**
+ * The dialog's two answers, located the same way and for the same reason.
+ *
+ * Clicking them by label was the same mistake one level down: the confirm
+ * label follows the processing depth, so rewording it broke the scenario at
+ * "the modal has no Authorize button", which reads like the dialog lost its
+ * button. Marked buttons make a reworded label fail on `judgeDisclosureButtons`
+ * instead. Guarded on the plugin side by `plugin/tests/library-modal.test.ts`.
+ */
+export const DISCLOSURE_CONFIRM_BUTTON_CLASS = "arxiv-daily-library-authorization-confirm";
+export const DISCLOSURE_CANCEL_BUTTON_CLASS = "arxiv-daily-library-authorization-cancel";
+
+/**
  * What the heading has to read at each processing depth. Two entries because
  * the depth is not fixed: a grant that covers full text says so, and one that
  * covers metadata and abstracts must not claim otherwise.
@@ -39,6 +51,25 @@ export const DISCLOSURE_TITLES = {
   "full-text": "Send full text off this device?",
   "metadata-and-abstracts": "Send titles and abstracts off this device?",
 };
+
+/**
+ * What the confirm button has to read at each depth — the heading's question
+ * answered in the heading's own words, rather than "Authorize", which answers a
+ * question the dialog never asked.
+ *
+ * Keyed by depth alongside `DISCLOSURE_TITLES` because both come from one
+ * branch on the depth in the plugin (`libraryAuthorizationCopy`); a third depth
+ * has to gain an entry in both, and a missing entry fails loudly below.
+ * `metadata-and-abstracts` is unreachable from this scenario for the reason
+ * given above, and is asserted in `plugin/tests/library-modal.test.ts`.
+ */
+export const DISCLOSURE_CONFIRM_LABELS = {
+  "full-text": "Send full text",
+  "metadata-and-abstracts": "Send titles and abstracts",
+};
+
+/** The negative answer does not follow the depth; there is only one way out. */
+export const DISCLOSURE_CANCEL_LABEL = "Cancel";
 
 /** The three groups whose order the settings page is supposed to present. */
 export const EXPECTED_GROUP_ORDER = ["Output & schedule", "Personal library", "Email delivery"];
@@ -275,9 +306,10 @@ export function clickLibraryRowButtonExpression(label) {
 }
 
 /**
- * Reads the dialog located by `modalClass`, and reports its heading as data
- * rather than matching on it — so the heading can be asserted separately from
- * the lookup that found the dialog.
+ * Reads the dialog located by `modalClass`, and reports its heading and the
+ * labels of its two marked answers as data rather than matching on any of them
+ * — so the wording can be asserted separately from the lookups that found the
+ * dialog and its buttons.
  */
 export function modalExpression(modalClass = DISCLOSURE_MODAL_CLASS) {
   return `(() => {
@@ -286,27 +318,37 @@ export function modalExpression(modalClass = DISCLOSURE_MODAL_CLASS) {
     );
     if (!modal) return JSON.stringify({ present: false });
     const r = modal.getBoundingClientRect();
+    const marked = (cls) => {
+      const button = modal.querySelector("button." + cls);
+      return button ? (button.textContent ?? "").trim() : null;
+    };
     return JSON.stringify({
       present: true,
       title: (modal.querySelector(".modal-title")?.textContent ?? "").trim(),
       buttons: Array.from(modal.querySelectorAll("button")).map((b) => (b.textContent ?? "").trim()),
+      confirm: marked(${JSON.stringify(DISCLOSURE_CONFIRM_BUTTON_CLASS)}),
+      cancel: marked(${JSON.stringify(DISCLOSURE_CANCEL_BUTTON_CLASS)}),
       text: (modal.querySelector(".modal-content")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
       rect: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
     });
   })()`;
 }
 
-export function clickModalButtonExpression(label, modalClass = DISCLOSURE_MODAL_CLASS) {
+/**
+ * Clicks the answer marked with `buttonClass`. The argument is a mark, never a
+ * label: the confirm label follows the processing depth, so selecting on it
+ * would make every copy change read as a missing button.
+ */
+export function clickModalButtonExpression(buttonClass, modalClass = DISCLOSURE_MODAL_CLASS) {
   return `(() => {
     const modal = document.querySelector(
       ".modal-container .modal." + ${JSON.stringify(modalClass)},
     );
     if (!modal) return JSON.stringify({ error: "no ." + ${JSON.stringify(modalClass)} + " modal is open" });
-    const button = Array.from(modal.querySelectorAll("button"))
-      .find((b) => (b.textContent ?? "").trim() === ${JSON.stringify(label)});
-    if (!button) return JSON.stringify({ error: "the modal has no " + ${JSON.stringify(label)} + " button" });
+    const button = modal.querySelector("button." + ${JSON.stringify(buttonClass)});
+    if (!button) return JSON.stringify({ error: "the modal has no ." + ${JSON.stringify(buttonClass)} + " button" });
     button.click();
-    return JSON.stringify({ clicked: ${JSON.stringify(label)} });
+    return JSON.stringify({ clicked: ${JSON.stringify(buttonClass)}, label: (button.textContent ?? "").trim() });
   })()`;
 }
 
@@ -642,6 +684,46 @@ export function judgeDisclosureTitle(modal, depth, titles = DISCLOSURE_TITLES) {
   return { ok: true, reason: `titled "${actual}" at ${depth} depth` };
 }
 
+/**
+ * The two answers, judged against the depth the dialog is disclosing.
+ *
+ * Separate from finding them, exactly as the heading is separate from finding
+ * the dialog. The buttons are located by their marks, so a reworded confirm
+ * label reaches this judge and fails as `reads "Authorize", expected "Send full
+ * text"` rather than as "the modal has no Authorize button" — the second reads
+ * like the dialog lost its affirmative, which is a lie about what happened.
+ *
+ * A missing mark is still reported, and says so in those words, because that is
+ * a different failure: the button really is not there.
+ */
+export function judgeDisclosureButtons(modal, depth, {
+  confirmLabels = DISCLOSURE_CONFIRM_LABELS,
+  cancelLabel = DISCLOSURE_CANCEL_LABEL,
+} = {}) {
+  const expected = confirmLabels[depth];
+  if (!expected) {
+    return { ok: false, reason: `no confirm label is specified for ${depth} depth` };
+  }
+  const problems = [];
+  const confirm = modal?.confirm ?? null;
+  const cancel = modal?.cancel ?? null;
+  if (confirm === null) {
+    problems.push(`the disclosure has no .${DISCLOSURE_CONFIRM_BUTTON_CLASS} button`);
+  } else if (confirm !== expected) {
+    problems.push(
+      `the confirm button reads "${confirm}", expected "${expected}" at ${depth} depth`,
+    );
+  }
+  if (cancel === null) {
+    problems.push(`the disclosure has no .${DISCLOSURE_CANCEL_BUTTON_CLASS} button`);
+  } else if (cancel !== cancelLabel) {
+    problems.push(`the cancel button reads "${cancel}", expected "${cancelLabel}"`);
+  }
+  return problems.length === 0
+    ? { ok: true, reason: `answers "${cancel}" / "${confirm}" at ${depth} depth` }
+    : { ok: false, reason: problems.join("; ") };
+}
+
 /** Nothing about the grant or the mode may move when a disclosure is declined. */
 export function judgeUnchanged(before, after) {
   const problems = [];
@@ -775,6 +857,7 @@ export async function librarySettingsScenarios({
   if (dispatched.error) {
     results.push(fail("remote-switch-asks-in-place", dispatched.error));
     results.push(fail("remote-disclosure-title", dispatched.error));
+    results.push(fail("remote-disclosure-buttons", dispatched.error));
   } else {
     const modal = await waitForModal(evaluate);
     if (!modal.present) {
@@ -809,9 +892,24 @@ export async function librarySettingsScenarios({
       results.push((verdict.ok ? pass : fail)("remote-disclosure-title", verdict.reason));
     }
 
+    // 4c — the two answers, judged the same way and apart from the marks the
+    // clicks below use to find them. The confirm button has to answer the
+    // heading in the heading's own words; "Authorize" would be a different
+    // concept the reader has to translate. Only the full-text pair is reachable
+    // here, for the same reason as the heading.
+    if (!modal.present) {
+      results.push(fail(
+        "remote-disclosure-buttons",
+        `no .${DISCLOSURE_MODAL_CLASS} dialog opened, so its buttons could not be read`,
+      ));
+    } else {
+      const verdict = judgeDisclosureButtons(modal, "full-text");
+      results.push((verdict.ok ? pass : fail)("remote-disclosure-buttons", verdict.reason));
+    }
+
     // 5 — declining puts everything back
     if (modal.present) {
-      await evaluate(clickModalButtonExpression("Cancel"));
+      await evaluate(clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS));
       await waitForModalGone(evaluate);
       await wait(evaluate, settleMs * 2);
       const afterCancel = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);
@@ -867,7 +965,7 @@ export async function librarySettingsScenarios({
         `Build index started without opening the .${DISCLOSURE_MODAL_CLASS} dialog`,
       ));
     } else {
-      await evaluate(clickModalButtonExpression("Cancel"));
+      await evaluate(clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS));
       await waitForModalGone(evaluate);
       await wait(evaluate, settleMs * 3);
       const afterCancel = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);
@@ -911,7 +1009,7 @@ export async function librarySettingsScenarios({
   if (!granting.error) {
     const modal = await waitForModal(evaluate);
     if (modal.present) {
-      await evaluate(clickModalButtonExpression("Authorize"));
+      await evaluate(clickModalButtonExpression(DISCLOSURE_CONFIRM_BUTTON_CLASS));
       await waitForModalGone(evaluate);
       await wait(evaluate, settleMs * 3);
       await evaluate(OPEN_SETTINGS_EXPRESSION);

@@ -87,3 +87,14 @@ class 两头各有单测守着，改哪一头都红：插件侧 `plugin/tests/li
 - 如果断言跑不过是因为产品有缺陷，停止并汇报，不得在本 initiative 内修改 `plugin/` 或 `packages/` 下的产品代码，也不得调低断言以求转绿。**已触发**：`library-row-geometry` 在两种宽度下均红，原因是 `09d43f1` 引入的 `.arxiv-daily-settings__library-controls` 同时设了 `min-width: 0` 与 `flex-wrap: nowrap`，前者让控件盒收缩到内容以下、按钮向左溢出并压住描述文字（1400px 窗口下 13.6px，700px 窗口下 118.2px），后者在 Obsidian 窄屏堆叠布局（窗口 < 700px）下让按钮横向铺出面板之外。已落盘截图为证，未改产品代码。**第二次触发**：`library-row-three-buttons-geometry` 在面板 448px 红——三个按钮一行占满 302px，只剩 6px 给说明文字，一行一个字母。同样只出断言与截图，产品侧的修法记在 `2026-08-30-library-setup-path` 的 journal 与 P1b 更正里。**第三次触发**：修完三按钮档后出现了荒谬的对比——三按钮换行、说明 176px，两按钮被 `library-row-geometry` 锁在一行、说明 81px，按钮越多这一行反而越好看。这一次红的原因不只在产品，也在断言：那条断言把「448px 必须一行」当成了期望值。于是按上面「断言变更」一节改严判据先取红（81px / 每行 10.7 字符），产品侧再收敛成一条由可读下限推出的样式规则转绿。
 - 如果截图需要注入内联样式才能造出目标宽度，停止并在文档中说明这是伪造的布局，不得把它描述为「用户可达的宽度」。未触发：两种宽度均由窗口尺寸驱动。
 - 如果场景需要真的跑一次索引或发出真实网络请求才能断言，停止并把断言收敛到设置层与对话框层。未触发。
+
+## 按钮定位方式变更（2026-08-31）
+
+上一轮只把**弹框**的定位从标题文本换成了稳定 class，**按钮仍然按文案点**：`clickModalButtonExpression` 收的是按钮文字，在弹框里找 `textContent` 相等的 button。于是改确认按钮文案会直接弄坏验收，且红的原文是「the modal has no Authorize button」——读起来像按钮不见了，实际只是换了词。这是标题那次同一个失败模式，只是从弹框挪到了按钮。
+
+两个按钮各加一个稳定 class（沿用 `arxiv-daily-` 前缀）：`arxiv-daily-library-authorization-confirm`、`arxiv-daily-library-authorization-cancel`。`clickModalButtonExpression(buttonClass)` 收标识不收文案，`modalExpression()` 把两个按钮的文字当**数据**读出来。新增判据 `judgeDisclosureButtons(modal, depth)` 单独断言文案。定位与断言就此分开：文案改了红在「按钮文案不符」，按钮真没了才红在「找不到那个 class 的按钮」，两种失败各自指得准，各有单测守着且断言互相排斥。
+
+新增场景断言 `remote-disclosure-buttons`，场景总数 16 → 17。
+
+- 红的证据：把 `DISCLOSURE_CONFIRM_LABELS["full-text"]` 临时改回 `Authorize` 重跑，红的原文是 `FAIL  remote-disclosure-buttons / the confirm button reads "Send full text", expected "Authorize" at full-text depth`——红在**文案不符**而非找不到按钮。同一次运行里 `remote-switch-asks-in-place`、`declined-remote-switch-changes-nothing`、`build-index-asks-before-remote-indexing` 与两条三按钮断言全绿，而这几条都必须先找到弹框、点它的取消或确认按钮才能成立（三按钮状态正是靠点确认按钮授权出来的），证明按钮定位已不吃文案。
+- `metadata-and-abstracts` 深度的按钮文案本场景够不到，原因与标题那条相同（设置页在无嵌入接口时返回 `undisclosable`、不开框），在 `plugin/tests/library-modal.test.ts` 覆盖。

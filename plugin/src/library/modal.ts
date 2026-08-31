@@ -15,17 +15,41 @@ import type {
 export const LIBRARY_AUTHORIZATION_MODAL_CLASS = "arxiv-daily-library-authorization-modal";
 
 /**
+ * Stable handles on the two answers, for the same reason as the class above:
+ * the confirm button's label is product copy that follows the processing
+ * depth, so anything that clicks it from the outside has to find it by mark,
+ * not by wording. Clicking by label is what turns a copy change into "the
+ * button is missing" — the dialog-level version of that mistake is documented
+ * on LIBRARY_AUTHORIZATION_MODAL_CLASS.
+ */
+export const LIBRARY_AUTHORIZATION_CONFIRM_CLASS = "arxiv-daily-library-authorization-confirm";
+export const LIBRARY_AUTHORIZATION_CANCEL_CLASS = "arxiv-daily-library-authorization-cancel";
+
+/**
+ * The words the dialog asks and answers with, taken from the depth in one
+ * place.
+ *
  * The heading names what leaves the device, and it has to name the depth the
  * grant actually covers: a fixed "full text" heading would misdescribe a
  * metadata-and-abstracts grant exactly the way the depth and endpoint fields
  * used to before they were made to follow the scope being asked about.
+ *
+ * The confirm button has to answer that heading in the same words. "Authorize"
+ * answers a question nobody was asked: the heading asks whether to send
+ * something, so the affirmative is sending it, not granting an authorization
+ * the reader then has to translate back. Heading and button are returned
+ * together, from a single branch on the depth, so a third depth cannot be
+ * added to one of them and forgotten in the other.
  */
-export function libraryAuthorizationTitle(
+export function libraryAuthorizationCopy(
   processingDepth: LibraryAuthorizationDisclosure["processingDepth"],
-): string {
+): { title: string; confirm: string } {
   return processingDepth === "full-text"
-    ? "Send full text off this device?"
-    : "Send titles and abstracts off this device?";
+    ? { title: "Send full text off this device?", confirm: "Send full text" }
+    : {
+        title: "Send titles and abstracts off this device?",
+        confirm: "Send titles and abstracts",
+      };
 }
 
 export function confirmLibraryAuthorization(
@@ -34,8 +58,9 @@ export function confirmLibraryAuthorization(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
+    const copy = libraryAuthorizationCopy(disclosure.processingDepth);
     modal.modalEl.addClass(LIBRARY_AUTHORIZATION_MODAL_CLASS);
-    modal.titleEl.setText(libraryAuthorizationTitle(disclosure.processingDepth));
+    modal.titleEl.setText(copy.title);
     modal.contentEl.createEl("p", {
       text: "Review exactly what arXiv Daily may process through your configured model endpoints.",
     });
@@ -66,10 +91,13 @@ export function confirmLibraryAuthorization(
       resolve(value);
       modal.close();
     };
-    actions.createEl("button", { text: "Cancel" }).onclick = () => finish(false);
-    const authorize = actions.createEl("button", { text: "Authorize" });
-    authorize.addClass("mod-cta");
-    authorize.onclick = () => finish(true);
+    const cancel = actions.createEl("button", { text: "Cancel" });
+    cancel.addClass(LIBRARY_AUTHORIZATION_CANCEL_CLASS);
+    cancel.onclick = () => finish(false);
+    const confirm = actions.createEl("button", { text: copy.confirm });
+    confirm.addClass(LIBRARY_AUTHORIZATION_CONFIRM_CLASS);
+    confirm.addClass("mod-cta");
+    confirm.onclick = () => finish(true);
     modal.onClose = () => finish(false);
     modal.open();
   });
