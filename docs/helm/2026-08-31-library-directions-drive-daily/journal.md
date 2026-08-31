@@ -1,0 +1,12 @@
+## 2026-08-31 — 立 goal 前的设计对齐：四个决定与三条 ADR
+
+- evidence: 接手时这条链一次也没端到端跑通——测试库两个分片各 10 / 12 个方向候选、confirmed 为 0，`interest-profile.json` 尚未生成，手写主题也是 0，91 篇论文无一带 discoveryProvenance。核实过程中改了三次判断，都记在下面。
+- **卡点比预想的少一条，也多一条**。原以为库一长大画像就整体失效——不成立：画像绑定的是文献库文件夹与收录的文件类型，加论文不影响，只有换文件夹才整体失配，单篇代表论文被删/被改只失效它所在的那一个方向。另一处原以为「手写主题为 0 时过滤阶段会把库方向选出的论文全丢掉」——也不成立：过滤是并集，库方向单独命中的论文以 `personal-library` 类别照常进报告。真正挡路的只有手动运行前的那道配置检查（`validateFilterConfig` 无条件要求 ≥1 个手写主题，不认库方向），排程路径没有这道检查。
+- **「定期更新画像 + 提醒确认」已经存在，不需要新建**。ADR 0007 早已决定并接线：建索引完成且 indexed > 0 时自动触发增量更新，新论文归入已有方向、缓冲池攒够就重新聚类并产出建议进复审队列，机器建议永不自动生效。它现在看不出效果，只是因为已确认方向为 0——增量更新是在已确认方向之上做增删，没有基底就无事可做。
+- **复审入口只有一个**：`review-personal-library-directions` 与 `review-incremental-suggestions` 两条命令调的是同一个函数，一个页面里同时装着待确认候选、已确认方向、增量建议。所以「待复核的东西被看见」是一个入口的可见性问题，不是两个。
+- change: 用户在本次 grill 中定下四件事。其一，**冷启动等确认才推**——不自动放行、不按置信度分级，保留 ADR 0007 §3 的立场。其二，**一键接受后一视同仁**，不记「只是扫了一眼」、不再回头提醒；因此 CONTEXT.md 里 confirmed interest profile 的 "researcher-reviewed" 措辞不必改。其三，**碎片在生成时收**，不靠人手动合并也不靠调粗聚类粒度（ADR 0009）。其四，**待复核信号放 Dashboard**，不并进设置页文献库那一行。日报分章一并定为不动（ADR 0010 §3）。
+- **22 个候选的碎片化查到了机制与实证**。聚类式提案对每个簇单独调一次 LLM 起名，簇与簇之间从不互相看一眼，结果直接拼接；不带聚类的老路径本来有一个跨批次综合步骤，聚类这条路丢了它。实测两个分片里至少七对是同一方向的两个名字（如 `Outer-halo profiles as tests of gravity` 与 `Cluster mass profiles from interiors to turnaround scales and tests of gravity`，共享 alternative gravity / cluster outskirts / cluster kinematics 三条线索），按线索归并后 22 条约塌成 6–8 条。代价不只是复审页难看：日报分类按每 12 个方向一组切块，19 个方向 = 2 组、8 个 = 1 组，**同义方向把每天的分类调用数直接翻倍**，且同一篇论文被两个同义方向重复命中、来源标记也重复。另有一条 `Quantum PCP and robust local verification of many-body states` 只有 1 篇代表论文且与其余无关，据此定下「标出来但默认不勾」。
+- disposition: 三条 ADR。**0009** 跨簇综合：综合只合并与标注、绝不删除候选（研究者看不到的方向无法纠正，而证据薄的新兴兴趣恰是最不该被默默抹掉的），走既有授权与取消范围。**0010** 已确认方向独立满足前置检查：库状态作为显式入参传入，CLI 无文献库、传空，行为一字不变；报告结构不动。**0011** reading candidates 停做：把 ADR 0004 步骤 7 与 9 从「later initiatives」明确关闭为 will-not-do，理由是从未进过任何发布 tag、删除外部零代价、留着则连存储格式一起变成兼容负担。ADR 0004 原文不改——它记录的是当时的计划，结论由 0011 承接。
+- **CONTEXT.md 对齐**：删掉 *reading candidate* / *direction review* / *reading disposition* 三条（描述的是已移除的功能），并去掉 *research signal* 里「以后阅读反馈会提供额外证据」这句已死的前向引用；*direction suggestion* 保留，增量建议那套是在跑的。新增 *direction candidate*（综合后的、未确认的方向；证据单薄者默认不勾；候选永不影响发现），并在 *discovery source* 上补一句「任一来源单独即可跑日报」。
+- boundary: 本次只写文档，没有一行产品代码改动。goal 仍是 `proposed`，等用户点头再置 active。ADR 0004 / 0005 / 0007 / 0008 未改，检索排序、段落证据、日报生成格式未改，三个并行 active helm 未碰。
+- next: 用户确认 goal 后置 active，写 P1（跨簇综合）的详细计划。P1 的实现与单测不受 LLM 端点阻塞，但要看到 22 → 6–8 的实际收敛必须重跑一次方向生成，那一步需要端点可达。
