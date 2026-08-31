@@ -134,7 +134,10 @@ test("a bullet that is not a plugin asset path fails and quotes the offending li
   for (const bullet of ["- see the workflow", "- `plugin/`", "- `dist/main.js`", "- `plugin/a/b.js`"]) {
     const rewritten = replaceOnce(DOC_FIXTURE, "- `plugin/main.js`", bullet);
     assert.throws(() => parseReleaseDocAssets(rewritten), (error) => {
-      assert.match(error.message, new RegExp(RELEASE_DOC_PATH.replace(/[.]/g, "\\.")));
+      // Compared as a substring rather than as a pattern: the path was being
+      // turned into a regex by escaping dots and nothing else, which is only
+      // correct for the paths it happens to hold today.
+      assert.ok(error.message.includes(RELEASE_DOC_PATH), error.message);
       assert.ok(error.message.includes("line "), error.message);
       return true;
     });

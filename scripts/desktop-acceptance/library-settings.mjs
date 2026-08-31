@@ -10,7 +10,23 @@
 import { clearViewport, setViewport } from "./cdp.mjs";
 
 const PLUGIN_ID = "arxiv-daily";
-const PLUGIN = `app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]`;
+
+/**
+ * Embed a value in the JavaScript this module generates for the renderer.
+ *
+ * `JSON.stringify` is nearly a JavaScript literal but not quite: U+2028 and
+ * U+2029 are line terminators in source text, so a string carrying one would end
+ * the statement it was embedded in. Every value passed here today is a literal
+ * from this file, so nothing is currently at risk — but this module is a code
+ * generator, and a generator that is only correct for the inputs it happens to
+ * have is the kind that breaks the day someone passes it a paper title.
+ */
+const asCode = (value) => JSON.stringify(value)
+  // Written as escapes: the raw characters are invisible in an editor.
+  .replace(/\u2028/g, "\\u2028")
+  .replace(/\u2029/g, "\\u2029");
+
+const PLUGIN = `app.plugins.plugins[${asCode(PLUGIN_ID)}]`;
 
 /**
  * The disclosure dialog is located by a class the plugin puts on its root, not
@@ -163,7 +179,7 @@ const inRenderer = (body) => `(() => {${RENDERER_PRELUDE}${body}})()`;
 async function readJson(evaluate, expression) {
   const raw = await evaluate(expression);
   if (typeof raw !== "string") {
-    throw new Error(`expected a JSON string from the renderer, received ${JSON.stringify(raw)}`);
+    throw new Error(`expected a JSON string from the renderer, received ${asCode(raw)}`);
   }
   return JSON.parse(raw);
 }
@@ -184,7 +200,7 @@ const round = (value) => Math.round(value * 10) / 10;
 
 export const OPEN_SETTINGS_EXPRESSION = `(() => {
   app.setting.open();
-  app.setting.openTabById(${JSON.stringify(PLUGIN_ID)});
+  app.setting.openTabById(${asCode(PLUGIN_ID)});
   return "opened";
 })()`;
 
@@ -318,33 +334,33 @@ export function beginIndexRunExpression({ phase, completed, total }) {
       "Personal library full-text index",
       "acceptance-index-probe",
     );
-    window[${JSON.stringify(INDEX_PROBE_GLOBAL)}] = operation;
-    plugin.libraryIndexStatus.beginRun(operation.id, ${JSON.stringify(phase)});
-    plugin.libraryIndexStatus.report(${JSON.stringify({ phase, completed, total })});
+    window[${asCode(INDEX_PROBE_GLOBAL)}] = operation;
+    plugin.libraryIndexStatus.beginRun(operation.id, ${asCode(phase)});
+    plugin.libraryIndexStatus.report(${asCode({ phase, completed, total })});
     return JSON.stringify({ operationId: operation.id });
   })()`;
 }
 
 export function reportIndexProgressExpression({ phase, completed, total }) {
   return `(() => {
-    ${PLUGIN}.libraryIndexStatus.report(${JSON.stringify({ phase, completed, total })});
-    return JSON.stringify({ reported: ${completed} });
+    ${PLUGIN}.libraryIndexStatus.report(${asCode({ phase, completed, total })});
+    return JSON.stringify({ reported: ${asCode(completed)} });
   })()`;
 }
 
 export const END_INDEX_RUN_EXPRESSION = `(() => {
   const plugin = ${PLUGIN};
-  const operation = window[${JSON.stringify(INDEX_PROBE_GLOBAL)}];
+  const operation = window[${asCode(INDEX_PROBE_GLOBAL)}];
   if (operation) operation.finish();
-  delete window[${JSON.stringify(INDEX_PROBE_GLOBAL)}];
+  delete window[${asCode(INDEX_PROBE_GLOBAL)}];
   plugin.libraryIndexStatus.endRun();
   return JSON.stringify({ ended: true });
 })()`;
 
 export function setLastIndexRunExpression({ updatedAt, papers }) {
   return `(() => {
-    ${PLUGIN}.libraryIndexStatus.setLastRun(${JSON.stringify({ updatedAt, papers })});
-    return JSON.stringify({ recorded: ${papers} });
+    ${PLUGIN}.libraryIndexStatus.setLastRun(${asCode({ updatedAt, papers })});
+    return JSON.stringify({ recorded: ${asCode(papers)} });
   })()`;
 }
 
@@ -383,7 +399,7 @@ export function selectEmbeddingModeExpression(mode) {
     if (!row) return JSON.stringify({ error: "the Personal library section has no Embedding row" });
     const select = row.querySelector("select");
     if (!select) return JSON.stringify({ error: "the Embedding row rendered no dropdown" });
-    select.value = ${JSON.stringify(mode)};
+    select.value = ${asCode(mode)};
     select.dispatchEvent(new Event("change"));
     return JSON.stringify({ dispatched: select.value });
   `);
@@ -394,10 +410,10 @@ export function clickLibraryRowButtonExpression(label) {
     const row = namedRow("Library");
     if (!row) return JSON.stringify({ error: "the Personal library section has no Library row" });
     const button = Array.from(row.querySelectorAll(".setting-item-control button"))
-      .find((b) => (b.textContent ?? "").trim() === ${JSON.stringify(label)});
-    if (!button) return JSON.stringify({ error: "the Library row has no " + ${JSON.stringify(label)} + " button" });
+      .find((b) => (b.textContent ?? "").trim() === ${asCode(label)});
+    if (!button) return JSON.stringify({ error: "the Library row has no " + ${asCode(label)} + " button" });
     button.click();
-    return JSON.stringify({ clicked: ${JSON.stringify(label)} });
+    return JSON.stringify({ clicked: ${asCode(label)} });
   `);
 }
 
@@ -410,7 +426,7 @@ export function clickLibraryRowButtonExpression(label) {
 export function modalExpression(modalClass = DISCLOSURE_MODAL_CLASS) {
   return `(() => {
     const modal = document.querySelector(
-      ".modal-container .modal." + ${JSON.stringify(modalClass)},
+      ".modal-container .modal." + ${asCode(modalClass)},
     );
     if (!modal) return JSON.stringify({ present: false });
     const r = modal.getBoundingClientRect();
@@ -422,8 +438,8 @@ export function modalExpression(modalClass = DISCLOSURE_MODAL_CLASS) {
       present: true,
       title: (modal.querySelector(".modal-title")?.textContent ?? "").trim(),
       buttons: Array.from(modal.querySelectorAll("button")).map((b) => (b.textContent ?? "").trim()),
-      confirm: marked(${JSON.stringify(DISCLOSURE_CONFIRM_BUTTON_CLASS)}),
-      cancel: marked(${JSON.stringify(DISCLOSURE_CANCEL_BUTTON_CLASS)}),
+      confirm: marked(${asCode(DISCLOSURE_CONFIRM_BUTTON_CLASS)}),
+      cancel: marked(${asCode(DISCLOSURE_CANCEL_BUTTON_CLASS)}),
       text: (modal.querySelector(".modal-content")?.textContent ?? "").replace(/\\s+/g, " ").trim(),
       rect: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
     });
@@ -438,13 +454,13 @@ export function modalExpression(modalClass = DISCLOSURE_MODAL_CLASS) {
 export function clickModalButtonExpression(buttonClass, modalClass = DISCLOSURE_MODAL_CLASS) {
   return `(() => {
     const modal = document.querySelector(
-      ".modal-container .modal." + ${JSON.stringify(modalClass)},
+      ".modal-container .modal." + ${asCode(modalClass)},
     );
-    if (!modal) return JSON.stringify({ error: "no ." + ${JSON.stringify(modalClass)} + " modal is open" });
-    const button = modal.querySelector("button." + ${JSON.stringify(buttonClass)});
-    if (!button) return JSON.stringify({ error: "the modal has no ." + ${JSON.stringify(buttonClass)} + " button" });
+    if (!modal) return JSON.stringify({ error: "no ." + ${asCode(modalClass)} + " modal is open" });
+    const button = modal.querySelector("button." + ${asCode(buttonClass)});
+    if (!button) return JSON.stringify({ error: "the modal has no ." + ${asCode(buttonClass)} + " button" });
     button.click();
-    return JSON.stringify({ clicked: ${JSON.stringify(buttonClass)}, label: (button.textContent ?? "").trim() });
+    return JSON.stringify({ clicked: ${asCode(buttonClass)}, label: (button.textContent ?? "").trim() });
   })()`;
 }
 
@@ -1257,7 +1273,7 @@ export async function librarySettingsScenarios({
       if (select.value !== "local") {
         results.push(fail(
           "declined-remote-switch-changes-nothing",
-          `the dropdown still shows ${JSON.stringify(select.value)} after the dialog was cancelled`,
+          `the dropdown still shows ${asCode(select.value)} after the dialog was cancelled`,
         ));
       } else if (!unchanged.ok) {
         results.push(fail("declined-remote-switch-changes-nothing", unchanged.reason));
