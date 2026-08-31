@@ -3,7 +3,7 @@ import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "../services/paper-index";
 import type { PersonalLibraryCatalog } from "./personal-library-catalog";
 import {
-  confirmPersonalLibraryDirectionCandidate,
+  confirmPersonalLibraryDirectionCandidates,
   type PersonalLibraryReviewedDirectionDraft,
 } from "./personal-library-interest-profile-review";
 import {
@@ -235,19 +235,70 @@ export interface ConfirmPersonalLibraryDirectionWithStoresInput {
   expectedProfileRevision: number;
 }
 
+export interface PersonalLibraryDirectionConfirmation {
+  candidateId: string;
+  directionId: string;
+  status: "active" | "disabled";
+  draft: PersonalLibraryReviewedDirectionDraft;
+}
+
+export interface ConfirmPersonalLibraryDirectionsWithStoresInput {
+  proposalStore: PersonalLibraryDirectionProposalStore;
+  profileStore: PersonalLibraryInterestProfileStore;
+  proposal: PersonalLibraryDirectionProposal;
+  profile: PersonalLibraryInterestProfile;
+  catalog: PersonalLibraryCatalog;
+  confirmations: readonly PersonalLibraryDirectionConfirmation[];
+  now: Date;
+  expectedProposalRevision: number;
+  expectedProfileRevision: number;
+}
+
+/** A single confirmation is the one-element case of confirming a group. */
 export async function confirmPersonalLibraryDirectionWithStores(
   input: ConfirmPersonalLibraryDirectionWithStoresInput,
 ): Promise<{ proposal: PersonalLibraryDirectionProposal; profile: PersonalLibraryInterestProfile }> {
-  const requested = confirmPersonalLibraryDirectionCandidate({
+  return await confirmPersonalLibraryDirectionsWithStores({
+    proposalStore: input.proposalStore,
+    profileStore: input.profileStore,
     proposal: input.proposal,
     profile: input.profile,
     catalog: input.catalog,
-    candidateId: input.candidateId,
-    directionId: input.directionId,
-    status: input.status,
-    draft: input.draft,
+    confirmations: [{
+      candidateId: input.candidateId,
+      directionId: input.directionId,
+      status: input.status,
+      draft: input.draft,
+    }],
+    now: input.now,
+    expectedProposalRevision: input.expectedProposalRevision,
+    expectedProfileRevision: input.expectedProfileRevision,
+  });
+}
+
+/**
+ * Confirm a group of candidates against the durable documents. The transform
+ * applies the whole group before anything is written, so the group costs the
+ * same two writes a single confirmation costs and no half-confirmed state ever
+ * reaches disk. Coordinator diagnostics are keyed on the first direction in
+ * the group, which for a single confirmation is the direction itself.
+ */
+export async function confirmPersonalLibraryDirectionsWithStores(
+  input: ConfirmPersonalLibraryDirectionsWithStoresInput,
+): Promise<{ proposal: PersonalLibraryDirectionProposal; profile: PersonalLibraryInterestProfile }> {
+  const requested = confirmPersonalLibraryDirectionCandidates({
+    proposal: input.proposal,
+    profile: input.profile,
+    catalog: input.catalog,
+    confirmations: input.confirmations.map((confirmation) => ({
+      candidateId: confirmation.candidateId,
+      directionId: confirmation.directionId,
+      status: confirmation.status,
+      draft: confirmation.draft,
+    })),
     now: input.now,
   });
+  const directionId = input.confirmations[0]!.directionId;
   const originalProfile = clone(input.profile);
   const requestedProfile = clone(requested.profile);
   const originalProposal = clone(input.proposal);
@@ -257,14 +308,14 @@ export async function confirmPersonalLibraryDirectionWithStores(
     original: originalProfile,
     requested: requestedProfile,
     expectedRevision: input.expectedProfileRevision,
-    directionId: input.directionId,
+    directionId,
   });
   const savedProposal = await consumeConfirmedProposal({
     store: input.proposalStore,
     original: originalProposal,
     requested: requestedProposal,
     expectedRevision: input.expectedProposalRevision,
-    directionId: input.directionId,
+    directionId,
   });
   return { proposal: savedProposal, profile: savedProfile };
 }

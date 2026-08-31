@@ -201,6 +201,44 @@ export function confirmPersonalLibraryDirectionCandidate(input: unknown): {
   return { proposal: outputProposal(proposal), profile: outputProfile(profile) };
 }
 
+/**
+ * Confirm a group of candidates as one transaction. Each step is the existing
+ * single confirmation, so every check it makes — document compatibility,
+ * catalog manifest, lineage conflicts, the direction limit — applies to each
+ * member of the group unchanged, and later members see the directions the
+ * earlier ones added. Single confirmation clones the documents it is handed,
+ * so a failure part-way through leaves the caller's proposal and profile
+ * exactly as they were: the group confirms completely or not at all.
+ */
+export function confirmPersonalLibraryDirectionCandidates(input: unknown): {
+  proposal: PersonalLibraryDirectionProposal;
+  profile: PersonalLibraryInterestProfile;
+} {
+  const raw = exactInput(input, ["proposal", "profile", "catalog", "confirmations", "now"]);
+  if (!Array.isArray(raw.confirmations) || raw.confirmations.length === 0) {
+    fail("invalid-input", "confirmations must be a non-empty array");
+  }
+  let proposal = raw.proposal as unknown;
+  let profile = raw.profile as unknown;
+  for (const entry of raw.confirmations) {
+    const confirmation = exactInput(entry, ["candidateId", "directionId", "status", "draft"]);
+    ({ proposal, profile } = confirmPersonalLibraryDirectionCandidate({
+      proposal,
+      profile,
+      catalog: raw.catalog,
+      candidateId: confirmation.candidateId,
+      directionId: confirmation.directionId,
+      status: confirmation.status,
+      draft: confirmation.draft,
+      now: raw.now,
+    }));
+  }
+  return {
+    proposal: proposal as PersonalLibraryDirectionProposal,
+    profile: profile as PersonalLibraryInterestProfile,
+  };
+}
+
 export function updatePersonalLibraryConfirmedDirection(input: unknown): PersonalLibraryInterestProfile {
   const raw = exactInput(input, ["profile", "directionId", "patch", "representativePaperKeys", "catalog", "now"], [
     "representativePaperKeys", "catalog",

@@ -19,6 +19,7 @@ import {
   PersonalLibraryInterestProfileStore,
   PersonalLibraryInterestProfileStoreError,
   confirmPersonalLibraryDirectionWithStores,
+  confirmPersonalLibraryDirectionsWithStores,
   derivePersonalLibraryInterestProfileStorePaths,
 } from "../src/library/personal-library-interest-profile-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -524,6 +525,48 @@ describe("profile-first confirmation coordinator", () => {
       directions: [expect.objectContaining({ id: "direction-1", updatedAt: secondTime.toISOString() })],
     });
     expect(result.proposal).toMatchObject({ revision: 1, candidates: [] });
+    await expect(input.profileStore.load()).resolves.toEqual(result.profile);
+    await expect(input.proposalStore.load()).resolves.toEqual(result.proposal);
+  });
+
+  it("confirms a whole group with one write per document", async () => {
+    const memory = makeStorage();
+    const input = confirmationInput(memory);
+    const paper = catalogPaper();
+    const representatives = [{
+      paperKey: paper.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper),
+    }];
+    input.proposal = await input.proposalStore.replace(proposal({
+      revision: 0,
+      candidates: [...proposal().candidates, {
+        id: "candidate-2", name: "Agent evaluation", description: "Evaluating research agents.",
+        discoveryCues: ["agent evaluation"], representatives,
+        representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+        lineage: { candidateIds: ["candidate-2"] },
+      }],
+    }), null);
+    memory.writeTextAtomic.mockClear();
+    const result = await confirmPersonalLibraryDirectionsWithStores({
+      proposalStore: input.proposalStore, profileStore: input.profileStore,
+      proposal: input.proposal, profile: input.profile, catalog: input.catalog,
+      confirmations: [
+        { candidateId: "candidate-1", directionId: "direction-1", status: "active", draft: input.draft },
+        {
+          candidateId: "candidate-2", directionId: "direction-2", status: "active",
+          draft: { ...input.draft, name: "Agent evaluation" },
+        },
+      ],
+      now: secondTime,
+      expectedProposalRevision: input.proposal.revision,
+      expectedProfileRevision: 0,
+    });
+    // The group costs the same two writes a single confirmation costs — not
+    // one pair per candidate — so no half-confirmed state can be observed.
+    const primaryWrites = memory.writeTextAtomic.mock.calls.map(([path]) => path)
+      .filter((path) => path === profilePath || path === proposalPath);
+    expect(primaryWrites).toEqual([profilePath, proposalPath]);
+    expect(result.profile.directions.map(({ id }) => id)).toEqual(["direction-1", "direction-2"]);
+    expect(result.proposal.candidates).toEqual([]);
     await expect(input.profileStore.load()).resolves.toEqual(result.profile);
     await expect(input.proposalStore.load()).resolves.toEqual(result.proposal);
   });

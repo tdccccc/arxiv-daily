@@ -16,6 +16,7 @@ import {
 } from "../src/library/personal-library-interest-profile";
 import {
   confirmPersonalLibraryDirectionCandidate,
+  confirmPersonalLibraryDirectionCandidates,
   disablePersonalLibraryConfirmedDirection,
   enablePersonalLibraryConfirmedDirection,
   mergePersonalLibraryConfirmedDirections,
@@ -187,6 +188,46 @@ describe("confirmation authority transaction", () => {
       createdAt: t1.toISOString(), updatedAt: t1.toISOString(),
     });
     expect(decodePersonalLibraryInterestProfile(result.profile)).toEqual(result.profile);
+    expect(originalProfile.directions).toEqual([]);
+  });
+
+  it("confirms a whole group in one transaction, in candidate order", () => {
+    const originalProposal = frozen(proposal());
+    const originalProfile = frozen(profile());
+    const result = confirmPersonalLibraryDirectionCandidates({
+      proposal: originalProposal, profile: originalProfile, catalog: frozen(catalog()),
+      confirmations: [
+        { candidateId: "candidate.1", directionId: "direction.1", status: "active", draft: draft() },
+        {
+          candidateId: "candidate.2", directionId: "direction.2", status: "active",
+          draft: draft(["arxiv:2608.00001"], "Second reviewed direction"),
+        },
+      ],
+      now: t1,
+    });
+    expect(result.proposal.candidates).toEqual([]);
+    expect(result.profile.directions.map(({ id }) => id)).toEqual(["direction.1", "direction.2"]);
+    expect(result.profile.directions[1]).toMatchObject({
+      lineage: { proposalIds: ["proposal.1"], candidateIds: ["candidate.2"], directionIds: [] },
+      createdAt: t1.toISOString(),
+    });
+    expect(decodePersonalLibraryInterestProfile(result.profile)).toEqual(result.profile);
+    expect(originalProfile.directions).toEqual([]);
+  });
+
+  it("confirms none of the group when any one of them fails", () => {
+    const originalProposal = frozen(proposal());
+    const originalProfile = frozen(profile());
+    expect(() => confirmPersonalLibraryDirectionCandidates({
+      proposal: originalProposal, profile: originalProfile, catalog: frozen(catalog()),
+      confirmations: [
+        { candidateId: "candidate.1", directionId: "direction.1", status: "active", draft: draft() },
+        // the same direction ID a second time: the group must not half-apply
+        { candidateId: "candidate.2", directionId: "direction.1", status: "active", draft: draft() },
+      ],
+      now: t1,
+    })).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(originalProposal.candidates.map(({ id }) => id)).toEqual(["candidate.1", "candidate.2"]);
     expect(originalProfile.directions).toEqual([]);
   });
 
