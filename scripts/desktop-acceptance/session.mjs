@@ -1,6 +1,7 @@
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withAppUsable } from "./app-state.mjs";
 import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
 import { createCdpClient, evaluate, selectVaultTarget } from "./cdp.mjs";
 import { createDiagnostics } from "./diagnostics.mjs";
@@ -128,18 +129,27 @@ export async function runDesktopSession({
           await waitForPluginReady({ evaluate: evaluateInRenderer, pluginId });
         assertVersionUnderTest({ expected: version, reported: pluginVersion });
 
-        return await body({
-          port,
-          sandbox,
-          expectedVersion: version,
-          session: {
-            evaluate: evaluateInRenderer,
-            diagnostics,
-            client,
-            pluginVersion,
-            trustPromptAccepted,
-            diagnosticsComplete: !loadedBeforeAttach,
-          },
+        // The scenarios only mean something if a vault window is actually
+        // mounted. Bracketing the body checks that on both sides: a host that
+        // was never usable never gets walked, and one that collapses part-way
+        // has its results discarded rather than reported. Either way the run
+        // ends as blocked, not as a product failure.
+        return await withAppUsable({
+          evaluate: evaluateInRenderer,
+          run: () =>
+            body({
+              port,
+              sandbox,
+              expectedVersion: version,
+              session: {
+                evaluate: evaluateInRenderer,
+                diagnostics,
+                client,
+                pluginVersion,
+                trustPromptAccepted,
+                diagnosticsComplete: !loadedBeforeAttach,
+              },
+            }),
         });
       } finally {
         client?.close();

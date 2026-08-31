@@ -10,6 +10,7 @@ import {
   sidecarDisabledScenario,
   sidecarFallbackScenario,
 } from "./scenarios.mjs";
+import { blockersFromError } from "./app-state.mjs";
 import { librarySettingsScenarios } from "./library-settings.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
 import { startProbeListener } from "./probe-listener.mjs";
@@ -122,6 +123,17 @@ try {
   sessions.push({ name: "personal library settings page", ...libraryOutcome });
 } catch (error) {
   await listener.close();
+  // An unusable application is an environment problem, not a product one, so it
+  // exits the way a preflight blocker does. Any results computed before it was
+  // noticed were discarded by the session guard and are deliberately not
+  // printed: a run that ends here reports no verdict at all.
+  const blockers = blockersFromError(error);
+  if (blockers) {
+    console.error("desktop acceptance stopped: the application was not in a state where a walk means anything\n");
+    console.error(describeBlockers(blockers));
+    console.error("\nNo assertion result is reported from this run: every check that had already been made was\nmade against a renderer that was not showing the vault.");
+    process.exit(EXIT_BLOCKED);
+  }
   console.error(`desktop acceptance could not run: ${error.message}`);
   process.exit(1);
 }

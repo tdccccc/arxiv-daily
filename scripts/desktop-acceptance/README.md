@@ -27,10 +27,46 @@ OBSIDIAN_TEST_VAULT=/path/to/disposable_vault npm run test:desktop
 Exit codes distinguish two different situations:
 
 - **2 — blocked.** The environment cannot run the acceptance. Every blocker is
-  listed with the action that fixes it. Nothing was launched.
+  listed with the action that fixes it. Either nothing was launched, or the
+  application turned out not to be showing a vault at all — in which case **no
+  assertion result is reported**, because none of them would mean anything.
 - **1 — failed.** The acceptance ran and a scenario failed, the renderer logged
   an error, or diagnostics were incomplete.
 - **0 — passed.**
+
+## What is checked before anything is believed
+
+Three guards stand between "the harness ran" and "the harness verified
+something". They exist because on 2026-08-31 a run reported **seventeen passes
+and ten screenshots** while Obsidian was sitting on its own error page with the
+vault never opened: the machine's file-watch quota was exhausted, and the only
+red was "the renderer logged no error" — so the run exited 1, blaming the
+product, rather than 2.
+
+- **Preflight probes the file-watch quota.** Not by reading
+  `/proc/sys/fs/inotify/max_user_watches`, which gives the ceiling and says
+  nothing about what is left: a machine whose 524288 watches are all spoken for
+  reads exactly like an idle one. The probe asks the kernel for
+  `WATCH_HEADROOM` real watches on throwaway directories — one directory each,
+  because inotify returns the same descriptor for a path it already watches —
+  and releases every one it got. `ENOSPC` is a blocker naming how many it
+  actually obtained and how to raise the ceiling. Any other refusal is reported
+  as *unmeasured*, never as a blocker the harness cannot stand behind.
+- **A screenshot is refused rather than written** unless its subject is in the
+  document, visible (`display`, `visibility`, `opacity`, and actual client
+  rects), laid out with a non-zero size, and at least
+  `MIN_VISIBLE_FRACTION` inside the viewport the camera photographs — and
+  unless the returned PNG holds more than one colour. Nothing is written until
+  every one of those holds, so a refusal leaves no file behind at all. The
+  colour rule is the whole image being one flat colour, never a percentage and
+  never a comparison with a stored baseline: there is still no pixel diff here.
+- **The application is checked before and after every walk.** The criterion is
+  the positive capability the acceptance rests on — Obsidian's object graph,
+  a mounted workspace with leaves, and the settings entry point — not the
+  wording of any error page, so an environment failure nobody anticipated is
+  caught along with the one that was. Whatever the page says is *quoted* in the
+  blocker so the real cause is visible, and never used to decide. Failing the
+  second check discards the results the walk had already produced.
 
 ## What it does to the vault
 
@@ -55,6 +91,11 @@ assertion settles. They land in **`.acceptance-out/desktop-acceptance/`**
 (git-ignored; override with `OBSIDIAN_ACCEPTANCE_SCREENSHOT_DIR`) and are
 overwritten each run. Nothing compares them: there is no stored baseline and no
 pixel diff, and no assertion reads an image back.
+
+A written file therefore has to be worth looking at, since its mere existence
+reads as evidence that the state it is named after was reached. Every capture
+is refused unless the checks above hold — see *What is checked before anything
+is believed*. A refused capture fails the run; it never becomes a file.
 
 | File | What it shows |
 | --- | --- |
@@ -135,6 +176,7 @@ If the harness cannot run, these steps are the equivalent record:
 | --- | --- |
 | `acceptance.mjs` | Entry point: preflight, run scenarios, report |
 | `preflight.mjs` | Environment checks that produce blockers, not stack traces |
+| `app-state.mjs` | Is a vault window mounted at all, before and after a walk |
 | `session.mjs` | Brackets deploy, launch, CDP attach and reclamation |
 | `vault-config.mjs` | Single-vault isolated config, overlap refusal |
 | `vault-state.mjs` | Capture and restore, including on signals |

@@ -1,7 +1,7 @@
 # Obsidian 桌面验收自动化 harness（Obsidian desktop acceptance harness）
 
 status: active
-updated: 2026-08-30
+updated: 2026-08-31
 owner: claude-code-session
 
 ## Intent
@@ -19,6 +19,7 @@ owner: claude-code-session
 - [x] 单条命令可复现执行；不进入默认 `npm test`，不进入 plugin bundle，`check:boundaries`、`check:product-units`、lint 与 bundle 预算门禁维持通过。
 - [x] 环境不具备（无显示、Obsidian 缺失、CDP 端口被占）时给出明确的阻塞原因并非零退出；脚本本身即等价的可复现手工步骤。
 - [ ] 设置页这类「只能肉眼确认」的验收项可断言：分组顺序、行内按钮集合、真实布局几何（同一行 / 右对齐 / 未溢出容器）与就地授权对话框的出现与取消，并在关键状态落盘截图供人判断措辞与观感。
+- [x] 宿主没起来时验收判为**阻塞**且**不产出任何断言结果**：启动前功能探测文件监视余量（不是读静态上限），截图落盘前确认拍到的确实是目标（存在 / 可见 / 有尺寸 / 在视口内 / 非整幅纯色），走查前后确认应用处于可走查状态（判据是正向能力，不是任何一句错误文案）。三条守卫在环境正常时不误伤——加固后真实验收仍 17/17、退出码 0。
 
 ## Non-goals
 
@@ -48,6 +49,7 @@ owner: claude-code-session
 4. P4 — 集成为单条命令，门禁隔离与环境阻塞降级完成 — status: done
 5. P5 — 个人文献库设置页场景与截图能力：分组顺序、按钮集合、两种面板宽度下的布局几何、就地授权对话框的出现与取消 — status: active
 6. P6 — 验收部署清单与发布资产清单出自同一常量，其余副本被逐份解析比对；单边改动必红且信息指名道姓 — status: done
+7. P7 — 堵住假绿：环境余量探测、截图落盘前置校验、应用错误态检测；宿主塌了必须判阻塞且零 PASS — status: done
 
 ## Open questions
 
