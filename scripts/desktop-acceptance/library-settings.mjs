@@ -201,10 +201,34 @@ export const LIBRARY_ROW_EXPRESSION = inRenderer(`
   if (!row) return JSON.stringify({ error: "the Personal library section has no Library row" });
   return JSON.stringify({
     rowButtons: buttonTexts(row),
+    /*
+     * The same buttons with the two facts a label cannot carry: whether the
+     * button can be pressed, and the mark a previous read left on it. The mark
+     * is how an in-place rewrite is told apart from a re-render that happened
+     * to produce the same text — see \`judgeInPlaceProgressUpdate\`.
+     */
+    rowButtonStates: Array.from(row.querySelectorAll(".setting-item-control button"))
+      .map((b) => ({
+        text: (b.textContent ?? "").trim(),
+        disabled: b.disabled === true,
+        mark: b.dataset ? (b.dataset.acceptanceMark ?? null) : null,
+      })),
     rowDescription: (row.querySelector(".setting-item-description")?.textContent ?? "").trim(),
     groupRowNames: group.map(rowName),
     groupButtons: group.flatMap(buttonTexts),
   });
+`);
+
+/**
+ * Stamp every button in the row so the next read can tell whether these are the
+ * same elements. Marks live on the element, so a re-render loses them.
+ */
+export const MARK_LIBRARY_BUTTONS_EXPRESSION = inRenderer(`
+  const row = namedRow("Library");
+  if (!row) return JSON.stringify({ error: "the Personal library section has no Library row" });
+  const marked = Array.from(row.querySelectorAll(".setting-item-control button"))
+    .map((b, index) => { b.dataset.acceptanceMark = "mark-" + index; return b.dataset.acceptanceMark; });
+  return JSON.stringify({ marked });
 `);
 
 export const LIBRARY_GEOMETRY_EXPRESSION = inRenderer(`
@@ -267,6 +291,78 @@ export const LIBRARY_ROW_RECT_EXPRESSION = inRenderer(`
   const r = box(row);
   return JSON.stringify({ x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height });
 `);
+
+/**
+ * Where an indexing probe keeps the operation it started, so a later step can
+ * finish it. A renderer global, because these are separate `evaluate` calls in
+ * one page.
+ */
+const INDEX_PROBE_GLOBAL = "__arxivDailyAcceptanceIndexRun";
+
+/**
+ * Start a real, cancellable operation and tell the settings row about it.
+ *
+ * The operation is genuine — it goes through the plugin's own registry, so the
+ * Cancel button on the row aborts a signal something could be listening to.
+ * What is not genuine is the work: an actual index run needs a local embedding
+ * model and minutes of PDF extraction, none of which says anything about how the
+ * row looks while it happens. The wiring from a real run to this same store is
+ * asserted in `plugin/tests/fulltext-index-lifecycle.test.ts`; what only the
+ * renderer can answer is what the row does with it.
+ */
+export function beginIndexRunExpression({ phase, completed, total }) {
+  return `(() => {
+    const plugin = ${PLUGIN};
+    const operation = plugin.operations.begin(
+      "personal-library-fulltext-index",
+      "Personal library full-text index",
+      "acceptance-index-probe",
+    );
+    window[${JSON.stringify(INDEX_PROBE_GLOBAL)}] = operation;
+    plugin.libraryIndexStatus.beginRun(operation.id, ${JSON.stringify(phase)});
+    plugin.libraryIndexStatus.report(${JSON.stringify({ phase, completed, total })});
+    return JSON.stringify({ operationId: operation.id });
+  })()`;
+}
+
+export function reportIndexProgressExpression({ phase, completed, total }) {
+  return `(() => {
+    ${PLUGIN}.libraryIndexStatus.report(${JSON.stringify({ phase, completed, total })});
+    return JSON.stringify({ reported: ${completed} });
+  })()`;
+}
+
+export const END_INDEX_RUN_EXPRESSION = `(() => {
+  const plugin = ${PLUGIN};
+  const operation = window[${JSON.stringify(INDEX_PROBE_GLOBAL)}];
+  if (operation) operation.finish();
+  delete window[${JSON.stringify(INDEX_PROBE_GLOBAL)}];
+  plugin.libraryIndexStatus.endRun();
+  return JSON.stringify({ ended: true });
+})()`;
+
+export function setLastIndexRunExpression({ updatedAt, papers }) {
+  return `(() => {
+    ${PLUGIN}.libraryIndexStatus.setLastRun(${JSON.stringify({ updatedAt, papers })});
+    return JSON.stringify({ recorded: ${papers} });
+  })()`;
+}
+
+/**
+ * Put the trace back to "nothing has been indexed here". The probe's timestamp
+ * is invented, and leaving it on the row would put a claim in every screenshot
+ * taken after it that no run in this vault ever earned.
+ */
+export const CLEAR_LAST_INDEX_RUN_EXPRESSION = `(() => {
+  ${PLUGIN}.libraryIndexStatus.setLastRun(undefined);
+  return JSON.stringify({ cleared: true });
+})()`;
+
+export const INDEX_OPERATIONS_EXPRESSION = `JSON.stringify({
+  operations: ${PLUGIN}.operations.snapshot()
+    .filter((operation) => operation.kind === "personal-library-fulltext-index")
+    .map((operation) => ({ id: operation.id, cancellationRequested: operation.cancellationRequested })),
+})`;
 
 export const PLUGIN_STATE_EXPRESSION = `JSON.stringify({
   embedding: ${PLUGIN}.settings.embedding,
@@ -662,6 +758,127 @@ export function judgeLibraryStackedGeometry(geometry, { tolerance = ALIGNMENT_TO
 }
 
 /**
+ * The row while a run is in flight.
+ *
+ * Progress already existed — the run pushes every step to the status bar — and
+ * the settings modal is drawn over that status bar, so this judges the one thing
+ * that was missing: that the row a person starts the run from is the row that
+ * shows it. Three claims, because a row that shows the count while still
+ * offering to start a second run, or to change the folder out from under one,
+ * has not actually said a run is happening.
+ */
+export function judgeIndexingRow(snapshot, { expectedLabel, phase } = {}) {
+  const states = snapshot?.rowButtonStates;
+  if (!Array.isArray(states) || states.length === 0) {
+    return { ok: false, reason: "the Library row rendered no buttons while a run was in flight" };
+  }
+  const problems = [];
+  const labels = states.map((button) => button.text);
+  const expected = ["Change folder", expectedLabel, "Cancel"];
+  if (labels.join(" | ") !== expected.join(" | ")) {
+    problems.push(`the row shows [${labels.join(", ")}], expected [${expected.join(", ")}]`);
+  }
+  const main = states.find((button) => button.text === expectedLabel);
+  if (main && !main.disabled) {
+    problems.push(`"${expectedLabel}" is still clickable, so the row offers to start a second run`);
+  }
+  const folder = states.find((button) => button.text === "Change folder");
+  if (folder && !folder.disabled) {
+    problems.push("Change folder is still clickable, so the folder can be moved out from under the run");
+  }
+  const cancel = states.find((button) => button.text === "Cancel");
+  if (!cancel) problems.push("the row offers no way to stop the run");
+  else if (cancel.disabled) problems.push("the row's Cancel is disabled, so the run cannot be stopped");
+  if (phase && !(snapshot.rowDescription ?? "").includes(phase)) {
+    problems.push(
+      `the description does not say what the run is doing; it reads "${(snapshot.rowDescription ?? "").slice(0, 120)}"`,
+    );
+  }
+  return problems.length === 0
+    ? { ok: true, reason: `[${labels.join(", ")}], only Cancel clickable, description names the phase` }
+    : { ok: false, reason: problems.join("; ") };
+}
+
+/**
+ * That a reported step rewrote the row rather than redrawing the page.
+ *
+ * The counts arrive once per paper. Re-rendering the settings page at that rate
+ * would discard whatever else is being edited on it, so the row is written in
+ * place — and "in place" is only checkable by identity: the marks were stamped
+ * on the button elements, so surviving marks mean the same elements, while the
+ * changed label means they were actually updated.
+ */
+export function judgeInPlaceProgressUpdate(before, after, { expectedLabel } = {}) {
+  const problems = [];
+  const marksBefore = (before?.rowButtonStates ?? []).map((button) => button.mark);
+  const marksAfter = (after?.rowButtonStates ?? []).map((button) => button.mark);
+  if (marksBefore.some((mark) => mark === null)) {
+    return { ok: false, reason: "the row's buttons were never marked, so identity cannot be compared" };
+  }
+  if (marksAfter.join("|") !== marksBefore.join("|")) {
+    problems.push(
+      `the buttons were replaced (marks ${marksBefore.join(",")} → ${marksAfter.join(",")}), `
+        + "so the page re-rendered instead of updating the row",
+    );
+  }
+  const label = (after?.rowButtonStates ?? []).map((button) => button.text)
+    .find((text) => text.startsWith("Indexing"));
+  if (label !== expectedLabel) {
+    problems.push(`the main button reads "${label}", expected "${expectedLabel}" after the report`);
+  }
+  return problems.length === 0
+    ? { ok: true, reason: `the same buttons now read "${expectedLabel}"` }
+    : { ok: false, reason: problems.join("; ") };
+}
+
+/** The row once cancellation has been asked for, and the run it asked. */
+export function judgeCancellingRow(snapshot, operations) {
+  const problems = [];
+  const cancel = (snapshot?.rowButtonStates ?? []).find((button) => /^Cancel/.test(button.text));
+  if (!cancel) {
+    problems.push("the row lost its stop control instead of showing that it is stopping");
+  } else {
+    if (cancel.text !== "Cancelling…") {
+      problems.push(`the stop control still reads "${cancel.text}", inviting a second press`);
+    }
+    if (!cancel.disabled) problems.push("the stop control is still clickable after being pressed");
+  }
+  const requested = (operations ?? []).filter((operation) => operation.cancellationRequested);
+  if (requested.length === 0) {
+    problems.push(
+      `pressing it asked no operation to stop; the registry holds ${(operations ?? []).length} `
+        + "indexing operation(s), none cancelled",
+    );
+  }
+  return problems.length === 0
+    ? { ok: true, reason: `the row reads "Cancelling…" and ${requested.length} run was asked to stop` }
+    : { ok: false, reason: problems.join("; ") };
+}
+
+/**
+ * The sentence a finished run leaves behind.
+ *
+ * The status bar hides its completion after four seconds and the notice after
+ * ten, so without this an index that ran overnight leaves nothing saying whether
+ * it finished. Both halves are required: a time alone does not say what is
+ * searchable, and a count alone does not say when.
+ */
+export function judgeIndexTraceSentence(snapshot, { papers } = {}) {
+  const description = snapshot?.rowDescription ?? "";
+  const problems = [];
+  if (!/Last indexed \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(description)) {
+    problems.push(`the row does not say when the index was last built: "${description.slice(0, 160)}"`);
+  }
+  const expected = papers === 1 ? "1 paper searchable" : `${papers} papers searchable`;
+  if (!description.includes(expected)) {
+    problems.push(`the row does not say "${expected}"; it reads "${description.slice(0, 160)}"`);
+  }
+  return problems.length === 0
+    ? { ok: true, reason: `the idle row reads "${description.slice(-60)}"` }
+    : { ok: false, reason: problems.join("; ") };
+}
+
+/**
  * The disclosure heading, judged against the depth the dialog is disclosing.
  *
  * Separate from finding the dialog on purpose. The lookup uses the stable class,
@@ -850,6 +1067,128 @@ export async function librarySettingsScenarios({
       (verdict.ok ? pass : fail)("library-row-geometry-stacked", `${width}: ${verdict.reason}`),
     );
   }
+
+  // 3b — the run on the row: progress, an in-place rewrite, and a way to stop
+  //
+  // Started through the plugin's own operation registry, so Cancel below aborts
+  // a real signal. The indexing work itself is not run — it needs an embedding
+  // model and minutes of extraction, and none of that changes what the row
+  // looks like. That a real run reports to this same store is asserted in the
+  // plugin units; what only a renderer can answer is what the row does with it.
+  const started = await readJson(evaluate, beginIndexRunExpression({
+    phase: "extracting and embedding PDF text",
+    completed: 12,
+    total: 40,
+  }));
+  // The row is expected to pick the run up on its own — nothing re-opens the
+  // settings tab here.
+  await wait(evaluate, settleMs * 2);
+  const running = await readJson(evaluate, LIBRARY_ROW_EXPRESSION);
+  if (running.error) {
+    results.push(fail("library-row-shows-the-run", running.error));
+  } else {
+    const verdict = judgeIndexingRow(running, {
+      expectedLabel: "Indexing… (12/40)",
+      phase: "extracting and embedding PDF text",
+    });
+    results.push((verdict.ok ? pass : fail)(
+      "library-row-shows-the-run",
+      `${verdict.reason} (operation ${started.operationId})`,
+    ));
+  }
+  await shot("library-row-indexing", { rect: await rowRect() });
+
+  // Geometry gets its own verdict because the run puts a third button on the
+  // row and a longer sentence beside it: the state that has to stay readable is
+  // not the one the earlier assertions measured.
+  const runningGeometry = [];
+  for (const [label, viewport] of [["narrow", narrowViewport], ["wide", wideViewport]]) {
+    await setViewport(client, viewport);
+    await wait(evaluate, settleMs);
+    const rect = await rowRect();
+    runningGeometry.push({ label, geometry: await readJson(evaluate, LIBRARY_GEOMETRY_EXPRESSION) });
+    await shot(`library-row-indexing-${label}-panel`, { rect });
+  }
+  await setViewport(client, captureViewport);
+  await wait(evaluate, settleMs);
+  const runningProblems = [];
+  const runningNotes = [];
+  for (const { label, geometry } of runningGeometry) {
+    if (geometry.error) {
+      runningProblems.push(`${label}: ${geometry.error}`);
+      continue;
+    }
+    const verdict = judgeLibraryWrappedGeometry(geometry, { mainCallToAction: "Indexing… (12/40)" });
+    const width = `${label} panel ${round(geometry.panelWidth)}px (window ${geometry.windowWidth})`;
+    if (verdict.ok) runningNotes.push(`${width}: ${verdict.reason}`);
+    else runningProblems.push(`${width}: ${verdict.reason}`);
+  }
+  results.push(
+    runningProblems.length === 0
+      ? pass("library-row-indexing-geometry", runningNotes.join("; "))
+      : fail("library-row-indexing-geometry", runningProblems.join(" | ")),
+  );
+
+  // The next count must rewrite the row rather than redraw the page.
+  await evaluate(MARK_LIBRARY_BUTTONS_EXPRESSION);
+  const marked = await readJson(evaluate, LIBRARY_ROW_EXPRESSION);
+  await evaluate(reportIndexProgressExpression({
+    phase: "extracting and embedding PDF text",
+    completed: 13,
+    total: 40,
+  }));
+  await wait(evaluate, settleMs);
+  const advanced = await readJson(evaluate, LIBRARY_ROW_EXPRESSION);
+  if (marked.error || advanced.error) {
+    results.push(fail("library-row-progress-updates-in-place", marked.error ?? advanced.error));
+  } else {
+    const verdict = judgeInPlaceProgressUpdate(marked, advanced, {
+      expectedLabel: "Indexing… (13/40)",
+    });
+    results.push((verdict.ok ? pass : fail)("library-row-progress-updates-in-place", verdict.reason));
+  }
+
+  // Cancel, from the same row, and the run has to hear it.
+  const cancelClicked = await readJson(evaluate, clickLibraryRowButtonExpression("Cancel"));
+  if (cancelClicked.error) {
+    results.push(fail("library-row-cancels-the-run", cancelClicked.error));
+  } else {
+    await wait(evaluate, settleMs * 2);
+    const stopping = await readJson(evaluate, LIBRARY_ROW_EXPRESSION);
+    const registry = await readJson(evaluate, INDEX_OPERATIONS_EXPRESSION);
+    const verdict = judgeCancellingRow(stopping, registry.operations);
+    results.push((verdict.ok ? pass : fail)("library-row-cancels-the-run", verdict.reason));
+    await shot("library-row-cancelling", { rect: await rowRect() });
+  }
+
+  // 3c — what the finished run leaves behind
+  //
+  // The status bar hides its completion after four seconds and the notice after
+  // ten, so this sentence is the whole of what an overnight run leaves for the
+  // person who comes back to it.
+  await evaluate(setLastIndexRunExpression({ updatedAt: "2026-08-30T21:15:00.000Z", papers: 128 }));
+  await evaluate(END_INDEX_RUN_EXPRESSION);
+  await wait(evaluate, settleMs * 2);
+  const afterRun = await readJson(evaluate, LIBRARY_ROW_EXPRESSION);
+  if (afterRun.error) {
+    results.push(fail("library-row-keeps-the-index-trace", afterRun.error));
+  } else {
+    const problems = [];
+    const trace = judgeIndexTraceSentence(afterRun, { papers: 128 });
+    if (!trace.ok) problems.push(trace.reason);
+    // The row also has to come back: a run that ends leaving its own controls
+    // behind would be worse than never showing them.
+    const backToIdle = judgeLibraryButtons(afterRun, { expected: ["Change folder", "Build index"] });
+    if (!backToIdle.ok) problems.push(backToIdle.reason);
+    results.push(
+      problems.length === 0
+        ? pass("library-row-keeps-the-index-trace", `${trace.reason}; ${backToIdle.reason}`)
+        : fail("library-row-keeps-the-index-trace", problems.join("; ")),
+    );
+    await shot("library-row-last-indexed", { rect: await rowRect() });
+  }
+  await evaluate(CLEAR_LAST_INDEX_RUN_EXPRESSION);
+  await wait(evaluate, settleMs);
 
   // 4 — switching to remote asks in place
   const beforeSwitch = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);

@@ -202,6 +202,71 @@ const LONG_ALPHA = Array.from({ length: 600 }, () => "alpha").join(" ");
 const LONG_BETA = Array.from({ length: 600 }, () => "beta").join(" ");
 
 describe("full-text indexing orchestration", () => {
+  /**
+   * The detail string is prose — a paper key, a fraction and an ETA in one
+   * sentence — which is the wrong shape for a caller that wants to put "5/120"
+   * on a button. The counts ride alongside it rather than replacing it, so the
+   * status bar keeps the sentence it has always shown.
+   */
+  it("reports its position in numbers as well as in words", async () => {
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2403.19237", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    const reports: Array<{ detail: string; progress?: { phase: string; completed: number; total: number } }> = [];
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA], "lib/b.pdf": [LONG_BETA] }),
+      embedding: new FakeEmbedding(),
+      store: new MemoryStore(),
+      now: () => new Date(NOW),
+      onProgress: (detail, progress) => reports.push({ detail, ...(progress ? { progress } : {}) }),
+    });
+
+    const indexing = reports.filter((report) => report.progress?.phase === "indexing");
+    expect(indexing.map((report) => report.progress)).toEqual([
+      { phase: "indexing", completed: 1, total: 2 },
+      { phase: "indexing", completed: 2, total: 2 },
+    ]);
+    // Every count is emitted with the sentence it summarizes, never instead of it.
+    for (const report of indexing) {
+      expect(report.detail).toContain(`(${report.progress!.completed}/${report.progress!.total})`);
+    }
+  });
+
+  /**
+   * "Did last night's run finish, and what can I search now" is answered from
+   * the manifest the run committed, so the answer cannot outlive the index.
+   */
+  it("reports what the committed manifest holds, not what the run touched", async () => {
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const run = {
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    };
+
+    const first = await indexPersonalLibraryFullText(run);
+    expect(first.indexed).toBe(1);
+    expect(first.searchablePapers).toBe(1);
+    expect(first.manifestUpdatedAt).toBe((await store.loadManifest()).updatedAt);
+
+    // A second run indexes nothing new, and the paper is still searchable.
+    const second = await indexPersonalLibraryFullText(run);
+    expect(second.indexed).toBe(0);
+    expect(second.searchablePapers).toBe(1);
+  });
+
   it("indexes every paper on the first run and persists per-paper documents", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",

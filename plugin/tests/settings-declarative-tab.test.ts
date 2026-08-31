@@ -2,7 +2,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
-import { ArxivDailySettingTab } from "../src/settings/tab";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
+import {
+  ArxivDailySettingTab,
+  LIBRARY_INDEX_PROGRESS_INTERVAL_MS,
+} from "../src/settings/tab";
 import {
   allSettingKeys,
   buildSettingDefinitions,
@@ -131,6 +135,7 @@ function makeTab() {
     sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
     getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     selectLibraryRoot: vi.fn().mockResolvedValue("cancelled"),
     getLibraryAuthorizationDisclosure: vi.fn().mockReturnValue(null),
     authorizeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
@@ -143,6 +148,7 @@ function makeTab() {
     scanPersonalLibrary: vi.fn().mockResolvedValue({}),
     reloadPersonalLibraryCatalog: vi.fn().mockResolvedValue({}),
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
+    cancelPersonalLibraryIndexing: vi.fn().mockReturnValue(true),
     openPersonalLibraryDirectionReview: vi.fn(),
   } as unknown as ArxivDailyPlugin;
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =
@@ -297,16 +303,24 @@ describe("personal library settings row", () => {
       text: string;
       cta: boolean;
       warning: boolean;
+      disabled: boolean;
       click?: () => void;
     }> = [];
+    // Attached to the document because the row refuses to write progress into
+    // a description that is no longer on screen, and a detached node is exactly
+    // what that check is for.
+    const descEl = document.createElement("div");
+    document.body.appendChild(descEl);
     const setting = {
       controlEl: { addClass: vi.fn() },
+      descEl,
       setDesc: vi.fn().mockReturnThis(),
       addButton(callback: (button: any) => void) {
-        const state = { text: "", cta: false, warning: false } as {
+        const state = { text: "", cta: false, warning: false, disabled: false } as {
           text: string;
           cta: boolean;
           warning: boolean;
+          disabled: boolean;
           click?: () => void;
         };
         const button = {
@@ -314,6 +328,7 @@ describe("personal library settings row", () => {
           setButtonText(text: string) { state.text = text; return button; },
           setCta() { state.cta = true; return button; },
           setWarning() { state.warning = true; return button; },
+          setDisabled(disabled: boolean) { state.disabled = disabled; return button; },
           onClick(click: () => void) { state.click = click; return button; },
         };
         callback(button);
@@ -496,6 +511,105 @@ describe("personal library settings row", () => {
       "index personal library full text",
       expect.any(Function),
     );
+  });
+
+  /**
+   * Indexing already reported itself to the status bar, which the settings
+   * modal covers. These say the row that started the run is now the row that
+   * shows it, and that it can stop it.
+   */
+  describe("while an index run is in flight", () => {
+    function connectedTab() {
+      const made = makeTab();
+      made.plugin.settings.embedding.mode = "local";
+      vi.mocked(made.plugin.getLibraryConnectionStatus).mockReturnValue({
+        kind: "authorization-required",
+        rootLabel: "papers",
+      });
+      vi.spyOn(made.tab, "refreshSettings").mockImplementation(() => {});
+      return made;
+    }
+
+    it("shows the run on the row and stops it from there", () => {
+      const { tab, plugin } = connectedTab();
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      plugin.libraryIndexStatus.report({
+        phase: "extracting and embedding PDF text",
+        completed: 4,
+        total: 40,
+      });
+
+      const { buttons } = renderLibraryButtons(tab);
+      expect(buttons.map((button) => button.text)).toEqual([
+        "Change folder",
+        "Indexing… (4/40)",
+        "Cancel",
+      ]);
+      expect(buttons[1]?.disabled).toBe(true);
+      expect(buttons[0]?.disabled).toBe(true);
+
+      buttons[2]?.click?.();
+      expect(plugin.cancelPersonalLibraryIndexing).toHaveBeenCalled();
+    });
+
+    /**
+     * A run reports once per paper. Re-rendering the settings page at that rate
+     * would throw away whatever else is being edited on it, so a report that
+     * only changes text writes straight into the row that is already drawn —
+     * and is paced, because the reports arrive faster than they can be read.
+     */
+    it("rewrites the row in place rather than re-rendering the page", async () => {
+      vi.useFakeTimers();
+      try {
+        const { tab, plugin } = connectedTab();
+        plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+        const { setting } = renderLibraryButtons(tab);
+        vi.mocked(tab.refreshSettings).mockClear();
+
+        for (let paper = 1; paper <= 20; paper += 1) {
+          plugin.libraryIndexStatus.report({
+            phase: "extracting and embedding PDF text",
+            completed: paper,
+            total: 40,
+          });
+        }
+        expect(tab.refreshSettings).not.toHaveBeenCalled();
+        expect(setting.descEl.textContent).toBe("");
+
+        vi.advanceTimersByTime(LIBRARY_INDEX_PROGRESS_INTERVAL_MS);
+        // One write, carrying the newest report rather than the first.
+        expect(setting.descEl.textContent).toContain("extracting and embedding PDF text");
+        expect(tab.refreshSettings).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /** Starting and stopping change which buttons exist, which text cannot do. */
+    it("re-renders when the run appears and when it is over", () => {
+      const { tab, plugin } = connectedTab();
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
+
+      // The re-render the tab would have done is stubbed out here, so tell the
+      // row what it would have learned: the run is on it now.
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      plugin.libraryIndexStatus.endRun();
+      expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops following the run once the tab is closed", () => {
+      const { tab, plugin } = connectedTab();
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      tab.hide();
+      plugin.libraryIndexStatus.beginRun("personal-library-fulltext-index:1", "indexing");
+      expect(tab.refreshSettings).not.toHaveBeenCalled();
+    });
   });
 });
 

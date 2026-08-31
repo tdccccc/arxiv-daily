@@ -1,5 +1,6 @@
 import {
   App,
+  type ButtonComponent,
   Modal,
   Notice,
   PluginSettingTab,
@@ -23,6 +24,7 @@ import {
   describeResult,
   detailSelectionPreset,
   formatDate,
+  isCancellationError,
   todayInTz,
   type LogLevel,
 } from "@arxiv-daily/core";
@@ -46,8 +48,9 @@ import {
 } from "../feedback";
 import { ObsidianResourceOpener } from "../hosts/obsidian/resource-opener";
 import {
-  librarySetupNextStep,
+  libraryRowPresentation,
 } from "../library/connection";
+import type { LibraryIndexStatus } from "../library/index-status";
 import {
   confirmEmbeddingMode,
   confirmLibraryAuthorization,
@@ -127,8 +130,37 @@ function isLogLevel(value: string): value is LogLevel {
   return value === "debug" || value === "info" || value === "warn" || value === "error";
 }
 
+/**
+ * How often the Library row may be rewritten while a run reports.
+ *
+ * Indexing reports once per paper, which on a large library is several times a
+ * second and, on a small fast one, faster than a person can read. The interval
+ * is what turns that stream into a readable count; it is not a re-render budget,
+ * because the updates it paces do not re-render anything.
+ */
+export const LIBRARY_INDEX_PROGRESS_INTERVAL_MS = 250;
+
+/**
+ * The parts of a rendered Library row that a reporting run may rewrite.
+ *
+ * Buttons are held as components rather than elements so a progress update goes
+ * through the same `setButtonText` / `setDisabled` the render used; writing to
+ * the element directly would drift from whatever else those set.
+ */
+interface LibraryRowElements {
+  descEl: HTMLElement;
+  primary?: ButtonComponent;
+  cancel?: ButtonComponent;
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
+  private libraryRowElements: LibraryRowElements | undefined;
+  /** Which structure the row was last rendered with: with a run, or without. */
+  private libraryRowShowsRun = false;
+  private libraryStatusUnsubscribe: (() => void) | undefined;
+  private libraryStatusFlushTimer: number | undefined;
+  private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private declarativeSetupGuideRow: Setting | undefined;
@@ -418,35 +450,164 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   public renderLibraryConnectionControls(setting: Setting): void {
-    const status = this.plugin.getLibraryConnectionStatus();
-    const next = librarySetupNextStep(status, this.plugin.settings.embedding.mode);
-    setting.setDesc(next.description);
+    const indexStatus = this.plugin.libraryIndexStatus.snapshot();
+    const row = libraryRowPresentation({
+      status: this.plugin.getLibraryConnectionStatus(),
+      embeddingMode: this.plugin.settings.embedding.mode,
+      ...(indexStatus.activity ? { activity: indexStatus.activity } : {}),
+      ...(indexStatus.lastRun ? { lastRun: indexStatus.lastRun } : {}),
+    });
+    setting.setDesc(row.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
+    const live: LibraryRowElements = { descEl: setting.descEl };
+
     setting.addButton((button) =>
       button
-        .setButtonText(status.kind === "disconnected" ? "Choose folder" : "Change folder")
+        .setButtonText(row.chooseFolder.label)
+        .setDisabled(row.chooseFolder.disabled)
         .onClick(() => this.runAction("choose personal library", () => this.chooseLibraryRoot())),
     );
     // There is no authorization button: remote consent is asked in place when
     // remote embedding is switched on, and otherwise in front of indexing.
-    if (next.action === "index") {
-      setting.addButton((button) =>
+    const primary = row.primary;
+    if (primary) {
+      setting.addButton((button) => {
         button
-          .setButtonText("Build index")
+          .setButtonText(primary.label)
           .setCta()
-          .onClick(() => this.runAction("index personal library full text", () => this.indexPersonalLibraryFullText())),
-      );
+          .setDisabled(primary.disabled)
+          .onClick(() => this.runAction("index personal library full text", () => this.indexPersonalLibraryFullText()));
+        live.primary = button;
+      });
+    }
+    // While a run is in flight the row's third button is its stop control, so
+    // the row still offers at most three: folder, run, stop.
+    const cancel = row.cancel;
+    if (cancel) {
+      setting.addButton((button) => {
+        button
+          .setButtonText(cancel.label)
+          .setWarning()
+          .setDisabled(cancel.disabled)
+          .onClick(() => this.cancelLibraryIndexing());
+        live.cancel = button;
+      });
     }
     // Secondary library actions (preview / scan / reload / direction review)
     // live in the command palette only, so this row never grows past three
     // buttons and needs no menu.
-    if (status.kind === "authorized") {
+    const revoke = row.revoke;
+    if (revoke) {
       setting.addButton((button) =>
         button
-          .setButtonText("Revoke")
+          .setButtonText(revoke.label)
           .onClick(() => this.runAction("revoke personal library", () => this.revokeLibraryAuthorization())),
       );
     }
+
+    this.libraryRowElements = live;
+    this.libraryRowShowsRun = Boolean(row.cancel);
+    this.watchLibraryIndexStatus();
+  }
+
+  /**
+   * Follow the indexing run while this tab is open.
+   *
+   * Subscribed from the row's own render rather than from a tab lifecycle hook,
+   * because the row is the only thing that wants it and both render paths go
+   * through here. The immediate replay the store performs on subscribe is
+   * dropped: the render that is asking for the subscription has already drawn
+   * that state, and re-entering `refreshSettings` from inside a render would
+   * not terminate.
+   */
+  private watchLibraryIndexStatus(): void {
+    if (this.libraryStatusUnsubscribe) return;
+    let replaying = true;
+    this.libraryStatusUnsubscribe = this.plugin.libraryIndexStatus.subscribe((status) => {
+      if (replaying) return;
+      this.onLibraryIndexStatusChange(status);
+    });
+    replaying = false;
+  }
+
+  /**
+   * A run reports far more often than a settings page should re-render — once
+   * per paper, which on a large library is several times a second.
+   *
+   * Two different updates hide behind that. Starting and stopping change which
+   * buttons the row has, so they go through the full re-render (twice a run, and
+   * `refreshSettings` keeps the scroll position). Everything in between only
+   * changes text on buttons that are already there, so it is written straight
+   * into the rendered elements on a timer — no re-render, which is also what
+   * keeps a half-typed value in another row from being thrown away mid-run.
+   */
+  private onLibraryIndexStatusChange(status: LibraryIndexStatus): void {
+    if (Boolean(status.activity) !== this.libraryRowShowsRun) {
+      this.clearLibraryStatusFlush();
+      this.refreshSettings();
+      return;
+    }
+    this.pendingLibraryIndexStatus = status;
+    if (this.libraryStatusFlushTimer !== undefined) return;
+    const view = this.libraryRowElements?.descEl.ownerDocument.defaultView;
+    if (!view) {
+      this.flushLibraryIndexStatus();
+      return;
+    }
+    this.libraryStatusFlushTimer = view.setTimeout(() => {
+      this.libraryStatusFlushTimer = undefined;
+      this.flushLibraryIndexStatus();
+    }, LIBRARY_INDEX_PROGRESS_INTERVAL_MS);
+  }
+
+  /** Write the latest reported progress into the row that is already on screen. */
+  private flushLibraryIndexStatus(): void {
+    const status = this.pendingLibraryIndexStatus;
+    const elements = this.libraryRowElements;
+    this.pendingLibraryIndexStatus = undefined;
+    if (!status || !elements || !elements.descEl.isConnected) return;
+    const row = libraryRowPresentation({
+      status: this.plugin.getLibraryConnectionStatus(),
+      embeddingMode: this.plugin.settings.embedding.mode,
+      ...(status.activity ? { activity: status.activity } : {}),
+      ...(status.lastRun ? { lastRun: status.lastRun } : {}),
+    });
+    elements.descEl.textContent = row.description;
+    if (elements.primary && row.primary) {
+      elements.primary.setButtonText(row.primary.label).setDisabled(row.primary.disabled);
+    }
+    if (elements.cancel && row.cancel) {
+      elements.cancel.setButtonText(row.cancel.label).setDisabled(row.cancel.disabled);
+    }
+  }
+
+  private clearLibraryStatusFlush(): void {
+    this.pendingLibraryIndexStatus = undefined;
+    if (this.libraryStatusFlushTimer === undefined) return;
+    this.libraryRowElements?.descEl.ownerDocument.defaultView?.clearTimeout(
+      this.libraryStatusFlushTimer,
+    );
+    this.libraryStatusFlushTimer = undefined;
+  }
+
+  public cancelLibraryIndexing(): void {
+    if (this.plugin.cancelPersonalLibraryIndexing()) return;
+    // The row can be a frame behind the run it describes; say so rather than
+    // leaving a press that did nothing.
+    new Notice("arXiv Daily: that indexing run has already finished.");
+    this.refreshSettings();
+  }
+
+  /**
+   * Obsidian calls this when the tab is closed, on both render paths. The
+   * subscription and its timer are the only things this tab leaves running.
+   */
+  override hide(): void {
+    this.clearLibraryStatusFlush();
+    this.libraryStatusUnsubscribe?.();
+    this.libraryStatusUnsubscribe = undefined;
+    this.libraryRowElements = undefined;
+    super.hide();
   }
 
   public async chooseLibraryRoot(): Promise<void> {
@@ -624,6 +785,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         10_000,
       );
     } catch (error) {
+      // A run the reader stopped from this row is an outcome, not a fault: it
+      // must not come back as "indexing failed" over a button they just pressed.
+      if (isCancellationError(error)) {
+        new Notice(
+          "arXiv Daily: indexing cancelled. Nothing was saved, so the next build starts over.",
+          10_000,
+        );
+        return;
+      }
       this.plugin.logger.error("settings: personal library full-text indexing failed", error);
       throw error;
     }

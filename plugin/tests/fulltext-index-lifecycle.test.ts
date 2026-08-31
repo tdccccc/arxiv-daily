@@ -16,6 +16,7 @@ import {
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import ArxivDailyPlugin from "../main.ts";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import { createLibraryConnection } from "../src/library/connection";
 
 function memoryStorage() {
@@ -214,6 +215,7 @@ function fixture(storage: StorageAdapter) {
       setError: vi.fn(),
     },
     operations: new OperationRegistry(),
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     libraryConnection: connection,
     librarySource: {
       canonicalRoot: connection.selectedRoot,
@@ -459,6 +461,60 @@ describe("personal library full-text index lifecycle", () => {
 
     expect(runtime.legacy.loadManifest).not.toHaveBeenCalled();
     expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The run has always reported to the status bar. The settings modal covers
+   * the status bar, so a run started from the Library row used to go silent on
+   * the one surface watching it; this is the second report that fixes it.
+   */
+  it("reports the run to the settings row and leaves its result behind", async () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    const seen: Array<string | undefined> = [];
+    runtime.plugin.libraryIndexStatus.subscribe((status) => {
+      seen.push(status.activity ? `run:${status.activity.phase}` : "idle");
+    });
+
+    const summary = await runtime.plugin.indexPersonalLibraryFullText();
+
+    expect(seen[0]).toBe("idle");
+    expect(seen.some((entry) => entry?.startsWith("run:"))).toBe(true);
+    expect(seen.at(-1)).toBe("idle");
+    // The trace survives the run that produced it — that is its whole point.
+    expect(runtime.plugin.libraryIndexStatus.snapshot()).toEqual({
+      lastRun: {
+        updatedAt: summary.manifestUpdatedAt,
+        papers: summary.searchablePapers,
+      },
+    });
+  });
+
+  /**
+   * The operation was always cancellable; the settings page had no way to say
+   * so. This is the way: the row cancels the run it is describing, by id.
+   */
+  it("cancels the run the settings row is describing", () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    const operation = runtime.internals.operations.begin(
+      "personal-library-fulltext-index",
+      "Personal library full-text index",
+      runtime.scopeFingerprint,
+    );
+    runtime.plugin.libraryIndexStatus.beginRun(operation.id, "indexing");
+
+    expect(runtime.plugin.cancelPersonalLibraryIndexing()).toBe(true);
+
+    expect(operation.signal.aborted).toBe(true);
+    expect(operation.signal.reason).toBe("cancelled from settings");
+    expect(runtime.plugin.libraryIndexStatus.snapshot().activity?.cancelling).toBe(true);
+  });
+
+  it("says so rather than pretending when there is no run to cancel", () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    expect(runtime.plugin.cancelPersonalLibraryIndexing()).toBe(false);
   });
 
   it("keeps the legacy migration fallback when the unsupported host has never cut over", async () => {

@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type ArxivDailyPlugin from "../main";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   ArxivDailySettingTab,
   isValidLocalTime,
@@ -101,6 +102,7 @@ function makeLegacyApiKeyTab(
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
     getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
+    libraryIndexStatus: new LibraryIndexStatusStore(),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);

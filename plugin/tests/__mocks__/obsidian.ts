@@ -85,6 +85,8 @@ export class PluginSettingTab {
   }
 
   update(): void {}
+
+  hide(): void {}
 }
 
 export class TextComponent {
@@ -200,6 +202,8 @@ export class ButtonComponent {
   }
 
   setCta(): this { return this; }
+
+  setWarning(): this { return this; }
 
   onClick(callback: () => unknown): this {
     this.callback = callback;

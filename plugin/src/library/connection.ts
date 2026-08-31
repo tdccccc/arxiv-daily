@@ -93,6 +93,128 @@ export function librarySetupNextStep(
   };
 }
 
+/** The primary button, which is the run's own state once a run is in flight. */
+export interface LibraryRowButton {
+  label: string;
+  disabled: boolean;
+}
+
+/**
+ * The whole Library row, decided in one place.
+ *
+ * The row has three jobs that used to be settled separately in the renderer:
+ * which buttons exist, what they read, and what the sentence beside them says.
+ * They cannot be settled separately once indexing is on the row — the run
+ * renames the main button, disables the folder picker, replaces the sentence and
+ * swaps Revoke for Cancel, all off one fact. Deciding it here also keeps the
+ * row's hard limit checkable: at most three buttons, in every state.
+ */
+export interface LibraryRowPresentation {
+  description: string;
+  /** Absent only before a folder is chosen, where there is nothing to build. */
+  primary?: LibraryRowButton;
+  chooseFolder: LibraryRowButton;
+  /** Present only while a run is in flight; it is the run's stop control. */
+  cancel?: LibraryRowButton;
+  /** Present only on a granted, idle row: revoking mid-run has no meaning. */
+  revoke?: LibraryRowButton;
+  /** True when clicking the primary button has to disclose before indexing. */
+  remoteConsentPending: boolean;
+}
+
+export interface LibraryRowInput {
+  status: LibraryConnectionStatus;
+  embeddingMode: "local" | "remote";
+  /** The run in flight, if the settings page caught one. */
+  activity?: {
+    phase: string;
+    completed?: number;
+    total?: number;
+    cancelling: boolean;
+  };
+  /** What the previous run left in the manifest. */
+  lastRun?: { updatedAt: string; papers: number };
+}
+
+export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresentation {
+  const next = librarySetupNextStep(input.status, input.embeddingMode);
+  const chooseFolderLabel = input.status.kind === "disconnected" ? "Choose folder" : "Change folder";
+
+  if (next.action === "choose-folder") {
+    return {
+      description: next.description,
+      chooseFolder: { label: chooseFolderLabel, disabled: false },
+      remoteConsentPending: false,
+    };
+  }
+
+  const { activity } = input;
+  if (activity) {
+    // Changing the folder mid-run would abort it at the next identity check,
+    // hours in, so the row stops offering that until the run is over. What
+    // stays offered is the one thing the run can still be told: stop.
+    return {
+      description: activity.cancelling
+        ? `Stopping the index run for ${next.rootLabel} — it finishes the step it is on first.`
+        : `Indexing ${next.rootLabel} — ${activity.phase}. Nothing is saved until the run finishes, `
+          + "so cancelling discards it.",
+      primary: { label: indexingLabel(activity), disabled: true },
+      chooseFolder: { label: chooseFolderLabel, disabled: true },
+      cancel: {
+        label: activity.cancelling ? "Cancelling…" : "Cancel",
+        disabled: activity.cancelling,
+      },
+      remoteConsentPending: next.remoteConsentPending,
+    };
+  }
+
+  const trace = input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
+  return {
+    description: `${next.description}${trace}`,
+    primary: { label: "Build index", disabled: false },
+    chooseFolder: { label: chooseFolderLabel, disabled: false },
+    ...(input.status.kind === "authorized"
+      ? { revoke: { label: "Revoke", disabled: false } }
+      : {}),
+    remoteConsentPending: next.remoteConsentPending,
+  };
+}
+
+/**
+ * The main button carries the count because it is the thing being watched. The
+ * fraction is dropped rather than faked when the phase does not count: a run
+ * spends its first minutes reading a catalog, where any number would be a guess.
+ */
+function indexingLabel(activity: { completed?: number; total?: number }): string {
+  return activity.completed !== undefined && activity.total !== undefined
+    ? `Indexing… (${activity.completed}/${activity.total})`
+    : "Indexing…";
+}
+
+/**
+ * The one sentence that outlives a run.
+ *
+ * Both numbers come from the manifest, so the claim is about what search can
+ * reach right now rather than about what some past run reported doing. Local
+ * time, minute precision: this answers "did last night's run finish", which
+ * seconds do not help with and UTC actively hinders.
+ */
+export function lastIndexedSentence(run: { updatedAt: string; papers: number }): string {
+  const when = formatLocalMinute(run.updatedAt);
+  const papers = run.papers === 1 ? "1 paper" : `${run.papers} papers`;
+  return when
+    ? `Last indexed ${when} · ${papers} searchable.`
+    : `${papers} searchable.`;
+}
+
+function formatLocalMinute(iso: string): string | undefined {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} `
+    + `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
 export interface LibraryAuthorizationDisclosure {
   selectedRoot: string;
   eligibleExtensions: string[];

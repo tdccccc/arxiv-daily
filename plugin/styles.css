@@ -1896,10 +1896,29 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   min-width: var(--arxiv-daily-library-description-floor);
 }
 
+/*
+ * Buttons keep their natural width and wrap onto another line rather than
+ * squeeze — until one of them alone is wider than the cap, which is where the
+ * bargain above has nothing left to trade. `Indexing… (12/40)` is that button:
+ * at a 448px panel the strip may be 116px and the label wants 134px, and a
+ * button that can neither shrink nor break spills leftwards out of its control
+ * and across the description — the exact failure the cap exists to prevent,
+ * arriving through the one gap the cap does not cover.
+ *
+ * So shrinking is permitted, as a last resort rather than a habit. `0 1 auto`
+ * keeps the hypothetical size at max-content, so a button that fits is laid out
+ * at its natural width and a line that cannot hold two buttons still wraps;
+ * flexbox only shrinks an item when it is alone on its line and still too wide.
+ * `white-space: normal` is what it shrinks into: the label breaks across two
+ * lines instead of being clipped. Both are inert at every width where the
+ * buttons already fit, which is why the existing geometry assertions read
+ * exactly as they did before.
+ */
 .arxiv-daily-settings .setting-item-control.arxiv-daily-settings__library-controls button {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /*

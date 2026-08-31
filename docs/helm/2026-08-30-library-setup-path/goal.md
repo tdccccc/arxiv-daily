@@ -1,7 +1,7 @@
 # 文献库上手路径（library setup path）
 
-status: active
-updated: 2026-08-30
+status: done
+updated: 2026-08-31
 owner: claude-code-main-session
 
 ## Intent
@@ -14,6 +14,8 @@ owner: claude-code-main-session
 - [x] 已选文件夹且为本地嵌入时，主按钮是建索引；不要求先授权。
 - [x] 已选文件夹后主按钮永远是建索引；远程授权改为切到远程时就地确认，不再是 Library 行上的独立按钮。
 - [x] 建索引可从设置页启动，进度和结果有通知；不必先打开命令面板。
+- [x] 建索引期间 Library 行显示当前阶段与 `Indexing… (N/M)`，并能就地取消。
+- [x] 索引跑完后 Library 行常驻一句「上次建索引的时间 + 可搜到多少篇」，不随通知一起消失。
 - [x] 授权文案区分本地（不离开本机）和远程（全文会发到嵌入接口）。
 - [x] Personal library 默认只露出选库、嵌入方式、可选 PDF parser；远程字段和 sidecar URL 按需展开，按钮不挤成一团。
 - [x] 文献库这一行最多三个按钮、没有二级菜单；预览 / 扫描 / 重载目录 / 方向复审只从命令面板进。
@@ -42,8 +44,8 @@ owner: claude-code-main-session
 2. P1b — Personal library 设置精简（少选项、不挤） — status: done
 3. P1c — 去掉 Manage 菜单，Library 行最多三个按钮 — status: done
 4. P1d — 远程授权改为切换时就地确认，Revoke 即切回本地 — status: done
-5. P2 — 建索引过程与完成后的下一步（去搜索）可感知 — status: pending
+5. P2 — 建索引的过程、取消与结果都落在 Library 行上 — status: done
 
 ## Open questions
 
-- P2 等用户看过精简后的设置页再做：索引进行中进度、建完后「去搜索」。
+（无。P2 收尾时确认：不加 Search library 按钮——搜索时本来就看得到，完成提示够了。）

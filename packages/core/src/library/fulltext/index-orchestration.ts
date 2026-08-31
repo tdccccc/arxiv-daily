@@ -59,7 +59,38 @@ export interface FullTextIndexRunSummary {
   pruned: number;
   outcomes: readonly FullTextIndexPaperOutcome[];
   manifestRevision: number;
+  /** When the manifest this run committed was written. */
+  manifestUpdatedAt: string;
+  /**
+   * Ready records the committed manifest holds — what a search can reach now,
+   * which is neither `indexed` (this run's additions) nor the outcome count
+   * (which includes failures and says nothing about papers left untouched).
+   */
+  searchablePapers: number;
 }
+
+/**
+ * The same progress the detail string describes, in numbers a caller can render
+ * without parsing prose.
+ *
+ * The detail string stays the primary channel — it is what the status bar has
+ * always shown — but a settings row that wants to read "Indexing… (5/120)" on a
+ * button cannot get those counts out of a sentence that also carries a paper key
+ * and an ETA. Optional, and always emitted alongside the string it summarizes,
+ * so a caller may ignore it entirely.
+ */
+export interface FullTextIndexProgress {
+  /** `preparing` hashes local files before the run; `indexing` is the run itself. */
+  phase: "preparing" | "indexing";
+  /** 1-based position of the item being worked on, never above `total`. */
+  completed: number;
+  total: number;
+}
+
+export type FullTextIndexProgressReporter = (
+  detail: string,
+  progress?: FullTextIndexProgress,
+) => void;
 
 interface IndexUnit {
   paperKey: string;
@@ -86,8 +117,8 @@ export interface IndexPersonalLibraryFullTextInput {
   embedding: EmbeddingModel;
   store: FullTextKnowledgeBaseStore;
   logger?: Logger;
-  /** Called with a short detail string before each paper. */
-  onProgress?: (detail: string) => void;
+  /** Called with a short detail string before each paper, plus its counts. */
+  onProgress?: FullTextIndexProgressReporter;
   /** Optional cross-runtime admission guard immediately around the manifest CAS. */
   beforeManifestCommit?: () => void | Promise<void>;
   afterManifestCommit?: () => void | Promise<void>;
@@ -156,7 +187,10 @@ export async function indexPersonalLibraryFullText(
     throwIfCancelled(input.signal);
     const unit = units[position]!;
     const { paperKey } = unit;
-    input.onProgress?.(indexProgressDetail(unit.label, position + 1, total, progressStartedAt));
+    input.onProgress?.(
+      indexProgressDetail(unit.label, position + 1, total, progressStartedAt),
+      { phase: "indexing", completed: position + 1, total },
+    );
 
     const fingerprints = unit.observationFingerprints;
     if (fingerprints.some((fingerprint) => fingerprint === undefined)) {
@@ -370,6 +404,8 @@ export async function indexPersonalLibraryFullText(
     pruned,
     outcomes,
     manifestRevision: saved.revision,
+    manifestUpdatedAt: saved.updatedAt,
+    searchablePapers: Object.values(saved.papers).filter((paper) => paper.status === "ready").length,
   };
 }
 
@@ -392,7 +428,7 @@ async function collectIndexUnits(input: {
   catalog: PersonalLibraryCatalog;
   source: ScopedLibrarySource;
   loaded: FullTextKnowledgeBaseManifest;
-  onProgress?: (detail: string) => void;
+  onProgress?: FullTextIndexProgressReporter;
   signal?: AbortSignal;
 }): Promise<IndexUnit[]> {
   const units: IndexUnit[] = [];
@@ -434,6 +470,7 @@ async function collectIndexUnits(input: {
     if (!contentHash) {
       input.onProgress?.(
         `Preparing local document ${position + 1}/${unresolved.length}: ${path}`,
+        { phase: "preparing", completed: position + 1, total: unresolved.length },
       );
       try {
         const buffer = await input.source.readBinary(path, { signal: input.signal });

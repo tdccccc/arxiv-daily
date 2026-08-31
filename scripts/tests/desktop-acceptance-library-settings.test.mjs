@@ -10,7 +10,11 @@ import {
   EXPECTED_GROUP_ORDER,
   judgeDisclosureButtons,
   judgeDisclosureTitle,
+  judgeCancellingRow,
   judgeGroupOrder,
+  judgeInPlaceProgressUpdate,
+  judgeIndexTraceSentence,
+  judgeIndexingRow,
   judgeLibraryButtons,
   judgeLibraryGeometry,
   judgeLibraryWrappedGeometry,
@@ -434,4 +438,168 @@ test("a depth with no specified confirm label is a failure rather than a silent 
   const verdict = judgeDisclosureButtons(dialog("full-text"), "invented-depth");
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /no confirm label is specified/);
+});
+
+// ── the row while a run is in flight ────────────────────────────────────────
+
+const RUNNING_LABEL = "Indexing… (12/40)";
+
+const runningRow = (overrides = {}) => ({
+  rowButtons: ["Change folder", RUNNING_LABEL, "Cancel"],
+  rowButtonStates: [
+    { text: "Change folder", disabled: true, mark: "mark-0" },
+    { text: RUNNING_LABEL, disabled: true, mark: "mark-1" },
+    { text: "Cancel", disabled: false, mark: "mark-2" },
+  ],
+  rowDescription: "Indexing papers — extracting and embedding PDF text. Nothing is saved until the run finishes, so cancelling discards it.",
+  groupButtons: ["Change folder", RUNNING_LABEL, "Cancel"],
+  ...overrides,
+});
+
+const runningOptions = {
+  expectedLabel: RUNNING_LABEL,
+  phase: "extracting and embedding PDF text",
+};
+
+test("the row carrying a run passes", () => {
+  const verdict = judgeIndexingRow(runningRow(), runningOptions);
+  assert.equal(verdict.ok, true);
+});
+
+test("a run whose main button can still be pressed fails", () => {
+  const states = runningRow().rowButtonStates.map((button) =>
+    button.text === RUNNING_LABEL ? { ...button, disabled: false } : button);
+  const verdict = judgeIndexingRow(runningRow({ rowButtonStates: states }), runningOptions);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /offers to start a second run/);
+});
+
+test("a run that still lets the folder move fails", () => {
+  const states = runningRow().rowButtonStates.map((button) =>
+    button.text === "Change folder" ? { ...button, disabled: false } : button);
+  const verdict = judgeIndexingRow(runningRow({ rowButtonStates: states }), runningOptions);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /out from under the run/);
+});
+
+test("a run with no way to stop it fails", () => {
+  const states = runningRow().rowButtonStates.filter((button) => button.text !== "Cancel");
+  const verdict = judgeIndexingRow(
+    runningRow({ rowButtonStates: states, rowButtons: states.map((b) => b.text) }),
+    runningOptions,
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /no way to stop the run/);
+});
+
+test("a run the description never names fails", () => {
+  const verdict = judgeIndexingRow(
+    runningRow({ rowDescription: "Selected: papers. Build the search index." }),
+    runningOptions,
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /does not say what the run is doing/);
+});
+
+test("a progress step that kept the same buttons and changed their text passes", () => {
+  const before = runningRow();
+  const after = runningRow({
+    rowButtonStates: before.rowButtonStates.map((button) =>
+      button.text === RUNNING_LABEL ? { ...button, text: "Indexing… (13/40)" } : button),
+  });
+  const verdict = judgeInPlaceProgressUpdate(before, after, { expectedLabel: "Indexing… (13/40)" });
+  assert.equal(verdict.ok, true);
+});
+
+test("a progress step that replaced the buttons is a re-render, and fails", () => {
+  const before = runningRow();
+  const after = runningRow({
+    rowButtonStates: before.rowButtonStates.map((button) => ({
+      ...button,
+      mark: null,
+      ...(button.text === RUNNING_LABEL ? { text: "Indexing… (13/40)" } : {}),
+    })),
+  });
+  const verdict = judgeInPlaceProgressUpdate(before, after, { expectedLabel: "Indexing… (13/40)" });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /re-rendered instead of updating the row/);
+});
+
+test("buttons that survived but never advanced their count fail", () => {
+  const before = runningRow();
+  const verdict = judgeInPlaceProgressUpdate(before, before, { expectedLabel: "Indexing… (13/40)" });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /expected "Indexing… \(13\/40\)"/);
+});
+
+const stoppingRow = (overrides = {}) => runningRow({
+  rowButtonStates: [
+    { text: "Change folder", disabled: true, mark: "mark-0" },
+    { text: RUNNING_LABEL, disabled: true, mark: "mark-1" },
+    { text: "Cancelling…", disabled: true, mark: "mark-2" },
+  ],
+  ...overrides,
+});
+
+const cancelled = [{ id: "personal-library-fulltext-index:1", cancellationRequested: true }];
+const stillRunning = [{ id: "personal-library-fulltext-index:1", cancellationRequested: false }];
+
+test("a pressed Cancel that says it is stopping, and stopped something, passes", () => {
+  const verdict = judgeCancellingRow(stoppingRow(), cancelled);
+  assert.equal(verdict.ok, true);
+});
+
+test("a Cancel that changed the row but asked no run to stop fails", () => {
+  const verdict = judgeCancellingRow(stoppingRow(), stillRunning);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /asked no operation to stop/);
+});
+
+test("a Cancel that stopped the run but still invites a second press fails", () => {
+  const verdict = judgeCancellingRow(runningRow(), cancelled);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /still reads "Cancel"/);
+});
+
+// ── what a finished run leaves on the row ───────────────────────────────────
+
+const idleRow = (rowDescription) => ({
+  rowButtons: ["Change folder", "Build index"],
+  rowButtonStates: [
+    { text: "Change folder", disabled: false, mark: null },
+    { text: "Build index", disabled: false, mark: null },
+  ],
+  rowDescription,
+  groupButtons: ["Change folder", "Build index"],
+});
+
+test("a row naming both when and how much passes", () => {
+  const verdict = judgeIndexTraceSentence(
+    idleRow("Selected: papers. Local embedding stays on this device. Last indexed 2026-08-30 21:15 · 128 papers searchable."),
+    { papers: 128 },
+  );
+  assert.equal(verdict.ok, true);
+});
+
+test("a count with no time fails: it does not answer whether last night's run finished", () => {
+  const verdict = judgeIndexTraceSentence(idleRow("Selected: papers. 128 papers searchable."), { papers: 128 });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /does not say when/);
+});
+
+test("a time with no count fails: it does not say what can be searched", () => {
+  const verdict = judgeIndexTraceSentence(
+    idleRow("Selected: papers. Last indexed 2026-08-30 21:15."),
+    { papers: 128 },
+  );
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /128 papers searchable/);
+});
+
+test("a row that says nothing about past runs fails once one has happened", () => {
+  const verdict = judgeIndexTraceSentence(
+    idleRow("Selected: papers. Build the search index to search these PDFs."),
+    { papers: 3 },
+  );
+  assert.equal(verdict.ok, false);
 });
