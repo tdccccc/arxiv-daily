@@ -49,7 +49,7 @@
     "eslint": "^9.39.5",
     "eslint-plugin-obsidianmd": "^0.4.1",
     "globals": "^17.7.0",
-    "happy-dom": "^20.10.6",
+    "happy-dom": "^20.11.12",
     "linkedom": "^0.18.12",
     "obsidian": "^1.13.1",
     "typescript": "^5.8.3",
