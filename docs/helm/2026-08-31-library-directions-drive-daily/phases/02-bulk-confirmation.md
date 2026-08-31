@@ -29,8 +29,9 @@ core 新增「确认多条」的纯函数与对应的带存储版本，折叠既
 - Red / baseline signal: 新增测试——两个候选一次确认，断言 profile 得到 2 个方向、proposal 候选清空、存储只发生一次写入；再加一条中途失败（第二条 lineage 冲突）的用例，断言整批不落盘且 proposal/profile 保持原状。红在函数不存在。
 - Green check: `npm run test --workspace @arxiv-daily/core -- personal-library-interest-profile-review`
 - regression checks: 单条确认的既有断言逐条仍绿（含幂等恢复分支）；`npm run typecheck`。
+- **observed**: 两条纯变换测试与存储测试都先红在函数不存在；「整批失败」那条一开始**为错误的原因通过**（`toThrow()` 把「不是函数」也算通过），收紧为要求 `code: "conflict"` 后才真正变红。绿之后 review 15/15、store 36/36，其中既有的协调器断言全部改走批量路径仍绿——这是「单条 = 一元批量」这次重构行为保持的证据。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — 复审页一次接受一组，证据单薄的默认不勾
 
@@ -39,12 +40,15 @@ core 新增「确认多条」的纯函数与对应的带存储版本，折叠既
 - Red / baseline signal: 新增测试——proposed 标签页渲染出勾选框，代表论文 ≥2 的默认勾上、=1 的默认不勾且带「证据单薄」标注；点「接受选中的」只提交勾上的那些，且只调用一次批量确认。红在没有勾选框与批量按钮。
 - Green check: `npm run test --workspace obsidian-arxiv-daily -- personal-library-interest-profile-modal`
 - regression checks: 单条确认/编辑/合并/禁用入口的既有断言仍绿；插件全量与 `npm run typecheck`。
+- **observed**: 红的原文 `expected [ false, false ] to deeply equal [ true, false ]` 与 `missing button Accept selected`。绿之后 modal 23/23、plugin 696/696、core 各分片全绿、typecheck 四包、lint 0 error、boundaries OK。
+- **撞坏一条既有测试，改的是源码不是测试**：提案加载失败时可能既没有 proposal 文档、又不走两条提前返回，新的预选逻辑必须守这个分支。
+- **两处自行做的判断，留给用户推翻**：其一，「接受选中的」**不再弹二次确认**——逐卡片的确认按钮是一次无防护点击才需要弹框，而这里勾选本身就是深思，且接受后仍可编辑/禁用/移除。其二，proposed 页的勾选框标签从「Select for merge」改为「Select」，一个选择同时服务接受与合并；因此合并按钮在默认全选下会变为可点，但它本来就有一个写明数量与名称的确认框。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
-- core 与 plugin 全量测试、`npm run typecheck`、`npm run lint` 0 error、`npm run check:boundaries`。
+- **observed 2026-08-31**：core 各分片全绿；plugin 696/696（41 文件）；`npm run typecheck` 四包；`npm run lint` 0 error（20 warning，既有）；`npm run check:boundaries` OK。
 - **不构成交付证据**：复审页只有 happy-dom 单测，桌面验收目前只覆盖设置页，这个模态框从未在真实 Obsidian 里被验收过。勾选框的实际可用性、默认勾选是否一眼看得懂、批量按钮的位置，必须由用户开一次看过才算数。
 - **本阶段不证明**：确认后日报能跑（那是 P3 的前置检查）与推送质量（P5）。
 
