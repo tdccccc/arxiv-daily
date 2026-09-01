@@ -115,6 +115,43 @@ describe("validateFilterConfig", () => {
     expect(r.reasons.join("; ")).toMatch(/topic/i);
   });
 
+  it("accepts an eligible library direction instead of a hand-written topic", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+      }),
+      { library: { connected: true, eligibleDirections: 1 } },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("names the library when it is connected but has nothing eligible", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+      }),
+      { library: { connected: true, eligibleDirections: 0 } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/library/i);
+  });
+
+  it("keeps the topic-only wording when no library is involved", () => {
+    // The CLI product has no personal library and passes nothing: its refusal
+    // must stay exactly what it is today.
+    const settings = makeSettings({
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+      arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+    });
+    expect(validateFilterConfig(settings).reasons).toContain("No research topics defined");
+    expect(validateFilterConfig(settings).reasons)
+      .toEqual(validateFilterConfig(settings, {}).reasons);
+    expect(validateFilterConfig(settings, { library: { connected: false, eligibleDirections: 0 } }).reasons)
+      .toContain("No research topics defined");
+  });
+
   it("combines LLM and topics reasons", () => {
     const r = validateFilterConfig(
       makeSettings({

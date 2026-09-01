@@ -72,7 +72,30 @@ export function validateLlmConfig(settings: PluginSettings): ValidationResult {
   return { ok: reasons.length === 0, reasons };
 }
 
-export function validateFilterConfig(settings: PluginSettings): ValidationResult {
+export interface FilterValidationLibraryState {
+  /** Whether a personal library is connected at all. */
+  connected: boolean;
+  /**
+   * Directions eligible for discovery right now — not the raw confirmed
+   * count. A disabled direction, or one whose representative evidence went
+   * missing, contributes nothing to a run and must not wave one through.
+   */
+  eligibleDirections: number;
+}
+
+export interface FilterValidationOptions {
+  /**
+   * Personal library state, passed in rather than read from settings. Hosts
+   * without a personal library — the CLI product — pass nothing and keep the
+   * topic requirement exactly as it was (ADR 0010 §2).
+   */
+  library?: FilterValidationLibraryState;
+}
+
+export function validateFilterConfig(
+  settings: PluginSettings,
+  options: FilterValidationOptions = {},
+): ValidationResult {
   const llm = validateLlmConfig(settings);
   const reasons = [...llm.reasons];
   const categories = arxivCategories(settings.arxiv);
@@ -118,8 +141,12 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
     }
     seenCategories.add(trimmed);
   }
-  if (settings.arxiv.topics.length === 0) {
-    reasons.push("No research topics defined");
+  // Either source is enough to run: a hand-written topic, or a confirmed
+  // library direction that is eligible right now (ADR 0010 §1).
+  if (settings.arxiv.topics.length === 0 && (options.library?.eligibleDirections ?? 0) === 0) {
+    reasons.push(options.library?.connected
+      ? "No research topics defined, and no personal library direction is currently eligible"
+      : "No research topics defined");
   }
   const seenTags = new Set<string>();
   settings.arxiv.topics.forEach((topic, i) => {
