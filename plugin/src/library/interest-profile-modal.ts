@@ -127,7 +127,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     root.createEl("h2", { text: "Review personal library directions" });
     root.createEl("p", {
       cls: "arxiv-daily-interest-review__disclosure",
-      text: "Proposed directions do not affect discovery. Only active confirmed directions with compatible, current evidence may become eligible for discovery later. Evidence uses metadata and abstracts, not full text.",
+      text: "Proposed directions affect nothing until you confirm them. Evidence is metadata and abstracts, never full text.",
     });
 
     const toolbar = root.createDiv({ cls: "arxiv-daily-interest-review__toolbar" });
@@ -137,7 +137,22 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     });
     this.addTab(tabs, "proposed", "Proposed");
     this.addTab(tabs, "confirmed", "Confirmed");
-    const refresh = toolbar.createEl("button", {
+    // Secondary controls share one row with the tabs; each explains itself on
+    // hover instead of spending a line of the header on prose.
+    const actions = toolbar.createDiv({ cls: "arxiv-daily-interest-review__toolbar-actions" });
+    const generation = generationAvailability(snapshot);
+    const generate = actions.createEl("button", {
+      text: snapshot.proposal ? "Regenerate proposals" : "Generate proposals",
+      attr: {
+        type: "button",
+        title: generation.allowed
+          ? "Sends bounded catalog metadata and abstracts to your configured model."
+          : generation.reason,
+      },
+    });
+    generate.disabled = this.pending || !generation.allowed;
+    generate.addEventListener("click", () => void this.generate(snapshot));
+    const refresh = actions.createEl("button", {
       text: "Refresh",
       attr: { type: "button", "aria-label": "Refresh personal library directions" },
     });
@@ -207,20 +222,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 
   private renderProposed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
-    const generation = generationAvailability(snapshot);
-    const controls = parent.createDiv({ cls: "arxiv-daily-interest-review__section-actions" });
-    const generate = controls.createEl("button", {
-      text: snapshot.proposal ? "Regenerate proposals" : "Generate proposals",
-      attr: { type: "button" },
-    });
-    generate.disabled = this.pending || !generation.allowed;
-    if (!generation.allowed) generate.title = generation.reason;
-    generate.addEventListener("click", () => void this.generate(snapshot));
-    controls.createSpan({
-      cls: "arxiv-daily-interest-review__hint",
-      text: generation.allowed ? "Generation sends bounded catalog metadata and abstracts to your configured model." : generation.reason,
-    });
-
     const candidates = snapshot.proposal?.candidates ?? [];
     if (!snapshot.proposal && !snapshot.proposalLoadError) {
       parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "No proposal has been generated." });
@@ -238,15 +239,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
       const accept = bar.createEl("button", {
         text: `Accept selected (${this.selectedProposals.size})`,
-        attr: { type: "button" },
+        attr: {
+          type: "button",
+          title: "Confirms every selected direction as active in one step. They stay editable, and can be disabled or removed afterwards.",
+        },
       });
       accept.addClass("mod-cta");
       accept.disabled = this.pending || this.selectedProposals.size === 0;
       accept.addEventListener("click", () => void this.acceptSelectedProposals());
-      bar.createSpan({
-        cls: "arxiv-daily-interest-review__hint",
-        text: "Accepting confirms every selected direction as active in one step. Directions can be edited, disabled, or removed afterwards.",
-      });
     }
     const allowedKeys = proposalPaperKeys(snapshot);
     for (const candidate of candidates) {
@@ -314,7 +314,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const checkbox = selectLabel.createEl("input", { type: "checkbox" });
     checkbox.checked = selected.has(direction.id);
     checkbox.disabled = this.pending || !terminal;
-    selectLabel.appendText(kind === "proposal" ? "Select" : "Select for merge");
+    checkbox.setAttribute("aria-label", kind === "proposal"
+      ? `Select ${direction.name}`
+      : `Select ${direction.name} for merge`);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) selected.add(direction.id);
       else selected.delete(direction.id);
@@ -383,7 +385,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
    */
   private createCardDetail(card: HTMLElement): HTMLElement {
     const detail = card.createEl("details", { cls: "arxiv-daily-interest-review__detail" });
-    detail.createEl("summary", { text: "Edit this direction" });
+    detail.createEl("summary", { text: "Edit" });
     return detail;
   }
 
@@ -496,13 +498,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       });
     }
     const suggestions = snapshot.suggestions?.suggestions ?? [];
-    if (suggestions.length === 0) {
-      parent.createEl("p", {
-        cls: "arxiv-daily-interest-review__suggestions-empty",
-        text: "No incremental suggestions. Run a check for new papers to review suggestions here.",
-      });
-      return;
-    }
+    // An empty queue is the normal state and needs no line of its own.
+    if (suggestions.length === 0) return;
     const section = parent.createDiv({ cls: "arxiv-daily-interest-review__suggestions" });
     section.createEl("strong", { text: `Incremental suggestions ${suggestions.length}` });
     for (const suggestion of suggestions) {

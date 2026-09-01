@@ -1801,6 +1801,12 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   flex: 1 1 14rem;
 }
 
+.arxiv-daily-interest-review__toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
 .arxiv-daily-interest-review__summary {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);

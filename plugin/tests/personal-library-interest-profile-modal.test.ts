@@ -189,6 +189,27 @@ describe("bulk acceptance of proposed directions", () => {
     });
   }
 
+  it("keeps the header to one disclosure line and one row of controls", () => {
+    const modal = open(controller(twoCandidates()).mock);
+    const text = modal.contentEl.textContent ?? "";
+    // The explanations that used to sit beside each button are gone from the
+    // page body; the buttons carry them as tooltips instead.
+    expect(text).not.toContain("Generation sends bounded catalog metadata");
+    expect(text).not.toContain("Accepting confirms every selected direction");
+    // Regenerate sits with the other secondary controls, not on its own row.
+    const toolbar = modal.contentEl.querySelector(".arxiv-daily-interest-review__toolbar")!;
+    const labels = Array.from(toolbar.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["Proposed", "Confirmed", "Refresh"]));
+    expect(labels.some((label) => label?.includes("proposals"))).toBe(true);
+    // The row checkbox is understood without a word of its own.
+    const checkbox = modal.contentEl.querySelector<HTMLInputElement>(
+      ".arxiv-daily-interest-review__card input[type=checkbox]",
+    )!;
+    expect(checkbox.getAttribute("aria-label")).toBeTruthy();
+    expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__card")!.textContent)
+      .not.toContain("Select");
+  });
+
   it("lists candidates as summary rows with the edit form collapsed", () => {
     const modal = open(controller(twoCandidates()).mock);
     // The row alone tells you what the candidate is and how much backs it.
@@ -251,8 +272,9 @@ describe("personal library interest profile modal", () => {
     expect(tabs).toHaveLength(2);
     expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
     expect(modal.contentEl.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(tabs[0]?.id);
-    expect(modal.contentEl.textContent).toContain("do not affect discovery");
-    expect(modal.contentEl.textContent).toContain("metadata and abstracts, not full text");
+    // The disclosure keeps both facts it has to carry, in one line.
+    expect(modal.contentEl.textContent).toContain("affect nothing until you confirm them");
+    expect(modal.contentEl.textContent).toContain("metadata and abstracts, never full text");
     expect(modal.contentEl.textContent).toContain('<img class="injected">');
     expect(modal.contentEl.querySelector("img")).toBeNull();
     button(modal.contentEl, "Confirmed").click();
@@ -450,10 +472,12 @@ describe("incremental suggestions in the review modal", () => {
     } as any;
   }
 
-  it("shows an empty state when no incremental suggestions exist", () => {
+  it("says nothing at all when there are no incremental suggestions", () => {
+    // An empty queue is the normal state; spending a line of the header to
+    // report that nothing happened is what made the top of the page noisy.
     const { mock } = controller();
     const modal = open(mock);
-    expect(modal.contentEl.textContent).toContain("No incremental suggestions.");
+    expect(modal.contentEl.textContent).not.toContain("No incremental suggestions");
     expect(modal.contentEl.querySelector(".arxiv-daily-interest-review__suggestions")).toBeNull();
   });
 
