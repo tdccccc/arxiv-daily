@@ -138,21 +138,22 @@ describe("review modal stylesheet", () => {
     expect(modal.modalEl.classList.contains("arxiv-daily-interest-review-modal")).toBe(true);
     const sheet = css();
     expect(sheet).toMatch(/\.arxiv-daily-interest-review-modal\s*\{[^}]*width:/);
-    // and the content element must not carry a width of its own any more
+    // The content element must not carry a width of its own; having no rule
+    // block at all satisfies that just as well as having one without a width.
     const content = /\.arxiv-daily-interest-review\s*\{([^}]*)\}/.exec(sheet);
-    expect(content).not.toBeNull();
-    expect(content![1]).not.toMatch(/(^|[^-])width:/);
+    if (content) expect(content[1]).not.toMatch(/(^|[^-])width:/);
   });
 
-  it("collapses the form by the modal's own width, never the window's", () => {
+  // Two columns inside a modal is what cut the name input in half and squeezed
+  // the paper list into a slit. One full-width column has nothing to collapse,
+  // so no width condition can bring the clipping back.
+  it("stacks the edit form in one column at every width", () => {
     const sheet = css();
-    expect(sheet).toMatch(/\.arxiv-daily-interest-review\s*\{[^}]*container-type:\s*inline-size/);
-    const containerBlocks = sheet.match(/@container[^{]*\{[\s\S]*?\n\}/g) ?? [];
-    expect(containerBlocks.some((block) =>
-      /\.arxiv-daily-interest-review__form\s*\{[^}]*grid-template-columns:\s*1fr/.test(block),
-    )).toBe(true);
-    const mediaBlocks = sheet.match(/@media[^{]*\{[\s\S]*?\n\}/g) ?? [];
-    expect(mediaBlocks.some((block) =>
+    const form = /\.arxiv-daily-interest-review__form\s*\{([^}]*)\}/.exec(sheet);
+    expect(form).not.toBeNull();
+    expect(form![1]).toMatch(/grid-template-columns:\s*1fr/);
+    const conditional = sheet.match(/@(?:media|container)[^{]*\{[\s\S]*?\n\}/g) ?? [];
+    expect(conditional.some((block) =>
       /\.arxiv-daily-interest-review__form\s*\{[^}]*grid-template-columns/.test(block),
     )).toBe(false);
   });

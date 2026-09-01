@@ -1733,16 +1733,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   overflow: auto;
 }
 
-.arxiv-daily-interest-review {
-  container-type: inline-size;
-}
-
-@container (max-width: 40rem) {
-  .arxiv-daily-interest-review__form {
-    grid-template-columns: 1fr;
-  }
-}
-
 .arxiv-daily-interest-review__disclosure,
 .arxiv-daily-interest-review__hint,
 .arxiv-daily-interest-review__diagnostic {
@@ -1840,11 +1830,18 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   text-transform: capitalize;
 }
 
+/* One full-width column at every width. Two columns inside a modal cut the
+   name input in half and squeezed the paper list into a slit; with a single
+   column there is nothing to collapse and no width condition to get wrong. */
 .arxiv-daily-interest-review__form {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr);
+  grid-template-columns: 1fr;
   gap: var(--size-4-3);
   margin-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__field select[multiple] {
+  min-height: 7rem;
 }
 
 .arxiv-daily-interest-review__field {
