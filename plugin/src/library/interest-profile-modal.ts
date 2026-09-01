@@ -37,10 +37,6 @@ export interface InterestProfileReviewController {
     patch: PersonalLibraryDirectionTextPatch;
     representativePaperKeys: string[];
   }): Promise<InterestProfileReviewSnapshot>;
-  mergeProposals(input: {
-    sourceCandidateIds: string[];
-    draft: PersonalLibraryReviewedDirectionDraft;
-  }): Promise<InterestProfileReviewSnapshot>;
   discardProposal(candidateId: string): Promise<InterestProfileReviewSnapshot>;
   confirmProposal(input: {
     candidateId: string;
@@ -253,11 +249,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const allowedKeys = proposalPaperKeys(snapshot);
     for (const candidate of candidates) {
       this.renderDirectionCard(parent, candidate, allowedKeys, "proposal", snapshot);
-    }
-    if (candidates.length > 0) {
-      const merge = parent.createEl("button", { text: "Merge selected proposals", attr: { type: "button" } });
-      merge.disabled = this.pending || this.selectedProposals.size < 2;
-      merge.addEventListener("click", () => void this.mergeSelectedProposals(snapshot));
     }
     this.renderBufferPool(parent, snapshot);
   }
@@ -749,29 +740,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     await this.run("accept selected directions", () => this.controller.confirmProposals({ confirmations }));
   }
 
-  private async mergeSelectedProposals(snapshot: InterestProfileReviewSnapshot): Promise<void> {
-    const ids = Array.from(this.selectedProposals).sort(codeUnitCompare);
-    if (ids.length < 2) return;
-    const draft = this.draft(ids[0]!);
-    if (!draft) return;
-    const names = ids.map((id) => snapshot.proposal?.candidates.find((candidate) => candidate.id === id)?.name)
-      .filter((name): name is string => Boolean(name));
-    const boundedNames = names.length === ids.length && names.every(isSafeConfirmationName);
-    const subjects = boundedNames ? ` (${names.join(", ")})` : "";
-    const choice = await chooseModal(
-      this.app,
-      "Merge proposed directions",
-      `Merge ${ids.length} selected proposed directions${subjects}? This replaces the source proposals with one newly identified proposal.`,
-      [
-        { label: "Cancel", value: "cancel" },
-        { label: "Merge proposals", value: "merge", warning: true },
-      ],
-    );
-    if (choice !== "merge" || this.closed) return;
-    await this.run("merge proposed directions", () => this.controller.mergeProposals({ sourceCandidateIds: ids, draft }));
-    this.selectedProposals.clear();
-  }
-
   private async mergeSelectedConfirmed(): Promise<void> {
     const ids = Array.from(this.selectedConfirmed).sort(codeUnitCompare);
     if (ids.length < 2) return;
@@ -999,13 +967,4 @@ export function safeUserError(error: unknown): string {
     "proposal-invariant": "The generated proposal was invalid. Retry generation.",
   };
   return messages[code] ?? "Operation failed. Refresh and try again.";
-}
-
-function isSafeConfirmationName(name: string): boolean {
-  return name.length > 0
-    && name.length <= 60
-    && Array.from(name).every((character) => {
-      const code = character.charCodeAt(0);
-      return code >= 32 && code !== 127;
-    });
 }

@@ -97,7 +97,7 @@ function controller(initial = snapshot()) {
   const mock: InterestProfileReviewController = {
     snapshot: () => current,
     reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
-    updateProposal: update, mergeProposals: update, discardProposal: update, confirmProposal: update,
+    updateProposal: update, discardProposal: update, confirmProposal: update,
     confirmProposals: vi.fn(async () => current),
     updateConfirmed: update, mergeConfirmed: update, enable: update, disable: update, remove: update,
     applySuggestion: update, dismissSuggestion: update, lock: update, unlock: update,
@@ -209,6 +209,16 @@ describe("bulk acceptance of proposed directions", () => {
     await vi.waitFor(() =>
       expect(modal.contentEl.textContent).toContain("Generating… (2/5)"));
     release();
+  });
+
+  it("offers no merge on the proposed tab", () => {
+    // Generation already merges same-direction candidates across clusters, and
+    // one shared selection that defaults to everything made a merge button a
+    // way to fold every direction into one by accident. Merging confirmed
+    // directions is unaffected.
+    const modal = open(controller(twoCandidates()).mock);
+    const labels = Array.from(modal.contentEl.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels.some((label) => label?.includes("Merge"))).toBe(false);
   });
 
   it("keeps the header to one disclosure line and one row of controls", () => {
@@ -403,35 +413,14 @@ describe("personal library interest profile modal", () => {
     expect(button(modal.contentEl, "Merge selected confirmed directions").disabled).toBe(true);
   });
 
-  it("merges two proposals and two terminal confirmed directions with reviewed fields and explicit status", async () => {
-    const secondCandidate = { ...candidate, id: "candidate-2", name: "Second", lineage: { candidateIds: ["candidate-2"] } };
+  it("merges two terminal confirmed directions with reviewed fields and explicit status", async () => {
     const secondDirection = { ...direction, id: "direction-2", name: "Second confirmed" };
     const { mock } = controller(snapshot({
-      proposal: { ...snapshot().proposal!, candidates: [candidate, secondCandidate] },
       profile: { ...snapshot().profile!, directions: [direction, secondDirection] },
     }));
     const modal = open(mock);
-    let checkbox = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    checkbox = Array.from(modal.contentEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((item) => !item.checked)!;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    expect(button(modal.contentEl, "Merge selected proposals").disabled).toBe(false);
-    button(modal.contentEl, "Merge selected proposals").click();
-    await vi.waitFor(() => expect(Modal.opened.at(-1)!.contentEl.textContent).toContain("Merge 2 selected proposed directions (Agents, Second)"));
-    button(Modal.opened.at(-1)!.contentEl, "Cancel").click();
-    await Promise.resolve();
-    expect(mock.mergeProposals).not.toHaveBeenCalled();
-    button(modal.contentEl, "Merge selected proposals").click();
-    await confirmChoice("Merge proposals");
-    await vi.waitFor(() => expect(mock.mergeProposals).toHaveBeenCalledWith(expect.objectContaining({
-      sourceCandidateIds: ["candidate-1", "candidate-2"],
-    })));
-
-    await vi.waitFor(() => expect(button(modal.contentEl, "Refresh").disabled).toBe(false));
     button(modal.contentEl, "Confirmed").click();
-    checkbox = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    let checkbox = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change"));
     checkbox = Array.from(modal.contentEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((item) => !item.checked)!;

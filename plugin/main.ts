@@ -790,7 +790,6 @@ export default class ArxivDailyPlugin extends Plugin {
       },
       generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
-      mergeProposals: (input) => this.mergePersonalLibraryProposalCandidates(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       confirmProposal: (input) => this.confirmPersonalLibraryProposalCandidate(input),
       confirmProposals: (input) => this.confirmPersonalLibraryProposalCandidates(input),
