@@ -47,6 +47,7 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 disablePersonalLibraryConfirmedDirection,
 enablePersonalLibraryConfirmedDirection,
+type DirectionProposalProgress,
 type FilterValidationLibraryState,
 evaluatePersonalLibraryInterestEligibility,
 mergePersonalLibraryConfirmedDirections,
@@ -787,7 +788,7 @@ export default class ArxivDailyPlugin extends Plugin {
         });
         return this.reloadPersonalLibraryProfileDocuments();
       },
-      generate: () => this.generatePersonalLibraryDirections(),
+      generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       mergeProposals: (input) => this.mergePersonalLibraryProposalCandidates(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
@@ -930,7 +931,9 @@ export default class ArxivDailyPlugin extends Plugin {
     return this.getPersonalLibraryProfileSnapshot();
   }
 
-  async generatePersonalLibraryDirections(): Promise<PersonalLibraryDirectionProposal> {
+  async generatePersonalLibraryDirections(
+    onProgress?: (progress: DirectionProposalProgress) => void,
+  ): Promise<PersonalLibraryDirectionProposal> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
     if (this.getLibraryConnectionStatus().kind !== "authorized") {
@@ -965,6 +968,17 @@ export default class ArxivDailyPlugin extends Plugin {
         llm: new LlmClient(llmSettings, this.logger, this.host.http),
         signal: operation.signal,
         createId: () => crypto.randomUUID(),
+        onProgress: (progress) => {
+          // The status bar serves the command-palette path; a caller with a
+          // modal open covers it and reports progress itself.
+          this.progress?.setTask(
+            "Generating personal library directions",
+            progress.phase === "synthesis"
+              ? "merging directions across clusters"
+              : `naming directions (${progress.completed}/${progress.total})`,
+          );
+          onProgress?.(progress);
+        },
       });
       operation.signal.throwIfAborted();
       this.assertPersonalLibraryGenerationCurrent({

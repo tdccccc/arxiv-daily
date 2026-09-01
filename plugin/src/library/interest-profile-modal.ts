@@ -7,6 +7,7 @@ import {
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   isThinEvidenceDirectionCandidate,
+  type DirectionProposalProgress,
   type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
   type PersonalLibraryClusterMember,
@@ -30,7 +31,7 @@ export interface InterestProfileReviewSnapshot
 export interface InterestProfileReviewController {
   snapshot(): InterestProfileReviewSnapshot;
   reload(): Promise<InterestProfileReviewSnapshot>;
-  generate(): Promise<unknown>;
+  generate(onProgress?: (progress: DirectionProposalProgress) => void): Promise<unknown>;
   updateProposal(input: {
     candidateId: string;
     patch: PersonalLibraryDirectionTextPatch;
@@ -96,6 +97,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private selectedConfirmed = new Set<string>();
   /** Identity of the proposal whose selection has already been seeded. */
   private preselectedProposal: string | null = null;
+  private generationProgress: DirectionProposalProgress | null = null;
   private fields = new Map<string, DirectionFields>();
 
   constructor(app: App, private readonly controller: InterestProfileReviewController) {
@@ -142,7 +144,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const actions = toolbar.createDiv({ cls: "arxiv-daily-interest-review__toolbar-actions" });
     const generation = generationAvailability(snapshot);
     const generate = actions.createEl("button", {
-      text: snapshot.proposal ? "Regenerate proposals" : "Generate proposals",
+      text: this.generationLabel(snapshot),
       attr: {
         type: "button",
         title: generation.allowed
@@ -635,10 +637,39 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       ]);
       if (choice !== "regenerate" || this.closed) return;
     }
-    await this.run("generate proposals", async () => {
-      await this.controller.generate();
-      return this.controller.reload();
-    });
+    // Progress lands on the button that started it: this modal covers the
+    // status bar, so anything reported there would be invisible here.
+    this.generationProgress = null;
+    try {
+      await this.run("generate proposals", async () => {
+        await this.controller.generate((progress) => {
+          this.generationProgress = progress;
+          this.updateGenerationLabel();
+        });
+        return this.controller.reload();
+      });
+    } finally {
+      this.generationProgress = null;
+    }
+  }
+
+  private generationLabel(snapshot: InterestProfileReviewSnapshot): string {
+    const progress = this.generationProgress;
+    if (progress) return `Generating… (${progress.completed}/${progress.total})`;
+    return snapshot.proposal ? "Regenerate proposals" : "Generate proposals";
+  }
+
+  /**
+   * Writes the count into the already-rendered button rather than re-rendering:
+   * generation reports once per cluster, and a full re-render would discard
+   * whatever the researcher is editing in an open row.
+   */
+  private updateGenerationLabel(): void {
+    if (this.closed) return;
+    const button = this.contentEl.querySelector<HTMLButtonElement>(
+      ".arxiv-daily-interest-review__toolbar-actions button",
+    );
+    if (button) button.textContent = this.generationLabel(this.controller.snapshot());
   }
 
   private saveProposal(id: string): void {

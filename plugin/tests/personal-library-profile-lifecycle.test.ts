@@ -86,7 +86,8 @@ function fixture() {
     settings,
     logger: { warn: vi.fn(), error: vi.fn(), setSensitiveValues: vi.fn() },
     host: { storage, http: {} },
-    progress: {},
+    // Direction generation reports each cluster to the status bar.
+    progress: { setTask: vi.fn(), setIdle: vi.fn() },
     operations: new OperationRegistry(),
     libraryConnection: connection,
     libraryCatalog: catalog,

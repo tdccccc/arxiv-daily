@@ -679,6 +679,8 @@ export interface ProposeClusteredDirectionsOptions {
   onMetrics?: MetricsObserver;
   now?: () => Date;
   createId: (kind: "proposal" | "candidate", ordinal: number) => string;
+  /** Reports each finished extraction and the start of synthesis. */
+  onProgress?: (progress: DirectionProposalProgress) => void;
 }
 
 /**
@@ -772,6 +774,16 @@ export function createPersonalLibraryClusteredDirectionGenerationContract(
  * the review interface derives the outlier buffer pool by subtracting each
  * candidate's clusterMembers from catalogInputPapers.
  */
+/**
+ * Direction generation makes one model call per cluster plus one synthesis
+ * call, so `total` is clusters + 1 and synthesis is the last unit of work.
+ */
+export interface DirectionProposalProgress {
+  readonly phase: "extraction" | "synthesis";
+  readonly completed: number;
+  readonly total: number;
+}
+
 export async function proposeClusteredPersonalLibraryDirections(
   options: ProposeClusteredDirectionsOptions,
 ): Promise<PersonalLibraryDirectionProposal> {
@@ -852,6 +864,9 @@ export async function proposeClusteredPersonalLibraryDirections(
   // that they are the same direction (ADR 0009).
   const provisional: PersonalLibraryDirectionModelCandidate[] = [];
   const clusterMembersByPaperKey = new Map<string, readonly PersonalLibraryClusterMember[]>();
+  // One call per cluster, then one synthesis call across their combined output.
+  const progressTotal = clustering.clusters.length + 1;
+  let extractedClusters = 0;
   for (const cluster of clustering.clusters) {
     throwIfCancelled(options.signal);
     const clusterPapers = cluster.paperKeys.map((paperKey) => catalog.papers[paperKey]!);
@@ -884,6 +899,8 @@ export async function proposeClusteredPersonalLibraryDirections(
     // members from the clusters its representatives came from.
     for (const paperKey of cluster.paperKeys) clusterMembersByPaperKey.set(paperKey, clusterMembers);
     provisional.push(...result.candidates);
+    extractedClusters += 1;
+    options.onProgress?.({ phase: "extraction", completed: extractedClusters, total: progressTotal });
   }
 
   throwIfCancelled(options.signal);
@@ -893,6 +910,7 @@ export async function proposeClusteredPersonalLibraryDirections(
   // intersected with the clustering input so nothing outside the evidence can
   // enter. Synthesis may merge and may rename, but it never drops a candidate
   // the researcher would otherwise have been able to correct (ADR 0009 §2).
+  options.onProgress?.({ phase: "synthesis", completed: progressTotal - 1, total: progressTotal });
   const synthesisInput = canonicalizeSynthesisInput(provisional);
   const clusteringInputKeys = new Set(clusteringInput.map(({ paperKey }) => paperKey));
   const allowedFinal = new Set(

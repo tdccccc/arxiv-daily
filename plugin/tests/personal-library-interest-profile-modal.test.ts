@@ -189,6 +189,27 @@ describe("bulk acceptance of proposed directions", () => {
     });
   }
 
+  it("reports generation progress on the button that started it", async () => {
+    // The modal covers the status bar, so progress reported there would be
+    // invisible to the person who pressed the button — the same trap the
+    // settings page hit with Build index.
+    const { mock } = controller(twoCandidates());
+    let report!: (progress: { phase: string; completed: number; total: number }) => void;
+    let release!: () => void;
+    vi.mocked(mock.generate).mockImplementation((onProgress?: any) => new Promise((resolve) => {
+      report = onProgress;
+      release = () => resolve(undefined);
+    }));
+    const modal = open(mock);
+    button(modal.contentEl, "Regenerate proposals").click();
+    await confirmChoice("Regenerate");
+    await vi.waitFor(() => expect(report).toBeTruthy());
+    report({ phase: "extraction", completed: 2, total: 5 });
+    await vi.waitFor(() =>
+      expect(modal.contentEl.textContent).toContain("Generating… (2/5)"));
+    release();
+  });
+
   it("keeps the header to one disclosure line and one row of controls", () => {
     const modal = open(controller(twoCandidates()).mock);
     const text = modal.contentEl.textContent ?? "";
