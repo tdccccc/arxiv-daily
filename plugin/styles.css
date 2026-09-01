@@ -1722,12 +1722,18 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 
 /* Personal library direction review */
+/* The modal box carries the width; the content element only declares itself a
+   container so the form below can collapse on the box's own inline size. */
+.arxiv-daily-interest-review-modal {
+  width: min(94vw, 68rem);
+  max-height: min(90vh, 52rem);
+  /* Obsidian modals are not resizable; the review list benefits from being
+     widened by hand when a description runs long. */
+  resize: horizontal;
+  overflow: auto;
+}
+
 .arxiv-daily-interest-review {
-  width: min(60rem, 92vw);
-  /* The two-column form below has a hard minimum of 12rem + 16rem. Whether it
-     fits is a property of this modal, which sizes itself independently of the
-     window; keying the collapse on the viewport let the modal be narrower than
-     its own content and clip it. */
   container-type: inline-size;
 }
 
@@ -1854,10 +1860,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 @media (max-width: 700px) {
-  .arxiv-daily-interest-review {
-    width: auto;
-  }
-
   .arxiv-daily-interest-review__toolbar,
   .arxiv-daily-interest-review__section-actions {
     align-items: stretch;

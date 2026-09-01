@@ -121,6 +121,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const root = this.contentEl;
     root.empty();
     root.addClass("arxiv-daily-interest-review");
+    // Width belongs on the modal box: Obsidian sizes .modal itself, so asking
+    // the content element to be wide only makes it overflow and clip.
+    this.modalEl.addClass("arxiv-daily-interest-review-modal");
     root.createEl("h2", { text: "Review personal library directions" });
     root.createEl("p", {
       cls: "arxiv-daily-interest-review__disclosure",

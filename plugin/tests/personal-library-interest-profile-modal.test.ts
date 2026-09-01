@@ -130,6 +130,20 @@ describe("review modal stylesheet", () => {
   // is a property of the modal, which sizes itself with min(60rem, 92vw) — not
   // of the window. Keying the collapse on the window let the modal be narrower
   // than its own content and clip it.
+  // Width has to be asked of the modal box. Obsidian sizes .modal itself, so a
+  // wide rule on the content element inside it cannot widen anything — the
+  // content simply overflows the box and is clipped, which is what happened.
+  it("sizes the modal box, not the content inside it", () => {
+    const modal = open(controller().mock);
+    expect(modal.modalEl.classList.contains("arxiv-daily-interest-review-modal")).toBe(true);
+    const sheet = css();
+    expect(sheet).toMatch(/\.arxiv-daily-interest-review-modal\s*\{[^}]*width:/);
+    // and the content element must not carry a width of its own any more
+    const content = /\.arxiv-daily-interest-review\s*\{([^}]*)\}/.exec(sheet);
+    expect(content).not.toBeNull();
+    expect(content![1]).not.toMatch(/(^|[^-])width:/);
+  });
+
   it("collapses the form by the modal's own width, never the window's", () => {
     const sheet = css();
     expect(sheet).toMatch(/\.arxiv-daily-interest-review\s*\{[^}]*container-type:\s*inline-size/);
