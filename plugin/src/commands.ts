@@ -56,7 +56,11 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   };
 
   function gateFilter(): boolean {
-    const v = validateFilterConfig(plugin.settings);
+    const v = validateFilterConfig(plugin.settings, {
+      // Optional at the call site: hosts that cannot answer fall back to the
+      // topic-only rule, which is exactly the behaviour they had before.
+      library: plugin.personalLibraryFilterState?.(),
+    });
     if (!v.ok) {
       notice(`arXiv Daily — cannot run:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
       return false;

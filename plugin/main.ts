@@ -47,6 +47,7 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 disablePersonalLibraryConfirmedDirection,
 enablePersonalLibraryConfirmedDirection,
+type FilterValidationLibraryState,
 evaluatePersonalLibraryInterestEligibility,
 mergePersonalLibraryConfirmedDirections,
 mergePersonalLibraryDirectionCandidates,
@@ -830,6 +831,22 @@ export default class ArxivDailyPlugin extends Plugin {
       this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
     }
     return structuredClone(catalog);
+  }
+
+  /**
+   * Personal library state for the pre-run configuration check. Eligibility,
+   * not the raw confirmed count, is what can carry a run: a disabled direction
+   * or one whose representative evidence went missing would only produce an
+   * empty report (ADR 0010).
+   */
+  personalLibraryFilterState(): FilterValidationLibraryState {
+    return {
+      connected: Boolean(this.libraryConnection),
+      eligibleDirections: evaluatePersonalLibraryInterestEligibility(
+        this.libraryProfile,
+        this.libraryCatalog,
+      ).eligibleDirections.length,
+    };
   }
 
   getPersonalLibraryProfileSnapshot(): PersonalLibraryProfileSnapshot {

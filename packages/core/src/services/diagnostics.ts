@@ -1,6 +1,7 @@
 import type { PluginSettings, RunState, RunStateEntry } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
 import { validateFilterConfig, validateLlmConfig } from "../settings/validation";
+import type { FilterValidationLibraryState } from "../settings/validation";
 import { daysBefore, formatDate, isWeekendDate, todayInTz } from "../utils/time";
 import { redactText, redactUrl } from "../utils/redaction";
 
@@ -11,6 +12,9 @@ export interface DiagnosticsInput {
   now?: Date;
   recentLimit?: number;
   paperIndex?: PaperIndexDiagnostics;
+  /** Omitted by hosts without a personal library, which keeps the report's
+   * readiness verdict exactly what it was for them. */
+  library?: FilterValidationLibraryState;
 }
 
 export interface PaperIndexDiagnostics {
@@ -37,7 +41,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
   const version = input.version?.trim() || "unknown";
   const recentLimit = input.recentLimit ?? 10;
   const llmValidation = validateLlmConfig(settings);
-  const filterValidation = validateFilterConfig(settings);
+  const filterValidation = validateFilterConfig(settings, input.library ? { library: input.library } : {});
   const dateContext = getDateContext(now, settings, runState);
   const recentEntries = Object.entries(runState)
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))

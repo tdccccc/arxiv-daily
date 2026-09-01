@@ -616,7 +616,11 @@ class ArxivDailyDashboardView extends ItemView {
     contentEl: HTMLElement,
     result: ReturnType<typeof queryDashboard>,
   ): void {
-    const setup = getSetupStatus(this.plugin.settings);
+    const setup = getSetupStatus(
+      this.plugin.settings,
+      {},
+      this.plugin.personalLibraryFilterState?.(),
+    );
     const state = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__empty",
     });
@@ -1255,7 +1259,11 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async runDateFromCalendar(date: string): Promise<void> {
-    const setup = getSetupStatus(this.plugin.settings);
+    const setup = getSetupStatus(
+      this.plugin.settings,
+      {},
+      this.plugin.personalLibraryFilterState?.(),
+    );
     if (!setup.readyToRun) {
       logSetupStatus(this.plugin.logger, "dashboard calendar run blocked", setup);
       this.notice("arXiv Daily: Please complete setup first");
@@ -2113,7 +2121,9 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private gateFilter(): boolean {
-    const validation = validateFilterConfig(this.plugin.settings);
+    const validation = validateFilterConfig(this.plugin.settings, {
+      library: this.plugin.personalLibraryFilterState?.(),
+    });
     if (!validation.ok) {
       this.plugin.logger.info(
         `dashboard: filter validation failed (${validation.reasons.join("; ")})`,

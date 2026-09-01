@@ -366,6 +366,43 @@ describe("collectPaperIndexDiagnostics", () => {
 });
 
 describe("registerCommands", () => {
+  describe("running on library directions alone", () => {
+    function runNow(plugin: ReturnType<typeof makePlugin>) {
+      registerCommands(plugin as any);
+      const command = vi.mocked(plugin.addCommand).mock.calls
+        .map(([value]) => value)
+        .find((value) => value.id === "run-now");
+      command?.callback?.();
+    }
+
+    function withoutTopics(plugin: ReturnType<typeof makePlugin>) {
+      plugin.settings = {
+        ...DEFAULT_SETTINGS,
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+      };
+    }
+
+    it("runs with no hand-written topic when a library direction is eligible", async () => {
+      const plugin = makePlugin();
+      withoutTopics(plugin);
+      plugin.personalLibraryFilterState = vi.fn(() => ({ connected: true, eligibleDirections: 3 }));
+      runNow(plugin);
+      await vi.waitFor(() => expect(plugin.scheduler.runForDateNow).toHaveBeenCalledOnce());
+    });
+
+    it("still refuses with neither topics nor eligible directions, and says which", async () => {
+      Notice.calls = [];
+      const plugin = makePlugin();
+      withoutTopics(plugin);
+      plugin.personalLibraryFilterState = vi.fn(() => ({ connected: true, eligibleDirections: 0 }));
+      runNow(plugin);
+      await vi.waitFor(() => expect(Notice.calls.length).toBeGreaterThan(0));
+      expect(plugin.scheduler.runForDateNow).not.toHaveBeenCalled();
+      expect(Notice.calls.at(-1)?.message).toMatch(/library/i);
+    });
+  });
+
   it("registers the run history viewer command", () => {
     const plugin = makePlugin();
 
