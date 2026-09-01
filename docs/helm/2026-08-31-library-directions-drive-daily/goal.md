@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-08-31T22:05:18+08:00
-updated: 2026-09-01T20:31:00+08:00
-revision: 8
+updated: 2026-09-01T20:32:18+08:00
+revision: 9
 owner: claude-code-main-session
 
 ## Intent
@@ -46,6 +46,7 @@ owner: claude-code-main-session
 3. P3 — 已确认方向可独立满足日报的前置检查 — status: done
 4. P4 — 待复核的条目数量与入口出现在 Dashboard 上 — status: pending
 5. P5 — 端到端跑出一篇带文献库来源的真实日报 — status: pending
+6. P6 — Proposed 页可扫读：折叠详情、主操作可见、不被裁切 — status: active
 
 ## Open questions
 
