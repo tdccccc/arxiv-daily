@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Modal, type App } from "obsidian";
 import {
   PersonalLibraryInterestProfileModal,
@@ -121,6 +123,27 @@ async function confirmChoice(text: string): Promise<void> {
   await Promise.resolve();
 }
 
+describe("review modal stylesheet", () => {
+  const css = (): string => readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
+
+  // The two-column form has a hard minimum of 12rem + 16rem. Whether it fits
+  // is a property of the modal, which sizes itself with min(60rem, 92vw) — not
+  // of the window. Keying the collapse on the window let the modal be narrower
+  // than its own content and clip it.
+  it("collapses the form by the modal's own width, never the window's", () => {
+    const sheet = css();
+    expect(sheet).toMatch(/\.arxiv-daily-interest-review\s*\{[^}]*container-type:\s*inline-size/);
+    const containerBlocks = sheet.match(/@container[^{]*\{[\s\S]*?\n\}/g) ?? [];
+    expect(containerBlocks.some((block) =>
+      /\.arxiv-daily-interest-review__form\s*\{[^}]*grid-template-columns:\s*1fr/.test(block),
+    )).toBe(true);
+    const mediaBlocks = sheet.match(/@media[^{]*\{[\s\S]*?\n\}/g) ?? [];
+    expect(mediaBlocks.some((block) =>
+      /\.arxiv-daily-interest-review__form\s*\{[^}]*grid-template-columns/.test(block),
+    )).toBe(false);
+  });
+});
+
 describe("bulk acceptance of proposed directions", () => {
   const secondPaper = {
     paperKey: "arxiv:2608.00002", source: "arxiv", externalId: "2608.00002", title: "Second paper",
@@ -152,6 +175,26 @@ describe("bulk acceptance of proposed directions", () => {
     });
   }
 
+  it("lists candidates as summary rows with the edit form collapsed", () => {
+    const modal = open(controller(twoCandidates()).mock);
+    // The row alone tells you what the candidate is and how much backs it.
+    expect(modal.contentEl.textContent).toContain("Well evidenced");
+    expect(modal.contentEl.textContent).toContain("1 cue · 2 papers");
+    expect(modal.contentEl.textContent).toContain("1 cue · 1 paper");
+    const details = Array.from(
+      modal.contentEl.querySelectorAll<HTMLDetailsElement>(".arxiv-daily-interest-review__detail"),
+    );
+    expect(details).toHaveLength(2);
+    expect(details.every((item) => !item.open)).toBe(true);
+    // Nothing is lost: the form and its actions live inside the collapsed part.
+    expect(details[0]!.querySelector("textarea")).not.toBeNull();
+    expect(Array.from(details[0]!.querySelectorAll("button")).map((b) => b.textContent))
+      .toEqual(expect.arrayContaining(["Save edits", "Confirm active", "Discard"]));
+    // and no form control is left outside a collapsed detail
+    expect(modal.contentEl.querySelectorAll("textarea").length)
+      .toBe(details.reduce((sum, item) => sum + item.querySelectorAll("textarea").length, 0));
+  });
+
   it("preselects every candidate except the ones with thin evidence", () => {
     const modal = open(controller(twoCandidates()).mock);
     const boxes = Array.from(modal.contentEl.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
@@ -159,10 +202,24 @@ describe("bulk acceptance of proposed directions", () => {
     expect(modal.contentEl.textContent).toContain("thin evidence");
   });
 
+  it("puts the primary action above the list and counts what is selected", () => {
+    const modal = open(controller(twoCandidates()).mock);
+    const accept = Array.from(modal.contentEl.querySelectorAll("button"))
+      .find((item) => item.textContent?.startsWith("Accept selected"));
+    const firstCard = modal.contentEl.querySelector(".arxiv-daily-interest-review__card");
+    expect(accept).toBeTruthy();
+    expect(firstCard).toBeTruthy();
+    // DOCUMENT_POSITION_FOLLOWING: the first card comes after the button
+    expect(accept!.compareDocumentPosition(firstCard!) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    // one of the two candidates is thin and starts unselected
+    expect(accept!.textContent).toBe("Accept selected (1)");
+  });
+
   it("accepts only the selected candidates in one call", async () => {
     const { mock } = controller(twoCandidates());
     const modal = open(mock);
-    button(modal.contentEl, "Accept selected").click();
+    button(modal.contentEl, "Accept selected (1)").click();
     await vi.waitFor(() => expect(mock.confirmProposals).toHaveBeenCalledTimes(1));
     const [input] = vi.mocked(mock.confirmProposals).mock.calls[0]!;
     expect(input.confirmations.map(({ candidateId }) => candidateId)).toEqual(["candidate-thick"]);

@@ -1724,6 +1724,17 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 /* Personal library direction review */
 .arxiv-daily-interest-review {
   width: min(60rem, 92vw);
+  /* The two-column form below has a hard minimum of 12rem + 16rem. Whether it
+     fits is a property of this modal, which sizes itself independently of the
+     window; keying the collapse on the viewport let the modal be narrower than
+     its own content and clip it. */
+  container-type: inline-size;
+}
+
+@container (max-width: 40rem) {
+  .arxiv-daily-interest-review__form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .arxiv-daily-interest-review__disclosure,
@@ -1784,6 +1795,32 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   flex: 1 1 14rem;
 }
 
+.arxiv-daily-interest-review__summary {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-interest-review__detail > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-block-start: var(--size-4-2);
+}
+
+/* The primary action stays reachable while scanning a long list rather than
+   sitting a full scroll below the rows it acts on. */
+.arxiv-daily-interest-review__accept-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: var(--size-4-2);
+  background: var(--modal-background);
+}
+
 .arxiv-daily-interest-review__status {
   padding: 0 var(--size-4-2);
   border-radius: var(--radius-s);
@@ -1819,10 +1856,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 @media (max-width: 700px) {
   .arxiv-daily-interest-review {
     width: auto;
-  }
-
-  .arxiv-daily-interest-review__form {
-    grid-template-columns: 1fr;
   }
 
   .arxiv-daily-interest-review__toolbar,

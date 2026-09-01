@@ -229,19 +229,27 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
     // A load error can leave no proposal at all while still rendering the tab.
     if (snapshot.proposal) this.preselectProposals(snapshot.proposal, candidates);
+    // The primary action sits above the list: with a dozen candidates it would
+    // otherwise be a full scroll away from the rows it acts on.
+    if (candidates.length > 0) {
+      const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
+      const accept = bar.createEl("button", {
+        text: `Accept selected (${this.selectedProposals.size})`,
+        attr: { type: "button" },
+      });
+      accept.addClass("mod-cta");
+      accept.disabled = this.pending || this.selectedProposals.size === 0;
+      accept.addEventListener("click", () => void this.acceptSelectedProposals());
+      bar.createSpan({
+        cls: "arxiv-daily-interest-review__hint",
+        text: "Accepting confirms every selected direction as active in one step. Directions can be edited, disabled, or removed afterwards.",
+      });
+    }
     const allowedKeys = proposalPaperKeys(snapshot);
     for (const candidate of candidates) {
       this.renderDirectionCard(parent, candidate, allowedKeys, "proposal", snapshot);
     }
     if (candidates.length > 0) {
-      const accept = parent.createEl("button", { text: "Accept selected", attr: { type: "button" } });
-      accept.addClass("mod-cta");
-      accept.disabled = this.pending || this.selectedProposals.size === 0;
-      accept.addEventListener("click", () => void this.acceptSelectedProposals());
-      parent.createSpan({
-        cls: "arxiv-daily-interest-review__hint",
-        text: "Accepting confirms every selected direction as active in one step. Directions can be edited, disabled, or removed afterwards.",
-      });
       const merge = parent.createEl("button", { text: "Merge selected proposals", attr: { type: "button" } });
       merge.disabled = this.pending || this.selectedProposals.size < 2;
       merge.addEventListener("click", () => void this.mergeSelectedProposals(snapshot));
@@ -321,8 +329,20 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if ("lockedAt" in direction && direction.lockedAt !== undefined) {
       heading.createSpan({ text: "locked", cls: "arxiv-daily-interest-review__status is-locked" });
     }
+    if (kind === "proposal") {
+      heading.createSpan({
+        cls: "arxiv-daily-interest-review__summary",
+        text: directionRowSummary(direction),
+      });
+    }
 
-    const form = card.createDiv({ cls: "arxiv-daily-interest-review__form" });
+    // Proposals are reviewed by scanning many rows and deselecting a few, so
+    // the editor is collapsed behind the row rather than stacked in front of
+    // it; nothing is removed, only folded away until it is wanted.
+    const body = kind === "proposal"
+      ? this.createCardDetail(card)
+      : card;
+    const form = body.createDiv({ cls: "arxiv-daily-interest-review__form" });
     const name = this.textField(form, "Name", direction.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH);
     const description = this.textArea(form, "Description", direction.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH, 3);
     const cues = this.textArea(form, "Discovery cues (one per line)", direction.discoveryCues.join("\n"), undefined, 4);
@@ -330,7 +350,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const representatives = this.representativeSelect(form, allowedPaperKeys, direction.representatives.map((item) => item.paperKey));
     this.fields.set(direction.id, { name, description, cues, representatives });
 
-    const evidence = card.createEl("details", { cls: "arxiv-daily-interest-review__evidence" });
+    const evidence = body.createEl("details", { cls: "arxiv-daily-interest-review__evidence" });
     evidence.createEl("summary", { text: `Evidence: ${direction.representatives.length} representative paper(s), metadata and abstract only` });
     const list = evidence.createEl("ul");
     for (const representative of direction.representatives) {
@@ -339,18 +359,29 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
 
     if (direction.clusterMembers && direction.clusterMembers.length > 0) {
-      this.renderClusterMembers(card, direction.clusterMembers, snapshot);
+      this.renderClusterMembers(body, direction.clusterMembers, snapshot);
     }
     if (kind === "confirmed") {
-      this.renderConfirmedDiagnostics(card, direction as PersonalLibraryConfirmedDirection, snapshot);
-      this.renderTimeline(card, (direction as PersonalLibraryConfirmedDirection).timeline);
+      this.renderConfirmedDiagnostics(body, direction as PersonalLibraryConfirmedDirection, snapshot);
+      this.renderTimeline(body, (direction as PersonalLibraryConfirmedDirection).timeline);
     }
-    const actions = card.createDiv({ cls: "arxiv-daily-interest-review__card-actions" });
+    const actions = body.createDiv({ cls: "arxiv-daily-interest-review__card-actions" });
     const save = actions.createEl("button", { text: "Save edits", attr: { type: "button" } });
     save.disabled = this.pending || !terminal;
     save.addEventListener("click", () => kind === "proposal" ? this.saveProposal(direction.id) : this.saveConfirmed(direction.id));
     if (kind === "proposal") this.renderProposalActions(actions, direction.id);
     else this.renderConfirmedActions(actions, direction as PersonalLibraryConfirmedDirection);
+  }
+
+  /**
+   * The collapsed half of a proposal row. Rendering it closed on every render
+   * is deliberate: a re-render follows selection changes and saves, and a row
+   * that reopened itself would fight the scan the list exists for.
+   */
+  private createCardDetail(card: HTMLElement): HTMLElement {
+    const detail = card.createEl("details", { cls: "arxiv-daily-interest-review__detail" });
+    detail.createEl("summary", { text: "Edit this direction" });
+    return detail;
   }
 
   private renderProposalActions(parent: HTMLElement, candidateId: string): void {
@@ -787,6 +818,17 @@ export function openPersonalLibraryInterestProfileModal(
   const modal = new PersonalLibraryInterestProfileModal(app, controller);
   modal.open();
   return modal;
+}
+
+/**
+ * What a collapsed row has to say for itself: how many cues describe the
+ * direction and how much library evidence stands behind it. Both numbers are
+ * already on the candidate; nothing is computed or fetched for the row.
+ */
+export function directionRowSummary(direction: EditableDirection): string {
+  const cues = direction.discoveryCues.length;
+  const papers = direction.representatives.length;
+  return `${cues} ${cues === 1 ? "cue" : "cues"} · ${papers} ${papers === 1 ? "paper" : "papers"}`;
 }
 
 export function normalizeLines(value: string): string[] {
