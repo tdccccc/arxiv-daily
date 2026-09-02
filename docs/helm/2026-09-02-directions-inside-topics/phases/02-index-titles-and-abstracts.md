@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-02T23:30:00+08:00
-revision: 4
+updated: 2026-09-02T23:35:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -74,7 +74,9 @@ revision: 4
 - **改动面**：core 的 `PdfExtractionOptions` 加可选 `maxPages`，plugin 的 `pdf-text-extractor.ts:229` 逐页循环改上界。用户 2026-09-02 定：做。
 - **「只截断不少解析」是本 chunk 唯一会骗人的失败模式**，所以取红判据落在 `getPage` 调用次数上，不落在返回页数上。
 - exception: 无
-- [ ] implementation and tests accepted
+- **已完成**。`PdfExtractionOptions` 与 `ParseDocumentOptions` 各加可选 `maxPages`，`pdf-text-extractor.ts` 的逐页循环收上界。契约明写**解析器可以忽略它**，调用方不得假定结果已被限长——sidecar 那条路径就不吃这个选项。不传 `maxPages` 时行为逐字不变。
+- 三条新断言，核心那条数的是 `getPage` 调用次数：解析全篇再 `slice` 能满足「返回两页」却一点不省，正是本 chunk 要防的假绿。
+- [x] implementation and tests accepted
 
 ### Chunk 4 — 索引改走 extractor + 摘要提取，产出一到两块
 

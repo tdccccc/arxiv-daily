@@ -151,3 +151,13 @@
 - validation: 新增 10 条测试全绿；core 全量 **2060 项**（P1 时 2050，新增 10）、typecheck 四包、lint 0 error（20 warning 既有基线）、check:boundaries OK。
 - boundary: 新模块尚未被任何地方引用，索引仍走全文——接线是 Chunk 3。筛选管线一行未动。
 - next: Chunk 3——把索引的文本来源换成它，并把解析范围收到前两页。取红判据要落在**解析范围**上而不是块数上：块数少可以靠截断伪造，「不解析全文」才是「分钟级」赖以成立的那件事。
+
+## 2026-09-02 — P2 Chunk 3 done：解析加页数上界
+
+- evidence: 接线前发现 `PdfTextExtractor` 的选项里**只有 `signal`，没有页范围**——「只解析前两页」在当前契约下根本表达不出来。这是 revision 3 的单个 Chunk 3 没料到的：它跨到宿主。用户定：加 `maxPages`。
+- change: `PdfExtractionOptions` 与 `ParseDocumentOptions` 各加可选 `maxPages`；`pdf-text-extractor.ts:229` 的逐页循环收上界。**契约明写「解析器可以忽略它，调用方不得假定结果已被限长」**——sidecar 那条路径吃不下这个选项，与其假装统一，不如把差异写进契约。
+- **取红判据落在 `getPage` 调用次数上，不在返回页数上**，这是本 chunk 唯一值得设计的一条：解析全篇再 `slice(0,2)` 能让「返回两页」的断言变绿，却一点解析时间都不省——而省解析正是这个改动存在的全部理由。断言写成「第 3 页从未被打开」，假实现就过不去。
+- disposition: 不传 `maxPages` 时行为逐字不变，既有 extractor 测试全绿即是这条的判据。
+- validation: plugin **721/721**（P1 时 718，新增 3）、core 2060、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。
+- boundary: 索引仍在走全文分块——`maxPages` 只是把能力加上，真正用它是 Chunk 4。ADR 0005/0007/0008 未动。
+- next: Chunk 4——索引改走 extractor + 摘要提取，产出一到两块；结构化 parser 在索引路径上退场（用户已定）；标题提取改为对所有论文生效，因为 catalog 有标题的只有 1.4%。
