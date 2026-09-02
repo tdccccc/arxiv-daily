@@ -1,9 +1,9 @@
 # 方向住进主题（directions inside topics）
 
-status: proposed
+status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-02T12:50:27+08:00
-revision: 1
+updated: 2026-09-02T13:07:28+08:00
+revision: 2
 owner: claude-code-main-session
 
 ## Intent
@@ -41,7 +41,7 @@ owner: claude-code-main-session
 ## Phases
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
-1. P1 — 主题带方向列表，老 description 可回滚地迁移 — status: pending
+1. P1 — 主题带方向列表，老 description 可回滚地迁移 — status: active
 2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: pending
 3. P3 — 筛选按方向工作，日报标出命中的方向 — status: pending
 4. P4 — 首次扫库提议整套主题与方向 — status: pending
