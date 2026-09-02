@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-02T23:52:00+08:00
-revision: 6
+updated: 2026-09-03T00:05:00+08:00
+revision: 7
 
 ## Outcome
 
@@ -90,6 +90,8 @@ revision: 6
 - **标题提取要对所有论文生效，不再只对 fallback**：catalog 有标题的只有 1.4%，维持现状会让 98.6% 的论文没有标题进索引。`extractTitleFromFirstPage` 本就是针对这个库调优的（26 条测试在），改的是调用条件不是算法。
 - catalog 有摘要时是否优先用它？**不用**——用户定的是以 PDF 内容为准，且双来源会让同一个库里的文本失去可比性，聚类相似度跟着不可比。
 - exception: 无
+- **进行中。第一部分（extractor provenance）已完成并验证**：`PdfTextExtractor` 现在要求声明 provenance，与 parser 层对称；extractor 分支记录它，复用判定读它；Obsidian 的 extractor 报告它实际委托的那个 pdf.js parser 的 provenance。两条新测试——换 provenance 必须重建、不换必须复用且不重新解析。**变异检验把 provenance 从复用判定里拿掉后 7 条红**，确认「记录」与「判定」两处都被守着。core 2062 / plugin 721 / CLI 71 全绿。
+- **第二部分（索引改走 extractor + 摘要提取）未做**，它必然要动既有测试：现有断言里有「记录每篇实际选中的 parser」「parser derivation 变则重建」「sidecar 失败回退到 fallback parser 并记录后者」这几条，索引不再走 parser 之后它们全部失去对象。**这不是可以顺手改绿的事**——要逐条判定哪些是被本阶段正当取代、哪些是不该丢的保护（例如 sidecar 回退的正确性在别处仍然成立）。
 - [ ] implementation and tests accepted
 
 ### Chunk 5 — 抬 derivation 版本，强制全库重建
