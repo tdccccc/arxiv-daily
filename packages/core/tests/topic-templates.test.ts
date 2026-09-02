@@ -38,11 +38,16 @@ describe("TOPIC_TEMPLATES", () => {
     }
   });
 
-  it("every topic has a non-empty name and description", () => {
+  it("every topic has a non-empty name and at least one direction line", () => {
+    // A seed authors directions; `description` is derived from them when the
+    // template is applied, so it is not written here (ADR 0012).
     for (const t of TOPIC_TEMPLATES) {
       for (const topic of t.topics) {
         expect(topic.name.length).toBeGreaterThan(0);
-        expect(topic.description.length).toBeGreaterThan(0);
+        expect(topic.directions.length).toBeGreaterThan(0);
+        for (const line of topic.directions) {
+          expect(line.trim().length).toBeGreaterThan(0);
+        }
       }
     }
   });

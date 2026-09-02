@@ -1814,3 +1814,34 @@ describe("topic editing when the setup guide is not on screen", () => {
     tab.containerEl.remove();
   });
 });
+
+describe("topics created by the plugin", () => {
+  it("applies a quick-start template as topics with authored directions", async () => {
+    const { tab, settings } = makeTab();
+    vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+
+    await tab.applyTopicTemplate("astro-ml");
+
+    expect(settings.arxiv.topics).toHaveLength(3);
+    for (const topic of settings.arxiv.topics) {
+      expect(topic.directions).toHaveLength(1);
+      expect(topic.directions[0].origin).toBe("manual");
+      // The shadow an older build reads stays in step with the list.
+      expect(topic.description).toBe(topic.directions[0].text);
+    }
+    expect(settings.arxiv.topics[0].name).toBe("Photo-z");
+  });
+
+  it("adds a blank topic with no directions and an empty shadow", async () => {
+    const { tab, settings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+
+    await tab.addTopic();
+
+    const topic = settings.arxiv.topics.at(-1)!;
+    expect(topic.directions).toEqual([]);
+    expect(topic.description).toBe("");
+    expect(topic.tag).toBe("topic-1");
+  });
+});

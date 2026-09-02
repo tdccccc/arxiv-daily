@@ -29,7 +29,12 @@ import {
   type LogLevel,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
-import { TOPIC_TEMPLATES, deriveTopicDescription, normalizeTopic } from "@arxiv-daily/core";
+import {
+  TOPIC_TEMPLATES,
+  deriveTopicDescription,
+  normalizeTopic,
+  topicFromSeed,
+} from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
 import { slugify } from "@arxiv-daily/core";
 import {
@@ -956,9 +961,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const apply = async () => {
       settings.arxiv.category = tpl.category;
       settings.arxiv.categories = [tpl.category];
-      settings.arxiv.topics = tpl.topics.map((t) =>
-        normalizeTopic({ ...t, id: crypto.randomUUID() }),
-      );
+      settings.arxiv.topics = tpl.topics.map(topicFromSeed);
       await this.plugin.saveSettings();
       this.refreshSettings();
     };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { normalizeTopic } from "../src/settings/topics";
+import { normalizeTopic, topicFromSeed } from "../src/settings/topics";
+import { TOPIC_TEMPLATES } from "../src/settings/topic-templates";
 
 /**
  * The shadow invariant (ADR 0012, P1): `directions` is the authority and
@@ -106,5 +107,52 @@ describe("normalizeTopic — shadow invariant", () => {
     const out = normalizeTopic({ ...base, description: "Legacy.", directions: "nope" });
     expect(out.directions).toHaveLength(1);
     expect(out.directions[0].text).toBe("Legacy.");
+  });
+});
+
+describe("topicFromSeed — quick-start templates", () => {
+  it("authors a template topic's directions rather than migrating them", () => {
+    const template = TOPIC_TEMPLATES.find((t) => t.id === "astro-ml")!;
+    const topics = template.topics.map(topicFromSeed);
+
+    expect(topics).toHaveLength(3);
+    for (const topic of topics) {
+      // "migrated" would be a lie: nothing was carried over from an older
+      // format, the user picked a template.
+      expect(topic.directions.every((d) => d.origin === "manual")).toBe(true);
+      expect(topic.description).toBe(topic.directions[0].text);
+    }
+  });
+
+  it("keeps every template topic to a single direction for now", () => {
+    // Until filtering reads the whole list (P3), only the first direction
+    // reaches the classifier through the description shadow. More than one
+    // here would silently narrow what a new user matches.
+    for (const template of TOPIC_TEMPLATES) {
+      for (const seed of template.topics) {
+        expect(topicFromSeed(seed).directions).toHaveLength(1);
+      }
+    }
+  });
+
+  it("gives every template topic a name, a tag and a direction", () => {
+    for (const template of TOPIC_TEMPLATES) {
+      for (const seed of template.topics) {
+        const topic = topicFromSeed(seed);
+        expect(topic.name.trim().length).toBeGreaterThan(0);
+        expect(topic.tag.trim().length).toBeGreaterThan(0);
+        expect(topic.directions[0].text.trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("gives each applied template topic its own identity", () => {
+    const template = TOPIC_TEMPLATES.find((t) => t.id === "nlp")!;
+    const topicIds = template.topics.map((seed) => topicFromSeed(seed).id);
+    const directionIds = template.topics.flatMap(
+      (seed) => topicFromSeed(seed).directions.map((d) => d.id),
+    );
+    expect(new Set(topicIds).size).toBe(topicIds.length);
+    expect(new Set(directionIds).size).toBe(directionIds.length);
   });
 });

@@ -77,3 +77,15 @@
 - validation: plugin 716/716、typecheck 四包、lint 0 error、check:boundaries OK。产物已装入 plugin_test（main.js md5 `29ec7ce8`）。
 - **仍未交付**：Chunk 3 验收框继续不勾。
 - next: 用户复看徽标的显眼程度与整体观感。
+
+## 2026-09-02 — P1 Chunk 4+5 done：P1 完成
+
+- evidence: Chunk 4 取红在 `topicFromSeed` 不存在；Chunk 5 五条断言**一次全绿**，因此按本轮规矩做了变异检验——把 `deriveTopicDescription` 改成返回空串，五条全红（prompt 不等、`expected [ Array(2) ] to deeply equal []`、影子为空、往返取不到 text），再还原。
+- change（Chunk 4）: 模板种子由 `{ description }` 改为 `{ directions: string[] }`，套用经 `topicFromSeed`，方向 `origin` 为 `manual`。**改这个是因为原来会标成 `migrated`，而用户挑模板时根本没有任何东西被迁移——那是句假话。**
+- **一处被设计前提逼定的克制**：模板每个主题仍只给一条方向。影子只等于第一条方向，而 P1 的筛选仍读影子；若把逗号分隔的模板描述拆成多条，第二条起不进分类器，等于**悄悄削窄新用户的筛选面**。拆分留到 P3，并已写成测试钉死，防止日后有人「顺手优化」。
+- change（Chunk 5）: `packages/core/tests/settings-rollback.test.ts` 把「可回滚」变成可执行判据五条，其中最有价值的是**往返**那条：降级 → 旧版只按四个字段回写 → 再升级，影子与第一条方向都稳定。
+- disposition: 撞坏一条既有测试（`topic-templates.test.ts` 断言种子上的 `description`），改断言为方向行非空——种子现在承载方向，`description` 是派生值。
+- **桌面验收的判断在阶段文件里明写了，不静默跳过**：判定「应当补，但不阻塞 P1」。用户已在真实 Obsidian 逐轮看过（Chunk 3 的交付条件已满足），但方向列表有依赖几何的行为（截断判定、`+N` 计数、折行不横向溢出），正是单测证明不了、上一轮翻车的那一类。建议单独补一个桌面场景，优先级交用户定。
+- validation: core 2050 项全绿、plugin 718/718、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。
+- boundary: 管线仍未动，`paper-filter-contract.ts` 继续读 `description`——这是 P1 的设计前提，也由 Chunk 5 逐字钉死。ADR 0005/0007/0008 未动，授权面未变。三个并行 active helm 未碰。
+- next: P2（索引只覆盖标题与摘要，重建降到分钟级）。P1 的六条 open questions 保持开放，尤其是 personal novelty 基准与「主题名是否作为硬门」。

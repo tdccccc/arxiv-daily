@@ -58,32 +58,39 @@ revision: 1
 - 撞坏两条既有测试，都是契约变更的直接后果：一条夹具里的 topic 没有 `directions`（改夹具走 `normalizeTopic`）；一条源码文本断言指着 `descId`（改为 `dirId`），并把「输入时不被重渲染夺走焦点」这条保护从 description 挪到方向输入框上。
 - 样式：`styles.css` 中 `topic-description` 的三处引用改为方向列表，并补上行内布局与增删按钮样式。
 - exception: 无
-- [ ] **实现与测试已绿，但未交付**——P1 唯一有界面的 chunk，按上一轮教训必须由用户在真实 Obsidian 里打开看过才算数。
+- 交付过程中用户提了两轮界面反馈，均已改并复看：长方向折行（收起一行 + 行尾 `+N` 徽标、聚焦展开），以及截断提示从右端省略号改为行尾计数——**原提示指错了方向**，截断是纵向的。
+- 另修一处**既有**缺陷：设置完成后编辑主题字段会丢焦点（单独成 `fix` 提交，详见 journal）。
+- [x] implementation and tests accepted（2026-09-02 用户在真实 Obsidian 中确认）
 
 ### Chunk 4 — 模板与「新建主题」产出方向
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
 - Red / baseline signal: `packages/core/src/settings/topic-templates.ts` 三套模板与 `plugin/src/settings/tab.ts:916` 的新建路径。断言——套用 `astro-ml` 模板后每个主题恰有一条方向且 text 等于原描述；新建空主题得到零条方向且 `description === ""`。红在模板产出的主题没有 `directions`。
-- Green check: `npm run test --workspace @arxiv-daily/core -- settings` 与 plugin 设置页测试
+- Green check: `npm run test --workspace @arxiv-daily/core -- settings-topics` 与 plugin 设置页测试
 - regression checks: core + plugin 全量
+- **模板改为直接声明方向**：种子由 `{ description }` 改成 `{ directions: string[] }`，套用时经 `topicFromSeed`，方向的 `origin` 是 `manual` 而非 `migrated`——用户挑了个模板，没有任何东西被迁移，标成 migrated 是假话。
+- **每个模板主题仍只给一条方向，这是被 P1 的设计前提逼定的**：影子只等于第一条方向，而 P1 的筛选仍读影子。若把逗号分隔的模板描述拆成多条，第二条起将不进入分类器，等于**悄悄削窄新用户的筛选面**。拆分留到 P3 筛选真的读完整列表之后再谈，已写成测试钉死。
+- 撞坏一条既有测试（`topic-templates.test.ts` 断言种子上的 `description`），改断言为方向行非空。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 5 — 「可回滚」被钉成可执行判据
 
 - change kind: behavior change（验收覆盖）
 - strategy: 先取红，再取绿
 - Red / baseline signal: 新增降级测试——取新版写出的 settings，**只经由旧版会读的字段**（`name` / `tag` / `description` / `detail`）走 `validateFilterConfig` 与 `buildPaperFilterRequest`：不抛错、不报 `description is empty`、且 `topicLines` 与迁移前逐字相同。红在迁移实现之前，也红在影子字段被写坏时（例如误用 join）。
-- Green check: `npm run test --workspace @arxiv-daily/core -- validation paper-filter-contract`
+- Green check: `npm run test --workspace @arxiv-daily/core -- settings-rollback`
 - regression checks: `npm run test --workspace arxiv-daily`（CLI 71/71——CLI 读同一份配置，是「插件与 CLI 行为一致」这条约束的硬判据）
+- 五条断言落在 `packages/core/tests/settings-rollback.test.ts`：迁移后筛选 prompt 逐字不变；只用旧版会读的四个字段仍能构出同一 prompt；旧版配置检查不报 description empty；影子等于第一条方向；**降级—旧版回写—再升级的往返稳定**。
+- **一次全绿，因此做了变异检验**：把 `deriveTopicDescription` 改成返回空串后五条全红（prompt 不等、`expected [ Array(2) ] to deeply equal []`、影子为空、往返取不到 text），再还原。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
 - core 全量、plugin 全量、CLI 71/71、`npm run typecheck`（四包）、`npm run lint` 0 error、`npm run check:boundaries`。
-- **不预设桌面验收**：P1 改的是设置页里已有验收覆盖的区域，但方向列表是新控件。是否需要新增桌面场景在 Chunk 3 完成后判断——不重复上一轮「自己写下的验收条件自己跳过」的错误，若判定需要就必须由用户在真实 Obsidian 里看过。
+- **桌面验收：判定为「应当补，但不阻塞 P1」——这个判断在此明写，不静默跳过。** 用户已在真实 Obsidian 里逐轮看过并认可（这是 Chunk 3 写明的交付条件，已满足）。但方向列表是新控件，且它有**依赖几何的行为**：收起一行的截断判定、`+N` 的计数、折行不横向溢出——这些正是单测证明不了、上一轮翻车的那一类。建议在 `scripts/desktop-acceptance` 增一个场景量这三件事。未在 P1 内做，是因为它属于验收框架而非本阶段的交付物，且需用户决定优先级。
 - 端到端日报仍被 LLM 端点不可达阻塞，不属本阶段。
 
 ## Abort / reshape triggers

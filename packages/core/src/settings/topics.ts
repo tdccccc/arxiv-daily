@@ -3,10 +3,29 @@ import type { Direction, DirectionOrigin, Topic } from "./types";
 const DIRECTION_ORIGINS: readonly DirectionOrigin[] = ["manual", "migrated", "library"];
 
 /**
- * A topic as a template or a caller describes it, before it is given an
- * identity and its directions are settled.
+ * A topic as a quick-start template describes it, before it is given an
+ * identity. Directions are plain lines here; `description` is derived, never
+ * authored.
  */
-export type TopicSeed = Omit<Topic, "id" | "directions">;
+export interface TopicSeed {
+  name: string;
+  tag: string;
+  detail: boolean;
+  /** One line each, in order. The first becomes the description shadow. */
+  directions: string[];
+}
+
+/**
+ * Turn a template seed into a real topic. Its directions are `manual`: the
+ * user picked a template, so nothing was carried over from an older format
+ * and calling them `migrated` would be a lie.
+ */
+export function topicFromSeed(seed: TopicSeed): Topic {
+  return normalizeTopic({
+    ...seed,
+    directions: seed.directions.map((text) => ({ text, origin: "manual" })),
+  });
+}
 
 function toOrigin(value: unknown): DirectionOrigin {
   return DIRECTION_ORIGINS.includes(value as DirectionOrigin)
