@@ -109,3 +109,14 @@
 - **安全**：夹具会覆盖 `data.json`，而测试库是用户的真实设置。核实了框架在装夹具**之前**捕获状态并在结束时还原，另外自行备份一份；跑完比对确认逐字节还原。
 - validation: `OBSIDIAN_TEST_VAULT=/home/tiandc/Desktop/plugin_test npm run test:desktop` 整体 PASSED（含既有的库设置页 18 条）；lint 0 error；release-tools 317/317。截图四张写入 `.acceptance-out/`。
 - next: P2（索引只覆盖标题与摘要，重建降到分钟级）。
+
+## 2026-09-02 — P2 阶段计划：索引只覆盖标题与摘要
+
+- evidence: 读代码定住了三件之前只在 ADR 层面说过的事。(1) **摘要已经在手边**——`PersonalLibraryPaperRecord` 带 `title` + `abstract`，`evidenceDepth` 就是 `"metadata-and-abstract"`，而 `catalog` 本来就是 `indexPersonalLibraryFullText` 的入参；所以 P2 是改索引的**输入来源**，不是新建元数据链路。(2) **`textHash` 不参与复用判定**（`index-orchestration.ts:213–218` 的 `exactReady` 只看 `observationFingerprints` + `modelId` + `derivation`，而 `identificationFingerprint` 只覆盖扩展名与识别策略版本）——改吃 catalog 文本之后这会变成一个真实的陈旧洞：摘要变了而文件没动，索引静默留旧向量。(3) 复用判定**已经**看 `derivation`，所以抬 `CHUNK_DERIVATION_VERSIONS` 就是 ADR 0013 §3「重建而非迁移」的现成执行点。
+- **ADR 0013 只数了 embedding 调用，但重建耗时的大头可能是 PDF 解析**。识别出的论文改从 catalog 取文本后整个不必 `readBinary` + `parseIndexDocument`。这是最大的机会，也正因为它没被 ADR 量过，Chunk 1 把「先量基线」写成了**门而不是仪式**：fallback 占比与「解析 vs embedding」的耗时拆分若不利，abort trigger 当场触发。
+- change: 写 `phases/02-index-titles-and-abstracts.md`，五个 chunk（量基线 → catalog 论文只索引标题摘要 → fallback 的有界首页路径 → 强制重建并堵陈旧洞 → 复量并确认聚类没塌）。goal.md 的 P2 行由 `pending` 改 `active`，revision 3 → 4。
+- **两处刻意的克制，都写进了 abort trigger**：其一，聚类每篇只剩一到两块之后 `maxChunkCosine` 退化为摘要对摘要，方向变粗是 ADR 0013 认下的代价、且是「要测的量」——**若聚类塌成一个大簇或每篇一簇，那是对 ADR 0013 §1 的反证，按 L2/L3 分类，不许在 P2 里调阈值掩过去**（goal 的 Constraints 明写两个阈值不得拍脑袋定，且实测排在 P4/P5）。其二，`chunkFullText` / `chunkParsedDocument` 保留不删——ADR 0013 §2 把「纳入结论段」列为最可能的下一增量，删分块器等于给回头路凭空加成本。
+- **Chunk 2 的取红判据选了「`readBinary` 一次也没被调用」而不是「块数变少」**：块数少可以靠截断伪造，而不读文件才是省下解析时间的那个机制。同理 Chunk 4 把「混合索引」点名为最坏失败模式——一部分论文 113 块、一部分 2 块，`maxChunkCosine` 会系统性偏向全文那部分，**而且不报错**。
+- disposition: 桌面验收判为不需要（索引是后台过程，无渲染几何可量），但该判定挂了条件——若改动触及设置页的索引进度显示即作废。上一轮那条教训一并写进了 trigger：**任何桌面变异检验必须先重新构建**。
+- validation: 尚未动任何源码，无测试可跑。P1 的全量绿仍是当前基线。
+- next: Chunk 1——在测试库上重建一次索引，量总块数 / 体积 / 墙钟耗时 / embedding 调用数，拆出解析与 embedding 各占多少，并数出 catalog 识别数 vs fallback 数。ADR 0013 的 207 篇 → 23,423 块 → 140MB 是对照。

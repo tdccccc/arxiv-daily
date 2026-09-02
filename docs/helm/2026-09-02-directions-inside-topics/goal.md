@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-02T20:30:00+08:00
-revision: 3
+updated: 2026-09-02T22:47:24+08:00
+revision: 4
 owner: claude-code-main-session
 
 ## Intent
@@ -42,7 +42,7 @@ owner: claude-code-main-session
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
 1. P1 — 主题带方向列表，老 description 可回滚地迁移 — status: done
-2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: pending
+2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: active
 3. P3 — 筛选按方向工作，日报标出命中的方向 — status: pending
 4. P4 — 首次扫库提议整套主题与方向 — status: pending
 5. P5 — 增量候选按相似度归入，不像则提议新主题 — status: pending
