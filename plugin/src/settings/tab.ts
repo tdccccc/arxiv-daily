@@ -29,7 +29,7 @@ import {
   type LogLevel,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
-import { TOPIC_TEMPLATES, normalizeTopic } from "@arxiv-daily/core";
+import { TOPIC_TEMPLATES, deriveTopicDescription, normalizeTopic } from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
 import { slugify } from "@arxiv-daily/core";
 import {
@@ -2525,34 +2525,144 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.refreshSetupGuide();
     };
 
-    // Description
-    const descRow = form.createDiv({
+    // Directions
+    const dirRow = form.createDiv({
       cls: "arxiv-daily-settings__topic-row",
     });
-    const descId = `${idPrefix}-description`;
-    const descHintId = `${descId}-hint`;
-    descRow.createEl("label", {
+    const dirId = `${idPrefix}-directions`;
+    const dirHintId = `${dirId}-hint`;
+    dirRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
-      text: "Description",
-      attr: { for: descId },
+      text: "Directions",
+      attr: { for: dirId },
     });
     if (!compact) {
-      this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+      this.hint(dirRow, "One line per specific thread you follow inside this topic. The AI matches papers against these.", dirHintId);
     }
-    const descArea = descRow.createEl("textarea", {
-      cls: "arxiv-daily-settings__topic-description",
+    const dirList = dirRow.createDiv({
+      cls: "arxiv-daily-settings__topic-directions",
       attr: compact
-        ? { id: descId }
-        : { id: descId, "aria-describedby": descHintId },
+        ? { id: dirId }
+        : { id: dirId, "aria-describedby": dirHintId },
     });
-    descArea.value = topic.description;
-    descArea.rows = 3;
-    descArea.placeholder = "What papers belong in this topic?";
-    descArea.oninput = async () => {
-      topic.description = descArea.value;
+
+    // `description` is the rollback shadow of the first direction, so it is
+    // re-derived here rather than edited (ADR 0012).
+    const persistDirections = async () => {
+      topic.description = deriveTopicDescription(topic.directions);
       await this.plugin.saveSettings();
       this.refreshSetupGuide();
     };
+
+    // Re-checked when the card expands: a hidden field measures as zero, so
+    // the truncation marker cannot be decided until it is on screen.
+    const directionOverflowChecks: Array<() => void> = [];
+
+    const addDirectionAt = async (position: number) => {
+      topic.directions.splice(position, 0, {
+        id: crypto.randomUUID(),
+        text: "",
+        origin: "manual",
+      });
+      renderDirections();
+      dirList
+        .querySelectorAll<HTMLTextAreaElement>(
+          ".arxiv-daily-settings__topic-direction-input",
+        )
+        .item(position)
+        ?.focus();
+      await persistDirections();
+    };
+
+    const renderDirections = () => {
+      dirList.empty();
+      directionOverflowChecks.length = 0;
+      topic.directions.forEach((direction, directionIndex) => {
+        const line = dirList.createDiv({
+          cls: "arxiv-daily-settings__topic-direction",
+        });
+        // The field grows with its content by replicating the text into a
+        // hidden ::after in the same grid cell, so no height is ever assigned
+        // from script and a field hidden inside a collapsed card still sizes
+        // itself correctly the moment it is shown.
+        const field = line.createDiv({
+          cls: "arxiv-daily-settings__topic-direction-field is-collapsed",
+        });
+        const dirInput = field.createEl("textarea", {
+          cls: "arxiv-daily-settings__topic-direction-input",
+        });
+        dirInput.value = direction.text;
+        dirInput.rows = 1;
+        dirInput.placeholder = "One specific direction";
+        // A textarea cannot render a marker over its own text, so the "there
+        // is more" badge is a sibling, shown only when the collapsed field is
+        // really cut off. It counts lines because that is what can be measured
+        // exactly; the title spells the number out.
+        const more = field.createSpan({
+          cls: "arxiv-daily-settings__topic-direction-more",
+        });
+
+        const syncField = () => {
+          field.dataset.replicatedValue = dirInput.value;
+          const collapsed = field.classList.contains("is-collapsed");
+          const lineHeight = Number.parseFloat(
+            getComputedStyle(dirInput).lineHeight,
+          );
+          const hidden = collapsed && Number.isFinite(lineHeight) && lineHeight > 0
+            ? Math.round((field.scrollHeight - field.clientHeight) / lineHeight)
+            : 0;
+          more.toggleClass("is-visible", hidden > 0);
+          more.setText(hidden > 0 ? `+${hidden}` : "");
+          more.title = hidden === 1 ? "1 more line" : `${hidden} more lines`;
+        };
+        directionOverflowChecks.push(syncField);
+        syncField();
+
+        dirInput.oninput = async () => {
+          // The filter prompt joins topics with "\n", so a pasted newline
+          // would break that line structure. Keep the stored value one line.
+          const flattened = dirInput.value.replace(/\s*\n+\s*/g, " ");
+          if (flattened !== dirInput.value) dirInput.value = flattened;
+          direction.text = flattened;
+          syncField();
+          await persistDirections();
+        };
+        dirInput.onfocus = () => {
+          field.removeClass("is-collapsed");
+          syncField();
+        };
+        dirInput.onblur = () => {
+          field.addClass("is-collapsed");
+          syncField();
+        };
+        dirInput.onkeydown = (event: KeyboardEvent) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          void addDirectionAt(directionIndex + 1);
+        };
+
+        const removeBtn = line.createEl("button", {
+          cls: "arxiv-daily-settings__topic-direction-remove",
+          text: "×",
+          attr: {
+            type: "button",
+            "aria-label": `Remove direction ${directionIndex + 1}`,
+          },
+        });
+        removeBtn.onclick = async () => {
+          topic.directions.splice(directionIndex, 1);
+          renderDirections();
+          await persistDirections();
+        };
+      });
+      const addBtn = dirList.createEl("button", {
+        cls: "arxiv-daily-settings__topic-direction-add",
+        text: "Add direction",
+        attr: { type: "button" },
+      });
+      addBtn.onclick = () => void addDirectionAt(topic.directions.length);
+    };
+    renderDirections();
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
     if (!compact) {
@@ -2604,6 +2714,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       form.toggleClass("is-collapsed", !expanded);
       header.setAttribute("aria-expanded", String(expanded));
       caret.textContent = expanded ? "▾" : "▸";
+      // Directions could not be measured while the form was hidden.
+      if (expanded) for (const check of directionOverflowChecks) check();
     };
   }
 

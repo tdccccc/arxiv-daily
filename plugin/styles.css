@@ -352,9 +352,114 @@
 }
 
 .arxiv-daily-settings__topic-name-input,
-.arxiv-daily-settings__topic-description,
 .arxiv-daily-settings__textarea {
   width: 100%;
+}
+
+.arxiv-daily-settings__topic-directions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  min-width: 0;
+}
+
+.arxiv-daily-settings__topic-direction {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+}
+
+/*
+ * The field grows with its content without any scripted height: the text is
+ * replicated into a hidden ::after that shares the single grid cell with the
+ * textarea, so the cell is as tall as the wrapped text. Collapsed, the field
+ * caps at a couple of lines; focusing lifts the cap.
+ */
+.arxiv-daily-settings__topic-direction-field {
+  --arxiv-daily-direction-lines: 1;
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.arxiv-daily-settings__topic-direction-field::after {
+  content: attr(data-replicated-value) " ";
+  visibility: hidden;
+  white-space: pre-wrap;
+}
+
+.arxiv-daily-settings__topic-direction-field > .arxiv-daily-settings__topic-direction-input,
+.arxiv-daily-settings__topic-direction-field::after {
+  box-sizing: border-box;
+  grid-area: 1 / 1 / 2 / 2;
+  width: 100%;
+  padding: 0.25em 0.5em;
+  border: 1px solid var(--background-modifier-border);
+  font: inherit;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-settings__topic-direction-input {
+  overflow: hidden;
+  resize: none;
+}
+
+.arxiv-daily-settings__topic-direction-field.is-collapsed {
+  max-height: calc(var(--arxiv-daily-direction-lines) * 1.5em + 0.5em + 2px);
+  overflow: hidden;
+}
+
+/*
+ * A textarea cannot render a marker over its own text, so the "+N" badge is a
+ * sibling pinned to the end of the collapsed line. It never takes pointer
+ * events, so clicking it still lands in the textarea and expands the field.
+ */
+.arxiv-daily-settings__topic-direction-more {
+  position: absolute;
+  top: 50%;
+  right: 0.35em;
+  display: none;
+  padding: 0 0.4em;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.arxiv-daily-settings__topic-direction-more.is-visible {
+  display: block;
+}
+
+/* Keep the last words clear of the badge instead of running under it. */
+.arxiv-daily-settings__topic-direction-field.is-collapsed
+  > .arxiv-daily-settings__topic-direction-input {
+  padding-right: 3em;
+}
+
+.arxiv-daily-settings__topic-direction-remove {
+  flex: 0 0 auto;
+  padding: 0 0.5em;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.arxiv-daily-settings__topic-direction-remove:hover {
+  color: var(--text-error);
+}
+
+.arxiv-daily-settings__topic-direction-add {
+  align-self: flex-start;
+  margin-top: 0.15em;
+  font-size: 0.9em;
 }
 
 .arxiv-daily-settings__topic-tag-input {
@@ -432,7 +537,7 @@
 }
 
 .arxiv-daily-settings__topic-host
-  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__hint,
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
   grid-column: 1 / -1;
@@ -454,7 +559,7 @@
   }
 
   .arxiv-daily-settings__topic-host
-    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
   .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
     grid-column: 1;
   }

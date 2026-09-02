@@ -51,10 +51,14 @@ revision: 1
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
 - Red / baseline signal: `plugin/src/settings/tab.ts:2534–2554` 的单一 textarea 换成方向列表。新增测试——渲染带两条方向的主题得到两个单行输入与增/删控件；改第一条后落盘的 `description` 同步。红在只渲染出一个 textarea。
-- Green check: `npm run test --workspace obsidian-arxiv-daily -- settings`
-- regression checks: 既有设置页断言全绿（含 0.4.3 刚修的 masked-reveal 密钥输入）；plugin 全量
+- Green check: `npm run test --workspace obsidian-arxiv-daily -- settings-declarative-tab`
+- regression checks: 既有设置页断言全绿（含 0.4.3 刚修的 masked-reveal 密钥输入）；plugin 全量 710/710
+- **第一次取红是假的，值得记**：测试原本走 `tab.refreshSettings()`，但它在 1.13+ 走声明式路径，而该路径的 `update()` 被同文件其它测试打了桩——结果渲染出 **0 张主题卡片**。于是「不再有 description textarea」那条**因为什么都没渲染而绿了**。改用公开的 `tab.renderTopicRow(new Setting(...), 0)` 真渲染后才得到诚实的红（`expected <textarea> to be null`）。与 journal 里那条宽泛 `toThrow()` 同类：**红必须红在被测行为上**。
+- 影子的派生规则由 core 的 `deriveTopicDescription` 提供，设置页调用它而不是自己写一遍——否则界面就成了影子的第二个作者。
+- 撞坏两条既有测试，都是契约变更的直接后果：一条夹具里的 topic 没有 `directions`（改夹具走 `normalizeTopic`）；一条源码文本断言指着 `descId`（改为 `dirId`），并把「输入时不被重渲染夺走焦点」这条保护从 description 挪到方向输入框上。
+- 样式：`styles.css` 中 `topic-description` 的三处引用改为方向列表，并补上行内布局与增删按钮样式。
 - exception: 无
-- [ ] implementation and tests accepted
+- [ ] **实现与测试已绿，但未交付**——P1 唯一有界面的 chunk，按上一轮教训必须由用户在真实 Obsidian 里打开看过才算数。
 
 ### Chunk 4 — 模板与「新建主题」产出方向
 

@@ -26,6 +26,15 @@ function toDirection(raw: unknown): Direction | null {
 }
 
 /**
+ * The rollback shadow for a direction list (ADR 0012). The one definition of
+ * the rule, so the settings page can keep the shadow in step while editing
+ * without becoming a second author of it.
+ */
+export function deriveTopicDescription(directions: readonly Direction[]): string {
+  return directions[0]?.text.trim() ?? "";
+}
+
+/**
  * Bring one topic to the current shape and restore the shadow invariant
  * `description === directions[0]?.text ?? ""` (ADR 0012).
  *
@@ -56,7 +65,7 @@ export function normalizeTopic(raw: unknown): Topic {
     id: typeof stored.id === "string" && stored.id ? stored.id : crypto.randomUUID(),
     name: typeof stored.name === "string" ? stored.name : "",
     tag: typeof stored.tag === "string" ? stored.tag : "",
-    description: directions[0]?.text ?? "",
+    description: deriveTopicDescription(directions),
     directions,
     detail: stored.detail === true,
   };

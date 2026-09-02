@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, normalizeTopic } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
@@ -1333,13 +1333,15 @@ describe("declarative topic cards", () => {
 
   it("keeps topic fields focused while updating the setup guide", async () => {
     const { tab, settings, saveSettings } = makeTab();
-    settings.arxiv.topics.push({
-      id: "topic-1",
-      name: "",
-      tag: "topic-1",
-      description: "",
-      detail: false,
-    });
+    settings.arxiv.topics.push(
+      normalizeTopic({
+        id: "topic-1",
+        name: "",
+        tag: "topic-1",
+        detail: false,
+        directions: [{ id: "d1", text: "Existing.", origin: "manual" }],
+      }),
+    );
     const refresh = vi.spyOn(tab, "refreshSettings");
     document.body.appendChild(tab.containerEl);
     const guideSetting = new Setting(tab.containerEl);
@@ -1359,7 +1361,7 @@ describe("declarative topic cards", () => {
         ".arxiv-daily-settings__topic-tag-input",
       ),
       topicSetting.settingEl.querySelector(
-        ".arxiv-daily-settings__topic-description",
+        ".arxiv-daily-settings__topic-direction-input",
       ),
     ] as Array<HTMLInputElement | HTMLTextAreaElement>;
 
@@ -1545,5 +1547,188 @@ describe("wired setControlValue", () => {
     expect(settings.output.summaryLanguage).toBe("zh");
     expect(tab.restoreControlValue(failure, SETTING_KEYS.output.summaryLanguage)).toBe("zh");
     expect(update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("topic directions editor", () => {
+  function renderTopicWithDirections(texts: string[]) {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push(
+      normalizeTopic({
+        id: "t1",
+        name: "Photo-z",
+        tag: "photo-z",
+        detail: false,
+        directions: texts.map((text, i) => ({ id: `d${i}`, text, origin: "manual" })),
+      }),
+    );
+    document.body.appendChild(tab.containerEl);
+    // refreshSettings() takes the declarative path, whose update() every other
+    // test here stubs out, so it renders no cards at all. renderTopicRow is the
+    // real entry point for a single topic card.
+    tab.renderTopicRow(new Setting(tab.containerEl), 0);
+    return { tab, settings, saveSettings };
+  }
+
+  function directionInputs(tab: ArxivDailySettingTab) {
+    return Array.from(
+      tab.containerEl.querySelectorAll<HTMLInputElement>(
+        ".arxiv-daily-settings__topic-direction-input",
+      ),
+    );
+  }
+
+  it("renders one single-line input per direction", () => {
+    const { tab } = renderTopicWithDirections([
+      "Photometric redshift methods.",
+      "Catalog cross-matching.",
+    ]);
+
+    const inputs = directionInputs(tab);
+    expect(inputs).toHaveLength(2);
+    expect(inputs.map((i) => i.value)).toEqual([
+      "Photometric redshift methods.",
+      "Catalog cross-matching.",
+    ]);
+    // ADR 0012 §2's "one line" is about the stored value, not the rendering:
+    // a long direction wraps so it can be read in full, but it is still one
+    // string with no newline in it.
+    expect(inputs.every((i) => i.tagName === "TEXTAREA")).toBe(true);
+    tab.containerEl.remove();
+  });
+
+  it("collapses an unfocused direction and expands it while editing", () => {
+    const { tab } = renderTopicWithDirections(["A long direction that wraps."]);
+
+    const input = directionInputs(tab)[0];
+    // The cap lives on the auto-growing wrapper, not on the textarea.
+    const field = input.parentElement!;
+    const collapsed = () => field.classList.contains("is-collapsed");
+    expect(collapsed()).toBe(true);
+
+    input.dispatchEvent(new Event("focus"));
+    expect(collapsed()).toBe(false);
+
+    input.dispatchEvent(new Event("blur"));
+    expect(collapsed()).toBe(true);
+    tab.containerEl.remove();
+  });
+
+  it("counts the hidden lines of a truncated direction", () => {
+    const { tab } = renderTopicWithDirections(["A long direction that wraps."]);
+    const input = directionInputs(tab)[0];
+    const field = input.parentElement!;
+    const badge = field.querySelector<HTMLElement>(
+      ".arxiv-daily-settings__topic-direction-more",
+    )!;
+    expect(badge.classList.contains("is-visible")).toBe(false);
+
+    // happy-dom lays nothing out, so the collapsed geometry is stated here:
+    // one visible 20px line against three lines of content.
+    input.style.lineHeight = "20px";
+    Object.defineProperty(field, "clientHeight", { value: 20, configurable: true });
+    Object.defineProperty(field, "scrollHeight", { value: 60, configurable: true });
+    input.dispatchEvent(new Event("input"));
+
+    expect(badge.textContent).toBe("+2");
+    expect(badge.title).toBe("2 more lines");
+    expect(badge.classList.contains("is-visible")).toBe(true);
+
+    // One hidden line reads as a singular.
+    Object.defineProperty(field, "scrollHeight", { value: 40, configurable: true });
+    input.dispatchEvent(new Event("input"));
+    expect(badge.textContent).toBe("+1");
+    expect(badge.title).toBe("1 more line");
+
+    // Focus lifts the cap, so nothing is hidden while editing.
+    input.dispatchEvent(new Event("focus"));
+    expect(badge.classList.contains("is-visible")).toBe(false);
+    tab.containerEl.remove();
+  });
+
+  it("never stores a newline in a direction", async () => {
+    const { tab, settings } = renderTopicWithDirections(["One."]);
+
+    const input = directionInputs(tab)[0];
+    // A paste can carry newlines; the filter prompt joins topics with "\n",
+    // so one inside the text would break that line structure.
+    input.value = "Pasted first line\nand a second line";
+    input.dispatchEvent(new Event("input"));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const stored = settings.arxiv.topics[0].directions[0].text;
+    expect(stored).not.toContain("\n");
+    expect(stored).toBe("Pasted first line and a second line");
+    tab.containerEl.remove();
+  });
+
+  it("starts the next direction on Enter instead of inserting a newline", async () => {
+    const { tab, settings } = renderTopicWithDirections(["First."]);
+
+    const input = directionInputs(tab)[0];
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(settings.arxiv.topics[0].directions).toHaveLength(2);
+    expect(settings.arxiv.topics[0].directions[1].text).toBe("");
+    expect(directionInputs(tab)).toHaveLength(2);
+    tab.containerEl.remove();
+  });
+
+  it("no longer offers a free-text description textarea", () => {
+    const { tab } = renderTopicWithDirections(["Photometric redshift methods."]);
+
+    expect(
+      tab.containerEl.querySelector(".arxiv-daily-settings__topic-description"),
+    ).toBeNull();
+    tab.containerEl.remove();
+  });
+
+  it("offers add and remove controls for directions", () => {
+    const { tab } = renderTopicWithDirections(["One.", "Two."]);
+
+    expect(
+      tab.containerEl.querySelector(".arxiv-daily-settings__topic-direction-add"),
+    ).not.toBeNull();
+    expect(
+      tab.containerEl.querySelectorAll(
+        ".arxiv-daily-settings__topic-direction-remove",
+      ),
+    ).toHaveLength(2);
+    tab.containerEl.remove();
+  });
+
+  it("keeps the description shadow in step while editing the first direction", async () => {
+    const { tab, settings } = renderTopicWithDirections(["Old text.", "Second."]);
+
+    const first = directionInputs(tab)[0];
+    first.value = "New text.";
+    first.dispatchEvent(new Event("input"));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const topic = settings.arxiv.topics[0];
+    expect(topic.directions[0].text).toBe("New text.");
+    expect(topic.description).toBe("New text.");
+    tab.containerEl.remove();
+  });
+
+  it("leaves the shadow alone when a later direction is edited", async () => {
+    const { tab, settings } = renderTopicWithDirections(["First.", "Second."]);
+
+    const second = directionInputs(tab)[1];
+    second.value = "Second edited.";
+    second.dispatchEvent(new Event("input"));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    const topic = settings.arxiv.topics[0];
+    expect(topic.directions[1].text).toBe("Second edited.");
+    expect(topic.description).toBe("First.");
+    tab.containerEl.remove();
   });
 });

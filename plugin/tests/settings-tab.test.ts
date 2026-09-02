@@ -577,7 +577,7 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain("form.hidden = !isExpanded");
     expect(settingsTabSource).toContain('attr: { for: nameId }');
     expect(settingsTabSource).toContain('attr: { for: tagId }');
-    expect(settingsTabSource).toContain('attr: { for: descId }');
+    expect(settingsTabSource).toContain('attr: { for: dirId }');
     expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
   });
 

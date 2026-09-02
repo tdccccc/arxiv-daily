@@ -30,3 +30,50 @@
 - **本 chunk 没有证明的事**：界面。设置页仍是那个单一 textarea，方向列表要到 Chunk 3 才有。用户看不到任何变化。
 - next: Chunk 3——设置页把 textarea 换成方向列表。这是 P1 里唯一有界面的 chunk，按上一轮教训，测试绿不构成交付证据，必须由用户在真实 Obsidian 里看过。
 
+
+## 2026-09-02 — P1 Chunk 3：设置页改成方向列表（未交付，待用户过目）
+
+- evidence: **第一次取红是假的**。测试原本用 `tab.refreshSettings()` 渲染，但它在 1.13+ 走声明式路径，而该路径的 `update()` 被同文件其它测试打了桩——实测渲染出 **0 张主题卡片**。于是「不再有 description textarea」那条断言**因为什么都没渲染而绿了**。加探针打印卡片数为 0 才发现。改用公开的 `renderTopicRow(new Setting(...), 0)` 真渲染后，红变成 `expected <textarea> to be null`，5 条全红且红在被测行为上。
+- **这是本轮最该记住的一条**：与之前那次宽泛 `toThrow()` 同类——红对了不等于红在对的地方。一条断言若在功能缺失时也能绿，它守不住任何东西。
+- change: 主题卡片里的单个 description textarea 换成方向列表：每条一行 `input`、各带删除按钮，底部一个「Add direction」。输入即改 `directions[i].text`，`description` 由 core 的 `deriveTopicDescription` 重新派生——设置页调用该函数而不是自己写一遍派生规则，否则界面就成了影子的第二个作者。
+- disposition: 撞坏两条既有测试，都是契约变更的直接后果，改的都不是源码：一条夹具的 topic 缺 `directions`（改走 `normalizeTopic`）；一条源码文本断言指着 `descId`（改为 `dirId`），同时把「输入时不被重渲染夺走焦点」这条保护从 description 挪到方向输入框上——那条保护本身比它守的具体控件更重要。
+- **一处自行做的判断**：编辑中允许方向为空行，不在每次按键时清理。理由是按键即清理会把光标所在的行删掉；空的第一条方向会让 `description` 为空，配置检查照常报 empty——这是**正确的反馈**，不是缺陷。空行在下次读入时由 `normalizeTopic` 清掉。
+- 样式：`styles.css` 里 `topic-description` 的三处引用改为方向列表，并补上行内布局与增删按钮样式。未动那条 `@media (max-width: 600px)`——它是设置页既有写法，不在本 chunk 的范围内。
+- validation: plugin 710/710、core 全分片、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。
+- **本 chunk 没有证明的事，也是它不能算完成的原因**：界面只在 happy-dom 里渲染过。一行一条读起来顺不顺、删除按钮认不认得出、加方向的位置顺不顺手，测试一概证明不了。上一轮的返工正是「测试绿 + 我认为够用」，所以这条**不自己勾**。
+- next: 把产物装进 plugin_test 由用户打开确认；确认后再进 Chunk 4（模板与新建主题产出方向）。
+
+## 2026-09-02 — 用户打开后：焦点仍被夺走。查出是 0.4.4 修复的漏网情形
+
+- evidence: 用户在 plugin_test 打开设置页，报「打一个就把焦点移出去了，没法连着打字」，并称「还是老毛病」。**先写探针复现，没复现出来**——那本身是线索：探针里 `update()` 是空操作，而 obsidian 桩的 `requireApiVersion` 返回 true，所以声明式重渲染确实发生了、只是在测试里没有可见后果。
+- **根因**：`definitions.ts:187` 只有 `showSetupGuide` 为真时才把「Getting started」行放进定义。设置一旦完成，该行不存在，`declarativeSetupGuideRow` 便从未被赋值；`refreshDeclarativeSetupGuide()` 于是落到兜底的 `this.refreshSettings()` → `update()` → **整页重渲染**，正在输入的控件被替换掉。
+- **这不是 directions 引入的，是 0.4.4（`6b96b57`）修复的漏网情形**。那次修复只在引导卡还在屏幕上时走便宜路径，而它的回归测试恰好先手动渲染了引导行——于是只覆盖了引导期。name、tag 与旧的 description 在设置完成后同样会丢焦点，用户说「老毛病」是准确的。
+- change: 没有引导行可更新时，只有「引导需要重新出现」才整页重渲染；否则什么都不做。
+- **测试的教训**：既有那条焦点测试断言的是 `refreshSettings` 未被调用——判据是对的，**但它把自己放进了引导卡仍在的情形**，于是永远走不到出问题的分支。新测试显式构造「设置已完成」（LLM 三项齐备 + 运行状态里有 completed 记录），并覆盖 name / tag / direction 三个字段。红的原文是 `expected "refreshSettings" to not be called at all, but actually been called 1 times`。
+- validation: plugin 712/712。产物已重新构建并装入 plugin_test（main.js md5 `9bde2d7c`）。
+- **仍未交付**：Chunk 3 的验收框继续不勾，等用户重开设置页确认焦点与其余观感。
+- next: 用户复看；通过后提交 Chunk 3 与本修复，再进 Chunk 4。
+
+## 2026-09-02 — 方向改为可折行：收起两行、聚焦展开
+
+- evidence: 用户问长方向能否折行显示而不是挤在一行。核实后确认**不违反 ADR 0012 §2**——那条约束的是数据模型（一个字符串，不是「名称+描述+线索」的结构化记录），不是渲染成几行。它给出的理由「几十条也一眼扫得完」才是真代价，用户选了「收起最多两行、聚焦展开全文」来平衡。
+- change: 方向控件由 `input` 改为 `textarea`。收起时最多两行、超出显示省略号；聚焦展开全文，失焦收回。短方向两种状态完全一致，不跳动。
+- **一个硬约束逼出的交互**：筛选 prompt 是 `- tag: description` 按 `\n` 拼的，文本里混进换行会切断那结构。所以回车不插入换行，改为**在下方新建一条方向并聚焦**；粘贴进来的换行一律折成空格。
+- **两处实现上的坑，都不是第一直觉**：
+  - `textarea` **做不出省略号**（`line-clamp` 不作用于其内部文本）。省略号改为同级的覆盖标记，`pointer-events: none`，仅在收起且确实溢出时出现。
+  - 最初用 JS 测 `scrollHeight` 定高，撞上 obsidian 的 lint 规则 `no-static-styles-assignment`（禁止写 `element.style.height`）。改用 CSS grid 的「文本复制到 ::after」自增高技巧后**一行内联样式都不需要**——顺带消掉了原本的隐患：卡片折叠时 `scrollHeight` 为 0，按它定高会让展开后的文本框是 0 高。高度全交给 CSS 之后，这个问题不存在了。
+- disposition: 收起状态的类挂在自增高的外层容器上而非 `textarea` 上（高度上限属于容器）。测试相应改查容器。
+- validation: plugin 715/715、core 全分片、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。产物已装入 plugin_test（main.js md5 `a6fa448d`）。
+- **仍未交付**：Chunk 3 验收框继续不勾，等用户看过折行、省略号、回车新建这三件事的真实观感。
+- next: 用户复看。
+
+## 2026-09-02 — 截断提示改为行尾「+N」徽标，收起改回一行
+
+- evidence: 用户看过两行折行版后说省略号「不太起眼，不太好看」。**症结不只是审美**：省略号贴在右端，而截断实际发生在下方（第三行被压住），用横向记号表示纵向截断，指错了方向，看不见是必然的。用户随后定下形态：收起一行，行尾给计数标记。
+- change: 收起上限由两行改为一行；`…` 换成行尾的 `+N` 小胶囊（带底色，`pointer-events: none`，点它照样落进文本框展开），悬停标题写全 `2 more lines` / `1 more line`。收起时文本框右内边距让出徽标位置，末尾的字不会钻到徽标底下。
+- **单位选「行」不选「词」，是被可测量性决定的，不是偏好**：更想显示 `+6 words`（描述内容而非版式），但要算被藏起来的词数得测量文本在哪个字符被切断（Range 或 canvas 测宽 + 二分），为一个提示标记造这套机器不值当；而「还差几行」用现成的 `scrollHeight / clientHeight / lineHeight` 就能算准。**只显示能算准的量。**
+- **不写「行」字**：插件界面通体英文（Name / Tag / Directions / Add direction / Detail report），中间插一个中文单位会突兀；徽标只写 `+2`，把完整措辞放进悬停标题，因为行尾空间紧张，而显眼靠的是样式不是字数。
+- **新测试做了变异检验**：它一次就绿，按本轮教训不能就此采信。把 `+${hidden}` 改成 `+${hidden + 1}` 后确认它变红（`expected '+3' to be '+2'`），再还原。happy-dom 没有布局，几何（lineHeight 20px、clientHeight 20、scrollHeight 60）在测试里显式声明。
+- validation: plugin 716/716、typecheck 四包、lint 0 error、check:boundaries OK。产物已装入 plugin_test（main.js md5 `29ec7ce8`）。
+- **仍未交付**：Chunk 3 验收框继续不勾。
+- next: 用户复看徽标的显眼程度与整体观感。
