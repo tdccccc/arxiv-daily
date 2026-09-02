@@ -1,10 +1,11 @@
-import type { Topic } from "./types";
+import type { TopicSeed } from "./topics";
 
 export interface TopicTemplate {
   id: string;
   name: string;
   category: string;
-  topics: Omit<Topic, "id">[];
+  /** Seeds: `normalizeTopic` turns each into a topic with its directions. */
+  topics: TopicSeed[];
 }
 
 export const TOPIC_TEMPLATES: TopicTemplate[] = [

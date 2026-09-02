@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   arxivCategories,
   normalizeCategoryList,
+  normalizeTopic,
   sanitizeDetailSelection,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
@@ -299,7 +300,10 @@ function mapTopic(raw: unknown, index: number): Topic {
     typeof raw.id === "string" && raw.id.trim()
       ? raw.id.trim()
       : `topic-${index + 1}`;
-  return { id, name, tag, description, detail };
+  // `detail` keeps the CLI's own default (true) rather than the shared one;
+  // everything else goes through normalizeTopic so the plugin and the CLI
+  // derive the description shadow the same way (ADR 0012).
+  return normalizeTopic({ id, name, tag, description, directions: raw.directions, detail });
 }
 
 function mapScheduleIntent(raw: unknown): CliScheduleIntent {

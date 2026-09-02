@@ -3,7 +3,7 @@ import { migrateArxivSettings, migrateEmailSettings } from "../src/settings/migr
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 describe("migrateArxivSettings", () => {
-  it("returns the same topics when already in new shape", () => {
+  it("preserves a stored topic's identity while deriving its directions", () => {
     const input = {
       category: "cs.CL",
       topics: [
@@ -12,7 +12,17 @@ describe("migrateArxivSettings", () => {
       timezone: "UTC",
     };
     const out = migrateArxivSettings(input);
-    expect(out.topics).toEqual(input.topics);
+    // Identity fields survive untouched; `directions` is derived from the
+    // stored description, so this is no longer a passthrough (ADR 0012).
+    expect(out.topics).toHaveLength(1);
+    expect(out.topics[0]).toMatchObject({
+      id: "u1",
+      name: "LLM",
+      tag: "llm",
+      description: "x",
+      detail: true,
+    });
+    expect(out.topics[0].directions).toHaveLength(1);
     expect(out.category).toBe("cs.CL");
     expect(out.categories).toEqual(["cs.CL"]);
     expect(out.timezone).toBe("UTC");
@@ -236,6 +246,79 @@ describe("migrateArxivSettings", () => {
     const out = migrateArxivSettings({ category: long, timezone: "UTC" });
     expect(out.category).toBe(long);
     expect(out.categories).toEqual([long]);
+  });
+});
+
+describe("migrateArxivSettings — directions (ADR 0012, P1 Chunk 1)", () => {
+  it("migrates a legacy description into the first direction", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      topics: [
+        { id: "u1", name: "Photo-z", tag: "photo-z", description: "Photometric redshift methods.", detail: true },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].directions).toHaveLength(1);
+    expect(out.topics[0].directions[0].text).toBe("Photometric redshift methods.");
+  });
+
+  it("gives every migrated direction a non-empty id", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      topics: [
+        { id: "u1", name: "Photo-z", tag: "photo-z", description: "Photometric redshift methods.", detail: true },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].directions[0].id).toEqual(expect.any(String));
+    expect(out.topics[0].directions[0].id.length).toBeGreaterThan(0);
+  });
+
+  it("keeps description verbatim as the rollback shadow field", () => {
+    const description = "Cluster surveys, mass calibration, catalogs, SZ/X-ray/optical.";
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      topics: [
+        { id: "u1", name: "Galaxy Cluster", tag: "galaxy-cluster", description, detail: true },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].description).toBe(description);
+  });
+
+  it("yields zero directions when the legacy description is empty", () => {
+    const out = migrateArxivSettings({
+      category: "cs.CL",
+      topics: [
+        { id: "u1", name: "LLM", tag: "llm", description: "   ", detail: false },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].directions).toEqual([]);
+    expect(out.topics[0].description).toBe("");
+  });
+
+  it("yields zero directions when the legacy topic has no description field at all", () => {
+    const out = migrateArxivSettings({
+      category: "cs.CL",
+      topics: [
+        { id: "u1", name: "LLM", tag: "llm" },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].directions).toEqual([]);
+    expect(out.topics[0].description).toBe("");
+  });
+
+  it("records where a migrated direction came from", () => {
+    const out = migrateArxivSettings({
+      category: "astro-ph",
+      topics: [
+        { id: "u1", name: "Photo-z", tag: "photo-z", description: "Photometric redshift methods.", detail: true },
+      ],
+      timezone: "UTC",
+    });
+    expect(out.topics[0].directions[0].origin).toBe("migrated");
   });
 });
 

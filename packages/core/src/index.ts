@@ -130,6 +130,7 @@ export * from "./settings/migration";
 export * from "./settings/providers";
 export * from "./settings/summary-language";
 export * from "./settings/topic-templates";
+export * from "./settings/topics";
 export * from "./settings/types";
 export * from "./settings/validation";
 export * from "./utils/arxiv";
