@@ -99,3 +99,13 @@
 - **变异检验**：改完一次全绿，遂把 `blur()` 注释掉确认那条测试变红（焦点仍在输入框）。该测试断言的是「Enter 后焦点离开且方向框收回」这一行为，不是「代码里存在 blur 调用」。
 - validation: plugin 718/718、typecheck 四包、lint 0 error、产物已装入 plugin_test（main.js md5 `7b358e46`），用户确认。
 - next: P2（索引只覆盖标题与摘要）。另有一项待用户定优先级：给方向列表补一个桌面验收场景，量截断判定、`+N` 计数与折行不横向溢出。
+
+## 2026-09-02 — 补上方向列表的桌面验收
+
+- evidence: 七条断言全过，其中最关键的是**徽标承诺的 `+N` 等于展开后真正多出的行数**（实测 `+2 matches the 2.00 lines gained on opening`）。其余：收起恰为 1.00 行；能装下的方向无徽标；徽标在框内；宽 689px 与窄 447px 面板下都折行不溢出；无 console 错误。
+- **这条断言刻意不复算插件的公式**。若照 `scrollHeight / clientHeight / lineHeight` 再算一遍，就只是重述插件自己的算术——布局错了也照样通过。改为「展开字段、量真实增高」，是对同一主张的独立测量。
+- **发现框架本身的一个坑，值得单独记**：验收部署的是**已构建的 `main.js`，不是源码**。我第一次做变异检验时改了源码却没重新构建，于是它拿旧产物跑出了一个 PASS——正是 build-deploy README 里说要防的「静默地报告一个分支上任何构建都不产生的布局」。现有守卫比对 manifest 版本号，而两次构建版本相同，拦不住这种陈旧。重新构建后变异才真正变红。**建议让 `test:desktop` 先构建**（一行脚本改动），但那属于桌面验收 helm，未擅自改。
+- disposition: **关于「不修改并行 active helm」这条约束的判断**：新增了 `topic-directions.mjs` 并在 `acceptance.mjs` 接了两行。判为可以——这是**使用**框架而非改动框架，且 `test/obsidian-desktop-harness` 已是本分支祖先（91 ahead / 0 behind），不存在未合并的并行改动会冲突。
+- **安全**：夹具会覆盖 `data.json`，而测试库是用户的真实设置。核实了框架在装夹具**之前**捕获状态并在结束时还原，另外自行备份一份；跑完比对确认逐字节还原。
+- validation: `OBSIDIAN_TEST_VAULT=/home/tiandc/Desktop/plugin_test npm run test:desktop` 整体 PASSED（含既有的库设置页 18 条）；lint 0 error；release-tools 317/317。截图四张写入 `.acceptance-out/`。
+- next: P2（索引只覆盖标题与摘要，重建降到分钟级）。

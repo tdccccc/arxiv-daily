@@ -90,7 +90,8 @@ revision: 1
 ## Phase verification
 
 - core 全量、plugin 全量、CLI 71/71、`npm run typecheck`（四包）、`npm run lint` 0 error、`npm run check:boundaries`。
-- **桌面验收：判定为「应当补，但不阻塞 P1」——这个判断在此明写，不静默跳过。** 用户已在真实 Obsidian 里逐轮看过并认可（这是 Chunk 3 写明的交付条件，已满足）。但方向列表是新控件，且它有**依赖几何的行为**：收起一行的截断判定、`+N` 的计数、折行不横向溢出——这些正是单测证明不了、上一轮翻车的那一类。建议在 `scripts/desktop-acceptance` 增一个场景量这三件事。未在 P1 内做，是因为它属于验收框架而非本阶段的交付物，且需用户决定优先级。
+- **桌面验收：已补**（2026-09-02，用户选定优先级后完成）。`scripts/desktop-acceptance/topic-directions.mjs` 七条断言：收起恰为一行；能装下的方向不显示徽标；徽标在框内不压文字；**徽标承诺的 +N 等于展开后真正多出的行数**；宽窄两种面板下都折行而非横向溢出；渲染进程无 console 错误。全过。
+- **那条最关键的断言刻意不复算插件的公式**：若照 `scrollHeight/clientHeight` 再算一遍，就只是重述插件自己的算术，布局错了也会通过。改为「展开后量真实增高」，是对同一主张的独立测量。变异检验确认有效：把徽标改成 `hidden + 1` 后红在 `the badge promises +3 lines but opening the field gains 2.00`。
 - 端到端日报仍被 LLM 端点不可达阻塞，不属本阶段。
 
 ## Abort / reshape triggers

@@ -12,6 +12,7 @@ import {
 } from "./scenarios.mjs";
 import { blockersFromError } from "./app-state.mjs";
 import { librarySettingsScenarios } from "./library-settings.mjs";
+import { topicDirectionsScenarios } from "./topic-directions.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
 import { startProbeListener } from "./probe-listener.mjs";
 import { runDesktopSession } from "./session.mjs";
@@ -109,6 +110,7 @@ try {
       });
       const results = await runScenarios([
         () => librarySettingsScenarios({ session, screenshots }),
+        () => topicDirectionsScenarios({ session, screenshots }),
       ]);
       return {
         results,
