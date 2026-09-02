@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-02T23:05:33+08:00
-revision: 2
+updated: 2026-09-02T23:20:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -58,7 +58,11 @@ revision: 2
 - **兜底必须有上界**，这是本 chunk 最要紧的一条断言：任何输入都不得产出超过约定字符数的文本，否则版式一怪就把块数拉回三位数。
 - 用冻结语料里的真实首页做几条夹具（含双栏、含无 Abstract 标题的期刊版式），不要只测理想输入。
 - exception: 无
-- [ ] implementation and tests accepted
+- **已完成**。`packages/core/src/library/fulltext/abstract-extraction.ts`，三条路径逐页尝试：`marker`（`Abstract` / `ABSTRACT` / 字间距 `A B S T R A C T`，独占行与行内起头都认）、`dated`（REVTeX 不印 Abstract 一词，正文跟在 `(Dated: …)` 后）、`leading-text`（有界兜底）。无文本层判 `none` 而**不兜底**——把 bibcode 水印当摘要嵌进去比没有向量更糟。
+- **真实语料实测（212 篇）**：marker 177（83.5%）、dated 2（0.9%）、leading-text 26（12.3%）、none 7（3.3%）。**84.4% 走的是真摘要路径，兜底率 12.3% 远低于 abort trigger 的「多数」阈值，不触发。** 摘要长度中位数 1594 字符、p90 2397；总索引字符 **337,786**，对比改造前约 4800 万字符。
+- **变异检验发现了一个测试盲点**：禁掉终止规则后三条主路径断言变红，但「摘要在第 2 页」那条**照样绿**——它的 `not.toMatch(/Bocquet/)` 查的是上一页的内容，管不住终止。已补一条 `not.toMatch(/Introduction/)`。这与 P1 那条「红必须红在被测行为上」是同一类错误的另一面：**绿也必须绿在被测行为上**。
+- **一处刻意不做的调优**：兜底样本里 `Beck2022`、`DES Collaboration2022` 取到的是期刊卷页页眉而非标题，加几条正则就能修好。**没有修**——那等于拿 8 个样本调参，正是 goal 的 Constraints 里「阈值不得拍脑袋定」警告的同类错误，且兜底文本质量我没有可测判据，只有主观观感。记入 open questions。
+- [x] implementation and tests accepted
 
 ### Chunk 3 — 索引改用它，且只解析首页
 
@@ -117,5 +121,6 @@ revision: 2
 - **ADR 0008 的全文授权深度。** 本阶段之后离开机器的只剩标题与摘要级文本，「全文深度」很可能已无对象（ADR 0013 Consequences 明写）。P2 只记录事实，退不退休那条 ADR 是 goal 的非目标。
 - **DOI/Crossref 作为摘要来源。** 实测 45.3% 的论文有 DOI，是拿到真摘要的现成路。本阶段不做——它新增外部依赖与授权面，值得单独决定。
 - **旧式 arXiv id 带版本号提取不出**（`LEGACY_ARXIV_ID_IN_TEXT_RE` 少 `(?:v\d+)?`）。真缺陷，按用户方向本阶段不修。
+- **兜底文本的质量。** 26 篇走 `leading-text` 的里面，有几篇开头是期刊卷页页眉而非标题。可修，但需要先有可测的质量判据，不能按样本调正则。
 - **聚类的 `MAX_CLUSTERING_CHUNKS_PER_PAPER = 80` 与 `recluster.ts` 的 centroid 理由**，在每篇只剩一到两块之后都成了死条款。等 P4 真的动聚类时一并处理。
 - **`2026-08-13-discovery-loop-and-library-insight` 的 P4「检索规模加固」**：动机在本阶段落地后基本消失，是否收束由用户定。
