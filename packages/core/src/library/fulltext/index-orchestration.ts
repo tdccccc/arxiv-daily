@@ -136,7 +136,10 @@ export async function indexPersonalLibraryFullText(
   }
   const log = input.logger;
   const expectedDerivation: EvidenceDerivation = {
-    parser: input.parserSelector?.preferredParser.provenance ?? input.parser?.provenance ?? LEGACY_PARSER_PROVENANCE,
+    parser: input.parserSelector?.preferredParser.provenance
+      ?? input.parser?.provenance
+      ?? input.extractor?.provenance
+      ?? LEGACY_PARSER_PROVENANCE,
     ...CHUNK_DERIVATION_VERSIONS,
   };
   const nowIso = (input.now ?? (() => new Date()))().toISOString();
@@ -663,7 +666,7 @@ async function parseIndexDocument(
   return {
     extraction: await input.extractor.extractPdfText(bytes, { signal: input.signal }),
     capabilities: ["page-text"],
-    derivation: { parser: LEGACY_PARSER_PROVENANCE, ...CHUNK_DERIVATION_VERSIONS },
+    derivation: { parser: input.extractor.provenance, ...CHUNK_DERIVATION_VERSIONS },
   };
 }
 

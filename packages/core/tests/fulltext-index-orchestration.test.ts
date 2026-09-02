@@ -120,8 +120,11 @@ class FakeSource implements ScopedLibrarySource {
 class FakeExtractor implements PdfTextExtractor {
   calls = 0;
   failFor = new Set<string>();
+  readonly provenance: { readonly id: string; readonly version: string };
 
-  constructor(private readonly texts: Record<string, string[]>) {}
+  constructor(private readonly texts: Record<string, string[]>, version = "1") {
+    this.provenance = { id: "fixture-extractor", version };
+  }
 
   async extractPdfText(bytes: Uint8Array): Promise<{ pages: readonly string[] }> {
     this.calls += 1;
@@ -423,6 +426,72 @@ describe("full-text indexing orchestration", () => {
     expect(secondCalls.value).toBe(1);
     expect(embedding.calls).toBe(embeddingCallsBefore + 1);
     expect((await store.loadPaper("arxiv:2403.19236"))?.derivation?.parser.version).toBe("2");
+  });
+
+  it("re-indexes unchanged content when extractor provenance changes", async () => {
+    // Swapping the extraction engine changes the indexed text, so the stored
+    // vectors are stale. Without a provenance on the extractor port the swap
+    // is invisible and the index silently mixes text from two engines.
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const embedding = new FakeEmbedding();
+    const texts = { "lib/a.pdf": [LONG_ALPHA] };
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor(texts, "1"),
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const second = new FakeExtractor(texts, "2");
+    const embeddingCallsBefore = embedding.calls;
+    const summary = await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: second,
+      embedding,
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(summary.indexed).toBe(1);
+    expect(summary.reused).toBe(0);
+    expect(second.calls).toBe(1);
+    expect(embedding.calls).toBe(embeddingCallsBefore + 1);
+    expect((await store.loadPaper("arxiv:2403.19236"))?.derivation?.parser)
+      .toEqual({ id: "fixture-extractor", version: "2" });
+  });
+
+  it("reuses an unchanged extractor-built paper when its provenance is unchanged", async () => {
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const embedding = new FakeEmbedding();
+    const texts = { "lib/a.pdf": [LONG_ALPHA] };
+
+    await indexPersonalLibraryFullText({
+      catalog, source: new FakeSource(), extractor: new FakeExtractor(texts, "1"),
+      embedding, store, now: () => new Date(NOW),
+    });
+
+    const second = new FakeExtractor(texts, "1");
+    const summary = await indexPersonalLibraryFullText({
+      catalog, source: new FakeSource(), extractor: second,
+      embedding, store, now: () => new Date(NOW),
+    });
+
+    expect(summary.reused).toBe(1);
+    expect(second.calls).toBe(0);
   });
 
   it("reuses an unchanged promoted v1 paper without parsing or embedding", async () => {

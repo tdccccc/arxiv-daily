@@ -53,6 +53,14 @@ export interface PdfExtractionOptions {
 
 export interface PdfTextExtractor {
   /**
+   * Stable engine identifier and output-contract version, mirroring
+   * `DocumentParser.provenance`. It enters each chunk's identity and the
+   * index reuse decision, so swapping the extraction engine — or changing
+   * what an engine produces — rebuilds the index instead of silently mixing
+   * text from two engines in one store.
+   */
+  readonly provenance: { readonly id: string; readonly version: string };
+  /**
    * Extract full text from PDF bytes. Must resolve pages in document order and
    * never throw for extractable content — malformed pages degrade to empty
    * strings; hard I/O or runtime failures throw.

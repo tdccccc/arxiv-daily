@@ -273,8 +273,12 @@ export class ObsidianPdfDocumentParser implements DocumentParser {
 export class ObsidianPdfTextExtractor implements PdfTextExtractor {
   private readonly parser: ObsidianPdfDocumentParser;
 
+  /** The engine actually doing the work is the parser this delegates to. */
+  readonly provenance: { readonly id: string; readonly version: string };
+
   constructor(pdfjsLib?: PdfJsLib) {
     this.parser = new ObsidianPdfDocumentParser(pdfjsLib);
+    this.provenance = this.parser.provenance;
   }
 
   async extractPdfText(
