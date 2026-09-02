@@ -2045,7 +2045,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       declarativeRows.renderSetupGuideRow(this, setting);
       return;
     }
-    this.refreshSettings();
+    // A finished setup drops the guide from the definitions, so there is no
+    // row to update. Re-rendering the whole tab here would replace the input
+    // the user is typing into, so do it only when the guide has to come back.
+    if (this.shouldShowSetupGuide()) this.refreshSettings();
   }
 
   public refreshSetupGuide(): void {

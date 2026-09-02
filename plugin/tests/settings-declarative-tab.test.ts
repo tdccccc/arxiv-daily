@@ -1732,3 +1732,85 @@ describe("topic directions editor", () => {
     tab.containerEl.remove();
   });
 });
+
+describe("topic editing when the setup guide is not on screen", () => {
+  /**
+   * A finished setup drops the "Getting started" row from the declarative
+   * definitions, so no guide row is ever registered. refreshSetupGuide() then
+   * used to fall back to a whole-tab re-render, which replaces the input the
+   * user is typing into. Onboarding hid this: while the guide is on screen the
+   * cheap path is taken, and that is the only case the 0.4.4 fix covered.
+   */
+  function completedSetup() {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    (plugin as unknown as { stateStore: { snapshot: () => unknown } }).stateStore = {
+      snapshot: () => ({ "2026-09-01": { status: "completed" } }),
+    };
+    settings.llm.apiKey = "sk-test";
+    settings.llm.baseUrl = "https://api.example.com/v1";
+    settings.llm.model = "test-model";
+    settings.arxiv.topics.push(
+      normalizeTopic({
+        id: "t1",
+        name: "Photo-z",
+        tag: "photo-z",
+        detail: false,
+        directions: [{ id: "d1", text: "Photometric redshift methods.", origin: "manual" }],
+      }),
+    );
+    return { tab, settings, saveSettings };
+  }
+
+  it("does not re-render the whole tab while any topic field is edited", async () => {
+    const { tab, saveSettings } = completedSetup();
+    // Deliberately never render a setup guide row: a finished setup has none.
+    expect(tab.shouldShowSetupGuide()).toBe(false);
+    const refresh = vi.spyOn(tab, "refreshSettings");
+    document.body.appendChild(tab.containerEl);
+    const topicSetting = new Setting(tab.containerEl);
+    tab.renderTopicRow(topicSetting, 0);
+
+    // Not direction-specific: name and tag lose focus the same way.
+    const fields = [
+      ".arxiv-daily-settings__topic-name-input",
+      ".arxiv-daily-settings__topic-tag-input",
+      ".arxiv-daily-settings__topic-direction-input",
+    ].map((selector) =>
+      topicSetting.settingEl.querySelector<HTMLInputElement>(selector)!,
+    );
+
+    for (const [index, input] of fields.entries()) {
+      input.focus();
+      input.value = `draft-${index}`;
+      input.dispatchEvent(new Event("input"));
+      await vi.waitFor(() => {
+        expect(saveSettings).toHaveBeenCalledTimes(index + 1);
+      });
+      expect(document.activeElement).toBe(input);
+    }
+
+    expect(refresh).not.toHaveBeenCalled();
+    tab.containerEl.remove();
+  });
+
+  it("still re-renders when the guide has to appear again", async () => {
+    const { tab, settings, saveSettings } = completedSetup();
+    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    document.body.appendChild(tab.containerEl);
+    const topicSetting = new Setting(tab.containerEl);
+    tab.renderTopicRow(topicSetting, 0);
+
+    // Emptying the only direction makes the setup incomplete, so the guide
+    // must come back — that transition is worth a full re-render.
+    const input = topicSetting.settingEl.querySelector<HTMLInputElement>(
+      ".arxiv-daily-settings__topic-direction-input",
+    )!;
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+
+    expect(settings.arxiv.topics[0].description).toBe("");
+    expect(refresh).toHaveBeenCalled();
+    tab.containerEl.remove();
+  });
+});
