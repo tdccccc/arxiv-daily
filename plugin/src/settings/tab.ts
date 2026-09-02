@@ -2564,8 +2564,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // the truncation marker cannot be decided until it is on screen.
     const directionOverflowChecks: Array<() => void> = [];
 
-    const addDirectionAt = async (position: number) => {
-      topic.directions.splice(position, 0, {
+    const appendDirection = async () => {
+      topic.directions.push({
         id: crypto.randomUUID(),
         text: "",
         origin: "manual",
@@ -2575,7 +2575,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .querySelectorAll<HTMLTextAreaElement>(
           ".arxiv-daily-settings__topic-direction-input",
         )
-        .item(position)
+        .item(topic.directions.length - 1)
         ?.focus();
       await persistDirections();
     };
@@ -2642,9 +2642,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           syncField();
         };
         dirInput.onkeydown = (event: KeyboardEvent) => {
+          // A direction is one line of text: the filter prompt joins topics
+          // with newlines, so one stored here would break that structure.
+          // Enter cannot insert one, so it confirms instead — the field
+          // collapses back and gives up focus. Adding a direction stays the
+          // Add button's job.
           if (event.key !== "Enter") return;
           event.preventDefault();
-          void addDirectionAt(directionIndex + 1);
+          dirInput.blur();
         };
 
         const removeBtn = line.createEl("button", {
@@ -2666,7 +2671,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         text: "Add direction",
         attr: { type: "button" },
       });
-      addBtn.onclick = () => void addDirectionAt(topic.directions.length);
+      addBtn.onclick = () => void appendDirection();
     };
     renderDirections();
 

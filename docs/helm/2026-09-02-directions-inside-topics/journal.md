@@ -89,3 +89,13 @@
 - validation: core 2050 项全绿、plugin 718/718、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。
 - boundary: 管线仍未动，`paper-filter-contract.ts` 继续读 `description`——这是 P1 的设计前提，也由 Chunk 5 逐字钉死。ADR 0005/0007/0008 未动，授权面未变。三个并行 active helm 未碰。
 - next: P2（索引只覆盖标题与摘要，重建降到分钟级）。P1 的六条 open questions 保持开放，尤其是 personal novelty 基准与「主题名是否作为硬门」。
+
+## 2026-09-02 — Enter 由「新增方向」改为「确认并失焦」
+
+- evidence: 用户试用后指出 Enter 直接新增方向没有必要——「点击添加足矣」。同时注意到 Enter 与 Shift+Enter 都换不了行。
+- **换行这条不能顺势放开，理由是数据契约不是偏好**：方向存的是一行文字，筛选 prompt 把每个主题拼成 `- tag: description` 再按 `\n` 连接，文本里混进换行会切断那个列表结构（ADR 0012 §2 的数据模型亦然）。所以 Enter 只能被吞掉。
+- change: Enter 先改为完全静默，用户随即定为**确认**——吞掉按键、令输入框失焦，方向框收回一行。Shift+Enter 同样处理：它一样插不了换行，行为不一致反而更迷惑。新增方向仍只由「Add direction」按钮承担。
+- disposition: 顺手收掉一处多余的通用性——「按位置插入方向」只剩追加到末尾一个调用点，简化为 `appendDirection`。点 Add 后光标仍落进新方向框。
+- **变异检验**：改完一次全绿，遂把 `blur()` 注释掉确认那条测试变红（焦点仍在输入框）。该测试断言的是「Enter 后焦点离开且方向框收回」这一行为，不是「代码里存在 blur 调用」。
+- validation: plugin 718/718、typecheck 四包、lint 0 error、产物已装入 plugin_test（main.js md5 `7b358e46`），用户确认。
+- next: P2（索引只覆盖标题与摘要）。另有一项待用户定优先级：给方向列表补一个桌面验收场景，量截断判定、`+N` 计数与折行不横向溢出。

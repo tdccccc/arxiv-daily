@@ -1662,10 +1662,15 @@ describe("topic directions editor", () => {
     tab.containerEl.remove();
   });
 
-  it("starts the next direction on Enter instead of inserting a newline", async () => {
+  it("makes Enter confirm the direction and leave the field", async () => {
     const { tab, settings } = renderTopicWithDirections(["First."]);
 
     const input = directionInputs(tab)[0];
+    const field = input.parentElement!;
+    input.focus();
+    input.dispatchEvent(new Event("focus"));
+    expect(field.classList.contains("is-collapsed")).toBe(false);
+
     const event = new KeyboardEvent("keydown", {
       key: "Enter",
       bubbles: true,
@@ -1674,10 +1679,14 @@ describe("topic directions editor", () => {
     input.dispatchEvent(event);
     await new Promise<void>((resolve) => queueMicrotask(resolve));
 
+    // No newline is inserted: a direction is one line, and the filter prompt
+    // joins topics with "\n".
     expect(event.defaultPrevented).toBe(true);
-    expect(settings.arxiv.topics[0].directions).toHaveLength(2);
-    expect(settings.arxiv.topics[0].directions[1].text).toBe("");
-    expect(directionInputs(tab)).toHaveLength(2);
+    // Enter confirms rather than adding: that stays the Add button's job.
+    expect(settings.arxiv.topics[0].directions).toHaveLength(1);
+    expect(settings.arxiv.topics[0].directions[0].text).toBe("First.");
+    expect(document.activeElement).not.toBe(input);
+    expect(field.classList.contains("is-collapsed")).toBe(true);
     tab.containerEl.remove();
   });
 
