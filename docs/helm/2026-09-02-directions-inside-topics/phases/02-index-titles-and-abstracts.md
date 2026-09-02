@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-02T23:20:00+08:00
-revision: 3
+updated: 2026-09-02T23:30:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -64,19 +64,32 @@ revision: 3
 - **一处刻意不做的调优**：兜底样本里 `Beck2022`、`DES Collaboration2022` 取到的是期刊卷页页眉而非标题，加几条正则就能修好。**没有修**——那等于拿 8 个样本调参，正是 goal 的 Constraints 里「阈值不得拍脑袋定」警告的同类错误，且兜底文本质量我没有可测判据，只有主观观感。记入 open questions。
 - [x] implementation and tests accepted
 
-### Chunk 3 — 索引改用它，且只解析首页
+### Chunk 3 — 解析加页数上界（port + 宿主）
 
-- change kind: behavior change
+- change kind: behavior change（跨包契约变更）
 - strategy: strict Red-Green-Refactor
-- Red / baseline signal: 断言两件事——(a) 一篇几十页的论文，索引产出**恰有一到两块**，文本即标题与摘要；(b) **解析范围收到首页**，不再对整篇做结构化解析。红在当前会解析全文并产出几十块。
-- Green check: `npm run test --workspace @arxiv-daily/core -- fulltext-index`
-- regression checks: core 全量；plugin 全量；CLI 71/71；`npm run typecheck`
-- **(b) 比 (a) 更重要**：块数少可以靠截断伪造，而「不解析全文」才是「分钟级」赖以成立的那件事（123ms/篇 的预算不容一次全篇解析）。取红判据要落在解析范围上，不能只数块数。
-- catalog 有摘要时是否优先用它？**默认不用**——用户定的是以 PDF 内容为准，且双路径会让同一个库里两种来源的文本混在一起，聚类相似度失去可比性。若日后要用，那是独立决定。
+- Red / baseline signal: 断言 `extractPdfText(bytes, { maxPages: 2 })` 只返回两页，且**宿主只对这两页调用 `getPage`**（后者是真判据——只截断返回值等于没省解析）。红在选项不存在。
+- Green check: `npm run test --workspace obsidian-arxiv-daily -- pdf-text-extractor`
+- regression checks: 不带 `maxPages` 时行为逐字不变（既有 extractor 测试全绿）；core / plugin 全量；typecheck
+- **改动面**：core 的 `PdfExtractionOptions` 加可选 `maxPages`，plugin 的 `pdf-text-extractor.ts:229` 逐页循环改上界。用户 2026-09-02 定：做。
+- **「只截断不少解析」是本 chunk 唯一会骗人的失败模式**，所以取红判据落在 `getPage` 调用次数上，不落在返回页数上。
 - exception: 无
 - [ ] implementation and tests accepted
 
-### Chunk 4 — 抬 derivation 版本，强制全库重建
+### Chunk 4 — 索引改走 extractor + 摘要提取，产出一到两块
+
+- change kind: behavior change
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: 一篇几十页的论文，索引产出**恰有一到两块**（标题 + 摘要），且**只解析前两页**。红在当前解析全文并产出几十块。
+- Green check: `npm run test --workspace @arxiv-daily/core -- fulltext-index`
+- regression checks: core 全量；plugin 全量；CLI 71/71；typecheck
+- **索引路径不再走结构化 parser**（用户 2026-09-02 定）。`headings` / `locator` 都是为全文分块服务的，摘要提取只要纯文本；Docling 因此在**索引路径上**失去对象——与 ADR 0008 全文授权深度那条情形同类。`parseIndexDocument` 的 parser / parserSelector 分支在索引路径上退场，`derivation.parser` 收敛为 extractor 的 provenance。
+- **标题提取要对所有论文生效，不再只对 fallback**：catalog 有标题的只有 1.4%，维持现状会让 98.6% 的论文没有标题进索引。`extractTitleFromFirstPage` 本就是针对这个库调优的（26 条测试在），改的是调用条件不是算法。
+- catalog 有摘要时是否优先用它？**不用**——用户定的是以 PDF 内容为准，且双来源会让同一个库里的文本失去可比性，聚类相似度跟着不可比。
+- exception: 无
+- [ ] implementation and tests accepted
+
+### Chunk 5 — 抬 derivation 版本，强制全库重建
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
@@ -84,11 +97,12 @@ revision: 3
 - Green check: `npm run test --workspace @arxiv-daily/core -- fulltext-index`
 - regression checks: 增量路径 `packages/core/src/library/incremental/` 相关测试；core 全量；CLI 71/71
 - 由抬升 `CHUNK_DERIVATION_VERSIONS`（`evidence-chunk.ts:33`）达成——ADR 0013 §3「重建而非迁移」的执行点。**最坏失败模式是混合索引**：一部分论文 113 块、一部分 2 块，`maxChunkCosine` 会系统性偏向全文那部分，**而且不报错**。
-- **revision 1 里的「陈旧摘要复用洞」在新方向下不存在**：文本派生自文件内容，文件不变则文本不变，现有 `observationFingerprints` 已是正确信号。`textHash` 不必参与复用判定。
+- Chunk 4 让 `derivation.parser` 变了，可能已经隐含触发重建。**仍要显式抬版本**：靠副作用达成的重建，下次有人改回 provenance 就会静默失效。
+- **revision 1 里的「陈旧摘要复用洞」在新方向下不存在**：文本派生自文件内容，文件不变则文本不变，现有 `observationFingerprints` 已是正确信号。
 - exception: 无
 - [ ] implementation and tests accepted
 
-### Chunk 5 — 在冻结语料上复量，并确认聚类没塌
+### Chunk 6 — 在冻结语料上复量，并确认聚类没塌
 
 - change kind: non-behavioral（验收测量）
 - strategy: correctness + performance baseline
@@ -96,6 +110,7 @@ revision: 3
 - Green check: 冻结语料重建 + 一次聚类，数字与方向数落进 journal.md
 - regression checks: core / plugin / CLI 全量、typecheck、lint、check:boundaries
 - **必须用同一份冻结语料**（212 个文件，硬链接固定），否则数字不可比。
+- **要用真解析器复核 Chunk 2 的路径分布**：那组百分比是拿 `pdftotext` 当代理量的，产品走 pdfjs，文本会有出入。
 - **「仍能产出方向」是活性判据，不是质量判据。** 方向是否变粗需要与旧索引的方向做人可读的对比，**判断权在用户**。
 - 桌面验收：索引是后台过程，无渲染几何可量，判定为不需要——除非改动触及设置页的索引进度显示。
 - exception: 测量与验收无红可取。补偿验证是必须与 Chunk 1 同库同法比对。
