@@ -163,7 +163,7 @@ export class ObsidianPdfDocumentParser implements DocumentParser {
     try {
       const doc = await this.openDocument(loadingTask, signal);
       try {
-        return await this.extractAllPages(doc, bytes, signal);
+        return await this.extractAllPages(doc, bytes, signal, options?.maxPages);
       } finally {
         // Document teardown belongs to the loading task (PDFDocumentProxy
         // has no destroy()); idempotent, and safe if the abort handler
@@ -224,9 +224,15 @@ export class ObsidianPdfDocumentParser implements DocumentParser {
     doc: PdfJsDocument,
     bytes: Uint8Array,
     signal?: AbortSignal,
+    maxPages?: number,
   ): Promise<ParsedDocument> {
     const blocks: ParsedDocument["blocks"][number][] = [];
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+    // Pages past the bound are never opened: the cost this avoids is pdf.js
+    // parsing them, which slicing the finished result would not save.
+    const lastPage = maxPages === undefined || !Number.isFinite(maxPages)
+      ? doc.numPages
+      : Math.min(doc.numPages, Math.max(0, Math.floor(maxPages)));
+    for (let pageNumber = 1; pageNumber <= lastPage; pageNumber++) {
       let text = "";
       let layout: ParsedTextLayoutLine[] = [];
       try {

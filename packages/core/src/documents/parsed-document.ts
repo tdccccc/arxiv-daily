@@ -58,6 +58,12 @@ export interface ParsedDocument {
 
 export interface ParseDocumentOptions {
   readonly signal?: AbortSignal;
+  /**
+   * Stop after this many leading pages. Parsers that cannot bound their work
+   * may ignore it; callers must not assume the result is bounded. See
+   * `PdfExtractionOptions.maxPages`.
+   */
+  readonly maxPages?: number;
 }
 
 export interface DocumentParser {

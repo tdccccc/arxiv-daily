@@ -42,6 +42,13 @@ export interface PdfLayoutLine {
 
 export interface PdfExtractionOptions {
   signal?: AbortSignal;
+  /**
+   * Stop after this many leading pages. Indexing covers a paper's title and
+   * abstract (ADR 0013), which live on the first page or two, so the pages
+   * behind the bound are never opened — the saving is unparsed pages, not a
+   * truncated result. Absent means the whole document.
+   */
+  maxPages?: number;
 }
 
 export interface PdfTextExtractor {
