@@ -161,3 +161,12 @@
 - validation: plugin **721/721**（P1 时 718，新增 3）、core 2060、CLI 71/71、typecheck 四包、lint 0 error（20 warning 既有）、check:boundaries OK。
 - boundary: 索引仍在走全文分块——`maxPages` 只是把能力加上，真正用它是 Chunk 4。ADR 0005/0007/0008 未动。
 - next: Chunk 4——索引改走 extractor + 摘要提取，产出一到两块；结构化 parser 在索引路径上退场（用户已定）；标题提取改为对所有论文生效，因为 catalog 有标题的只有 1.4%。
+
+## 2026-09-02 — Chunk 4 补一条：extractor 缺 provenance，换引擎不会触发重建
+
+- evidence: 用户问「PDF 内容提取是否支持后期更换引擎」，查证时发现一处不对称。`DocumentParser` 声明 `provenance {id, version}` 与 `capabilities`，provenance 进 chunk 指纹、也进 `sameDerivation` 的复用判定——所以换解析器或升版本，索引会整批重建，这是设计好的。**但 `PdfTextExtractor` 接口根本没有 provenance**：走 extractor 分支时 derivation 被硬编码成 `LEGACY_PARSER_PROVENANCE`（`index-orchestration.ts:666`）。换掉 extractor 实现，索引察觉不到，也不重建。
+- **这直接打到 Chunk 4 的设计上**：用户定的「索引走 extractor 不走 parser」把索引挪到了这条没有来源标记的路上，等于把「换引擎自动重建」这层保护丢掉。**这是我在计划里点名的「混合索引」最坏失败模式的第二个入口**——之前担心的是一部分论文 113 块、一部分 2 块；现在是一部分文本来自这个引擎、一部分来自那个引擎。两者同样静默、同样不报错、同样让 `maxChunkCosine` 的相似度失去可比性。
+- change: Chunk 4 加一条判据——给 extractor 补 provenance，与 parser 那层对称；取红为「换一个 provenance 不同的 extractor 实现后，既有 ready 记录不得被判为 `reused`」。phase revision 5 → 6。
+- **值得记的是发现方式**：这个洞不是测试或回归翻出来的，是回答一个「以后能不能换引擎」的问题时查证出来的。**当时如果照着计划直接写 Chunk 4，它会静默地跟着落地**——因为现有测试全绿，typecheck 也过，没有任何东西会响。
+- validation: 尚未改源码，无回归可跑。Chunk 3 的全绿仍是当前基线。
+- next: Chunk 4，含新增的这条 provenance 判据。

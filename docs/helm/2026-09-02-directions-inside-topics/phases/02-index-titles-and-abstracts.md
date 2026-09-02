@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-02T23:35:00+08:00
-revision: 5
+updated: 2026-09-02T23:52:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -86,6 +86,7 @@ revision: 5
 - Green check: `npm run test --workspace @arxiv-daily/core -- fulltext-index`
 - regression checks: core 全量；plugin 全量；CLI 71/71；typecheck
 - **索引路径不再走结构化 parser**（用户 2026-09-02 定）。`headings` / `locator` 都是为全文分块服务的，摘要提取只要纯文本；Docling 因此在**索引路径上**失去对象——与 ADR 0008 全文授权深度那条情形同类。`parseIndexDocument` 的 parser / parserSelector 分支在索引路径上退场，`derivation.parser` 收敛为 extractor 的 provenance。
+- **必须给 extractor 补上 provenance，否则换引擎不再触发重建。** `DocumentParser` 声明 `provenance {id, version}`，它进 chunk 指纹也进复用判定，所以换解析器或升版本会整批重建；**而 `PdfTextExtractor` 没有这个字段**，走 extractor 分支时 derivation 硬编码为 `LEGACY_PARSER_PROVENANCE`（`index-orchestration.ts:666`）。把索引挪到 extractor 上就等于丢掉这层保护——**这是「混合索引」那个最坏失败模式的第二个入口**：不再是一部分 113 块一部分 2 块，而是一部分文本来自这个引擎、一部分来自那个引擎，同样静默，同样让 `maxChunkCosine` 失去可比性。取红判据：换一个 provenance 不同的 extractor 实现后，既有 ready 记录**不得被判为 `reused`**。
 - **标题提取要对所有论文生效，不再只对 fallback**：catalog 有标题的只有 1.4%，维持现状会让 98.6% 的论文没有标题进索引。`extractTitleFromFirstPage` 本就是针对这个库调优的（26 条测试在），改的是调用条件不是算法。
 - catalog 有摘要时是否优先用它？**不用**——用户定的是以 PDF 内容为准，且双来源会让同一个库里的文本失去可比性，聚类相似度跟着不可比。
 - exception: 无
