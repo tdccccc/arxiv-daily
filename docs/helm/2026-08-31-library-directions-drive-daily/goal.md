@@ -1,9 +1,9 @@
 # 文献库方向驱动日报（library directions drive the daily）
 
-status: active
+status: abandoned
 created: 2026-08-31T22:05:18+08:00
-updated: 2026-09-01T20:32:18+08:00
-revision: 9
+updated: 2026-09-01T22:05:00+08:00
+revision: 10
 owner: claude-code-main-session
 
 ## Intent
@@ -44,9 +44,9 @@ owner: claude-code-main-session
 1. P1 — 方向候选生成时跨簇综合，同义方向不再各占一条 — status: done
 2. P2 — 候选可一次成组确认，证据单薄的默认不勾，确认后画像非空 — status: done
 3. P3 — 已确认方向可独立满足日报的前置检查 — status: done
-4. P4 — 待复核的条目数量与入口出现在 Dashboard 上 — status: pending
-5. P5 — 端到端跑出一篇带文献库来源的真实日报 — status: pending
-6. P6 — Proposed 页可扫读：折叠详情、主操作可见、不被裁切 — status: active
+4. P4 — 待复核的条目数量与入口出现在 Dashboard 上 — status: superseded（ADR 0012：复审页本身要重做）
+5. P5 — 端到端跑出一篇带文献库来源的真实日报 — status: superseded（意图移交新 helm）
+6. P6 — Proposed 页可扫读：折叠详情、主操作可见、不被裁切 — status: abandoned
 
 ## Open questions
 
