@@ -542,6 +542,37 @@ describe("full-text indexing orchestration", () => {
     expect(store.manifest.papers["arxiv:2403.19236"]?.chunkCount).toBe(1);
   });
 
+  it("fails a paper whose leading pages yield neither title nor abstract", async () => {
+    // Storing it ready with zero chunks would leave a record search can never
+    // match, reporting nothing wrong. A failure is visible in the run summary
+    // and costs only two pages of parsing to retry.
+    const paperKey = "arxiv:2403.19236";
+    const catalog = makeCatalog([{
+      paperKey,
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+
+    const summary = await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      // A cover page with no title line and no abstract — the shape scanned
+      // books and stray non-papers take.
+      extractor: new PagedExtractor(["   \n\n  \n"]),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(summary.failed).toBe(1);
+    expect(summary.indexed).toBe(0);
+    const record = (await store.loadManifest()).papers[paperKey];
+    expect(record?.status).toBe("failed");
+    expect(record?.error).toContain("no indexable text");
+    expect(await store.loadPaper(paperKey)).toBeNull();
+  });
+
   it("extracts a title for catalog-identified papers, not only fallback ones", async () => {
     // Only 1.4% of the frozen corpus yields catalog metadata, so a title that
     // only fallback papers receive leaves the rest of the library untitled.

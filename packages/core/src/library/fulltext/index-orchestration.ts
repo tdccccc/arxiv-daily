@@ -543,6 +543,16 @@ async function buildPaperDocument(input: {
   // promises, rather than a second chunking path that would need its own
   // identity and overlap rules.
   const indexedText = [title, abstract].filter((part) => part !== undefined && part !== "").join("\n\n");
+  // A paper with no title and no abstract has nothing to embed. Storing it
+  // ready with zero chunks would put a record in the manifest that search can
+  // never match while reporting nothing wrong; failing it is visible in the run
+  // summary and costs only these two pages to retry. Scanned covers and stray
+  // non-papers are what reach here.
+  if (indexedText === "") {
+    throw new Error(
+      `no indexable text: neither a title nor an abstract was found in the first ${MAX_LEADING_PAGES} pages`,
+    );
+  }
   const textHash = `sha256:${sha256Hex(indexedText)}`;
   const chunks = chunkParsedDocument(
     {
