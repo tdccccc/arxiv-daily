@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-03T14:20:00+08:00
-revision: 12
+updated: 2026-09-03T15:10:00+08:00
+revision: 13
 
 ## Outcome
 
@@ -193,4 +193,5 @@ revision: 12
 - **兜底文本的质量。** 26 篇走 `leading-text` 的里面，有几篇开头是期刊卷页页眉而非标题。可修，但需要先有可测的质量判据，不能按样本调正则。
 - **聚类的 `MAX_CLUSTERING_CHUNKS_PER_PAPER = 80` 与 `recluster.ts` 的 centroid 理由**，在每篇只剩一到两块之后都成了死条款。等 P4 真的动聚类时一并处理。
 - **`2026-08-13-discovery-loop-and-library-insight` 的 P4「检索规模加固」**：动机在本阶段落地后基本消失，是否收束由用户定。
+- **近重复论文是否在聚类前合并（2026-09-03 用户指出）。** 字节去重已在做（212 文件 → 207 篇，内容寻址键），但**同一篇论文的两份不同文件**（`Raichoor2023` / `Raichoor2023 1` 等，字节不同）抓不到，冻结语料里有 **7 组**。其中 4 组是 Wen 系列且全在「星系团星表」那个簇里，**把该簇的凝聚度虚高了**；近重复还会凭空造出 2 篇的小簇污染方向列表。候选判据：归一化标题精确相等（不含阈值，但会误合并同名不同篇）、向量相似度阈值（与 goal「阈值不得拍脑袋定」冲突）、或不自动合并只报给用户清理。**待用户定。**
 - **整条 PDF parser sidecar 装配的去留（2026-09-03 判定三条 parser 断言时发现）。** 计划第 88 条说的是「Docling 在索引路径上失去对象」，实际上 `buildFullTextDocumentParser`（`plugin/main.ts:1603`）只有 `plugin/main.ts:1695` 一个调用方，就在索引里——**索引路径即全部路径**。Chunk 4 第二部分落地后，`SidecarFallbackDocumentParserSelector`、`probeLoopbackSidecarParser`、`ObsidianPdfDocumentParser` 的 parser 身份（它作为 extractor 的委托对象仍在）、以及三个用户可见设置行 `pdfParserSidecar.{enabled,capabilitiesUrl,parseUrl}` 全部失去生产调用方。**Chunk 4 只让它们失去调用方，不删任何一个**——删设置项是用户可见的收窄，须用户单独决定。相关测试（`sidecar-document-parser-client.test.ts` 等）在代码还在时照常保留。
