@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-03T11:48:00+08:00
-revision: 9
+updated: 2026-09-03T13:05:00+08:00
+revision: 10
 
 ## Outcome
 
@@ -131,7 +131,10 @@ revision: 9
 - Chunk 4 让 `derivation.parser` 变了，可能已经隐含触发重建。**仍要显式抬版本**：靠副作用达成的重建，下次有人改回 provenance 就会静默失效。
 - **revision 1 里的「陈旧摘要复用洞」在新方向下不存在**：文本派生自文件内容，文件不变则文本不变，现有 `observationFingerprints` 已是正确信号。
 - exception: 无
-- [ ] implementation and tests accepted
+- **已完成（2026-09-03）**。`chunkerVersion` 2 → 3，`embeddingInputVersion` 1 → 2。**两个都抬**：块的形成方式变了（单块标题+摘要、关掉短段过滤），喂给 embedding 的文本也变了（全文 → 标题+摘要），两条各自为真，只抬一个会让留下的那个字段记着假话。
+- **测试写成每个字段单独变老，而不是一起变老。** 一起变老那版最初也是绿的，但变异检验显示：只把 `chunkerVersion` 退回 2、另一个仍为 2 时，测试照样绿——因为另一个字段的差异已经够触发重建了。**那版测试实际只钉住了「至少有一个字段变了」**，`sameDerivation` 里少比一个字段它也发现不了。拆成两条后，退任一版本号、或从复用比较里删掉任一字段，都会红在对应那条上（四次变异，四次都对）。
+- 测试里的 2 / 1 是写死的字面量，**不能读 `CHUNK_DERIVATION_VERSIONS`**——读常量会让断言跟着常量走，什么也守不住。这两个数字是磁盘上现存索引的真实版本。
+- [x] implementation and tests accepted
 
 ### Chunk 6 — 在冻结语料上复量，并确认聚类没塌
 

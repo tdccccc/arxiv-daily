@@ -193,3 +193,14 @@
 - validation: core **2062**、plugin **720**、CLI **71/71**、typecheck 四包、lint **0 error / 20 warning**（回到基线；中途因删 sidecar 装配多出 4 条 unused import，已清）、check:boundaries OK。
 - boundary: **sidecar 代码与三个设置项一个未删**，只是失去调用方——删用户可见设置是收窄，须用户单独决定。`pdfParserSidecar.enabled` 为真时索引记一条 info 说明它不参与索引，避免设置看着生效实则不然。筛选管线一行未动。
 - next: Chunk 5——显式抬 `CHUNK_DERIVATION_VERSIONS`。**本次已因 provenance 与 derivation 变化隐含触发重建，但仍要显式抬**：靠副作用达成的重建，下次有人改回去就静默失效。
+
+## 2026-09-03 — P2 Chunk 5 done：显式抬重建版本，并抓到一条自己写的假绿
+
+- change: `chunkerVersion` 2 → 3，`embeddingInputVersion` 1 → 2。两个都抬——块的形成方式和喂给 embedding 的文本各自都变了，只抬一个会让留下的那个字段记着假话。常量上补了注释说明每个数字对应什么改动。
+- **本 chunk 真正的收获是抓到一条我自己刚写的假绿。** 最初的测试把两个版本号一起改老，红绿都正常，看着没问题。变异检验时只把 `chunkerVersion` 退回 2（另一个仍是新值），**37 条全绿**——因为剩下那个字段的差异已经足够触发重建了。也就是说那条测试只钉住了「至少有一个字段变了」，`sameDerivation` 里少比一个字段它同样发现不了。
+- **改法是把一条拆成两条，每条只让一个字段变老。** 拆完之后四次变异全部红在对应的那条上：退 `chunkerVersion`、退 `embeddingInputVersion`、从 `sameDerivation` 里删掉任一字段。**这比原来的写法多守住了一件事**——不只是「版本抬了没」，还有「这两个字段是不是都还参与复用判定」，而后者原先整个 orchestration 测试里没有人守。
+- **和 Chunk 2 那次是同一类错误的第三次出现**：绿也必须绿在被测行为上。前两次分别是断言查错了页、断言落在块数而非解析范围上；这次是一个断言被另一个字段的副作用顶绿了。共同点是**只看红绿不看红在哪，就会把「别的原因导致的绿」当成保护**。
+- 测试里的 2 / 1 写死为字面量，不读常量——读常量会让断言跟着常量走。这两个数字是磁盘上现存索引的真实版本。
+- validation: core **2064**、plugin 719、CLI 71/71、typecheck 四包、lint 0 error / 20 warning、check:boundaries OK。
+- boundary: 只动了常量与测试。用户下次建索引会整库重建，这是 ADR 0013 §3 认下的代价。
+- next: Chunk 6——冻结语料复量 + 确认聚类没塌。**这一步有外部阻塞**：需要真实重建索引，而 vault 配的是远程 embedding（`nomic-embed-text`，`http://100.64.2.3:8081/v1`），该端点从 P1 起就没验证过可达。开工前先确认它通不通。

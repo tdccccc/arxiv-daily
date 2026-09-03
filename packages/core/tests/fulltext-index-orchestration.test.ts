@@ -402,6 +402,56 @@ describe("full-text indexing orchestration", () => {
       .toEqual({ id: "fixture-extractor", version: "2" });
   });
 
+  // Libraries already on disk were built with chunkerVersion 2 and
+  // embeddingInputVersion 1, and ADR 0013 §3 requires those to be rebuilt
+  // rather than migrated. The worst outcome is a mixed index — some papers
+  // holding full text, others a title and abstract — where nothing errors and
+  // maxChunkCosine quietly favours the full-text ones.
+  //
+  // The literal old numbers matter: reading CHUNK_DERIVATION_VERSIONS here
+  // would make these assertions move with the constant and protect nothing.
+  // Each field is aged on its own, because ageing both at once still passes
+  // when one of them has been dropped from the reuse comparison.
+  for (const [field, aged] of [
+    ["chunkerVersion", { chunkerVersion: 2 }],
+    ["embeddingInputVersion", { embeddingInputVersion: 1 }],
+  ] as const) {
+    it(`re-indexes a paper whose stored ${field} predates ADR 0013`, async () => {
+      const paperKey = "arxiv:2403.19236";
+      const catalog = makeCatalog([{
+        paperKey,
+        filePaths: ["lib/a.pdf"],
+        fingerprint: fingerprint("f1"),
+      }]);
+      const store = new MemoryStore();
+      const extractor = new FakeExtractor({
+        "lib/a.pdf": [
+          "A Survey of Galaxy Clusters\n\nABSTRACT\nWe derive the cluster mass "
+          + "function from weak lensing measurements across a wide survey area.",
+        ],
+      });
+      const embedding = new FakeEmbedding();
+      const run = () => indexPersonalLibraryFullText({
+        catalog, source: new FakeSource(), extractor, embedding, store, now: () => new Date(NOW),
+      });
+
+      await run();
+
+      // Fingerprints, model and title version stay current, so this one
+      // derivation field is the single reason left to rebuild.
+      const stored = (await store.loadPaper(paperKey))!;
+      const derivation = { ...stored.derivation!, ...aged };
+      stored.derivation = derivation;
+      await store.savePaper(stored);
+      store.manifest.papers[paperKey]!.derivation = derivation;
+
+      const summary = await run();
+
+      expect(summary.indexed).toBe(1);
+      expect(summary.reused).toBe(0);
+    });
+  }
+
   it("reuses an unchanged extractor-built paper when its provenance is unchanged", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",
