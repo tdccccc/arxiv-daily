@@ -262,7 +262,6 @@ describe("wired getSettingDefinitions", () => {
         "Enable · Paused",
         "Library",
         "Embedding",
-        "Better PDF parser",
         "Timezone",
         "Run window",
         "Check every (minutes)",
@@ -273,6 +272,7 @@ describe("wired getSettingDefinitions", () => {
       ]),
     );
     expect(names).not.toContain("Embedding API base URL");
+    expect(names).not.toContain("Better PDF parser");
     expect(names).not.toContain("Sidecar capability URL");
     expect(names).not.toContain("Library connection");
     expect(names).not.toContain("Embedding mode");

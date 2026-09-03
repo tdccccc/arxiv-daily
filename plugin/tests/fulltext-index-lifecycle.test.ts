@@ -266,22 +266,12 @@ describe("personal library full-text index lifecycle", () => {
     );
   });
 
-  it("stops an active full-text index when local sidecar settings change", () => {
-    const memory = memoryStorage();
-    const runtime = fixture(memory.storage);
-    const operation = runtime.internals.operations.begin(
-      "personal-library-fulltext-index",
-      "Personal library full-text index",
-      runtime.scopeFingerprint,
-    );
-
-    runtime.internals.preparePdfParserSidecarSettingsChange([
-      "pdfParserSidecar.parseUrl",
-    ]);
-
-    expect(operation.signal.aborted).toBe(true);
-    expect(operation.signal.reason).toBe("local PDF parser sidecar settings changed");
-  });
+  // "stops an active full-text index when local sidecar settings change" was
+  // removed here along with the behaviour itself. Interrupting a long index run
+  // made sense while the sidecar decided how PDFs were parsed; it no longer
+  // takes part in indexing, so aborting would throw away minutes of work to
+  // apply a setting that changes nothing about the result. The settings still
+  // validate on change — see settings-change-service.test.ts.
 
   it("revalidates a current indexed PDF before opening its evidence page", async () => {
     const memory = memoryStorage();

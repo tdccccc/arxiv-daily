@@ -480,7 +480,6 @@ export default class ArxivDailyPlugin extends Plugin {
             };
           }
         }
-        this.preparePdfParserSidecarSettingsChange(changedKeys);
         return rollback;
       },
     });
@@ -2957,13 +2956,6 @@ export default class ArxivDailyPlugin extends Plugin {
     this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-direction-generation"]);
   }
 
-  private preparePdfParserSidecarSettingsChange(changedKeys: readonly string[]): void {
-    if (!changedKeys.some((key) => key.startsWith("pdfParserSidecar."))) return;
-    this.cancelPersonalLibraryOperationKinds(
-      "local PDF parser sidecar settings changed",
-      ["personal-library-fulltext-index"],
-    );
-  }
 
   private cancelPersonalLibraryOperations(reason: string): void {
     this.cancelPersonalLibraryOperationKinds(reason, [

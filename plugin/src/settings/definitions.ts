@@ -403,27 +403,20 @@ export function buildSettingDefinitions(
                   render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
                 } satisfies SettingDefinitionItem]
               : []),
-            ...(host.renderPdfParserSidecarEnabledRow
-              ? [{
-                  name: "Better PDF parser",
-                  desc: "Optional local sidecar. Off by default; PDFs stay on this device either way.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
-            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarCapabilitiesUrlRow
-              ? [{
-                  name: "Sidecar capability URL",
-                  desc: "Local loopback endpoint that reports parser capabilities.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
-            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarParseUrlRow
-              ? [{
-                  name: "Sidecar parse URL",
-                  desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
+            // The three PDF parser sidecar rows ("Better PDF parser" and its two
+            // loopback URLs) are deliberately not listed here.
+            //
+            // Indexing covers each paper's title and abstract (ADR 0013), which
+            // needs plain text from the leading pages, so the sidecar's
+            // structured output has no consumer and switching it on would change
+            // nothing a user could observe. A toggle promising a better parser
+            // that silently does nothing is worse than no toggle.
+            //
+            // The renderers, the host wiring, the sidecar client and the stored
+            // `pdfParserSidecar` settings all remain, so restoring the rows is a
+            // matter of re-adding these entries. Whether to retire the sidecar
+            // outright is an open question tied to the conclusion-section
+            // increment in ADR 0013 §2, which would want section structure back.
           ],
         } satisfies SettingDefinitionItem]
       : []),
