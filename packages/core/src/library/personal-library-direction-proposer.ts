@@ -7,7 +7,7 @@ import type { MetricsObserver } from "../metrics/generation";
 import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
 import { clusterPaperVectors, type ClusteringOptions } from "./clustering/clusterer";
-import { buildClusteringInput } from "./clustering/paper-vector";
+import { buildClusteringInput, type MergedDuplicatePapers } from "./clustering/paper-vector";
 import type { FullTextKnowledgeBaseStore } from "./fulltext/knowledge-base";
 import {
   PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
@@ -681,6 +681,12 @@ export interface ProposeClusteredDirectionsOptions {
   createId: (kind: "proposal" | "candidate", ordinal: number) => string;
   /** Reports each finished extraction and the start of synthesis. */
   onProgress?: (progress: DirectionProposalProgress) => void;
+  /**
+   * Called once, before extraction, when papers were collapsed as the same
+   * work by title. Never called with an empty list. A merge changes which
+   * papers back a direction, so it is surfaced rather than left implicit.
+   */
+  onDuplicatesMerged?: (merged: readonly MergedDuplicatePapers[]) => void;
 }
 
 /**
@@ -806,10 +812,13 @@ export async function proposeClusteredPersonalLibraryDirections(
     );
   }
 
-  const clusteringInput = await buildClusteringInput(
+  const { papers: clusteringInput, mergedDuplicates } = await buildClusteringInput(
     options.knowledgeBase,
     PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
   );
+  // Merging is a judgement about which papers are the same work, so it is
+  // handed to the caller rather than applied quietly.
+  if (mergedDuplicates.length > 0) options.onDuplicatesMerged?.(mergedDuplicates);
   if (clusteringInput.length === 0) {
     throw new ClusteredDirectionsProposerError(
       "no-evidence",

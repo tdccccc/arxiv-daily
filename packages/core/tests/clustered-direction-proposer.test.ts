@@ -240,7 +240,7 @@ function proposeOptions(
 }
 
 async function expectedClusters(store: FullTextKnowledgeBaseStore) {
-  return clusterPaperVectors(await buildClusteringInput(store)).clusters;
+  return clusterPaperVectors((await buildClusteringInput(store)).papers).clusters;
 }
 
 describe("proposeClusteredPersonalLibraryDirections", () => {

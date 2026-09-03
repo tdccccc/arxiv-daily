@@ -308,7 +308,7 @@ describe("buildClusteringInput", () => {
     for (const paperKey of keys) {
       await store.savePaper(documentWithChunks(paperKey, 1));
     }
-    const papers = await buildClusteringInput(store);
+    const { papers } = await buildClusteringInput(store);
     expect(papers.map(({ paperKey }) => paperKey)).toEqual([
       "arxiv:2608.00001",
       "arxiv:2305.00001",
@@ -320,10 +320,74 @@ describe("buildClusteringInput", () => {
   it("collects ready papers with chunk vectors, skipping failures", async () => {
     const store = new MemoryStore();
     await store.savePaper(documentWithChunks("arxiv:1", 3));
-    const papers = await buildClusteringInput(store);
+    const { papers } = await buildClusteringInput(store);
     expect(papers.length).toBe(1);
     expect(papers[0]!.paperKey).toBe("arxiv:1");
     expect(papers[0]!.chunks.length).toBe(3);
     expect(papers[0]!.chunks[0]!.length).toBe(DIMENSION);
+  });
+
+  /** Same paper, different file: byte hashing cannot see it, so the title does. */
+  function readyWithTitle(paperKey: string, title: string): FullTextPaperDocument {
+    return { ...documentWithChunks(paperKey, 1), title };
+  }
+
+
+  it("merges papers whose normalized titles are identical and reports them", async () => {
+    const store = new MemoryStore();
+    const title = "A Catalog of 1.58 Million Clusters of Galaxies from the Legacy Surveys";
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb", "file:sha256:cccc"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    // Two spellings of one paper, plus an unrelated one.
+    await store.savePaper(readyWithTitle(keys[0]!, title));
+    await store.savePaper(readyWithTitle(keys[1]!, `  ${title.toUpperCase()}!! `));
+    await store.savePaper(readyWithTitle(keys[2]!, "Photometric Redshift Estimation with Neural Networks"));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.map((p) => p.paperKey)).toEqual([keys[0], keys[2]]);
+    expect(mergedDuplicates).toEqual([
+      { keptPaperKey: keys[0], droppedPaperKeys: [keys[1]], title },
+    ]);
+  });
+
+  it("keeps papers whose titles are too short to identify a work", async () => {
+    // "Erratum" appearing twice is not evidence of the same paper.
+    const store = new MemoryStore();
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    for (const key of keys) await store.savePaper(readyWithTitle(key, "Erratum"));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.length).toBe(2);
+    expect(mergedDuplicates).toEqual([]);
+  });
+
+  it("keeps papers with no extracted title", async () => {
+    const store = new MemoryStore();
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    for (const key of keys) await store.savePaper(documentWithChunks(key, 1));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.length).toBe(2);
+    expect(mergedDuplicates).toEqual([]);
   });
 });
