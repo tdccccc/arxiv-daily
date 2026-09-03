@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-02T22:47:24+08:00
-revision: 4
+updated: 2026-09-03T23:21:47+08:00
+revision: 5
 owner: claude-code-main-session
 
 ## Intent
@@ -13,7 +13,7 @@ owner: claude-code-main-session
 ## Success criteria
 
 - [x] 设置里的主题带一列方向，每条一行文字；老的 `description` 迁移为第一条方向，且迁移可回滚（ADR 0012）。
-- [ ] 库索引只覆盖标题与摘要；千篇量级的库在 CPU 上分钟级重建完（ADR 0013）。
+- [x] 库索引只覆盖标题与摘要；千篇量级的库在 CPU 上分钟级重建完（ADR 0013）。
 - [ ] 首次扫库能提议出一整套主题（含各自的方向），接受后设置里直接有可用主题，全程不必手写一个主题名（ADR 0014 §1）。
 - [ ] 此后新候选被建议归入最相像的主题、可当场改；与所有主题都不像的提议新建主题而不是硬塞（ADR 0014 §2/§3）。
 - [ ] 日报按新结构筛选，并说得出是哪一个主题下的哪一条方向选中了这篇论文。
@@ -25,7 +25,8 @@ owner: claude-code-main-session
 - 把结论段纳入索引（ADR 0013 §2 已推迟，等摘要级检索的实测结果）。
 - 重命名 `topics` 设置键（ADR 0012 §3）。
 - 决定 personal novelty 的新对比基准——ADR 0012 留为开放，需单独决定，不在本 goal 内顺手定。
-- 决定主题名是否作为「硬门」参与筛选——用户 2026-09-01 明确说筛选后面再谈。
+- 让主题名参与筛选判定——2026-09-03 用户定：**主题名仍只作标签**，命中与否完全由方向文本决定（收掉 ADR 0012 line 45 留的未决项）。硬门是随时可加的增量，且需要一个「像不像本主题」的判据，属于下面 Constraints 明令不得拍脑袋定的阈值类决策。
+- 在本 goal 内退休画像文档驱动的第二个分类器（`personal-library` 类别）——2026-09-03 用户定：留到 P4/P5 随画像文档一起处理，P3 只改手动路径。
 - 决定 ADR 0008 的全文授权深度是否退休（ADR 0013 已标记，需回头单独看那条 ADR）。
 
 ## Constraints
@@ -42,8 +43,8 @@ owner: claude-code-main-session
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
 1. P1 — 主题带方向列表，老 description 可回滚地迁移 — status: done
-2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: active
-3. P3 — 筛选按方向工作，日报标出命中的方向 — status: pending
+2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: done
+3. P3 — 筛选按方向工作，日报标出命中的方向 — status: active
 4. P4 — 首次扫库提议整套主题与方向 — status: pending
 5. P5 — 增量候选按相似度归入，不像则提议新主题 — status: pending
 6. P6 — 端到端跑出一篇带方向来源的真实日报 — status: pending
