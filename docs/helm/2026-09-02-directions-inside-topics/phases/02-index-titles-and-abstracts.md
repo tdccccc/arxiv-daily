@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-02T22:47:24+08:00
-updated: 2026-09-03T00:05:00+08:00
-revision: 7
+updated: 2026-09-03T11:48:00+08:00
+revision: 9
 
 ## Outcome
 
@@ -92,7 +92,33 @@ revision: 7
 - exception: 无
 - **进行中。第一部分（extractor provenance）已完成并验证**：`PdfTextExtractor` 现在要求声明 provenance，与 parser 层对称；extractor 分支记录它，复用判定读它；Obsidian 的 extractor 报告它实际委托的那个 pdf.js parser 的 provenance。两条新测试——换 provenance 必须重建、不换必须复用且不重新解析。**变异检验把 provenance 从复用判定里拿掉后 7 条红**，确认「记录」与「判定」两处都被守着。core 2062 / plugin 721 / CLI 71 全绿。
 - **第二部分（索引改走 extractor + 摘要提取）未做**，它必然要动既有测试：现有断言里有「记录每篇实际选中的 parser」「parser derivation 变则重建」「sidecar 失败回退到 fallback parser 并记录后者」这几条，索引不再走 parser 之后它们全部失去对象。**这不是可以顺手改绿的事**——要逐条判定哪些是被本阶段正当取代、哪些是不该丢的保护（例如 sidecar 回退的正确性在别处仍然成立）。
-- [ ] implementation and tests accepted
+
+#### 三条 parser 断言的逐条判定（2026-09-03）
+
+判据不是「索引还走不走 parser」，而是**每条断言守的那个失败模式，在别处有没有home**。逐条查过接管方后：**三条都可删，无一需要搬走**。
+
+- `fulltext-index-orchestration.test.ts:307` `indexes ParsedDocument input with parser derivation and structured headings` — **删**。三个断言各有接管方：`derivation.parser` 记录引擎身份 → 已由 extractor 侧的 `:431`（换 provenance 必重建）+ `:472`（不换必复用）接管；`headings === ["Methods"]` → `fulltext-structured-chunking.test.ts:93-97` 覆盖更全（三级标题继承链）；`locator === {pageStart:2,pageEnd:2,blockStart:1,blockEnd:1}` → `fulltext-structured-chunking.test.ts:103-107` **逐字同一个断言**。此测唯一独有的是「索引路径能把结构化 parser 接通」——而这正是 ADR 0013 要退掉的东西，不是要保住的。
+
+- `:344` `persists the actual parser selected for each indexed document` — **删**。这条是三条里唯一真的要想的，因为它守着一个**每篇不同**的失败模式（selector 逐篇选引擎，索引必须记下**实际选中**的那个而不是首选那个）。查证：
+  - 「sidecar 失败 → 回退 → 报告 fallback 身份」→ `sidecar-document-parser-client.test.ts:132-167`，且第 164 行直接断言 `selected.parser.provenance === fallback.provenance`。**这就是 handoff 担心的那条保护，它在 selector 自己的层高上已经钉住了**，比在索引里验更贴切。
+  - 「结构化文档带 headings / 纯页文档 headings 为空」→ `fulltext-structured-chunking.test.ts:21`（page-only 分支 headings 必空、pageEnd 必 undefined）+ `:93`。
+  - 残余的「preferred vs actual」不对称确实只有此测在钉：`index-orchestration.ts:139` 的 `expectedDerivation` 取的是 `parserSelector.preferredParser.provenance`，而 `parseIndexDocument:651` 记的是**实际选中**的 parser。selector 退出索引路径后这条不对称**随之消失**（extractor 是单个对象、单个 provenance，没有选择动作就没有不对称）。**删此测时必须同时删掉 `:139` 的 `preferredParser` 分支**，否则留下一个没有测试守的歪逻辑。
+
+- `:403` `re-indexes unchanged v2 content when parser derivation changes` — **删**。`:431` `re-indexes unchanged content when extractor provenance changes` 是它逐项的孪生（indexed=1 / reused=0 / 解析调用 1 次 / embedding +1 / 存储的 provenance 版本已更新），只是把 parser 端口换成 extractor 端口。反方向由 `:472` 守。
+
+**判定期间发现的一处计划低估**（见下方 open questions）：上面第 88 条写的是「Docling 在**索引路径上**失去对象」，但 `buildFullTextDocumentParser`（`plugin/main.ts:1603`）**只有一个调用方**——`plugin/main.ts:1695`，就在索引里。索引路径即全部路径，所以失去对象的不只是索引侧的 Docling，而是整条 sidecar 装配：`SidecarFallbackDocumentParserSelector`、`probeLoopbackSidecarParser`，以及**三个用户可见设置行** `pdfParserSidecar.{enabled,capabilitiesUrl,parseUrl}`（`declarative-rows.ts:684-727`）。这超出本 chunk 的授权范围，**待用户定**，不在 Chunk 4 里顺手做。
+
+#### 第二部分落地（2026-09-03）
+
+- `buildPaperDocument` 改为：extractor 取前两页 → `extractTitleFromFirstPage` + `extractAbstractFromPages` → 拼成一段文本 → 走既有 `chunkParsedDocument`。`parseIndexDocument` 换成 `extractIndexPages`，parser / parserSelector 从 `IndexPersonalLibraryFullTextInput` 移除，`extractor` 变成必填。`:139` 的 `preferredParser` 分支按判定连带删除。
+- **`maxPages` 传给 extractor 而不是切结果**，且与 `extractAbstractFromPages` 共用导出的 `MAX_LEADING_PAGES`——两个边界若各写各的，「摘要在第 2 页」那 0.9% 会静默退化成兜底且无人报告。
+- 标题提取改为对所有论文生效，`titleVersion` 恒定写入；`:222` 的复用条件相应去掉 `!unit.fallback ||`，陈旧标题版本对全库都使复用失效。
+- **一处实现中发现的真问题**：分块器默认 `minChunkChars: 16` 会把短标题整条滤掉。走全文时这是丢页眉噪声，走标题+摘要时它把「有标题、无可用摘要」的论文（实测 3.3% 的 `none` 路径）压成**零块 ready 记录**——检索永远匹配不到，且不报错。索引路径改传 `minChunkChars: 0`：这段文本是刻意拼出来的，不存在噪声。补测试钉住。
+- **变异检验三条全部取红且位置正确**：去掉 `maxPages` → 只有「只开前两页」那条红（其余不动，说明该判据独立）；恢复 `minChunkChars` 默认 → 短标题那条红；标题退回只给 fallback → 6 条红。
+- validation: core **2062**、plugin **720**、CLI **71/71**、typecheck 四包、lint **0 error / 20 warning**（与基线一致，中途多出的 4 条 unused import 已清）、check:boundaries OK。
+- boundary: sidecar 代码与三个设置项**一个未删**，只是失去调用方；`pdfParserSidecar.enabled` 为真时索引记一条 info 说明它不参与索引。筛选管线未动。
+
+- [x] implementation and tests accepted
 
 ### Chunk 5 — 抬 derivation 版本，强制全库重建
 
@@ -144,3 +170,4 @@ revision: 7
 - **兜底文本的质量。** 26 篇走 `leading-text` 的里面，有几篇开头是期刊卷页页眉而非标题。可修，但需要先有可测的质量判据，不能按样本调正则。
 - **聚类的 `MAX_CLUSTERING_CHUNKS_PER_PAPER = 80` 与 `recluster.ts` 的 centroid 理由**，在每篇只剩一到两块之后都成了死条款。等 P4 真的动聚类时一并处理。
 - **`2026-08-13-discovery-loop-and-library-insight` 的 P4「检索规模加固」**：动机在本阶段落地后基本消失，是否收束由用户定。
+- **整条 PDF parser sidecar 装配的去留（2026-09-03 判定三条 parser 断言时发现）。** 计划第 88 条说的是「Docling 在索引路径上失去对象」，实际上 `buildFullTextDocumentParser`（`plugin/main.ts:1603`）只有 `plugin/main.ts:1695` 一个调用方，就在索引里——**索引路径即全部路径**。Chunk 4 第二部分落地后，`SidecarFallbackDocumentParserSelector`、`probeLoopbackSidecarParser`、`ObsidianPdfDocumentParser` 的 parser 身份（它作为 extractor 的委托对象仍在）、以及三个用户可见设置行 `pdfParserSidecar.{enabled,capabilitiesUrl,parseUrl}` 全部失去生产调用方。**Chunk 4 只让它们失去调用方，不删任何一个**——删设置项是用户可见的收窄，须用户单独决定。相关测试（`sidecar-document-parser-client.test.ts` 等）在代码还在时照常保留。

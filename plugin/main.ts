@@ -71,9 +71,6 @@ FullTextKnowledgeBaseFileStore,
 FullTextGenerationIndexStore,
 indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
 searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
-probeLoopbackSidecarParser,
-SidecarDocumentParserError,
-SidecarFallbackDocumentParserSelector,
 preflightFullTextGenerationSynchronization,
 synchronizeFullTextGenerationIndex,
 IncrementalSuggestionsStore,
@@ -141,7 +138,6 @@ import { registerDashboardView } from "./src/dashboard/view";
 import {
   buildObsidianHostAdapters,
   ObsidianLibraryDirectoryPicker,
-  ObsidianPdfDocumentParser,
   ObsidianPdfTextExtractor,
   createTransformersEmbeddingModel,
   describeRuntimeProbe,
@@ -1599,27 +1595,24 @@ export default class ArxivDailyPlugin extends Plugin {
     return createTransformersEmbeddingModel();
   }
 
-  /** Build the selected local parser without exposing library paths to a sidecar. */
-  private async buildFullTextDocumentParser(signal?: AbortSignal) {
-    const fallback = new ObsidianPdfDocumentParser();
-    const sidecar = this.settings.pdfParserSidecar;
-    if (!sidecar.enabled) return { parser: fallback };
-    try {
-      const probed = await probeLoopbackSidecarParser({
-        http: this.host.http,
-        capabilitiesUrl: sidecar.capabilitiesUrl,
-        parseUrl: sidecar.parseUrl,
-        signal,
-      });
-      return {
-        parserSelector: new SidecarFallbackDocumentParserSelector(probed, fallback),
-      };
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (!(error instanceof SidecarDocumentParserError)) throw error;
-      this.logger.warn("fulltext: local PDF parser sidecar probe failed; using PDF.js", error);
-      return { parser: fallback };
+  /**
+   * Build the PDF text extractor the index runs on.
+   *
+   * The index covers each paper's title and abstract (ADR 0013), which need
+   * plain text from the leading pages — `headings` and `locator` exist to serve
+   * full-text chunking, so the structured-parser sidecar has no subject on this
+   * path and is no longer probed. The sidecar settings and client are left in
+   * place pending a separate decision on retiring them; indexing simply does
+   * not consult them, and says so when one is switched on.
+   */
+  private buildFullTextExtractor() {
+    if (this.settings.pdfParserSidecar.enabled) {
+      this.logger.info(
+        "fulltext: the local PDF parser sidecar is not used for indexing; "
+        + "the index reads titles and abstracts with PDF.js",
+      );
     }
+    return new ObsidianPdfTextExtractor();
   }
 
   /**
@@ -1692,7 +1685,7 @@ export default class ArxivDailyPlugin extends Plugin {
       // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
-      const parser = await this.buildFullTextDocumentParser(operation.signal);
+      const extractor = this.buildFullTextExtractor();
       this.assertRemoteEmbeddingReady();
       const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
@@ -1710,7 +1703,7 @@ export default class ArxivDailyPlugin extends Plugin {
       const summary = await indexFullTextKnowledgeBase({
         catalog,
         source,
-        ...parser,
+        extractor,
         embedding,
         store,
         logger: this.logger,

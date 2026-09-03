@@ -16,8 +16,7 @@ import {
   decodeFullTextPaperDocument,
   serializeFullTextPaperDocument,
 } from "../src/library/fulltext/knowledge-base";
-import type { DocumentParser, DocumentParserSelector } from "../src/documents/parsed-document";
-import type { EmbeddingModel, PdfTextExtractor } from "../src/library/fulltext/ports";
+import type { EmbeddingModel, PdfExtractionOptions, PdfTextExtractor } from "../src/library/fulltext/ports";
 import { FullTextKnowledgeBaseStoreError } from "../src/library/fulltext/knowledge-base-store";
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
 import type { PersonalLibraryCatalog } from "../src/library/personal-library-catalog";
@@ -134,17 +133,56 @@ class FakeExtractor implements PdfTextExtractor {
   }
 }
 
+/**
+ * Records how many pages were actually opened.
+ *
+ * The saving ADR 0013 promises is *unparsed pages*, so "only the leading pages
+ * are read" has to be observable on its own. An implementation that parses the
+ * whole document and then slices would satisfy any chunk-count assertion while
+ * doing all of the work it was supposed to avoid.
+ */
+class PagedExtractor implements PdfTextExtractor {
+  calls = 0;
+  openedPages = 0;
+  readonly provenance = { id: "paged-extractor", version: "1" } as const;
+
+  constructor(private readonly pages: readonly string[]) {}
+
+  async extractPdfText(_bytes: Uint8Array, options?: PdfExtractionOptions) {
+    this.calls += 1;
+    const opened = this.pages.slice(0, options?.maxPages ?? this.pages.length);
+    this.openedPages = Math.max(this.openedPages, opened.length);
+    return { pages: opened };
+  }
+}
+
 class FakeEmbedding implements EmbeddingModel {
   readonly modelId = "fake-e5-q8";
   readonly dimension = 4;
   readonly prefixPolicy = "e5" as const;
   calls = 0;
 
-  constructor(private readonly vectors: Readonly<Record<string, Float32Array>> = {}) {}
+  constructor(
+    private readonly vectors: Readonly<Record<string, Float32Array>> = {},
+    /**
+     * Passage vectors chosen by a distinctive token the text contains.
+     *
+     * The indexed text is derived (title + abstract), so a fixture cannot spell
+     * out the exact chunk string without restating the extraction rules — which
+     * would make these retrieval tests fail whenever those rules change, for
+     * reasons that have nothing to do with retrieval.
+     */
+    private readonly byToken: Readonly<Record<string, Float32Array>> = {},
+  ) {}
 
   async embed(texts: readonly string[]): Promise<readonly Float32Array[]> {
     this.calls += 1;
-    return texts.map((text) => this.vectors[text] ?? new Float32Array(this.dimension));
+    return texts.map((text) => {
+      const exact = this.vectors[text];
+      if (exact) return exact;
+      const matched = Object.entries(this.byToken).find(([token]) => text.includes(token));
+      return matched?.[1] ?? new Float32Array(this.dimension);
+    });
   }
 }
 
@@ -199,6 +237,18 @@ function makeCatalog(
     files,
     papers: paperRecords,
   };
+}
+
+/**
+ * A realistic leading page: title line, authors, then a marked abstract.
+ *
+ * Retrieval fixtures need pages the index can actually derive text from — the
+ * index covers title and abstract, so a bare keyword line yields nothing to
+ * search and would make these tests fail for extraction reasons rather than
+ * retrieval ones.
+ */
+function leadingPage(title: string, abstract: string): string {
+  return `${title}\n\nJ. Doe and A. Author\n\nABSTRACT\n${abstract}`;
 }
 
 const LONG_ALPHA = Array.from({ length: 600 }, () => "alpha").join(" ");
@@ -304,129 +354,12 @@ describe("full-text indexing orchestration", () => {
     expect(manifest.papers["arxiv:2403.19236"]!.chunkCount).toBe(document!.chunks.length);
   });
 
-  it("indexes ParsedDocument input with parser derivation and structured headings", async () => {
-    const catalog = makeCatalog([{
-      paperKey: "arxiv:2403.19236",
-      filePaths: ["lib/a.pdf"],
-      fingerprint: fingerprint("f1"),
-    }]);
-    const store = new MemoryStore();
-    const parser: DocumentParser = {
-      capabilities: ["page-text", "document-structure"],
-      provenance: { id: "fixture-structured", version: "2" },
-      async parse() {
-        return {
-          mediaType: "application/pdf",
-          blocks: [
-            { kind: "heading", text: "Methods", headingLevel: 1, locator: { page: 2, block: 0 } },
-            { kind: "paragraph", text: "Structured method evidence with enough text.", locator: { page: 2, block: 1 } },
-          ],
-        };
-      },
-    };
-    const embedding = new FakeEmbedding();
-
-    await indexPersonalLibraryFullText({
-      catalog,
-      source: new FakeSource(),
-      parser,
-      embedding,
-      store,
-      now: () => new Date(NOW),
-    });
-
-    const document = await store.loadPaper("arxiv:2403.19236");
-    expect(document?.derivation?.parser).toEqual(parser.provenance);
-    expect(document?.chunks[0]?.headings).toEqual(["Methods"]);
-    expect(document?.chunks[0]?.locator).toEqual({ pageStart: 2, pageEnd: 2, blockStart: 1, blockEnd: 1 });
-  });
-
-  it("persists the actual parser selected for each indexed document", async () => {
-    const catalog = makeCatalog([
-      { paperKey: "arxiv:2403.19236", filePaths: ["lib/sidecar.pdf"], fingerprint: fingerprint("f1") },
-      { paperKey: "arxiv:2501.00001", filePaths: ["lib/fallback.pdf"], fingerprint: fingerprint("f2") },
-    ]);
-    const sidecar: DocumentParser = {
-      capabilities: ["page-text", "document-structure"],
-      provenance: { id: "docling", version: "2.0" },
-      async parse() { throw new Error("selector owns sidecar parsing"); },
-    };
-    const fallback: DocumentParser = {
-      capabilities: ["page-text"],
-      provenance: { id: "pdfjs", version: "4.10" },
-      async parse() { throw new Error("selector owns fallback parsing"); },
-    };
-    const selector: DocumentParserSelector = {
-      preferredParser: sidecar,
-      async parse(bytes) {
-        const path = new TextDecoder().decode(bytes);
-        if (path === "lib/sidecar.pdf") {
-          return {
-            parser: sidecar,
-            document: {
-              mediaType: "application/pdf",
-              blocks: [
-                { kind: "heading", text: "Methods", headingLevel: 1, locator: { page: 2, block: 0 } },
-                { kind: "paragraph", text: LONG_ALPHA, locator: { page: 2, block: 1 } },
-              ],
-            },
-          };
-        }
-        return {
-          parser: fallback,
-          document: {
-            mediaType: "application/pdf",
-            blocks: [{ kind: "page", text: LONG_BETA, locator: { page: 1, block: 0 } }],
-          },
-        };
-      },
-    };
-    const store = new MemoryStore();
-
-    await indexPersonalLibraryFullText({
-      catalog,
-      source: new FakeSource(),
-      parserSelector: selector,
-      embedding: new FakeEmbedding(),
-      store,
-      now: () => new Date(NOW),
-    });
-
-    const sidecarDocument = await store.loadPaper("arxiv:2403.19236");
-    const fallbackDocument = await store.loadPaper("arxiv:2501.00001");
-    expect(sidecarDocument?.derivation?.parser).toEqual(sidecar.provenance);
-    expect(sidecarDocument?.chunks[0]?.headings).toEqual(["Methods"]);
-    expect(fallbackDocument?.derivation?.parser).toEqual(fallback.provenance);
-    expect(fallbackDocument?.chunks[0]?.headings).toEqual([]);
-  });
-
-  it("re-indexes unchanged v2 content when parser derivation changes", async () => {
-    const catalog = makeCatalog([{
-      paperKey: "arxiv:2403.19236",
-      filePaths: ["lib/a.pdf"],
-      fingerprint: fingerprint("f1"),
-    }]);
-    const store = new MemoryStore();
-    const makeParser = (version: string, calls: { value: number }): DocumentParser => ({
-      capabilities: ["page-text"],
-      provenance: { id: "fixture-parser", version },
-      async parse() {
-        calls.value += 1;
-        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_ALPHA, locator: { page: 1, block: 0 } }] };
-      },
-    });
-    const firstCalls = { value: 0 };
-    const embedding = new FakeEmbedding();
-    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser: makeParser("1", firstCalls), embedding, store, now: () => new Date(NOW) });
-    const secondCalls = { value: 0 };
-    const embeddingCallsBefore = embedding.calls;
-    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser: makeParser("2", secondCalls), embedding, store, now: () => new Date(NOW) });
-    expect(summary.indexed).toBe(1);
-    expect(summary.reused).toBe(0);
-    expect(secondCalls.value).toBe(1);
-    expect(embedding.calls).toBe(embeddingCallsBefore + 1);
-    expect((await store.loadPaper("arxiv:2403.19236"))?.derivation?.parser.version).toBe("2");
-  });
+  // Three parser-path assertions were removed here when the index moved to the
+  // extractor (ADR 0013). Each was checked for a surviving home first:
+  // heading/locator propagation is covered in fulltext-structured-chunking (the
+  // locator assertion verbatim), sidecar-failure fallback identity in
+  // sidecar-document-parser-client, and rebuild-on-engine-change by the
+  // extractor twin directly below.
 
   it("re-indexes unchanged content when extractor provenance changes", async () => {
     // Swapping the extraction engine changes the indexed text, so the stored
@@ -494,6 +427,100 @@ describe("full-text indexing orchestration", () => {
     expect(second.calls).toBe(0);
   });
 
+  it("indexes only the title and abstract, opening just the leading pages", async () => {
+    const abstract = "We present a catalogue of 212 galaxy clusters drawn from a wide-field survey "
+      + "and derive their mass function from weak lensing measurements calibrated on simulations.";
+    const pages = [
+      `A Wide-Field Survey of Galaxy Clusters\n\nJ. Doe and A. Author\n\nABSTRACT\n${abstract}`,
+      "1. INTRODUCTION\nThe study of clusters has a long history in observational cosmology.",
+      ...Array.from(
+        { length: 38 },
+        (_, index) => `BODY-PAGE-${index + 3} carries a great deal of body prose that would chunk heavily.`,
+      ),
+    ];
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const extractor = new PagedExtractor(pages);
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor,
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    // The load-bearing assertion: page 3 is never opened. Chunk count alone
+    // could be faked by truncating after a full parse.
+    expect(extractor.openedPages).toBeLessThanOrEqual(2);
+    const document = await store.loadPaper("arxiv:2403.19236");
+    expect(document!.chunks.length).toBeGreaterThanOrEqual(1);
+    expect(document!.chunks.length).toBeLessThanOrEqual(2);
+    const text = document!.chunks.map((chunk) => chunk.text).join(" ");
+    expect(text).toContain("weak lensing measurements");
+    expect(text).not.toContain("BODY-PAGE-3");
+  });
+
+  it("still indexes a paper whose leading pages yield only a short title", async () => {
+    // 3.3% of the frozen corpus has no usable abstract (scanned pages, mostly).
+    // Those papers must stay retrievable by title: a ready manifest record with
+    // zero chunks matches nothing and reports no problem while doing it.
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new PagedExtractor(["Short Title"]),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const document = await store.loadPaper("arxiv:2403.19236");
+    expect(document!.chunks.length).toBe(1);
+    expect(document!.chunks[0]!.text).toContain("Short Title");
+    expect(store.manifest.papers["arxiv:2403.19236"]?.chunkCount).toBe(1);
+  });
+
+  it("extracts a title for catalog-identified papers, not only fallback ones", async () => {
+    // Only 1.4% of the frozen corpus yields catalog metadata, so a title that
+    // only fallback papers receive leaves the rest of the library untitled.
+    const catalog = makeCatalog([{
+      paperKey: "arxiv:2403.19236",
+      filePaths: ["lib/a.pdf"],
+      fingerprint: fingerprint("f1"),
+    }]);
+    const store = new MemoryStore();
+    const abstract = "We measure the clustering of luminous red galaxies across a wide redshift range "
+      + "and compare the result against a suite of cosmological simulations.";
+
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new PagedExtractor([
+        `Clustering of Luminous Red Galaxies\n\nJ. Doe\n\nABSTRACT\n${abstract}`,
+        "1. INTRODUCTION\nBody text.",
+      ]),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    const document = await store.loadPaper("arxiv:2403.19236");
+    expect(document?.title).toBe("Clustering of Luminous Red Galaxies");
+    expect(document?.titleVersion).toBe(TITLE_EXTRACTION_VERSION);
+  });
+
   it("reuses an unchanged promoted v1 paper without parsing or embedding", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",
@@ -510,13 +537,12 @@ describe("full-text indexing orchestration", () => {
     await store.savePaper(stored!);
     const record = store.manifest.papers["arxiv:2403.19236"]!;
     record.derivation = undefined;
-    const parser: DocumentParser = {
-      capabilities: ["page-text"],
-      provenance: { id: "new-parser", version: "9" },
-      async parse() { throw new Error("must not parse legacy reuse"); },
+    const trap: PdfTextExtractor = {
+      provenance: { id: "new-extractor", version: "9" },
+      async extractPdfText() { throw new Error("must not extract for legacy reuse"); },
     };
     const callsBefore = embedding.calls;
-    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), parser, embedding, store, now: () => new Date(NOW) });
+    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor: trap, embedding, store, now: () => new Date(NOW) });
     expect(summary.reused).toBe(1);
     expect(embedding.calls).toBe(callsBefore);
   });
@@ -974,25 +1000,24 @@ describe("full-text indexing orchestration", () => {
     expect(store.manifest.papers[paperKey]?.status).toBe("ready");
   });
 
-  it("does not content-reuse a v2 fallback when parser derivation changes", async () => {
+  it("does not content-reuse a v2 fallback when extractor derivation changes", async () => {
     const path = "lib/local.pdf";
     const pdfBytes = "stable-fallback-bytes";
     const source = new FakeSource({ [path]: pdfBytes });
     const store = new MemoryStore();
     const calls = { first: 0, second: 0 };
-    const parser = (version: string, key: keyof typeof calls): DocumentParser => ({
-      capabilities: ["page-text"],
-      provenance: { id: "fallback-parser", version },
-      async parse() {
+    const engine = (version: string, key: keyof typeof calls): PdfTextExtractor => ({
+      provenance: { id: "fallback-extractor", version },
+      async extractPdfText() {
         calls[key] += 1;
-        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_ALPHA, locator: { page: 1, block: 0 } }] };
+        return { pages: [LONG_ALPHA] };
       },
     });
     const embedding = new FakeEmbedding();
     await indexPersonalLibraryFullText({
       catalog: makeCatalog([], [{ path, fingerprint: fingerprint("a1") }]),
       source,
-      parser: parser("1", "first"),
+      extractor: engine("1", "first"),
       embedding,
       store,
       now: () => new Date(NOW),
@@ -1001,7 +1026,7 @@ describe("full-text indexing orchestration", () => {
     const summary = await indexPersonalLibraryFullText({
       catalog: makeCatalog([], [{ path, fingerprint: fingerprint("a2") }]),
       source,
-      parser: parser("2", "second"),
+      extractor: engine("2", "second"),
       embedding,
       store,
       now: () => new Date(NOW),
@@ -1011,7 +1036,7 @@ describe("full-text indexing orchestration", () => {
     expect(embedding.calls).toBe(before + 1);
   });
 
-  it("does not reuse a v2 migration source when parser derivation changes", async () => {
+  it("does not reuse a v2 migration source when extractor derivation changes", async () => {
     const path = "lib/legacy.pdf";
     const bytes = "migration-pdf-bytes";
     const observation = fingerprint("c1");
@@ -1043,17 +1068,16 @@ describe("full-text indexing orchestration", () => {
       } },
     }, 0);
     let parseCalls = 0;
-    const parser: DocumentParser = {
-      capabilities: ["page-text"],
-      provenance: { id: "new-parser", version: "2" },
-      async parse() {
+    const extractor: PdfTextExtractor = {
+      provenance: { id: "new-extractor", version: "2" },
+      async extractPdfText() {
         parseCalls += 1;
-        return { mediaType: "application/pdf", blocks: [{ kind: "page", text: LONG_BETA, locator: { page: 1, block: 0 } }] };
+        return { pages: [LONG_BETA] };
       },
     };
     const embedding = new FakeEmbedding();
     const summary = await indexPersonalLibraryFullText({
-      catalog: makeCatalog([], [{ path, fingerprint: observation }]), source, parser, embedding, store,
+      catalog: makeCatalog([], [{ path, fingerprint: observation }]), source, extractor, embedding, store,
       now: () => new Date(NOW),
     });
     expect(summary).toMatchObject({ indexed: 1, reused: 0 });
@@ -1397,16 +1421,21 @@ describe("full-text indexing orchestration", () => {
       { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
     ]);
     const store = new MemoryStore();
-    const exactPage = "rarelexeme rarelexeme rarelexeme";
-    const semanticPage = "semantic neighboring concept";
-    const exactChunk = chunkFullText([exactPage])[0]!;
-    const semanticChunk = chunkFullText([semanticPage])[0]!;
+    const exactPage = leadingPage(
+      "Rarelexeme Studies in Cosmology",
+      "We examine rarelexeme rarelexeme rarelexeme across a wide sample of galaxies "
+      + "and report the resulting distribution in detail.",
+    );
+    const semanticPage = leadingPage(
+      "Neighbouring Concept Structure",
+      "We explore semantic neighboring concept structure across a broad corpus "
+      + "and report the resulting distribution in detail.",
+    );
     const query = new Float32Array([1, 0, 0, 0]);
-    const embedding = new FakeEmbedding({
-      "query: rarelexeme": query,
-      [`passage: ${exactChunk.text}`]: new Float32Array([0, 1, 0, 0]),
-      [`passage: ${semanticChunk.text}`]: query,
-    });
+    const embedding = new FakeEmbedding(
+      { "query: rarelexeme": query },
+      { rarelexeme: new Float32Array([0, 1, 0, 0]), semantic: query },
+    );
     await indexPersonalLibraryFullText({
       catalog,
       source: new FakeSource(),
@@ -1432,17 +1461,22 @@ describe("full-text indexing orchestration", () => {
       { paperKey: "arxiv:2501.00001", filePaths: ["lib/b.pdf"], fingerprint: fingerprint("f2") },
     ]);
     const store = new MemoryStore();
-    const lexicalPage = "laterterm laterterm evidence";
-    const semanticPage = `semantic target ${"context ".repeat(30)}`;
-    const lexicalChunk = chunkFullText([lexicalPage])[0]!;
-    const semanticChunk = chunkFullText([semanticPage])[0]!;
-    const queryText = `Unrelated title\n\n${"background ".repeat(30)}laterterm`;
+    const lexicalPage = leadingPage(
+      "Laterterm Evidence Survey",
+      "We collect laterterm laterterm evidence from a broad survey and describe "
+      + "the resulting catalogue in detail.",
+    );
+    const semanticPage = leadingPage(
+      "Analysis of a Semantic Target",
+      "We analyse the semantic target across many observing contexts and describe "
+      + "the resulting catalogue in detail.",
+    );
+    const queryText = `Unrelated heading\n\n${"background ".repeat(30)}laterterm`;
     const queryVector = new Float32Array([1, 0, 0, 0]);
-    const embedding = new FakeEmbedding({
-      [`query: ${queryText}`]: queryVector,
-      [`passage: ${lexicalChunk.text}`]: new Float32Array([0, 1, 0, 0]),
-      [`passage: ${semanticChunk.text}`]: queryVector,
-    });
+    const embedding = new FakeEmbedding(
+      { [`query: ${queryText}`]: queryVector },
+      { laterterm: new Float32Array([0, 1, 0, 0]), "semantic target": queryVector },
+    );
     await indexPersonalLibraryFullText({
       catalog,
       source: new FakeSource(),
@@ -1457,7 +1491,7 @@ describe("full-text indexing orchestration", () => {
       store,
       embedding,
       queryText,
-      lexicalQueryText: "Unrelated title",
+      lexicalQueryText: "Unrelated heading",
     });
     expect(ordinary[0]!.paperKey).toBe("arxiv:2403.19236");
     expect(findSimilar[0]!.paperKey).toBe("arxiv:2501.00001");

@@ -20,8 +20,7 @@ import type { Logger } from "../../services/logger";
 import { sha256Hex } from "../../utils/digest";
 import type { PersonalLibraryCatalog } from "../personal-library-catalog";
 import type { ScopedLibrarySource } from "../scoped-library-source";
-import type { DocumentParser, DocumentParserSelector, ParsedDocument, ParserCapability } from "../../documents/parsed-document";
-import { chunkFullText, chunkParsedDocument } from "./chunking";
+import { chunkParsedDocument } from "./chunking";
 import {
   FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
   type FullTextKnowledgeBaseManifest,
@@ -31,9 +30,7 @@ import {
 } from "./knowledge-base";
 import type { EmbeddingModel, PdfExtractionResult, PdfTextExtractor } from "./ports";
 import { applyEmbeddingPrefix } from "./ports";
-import { parsedDocumentToPdfExtractionResult } from "./pdf-text-compat";
 import { CHUNK_DERIVATION_VERSIONS, type EvidenceDerivation } from "./evidence-chunk";
-import { LEGACY_PARSER_PROVENANCE } from "./knowledge-base";
 import { FullTextKnowledgeBaseStoreError } from "./knowledge-base-store";
 import { searchKnowledgeBase, type KnowledgeBasePaperMatch } from "./retrieval";
 import { searchKnowledgeBaseBm25 } from "./bm25-retrieval";
@@ -42,6 +39,7 @@ import { searchGenerationBm25 } from "./generation-bm25-index";
 import { FullTextGenerationIndexStoreError, type FullTextGenerationIndexStore } from "./generation-index-store";
 import { searchGenerationDense } from "./retrieval";
 import { extractTitleFromFirstPage } from "./title-extraction";
+import { extractAbstractFromPages, MAX_LEADING_PAGES } from "./abstract-extraction";
 
 export interface FullTextIndexPaperOutcome {
   paperKey: string;
@@ -109,11 +107,12 @@ export interface IndexPersonalLibraryFullTextInput {
   catalog: PersonalLibraryCatalog;
   /** Host file access for PDF bytes. */
   source: ScopedLibrarySource;
-  /** Structured parser preferred for new writes; extractor remains a compatible legacy input. */
-  parser?: DocumentParser;
-  /** Per-document parser selection for optional parser fallback paths. */
-  parserSelector?: DocumentParserSelector;
-  extractor?: PdfTextExtractor;
+  /**
+   * PDF text extraction. The index covers a paper's title and abstract, which
+   * need plain text from the leading pages only — structured parsing exists to
+   * serve full-text chunking and has no subject on this path (ADR 0013).
+   */
+  extractor: PdfTextExtractor;
   embedding: EmbeddingModel;
   store: FullTextKnowledgeBaseStore;
   logger?: Logger;
@@ -131,15 +130,12 @@ export async function indexPersonalLibraryFullText(
 ): Promise<FullTextIndexRunSummary> {
   throwIfCancelled(input.signal);
   const { catalog, source, embedding, store } = input;
-  if (!input.parser && !input.parserSelector && !input.extractor) {
-    throw new Error("full-text indexing requires a parser or extractor");
+  if (!input.extractor) {
+    throw new Error("full-text indexing requires an extractor");
   }
   const log = input.logger;
   const expectedDerivation: EvidenceDerivation = {
-    parser: input.parserSelector?.preferredParser.provenance
-      ?? input.parser?.provenance
-      ?? input.extractor?.provenance
-      ?? LEGACY_PARSER_PROVENANCE,
+    parser: input.extractor.provenance,
     ...CHUNK_DERIVATION_VERSIONS,
   };
   const nowIso = (input.now ?? (() => new Date()))().toISOString();
@@ -219,7 +215,9 @@ export async function indexPersonalLibraryFullText(
       // derivation component participates in the reuse decision.
       && (previous.derivation === undefined || sameDerivation(previous.derivation, expectedDerivation));
 
-    if (exactReady && (!unit.fallback || previous.titleVersion === TITLE_EXTRACTION_VERSION)) {
+    // Every paper carries an extracted title now, not just fallback ones, so a
+    // stale title version invalidates reuse for the whole library.
+    if (exactReady && previous.titleVersion === TITLE_EXTRACTION_VERSION) {
       outcomes.push({ paperKey, status: "reused" });
       continue;
     }
@@ -259,8 +257,6 @@ export async function indexPersonalLibraryFullText(
                 contentHash: unit.contentHash,
                 refreshTitle,
                 source,
-                parser: input.parser,
-                parserSelector: input.parserSelector,
                 extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
@@ -279,8 +275,6 @@ export async function indexPersonalLibraryFullText(
                 contentHash: unit.contentHash,
                 refreshTitle: false,
                 source,
-                parser: input.parser,
-                parserSelector: input.parserSelector,
                 extractor: input.extractor,
                 nowIso,
                 signal: input.signal,
@@ -341,10 +335,7 @@ export async function indexPersonalLibraryFullText(
         filePaths: unit.filePaths,
         observationFingerprints,
         contentHash: unit.contentHash,
-        extractTitle: unit.fallback,
         source,
-        parser: input.parser,
-        parserSelector: input.parserSelector,
         extractor: input.extractor,
         embedding,
         nowIso,
@@ -532,12 +523,8 @@ async function buildPaperDocument(input: {
   filePaths: readonly string[];
   observationFingerprints: readonly string[];
   contentHash?: string;
-  /** Extract a title from the first page (fallback papers have no catalog metadata). */
-  extractTitle?: boolean;
   source: ScopedLibrarySource;
-  parser?: DocumentParser;
-  parserSelector?: DocumentParserSelector;
-  extractor?: PdfTextExtractor;
+  extractor: PdfTextExtractor;
   embedding: EmbeddingModel;
   nowIso: string;
   signal?: AbortSignal;
@@ -547,17 +534,30 @@ async function buildPaperDocument(input: {
     throw new Error("paper has no file paths to index");
   }
   const bytes = await input.source.readBinary(filePaths[0]!, { signal: input.signal });
-  const parsed = await parseIndexDocument(input, new Uint8Array(bytes));
-  const { extraction, document, capabilities, derivation } = parsed;
+  const { extraction, derivation } = await extractIndexPages(input, new Uint8Array(bytes));
   const pages = extraction.pages;
-  const textHash = `sha256:${sha256Hex(pages.join("\n"))}`;
-  const chunks = document
-    ? chunkParsedDocument(document, capabilities, derivation.parser)
-    : chunkParsedDocument(
-      { mediaType: "application/pdf", blocks: pages.map((text, index) => ({ kind: "page", text, locator: { page: index + 1, block: index } })) },
-      ["page-text"],
-      derivation.parser,
-    );
+  const title = extractTitleFromFirstPage(pages, extraction.layout, extraction.metadataTitle) ?? undefined;
+  const { abstract } = extractAbstractFromPages(pages);
+  // Title and abstract are what the index covers (ADR 0013). They go in as one
+  // text so the existing chunker produces the one or two chunks the phase
+  // promises, rather than a second chunking path that would need its own
+  // identity and overlap rules.
+  const indexedText = [title, abstract].filter((part) => part !== undefined && part !== "").join("\n\n");
+  const textHash = `sha256:${sha256Hex(indexedText)}`;
+  const chunks = chunkParsedDocument(
+    {
+      mediaType: "application/pdf",
+      blocks: [{ kind: "page", text: indexedText, locator: { page: 1, block: 0 } }],
+    },
+    ["page-text"],
+    derivation.parser,
+    // The short-paragraph noise filter exists to drop page furniture out of
+    // full text. This text is a deliberately assembled title and abstract and
+    // is never noise, so the filter is off: a paper with a short title but no
+    // usable abstract must still be retrievable by that title rather than
+    // landing in the manifest with zero chunks and silently matching nothing.
+    { minChunkChars: 0 },
+  );
   const vectors = await input.embedding.embed(
     chunks.map((chunk) => prefixFor("passage", input.embedding, chunk.text)),
     { signal: input.signal },
@@ -573,9 +573,6 @@ async function buildPaperDocument(input: {
   }
   const flat = new Float32Array(chunks.length * dimension);
   vectors.forEach((vector, index) => flat.set(vector, index * dimension));
-  const title = input.extractTitle
-    ? extractTitleFromFirstPage(pages, extraction.layout, extraction.metadataTitle) ?? undefined
-    : undefined;
   return {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
     paperKey,
@@ -584,7 +581,7 @@ async function buildPaperDocument(input: {
     textHash,
     contentHash: input.contentHash,
     title,
-    titleVersion: input.extractTitle ? TITLE_EXTRACTION_VERSION : undefined,
+    titleVersion: TITLE_EXTRACTION_VERSION,
     filePaths: [...filePaths],
     observationFingerprints: [...observationFingerprints],
     derivation,
@@ -603,9 +600,7 @@ async function rebindFallbackDocument(input: {
   contentHash?: string;
   refreshTitle: boolean;
   source: ScopedLibrarySource;
-  parser?: DocumentParser;
-  parserSelector?: DocumentParserSelector;
-  extractor?: PdfTextExtractor;
+  extractor: PdfTextExtractor;
   nowIso: string;
   signal?: AbortSignal;
 }): Promise<FullTextPaperDocument> {
@@ -614,7 +609,7 @@ async function rebindFallbackDocument(input: {
     const path = input.filePaths[0];
     if (!path) throw new Error("fallback paper has no file path for title refresh");
     const bytes = await input.source.readBinary(path, { signal: input.signal });
-    const { extraction } = await parseIndexDocument(input, new Uint8Array(bytes));
+    const { extraction } = await extractIndexPages(input, new Uint8Array(bytes));
     title = extractTitleFromFirstPage(extraction.pages, extraction.layout, extraction.metadataTitle) ?? undefined;
   }
   return {
@@ -629,60 +624,25 @@ async function rebindFallbackDocument(input: {
   };
 }
 
-async function parseIndexDocument(
-  input: { parser?: DocumentParser; parserSelector?: DocumentParserSelector; extractor?: PdfTextExtractor; signal?: AbortSignal },
+/**
+ * Read the leading pages the index covers.
+ *
+ * The bound is passed to the extractor rather than applied to its result: the
+ * cost ADR 0013 removes is parsing time, and a full parse followed by a slice
+ * would keep every second of it. `MAX_LEADING_PAGES` is shared with
+ * `extractAbstractFromPages` so the pages read and the pages searched cannot
+ * drift apart.
+ */
+async function extractIndexPages(
+  input: { extractor: PdfTextExtractor; signal?: AbortSignal },
   bytes: Uint8Array,
-): Promise<{
-  extraction: PdfExtractionResult;
-  document?: ParsedDocument;
-  capabilities: readonly ParserCapability[];
-  derivation: EvidenceDerivation;
-}> {
-  if (input.parserSelector) {
-    const selected = await input.parserSelector.parse(bytes, { signal: input.signal });
-    const document = selected.document;
-    const parser = selected.parser;
-    return {
-      extraction: parser.capabilities.includes("document-structure")
-        ? structuredDocumentExtraction(document)
-        : parsedDocumentToPdfExtractionResult(document, parser.capabilities),
-      document,
-      capabilities: parser.capabilities,
-      derivation: { parser: parser.provenance, ...CHUNK_DERIVATION_VERSIONS },
-    };
-  }
-  if (input.parser) {
-    const document = await input.parser.parse(bytes, { signal: input.signal });
-    return {
-      extraction: input.parser.capabilities.includes("document-structure")
-        ? structuredDocumentExtraction(document)
-        : parsedDocumentToPdfExtractionResult(document, input.parser.capabilities),
-      document,
-      capabilities: input.parser.capabilities,
-      derivation: { parser: input.parser.provenance, ...CHUNK_DERIVATION_VERSIONS },
-    };
-  }
-  if (!input.extractor) throw new Error("full-text indexing requires a parser or extractor");
+): Promise<{ extraction: PdfExtractionResult; derivation: EvidenceDerivation }> {
   return {
-    extraction: await input.extractor.extractPdfText(bytes, { signal: input.signal }),
-    capabilities: ["page-text"],
+    extraction: await input.extractor.extractPdfText(bytes, {
+      maxPages: MAX_LEADING_PAGES,
+      signal: input.signal,
+    }),
     derivation: { parser: input.extractor.provenance, ...CHUNK_DERIVATION_VERSIONS },
-  };
-}
-
-function structuredDocumentExtraction(document: ParsedDocument): PdfExtractionResult {
-  const byPage = new Map<number, string[]>();
-  for (const block of document.blocks) {
-    const page = block.locator.page;
-    if (page === undefined) continue;
-    const texts = byPage.get(page) ?? [];
-    texts.push(block.text);
-    byPage.set(page, texts);
-  }
-  const maxPage = Math.max(0, ...byPage.keys());
-  return {
-    pages: Array.from({ length: maxPage }, (_, index) => byPage.get(index + 1)?.join("\n") ?? ""),
-    ...(document.metadata?.title === undefined ? {} : { metadataTitle: document.metadata.title }),
   };
 }
 

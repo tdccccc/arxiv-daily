@@ -170,3 +170,26 @@
 - **值得记的是发现方式**：这个洞不是测试或回归翻出来的，是回答一个「以后能不能换引擎」的问题时查证出来的。**当时如果照着计划直接写 Chunk 4，它会静默地跟着落地**——因为现有测试全绿，typecheck 也过，没有任何东西会响。
 - validation: 尚未改源码，无回归可跑。Chunk 3 的全绿仍是当前基线。
 - next: Chunk 4，含新增的这条 provenance 判据。
+
+## 2026-09-03 — 三条 parser 断言的判定：都可删，且都验过接管方
+
+- evidence: Chunk 4 第二部分动手前的必要一步。三条断言（`fulltext-index-orchestration.test.ts:307/344/403`）在索引不再走 parser 之后全部失去对象，但「失去对象」不等于「可以删」——**判据是每条守的失败模式在别处有没有 home**，不是它还编不编得过。
+- **判定结果：三条都删，无一需要搬走。** 每条都逐一查到了接管方：`:307` 的 headings/locator 断言在 `fulltext-structured-chunking.test.ts:93-107`（locator 那条**逐字是同一个断言**），derivation 记录在 extractor 侧的 `:431`+`:472`；`:403` 与 `:431` 是逐项孪生；`:344` 见下。
+- **`:344` 是唯一真需要想的一条，而 handoff 担心的方向对了**：它守着「selector 逐篇选引擎，索引要记**实际选中**那个而非首选那个」。查证后这条保护在 `sidecar-document-parser-client.test.ts:132-167` 已经钉住，第 164 行直接断言回退后报告的是 fallback 的 provenance——**在 selector 自己的层高上验，比在索引里验更贴切**。所以是「早就有更好的家」，不是「搬家」。
+- **删它时有一处必须连带删**：`index-orchestration.ts:139` 的 `expectedDerivation` 取 `parserSelector.preferredParser.provenance`，而 `parseIndexDocument:651` 记的是实际选中的 parser——这处 preferred/actual 不对称目前只有 `:344` 在钉。selector 退出后不对称自然消失，但**若只删测试不删这段分支，就留下一段没有测试守的歪逻辑**。
+- **判定过程顺带翻出一处计划低估**：计划第 88 条写「Docling 在索引路径上失去对象」，实测 `buildFullTextDocumentParser`（`plugin/main.ts:1603`）只有 `:1695` 一个调用方，就在索引里——**索引路径即全部路径**。失去调用方的是整条 sidecar 装配，含三个用户可见设置行 `pdfParserSidecar.{enabled,capabilitiesUrl,parseUrl}`。**Chunk 4 只让它们失去调用方，一个都不删**：删用户可见设置是收窄，须用户单独决定。记入 open questions。
+- validation: 本次只动文档，未改源码，无回归可跑。Chunk 4 第一部分的 core 2062 / plugin 721 / CLI 71 仍是当前基线。
+- boundary: 未改任何测试与源码——判定先落纸，改代码是下一步。phase revision 7 → 8。
+- next: Chunk 4 第二部分实现。取红判据落在**解析范围**上（第 3 页从未被打开），不在块数上——块数少可以靠截断伪造。
+
+## 2026-09-03 — P2 Chunk 4 done：索引真正接到摘要提取上
+
+- change: `buildPaperDocument` 改走 extractor 取前两页 → 标题 + 摘要 → 拼一段文本 → 既有分块器。`parseIndexDocument` 变 `extractIndexPages`；parser / parserSelector 退出 `IndexPersonalLibraryFullTextInput`，`extractor` 必填；`preferredParser` 那处 preferred/actual 不对称按判定连带删除。标题改为对所有论文生效。
+- **取红判据按计划落在解析范围上**：`PagedExtractor` 记录实际打开了几页，40 页的夹具断言「第 3 页从未被打开」。改前红在 `expected 40 to be less than or equal to 2`——红在被测行为本身，不是在某个副产品上。
+- **`maxPages` 传下去而不是切结果，且与摘要提取共用同一个导出常量。** 两个边界各写各的话，「摘要在第 2 页」那 0.9% 会静默退化成兜底——这是本阶段反复出现的同一种失败形状：不报错、只是悄悄变差。
+- **实现中翻出一个真问题，比预定的改动更值得记**：分块器默认 `minChunkChars: 16` 会把短标题整条滤掉。走全文时这条过滤是丢页眉噪声，完全正确；**走标题+摘要时它把「有标题、无可用摘要」的论文压成零块 ready 记录**——manifest 里在、检索永远匹配不到、没有任何东西报错。实测 `none` 路径占 3.3%，正是扫描件那批。索引路径改传 `minChunkChars: 0`：这段文本是刻意拼出来的，按定义不含噪声。**发现方式**是一条既有测试（`refreshes fallback titles`）断言 `chunks.length > 0` 变红——它本来测的是别的事，却兜住了这个洞。
+- **两条既有检索测试也红了，但红得没有价值**：它们把假向量按 `chunkFullText(page)[0].text` 逐字为键，索引文本一改就对不上。**这是测试耦合到了实现细节**，不是回归。改成按论文里的稀有词选向量，并给夹具换成有标题有 `ABSTRACT` 的真实首页——原来那种一行关键词的假页，索引现在什么也提不出来。
+- **变异检验三条，位置都对**：去掉 `maxPages` → 只有「只开前两页」那条红，其余 35 条不动，说明这条判据独立、不靠别的断言兜底；恢复 `minChunkChars` 默认 → 短标题那条红；标题退回只给 fallback → 6 条红。
+- validation: core **2062**、plugin **720**、CLI **71/71**、typecheck 四包、lint **0 error / 20 warning**（回到基线；中途因删 sidecar 装配多出 4 条 unused import，已清）、check:boundaries OK。
+- boundary: **sidecar 代码与三个设置项一个未删**，只是失去调用方——删用户可见设置是收窄，须用户单独决定。`pdfParserSidecar.enabled` 为真时索引记一条 info 说明它不参与索引，避免设置看着生效实则不然。筛选管线一行未动。
+- next: Chunk 5——显式抬 `CHUNK_DERIVATION_VERSIONS`。**本次已因 provenance 与 derivation 变化隐含触发重建，但仍要显式抬**：靠副作用达成的重建，下次有人改回去就静默失效。

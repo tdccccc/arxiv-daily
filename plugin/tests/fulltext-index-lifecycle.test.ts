@@ -244,38 +244,25 @@ function fixture(storage: StorageAdapter) {
 }
 
 describe("personal library full-text index lifecycle", () => {
-  it("does not probe a local parser sidecar while it is disabled", async () => {
-    const memory = memoryStorage();
-    const runtime = fixture(memory.storage);
-    const request = vi.fn();
-    runtime.internals.host.http = { request };
+  // The two sidecar-probe tests that stood here lost their subject when the
+  // index moved to the extractor (ADR 0013): nothing on the index path probes a
+  // sidecar any more, whatever the setting says. `probeLoopbackSidecarParser`
+  // keeps its own tests in core while the client remains. What is worth pinning
+  // now is the opposite property — that indexing reaches no network at all.
 
-    const configured = await runtime.internals.buildFullTextDocumentParser();
-
-    expect(configured.parser?.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
-    expect(configured.parserSelector).toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("falls back to PDF.js when an enabled local sidecar cannot be probed", async () => {
+  it("builds a PDF.js extractor for indexing and never probes the sidecar", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
     runtime.internals.settings.pdfParserSidecar.enabled = true;
-    const failure = new Error("connection refused");
-    const request = vi.fn(async () => { throw failure; });
+    const request = vi.fn();
     runtime.internals.host.http = { request };
 
-    const configured = await runtime.internals.buildFullTextDocumentParser();
+    const extractor = runtime.internals.buildFullTextExtractor();
 
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({
-      method: "GET",
-      url: "http://127.0.0.1:5001/v1/capabilities",
-    }));
-    expect(configured.parser?.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
-    expect(configured.parserSelector).toBeUndefined();
-    expect(runtime.internals.logger.warn).toHaveBeenCalledWith(
-      "fulltext: local PDF parser sidecar probe failed; using PDF.js",
-      expect.anything(),
+    expect(extractor.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
+    expect(request).not.toHaveBeenCalled();
+    expect(runtime.internals.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("sidecar is not used for indexing"),
     );
   });
 

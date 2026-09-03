@@ -32,8 +32,16 @@
 /** Upper bound on extracted abstract text. Roughly 600 tokens. */
 export const MAX_ABSTRACT_CHARS = 2_400;
 
-/** Pages beyond this are never read: a long author list can push the abstract to page 2, but no further. */
-const MAX_LEADING_PAGES = 2;
+/**
+ * Pages beyond this are never read: a long author list can push the abstract to
+ * page 2, but no further.
+ *
+ * Exported because the indexer must pass the same bound to the extractor as
+ * `PdfExtractionOptions.maxPages`. If the extractor were given a smaller bound
+ * than this function reads, papers whose abstract sits on page 2 would silently
+ * degrade to the `leading-text` fallback with nothing reporting the loss.
+ */
+export const MAX_LEADING_PAGES = 2;
 
 /**
  * Below this, the leading pages carry no usable text layer at all. Checked
