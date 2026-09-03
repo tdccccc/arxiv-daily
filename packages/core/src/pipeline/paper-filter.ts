@@ -280,6 +280,7 @@ async function filterPapersManualOnly(
       parsed,
       new Set(request.identity.knownIds),
       new Set(request.identity.validTags),
+      request.identity.directions,
     );
     if (!records.ok) {
       throw new PaperFilterResponseValidationError(

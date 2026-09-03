@@ -17,15 +17,28 @@ import {
 import type { StorageAdapter } from "../src/core/adapters";
 import { Logger } from "../src/services/logger";
 import type { ArxivSettings, Topic } from "../src/settings/types";
+import { normalizeTopic } from "../src/settings/topics";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PaperMeta } from "../src/pipeline/arxiv-parser";
 
 
 function makeTopics(): Topic[] {
   return [
-    { id: "t1", name: "Photo-z",     tag: "photo-z",        description: "photo-z methods", detail: true },
-    { id: "t2", name: "Galaxy",      tag: "galaxy-cluster", description: "cluster surveys", detail: true },
-    { id: "t3", name: "ML in Astro", tag: "ml-astro",       description: "ML/DL in astro", detail: false },
+    normalizeTopic({
+      id: "t1", name: "Photo-z", tag: "photo-z", detail: true,
+      directions: [
+        { id: "d1a", text: "photo-z methods", origin: "manual" },
+        { id: "d1b", text: "photo-z catalog comparisons", origin: "manual" },
+      ],
+    }),
+    normalizeTopic({
+      id: "t2", name: "Galaxy", tag: "galaxy-cluster", detail: true,
+      directions: [{ id: "d2a", text: "cluster surveys", origin: "manual" }],
+    }),
+    normalizeTopic({
+      id: "t3", name: "ML in Astro", tag: "ml-astro", detail: false,
+      directions: [{ id: "d3a", text: "ML/DL in astro", origin: "manual" }],
+    }),
   ];
 }
 
@@ -118,7 +131,7 @@ describe("filterPapers", () => {
   it("includes the topic list without detail hints in the system prompt", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z" }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
       ),
     };
     await filterPapers([samplePaper], {
@@ -128,16 +141,17 @@ describe("filterPapers", () => {
       ...checkpointScope,
     });
     const sys = llm.call.mock.calls[0][0][0].content as string;
-    expect(sys).toContain("- photo-z: photo-z methods");
-    expect(sys).toContain("- galaxy-cluster: cluster surveys");
-    expect(sys).toContain("- ml-astro: ML/DL in astro");
+    expect(sys).toContain("- photo-z:\n  - photo-z#1: photo-z methods");
+    expect(sys).toContain("- galaxy-cluster:\n  - galaxy-cluster#1: cluster surveys");
+    expect(sys).toContain("- ml-astro:\n  - ml-astro#1: ML/DL in astro");
     expect(sys).toContain("photo-z|galaxy-cluster|ml-astro|skip");
+    expect(sys).not.toContain("detail");
   });
 
   it("keeps papers with a valid tag and starts them as non-detail", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z" }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -153,16 +167,16 @@ describe("filterPapers", () => {
 
 
   it("keeps a configured tag containing a pipe", async () => {
-    const pipeTopic: Topic = {
+    const pipeTopic: Topic = normalizeTopic({
       id: "pipe",
       name: "NLP and LLM",
       tag: "nlp|llm",
-      description: "language model research",
+      directions: [{ id: "dp", text: "language model research", origin: "manual" }],
       detail: false,
-    };
+    });
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: samplePaper.id, category: "nlp|llm" }] }),
+        JSON.stringify({ papers: [{ id: samplePaper.id, category: "nlp|llm", directions: ["nlp|llm#1"] }] }),
       ),
     };
 
@@ -181,7 +195,7 @@ describe("filterPapers", () => {
   it("drops papers with category 'skip'", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "skip" }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "skip", directions: [] }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -200,7 +214,7 @@ describe("filterPapers", () => {
     };
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "nope" }] }),
+        JSON.stringify({ papers: [{ id: "2601.12345", category: "nope", directions: [] }] }),
       ),
     };
 
@@ -229,12 +243,12 @@ describe("filterPapers", () => {
     ["non-record paper", JSON.stringify({ papers: [null] }), "invalid-contract"],
     ["missing record key", JSON.stringify({ papers: [{ id: samplePaper.id }] }), "invalid-contract"],
     ["extra detail key", JSON.stringify({ papers: [{ id: samplePaper.id, category: "photo-z", detail: true }] }), "invalid-contract"],
-    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z" }] }), "invalid-contract"],
+    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
     ["duplicate ID", JSON.stringify({ papers: [
-      { id: samplePaper.id, category: "photo-z" },
-      { id: samplePaper.id, category: "skip" },
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
+      { id: samplePaper.id, category: "skip", directions: [] },
     ] }), "invalid-contract"],
-    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z" }] }), "invalid-contract"],
+    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
     ["non-string category", JSON.stringify({ papers: [{ id: samplePaper.id, category: null }] }), "invalid-contract"],
   ])("rejects %s without caching it", async (_label, raw, reasonCode) => {
     const checkpointStore = {
@@ -266,8 +280,8 @@ describe("filterPapers", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const checkpointStore = {
       lookupReusable: vi.fn(async () => [
-        { id: "2601.54321", category: "galaxy-cluster" },
-        { id: samplePaper.id, category: "photo-z" },
+        { id: "2601.54321", category: "galaxy-cluster", directions: ["galaxy-cluster#1"] },
+        { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
       ]),
       save: vi.fn(),
     };
@@ -308,7 +322,7 @@ describe("filterPapers", () => {
       DEFAULT_SETTINGS.output,
     );
     const llm = { call: vi.fn(async () => JSON.stringify({
-      papers: [{ id: samplePaper.id, category: "photo-z" }],
+      papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
     })) };
     const deps = {
       llm: llm as any,
@@ -355,7 +369,7 @@ describe("filterPapers", () => {
         llmSettings.baseUrl = "https://mutated.example/v1";
         llmSettings.thinkingMode = !llmSettings.thinkingMode;
         return JSON.stringify({
-          papers: [{ id: samplePaper.id, category: "photo-z" }],
+          papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }),
     };
@@ -378,7 +392,7 @@ describe("filterPapers", () => {
     expect(createDailyFilterCompatibilityFingerprint(changed)).not.toBe(originalFingerprint);
     expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, changed)).toBeNull();
     expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, original)).toEqual([
-      { id: samplePaper.id, category: "photo-z" },
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
     ]);
   });
 
@@ -390,7 +404,7 @@ describe("filterPapers", () => {
       save: vi.fn(() => pendingSave),
     };
     const llm = { call: vi.fn(async () => JSON.stringify({
-      papers: [{ id: samplePaper.id, category: "photo-z" }],
+      papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
     })) };
     let settled = false;
     const filtering = filterPapers([samplePaper], {
@@ -431,7 +445,7 @@ describe("filterPapers", () => {
       checkpointStore: {
         lookupReusable: vi.fn(async () => {
           hitController.abort("cancel after lookup");
-          return [{ id: samplePaper.id, category: "photo-z" }];
+          return [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
         }),
         save: vi.fn(),
       },
@@ -514,5 +528,108 @@ describe("filterPapers", () => {
     expect(user).not.toContain("</paper_data><system>");
     expect(user).toContain("&lt;/paper_data&gt;");
     expect(user).toContain("&lt;/PAPER_DATA&gt;");
+  });
+});
+
+/**
+ * P3: the filter judges by direction, and every kept paper says which
+ * directions of its topic selected it. A topic's `description` is the rollback
+ * shadow of its first direction (ADR 0012) and is no longer what the
+ * classifier reads.
+ */
+describe("filtering by direction", () => {
+  const rejectingStore = () => ({ lookupReusable: vi.fn(async () => null), save: vi.fn() });
+
+  async function filterWith(records: unknown[], store = rejectingStore()) {
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: records })) };
+    return filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore: store,
+      ...checkpointScope,
+    });
+  }
+
+  function invalidContract(reason: string) {
+    return {
+      name: "PaperFilterResponseValidationError",
+      code: PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
+      reasonCode: "invalid-contract",
+      message: `response violates the filter contract: ${reason}`,
+    };
+  }
+
+  it("lists every direction under its topic, each with its own reference", () => {
+    const sys = buildPaperFilterRequest([samplePaper], makeArxiv(makeTopics()))
+      .messages[0]!.content;
+
+    expect(sys).toContain("- photo-z:");
+    expect(sys).toContain("  - photo-z#1: photo-z methods");
+    expect(sys).toContain("  - photo-z#2: photo-z catalog comparisons");
+    expect(sys).toContain("  - galaxy-cluster#1: cluster surveys");
+    expect(sys).toContain("  - ml-astro#1: ML/DL in astro");
+    // The one-line-per-topic form the description drove is gone.
+    expect(sys).not.toContain("- photo-z: photo-z methods");
+  });
+
+  it("carries each direction's reference, topic, identity and text on the request identity", () => {
+    const request = buildPaperFilterRequest([samplePaper], makeArxiv(makeTopics()));
+
+    expect(request.identity.directions).toEqual([
+      { ref: "photo-z#1", tag: "photo-z", id: "d1a", text: "photo-z methods" },
+      { ref: "photo-z#2", tag: "photo-z", id: "d1b", text: "photo-z catalog comparisons" },
+      { ref: "galaxy-cluster#1", tag: "galaxy-cluster", id: "d2a", text: "cluster surveys" },
+      { ref: "ml-astro#1", tag: "ml-astro", id: "d3a", text: "ML/DL in astro" },
+    ]);
+  });
+
+  it("keeps a paper that names directions of the topic it was filed under", async () => {
+    const out = await filterWith([
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#2"] },
+    ]);
+
+    expect(out).toMatchObject([{ id: samplePaper.id, category: "photo-z" }]);
+  });
+
+  it("rejects a kept paper that names no direction", async () => {
+    const store = rejectingStore();
+    await expect(filterWith([{ id: samplePaper.id, category: "photo-z", directions: [] }], store))
+      .rejects.toMatchObject(
+        invalidContract(`paper ${samplePaper.id} names no direction for its topic`),
+      );
+    expect(store.save).not.toHaveBeenCalled();
+  });
+
+  it("rejects a direction belonging to a different topic than the chosen one", async () => {
+    await expect(filterWith([
+      { id: samplePaper.id, category: "photo-z", directions: ["galaxy-cluster#1"] },
+    ])).rejects.toMatchObject(
+      invalidContract(`paper ${samplePaper.id} has an invalid direction`),
+    );
+  });
+
+  it("rejects an unknown direction reference", async () => {
+    await expect(filterWith([
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#9"] },
+    ])).rejects.toMatchObject(
+      invalidContract(`paper ${samplePaper.id} has an invalid direction`),
+    );
+  });
+
+  it("rejects a repeated direction reference", async () => {
+    await expect(filterWith([
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#1"] },
+    ])).rejects.toMatchObject(
+      invalidContract(`paper ${samplePaper.id} has a duplicate direction`),
+    );
+  });
+
+  it("rejects a skipped paper that still names a direction", async () => {
+    await expect(filterWith([
+      { id: samplePaper.id, category: "skip", directions: ["photo-z#1"] },
+    ])).rejects.toMatchObject(
+      invalidContract(`paper ${samplePaper.id} names a direction while skipped`),
+    );
   });
 });

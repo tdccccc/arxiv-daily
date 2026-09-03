@@ -10,6 +10,7 @@ import {
   prepareDailyFilterCheckpoint,
   type DailyFilterCheckpointCompatibilityInput,
   type DailyFilterCheckpointFingerprintInput,
+  type FilterDirectionRef,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "../pipeline/paper-filter-contract";
@@ -384,6 +385,7 @@ export class DailyFilterCheckpointStore {
         { papers: result },
         new Set(fingerprintInput.request.identity.knownIds),
         new Set(fingerprintInput.request.identity.validTags),
+        fingerprintInput.request.identity.directions,
       );
       if (!decoded.ok) {
         throw new DailyFilterCheckpointStoreError(
@@ -684,6 +686,7 @@ function decodeDocument(value: unknown, reportDate: string): DailyFilterCheckpoi
     { papers: value.result },
     new Set(fingerprintInput.request.identity.knownIds),
     new Set(fingerprintInput.request.identity.validTags),
+    fingerprintInput.request.identity.directions,
   );
   if (!decoded.ok) return null;
   return {
@@ -771,10 +774,21 @@ function decodeFingerprintInput(value: unknown): DailyFilterCheckpointFingerprin
 function isRequestIdentity(value: unknown): value is {
   knownIds: string[];
   validTags: string[];
+  directions: FilterDirectionRef[];
 } {
-  return isExactObject(value, ["knownIds", "validTags"]) &&
+  return isExactObject(value, ["knownIds", "validTags", "directions"]) &&
     isStringArray(value.knownIds) &&
-    isStringArray(value.validTags);
+    isStringArray(value.validTags) &&
+    isDirectionRefs(value.directions);
+}
+
+function isDirectionRefs(value: unknown): value is FilterDirectionRef[] {
+  return Array.isArray(value) && value.every((item) =>
+    isExactObject(item, ["ref", "tag", "id", "text"]) &&
+    typeof item.ref === "string" &&
+    typeof item.tag === "string" &&
+    typeof item.id === "string" &&
+    typeof item.text === "string");
 }
 
 function isStringArray(value: unknown): value is string[] {

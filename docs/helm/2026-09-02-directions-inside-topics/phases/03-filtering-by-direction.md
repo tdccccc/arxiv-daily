@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-03T23:21:47+08:00
-updated: 2026-09-03T23:21:47+08:00
-revision: 1
+updated: 2026-09-03T23:58:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -31,9 +31,11 @@ revision: 1
 - Red / baseline signal: `packages/core/tests/paper-filter.test.ts` 新增——(a) `buildPaperFilterRequest` 产出的 system 消息里，每个主题下逐条列出它的方向文本与各自的标识，`topic.description` 不再是判据来源；(b) `decodePaperFilterRecords` 接受 `{id, category, directions:[...]}`，**方向标识不属于所选主题时判违约**；(c) 重复方向标识判违约。红在今天的 `- ${t.tag}: ${t.description}` 只有一行、且 record 多一个键就被 `hasExactKeys` 拒掉。
 - Green check: `npm run test --workspace @arxiv-daily/core -- paper-filter`
 - regression checks: `npm run test --workspace @arxiv-daily/core`；`npm run typecheck`
-- 方向标识用什么形态由本 chunk 定：必须能**唯一映射回一条方向**，且未知标识是违约而不是被静默丢弃——与既有 `knownIds` / `validTags` 的严格解码同形。
+- 方向标识定为 **`<tag>#<n>`**（n 是方向在其主题内的序号）。方向的存储 `id` 是 UUID，让模型逐字回抄又长又易错；`<tag>#<n>` 短，且**自带所属主题**，所以「论文归在 A 主题却报了 B 主题的方向」是可检出的违约而不是静默接受。按最后一个 `#` 切分，tag 自身含 `#` 也不歧义（`nlp|llm` 那条既有测试同时覆盖了含 `|` 的 tag）。
+- `identity` 一并带上 `directions: [{ref, tag, id, text}]` 而不是只带可用标识：settings 可能在 LLM 调用期间被改（既有测试「persists the immutable exact request snapshot when settings mutate during the LLM call」钉着这件事），所以 Chunk 5 要用的方向文本必须来自**冻结的请求**，不能回头读实时设置。一次成形，避免 Chunk 4 再改一次契约、再抬一次版本号。
+- **L1：与 Chunk 2、Chunk 3 合并为一次提交。** 三者是同一次契约变更的三面——改提示词必然推翻 Chunk 3 那条「提示词逐字不变」的断言，分开提交会留下一次自知的红。各自的变异检验仍分开做。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — 两个契约版本号显式抬，旧缓存作废是被断言的
 
@@ -42,9 +44,10 @@ revision: 1
 - Red / baseline signal: `DAILY_FILTER_PROMPT_CONTRACT_VERSION` 与 `DAILY_FILTER_RESULT_CONTRACT_VERSION` 各 1→2。新增测试——按旧版本号存下的 checkpoint **不得**被复用。红在版本号未抬时旧 checkpoint 照样命中。
 - Green check: `npm run test --workspace @arxiv-daily/core -- daily-filter-checkpoint-store`
 - regression checks: core 全量
-- **变异检验（本 chunk 必做）**：只退回其中一个版本号，对应那条测试必须仍然红。P2 栽过一次——两个版本号写在同一条测试里，退回一个照样绿，那条测试实际只钉住「至少有一个字段变了」。每个版本号各一条测试。
+- **变异检验当场抓到一条自己写的假绿，值得记。** 第一版把陈旧版本号写成 `CURRENT - 1`，两条测试各自独立、看起来满足「每个版本号各一条」。但退回任一版本号时，`CURRENT - 1` 跟着一起降，陈旧值与当前值**永远不相等**，测试照样绿——它实际只钉住「版本号不等于版本号减一」这句废话。改成旧契约真正发布过的**字面量 1**后，退回 prompt 版本只有 prompt 那条红、退回 result 版本只有 result 那条红。
+- **与 P2 那次的同形之处**：两次都是「测试通过了，但通过的原因不是被测行为」。P2 是两个断言挤在一条测试里，这次是断言的参照系跟着被测对象一起动。判据要钉在**不随实现变动的锚点**上。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — 回滚契约重新判定：守数据，不守提示词
 
@@ -54,8 +57,10 @@ revision: 1
 - Green check: `npm run test --workspace @arxiv-daily/core -- settings-rollback`
 - regression checks: `real-corpus-migration.test.ts`、`migration.test.ts`、`validation.test.ts` 全绿
 - **不允许的做法**：把那条断言删掉了事，或放宽成「大致相同」。P1 的验收标准是「迁移可回滚」，本 chunk 要让它继续以可执行形式存在，只是换到它真正该待的那一侧。
+- 落地形态：原「提示词逐字不变」的两条换成——(a)「迁移后按方向出题」，断言提示词里是方向行、且 `identity.directions` 逐条对得上迁移产物；(b)「提示词变了这件事由两个版本号显式宣告」，断言老的一行式提示词已不存在、两个版本号都大于 1。数据侧回滚的三条（旧构建配置检查通过、影子等于第一条方向、往返稳定）**原样保留未动**。
+- **顺带定死了一件事**：`buildPaperFilterRequest` 不再接受未经 `normalizeTopic` 的设置。原测试直接把老形状喂给它来比对提示词，现在会抛。这是 P1「`normalizeTopic` 是所有主题的唯一入口」的自然结果，没有加 `?? []` 去兜——兜住只会造出「有主题但一条方向都没有」的静默状态，而那正是 Chunk 6 要正面定义的退化行为。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — 命中方向沿管线流到日报组装
 

@@ -25,6 +25,7 @@ import { Logger } from "../src/services/logger";
 import { RunCancelledError } from "../src/services/cancellation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { ArxivSettings } from "../src/settings/types";
+import { normalizeTopic } from "../src/settings/topics";
 
 function paper(index: number, overrides: Partial<PaperMeta> = {}): PaperMeta {
   return {
@@ -61,8 +62,8 @@ const arxivSettings: ArxivSettings = {
   categories: ["astro-ph"],
   timezone: "UTC",
   topics: [
-    { id: "topic-a", name: "Topic A", tag: "topic-a", description: "manual A", detail: false },
-    { id: "topic-b", name: "Topic B", tag: "topic-b", description: "manual B", detail: false },
+    normalizeTopic({ id: "topic-a", name: "Topic A", tag: "topic-a", directions: [{ id: "da", text: "manual A", origin: "manual" }], detail: false }),
+    normalizeTopic({ id: "topic-b", name: "Topic B", tag: "topic-b", directions: [{ id: "db", text: "manual B", origin: "manual" }], detail: false }),
   ],
 };
 
@@ -370,8 +371,8 @@ describe("manual and personalized union", () => {
   it("preserves exact legacy manual-only behavior when discovery is absent or empty", async () => {
     const run = async (personalizedDiscovery?: PersonalizedDiscoveryInput) => {
       const llm = { call: vi.fn(async () => JSON.stringify({ papers: [
-        { id: paper(2).id, category: "topic-b" },
-        { id: paper(1).id, category: "topic-a" },
+        { id: paper(2).id, category: "topic-b", directions: ["topic-b#1"] },
+        { id: paper(1).id, category: "topic-a", directions: ["topic-a#1"] },
       ] })) };
       const manualCheckpoint = {
         lookupReusable: vi.fn(async () => null), save: vi.fn(async () => undefined),
@@ -406,8 +407,8 @@ describe("manual and personalized union", () => {
     const llm = { call: vi.fn(async (messages: ChatMessage[]) => {
       call += 1;
       if (call === 1) return JSON.stringify({ papers: [
-        { id: paper(2).id, category: "topic-b" },
-        { id: paper(1).id, category: "topic-a" },
+        { id: paper(2).id, category: "topic-b", directions: ["topic-b#1"] },
+        { id: paper(1).id, category: "topic-a", directions: ["topic-a#1"] },
       ] });
       return personalizedResponse(messages, matches);
     }) };
@@ -438,7 +439,7 @@ describe("manual and personalized union", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const invalid: any = { directions: [{ ...direction(1), path: "/private/secret.pdf" }] };
     const llm = { call: vi.fn(async () => JSON.stringify({ papers: [
-      { id: paper(1).id, category: "topic-a" },
+      { id: paper(1).id, category: "topic-a", directions: ["topic-a#1"] },
     ] })) };
     await filterPapers([paper(1)], {
       ...baseDeps, logger: logger as any, llm: llm as any, personalizedDiscovery: invalid,
@@ -450,7 +451,7 @@ describe("manual and personalized union", () => {
   });
 
   it("wraps personalized checkpoint failures but propagates transport and output-limit errors", async () => {
-    const manual = JSON.stringify({ papers: [{ id: paper(1).id, category: "topic-a" }] });
+    const manual = JSON.stringify({ papers: [{ id: paper(1).id, category: "topic-a", directions: ["topic-a#1"] }] });
     for (const failure of ["lookup", "save"] as const) {
       let calls = 0;
       const store = {
@@ -504,7 +505,7 @@ describe("manual and personalized union", () => {
     const llm = { call: vi.fn(async () => {
       call += 1;
       return call === 1
-        ? JSON.stringify({ papers: [{ id: paper(2).id, category: "topic-b" }] })
+        ? JSON.stringify({ papers: [{ id: paper(2).id, category: "topic-b", directions: ["topic-b#1"] }] })
         : "malformed";
     }) };
     const result = await filterPapers([paper(1), paper(2)], {

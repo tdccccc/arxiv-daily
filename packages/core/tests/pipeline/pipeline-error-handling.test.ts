@@ -1,4 +1,5 @@
 import { markupParser } from "../markup-parser";
+import { normalizeTopic } from "../../src/settings/topics";
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,7 @@ const testDetailSelection = {
 const testArxiv = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
-    { id: "t1", name: "Test Topic", tag: "test", description: "test topic", detail: true },
+    normalizeTopic({ id: "t1", name: "Test Topic", tag: "test", directions: [{ id: "d1", text: "test topic", origin: "manual" }], detail: true }),
   ],
 };
 
@@ -207,7 +208,7 @@ describe("Pipeline index 0 papers handling", () => {
       call: vi.fn().mockResolvedValue(
         JSON.stringify({
           papers: [
-            { id: "2605.08080", category: "test" },
+            { id: "2605.08080", category: "test", directions: ["test#1"] },
           ],
         }),
       ),
@@ -331,9 +332,9 @@ describe("Pipeline partial failure consistency", () => {
         const system = messages[0]?.content ?? "";
         const daily = structuredDailyResponse(messages);
         if (daily) return daily;
-        if (system.includes("选择最匹配的主题")) {
+        if (system.includes("判断它命中了哪些方向")) {
           return JSON.stringify({
-            papers: ids.map((id) => ({ id, category: "test" })),
+            papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
           });
         }
         if (system.includes("strict research-paper evaluator")) {
@@ -383,9 +384,9 @@ describe("Pipeline partial failure consistency", () => {
     const { pipeline, writer, paperIndex, llm } = makeOnePaperPipeline({ ids });
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
-      if (system.includes("选择最匹配的主题")) {
+      if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "test" })),
+          papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
         });
       }
       if (system.includes("strict research-paper evaluator")) {
@@ -501,7 +502,7 @@ describe("Pipeline partial failure consistency", () => {
     ],
     [
       "contract-invalid JSON",
-      JSON.stringify({ papers: [{ id: "2605.99999", category: "test" }] }),
+      JSON.stringify({ papers: [{ id: "2605.99999", category: "test", directions: ["test#1"] }] }),
       "response violates the filter contract: paper record has an unknown id",
     ],
   ])("fails closed before downstream work for %s filter responses", async (
@@ -588,7 +589,7 @@ describe("Pipeline partial failure consistency", () => {
 
   it("passes filter and summary checkpoint scopes to their orchestration seams", async () => {
     const filterStore = {
-      lookupReusable: vi.fn(async () => [{ id: "2605.08080", category: "test" }]),
+      lookupReusable: vi.fn(async () => [{ id: "2605.08080", category: "test", directions: ["test#1"] }]),
       save: vi.fn(),
       removeAll: vi.fn(async () => undefined),
     };
@@ -618,7 +619,7 @@ describe("Pipeline partial failure consistency", () => {
       }),
     );
     expect(llm.call).not.toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("选择最匹配的主题") })]),
+      expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining("判断它命中了哪些方向") })]),
       expect.anything(),
     );
     expect(summarizeDaily).toHaveBeenCalledTimes(1);
@@ -652,8 +653,8 @@ describe("Pipeline partial failure consistency", () => {
     const { pipeline, writer, paperIndex, llm } = makeOnePaperPipeline({ ids });
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
-      if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id: ids[0], category: "test" }] });
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({ papers: [{ id: ids[0], category: "test", directions: ["test#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) {
         return JSON.stringify({ papers: [] });
@@ -696,8 +697,8 @@ describe("Pipeline partial failure consistency", () => {
       const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
       llm.call = vi.fn(async (messages: any[]) => {
         const system = messages[0]?.content ?? "";
-        if (system.includes("选择最匹配的主题")) {
-          return JSON.stringify({ papers: [{ id: ids[0], category: "test" }] });
+        if (system.includes("判断它命中了哪些方向")) {
+          return JSON.stringify({ papers: [{ id: ids[0], category: "test", directions: ["test#1"] }] });
         }
         if (system.includes("strict research-paper evaluator")) {
           return JSON.stringify({ papers: [] });
@@ -721,9 +722,9 @@ describe("Pipeline partial failure consistency", () => {
     const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
-      if (system.includes("选择最匹配的主题")) {
+      if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "test" })),
+          papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
         });
       }
       if (system.includes("strict research-paper evaluator")) {

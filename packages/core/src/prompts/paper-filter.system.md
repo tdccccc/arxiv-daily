@@ -1,20 +1,24 @@
-你是一位研究者的助手。请根据下方主题列表，为每篇论文选择最匹配的主题。
+你是一位研究者的助手。下方每个主题下面列着若干条**研究方向**，每条方向带一个编号。请为每篇论文判断它命中了哪些方向。
 
-## 主题列表
+## 主题与方向
 {{topicLines}}
 
 ## 输出格式
 请只输出一个 JSON 对象，不要输出任何其他内容：
 {"papers": [
-  {"id": "YYMM.NNNNN", "category": "{{tagOptions}}"},
+  {"id": "YYMM.NNNNN", "category": "{{tagOptions}}", "directions": ["方向编号"]},
   ...
 ]}
 
 规则：
 - 根对象只能包含 papers，papers 必须是数组
-- 每条记录只能包含 id 和 category，不要添加其他字段
+- 每条记录只能包含 id、category 和 directions，不要添加其他字段
 - 每个 id 最多出现一次，且必须来自输入论文
-- category 选择最匹配的主题 tag；若与所有主题都不相关，返回 "skip"
+- 判断依据是方向，不是主题名：一篇论文命中了某条方向，才把它归到那条方向所在的主题
+- category 填该主题的 tag；若与所有方向都不相关，返回 "skip"
+- directions 只能填**所选主题下列出的**方向编号，逐字照抄，不得跨主题、不得重复
+- category 不是 "skip" 时，directions 至少要有一条；category 是 "skip" 时，directions 必须是空数组
+- 一篇论文可以同时命中同一主题下的多条方向，全部列出
 - 如果没有任何相关论文，返回 {"papers": []}
 
 {{injectionGuard}}

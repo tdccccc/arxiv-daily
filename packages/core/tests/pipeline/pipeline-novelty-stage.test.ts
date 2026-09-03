@@ -1,4 +1,5 @@
 import { markupParser } from "../markup-parser";
+import { normalizeTopic } from "../../src/settings/topics";
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -42,7 +43,7 @@ const testDetailSelection = {
 const testArxiv = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
-    { id: "t1", name: "Photo-z", tag: "photo-z", description: "photo-z methods", detail: true },
+    normalizeTopic({ id: "t1", name: "Photo-z", tag: "photo-z", directions: [{ id: "d1", text: "photo-z methods", origin: "manual" }], detail: true }),
   ],
 };
 
@@ -193,9 +194,9 @@ function makePipeline(options: NoveltyHarnessOptions = {}) {
   const llm = {
     call: vi.fn(async (messages: ChatMessage[]) => {
       const system = messages[0]?.content ?? "";
-      if (system.includes("选择最匹配的主题")) {
+      if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: keptIds.map((id) => ({ id, category: "photo-z" })),
+          papers: keptIds.map((id) => ({ id, category: "photo-z", directions: ["photo-z#1"] })),
         });
       }
       if (system.includes("You classify new arXiv papers against researcher-confirmed directions")) {

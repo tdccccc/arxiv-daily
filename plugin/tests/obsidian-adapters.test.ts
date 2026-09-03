@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { normalizeTopic } from "../../packages/core/src/settings/topics";
 import {
   chmod,
   mkdir,
@@ -686,7 +687,7 @@ describe("Obsidian host adapters", () => {
         ...DEFAULT_SETTINGS.arxiv,
         categories: ["astro-ph"],
         topics: [
-          { id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false },
+          normalizeTopic({ id: "topic-id", name: "Topic", tag: "topic", directions: [{ id: "topic-d1", text: "Topic", origin: "manual" }], detail: false }),
         ],
       },
       llm: {
@@ -698,8 +699,8 @@ describe("Obsidian host adapters", () => {
       },
     };
     const prepared = prepareDailyFilterCheckpoint(compatibility);
-    const first = [{ id: "2608.00001", category: "topic" }];
-    const second = [{ id: "2608.00001", category: "skip" }];
+    const first = [{ id: "2608.00001", category: "topic", directions: ["topic#1"] }];
+    const second = [{ id: "2608.00001", category: "skip", directions: [] }];
 
     await store.save("2026-08-01", prepared, first);
     await store.save("2026-08-01", prepared, second);

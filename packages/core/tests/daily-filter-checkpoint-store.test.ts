@@ -9,6 +9,7 @@ import {
 import {
   DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION,
   DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
   DailyFilterCheckpointStore,
   buildDailyFilterCheckpointFingerprintInput,
   createDailyFilterCompatibilityFingerprint,
@@ -48,6 +49,7 @@ import {
 } from "../src/index";
 import { sha256ForCheckpointTests } from "../src/services/daily-summary-checkpoint-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { normalizeTopic } from "../src/settings/topics";
 
 const reportDate = "2026-08-01";
 const documentPath = "arxiv-daily/.index/filter-checkpoints/2026-08-01.json";
@@ -57,8 +59,8 @@ const papers: PaperMeta[] = [
   { id: "2608.00002", title: "Second", authors: "B", abstract: "Abstract two" },
 ];
 const result: FilterRecord[] = [
-  { id: "2608.00002", category: "skip" },
-  { id: "2608.00001", category: "topic-a" },
+  { id: "2608.00002", category: "skip", directions: [] },
+  { id: "2608.00001", category: "topic-a", directions: ["topic-a#1"] },
 ];
 
 function compatibility(
@@ -71,8 +73,8 @@ function compatibility(
       categories: ["astro-ph", "cs.LG"],
       timezone: "UTC",
       topics: [
-        { id: "unused-id", name: "Unused name", tag: "topic-a", description: "Topic A", detail: true },
-        { id: "unused-id-2", name: "Unused name 2", tag: "topic-b", description: "Topic B", detail: false },
+        normalizeTopic({ id: "unused-id", name: "Unused name", tag: "topic-a", directions: [{ id: "da", text: "Topic A", origin: "manual" }], detail: true }),
+        normalizeTopic({ id: "unused-id-2", name: "Unused name 2", tag: "topic-b", directions: [{ id: "db", text: "Topic B", origin: "manual" }], detail: false }),
       ],
     },
     llm: {
@@ -318,6 +320,10 @@ describe("paper filter shared contract", () => {
     expect(request.identity).toEqual({
       knownIds: ["2608.00001", "2608.00002"],
       validTags: ["topic-a", "topic-b"],
+      directions: [
+        { ref: "topic-a#1", tag: "topic-a", id: "da", text: "Topic A" },
+        { ref: "topic-b#1", tag: "topic-b", id: "db", text: "Topic B" },
+      ],
     });
     expect(request.messages[0]?.content).toContain("topic-a|topic-b|skip");
     expect(request.messages[1]?.content).toContain("ID: 2608.00001");
@@ -327,9 +333,10 @@ describe("paper filter shared contract", () => {
   it("strictly accepts ordered, omitted, and empty record lists", () => {
     const ids = new Set(papers.map((paper) => paper.id));
     const tags = new Set(["topic-a", "topic-b"]);
-    expect(decodePaperFilterRecords({ papers: result }, ids, tags)).toEqual({ ok: true, value: result });
-    expect(decodePaperFilterRecords({ papers: [] }, ids, tags)).toEqual({ ok: true, value: [] });
-    expect(decodePaperFilterRecords({ papers: [result[1]] }, ids, tags)).toEqual({
+    const dirs = buildPaperFilterRequest(papers, compatibility().arxivSettings).identity.directions;
+    expect(decodePaperFilterRecords({ papers: result }, ids, tags, dirs)).toEqual({ ok: true, value: result });
+    expect(decodePaperFilterRecords({ papers: [] }, ids, tags, dirs)).toEqual({ ok: true, value: [] });
+    expect(decodePaperFilterRecords({ papers: [result[1]] }, ids, tags, dirs)).toEqual({
       ok: true,
       value: [result[1]],
     });
@@ -338,14 +345,15 @@ describe("paper filter shared contract", () => {
   it.each([
     { papers: result, extra: true },
     { papers: [{ ...result[0], extra: true }] },
-    { papers: [{ id: "unknown", category: "topic-a" }] },
+    { papers: [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"] }] },
     { papers: [result[0], result[0]] },
-    { papers: [{ id: papers[0]!.id, category: "unknown" }] },
+    { papers: [{ id: papers[0]!.id, category: "unknown", directions: [] }] },
   ])("rejects malformed records %#", (value) => {
     expect(decodePaperFilterRecords(
       value,
       new Set(papers.map((paper) => paper.id)),
       new Set(["topic-a"]),
+      buildPaperFilterRequest(papers, compatibility().arxivSettings).identity.directions,
     )).toMatchObject({ ok: false });
   });
 });
@@ -394,13 +402,13 @@ describe("daily filter checkpoint fingerprint", () => {
     ["abstract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, papers: input.papers.map((paper, i) => i ? paper : { ...paper, abstract: "changed" }) })],
     ["category rendering", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, categories: ["astro-ph"] } })],
     ["topic order", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: [...input.arxivSettings.topics].reverse() } })],
-    ["topic description", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: input.arxivSettings.topics.map((topic, i) => i ? topic : { ...topic, description: "changed" }) } })],
+    ["topic direction text", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: input.arxivSettings.topics.map((topic, i) => i ? topic : normalizeTopic({ ...topic, directions: [{ ...topic.directions[0]!, text: "changed" }] })) } })],
     ["provider", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, provider: "openai" } })],
     ["endpoint", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, baseUrl: "https://other.test/v1" } })],
     ["model", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, model: "model-b" } })],
     ["mode", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, thinkingMode: true } })],
-    ["prompt contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, promptContractVersion: 2 })],
-    ["result contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, resultContractVersion: 2 })],
+    ["prompt contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 })],
+    ["result contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, resultContractVersion: DAILY_FILTER_RESULT_CONTRACT_VERSION + 1 })],
   ])("invalidates on %s changes", (_name, mutate) => {
     const input = compatibility();
     expect(createDailyFilterCompatibilityFingerprint(mutate(input))).not.toBe(createDailyFilterCompatibilityFingerprint(input));
@@ -458,16 +466,16 @@ describe("DailyFilterCheckpointStore", () => {
     const input = compatibility({
       arxivSettings: {
         ...compatibility().arxivSettings,
-        topics: [{
+        topics: [normalizeTopic({
           id: "pipe-tag",
           name: "NLP and LLM",
           tag: "nlp|llm",
-          description: "NLP and language models",
+          directions: [{ id: "dp", text: "NLP and language models", origin: "manual" }],
           detail: false,
-        }],
+        })],
       },
     });
-    const records = [{ id: papers[0]!.id, category: "nlp|llm" }];
+    const records = [{ id: papers[0]!.id, category: "nlp|llm", directions: ["nlp|llm#1"] }];
 
     await makeStore(storage).save(
       reportDate,
@@ -479,6 +487,8 @@ describe("DailyFilterCheckpointStore", () => {
     expect(persisted.fingerprintInput.request.identity).toEqual({
       knownIds: ["2608.00001", "2608.00002"],
       validTags: ["nlp|llm"],
+      // Splitting the ref on its final `#` recovers a tag that contains one.
+      directions: [{ ref: "nlp|llm#1", tag: "nlp|llm", id: "dp", text: "NLP and language models" }],
     });
     expect(persisted.fingerprintInput.request.messages[0].content)
       .toContain("nlp|llm|skip");
@@ -486,9 +496,35 @@ describe("DailyFilterCheckpointStore", () => {
     expect(await makeStore(storage).lookupReusable(reportDate, prepareDailyFilterCheckpoint(input))).toEqual(records);
   });
 
+  /**
+   * P3 moved the filter from a topic's one-line description to its directions,
+   * which invalidates every checkpoint written by the old contract. Two things
+   * this case has to get right, both learned by getting them wrong first:
+   *
+   * - One case per version. With both stale versions in a single case,
+   *   reverting either bump alone still leaves it green, and it then pins only
+   *   "at least one of them changed".
+   * - The stale value is the literal 1 the old contract shipped with, not
+   *   `CURRENT - 1`. Written relative to the constant, the case follows the
+   *   constant back down on a revert and can never fail.
+   */
+  it.each([
+    ["prompt", { promptContractVersion: 1 }],
+    ["result", { resultContractVersion: 1 }],
+  ])("never reuses a checkpoint written under the shipped %s contract 1", async (_name, stale) => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    Object.assign(document.fingerprintInput, stale);
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
   it("rejects invalid result and unsupported contracts", async () => {
     const { storage } = makeStorage();
-    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a" }])).rejects.toThrow(/invalid daily filter/);
+    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"] }])).rejects.toThrow(/invalid daily filter/);
     await expect(makeStore(storage).save(reportDate, prepared({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
   });
 

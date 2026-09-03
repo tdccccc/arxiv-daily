@@ -10,8 +10,29 @@ import type { PaperMeta } from "./arxiv-parser";
 import { escapePaperDataFence } from "./prompt-safety";
 
 export const DAILY_FILTER_FINGERPRINT_VERSION = 1 as const;
-export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 1 as const;
-export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 1 as const;
+/**
+ * Both were 1 while the classifier judged by a topic's one-line description.
+ * They move together only by coincidence: the prompt now asks about
+ * directions, and the result now carries which ones matched. Each records a
+ * different change, so each is bumped on its own account (ADR 0012 line 45
+ * accepts the one-time invalidation of cached daily filter results).
+ */
+export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 2 as const;
+export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 2 as const;
+
+/**
+ * One direction as the classifier sees it. `ref` is the short handle written
+ * into the prompt and echoed back by the model — a direction's stored `id` is
+ * a UUID, which is both long to repeat and easy to mistranscribe. `tag` makes
+ * the reference self-checking: a paper filed under one topic cannot name a
+ * direction belonging to another (ADR 0012 §1, one topic holds its own list).
+ */
+export interface FilterDirectionRef {
+  ref: string;
+  tag: string;
+  id: string;
+  text: string;
+}
 
 export interface PaperFilterRequest {
   messages: ChatMessage[];
@@ -19,12 +40,15 @@ export interface PaperFilterRequest {
   identity: {
     knownIds: string[];
     validTags: string[];
+    directions: FilterDirectionRef[];
   };
 }
 
 export interface FilterRecord {
   id: string;
   category: string;
+  /** Direction refs of the chosen topic; empty exactly when `category` is `skip`. */
+  directions: string[];
 }
 
 export type FilterRecordDecodeResult =
@@ -49,6 +73,7 @@ export interface DailyFilterCheckpointFingerprintInput {
     identity: {
       knownIds: string[];
       validTags: string[];
+      directions: FilterDirectionRef[];
     };
   };
   generation: CheckpointGenerationIdentity;
@@ -104,7 +129,20 @@ export function buildPaperFilterRequest(
   arxivSettings: ArxivSettings,
 ): PaperFilterRequest {
   const topics: Topic[] = arxivSettings.topics ?? [];
-  const topicLines = topics.map((t) => `- ${t.tag}: ${t.description}`).join("\n");
+  const directions = buildFilterDirectionRefs(topics);
+  const byTag = new Map<string, FilterDirectionRef[]>();
+  for (const direction of directions) {
+    byTag.set(direction.tag, [...(byTag.get(direction.tag) ?? []), direction]);
+  }
+  // The topic's `description` is the rollback shadow of its first direction
+  // (ADR 0012) and no longer takes part in classification: the judgement is
+  // made against the direction lines, one per thread running inside the topic.
+  const topicLines = topics
+    .map((t) => [
+      `- ${t.tag}:`,
+      ...(byTag.get(t.tag) ?? []).map((d) => `  - ${d.ref}: ${singleLine(d.text)}`),
+    ].join("\n"))
+    .join("\n");
   const tagOptions = topics.map((t) => t.tag).join("|") + "|skip";
   const papersText = papers
     .map(
@@ -133,8 +171,30 @@ export function buildPaperFilterRequest(
     identity: {
       knownIds: papers.map((paper) => paper.id),
       validTags: topics.map((topic) => topic.tag),
+      directions,
     },
   };
+}
+
+/**
+ * Number directions within their own topic, so a reference reads as
+ * `<tag>#<n>` and carries the topic it belongs to. Splitting on the final `#`
+ * recovers the tag even when the tag itself contains one.
+ */
+export function buildFilterDirectionRefs(topics: readonly Topic[]): FilterDirectionRef[] {
+  return topics.flatMap((topic) =>
+    topic.directions.map((direction, index) => ({
+      ref: `${topic.tag}#${index + 1}`,
+      tag: topic.tag,
+      id: direction.id,
+      text: direction.text,
+    })),
+  );
+}
+
+/** Keep one direction on one prompt line; identity keeps the text as written. */
+function singleLine(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 /** Strictly decode validated model decisions while preserving record order and omissions. */
@@ -142,15 +202,17 @@ export function decodePaperFilterRecords(
   value: unknown,
   knownIds: ReadonlySet<string>,
   validTags: ReadonlySet<string>,
+  directions: readonly FilterDirectionRef[],
 ): FilterRecordDecodeResult {
   if (!isPlainObject(value) || !hasExactKeys(value, ["papers"]) || !Array.isArray(value.papers)) {
     return { ok: false, reason: "root must be exactly {papers:[...]}" };
   }
+  const tagByRef = new Map(directions.map((direction) => [direction.ref, direction.tag]));
 
   const seen = new Set<string>();
   const records: FilterRecord[] = [];
   for (const record of value.papers) {
-    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category"])) {
+    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category", "directions"])) {
       return { ok: false, reason: "paper record has an invalid shape" };
     }
     if (typeof record.id !== "string" || !knownIds.has(record.id)) {
@@ -165,8 +227,33 @@ export function decodePaperFilterRecords(
     ) {
       return { ok: false, reason: `paper ${record.id} has an invalid category` };
     }
+    if (!Array.isArray(record.directions)) {
+      return { ok: false, reason: "paper record has an invalid shape" };
+    }
+    // The topic is chosen because a direction matched, so a skipped paper has
+    // no direction to name and a kept one has no reason to be kept without
+    // naming at least one. Both are checked before the references themselves,
+    // so the reason reported is the incoherence rather than a stray reference.
+    if (record.category === "skip" && record.directions.length > 0) {
+      return { ok: false, reason: `paper ${record.id} names a direction while skipped` };
+    }
+    if (record.category !== "skip" && record.directions.length === 0) {
+      return { ok: false, reason: `paper ${record.id} names no direction for its topic` };
+    }
+    const chosen = new Set<string>();
+    for (const ref of record.directions) {
+      // A reference is valid only inside the topic the paper was filed under,
+      // so a mismatch is a contract violation rather than a silent drop.
+      if (typeof ref !== "string" || tagByRef.get(ref) !== record.category) {
+        return { ok: false, reason: `paper ${record.id} has an invalid direction` };
+      }
+      if (chosen.has(ref)) {
+        return { ok: false, reason: `paper ${record.id} has a duplicate direction` };
+      }
+      chosen.add(ref);
+    }
     seen.add(record.id);
-    records.push({ id: record.id, category: record.category });
+    records.push({ id: record.id, category: record.category, directions: [...record.directions] });
   }
   return { ok: true, value: records };
 }

@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { migrateArxivSettings } from "../src/settings/migration";
 import { validateFilterConfig } from "../src/settings/validation";
-import { buildPaperFilterRequest } from "../src/pipeline/paper-filter-contract";
+import {
+  DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
+  buildPaperFilterRequest,
+} from "../src/pipeline/paper-filter-contract";
 import type { ArxivSettings, PluginSettings } from "../src/settings/types";
 
 /**
@@ -11,8 +15,15 @@ import type { ArxivSettings, PluginSettings } from "../src/settings/types";
  * `description` stays in data.json as a shadow of the first direction, so a
  * build from before directions existed reads the same file and behaves exactly
  * as it did. That older build knows only four fields per topic, so this suite
- * hands it exactly those four and checks it still works — and that the filter
- * prompt is unchanged, which is what keeps cached classifications valid.
+ * hands it exactly those four and checks it still works.
+ *
+ * P3 changed what rollback means here. This suite used to also assert that the
+ * filter prompt was byte-identical after migration — the guard for P1's
+ * promise not to touch classification. P3 makes the filter judge by direction,
+ * so that assertion no longer describes a promise anyone is keeping: what
+ * survives is **data** reversibility, and the prompt change is declared by the
+ * bumped contract versions rather than hidden. The cost — cached daily filter
+ * results are invalidated once — is the one ADR 0012 line 45 accepts.
  */
 
 const LEGACY_ARXIV = {
@@ -65,23 +76,29 @@ function settingsWith(arxiv: ArxivSettings): PluginSettings {
 }
 
 describe("rollback to a build without directions", () => {
-  it("leaves the filter prompt byte-identical after migration", () => {
+  it("classifies by the migrated directions, not by the description shadow", () => {
     const migrated = migrateArxivSettings(LEGACY_ARXIV);
 
-    const before = buildPaperFilterRequest([], LEGACY_ARXIV as ArxivSettings);
-    const after = buildPaperFilterRequest([], migrated);
+    const system = buildPaperFilterRequest([], migrated).messages[0]!.content;
 
-    // Nothing the classifier sees changed, so cached results stay valid.
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    expect(system).toContain("- photo-z:\n  - photo-z#1: Photometric redshift methods, catalogs, comparisons.");
+    expect(buildPaperFilterRequest([], migrated).identity.directions).toEqual(
+      migrated.topics.map((topic) => ({
+        ref: `${topic.tag}#1`,
+        tag: topic.tag,
+        id: topic.directions[0]!.id,
+        text: topic.description,
+      })),
+    );
   });
 
-  it("still builds the same prompt from only the fields an older build reads", () => {
-    const migrated = migrateArxivSettings(LEGACY_ARXIV);
-    const downgraded = asOlderBuildReadsIt(migrated);
-
-    expect(JSON.stringify(buildPaperFilterRequest([], downgraded))).toBe(
-      JSON.stringify(buildPaperFilterRequest([], LEGACY_ARXIV as ArxivSettings)),
-    );
+  it("declares the prompt change with both contract versions instead of hiding it", () => {
+    // The old one-line-per-topic prompt is gone, and cached results keyed to it
+    // must not be reused. Both versions moved past the 1 they shipped with.
+    expect(buildPaperFilterRequest([], migrateArxivSettings(LEGACY_ARXIV)).messages[0]!.content)
+      .not.toContain("- photo-z: Photometric redshift methods, catalogs, comparisons.");
+    expect(DAILY_FILTER_PROMPT_CONTRACT_VERSION).toBeGreaterThan(1);
+    expect(DAILY_FILTER_RESULT_CONTRACT_VERSION).toBeGreaterThan(1);
   });
 
   it("passes the older build's config check without a missing description", () => {
