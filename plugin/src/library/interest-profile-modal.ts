@@ -3,7 +3,6 @@ import {
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
-  PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   isThinEvidenceDirectionCandidate,
@@ -42,15 +41,13 @@ type EditableDirection = PersonalLibraryDirectionCandidate;
 
 /** The edited form of one proposed direction, before it is accepted. */
 interface ReviewedDirectionDraft {
-  name: string;
-  description: string;
+  text: string;
   discoveryCues: string[];
   representativePaperKeys: string[];
 }
 
 interface DirectionFields {
-  name: HTMLInputElement;
-  description: HTMLTextAreaElement;
+  text: HTMLTextAreaElement;
   cues: HTMLTextAreaElement;
   representatives: HTMLSelectElement;
 }
@@ -183,7 +180,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 
   private renderProposed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
-    const candidates = snapshot.proposal?.candidates ?? [];
+    const topics = snapshot.proposal?.topics ?? [];
+    const candidates = topics.flatMap(({ directions }) => directions);
     if (!snapshot.proposal && !snapshot.proposalLoadError) {
       parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "No proposal has been generated." });
       return;
@@ -198,8 +196,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     // the interest profile document. Accepting a whole proposed structure into
     // `settings.topics` (ADR 0014 §1) is built in P4's later chunks.
     const allowedKeys = proposalPaperKeys(snapshot);
-    for (const candidate of candidates) {
-      this.renderDirectionCard(parent, candidate, allowedKeys, "proposal", snapshot);
+    // One section per proposed topic: the researcher accepts a structure, not
+    // a pile of unattached lines (ADR 0014 §1).
+    for (const topic of topics) {
+      const section = parent.createDiv({ cls: "arxiv-daily-interest-review__topic" });
+      section.createEl("h3", { text: topic.suggestedName });
+      for (const candidate of topic.directions) {
+        this.renderDirectionCard(section, candidate, allowedKeys, "proposal", snapshot);
+      }
     }
     this.renderBufferPool(parent, snapshot);
   }
@@ -233,14 +237,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     checkbox.checked = selected.has(direction.id);
     checkbox.disabled = this.pending || !terminal;
     checkbox.setAttribute("aria-label", kind === "proposal"
-      ? `Select ${direction.name}`
-      : `Select ${direction.name} for merge`);
+      ? `Select ${direction.text}`
+      : `Select ${direction.text} for merge`);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) selected.add(direction.id);
       else selected.delete(direction.id);
       this.render();
     });
-    heading.createEl("strong", { text: direction.name });
+    heading.createEl("strong", { text: direction.text });
     if (kind === "proposal" && isThinEvidenceDirectionCandidate(direction)) {
       heading.createSpan({
         text: "thin evidence",
@@ -262,12 +266,11 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       ? this.createCardDetail(card)
       : card;
     const form = body.createDiv({ cls: "arxiv-daily-interest-review__form" });
-    const name = this.textField(form, "Name", direction.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH);
-    const description = this.textArea(form, "Description", direction.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH, 3);
+    const text = this.textArea(form, "Direction (one line)", direction.text, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH, 2);
     const cues = this.textArea(form, "Discovery cues (one per line)", direction.discoveryCues.join("\n"), undefined, 4);
     cues.maxLength = (PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH + 1) * PERSONAL_LIBRARY_MAX_DISCOVERY_CUES;
     const representatives = this.representativeSelect(form, allowedPaperKeys, direction.representatives.map((item) => item.paperKey));
-    this.fields.set(direction.id, { name, description, cues, representatives });
+    this.fields.set(direction.id, { text, cues, representatives });
 
     const evidence = body.createEl("details", { cls: "arxiv-daily-interest-review__evidence" });
     evidence.createEl("summary", { text: `Evidence: ${direction.representatives.length} representative paper(s), metadata and abstract only` });
@@ -374,21 +377,20 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private draft(id: string): ReviewedDirectionDraft | null {
     const fields = this.fields.get(id);
     if (!fields) return null;
-    const name = fields.name.value.trim();
-    const description = fields.description.value.trim();
+    const text = fields.text.value.trim().replace(/\s+/gu, " ");
     const discoveryCues = normalizeLines(fields.cues.value);
     const representativePaperKeys = Array.from(fields.representatives.selectedOptions, (option) => option.value).sort(codeUnitCompare);
-    const error = validateDraft({ name, description, discoveryCues, representativePaperKeys });
+    const error = validateDraft({ text, discoveryCues, representativePaperKeys });
     if (error) {
       this.errorMessage = error;
       this.renderErrorOnly();
       return null;
     }
-    return { name, description, discoveryCues, representativePaperKeys };
+    return { text, discoveryCues, representativePaperKeys };
   }
 
   private patch(draft: ReviewedDirectionDraft): PersonalLibraryDirectionTextPatch {
-    return { name: draft.name, description: draft.description, discoveryCues: draft.discoveryCues };
+    return { text: draft.text, discoveryCues: draft.discoveryCues };
   }
 
   private async generate(snapshot: InterestProfileReviewSnapshot): Promise<void> {
@@ -525,10 +527,8 @@ export function normalizeLines(value: string): string[] {
 }
 
 export function validateDraft(draft: ReviewedDirectionDraft): string | null {
-  if (!draft.name) return "Enter a direction name.";
-  if (draft.name.length > PERSONAL_LIBRARY_MAX_NAME_LENGTH) return `Name must be at most ${PERSONAL_LIBRARY_MAX_NAME_LENGTH} characters.`;
-  if (!draft.description) return "Enter a direction description.";
-  if (draft.description.length > PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH) return `Description must be at most ${PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH} characters.`;
+  if (!draft.text) return "Enter the direction as one line.";
+  if (draft.text.length > PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH) return `Direction must be at most ${PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH} characters.`;
   if (draft.discoveryCues.length < 1 || draft.discoveryCues.length > PERSONAL_LIBRARY_MAX_DISCOVERY_CUES) return `Enter 1–${PERSONAL_LIBRARY_MAX_DISCOVERY_CUES} non-empty discovery cues.`;
   if (draft.discoveryCues.some((cue) => cue.length > PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)) return `Each discovery cue must be at most ${PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH} characters.`;
   if (draft.representativePaperKeys.length < PERSONAL_LIBRARY_MIN_REPRESENTATIVES || draft.representativePaperKeys.length > PERSONAL_LIBRARY_MAX_REPRESENTATIVES) return `Choose ${PERSONAL_LIBRARY_MIN_REPRESENTATIVES}–${PERSONAL_LIBRARY_MAX_REPRESENTATIVES} representative papers.`;
@@ -556,13 +556,20 @@ export function formatTimelineTimestamp(at: string): string {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
+/**
+ * Papers the proposal saw but that no proposed direction covers. Surfacing the
+ * count is deliberate: the researcher should be able to see how much of the
+ * library this proposal does not speak for.
+ */
 export function unclassifiedBufferPoolPapers(
-  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "candidates"> | null,
+  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "topics"> | null,
 ): PersonalLibraryRepresentativeEvidence[] {
   if (!proposal) return [];
   const covered = new Set<string>();
-  for (const candidate of proposal.candidates) {
-    for (const member of candidate.clusterMembers ?? []) covered.add(member.paperKey);
+  for (const topic of proposal.topics) {
+    for (const candidate of topic.directions) {
+      for (const member of candidate.clusterMembers ?? []) covered.add(member.paperKey);
+    }
   }
   return proposal.catalogInputPapers.filter((entry) => !covered.has(entry.paperKey));
 }

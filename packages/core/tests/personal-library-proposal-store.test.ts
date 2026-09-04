@@ -110,28 +110,18 @@ function proposal(overrides: Partial<PersonalLibraryDirectionProposal> = {}): Pe
     catalogInputPapers: createPersonalLibraryCatalogInputManifest(Object.values(confirmationCatalog().papers)),
     generationContractFingerprint: `sha256:${"1".repeat(64)}`,
     generatedAt: firstTime.toISOString(),
-    candidates: [{
-      id: "candidate-1", name: "Reliable agents", description: "Reliable research agents.",
-      discoveryCues: ["agent reliability"], representatives,
-      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
-      lineage: { candidateIds: ["candidate-1"] },
+    topics: [{
+      id: "topic-1",
+      suggestedName: "Reliable agents",
+      directions: [{
+        id: "candidate-1", text: "Reliability of long-running research agents",
+        discoveryCues: ["agent reliability"], representatives,
+        representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+        lineage: { candidateIds: ["candidate-1"] },
+      }],
     }],
     ...overrides,
   };
-}
-
-function legacyProfile(overrides: Partial<PersonalLibraryInterestProfile> = {}): Record<string, any> {
-  const current = profile(overrides) as unknown as Record<string, any>;
-  current.schemaVersion = 1;
-  current.directions = current.directions.map((direction: Record<string, any>) => ({
-    ...direction,
-    lineage: {
-      proposalId: direction.lineage.proposalIds[0],
-      candidateIds: direction.lineage.candidateIds,
-      directionIds: direction.lineage.directionIds,
-    },
-  }));
-  return current;
 }
 
 function stores(storage: StorageAdapter, now = () => secondTime) {
@@ -189,8 +179,8 @@ describe("proposal lifecycle", () => {
     const memory = makeStorage();
     const store = stores(memory.storage).proposals;
     await expect(store.load()).resolves.toBeNull();
-    const saved = await store.replace(proposal({ candidates: [] }), null);
-    expect(saved).toMatchObject({ revision: 0, candidates: [] });
+    const saved = await store.replace(proposal({ topics: [] }), null);
+    expect(saved).toMatchObject({ revision: 0, topics: [] });
     await expect(store.load()).resolves.toEqual(saved);
   });
 

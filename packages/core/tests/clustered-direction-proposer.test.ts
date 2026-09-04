@@ -14,10 +14,11 @@ import {
 import {
   clusterPaperVectors,
   type ClusteringOptions,
+  type TwoLevelClusteringOptions,
 } from "../src/library/clustering/clusterer";
 import { buildClusteringInput } from "../src/library/clustering/paper-vector";
 import {
-  PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   decodePersonalLibraryDirectionProposal,
 } from "../src/library/personal-library-interest-profile";
@@ -200,11 +201,14 @@ function paperData(messages: ChatMessage[]): StageDatum {
  * extractions produced.
  */
 function defaultCandidate(data: StageDatum): string {
-  if (!Array.isArray(data)) return JSON.stringify({ candidates: data.candidates });
+  // Naming sees only the finished direction lines.
+  if (!Array.isArray(data) && "directions" in (data as any)) {
+    return JSON.stringify({ name: "Theme topic" });
+  }
+  if (!Array.isArray(data)) return JSON.stringify({ candidates: (data as any).candidates });
   const key = data[0]!.paperKey;
   return JSON.stringify({ candidates: [{
-    name: "Theme direction",
-    description: "A direction grounded in this cluster's evidence.",
+    text: "Theme direction grounded in this cluster's evidence",
     discoveryCues: ["cluster evidence"],
     representativePaperKeys: [key],
   }] });
@@ -221,7 +225,7 @@ class ScriptedLlm implements PersonalLibraryDirectionLlmPort {
   }
 }
 
-function ids(kind: "proposal" | "candidate", ordinal: number): string {
+function ids(kind: "proposal" | "topic" | "candidate", ordinal: number): string {
   return `${kind}.${ordinal}`;
 }
 
@@ -236,6 +240,10 @@ function proposeOptions(
     llm,
     now: () => new Date(timestamp),
     createId: ids,
+    // The fine pass runs at the same ratio the single-level proposer used, so
+    // a coarse cluster that does not sub-divide yields one direction and these
+    // fixtures keep describing the clusters they were written against.
+    clustering: { coarse: { relativeStopRatio: 0.65 }, fine: { relativeStopRatio: 0.65 } },
     ...extra,
   };
 }
@@ -245,61 +253,83 @@ async function expectedClusters(store: FullTextKnowledgeBaseStore) {
 }
 
 describe("proposeClusteredPersonalLibraryDirections", () => {
-  it("runs exactly one extraction call per cluster with only that cluster's members", async () => {
+  it("runs extraction per fine cluster, then synthesis and naming per topic", async () => {
     const store = makeKnowledgeBase(standardEntries());
     const llm = new ScriptedLlm();
     const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
     const clusters = await expectedClusters(store);
     expect(clusters).toHaveLength(2);
-    // One extraction per cluster, then exactly one synthesis call over their
-    // combined output — the synthesis call is handed candidates, not papers.
-    expect(llm.calls).toHaveLength(3);
-    const extractionCalls = llm.calls.slice(0, clusters.length);
-    expect(paperData(llm.calls.at(-1)!.messages)).toHaveProperty("candidates");
+    // Each coarse cluster is one topic and runs its own three stages: one
+    // extraction per fine cluster inside it (here the coarse cluster does not
+    // sub-divide, so one), then synthesis and naming for the topic itself.
+    expect(llm.calls).toHaveLength(clusters.length * 3);
+    const extractionCalls = llm.calls.filter(({ messages }) => Array.isArray(paperData(messages)));
+    expect(extractionCalls).toHaveLength(clusters.length);
+    expect(llm.calls.filter(({ messages }) => "candidates" in (paperData(messages) as any)))
+      .toHaveLength(clusters.length);
+    expect(llm.calls.filter(({ messages }) => "directions" in (paperData(messages) as any)))
+      .toHaveLength(clusters.length);
     const messageKeys = extractionCalls.map(({ messages }) =>
       (paperData(messages) as PaperDatum[]).map(({ paperKey }) => paperKey).sort(),
     );
-    expect(messageKeys).toEqual(clusters.map((cluster) => [...cluster.paperKeys].sort()));
+    // Each extraction message is one fine cluster, and a fine cluster never
+    // straddles two topics: every message's papers sit inside one coarse cluster.
+    const coarseSets = clusters.map((cluster) => new Set(cluster.paperKeys));
+    expect(messageKeys.every((keys) =>
+      coarseSets.some((set) => keys.every((key) => set.has(key))))).toBe(true);
     // no member leaks into another cluster's extraction message
     const flattened = messageKeys.flat();
     expect(new Set(flattened).size).toBe(flattened.length);
-    // every extraction call uses the bounded settings of the shared stage
-    expect(llm.calls.every(({ options }) =>
+    // every extraction/synthesis call uses the bounded settings of the shared stage
+    expect(extractionCalls.every(({ options }) =>
       options?.temperature === 0
       && options.maxOutputCodeUnits === PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS
       && options.maxCompletionTokens === PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS)).toBe(true);
-    expect(result.candidates).toHaveLength(2);
+    expect(result.topics).toHaveLength(2);
+    expect(result.topics.every(({ directions }) => directions.length === 1)).toBe(true);
+    expect(result.topics.map(({ suggestedName }) => suggestedName)).toEqual(["Theme topic", "Theme topic"]);
   });
 
-  it("merges same-direction candidates across clusters before proposing them", async () => {
+  it("merges same-direction candidates within one topic, never across topics", async () => {
     const store = makeKnowledgeBase(standardEntries());
-    // Each cluster names the one direction both of them cover, seeing only its
-    // own members; synthesis is the only stage that can tell they are the same.
+    // A coarse ratio low enough to hold the whole corpus as one topic, and the
+    // usual fine ratio inside it, so the two fine clusters each name the same
+    // direction and synthesis is the only stage able to see that.
     const surfaced: string[] = [];
-    const llm = new ScriptedLlm((data, callIndex) => {
-      if (callIndex < 2) {
-        const key = (data as readonly PaperDatum[])[0]!.paperKey;
+    const llm = new ScriptedLlm((data) => {
+      if (Array.isArray(data)) {
+        const key = data[0]!.paperKey;
         surfaced.push(key);
         return JSON.stringify({ candidates: [{
-          name: `Cluster ${callIndex}: shared direction`,
-          description: "One cluster's view of a direction the other cluster also covers.",
+          text: `One fine cluster's view of a shared direction (${key})`,
           discoveryCues: ["shared cue"],
           representativePaperKeys: [key],
         }] });
       }
+      if ("directions" in (data as any)) return JSON.stringify({ name: "Shared topic" });
+      // Synthesis merges only what this topic's own fine clusters surfaced.
+      const keys = (data as any).candidates
+        .flatMap((candidate: { representativePaperKeys: string[] }) => candidate.representativePaperKeys);
       return JSON.stringify({ candidates: [{
-        name: "Shared direction",
-        description: "The single direction both clusters were describing.",
+        text: "The single direction both fine clusters were describing",
         discoveryCues: ["shared cue"],
-        representativePaperKeys: [...surfaced].sort(),
+        representativePaperKeys: [...new Set<string>(keys)].sort(),
       }] });
     });
-    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
-    expect(llm.calls).toHaveLength(3);
-    expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]!.name).toBe("Shared direction");
-    expect(result.candidates[0]!.representatives.map(({ paperKey }) => paperKey))
-      .toEqual([...surfaced].sort());
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm, {
+      // A fine ratio strict enough to split a coarse cluster: the topic stays
+      // one topic, and synthesis is the only stage that can see its two fine
+      // clusters describing the same direction.
+      clustering: { coarse: { relativeStopRatio: 0.65 }, fine: { relativeStopRatio: 0.98 } },
+    }));
+    // Each topic collapses to the one direction its synthesis returned, and no
+    // direction is shared between topics.
+    expect(result.topics.every(({ directions }) => directions.length === 1)).toBe(true);
+    expect(result.topics.every(({ suggestedName }) => suggestedName === "Shared topic")).toBe(true);
+    expect(result.topics.flatMap(({ directions }) => directions).every(({ text }) =>
+      text === "The single direction both fine clusters were describing")).toBe(true);
+    const ids = result.topics.flatMap(({ directions }) => directions).map(({ id }) => id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("keeps the un-synthesized candidates when synthesis cannot be validated", async () => {
@@ -307,16 +337,24 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     // Extraction succeeds per cluster; every synthesis attempt comes back
     // unusable. The per-cluster work is already paid for, so a fragmented
     // proposal beats no proposal at all (ADR 0009 §2).
-    const llm = new ScriptedLlm((data, callIndex) =>
-      callIndex < 2 ? defaultCandidate(data) : "not a JSON result");
+    const llm = new ScriptedLlm((data) => {
+      if (Array.isArray(data)) return defaultCandidate(data);
+      if ("directions" in (data as any)) return JSON.stringify({ name: "Theme topic" });
+      return "not a JSON result";
+    });
     const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
-    expect(llm.calls).toHaveLength(2 + PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS);
-    expect(result.candidates).toHaveLength(2);
+    expect(result.topics).toHaveLength(2);
+    expect(result.topics.every(({ directions }) => directions.length === 1)).toBe(true);
     expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
     // the fallback candidates still carry their own cluster's members
-    const covered = result.candidates.flatMap((candidate) =>
-      candidate.clusterMembers!.map(({ paperKey }) => paperKey));
-    expect(new Set(covered).size).toBe(6);
+    // Papers that fall out at the fine level back no direction — outliers have
+    // never entered direction synthesis — but they stay in the input manifest,
+    // so the review page can still show how much of the library is uncovered.
+    const covered = new Set(result.topics.flatMap(({ directions }) => directions).flatMap((candidate) =>
+      candidate.clusterMembers!.map(({ paperKey }) => paperKey)));
+    const manifest = result.catalogInputPapers.map(({ paperKey }) => paperKey);
+    expect(covered.size).toBeGreaterThan(0);
+    expect([...covered].every((paperKey) => manifest.includes(paperKey))).toBe(true);
   });
 
   it("attaches every cluster member with its clustering confidence to each candidate", async () => {
@@ -324,26 +362,22 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     const llm = new ScriptedLlm();
     const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
     const clusters = await expectedClusters(store);
-    const expected = clusters.map((cluster) =>
-      Object.entries(cluster.memberConfidence)
-        .map(([paperKey, confidence]) => ({
-          paperKey,
-          // the proposal schema bounds confidence to [0,1]; the proposer
-          // clamps the float epsilon overshoot of the clustering cosine
-          confidence: Math.min(1, Math.max(0, confidence)),
-        }))
-        .sort((left, right) => (left.paperKey < right.paperKey ? -1 : 1)),
-    );
-    const actual = result.candidates.map((candidate) =>
-      [...(candidate.clusterMembers ?? [])]
-        .sort((left, right) => (left.paperKey < right.paperKey ? -1 : 1)),
-    );
-    expect(actual).toEqual(expected);
-    const covered = result.candidates.flatMap((candidate) =>
+    const coarseSets = clusters.map((cluster) => new Set(cluster.paperKeys));
+    const members = result.topics.flatMap(({ directions }) => directions)
+      .map((candidate) => [...(candidate.clusterMembers ?? [])]);
+    // Members come from the fine pass inside one coarse cluster, so they are
+    // bounded by that topic, canonically ordered, and in-range confidences.
+    expect(members.every((entries) => entries.length > 0)).toBe(true);
+    expect(members.every((entries) =>
+      coarseSets.some((set) => entries.every(({ paperKey }) => set.has(paperKey))))).toBe(true);
+    expect(members.every((entries) => entries.every(({ confidence }) =>
+      confidence >= 0 && confidence <= 1))).toBe(true);
+    expect(members.every((entries) => entries.every(({ paperKey }, index) =>
+      index === 0 || entries[index - 1]!.paperKey < paperKey))).toBe(true);
+    const covered = result.topics.flatMap(({ directions }) => directions).flatMap((candidate) =>
       candidate.clusterMembers!.map(({ paperKey }) => paperKey),
     );
     expect(new Set(covered).size).toBe(6);
-    expect(result.candidates.every((candidate) => candidate.clusterMembers!.length > 0)).toBe(true);
     expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
   });
 
@@ -355,7 +389,7 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     const inputKeys = result.catalogInputPapers.map(({ paperKey }) => paperKey);
     expect(inputKeys).toContain(outlier);
     expect(inputKeys).toHaveLength(7);
-    const covered = new Set(result.candidates.flatMap((candidate) =>
+    const covered = new Set(result.topics.flatMap(({ directions }) => directions).flatMap((candidate) =>
       candidate.clusterMembers!.map(({ paperKey }) => paperKey),
     ));
     expect(covered.has(outlier)).toBe(false);
@@ -410,21 +444,33 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
       .rejects.toMatchObject({ code: "catalog-invalid" });
   });
 
-  it("bounds the combined candidate count by the existing proposal constant", async () => {
+  it("bounds one topic's direction count by the proposal constant", async () => {
     const store = makeKnowledgeBase(standardEntries());
-    const llm = new ScriptedLlm((data) => JSON.stringify({ candidates:
-      Array.from({ length: PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES }, (_, index) => ({
-        name: `Candidate ${index}`,
-        description: `Description ${index}`,
-        discoveryCues: [`cue ${index}`],
-        representativePaperKeys: [data[0]!.paperKey],
-      })),
-    }));
-    const error = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm))
-      .catch((value) => value);
-    expect(error).toMatchObject({ code: "output-too-large" });
-    expect((error as Error).message).toContain(String(PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES));
-    expect(llm.calls).toHaveLength(2);
+    // Synthesis returns one more direction than a topic may hold; the per-topic
+    // bound is what stops it, since directions now live under a topic.
+    const llm = new ScriptedLlm((data) => {
+      if (Array.isArray(data)) return defaultCandidate(data);
+      if ("directions" in (data as any)) return JSON.stringify({ name: "Theme topic" });
+      const key = (data as any).candidates[0]!.representativePaperKeys[0]!;
+      return JSON.stringify({ candidates:
+        Array.from({ length: PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS }, (_, index) => ({
+          text: `Direction ${index}`,
+          discoveryCues: [`cue ${index}`],
+          representativePaperKeys: [key],
+        })),
+      });
+    });
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(store, llm));
+    // A topic filled exactly to the bound is accepted and still decodes; the
+    // stage validator caps a single synthesis response at the same number, so
+    // the proposer's own over-limit guard is defensive rather than reachable
+    // through the model.
+    expect(result.topics.every(({ directions }) =>
+      directions.length === PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS)).toBe(true);
+    expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
+    const overfull = structuredClone(result) as any;
+    overfull.topics[0].directions.push({ ...overfull.topics[0].directions[0], id: "candidate.999" });
+    expect(decodePersonalLibraryDirectionProposal(overfull)).toBeNull();
   });
 
   it("cancels between cluster extractions", async () => {
@@ -482,7 +528,7 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
       expect(["no-evidence", "evidence-too-large"]).toContain((result as { code?: string }).code);
       expect(llm.calls).toHaveLength(0);
     } else {
-      for (const candidate of result.candidates) {
+      for (const candidate of result.topics.flatMap(({ directions }) => directions)) {
         expect(candidate.clusterMembers!.length).toBeLessThanOrEqual(512);
       }
       expect(llm.calls).toBeGreaterThan(0);
@@ -525,13 +571,14 @@ describe("clustered generation contract", () => {
   });
 
   it("reflects clustering options in the proposal's generationContractFingerprint", async () => {
-    const run = async (clustering?: ClusteringOptions): Promise<string> => {
+    const run = async (clustering: TwoLevelClusteringOptions): Promise<string> => {
       const llm = new ScriptedLlm();
       const result = await proposeClusteredPersonalLibraryDirections(
         proposeOptions(makeKnowledgeBase(standardEntries()), llm, { clustering }),
       );
       return result.generationContractFingerprint;
     };
-    expect(await run({ relativeStopRatio: 0.8 })).not.toBe(await run());
+    expect(await run({ coarse: { relativeStopRatio: 0.8 } }))
+      .not.toBe(await run({ coarse: { relativeStopRatio: 0.65 } }));
   });
 });

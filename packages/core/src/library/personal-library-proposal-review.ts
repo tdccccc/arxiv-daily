@@ -11,6 +11,8 @@
  */
 import {
   PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS,
+  PERSONAL_LIBRARY_MAX_NAME_LENGTH,
+  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
   createPersonalLibraryCatalogInputManifestFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
@@ -27,16 +29,62 @@ import {
 } from "./personal-library-catalog";
 
 export interface PersonalLibraryReviewedDirectionDraft {
-  name: string;
-  description: string;
+  /** The one line the direction will contribute to `settings.topics`. */
+  text: string;
   discoveryCues: string[];
   representativePaperKeys: string[];
 }
 
 export interface PersonalLibraryDirectionTextPatch {
-  name?: string;
-  description?: string;
+  text?: string;
   discoveryCues?: string[];
+}
+
+/** Where a direction sits in the two-level proposal. */
+interface CandidateLocation {
+  topicIndex: number;
+  index: number;
+  candidate: PersonalLibraryDirectionCandidate;
+}
+
+function locate(
+  proposal: PersonalLibraryDirectionProposal,
+  candidateId: string,
+): CandidateLocation {
+  for (let topicIndex = 0; topicIndex < proposal.topics.length; topicIndex += 1) {
+    const index = proposal.topics[topicIndex]!.directions.findIndex(({ id }) => id === candidateId);
+    if (index >= 0) {
+      return { topicIndex, index, candidate: proposal.topics[topicIndex]!.directions[index]! };
+    }
+  }
+  return fail("not-found", "candidate was not found", { candidateId });
+}
+
+function everyCandidate(
+  proposal: PersonalLibraryDirectionProposal,
+): PersonalLibraryDirectionCandidate[] {
+  return proposal.topics.flatMap(({ directions }) => directions);
+}
+
+/**
+ * Renames a proposed topic. ADR 0014 §1 calls the generated name a suggestion,
+ * so the researcher settles it before the tag is derived from it at acceptance.
+ */
+export function renamePersonalLibraryProposedTopic(input: unknown): PersonalLibraryDirectionProposal {
+  const raw = exactInput(input, ["proposal", "topicId", "suggestedName"]);
+  const proposal = proposalDocument(raw.proposal);
+  const topicId = opaqueId(raw.topicId, "topicId");
+  const topic = proposal.topics.find(({ id }) => id === topicId)
+    ?? fail("not-found", "topic was not found", { topicId });
+  if (typeof raw.suggestedName !== "string") fail("invalid-input", "suggestedName must be a string");
+  const suggestedName = raw.suggestedName.trim();
+  if (!suggestedName || suggestedName.length > PERSONAL_LIBRARY_MAX_NAME_LENGTH
+    || suggestedName.includes("\n")) {
+    fail("invalid-input", "suggestedName must be one non-empty bounded line");
+  }
+  if (suggestedName === topic.suggestedName) return proposal;
+  topic.suggestedName = suggestedName;
+  return outputProposal(proposal);
 }
 
 export type PersonalLibraryReviewErrorCode =
@@ -68,9 +116,7 @@ export function updatePersonalLibraryDirectionCandidate(input: unknown): Persona
   const proposal = proposalDocument(raw.proposal);
   const candidateId = opaqueId(raw.candidateId, "candidateId");
   const patch = textPatch(raw.patch);
-  const index = proposal.candidates.findIndex(({ id }) => id === candidateId);
-  if (index < 0) fail("not-found", "candidate was not found", { candidateId });
-  const current = proposal.candidates[index]!;
+  const { topicIndex, index, candidate: current } = locate(proposal, candidateId);
   const representativePaperKeys = optionalRepresentativeKeys(raw.representativePaperKeys);
   if (representativePaperKeys !== undefined && raw.catalog === undefined) {
     fail("invalid-input", "catalog is required when representativePaperKeys are supplied");
@@ -85,27 +131,34 @@ export function updatePersonalLibraryDirectionCandidate(input: unknown): Persona
     ? current.representatives
     : representativesFromCatalog(representativeCatalog!, representativePaperKeys);
   const updated = candidateFromReviewed(current.id, {
-    name: patch.name ?? current.name,
-    description: patch.description ?? current.description,
+    text: patch.text ?? current.text,
     discoveryCues: patch.discoveryCues ?? current.discoveryCues,
     representativePaperKeys: representatives.map(({ paperKey }) => paperKey),
   }, representatives, current.lineage.candidateIds, current.clusterMembers);
   if (JSON.stringify(updated) === JSON.stringify(current)) return proposal;
-  proposal.candidates[index] = updated;
-  proposal.candidates.sort(byId);
+  proposal.topics[topicIndex]!.directions[index] = updated;
+  proposal.topics[topicIndex]!.directions.sort(byId);
   return outputProposal(proposal);
 }
 
 export function mergePersonalLibraryDirectionCandidates(input: unknown): PersonalLibraryDirectionProposal {
   const raw = exactInput(input, ["proposal", "sourceCandidateIds", "candidateId", "draft", "catalog"]);
   const proposal = proposalDocument(raw.proposal);
-  const sourceIds = opaqueIdSet(raw.sourceCandidateIds, "sourceCandidateIds", 2, proposal.candidates.length);
+  const all = everyCandidate(proposal);
+  const sourceIds = opaqueIdSet(raw.sourceCandidateIds, "sourceCandidateIds", 2, all.length);
   const candidateId = opaqueId(raw.candidateId, "candidateId");
-  if (proposal.candidates.some(({ id }) => id === candidateId)) {
+  if (all.some(({ id }) => id === candidateId)) {
     fail("conflict", "candidateId already exists", { candidateId });
   }
-  const sources = sourceIds.map((id) => proposal.candidates.find((candidate) => candidate.id === id)
-    ?? fail("not-found", "source candidate was not found", { candidateId: id }));
+  const locations = sourceIds.map((id) => locate(proposal, id));
+  // Merging across topics would silently move a direction out of the topic the
+  // researcher is reading it under; a direction belongs to exactly one topic
+  // (ADR 0014 §1), so the merge target is that topic and nowhere else.
+  const topicIndex = locations[0]!.topicIndex;
+  if (locations.some((location) => location.topicIndex !== topicIndex)) {
+    fail("conflict", "candidates from different topics cannot be merged");
+  }
+  const sources = locations.map(({ candidate }) => candidate);
   const lineage = canonicalUnion([candidateId], ...sources.map(({ lineage }) => lineage.candidateIds));
   if (lineage.length > PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS) lineageLimit("candidateIds", lineage.length);
   const draft = reviewedDraft(raw.draft);
@@ -113,9 +166,10 @@ export function mergePersonalLibraryDirectionCandidates(input: unknown): Persona
   const representatives = representativesFromCatalog(catalog, draft.representativePaperKeys);
   const merged = candidateFromReviewed(candidateId, draft, representatives, lineage,
     unionClusterMembers(sources));
-  proposal.candidates = proposal.candidates.filter(({ id }) => !sourceIds.includes(id));
-  proposal.candidates.push(merged);
-  proposal.candidates.sort(byId);
+  const topic = proposal.topics[topicIndex]!;
+  topic.directions = topic.directions.filter(({ id }) => !sourceIds.includes(id));
+  topic.directions.push(merged);
+  topic.directions.sort(byId);
   return outputProposal(proposal);
 }
 
@@ -123,9 +177,12 @@ export function removePersonalLibraryDirectionCandidate(input: unknown): Persona
   const raw = exactInput(input, ["proposal", "candidateId"]);
   const proposal = proposalDocument(raw.proposal);
   const candidateId = opaqueId(raw.candidateId, "candidateId");
-  const next = proposal.candidates.filter(({ id }) => id !== candidateId);
-  if (next.length === proposal.candidates.length) fail("not-found", "candidate was not found", { candidateId });
-  proposal.candidates = next;
+  const { topicIndex } = locate(proposal, candidateId);
+  const topic = proposal.topics[topicIndex]!;
+  topic.directions = topic.directions.filter(({ id }) => id !== candidateId);
+  // A topic with no directions left has nothing to propose, so it goes with its
+  // last direction rather than lingering as an empty heading.
+  if (topic.directions.length === 0) proposal.topics.splice(topicIndex, 1);
   return outputProposal(proposal);
 }
 
@@ -148,11 +205,10 @@ function compatibleCatalog(
 }
 
 function reviewedDraft(value: unknown): PersonalLibraryReviewedDirectionDraft {
-  const raw = exactInput(value, ["name", "description", "discoveryCues", "representativePaperKeys"]);
+  const raw = exactInput(value, ["text", "discoveryCues", "representativePaperKeys"]);
   const candidate = {
     id: "validation",
-    name: raw.name,
-    description: raw.description,
+    text: raw.text,
     discoveryCues: raw.discoveryCues,
     representatives: [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: `sha256:${"0".repeat(64)}` }],
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint([
@@ -163,8 +219,7 @@ function reviewedDraft(value: unknown): PersonalLibraryReviewedDirectionDraft {
   const decoded = decodeCandidateViaProposal(candidate);
   if (!decoded) fail("invalid-input", "reviewed draft text is invalid or noncanonical");
   return {
-    name: decoded.name,
-    description: decoded.description,
+    text: decoded.text,
     discoveryCues: decoded.discoveryCues,
     representativePaperKeys: representativeKeys(raw.representativePaperKeys),
   };
@@ -173,18 +228,16 @@ function reviewedDraft(value: unknown): PersonalLibraryReviewedDirectionDraft {
 function textPatch(value: unknown): PersonalLibraryDirectionTextPatch {
   if (!isPlainObject(value)) fail("invalid-input", "patch must be an object");
   const keys = Object.keys(value);
-  if (keys.length === 0 || keys.some((key) => !["name", "description", "discoveryCues"].includes(key))) {
+  if (keys.length === 0 || keys.some((key) => !["text", "discoveryCues"].includes(key))) {
     fail("invalid-input", "patch must contain only one or more text fields");
   }
   const draft = reviewedDraft({
-    name: value.name ?? "validation",
-    description: value.description ?? "validation",
+    text: value.text ?? "validation",
     discoveryCues: value.discoveryCues ?? ["validation"],
     representativePaperKeys: ["arxiv:2608.00001"],
   });
   return {
-    ...(value.name !== undefined ? { name: draft.name } : {}),
-    ...(value.description !== undefined ? { description: draft.description } : {}),
+    ...(value.text !== undefined ? { text: draft.text } : {}),
     ...(value.discoveryCues !== undefined ? { discoveryCues: draft.discoveryCues } : {}),
   };
 }
@@ -209,8 +262,7 @@ function candidateFromReviewed(
 ): PersonalLibraryDirectionCandidate {
   return {
     id,
-    name: draft.name,
-    description: draft.description,
+    text: draft.text,
     discoveryCues: [...draft.discoveryCues],
     representatives: representatives.map((entry) => ({ ...entry })),
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
@@ -241,7 +293,7 @@ function outputProposal(value: PersonalLibraryDirectionProposal): PersonalLibrar
 function decodeCandidateViaProposal(candidate: unknown): PersonalLibraryDirectionCandidate | null {
   const fingerprint = `sha256:${"0".repeat(64)}`;
   return decodePersonalLibraryDirectionProposal({
-    schemaVersion: 3,
+    schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
     revision: 0,
     proposalId: "validation",
     scopeFingerprint: fingerprint,
@@ -254,8 +306,8 @@ function decodeCandidateViaProposal(candidate: unknown): PersonalLibraryDirectio
     catalogInputPapers: [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: fingerprint }],
     generationContractFingerprint: fingerprint,
     generatedAt: "2000-01-01T00:00:00.000Z",
-    candidates: [candidate],
-  })?.candidates[0] ?? null;
+    topics: [{ id: "validation-topic", suggestedName: "validation", directions: [candidate] }],
+  })?.topics[0]?.directions[0] ?? null;
 }
 
 function representativeKeys(value: unknown): string[] {
@@ -279,8 +331,7 @@ function opaqueId(value: unknown, field: string): string {
   if (typeof value !== "string") fail("invalid-input", `${field} must be a valid opaque ID`);
   const probe = decodeCandidateViaProposal({
     id: value,
-    name: "validation",
-    description: "validation",
+    text: "validation",
     discoveryCues: ["validation"],
     representatives: [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: `sha256:${"0".repeat(64)}` }],
     representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint([

@@ -37,6 +37,7 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 type DirectionProposalProgress,
 proposeClusteredPersonalLibraryDirections,
+PERSONAL_LIBRARY_UNMEASURED_COARSE_STOP_RATIO,
 mergePersonalLibraryDirectionCandidates,
 removePersonalLibraryDirectionCandidate,
 updatePersonalLibraryDirectionCandidate,
@@ -832,6 +833,10 @@ export default class ArxivDailyPlugin extends Plugin {
       const proposal = await proposeClusteredPersonalLibraryDirections({
         catalog: structuredClone(catalog),
         knowledgeBase: this.buildFullTextKnowledgeBaseStore(connection),
+        // The coarse ratio decides how many topics a first scan proposes and
+        // has no measured default yet (P4 Chunk 5); this is the placeholder,
+        // not settled behaviour.
+        clustering: { coarse: { relativeStopRatio: PERSONAL_LIBRARY_UNMEASURED_COARSE_STOP_RATIO } },
         llm: new LlmClient(llmSettings, this.logger, this.host.http),
         signal: operation.signal,
         createId: () => crypto.randomUUID(),
@@ -2429,13 +2434,6 @@ function latestCompletedDate(store: StateStore): string | undefined {
 // ---------------------------------------------------------------------------
 // Incremental direction update helpers (plugin-internal).
 // ---------------------------------------------------------------------------
-
-const SUGGESTION_KIND_ORDER: Readonly<Record<DirectionDiffSuggestion["kind"], number>> = {
-  attach: 0,
-  merge: 1,
-  new: 2,
-  split: 3,
-};
 
 function createFullTextGenerationWriterToken(): string {
   return `writer-${crypto.randomUUID().replaceAll("-", "")}`;

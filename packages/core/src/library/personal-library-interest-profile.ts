@@ -5,7 +5,15 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 3 as const;
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 4 as const;
+/**
+ * A first scan proposes whole topics (ADR 0014 §1), so the same bound caps both
+ * levels: more than a dozen topics fills the settings page, and more than a
+ * dozen directions inside one topic stops being a list a researcher can read.
+ * Deliberately the existing candidate bound rather than a new number — this
+ * goal already owes two measured thresholds and will not invent a third.
+ */
+export const PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS = 12 as const;
 export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
 export const PERSONAL_LIBRARY_MIN_REPRESENTATIVES = 1 as const;
@@ -34,8 +42,18 @@ export interface PersonalLibraryClusterMember {
 
 export interface PersonalLibraryDirectionCandidate {
   id: string;
-  name: string;
-  description: string;
+  /**
+   * The direction itself: one line, in the form it will take in
+   * `settings.topics` if accepted (ADR 0012 §2). The extraction stage writes
+   * it directly — there is no later fold from a name plus a description,
+   * because the researcher reviews exactly the text that will be used.
+   */
+  text: string;
+  /**
+   * What made this direction visible in the library. Shown on the review page
+   * to help the researcher judge the proposal; deliberately not carried into
+   * settings, where a direction is one line and nothing else.
+   */
   discoveryCues: string[];
   representatives: PersonalLibraryRepresentativeEvidence[];
   representativeSetFingerprint: string;
@@ -60,6 +78,19 @@ export function isThinEvidenceDirectionCandidate(
   return candidate.representatives.length < PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES;
 }
 
+/**
+ * One proposed topic: a suggested display name and the directions found inside
+ * it. Coarse clustering produces the topic, fine clustering inside it produces
+ * the directions (ADR 0014 §1). The name is a suggestion — the researcher can
+ * rename it before accepting — and the machine tag is derived from it at
+ * acceptance, not stored here.
+ */
+export interface PersonalLibraryProposedTopic {
+  id: string;
+  suggestedName: string;
+  directions: PersonalLibraryDirectionCandidate[];
+}
+
 export interface PersonalLibraryDirectionProposal {
   schemaVersion: typeof PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION;
   revision: number;
@@ -70,7 +101,7 @@ export interface PersonalLibraryDirectionProposal {
   catalogInputPapers: PersonalLibraryRepresentativeEvidence[];
   generationContractFingerprint: string;
   generatedAt: string;
-  candidates: PersonalLibraryDirectionCandidate[];
+  topics: PersonalLibraryProposedTopic[];
 }
 
 export function createPersonalLibraryPaperEvidenceFingerprint(
@@ -167,10 +198,13 @@ export function decodePersonalLibraryDirectionProposal(
 ): PersonalLibraryDirectionProposal | null {
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
-    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "candidates",
+    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
   ])
-    // Schema 2 proposals remain readable: candidates gained only the optional clusterMembers field in v3.
-    || (value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION && value.schemaVersion !== 2)
+    // Only the current schema decodes. Earlier proposals were a flat candidate
+    // list with name+description directions; both shapes changed in v4 and the
+    // proposal document has never been in a release, so it is regenerated
+    // rather than migrated (goal Constraints).
+    || value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION
     || !isNonNegativeSafeInteger(value.revision)
     || !isOpaqueId(value.proposalId)
     || !isFingerprint(value.scopeFingerprint)
@@ -178,9 +212,9 @@ export function decodePersonalLibraryDirectionProposal(
     || !isFingerprint(value.catalogInputFingerprint)
     || !isFingerprint(value.generationContractFingerprint)
     || !isCanonicalTimestamp(value.generatedAt)
-    || !Array.isArray(value.candidates)
-    || value.candidates.length < PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES
-    || value.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) return null;
+    || !Array.isArray(value.topics)
+    || value.topics.length < PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES
+    || value.topics.length > PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS) return null;
 
   const catalogInputPapers = decodeCatalogInputManifest(value.catalogInputPapers);
   if (!catalogInputPapers || createPersonalLibraryCatalogInputManifestFingerprint({
@@ -189,13 +223,29 @@ export function decodePersonalLibraryDirectionProposal(
     catalogInputPapers,
   }) !== value.catalogInputFingerprint) return null;
 
-  const candidates: PersonalLibraryDirectionCandidate[] = [];
-  for (const raw of value.candidates) {
-    const candidate = decodeCandidate(raw);
-    if (!candidate) return null;
-    candidates.push(candidate);
+  const topics: PersonalLibraryProposedTopic[] = [];
+  const directionIds: string[] = [];
+  for (const rawTopic of value.topics) {
+    if (!isExactObject(rawTopic, ["id", "suggestedName", "directions"])
+      || !isOpaqueId(rawTopic.id)
+      || !isBoundedText(rawTopic.suggestedName, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
+      || !Array.isArray(rawTopic.directions)
+      || rawTopic.directions.length < 1
+      || rawTopic.directions.length > PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS) return null;
+    const directions: PersonalLibraryDirectionCandidate[] = [];
+    for (const raw of rawTopic.directions) {
+      const candidate = decodeCandidate(raw);
+      if (!candidate) return null;
+      directions.push(candidate);
+    }
+    if (!isStrictlyOrderedUnique(directions.map(({ id }) => id))) return null;
+    directionIds.push(...directions.map(({ id }) => id));
+    topics.push({ id: rawTopic.id, suggestedName: rawTopic.suggestedName, directions });
   }
-  if (!isStrictlyOrderedUnique(candidates.map(({ id }) => id))) return null;
+  // A direction belongs to exactly one topic (ADR 0014 §1): an id appearing
+  // twice means the proposal was assembled wrong, not that it is ambiguous.
+  if (!isStrictlyOrderedUnique(topics.map(({ id }) => id))
+    || new Set(directionIds).size !== directionIds.length) return null;
   return {
     schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
     revision: value.revision,
@@ -206,20 +256,23 @@ export function decodePersonalLibraryDirectionProposal(
     catalogInputPapers,
     generationContractFingerprint: value.generationContractFingerprint,
     generatedAt: value.generatedAt,
-    candidates,
+    topics,
   };
 }
 
 function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | null {
   const hasClusterMembers = isPlainObject(value) && Object.hasOwn(value, "clusterMembers");
   const keys = [
-    "id", "name", "description", "discoveryCues", "representatives",
+    "id", "text", "discoveryCues", "representatives",
     "representativeSetFingerprint", "lineage",
     ...(hasClusterMembers ? ["clusterMembers"] : []),
   ];
   if (!isExactObject(value, keys)
-    || !isOpaqueId(value.id) || !isBoundedText(value.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
-    || !isBoundedText(value.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+    || !isOpaqueId(value.id)
+    // One line, bounded by the existing text bound rather than a new
+    // "how long is a line" constant; single-line-ness is the prompt's job.
+    || !isBoundedText(value.text, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+    || value.text.includes("\n")
     || !isDiscoveryCues(value.discoveryCues)
     || !isFingerprint(value.representativeSetFingerprint)
     || !isExactObject(value.lineage, ["candidateIds"])
@@ -237,8 +290,7 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
   }
   return {
     id: value.id,
-    name: value.name,
-    description: value.description,
+    text: value.text,
     discoveryCues: [...value.discoveryCues],
     representatives,
     representativeSetFingerprint: value.representativeSetFingerprint,
