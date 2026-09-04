@@ -6,6 +6,7 @@ import {
   PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS,
   createPersonalLibraryClusteredDirectionGenerationContract,
+  PERSONAL_LIBRARY_DIRECTION_SYNTHESIS_PROMPT_VERSION,
   proposeClusteredPersonalLibraryDirections,
   resolvePersonalLibraryClusteringOptions,
   type ProposeClusteredDirectionsOptions,
@@ -506,6 +507,21 @@ describe("clustered generation contract", () => {
     expect(tuned).toContain('"relativeStopRatio":0.8');
     expect(tuned).toContain('"minClusterSize":3');
     expect(tuned).toContain('"centerCorpus":false');
+  });
+
+  /**
+   * The contract's job is to make parameter drift detectable from a stored
+   * proposal. It used to record `synthesisPrompt: "none"` and a
+   * `...-no-synthesis` strategy while the proposer ran a synthesis stage, so
+   * changing the synthesis prompt invalidated nothing.
+   */
+  it("records the synthesis stage the proposer actually runs", () => {
+    const contract = createPersonalLibraryClusteredDirectionGenerationContract(
+      resolvePersonalLibraryClusteringOptions(undefined),
+    );
+    expect(contract).toContain(PERSONAL_LIBRARY_DIRECTION_SYNTHESIS_PROMPT_VERSION);
+    expect(contract).not.toContain('"synthesisPrompt":"none"');
+    expect(contract).not.toContain("no-synthesis");
   });
 
   it("reflects clustering options in the proposal's generationContractFingerprint", async () => {
