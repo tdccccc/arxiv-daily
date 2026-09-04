@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-03T23:21:47+08:00
-revision: 5
+updated: 2026-09-04T12:58:00+08:00
+revision: 6
 owner: claude-code-main-session
 
 ## Intent
@@ -16,7 +16,7 @@ owner: claude-code-main-session
 - [x] 库索引只覆盖标题与摘要；千篇量级的库在 CPU 上分钟级重建完（ADR 0013）。
 - [ ] 首次扫库能提议出一整套主题（含各自的方向），接受后设置里直接有可用主题，全程不必手写一个主题名（ADR 0014 §1）。
 - [ ] 此后新候选被建议归入最相像的主题、可当场改；与所有主题都不像的提议新建主题而不是硬塞（ADR 0014 §2/§3）。
-- [ ] 日报按新结构筛选，并说得出是哪一个主题下的哪一条方向选中了这篇论文。
+- [x] 日报按新结构筛选，并说得出是哪一个主题下的哪一条方向选中了这篇论文。
 - [ ] 在测试库上产出一篇真实日报，含由方向选出的论文并标明来源。
 
 ## Non-goals
@@ -44,7 +44,7 @@ owner: claude-code-main-session
 <!-- Single source of truth for phase status. PN ↔ filename NN. -->
 1. P1 — 主题带方向列表，老 description 可回滚地迁移 — status: done
 2. P2 — 索引只覆盖标题与摘要，重建降到分钟级 — status: done
-3. P3 — 筛选按方向工作，日报标出命中的方向 — status: active
+3. P3 — 筛选按方向工作，日报标出命中的方向 — status: done
 4. P4 — 首次扫库提议整套主题与方向 — status: pending
 5. P5 — 增量候选按相似度归入，不像则提议新主题 — status: pending
 6. P6 — 端到端跑出一篇带方向来源的真实日报 — status: pending
