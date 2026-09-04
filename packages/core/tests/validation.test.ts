@@ -116,27 +116,22 @@ describe("validateFilterConfig", () => {
     expect(r.reasons.join("; ")).toMatch(/topic/i);
   });
 
-  it("accepts an eligible library direction instead of a hand-written topic", () => {
+  // ADR 0010 §1 let a connected library with eligible confirmed directions
+  // stand in for a hand-written topic, because those directions drove a
+  // classifier of their own. That classifier retired with the profile document
+  // (ADR 0012 / ADR 0014), so a topic is the only thing that can select a paper
+  // and a run without one is refused however rich the library is.
+  it("refuses a run without topics no matter what the library holds", () => {
     const r = validateFilterConfig(
       makeSettings({
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
       }),
-      { library: { connected: true, eligibleDirections: 1 } },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  it("names the library when it is connected but has nothing eligible", () => {
-    const r = validateFilterConfig(
-      makeSettings({
-        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
-        arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
-      }),
-      { library: { connected: true, eligibleDirections: 0 } },
+      {},
     );
     expect(r.ok).toBe(false);
-    expect(r.reasons.join("; ")).toMatch(/library/i);
+    expect(r.reasons).toContain("No research topics defined");
+    expect(r.reasons.join("; ")).not.toMatch(/library/i);
   });
 
   it("keeps the topic-only wording when no library is involved", () => {

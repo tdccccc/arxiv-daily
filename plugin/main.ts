@@ -3,10 +3,8 @@ import type {
   LibraryInventory,
   PersonalLibraryCatalog,
   PersonalLibraryDirectionProposal,
-  PersonalLibraryInterestEligibility,
-  PersonalLibraryInterestProfile,
-  PersonalLibraryReviewedDirectionDraft,
   PersonalLibraryDirectionTextPatch,
+  PersonalLibraryReviewedDirectionDraft,
   PipelineResult,
   PluginSettings,
   RunState,
@@ -16,8 +14,6 @@ import type {
   KnowledgeBaseChunkHit,
   DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
-  PersonalLibraryDirectionCandidate,
-  PersonalLibraryRepresentativeEvidence,
   ClusteringInputPaper,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
@@ -37,23 +33,14 @@ createPersonalLibraryScopeFingerprint,
 OperationRegistry,
 PersonalLibraryCatalogStore,
 PersonalLibraryDirectionProposalStore,
-PersonalLibraryInterestProfileStore,
-confirmPersonalLibraryDirectionsWithStores,
 buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
-disablePersonalLibraryConfirmedDirection,
-enablePersonalLibraryConfirmedDirection,
 type DirectionProposalProgress,
-type FilterValidationLibraryState,
-evaluatePersonalLibraryInterestEligibility,
-mergePersonalLibraryConfirmedDirections,
-mergePersonalLibraryDirectionCandidates,
 proposeClusteredPersonalLibraryDirections,
-removePersonalLibraryConfirmedDirection,
+mergePersonalLibraryDirectionCandidates,
 removePersonalLibraryDirectionCandidate,
-selectPersonalLibraryDirectionPapers,
-updatePersonalLibraryConfirmedDirection,
 updatePersonalLibraryDirectionCandidate,
+selectPersonalLibraryDirectionPapers,
 reconcilePersonalLibraryCatalog,
 RunCancellationService,
 normalizeArxivId,
@@ -64,27 +51,9 @@ searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
 preflightFullTextGenerationSynchronization,
 synchronizeFullTextGenerationIndex,
 IncrementalSuggestionsStore,
-applyAttachSuggestion,
-applyMergeSuggestion,
-applySplitSuggestion,
-buildNewDirectionDraft,
-createEmptyIncrementalSuggestionsDocument,
-createPersonalLibraryCatalogInputManifestFingerprint,
-createPersonalLibraryGenerationContractFingerprint,
-createPersonalLibraryPaperEvidenceFingerprint,
-createPersonalLibraryRepresentativeSetFingerprint,
 centerCorpusChunks,
 loadClusteringInput,
-lockPersonalLibraryConfirmedDirection,
-unlockPersonalLibraryConfirmedDirection,
-PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
-PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
-PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
-PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
 PDF_IDENTIFICATION_EVIDENCE_VERSION,
-reclusterPool,
-suggestDirectionDiff,
-suggestIncrementalPlacement,
 type OperationHandle,
 type OperationKind,
 } from "@arxiv-daily/core";
@@ -187,13 +156,10 @@ export interface PersonalLibraryReviewLoadError {
 export interface PersonalLibraryProfileSnapshot {
   catalog: PersonalLibraryCatalog | null;
   proposal: PersonalLibraryDirectionProposal | null;
-  profile: PersonalLibraryInterestProfile | null;
   suggestions: IncrementalSuggestionsDocument | null;
-  eligibility: PersonalLibraryInterestEligibility;
   authorization: LibraryConnectionStatus;
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
-  profileLoadError: PersonalLibraryReviewLoadError | null;
   suggestionsLoadError: PersonalLibraryReviewLoadError | null;
 }
 
@@ -258,7 +224,6 @@ const IDENTIFICATION_TAIL_BYTES = 1024 * 1024;
 export const INCREMENTAL_BUFFER_TRIGGER = 3 as const;
 
 /** Fixed reason attached to deterministic placement attach suggestions. */
-const INCREMENTAL_ATTACH_REASON = "Newly indexed paper matches this confirmed direction." as const;
 
 function cacheCleanupDateKey(now: Date, timezone: string): string {
   return formatDate(todayInTz(now, timezone));
@@ -332,10 +297,8 @@ export default class ArxivDailyPlugin extends Plugin {
    */
   private libraryMutationRevision = 0;
   private libraryProposal: PersonalLibraryDirectionProposal | null = null;
-  private libraryProfile: PersonalLibraryInterestProfile | null = null;
   private librarySuggestions: IncrementalSuggestionsDocument | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
-  private libraryProfileLoadError: PersonalLibraryReviewLoadError | null = null;
   private librarySuggestionsLoadError: PersonalLibraryReviewLoadError | null = null;
 
   getHttpClient(): HttpClient {
@@ -574,9 +537,7 @@ export default class ArxivDailyPlugin extends Plugin {
       const previousSource = this.librarySource;
       const previousCatalog = this.libraryCatalog;
       const previousProposal = this.libraryProposal;
-      const previousProfile = this.libraryProfile;
       const previousProposalError = this.libraryProposalLoadError;
-      const previousProfileError = this.libraryProfileLoadError;
       const previousConnectionRevision = this.libraryConnectionRevision;
       this.libraryInventoryController?.abort("library folder changed");
       this.libraryConnectionRevision += 1;
@@ -591,9 +552,7 @@ export default class ArxivDailyPlugin extends Plugin {
         this.librarySource = previousSource;
         this.libraryCatalog = previousCatalog;
         this.libraryProposal = previousProposal;
-        this.libraryProfile = previousProfile;
         this.libraryProposalLoadError = previousProposalError;
-        this.libraryProfileLoadError = previousProfileError;
         this.libraryConnectionRevision = previousConnectionRevision;
         this.refreshSensitiveValues();
         throw error;
@@ -754,17 +713,6 @@ export default class ArxivDailyPlugin extends Plugin {
       generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
-      confirmProposal: (input) => this.confirmPersonalLibraryProposalCandidate(input),
-      confirmProposals: (input) => this.confirmPersonalLibraryProposalCandidates(input),
-      updateConfirmed: (input) => this.updatePersonalLibraryConfirmedDirection(input),
-      mergeConfirmed: (input) => this.mergePersonalLibraryConfirmedDirections(input),
-      enable: (directionId) => this.enablePersonalLibraryConfirmedDirection(directionId),
-      disable: (directionId) => this.disablePersonalLibraryConfirmedDirection(directionId),
-      remove: (input) => this.removePersonalLibraryConfirmedDirection(input),
-      applySuggestion: (key) => this.applyIncrementalSuggestion(key),
-      dismissSuggestion: (key) => this.dismissIncrementalSuggestion(key),
-      lock: (directionId) => this.lockPersonalLibraryConfirmedDirection(directionId),
-      unlock: (directionId) => this.unlockPersonalLibraryConfirmedDirection(directionId),
     };
   }
 
@@ -792,43 +740,20 @@ export default class ArxivDailyPlugin extends Plugin {
     return structuredClone(catalog);
   }
 
-  /**
-   * Personal library state for the pre-run configuration check. Eligibility,
-   * not the raw confirmed count, is what can carry a run: a disabled direction
-   * or one whose representative evidence went missing would only produce an
-   * empty report (ADR 0010).
-   */
-  personalLibraryFilterState(): FilterValidationLibraryState {
-    return {
-      connected: Boolean(this.libraryConnection),
-      eligibleDirections: evaluatePersonalLibraryInterestEligibility(
-        this.libraryProfile,
-        this.libraryCatalog,
-      ).eligibleDirections.length,
-    };
-  }
-
   getPersonalLibraryProfileSnapshot(): PersonalLibraryProfileSnapshot {
     return structuredClone({
       catalog: this.libraryCatalog,
       proposal: this.libraryProposal,
-      profile: this.libraryProfile,
       suggestions: this.librarySuggestions,
-      eligibility: evaluatePersonalLibraryInterestEligibility(this.libraryProfile, this.libraryCatalog),
       authorization: this.getLibraryConnectionStatus(),
       catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
-      profileLoadError: this.libraryProfileLoadError,
       suggestionsLoadError: this.librarySuggestionsLoadError,
     });
   }
 
   getPersonalLibraryDirectionProposal(): PersonalLibraryDirectionProposal | null {
     return this.libraryProposal ? structuredClone(this.libraryProposal) : null;
-  }
-
-  getPersonalLibraryInterestProfile(): PersonalLibraryInterestProfile | null {
-    return this.libraryProfile ? structuredClone(this.libraryProfile) : null;
   }
 
   async reloadPersonalLibraryProfileDocuments(
@@ -840,10 +765,8 @@ export default class ArxivDailyPlugin extends Plugin {
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryProposal = null;
-      this.libraryProfile = null;
       this.librarySuggestions = null;
       this.libraryProposalLoadError = null;
-      this.libraryProfileLoadError = null;
       this.librarySuggestionsLoadError = null;
       return this.getPersonalLibraryProfileSnapshot();
     }
@@ -860,16 +783,6 @@ export default class ArxivDailyPlugin extends Plugin {
         this.libraryProposal = null;
         this.libraryProposalLoadError = this.safeProfileLoadError("proposal", error);
         this.logger?.error("personal library direction proposal load failed", error);
-      }),
-      stores.profile.load().then((profile) => {
-        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
-        this.libraryProfile = profile;
-        this.libraryProfileLoadError = null;
-      }).catch((error) => {
-        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
-        this.libraryProfile = null;
-        this.libraryProfileLoadError = this.safeProfileLoadError("profile", error);
-        this.logger?.error("personal library interest profile load failed", error);
       }),
       stores.suggestions.load().then((suggestions) => {
         this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
@@ -995,372 +908,8 @@ export default class ArxivDailyPlugin extends Plugin {
       removePersonalLibraryDirectionCandidate({ proposal, candidateId }));
   }
 
-  /** A single confirmation is the one-element case of confirming a group. */
-  async confirmPersonalLibraryProposalCandidate(input: {
-    candidateId: string;
-    draft: PersonalLibraryReviewedDirectionDraft;
-    status: "active" | "disabled";
-    directionId?: string;
-    now?: Date;
-  }): Promise<PersonalLibraryProfileSnapshot> {
-    return await this.confirmPersonalLibraryProposalCandidates({
-      confirmations: [{
-        candidateId: input.candidateId,
-        draft: input.draft,
-        status: input.status,
-        ...(input.directionId === undefined ? {} : { directionId: input.directionId }),
-      }],
-      ...(input.now === undefined ? {} : { now: input.now }),
-    });
-  }
-
-  async confirmPersonalLibraryProposalCandidates(input: {
-    confirmations: readonly {
-      candidateId: string;
-      draft: PersonalLibraryReviewedDirectionDraft;
-      status: "active" | "disabled";
-      directionId?: string;
-    }[];
-    now?: Date;
-  }): Promise<PersonalLibraryProfileSnapshot> {
-    const guard = this.capturePersonalLibraryReviewGuard();
-    const mutationRevision = this.beginLibraryMutation();
-    return this.enqueueLibraryMutation(async () => {
-      this.assertPersonalLibraryReviewGuard(guard);
-      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
-      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, true);
-      try {
-        this.assertPersonalLibraryReviewGuard(guard);
-        const saved = await confirmPersonalLibraryDirectionsWithStores({
-          proposalStore: stores.proposal,
-          profileStore: stores.profile,
-          proposal: current.proposal!,
-          profile: current.profile,
-          catalog: current.catalog,
-          confirmations: input.confirmations.map((confirmation) => ({
-            candidateId: confirmation.candidateId,
-            directionId: confirmation.directionId ?? crypto.randomUUID(),
-            status: confirmation.status,
-            draft: confirmation.draft,
-          })),
-          now: input.now ?? new Date(),
-          expectedProposalRevision: current.proposal!.revision,
-          expectedProfileRevision: current.profile.revision,
-        });
-        this.assertPersonalLibraryReviewGuard(guard);
-        this.libraryProposal = saved.proposal;
-        this.libraryProfile = saved.profile;
-        this.libraryProposalLoadError = null;
-        this.libraryProfileLoadError = null;
-        return this.getPersonalLibraryProfileSnapshot();
-      } catch (error) {
-        if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, mutationRevision);
-        }
-        throw error;
-      }
-    });
-  }
-
-  async updatePersonalLibraryConfirmedDirection(input: {
-    directionId: string;
-    patch: PersonalLibraryDirectionTextPatch;
-    representativePaperKeys?: string[];
-    now?: Date;
-  }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile, catalog) =>
-      updatePersonalLibraryConfirmedDirection({
-        profile,
-        directionId: input.directionId,
-        patch: input.patch,
-        ...(input.representativePaperKeys === undefined ? {} : {
-          representativePaperKeys: input.representativePaperKeys,
-          catalog,
-        }),
-        now: input.now ?? new Date(),
-      }));
-  }
-
-  async disablePersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile) =>
-      disablePersonalLibraryConfirmedDirection({ profile, directionId, now }));
-  }
-
-  async enablePersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile, catalog) =>
-      enablePersonalLibraryConfirmedDirection({ profile, directionId, catalog, now }));
-  }
-
-  async mergePersonalLibraryConfirmedDirections(input: {
-    sourceDirectionIds: string[];
-    draft: PersonalLibraryReviewedDirectionDraft;
-    status: "active" | "disabled";
-    directionId?: string;
-    now?: Date;
-  }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile, catalog) =>
-      mergePersonalLibraryConfirmedDirections({
-        profile,
-        sourceDirectionIds: input.sourceDirectionIds,
-        directionId: input.directionId ?? crypto.randomUUID(),
-        status: input.status,
-        draft: input.draft,
-        catalog,
-        now: input.now ?? new Date(),
-      }));
-  }
-
-  async removePersonalLibraryConfirmedDirection(input: {
-    directionId: string;
-    mode: "restrict" | "cascade";
-  }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile) =>
-      removePersonalLibraryConfirmedDirection({
-        profile,
-        directionId: input.directionId,
-        mode: input.mode,
-      }));
-  }
-
   getIncrementalSuggestions(): IncrementalSuggestionsDocument | null {
     return this.librarySuggestions ? structuredClone(this.librarySuggestions) : null;
-  }
-
-  /**
-   * Incremental direction update: place every indexed paper not yet covered by
-   * a confirmed direction (deterministic attach vs. buffer), then — only when
-   * the buffer pool reached INCREMENTAL_BUFFER_TRIGGER papers — recluster the
-   * pool and ask the LLM for direction-diff suggestions. The merged suggestion
-   * set replaces the persisted suggestions document (CAS); pending suggestions
-   * from an earlier run are superseded by the newest evidence.
-   *
-   * Consent gate (ADR 0007): placement is local embedding similarity and runs
-   * without model-processing consent; the recluster + LLM diff stage requires
-   * it. Without consent the LLM stage is skipped and the document records
-   * `pendingAuthorization` for the buffered papers.
-   */
-  async runIncrementalDirectionUpdate(): Promise<{
-    suggestions: number;
-    attachments: number;
-    buffered: number;
-    pendingAuthorizationBuffered: number;
-    /** Un-reviewed suggestions from the previous run that this run replaced. */
-    superseded: number;
-  }> {
-    const connection = this.libraryConnection;
-    if (!connection) throw new Error("Choose a personal library first");
-    const profile = this.libraryProfile;
-    if (!profile) throw new Error("Load the confirmed personal library profile first");
-    const { scopeFingerprint } = this.libraryFingerprints(connection);
-    // The operation reuses the direction-generation kind: the closed core
-    // OperationKind union has no incremental kind, and the two flows share the
-    // authorization gate and cancellation scope (revocation cancels both).
-    if (this.operations.find("personal-library-direction-generation", scopeFingerprint)) {
-      throw new Error("Incremental direction update is already active");
-    }
-    const connectionRevision = this.libraryConnectionRevision;
-    const outputRevision = this.libraryOutputRevision;
-    const authorizationFingerprint = connection.authorization?.fingerprint;
-    const llmSettings = structuredClone(this.settings.llm);
-    const knowledgeBase = this.buildFullTextKnowledgeBaseStore(connection);
-    const operation = this.operations.begin(
-      "personal-library-direction-generation",
-      "Incremental direction update",
-      scopeFingerprint,
-    );
-    try {
-      operation.signal.throwIfAborted();
-      this.assertIncrementalUpdateCurrent({
-        connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-      }, false);
-      const placement = await suggestIncrementalPlacement({
-        profile: { directions: profile.directions },
-        knowledgeBase,
-        signal: operation.signal,
-      });
-      operation.signal.throwIfAborted();
-      const attachSuggestions: DirectionDiffSuggestion[] = [];
-      const bufferPaperKeys: string[] = [];
-      for (const paperKey of Object.keys(placement.placements).sort()) {
-        const decision = placement.placements[paperKey]!;
-        if (decision.kind === "attach") {
-          attachSuggestions.push({
-            kind: "attach",
-            directionId: decision.directionId,
-            paperKeys: [paperKey],
-            reason: INCREMENTAL_ATTACH_REASON,
-          });
-        } else {
-          bufferPaperKeys.push(paperKey);
-        }
-      }
-      // Reclustering + LLM diff are the low-frequency path. The placement pass
-      // already loaded and centered its own corpus copy, but the core API does
-      // not expose the centered papers (nor the centering transform), so the
-      // pool pass reloads and re-centers the corpus — a second load is fine
-      // here. LLM suggestions can only reference cluster papers, so the union
-      // with the per-paper placement attaches is always conflict-free.
-      // The LLM stage requires model-processing consent (ADR 0007); without
-      // it the buffered papers are recorded as pending authorization.
-      let llmSuggestions: DirectionDiffSuggestion[] = [];
-      let pendingAuthorizationBuffered = 0;
-      const llmAuthorized = this.getLibraryConnectionStatus().kind === "authorized"
-        && this.libraryConnection?.authorization?.fingerprint === authorizationFingerprint;
-      if (bufferPaperKeys.length >= INCREMENTAL_BUFFER_TRIGGER) {
-        if (!llmAuthorized) {
-          pendingAuthorizationBuffered = bufferPaperKeys.length;
-        } else {
-          const centered = await this.loadCenteredClusteringInput(knowledgeBase, operation.signal);
-          operation.signal.throwIfAborted();
-          const pooled = reclusterPool(centered, {
-            poolPaperKeys: bufferPaperKeys,
-            directions: profile.directions,
-          });
-          llmSuggestions = await suggestDirectionDiff({
-            directions: profile.directions,
-            clusters: pooled.candidates,
-            llm: new LlmClient(llmSettings, this.logger, this.host.http),
-            signal: operation.signal,
-          });
-        }
-      }
-      operation.signal.throwIfAborted();
-      const suggestions = mergeIncrementalSuggestions(attachSuggestions, llmSuggestions);
-      const nextDocument = emptyIncrementalSuggestionsDocument(connection, suggestions, new Date());
-      if (pendingAuthorizationBuffered > 0) {
-        nextDocument.pendingAuthorization = {
-          bufferedPaperCount: pendingAuthorizationBuffered,
-          updatedAt: nextDocument.updatedAt,
-        };
-      }
-      return await this.enqueueLibraryMutation(async () => {
-        operation.signal.throwIfAborted();
-        this.assertIncrementalUpdateCurrent({
-          connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-        }, llmAuthorized);
-        const store = this.buildIncrementalSuggestionsStore(connection);
-        const current = await store.load();
-        // Whole-document replace (ADR 0007): un-reviewed suggestions from the
-        // previous run are superseded by the newest evidence. Count them so
-        // the notice can make the replacement visible.
-        const superseded = current.suggestions.length > 0
-          && JSON.stringify(current.suggestions) !== JSON.stringify(nextDocument.suggestions)
-          ? current.suggestions.length
-          : 0;
-        const saved = await store.replace(nextDocument, current.revision);
-        this.assertIncrementalUpdateCurrent({
-          connection, connectionRevision, outputRevision, authorizationFingerprint, profile,
-        }, llmAuthorized);
-        this.librarySuggestions = saved;
-        this.librarySuggestionsLoadError = null;
-        return {
-          suggestions: saved.suggestions.length,
-          attachments: saved.suggestions.filter((entry) => entry.kind === "attach").length,
-          buffered: bufferPaperKeys.length,
-          pendingAuthorizationBuffered,
-          superseded,
-        };
-      });
-    } catch (error) {
-      if (this.isReviewPersistenceConflict(error)) await this.reloadPersonalLibraryProfileDocuments();
-      throw error;
-    } finally {
-      operation.finish();
-    }
-  }
-
-  /**
-   * Apply one persisted incremental suggestion. attach/split/merge mutate the
-   * confirmed profile through the same review persistence path; "new" becomes
-   * a review candidate in the proposal store (the existing confirmation flow
-   * then decides the direction — the caller surfaces the proposal). The
-   * suggestion is removed from the suggestions document (CAS) after the
-   * mutation commits. Local operation: no model authorization required.
-   */
-  async applyIncrementalSuggestion(key: string): Promise<PersonalLibraryProfileSnapshot> {
-    const guard = this.capturePersonalLibraryReviewGuard();
-    const mutationRevision = this.beginLibraryMutation();
-    return this.enqueueLibraryMutation(async () => {
-      this.assertPersonalLibraryReviewGuard(guard);
-      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
-      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, false);
-      const suggestions = await stores.suggestions.load();
-      const suggestion = findIncrementalSuggestionByKey(suggestions.suggestions, key);
-      if (!suggestion) {
-        throw new Error("Incremental suggestion no longer exists. Refresh and try again.");
-      }
-      const now = new Date();
-      let profile = current.profile;
-      let proposal = current.proposal;
-      const expectedProposalRevision = proposal?.revision ?? null;
-      if (suggestion.kind === "new") {
-        proposal = this.attachNewSuggestionToProposal(suggestion, proposal, current.catalog, now);
-      } else {
-        profile = applySuggestionToProfile(profile, suggestion, now);
-      }
-      try {
-        if (suggestion.kind === "new") {
-          const savedProposal = await stores.proposal.replace(proposal!, expectedProposalRevision);
-          this.assertPersonalLibraryReviewGuard(guard);
-          this.libraryProposal = savedProposal;
-          this.libraryProposalLoadError = null;
-        } else {
-          const savedProfile = await stores.profile.replace(profile, profile.revision);
-          this.assertPersonalLibraryReviewGuard(guard);
-          this.libraryProfile = savedProfile;
-          this.libraryProfileLoadError = null;
-        }
-        const remaining = suggestions.suggestions.filter((entry) => !sameIncrementalSuggestion(entry, suggestion));
-        const nextDocument = suggestionsDocumentWithout(
-          suggestions,
-          remaining,
-          now,
-        );
-        const savedSuggestions = await stores.suggestions.replace(nextDocument, suggestions.revision);
-        this.assertPersonalLibraryReviewGuard(guard);
-        this.librarySuggestions = savedSuggestions;
-        this.librarySuggestionsLoadError = null;
-      } catch (error) {
-        if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, mutationRevision);
-        }
-        throw error;
-      }
-      return this.getPersonalLibraryProfileSnapshot();
-    });
-  }
-
-  /** Remove one persisted incremental suggestion without applying it. */
-  async dismissIncrementalSuggestion(key: string): Promise<PersonalLibraryProfileSnapshot> {
-    const guard = this.capturePersonalLibraryReviewGuard();
-    return this.enqueueLibraryMutation(async () => {
-      this.assertPersonalLibraryReviewGuard(guard);
-      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
-      const suggestions = await stores.suggestions.load();
-      const suggestion = findIncrementalSuggestionByKey(suggestions.suggestions, key);
-      if (!suggestion) {
-        throw new Error("Incremental suggestion no longer exists. Refresh and try again.");
-      }
-      const remaining = suggestions.suggestions.filter((entry) => !sameIncrementalSuggestion(entry, suggestion));
-      const saved = await stores.suggestions.replace(
-        suggestionsDocumentWithout(suggestions, remaining, new Date()),
-        suggestions.revision,
-      );
-      this.assertPersonalLibraryReviewGuard(guard);
-      this.librarySuggestions = saved;
-      this.librarySuggestionsLoadError = null;
-      return this.getPersonalLibraryProfileSnapshot();
-    });
-  }
-
-  async lockPersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile) =>
-      lockPersonalLibraryConfirmedDirection({ profile, directionId, now }));
-  }
-
-  async unlockPersonalLibraryConfirmedDirection(directionId: string, now = new Date()): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProfile((profile) =>
-      unlockPersonalLibraryConfirmedDirection({ profile, directionId, now }));
   }
 
   async scanPersonalLibrary(): Promise<PersonalLibraryCatalog> {
@@ -1734,7 +1283,6 @@ export default class ArxivDailyPlugin extends Plugin {
       // ADR 0007: every durable legacy manifest commit remains a trigger even
       // when rebuilding its derived generation fails.
       operation.signal.throwIfAborted();
-      await this.runIncrementalDirectionUpdateAfterIndex(summary, updateProgress);
       operation.signal.throwIfAborted();
       if (generationFailed) throw generationFailure;
       if (updateProgress) {
@@ -2077,41 +1625,6 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
-  /**
-   * ADR 0007 auto-trigger after an index run: only new or changed papers
-   * (indexed > 0) trigger the incremental update. Runs the same update as
-   * the manual command and surfaces the result with a Notice; any failure
-   * (already active, no profile, transient LLM error) is logged and
-   * swallowed so the index command stays successful. While it runs, the
-   * progress text moves to the direction update so the post-index wait
-   * (clustering, possibly an LLM diff) reads as work, not a stall.
-   */
-  private async runIncrementalDirectionUpdateAfterIndex(
-    summary: FullTextIndexRunSummary,
-    updateProgress: boolean,
-  ): Promise<void> {
-    if (summary.indexed <= 0) return;
-    if (updateProgress) {
-      this.progress?.setTask("Updating paper directions", "Placing new papers");
-    }
-    try {
-      const update = await this.runIncrementalDirectionUpdate();
-      const pending = update.pendingAuthorizationBuffered > 0
-        ? `, ${update.pendingAuthorizationBuffered} buffered awaiting model authorization`
-        : "";
-      const superseded = update.superseded > 0
-        ? `, ${update.superseded} un-reviewed suggestion(s) superseded by new evidence`
-        : "";
-      new Notice(
-        `arXiv Daily: incremental update — ${update.suggestions} suggestions `
-        + `(${update.attachments} attaches), ${update.buffered} buffered${pending}${superseded}`,
-        10_000,
-      );
-    } catch (error) {
-      this.logger.warn("incremental direction update after indexing failed", error);
-    }
-  }
-
   restartScheduler(): void {
     this.scheduler.stop();
     if (this.settings.schedule.enabled) this.scheduler.start();
@@ -2342,7 +1855,6 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildPersonalLibraryProfileStores(connection: PersistedLibraryConnection): {
     proposal: PersonalLibraryDirectionProposalStore;
-    profile: PersonalLibraryInterestProfileStore;
     suggestions: IncrementalSuggestionsStore;
   } {
     if (!this.host?.storage.writeTextAtomic) {
@@ -2352,9 +1864,6 @@ export default class ArxivDailyPlugin extends Plugin {
     const options = { onWarning: (message: string, error?: unknown) => this.logger.warn(message, error) };
     return {
       proposal: new PersonalLibraryDirectionProposalStore(
-        this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
-      ),
-      profile: new PersonalLibraryInterestProfileStore(
         this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
       ),
       suggestions: new IncrementalSuggestionsStore(
@@ -2388,64 +1897,33 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
-  private async loadPersonalLibraryReviewStateDirect(
+  /**
+   * Loads the proposal beside the catalog it was generated against. The
+   * confirmed-profile arm went with the interest profile document
+   * (ADR 0012 / ADR 0014); only the proposal is durable review state now.
+   */
+  private async loadPersonalLibraryProposalStateDirect(
     guard: { connection: PersistedLibraryConnection; connectionRevision: number; outputRevision: number },
-    stores: { proposal: PersonalLibraryDirectionProposalStore; profile: PersonalLibraryInterestProfileStore },
-    requireProposal: boolean,
-  ): Promise<{
-    catalog: PersonalLibraryCatalog;
-    proposal: PersonalLibraryDirectionProposal | null;
-    profile: PersonalLibraryInterestProfile;
-  }> {
+    stores: { proposal: PersonalLibraryDirectionProposalStore },
+  ): Promise<{ catalog: PersonalLibraryCatalog; proposal: PersonalLibraryDirectionProposal }> {
     this.assertPersonalLibraryReviewGuard(guard);
     const catalog = this.libraryCatalog;
     if (!catalog) throw new Error("Scan and load the personal library catalog first");
-    const loaded = await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
-    if (loaded.profile.status === "rejected") {
-      throw new Error("Personal library confirmed profile is unavailable");
-    }
-    if (requireProposal && loaded.proposal.status === "rejected") {
+    const loaded = await this.loadPersonalLibraryProposalDocumentDirect(guard, stores);
+    if (loaded.status === "rejected" || !loaded.value) {
       throw new Error("Personal library direction proposal is unavailable");
     }
     this.assertPersonalLibraryReviewGuard(guard);
-    return {
-      catalog: structuredClone(catalog),
-      proposal: loaded.proposal.status === "fulfilled" && loaded.proposal.value
-        ? structuredClone(loaded.proposal.value)
-        : null,
-      profile: structuredClone(loaded.profile.value),
-    };
+    return { catalog: structuredClone(catalog), proposal: structuredClone(loaded.value) };
   }
 
-  private async loadPersonalLibraryReviewDocumentsDirect(
+  private async loadPersonalLibraryProposalDocumentDirect(
     guard: { connection: PersistedLibraryConnection; connectionRevision: number; outputRevision: number },
-    stores: { proposal: PersonalLibraryDirectionProposalStore; profile: PersonalLibraryInterestProfileStore },
-    mutationRevision?: number,
-  ): Promise<{
-    proposal: PromiseSettledResult<PersonalLibraryDirectionProposal | null>;
-    profile: PromiseSettledResult<PersonalLibraryInterestProfile>;
-  }> {
-    const [proposal, profile] = await Promise.allSettled([stores.proposal.load(), stores.profile.load()]);
+    stores: { proposal: PersonalLibraryDirectionProposalStore },
+  ): Promise<PromiseSettledResult<PersonalLibraryDirectionProposal | null>> {
+    const [proposal] = await Promise.allSettled([stores.proposal.load()]);
     this.assertPersonalLibraryReviewGuard(guard);
-    if (mutationRevision !== undefined) {
-      if (proposal.status === "fulfilled") {
-        this.libraryProposal = proposal.value;
-        this.libraryProposalLoadError = null;
-      } else {
-        this.libraryProposal = null;
-        this.libraryProposalLoadError = this.safeProfileLoadError("proposal", proposal.reason);
-        this.logger?.error("personal library direction proposal load failed", proposal.reason);
-      }
-      if (profile.status === "fulfilled") {
-        this.libraryProfile = profile.value;
-        this.libraryProfileLoadError = null;
-      } else {
-        this.libraryProfile = null;
-        this.libraryProfileLoadError = this.safeProfileLoadError("profile", profile.reason);
-        this.logger?.error("personal library interest profile load failed", profile.reason);
-      }
-    }
-    return { proposal, profile };
+    return proposal;
   }
 
   private async mutatePersonalLibraryProposal(
@@ -2458,11 +1936,11 @@ export default class ArxivDailyPlugin extends Plugin {
     return this.enqueueLibraryMutation(async () => {
       this.assertPersonalLibraryReviewGuard(guard);
       const stores = this.buildPersonalLibraryProfileStores(guard.connection);
-      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, true);
+      const current = await this.loadPersonalLibraryProposalStateDirect(guard, stores);
       try {
         const saved = await stores.proposal.replace(
-          mutation(current.proposal!, current.catalog),
-          current.proposal!.revision,
+          mutation(current.proposal, current.catalog),
+          current.proposal.revision,
         );
         this.assertPersonalLibraryReviewGuard(guard);
         this.libraryProposal = saved;
@@ -2470,37 +1948,7 @@ export default class ArxivDailyPlugin extends Plugin {
         return this.getPersonalLibraryProfileSnapshot();
       } catch (error) {
         if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores);
-        }
-        throw error;
-      }
-    });
-  }
-
-  private async mutatePersonalLibraryProfile(
-    mutation: (
-      profile: PersonalLibraryInterestProfile,
-      catalog: PersonalLibraryCatalog,
-    ) => PersonalLibraryInterestProfile,
-  ): Promise<PersonalLibraryProfileSnapshot> {
-    const guard = this.capturePersonalLibraryReviewGuard();
-    const mutationRevision = this.beginLibraryMutation();
-    return this.enqueueLibraryMutation(async () => {
-      this.assertPersonalLibraryReviewGuard(guard);
-      const stores = this.buildPersonalLibraryProfileStores(guard.connection);
-      const current = await this.loadPersonalLibraryReviewStateDirect(guard, stores, false);
-      try {
-        const saved = await stores.profile.replace(
-          mutation(current.profile, current.catalog),
-          current.profile.revision,
-        );
-        this.assertPersonalLibraryReviewGuard(guard);
-        this.libraryProfile = saved;
-        this.libraryProfileLoadError = null;
-        return this.getPersonalLibraryProfileSnapshot();
-      } catch (error) {
-        if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryReviewDocumentsDirect(guard, stores, mutationRevision);
+          await this.loadPersonalLibraryProposalDocumentDirect(guard, stores);
         }
         throw error;
       }
@@ -2544,35 +1992,6 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
-  /**
-   * Guards the incremental update run: connection/output/authorization are the
-   * same gates as direction generation; the confirmed profile is captured by
-   * reference so any reload supersedes the run.
-   */
-  private assertIncrementalUpdateCurrent(
-    input: {
-      connection: PersistedLibraryConnection;
-      connectionRevision: number;
-      outputRevision: number;
-      authorizationFingerprint?: string;
-      profile: PersonalLibraryInterestProfile;
-    },
-    requireAuthorization: boolean,
-  ): void {
-    this.assertLibraryConnectionCurrent(input.connection, input.connectionRevision);
-    if (this.libraryOutputRevision !== input.outputRevision) {
-      throw new Error("Output paths changed during incremental direction update");
-    }
-    if (requireAuthorization
-      && (this.getLibraryConnectionStatus().kind !== "authorized"
-        || this.libraryConnection?.authorization?.fingerprint !== input.authorizationFingerprint)) {
-      throw new Error("Personal library model authorization changed during incremental update");
-    }
-    if (this.libraryProfile !== input.profile) {
-      throw new Error("Personal library confirmed profile changed during incremental update");
-    }
-  }
-
   private buildIncrementalSuggestionsStore(connection: PersistedLibraryConnection): IncrementalSuggestionsStore {
     if (!this.host?.storage.writeTextAtomic) {
       throw new Error("Incremental suggestions require atomic storage writes");
@@ -2601,77 +2020,6 @@ export default class ArxivDailyPlugin extends Plugin {
     return centerCorpusChunks(papers);
   }
 
-  /**
-   * Convert a "new" suggestion into a review candidate and append it to the
-   * proposal document (creating one when none exists yet). The candidate
-   * carries the suggestion's cluster members so the review shows them; its
-   * representatives are resolved against the current catalog evidence so the
-   * existing confirmation flow can verify and confirm it.
-   */
-  private attachNewSuggestionToProposal(
-    suggestion: Extract<DirectionDiffSuggestion, { kind: "new" }>,
-    proposal: PersonalLibraryDirectionProposal | null,
-    catalog: PersonalLibraryCatalog,
-    now: Date,
-  ): PersonalLibraryDirectionProposal {
-    const draft = buildNewDirectionDraft(suggestion);
-    const candidateId = crypto.randomUUID();
-    const representativePaperKeys = draft.representativePaperKeys
-      .slice(0, PERSONAL_LIBRARY_MAX_REPRESENTATIVES);
-    const representatives = representativePaperKeys.map((paperKey) => {
-      const paper = catalog.papers[paperKey];
-      if (!paper) {
-        throw new Error(`Suggestion paper is missing from the current catalog: ${paperKey}`);
-      }
-      return { paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper) };
-    });
-    // Discovery cues: representative paper titles (deduped, code-unit sorted
-    // — the strict candidate decoder requires >=1 cue, strictly ordered and
-    // unique). Titles are natural cues for what the new direction is about;
-    // the reason falls back when no titles are available.
-    const titleCues = [...new Set(
-      representativePaperKeys
-        .map((paperKey) => catalog.papers[paperKey]?.title?.trim() ?? "")
-        .filter((title) => title.length > 0)
-        .map((title) => title.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)),
-    )].sort(codeUnitCompare);
-    const candidate: PersonalLibraryDirectionCandidate = {
-      id: candidateId,
-      name: draft.name,
-      description: draft.description,
-      discoveryCues: titleCues.length > 0
-        ? titleCues
-        : [draft.description.slice(0, PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH)],
-      representatives,
-      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
-      lineage: { candidateIds: [candidateId] },
-      clusterMembers: draft.clusterMembers.slice(0, PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS),
-    };
-    const inputPapers = mergeRepresentativeEvidence(
-      proposal?.catalogInputPapers ?? [],
-      representatives,
-    );
-    const scopeFingerprint = catalog.scopeFingerprint;
-    const identificationFingerprint = catalog.identificationFingerprint;
-    return {
-      schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
-      revision: proposal?.revision ?? 0,
-      proposalId: proposal?.proposalId ?? crypto.randomUUID(),
-      scopeFingerprint,
-      identificationFingerprint,
-      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
-        scopeFingerprint,
-        identificationFingerprint,
-        catalogInputPapers: inputPapers,
-      }),
-      catalogInputPapers: inputPapers,
-      generationContractFingerprint: proposal?.generationContractFingerprint
-        ?? createPersonalLibraryGenerationContractFingerprint("incremental-new-suggestion"),
-      generatedAt: proposal?.generatedAt ?? now.toISOString(),
-      candidates: [...(proposal?.candidates ?? []), candidate].sort(byOpaqueId),
-    };
-  }
-
   private assertPersonalLibraryDocumentLoadCurrent(
     connection: PersistedLibraryConnection,
     connectionRevision: number,
@@ -2687,10 +2035,8 @@ export default class ArxivDailyPlugin extends Plugin {
     this.libraryCatalog = null;
     this.libraryCatalogLoadError = null;
     this.libraryProposal = null;
-    this.libraryProfile = null;
     this.librarySuggestions = null;
     this.libraryProposalLoadError = null;
-    this.libraryProfileLoadError = null;
     this.librarySuggestionsLoadError = null;
   }
 
@@ -3084,163 +2430,12 @@ function latestCompletedDate(store: StateStore): string | undefined {
 // Incremental direction update helpers (plugin-internal).
 // ---------------------------------------------------------------------------
 
-/**
- * Content key of one persisted suggestion, used by the review UI and the
- * plugin methods to address a single suggestion. The key is never parsed —
- * lookups recompute it for every suggestion in the loaded document — so the
- * colons inside paper keys (e.g. "arxiv:2608.00001") are harmless.
- */
-function incrementalSuggestionKey(suggestion: DirectionDiffSuggestion): string {
-  switch (suggestion.kind) {
-    case "attach":
-      return `attach:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
-    case "new":
-      return `new::${suggestion.paperKeys[0]}`;
-    case "split":
-      return `split:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
-    case "merge":
-      return `merge:${suggestion.directionIds[0]}:${suggestion.directionIds[1]}`;
-  }
-}
-
-function findIncrementalSuggestionByKey(
-  suggestions: readonly DirectionDiffSuggestion[],
-  key: string,
-): DirectionDiffSuggestion | undefined {
-  return suggestions.find((suggestion) => incrementalSuggestionKey(suggestion) === key);
-}
-
-function sameIncrementalSuggestion(
-  left: DirectionDiffSuggestion,
-  right: DirectionDiffSuggestion,
-): boolean {
-  return incrementalSuggestionKey(left) === incrementalSuggestionKey(right);
-}
-
-function suggestionsDocumentWithout(
-  document: IncrementalSuggestionsDocument,
-  suggestions: DirectionDiffSuggestion[],
-  now: Date,
-): IncrementalSuggestionsDocument {
-  const empty = createEmptyIncrementalSuggestionsDocument(
-    document.scopeFingerprint,
-    document.identificationFingerprint,
-    now,
-  );
-  return {
-    ...empty,
-    suggestions,
-    // Applying or dismissing a suggestion does not change the buffer pool,
-    // so a pending-authorization note from the last run stays visible.
-    ...(document.pendingAuthorization
-      ? { pendingAuthorization: document.pendingAuthorization }
-      : {}),
-  };
-}
-
-function emptyIncrementalSuggestionsDocument(
-  connection: PersistedLibraryConnection,
-  suggestions: DirectionDiffSuggestion[],
-  now: Date,
-): IncrementalSuggestionsDocument {
-  const { scopeFingerprint, identificationFingerprint } = libraryFingerprints(connection);
-  const empty = createEmptyIncrementalSuggestionsDocument(
-    scopeFingerprint,
-    identificationFingerprint,
-    now,
-  );
-  return { ...empty, suggestions };
-}
-
-/**
- * Canonical union of placement attaches (deterministic) and LLM diff
- * suggestions (cluster-bound): papers never overlap between the two sources,
- * so the merged list is conflict-free once sorted into the store's canonical
- * code-unit order.
- */
-function mergeIncrementalSuggestions(
-  attach: readonly DirectionDiffSuggestion[],
-  llm: readonly DirectionDiffSuggestion[],
-): DirectionDiffSuggestion[] {
-  return [...attach, ...llm].sort(compareIncrementalSuggestions);
-}
-
 const SUGGESTION_KIND_ORDER: Readonly<Record<DirectionDiffSuggestion["kind"], number>> = {
   attach: 0,
   merge: 1,
   new: 2,
   split: 3,
 };
-
-function compareIncrementalSuggestions(left: DirectionDiffSuggestion, right: DirectionDiffSuggestion): number {
-  const leftKey = incrementalSuggestionSortKey(left);
-  const rightKey = incrementalSuggestionSortKey(right);
-  for (let index = 0; index < leftKey.length; index += 1) {
-    const diff = codeUnitCompare(leftKey[index]!, rightKey[index]!);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-function incrementalSuggestionSortKey(suggestion: DirectionDiffSuggestion): string[] {
-  switch (suggestion.kind) {
-    case "attach":
-      return [String(SUGGESTION_KIND_ORDER.attach), suggestion.directionId, suggestion.paperKeys[0] ?? ""];
-    case "merge":
-      return [String(SUGGESTION_KIND_ORDER.merge), suggestion.directionIds[0], suggestion.directionIds[1]];
-    case "new":
-      return [String(SUGGESTION_KIND_ORDER.new), suggestion.paperKeys[0] ?? "", ""];
-    case "split":
-      return [String(SUGGESTION_KIND_ORDER.split), suggestion.directionId, suggestion.paperKeys[0] ?? ""];
-  }
-}
-
-function applySuggestionToProfile(
-  profile: PersonalLibraryInterestProfile,
-  suggestion: DirectionDiffSuggestion,
-  now: Date,
-): PersonalLibraryInterestProfile {
-  switch (suggestion.kind) {
-    case "attach":
-      return applyAttachSuggestion({ profile, suggestion, now });
-    case "split":
-      return applySplitSuggestion({
-        profile,
-        suggestion,
-        createId: () => crypto.randomUUID(),
-        now,
-      }).profile;
-    case "merge":
-      return applyMergeSuggestion({
-        profile,
-        suggestion,
-        createId: () => crypto.randomUUID(),
-        now,
-      });
-    case "new":
-      throw new Error("new suggestions are converted to review candidates, not applied to the profile");
-  }
-}
-
-/** Merge representative evidence by paperKey, keeping the first occurrence. */
-function mergeRepresentativeEvidence(
-  current: readonly PersonalLibraryRepresentativeEvidence[],
-  additional: readonly PersonalLibraryRepresentativeEvidence[],
-): PersonalLibraryRepresentativeEvidence[] {
-  const byKey = new Map(current.map((entry) => [entry.paperKey, entry]));
-  for (const entry of additional) {
-    if (!byKey.has(entry.paperKey)) byKey.set(entry.paperKey, entry);
-  }
-  return [...byKey.values()].sort((left, right) => codeUnitCompare(left.paperKey, right.paperKey));
-}
-
-function byOpaqueId(left: { id: string }, right: { id: string }): number {
-  return codeUnitCompare(left.id, right.id);
-}
-
-function codeUnitCompare(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function createFullTextGenerationWriterToken(): string {
   return `writer-${crypto.randomUUID().replaceAll("-", "")}`;
@@ -3252,19 +2447,4 @@ function desktopVaultRoot(adapter: unknown): string | undefined {
   if (typeof getBasePath !== "function") return undefined;
   const root = getBasePath.call(adapter);
   return typeof root === "string" && root ? root : undefined;
-}
-
-function libraryFingerprints(connection: PersistedLibraryConnection): {
-  scopeFingerprint: string;
-  identificationFingerprint: string;
-} {
-  return {
-    scopeFingerprint: createPersonalLibraryScopeFingerprint({
-      rootIdentity: connection.rootIdentity,
-      eligibleExtensions: connection.eligibleExtensions,
-    }),
-    identificationFingerprint: createPersonalLibraryIdentificationFingerprint(
-      connection.eligibleExtensions,
-    ),
-  };
 }

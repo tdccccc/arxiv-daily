@@ -1,7 +1,6 @@
 import type { PluginSettings, RunState } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import { validateFilterConfig, validateSchedulerConfig } from "@arxiv-daily/core";
-import type { FilterValidationLibraryState } from "@arxiv-daily/core";
 import type { Logger } from "@arxiv-daily/core";
 
 export interface SetupStatus {
@@ -24,7 +23,6 @@ export function shouldRenderSetupGuide(
 export function getSetupStatus(
   settings: PluginSettings,
   runState: RunState = {},
-  library?: FilterValidationLibraryState,
 ): SetupStatus {
   const llmReady = Boolean(
     settings.llm.apiKey.trim() &&
@@ -40,9 +38,10 @@ export function getSetupStatus(
         topic.tag.trim() &&
         topic.description.trim(),
     );
-  // readyToRun follows the same either-source rule the run gate uses, so a
-  // library-only researcher is not told to write a topic first (ADR 0010).
-  const validation = validateFilterConfig(settings, library ? { library } : {});
+  // ADR 0010's either-source rule retired with the profile-driven classifier
+  // (ADR 0012 / ADR 0014): a topic is now the only thing that can select a
+  // paper, so it is also the only thing setup has to wait for.
+  const validation = validateFilterConfig(settings, {});
   const schedulerValidation = validateSchedulerConfig(settings);
   const latestCompletedReportDate = Object.entries(runState)
     .filter(([, entry]) => entry?.status === "completed")

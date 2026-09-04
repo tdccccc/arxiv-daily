@@ -41,7 +41,6 @@ export async function buildSafePluginDiagnosticsReport(
     runState: plugin.stateStore.snapshot(),
     version: plugin.manifest?.version,
     paperIndex,
-    library: plugin.personalLibraryFilterState?.(),
   });
 }
 

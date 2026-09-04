@@ -19,7 +19,7 @@
  * (goal: 锁定的方向不参与自动合并/分裂/改名，但新论文仍可归入).
  */
 
-import type { PersonalLibraryConfirmedDirection } from "../personal-library-interest-profile";
+import type { PlaceableDirection } from "./placeable-direction";
 import type {
   FullTextKnowledgeBaseStore,
   FullTextPaperDocument,
@@ -82,7 +82,7 @@ export function decideIncrementalPlacement(
 }
 
 export interface IncrementalPlacementInput {
-  profile: { directions: readonly PersonalLibraryConfirmedDirection[] };
+  profile: { directions: readonly PlaceableDirection[] };
   knowledgeBase: FullTextKnowledgeBaseStore;
   options?: PlacementOptions;
   signal?: AbortSignal;
@@ -151,7 +151,7 @@ export async function suggestIncrementalPlacement(
 }
 
 export function coveredPaperKeys(
-  directions: readonly PersonalLibraryConfirmedDirection[],
+  directions: readonly PlaceableDirection[],
 ): Set<string> {
   const covered = new Set<string>();
   for (const direction of directions) {

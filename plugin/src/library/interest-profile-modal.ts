@@ -11,13 +11,10 @@ import {
   type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
   type PersonalLibraryClusterMember,
-  type PersonalLibraryConfirmedDirection,
   type PersonalLibraryDirectionCandidate,
   type PersonalLibraryDirectionProposal,
   type PersonalLibraryDirectionTextPatch,
-  type PersonalLibraryDirectionTimelineEvent,
   type PersonalLibraryRepresentativeEvidence,
-  type PersonalLibraryReviewedDirectionDraft,
 } from "@arxiv-daily/core";
 import type { PersonalLibraryProfileSnapshot } from "../../main";
 import type { LibraryConnectionStatus } from "./connection";
@@ -38,43 +35,18 @@ export interface InterestProfileReviewController {
     representativePaperKeys: string[];
   }): Promise<InterestProfileReviewSnapshot>;
   discardProposal(candidateId: string): Promise<InterestProfileReviewSnapshot>;
-  confirmProposal(input: {
-    candidateId: string;
-    draft: PersonalLibraryReviewedDirectionDraft;
-    status: "active" | "disabled";
-  }): Promise<InterestProfileReviewSnapshot>;
-  /** Confirms a whole group as one transaction; see the core group confirmation. */
-  confirmProposals(input: {
-    confirmations: {
-      candidateId: string;
-      draft: PersonalLibraryReviewedDirectionDraft;
-      status: "active" | "disabled";
-    }[];
-  }): Promise<InterestProfileReviewSnapshot>;
-  updateConfirmed(input: {
-    directionId: string;
-    patch: PersonalLibraryDirectionTextPatch;
-    representativePaperKeys: string[];
-  }): Promise<InterestProfileReviewSnapshot>;
-  mergeConfirmed(input: {
-    sourceDirectionIds: string[];
-    draft: PersonalLibraryReviewedDirectionDraft;
-    status: "active" | "disabled";
-  }): Promise<InterestProfileReviewSnapshot>;
-  enable(directionId: string): Promise<InterestProfileReviewSnapshot>;
-  disable(directionId: string): Promise<InterestProfileReviewSnapshot>;
-  remove(input: {
-    directionId: string;
-    mode: "restrict" | "cascade";
-  }): Promise<InterestProfileReviewSnapshot>;
-  applySuggestion(key: string): Promise<InterestProfileReviewSnapshot>;
-  dismissSuggestion(key: string): Promise<InterestProfileReviewSnapshot>;
-  lock(directionId: string): Promise<InterestProfileReviewSnapshot>;
-  unlock(directionId: string): Promise<InterestProfileReviewSnapshot>;
 }
 
-type ReviewTab = "proposed" | "confirmed";
-type EditableDirection = PersonalLibraryDirectionCandidate | PersonalLibraryConfirmedDirection;
+type ReviewTab = "proposed";
+type EditableDirection = PersonalLibraryDirectionCandidate;
+
+/** The edited form of one proposed direction, before it is accepted. */
+interface ReviewedDirectionDraft {
+  name: string;
+  description: string;
+  discoveryCues: string[];
+  representativePaperKeys: string[];
+}
 
 interface DirectionFields {
   name: HTMLInputElement;
@@ -134,7 +106,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       attr: { role: "tablist", "aria-label": "Direction review sections" },
     });
     this.addTab(tabs, "proposed", "Proposed");
-    this.addTab(tabs, "confirmed", "Confirmed");
     // Secondary controls share one row with the tabs; each explains itself on
     // hover instead of spending a line of the header on prose.
     const actions = toolbar.createDiv({ cls: "arxiv-daily-interest-review__toolbar-actions" });
@@ -164,8 +135,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     error.hidden = !this.errorMessage;
     error.textContent = this.errorMessage;
 
-    this.renderIncrementalSuggestions(root, snapshot);
-
     const panel = root.createEl("section", {
       cls: "arxiv-daily-interest-review__panel",
       attr: {
@@ -174,8 +143,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         "aria-labelledby": `arxiv-daily-interest-${this.tab}-tab`,
       },
     });
-    if (this.tab === "proposed") this.renderProposed(panel, snapshot);
-    else this.renderConfirmed(panel, snapshot);
+    this.renderProposed(panel, snapshot);
   }
 
   private addTab(parent: HTMLElement, tab: ReviewTab, label: string): void {
@@ -195,14 +163,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     button.disabled = this.pending;
     button.addEventListener("click", () => this.activateTab(tab, false));
     button.addEventListener("keydown", (event) => {
-      let next: ReviewTab | null = null;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        next = tab === "proposed" ? "confirmed" : "proposed";
-      } else if (event.key === "Home") {
-        next = "proposed";
-      } else if (event.key === "End") {
-        next = "confirmed";
-      }
+      // One tab left after the confirmed half retired (ADR 0012 / ADR 0014),
+      // so arrow/Home/End have nowhere to move.
+      const next: ReviewTab | null = null;
       if (!next) return;
       event.preventDefault();
       this.activateTab(next, true);
@@ -231,52 +194,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
     // A load error can leave no proposal at all while still rendering the tab.
     if (snapshot.proposal) this.preselectProposals(snapshot.proposal, candidates);
-    // The primary action sits above the list: with a dozen candidates it would
-    // otherwise be a full scroll away from the rows it acts on.
-    if (candidates.length > 0) {
-      const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
-      const accept = bar.createEl("button", {
-        text: `Accept selected (${this.selectedProposals.size})`,
-        attr: {
-          type: "button",
-          title: "Confirms every selected direction as active in one step. They stay editable, and can be disabled or removed afterwards.",
-        },
-      });
-      accept.addClass("mod-cta");
-      accept.disabled = this.pending || this.selectedProposals.size === 0;
-      accept.addEventListener("click", () => void this.acceptSelectedProposals());
-    }
+    // The accept bar that used to sit here confirmed selected candidates into
+    // the interest profile document. Accepting a whole proposed structure into
+    // `settings.topics` (ADR 0014 §1) is built in P4's later chunks.
     const allowedKeys = proposalPaperKeys(snapshot);
     for (const candidate of candidates) {
       this.renderDirectionCard(parent, candidate, allowedKeys, "proposal", snapshot);
     }
     this.renderBufferPool(parent, snapshot);
-  }
-
-  private renderConfirmed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
-    this.renderDocumentError(parent, "Confirmed profile", snapshot.profileLoadError);
-    if (snapshot.eligibility.documentDiagnostics.length > 0) {
-      parent.createEl("p", {
-        cls: "arxiv-daily-interest-review__diagnostic",
-        text: `Profile/catalog compatibility: ${snapshot.eligibility.documentDiagnostics.join(", ")}.`,
-      });
-    }
-    const directions = snapshot.profile?.directions ?? [];
-    if (!snapshot.profile && !snapshot.profileLoadError) {
-      parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "No confirmed profile exists yet." });
-      return;
-    }
-    if (snapshot.profile && directions.length === 0) {
-      parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "No directions have been confirmed." });
-      return;
-    }
-    const allowedKeys = catalogPaperKeys(snapshot.catalog);
-    for (const direction of directions) {
-      this.renderDirectionCard(parent, direction, allowedKeys, "confirmed", snapshot);
-    }
-    const merge = parent.createEl("button", { text: "Merge selected confirmed directions", attr: { type: "button" } });
-    merge.disabled = this.pending || this.selectedConfirmed.size < 2;
-    merge.addEventListener("click", () => void this.mergeSelectedConfirmed());
   }
 
   private renderDocumentError(
@@ -323,10 +248,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         attr: { title: "Only one representative paper. Select it explicitly to include it." },
       });
     }
-    if ("status" in direction) heading.createSpan({ text: direction.status, cls: `arxiv-daily-interest-review__status is-${direction.status}` });
-    if ("lockedAt" in direction && direction.lockedAt !== undefined) {
-      heading.createSpan({ text: "locked", cls: "arxiv-daily-interest-review__status is-locked" });
-    }
     if (kind === "proposal") {
       heading.createSpan({
         cls: "arxiv-daily-interest-review__summary",
@@ -359,16 +280,11 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (direction.clusterMembers && direction.clusterMembers.length > 0) {
       this.renderClusterMembers(body, direction.clusterMembers, snapshot);
     }
-    if (kind === "confirmed") {
-      this.renderConfirmedDiagnostics(body, direction as PersonalLibraryConfirmedDirection, snapshot);
-      this.renderTimeline(body, (direction as PersonalLibraryConfirmedDirection).timeline);
-    }
     const actions = body.createDiv({ cls: "arxiv-daily-interest-review__card-actions" });
     const save = actions.createEl("button", { text: "Save edits", attr: { type: "button" } });
     save.disabled = this.pending || !terminal;
-    save.addEventListener("click", () => kind === "proposal" ? this.saveProposal(direction.id) : this.saveConfirmed(direction.id));
-    if (kind === "proposal") this.renderProposalActions(actions, direction.id);
-    else this.renderConfirmedActions(actions, direction as PersonalLibraryConfirmedDirection);
+    save.addEventListener("click", () => void this.saveProposal(direction.id));
+    this.renderProposalActions(actions, direction.id);
   }
 
   /**
@@ -383,62 +299,10 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   }
 
   private renderProposalActions(parent: HTMLElement, candidateId: string): void {
-    for (const status of ["active", "disabled"] as const) {
-      const button = parent.createEl("button", {
-        text: status === "active" ? "Confirm active" : "Confirm disabled",
-        attr: { type: "button" },
-      });
-      button.disabled = this.pending;
-      button.addEventListener("click", () => void this.confirmProposal(candidateId, status));
-    }
     const discard = parent.createEl("button", { text: "Discard", attr: { type: "button" } });
     discard.addClass("mod-warning");
     discard.disabled = this.pending;
     discard.addEventListener("click", () => void this.discardProposal(candidateId));
-  }
-
-  private renderConfirmedActions(parent: HTMLElement, direction: PersonalLibraryConfirmedDirection): void {
-    if (direction.status !== "merged") {
-      const toggle = parent.createEl("button", { text: direction.status === "active" ? "Disable" : "Enable", attr: { type: "button" } });
-      toggle.disabled = this.pending;
-      toggle.addEventListener("click", () => void this.toggleConfirmed(direction));
-      if (direction.lockedAt !== undefined) {
-        const unlock = parent.createEl("button", { text: "Unlock", attr: { type: "button" } });
-        unlock.disabled = this.pending;
-        unlock.addEventListener("click", () => void this.run("unlock direction", () => this.controller.unlock(direction.id)));
-      } else {
-        const lock = parent.createEl("button", { text: "Lock", attr: { type: "button" } });
-        lock.disabled = this.pending;
-        lock.addEventListener("click", () => void this.run("lock direction", () => this.controller.lock(direction.id)));
-      }
-    }
-    const restrict = parent.createEl("button", { text: "Remove", attr: { type: "button" } });
-    restrict.addClass("mod-warning");
-    restrict.disabled = this.pending;
-    restrict.addEventListener("click", () => void this.removeConfirmed(direction.id, "restrict"));
-    const cascade = parent.createEl("button", { text: "Cascade remove merge family", attr: { type: "button" } });
-    cascade.addClass("mod-warning");
-    cascade.disabled = this.pending;
-    cascade.addEventListener("click", () => void this.removeConfirmed(direction.id, "cascade"));
-  }
-
-  private renderConfirmedDiagnostics(
-    parent: HTMLElement,
-    direction: PersonalLibraryConfirmedDirection,
-    snapshot: InterestProfileReviewSnapshot,
-  ): void {
-    const diagnostic = snapshot.eligibility.diagnostics.find((item) => item.directionId === direction.id);
-    const details = parent.createEl("details", { cls: "arxiv-daily-interest-review__diagnostics" });
-    details.createEl("summary", { text: diagnostic?.eligible ? "Eligible with current catalog" : "Eligibility and stale diagnostics" });
-    if (direction.status === "merged") details.createEl("p", { text: `Merged into ${direction.mergedIntoDirectionId}.` });
-    if (!diagnostic || diagnostic.reasons.length === 0) {
-      details.createEl("p", { text: diagnostic?.eligible ? "Active, compatible, and current." : "No direction-level stale evidence was reported." });
-      return;
-    }
-    const list = details.createEl("ul");
-    for (const reason of diagnostic.reasons) {
-      list.createEl("li", { text: reason.paperKey ? `${reason.reason}: ${reason.paperKey}` : reason.reason });
-    }
   }
 
   private renderClusterMembers(
@@ -456,16 +320,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
   }
 
-  private renderTimeline(parent: HTMLElement, timeline: readonly PersonalLibraryDirectionTimelineEvent[] | undefined): void {
-    if (!timeline || timeline.length === 0) return;
-    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__timeline" });
-    section.createEl("strong", { text: "Timeline" });
-    const list = section.createEl("ul");
-    for (const event of timeline.slice(-PERSONAL_LIBRARY_TIMELINE_DISPLAY_LIMIT).reverse()) {
-      list.createEl("li", { text: `${formatTimelineTimestamp(event.at)} — ${timelineEventLabel(event.kind)}` });
-    }
-  }
-
   private renderBufferPool(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     const buffer = unclassifiedBufferPoolPapers(snapshot.proposal);
     if (buffer.length === 0) return;
@@ -479,89 +333,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       });
     }
     section.createEl("p", { cls: "arxiv-daily-interest-review__hint", text: "这些论文未进入任何方向草案" });
-  }
-
-  private renderIncrementalSuggestions(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
-    this.renderDocumentError(parent, "Incremental suggestions", snapshot.suggestionsLoadError);
-    const pending = snapshot.suggestions?.pendingAuthorization;
-    if (pending) {
-      parent.createEl("p", {
-        cls: "arxiv-daily-interest-review__pending-authorization",
-        text: `${pending.bufferedPaperCount} buffered paper(s) await model authorization to generate suggestions.`,
-      });
-    }
-    const suggestions = snapshot.suggestions?.suggestions ?? [];
-    // An empty queue is the normal state and needs no line of its own.
-    if (suggestions.length === 0) return;
-    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__suggestions" });
-    section.createEl("strong", { text: `Incremental suggestions ${suggestions.length}` });
-    for (const suggestion of suggestions) {
-      this.renderIncrementalSuggestion(section, suggestion, snapshot);
-    }
-  }
-
-  private renderIncrementalSuggestion(
-    parent: HTMLElement,
-    suggestion: DirectionDiffSuggestion,
-    snapshot: InterestProfileReviewSnapshot,
-  ): void {
-    const card = parent.createEl("article", { cls: "arxiv-daily-interest-review__suggestion" });
-    const heading = card.createDiv({ cls: "arxiv-daily-interest-review__suggestion-heading" });
-    heading.createEl("span", {
-      cls: `arxiv-daily-interest-review__suggestion-kind is-${suggestion.kind}`,
-      text: suggestion.kind,
-    });
-    heading.createEl("strong", { text: this.incrementalSuggestionTarget(suggestion, snapshot) });
-    heading.createSpan({ text: incrementalSuggestionPaperCount(suggestion) });
-    card.createEl("p", {
-      cls: "arxiv-daily-interest-review__suggestion-reason",
-      text: truncateReason(suggestion.reason),
-    });
-    const actions = card.createDiv({ cls: "arxiv-daily-interest-review__suggestion-actions" });
-    const apply = actions.createEl("button", {
-      text: suggestion.kind === "new" ? "Convert to proposal" : "Apply",
-      attr: { type: "button" },
-    });
-    apply.disabled = this.pending;
-    apply.addEventListener("click", () => void this.applyIncrementalSuggestion(suggestion));
-    const dismiss = actions.createEl("button", { text: "Ignore", attr: { type: "button" } });
-    dismiss.disabled = this.pending;
-    dismiss.addEventListener("click", () => void this.dismissIncrementalSuggestion(suggestion));
-  }
-
-  private incrementalSuggestionTarget(
-    suggestion: DirectionDiffSuggestion,
-    snapshot: InterestProfileReviewSnapshot,
-  ): string {
-    switch (suggestion.kind) {
-      case "merge": {
-        const names = suggestion.directionIds.map((id) => this.directionName(snapshot, id));
-        return names.join(" + ");
-      }
-      case "new":
-        return "New direction";
-      case "attach":
-      case "split":
-        return this.directionName(snapshot, suggestion.directionId);
-    }
-  }
-
-  private directionName(snapshot: InterestProfileReviewSnapshot, directionId: string): string {
-    return snapshot.profile?.directions.find((direction) => direction.id === directionId)?.name
-      ?? directionId;
-  }
-
-  private async applyIncrementalSuggestion(suggestion: DirectionDiffSuggestion): Promise<void> {
-    const convertingToProposal = suggestion.kind === "new";
-    await this.run("apply incremental suggestion", async () => {
-      await this.controller.applySuggestion(incrementalSuggestionKey(suggestion));
-      if (convertingToProposal) this.tab = "proposed";
-    });
-  }
-
-  private async dismissIncrementalSuggestion(suggestion: DirectionDiffSuggestion): Promise<void> {
-    await this.run("dismiss incremental suggestion", () =>
-      this.controller.dismissSuggestion(incrementalSuggestionKey(suggestion)));
   }
 
   private textField(parent: HTMLElement, labelText: string, value: string, maxLength: number): HTMLInputElement {
@@ -600,7 +371,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     return select;
   }
 
-  private draft(id: string): PersonalLibraryReviewedDirectionDraft | null {
+  private draft(id: string): ReviewedDirectionDraft | null {
     const fields = this.fields.get(id);
     if (!fields) return null;
     const name = fields.name.value.trim();
@@ -616,7 +387,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     return { name, description, discoveryCues, representativePaperKeys };
   }
 
-  private patch(draft: PersonalLibraryReviewedDirectionDraft): PersonalLibraryDirectionTextPatch {
+  private patch(draft: ReviewedDirectionDraft): PersonalLibraryDirectionTextPatch {
     return { name: draft.name, description: draft.description, discoveryCues: draft.discoveryCues };
   }
 
@@ -669,25 +440,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     void this.run("save proposed direction", () => this.controller.updateProposal({ candidateId: id, patch: this.patch(draft), representativePaperKeys: draft.representativePaperKeys }));
   }
 
-  private saveConfirmed(id: string): void {
-    const draft = this.draft(id);
-    if (!draft) return;
-    void this.run("save confirmed direction", () => this.controller.updateConfirmed({ directionId: id, patch: this.patch(draft), representativePaperKeys: draft.representativePaperKeys }));
-  }
-
-  private async confirmProposal(id: string, status: "active" | "disabled"): Promise<void> {
-    const draft = this.draft(id);
-    if (!draft) return;
-    const choice = await chooseModal(this.app, `Confirm ${status} direction`, status === "active"
-      ? "Confirm this as active? It is eligible only later when its catalog evidence is compatible and current."
-      : "Confirm this direction as disabled? It will remain excluded from discovery until explicitly enabled.", [
-      { label: "Cancel", value: "cancel" },
-      { label: status === "active" ? "Confirm active" : "Confirm disabled", value: "confirm", cta: true },
-    ]);
-    if (choice !== "confirm" || this.closed) return;
-    await this.run(`confirm ${status} direction`, () => this.controller.confirmProposal({ candidateId: id, draft, status }));
-  }
-
   private async discardProposal(id: string): Promise<void> {
     const choice = await chooseModal(this.app, "Discard proposed direction", "Discard this proposed direction and its reviewed edits?", [
       { label: "Cancel", value: "cancel" },
@@ -716,68 +468,6 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         .filter((candidate) => !isThinEvidenceDirectionCandidate(candidate))
         .map(({ id }) => id),
     );
-  }
-
-  /**
-   * No extra confirmation dialog here: unlike the per-card confirm buttons,
-   * which act on one unguarded click, the selection itself is the researcher's
-   * deliberation, and every accepted direction stays editable, disablable, and
-   * removable afterwards.
-   */
-  private async acceptSelectedProposals(): Promise<void> {
-    const ids = Array.from(this.selectedProposals).sort(codeUnitCompare);
-    if (ids.length === 0) return;
-    const confirmations: {
-      candidateId: string;
-      draft: PersonalLibraryReviewedDirectionDraft;
-      status: "active" | "disabled";
-    }[] = [];
-    for (const candidateId of ids) {
-      const draft = this.draft(candidateId);
-      if (!draft) return;
-      confirmations.push({ candidateId, draft, status: "active" as const });
-    }
-    await this.run("accept selected directions", () => this.controller.confirmProposals({ confirmations }));
-  }
-
-  private async mergeSelectedConfirmed(): Promise<void> {
-    const ids = Array.from(this.selectedConfirmed).sort(codeUnitCompare);
-    if (ids.length < 2) return;
-    const draft = this.draft(ids[0]!);
-    if (!draft) return;
-    const choice = await chooseModal(this.app, "Merge confirmed directions", "Merge the selected terminal directions into one newly identified direction? Source directions become merged history.", [
-      { label: "Cancel", value: "cancel" },
-      { label: "Merge as disabled", value: "disabled" },
-      { label: "Merge as active", value: "active", cta: true },
-    ]);
-    if ((choice !== "active" && choice !== "disabled") || this.closed) return;
-    await this.run("merge confirmed directions", () => this.controller.mergeConfirmed({ sourceDirectionIds: ids, draft, status: choice }));
-    this.selectedConfirmed.clear();
-  }
-
-  private async toggleConfirmed(direction: PersonalLibraryConfirmedDirection): Promise<void> {
-    const enabling = direction.status === "disabled";
-    const choice = await chooseModal(this.app, enabling ? "Enable confirmed direction" : "Disable confirmed direction", enabling
-      ? "Enable this direction? Enabling can fail if its representative evidence is missing, stale, or incompatible."
-      : "Disable this direction? Disabled directions are not eligible for discovery.", [
-      { label: "Cancel", value: "cancel" },
-      { label: enabling ? "Enable" : "Disable", value: "confirm", cta: enabling },
-    ]);
-    if (choice !== "confirm" || this.closed) return;
-    await this.run(enabling ? "enable direction" : "disable direction", () => enabling ? this.controller.enable(direction.id) : this.controller.disable(direction.id));
-  }
-
-  private async removeConfirmed(id: string, mode: "restrict" | "cascade"): Promise<void> {
-    const cascade = mode === "cascade";
-    const choice = await chooseModal(this.app, cascade ? "Cascade remove merge family" : "Remove confirmed direction", cascade
-      ? "Permanently remove this direction and its entire connected merge family, including retained ancestry? This stronger action cannot be undone."
-      : "Remove this direction only when doing so does not break retained merge history? This cannot be undone.", [
-      { label: "Cancel", value: "cancel" },
-      { label: cascade ? "Cascade remove family" : "Remove", value: "remove", warning: true },
-    ]);
-    if (choice !== "remove" || this.closed) return;
-    this.selectedConfirmed.delete(id);
-    await this.run(cascade ? "cascade remove direction family" : "remove direction", () => this.controller.remove({ directionId: id, mode }));
   }
 
   private async run(action: string, operation: () => Promise<unknown>): Promise<void> {
@@ -834,7 +524,7 @@ export function normalizeLines(value: string): string[] {
   return Array.from(new Set(value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean))).sort(codeUnitCompare);
 }
 
-export function validateDraft(draft: PersonalLibraryReviewedDirectionDraft): string | null {
+export function validateDraft(draft: ReviewedDirectionDraft): string | null {
   if (!draft.name) return "Enter a direction name.";
   if (draft.name.length > PERSONAL_LIBRARY_MAX_NAME_LENGTH) return `Name must be at most ${PERSONAL_LIBRARY_MAX_NAME_LENGTH} characters.`;
   if (!draft.description) return "Enter a direction description.";
@@ -845,7 +535,6 @@ export function validateDraft(draft: PersonalLibraryReviewedDirectionDraft): str
   return null;
 }
 
-const PERSONAL_LIBRARY_TIMELINE_DISPLAY_LIMIT = 5 as const;
 
 export function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -859,21 +548,6 @@ export function describeClusterMembers(members: readonly PersonalLibraryClusterM
 
 export function bufferPoolHeading(count: number): string {
   return `Unclustered (buffer pool) ${count}`;
-}
-
-const TIMELINE_EVENT_LABELS: Record<PersonalLibraryDirectionTimelineEvent["kind"], string> = {
-  created: "Created",
-  edited: "Edited",
-  "members-updated": "Members updated",
-  merged: "Merged",
-  removed: "Removed",
-  locked: "Locked",
-  unlocked: "Unlocked",
-  split: "Split",
-};
-
-export function timelineEventLabel(kind: PersonalLibraryDirectionTimelineEvent["kind"]): string {
-  return TIMELINE_EVENT_LABELS[kind];
 }
 
 export function formatTimelineTimestamp(at: string): string {

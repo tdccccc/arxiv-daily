@@ -1,0 +1,199 @@
+import { describe, expect, it } from "vitest";
+import {
+  PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS,
+  PERSONAL_LIBRARY_MAX_DIRECTIONS,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
+  PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
+  createPersonalLibraryCatalogInputFingerprint,
+  createPersonalLibraryCatalogInputManifest,
+  createPersonalLibraryGenerationContractFingerprint,
+  createPersonalLibraryPaperEvidenceFingerprint,
+  createPersonalLibraryRepresentativeSetFingerprint,
+  decodeDurablePersonalLibraryInterestProfile,
+  decodePersonalLibraryDirectionProposal,
+  decodePersonalLibraryInterestProfile,
+  decodePersistedPersonalLibraryInterestProfile,
+  evaluatePersonalLibraryInterestEligibility,
+  type PersonalLibraryConfirmedDirection,
+  type PersonalLibraryDirectionProposal,
+  type PersonalLibraryInterestProfile,
+  type PersonalLibraryRepresentativeEvidence,
+} from "../src/library/personal-library-interest-profile";
+import type {
+  PersonalLibraryCatalog,
+  PersonalLibraryPaperRecord,
+} from "../src/library/personal-library-catalog";
+
+const scopeFingerprint = `sha256:${"a".repeat(64)}`;
+const identificationFingerprint = `sha256:${"b".repeat(64)}`;
+const now = "2026-08-03T12:00:00.000Z";
+
+function paper(externalId: string, overrides: Partial<PersonalLibraryPaperRecord> = {}): PersonalLibraryPaperRecord {
+  return {
+    paperKey: `arxiv:${externalId}`,
+    source: "arxiv",
+    externalId,
+    title: `Paper ${externalId}`,
+    authors: ["A. Author", "B. Author"],
+    abstract: `Abstract ${externalId}`,
+    published: "2026-08-01T00:00:00.000Z",
+    updated: "2026-08-02T00:00:00.000Z",
+    primaryCategory: "cs.AI",
+    categories: ["cs.AI", "cs.LG"],
+    evidenceDepth: "metadata-and-abstract",
+    filePaths: [`papers/${externalId}.pdf`],
+    ...overrides,
+  };
+}
+
+function catalog(entries = [paper("2608.00001"), paper("2608.00002")]): PersonalLibraryCatalog {
+  return {
+    schemaVersion: 1,
+    revision: 7,
+    scopeFingerprint,
+    identificationFingerprint,
+    updatedAt: now,
+    lastScan: null,
+    files: Object.fromEntries(entries.map((entry, index) => [entry.filePaths[0]!, {
+      path: entry.filePaths[0]!,
+      status: "ready" as const,
+      observationFingerprint: `sha256:${String(index % 10).repeat(64)}`,
+      paperKey: entry.paperKey,
+      arxivId: entry.externalId,
+      updatedAt: now,
+    }])),
+    papers: Object.fromEntries(entries.map((entry) => [entry.paperKey, entry])),
+  };
+}
+
+function representative(entry = paper("2608.00001")): PersonalLibraryRepresentativeEvidence {
+  return { paperKey: entry.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(entry) };
+}
+
+function proposal(): PersonalLibraryDirectionProposal {
+  const representatives = [representative()];
+  return {
+    schemaVersion: 3,
+    revision: 0,
+    proposalId: "proposal.1",
+    scopeFingerprint,
+    identificationFingerprint,
+    catalogInputFingerprint: createPersonalLibraryCatalogInputFingerprint({
+      scopeFingerprint,
+      identificationFingerprint,
+      papers: Object.values(catalog().papers),
+    }),
+    catalogInputPapers: createPersonalLibraryCatalogInputManifest(Object.values(catalog().papers)),
+    generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint("contract-v1"),
+    generatedAt: now,
+    candidates: [{
+      id: "candidate.1",
+      name: "Efficient language models",
+      description: "Methods that reduce inference cost.",
+      discoveryCues: ["efficient inference", "model compression"],
+      representatives,
+      representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+      lineage: { candidateIds: ["candidate.1", "historical.1"] },
+    }],
+  };
+}
+
+function direction(
+  id: string,
+  status: "active" | "disabled" | "merged" = "active",
+  options: {
+    entry?: PersonalLibraryPaperRecord;
+    target?: string;
+    ancestors?: string[];
+  } = {},
+): PersonalLibraryConfirmedDirection {
+  const representatives = [representative(options.entry)];
+  const common = {
+    id,
+    name: `Direction ${id}`,
+    description: "A researcher-confirmed direction.",
+    discoveryCues: ["cue one", "cue two"],
+    representatives,
+    representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
+    clusterMembers: [],
+    timeline: [{ kind: "created" as const, at: now }],
+    lineage: {
+      proposalIds: ["proposal.1"],
+      candidateIds: ["candidate.1"],
+      directionIds: options.ancestors ?? [],
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  return status === "merged"
+    ? { ...common, status, mergedIntoDirectionId: options.target! }
+    : { ...common, status };
+}
+
+function profile(directions: PersonalLibraryConfirmedDirection[] = [direction("direction.1")]): PersonalLibraryInterestProfile {
+  return {
+    schemaVersion: 3,
+    revision: 3,
+    scopeFingerprint,
+    identificationFingerprint,
+    updatedAt: now,
+    directions,
+  };
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function expectInvalidRevisions(document: Record<string, unknown>, decode: (value: unknown) => unknown): void {
+  for (const revision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(decode({ ...document, revision })).toBeNull();
+  }
+}
+
+describe("personal library fingerprints", () => {
+  it("uses explicit bounded unique selection without mutating order", () => {
+    const first = paper("2608.00001");
+    const second = paper("2608.00002");
+    const selected = [second, first];
+    const input = { scopeFingerprint, identificationFingerprint, papers: selected };
+    expect(createPersonalLibraryCatalogInputFingerprint(input)).toBe(
+      createPersonalLibraryCatalogInputFingerprint({ ...input, papers: [first, second] }),
+    );
+    expect(selected).toEqual([second, first]);
+    expect(() => createPersonalLibraryCatalogInputFingerprint({ ...input, papers: [first, first] }))
+      .toThrow(/unique/);
+    expect(() => createPersonalLibraryCatalogInputFingerprint({
+      ...input,
+      papers: Array.from({ length: PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS + 1 }, (_, index) => (
+        paper(`26${String(index).padStart(2, "0")}.${String(index).padStart(5, "0")}`)
+      )),
+    })).toThrow(/bounded/);
+  });
+
+  it("fingerprints metadata and abstract, preserves author order, treats categories as a set, and excludes paths", () => {
+    const original = paper("2608.00001");
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, filePaths: ["moved/paper.pdf"] }))
+      .toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, categories: ["cs.LG", "cs.AI"] }))
+      .toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, authors: [...original.authors].reverse() }))
+      .not.toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, abstract: "Changed." }))
+      .not.toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+  });
+
+  it("strictly validates direct paper records while excluding valid file paths from evidence", () => {
+    const extra = { ...paper("2608.00001"), unexpected: true };
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint(extra)).toThrow(/exact canonical/);
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint(paper("2608.00001", { authors: [] })))
+      .toThrow(/exact canonical/);
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint(paper("2608.00001", { categories: [] })))
+      .toThrow(/exact canonical/);
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint(paper("2608.00001", { filePaths: ["../escape.pdf"] })))
+      .toThrow(/exact canonical/);
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint(paper("2608.00001", { filePaths: ["b.pdf", "a.pdf"] })))
+      .toThrow(/exact canonical/);
+  });
+});

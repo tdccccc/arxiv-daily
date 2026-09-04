@@ -59,7 +59,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     const v = validateFilterConfig(plugin.settings, {
       // Optional at the call site: hosts that cannot answer fall back to the
       // topic-only rule, which is exactly the behaviour they had before.
-      library: plugin.personalLibraryFilterState?.(),
     });
     if (!v.ok) {
       notice(`arXiv Daily — cannot run:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
@@ -405,36 +404,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         notice("arXiv Daily: direction review could not be opened. Try again.", 10_000);
       }
     },
-  });
-
-  plugin.addCommand({
-    id: "check-incremental-direction-updates",
-    name: "Check incremental direction updates",
-    callback: () =>
-      runDetached(
-        (async () => {
-          notice("arXiv Daily: checking incremental direction updates…");
-          try {
-            const summary = await plugin.runIncrementalDirectionUpdate();
-            const pending = summary.pendingAuthorizationBuffered > 0
-              ? `, ${summary.pendingAuthorizationBuffered} awaiting model authorization`
-              : "";
-            const superseded = summary.superseded > 0
-              ? `, ${summary.superseded} un-reviewed suggestion(s) superseded by new evidence`
-              : "";
-            notice(
-              `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
-              + `stored (${summary.attachments} attachment(s)), `
-              + `${summary.buffered} paper(s) buffered${pending}${superseded}`,
-              10_000,
-            );
-          } catch (error) {
-            plugin.logger.error("commands: incremental direction update failed", error);
-            notice(`arXiv Daily: incremental update failed: ${errorMessage(error)}`, 10_000);
-          }
-        })(),
-        "check incremental direction updates",
-      ),
   });
 
   plugin.addCommand({

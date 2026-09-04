@@ -232,7 +232,6 @@ function fixture(storage: StorageAdapter) {
   }));
   internals.buildFullTextKnowledgeBaseStore = vi.fn(() => legacy.store);
   internals.buildEmbeddingModel = vi.fn(() => model);
-  internals.runIncrementalDirectionUpdateAfterIndex = vi.fn(async () => undefined);
   return {
     plugin,
     internals,
@@ -401,7 +400,6 @@ describe("personal library full-text index lifecycle", () => {
 
     expect(runtime.legacy.loadManifest).not.toHaveBeenCalled();
     expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).not.toHaveBeenCalled();
   });
 
   it("rejects fallback admission when cutover wins after preflight", async () => {
@@ -508,7 +506,6 @@ describe("personal library full-text index lifecycle", () => {
 
     expect(runtime.legacy.loadManifest).toHaveBeenCalledTimes(1);
     expect(runtime.legacy.replaceManifest).toHaveBeenCalledTimes(1);
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).toHaveBeenCalledTimes(1);
     expect(runtime.internals.logger.warn).toHaveBeenCalledWith(
       "fulltext: immutable generation cutover is unavailable on this host; retaining the legacy migration fallback",
     );
@@ -521,9 +518,6 @@ describe("personal library full-text index lifecycle", () => {
     const assertOwned = vi.fn(async () => undefined);
     const release = vi.fn(async () => { lifecycle.push("release"); });
     const acquireLegacyMigrationLease = vi.fn(async () => ({ assertOwned, release }));
-    runtime.internals.runIncrementalDirectionUpdateAfterIndex = vi.fn(async () => {
-      lifecycle.push("direction");
-    });
     runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
       openCurrent: vi.fn(async () => null),
       acquireLegacyMigrationLease,
@@ -538,7 +532,7 @@ describe("personal library full-text index lifecycle", () => {
     );
     expect(assertOwned).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(1);
-    expect(lifecycle).toEqual(["release", "direction"]);
+    expect(lifecycle).toEqual(["release"]);
   });
 
   it("preserves the indexing error when legacy lease release also fails", async () => {
@@ -623,7 +617,7 @@ describe("personal library full-text index lifecycle", () => {
     })).resolves.toMatchObject({ descriptor: { generationId: "gen-plugin-preflight" } });
   });
 
-  it("preserves the post-commit direction update when generation synchronization fails", async () => {
+  it("still commits the legacy manifest when generation synchronization fails", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
     const stageAndPromote = vi.fn(async () => { throw new Error("generation promotion failed"); });
@@ -636,10 +630,6 @@ describe("personal library full-text index lifecycle", () => {
       .rejects.toThrow("generation promotion failed");
 
     expect(runtime.legacy.replaceManifest).toHaveBeenCalledTimes(1);
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).toHaveBeenCalledTimes(1);
-    expect(stageAndPromote.mock.invocationCallOrder[0]).toBeLessThan(
-      runtime.internals.runIncrementalDirectionUpdateAfterIndex.mock.invocationCallOrder[0],
-    );
   });
 
   it("runs generation maintenance only through an explicit host quiet-period gate", async () => {

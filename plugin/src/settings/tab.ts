@@ -2032,7 +2032,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       getSetupStatus(
         this.plugin.settings,
         this.plugin.stateStore.snapshot(),
-        this.plugin.personalLibraryFilterState?.(),
       ),
     );
   }
@@ -2076,7 +2075,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const status = getSetupStatus(
       this.plugin.settings,
       this.plugin.stateStore.snapshot(),
-      this.plugin.personalLibraryFilterState?.(),
     );
     const guide = this.containerEl.createEl("section", {
       cls: "arxiv-daily-setup",

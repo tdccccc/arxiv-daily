@@ -10,7 +10,7 @@
  */
 
 import { clusterPaperVectors, type ClusteringInputPaper, type ClusteringOptions } from "../clustering/clusterer";
-import type { PersonalLibraryConfirmedDirection } from "../personal-library-interest-profile";
+import type { PlaceableDirection } from "./placeable-direction";
 
 export interface NewClusterCandidate {
   clusterId: string;
@@ -30,7 +30,7 @@ export interface ReclusterPoolOptions extends ClusteringOptions {
   /** Paper keys to consider (the buffer pool). */
   poolPaperKeys: readonly string[];
   /** Directions whose anchors provide the drift reference. */
-  directions: readonly PersonalLibraryConfirmedDirection[];
+  directions: readonly PlaceableDirection[];
 }
 
 /**

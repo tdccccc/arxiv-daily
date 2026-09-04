@@ -619,7 +619,6 @@ class ArxivDailyDashboardView extends ItemView {
     const setup = getSetupStatus(
       this.plugin.settings,
       {},
-      this.plugin.personalLibraryFilterState?.(),
     );
     const state = contentEl.createDiv({
       cls: "arxiv-daily-dashboard__state arxiv-daily-dashboard__empty",
@@ -1262,7 +1261,6 @@ class ArxivDailyDashboardView extends ItemView {
     const setup = getSetupStatus(
       this.plugin.settings,
       {},
-      this.plugin.personalLibraryFilterState?.(),
     );
     if (!setup.readyToRun) {
       logSetupStatus(this.plugin.logger, "dashboard calendar run blocked", setup);
@@ -2122,7 +2120,6 @@ class ArxivDailyDashboardView extends ItemView {
 
   private gateFilter(): boolean {
     const validation = validateFilterConfig(this.plugin.settings, {
-      library: this.plugin.personalLibraryFilterState?.(),
     });
     if (!validation.ok) {
       this.plugin.logger.info(

@@ -72,25 +72,14 @@ export function validateLlmConfig(settings: PluginSettings): ValidationResult {
   return { ok: reasons.length === 0, reasons };
 }
 
-export interface FilterValidationLibraryState {
-  /** Whether a personal library is connected at all. */
-  connected: boolean;
-  /**
-   * Directions eligible for discovery right now — not the raw confirmed
-   * count. A disabled direction, or one whose representative evidence went
-   * missing, contributes nothing to a run and must not wave one through.
-   */
-  eligibleDirections: number;
-}
-
-export interface FilterValidationOptions {
-  /**
-   * Personal library state, passed in rather than read from settings. Hosts
-   * without a personal library — the CLI product — pass nothing and keep the
-   * topic requirement exactly as it was (ADR 0010 §2).
-   */
-  library?: FilterValidationLibraryState;
-}
+/**
+ * ADR 0010 §1 let either a hand-written topic or an eligible library direction
+ * carry a run, because confirmed library directions drove a classifier of their
+ * own. That classifier retired with the profile document (ADR 0012 / ADR 0014)
+ * and directions now live inside topics, so a topic is the only thing that can
+ * select a paper — and the only thing worth checking for.
+ */
+export interface FilterValidationOptions {}
 
 export function validateFilterConfig(
   settings: PluginSettings,
@@ -141,13 +130,7 @@ export function validateFilterConfig(
     }
     seenCategories.add(trimmed);
   }
-  // Either source is enough to run: a hand-written topic, or a confirmed
-  // library direction that is eligible right now (ADR 0010 §1).
-  if (settings.arxiv.topics.length === 0 && (options.library?.eligibleDirections ?? 0) === 0) {
-    reasons.push(options.library?.connected
-      ? "No research topics defined, and no personal library direction is currently eligible"
-      : "No research topics defined");
-  }
+  if (settings.arxiv.topics.length === 0) reasons.push("No research topics defined");
   const seenTags = new Set<string>();
   settings.arxiv.topics.forEach((topic, i) => {
     const label = `Topic ${i + 1}`;
