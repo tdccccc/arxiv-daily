@@ -343,3 +343,17 @@
 - **未完成，工作区留着未提交**：插件侧还剩 21 个 typecheck 错误，全部来自同一条线——`markPersonalizedDailyDiscoveryUnavailable` / `restorePersonalizedDailyDiscoveryAvailability` / 沿方法签名穿下去的 `discoveryRevision`，约 20 处调用点。**这套机制存在的唯一目的就是给已删掉的日报快照做可用性门控**，所以整条要拆，但它缠在文献库操作的生命周期守卫里，需要逐处读过再动，不能机械替换。此外画像文档模块本体（profile schema 那一半、review、store 那一半、`incremental/apply.ts`）、复审页的减法、以及测试清理都还没做。
 - validation: **树当前编译不过**（插件 21 个错误），因此没有提交。core 2101 / plugin 719 / CLI 73 的基线在动手前已复核，与 P3 一致。
 - next: 接着拆 `discoveryRevision` 那条线到编译通过，跑四包回归确认「旧日报解析逐字不变」，再作为 Chunk 1 的第一次提交。
+
+## 2026-09-04 — P4 Chunk 1 完成，Chunk 2 起了个头（三次提交）
+
+- **计划改序（revision 2）**：删除从 Chunk 7 提到 Chunk 1。原顺序有硬伤——Chunk 2 把提案文档改成两级会立刻打断它的消费方，而那些正是要删的东西，先改后删等于为将死的代码做一次移植。
+- **`e7498dc` 日报侧退休**：删掉第二分类器与 union 分支、日报快照装配、`personal-library` 分节、provenance 生产、novelty stage 接线。插件那套「日报要不要走文献库」的可用性门控降级成只增不减的 `libraryMutationRevision`——它真正还有读者的地方只有「授权对话框期间文献库变没变」这一条守卫。core 2101 → 2051。
+  - **读代码才改掉的删除边界**：`parseDiscoveryProvenanceMarker` 用 `renderDiscoveryProvenanceMarker` 做 round-trip 规范形式校验，渲染函数是**解析路径的一部分**，不是写入方；`personal-library` 分节标题只被写、从不被解析（解析按 `###` 论文块定位）。
+  - **变异检验抓到一个真空档**：删掉那个 round-trip 校验，**整个 core 套件没有一条测试变红**。先补 `discovery-provenance-marker.test.ts`（伪造一个内容合法但序列化不规范的标记，必须被拒），再变异，才只红在它自己那条上。这个文件同时是「旧日报解析逐字不变」的独立回归——管线已经产不出标记，没法再靠 round-trip 来测。
+- **`8afff77` 画像文档退休**：schema、store、已确认方向的全部操作、资格判定、`incremental/apply.ts` 删除。**拆分而非整删**：提案编辑拆成 `personal-library-proposal-review.ts`，提案 store 拆成 `personal-library-proposal-store.ts`，`incremental/` 的打分三件套改吃新的 `PlaceableDirection`（按「打分实际读什么」写出来，不从已不存在的 store 借类型，P5 只改适配层）。core 2051 → 1933，plugin 719 → 637。
+  - **顺带退休一条产品规则**：ADR 0010 §1 的「有主题 或 文献库有可用方向，任一足够开跑」。它服务的分类器没了，现在没有主题就不能跑。这个改动是以两条 validation 测试变红的形式暴露的，换成了一条新判据（拒绝信息不再提文献库）。
+  - **incremental 建议界面此后到 P5 之前是暗的**，计划里写明是预期。
+- **`079abf1` Chunk 2 起手**：删掉无调用方的未聚类提议器与整个 grouping 阶段（`selectPersonalLibraryDirectionPapers` 插件还在用，保留，测试移到 `personal-library-paper-selection.test.ts`）；**修掉生成契约说谎**——它记 `synthesisPrompt: "none"` 而代码实际跑综合。同样先确认这条没有守卫（改回 `"none"` 无人变红），补测试后再变异，只红在那一条。**与标记那次是同一种空档形状，本 goal 第二次撞上。**
+- validation: core 1914 / 2 skipped、plugin 637、CLI 73、typecheck 干净、lint 0 error / 20 warning（基线）、boundaries 通过。三次提交合计净减约 12800 行。**未推送。**
+- **一笔要记的账**：插件那两个大测试文件（modal 950 行、lifecycle 530 行）是按「块里提到已删 API 就整块删」处理的，不是逐条判断哪些断言仍有价值，可能误删了仍然成立的覆盖。Chunk 7 重写复审页并做桌面验收时要重新长出来。
+- next: Chunk 2 的主体——提案文档变两级（schema 3→4）、提取提示词直接产出一行方向、cues 只供复审页不进 settings；然后 Chunk 3（粗/细两级聚类、篇数上限让位给体积上限）与 Chunk 4（每个粗簇一次命名调用），三者按 L1 合并为一次提交。
