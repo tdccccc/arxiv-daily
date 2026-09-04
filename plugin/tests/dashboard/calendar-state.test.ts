@@ -568,7 +568,7 @@ describe("runDateFromCalendar", () => {
       },
       arxiv: {
         ...DEFAULT_SETTINGS.arxiv,
-        topics: [{ name: "Topic", tag: "topic", description: "Topic description" }],
+        topics: [{ name: "Topic", tag: "topic", description: "Topic description", directions: [{ id: "d1", text: "Topic description", origin: "migrated" }] }],
       },
     };
     const plugin = {

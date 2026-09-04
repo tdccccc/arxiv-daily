@@ -22,6 +22,7 @@ import {
   parseDailyReportDiscoveryProvenance,
   parseDiscoveryProvenanceMarker,
 } from "../src/pipeline/discovery-provenance-marker";
+import { parseDailyReportTopicDirections } from "../src/pipeline/topic-direction-marker";
 import {
   PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS,
   parseDailyReportPersonalNovelty,
@@ -944,5 +945,113 @@ describe("preflightDailySummaryAssembly", () => {
     modify(assemblyInput);
     expect(() => preflightDailySummaryAssembly(assemblyInput)).toThrow(message);
     expect(() => assembleDailySummary(assemblyInput)).toThrow(message);
+  });
+});
+
+describe("topic direction hits on assembly papers", () => {
+  function withDirections(topicDirections: unknown) {
+    const assemblyInput = input();
+    assemblyInput.slots[0] = {
+      ...assemblyInput.slots[0]!,
+      paper: { ...assemblyInput.slots[0]!.paper, topicDirections } as any,
+    };
+    return assemblyInput;
+  }
+
+  it("carries a valid hit list through preflight and assembly", () => {
+    const tag = input().slots[0]!.paper.category;
+    const assemblyInput = withDirections([
+      { tag, id: "d1", text: "one direction" },
+      { tag, id: "d2", text: "another direction" },
+    ]);
+
+    expect(() => preflightDailySummaryAssembly(assemblyInput)).not.toThrow();
+    expect(() => assembleDailySummary(assemblyInput)).not.toThrow();
+  });
+
+  it.each([
+    ["an empty list", () => []],
+    ["a repeated direction", (tag: string) => [
+      { tag, id: "d1", text: "one" },
+      { tag, id: "d1", text: "one" },
+    ]],
+    ["directions from two different topics", (tag: string) => [
+      { tag, id: "d1", text: "one" },
+      { tag: `${tag}-other`, id: "d2", text: "two" },
+    ]],
+    ["a blank direction line", (tag: string) => [{ tag, id: "d1", text: "" }]],
+    ["an extra field", (tag: string) => [{ tag, id: "d1", text: "one", origin: "manual" }]],
+  ])("refuses to assemble a paper carrying %s", (_name, make) => {
+    const tag = input().slots[0]!.paper.category;
+    const assemblyInput = withDirections(make(tag));
+    const message = "paper 2607.00001 has invalid topic directions";
+
+    expect(() => preflightDailySummaryAssembly(assemblyInput)).toThrow(message);
+    expect(() => assembleDailySummary(assemblyInput)).toThrow(message);
+  });
+});
+
+describe("the report says which directions selected each paper", () => {
+  const hits = [
+    { tag: "methods", id: "d1", text: "photo-z with neural nets" },
+    { tag: "methods", id: "d2", text: "catalog comparisons" },
+  ];
+
+  it.each([
+    ["zh", "命中方向：主题 methods — photo\\-z with neural nets、catalog comparisons"],
+    ["en", "Matched directions: topic methods — photo\\-z with neural nets; catalog comparisons"],
+  ] as const)("names the topic and every matched direction in %s", (language, line) => {
+    const assemblyInput = input({ summaryLanguage: language });
+    assemblyInput.slots[0] = {
+      ...assemblyInput.slots[0]!,
+      paper: { ...assemblyInput.slots[0]!.paper, topicDirections: hits },
+    };
+
+    const markdown = assembleDailySummary(assemblyInput);
+
+    expect(markdown).toContain(line);
+    expect(parseDailyReportTopicDirections(markdown, "2026-07-22")).toEqual({
+      kind: "valid",
+      occurrences: [{ arxivId: "2607.00001", hits }],
+    });
+  });
+
+  it("escapes direction text instead of letting it become Markdown", () => {
+    const assemblyInput = input();
+    assemblyInput.slots[0] = {
+      ...assemblyInput.slots[0]!,
+      paper: {
+        ...assemblyInput.slots[0]!.paper,
+        topicDirections: [{
+          tag: "methods",
+          id: "d1",
+          text: "<script>alert(1)</script> [link](https://evil.test) **bold**",
+        }],
+      },
+    };
+
+    const markdown = assembleDailySummary(assemblyInput);
+
+    expect(markdown).not.toContain("<script>");
+    expect(markdown).not.toContain("](https://evil.test)");
+    expect(markdown).toContain("命中方向：主题 methods —");
+  });
+
+  it("stays readable by all three marker parsers when a paper carries every family", () => {
+    const assemblyInput = input();
+    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
+    assemblyInput.slots = [
+      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+        discoveryProvenance: provenance,
+        personalNovelty: noveltyWithBasis,
+        topicDirections: [{ tag: PERSONALIZED_LIBRARY_ONLY_CATEGORY, id: "d1", text: "one line" }],
+      })),
+    ];
+
+    const markdown = assembleDailySummary(assemblyInput);
+
+    expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22").kind).toBe("valid");
+    expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22").kind).toBe("valid");
+    expect(parseDailyReportTopicDirections(markdown, "2026-07-22").kind).toBe("valid");
   });
 });

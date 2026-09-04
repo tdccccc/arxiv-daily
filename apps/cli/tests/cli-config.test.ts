@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CliConfigError, loadCliConfig, scheduleFireSlots } from "../src/config";
+import { buildPaperFilterRequest } from "@arxiv-daily/core";
 
 const minimalToml = `
 schema_version = 1
@@ -131,5 +132,48 @@ describe("CLI config loader (TOML / XDG)", () => {
         weekdaysOnly: true,
       }),
     ).toEqual(["09:30", "13:30", "17:30"]);
+  });
+});
+
+/**
+ * P3: the CLI and the plugin classify through the same core path, so the CLI
+ * must reach the filter with directions too. A TOML topic written the legacy
+ * way — one `description` line, no `directions` — has to arrive as a topic the
+ * filter can judge against (ADR 0003 keeps the two products consistent).
+ */
+describe("CLI topics reach the direction-driven filter", () => {
+  it("turns a legacy description-only TOML topic into a classifiable direction", async () => {
+    const cfg = await loadCliConfig({
+      configPath: "/cfg.toml",
+      readText: async () => minimalToml,
+    });
+
+    const request = buildPaperFilterRequest(
+      [{ id: "2609.00001", title: "T", authors: "A", abstract: "B" }],
+      cfg.settings.arxiv,
+    );
+
+    expect(request.messages[0]!.content).toContain("- ml:\n  - ml#1: machine learning");
+    expect(request.identity.directions).toMatchObject([
+      { ref: "ml#1", tag: "ml", text: "machine learning" },
+    ]);
+  });
+
+  it("carries an explicit TOML direction list through in order", async () => {
+    const toml = minimalToml.replace(
+      'description = "machine learning"',
+      'directions = [{ id = "d1", text = "graph neural networks" }, { id = "d2", text = "diffusion models" }]',
+    );
+    const cfg = await loadCliConfig({ configPath: "/cfg.toml", readText: async () => toml });
+
+    const request = buildPaperFilterRequest(
+      [{ id: "2609.00001", title: "T", authors: "A", abstract: "B" }],
+      cfg.settings.arxiv,
+    );
+
+    expect(request.identity.directions.map(({ ref, text }) => ({ ref, text }))).toEqual([
+      { ref: "ml#1", text: "graph neural networks" },
+      { ref: "ml#2", text: "diffusion models" },
+    ]);
   });
 });

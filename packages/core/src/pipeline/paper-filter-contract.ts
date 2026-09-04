@@ -128,7 +128,13 @@ export function buildPaperFilterRequest(
   papers: PaperMeta[],
   arxivSettings: ArxivSettings,
 ): PaperFilterRequest {
-  const topics: Topic[] = arxivSettings.topics ?? [];
+  // A topic with no directions has nothing to judge against, so it cannot
+  // select a paper. Offering it as a tag anyway invites the model to file a
+  // paper under it and then fail the strict decode for naming no direction —
+  // a whole run lost to a configuration problem `validateFilterConfig` already
+  // reports. `classifiableTopics` is exported so callers can say which topics
+  // they left out rather than dropping them silently.
+  const topics: Topic[] = classifiableTopics(arxivSettings);
   const directions = buildFilterDirectionRefs(topics);
   const byTag = new Map<string, FilterDirectionRef[]>();
   for (const direction of directions) {
@@ -174,6 +180,11 @@ export function buildPaperFilterRequest(
       directions,
     },
   };
+}
+
+/** Topics that hold at least one direction, in configured order. */
+export function classifiableTopics(arxivSettings: ArxivSettings): Topic[] {
+  return (arxivSettings.topics ?? []).filter((topic) => topic.directions.length > 0);
 }
 
 /**

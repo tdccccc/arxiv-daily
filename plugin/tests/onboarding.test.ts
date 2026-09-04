@@ -49,6 +49,9 @@ describe("getSetupStatus", () => {
               name: "Compact objects",
               tag: "compact-objects",
               description: "Neutron stars and black holes",
+              directions: [
+                { id: "d1", text: "Neutron stars and black holes", origin: "migrated" },
+              ],
               detail: false,
             },
           ],
@@ -73,6 +76,9 @@ describe("getSetupStatus", () => {
             name: "Compact objects",
             tag: "compact-objects",
             description: "Neutron stars and black holes",
+            directions: [
+              { id: "d1", text: "Neutron stars and black holes", origin: "migrated" },
+            ],
             detail: false,
           },
         ],
@@ -113,6 +119,7 @@ describe("getSetupStatus", () => {
               name: "Compact objects",
               tag: "",
               description: "",
+              directions: [],
               detail: false,
             },
           ],
@@ -124,6 +131,6 @@ describe("getSetupStatus", () => {
     expect(status.topicsReady).toBe(false);
     expect(status.readyToRun).toBe(false);
     expect(status.reasons.join("; ")).toMatch(/tag is empty/i);
-    expect(status.reasons.join("; ")).toMatch(/description is empty/i);
+    expect(status.reasons.join("; ")).toMatch(/has no directions/i);
   });
 });

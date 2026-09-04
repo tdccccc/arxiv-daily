@@ -7,6 +7,7 @@ import {
 } from "../settings/summary-language";
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
+import { normalizeTopicDirectionHits, type TopicDirectionHit } from "./topic-direction-hits";
 import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
 import type { PaperDiscoveryProvenance } from "./personalized-paper-filter";
 import { normalizePersonalNoveltyWithBasis } from "./personalized-novelty";
@@ -48,6 +49,12 @@ export interface DailySummaryAssemblyPaper {
    * contracts may carry it; persisted markers stay minimal.
    */
   personalNovelty?: PersonalNoveltyWithBasis;
+  /**
+   * Directions of this paper's own topic that selected it, in the topic's
+   * order. Kept beside `discoveryProvenance` rather than inside it: a topic
+   * direction carries no representative evidence (ADR 0012 §4).
+   */
+  topicDirections?: TopicDirectionHit[];
 }
 
 export type DailyPaperFallbackReasonCode =
@@ -125,6 +132,10 @@ export function preflightDailySummaryPapers(
     if (paper.personalNovelty
       && !normalizePersonalNoveltyWithBasis(paper.personalNovelty)) {
       throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid personal novelty`);
+    }
+    if (paper.topicDirections
+      && !normalizeTopicDirectionHits(paper.topicDirections)) {
+      throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid topic directions`);
     }
     if (paperIds.has(paper.id)) {
       throw new Error(`preflightDailySummaryAssembly: duplicate input paper ID: ${paper.id}`);

@@ -10,6 +10,7 @@ import {
   renderDiscoveryProvenanceMarker,
 } from "./discovery-provenance-marker";
 import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
+import { renderTopicDirectionMarker } from "./topic-direction-marker";
 import type {
   PersonalNoveltyDifferenceType,
   PersonalNoveltyWithBasis,
@@ -199,10 +200,41 @@ export function renderPaperHeader(
           renderVisiblePersonalNovelty(paper.personalNovelty, language),
         ]
       : []),
+    // Last of the three marker families on purpose: both parsers above pin
+    // their marker to a canonical slot counted from the heading, so appending
+    // here leaves their arithmetic untouched.
+    ...(paper.topicDirections
+      ? [
+          renderTopicDirectionMarker(
+            paper.topicDirections,
+            paper.id,
+            requireReportDate(reportDate),
+          ),
+          renderVisibleTopicDirections(paper.topicDirections, language),
+        ]
+      : []),
     `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
   ];
+}
+
+/**
+ * The one line that answers "why is this paper here": the topic it was filed
+ * under and the direction lines of that topic which selected it. Direction
+ * text is what the researcher typed, so it is escaped to literal Markdown.
+ */
+function renderVisibleTopicDirections(
+  hits: NonNullable<DailySummaryAssemblyPaper["topicDirections"]>,
+  language: SummaryLanguage,
+): string {
+  const tag = escapeDiscoveryProvenancePlainText(hits[0]!.tag);
+  const directions = hits
+    .map((hit) => escapeDiscoveryProvenancePlainText(hit.text))
+    .join(language === "en" ? "; " : "、");
+  return language === "en"
+    ? `> Matched directions: topic ${tag} — ${directions}`
+    : `> 命中方向：主题 ${tag} — ${directions}`;
 }
 
 function renderVisibleDiscoveryProvenance(
@@ -293,7 +325,8 @@ export function renderFallbackBlock(
   lines.splice(
     headingIndex + 1
       + (paper.discoveryProvenance ? 2 : 0)
-      + (paper.personalNovelty ? 2 : 0),
+      + (paper.personalNovelty ? 2 : 0)
+      + (paper.topicDirections ? 2 : 0),
     0,
     warning,
     `<!-- ${DAILY_SUMMARY_FALLBACK_MARKER_PREFIX}:${paper.id} -->`,

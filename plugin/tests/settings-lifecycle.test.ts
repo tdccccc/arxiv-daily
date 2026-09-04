@@ -265,6 +265,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let resolveModal!: (value: string) => void;
@@ -306,6 +307,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let finishEnableSave!: () => void;

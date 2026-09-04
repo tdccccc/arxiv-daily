@@ -9,6 +9,7 @@ import {
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
+import { normalizeTopic } from "../src/settings/topics";
 
 function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
   return {
@@ -169,7 +170,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
       }),
     );
@@ -183,7 +184,7 @@ describe("validateFilterConfig", () => {
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
           categories: ["astro-ph", " ", "astro-ph"],
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
       }),
     );
@@ -212,7 +213,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
         output: {
           ...DEFAULT_SETTINGS.output,
@@ -230,7 +231,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
         output: {
           ...DEFAULT_SETTINGS.output,
@@ -248,14 +249,34 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: " ", tag: "", description: " ", detail: false }],
+          topics: [{ id: "t", name: " ", tag: "", description: " ", directions: [], detail: false }],
         },
       }),
     );
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/name is empty/i);
     expect(r.reasons.join("; ")).toMatch(/tag is empty/i);
-    expect(r.reasons.join("; ")).toMatch(/description is empty/i);
+    expect(r.reasons.join("; ")).toMatch(/has no directions/i);
+  });
+
+  /**
+   * P3: a topic with no directions has nothing for the classifier to judge
+   * against, so the check must say that rather than name the `description`
+   * shadow the researcher never edits directly.
+   */
+  it("says a topic has no directions rather than naming the shadow field", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [normalizeTopic({ id: "t", name: "Topic", tag: "topic", directions: [], detail: false })],
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/has no directions/i);
+    expect(r.reasons.join("; ")).not.toMatch(/description/i);
   });
 
   it("flags duplicate topic tags", () => {

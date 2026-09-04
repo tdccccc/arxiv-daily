@@ -300,8 +300,14 @@ describe("filterPapers", () => {
     expect(onMetrics).not.toHaveBeenCalled();
     expect(checkpointStore.save).not.toHaveBeenCalled();
     expect(out).toEqual([
-      { ...currentPapers[1], category: "galaxy-cluster", isDetail: false },
-      { ...currentPapers[0], category: "photo-z", isDetail: false },
+      {
+        ...currentPapers[1], category: "galaxy-cluster", isDetail: false,
+        topicDirections: [{ tag: "galaxy-cluster", id: "d2a", text: "cluster surveys" }],
+      },
+      {
+        ...currentPapers[0], category: "photo-z", isDetail: false,
+        topicDirections: [{ tag: "photo-z", id: "d1a", text: "photo-z methods" }],
+      },
     ]);
     expect(logger.info).toHaveBeenCalledWith(
       "paper-filter: checkpoint hit date=2026-08-01 count=2",
@@ -631,5 +637,116 @@ describe("filtering by direction", () => {
     ])).rejects.toMatchObject(
       invalidContract(`paper ${samplePaper.id} names a direction while skipped`),
     );
+  });
+});
+
+describe("matched directions reach the report", () => {
+  it("resolves each kept paper's direction refs to their topic, identity and text", async () => {
+    const llm = {
+      call: vi.fn().mockResolvedValue(JSON.stringify({
+        papers: [{
+          id: samplePaper.id,
+          category: "photo-z",
+          directions: ["photo-z#2", "photo-z#1"],
+        }],
+      })),
+    };
+
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
+    });
+
+    // Listed in the topic's own order, which is the order the researcher sees
+    // in settings — not the order the model happened to answer in.
+    expect(out[0]!.topicDirections).toEqual([
+      { tag: "photo-z", id: "d1a", text: "photo-z methods" },
+      { tag: "photo-z", id: "d1b", text: "photo-z catalog comparisons" },
+    ]);
+  });
+
+  it("resolves refs from a reused checkpoint the same way as from a live call", async () => {
+    const records = [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
+    const checkpointStore = {
+      lookupReusable: vi.fn(async () => records),
+      save: vi.fn(),
+    };
+    const llm = { call: vi.fn() };
+
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      checkpointStore,
+      ...checkpointScope,
+    });
+
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(out[0]!.topicDirections).toEqual([
+      { tag: "photo-z", id: "d1a", text: "photo-z methods" },
+    ]);
+  });
+});
+
+/**
+ * A topic with no directions cannot select anything: there is nothing for the
+ * classifier to judge against. Leaving it in the prompt would invite the model
+ * to file a paper under a topic it then cannot name a direction for — which
+ * the strict decode treats as a contract violation, failing the whole run over
+ * a configuration problem the pre-run check already reports.
+ */
+describe("topics with no directions", () => {
+  function topicsWithOneEmpty(): Topic[] {
+    return [
+      normalizeTopic({
+        id: "t1", name: "Photo-z", tag: "photo-z", detail: true,
+        directions: [{ id: "d1a", text: "photo-z methods", origin: "manual" }],
+      }),
+      normalizeTopic({ id: "t2", name: "Empty", tag: "empty", directions: [], detail: false }),
+    ];
+  }
+
+  it("leaves a directionless topic out of the prompt and out of the valid tags", () => {
+    const request = buildPaperFilterRequest([samplePaper], makeArxiv(topicsWithOneEmpty()));
+
+    expect(request.messages[0]!.content).not.toContain("- empty:");
+    expect(request.identity.validTags).toEqual(["photo-z"]);
+    expect(request.messages[0]!.content).toContain("photo-z|skip");
+  });
+
+  it("says which topics it left out instead of dropping them silently", async () => {
+    const logger = new Logger("info");
+    const warn = vi.spyOn(logger, "warn");
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [] })) };
+
+    await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger,
+      arxivSettings: makeArxiv(topicsWithOneEmpty()),
+      ...checkpointScope,
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("empty"));
+  });
+
+  it("calls no LLM at all when no topic has a single direction", async () => {
+    const llm = { call: vi.fn() };
+    const logger = new Logger("info");
+    const warn = vi.spyOn(logger, "warn");
+
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger,
+      arxivSettings: makeArxiv([
+        normalizeTopic({ id: "t2", name: "Empty", tag: "empty", directions: [], detail: false }),
+      ]),
+      ...checkpointScope,
+    });
+
+    expect(out).toEqual([]);
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 });

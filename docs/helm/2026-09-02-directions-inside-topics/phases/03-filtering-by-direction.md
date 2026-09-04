@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-03T23:21:47+08:00
-updated: 2026-09-03T23:58:00+08:00
-revision: 2
+updated: 2026-09-04T01:05:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -69,9 +69,11 @@ revision: 2
 - Red / baseline signal: `FilteredPaper` 带上命中的主题方向（tag + 方向标识 + 方向文本），经 `summarizer.ts:107` 与 `daily-summary-assembler.ts` 透传到组装层，`preflightDailySummaryAssembly` 对其做与既有 provenance 同级的校验（不合法即抛，不静默丢）。红在组装层收不到这个字段。
 - Green check: `npm run test --workspace @arxiv-daily/core -- daily-summary-assembler`
 - regression checks: core 全量；`npm run check:boundaries`
-- **新字段与 `discoveryProvenance` 并列而不是塞进去**：后者的 `directions[].representatives` 至少一条是硬性约束，而主题方向按 ADR 0012 §4 不留证据，塞进去只能靠放宽那条约束，等于让两种语义共用一个校验器。
+- **新字段与 `discoveryProvenance` 并列而不是塞进去**：后者的 `directions[].representatives` 至少一条是硬性约束，而主题方向按 ADR 0012 §4 不留证据，塞进去只能靠放宽那条约束，等于让两种语义共用一个校验器。落地为 `topic-direction-hits.ts` 的 `TopicDirectionHit{tag,id,text}` 与 `normalizeTopicDirectionHits`。
+- **命中方向按主题自己的顺序排，不按模型回答的顺序**：用户在设置页看到的就是这个顺序，日报里换一个顺序没有道理。实现上是过滤冻结请求里的方向表，而不是遍历模型给的数组——变异检验把后者写回来时，顺序那条断言立刻红。
+- 校验多钉了一条计划里没写的不变量：**一篇论文的所有命中方向必须同属一个主题**。这是「归组由单一 tag 决定」的直接推论，混着两个 tag 说明命中是被错误拼装的。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 5 — 日报写出命中的方向：可见一行 + 机器标记
 
@@ -80,9 +82,12 @@ revision: 2
 - Red / baseline signal: 渲染带方向命中的论文块时，(a) 可见行说出主题与命中的每一条方向文本（中英双语，走既有 `escapeDiscoveryProvenancePlainText` 的转义，方向文本是用户输入，不可信）；(b) 机器标记可被解析回等价结构；(c) **既有报告里的 v1 标记仍能被解析**。红在渲染不产出方向、或旧标记解析回归。
 - Green check: `npm run test --workspace @arxiv-daily/core -- daily-summary-rendering`；`-- discovery-provenance-marker`
 - regression checks: `daily-summary-parser` 与 `paper-index` 相关测试全绿；core 全量
-- 标记形态由本 chunk 定：扩 `discovery-provenance` 到 v2 并保留 v1 解析，或另起一个前缀。判据是**磁盘上已有的日报不能因为升级而解析失败**——`parseDailyReportDiscoveryProvenance` 会把它判成 invalid 并影响派生索引。
-- exception: 无
-- [ ] implementation and tests accepted
+- **标记形态定为另起前缀 `arxiv-daily-topic-directions`，而不是把 discovery-provenance 扩到 v2。** 理由有两条，第二条是读代码才发现的：(a) 手动路径的论文在没有文献库时根本没有 `discoveryProvenance`，扩它等于为了搭车而凭空造一个；(b) 既有的两个标记族**各自把自己钉死在从标题数起的固定行号上**（`personal-novelty-marker.ts:139` 依赖 discovery 标记是否存在来算第 3 行），中间插一族会把这套算术全部打乱。新标记族**排在最后**，两个既有解析器的行号算术一行不用改。
+- **`renderVisibleTopicDirections` 是本阶段真正交付验收标准的那一行**：`> 命中方向：主题 <tag> — <方向文本>、<方向文本>`。方向文本是用户输入，走既有转义。
+- **一处自查漏网**：变异检验发现「标记必须在规范槽位」这条规则**删掉后没有任何测试变红**——原本以为「标记跑到 block 外面」那条覆盖了它，其实那条是被另一个守卫抓住的。补了一条「标记在 block 内但不在规范槽位」的测试后才真红。这条规则不是装饰：它和另两族一样，是防止不可信的摘要正文伪造出一行看起来合法的标记。
+- **本 chunk 的实现写在测试之前**（marker 模块整体成形后才补测试），不满足 strict Red-Green。补偿验证是逐条变异检验：可见行、转义、槽位规则、身份校验各删一次，对应断言都红。
+- exception: 见上，已记补偿验证
+- [x] implementation and tests accepted
 
 ### Chunk 6 — 退化行为：没有方向的主题、模型一条都不命中
 
@@ -91,19 +96,22 @@ revision: 2
 - Red / baseline signal: (a) 一个主题的方向被删空时（影子 `description` 为 `""`），筛选与配置检查的行为被钉死——今天 `validation.ts:163` 报 “description is empty”，在新模型下这句话该说的是「这个主题一条方向也没有」；(b) 模型给出 `category` 却回报空方向列表时的行为被显式钉死（保留该论文并只标主题，还是判违约），不留给巧合。
 - Green check: `npm run test --workspace @arxiv-daily/core -- validation`；`-- paper-filter`
 - regression checks: core 全量；plugin 全量
+- **两处行为都定死了**：(a) 配置检查的文案从「description is empty」改成「has no directions」——描述是影子字段，设置页根本不显示它，指着它让用户去修是指错了地方；(b) **没有方向的主题整个不进提示词、也不进合法 tag**，一条方向都没有时直接不调 LLM。理由：留在提示词里等于邀请模型把论文归到它下面、然后因为报不出方向而触发严格解码违约——**一次配置问题葬送整次运行**。两种情况都 warn 出被跳过的主题名，不静默。
+- `validateFilterConfig` 这里**刻意做了防御性取值**（`topic.directions ?? []`）：它的职责就是报告坏配置，遇到没规范化过的主题应当报出来而不是抛。这与 Chunk 3 里 `buildPaperFilterRequest` 不做防御是两回事——那里防御会造出「有主题但没方向」的静默状态，正是本 chunk 要消灭的。
+- **牵出一条既有测试的前提错误**：`settings-rollback` 里「降级后配置检查仍通过」原本把**未经迁移**的四字段形状直接喂给校验器。生产上任何构建读盘都先迁移，未迁移形状根本不会被校验。改为走一次「降级—再升级」的真实往返，断言仍是「不该有方向/描述相关的抱怨且 ok」。
 - exception: 无
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 7 — CLI 侧行为一致
 
 - change kind: behavior change（跟随）
 - strategy: strict Red-Green-Refactor
-- Red / baseline signal: CLI 从 TOML 造 `Topic`（`apps/cli/src/config.ts:302` 走 core 的 `normalizeTopic`），筛选走同一条 core 路径因此自动跟随。新增一条 CLI 测试钉住：从 TOML 配置出发产出的筛选请求里带着方向。红在 CLI 侧仍只喂 description。
-- Green check: `npm run test --workspace arxiv-daily`
+- **计划里这条预期是错的，如实记下**：原写「红在 CLI 侧仍只喂 description」。实际 CLI 早在 Chunk 1 就跟着变了——它走的就是同一个 `buildPaperFilterRequest`，没有独立的筛选代码可以掉队。**所以这里取不到诚实的红**，两条测试是确认跟随成立的表征测试，不是 Red-Green。
+- Green check: `npm run test --workspace arxiv-daily`（73/73）
 - regression checks: 四包全量；`npm run typecheck`；`npm run lint`
-- goal Constraints 要求插件与 CLI 两侧行为一致；ADR 0003 的两产品边界不因此变动。
-- exception: 无
-- [ ] implementation and tests accepted
+- 钉住的两件事：legacy 的 `description = "..."` TOML 主题迁移成一条可判定的方向；TOML 里显式写的 `directions` 列表按顺序进入提示词。goal Constraints 要求插件与 CLI 两侧行为一致；ADR 0003 的两产品边界不因此变动。
+- exception: 无法取红，见上
+- [x] implementation and tests accepted
 
 ## Phase verification
 

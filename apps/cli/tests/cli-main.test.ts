@@ -42,6 +42,7 @@ function testConfig(): CliRuntimeConfig {
             name: "Topic",
             tag: "topic",
             description: "topic description",
+            directions: [{ id: "d1", text: "topic description", origin: "migrated" }],
             detail: false,
           },
         ],

@@ -17,12 +17,14 @@ import {
 } from "./personalized-paper-filter";
 import {
   buildPaperFilterRequest,
+  classifiableTopics,
   decodePaperFilterRecords,
   prepareDailyFilterCheckpoint,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
 import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
+import type { TopicDirectionHit } from "./topic-direction-hits";
 
 export {
   buildPaperFilterRequest,
@@ -38,6 +40,12 @@ export {
 export interface FilteredPaper extends PaperMeta {
   category: string;
   isDetail: boolean;
+  /**
+   * Directions of `category`'s topic that selected this paper, in the topic's
+   * own order. Absent on papers that reached the report by another route —
+   * today, the library-only personalized path.
+   */
+  topicDirections?: TopicDirectionHit[];
   /** Present only on the personalized path; legacy manual-only objects are unchanged. */
   discoveryProvenance?: PaperDiscoveryProvenance;
   /** Validated personal novelty with trusted basis display titles, attached only to library-derived papers with a novelty outcome. */
@@ -199,9 +207,22 @@ async function filterPapersManualOnly(
   throwIfCancelled(deps.signal);
   if (papers.length === 0) return [];
 
-  const topics: Topic[] = arxivSettings.topics ?? [];
-  if (topics.length === 0) {
+  const configured: Topic[] = arxivSettings.topics ?? [];
+  if (configured.length === 0) {
     logger.warn("paper-filter: no topics configured, skipping LLM call");
+    return [];
+  }
+  const topics = classifiableTopics(arxivSettings);
+  const withoutDirections = configured.filter((topic) => !topics.includes(topic));
+  if (withoutDirections.length > 0) {
+    logger.warn(
+      `paper-filter: skipping topics with no directions: ${
+        withoutDirections.map((topic) => topic.tag).join(", ")
+      }`,
+    );
+  }
+  if (topics.length === 0) {
+    logger.warn("paper-filter: no topic has a direction, skipping LLM call");
     return [];
   }
 
@@ -316,7 +337,14 @@ async function filterPapersManualOnly(
   for (const item of validatedRecords) {
     if (item.category === "skip") continue;
     const meta = idMap.get(item.id)!;
-    out.push({ ...meta, category: item.category, isDetail: false });
+    // Resolved from the frozen request, never from live settings: those may
+    // have been edited while the call was in flight. Walking the request's own
+    // direction list keeps the topic's order rather than the model's.
+    const chosen = new Set(item.directions);
+    const topicDirections = request.identity.directions
+      .filter((direction) => chosen.has(direction.ref))
+      .map(({ tag, id, text }) => ({ tag, id, text }));
+    out.push({ ...meta, category: item.category, isDetail: false, topicDirections });
   }
   logger.info(`paper-filter: kept ${out.length}/${papers.length} papers`);
 

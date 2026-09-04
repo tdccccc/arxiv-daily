@@ -101,13 +101,17 @@ describe("rollback to a build without directions", () => {
     expect(DAILY_FILTER_RESULT_CONTRACT_VERSION).toBeGreaterThan(1);
   });
 
-  it("passes the older build's config check without a missing description", () => {
+  it("passes the config check again after a downgrade-and-upgrade round trip", () => {
     const migrated = migrateArxivSettings(LEGACY_ARXIV);
-    const downgraded = asOlderBuildReadsIt(migrated);
+    // What the user actually does: downgrade, let the old build rewrite
+    // data.json from the four fields it knows, then upgrade. Every build
+    // migrates on load, so the four-field shape is never what gets validated —
+    // P3's check asks for directions, and migration is what restores them.
+    const upgradedAgain = migrateArxivSettings(asOlderBuildReadsIt(migrated));
 
-    const result = validateFilterConfig(settingsWith(downgraded));
+    const result = validateFilterConfig(settingsWith(upgradedAgain));
 
-    expect(result.reasons.filter((r) => /description/i.test(r))).toEqual([]);
+    expect(result.reasons.filter((r) => /direction|description/i.test(r))).toEqual([]);
     expect(result.ok).toBe(true);
   });
 

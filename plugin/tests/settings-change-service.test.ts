@@ -255,6 +255,7 @@ describe("SettingsChangeService", () => {
       name: "Language models",
       tag: "language-models",
       description: "Research about language models",
+      directions: [{ id: "d1", text: "Research about language models", origin: "migrated" }],
       detail: false,
     });
     const save = deferred();
@@ -347,6 +348,7 @@ describe("SettingsChangeService", () => {
       name: "Language models",
       tag: "language-models",
       description: "Research about language models",
+      directions: [{ id: "d1", text: "Research about language models", origin: "migrated" }],
       detail: false,
     });
     const identities = {
@@ -389,6 +391,7 @@ describe("SettingsChangeService", () => {
       name: "Original topic",
       tag: "original-topic",
       description: "Original description",
+      directions: [{ id: "d1", text: "Original description", origin: "migrated" }],
       detail: false,
     });
     const save = deferred();

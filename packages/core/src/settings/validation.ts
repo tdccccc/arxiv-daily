@@ -160,7 +160,16 @@ export function validateFilterConfig(
     } else {
       seenTags.add(tag);
     }
-    if (!topic.description.trim()) reasons.push(`${label} description is empty`);
+    // Directions are what the classifier judges against (ADR 0012 §1), so an
+    // empty list is what the researcher has to fix. `description` is the
+    // rollback shadow of the first direction and is never edited directly, so
+    // naming it here would point at a field the settings page does not show.
+    // Reported, never thrown: reporting bad configuration is this function's
+    // whole job, so a topic that never went through `normalizeTopic` has to
+    // come back as a reason rather than a crash.
+    if (!(topic.directions ?? []).some((direction) => direction?.text?.trim())) {
+      reasons.push(`${label} has no directions`);
+    }
   });
   return { ok: reasons.length === 0, reasons };
 }

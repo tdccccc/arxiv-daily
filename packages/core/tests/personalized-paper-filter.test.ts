@@ -512,7 +512,10 @@ describe("manual and personalized union", () => {
       ...baseDeps, llm: llm as any, personalizedDiscovery: discovery(1),
       personalizedCheckpointStore,
     });
-    expect(result).toEqual([{ ...paper(2), category: "topic-b", isDetail: false }]);
+    expect(result).toEqual([{
+      ...paper(2), category: "topic-b", isDetail: false,
+      topicDirections: [{ tag: "topic-b", id: "db", text: "manual B" }],
+    }]);
     expect(personalizedCheckpointStore.savePersonalized).not.toHaveBeenCalled();
   });
 });
