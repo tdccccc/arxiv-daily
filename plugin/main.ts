@@ -40,6 +40,8 @@ proposeClusteredPersonalLibraryDirections,
 PERSONAL_LIBRARY_UNMEASURED_COARSE_STOP_RATIO,
 mergePersonalLibraryDirectionCandidates,
 removePersonalLibraryDirectionCandidate,
+renamePersonalLibraryProposedTopic,
+acceptProposedTopics,
 updatePersonalLibraryDirectionCandidate,
 selectPersonalLibraryDirectionPapers,
 reconcilePersonalLibraryCatalog,
@@ -714,7 +716,41 @@ export default class ArxivDailyPlugin extends Plugin {
       generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
+      renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
+      acceptTopics: (topicIds) => this.acceptPersonalLibraryProposedTopics(topicIds),
     };
+  }
+
+  /** Renames one proposed topic before its tag is derived (ADR 0014 §1). */
+  async renamePersonalLibraryProposedTopic(input: {
+    topicId: string;
+    suggestedName: string;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    return this.mutatePersonalLibraryProposal((proposal) => renamePersonalLibraryProposedTopic({
+      proposal, topicId: input.topicId, suggestedName: input.suggestedName,
+    }));
+  }
+
+  /**
+   * Accepts kept proposed topics into `settings.topics` and persists settings.
+   * The proposal is left alone: it stays the durable record of what was
+   * proposed, and the researcher can accept the rest later.
+   */
+  async acceptPersonalLibraryProposedTopics(topicIds: readonly string[]): Promise<PersonalLibraryProfileSnapshot> {
+    const proposal = this.libraryProposal;
+    if (!proposal) throw new Error("Generate a direction proposal first");
+    const kept = topicIds.map((topicId) => proposal.topics.find(({ id }) => id === topicId)
+      ?? (() => { throw new Error(`Proposed topic ${topicId} is no longer in the proposal`); })());
+    if (kept.length === 0) throw new Error("Select at least one proposed topic to accept");
+    const accepted = acceptProposedTopics({ topics: kept, existingTopics: this.settings.arxiv.topics });
+    // Settings writes go through the same persistence path as any other
+    // settings change, so every guard that already covers them covers this.
+    this.settings.arxiv = {
+      ...this.settings.arxiv,
+      topics: [...this.settings.arxiv.topics, ...accepted],
+    };
+    await this.persistSettings();
+    return this.getPersonalLibraryProfileSnapshot();
   }
 
   async reloadPersonalLibraryCatalog(

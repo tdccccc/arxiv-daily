@@ -34,6 +34,9 @@ export interface InterestProfileReviewController {
     representativePaperKeys: string[];
   }): Promise<InterestProfileReviewSnapshot>;
   discardProposal(candidateId: string): Promise<InterestProfileReviewSnapshot>;
+  renameTopic(input: { topicId: string; suggestedName: string }): Promise<InterestProfileReviewSnapshot>;
+  /** Writes the kept topics into `settings.topics` (ADR 0014 §1). */
+  acceptTopics(topicIds: readonly string[]): Promise<InterestProfileReviewSnapshot>;
 }
 
 type ReviewTab = "proposed";
@@ -57,6 +60,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private pending = false;
   private closed = false;
   private renderVersion = 0;
+  private readonly selectedTopics = new Set<string>();
   private errorMessage = "";
   private selectedProposals = new Set<string>();
   private selectedConfirmed = new Set<string>();
@@ -196,16 +200,54 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     // the interest profile document. Accepting a whole proposed structure into
     // `settings.topics` (ADR 0014 §1) is built in P4's later chunks.
     const allowedKeys = proposalPaperKeys(snapshot);
-    // One section per proposed topic: the researcher accepts a structure, not
-    // a pile of unattached lines (ADR 0014 §1).
+    // The whole structure is the unit of acceptance (ADR 0014 §1), so the
+    // action sits above the list rather than on each row.
+    if (topics.length > 0) {
+      const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
+      const accept = bar.createEl("button", {
+        text: `Accept ${this.selectedTopics.size} topic(s) into settings`,
+        attr: {
+          type: "button",
+          title: "Adds the selected topics, with their directions, to your research topics. You can edit or remove them there afterwards.",
+        },
+      });
+      accept.addClass("mod-cta");
+      accept.disabled = this.pending || this.selectedTopics.size === 0;
+      accept.addEventListener("click", () => void this.acceptSelectedTopics());
+    }
     for (const topic of topics) {
       const section = parent.createDiv({ cls: "arxiv-daily-interest-review__topic" });
-      section.createEl("h3", { text: topic.suggestedName });
+      const heading = section.createDiv({ cls: "arxiv-daily-interest-review__topic-heading" });
+      const select = heading.createEl("input", { type: "checkbox" });
+      select.checked = this.selectedTopics.has(topic.id);
+      select.setAttribute("aria-label", `Accept ${topic.suggestedName}`);
+      select.disabled = this.pending;
+      select.addEventListener("change", () => {
+        if (select.checked) this.selectedTopics.add(topic.id);
+        else this.selectedTopics.delete(topic.id);
+        this.render();
+      });
+      // The generated name is a suggestion; the machine tag is derived from
+      // whatever it says at acceptance, so it is editable right here.
+      const name = heading.createEl("input", { type: "text", value: topic.suggestedName });
+      name.setAttribute("aria-label", "Topic name");
+      name.disabled = this.pending;
+      name.addEventListener("change", () => {
+        const next = name.value.trim();
+        if (!next || next === topic.suggestedName) return;
+        void this.run("rename proposed topic", () =>
+          this.controller.renameTopic({ topicId: topic.id, suggestedName: next }));
+      });
+      heading.createSpan({
+        cls: "arxiv-daily-interest-review__topic-count",
+        text: `${topic.directions.length} direction(s)`,
+      });
       for (const candidate of topic.directions) {
         this.renderDirectionCard(section, candidate, allowedKeys, "proposal", snapshot);
       }
     }
     this.renderBufferPool(parent, snapshot);
+    this.renderIncrementalNotice(parent);
   }
 
   private renderDocumentError(
@@ -218,6 +260,16 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       cls: "arxiv-daily-interest-review__document-error",
       attr: { role: "status" },
       text: `${label} could not be loaded: ${error.message}`,
+    });
+  }
+
+  private async acceptSelectedTopics(): Promise<void> {
+    const ids = [...this.selectedTopics];
+    if (ids.length === 0) return;
+    await this.run("accept proposed topics", async () => {
+      const snapshot = await this.controller.acceptTopics(ids);
+      this.selectedTopics.clear();
+      return snapshot;
     });
   }
 
@@ -335,7 +387,24 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         text: paper ? `${paper.title} — ${entry.paperKey}` : `${entry.paperKey} — missing from current catalog`,
       });
     }
-    section.createEl("p", { cls: "arxiv-daily-interest-review__hint", text: "这些论文未进入任何方向草案" });
+    section.createEl("p", {
+      cls: "arxiv-daily-interest-review__hint",
+      text: "No proposed direction covers these papers. Accepting the proposal will not select them.",
+    });
+  }
+
+  /**
+   * The incremental suggestion flow filed new papers into confirmed directions
+   * of the interest profile document, which retired with ADR 0012. It is
+   * rebuilt against topics in a later phase; saying so is better than a blank
+   * space the researcher reads as a bug.
+   */
+  private renderIncrementalNotice(parent: HTMLElement): void {
+    parent.createEl("p", {
+      cls: "arxiv-daily-interest-review__hint",
+      attr: { role: "status" },
+      text: "Incremental suggestions for papers added after this scan are unavailable while they are rebuilt around topics. Re-running the scan proposes the whole structure again.",
+    });
   }
 
   private textField(parent: HTMLElement, labelText: string, value: string, maxLength: number): HTMLInputElement {

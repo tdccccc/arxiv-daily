@@ -131,6 +131,7 @@ export * from "./settings/migration";
 export * from "./settings/providers";
 export * from "./settings/summary-language";
 export * from "./settings/topic-templates";
+export * from "./settings/accept-proposed-topics";
 export * from "./settings/topics";
 export * from "./settings/types";
 export * from "./settings/validation";

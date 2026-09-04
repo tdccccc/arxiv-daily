@@ -7,11 +7,7 @@ import {
   bufferPoolHeading,
   describeClusterMembers,
   formatConfidence,
-  incrementalSuggestionKey,
-  incrementalSuggestionPaperCount,
   normalizeLines,
-  timelineEventLabel,
-  truncateReason,
   unclassifiedBufferPoolPapers,
   type InterestProfileReviewController,
   type InterestProfileReviewSnapshot,
@@ -44,16 +40,9 @@ beforeEach(() => { Modal.opened.length = 0; });
 const fingerprint = `sha256:${"a".repeat(64)}`;
 const evidence = `sha256:${"b".repeat(64)}`;
 const candidate = {
-  id: "candidate-1", name: "Agents", description: "Reliable agents", discoveryCues: ["agents"],
+  id: "candidate-1", text: "Reliability of long-running research agents", discoveryCues: ["agents"],
   representatives: [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence }],
   representativeSetFingerprint: fingerprint, lineage: { candidateIds: ["candidate-1"] },
-};
-const direction = {
-  id: "direction-1", status: "active" as const, name: "Confirmed agents", description: "Confirmed work",
-  discoveryCues: ["confirmed"], representatives: candidate.representatives,
-  representativeSetFingerprint: fingerprint,
-  lineage: { proposalIds: ["proposal-1"], candidateIds: ["candidate-1"], directionIds: [] },
-  createdAt: "2026-08-03T00:00:00.000Z", updatedAt: "2026-08-03T00:00:00.000Z",
 };
 
 function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): InterestProfileReviewSnapshot {
@@ -71,22 +60,15 @@ function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): Inter
       }, summary: { inventoryCount: 1, eligibleFileCount: 1, readyFileCount: 1, unsupportedFileCount: 0, unidentifiedFileCount: 0, failedFileCount: 0, paperCount: 1 },
     } as any,
     proposal: {
-      schemaVersion: 2, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
+      schemaVersion: 4, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
       identificationFingerprint: fingerprint, catalogInputFingerprint: fingerprint,
       catalogInputPapers: candidate.representatives, generationContractFingerprint: fingerprint,
-      generatedAt: "2026-08-03T00:00:00.000Z", candidates: [candidate],
-    },
-    profile: {
-      schemaVersion: 2, revision: 0, scopeFingerprint: fingerprint, identificationFingerprint: fingerprint,
-      updatedAt: "2026-08-03T00:00:00.000Z", directions: [direction],
+      generatedAt: "2026-08-03T00:00:00.000Z",
+      topics: [{ id: "topic-1", suggestedName: "Research agents", directions: [candidate] }],
     },
     suggestions: null,
-    eligibility: {
-      documentDiagnostics: [], eligibleDirections: [direction],
-      diagnostics: [{ directionId: direction.id, eligible: true, reasons: [] }],
-    },
     authorization: { kind: "authorized", rootLabel: "papers", processingDepth: "metadata-and-abstracts", endpoint: "https://example.test" } as any,
-    catalogLoadError: null, proposalLoadError: null, profileLoadError: null, suggestionsLoadError: null,
+    catalogLoadError: null, proposalLoadError: null, suggestionsLoadError: null,
     ...overrides,
   };
 }
@@ -97,10 +79,9 @@ function controller(initial = snapshot()) {
   const mock: InterestProfileReviewController = {
     snapshot: () => current,
     reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
-    updateProposal: update, discardProposal: update, confirmProposal: update,
-    confirmProposals: vi.fn(async () => current),
-    updateConfirmed: update, mergeConfirmed: update, enable: update, disable: update, remove: update,
-    applySuggestion: update, dismissSuggestion: update, lock: update, unlock: update,
+    updateProposal: update, discardProposal: update,
+    renameTopic: vi.fn(async () => current),
+    acceptTopics: vi.fn(async () => current),
   };
   return { mock, set: (next: InterestProfileReviewSnapshot) => { current = next; } };
 }
@@ -122,6 +103,63 @@ async function confirmChoice(text: string): Promise<void> {
   button(Modal.opened.at(-1)!.contentEl, text).click();
   await Promise.resolve();
 }
+
+describe("accepting a proposed structure", () => {
+  /**
+   * ADR 0014 §1: the researcher reviews and accepts a structure. The modal's
+   * job here is that nothing reaches settings without being picked, that the
+   * suggested name is editable before the tag is derived from it, and that
+   * what is uncovered stays visible.
+   */
+  it("accepts only the topics that were selected", async () => {
+    const ctrl = controller();
+    const modal = open(ctrl.mock);
+    const root = (modal as any).contentEl as HTMLElement;
+
+    const accept = button(root, "Accept 0 topic(s) into settings");
+    expect(accept.disabled).toBe(true);
+
+    const checkbox = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+
+    const armed = button((modal as any).contentEl, "Accept 1 topic(s) into settings");
+    expect(armed.disabled).toBe(false);
+    armed.dispatchEvent(new Event("click"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(["topic-1"]);
+  });
+
+  it("routes a renamed topic through the controller before any tag is derived", async () => {
+    const ctrl = controller();
+    const modal = open(ctrl.mock);
+    const root = (modal as any).contentEl as HTMLElement;
+    const name = root.querySelector<HTMLInputElement>('input[aria-label="Topic name"]')!;
+    expect(name.value).toBe("Research agents");
+    name.value = "Agent reliability";
+    name.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(ctrl.mock.renameTopic).toHaveBeenCalledWith({
+      topicId: "topic-1", suggestedName: "Agent reliability",
+    });
+  });
+
+  it("says what the proposal does not cover instead of leaving it silent", () => {
+    const base = snapshot();
+    const uncovered = { paperKey: "arxiv:2608.00002", evidenceFingerprint: evidence };
+    const ctrl = controller(snapshot({
+      proposal: { ...base.proposal!, catalogInputPapers: [...base.proposal!.catalogInputPapers, uncovered] },
+    }));
+    const modal = open(ctrl.mock);
+    const text = ((modal as any).contentEl as HTMLElement).textContent ?? "";
+    expect(unclassifiedBufferPoolPapers(ctrl.mock.snapshot().proposal)).toHaveLength(2);
+    expect(text).toContain("No proposed direction covers these papers");
+    // The incremental flow is dark until it is rebuilt around topics; a blank
+    // space would read as a bug.
+    expect(text).toContain("Incremental suggestions");
+  });
+});
 
 describe("review modal stylesheet", () => {
   const css = (): string => readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
