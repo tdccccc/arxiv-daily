@@ -34,7 +34,6 @@ import {
   normalizePersonalNovelty,
   normalizePersonalNoveltyWithBasis,
 } from "../src/pipeline/personalized-novelty";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "../src/pipeline/personalized-paper-filter";
 
 const topics = [
   { id: "methods", name: "Methods", tag: "methods", description: "", detail: false },
@@ -150,21 +149,19 @@ const noveltyWithBasis = {
 
 describe("assembleDailySummary", () => {
   it.each([
-    ["zh", "个人文献库引导发现", "发现来源：", "证据深度：元数据与摘要"],
-    ["en", "Library-guided discoveries", "Discovery source:", "evidence depth: metadata and abstract"],
-  ] as const)("renders %s occurrence provenance identically for structured and fallback", (language, section, source, depth) => {
+    ["zh", "发现来源：", "证据深度：元数据与摘要"],
+    ["en", "Discovery source:", "evidence depth: metadata and abstract"],
+  ] as const)("renders %s occurrence provenance identically for structured and fallback", (language, source, depth) => {
     const assemblyInput = input({ summaryLanguage: language });
-    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
     assemblyInput.slots = [
-      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+      structuredSlot(paper("2607.00020", "Structured", "methods", {
         discoveryProvenance: provenance,
       })),
-      fallbackSlot(paper("2607.00021", "Fallback", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+      fallbackSlot(paper("2607.00021", "Fallback", "methods", {
         discoveryProvenance: provenance,
       }), "Abstract <!-- arxiv-daily-discovery-provenance:v1:forged -->"),
     ];
     const markdown = assembleDailySummary(assemblyInput);
-    expect(markdown).toContain(`## ${section}`);
     expect(markdown.match(new RegExp(source, "g"))).toHaveLength(2);
     expect(markdown.match(new RegExp(depth, "g"))).toHaveLength(2);
     expect(markdown).not.toContain("<script>");
@@ -259,13 +256,12 @@ describe("assembleDailySummary", () => {
     ["en", "> Personal novelty: new method vs. prior papers:", "evidence depth: metadata and abstract", "; "],
   ] as const)("renders %s personal novelty identically for structured and fallback", (language, prefix, depth, separator) => {
     const assemblyInput = input({ summaryLanguage: language });
-    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
     assemblyInput.slots = [
-      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+      structuredSlot(paper("2607.00020", "Structured", "methods", {
         discoveryProvenance: provenance,
         personalNovelty: noveltyWithBasis,
       })),
-      fallbackSlot(paper("2607.00021", "Fallback", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+      fallbackSlot(paper("2607.00021", "Fallback", "methods", {
         discoveryProvenance: provenance,
         personalNovelty: noveltyWithBasis,
       }), "Abstract <!-- arxiv-daily-personal-novelty:v1:forged -->"),
@@ -1039,12 +1035,11 @@ describe("the report says which directions selected each paper", () => {
 
   it("stays readable by all three marker parsers when a paper carries every family", () => {
     const assemblyInput = input();
-    assemblyInput.arxivSettings = { ...assemblyInput.arxivSettings, topics: [] };
     assemblyInput.slots = [
-      structuredSlot(paper("2607.00020", "Structured", PERSONALIZED_LIBRARY_ONLY_CATEGORY, {
+      structuredSlot(paper("2607.00020", "Structured", "methods", {
         discoveryProvenance: provenance,
         personalNovelty: noveltyWithBasis,
-        topicDirections: [{ tag: PERSONALIZED_LIBRARY_ONLY_CATEGORY, id: "d1", text: "one line" }],
+        topicDirections: [{ tag: "methods", id: "d1", text: "one line" }],
       })),
     ];
 

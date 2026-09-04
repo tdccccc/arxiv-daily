@@ -2,7 +2,7 @@ import type { StorageAdapter } from "../core/adapters";
 import {
   normalizePaperDiscoveryProvenance,
 } from "../pipeline/discovery-provenance-marker";
-import type { PaperDiscoveryProvenance } from "../pipeline/personalized-paper-filter";
+import type { PaperDiscoveryProvenance } from "../pipeline/discovery-provenance-marker";
 import { normalizePersonalNovelty } from "../pipeline/personalized-novelty";
 import type { PersonalNovelty } from "../pipeline/personalized-novelty";
 import type { OutputSettings } from "../settings/types";

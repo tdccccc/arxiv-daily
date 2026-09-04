@@ -15,15 +15,8 @@ import {
   createDailyFilterCompatibilityFingerprint,
   deriveDailyFilterCheckpointPaths,
   prepareDailyFilterCheckpoint,
-  PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
   NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
 } from "../src/services/daily-filter-checkpoint-store";
-import {
-  planPersonalizedFilterCalls,
-  preparePersonalizedFilterCheckpoint,
-  type PersonalizedDiscoveryInput,
-  type PersonalizedDirectionRecord,
-} from "../src/pipeline/personalized-paper-filter";
 import {
   PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
   PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
@@ -129,31 +122,6 @@ function makeStore(storage: StorageAdapter, warning = vi.fn()) {
     onWarning: warning,
   });
 }
-
-const personalizedDiscovery: PersonalizedDiscoveryInput = {
-  directions: [{
-    id: "direction.001",
-    name: "Direction one",
-    description: "Strict personalized direction",
-    discoveryCues: ["strict discovery"],
-    representatives: [{
-      paperKey: "arxiv:2501.00001",
-      title: "Representative one",
-      evidenceDepth: "metadata-and-abstract",
-    }],
-  }],
-};
-
-function personalizedPrepared() {
-  const planned = planPersonalizedFilterCalls(papers, personalizedDiscovery);
-  if (!planned.ok) throw new Error("unexpected plan-too-large");
-  return preparePersonalizedFilterCheckpoint({ plan: planned.value, llm: compatibility().llm as any });
-}
-
-const personalizedResult: PersonalizedDirectionRecord[] = [
-  { paperKey: "arxiv:2608.00001", directionIds: ["direction.001"] },
-  { paperKey: "arxiv:2608.00002", directionIds: [] },
-];
 
 function recomputeDocumentFingerprint(document: any): void {
   document.fingerprint = `sha256:${sha256ForCheckpointTests(
@@ -697,96 +665,14 @@ describe("DailyFilterCheckpointStore", () => {
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
   });
 
-  it("persists and reconstructs a strict independent personalized checkpoint privately", async () => {
-    const { files, storage } = makeStorage();
-    const writeTextWithMode = vi.fn(async (path: string, content: string) => {
-      files[path] = content;
-    });
-    storage.writeTextWithMode = writeTextWithMode;
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-
-    expect(JSON.parse(files[paths.personalizedDocumentPath]!)).toMatchObject({
-      schemaVersion: PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
-      reportDate,
-      result: personalizedResult,
-    });
-    expect(writeTextWithMode).toHaveBeenCalledWith(
-      expect.stringContaining(".personalized.json.tmp"), expect.any(String), 0o600,
-    );
-    expect(await makeStore(storage).lookupPersonalizedReusable(
-      reportDate, personalizedPrepared(),
-    )).toEqual(personalizedResult);
-  });
-
-  it("rejects arbitrary snapshots, unknown/duplicate/partial results, and fingerprint tampering", async () => {
-    const { files, storage } = makeStorage();
-    const store = makeStore(storage);
-    const snapshot = personalizedPrepared();
-    await expect(store.savePersonalized(
-      reportDate, JSON.parse(JSON.stringify(snapshot)) as any, personalizedResult,
-    ))
-      .rejects.toThrow(/prepared exact call-plan snapshot/);
-    for (const invalid of [
-      personalizedResult.slice(0, 1),
-      [{ paperKey: "arxiv:2608.99999", directionIds: [] }, personalizedResult[1]],
-      [{ paperKey: personalizedResult[0]!.paperKey, directionIds: ["unknown"] }, personalizedResult[1]],
-      [{ ...personalizedResult[0], extra: true }, personalizedResult[1]],
-    ]) {
-      await expect(store.savePersonalized(reportDate, snapshot, invalid))
-        .rejects.toThrow(/invalid personalized filter checkpoint/);
-    }
-    await store.savePersonalized(reportDate, snapshot, personalizedResult);
-    const paths = store.pathsFor(reportDate);
-    const document = JSON.parse(files[paths.personalizedDocumentPath]!);
-    document.fingerprintInput.plan.batches[0].request.messages[1].content = "tampered";
-    document.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(document.fingerprintInput))}`;
-    files[paths.personalizedDocumentPath] = JSON.stringify(document);
-    expect(await makeStore(storage).loadPersonalized(reportDate)).toBeNull();
-  });
-
-  it("recovers personalized backup, rotates atomically, and serializes same-path saves", async () => {
-    const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-    const first = files[paths.personalizedDocumentPath]!;
-    await Promise.all([
-      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), personalizedResult),
-      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), [
-        { ...personalizedResult[0]!, directionIds: [] }, personalizedResult[1]!,
-      ]),
-    ]);
-    expect(files[paths.personalizedBackupPath]).toBeTruthy();
-    expect(files[`${paths.personalizedDocumentPath}.tmp`]).toBeUndefined();
-    expect(files[`${paths.personalizedBackupPath}.tmp`]).toBeUndefined();
-    files[paths.personalizedBackupPath] = first;
-    files[paths.personalizedDocumentPath] = "corrupt";
-    expect(await makeStore(storage).lookupPersonalizedReusable(
-      reportDate, personalizedPrepared(),
-    )).toEqual(personalizedResult);
-  });
-
-  it("fails personalized lookup closed on unreadable primary", async () => {
-    const { files, storage, readText } = makeStorage();
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-    files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
-    readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
-    await expect(store.lookupPersonalizedReusable(reportDate, personalizedPrepared()))
-      .rejects.toThrow(/cannot read personalized filter checkpoint/);
-    expect(readText).toHaveBeenCalledTimes(1);
-  });
-
   it("removes manual and personalized primary, backup, and temp artifacts", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.save(reportDate, prepared(), result);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
     const paths = store.pathsFor(reportDate);
+    // The retired library-profile classifier left these behind on real vaults;
+    // nothing writes them any more, so seed them the way disk would have.
+    files[paths.personalizedDocumentPath] = "{}";
     files[backupPath] = files[documentPath]!;
     files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
     for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
@@ -1061,9 +947,9 @@ describe("novelty filter checkpoint", () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.save(reportDate, prepared(), result);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
     await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
     const paths = store.pathsFor(reportDate);
+    files[paths.personalizedDocumentPath] = "{}";
     for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
       paths.personalizedBackupPath, paths.noveltyDocumentPath, paths.noveltyBackupPath]) {
       files[`${path}.tmp`] = "tmp";

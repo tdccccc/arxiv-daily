@@ -21,7 +21,6 @@ import {
   extractFallbackPaperIds,
   extractPaperSummaries,
 } from "./daily-summary-parser";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
 import {
   fallbackCountLine,
   normalizeMarkdownLine,
@@ -322,19 +321,6 @@ export function renderDailySummaryRescueMarkdown(contract: RescueContract): stri
       continue;
     }
     for (const slot of topicSlots) {
-      out.push("", renderRescueSlot(slot, contract.language, contract.date));
-    }
-  }
-  const librarySlots = contract.slots.filter(
-    ({ paper }) => paper.category === PERSONALIZED_LIBRARY_ONLY_CATEGORY,
-  );
-  if (librarySlots.length > 0) {
-    out.push(
-      "",
-      "<!-- arxiv-daily-rescue-library-only -->",
-      `## ${contract.language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`,
-    );
-    for (const slot of librarySlots) {
       out.push("", renderRescueSlot(slot, contract.language, contract.date));
     }
   }

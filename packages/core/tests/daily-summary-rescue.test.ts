@@ -6,7 +6,6 @@ import {
   assembleDailySummary,
   assembleEmergencyDailySummary,
 } from "../src/pipeline/daily-summary-assembler";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "../src/pipeline/personalized-paper-filter";
 import { parseDailyReportDiscoveryProvenance } from "../src/pipeline/discovery-provenance-marker";
 import {
   buildDailySummaryRescueContract,
@@ -148,11 +147,11 @@ describe("rescueDailySummary", () => {
   it.each(["en", "zh"] as const)("matches normal/emergency grouping and occurrence coverage in %s", (language) => {
     const assemblyInput = input();
     assemblyInput.summaryLanguage = language;
-    const libraryPaper = {
+    const provenancePaper = {
       ...assemblyInput.slots[0]!.paper,
       id: "2607.00003",
       title: "Library only",
-      category: PERSONALIZED_LIBRARY_ONLY_CATEGORY,
+      category: "c",
       discoveryProvenance: { manualTopicTags: [], directions: [{
         id: "d", name: "Direction", representatives: [{
           paperKey: "arxiv:2501.00001", title: "Prior", evidenceDepth: "metadata-and-abstract" as const,
@@ -160,9 +159,9 @@ describe("rescueDailySummary", () => {
       }] },
     };
     assemblyInput.slots.push({
-      paper: libraryPaper,
+      paper: provenancePaper,
       result: { kind: "structured", summary: {
-        id: libraryPaper.id, coreProblem: "p", keyMethod: "m", mainResult: "r",
+        id: provenancePaper.id, coreProblem: "p", keyMethod: "m", mainResult: "r",
         whyRelevant: "v", limitations: "l",
       } },
     });
@@ -172,9 +171,6 @@ describe("rescueDailySummary", () => {
       renderDailySummaryRescueMarkdown(buildDailySummaryRescueContract(assemblyInput)),
     ];
     for (const output of outputs) {
-      expect(output.indexOf("## Topic C")).toBeLessThan(output.indexOf(
-        language === "en" ? "## Library-guided discoveries" : "## 个人文献库引导发现",
-      ));
       expect(output.match(/^### /gm)).toHaveLength(3);
       for (const id of ["2607.00001", "2607.00002", "2607.00003"]) {
         expect(output.match(new RegExp(`\\*\\*arXiv\\*\\*.*${id}`, "g"))).toHaveLength(1);

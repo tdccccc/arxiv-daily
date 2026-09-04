@@ -8,8 +8,7 @@ import {
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import { normalizeTopicDirectionHits, type TopicDirectionHit } from "./topic-direction-hits";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
-import type { PaperDiscoveryProvenance } from "./personalized-paper-filter";
+import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import { normalizePersonalNoveltyWithBasis } from "./personalized-novelty";
 import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import {
@@ -141,8 +140,7 @@ export function preflightDailySummaryPapers(
       throw new Error(`preflightDailySummaryAssembly: duplicate input paper ID: ${paper.id}`);
     }
     paperIds.add(paper.id);
-    if (!topicsByTag.has(paper.category)
-      && paper.category !== PERSONALIZED_LIBRARY_ONLY_CATEGORY) {
+    if (!topicsByTag.has(paper.category)) {
       throw new Error(
         `preflightDailySummaryAssembly: paper ${paper.id} has unknown category tag: ${paper.category}`,
       );
@@ -266,11 +264,6 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
     }
     for (const slot of topicSlots) out.push("", renderSlot(slot, language, dateStr));
   }
-  const librarySlots = slotsByTopic.get(PERSONALIZED_LIBRARY_ONLY_CATEGORY) ?? [];
-  if (librarySlots.length > 0) {
-    out.push("", `## ${language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`);
-    for (const slot of librarySlots) out.push("", renderSlot(slot, language, dateStr));
-  }
   return out.join("\n");
 }
 
@@ -278,10 +271,9 @@ function groupSlots(
   slots: DailyPaperSlot[],
   arxivSettings: ArxivSettings,
 ): Map<string, DailyPaperSlot[]> {
-  const slotsByTopic = new Map([
-    ...arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]] as const),
-    [PERSONALIZED_LIBRARY_ONLY_CATEGORY, [] as DailyPaperSlot[]] as const,
-  ]);
+  const slotsByTopic = new Map(
+    arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]] as const),
+  );
   for (const slot of slots) slotsByTopic.get(slot.paper.category)!.push(slot);
   return slotsByTopic;
 }

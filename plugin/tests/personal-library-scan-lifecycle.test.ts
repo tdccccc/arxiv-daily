@@ -213,33 +213,6 @@ describe("personal library scan lifecycle", () => {
     expect(scanned.files["papers/legacy.pdf"]).toMatchObject({ status: "unresolved" });
   });
 
-  it("invalidates captured personalized discovery before catalog promotion and reload installs", async () => {
-    const { plugin, internals, storage, source } = makePlugin();
-    const controllers = new Map<object, AbortController>();
-    const promoted = new AbortController();
-    controllers.set({}, promoted);
-    internals.personalizedDailyRunControllers = controllers;
-    let releaseWrite!: () => void;
-    vi.mocked(storage.writeTextAtomic!).mockImplementationOnce(async () => {
-      await new Promise<void>((resolve) => { releaseWrite = resolve; });
-    });
-
-    const scan = plugin.scanPersonalLibrary();
-    await vi.waitFor(() => expect(storage.writeTextAtomic).toHaveBeenCalled());
-    expect(promoted.signal.aborted).toBe(true);
-    releaseWrite();
-    await scan;
-
-    const reloaded = new AbortController();
-    controllers.set({}, reloaded);
-    const reload = plugin.reloadPersonalLibraryCatalog();
-    expect(reloaded.signal.aborted).toBe(true);
-    await reload;
-    // A scan may read PDF evidence for unrecognized files; the reload itself
-    // must not re-read PDFs (unrecognized files reuse their observations).
-    expect(source.readBinary).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects a duplicate scan operation", async () => {
     const { plugin, source } = makePlugin();
     let finishInventory!: () => void;

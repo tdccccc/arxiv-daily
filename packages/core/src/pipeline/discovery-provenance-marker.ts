@@ -1,17 +1,48 @@
-import {
-  PERSONALIZED_FILTER_MAX_DIRECTIONS,
-  PERSONALIZED_FILTER_MAX_ID_LENGTH,
-  PERSONALIZED_FILTER_MAX_NAME_LENGTH,
-  PERSONALIZED_FILTER_MAX_REPRESENTATIVES,
-  PERSONALIZED_FILTER_MAX_TITLE_CODE_UNITS,
-  type PaperDiscoveryProvenance,
-} from "./personalized-paper-filter";
+/**
+ * Discovery provenance is a **read-only legacy format** (ADR 0012 / ADR 0014).
+ * The library-profile classifier that produced these markers retired with the
+ * profile document, so nothing writes them any more — but reports already on
+ * disk carry them, and `paper-index` and the Dashboard still have to read
+ * those reports back unchanged.
+ *
+ * `renderDiscoveryProvenanceMarker` is therefore **not** production code: it
+ * is the canonical-form checker that `parseDiscoveryProvenanceMarker` rounds a
+ * candidate line through before accepting it. Deleting it would delete the
+ * parser's integrity check, not a writer.
+ *
+ * The bounds and payload types below used to live in the retired
+ * `personalized-paper-filter` module. They are the marker format's own bounds
+ * now, and their values are frozen: they describe markers already written to
+ * disk, so changing one silently invalidates existing reports.
+ */
 
 export const DISCOVERY_PROVENANCE_MARKER_VERSION = 1 as const;
 export const DISCOVERY_PROVENANCE_MARKER_PREFIX = "arxiv-daily-discovery-provenance";
 export const DISCOVERY_PROVENANCE_MARKER_MAX_CODE_UNITS = 48_000 as const;
 export const DISCOVERY_PROVENANCE_MAX_MANUAL_TOPICS = 256 as const;
 export const DISCOVERY_PROVENANCE_MAX_TOPIC_LENGTH = 120 as const;
+export const DISCOVERY_PROVENANCE_MAX_DIRECTIONS = 256 as const;
+export const DISCOVERY_PROVENANCE_MAX_ID_LENGTH = 128 as const;
+export const DISCOVERY_PROVENANCE_MAX_NAME_LENGTH = 120 as const;
+export const DISCOVERY_PROVENANCE_MAX_REPRESENTATIVES = 5 as const;
+export const DISCOVERY_PROVENANCE_MAX_TITLE_CODE_UNITS = 2_000 as const;
+
+export interface DiscoveryRepresentativeProvenance {
+  paperKey: string;
+  title: string;
+  evidenceDepth: "metadata-and-abstract";
+}
+
+export interface DiscoveryDirectionProvenance {
+  id: string;
+  name: string;
+  representatives: DiscoveryRepresentativeProvenance[];
+}
+
+export interface PaperDiscoveryProvenance {
+  manualTopicTags: string[];
+  directions: DiscoveryDirectionProvenance[];
+}
 
 interface MarkerPayload {
   v: typeof DISCOVERY_PROVENANCE_MARKER_VERSION;
@@ -36,20 +67,20 @@ export function normalizePaperDiscoveryProvenance(value: unknown): PaperDiscover
     DISCOVERY_PROVENANCE_MAX_MANUAL_TOPICS,
     DISCOVERY_PROVENANCE_MAX_TOPIC_LENGTH,
   )) return null;
-  if (!isOrdinaryDataArray(value.directions, PERSONALIZED_FILTER_MAX_DIRECTIONS)) return null;
+  if (!isOrdinaryDataArray(value.directions, DISCOVERY_PROVENANCE_MAX_DIRECTIONS)) return null;
 
   const directions: PaperDiscoveryProvenance["directions"] = [];
   for (const raw of value.directions) {
     if (!isExactDataObject(raw, ["id", "name", "representatives"])
-      || !isBoundedText(raw.id, PERSONALIZED_FILTER_MAX_ID_LENGTH)
-      || !isBoundedText(raw.name, PERSONALIZED_FILTER_MAX_NAME_LENGTH)
-      || !isOrdinaryDataArray(raw.representatives, PERSONALIZED_FILTER_MAX_REPRESENTATIVES)
+      || !isBoundedText(raw.id, DISCOVERY_PROVENANCE_MAX_ID_LENGTH)
+      || !isBoundedText(raw.name, DISCOVERY_PROVENANCE_MAX_NAME_LENGTH)
+      || !isOrdinaryDataArray(raw.representatives, DISCOVERY_PROVENANCE_MAX_REPRESENTATIVES)
       || raw.representatives.length < 1) return null;
     const representatives: PaperDiscoveryProvenance["directions"][number]["representatives"] = [];
     for (const representative of raw.representatives) {
       if (!isExactDataObject(representative, ["paperKey", "title", "evidenceDepth"])
         || !/^arxiv:\d{4}\.\d{4,5}$/.test(representative.paperKey)
-        || !isBoundedText(representative.title, PERSONALIZED_FILTER_MAX_TITLE_CODE_UNITS)
+        || !isBoundedText(representative.title, DISCOVERY_PROVENANCE_MAX_TITLE_CODE_UNITS)
         || representative.evidenceDepth !== "metadata-and-abstract") return null;
       representatives.push({
         paperKey: representative.paperKey,

@@ -303,3 +303,43 @@
 - **Chunk 5 的实现写在了测试之前**（marker 模块整体成形后才补测试），不满足 strict Red-Green。补偿验证是逐条变异检验，四条规则各删一次都红。记在阶段计划里。
 - **退化行为定死了两条**：没有方向的主题**整个不进提示词、也不进合法 tag**（留着等于邀请模型把论文归进去、再因为报不出方向而触发违约，**一次配置问题葬送整次运行**），一条方向都没有时直接不调 LLM；两种情况都 warn 出被跳过的主题名。配置检查文案从「description is empty」改成「has no directions」——影子字段在设置页里根本不显示，指着它让用户去修是指错了地方。
 - **真实端点实测通过，但带一条要留给 P6 的观察。** 真端点 + 9 篇真实论文跑两轮，标识全部合法、严格解码直接通过、3 篇 hep-th 两轮都判 skip。**但 18 次判定里一次多条命中都没出现**——提示词明写了「可以同时命中多条、全部列出」，模型仍只挑最匹配的一条，包括那篇既是 SZ 选源星表又做质量标定的 SPT 论文；`redMaPPer 子结构`那篇也两轮都判 skip。契约允许 1..n 且单测覆盖了，**但多条命中在真模型上没有活证据**。这是召回口径问题，取决于方向文本怎么写，P6 拿真实日报判。
+
+## 2026-09-04 — P4 开工前：判定画像文档那套的退休范围
+
+- evidence: 这批代码**从未发布过**。`docs/releases/` 里 0.3.0–0.4.6 共 13 份发布说明零次提到 personal library；README 只有一段 "Personal library access (desktop preview)"，且那段写着「The current preview does not change daily filtering, reports, paper notes, or email delivery」——**这句话现在是假的**：`buildPipeline()` 每次日报都调 `buildPersonalizedDailyDiscoverySnapshot()`（`plugin/main.ts:3083`），没有任何 feature flag。退休第二分类器不是撤回承诺，反而是把行为拉回文档说的样子。
+- evidence: **CLI 一行都不涉及**。`apps/cli` 对 personalized / interest-profile / libraryProfile 的引用数为 0，整条路径是插件独有的。goal Constraints 里「插件与 CLI 行为一致」这条在此不构成约束。
+- **退休范围的大部分不是选择，是被 P4 的验收标准逼出来的。** 接受动作一旦写进 `settings.topics`，`interest-profile.json` 就失去唯一的写入者，挂在它下游的整条链同时失去主语：资格判定 → 日报快照 → 第二分类器 → provenance → novelty，以及 incremental 的 attach/split/merge。问题不是「要不要一起退休」，而是「改道之后它们还有没有输入」——没有。
+- **存活**：`personal-library-direction-proposer.ts`（P4 要在它上面加粗/细两级）、`direction-proposal.json` 与 store 的候选那一半（ADR 0012 line 41 明确要求候选仍需持久家）、catalog / clustering / fulltext 索引、`incremental/` 的打分半边（placement / recluster / diff-suggestions / suggestions-store 约 1400 行，算法不变，P5 只换写入目标）。
+- **用户定：失去主语的那批物理删除，不留着不接线。** 范围是 profile schema、`personal-library-interest-profile-review.ts`、profile store 那一半、`evaluatePersonalLibraryInterestEligibility`、`buildPersonalizedDailyDiscoverySnapshot`、`personalized-paper-filter.ts`、`PERSONALIZED_LIBRARY_ONLY_CATEGORY` 的日报分节与 `discoveryProvenance` 的**生产端**，约 3000 行源码 + 约 4000 行测试。理由：从未发布、CLI 无引用、无迁移负担，git 历史随时可取回；留着不接线会多出一大片永不执行却仍在跑的测试。**P2 对 sidecar 的处理不构成先例**——那次不删是因为有用户可见设置，这里没有。
+- **停产但解析必须保留**：`personal-library` 分节与 discovery-provenance 标记族不再产出，但磁盘上的旧日报仍要能被 `paper-index` 与 `dashboard/history-sync` 正确读回。这是删除动作的第一条 abort trigger——**红要红在「旧日报解析行为逐字不变」上**。
+- **用户定：personal novelty 休眠并记账，不在 P4 内删也不改基准。** `personalized-novelty.ts`（1388 行 + 1200 行测试）在输入断供后该 stage 永不触发。删掉它等于替用户决定了 Non-goals 第 4 条明令不在本 goal 内决定的事（ADR 0012 line 43 明说 novelty 未必要走，基准可以改成检索索引里最相似的论文）。**这是本 goal 结束时必须交还给用户的一笔显式欠债。**
+- **被迫接受的一条暗期**：incremental 建议界面在 P4 之后到 P5 之前是暗的——它的建议挂靠对象是 profile 里的已确认方向，profile 空了就没有可挂靠的东西。`incremental/apply.ts`（450 行）的三个 `apply*Suggestion` 都返回 `PersonalLibraryInterestProfile`，写入目标要换成 topics，属 P5（ADR 0014 §2/§3）。P4 计划要写明这段暗期是预期而非缺陷。
+- **P4 要新造的一小块机器：接受时生成唯一 tag。** `normalizeTopic`（`packages/core/src/settings/topics.ts:68`）是所有主题的唯一入口，但它**不管 tag 唯一性、也不从 name 派生 tag**；重复 tag 是在 `validation.ts:158` 被判为错误的。按 ADR 0014 §1 直接写入会产出一份校验不过的设置。这就是 ADR 0014 Consequences 那句「凡是守设置写入的机制都要覆盖它」的具体落点。
+- **复审页必须重写并桌面验收。** `plugin/src/library/interest-profile-modal.ts`（970 行）现在的主体是「逐条确认方向」，P4 要变成「接受一整套主题（含各自的方向）」。goal Constraints 点名复审页从未进过桌面验收，**测试绿不构成交付证据**。
+- validation: 未改源码，只读与文档。P3 的 core 2101 / plugin 719 / CLI 73 仍是基线。
+- boundary: 只追加本条 journal，未动 goal.md 的阶段状态（P4 仍为 pending，待计划落盘再说）。删除了 `docs/handoffs/2026-09-04-p4-library-proposes-topics.md`（其全部未决项在 P2/P3 计划与本 journal 里均有留存），目录随之为空一并移除。
+- next: 起草 P4 阶段计划 `phases/04-*.md`。先读 ADR 0014 §1 与 Consequences 最后两条；粗/细两级聚类不需要新机器，同一批向量跑两遍 `clusterVectors`，靠 `relativeStopRatio` 区分（`clusterer.ts:95`，proposer 现用 0.65，见 `personal-library-direction-proposer.ts:712`）；**粗聚类比例必须标为「待实测的调参旋钮」而非默认值**。
+
+## 2026-09-04 — P4 计划落盘；写计划时翻出提议器的两处缺陷
+
+- **P4 计划已写**：`phases/04-first-scan-proposes-topics.md`，七个 chunk。顺序是提议侧（两级 schema + 一行方向 + 生成契约修真 → 粗/细两级聚类 → 主题建议名）→ **停下来实测粗聚类比例交用户判** → 写入侧（唯一 tag 派生）→ 复审页重写（含桌面验收）→ 物理删除旧路径。
+- **缺陷一：聚类提议器的生成契约在说谎。** `createPersonalLibraryClusteredDirectionGenerationContract`（`personal-library-direction-proposer.ts:733`）记 `synthesisPrompt: "none"`、`strategy: "...-no-synthesis"`，模块头注释也写着 "skip the cross-cluster synthesis stage"，**但代码实际跑了综合阶段**（同文件 :946）。契约的自述职责是让参数漂移可从提案里检出，而整整一个 LLM 阶段连同其提示词版本对该指纹不可见——改综合提示词不会让任何旧提案失效。形状是当初真跳过、后来按 ADR 0009 §2 加回来，契约与注释没跟上。P4 Chunk 1 修。
+- **缺陷二：提议器在冻结语料上会当场抛错，而这从未被观察到。** `renderClusteredExtractionMessage`（:1047）对超过 20 篇的簇硬抛 `evidence-too-large`，而 P2 实测去重后**最大簇 21 篇**。P2 的测量是临时脚本直接调 `clusterPaperVectors`，提议器本身从未在这个库上跑过，所以这条撞线一直没露面。粗聚类只会让簇更大，P4 第一次真跑必然撞上。**另有一处自相矛盾**：schema 允许 512 成员的簇（`PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS`），提取见到 21 就抛。
+- **用户定：方向的一行文本由提取提示词直接产出**，不做「name + description + cues 拼成一行」的确定性折叠。理由是拼出来的一行会直接变成用户设置页里的正式文本，且提议预览与最终文本对不上。cues 仍产出但只供复审页帮判断，不进 settings。**推论**：`origin: "library"` 在 P4 第一次有生产者——P1 把它加进枚举时没有任何写入方（至今 `grep 'origin: "library"'` 零命中），所以这条路是 P4 接通的，不是既有行为的延续。
+- **用户定：抬提取的篇数上限，让代码单位上限当真守卫。** 真正的约束是消息体积（`MAX_BATCH_CODE_UNITS = 60_000`），20 篇只是它的代理，21 篇的标题+摘要远不到 60k。**不引入新阈值**——超体积仍然抛。备选的「簇内分批再综合」被否掉，因为它把「两批说的是不是同一条方向」的判断又交回给模型，而细聚类本来就是为了避开这个判断。
+- **一行的长度不新造常数**：沿用既有的 `PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH`（1000）作 DTO 硬上限防膨胀，「一行」由提示词表达。goal Constraints 已把两个阈值列为必须实测，再添一个拍脑袋的数是同一个错误的第三次。
+- **计划里显式写进去的一条判据**：粗聚类比例的实测判据是「提议出的主题是否说得出名字」，不是「离群率低不低」（2026-09-03 用户定，混进来的无关 PDF 落进离群是可接受的现实）。判断权在用户；判不出来就作为调参旋钮交付并在 Open questions 里标明。
+- validation: 未改源码，只读与文档。P3 的 core 2101 / plugin 719 / CLI 73 仍是基线。
+- boundary: 只新增 P4 计划与本条 journal。goal.md 未动——P4 状态仍为 pending，按本 goal 的惯例等实现完成才标 done。
+- next: 用户确认计划后开 Chunk 1（提案文档两级 + 提取产出一行 + 生成契约修真，三者与 Chunk 2/3 合并为一次提交，各自变异检验分开做）。
+
+## 2026-09-04 — P4 计划改序（revision 2）；Chunk 1 删除做到一半，**未提交**
+
+- **计划顺序有硬伤，已修正。** revision 1 把「物理删除」排在最后（Chunk 7），但 Chunk 1 要把提案文档改成两级，而它的消费方（复审逻辑、复审页、store）正是要删的东西——先改后删等于为将死的代码做一次移植。删除移到 Chunk 1，其余顺延。
+- **又一处无调用方的死代码**：未聚类提议器 `proposePersonalLibraryDirections` 与整个 grouping 阶段（约 400 行 + 一个提示词 + 551 行测试）只被自己的测试引用，插件走的是 `proposeClusteredPersonalLibraryDirections`（`plugin/main.ts:959`）。它与聚类提议器共用 Chunk 2 要改的提取契约，按同一条原则一并删，已写进计划。
+- **一处读代码才发现、会改变删除边界的事实**：`parseDiscoveryProvenanceMarker` 用 `renderDiscoveryProvenanceMarker` 做规范形式校验（round-trip，`discovery-provenance-marker.ts:137`）。**渲染函数是解析路径的一部分，不是写入方**——删掉它等于删掉解析器的完整性校验。所以「删生产端」的正确边界是「管线不再调用它」，标记模块整体保留。已把这层意思写进该模块的文件头注释。
+- **另一处**：`personal-library` 分节的标题只被写、从不被解析（`parseDailyReportDiscoveryProvenance` 按 `###` 论文块与标记行定位，不看 `##` 分节标题）。所以删掉分节产出对旧日报解析零影响。
+- **已完成（core 侧全部 typecheck 通过）**：provenance 的类型与五个边界常数从被删的 `personalized-paper-filter` 搬进标记模块并改名 `DISCOVERY_PROVENANCE_MAX_*`；`filterPapers` 的 union 分支删除，只剩单一分类器；pipeline 的 personalized 依赖与 novelty stage 摘除（novelty 模块本身保留）；assembler / rescue 的 `personal-library` 分节删除；filter checkpoint store 的 personalized 读写删除（**`removeAll` 的清理保留**，否则磁盘上已有的 `.personalized.json` 永远没人收）；`personalized-paper-filter.ts` 与其 580 行测试删除。core src 净减约 750 行。
+- **未完成，工作区留着未提交**：插件侧还剩 21 个 typecheck 错误，全部来自同一条线——`markPersonalizedDailyDiscoveryUnavailable` / `restorePersonalizedDailyDiscoveryAvailability` / 沿方法签名穿下去的 `discoveryRevision`，约 20 处调用点。**这套机制存在的唯一目的就是给已删掉的日报快照做可用性门控**，所以整条要拆，但它缠在文献库操作的生命周期守卫里，需要逐处读过再动，不能机械替换。此外画像文档模块本体（profile schema 那一半、review、store 那一半、`incremental/apply.ts`）、复审页的减法、以及测试清理都还没做。
+- validation: **树当前编译不过**（插件 21 个错误），因此没有提交。core 2101 / plugin 719 / CLI 73 的基线在动手前已复核，与 P3 一致。
+- next: 接着拆 `discoveryRevision` 那条线到编译通过，跑四包回归确认「旧日报解析逐字不变」，再作为 Chunk 1 的第一次提交。
