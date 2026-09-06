@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-06T22:36:44+08:00
-revision: 10
+updated: 2026-09-07T00:05:00+08:00
+revision: 11
 owner: claude-opus-session
 
 ## Intent
@@ -57,5 +57,6 @@ owner: claude-opus-session
 ## Open questions
 
 - P5 提议新主题的相似度下限仍需实测。P7 的方向高度已由用户在真实 Obsidian 中确认（2026-09-06，4 主题 / 8 方向）。
+- **中英文主题在筛选 prompt 里的信息量不对等**：主题在 prompt 里由 tag 代表，而 tag 是主题名的 slug——拉丁字母主题名的词一个不少地传给模型，中日文主题名派生不出 slug、退化为 `topic-N`，模型只剩方向文本。判断依据本就只看方向（见 Non-goals），所以这不影响正确性，但同一份配置里中英文主题拿到的上下文并不一样。要不要抹平（例如 tag 一律用序号，或给非拉丁名一个可读的音译/编号之外的表示），未决。
 - personal novelty 继续休眠；本 goal 结束前将新对比基准的决定交还用户。
 - `2026-08-13-discovery-loop-and-library-insight` 的 P4「检索规模加固」在 ADR 0013 之后动机基本消失，需用户决定是否一并收束——本 goal 不动它。
