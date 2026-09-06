@@ -371,3 +371,43 @@
   - **Chunk 7 桌面验收**：goal Constraints 点名复审页从未进过桌面验收，**测试绿不构成交付证据**，必须由用户在真实 Obsidian 里看过。
 - validation: core 1918 / 2 skipped、plugin 640、CLI 73、typecheck 干净、lint 0 error / 20 warning（基线）、boundaries 通过。**未推送。**
 - next: 用户跑桌面验收；粗比例实测需要先决定是否搭那个重建脚手架，或者改为在真实 Obsidian 里扫一次库再导出聚类结果。**goal.md 的 P4 仍为 pending**，这两件事都落地才能标 done。
+
+## 2026-09-05 — L3 steer：LLM 组织少量主题，新增每日 20 篇上限
+
+- evidence: 已消费的交接与当前工作区吻合：HEAD `655a867`，14 个修改文件、6 个非交接未跟踪文件。旧版已在真实 Obsidian 跑通，但 10 个主题、46 条方向被用户判断过细。189 篇输入来自 196 篇索引论文（7 组近重复合并）；平均连接的相似度 max 0.786、p99 0.424、p95 0.287、中位数 0.027。单链接没有可用中间粒度，调整细聚类分位数也只能把方向数从 34 变到 46。
+- change: 按用户已确认的方案，由 P7 替代 P4 的粗细两级生成路径，改为紧聚类后全局组织成 2–4 个主题、每主题 1–2 条方向，不写用户配置范例。主题按覆盖量排序，默认选前两个并折叠。用户本轮确认每日总数默认 **20 篇**；P8 在筛选后、摘要前按相关性截断，详情选取只看保留集合。已向用户说明旧筛选缓存会失效。P1–P3 的已验收结论不受影响，P5/P6 保持 pending。
+- disposition: 保留未提交的平均连接聚类、索引摘要（标题版本 9）、非 arXiv 证据四处修复、生成时授权、真实错误日志与进度修复。替换逐簇提取/综合/命名、两级参数及其实现绑定测试；保留取消、证据边界、严格解码、接受设置和旧日报解析的契约测试。ADR 0009 的生成路径退休，ADR 0014 §1 与词汇表同步修订。四个临时测量/探针文件在读过后清理。
+- verification: 本轮改动前 `clustered-direction-proposer.test.ts` 19 项、`personal-library-proposal-contract.test.ts` 5 项通过。交接记载的 core 1928 / plugin 655 / CLI 73、lint 20 warnings 为历史结果，后续重跑。接手 owner 为 `codex-main-session`；按明确约束不提交、不推送、不开 PR。
+- next: P7 Chunk 1 先补组织契约的行为红测，同时独立实施复审页 Chunk 2；构建后由用户查看真实结果。P8 随后实施，不提前改动其他 active initiative。personal novelty 基准、P5 相似度下限、Dashboard 来源展示与全文授权深度仍未决定。
+
+## 2026-09-06 — P7 代码收尾，P8 开始
+
+- evidence: 一次组织调用替代逐簇提取/综合/命名；proposer 23 项与 decoder 61 项通过，真实成员并集/跨组引用变异能触发对应断言。复审 modal 28 项、plugin 全量 670 项通过，取消方向后的真实设置持久化也已覆盖。core 全量、CLI 73、typecheck、lint 0 errors / 20 warnings、boundaries 曾在集成中通过，最终全量随 P8 重跑。
+- change: 仅修改生成 fingerprint 不会使旧提案在加载时失效，补 schema 5 与合法 v4 的重生成路径；38 项针对性回归通过。薄证据从代表展示数量改按去重完整成员数判定，4 红→9 绿。原测量脚本 2 份和无断言探针 2 份已清理，旧 3 个阶段提示词退休。
+- disposition: P7 的代码与回归保留且未提交，P7 仍等真实模型方向高度与 Obsidian 桌面验收，不能标 done；切到独立的 P8（默认每日 20 篇）。P5/P6 不受本次 phase 转换影响。
+- next: P8 在排除 ignored 后、抓正文前按 0–100 relevanceScore 全局排序截断；共享 output 设置正整数上限，缓存保留完整评分。构建与 vault 安装在两项改造都就绪后一起完成。
+
+## 2026-09-06 — P8 完成，构建已安装，P7 待真实桌面验收
+
+- evidence: 每日上限默认 20，插件两套 UI 与 CLI `[output].max_daily_papers` 一致；非法配置被拒绝，旧配置缺失时恢复 20。筛选使用 0–100 relevanceScore，prompt/result 合同分别升到 3；缓存保留所有评分，上限变更可复用。忽略论文先排除，随后全局按分数/规范 ID 截断，正文、详情、摘要、日报索引引用使用同一保留集合。
+- verification: 设置、评分、缓存与截断均有观察到的 Red→Green；针对 CLI 0 值、跨主题截断、代表范围、完整成员、复审排序与真实接受写入的变异均能触发目标断言，已恢复。最终 core 2043 passed / 2 skipped，plugin 700 passed，CLI 85 passed；四包 typecheck、boundaries、lint 0 errors / 20 既有 warnings、插件 build 和 diff 检查通过。
+- change: 集成复核补上一处摘要预算误拒绝：短/长摘要混排时，空预算下的截断标记可能比正文更大；用独立 abstractTruncated 与码点安全前缀恢复单调预算，302 篇回归先红后绿。P7 的旧 v4 提案已真实失效且可重新生成，薄证据看完整去重成员，方向勾选会影响最终设置。
+- delivery: main.js 与 styles.css 已安装到 `/home/tiandc/Desktop/plugin_test/.obsidian/plugins/arxiv-daily/`，cmp 与工作区构建一致。旧文件备份于 `/tmp/arxiv-daily-before-topics-and-cap.l3uAoa/`，临时目录不作长期恢复保证。HEAD 仍为 `655a86754240488b12a0827dbc89a7a2a4d171ae`；全部源码、测试与文档改动保持未提交。
+- next: 用户重载 Obsidian 插件并重新生成提案，查看主题/方向高度、默认前两个主题、折叠和方向选择是否可用。P7 保持 blocked（仅待真实模型/桌面验收），P8 done，P5/P6 仍 pending；未实施增量归入或真实日报验收，也未决定 personal novelty 新基准。
+
+## 2026-09-06 — Accept 已写入但设置页未刷新
+
+- evidence: 用户报告 Accept into topics 点击后设置没变化。只读检查测试 vault：最新 schema 5 提案真实生成于 09:29，含 4 个主题、8 条方向；data.json 已有原来的 2 个主题及新 4 个主题的两份，共 10 个。写入并未失败，接受路径缺少手动新增主题路径已有的设置页刷新与成功反馈。原测试只检查 saveData，没有覆盖已打开页面。
+- change: 插件保留已注册的 ArxivDailySettingTab，接受并持久化成功后刷新其当前/缓存视图，提示新增数量。若保存成功而页面刷新抛错，记录错误并提示重新打开设置，不让用户误以为需要再次接受。没有清理、覆盖真实设置或提案中的任何内容。
+- verification: 新 DOM 回归先复现“文件有新主题、页面仍只有旧主题”，成功提示与刷新异常提示亦先红后绿；32 项弹窗测试、704 项插件全量、插件 typecheck、build 全过，lint 保持 0 errors / 20 既有 warnings。短暂去掉刷新调用时 DOM 回归再次失败，恢复后全量通过。core / CLI 本轮未改、未重跑。
+- delivery: 修复版 main.js 已安装到测试 vault，cmp 与构建一致；旧文件保存在 `/tmp/arxiv-daily-before-accept-refresh.nhrexa/main.js`。改动未提交。
+- next: 用户重载插件并打开设置查看已有主题，本次提案无需再次 Accept。当前 4 个重复主题保留，清理需另行明确；P7 仍待方向质量及修复版实际交互确认。
+
+## 2026-09-06 — P7 验收通过；P9 完成；新增 P10/P11；owner 交接
+
+- evidence: 用户在真实 Obsidian 里跑完了整条路：提案生成 4 主题 / 8 方向，接受写进设置，**方向高度确认合格**（上一次 L3 的起因是 10 主题 46 方向过细），P7 的桌面验收条件因此满足。同一轮验收暴露三件事：(1) 同一份提案被接受了两遍，测试库 data.json 里 4 个主题各存了两份（第二份 tag 带 `-2` 后缀），接受路径除同名外无任何幂等保护，且复审页每次重开都会默认勾选覆盖量最大的两个主题；(2) 主题卡片折叠标题「名字 + #tag」过长，而 tag 是用户不会去编辑的机器字段；(3) 复审页「未聚类」整段列出论文标题过于嘈杂，与上方内容之间没有任何间隔（该段在样式表里一条规则都没有）。
+- change: P7 blocked → done。新增 P9（本轮已完成的验收修正）、P10（提案生成看见已有主题，active）、P11（筛选按具体度裁决，pending）。成功标准第 3 条（首次扫库提议整套主题、接受后即可用、不必手写主题名）勾选。Open questions 里 P7 那半条移除，P5 的相似度下限保留。owner 由 `codex-main-session` 接为 `claude-opus-session`（上一条日志的 next 是等用户验证，工作停在用户侧，无并行 owner）。
+- disposition: P9 的四块改动全部保留：接受按主题名去重（`topicNameKey`，忽略大小写与首尾空格，同批重名也只留一条）+ 复审页把已在设置里的主题标 Added、禁选、排除出预选与接受载荷 + 全部跳过时不写设置只提示；设置页彻底移除 tag 的显示与编辑，改名时按「旧 tag 仍是旧名字的机器形式或 `topic-N` 占位」决定是否跟随，并对其他主题去重（tag 重复是 `preflightDailySummaryAssembly` 的硬错误，会让当天整份日报生成失败，而界面已无处修改）；未覆盖证据由标题列表收成一行计数；复审页四处间距。ADR 0014 补一条 consequence 记录列表收成计数**以及其代价**——那些论文的标题此后在产品里任何地方都不再出现。测试库 data.json 里 4 个重复主题已删除（备份 `data.json.bak-20260906-200906-dupetopics`）。
+- verification: typecheck 四包干净；plugin 719 passed（42 files）；`packages/core` accept-proposed-topics 9/9；lint 0 error / 20 既有 warning。`packages/node-runtime` 的 `reconstructs filter checkpoints from backup...` 为**既有失败**，已用 stash 回到 `655a867` 复现——测试夹具手搓了一个没有 `directions` 键的 topic 绕过 `normalizeTopic`，真实设置到不了那条路径；该夹具待单独修。构建已装入测试 vault（旧文件备份 `main.js.bak-20260906-*-pretopicui` / `-prereview`）。
+- note: 排查 P11 时发现 goal 的 Non-goal「主题名仍只作标签」在代码里是**用 prompt 明文规则**落实的（`paper-filter.system.md`：判断依据是方向，不是主题名），而不是靠不给主题名——给模型的 tag 就是主题名的 slug，拉丁文主题名的词一个不少。原本设想的「把主题名加进 prompt」因此收益近零且与该规则自相矛盾，已从 P11 砍掉，Non-goals 不动、不构成 L3。附带记一笔：中日文主题名派生不出 slug，tag 退化为 `topic-N`，这类主题在筛选 prompt 里没有任何主题级线索——不影响正确性（判断本就只看方向），但中英文主题的信息量并不对等。
+- next: P10 Chunk 1——先给组织契约补「一条方向归属已有主题」的行为红测。P11 在 P10 之后做，改动会让已缓存的筛选结果整批失效，实施前再确认一次。P5/P6 仍 pending；C 类工作（把已建好但无调用方的 `library/incremental/{placement,recluster,diff-suggestions}` 接上）仍未立项。
