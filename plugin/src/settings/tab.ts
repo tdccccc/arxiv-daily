@@ -228,6 +228,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderRunWindowRow(this, setting),
       renderTickIntervalRow: (setting) =>
         declarativeRows.renderTickIntervalRow(this, setting),
+      renderDailyPaperLimitRow: (setting) =>
+        declarativeRows.renderDailyPaperLimitRow(this, setting),
       renderEmailGuideRow: (setting) =>
         declarativeRows.renderEmailGuideRow(this, setting),
       renderEmailModeRow: (setting) =>
@@ -917,7 +919,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     topics.push(normalizeTopic({
       id: newId,
       name: "",
-      tag: `topic-${topics.length + 1}`,
+      // Deleting a topic frees its ordinal, so the plain count can collide.
+      tag: uniqueTopicTag(topics, -1, `topic-${topics.length + 1}`),
       detail: false,
     }));
     this.expandedTopics.add(newId);
@@ -1511,6 +1514,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // ─── Output & Schedule ────────────────────────────
     this.sectionHeading(containerEl, "Output & schedule", "schedule");
+
+    declarativeRows.renderDailyPaperLimitRow(
+      this,
+      new Setting(containerEl)
+        .setName("Daily paper limit")
+        .setDesc("Maximum papers across all topics in each daily report. Default is 20."),
+    );
 
     new Setting(containerEl)
       .setName("Daily reports folder")
@@ -2411,29 +2421,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
-    let tagChip: HTMLElement | null = null;
-    const createTag = () => {
-      if (!topic.tag) return;
-      tagChip = header.createSpan({
-        cls: "arxiv-daily-settings__topic-tag",
-        text: "#" + topic.tag,
-      });
-    };
+    // The header carries the name alone: a topic name and its machine tag
+    // together outran the row, and the tag is derived from the name anyway.
     let star: HTMLElement | null = null;
-    const createStar = () => {
-      if (!topic.detail) return;
+    if (topic.detail) {
       star = header.createSpan({
         cls: "arxiv-daily-settings__topic-star",
         text: "★",
         attr: { title: "Detail report enabled" },
       });
-    };
-    if (compact) {
-      createTag();
-      createStar();
-    } else {
-      createStar();
-      createTag();
     }
 
     // ─── Expanded form (toggled via display) ────────────────
@@ -2468,63 +2464,30 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     nameInput.value = topic.name;
     nameInput.placeholder = "Topic name";
 
-    // Tag row
-    const tagRow = form.createDiv({
-      cls: "arxiv-daily-settings__topic-row",
-    });
-    const tagId = `${idPrefix}-tag`;
-    const tagHintId = `${tagId}-hint`;
-    tagRow.createEl("label", {
-      cls: "arxiv-daily-settings__topic-label",
-      text: "Tag",
-      attr: { for: tagId },
-    });
-    if (!compact) {
-      this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
-    }
-    const tagInput = tagRow.createEl("input", {
-      cls: "arxiv-daily-settings__topic-tag-input",
-      type: "text",
-      attr: compact
-        ? { id: tagId }
-        : { id: tagId, "aria-describedby": tagHintId },
-    });
-    tagInput.value = topic.tag;
-    tagInput.placeholder = "Topic tag";
-    const autoBadge = compact
-      ? null
-      : tagRow.createSpan({
-          cls: "arxiv-daily-settings__topic-auto",
-          text: "Auto",
-        });
-    const refreshAutoBadge = () => {
-      autoBadge?.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
-    };
-    refreshAutoBadge();
-
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
       titleSpan.title = topic.name;
       titleSpan.toggleClass("is-muted", !topic.name.trim());
     };
 
-    nameInput.oninput = async () => {
-      const wasAuto = topic.tag === slugify(topic.name);
-      topic.name = nameInput.value;
-      if (wasAuto) {
-        const derived = slugify(topic.name);
-        topic.tag = derived || `topic-${index + 1}`;
-        tagInput.value = topic.tag;
-      }
-      refreshAutoBadge();
-      refreshHeader();
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-    };
+    // Settings no longer shows the tag, so the name is the only thing left
+    // that can produce one. A tag that is still the machine form of the old
+    // name follows the rename; one that was typed by hand while the field
+    // existed is left alone, because nothing on screen could restore it.
+    const tagFollowsName = isDerivedTopicTag(topic.tag, topic.name)
+      || isPlaceholderTopicTag(topic.tag)
+      || !topic.tag;
 
-    tagInput.oninput = async () => {
-      topic.tag = tagInput.value;
-      refreshAutoBadge();
+    nameInput.oninput = async () => {
+      topic.name = nameInput.value;
+      if (tagFollowsName) {
+        topic.tag = uniqueTopicTag(
+          topics,
+          index,
+          slugify(topic.name) || `topic-${index + 1}`,
+        );
+      }
+      refreshHeader();
       await this.plugin.saveSettings();
       this.refreshSetupGuide();
     };
@@ -2700,7 +2663,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           text: "★",
           attr: { title: "Detail report enabled" },
         });
-        if (!compact && tagChip) header.insertBefore(star, tagChip);
       }
     };
 
@@ -2808,6 +2770,43 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 function stableDomId(value: string): string {
   const normalized = value.replace(/[^A-Za-z0-9_-]/g, "-");
   return normalized || "unnamed";
+}
+
+/** The stand-in tag a blank topic starts with, before it has a name. */
+export function isPlaceholderTopicTag(tag: string): boolean {
+  return /^topic-\d+$/.test(tag);
+}
+
+/**
+ * Whether `tag` is the machine form of `name`: the slug, or the slug plus the
+ * numeric suffix uniqueness adds. Retiring the tag field made this the test
+ * for "nobody chose this tag on purpose", so renaming may replace it.
+ */
+export function isDerivedTopicTag(tag: string, name: string): boolean {
+  const base = slugify(name);
+  if (!base) return false;
+  // `base` is a slug, so it holds no regular-expression metacharacters.
+  return tag === base || new RegExp(`^${base}-\\d+$`).test(tag);
+}
+
+/**
+ * First free tag for `base`, ignoring the topic at `index` so a topic keeps
+ * its own tag. Duplicate tags fail validation outright, and the settings page
+ * no longer offers a field to resolve a collision by hand.
+ */
+export function uniqueTopicTag(
+  topics: readonly Topic[],
+  index: number,
+  base: string,
+): string {
+  const taken = new Set(
+    topics.filter((_, position) => position !== index).map(({ tag }) => tag),
+  );
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 export function isValidLocalTime(value: string): boolean {

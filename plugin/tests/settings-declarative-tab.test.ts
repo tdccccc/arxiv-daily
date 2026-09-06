@@ -179,6 +179,57 @@ function walkItems(
   }
 }
 
+describe("declarative daily paper limit", () => {
+  function renderLimit(tab: ArxivDailySettingTab): HTMLInputElement {
+    let render: ((setting: Setting) => void) | undefined;
+    walkItems(tab.getSettingDefinitions(), (item) => {
+      if (item.name === "Daily paper limit" && typeof item.render === "function") {
+        render = item.render as (setting: Setting) => void;
+      }
+    });
+    expect(render).toBeTypeOf("function");
+    const setting = new Setting(document.createElement("div"));
+    render!(setting);
+    return setting.controlEl.querySelector<HTMLInputElement>("input")!;
+  }
+
+  it("shows 20 and persists a whole-number edit as a number", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    const input = renderLimit(tab);
+    expect(input.value).toBe("20");
+    expect(input.min).toBe("1");
+    expect(input.step).toBe("1");
+    input.value = "35";
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.output.maxDailyPapers).toBe(35));
+    expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      output: expect.objectContaining({ maxDailyPapers: 35 }),
+    }));
+  });
+
+  it.each(["0", "2.5", ""])("rejects the invalid draft %j without persistence", async (draft) => {
+    const { tab, settings, saveSettings } = makeTab();
+    const input = renderLimit(tab);
+    input.value = draft;
+    input.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(input.validationMessage).toContain("positive whole number");
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+
+  it("restores the current limit when persistence fails", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    const input = renderLimit(tab);
+    input.value = "35";
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(input.value).toBe("20"));
+    expect(saveSettings).toHaveBeenCalledOnce();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+});
+
 describe("wired getSettingDefinitions", () => {
   it("returns non-empty definitions with section groups", () => {
     const { tab } = makeTab();
@@ -1358,9 +1409,6 @@ describe("declarative topic cards", () => {
         ".arxiv-daily-settings__topic-name-input",
       ),
       topicSetting.settingEl.querySelector(
-        ".arxiv-daily-settings__topic-tag-input",
-      ),
-      topicSetting.settingEl.querySelector(
         ".arxiv-daily-settings__topic-direction-input",
       ),
     ] as Array<HTMLInputElement | HTMLTextAreaElement>;
@@ -1779,10 +1827,9 @@ describe("topic editing when the setup guide is not on screen", () => {
     const topicSetting = new Setting(tab.containerEl);
     tab.renderTopicRow(topicSetting, 0);
 
-    // Not direction-specific: name and tag lose focus the same way.
+    // Not direction-specific: name and directions lose focus the same way.
     const fields = [
       ".arxiv-daily-settings__topic-name-input",
-      ".arxiv-daily-settings__topic-tag-input",
       ".arxiv-daily-settings__topic-direction-input",
     ].map((selector) =>
       topicSetting.settingEl.querySelector<HTMLInputElement>(selector)!,
@@ -1852,5 +1899,159 @@ describe("topics created by the plugin", () => {
     expect(topic.directions).toEqual([]);
     expect(topic.description).toBe("");
     expect(topic.tag).toBe("topic-1");
+  });
+
+  it("does not hand out a tag that already exists after topics were deleted and re-added", async () => {
+    const { tab, settings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
+
+    await tab.addTopic();
+    await tab.addTopic();
+    expect(settings.arxiv.topics.map((t) => t.tag)).toEqual(["topic-1", "topic-2"]);
+
+    // Deleting the first frees "topic-1"; the plain count-based candidate for
+    // a third topic would otherwise collide with the survivor's tag.
+    await tab.deleteTopic(0);
+    await tab.addTopic();
+
+    const tags = settings.arxiv.topics.map((t) => t.tag);
+    expect(new Set(tags).size).toBe(tags.length);
+  });
+});
+
+/**
+ * Settings no longer shows a topic's machine tag: the collapsed header used
+ * to pair name and tag, and that outran the row. The tag itself still exists
+ * (daily reports and the filter prompt key off it), so renaming has to keep
+ * deriving it — just without a field on screen to fix a collision by hand.
+ */
+describe("topic header hides the machine tag", () => {
+  function renderTopic(topic: Parameters<typeof normalizeTopic>[0]) {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push(normalizeTopic(topic));
+    document.body.appendChild(tab.containerEl);
+    tab.renderTopicRow(new Setting(tab.containerEl), 0);
+    return { tab, settings, saveSettings };
+  }
+
+  it("shows only the name in the collapsed header, with no tag chip", () => {
+    const { tab } = renderTopic({
+      id: "t1",
+      name: "Photo-z",
+      tag: "photo-z",
+      detail: false,
+      directions: [],
+    });
+
+    const header = tab.containerEl.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    )!;
+    const title = header.querySelector(".arxiv-daily-settings__topic-title")!;
+    expect(title.textContent).toBe("Photo-z");
+    expect(header.textContent).not.toContain("#");
+    tab.containerEl.remove();
+  });
+
+  it("shows the name and the detail star, still with no tag chip", () => {
+    const { tab } = renderTopic({
+      id: "t1",
+      name: "Photo-z",
+      tag: "photo-z",
+      detail: true,
+      directions: [],
+    });
+
+    const header = tab.containerEl.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    )!;
+    expect(header.querySelector(".arxiv-daily-settings__topic-star")).not.toBeNull();
+    expect(header.textContent).not.toContain("#");
+    tab.containerEl.remove();
+  });
+
+  it("renders no tag input in the expanded form", () => {
+    const { tab } = renderTopic({
+      id: "t1",
+      name: "Photo-z",
+      tag: "photo-z",
+      detail: false,
+      directions: [],
+    });
+
+    expect(
+      tab.containerEl.querySelector(".arxiv-daily-settings__topic-tag-input"),
+    ).toBeNull();
+    tab.containerEl.remove();
+  });
+
+  it("re-derives a tag that was still the machine form of the old name", () => {
+    const { tab, settings } = renderTopic({
+      id: "t1",
+      name: "Photo-z",
+      tag: "photo-z",
+      detail: false,
+      directions: [],
+    });
+
+    const nameInput = tab.containerEl.querySelector<HTMLInputElement>(
+      ".arxiv-daily-settings__topic-name-input",
+    )!;
+    nameInput.value = "Weak lensing";
+    nameInput.dispatchEvent(new Event("input"));
+
+    expect(settings.arxiv.topics[0].tag).toBe("weak-lensing");
+    tab.containerEl.remove();
+  });
+
+  it("leaves a hand-set tag alone when the name is renamed", () => {
+    const { tab, settings } = renderTopic({
+      id: "t1",
+      name: "Photo-z",
+      tag: "custom-tag",
+      detail: false,
+      directions: [],
+    });
+
+    const nameInput = tab.containerEl.querySelector<HTMLInputElement>(
+      ".arxiv-daily-settings__topic-name-input",
+    )!;
+    nameInput.value = "Weak lensing";
+    nameInput.dispatchEvent(new Event("input"));
+
+    expect(settings.arxiv.topics[0].tag).toBe("custom-tag");
+    tab.containerEl.remove();
+  });
+
+  it("makes a renamed topic's derived tag unique against a collision, not a duplicate", () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.topics.push(
+      normalizeTopic({
+        id: "t1",
+        name: "Photo-z",
+        tag: "photo-z",
+        detail: false,
+        directions: [],
+      }),
+      normalizeTopic({
+        id: "t2",
+        name: "Weak lensing",
+        tag: "weak-lensing",
+        detail: false,
+        directions: [],
+      }),
+    );
+    document.body.appendChild(tab.containerEl);
+    tab.renderTopicRow(new Setting(tab.containerEl), 0);
+
+    const nameInput = tab.containerEl.querySelector<HTMLInputElement>(
+      ".arxiv-daily-settings__topic-name-input",
+    )!;
+    nameInput.value = "Weak lensing";
+    nameInput.dispatchEvent(new Event("input"));
+
+    expect(settings.arxiv.topics[0].tag).toBe("weak-lensing-2");
+    expect(settings.arxiv.topics[1].tag).toBe("weak-lensing");
+    tab.containerEl.remove();
   });
 });

@@ -328,11 +328,6 @@
   color: var(--text-accent);
 }
 
-.arxiv-daily-settings__topic-tag {
-  opacity: 0.55;
-  font-size: 0.85em;
-}
-
 .arxiv-daily-settings__topic-form {
   margin-top: 0.6em;
 }
@@ -462,20 +457,6 @@
   font-size: 0.9em;
 }
 
-.arxiv-daily-settings__topic-tag-input {
-  width: 60%;
-}
-
-.arxiv-daily-settings__topic-auto {
-  margin-left: 0.5em;
-  opacity: 0.5;
-  font-size: 0.85em;
-}
-
-.arxiv-daily-settings__topic-auto.is-hidden {
-  display: none;
-}
-
 .arxiv-daily-settings__topic-footer {
   display: flex;
   align-items: center;
@@ -492,7 +473,7 @@
 
 /* Declarative (1.13+) topic rows only: the card spans the full row width
    (the framework name column is hidden — the card header carries the
-   title), the header right-aligns star/tag, and the expanded form uses a
+   title), the header right-aligns the detail star, and the expanded form uses a
    two-column grid. The <1.13 display() path never gets this class. */
 .arxiv-daily-settings__topic-host {
   flex-wrap: wrap;
@@ -515,8 +496,7 @@
   text-overflow: ellipsis;
 }
 
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-star,
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag {
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-star {
   flex: 0 0 auto;
 }
 
@@ -541,10 +521,6 @@
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__hint,
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
   grid-column: 1 / -1;
-}
-
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag-input {
-  width: 100%;
 }
 
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {

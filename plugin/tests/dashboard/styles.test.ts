@@ -50,12 +50,12 @@ describe("dashboard and settings styles", () => {
     );
   });
 
-  it("keeps topic tags beside shrinkable titles", () => {
+  it("keeps the topic title shrinkable and the detail star beside it fixed-width", () => {
     expect(styles).toMatch(
       /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-title\s*\{[^}]*flex:\s*0 1 auto;[^}]*text-overflow:\s*ellipsis;/s,
     );
     expect(styles).toMatch(
-      /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-star,[\s\S]*?flex:\s*0 0 auto;/,
+      /\.arxiv-daily-settings__topic-host \.arxiv-daily-settings__topic-star\s*\{[^}]*flex:\s*0 0 auto;/s,
     );
   });
 

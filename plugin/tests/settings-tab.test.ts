@@ -139,6 +139,51 @@ function componentOf<T>(setting: Setting | undefined, ctor: new (...args: never[
   return component as T;
 }
 
+describe("legacy daily paper limit", () => {
+  it("shows 20 and persists a whole-number edit as a number", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(persistSettings);
+    const row = renderLegacySettings(tab).get("Daily paper limit");
+    const input = row?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    expect(input!.value).toBe("20");
+    expect(input!.min).toBe("1");
+    expect(input!.step).toBe("1");
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.output.maxDailyPapers).toBe(35));
+    expect(persistSettings).toHaveBeenCalledWith(expect.objectContaining({
+      output: expect.objectContaining({ maxDailyPapers: 35 }),
+    }));
+    expect(installOutputStores).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "2.5", ""])("rejects the invalid draft %j without persistence", async (draft) => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = draft;
+    input!.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(input!.validationMessage).toContain("positive whole number");
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+
+  it("restores the current limit when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(input!.value).toBe("20"));
+    expect(persistSettings).toHaveBeenCalledOnce();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+});
+
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
     expect(modelFetchNoticeMessage({ kind: "success", count: 3 })).toBe(
@@ -576,7 +621,6 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('"aria-controls": formId');
     expect(settingsTabSource).toContain("form.hidden = !isExpanded");
     expect(settingsTabSource).toContain('attr: { for: nameId }');
-    expect(settingsTabSource).toContain('attr: { for: tagId }');
     expect(settingsTabSource).toContain('attr: { for: dirId }');
     expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
   });
@@ -844,4 +888,3 @@ describe("personal library settings layout", () => {
     expect(css).toMatch(/@container \(max-width: 340px\) \{[\s\S]*?max-width:\s*100%;/);
   });
 });
-
