@@ -57,29 +57,49 @@ function uniqueTag(base: string, taken: Set<string>): string {
   }
 }
 
+/**
+ * How a researcher tells two topics apart in settings: by the name on the
+ * report heading, whatever its casing or surrounding space. The proposal
+ * survives acceptance so the rest can be accepted later, which means the same
+ * topic can be offered again — matching on this key is what keeps a second
+ * accept from appending a second copy of it.
+ */
+export function topicNameKey(name: string): string {
+  return name.trim().toLocaleLowerCase();
+}
+
 export interface AcceptProposedTopicsInput {
   /** Proposed topics the researcher kept, in the order they were reviewed. */
   topics: readonly Pick<PersonalLibraryProposedTopic, "suggestedName" | "directions">[];
-  /** Topics already in settings; their tags are reserved. */
-  existingTopics: readonly Pick<Topic, "tag">[];
+  /** Topics already in settings; their names and tags are both reserved. */
+  existingTopics: readonly Pick<Topic, "tag" | "name">[];
   /** Whether accepted topics request full paper notes. */
   detail?: boolean;
 }
 
 /**
- * Turns kept proposed topics into settings topics. Every result goes through
- * `normalizeTopic`, so the `description` rollback shadow (ADR 0012 §1) is
- * maintained by its single writer and never by this module.
+ * Turns kept proposed topics into settings topics, skipping any whose name is
+ * already in settings. Every result goes through `normalizeTopic`, so the
+ * `description` rollback shadow (ADR 0012 §1) is maintained by its single
+ * writer and never by this module.
  *
  * Directions carry `origin: "library"` — the first producer of that origin,
  * which P1 added to the schema with nothing yet writing it.
  */
 export function acceptProposedTopics(input: AcceptProposedTopicsInput): Topic[] {
   const taken = new Set(input.existingTopics.map(({ tag }) => tag.trim()).filter(Boolean));
+  const names = new Set(
+    input.existingTopics.map(({ name }) => topicNameKey(name)).filter(Boolean),
+  );
   const accepted: Topic[] = [];
   for (let ordinal = 0; ordinal < input.topics.length; ordinal += 1) {
     const proposed = input.topics[ordinal]!;
     const name = proposed.suggestedName.trim();
+    // Accepting the same proposal twice — or a proposal that names a topic the
+    // researcher already keeps — has to be a no-op, not a duplicate section in
+    // every daily report from then on.
+    if (names.has(topicNameKey(name))) continue;
+    names.add(topicNameKey(name));
     const base = slugify(name) || fallbackTag(ordinal);
     const tag = uniqueTag(base, taken);
     taken.add(tag);

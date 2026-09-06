@@ -1844,6 +1844,10 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   color: var(--text-muted);
 }
 
+.arxiv-daily-interest-review__hint {
+  margin-block-start: var(--size-4-3);
+}
+
 .arxiv-daily-interest-review__pending-authorization {
   color: var(--text-warning);
   font-size: var(--font-ui-small);
@@ -1925,7 +1929,34 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   top: 0;
   z-index: 1;
   padding-block: var(--size-4-2);
+  padding-block-end: var(--size-4-4);
   background: var(--modal-background);
+}
+
+.arxiv-daily-interest-review__topic {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-block: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__topic-heading {
+  cursor: pointer;
+  padding-block: var(--size-4-1);
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__topic-heading > input,
+.arxiv-daily-interest-review__topic-heading > strong,
+.arxiv-daily-interest-review__topic-count {
+  margin-inline-end: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__topic-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-interest-review__topic-body {
+  padding-block: var(--size-4-2);
 }
 
 .arxiv-daily-interest-review__status {
@@ -1965,6 +1996,15 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-interest-review__evidence,
 .arxiv-daily-interest-review__diagnostics {
   margin-block: var(--size-4-2);
+}
+
+/* The uncovered-papers line sits after the topic list with no heading of its
+   own, so it needs the same separator the topics use plus enough room to read
+   as a distinct section rather than a trailing fragment of the last topic. */
+.arxiv-daily-interest-review__buffer {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-block-start: var(--size-4-4);
+  padding-block: var(--size-4-4);
 }
 
 @media (max-width: 700px) {

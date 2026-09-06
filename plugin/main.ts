@@ -37,7 +37,7 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 type DirectionProposalProgress,
 proposeClusteredPersonalLibraryDirections,
-PERSONAL_LIBRARY_UNMEASURED_COARSE_STOP_RATIO,
+PERSONAL_LIBRARY_SIMILARITY_QUANTILE,
 mergePersonalLibraryDirectionCandidates,
 removePersonalLibraryDirectionCandidate,
 renamePersonalLibraryProposedTopic,
@@ -57,6 +57,7 @@ IncrementalSuggestionsStore,
 centerCorpusChunks,
 loadClusteringInput,
 PDF_IDENTIFICATION_EVIDENCE_VERSION,
+sha256Hex,
 type OperationHandle,
 type OperationKind,
 } from "@arxiv-daily/core";
@@ -134,6 +135,7 @@ import {
   type PersistedLibraryConnection,
 } from "./src/library/connection";
 import { projectLibraryFullTextMatches } from "./src/library/fulltext-results";
+import { confirmLibraryAuthorization } from "./src/library/modal";
 import {
   SettingsChangeService,
   type PreparedOutputStores,
@@ -156,14 +158,44 @@ export interface PersonalLibraryReviewLoadError {
   message: string;
 }
 
+/** One line for the status bar, for the command-palette path that has no modal. */
+function describeProposalProgress(progress: DirectionProposalProgress): string {
+  if (progress.phase === "reading") return "reading the index";
+  if (progress.phase === "grouping") return "grouping papers";
+  return "organizing topics and directions";
+}
+
+/** An error the review page can recognize and phrase for the researcher. */
+class CodedError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "CodedError";
+  }
+}
+
+/** One indexed paper the catalog has no record of, named by the index. */
+export interface PersonalLibraryIndexedPaper {
+  paperKey: string;
+  title: string;
+}
+
 export interface PersonalLibraryProfileSnapshot {
   catalog: PersonalLibraryCatalog | null;
+  /** Fallback-indexed papers, empty when every indexed paper is in the catalog. */
+  indexedPapers: PersonalLibraryIndexedPaper[];
   proposal: PersonalLibraryDirectionProposal | null;
   suggestions: IncrementalSuggestionsDocument | null;
   authorization: LibraryConnectionStatus;
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
   suggestionsLoadError: PersonalLibraryReviewLoadError | null;
+  /**
+   * Names of topics already in `settings.arxiv.topics`. The review page uses
+   * this to mark proposed topics that a prior accept already added, since the
+   * proposal is kept around for the rest to be accepted later and would
+   * otherwise look identical whether or not it was accepted already.
+   */
+  settingsTopicNames: string[];
 }
 
 /**
@@ -255,6 +287,7 @@ export default class ArxivDailyPlugin extends Plugin {
   runHistoryStore!: RunHistoryStore;
   scheduler!: SchedulerService;
   settingsChanges!: SettingsChangeService;
+  private settingsTab?: ArxivDailySettingTab;
   recentDates!: RecentDatesCache;
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
@@ -281,6 +314,12 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryInventoryController?: AbortController;
   private libraryCatalog: PersonalLibraryCatalog | null = null;
   private libraryCatalogLoadError: PersonalLibraryReviewLoadError | null = null;
+  /**
+   * Papers the index holds that the catalog cannot name: files the scan could
+   * not identify. The review page needs them to know there is anything to
+   * propose from, and to show a title instead of a bare content hash.
+   */
+  private libraryIndexedPapers: PersonalLibraryIndexedPaper[] = [];
   private libraryMutationQueue: Promise<void> = Promise.resolve();
   private librarySelectionRevision = 0;
   private libraryConnectionRevision = 0;
@@ -452,7 +491,8 @@ export default class ArxivDailyPlugin extends Plugin {
     };
     this.cleanupCachesIfDue();
 
-    this.addSettingTab(new ArxivDailySettingTab(this.app, this));
+    this.settingsTab = new ArxivDailySettingTab(this.app, this);
+    this.addSettingTab(this.settingsTab);
     registerDashboardView(this);
     registerCommands(this);
     if (this.settings.schedule.enabled) {
@@ -711,14 +751,70 @@ export default class ArxivDailyPlugin extends Plugin {
           this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
           this.logger.error("personal library catalog reload failed", error);
         });
+        // A library of unidentified files has an empty catalog, so without this
+        // the review page would believe there is nothing to propose from.
+        await this.refreshLibraryIndexTrace();
         return this.reloadPersonalLibraryProfileDocuments();
       },
+      authorize: () => this.confirmPersonalLibraryDirectionAuthorization(),
+      logError: (action, error) => this.logger.error(`library review: ${action} failed`, error),
       generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
-      acceptTopics: (topicIds) => this.acceptPersonalLibraryProposedTopics(topicIds),
+      acceptTopics: (topicIds, candidateIds) => this.acceptPersonalLibraryProposedTopics(topicIds, candidateIds),
     };
+  }
+
+  /**
+   * Where one generation's progress goes. The status bar serves the
+   * command-palette path; a caller that passed its own reporter has a surface
+   * of its own and covers the bar with it, so writing both left two
+   * differently-worded counters on screen for the same run.
+   */
+  proposalProgressReporter(
+    caller?: (progress: DirectionProposalProgress) => void,
+  ): (progress: DirectionProposalProgress) => void {
+    return (progress) => {
+      if (!caller) {
+        this.progress?.setTask("Generating personal library directions", describeProposalProgress(progress));
+      }
+      caller?.(progress);
+    };
+  }
+
+  /**
+   * Disclose what generating directions would send, and record the grant if
+   * the researcher agrees. The scope is the live one — with local embedding
+   * that is the chat endpoint and titles-and-abstracts depth, which the
+   * remote-embedding consent flow in settings never asks about, leaving this
+   * as the only path to the grant that generation requires.
+   */
+  async confirmPersonalLibraryDirectionAuthorization(): Promise<boolean> {
+    const disclosure = this.getLibraryAuthorizationDisclosure();
+    if (!disclosure) return false;
+    if (!await confirmLibraryAuthorization(this.app, disclosure)) return false;
+    try {
+      await this.authorizeLibraryProcessing(disclosure.authorizationFingerprint);
+    } catch (error) {
+      // These two are the guards around the grant, and they are the difference
+      // between "review it again" and "something is wrong"; the review page can
+      // only tell them apart if they arrive carrying a code.
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("terms changed")) throw new CodedError("authorization-terms-changed", message);
+      if (message.includes("superseded")) throw new CodedError("authorization-superseded", message);
+      throw error;
+    }
+    const status = this.getLibraryConnectionStatus();
+    if (status.kind !== "authorized") {
+      // The grant was written but reading it back does not say authorized: the
+      // fingerprint the status recomputes disagrees with the one just stored.
+      throw new CodedError(
+        "authorization-not-recorded",
+        `authorization stored but the connection reads back as ${status.kind}`,
+      );
+    }
+    return true;
   }
 
   /** Renames one proposed topic before its tag is derived (ADR 0014 §1). */
@@ -736,13 +832,34 @@ export default class ArxivDailyPlugin extends Plugin {
    * The proposal is left alone: it stays the durable record of what was
    * proposed, and the researcher can accept the rest later.
    */
-  async acceptPersonalLibraryProposedTopics(topicIds: readonly string[]): Promise<PersonalLibraryProfileSnapshot> {
+  async acceptPersonalLibraryProposedTopics(
+    topicIds: readonly string[],
+    candidateIds?: readonly string[],
+  ): Promise<PersonalLibraryProfileSnapshot> {
     const proposal = this.libraryProposal;
     if (!proposal) throw new Error("Generate a direction proposal first");
-    const kept = topicIds.map((topicId) => proposal.topics.find(({ id }) => id === topicId)
+    const selectedTopics = topicIds.map((topicId) => proposal.topics.find(({ id }) => id === topicId)
       ?? (() => { throw new Error(`Proposed topic ${topicId} is no longer in the proposal`); })());
-    if (kept.length === 0) throw new Error("Select at least one proposed topic to accept");
+    if (selectedTopics.length === 0) throw new Error("Select at least one proposed topic to accept");
+    const selectedCandidates = candidateIds === undefined ? null : new Set(candidateIds);
+    const kept = selectedTopics.map((topic) => ({
+      ...topic,
+      directions: selectedCandidates
+        ? topic.directions.filter(({ id }) => selectedCandidates.has(id))
+        : topic.directions,
+    })).filter(({ directions }) => directions.length > 0);
+    if (kept.length === 0) {
+      throw new CodedError("invalid-input", "Select at least one proposed direction to accept");
+    }
     const accepted = acceptProposedTopics({ topics: kept, existingTopics: this.settings.arxiv.topics });
+    if (accepted.length === 0) {
+      // Every kept topic's name already names a settings topic. The review
+      // page marks those as added and refuses to select them, so reaching here
+      // means settings changed underneath an open page — worth saying plainly,
+      // not worth throwing over.
+      new Notice("The selected topics are already in your research settings.");
+      return this.getPersonalLibraryProfileSnapshot();
+    }
     // Settings writes go through the same persistence path as any other
     // settings change, so every guard that already covers them covers this.
     this.settings.arxiv = {
@@ -750,6 +867,22 @@ export default class ArxivDailyPlugin extends Plugin {
       topics: [...this.settings.arxiv.topics, ...accepted],
     };
     await this.persistSettings();
+    // Accept runs outside the settings tab, so its already-rendered topic
+    // cards (and the 1.13+ definitions cache) need an explicit refresh.
+    let refreshFailed = false;
+    try {
+      this.settingsTab?.refreshSettings();
+    } catch (error) {
+      // Persistence has succeeded. A view failure must not look like a failed
+      // acceptance and invite the researcher to append the same topics again.
+      refreshFailed = true;
+      this.logger.error("settings: accepted topics were saved but the view could not refresh", error);
+    }
+    const skipped = kept.length - accepted.length;
+    const skippedNote = skipped > 0
+      ? ` ${skipped} ${skipped === 1 ? "topic was" : "topics were"} already in research settings and skipped.`
+      : "";
+    new Notice(`Added ${accepted.length} ${accepted.length === 1 ? "topic" : "topics"} to research settings.${skippedNote}${refreshFailed ? " Reopen settings to refresh the list." : ""}`);
     return this.getPersonalLibraryProfileSnapshot();
   }
 
@@ -780,12 +913,14 @@ export default class ArxivDailyPlugin extends Plugin {
   getPersonalLibraryProfileSnapshot(): PersonalLibraryProfileSnapshot {
     return structuredClone({
       catalog: this.libraryCatalog,
+      indexedPapers: this.libraryIndexedPapers,
       proposal: this.libraryProposal,
       suggestions: this.librarySuggestions,
       authorization: this.getLibraryConnectionStatus(),
       catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
       suggestionsLoadError: this.librarySuggestionsLoadError,
+      settingsTopicNames: this.settings.arxiv.topics.map(({ name }) => name),
     });
   }
 
@@ -869,31 +1004,19 @@ export default class ArxivDailyPlugin extends Plugin {
       const proposal = await proposeClusteredPersonalLibraryDirections({
         catalog: structuredClone(catalog),
         knowledgeBase: this.buildFullTextKnowledgeBaseStore(connection),
-        // The coarse ratio decides how many topics a first scan proposes and
-        // has no measured default yet (P4 Chunk 5); this is the placeholder,
-        // not settled behaviour.
-        clustering: { coarse: { relativeStopRatio: PERSONAL_LIBRARY_UNMEASURED_COARSE_STOP_RATIO } },
+        // Tight groups provide evidence; the model organizes their topic scope.
+        clustering: { similarityQuantile: PERSONAL_LIBRARY_SIMILARITY_QUANTILE },
         llm: new LlmClient(llmSettings, this.logger, this.host.http),
         signal: operation.signal,
         createId: () => crypto.randomUUID(),
-        onProgress: (progress) => {
-          // The status bar serves the command-palette path; a caller with a
-          // modal open covers it and reports progress itself.
-          this.progress?.setTask(
-            "Generating personal library directions",
-            progress.phase === "synthesis"
-              ? "merging directions across clusters"
-              : `naming directions (${progress.completed}/${progress.total})`,
-          );
-          onProgress?.(progress);
-        },
+        onProgress: this.proposalProgressReporter(onProgress),
       });
       operation.signal.throwIfAborted();
       this.assertPersonalLibraryGenerationCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint,
         catalog, selectedInputFingerprint, expectedProposalRevision,
       });
-      return await this.enqueueLibraryMutation(async () => {
+      const result = await this.enqueueLibraryMutation(async () => {
         operation.signal.throwIfAborted();
         this.assertPersonalLibraryGenerationCurrent({
           connection, connectionRevision, outputRevision, authorizationFingerprint,
@@ -904,7 +1027,16 @@ export default class ArxivDailyPlugin extends Plugin {
         this.libraryProposalLoadError = null;
         return structuredClone(saved);
       });
+      // Whoever wrote a task into the status bar has to take it back out. This
+      // reported progress but never an ending, so a failed or finished run left
+      // the bar showing "naming directions (5/9)" until the next task replaced
+      // it — scanning and indexing both close theirs the same way.
+      this.progress?.setComplete("Personal library directions generated");
+      return result;
     } catch (error) {
+      if (!operation.signal.aborted) {
+        this.progress?.setError("Personal library direction generation failed");
+      }
       if (this.isReviewPersistenceConflict(error)) await this.reloadPersonalLibraryProfileDocuments();
       throw error;
     } finally {
@@ -1391,10 +1523,16 @@ export default class ArxivDailyPlugin extends Plugin {
     }
     try {
       const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
-      const ready = Object.values(manifest.papers).filter((paper) => paper.status === "ready").length;
+      const readyPapers = Object.values(manifest.papers).filter((paper) => paper.status === "ready");
       this.libraryIndexStatus.setLastRun(
-        manifest.revision > 0 ? { updatedAt: manifest.updatedAt, papers: ready } : undefined,
+        manifest.revision > 0 ? { updatedAt: manifest.updatedAt, papers: readyPapers.length } : undefined,
       );
+      // Only papers the index had to name itself: an arXiv paper's title lives
+      // in the catalog and stays the one source for it.
+      this.libraryIndexedPapers = readyPapers
+        .filter((paper) => paper.title !== undefined && paper.title.length > 0)
+        .map((paper) => ({ paperKey: paper.paperKey, title: paper.title! }))
+        .sort((left, right) => (left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0));
     } catch (error) {
       // A row that cannot read the manifest says nothing about past runs; it
       // must not say the index is gone.
@@ -1996,12 +2134,37 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
+  /**
+   * Identity of the evidence one generation runs on, for the guard that
+   * refuses to finish if that evidence changed underneath it.
+   *
+   * Two things make this more than a call to the catalog fingerprint. An empty
+   * catalog selection is a real state — a library whose files carry no arXiv
+   * identity has one — and the proposal fingerprint refuses to describe an
+   * empty selection, which turned every such generation into a TypeError
+   * before it began. And the input is no longer the catalog alone: papers only
+   * the index can name are part of it, so the guard has to cover them or it
+   * would sleep through exactly the evidence this kind of library runs on.
+   */
   private selectedCatalogFingerprint(catalog: PersonalLibraryCatalog): string {
-    return createPersonalLibraryCatalogInputFingerprint({
+    const papers = selectPersonalLibraryDirectionPapers(catalog);
+    const catalogPart = papers.length === 0
+      ? "none"
+      : createPersonalLibraryCatalogInputFingerprint({
+        scopeFingerprint: catalog.scopeFingerprint,
+        identificationFingerprint: catalog.identificationFingerprint,
+        papers,
+      });
+    const indexedPart = sha256Hex(this.libraryIndexedPapers
+      .map(({ paperKey, title }) => `${paperKey} ${title}`)
+      .join(""));
+    return `sha256:${sha256Hex(JSON.stringify({
+      version: 2,
       scopeFingerprint: catalog.scopeFingerprint,
       identificationFingerprint: catalog.identificationFingerprint,
-      papers: selectPersonalLibraryDirectionPapers(catalog),
-    });
+      catalogPart,
+      indexedPart,
+    }))}`;
   }
 
   private assertPersonalLibraryGenerationCurrent(input: {

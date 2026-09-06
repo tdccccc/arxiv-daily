@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptProposedTopics } from "../src/settings/accept-proposed-topics";
+import { acceptProposedTopics, topicNameKey } from "../src/settings/accept-proposed-topics";
 import { normalizeTopic, deriveTopicDescription } from "../src/settings/topics";
 import { validateFilterConfig } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
@@ -53,13 +53,16 @@ describe("acceptProposedTopics", () => {
   });
 
   it("never emits a tag that collides with settings or with a sibling", () => {
+    // Three distinct names (by topicNameKey) that all slugify to the same
+    // base tag — this exercises tag collision, not the separate name-based
+    // dedup that skips a second acceptance of the same topic.
     const topics = acceptProposedTopics({
       topics: [
         proposed("Galaxy clusters", ["Optical cluster catalogues from wide imaging"]),
-        proposed("Galaxy Clusters", ["Sunyaev-Zeldovich selected cluster samples"]),
+        proposed("Galaxy_Clusters", ["Sunyaev-Zeldovich selected cluster samples"]),
         proposed("galaxy   clusters!", ["Cluster mass calibration from weak lensing"]),
       ],
-      existingTopics: [{ tag: "galaxy-clusters" }],
+      existingTopics: [{ tag: "galaxy-clusters", name: "Some other cluster topic" }],
     });
     const tags = topics.map(({ tag }) => tag);
     expect(tags).toEqual(["galaxy-clusters-2", "galaxy-clusters-3", "galaxy-clusters-4"]);
@@ -97,5 +100,55 @@ describe("acceptProposedTopics", () => {
     }));
     expect(strip(acceptProposedTopics(input))).toEqual(strip(acceptProposedTopics(input)));
     expect(acceptProposedTopics(input).map(({ tag }) => tag)).toEqual(["photo-z", "photo-z-2"]);
+  });
+
+  /**
+   * The proposal survives acceptance so the rest can be accepted later, which
+   * means the same topic can be offered again — a second accept has to be a
+   * no-op rather than a second `-2` copy of a topic the researcher already
+   * kept (the bug this module exists to close).
+   */
+  it("accepts nothing when every proposed name is already in settings", () => {
+    const topics = acceptProposedTopics({
+      topics: [proposed("Photometric redshifts", ["A direction"])],
+      existingTopics: [{ tag: "photometric-redshifts", name: "Photometric redshifts" }],
+    });
+    expect(topics).toEqual([]);
+  });
+
+  it("matches an existing name regardless of case or surrounding whitespace", () => {
+    const topics = acceptProposedTopics({
+      topics: [proposed("  Photometric REDSHIFTS  ", ["A direction"])],
+      existingTopics: [{ tag: "photometric-redshifts", name: "photometric redshifts" }],
+    });
+    expect(topics).toEqual([]);
+  });
+
+  it("collapses two proposed topics with the same name into one accepted topic", () => {
+    const topics = acceptProposedTopics({
+      topics: [
+        proposed("Photometric redshifts", ["First direction"]),
+        proposed("photometric redshifts", ["Second direction"]),
+      ],
+      existingTopics: [],
+    });
+    expect(topics).toHaveLength(1);
+    expect(topics[0]!.directions.map(({ text }) => text)).toEqual(["First direction"]);
+  });
+
+  it("keeps only the topics that are new in a mixed batch", () => {
+    const topics = acceptProposedTopics({
+      topics: [
+        proposed("Photometric redshifts", ["A direction"]),
+        proposed("Galaxy clusters", ["Another direction"]),
+      ],
+      existingTopics: [{ tag: "photometric-redshifts", name: "Photometric redshifts" }],
+    });
+    expect(topics.map(({ name }) => name)).toEqual(["Galaxy clusters"]);
+  });
+
+  it("exposes the same normalization acceptProposedTopics matches names on", () => {
+    expect(topicNameKey("  Photometric REDSHIFTS  ")).toBe(topicNameKey("photometric redshifts"));
+    expect(topicNameKey("Galaxy clusters")).not.toBe(topicNameKey("Galaxy filaments"));
   });
 });

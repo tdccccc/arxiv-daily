@@ -1,13 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Modal, type App } from "obsidian";
+import { Modal, Notice, type App } from "obsidian";
+import { DEFAULT_SETTINGS, normalizeTopic } from "@arxiv-daily/core";
+import ArxivDailyPlugin from "../main.ts";
+import { ArxivDailySettingTab } from "../src/settings/tab";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   PersonalLibraryInterestProfileModal,
   bufferPoolHeading,
   describeClusterMembers,
   formatConfidence,
   normalizeLines,
+  safeUserError,
   unclassifiedBufferPoolPapers,
   type InterestProfileReviewController,
   type InterestProfileReviewSnapshot,
@@ -17,8 +22,10 @@ beforeAll(() => {
   type Options = { cls?: string; text?: string; type?: string; value?: string; attr?: Record<string, string> };
   const proto = HTMLElement.prototype as any;
   proto.addClass ??= function (...classes: string[]) { this.classList.add(...classes); };
+  proto.removeClass ??= function (...classes: string[]) { this.classList.remove(...classes); };
   proto.toggleClass ??= function (name: string, value: boolean) { this.classList.toggle(name, value); };
   proto.empty ??= function () { this.replaceChildren(); };
+  proto.detach ??= function () { this.remove(); };
   proto.createEl ??= function (tag: string, options: Options = {}) {
     const element = document.createElement(tag);
     if (options.cls) element.className = options.cls;
@@ -35,7 +42,11 @@ beforeAll(() => {
   proto.setText ??= function (text: string) { this.textContent = text; };
 });
 
-beforeEach(() => { Modal.opened.length = 0; });
+beforeEach(() => {
+  Modal.opened.length = 0;
+  Notice.calls.length = 0;
+  document.body.replaceChildren();
+});
 
 const fingerprint = `sha256:${"a".repeat(64)}`;
 const evidence = `sha256:${"b".repeat(64)}`;
@@ -60,25 +71,63 @@ function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): Inter
       }, summary: { inventoryCount: 1, eligibleFileCount: 1, readyFileCount: 1, unsupportedFileCount: 0, unidentifiedFileCount: 0, failedFileCount: 0, paperCount: 1 },
     } as any,
     proposal: {
-      schemaVersion: 4, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
+      schemaVersion: 5, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
       identificationFingerprint: fingerprint, catalogInputFingerprint: fingerprint,
       catalogInputPapers: candidate.representatives, generationContractFingerprint: fingerprint,
       generatedAt: "2026-08-03T00:00:00.000Z",
       topics: [{ id: "topic-1", suggestedName: "Research agents", directions: [candidate] }],
     },
     suggestions: null,
+    indexedPapers: [],
     authorization: { kind: "authorized", rootLabel: "papers", processingDepth: "metadata-and-abstracts", endpoint: "https://example.test" } as any,
     catalogLoadError: null, proposalLoadError: null, suggestionsLoadError: null,
+    settingsTopicNames: [],
     ...overrides,
   };
 }
 
-function controller(initial = snapshot()) {
+function topicSnapshot(): InterestProfileReviewSnapshot {
+  const base = snapshot();
+  const paperKey = (number: number): string => `arxiv:2608.${String(number).padStart(5, "0")}`;
+  const papers = Array.from({ length: 8 }, (_, index) => ({ paperKey: paperKey(index + 1), evidenceFingerprint: evidence }));
+  const topic = (id: string, suggestedName: string, groups: number[][]) => ({
+    id,
+    suggestedName,
+    directions: groups.map((members, index) => ({
+      ...candidate,
+      id: `${id}-direction-${index + 1}`,
+      text: `${suggestedName} direction ${index + 1}`,
+      representatives: Array.from(new Set(members), (number) => ({ paperKey: paperKey(number), evidenceFingerprint: evidence })),
+      lineage: { candidateIds: [`${id}-direction-${index + 1}`] },
+      clusterMembers: members.map((number) => ({
+        paperKey: paperKey(number),
+        confidence: 1,
+      })),
+    })),
+  });
+  return snapshot({
+    proposal: {
+      ...base.proposal!,
+      catalogInputPapers: papers,
+      topics: [
+        topic("small", "Small coverage", [[1], [1]]),
+        topic("tie-z", "First tied coverage", [[2, 3]]),
+        topic("tie-a", "Second tied coverage", [[4, 5]]),
+        topic("large", "Largest coverage", [[6, 7], [7, 8]]),
+      ],
+    },
+    indexedPapers: papers.map(({ paperKey }) => ({ paperKey, title: `Paper ${paperKey}` })),
+  });
+}
+
+function controller(initial = snapshot(), options: { granted?: boolean } = {}) {
   let current = initial;
   const update = vi.fn(async () => current);
   const mock: InterestProfileReviewController = {
     snapshot: () => current,
     reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
+    authorize: vi.fn(async () => options.granted ?? true),
+    logError: vi.fn(),
     updateProposal: update, discardProposal: update,
     renameTopic: vi.fn(async () => current),
     acceptTopics: vi.fn(async () => current),
@@ -88,14 +137,90 @@ function controller(initial = snapshot()) {
 
 function open(ctrl: InterestProfileReviewController) {
   const modal = new PersonalLibraryInterestProfileModal({} as App, ctrl);
+  modal.modalEl.appendChild(modal.contentEl);
+  document.body.appendChild(modal.modalEl);
   modal.open();
   return modal;
+}
+
+function openPluginReview(
+  initial = topicSnapshot(),
+  existingTopics: ReturnType<typeof normalizeTopic>[] = [],
+) {
+  const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+  const settings = structuredClone(DEFAULT_SETTINGS);
+  settings.arxiv.topics = existingTopics;
+  const saved: typeof settings[] = [];
+  const saveData = vi.fn(async (data: { settings: typeof settings }) => {
+    saved.push(structuredClone(data.settings));
+  });
+  Object.assign(plugin, {
+    app: {} as App,
+    settings,
+    saveData,
+    logger: { error: vi.fn() },
+    libraryCatalog: initial.catalog,
+    libraryProposal: initial.proposal,
+    libraryIndexedPapers: initial.indexedPapers,
+    librarySuggestions: initial.suggestions,
+    libraryCatalogLoadError: null,
+    libraryProposalLoadError: null,
+    librarySuggestionsLoadError: null,
+  });
+  plugin.openPersonalLibraryDirectionReview();
+  const modal = Modal.opened.at(-1)!;
+  modal.modalEl.appendChild(modal.contentEl);
+  document.body.appendChild(modal.modalEl);
+  return { plugin, root: modal.contentEl, saveData, saved };
+}
+
+/** A real, already-rendered settings page behind the review modal. */
+function openSettingsBehindReview(plugin: ArxivDailyPlugin): ArxivDailySettingTab {
+  Object.assign(plugin, {
+    stateStore: { snapshot: () => ({}) },
+    manifest: { id: "arxiv-daily", version: "0.0.0-test" },
+    libraryIndexStatus: new LibraryIndexStatusStore(),
+  });
+  plugin.settings.arxiv.topics = [normalizeTopic({
+    id: "existing-topic", name: "Existing topic", tag: "existing", detail: false,
+    directions: [{ id: "existing-direction", text: "An existing research direction", origin: "manual" }],
+  })];
+  const tab = new ArxivDailySettingTab(plugin.app, plugin);
+  // The Obsidian framework renderer is a no-op in the test host. Exercise the
+  // actual legacy renderer here, including the actual topic cards and drafts.
+  vi.spyOn(tab, "getSettingDefinitions").mockReturnValue([]);
+  Object.assign(plugin, { settingsTab: tab });
+  document.body.appendChild(tab.containerEl);
+  tab.display();
+  return tab;
 }
 
 function button(root: HTMLElement, text: string): HTMLButtonElement {
   const found = Array.from(root.querySelectorAll("button")).find((item) => item.textContent === text);
   if (!found) throw new Error(`missing button ${text}`);
   return found;
+}
+
+function topicChoices(root: HTMLElement): HTMLInputElement[] {
+  return Array.from(root.querySelectorAll<HTMLInputElement>('input[aria-label^="Accept "]'));
+}
+
+function directionChoice(root: HTMLElement, text: string): HTMLInputElement {
+  const choice = Array.from(root.querySelectorAll<HTMLInputElement>('input[aria-label^="Select "]'))
+    .find((input) => input.getAttribute("aria-label") === `Select ${text}`);
+  expect(choice).toBeDefined();
+  return choice!;
+}
+
+function expandTopic(root: HTMLElement, name: string): HTMLDetailsElement {
+  const section = topicChoices(root)
+    .find((choice) => choice.getAttribute("aria-label") === `Accept ${name}`)
+    ?.closest<HTMLDetailsElement>("details.arxiv-daily-interest-review__topic");
+  expect(section).not.toBeNull();
+  expect(section).toBeDefined();
+  section!.open = true;
+  section!.dispatchEvent(new Event("toggle"));
+  return section!;
 }
 
 async function confirmChoice(text: string): Promise<void> {
@@ -116,19 +241,256 @@ describe("accepting a proposed structure", () => {
     const modal = open(ctrl.mock);
     const root = (modal as any).contentEl as HTMLElement;
 
-    const accept = button(root, "Accept 0 topic(s) into settings");
-    expect(accept.disabled).toBe(true);
+    // This fixture has one representative, so including its direction requires
+    // an explicit choice even though the topic itself starts selected.
+    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    directionChoice(root, candidate.text).click();
+    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
 
     const checkbox = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
-    checkbox.checked = true;
+    checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change"));
+    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+
+    const reselected = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
+    reselected.checked = true;
+    reselected.dispatchEvent(new Event("change"));
 
     const armed = button((modal as any).contentEl, "Accept 1 topic(s) into settings");
     expect(armed.disabled).toBe(false);
     armed.dispatchEvent(new Event("click"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(["topic-1"]);
+    expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(["topic-1"], ["candidate-1"]);
+  });
+
+  it("orders topics by distinct covered papers and keeps tied topics in proposal order", () => {
+    const initial = topicSnapshot();
+    const ctrl = controller(initial);
+    const root = open(ctrl.mock).contentEl;
+    expect(topicChoices(root).map((choice) => choice.getAttribute("aria-label"))).toEqual([
+      "Accept Largest coverage",
+      "Accept First tied coverage",
+      "Accept Second tied coverage",
+      "Accept Small coverage",
+    ]);
+    expect(initial.proposal!.topics.map(({ id }) => id)).toEqual(["small", "tie-z", "tie-a", "large"]);
+  });
+
+  it("preselects only the two widest topics and labels the others optional", async () => {
+    const ctrl = controller(topicSnapshot());
+    const root = open(ctrl.mock).contentEl;
+    expect(topicChoices(root).map((choice) => choice.checked)).toEqual([true, true, false, false]);
+    const sections = Array.from(root.querySelectorAll(".arxiv-daily-interest-review__topic"));
+    expect(sections.map((section) => section.querySelector("summary")?.textContent?.includes("Optional")))
+      .toEqual([false, false, true, true]);
+    expect(sections[2]!.querySelector("summary")?.textContent).toContain("2 papers");
+    expect(sections[3]!.querySelector("summary")?.textContent).toContain("1 paper");
+    button(root, "Accept 2 topic(s) into settings").click();
+    await vi.waitFor(() => expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(
+      ["large", "tie-z"], ["large-direction-1", "large-direction-2", "tie-z-direction-1"],
+    ));
+  });
+
+  it("starts every topic collapsed and summarizes its distinct papers and directions", () => {
+    const root = open(controller(topicSnapshot()).mock).contentEl;
+    const topics = Array.from(root.querySelectorAll<HTMLDetailsElement>("details.arxiv-daily-interest-review__topic"));
+    expect(topics).toHaveLength(4);
+    expect(topics.every((topic) => !topic.open)).toBe(true);
+    expect(topics.map((topic) => topic.querySelector(".arxiv-daily-interest-review__topic-count")?.textContent))
+      .toEqual(["3 papers · 2 directions", "2 papers · 1 direction", "2 papers · 1 direction", "1 paper · 2 directions"]);
+  });
+
+  it("preserves reviewed choices across a revision and reseeds only for a different proposal", async () => {
+    const initial = topicSnapshot();
+    const ctrl = controller(initial);
+    const root = open(ctrl.mock).contentEl;
+    const largest = topicChoices(root)[0]!;
+    largest.checked = false;
+    largest.dispatchEvent(new Event("change"));
+    const optional = topicChoices(root)[2]!;
+    optional.checked = true;
+    optional.dispatchEvent(new Event("change"));
+
+    ctrl.set({ ...initial, proposal: { ...initial.proposal!, revision: 1 } });
+    button(root, "Refresh").click();
+    await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
+    expect(topicChoices(root).map((choice) => choice.checked)).toEqual([false, true, true, false]);
+
+    ctrl.set({ ...initial, proposal: { ...initial.proposal!, proposalId: "proposal-2" } });
+    button(root, "Refresh").click();
+    await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
+    expect(topicChoices(root).map((choice) => choice.checked)).toEqual([true, true, false, false]);
+  });
+
+  it("keeps an expanded topic open when its selection or name changes", async () => {
+    const initial = topicSnapshot();
+    const ctrl = controller(initial);
+    vi.mocked(ctrl.mock.renameTopic).mockImplementation(async ({ topicId, suggestedName }) => {
+      const next = {
+        ...initial,
+        proposal: {
+          ...initial.proposal!,
+          revision: 1,
+          topics: initial.proposal!.topics.map((topic) => topic.id === topicId ? { ...topic, suggestedName } : topic),
+        },
+      };
+      ctrl.set(next);
+      return next;
+    });
+    const root = open(ctrl.mock).contentEl;
+    const section = expandTopic(root, "Largest coverage");
+    const select = section.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    select.click();
+    const expanded = root.querySelector<HTMLDetailsElement>("details.arxiv-daily-interest-review__topic")!;
+    expect(expanded.open).toBe(true);
+    const name = expanded.querySelector<HTMLInputElement>('input[aria-label="Topic name"]')!;
+    name.value = "Agent reliability";
+    name.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
+    expect(ctrl.mock.renameTopic).toHaveBeenCalledWith({ topicId: "large", suggestedName: "Agent reliability" });
+    expect(root.querySelector<HTMLDetailsElement>("details.arxiv-daily-interest-review__topic")!.open).toBe(true);
+    expect(topicChoices(root)[0]!.checked).toBe(false);
+    expect(topicChoices(root)[0]!.getAttribute("aria-label")).toBe("Accept Agent reliability");
+  });
+
+  it("saves a direction edited inside an expanded topic and reports controller failures", async () => {
+    const ctrl = controller();
+    const root = open(ctrl.mock).contentEl;
+    const section = expandTopic(root, "Research agents");
+    const editor = section.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__detail")!;
+    editor.open = true;
+    const fields = Array.from(editor.querySelectorAll("textarea"));
+    fields[0]!.value = "Reliable research agents";
+    fields[1]!.value = "agents\nreliability";
+    button(editor, "Save edits").click();
+    await vi.waitFor(() => expect(ctrl.mock.updateProposal).toHaveBeenCalledWith({
+      candidateId: "candidate-1",
+      patch: { text: "Reliable research agents", discoveryCues: ["agents", "reliability"] },
+      representativePaperKeys: ["arxiv:2608.00001"],
+    }));
+    await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
+
+    const failure = Object.assign(new Error("stale evidence"), { code: "evidence-mismatch" });
+    vi.mocked(ctrl.mock.updateProposal).mockRejectedValueOnce(failure);
+    const reopened = expandTopic(root, "Research agents");
+    button(reopened, "Save edits").click();
+    await vi.waitFor(() => expect(ctrl.mock.logError).toHaveBeenCalledWith("save proposed direction", failure));
+    expect(root.querySelector('[role="alert"]')?.textContent).toContain("Representative evidence is missing or stale");
+  });
+
+  /**
+   * A library of PDFs the scan could not give an arXiv identity has an empty
+   * catalog and a full index. Those papers are proposable on the title and
+   * abstract the index read, so the button must not be gated on the catalog.
+   */
+  it("offers generation for a library whose papers only the index can name", () => {
+    const ctrl = controller(snapshot({
+      catalog: { ...(snapshot().catalog as any), papers: {} },
+      proposal: null,
+      indexedPapers: [{ paperKey: `file:sha256:${"a".repeat(64)}`, title: "A Local Paper" }],
+    }));
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    expect(button(root, "Generate proposals").disabled).toBe(false);
+  });
+
+  it("refuses generation when neither the catalog nor the index has papers", () => {
+    const ctrl = controller(snapshot({
+      catalog: { ...(snapshot().catalog as any), papers: {} },
+      proposal: null,
+      indexedPapers: [],
+    }));
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    const generate = button(root, "Generate proposals");
+    expect(generate.disabled).toBe(true);
+    expect(generate.getAttribute("title")).toContain("no indexed metadata-and-abstract papers");
+  });
+
+  it("names a fallback-indexed representative from the index instead of calling it missing", () => {
+    const paperKey = candidate.representatives[0]!.paperKey;
+    const ctrl = controller(snapshot({
+      catalog: { ...(snapshot().catalog as any), papers: {} },
+      indexedPapers: [{ paperKey, title: "A Local Paper" }],
+    }));
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    expect(root.textContent).toContain("A Local Paper");
+    expect(root.textContent).not.toContain("missing from current library");
+  });
+
+  /**
+   * With local embedding no other path in the plugin asks for this grant, so a
+   * button disabled on it could never become clickable. Consent is asked on
+   * the click instead.
+   */
+  it("offers generation while unauthorized and asks for consent on the click", async () => {
+    const ctrl = controller(snapshot({
+      proposal: null,
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }));
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    const generate = button(root, "Generate proposals");
+    expect(generate.disabled).toBe(false);
+    expect(generate.getAttribute("title")).toContain("confirm what leaves this device");
+
+    generate.dispatchEvent(new Event("click"));
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalled());
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalled());
+  });
+
+  it("generates nothing when the disclosure is declined", async () => {
+    const ctrl = controller(snapshot({
+      proposal: null,
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }), { granted: false });
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
+  it("does not re-ask for consent once the grant is recorded", async () => {
+    const ctrl = controller(snapshot({ proposal: null }));
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalled());
+    expect(ctrl.mock.authorize).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The page can only show a message safe to put on screen, so a failure whose
+   * reason reaches neither the log nor the researcher is undiagnosable. Every
+   * failure here looked like "Operation failed" and logged nothing.
+   */
+  it("records the real reason when authorizing fails", async () => {
+    const ctrl = controller(snapshot({
+      proposal: null,
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }));
+    const boom = Object.assign(new Error("authorization stored but reads back as connected"), {
+      code: "authorization-not-recorded",
+    });
+    (ctrl.mock.authorize as any).mockRejectedValueOnce(boom);
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+
+    await vi.waitFor(() => expect(ctrl.mock.logError).toHaveBeenCalledWith(
+      "authorize personal library processing",
+      boom,
+    ));
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
+  it("tells the researcher which authorization guard refused", () => {
+    expect(safeUserError({ code: "authorization-terms-changed" }))
+      .toContain("changed while the disclosure was open");
+    expect(safeUserError({ code: "authorization-superseded" }))
+      .toContain("library changed while authorizing");
+    expect(safeUserError({ code: "authorization-not-recorded" }))
+      .toContain("was not recorded");
+    // Anything unrecognized still refuses to put a raw message on screen.
+    expect(safeUserError(new Error("/home/someone/secret/path exploded")))
+      .toBe("Operation failed. Refresh and try again.");
   });
 
   it("routes a renamed topic through the controller before any tag is derived", async () => {
@@ -145,19 +507,296 @@ describe("accepting a proposed structure", () => {
     });
   });
 
-  it("says what the proposal does not cover instead of leaving it silent", () => {
+  /**
+   * The researcher found the full title list noisy, so the uncovered-papers
+   * section says only how many library papers no proposed direction covers
+   * (ADR 0014 §1's "remain visible as uncovered evidence" — the count keeps
+   * that fact visible without repeating titles shown elsewhere on the page).
+   */
+  it("says how many papers the proposal does not cover, without listing them", () => {
     const base = snapshot();
     const uncovered = { paperKey: "arxiv:2608.00002", evidenceFingerprint: evidence };
     const ctrl = controller(snapshot({
       proposal: { ...base.proposal!, catalogInputPapers: [...base.proposal!.catalogInputPapers, uncovered] },
     }));
     const modal = open(ctrl.mock);
-    const text = ((modal as any).contentEl as HTMLElement).textContent ?? "";
+    const root = (modal as any).contentEl as HTMLElement;
     expect(unclassifiedBufferPoolPapers(ctrl.mock.snapshot().proposal)).toHaveLength(2);
-    expect(text).toContain("No proposed direction covers these papers");
+    const section = root.querySelector(".arxiv-daily-interest-review__buffer");
+    expect(section?.textContent).toBe(bufferPoolHeading(2));
+    expect(section?.querySelectorAll("li")).toHaveLength(0);
+    expect(section?.textContent).not.toContain("Paper <img src=x>");
     // The incremental flow is dark until it is rebuilt around topics; a blank
-    // space would read as a bug.
-    expect(text).toContain("Incremental suggestions");
+    // space would read as a bug. It is unrelated to the buffer pool and must
+    // keep rendering regardless of how many papers are uncovered.
+    expect(root.textContent).toContain("Incremental suggestions");
+  });
+
+  it("renders nothing when every paper is covered by a proposed direction", () => {
+    const ctrl = controller(topicSnapshot());
+    const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
+    expect(unclassifiedBufferPoolPapers(ctrl.mock.snapshot().proposal)).toHaveLength(0);
+    expect(root.querySelector(".arxiv-daily-interest-review__buffer")).toBeNull();
+  });
+});
+
+describe("proposed topics already in settings", () => {
+  /**
+   * A researcher who accepts the same proposal twice must not get a second
+   * copy of a topic they already kept. The proposal is left in place so the
+   * rest can be accepted later, so the review page has to tell "already
+   * added" apart from "not yet reviewed" by name, using settings as the
+   * source of truth.
+   */
+  it("renders an already-added topic as unselectable and excludes it from preselection", () => {
+    const ctrl = controller(snapshot({ settingsTopicNames: ["Research agents"] }));
+    const root = open(ctrl.mock).contentEl;
+    const checkbox = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.title).toContain("already in your research settings");
+    expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
+    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+  });
+
+  it("matches an added topic name regardless of case or surrounding whitespace", () => {
+    const ctrl = controller(snapshot({ settingsTopicNames: ["  research AGENTS  "] }));
+    const root = open(ctrl.mock).contentEl;
+    expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
+  });
+
+  it("skips an already-added topic when choosing the two widest topics to preselect", async () => {
+    const initial = topicSnapshot();
+    const ctrl = controller({ ...initial, settingsTopicNames: ["Largest coverage"] });
+    const root = open(ctrl.mock).contentEl;
+    expect(topicChoices(root).map((choice) => choice.checked)).toEqual([false, true, true, false]);
+    const sections = Array.from(root.querySelectorAll(".arxiv-daily-interest-review__topic"));
+    expect(sections[0]!.querySelector("summary")?.textContent).toContain("Added");
+    button(root, "Accept 2 topic(s) into settings").click();
+    await vi.waitFor(() => expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(
+      ["tie-z", "tie-a"], ["tie-z-direction-1", "tie-a-direction-1"],
+    ));
+  });
+
+  it("renders a proposed topic already in real settings as Added and excludes it from acceptance", async () => {
+    const initial = topicSnapshot();
+    const existing = [normalizeTopic({
+      name: "Largest coverage", tag: "largest-coverage", detail: false,
+      directions: [{ text: "An existing direction", origin: "manual" }],
+    })];
+    const { root, saved } = openPluginReview(initial, existing);
+    const heading = Array.from(root.querySelectorAll<HTMLElement>(".arxiv-daily-interest-review__topic-heading"))
+      .find((element) => element.textContent?.includes("Largest coverage"))!;
+    expect(heading.textContent).toContain("Added");
+    const checkbox = heading.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    button(root, "Accept 2 topic(s) into settings").click();
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual([
+      "Largest coverage", "First tied coverage", "Second tied coverage",
+    ]);
+  });
+
+  it("reports settings topic names in the profile snapshot", () => {
+    const { plugin } = openPluginReview(topicSnapshot(), [normalizeTopic({
+      name: "Existing topic", tag: "existing", detail: false,
+      directions: [{ text: "A direction", origin: "manual" }],
+    })]);
+    expect(plugin.getPersonalLibraryProfileSnapshot().settingsTopicNames).toEqual(["Existing topic"]);
+  });
+
+  it("skips a topic whose name already exists in settings, without writing settings or failing loudly", async () => {
+    const existing = [normalizeTopic({
+      name: "Largest coverage", tag: "largest-coverage", detail: false,
+      directions: [{ text: "An existing direction", origin: "manual" }],
+    })];
+    const { plugin, saveData } = openPluginReview(topicSnapshot(), existing);
+    const result = await plugin.acceptPersonalLibraryProposedTopics(["large"]);
+    expect(saveData).not.toHaveBeenCalled();
+    expect(result.settingsTopicNames).toEqual(["Largest coverage"]);
+    expect(Notice.calls.map(({ message }) => message)).toContain(
+      "The selected topics are already in your research settings.",
+    );
+  });
+
+  it("accepts the new topics in a mixed selection and says which were skipped", async () => {
+    const existing = [normalizeTopic({
+      name: "Largest coverage", tag: "largest-coverage", detail: false,
+      directions: [{ text: "An existing direction", origin: "manual" }],
+    })];
+    const { plugin, saveData, saved } = openPluginReview(topicSnapshot(), existing);
+    await plugin.acceptPersonalLibraryProposedTopics(["large", "tie-z"]);
+    expect(saveData).toHaveBeenCalledOnce();
+    expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Largest coverage", "First tied coverage"]);
+    expect(Notice.calls.map(({ message }) => message)).toContain(
+      "Added 1 topic to research settings. 1 topic was already in research settings and skipped.",
+    );
+  });
+});
+
+describe("persisting the reviewed direction selection", () => {
+  it("refreshes an already-open settings page after accepting topics", async () => {
+    const { plugin, root, saveData, saved } = openPluginReview();
+    const tab = openSettingsBehindReview(plugin);
+    const names = () => Array.from(tab.containerEl.querySelectorAll(".arxiv-daily-settings__topic-title"),
+      (element) => element.textContent);
+    expect(names()).toEqual(["Existing topic"]);
+    button(root, "Accept 2 topic(s) into settings").click();
+    await vi.waitFor(() => expect(names()).toEqual(["Existing topic", "Largest coverage", "First tied coverage"]));
+    expect(saveData).toHaveBeenCalledOnce();
+    expect(saved[0]!.arxiv.topics.map(({ name }) => name))
+      .toEqual(["Existing topic", "Largest coverage", "First tied coverage"]);
+    expect(plugin.logger.error).not.toHaveBeenCalled();
+    expect(names()).toEqual(["Existing topic", "Largest coverage", "First tied coverage"]);
+    tab.hide();
+  });
+
+  it("reports successful acceptance only after the settings write finishes", async () => {
+    const { plugin, saveData } = openPluginReview();
+    let finish!: () => void;
+    const writing = new Promise<void>((resolve) => { finish = resolve; });
+    saveData.mockImplementationOnce(() => writing);
+    const accepting = plugin.acceptPersonalLibraryProposedTopics(["large"]);
+    expect(Notice.calls).toEqual([]);
+    finish();
+    await accepting;
+    expect(Notice.calls.map(({ message }) => message)).toContain("Added 1 topic to research settings.");
+  });
+
+  it("does not refresh the settings page or report success after a failed write", async () => {
+    const { plugin, saveData } = openPluginReview();
+    const tab = openSettingsBehindReview(plugin);
+    saveData.mockRejectedValueOnce(new Error("disk full"));
+    await expect(plugin.acceptPersonalLibraryProposedTopics(["large"])).rejects.toThrow("disk full");
+    expect(Array.from(tab.containerEl.querySelectorAll(".arxiv-daily-settings__topic-title"),
+      (element) => element.textContent)).toEqual(["Existing topic"]);
+    expect(Notice.calls).toEqual([]);
+    tab.hide();
+  });
+
+  it("keeps a saved acceptance successful when refreshing the settings view fails", async () => {
+    const { plugin, saved } = openPluginReview();
+    const tab = openSettingsBehindReview(plugin);
+    vi.spyOn(tab, "refreshSettings").mockImplementationOnce(() => { throw new Error("view unavailable"); });
+    await plugin.acceptPersonalLibraryProposedTopics(["large"]);
+    expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Existing topic", "Largest coverage"]);
+    expect(Notice.calls.map(({ message }) => message)).toContain(
+      "Added 1 topic to research settings. Reopen settings to refresh the list.",
+    );
+    tab.hide();
+  });
+
+  it("persists only the kept direction from a selected topic through the review modal", async () => {
+    const initial = topicSnapshot();
+    const { plugin, root, saveData, saved } = openPluginReview(initial);
+    topicChoices(root).find((choice) => choice.getAttribute("aria-label") === "Accept First tied coverage")!.click();
+    expandTopic(root, "Largest coverage");
+    directionChoice(root, "Largest coverage direction 2").click();
+    button(root, "Accept 1 topic(s) into settings").click();
+
+    await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
+    expect(saved[0]!.arxiv.topics.map((topic) => ({ name: topic.name, directions: topic.directions.map(({ text }) => text) })))
+      .toEqual([{ name: "Largest coverage", directions: ["Largest coverage direction 1"] }]);
+    expect(plugin.settings.arxiv.topics).toEqual(saved[0]!.arxiv.topics);
+    expect(plugin.getPersonalLibraryProfileSnapshot().proposal).toEqual(initial.proposal);
+  });
+
+  it("leaves a topic with no kept directions out while accepting another selected topic", async () => {
+    const { root, saveData, saved } = openPluginReview();
+    expandTopic(root, "Largest coverage");
+    directionChoice(root, "Largest coverage direction 1").click();
+    directionChoice(root, "Largest coverage direction 2").click();
+    expect(topicChoices(root)[0]!.checked).toBe(true);
+    button(root, "Accept 1 topic(s) into settings").click();
+
+    await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
+    expect(saved[0]!.arxiv.topics.map((topic) => ({ name: topic.name, directions: topic.directions.map(({ text }) => text) })))
+      .toEqual([{ name: "First tied coverage", directions: ["First tied coverage direction 1"] }]);
+  });
+
+  it("disables acceptance with an explanation when selected topics have no kept directions", () => {
+    const { root, saveData, plugin } = openPluginReview();
+    directionChoice(root, "Largest coverage direction 1").click();
+    directionChoice(root, "Largest coverage direction 2").click();
+    directionChoice(root, "First tied coverage direction 1").click();
+    const accept = button(root, "Accept 0 topic(s) into settings");
+    expect(accept.disabled).toBe(true);
+    expect(root.querySelector(".arxiv-daily-interest-review__accept-bar")?.textContent)
+      .toContain("Select at least one direction in a selected topic");
+    accept.click();
+    expect(saveData).not.toHaveBeenCalled();
+    expect(plugin.settings.arxiv.topics).toEqual([]);
+  });
+
+  it("does not persist a thin-evidence direction until it is explicitly selected", async () => {
+    const { root, saveData, saved } = openPluginReview(snapshot());
+    expect(topicChoices(root)[0]!.checked).toBe(true);
+    expect(directionChoice(root, candidate.text).checked).toBe(false);
+    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(saveData).not.toHaveBeenCalled();
+
+    expandTopic(root, "Research agents");
+    directionChoice(root, candidate.text).click();
+    button(root, "Accept 1 topic(s) into settings").click();
+    await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
+    expect(saved[0]!.arxiv.topics[0]!.directions.map(({ text }) => text)).toEqual([candidate.text]);
+  });
+
+  it("keeps the topic-only host call compatible with accepting all its directions", async () => {
+    const { plugin, saved } = openPluginReview();
+    await plugin.acceptPersonalLibraryProposedTopics(["large"]);
+    expect(saved[0]!.arxiv.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Largest coverage direction 1", "Largest coverage direction 2"]);
+  });
+
+  it("ignores candidates from unselected topics and skips selected topics emptied by filtering", async () => {
+    const { plugin, saved } = openPluginReview();
+    await plugin.acceptPersonalLibraryProposedTopics(
+      ["large", "tie-z"], ["large-direction-1", "tie-a-direction-1"],
+    );
+    expect(saved[0]!.arxiv.topics.map((topic) => ({ name: topic.name, directions: topic.directions.map(({ text }) => text) })))
+      .toEqual([{ name: "Largest coverage", directions: ["Largest coverage direction 1"] }]);
+  });
+
+  it("rejects an explicitly empty host selection before changing or persisting settings", async () => {
+    const { plugin, saveData } = openPluginReview();
+    await expect(plugin.acceptPersonalLibraryProposedTopics(["large"], []))
+      .rejects.toThrow("Select at least one proposed direction to accept");
+    expect(saveData).not.toHaveBeenCalled();
+    expect(plugin.settings.arxiv.topics).toEqual([]);
+  });
+});
+
+describe("generation progress in the review modal", () => {
+  it.each(["success", "failure"])("names the organization phase and clears progress after %s", async (outcome) => {
+    const ctrl = controller(snapshot({ proposal: null }));
+    let report!: NonNullable<Parameters<InterestProfileReviewController["generate"]>[0]>;
+    let release!: () => void;
+    const work = new Promise<void>((resolve) => { release = resolve; });
+    const failure = Object.assign(new Error("invalid organization"), { code: "proposal-invariant" });
+    vi.mocked(ctrl.mock.generate).mockImplementation(async (onProgress) => {
+      report = onProgress!;
+      await work;
+      if (outcome === "failure") throw failure;
+    });
+    const root = open(ctrl.mock).contentEl;
+    button(root, "Generate proposals").click();
+    expect(ctrl.mock.generate).toHaveBeenCalledOnce();
+    report({ phase: "reading", completed: 0, total: 0 });
+    expect(button(root, "Reading the index…").disabled).toBe(true);
+    report({ phase: "grouping", completed: 0, total: 0 });
+    expect(button(root, "Grouping papers…").disabled).toBe(true);
+    report({ phase: "organization", completed: 0, total: 1 });
+    expect(button(root, "Organizing topics and directions…").disabled).toBe(true);
+    release();
+    await vi.waitFor(() => expect(button(root, "Generate proposals").disabled).toBe(false));
+    if (outcome === "failure") {
+      expect(ctrl.mock.logError).toHaveBeenCalledWith("generate proposals", failure);
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("generated proposal was invalid");
+    } else {
+      expect(ctrl.mock.reload).toHaveBeenCalledOnce();
+    }
   });
 });
 

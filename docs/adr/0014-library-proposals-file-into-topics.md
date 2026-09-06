@@ -1,6 +1,6 @@
 # ADR 0014: Library proposals file themselves into topics
 
-Status: Accepted (2026-09-02 design session)
+Status: Accepted (2026-09-02; first-scan organization revised 2026-09-05)
 
 Related: ADR 0012 (topics hold a list of directions), which creates the question this answers; ADR 0009 (direction synthesis across clusters).
 
@@ -14,13 +14,17 @@ Two situations differ sharply.
 
 **Afterwards.** A researcher with topics that already describe their work, whose library grows and yields a handful of new candidates. Here the topics are the best available evidence of where a new direction belongs, and choosing by hand for each candidate reintroduces exactly the per-candidate friction that bulk acceptance removed.
 
-The clusterer can already serve both: its `relativeStopRatio` stops merging when the next edge falls below a fraction of the strongest one, so lowering it yields fewer, coarser clusters. Two passes over the same vectors give a coarse level and a fine level without new machinery.
+The first implementation used coarse clusters as topics and fine clusters as directions. Real-library measurement invalidated that path: single linkage chained almost the whole corpus together, while average linkage separated it into ten topics and 46 overly narrow directions. Changing the fine quantile barely reduced direction count. Similarity successfully identified related papers, but cluster boundaries were not a useful boundary for a researcher's standing interests.
 
 ## Decision
 
 ### 1. The first scan proposes whole topics
 
-Coarse clustering yields the topics, fine clustering within each yields that topic's directions. The researcher reviews and accepts a structure, not a pile of unattached lines. A proposed topic carries a suggested name; its machine tag is derived from that name and made unique.
+One tight clustering pass supplies evidence groups. A model sees those groups together and organizes them into 2–4 topics, each with 1–2 broad, one-line directions; one evidence group may yield one topic. It also supplies suggested names. Quantity and level-of-abstraction constraints guide it without examples copied from the researcher's settings. This replaces per-cluster extraction, synthesis (ADR 0009), and per-topic naming calls.
+
+Every evidence group must be assigned exactly once. Direction membership is the full union of assigned groups, while representative papers must come from those groups. Invalid or incomplete assignments are retried within the generation budget and then rejected, never silently repaired by dropping evidence. Ungrouped papers remain visible as uncovered evidence.
+
+The researcher reviews and accepts a structure. Topics are sorted by distinct paper coverage, the two largest are selected initially, and other topics are marked optional. Collapsed rows show paper and direction counts; selection and editing remain available. A topic's machine tag is derived from its suggested or edited name and made unique.
 
 ### 2. Later candidates are filed by similarity, and the researcher can move them
 
@@ -36,5 +40,6 @@ This matters more than tidiness once the topic name is used to exclude other fie
 
 - A researcher can go from an indexed library to a working set of topics without writing one by hand, which is the shortest path the product has ever offered to its own premise.
 - Two placement paths exist and both must be built; the first-run path is not a special case of the second, because it has no topics to compare against.
-- **Two thresholds now shape what the researcher sees**: the coarse clustering ratio that decides how many topics a first scan proposes, and the similarity floor below which a candidate proposes its own topic. Set the floor too low and drift is missed; too high and the settings page fills with near-duplicate topics. Neither has a defensible default yet — both need measurement against a real library, and until then they are tuning knobs, not settled behaviour.
+- The first scan no longer uses a coarse similarity threshold to determine topic count. Tight clustering remains an evidence-grouping parameter, recorded in the generation contract; the later-placement similarity floor still needs measurement against a real library. Set that floor too low and drift is missed; too high and settings fill with near-duplicate topics.
 - Accepting a proposed topic writes a new topic into product settings, so acceptance now changes settings rather than a separate document. Whatever guards settings writes has to cover it.
+- The review page shows uncovered evidence as a single count rather than the per-paper list this decision originally described; the researcher found the list noisy. The count still says how much of the library a proposal does not speak for, but those papers are named nowhere in the product now — reading which ones they are costs a regeneration or a look at the library itself.
