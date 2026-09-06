@@ -69,7 +69,7 @@ function proposal(ids = ["candidate.1", "candidate.2"]): PersonalLibraryDirectio
     catalog().papers["arxiv:2608.00001"]!,
   ]);
   return {
-    schemaVersion: 4, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
+    schemaVersion: 5, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
     identificationFingerprint: identification,
     catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
       scopeFingerprint: scope, identificationFingerprint: identification, catalogInputPapers,

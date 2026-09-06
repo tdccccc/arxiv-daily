@@ -42,7 +42,9 @@ import {
 import type { FilteredPaper } from "./paper-filter";
 import { escapePaperDataFence } from "./prompt-safety";
 
-export interface DailyPaperWithContent extends FilteredPaper {
+export interface DailyPaperWithContent extends Omit<FilteredPaper, "relevanceScore"> {
+  /** Manual paper fetches bypass classification and have no relevance score. */
+  relevanceScore?: number;
   abstractConclusion: string;
   fullSections: string | null;
   published?: string;

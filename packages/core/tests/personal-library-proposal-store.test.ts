@@ -3,6 +3,7 @@ import type { StorageAdapter } from "../src/core/adapters";
 import {
   PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+  decodePersonalLibraryDirectionProposal,
   createEmptyPersonalLibraryInterestProfile,
   createPersonalLibraryCatalogInputFingerprint,
   createPersonalLibraryCatalogInputManifest,
@@ -159,6 +160,39 @@ describe("scope-bound paths and construction", () => {
 });
 
 describe("proposal lifecycle", () => {
+  it("retires a two-level v4 proposal on load and allows a fresh organized generation", async () => {
+    const memory = makeStorage();
+    const legacy = { ...proposal(), schemaVersion: 4 };
+    memory.files[proposalPath] = JSON.stringify(legacy);
+    memory.files[proposalBackupPath] = JSON.stringify(legacy);
+    expect(decodePersonalLibraryDirectionProposal(legacy)).toBeNull();
+    const store = stores(memory.storage).proposals;
+    await expect(store.load()).resolves.toBeNull();
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+    const fresh = await store.replace(proposal(), null);
+    expect(fresh.schemaVersion).toBe(5);
+    await expect(store.load()).resolves.toEqual(fresh);
+  });
+
+  it("does not retire a wrong-scope or corrupt proposal as if it were empty", async () => {
+    const memory = makeStorage();
+    const legacy = { ...proposal(), schemaVersion: 4 };
+    memory.files[proposalBackupPath] = JSON.stringify(legacy);
+    memory.files[proposalPath] = "corrupt current proposal";
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    const catalogInputPapers = legacy.catalogInputPapers;
+    memory.files[proposalPath] = JSON.stringify({ ...legacy,
+      scopeFingerprint: otherScope,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: otherScope, identificationFingerprint: identification, catalogInputPapers,
+      }),
+    });
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "incompatible" });
+    memory.files[proposalBackupPath] = JSON.stringify(proposal());
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "incompatible" });
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
   it("fails closed with regeneration-required for legacy v1 primary or backup", async () => {
     const primary = makeStorage();
     const legacy = proposal() as unknown as Record<string, any>;

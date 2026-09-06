@@ -208,7 +208,7 @@ describe("Pipeline index 0 papers handling", () => {
       call: vi.fn().mockResolvedValue(
         JSON.stringify({
           papers: [
-            { id: "2605.08080", category: "test", directions: ["test#1"] },
+            { relevanceScore: 80, id: "2605.08080", category: "test", directions: ["test#1"] },
           ],
         }),
       ),
@@ -334,7 +334,7 @@ describe("Pipeline partial failure consistency", () => {
         if (daily) return daily;
         if (system.includes("判断它命中了哪些方向")) {
           return JSON.stringify({
-            papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
+            papers: ids.map((id) => ({ relevanceScore: 80, id, category: "test", directions: ["test#1"] })),
           });
         }
         if (system.includes("strict research-paper evaluator")) {
@@ -386,7 +386,7 @@ describe("Pipeline partial failure consistency", () => {
       const system = messages[0]?.content ?? "";
       if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
+          papers: ids.map((id) => ({ relevanceScore: 80, id, category: "test", directions: ["test#1"] })),
         });
       }
       if (system.includes("strict research-paper evaluator")) {
@@ -422,7 +422,7 @@ describe("Pipeline partial failure consistency", () => {
       `### Fallback\n> **自动摘要不可用。**\n<!-- arxiv-daily-fallback:${ids[1]} -->\n> 信息来源： Abstract\n- **作者**: B\n- **arXiv**: [${ids[1]}](https://arxiv.org/abs/${ids[1]})\n- **原始摘要**: Original abstract`,
     ].join("\n");
     const summarizeDaily = vi.fn(async (papers: any[]) => {
-      expect(papers.map((paper) => paper.id)).toEqual(ids);
+      expect(papers.map((paper) => paper.id)).toEqual([ids[1], ids[0]]);
       expect(papers.map((paper) => paper.abstract)).toEqual(["abstract", "abstract"]);
       return { markdown: emergency, slots: [] };
     });
@@ -443,7 +443,7 @@ describe("Pipeline partial failure consistency", () => {
       expect.any(Object),
     );
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
-      ids,
+      [ids[1], ids[0]],
       "arxiv-daily/daily/2026-05-11.md",
     );
     expect(paperIndex.setSummaries).toHaveBeenCalledWith({
@@ -502,7 +502,7 @@ describe("Pipeline partial failure consistency", () => {
     ],
     [
       "contract-invalid JSON",
-      JSON.stringify({ papers: [{ id: "2605.99999", category: "test", directions: ["test#1"] }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id: "2605.99999", category: "test", directions: ["test#1"] }] }),
       "response violates the filter contract: paper record has an unknown id",
     ],
   ])("fails closed before downstream work for %s filter responses", async (
@@ -589,7 +589,7 @@ describe("Pipeline partial failure consistency", () => {
 
   it("passes filter and summary checkpoint scopes to their orchestration seams", async () => {
     const filterStore = {
-      lookupReusable: vi.fn(async () => [{ id: "2605.08080", category: "test", directions: ["test#1"] }]),
+      lookupReusable: vi.fn(async () => [{ relevanceScore: 80, id: "2605.08080", category: "test", directions: ["test#1"] }]),
       save: vi.fn(),
       removeAll: vi.fn(async () => undefined),
     };
@@ -654,7 +654,7 @@ describe("Pipeline partial failure consistency", () => {
     llm.call = vi.fn(async (messages: any[]) => {
       const system = messages[0]?.content ?? "";
       if (system.includes("判断它命中了哪些方向")) {
-        return JSON.stringify({ papers: [{ id: ids[0], category: "test", directions: ["test#1"] }] });
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id: ids[0], category: "test", directions: ["test#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) {
         return JSON.stringify({ papers: [] });
@@ -698,7 +698,7 @@ describe("Pipeline partial failure consistency", () => {
       llm.call = vi.fn(async (messages: any[]) => {
         const system = messages[0]?.content ?? "";
         if (system.includes("判断它命中了哪些方向")) {
-          return JSON.stringify({ papers: [{ id: ids[0], category: "test", directions: ["test#1"] }] });
+          return JSON.stringify({ papers: [{ relevanceScore: 80, id: ids[0], category: "test", directions: ["test#1"] }] });
         }
         if (system.includes("strict research-paper evaluator")) {
           return JSON.stringify({ papers: [] });
@@ -724,7 +724,7 @@ describe("Pipeline partial failure consistency", () => {
       const system = messages[0]?.content ?? "";
       if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "test", directions: ["test#1"] })),
+          papers: ids.map((id) => ({ relevanceScore: 80, id, category: "test", directions: ["test#1"] })),
         });
       }
       if (system.includes("strict research-paper evaluator")) {

@@ -699,8 +699,8 @@ describe("Obsidian host adapters", () => {
       },
     };
     const prepared = prepareDailyFilterCheckpoint(compatibility);
-    const first = [{ id: "2608.00001", category: "topic", directions: ["topic#1"] }];
-    const second = [{ id: "2608.00001", category: "skip", directions: [] }];
+    const first = [{ id: "2608.00001", category: "topic", directions: ["topic#1"], relevanceScore: 80 }];
+    const second = [{ id: "2608.00001", category: "skip", directions: [], relevanceScore: 0 }];
 
     await store.save("2026-08-01", prepared, first);
     await store.save("2026-08-01", prepared, second);

@@ -12,7 +12,7 @@ import {
   renderRunWindowTimeSelect,
   TIMEZONE_OPTIONS,
 } from "./tab";
-import { arxivCategories, LlmClient } from "@arxiv-daily/core";
+import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -334,6 +334,47 @@ export function renderTickIntervalRow(
   });
   input.value = String(tab.plugin.settings.schedule.tickIntervalMin);
   tab.bindTickIntervalInput(input);
+}
+
+/** Shared by the legacy tab and the declarative settings page. */
+export function renderDailyPaperLimitRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "number",
+    attr: { "aria-label": "Daily paper limit", min: "1", step: "1" },
+  });
+  input.value = String(normalizeMaxDailyPapers(tab.plugin.settings.output.maxDailyPapers));
+  const validate = (): number | null => {
+    const value = Number(input.value.trim());
+    const valid = isValidMaxDailyPapers(value);
+    input.setCustomValidity(valid ? "" : "Enter a positive whole number.");
+    input.toggleClass("is-invalid", !valid);
+    return valid ? value : null;
+  };
+  input.addEventListener("input", () => {
+    tab.beginControlChange(input);
+    validate();
+  });
+  input.addEventListener("change", () => {
+    const revision = tab.beginControlChange(input);
+    const next = validate();
+    if (next === null) return;
+    tab.runAction("save daily paper limit", async () => {
+      try {
+        await tab.changeSettingValue("output.maxDailyPapers", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = String(next);
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = String(normalizeMaxDailyPapers(tab.restoreCurrentControlValue(error, "output.maxDailyPapers")));
+          validate();
+        }
+        throw error;
+      }
+    });
+  });
 }
 
 /** Email delivery guide strip for the current mode. */

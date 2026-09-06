@@ -44,6 +44,7 @@ describe("CLI init template", () => {
     expect(body).not.toContain("可含密钥");
     expect(body).toContain('categories = ["cs.LG", "cs.AI"]');
     expect(body).toContain('provider = "openai"');
+    expect(body).toContain("\nmax_daily_papers = 20\n");
   });
 
   it("runs non-TUI wizard: provider → url → key → models → rest", async () => {
@@ -99,6 +100,7 @@ describe("CLI init template", () => {
       true,
     );
     expect(written[0]!.body).toContain("detail = false");
+    expect(written[0]!.body).toContain("\nmax_daily_papers = 20\n");
     expect(written[0]!.body).toContain("thinking_mode = true");
     expect(written[0]!.body).toContain('reasoning_effort = "high"');
   });

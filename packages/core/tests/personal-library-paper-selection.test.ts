@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  PERSONAL_LIBRARY_DIRECTION_ABSTRACT_TRUNCATION_MARKER,
   PERSONAL_LIBRARY_DIRECTION_GENERATION_CONTRACT,
   PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS,
   PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS,
@@ -152,10 +151,12 @@ describe("personal-library direction evidence selection", () => {
     expect(selected.some(({ paperKey }) => paperKey === "arxiv:2608.00205")).toBe(true);
   });
 
-  it("deterministically truncates a long abstract with the shared marker", () => {
+  it("deterministically truncates a long abstract and marks the bounded prefix", () => {
     const long = paper(1, { abstract: "x".repeat(PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS + 200) });
     const rendered = renderPersonalLibraryDirectionPaper(long);
     expect(rendered.abstract).toHaveLength(PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS);
-    expect(rendered.abstract.endsWith(PERSONAL_LIBRARY_DIRECTION_ABSTRACT_TRUNCATION_MARKER)).toBe(true);
+    expect(rendered.abstract).toBe(long.abstract.slice(0, PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS));
+    expect(rendered.abstractTruncated).toBe(true);
+    expect(renderPersonalLibraryDirectionPaper(paper(1)).abstractTruncated).toBe(false);
   });
 });

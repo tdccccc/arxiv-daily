@@ -56,7 +56,7 @@ const filterCompatibility: DailyFilterCheckpointCompatibilityInput = {
 };
 const preparedFilterCompatibility = prepareDailyFilterCheckpoint(filterCompatibility);
 const filterResult = [
-  { id: compatibility.paper.id, category: "topic", directions: ["topic#1"] },
+  { id: compatibility.paper.id, category: "topic", directions: ["topic#1"], relevanceScore: 80 },
 ];
 const result: DailyPaperResult = {
   kind: "structured",

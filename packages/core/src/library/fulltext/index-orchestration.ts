@@ -404,12 +404,15 @@ export async function indexPersonalLibraryFullText(
 }
 
 /**
- * Version of the first-page title extraction rules. Bumped when the rules
- * change so previously indexed fallback papers refresh their titles on the
+ * Version of the leading-page title and abstract extraction rules. Bumped when
+ * the rules change so previously indexed fallback papers refresh both on the
  * next index run (reuse detects `titleVersion` mismatch; the refresh re-reads
- * the first page and updates the title without re-embedding).
+ * the leading pages and updates them without re-embedding).
+ *
+ * 9 — abstracts joined the document so a fallback paper can be proposed on its
+ * own evidence; 8 stored a title alone.
  */
-export const TITLE_EXTRACTION_VERSION = 8 as const;
+export const TITLE_EXTRACTION_VERSION = 9 as const;
 
 /**
  * Index units: catalog papers plus unresolved files keyed by SHA-256 of the
@@ -591,6 +594,7 @@ async function buildPaperDocument(input: {
     textHash,
     contentHash: input.contentHash,
     title,
+    abstract: abstract === "" ? undefined : abstract,
     titleVersion: TITLE_EXTRACTION_VERSION,
     filePaths: [...filePaths],
     observationFingerprints: [...observationFingerprints],
@@ -615,18 +619,25 @@ async function rebindFallbackDocument(input: {
   signal?: AbortSignal;
 }): Promise<FullTextPaperDocument> {
   let title = input.document.title;
+  let abstract = input.document.abstract;
   if (input.refreshTitle) {
     const path = input.filePaths[0];
     if (!path) throw new Error("fallback paper has no file path for title refresh");
     const bytes = await input.source.readBinary(path, { signal: input.signal });
     const { extraction } = await extractIndexPages(input, new Uint8Array(bytes));
     title = extractTitleFromFirstPage(extraction.pages, extraction.layout, extraction.metadataTitle) ?? undefined;
+    // The refresh already parsed the pages the abstract lives on, so it costs
+    // nothing extra here and it is the only way a document indexed before
+    // abstracts were stored ever gets one.
+    const refreshed = extractAbstractFromPages(extraction.pages).abstract;
+    abstract = refreshed === "" ? undefined : refreshed;
   }
   return {
     ...input.document,
     paperKey: input.paperKey,
     contentHash: input.contentHash ?? input.document.contentHash,
     title,
+    abstract,
     titleVersion: input.refreshTitle ? TITLE_EXTRACTION_VERSION : input.document.titleVersion,
     filePaths: [...input.filePaths],
     observationFingerprints: [...input.observationFingerprints],
@@ -668,6 +679,7 @@ function recordFromDocument(
     textHash: document.textHash,
     contentHash: document.contentHash,
     title: document.title,
+    abstract: document.abstract,
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],

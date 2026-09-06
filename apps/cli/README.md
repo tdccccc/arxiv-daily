@@ -49,6 +49,17 @@ Config path:
 
 Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags.
 
+## Daily paper limit
+
+New daily reports contain at most 20 papers across all topics by default. Set a different positive integer in the existing `[output]` table:
+
+```toml
+[output]
+max_daily_papers = 20
+```
+
+The most relevant matching papers are kept before full-text retrieval, detail-note selection, and summarization. Missing values use 20; zero, negative numbers, fractions, and quoted strings are rejected. Changing only this limit can reuse cached filtering results. Reports already written are not automatically rewritten.
+
 ## Uninstall
 
 ```bash

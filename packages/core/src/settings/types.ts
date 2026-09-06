@@ -81,6 +81,8 @@ export interface ArxivSettings {
 export interface OutputSettings {
   dailyDir: string;
   papersDir: string;
+  /** Maximum papers in a new daily report across all topics; defaults to 20. */
+  maxDailyPapers?: number;
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
 }

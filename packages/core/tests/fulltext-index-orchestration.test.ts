@@ -1452,16 +1452,41 @@ describe("full-text indexing orchestration", () => {
     expect(matches[0]!.rankingScore).toBeCloseTo(1 / 61, 12);
   });
 
+  it("stores the abstract of a fallback-indexed file beside its title", async () => {
+    // A fallback file has no catalog record, so the index is the only place its
+    // abstract can come from when a proposal is built from it later.
+    const catalog = makeCatalog(
+      [],
+      [{ path: "lib/local.pdf", fingerprint: fingerprint("f2") }],
+    );
+    const store = new MemoryStore();
+    await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({
+        "lib/local.pdf": [leadingPage("Local Title", "The measured abstract body of this local document, long enough to clear the extractor's minimum length.")],
+      }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+    const key = fallbackPaperKey("lib/local.pdf");
+    const document = await store.loadPaper(key);
+    expect(document?.title).toBe("Local Title");
+    expect(document?.abstract).toContain("The measured abstract body of this local document");
+    expect((await store.loadManifest()).papers[key]?.abstract).toBe(document?.abstract);
+  });
+
   it("refreshes fallback titles when the extraction rules advanced", async () => {
     const catalog = makeCatalog(
       [],
       [{ path: "lib/local.pdf", fingerprint: fingerprint("f2") }],
     );
     const store = new MemoryStore();
-    const run = async (firstPage: string) => indexPersonalLibraryFullText({
+    const run = async (firstPage: string, abstract = "Abstract body.") => indexPersonalLibraryFullText({
       catalog,
       source: new FakeSource(),
-      extractor: new FakeExtractor({ "lib/local.pdf": [`${firstPage}\nAbstract body.`] }),
+      extractor: new FakeExtractor({ "lib/local.pdf": [`${firstPage}\n${abstract}`] }),
       embedding: new FakeEmbedding(),
       store,
       now: () => new Date(NOW),
@@ -1481,11 +1506,14 @@ describe("full-text indexing orchestration", () => {
     );
 
     // The same file re-runs; the title refresh re-reads the first page.
-    const second = await run("New Title Line");
+    const second = await run("New Title Line", "ABSTRACT\nRefreshed abstract body of this local document, long enough to clear the extractor's minimum length.");
     expect(second.titlesRefreshed).toBe(1);
     expect(second.reused).toBe(1);
     const refreshed = await store.loadPaper(fallbackKey);
     expect(refreshed?.title).toBe("New Title Line");
+    // The refresh already parsed these pages, so it must pick the abstract up
+    // too — that is how a document indexed before abstracts existed gets one.
+    expect(refreshed?.abstract).toContain("Refreshed abstract body of this local document");
     expect(refreshed?.derivation).toBeDefined();
     expect((await store.loadManifest()).papers[fallbackKey]?.derivation).toEqual(refreshed?.derivation);
     expect(refreshed?.chunks.length).toBeGreaterThan(0);

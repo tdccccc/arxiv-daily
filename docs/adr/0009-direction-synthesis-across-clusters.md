@@ -1,6 +1,8 @@
 # ADR 0009: Direction candidates are synthesized across clusters before review
 
-Status: Accepted (2026-08-31 design session)
+Status: Superseded for initial library proposals by ADR 0014 §1 (2026-09-05)
+
+The initial proposal now organizes evidence groups directly into a few topics and directions in one model stage. Per-cluster extraction and subsequent synthesis are retired. The requirement not to silently lose evidence survives as complete, unique group assignment; consent and cancellation boundaries remain unchanged. The original decision below records why concatenating cluster-level directions was inadequate.
 
 Related: ADR 0004 (personal-library-guided discovery); ADR 0007 (incremental trigger and split consent gate).
 

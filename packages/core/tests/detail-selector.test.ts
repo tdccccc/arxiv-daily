@@ -45,6 +45,7 @@ function paper(
     abstract: `Abstract ${id}`,
     category: "detail",
     isDetail: false,
+    relevanceScore: 80,
     abstractConclusion: `## Abstract\nAbstract ${id}`,
     fullSections: `## Method\nFull text ${id}`,
     ...overrides,

@@ -89,6 +89,7 @@ describe("CLI config loader (TOML / XDG)", () => {
     expect(cfg.settings.arxiv.topics[0]?.tag).toBe("ml");
     expect(cfg.settings.output.linkStyle).toBe("relative");
     expect(cfg.settings.output.summaryLanguage).toBe("en");
+    expect(cfg.settings.output.maxDailyPapers).toBe(20);
     expect(cfg.settings.email.to).toBe("a@b.com");
     expect(cfg.settings.detailSelection.profile).toBe("balanced");
     expect(cfg.scheduleIntent.on).toBe("09:30");
@@ -103,6 +104,24 @@ describe("CLI config loader (TOML / XDG)", () => {
 
     expect(cfg.settings.advanced.requestDelayMs).toBe(3000);
   });
+
+  it.each([1, 35, Number.MAX_SAFE_INTEGER])("loads output.max_daily_papers = %s", async (limit) => {
+    const cfg = await loadCliConfig({
+      configPath: "/cfg.toml",
+      readText: async () => minimalToml.replace("[output]", `[output]\nmax_daily_papers = ${limit}`),
+    });
+    expect(cfg.settings.output.maxDailyPapers).toBe(limit);
+  });
+
+  it.each(["0", "-1", "1.5", "nan", "inf", '"20"', "true", "[20]", "9.007199254740992e15"])(
+    "rejects invalid output.max_daily_papers = %s",
+    async (value) => {
+      await expect(loadCliConfig({
+        configPath: "/cfg.toml",
+        readText: async () => minimalToml.replace("[output]", `[output]\nmax_daily_papers = ${value}`),
+      })).rejects.toThrow(/invalid output.max_daily_papers/);
+    },
+  );
 
   it("rejects invalid request delay configuration", async () => {
     await expect(

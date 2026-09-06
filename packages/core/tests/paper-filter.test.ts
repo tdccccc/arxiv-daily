@@ -77,6 +77,49 @@ const samplePaper: PaperMeta = {
 };
 
 describe("filterPapers", () => {
+  it("carries relevance scores from validated model decisions to selected papers", async () => {
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [{
+      id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 93.5,
+    }] })) };
+    const result = await filterPapers([samplePaper], {
+      llm: llm as any, logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()), ...checkpointScope,
+    });
+    expect(result[0]).toMatchObject({ id: samplePaper.id, relevanceScore: 93.5 });
+    expect(result[0]!.topicDirections).toEqual([{ tag: "photo-z", id: "d1a", text: "photo-z methods" }]);
+  });
+
+  it.each([undefined, null, -1, 101, NaN, Infinity, "80"])("rejects invalid or absent relevance score %s", async (score) => {
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [{
+      id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: score,
+    }] })) };
+    await expect(filterPapers([samplePaper], {
+      llm: llm as any, logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()), ...checkpointScope,
+    })).rejects.toMatchObject({ reasonCode: "invalid-contract" });
+  });
+
+  it.each([0, 100])("accepts the relevance score boundary %s without adding a filtering threshold", async (score) => {
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [{
+      id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: score,
+    }] })) };
+    const result = await filterPapers([samplePaper], {
+      llm: llm as any, logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()), ...checkpointScope,
+    });
+    expect(result[0]!.relevanceScore).toBe(score);
+  });
+
+  it("requires skipped records to have zero relevance", async () => {
+    const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [{
+      id: samplePaper.id, category: "skip", directions: [], relevanceScore: 30,
+    }] })) };
+    await expect(filterPapers([samplePaper], {
+      llm: llm as any, logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()), ...checkpointScope,
+    })).rejects.toMatchObject({ reasonCode: "invalid-contract" });
+  });
+
   it("recognizes only real validation errors and compatible Error instances", () => {
     const local = new PaperFilterResponseValidationError(
       "response is not strict JSON",
@@ -131,7 +174,7 @@ describe("filterPapers", () => {
   it("includes the topic list without detail hints in the system prompt", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
+        JSON.stringify({ papers: [{ relevanceScore: 80, id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
       ),
     };
     await filterPapers([samplePaper], {
@@ -151,7 +194,7 @@ describe("filterPapers", () => {
   it("keeps papers with a valid tag and starts them as non-detail", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
+        JSON.stringify({ papers: [{ relevanceScore: 80, id: "2601.12345", category: "photo-z", directions: ["photo-z#1"] }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -176,7 +219,7 @@ describe("filterPapers", () => {
     });
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: samplePaper.id, category: "nlp|llm", directions: ["nlp|llm#1"] }] }),
+        JSON.stringify({ papers: [{ relevanceScore: 80, id: samplePaper.id, category: "nlp|llm", directions: ["nlp|llm#1"] }] }),
       ),
     };
 
@@ -195,7 +238,7 @@ describe("filterPapers", () => {
   it("drops papers with category 'skip'", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "skip", directions: [] }] }),
+        JSON.stringify({ papers: [{ relevanceScore: 0, id: "2601.12345", category: "skip", directions: [] }] }),
       ),
     };
     const out = await filterPapers([samplePaper], {
@@ -214,7 +257,7 @@ describe("filterPapers", () => {
     };
     const llm = {
       call: vi.fn().mockResolvedValue(
-        JSON.stringify({ papers: [{ id: "2601.12345", category: "nope", directions: [] }] }),
+        JSON.stringify({ papers: [{ relevanceScore: 80, id: "2601.12345", category: "nope", directions: [] }] }),
       ),
     };
 
@@ -243,12 +286,12 @@ describe("filterPapers", () => {
     ["non-record paper", JSON.stringify({ papers: [null] }), "invalid-contract"],
     ["missing record key", JSON.stringify({ papers: [{ id: samplePaper.id }] }), "invalid-contract"],
     ["extra detail key", JSON.stringify({ papers: [{ id: samplePaper.id, category: "photo-z", detail: true }] }), "invalid-contract"],
-    ["unknown ID", JSON.stringify({ papers: [{ id: "2601.99999", category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
+    ["unknown ID", JSON.stringify({ papers: [{ relevanceScore: 80, id: "2601.99999", category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
     ["duplicate ID", JSON.stringify({ papers: [
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
-      { id: samplePaper.id, category: "skip", directions: [] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
+      { relevanceScore: 0, id: samplePaper.id, category: "skip", directions: [] },
     ] }), "invalid-contract"],
-    ["non-string ID", JSON.stringify({ papers: [{ id: 123, category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
+    ["non-string ID", JSON.stringify({ papers: [{ relevanceScore: 80, id: 123, category: "photo-z", directions: ["photo-z#1"] }] }), "invalid-contract"],
     ["non-string category", JSON.stringify({ papers: [{ id: samplePaper.id, category: null }] }), "invalid-contract"],
   ])("rejects %s without caching it", async (_label, raw, reasonCode) => {
     const checkpointStore = {
@@ -280,8 +323,8 @@ describe("filterPapers", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const checkpointStore = {
       lookupReusable: vi.fn(async () => [
-        { id: "2601.54321", category: "galaxy-cluster", directions: ["galaxy-cluster#1"] },
-        { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
+        { relevanceScore: 80, id: "2601.54321", category: "galaxy-cluster", directions: ["galaxy-cluster#1"] },
+        { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
       ]),
       save: vi.fn(),
     };
@@ -301,11 +344,11 @@ describe("filterPapers", () => {
     expect(checkpointStore.save).not.toHaveBeenCalled();
     expect(out).toEqual([
       {
-        ...currentPapers[1], category: "galaxy-cluster", isDetail: false,
+        ...currentPapers[1], category: "galaxy-cluster", isDetail: false, relevanceScore: 80,
         topicDirections: [{ tag: "galaxy-cluster", id: "d2a", text: "cluster surveys" }],
       },
       {
-        ...currentPapers[0], category: "photo-z", isDetail: false,
+        ...currentPapers[0], category: "photo-z", isDetail: false, relevanceScore: 80,
         topicDirections: [{ tag: "photo-z", id: "d1a", text: "photo-z methods" }],
       },
     ]);
@@ -328,7 +371,7 @@ describe("filterPapers", () => {
       DEFAULT_SETTINGS.output,
     );
     const llm = { call: vi.fn(async () => JSON.stringify({
-      papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
+      papers: [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
     })) };
     const deps = {
       llm: llm as any,
@@ -375,7 +418,7 @@ describe("filterPapers", () => {
         llmSettings.baseUrl = "https://mutated.example/v1";
         llmSettings.thinkingMode = !llmSettings.thinkingMode;
         return JSON.stringify({
-          papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }),
     };
@@ -398,7 +441,7 @@ describe("filterPapers", () => {
     expect(createDailyFilterCompatibilityFingerprint(changed)).not.toBe(originalFingerprint);
     expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, changed)).toBeNull();
     expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, original)).toEqual([
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
     ]);
   });
 
@@ -410,7 +453,7 @@ describe("filterPapers", () => {
       save: vi.fn(() => pendingSave),
     };
     const llm = { call: vi.fn(async () => JSON.stringify({
-      papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
+      papers: [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
     })) };
     let settled = false;
     const filtering = filterPapers([samplePaper], {
@@ -451,7 +494,7 @@ describe("filterPapers", () => {
       checkpointStore: {
         lookupReusable: vi.fn(async () => {
           hitController.abort("cancel after lookup");
-          return [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
+          return [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
         }),
         save: vi.fn(),
       },
@@ -592,7 +635,7 @@ describe("filtering by direction", () => {
 
   it("keeps a paper that names directions of the topic it was filed under", async () => {
     const out = await filterWith([
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#2"] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#2"] },
     ]);
 
     expect(out).toMatchObject([{ id: samplePaper.id, category: "photo-z" }]);
@@ -600,7 +643,7 @@ describe("filtering by direction", () => {
 
   it("rejects a kept paper that names no direction", async () => {
     const store = rejectingStore();
-    await expect(filterWith([{ id: samplePaper.id, category: "photo-z", directions: [] }], store))
+    await expect(filterWith([{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: [] }], store))
       .rejects.toMatchObject(
         invalidContract(`paper ${samplePaper.id} names no direction for its topic`),
       );
@@ -609,7 +652,7 @@ describe("filtering by direction", () => {
 
   it("rejects a direction belonging to a different topic than the chosen one", async () => {
     await expect(filterWith([
-      { id: samplePaper.id, category: "photo-z", directions: ["galaxy-cluster#1"] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["galaxy-cluster#1"] },
     ])).rejects.toMatchObject(
       invalidContract(`paper ${samplePaper.id} has an invalid direction`),
     );
@@ -617,7 +660,7 @@ describe("filtering by direction", () => {
 
   it("rejects an unknown direction reference", async () => {
     await expect(filterWith([
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#9"] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#9"] },
     ])).rejects.toMatchObject(
       invalidContract(`paper ${samplePaper.id} has an invalid direction`),
     );
@@ -625,7 +668,7 @@ describe("filtering by direction", () => {
 
   it("rejects a repeated direction reference", async () => {
     await expect(filterWith([
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#1"] },
+      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1", "photo-z#1"] },
     ])).rejects.toMatchObject(
       invalidContract(`paper ${samplePaper.id} has a duplicate direction`),
     );
@@ -633,7 +676,7 @@ describe("filtering by direction", () => {
 
   it("rejects a skipped paper that still names a direction", async () => {
     await expect(filterWith([
-      { id: samplePaper.id, category: "skip", directions: ["photo-z#1"] },
+      { relevanceScore: 0, id: samplePaper.id, category: "skip", directions: ["photo-z#1"] },
     ])).rejects.toMatchObject(
       invalidContract(`paper ${samplePaper.id} names a direction while skipped`),
     );
@@ -644,7 +687,7 @@ describe("matched directions reach the report", () => {
   it("resolves each kept paper's direction refs to their topic, identity and text", async () => {
     const llm = {
       call: vi.fn().mockResolvedValue(JSON.stringify({
-        papers: [{
+        papers: [{ relevanceScore: 80,
           id: samplePaper.id,
           category: "photo-z",
           directions: ["photo-z#2", "photo-z#1"],
@@ -668,7 +711,7 @@ describe("matched directions reach the report", () => {
   });
 
   it("resolves refs from a reused checkpoint the same way as from a live call", async () => {
-    const records = [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
+    const records = [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
     const checkpointStore = {
       lookupReusable: vi.fn(async () => records),
       save: vi.fn(),

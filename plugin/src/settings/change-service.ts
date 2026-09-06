@@ -1,4 +1,5 @@
 import {
+  isValidMaxDailyPapers,
   sanitizeDetailSelection,
   validateLocalPdfParserSidecarConfig,
   validateScheduleConfig,
@@ -91,6 +92,7 @@ export class SettingsChangeService {
       );
       const commitPaths = changedLeafPaths(previous, candidate);
       try {
+        this.validateCandidate(candidate, []);
         assertLiveCommitEligible(this.deps.settings, candidate, commitPaths);
         await this.deps.persistSettings(candidate);
       } catch (error) {
@@ -212,6 +214,12 @@ export class SettingsChangeService {
     candidate: PluginSettings,
     changedKeys: readonly string[],
   ): void {
+    if (
+      (candidate.output.maxDailyPapers !== undefined || changedKeys.includes("output.maxDailyPapers"))
+      && !isValidMaxDailyPapers(candidate.output.maxDailyPapers)
+    ) {
+      throw new Error("Invalid output.maxDailyPapers: expected a positive safe integer");
+    }
     if (changedKeys.some(isOutputDirectoryKey)) {
       for (const field of ["dailyDir", "papersDir"] as const) {
         const validation = validateVaultRelativeDirectory(candidate.output[field]);

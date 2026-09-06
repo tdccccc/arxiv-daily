@@ -52,8 +52,8 @@ const papers: PaperMeta[] = [
   { id: "2608.00002", title: "Second", authors: "B", abstract: "Abstract two" },
 ];
 const result: FilterRecord[] = [
-  { id: "2608.00002", category: "skip", directions: [] },
-  { id: "2608.00001", category: "topic-a", directions: ["topic-a#1"] },
+  { id: "2608.00002", category: "skip", directions: [], relevanceScore: 0 },
+  { id: "2608.00001", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 },
 ];
 
 function compatibility(
@@ -311,18 +311,33 @@ describe("paper filter shared contract", () => {
   });
 
   it.each([
-    { papers: result, extra: true },
-    { papers: [{ ...result[0], extra: true }] },
-    { papers: [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"] }] },
-    { papers: [result[0], result[0]] },
-    { papers: [{ id: papers[0]!.id, category: "unknown", directions: [] }] },
-  ])("rejects malformed records %#", (value) => {
+    {
+      label: "extra root key", value: { papers: result, extra: true },
+      reason: "root must be exactly {papers:[...]}",
+    },
+    {
+      label: "extra record key", value: { papers: [{ ...result[0], extra: true }] },
+      reason: "paper record has an invalid shape",
+    },
+    {
+      label: "unknown id", value: { papers: [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 }] },
+      reason: "paper record has an unknown id",
+    },
+    {
+      label: "duplicate id", value: { papers: [result[0], result[0]] },
+      reason: "paper record has a duplicate id",
+    },
+    {
+      label: "unknown category", value: { papers: [{ id: papers[0]!.id, category: "unknown", directions: [], relevanceScore: 80 }] },
+      reason: `paper ${papers[0]!.id} has an invalid category`,
+    },
+  ])("rejects $label for its original contract violation", ({ value, reason }) => {
     expect(decodePaperFilterRecords(
       value,
       new Set(papers.map((paper) => paper.id)),
       new Set(["topic-a"]),
       buildPaperFilterRequest(papers, compatibility().arxivSettings).identity.directions,
-    )).toMatchObject({ ok: false });
+    )).toEqual({ ok: false, reason });
   });
 });
 
@@ -393,6 +408,59 @@ describe("daily filter checkpoint fingerprint", () => {
   });
 });
 
+describe("scored daily filter checkpoints", () => {
+  it("persists and reconstructs every relevance score without rounding or reordering", async () => {
+    const { files, storage } = makeStorage();
+    const records = result.map((record) => ({
+      ...record,
+      relevanceScore: record.category === "skip" ? 0 : 87.5,
+    }));
+    await makeStore(storage).save(reportDate, prepared(), records);
+    expect(JSON.parse(files[documentPath]!).result).toEqual(records);
+    const reconstructed = makeStore(storage);
+    expect(await reconstructed.load(reportDate)).toMatchObject({ result: records });
+    expect(await reconstructed.lookupReusable(reportDate, prepared())).toEqual(records);
+  });
+
+  // Keep each old contract at literal 2 independently. Valid current records
+  // isolate version rejection from the separate missing-score shape check.
+  it.each([
+    ["prompt", { promptContractVersion: 2 }],
+    ["result", { resultContractVersion: 2 }],
+  ])("rejects the old %s contract 2 independently", async (_name, stale) => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    Object.assign(document.fingerprintInput, stale);
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).load(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
+  it("refuses to save a current-contract record with a missing relevance score", async () => {
+    const { files, storage } = makeStorage();
+    await expect(makeStore(storage).save(reportDate, prepared(), [{
+      id: "2608.00001",
+      category: "topic-a",
+      directions: ["topic-a#1"],
+    }])).rejects.toThrow(/invalid daily filter checkpoint result: paper record has an invalid shape/);
+    expect(files[documentPath]).toBeUndefined();
+  });
+
+  it("refuses to load a current-contract record with a missing relevance score", async () => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    delete document.result[1].relevanceScore;
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).load(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+});
+
 describe("DailyFilterCheckpointStore", () => {
   it("derives its independent date-scoped path and validates dates", () => {
     expect(deriveDailyFilterCheckpointPaths({ normalizePath: (path) => path }, DEFAULT_SETTINGS.output, reportDate)).toEqual({
@@ -443,7 +511,7 @@ describe("DailyFilterCheckpointStore", () => {
         })],
       },
     });
-    const records = [{ id: papers[0]!.id, category: "nlp|llm", directions: ["nlp|llm#1"] }];
+    const records = [{ id: papers[0]!.id, category: "nlp|llm", directions: ["nlp|llm#1"], relevanceScore: 80 }];
 
     await makeStore(storage).save(
       reportDate,
@@ -492,7 +560,7 @@ describe("DailyFilterCheckpointStore", () => {
 
   it("rejects invalid result and unsupported contracts", async () => {
     const { storage } = makeStorage();
-    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"] }])).rejects.toThrow(/invalid daily filter/);
+    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 }])).rejects.toThrow(/paper record has an unknown id/);
     await expect(makeStore(storage).save(reportDate, prepared({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
   });
 

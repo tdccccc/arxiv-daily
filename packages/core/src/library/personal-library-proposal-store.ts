@@ -218,6 +218,10 @@ async function loadDurableDocument<T>(input: {
     }
     return { document: primary.document as T & Fingerprinted, raw: primary.raw };
   }
+  const retiredPrimary = readRetiredTopicProposal(primary);
+  if (retiredPrimary && !compatible(retiredPrimary, input)) {
+    throw error(input.kind, "incompatible", "retired personal library proposal has a different scope");
+  }
   const backup = await readDocument(input.storage, input.paths.backupPath, input.decoder);
   if (backup.kind === "valid") {
     if (!compatible(backup.document as T & Fingerprinted, input)) {
@@ -233,6 +237,22 @@ async function loadDurableDocument<T>(input: {
     return { document: backup.document as T & Fingerprinted, raw };
   }
   if (primary.kind === "missing" && backup.kind === "missing") return null;
+  // v4 proposals came from the retired two-level generator. They are not
+  // migrated into organized proposals: keep disk untouched until generation
+  // succeeds, and let replace(..., null) install a new generation. Only retire
+  // fully decodable, scope-matching v4 documents; an unreadable/current corrupt
+  // primary must still fail closed rather than being mistaken for empty state.
+  const retiredBackup = readRetiredTopicProposal(backup);
+  if ((primary.kind === "missing" || retiredPrimary)
+    && (backup.kind === "missing" || retiredBackup)) {
+    for (const retired of [retiredPrimary, retiredBackup]) {
+      if (retired && !compatible(retired, input)) {
+        throw error(input.kind, "incompatible", "retired personal library proposal has a different scope");
+      }
+    }
+    input.onWarning?.("Personal library proposals use a new organization model; generate proposals again.");
+    return null;
+  }
   if (input.kind === "proposal" && (isLegacyProposalRead(primary) || isLegacyProposalRead(backup))) {
     throw error("proposal", "regeneration-required",
       `legacy personal library direction proposal must be regenerated: ${input.paths.documentPath}`);
@@ -379,6 +399,18 @@ function isLegacyProposalRead<T>(result: ReadResult<T>): boolean {
     return typeof value === "object" && value !== null && value.schemaVersion === 1;
   } catch {
     return false;
+  }
+}
+
+function readRetiredTopicProposal<T>(result: ReadResult<T>): PersonalLibraryDirectionProposal | null {
+  if (result.kind !== "corrupt" || typeof result.raw !== "string") return null;
+  try {
+    const value: unknown = JSON.parse(result.raw);
+    if (typeof value !== "object" || value === null || Array.isArray(value)
+      || !("schemaVersion" in value) || value.schemaVersion !== 4) return null;
+    return decodePersonalLibraryDirectionProposal({ ...value, schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION });
+  } catch {
+    return null;
   }
 }
 

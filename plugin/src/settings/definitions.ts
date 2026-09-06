@@ -26,6 +26,7 @@ export const SETTING_KEYS = {
   output: {
     dailyDir: "output.dailyDir",
     papersDir: "output.papersDir",
+    maxDailyPapers: "output.maxDailyPapers",
     linkStyle: "output.linkStyle",
     summaryLanguage: "output.summaryLanguage",
   },
@@ -142,6 +143,7 @@ export interface SettingDefinitionsHost {
   renderScheduleEnabledRow?: (setting: Setting) => void;
   renderRunWindowRow?: (setting: Setting) => void;
   renderTickIntervalRow?: (setting: Setting) => void;
+  renderDailyPaperLimitRow?: (setting: Setting) => void;
   renderEmailGuideRow?: (setting: Setting) => void;
   renderEmailModeRow?: (setting: Setting) => void;
   renderEmailToRow?: (setting: Setting) => void;
@@ -284,6 +286,11 @@ export function buildSettingDefinitions(
       type: "group",
       heading: "Output & schedule",
       items: [
+        {
+          name: "Daily paper limit",
+          desc: "Maximum papers across all topics in each daily report. Default is 20.",
+          render: (setting: Setting) => host.renderDailyPaperLimitRow?.(setting),
+        },
         {
           name: "Daily reports folder",
           desc: "Folder in this vault for daily report notes (relative path).",

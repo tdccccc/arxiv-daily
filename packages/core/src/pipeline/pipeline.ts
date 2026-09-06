@@ -11,6 +11,7 @@ import type {
   LlmSettings,
 } from "../settings/types";
 import { arxivCategories } from "../settings/categories";
+import { normalizeMaxDailyPapers } from "../settings/daily-paper-limit";
 import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
@@ -263,9 +264,20 @@ export class ArxivPipeline {
     throwIfCancelled(signal);
     const indexed = await this.indexFilteredPapers(filtered, dateStr);
     if (indexed.kind !== "ok") return indexed.result;
-    const visiblePapers = indexed.papers.filter(
+    const eligiblePapers = indexed.papers.filter(
       (p) => p.indexEntry?.status !== "ignored",
     );
+    // Rank globally after ignored papers are removed, before any body fetch,
+    // detail selection, or summary cost. All later consumers (including report
+    // index links) use this same bounded set; the filter cache keeps all scores.
+    const dailyLimit = normalizeMaxDailyPapers(this.deps.output.maxDailyPapers);
+    const visiblePapers = eligiblePapers
+      .sort((left, right) => right.relevanceScore - left.relevanceScore
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      .slice(0, dailyLimit);
+    if (visiblePapers.length < eligiblePapers.length) {
+      logger.info(`pipeline: daily paper limit=${dailyLimit} kept=${visiblePapers.length}/${eligiblePapers.length} omitted=${eligiblePapers.length - visiblePapers.length}`);
+    }
     if (visiblePapers.length === 0) {
       throwIfCancelled(signal);
       // Don't write empty file - show "0" in calendar

@@ -7,6 +7,7 @@ import * as p from "@clack/prompts";
 import {
   ARXIV_CATEGORIES,
   DEFAULT_SETTINGS,
+  DEFAULT_MAX_DAILY_PAPERS,
   LlmClient,
   Logger,
   PROVIDER_PRESETS,
@@ -1226,6 +1227,8 @@ description = ${tomlString(input.topic.description)}
 detail = ${input.topic.detail}
 
 [output]
+# Maximum papers across all topics in each new daily report (positive integer).
+max_daily_papers = ${DEFAULT_MAX_DAILY_PAPERS}
 # "zh" or "en"
 summary_language = ${tomlString(input.summaryLanguage)}
 daily_dir = "arxiv-daily/daily"

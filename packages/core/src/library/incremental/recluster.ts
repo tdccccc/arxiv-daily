@@ -56,7 +56,7 @@ export function reclusterPool(
     minClusterSize: options.minClusterSize,
     centerCorpus: false, // caller already centered the shared space
     minSimilarity: options.minSimilarity,
-    relativeStopRatio: options.relativeStopRatio,
+    similarityQuantile: options.similarityQuantile,
   });
 
   // Anchor chunks per direction for the drift reference.

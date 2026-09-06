@@ -5,13 +5,13 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 4 as const;
+// Version 5 retires two-level generated proposals. Their shape was similar,
+// but changing an opaque generation fingerprint alone did not invalidate load.
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 5 as const;
 /**
- * A first scan proposes whole topics (ADR 0014 §1), so the same bound caps both
- * levels: more than a dozen topics fills the settings page, and more than a
- * dozen directions inside one topic stops being a list a researcher can read.
- * Deliberately the existing candidate bound rather than a new number — this
- * goal already owes two measured thresholds and will not invent a third.
+ * Storage/editing bounds for both levels of a proposal. Initial organization
+ * uses the tighter limits in personal-library-topic-organization.ts; retaining
+ * these bounds lets the researcher edit a proposal before acceptance.
  */
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS = 12 as const;
 export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
@@ -44,7 +44,7 @@ export interface PersonalLibraryDirectionCandidate {
   id: string;
   /**
    * The direction itself: one line, in the form it will take in
-   * `settings.topics` if accepted (ADR 0012 §2). The extraction stage writes
+   * `settings.topics` if accepted (ADR 0012 §2). The organization stage writes
    * it directly — there is no later fold from a name plus a description,
    * because the researcher reviews exactly the text that will be used.
    */
@@ -64,24 +64,27 @@ export interface PersonalLibraryDirectionCandidate {
 }
 
 /**
- * A research direction needs more than one paper behind it: a single
- * representative is a paper, not a direction. Candidates below this bar are
- * still proposed and still confirmable one by one, but they are marked and
- * left unselected when a group is accepted at once, so including one stays a
- * deliberate act (ADR 0009 §3).
+ * A research direction needs more than one distinct paper behind it. Cluster
+ * members describe its full evidence; representatives are a display sample.
+ * Older candidates without members fall back to their distinct representatives.
+ * Thin candidates remain confirmable but are marked and left unselected when
+ * accepting a group, so including one stays deliberate (ADR 0009 §3).
  */
 export const PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES = 2 as const;
 
 export function isThinEvidenceDirectionCandidate(
-  candidate: Pick<PersonalLibraryDirectionCandidate, "representatives">,
+  candidate: Pick<PersonalLibraryDirectionCandidate, "representatives" | "clusterMembers">,
 ): boolean {
-  return candidate.representatives.length < PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES;
+  const evidence = candidate.clusterMembers?.length
+    ? candidate.clusterMembers
+    : candidate.representatives;
+  return new Set(evidence.map(({ paperKey }) => paperKey)).size
+    < PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES;
 }
 
 /**
- * One proposed topic: a suggested display name and the directions found inside
- * it. Coarse clustering produces the topic, fine clustering inside it produces
- * the directions (ADR 0014 §1). The name is a suggestion — the researcher can
+ * One proposed topic: a suggested display name and the directions organized
+ * from its evidence groups (ADR 0014 §1). The name is a suggestion — the researcher can
  * rename it before accepting — and the machine tag is derived from it at
  * acceptance, not stored here.
  */
@@ -104,11 +107,45 @@ export interface PersonalLibraryDirectionProposal {
   topics: PersonalLibraryProposedTopic[];
 }
 
+/**
+ * A library file the scan could not give an arXiv identity, carried into a
+ * proposal on the evidence the index already holds: the title and abstract
+ * read from its leading pages. Identity is the content hash inside `paperKey`,
+ * so a rename does not make it a different paper.
+ */
+export interface PersonalLibraryFallbackPaperRecord {
+  paperKey: string;
+  source: "file";
+  title: string;
+  abstract: string;
+  evidenceDepth: "metadata-and-abstract";
+  filePaths: string[];
+}
+
+/** A paper a proposal can be built from, whichever way it was identified. */
+export type PersonalLibraryProposalPaper =
+  | PersonalLibraryPaperRecord
+  | PersonalLibraryFallbackPaperRecord;
+
 export function createPersonalLibraryPaperEvidenceFingerprint(
-  paper: PersonalLibraryPaperRecord,
+  paper: PersonalLibraryProposalPaper,
 ): string {
+  if (isCanonicalFallbackPaper(paper)) {
+    // The two kinds are already told apart by `paperKey` (an arXiv id cannot
+    // look like `file:sha256:…`); `source` rides along to keep the hashed
+    // object self-describing, matching the arXiv branch below.
+    return fingerprint({
+      paperKey: paper.paperKey,
+      source: paper.source,
+      title: paper.title,
+      abstract: paper.abstract,
+      evidenceDepth: paper.evidenceDepth,
+    });
+  }
   if (!isCanonicalCatalogPaper(paper)) {
-    throw new TypeError("paper must be an exact canonical metadata-and-abstract arXiv catalog record");
+    throw new TypeError(
+      "paper must be an exact canonical metadata-and-abstract arXiv catalog record or fallback record",
+    );
   }
   return fingerprint({
     paperKey: paper.paperKey,
@@ -127,7 +164,7 @@ export function createPersonalLibraryPaperEvidenceFingerprint(
 }
 
 export function createPersonalLibraryCatalogInputManifest(
-  papers: readonly PersonalLibraryPaperRecord[],
+  papers: readonly PersonalLibraryProposalPaper[],
 ): PersonalLibraryRepresentativeEvidence[] {
   if (!Array.isArray(papers) || papers.length === 0
     || papers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
@@ -165,7 +202,7 @@ export function createPersonalLibraryCatalogInputManifestFingerprint(input: {
 export function createPersonalLibraryCatalogInputFingerprint(input: {
   scopeFingerprint: string;
   identificationFingerprint: string;
-  papers: readonly PersonalLibraryPaperRecord[];
+  papers: readonly PersonalLibraryProposalPaper[];
 }): string {
   if (!isExactObject(input, ["scopeFingerprint", "identificationFingerprint", "papers"])) {
     throw new TypeError("catalog input must be exact");
@@ -305,7 +342,7 @@ function decodeCatalogInputManifest(value: unknown): PersonalLibraryRepresentati
   const manifest: PersonalLibraryRepresentativeEvidence[] = [];
   for (const raw of value) {
     if (!isExactObject(raw, ["paperKey", "evidenceFingerprint"])
-      || !isCanonicalArxivPaperKey(raw.paperKey)
+      || !isCanonicalProposalPaperKey(raw.paperKey)
       || !isFingerprint(raw.evidenceFingerprint)) return null;
     manifest.push({ paperKey: raw.paperKey, evidenceFingerprint: raw.evidenceFingerprint });
   }
@@ -319,7 +356,7 @@ function decodeRepresentatives(value: unknown): PersonalLibraryRepresentativeEvi
   const representatives: PersonalLibraryRepresentativeEvidence[] = [];
   for (const raw of value) {
     if (!isExactObject(raw, ["paperKey", "evidenceFingerprint"])
-      || !isCanonicalArxivPaperKey(raw.paperKey)
+      || !isCanonicalProposalPaperKey(raw.paperKey)
       || !isFingerprint(raw.evidenceFingerprint)) return null;
     representatives.push({ paperKey: raw.paperKey, evidenceFingerprint: raw.evidenceFingerprint });
   }
@@ -384,6 +421,31 @@ function isCanonicalArxivPaperKey(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+/** `file:sha256:<64 lowercase hex>` — the index's content-addressed identity. */
+const FALLBACK_PAPER_KEY_RE = /^file:sha256:[0-9a-f]{64}$/;
+
+function isCanonicalFallbackPaperKey(value: unknown): value is string {
+  return typeof value === "string" && FALLBACK_PAPER_KEY_RE.test(value);
+}
+
+/**
+ * Paper keys a proposal may carry. Both identities are canonical and cannot
+ * collide: one is an arXiv id, the other a content hash.
+ */
+function isCanonicalProposalPaperKey(value: unknown): value is string {
+  return isCanonicalArxivPaperKey(value) || isCanonicalFallbackPaperKey(value);
+}
+
+function isCanonicalFallbackPaper(value: unknown): value is PersonalLibraryFallbackPaperRecord {
+  return isExactObject(value, ["paperKey", "source", "title", "abstract", "evidenceDepth", "filePaths"])
+    && isCanonicalFallbackPaperKey(value.paperKey)
+    && value.source === "file"
+    && isNonEmptyString(value.title)
+    && typeof value.abstract === "string"
+    && value.evidenceDepth === "metadata-and-abstract"
+    && isLogicalPathArray(value.filePaths);
 }
 
 function isDiscoveryCues(value: unknown): value is string[] {

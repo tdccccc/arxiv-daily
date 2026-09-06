@@ -125,6 +125,7 @@ export * from "./services/scheduling/types";
 export * from "./services/state-store";
 export * from "./settings/arxiv-categories";
 export * from "./settings/categories";
+export * from "./settings/daily-paper-limit";
 export * from "./settings/defaults";
 export * from "./settings/detail-selection";
 export * from "./settings/migration";

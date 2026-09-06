@@ -11,14 +11,12 @@ import { escapePaperDataFence } from "./prompt-safety";
 
 export const DAILY_FILTER_FINGERPRINT_VERSION = 1 as const;
 /**
- * Both were 1 while the classifier judged by a topic's one-line description.
- * They move together only by coincidence: the prompt now asks about
- * directions, and the result now carries which ones matched. Each records a
- * different change, so each is bumped on its own account (ADR 0012 line 45
- * accepts the one-time invalidation of cached daily filter results).
+ * Version 3 asks for relevance scores and requires them in cached results.
+ * The full scored classification remains reusable when only the daily output
+ * limit changes; old unscored results cannot safely select the best papers.
  */
-export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 2 as const;
-export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 2 as const;
+export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 3 as const;
+export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 3 as const;
 
 /**
  * One direction as the classifier sees it. `ref` is the short handle written
@@ -49,6 +47,8 @@ export interface FilterRecord {
   category: string;
   /** Direction refs of the chosen topic; empty exactly when `category` is `skip`. */
   directions: string[];
+  /** Relevance to the matched directions, on one 0–100 scale across topics. */
+  relevanceScore: number;
 }
 
 export type FilterRecordDecodeResult =
@@ -223,7 +223,7 @@ export function decodePaperFilterRecords(
   const seen = new Set<string>();
   const records: FilterRecord[] = [];
   for (const record of value.papers) {
-    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category", "directions"])) {
+    if (!isPlainObject(record) || !hasExactKeys(record, ["id", "category", "directions", "relevanceScore"])) {
       return { ok: false, reason: "paper record has an invalid shape" };
     }
     if (typeof record.id !== "string" || !knownIds.has(record.id)) {
@@ -240,6 +240,13 @@ export function decodePaperFilterRecords(
     }
     if (!Array.isArray(record.directions)) {
       return { ok: false, reason: "paper record has an invalid shape" };
+    }
+    if (typeof record.relevanceScore !== "number" || !Number.isFinite(record.relevanceScore)
+      || record.relevanceScore < 0 || record.relevanceScore > 100) {
+      return { ok: false, reason: `paper ${record.id} has an invalid relevance score` };
+    }
+    if (record.category === "skip" && record.relevanceScore !== 0) {
+      return { ok: false, reason: `paper ${record.id} has relevance while skipped` };
     }
     // The topic is chosen because a direction matched, so a skipped paper has
     // no direction to name and a kept one has no reason to be kept without
@@ -264,7 +271,7 @@ export function decodePaperFilterRecords(
       chosen.add(ref);
     }
     seen.add(record.id);
-    records.push({ id: record.id, category: record.category, directions: [...record.directions] });
+    records.push({ id: record.id, category: record.category, directions: [...record.directions], relevanceScore: record.relevanceScore });
   }
   return { ok: true, value: records };
 }

@@ -548,6 +548,7 @@ function clonePaperDocument(document: FullTextPaperDocument): FullTextPaperDocum
     textHash: document.textHash,
     contentHash: document.contentHash,
     title: document.title,
+    abstract: document.abstract,
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],

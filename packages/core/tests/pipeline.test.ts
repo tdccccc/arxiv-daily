@@ -459,7 +459,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -514,7 +514,7 @@ describe("ArxivPipeline", () => {
       }
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -579,7 +579,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -674,7 +674,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       throw new Error("daily summarizer should not be called");
@@ -893,7 +893,7 @@ describe("ArxivPipeline", () => {
     });
     d.writer.readDaily = vi.fn(async (writtenDate: string) => d.writes[`daily/${writtenDate}.md`] ?? "");
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     let failDailyLink = true;
     const paperIndex = {
@@ -1427,7 +1427,7 @@ describe("ArxivPipeline", () => {
     const id = firstBucketPapersFromFixture()[0]!.id;
     const controller = new AbortController();
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     const checkpointStore = {
       lookupReusable: vi.fn(),
@@ -1639,7 +1639,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -1704,8 +1704,8 @@ describe("ArxivPipeline", () => {
       if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
           papers: [
-            { id: existingId, category: "photo-z", directions: ["photo-z#1"] },
-            { id: candidateId, category: "photo-z", directions: ["photo-z#1"] },
+            { relevanceScore: 80, id: existingId, category: "photo-z", directions: ["photo-z#1"] },
+            { relevanceScore: 80, id: candidateId, category: "photo-z", directions: ["photo-z#1"] },
           ],
         });
       }
@@ -1754,7 +1754,7 @@ describe("ArxivPipeline", () => {
     const id = firstBucketPapersFromFixture()[0]!.id;
     const controller = new AbortController();
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     const paperIndex = {
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
@@ -1811,7 +1811,7 @@ describe("ArxivPipeline", () => {
       return `daily/${writtenDate}.md`;
     });
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     let failDailyLink = true;
     const paperIndex = {
@@ -1896,7 +1896,7 @@ describe("ArxivPipeline", () => {
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
       if (system.includes("判断它命中了哪些方向")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] });
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       return summary;
     });
@@ -1983,7 +1983,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -2035,7 +2035,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -2083,8 +2083,8 @@ describe("ArxivPipeline", () => {
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
       if (system.includes("判断它命中了哪些方向")) return JSON.stringify({ papers: [
-        { id: selectedId, category: "photo-z", directions: ["photo-z#1"] },
-        { id: unselectedId, category: "photo-z", directions: ["photo-z#1"] },
+        { relevanceScore: 80, id: selectedId, category: "photo-z", directions: ["photo-z#1"] },
+        { relevanceScore: 80, id: unselectedId, category: "photo-z", directions: ["photo-z#1"] },
       ] });
       if (system.includes("strict research-paper evaluator")) {
         selectorCalls += 1;
@@ -2120,7 +2120,7 @@ describe("ArxivPipeline", () => {
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
       if (system.includes("判断它命中了哪些方向")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] });
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) throw new Error("selector unavailable");
       return "## daily still generated\n";
@@ -2150,7 +2150,7 @@ describe("ArxivPipeline", () => {
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
       if (system.includes("判断它命中了哪些方向")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"] }] });
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) {
         return JSON.stringify({ papers: [{ id, score: 85, reason: "direct contribution" }] });
@@ -2181,7 +2181,7 @@ describe("ArxivPipeline", () => {
       if (daily) return daily;
       if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "photo-z", directions: ["photo-z#1"] })),
+          papers: ids.map((id) => ({ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] })),
         });
       }
       if (sys.includes("strict research-paper evaluator")) {

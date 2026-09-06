@@ -5,6 +5,7 @@ import { parse as parseToml } from "smol-toml";
 import {
   DEFAULT_SETTINGS,
   arxivCategories,
+  isValidMaxDailyPapers,
   normalizeCategoryList,
   normalizeTopic,
   sanitizeDetailSelection,
@@ -203,6 +204,12 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
 
   const output = asTable(root.output);
   if (output) {
+    if (output.max_daily_papers !== undefined) {
+      if (!isValidMaxDailyPapers(output.max_daily_papers)) {
+        throw new CliConfigError("invalid output.max_daily_papers: expected a positive safe integer");
+      }
+      base.output.maxDailyPapers = output.max_daily_papers;
+    }
     base.output.dailyDir = stringField(output, "daily_dir", base.output.dailyDir);
     base.output.papersDir = stringField(
       output,

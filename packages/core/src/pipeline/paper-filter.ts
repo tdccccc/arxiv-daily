@@ -30,6 +30,8 @@ export {
 export interface FilteredPaper extends PaperMeta {
   category: string;
   isDetail: boolean;
+  /** Validated relevance score used to select papers within the daily limit. */
+  relevanceScore: number;
   /**
    * Directions of `category`'s topic that selected this paper, in the topic's
    * own order. Every filtered paper now reaches the report by this one route.
@@ -270,7 +272,7 @@ export async function filterPapers(
     const topicDirections = request.identity.directions
       .filter((direction) => chosen.has(direction.ref))
       .map(({ tag, id, text }) => ({ tag, id, text }));
-    out.push({ ...meta, category: item.category, isDetail: false, topicDirections });
+    out.push({ ...meta, category: item.category, isDetail: false, relevanceScore: item.relevanceScore, topicDirections });
   }
   logger.info(`paper-filter: kept ${out.length}/${papers.length} papers`);
 

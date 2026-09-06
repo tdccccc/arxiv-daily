@@ -184,6 +184,43 @@ describe("personal library fingerprints", () => {
       .not.toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
   });
 
+  it("fingerprints a fallback record on its indexed evidence and excludes paths", () => {
+    const original = {
+      paperKey: `file:sha256:${"a".repeat(64)}`,
+      source: "file" as const,
+      title: "A Local Paper",
+      abstract: "The abstract the index read.",
+      evidenceDepth: "metadata-and-abstract" as const,
+      filePaths: ["library/local.pdf"],
+    };
+    // Renaming the file is not a new paper: identity is the content hash.
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, filePaths: ["moved/local.pdf"] }))
+      .toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+    // Re-extracting different evidence for the same file is a new fingerprint,
+    // which is what makes a stale proposal detectable.
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, title: "Another Title" }))
+      .not.toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+    expect(createPersonalLibraryPaperEvidenceFingerprint({ ...original, abstract: "Changed." }))
+      .not.toBe(createPersonalLibraryPaperEvidenceFingerprint(original));
+  });
+
+  it("rejects fallback records that are not canonical", () => {
+    const original = {
+      paperKey: `file:sha256:${"a".repeat(64)}`,
+      source: "file" as const,
+      title: "A Local Paper",
+      abstract: "The abstract the index read.",
+      evidenceDepth: "metadata-and-abstract" as const,
+      filePaths: ["library/local.pdf"],
+    };
+    // A key that is not the content-addressed form is not a fallback record,
+    // and it is not an arXiv record either — it must not fingerprint at all.
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint({ ...original, paperKey: "file:sha256:short" }))
+      .toThrow(/exact canonical/);
+    expect(() => createPersonalLibraryPaperEvidenceFingerprint({ ...original, title: "" }))
+      .toThrow(/exact canonical/);
+  });
+
   it("strictly validates direct paper records while excluding valid file paths from evidence", () => {
     const extra = { ...paper("2608.00001"), unexpected: true };
     expect(() => createPersonalLibraryPaperEvidenceFingerprint(extra)).toThrow(/exact canonical/);
