@@ -46,9 +46,9 @@ import {
 } from "./personal-library-topic-organization";
 
 export const PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION =
-  "personal-library-clustered-direction-proposer-v3" as const;
+  "personal-library-clustered-direction-proposer-v4" as const;
 export const PERSONAL_LIBRARY_DIRECTION_ORGANIZATION_PROMPT_VERSION =
-  "personal-library-topic-organization-v2" as const;
+  "personal-library-topic-organization-v3" as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_SELECTED_PAPERS = 200 as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS = 60_000 as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS = 6_000 as const;
@@ -139,6 +139,7 @@ export interface PersonalLibraryRenderedPaper {
 interface OrganizationEvidenceGroup {
   id: string;
   papers: readonly PersonalLibraryProposalPaper[];
+  researchThread?: { text: string; discoveryCues: string[] };
 }
 
 const organizationSystemPrompt = renderPrompt(organizationPromptTemplate, { injectionGuard });
@@ -199,6 +200,7 @@ export function renderPersonalLibraryDirectionPaper(
 export function renderPersonalLibraryOrganizationUserMessage(
   groups: readonly OrganizationEvidenceGroup[],
   existingTopics: readonly PersonalLibraryExistingTopic[] = [],
+  completeEvidence = false,
 ): string {
   const render = (abstractBudget: number): string => {
     const data = {
@@ -208,6 +210,7 @@ export function renderPersonalLibraryOrganizationUserMessage(
       groups: groups.map((group) => ({
         id: group.id,
         paperCount: group.papers.length,
+        ...(group.researchThread ? { researchThread: group.researchThread } : {}),
         papers: group.papers.map((paper) => renderPersonalLibraryDirectionPaper(paper, abstractBudget)),
       })),
     };
@@ -216,7 +219,8 @@ export function renderPersonalLibraryOrganizationUserMessage(
     );
     return ORGANIZATION_PREFIX + json + DATA_SUFFIX;
   };
-  const complete = render(PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS);
+  const complete = render(completeEvidence ? Number.MAX_SAFE_INTEGER : PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS);
+  if (completeEvidence) return complete;
   if (complete.length <= PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS) return complete;
   let fitting = render(0);
   if (fitting.length > PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS) {
@@ -268,7 +272,100 @@ async function callValidatedStage(
   throw new PersonalLibraryDirectionValidationError("organization", reason, PERSONAL_LIBRARY_DIRECTION_VALIDATION_ATTEMPTS);
 }
 
-/** Effective parameters for the single proposal pass, including its tight cut. */
+interface OrganizationWorkGroup extends OrganizationEvidenceGroup {
+  sourceGroupIds: string[];
+}
+
+/** Only the transmitted summary shrinks; membership stays complete locally. */
+async function organizeBoundedEvidence(
+  original: readonly OrganizationEvidenceGroup[],
+  options: ProposeClusteredDirectionsOptions,
+): Promise<{ organized: OrganizedTopicsResult; groups: OrganizationEvidenceGroup[] }> {
+  const render = (groups: readonly OrganizationEvidenceGroup[]) =>
+    renderPersonalLibraryOrganizationUserMessage(groups, options.existingTopics, true);
+  const limit = PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS;
+  if (render(original).length <= limit) {
+    return { organized: await callValidatedStage(render(original), original, options), groups: [...original] };
+  }
+  if (render([]).length >= limit) {
+    throw new ClusteredDirectionsProposerError("evidence-too-large", "existing directions exhaust the organization budget");
+  }
+  const sourceGroups: OrganizationEvidenceGroup[] = [];
+  for (const group of original) {
+    let papers: PersonalLibraryProposalPaper[] = [];
+    const flush = () => {
+      if (papers.length > 0) sourceGroups.push({ id: `evidence-${sourceGroups.length}`, papers });
+      papers = [];
+    };
+    for (const paper of group.papers) {
+      if (render([{ id: "evidence-1000", papers: [...papers, paper] }]).length > limit) flush();
+      if (render([{ id: "evidence-1000", papers: [paper] }]).length > limit) {
+        throw new ClusteredDirectionsProposerError("evidence-too-large", "one paper's complete evidence exceeds the message bound");
+      }
+      papers.push(paper);
+    }
+    flush();
+  }
+  const paperByKey = new Map(original.flatMap(({ papers }) => papers.map((paper) => [paper.paperKey, paper] as const)));
+  let work: OrganizationWorkGroup[] = sourceGroups.map((group) => ({ ...group, sourceGroupIds: [group.id] }));
+  const covered: NonNullable<OrganizedTopicsResult["coveredGroups"]> = [];
+  let completed = 0;
+  for (let level = 0; level < 12; level += 1) {
+    throwIfCancelled(options.signal);
+    const batches: OrganizationWorkGroup[][] = [];
+    let batch: OrganizationWorkGroup[] = [];
+    for (const group of work) {
+      if (batch.length && render([...batch, group]).length > limit) {
+        batches.push(batch);
+        batch = [];
+      }
+      if (render([group]).length > limit) {
+        throw new ClusteredDirectionsProposerError("evidence-too-large", "one research thread exceeds the organization budget");
+      }
+      batch.push(group);
+    }
+    if (batch.length) batches.push(batch);
+    const next: OrganizationWorkGroup[] = [];
+    for (const current of batches) {
+      const byId = new Map(current.map((group) => [group.id, group]));
+      const organized = await callValidatedStage(render(current), current, options);
+      for (const item of organized.coveredGroups ?? []) {
+        covered.push(...byId.get(item.groupId)!.sourceGroupIds.map((groupId) => ({ ...item, groupId })));
+      }
+      completed += 1;
+      options.onProgress?.({ phase: "organization", completed, total: completed + batches.length });
+      if (batches.length === 1) {
+        return {
+          groups: sourceGroups,
+          organized: {
+            topics: organized.topics.map((topic) => ({ ...topic, directions: topic.directions.map((direction) => ({
+              ...direction, groupIds: direction.groupIds.flatMap((id) => byId.get(id)!.sourceGroupIds),
+            })) })),
+            coveredGroups: covered,
+          },
+        };
+      }
+      for (const topic of organized.topics) {
+        for (const direction of topic.directions) {
+          next.push({
+            id: `thread-${level}-${next.length}`,
+            sourceGroupIds: direction.groupIds.flatMap((id) => byId.get(id)!.sourceGroupIds),
+            researchThread: { text: direction.text, discoveryCues: direction.discoveryCues },
+            papers: direction.representativePaperKeys.map((key) => ({ ...paperByKey.get(key)!, abstract: "" })),
+          });
+        }
+      }
+    }
+    if (next.length === 0) return { organized: { topics: [], coveredGroups: covered }, groups: sourceGroups };
+    if (render(next).length >= render(work).length) {
+      throw new ClusteredDirectionsProposerError("evidence-too-large", "research-thread summaries did not reduce the evidence budget");
+    }
+    work = next;
+  }
+  throw new ClusteredDirectionsProposerError("evidence-too-large", "research-thread organization exceeded the bounded number of passes");
+}
+
+/** Effective parameters for evidence grouping, independent of transport batches. */
 export function resolvePersonalLibraryClusteringOptions(options?: ClusteringOptions): Required<ClusteringOptions> {
   return {
     minClusterSize: options?.minClusterSize ?? 2,
@@ -284,7 +381,7 @@ export function createPersonalLibraryClusteredDirectionGenerationContract(
   return JSON.stringify({
     version: PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION,
     organizationPrompt: PERSONAL_LIBRARY_DIRECTION_ORGANIZATION_PROMPT_VERSION,
-    strategy: "knowledge-base-tight-clustering-then-topic-organization",
+    strategy: "knowledge-base-tight-clustering-bounded-complete-evidence-and-thread-organization",
     clustering,
     selection: "knowledge-base-ready-papers-newest-arxiv-first-file-hash-order",
     maxClusteringInputPapers: PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
@@ -299,9 +396,10 @@ export function createPersonalLibraryClusteredDirectionGenerationContract(
     targetPolicy: "explicit-existing-id-once-per-generation-no-name-guessing",
     singleGroupTopic: true,
     maxMessageCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS,
-    maxAbstractCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS,
-    abstractTruncation: "explicit-flag-and-codepoint-safe-prefix",
-    evidenceBudget: "all-paper-identities-and-titles-equal-abstract-budget",
+    abstractBudget: "complete-abstract-within-bounded-leaf-request",
+    abstractTruncation: "none-in-production-organization",
+    evidenceBudget: "complete-leaf-abstracts-bounded-batches-traceable-thread-reduction",
+    maxOrganizationLevels: 12,
     coverageEvidence: "topic-direction-identities-text-and-complete-paper-membership",
     maxClusterMembers: PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
     maxOutputCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
@@ -408,7 +506,6 @@ export async function proposeClusteredPersonalLibraryDirections(
     id: group.id,
     papers: group.paperKeys.map((paperKey) => inputPaperByKey.get(paperKey)!),
   }));
-  const userMessage = renderPersonalLibraryOrganizationUserMessage(groups, existingTopics);
   const inputPapers = clusteringInput.map(({ paperKey }) => inputPaperByKey.get(paperKey)!);
   const evidenceManifest = createPersonalLibraryCatalogInputManifest(inputPapers);
   const evidenceByKey = new Map(evidenceManifest.map((entry) => [entry.paperKey, entry.evidenceFingerprint]));
@@ -422,9 +519,15 @@ export async function proposeClusteredPersonalLibraryDirections(
   }
 
   options.onProgress?.({ phase: "organization", completed: 0, total: 1 });
-  const organized = await callValidatedStage(userMessage, groups, { ...options, existingTopics });
+  const organization = await organizeBoundedEvidence(groups, { ...options, existingTopics });
+  const organized = organization.organized;
   throwIfCancelled(options.signal);
-  const groupById = new Map(clustering.clusters.map((group) => [group.id, group]));
+  const confidenceByKey = new Map(clustering.clusters.flatMap((group) =>
+    group.paperKeys.map((key) => [key, group.memberConfidence[key] ?? 0] as const)));
+  const groupById = new Map<string, PaperCluster>(organization.groups.map((group) => [group.id, {
+    id: group.id, paperKeys: group.papers.map(({ paperKey }) => paperKey),
+    memberConfidence: Object.fromEntries(group.papers.map(({ paperKey }) => [paperKey, confidenceByKey.get(paperKey) ?? 0])),
+  }]));
   const coverageByDirection = new Map<string, PersonalLibraryCoverageEvidence>();
   for (const { groupId, topicId, directionId } of organized.coveredGroups ?? []) {
     const identity = JSON.stringify([topicId, directionId]);

@@ -319,6 +319,87 @@ async function expectedClusters(store: FullTextKnowledgeBaseStore) {
 }
 
 describe("proposeClusteredPersonalLibraryDirections", () => {
+  it("preserves existing coverage across all batches without manufacturing additions", async () => {
+    const records = Array.from({ length: 80 }, (_, index) => ({ ...paper(index + 1), abstract: "Evidence. ".repeat(1000) }));
+    const model = new ScriptedLlm((data) => JSON.stringify({ topics: [], coveredGroups: data.groups.map(({ id }) => ({
+      groupId: id, topicId: "existing", directionId: "followed",
+    })) }));
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(
+      makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(0)])), model, {
+        catalog: catalog(records), clustering: { centerCorpus: false },
+        existingTopics: [{ id: "existing", name: "Research", directions: [{ id: "followed", text: "Research methods" }] }],
+      },
+    ));
+    expect(result.topics).toEqual([]);
+    expect(result.coveredPaperKeys).toEqual(records.map(({ paperKey }) => paperKey));
+    expect(result.coverageEvidence).toEqual([{
+      topicId: "existing", directionId: "followed", directionText: "Research methods", paperKeys: records.map(({ paperKey }) => paperKey),
+    }]);
+  });
+
+  it("cancels between bounded batches without requesting later evidence", async () => {
+    const abort = new AbortController();
+    const records = Array.from({ length: 80 }, (_, index) => ({ ...paper(index + 1), abstract: "Evidence. ".repeat(1000) }));
+    const model = new ScriptedLlm((data) => {
+      abort.abort();
+      return JSON.stringify(organize(data));
+    });
+    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(
+      makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(0)])), model,
+      { catalog: catalog(records), clustering: { centerCorpus: false }, signal: abort.signal },
+    ))).rejects.toMatchObject({ name: "RunCancelledError" });
+    expect(model.calls).toHaveLength(1);
+  });
+
+  it("rejects an incomplete reduction response after bounded retries", async () => {
+    const records = Array.from({ length: 80 }, (_, index) => ({ ...paper(index + 1), abstract: "Evidence. ".repeat(1000) }));
+    const model = new ScriptedLlm((data) => data.groups.some((group) => group.id.startsWith("thread-"))
+      ? JSON.stringify({ topics: [] }) : JSON.stringify(organize(data)));
+    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(
+      makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(0)])), model,
+      { catalog: catalog(records), clustering: { centerCorpus: false } },
+    ))).rejects.toMatchObject({ name: "PersonalLibraryDirectionValidationError", attempts: 3 });
+    expect(model.calls.filter(({ messages }) => paperData(messages).groups.some(({ id }) => id.startsWith("thread-")))).toHaveLength(3);
+  });
+
+  it("rejects a single untransmittable abstract before any model call", async () => {
+    const records = [paper(1), { ...paper(2), abstract: "x".repeat(61_000) }];
+    const model = new ScriptedLlm();
+    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(
+      makeKnowledgeBase([[1, oneHot(0)], [2, oneHot(0)]]), model,
+      { catalog: catalog(records), clustering: { centerCorpus: false } },
+    ))).rejects.toMatchObject({ code: "evidence-too-large" });
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it.each([500, 1000])("organizes %i papers with complete abstract evidence in bounded requests", async (count) => {
+    const records = Array.from({ length: count }, (_, index) => ({
+      ...paper(index + 1), abstract: `${"Research evidence. ".repeat(80)} Final result ${index + 1}.`,
+    }));
+    // The scripted model follows the production partition contract while the
+    // real clusterer, batching, validation and proposal construction execute.
+    const model = new ScriptedLlm((data) => {
+      const midpoint = data.groups.length === 1 ? 1 : Math.ceil(data.groups.length / 2);
+      const partitions = [data.groups.slice(0, midpoint), data.groups.slice(midpoint)].filter((groups) => groups.length);
+      return JSON.stringify({ topics: partitions.map((groups, index) => ({
+        suggestedName: `Research field ${index}`, directions: [{
+          text: `Research methods in field ${index}`, discoveryCues: ["Research evidence"],
+          groupIds: groups.map(({ id }) => id), representativePaperKeys: [groups[0]!.papers[0]!.paperKey],
+        }],
+      })) });
+    });
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(
+      makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(0)])), model,
+      { catalog: catalog(records), clustering: { centerCorpus: false } },
+    ));
+    expect(result.topics.length).toBeLessThanOrEqual(4);
+    const members = result.topics.flatMap(({ directions }) => directions.flatMap(({ clusterMembers }) => clusterMembers!.map(({ paperKey }) => paperKey)));
+    expect(members.sort()).toEqual(records.map(({ paperKey }) => paperKey).sort());
+    for (const { messages } of model.calls) expect(messages[1]!.content.length).toBeLessThanOrEqual(60_000);
+    const sent = model.calls.flatMap(({ messages }) => paperData(messages).groups.flatMap(({ papers }) => papers));
+    for (const record of records) expect(sent.some((item) => item.paperKey === record.paperKey && item.abstract === record.abstract)).toBe(true);
+    expect(model.calls.length).toBeGreaterThan(1);
+  });
 
   const existingTopics = [{
     id: "existing-galaxies", name: "Galaxies",
@@ -407,6 +488,7 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     const data = paperData(llm.calls[0]!.messages);
     expect(data).toMatchObject({ existingTopics: longExisting });
     expect(llm.calls.every(({ messages }) => messages[1]!.content.length <= 60_000)).toBe(true);
+    expect(data.groups.flatMap(({ papers }) => papers).every(({ abstractTruncated }) => !abstractTruncated)).toBe(true);
   });
 
   it("fails before a model call if existing directions alone exhaust the message budget", async () => {
@@ -625,25 +707,28 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     ));
     const message = llm.calls[0]!.messages[1]!.content;
     expect(message.length).toBeLessThanOrEqual(60_000);
-    const sent = paperData(llm.calls[0]!.messages).groups.flatMap(({ papers }) => papers);
+    const sent = llm.calls.flatMap(({ messages }) => paperData(messages).groups.flatMap(({ papers }) => papers))
+      .filter(({ abstract }) => abstract.length > 0);
     expect(sent).toHaveLength(40);
     expect(new Set(sent.map(({ paperKey }) => paperKey)).size).toBe(40);
-    expect(sent.every(({ abstractTruncated }) => abstractTruncated)).toBe(true);
+    expect(sent.every(({ abstractTruncated }) => !abstractTruncated)).toBe(true);
+    for (const record of records) expect(sent.find(({ paperKey }) => paperKey === record.paperKey)?.abstract).toBe(record.abstract);
     expect(result.topics.flatMap(({ directions }) => directions).flatMap(({ clusterMembers }) => clusterMembers!))
       .toHaveLength(40);
   });
 
-  it("rejects an oversized title manifest before spending a model call", async () => {
+  it("batches an oversized title manifest while retaining all papers", async () => {
     const records = Array.from({ length: 180 }, (_, index) => ({
       ...paper(index + 1), title: "Research title ".repeat(30) + index,
     }));
     const llm = new ScriptedLlm();
-    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(
       makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(index < 90 ? 0 : 1)])), llm, {
         catalog: catalog(records), clustering: { centerCorpus: false, minSimilarity: 0.5 },
       },
-    ))).rejects.toMatchObject({ code: "evidence-too-large" });
-    expect(llm.calls).toHaveLength(0);
+    ));
+    expect(result.topics.flatMap(({ directions }) => directions.flatMap(({ clusterMembers }) => clusterMembers!))).toHaveLength(180);
+    expect(llm.calls.every(({ messages }) => messages[1]!.content.length <= 60_000)).toBe(true);
   });
 
   it("fits mixed short and long abstracts without treating truncation markers as a minimum budget", () => {
@@ -679,15 +764,16 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     expect(message).not.toContain("private/root");
   });
 
-  it("fails pathological overfull groups before the organization call", async () => {
+  it("retains a single large group across organization batches", async () => {
     const records = Array.from({ length: 600 }, (_, index) => paper(index + 1));
     const llm = new ScriptedLlm();
-    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(
       makeKnowledgeBase(records.map((_, index) => [index + 1, oneHot(0)])), llm, {
         catalog: catalog(records), clustering: { centerCorpus: false },
       },
-    ))).rejects.toBeInstanceOf(ClusteredDirectionsProposerError);
-    expect(llm.calls).toHaveLength(0);
+    ));
+    const keys = result.topics.flatMap(({ directions }) => directions.flatMap(({ clusterMembers }) => clusterMembers!.map(({ paperKey }) => paperKey)));
+    expect(keys.sort()).toEqual(records.map(({ paperKey }) => paperKey).sort());
   });
 });
 
@@ -696,8 +782,8 @@ describe("clustered generation contract", () => {
     const contract = createPersonalLibraryClusteredDirectionGenerationContract(resolvePersonalLibraryClusteringOptions());
     const parsed = JSON.parse(contract);
     expect(contract.length).toBeLessThanOrEqual(4096);
-    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v3");
-    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v2");
+    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v4");
+    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v3");
     expect(parsed.clustering).toMatchObject({ minClusterSize: 2, centerCorpus: true, similarityQuantile: 0.95 });
     expect(parsed).toMatchObject({ minTopics: 2, maxTopics: 4, maxDirectionsPerTopic: 2 });
     expect(parsed).not.toHaveProperty("synthesisPrompt");

@@ -28,7 +28,7 @@ export const PERSONAL_LIBRARY_MIN_DISCOVERY_CUES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUES = 12 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH = 200 as const;
 export const PERSONAL_LIBRARY_MAX_GENERATION_CONTRACT_LENGTH = 4_096 as const;
-export const PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS = 512 as const;
+export const PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS = PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS;
 
 export interface PersonalLibraryRepresentativeEvidence {
   paperKey: string;
