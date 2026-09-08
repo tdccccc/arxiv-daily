@@ -15,12 +15,14 @@ import { summarizeDaily, summarizePaperDetail } from "../src/pipeline/summarizer
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { normalizeTopic } from "../src/settings/topics";
+import { assembleDailySummary, type DailySummaryAssemblyInput } from "../src/pipeline/daily-summary-assembler";
 
 const arxivSettings = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
-    { id: "a", name: "Topic A", tag: "a", description: "a", detail: false },
-    { id: "b", name: "Topic B", tag: "b", description: "b", detail: true },
+    normalizeTopic({ id: "a", name: "Topic A", tag: "a", description: "a", detail: false }),
+    normalizeTopic({ id: "b", name: "Topic B", tag: "b", description: "b", detail: true }),
   ],
 };
 
@@ -36,6 +38,7 @@ function paper(
     abstract: `abstract ${id}`,
     category,
     isDetail: false,
+    relevanceScore: 80,
     abstractConclusion: `## Abstract\nabstract evidence ${id}`,
     fullSections: "## Results\nresult evidence",
     ...overrides,
@@ -72,6 +75,21 @@ function deps(llm: unknown, overrides: Record<string, unknown> = {}) {
 }
 
 describe("summarizeDaily", () => {
+  it("carries daily-cap omissions through per-paper summarization into actual assembly", async () => {
+    const llm = { call: vi.fn(async () => structured("2607.00001")) };
+    let rendered: DailySummaryAssemblyInput | undefined;
+    const dailyRenderer = (input: DailySummaryAssemblyInput) => {
+      rendered = input;
+      return assembleDailySummary(input);
+    };
+    const result = await summarizeDaily([paper("2607.00001")], "2026-07-22", deps(llm, {
+      omittedByTopic: { b: 2 }, dailyRenderer,
+    }));
+    expect(rendered?.omittedByTopic).toEqual({ b: 2 });
+    expect(result.markdown).not.toContain("今日无相关论文更新");
+    expect(Object.keys(extractPaperSummaries(result.markdown))).toEqual(["2607.00001"]);
+  });
+
   it("runs assembly preflight before the first LLM call", async () => {
     const llm = { call: vi.fn() };
 

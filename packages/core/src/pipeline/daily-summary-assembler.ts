@@ -4,6 +4,7 @@ import {
   dailyHeader,
   noCategoryPapersText,
   normalizeSummaryLanguage,
+  omittedPapersText,
 } from "../settings/summary-language";
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
@@ -79,6 +80,34 @@ export interface DailySummaryAssemblyInput {
   dateStr: string;
   arxivSettings: ArxivSettings;
   summaryLanguage?: SummaryLanguage;
+  /** Matched, non-ignored papers omitted only because of the daily limit. */
+  omittedByTopic?: Readonly<Record<string, number>>;
+}
+
+/** Share the trusted omission snapshot between normal and rescue rendering. */
+export function validateDailySummaryOmissions(
+  input: Pick<DailySummaryAssemblyInput, "arxivSettings" | "omittedByTopic">,
+): { total: number; byTopic: ReadonlyMap<string, number> } {
+  const byTopic = new Map<string, number>();
+  const counts = input.omittedByTopic;
+  if (counts === undefined) return { total: 0, byTopic };
+  if (typeof counts !== "object" || counts === null || Array.isArray(counts)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(counts))) {
+    throw new Error("preflightDailySummaryAssembly: invalid omittedByTopic object");
+  }
+  const tags = new Set(input.arxivSettings.topics.map(({ tag }) => tag));
+  let total = 0;
+  for (const [tag, count] of Object.entries(counts)) {
+    if (!tags.has(tag) || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`preflightDailySummaryAssembly: invalid omittedByTopic count for ${tag}`);
+    }
+    total += count;
+    if (!Number.isSafeInteger(total)) {
+      throw new Error("preflightDailySummaryAssembly: invalid omittedByTopic total");
+    }
+    byTopic.set(tag, count);
+  }
+  return { total, byTopic };
 }
 
 const FALLBACK_REASON_CODES = new Set<DailyPaperFallbackReasonCode>([
@@ -150,6 +179,7 @@ export function preflightDailySummaryPapers(
 
 export function preflightDailySummaryAssembly(input: DailySummaryAssemblyInput): void {
   preflightDailySummaryPapers(input.slots.map(({ paper }) => paper), input.arxivSettings);
+  validateDailySummaryOmissions(input);
   for (const { paper, result } of input.slots) {
     if (result.kind === "structured") {
       for (const field of STRUCTURED_FIELDS) {
@@ -240,6 +270,7 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
   const { slots, dateStr, arxivSettings } = input;
   const language = normalizeSummaryLanguage(input.summaryLanguage);
   const slotsByTopic = groupSlots(slots, arxivSettings);
+  const omissions = validateDailySummaryOmissions(input);
   const detailCount = slots.filter(({ paper }) => paper.isDetail || Boolean(paper.paperPath)).length;
   const fallbackCount = slots.filter(({ result }) => result.kind === "fallback").length;
   const out = emergency
@@ -254,14 +285,17 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
     dailyCountLine(language, slots.length, detailCount),
   );
   if (fallbackCount > 0) out.push(fallbackCountLine(language, fallbackCount));
+  if (omissions.total > 0) out.push(omittedPapersText(language, omissions.total, true));
 
   for (const topic of arxivSettings.topics) {
     out.push("", `## ${normalizeMarkdownLine(topic.name)}`);
     const topicSlots = slotsByTopic.get(topic.tag) ?? [];
+    const omittedCount = omissions.byTopic.get(topic.tag) ?? 0;
     if (topicSlots.length === 0) {
-      out.push(noCategoryPapersText(language));
+      out.push(noCategoryPapersText(language, omittedCount));
       continue;
     }
+    if (omittedCount > 0) out.push(omittedPapersText(language, omittedCount, true));
     for (const slot of topicSlots) out.push("", renderSlot(slot, language, dateStr));
   }
   return out.join("\n");

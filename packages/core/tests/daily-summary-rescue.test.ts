@@ -514,3 +514,73 @@ describe("validateDailySummaryRescueMarkdown", () => {
     );
   });
 });
+
+describe("daily limit omissions in rescue", () => {
+  it.each([
+    {
+      language: "zh" as const,
+      total: "因每日总数上限，另有 3 篇相关论文未展示。",
+      partial: "因每日总数上限，另有 1 篇相关论文未展示。",
+      empty: "因每日总数上限，2 篇相关论文未展示。",
+    },
+    {
+      language: "en" as const,
+      total: "3 additional relevant papers were omitted because of the daily paper limit.",
+      partial: "1 additional relevant paper was omitted because of the daily paper limit.",
+      empty: "2 relevant papers were omitted because of the daily paper limit.",
+    },
+  ])("preserves $language omission counts through the transported contract and postflight", async ({ language, total, partial, empty }) => {
+    const value = input();
+    value.summaryLanguage = language;
+    value.omittedByTopic = { a: 1, c: 2 };
+    const contract = buildDailySummaryRescueContract(value);
+    expect(contract.counts).toMatchObject({ total: 2, detail: 1, fallback: 1, omitted: 3 });
+    expect(contract.fixedPrefix).toContain(total);
+    expect(contract.topics[0]).toMatchObject({ omitted: 1, omissionText: partial });
+    expect(contract.topics[2]).toMatchObject({ omitted: 2, emptyText: empty });
+    const llm = {
+      call: async (messages: Array<{ content: string }>) => {
+        const serialized = /<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(messages[1]!.content)![1]!;
+        return renderDailySummaryRescueMarkdown(JSON.parse(serialized));
+      },
+    };
+    const output = await rescueDailySummary(value, { llm: llm as any, logger: logger() as any });
+    expect(output).toContain(total);
+    expect(output).toContain(`## Topic A\n${partial}\n`);
+    expect(output).toContain(`## Topic C\n${empty}\n`);
+    expect(() => validateDailySummaryRescueMarkdown(output, requiredMarkdown(value), contract)).not.toThrow();
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
+    expect(Object.keys(extractPaperSummaries(output))).toEqual(["2607.00001"]);
+  });
+
+  it.each(["zh", "en"] as const)("keeps zero-omission %s rescue Markdown unchanged", (language) => {
+    const value = input();
+    value.summaryLanguage = language;
+    const original = requiredMarkdown(value);
+    value.omittedByTopic = {};
+    expect(requiredMarkdown(value)).toBe(original);
+    value.omittedByTopic = { a: 0, b: 0, c: 0 };
+    expect(requiredMarkdown(value)).toBe(original);
+  });
+
+  it.each([
+    ["drops the total", "3 additional relevant papers were omitted because of the daily paper limit.\n", ""],
+    ["changes the total", "3 additional relevant papers were omitted", "9 additional relevant papers were omitted"],
+    ["drops the partial topic count", "1 additional relevant paper was omitted because of the daily paper limit.\n", ""],
+    ["changes the empty topic count", "2 relevant papers were omitted", "5 relevant papers were omitted"],
+    ["claims no matching papers", "2 relevant papers were omitted because of the daily paper limit.", "No relevant paper updates today."],
+  ])("rejects rescue output that %s", (_label, from, to) => {
+    const value = input();
+    value.omittedByTopic = { a: 1, c: 2 };
+    const contract = buildDailySummaryRescueContract(value);
+    const expected = renderDailySummaryRescueMarkdown(contract);
+    expect(() => validateDailySummaryRescueMarkdown(expected.replace(from, to), expected, contract))
+      .toThrow(DailySummaryRescueValidationError);
+  });
+
+  it.each([{ missing: 1 }, { a: -1 }, { c: 1.5 }])("rejects invalid omission counts %j before building a rescue contract", (counts) => {
+    const value = input();
+    value.omittedByTopic = counts;
+    expect(() => buildDailySummaryRescueContract(value)).toThrow(/omittedByTopic/);
+  });
+});

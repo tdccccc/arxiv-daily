@@ -6,9 +6,10 @@
 - 严格保留所有 `arxiv-daily-rescue-*`、`arxiv-daily-fallback:*` 及缺失摘要 HTML 注释标记；每个标记独占一行。
 - 不得补充、改写、概括或推断内容。
 - structured slot 只渲染五个结构化字段；fallback slot 只渲染警告、回退标记和原始摘要。
-- 使用合同计数生成标题后的总数、详细收录数和回退数行；空 topic 使用本地化无更新文本。
+- 逐行原样复制 `fixedPrefix`，其中已包含报告开始标记、标题、收录计数、回退计数和每日上限遗漏说明；不得自行重算或省略。
+- 空 topic 逐字复制该 topic 的 `emptyText`；有 slot 的 topic 若带 `omissionText`，在第一篇论文之前逐字复制该说明。因每日上限未展示不等于没有相关论文，不得互相替换。
 - 使用以下精确骨架，不得输出合同之外的 topic 或 paper：
-  1. `<!-- arxiv-daily-rescue-report:start -->`、本地化 H1、本地化计数行。
+  1. `fixedPrefix` 中的全部行，保持顺序，每项独占一行。
   2. topic 索引 N 使用 `<!-- arxiv-daily-rescue-topic:N -->`，随后是 `## NAME`；topic tag 不进入标记。
   3. 每个 slot 按该 topic 中的原始全局顺序，使用 `<!-- arxiv-daily-rescue-paper:ID:structured -->` 或 `<!-- arxiv-daily-rescue-paper:ID:fallback -->`，随后是 H3 标题/详情链接、来源引用、作者 bullet、精确 arXiv bullet。
   4. structured slot 随后按顺序仅包含研究问题、方法设计、核心结果、研究价值、适用边界五个 bullet。

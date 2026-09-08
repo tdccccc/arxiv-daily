@@ -10,6 +10,7 @@ import {
   dailyHeader,
   noCategoryPapersText,
   normalizeSummaryLanguage,
+  omittedPapersText,
 } from "../settings/summary-language";
 import type { SummaryLanguage } from "../settings/types";
 import type {
@@ -17,6 +18,7 @@ import type {
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
+import { validateDailySummaryOmissions } from "./daily-summary-assembler";
 import {
   extractFallbackPaperIds,
   extractPaperSummaries,
@@ -95,8 +97,9 @@ type RescueContract = {
   language: SummaryLanguage;
   date: string;
   categories: string;
-  topics: Array<{ tag: string; name: string }>;
-  counts: { total: number; detail: number; fallback: number };
+  fixedPrefix: string[];
+  topics: Array<{ tag: string; name: string; omitted: number; emptyText: string; omissionText?: string }>;
+  counts: { total: number; detail: number; fallback: number; omitted: number };
   slots: Array<{
     paper: DailySummaryAssemblyPaper & { hasDetail: boolean; arxivLink: string };
     result:
@@ -167,6 +170,7 @@ export function buildDailySummaryRescueContract(
   input: DailySummaryAssemblyInput,
 ): RescueContract {
   const language = normalizeSummaryLanguage(input.summaryLanguage);
+  const omissions = validateDailySummaryOmissions(input);
   const display = (value: string): string =>
     protectRescueContractDelimiter(normalizeMarkdownLine(value));
   const slots = input.slots.map(({ paper, result }) => {
@@ -213,20 +217,38 @@ export function buildDailySummaryRescueContract(
           },
     };
   });
+  const date = display(input.dateStr);
+  const categories = display(formatArxivCategories(input.arxivSettings));
+  const counts = {
+    total: slots.length,
+    detail: slots.filter(({ paper }) => paper.hasDetail).length,
+    fallback: slots.filter(({ result }) => result.kind === "fallback").length,
+    omitted: omissions.total,
+  };
+  const fixedPrefix = [
+    "<!-- arxiv-daily-rescue-report:start -->",
+    dailyHeader(language, normalizeMarkdownLine(categories), normalizeMarkdownLine(date)),
+    dailyCountLine(language, counts.total, counts.detail),
+  ];
+  if (counts.fallback > 0) fixedPrefix.push(fallbackCountLine(language, counts.fallback));
+  if (counts.omitted > 0) fixedPrefix.push(omittedPapersText(language, counts.omitted, true));
   return {
     version: 1,
     language,
-    date: display(input.dateStr),
-    categories: display(formatArxivCategories(input.arxivSettings)),
-    topics: input.arxivSettings.topics.map(({ tag, name }) => ({
-      tag: protectRescueContractDelimiter(tag),
-      name: display(name),
-    })),
-    counts: {
-      total: slots.length,
-      detail: slots.filter(({ paper }) => paper.hasDetail).length,
-      fallback: slots.filter(({ result }) => result.kind === "fallback").length,
-    },
+    date,
+    categories,
+    fixedPrefix,
+    topics: input.arxivSettings.topics.map(({ tag, name }) => {
+      const omitted = omissions.byTopic.get(tag) ?? 0;
+      return {
+        tag: protectRescueContractDelimiter(tag),
+        name: display(name),
+        omitted,
+        emptyText: noCategoryPapersText(language, omitted),
+        ...(omitted > 0 ? { omissionText: omittedPapersText(language, omitted, true) } : {}),
+      };
+    }),
+    counts,
     slots,
   };
 }
@@ -294,18 +316,7 @@ function validateRescueParserProjection(
 }
 
 export function renderDailySummaryRescueMarkdown(contract: RescueContract): string {
-  const out = [
-    "<!-- arxiv-daily-rescue-report:start -->",
-    dailyHeader(
-      contract.language,
-      normalizeMarkdownLine(contract.categories),
-      normalizeMarkdownLine(contract.date),
-    ),
-    dailyCountLine(contract.language, contract.counts.total, contract.counts.detail),
-  ];
-  if (contract.counts.fallback > 0) {
-    out.push(fallbackCountLine(contract.language, contract.counts.fallback));
-  }
+  const out = [...contract.fixedPrefix];
   for (let topicIndex = 0; topicIndex < contract.topics.length; topicIndex += 1) {
     const topic = contract.topics[topicIndex]!;
     out.push(
@@ -317,9 +328,10 @@ export function renderDailySummaryRescueMarkdown(contract: RescueContract): stri
       ({ paper }) => paper.category === topic.tag,
     );
     if (topicSlots.length === 0) {
-      out.push(noCategoryPapersText(contract.language));
+      out.push(topic.emptyText);
       continue;
     }
+    if (topic.omissionText) out.push(topic.omissionText);
     for (const slot of topicSlots) {
       out.push("", renderRescueSlot(slot, contract.language, contract.date));
     }

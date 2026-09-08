@@ -30,10 +30,26 @@ export function dailyCountLine(
 
 export function noCategoryPapersText(
   language: SummaryLanguage | undefined,
+  omittedCount = 0,
 ): string {
+  if (omittedCount > 0) return omittedPapersText(language, omittedCount);
   return normalizeSummaryLanguage(language) === "en"
     ? "No relevant paper updates today."
     : "今日无相关论文更新。";
+}
+
+/** Counts are validated at the assembly boundary before reaching display. */
+export function omittedPapersText(
+  language: SummaryLanguage | undefined,
+  omittedCount: number,
+  additional = false,
+): string {
+  if (omittedCount === 0) return "";
+  if (normalizeSummaryLanguage(language) === "en") {
+    return `${omittedCount} ${additional ? "additional " : ""}relevant ${plural(omittedCount, "paper")} `
+      + `${omittedCount === 1 ? "was" : "were"} omitted because of the daily paper limit.`;
+  }
+  return `因每日总数上限，${additional ? "另有 " : ""}${omittedCount} 篇相关论文未展示。`;
 }
 
 export function noDailyPapersText(

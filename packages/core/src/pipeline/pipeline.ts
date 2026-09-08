@@ -275,6 +275,11 @@ export class ArxivPipeline {
       .sort((left, right) => right.relevanceScore - left.relevanceScore
         || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
       .slice(0, dailyLimit);
+    const omittedCounts = new Map<string, number>();
+    for (const paper of eligiblePapers.slice(dailyLimit)) {
+      omittedCounts.set(paper.category, (omittedCounts.get(paper.category) ?? 0) + 1);
+    }
+    const omittedByTopic = Object.fromEntries(omittedCounts);
     if (visiblePapers.length < eligiblePapers.length) {
       logger.info(`pipeline: daily paper limit=${dailyLimit} kept=${visiblePapers.length}/${eligiblePapers.length} omitted=${eligiblePapers.length - visiblePapers.length}`);
     }
@@ -462,6 +467,7 @@ export class ArxivPipeline {
           summaryLanguage: this.deps.output.summaryLanguage,
           signal,
           onMetrics: (metrics) => runMetrics.record(metrics),
+          omittedByTopic,
           onDailyPaperProgress: (completed, total) =>
             this.progress.setStage("summarize-daily", completed, total),
         },

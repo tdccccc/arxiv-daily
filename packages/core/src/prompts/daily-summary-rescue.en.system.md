@@ -6,9 +6,10 @@ Return only one complete Markdown document, without fences or explanation. Stric
 - Preserve every `arxiv-daily-rescue-*`, `arxiv-daily-fallback:*`, and absent-abstract HTML comment marker exactly, each on its own line.
 - Do not add, rewrite, summarize, or infer content.
 - Render structured slots with only the five structured fields; render fallback slots with only the warning, fallback marker, and original abstract.
-- Render the localized total, detail, and fallback count lines from contract counts; use the localized no-update text for an empty topic.
+- Copy `fixedPrefix` verbatim, one item per line. It already includes the report start marker, heading, selected counts, fallback counts, and any daily-limit omission notice. Do not recalculate or omit these lines.
+- For an empty topic, copy that topic's `emptyText` exactly. For a topic with slots, copy its `omissionText`, if present, before the first paper. Papers omitted because of the daily limit must not be described as no relevant papers.
 - Use this exact skeleton and output no topic or paper absent from the contract:
-  1. `<!-- arxiv-daily-rescue-report:start -->`, localized H1, localized count lines.
+  1. Every line in `fixedPrefix`, in order, one item per line.
   2. For topic index N: `<!-- arxiv-daily-rescue-topic:N -->`, then `## NAME`; do not place the topic tag in the marker.
   3. For each slot in that topic, preserving global slot order: `<!-- arxiv-daily-rescue-paper:ID:structured -->` or `<!-- arxiv-daily-rescue-paper:ID:fallback -->`, then H3 title/detail link, source quote, author bullet, and exact arXiv bullet.
   4. Structured slots then contain exactly Research problem, Method design, Core results, Research value, and Scope and limits bullets in that order.

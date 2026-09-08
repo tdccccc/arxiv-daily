@@ -1050,3 +1050,62 @@ describe("the report says which directions selected each paper", () => {
     expect(parseDailyReportTopicDirections(markdown, "2026-07-22").kind).toBe("valid");
   });
 });
+
+describe("daily limit omissions", () => {
+  it.each([
+    {
+      language: "zh" as const,
+      total: "因每日总数上限，另有 3 篇相关论文未展示。",
+      partial: "因每日总数上限，另有 1 篇相关论文未展示。",
+      empty: "因每日总数上限，2 篇相关论文未展示。",
+      none: "今日无相关论文更新。",
+    },
+    {
+      language: "en" as const,
+      total: "3 additional relevant papers were omitted because of the daily paper limit.",
+      partial: "1 additional relevant paper was omitted because of the daily paper limit.",
+      empty: "2 relevant papers were omitted because of the daily paper limit.",
+      none: "No relevant paper updates today.",
+    },
+  ])("explains empty and partially retained topics in normal and emergency $language reports", ({ language, total, partial, empty, none }) => {
+    const value = input({ summaryLanguage: language, omittedByTopic: { methods: 1, empty: 2 } });
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const markdown = render(value);
+      expect(markdown).toContain(total);
+      expect(markdown.indexOf(total)).toBeLessThan(markdown.indexOf("## Methods"));
+      expect(markdown).toContain(`## Methods\n${partial}\n\n### Methods Paper`);
+      expect(markdown).toContain(`## Empty\n${empty}`);
+      expect(markdown).not.toContain(`## Empty\n${none}`);
+      expect(Object.keys(extractPaperSummaries(markdown)).sort())
+        .toEqual(["2607.00001", "2607.00002", "2607.00003"]);
+    }
+  });
+
+  it.each(["zh", "en"] as const)("leaves zero-omission %s output byte-identical", (summaryLanguage) => {
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const original = render(input({ summaryLanguage }));
+      expect(render(input({ summaryLanguage, omittedByTopic: {} }))).toBe(original);
+      expect(render(input({ summaryLanguage, omittedByTopic: { methods: 0, results: 0, empty: 0 } })))
+        .toBe(original);
+    }
+  });
+
+  it.each([
+    { label: "unknown topic", counts: { missing: 2 } },
+    { label: "unknown zero topic", counts: { missing: 0 } },
+    { label: "negative", counts: { methods: -1 } },
+    { label: "fractional", counts: { methods: 0.5 } },
+    { label: "non-number", counts: { methods: "2" } },
+    { label: "NaN", counts: { methods: NaN } },
+    { label: "infinite", counts: { methods: Infinity } },
+    { label: "unsafe integer", counts: { methods: Number.MAX_SAFE_INTEGER + 1 } },
+    { label: "unsafe total", counts: { methods: Number.MAX_SAFE_INTEGER, empty: 1 } },
+    { label: "null", counts: null },
+    { label: "array", counts: [] },
+  ])("rejects $label omission counts before rendering", ({ counts }) => {
+    const value = input({ omittedByTopic: counts as unknown as Readonly<Record<string, number>> });
+    for (const check of [preflightDailySummaryAssembly, assembleDailySummary, assembleEmergencyDailySummary]) {
+      expect(() => check(value)).toThrow(/omittedByTopic/);
+    }
+  });
+});

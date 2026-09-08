@@ -96,6 +96,7 @@ describe("daily paper cap", () => {
     expect(result).toMatchObject({ kind: "completed", papersWritten: 2 });
     expect(vi.mocked(h.source.fetchContent).mock.calls.map(([paperId]) => paperId)).toEqual([id(3), id(2)]);
     expect(h.summarize.mock.calls[0]![0].map(({ id }) => id)).toEqual([id(3), id(2)]);
+    expect(h.summarize.mock.calls[0]![2].omittedByTopic).toEqual({ "topic-a": 1 });
     const detailRequest = h.llm.call.mock.calls.find(([messages]) => !messages[0]!.content.includes("relevanceScore"));
     expect(detailRequest).toBeDefined();
     expect(detailRequest![0][1]!.content).toContain(id(3));
@@ -138,6 +139,14 @@ describe("daily paper cap", () => {
     expect(index.papers["arxiv:" + id(3)].dailyReports).toEqual([]);
     expect(index.papers["arxiv:" + id(2)].dailyReports).toEqual([`arxiv-daily/daily/${date}.md`]);
     expect(h.source.fetchContent).toHaveBeenCalledTimes(1);
+    expect(h.summarize.mock.calls[0]![2].omittedByTopic).toEqual({ "topic-a": 1 });
+  });
+
+  it("retains the number of matches for a topic entirely omitted by the daily cap", async () => {
+    const h = harness([decision(1, 95), decision(2, 90, "topic-b"), decision(3, 80, "topic-b")]);
+    await h.makePipeline(1).runForDate(date);
+    expect(h.summarize.mock.calls[0]![0].map(({ id }) => id)).toEqual([id(1)]);
+    expect(h.summarize.mock.calls[0]![2].omittedByTopic).toEqual({ "topic-b": 2 });
   });
 
   it("reuses complete cached scores when a retry changes only the daily cap", async () => {

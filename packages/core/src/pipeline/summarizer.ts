@@ -77,6 +77,8 @@ export interface SummarizerDeps {
   advanced: AdvancedSettings;
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
+  /** Counts omitted by the report limit, separate from per-paper summaries. */
+  omittedByTopic?: Readonly<Record<string, number>>;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
@@ -188,6 +190,7 @@ export async function summarizeDaily(
     dateStr,
     arxivSettings: deps.arxivSettings,
     summaryLanguage: deps.summaryLanguage,
+    ...(deps.omittedByTopic ? { omittedByTopic: deps.omittedByTopic } : {}),
   };
   preflightDailySummaryAssembly(assemblyInput);
 
