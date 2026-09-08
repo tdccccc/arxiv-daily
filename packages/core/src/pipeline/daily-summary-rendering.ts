@@ -1,5 +1,6 @@
 import type { PaperSummary } from "../services/paper-index";
 import type { SummaryLanguage } from "../settings/types";
+import { noCategoryPapersText } from "../settings/summary-language";
 import type {
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
@@ -176,6 +177,9 @@ export function renderPaperHeader(
     paper.isDetail || Boolean(paper.paperPath),
   );
   const sourceLabel = language === "en" ? "Source sections:" : "信息来源：";
+  const contextLabel = paper.topicDirections
+    ? language === "en" ? "Matched directions and sources" : "命中方向与信息来源"
+    : language === "en" ? "Source sections" : "信息来源";
   const authorLabel = language === "en" ? "Authors" : "作者";
   return [
     ...leadingMarkers,
@@ -200,41 +204,41 @@ export function renderPaperHeader(
           renderVisiblePersonalNovelty(paper.personalNovelty, language),
         ]
       : []),
-    // Last of the three marker families on purpose: both parsers above pin
-    // their marker to a canonical slot counted from the heading, so appending
-    // here leaves their arithmetic untouched.
+    // Keep the metadata callout after the other two marker families, whose
+    // canonical slots are counted from the paper heading.
+    ...(paper.discoveryProvenance || paper.personalNovelty ? [""] : []),
+    `> [!info]- ${contextLabel}`,
     ...(paper.topicDirections
       ? [
-          renderTopicDirectionMarker(
+          `> ${renderTopicDirectionMarker(
             paper.topicDirections,
             paper.id,
             requireReportDate(reportDate),
-          ),
-          renderVisibleTopicDirections(paper.topicDirections, language),
+          )}`,
+          ...renderVisibleTopicDirections(paper.topicDirections, language),
+          ">",
         ]
       : []),
     `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
+    "",
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
   ];
 }
 
 /**
- * The one line that answers "why is this paper here": the topic it was filed
- * under and the direction lines of that topic which selected it. Direction
- * text is what the researcher typed, so it is escaped to literal Markdown.
+ * Each direction gets its own list item. The report's section heading already
+ * names the topic. Direction text is researcher-authored literal text.
  */
 function renderVisibleTopicDirections(
   hits: NonNullable<DailySummaryAssemblyPaper["topicDirections"]>,
   language: SummaryLanguage,
-): string {
-  const tag = escapeDiscoveryProvenancePlainText(hits[0]!.tag);
-  const directions = hits
-    .map((hit) => escapeDiscoveryProvenancePlainText(hit.text))
-    .join(language === "en" ? "; " : "、");
-  return language === "en"
-    ? `> Matched directions: topic ${tag} — ${directions}`
-    : `> 命中方向：主题 ${tag} — ${directions}`;
+): string[] {
+  const label = language === "en" ? "Matched directions" : "命中方向";
+  return [
+    `> **${label}**`,
+    ...hits.map((hit) => `> - ${escapeDiscoveryProvenancePlainText(hit.text)}`),
+  ];
 }
 
 function renderVisibleDiscoveryProvenance(
@@ -301,9 +305,32 @@ export function renderStructuredFields(
   summary: StructuredPaperSummary,
   language: SummaryLanguage,
 ): string[] {
-  return DAILY_SUMMARY_FIELD_LABELS[language].map(
-    ([key, label]) => `- **${label}**: ${normalizeMarkdownLine(summary[key])}`,
-  );
+  const fields = DAILY_SUMMARY_FIELD_LABELS[language];
+  const resultLabel = fields.find(([key]) => key === "mainResult")![1];
+  const detailsLabel = language === "en" ? "Background, methods and limits" : "研究背景、方法与边界";
+  return [
+    `- **${resultLabel}**: ${normalizeMarkdownLine(summary.mainResult)}`,
+    "",
+    `> [!abstract]- ${detailsLabel}`,
+    ...fields.filter(([key]) => key !== "mainResult").flatMap(
+      ([key, label], index) => [
+        ...(index > 0 ? [">"] : []),
+        `> - **${label}**: ${normalizeMarkdownLine(summary[key])}`,
+      ],
+    ),
+  ];
+}
+
+export function renderEmptyTopics(
+  topics: ReadonlyArray<{ name: string; omittedCount: number }>,
+  language: SummaryLanguage,
+): string[] {
+  if (topics.length === 0) return [];
+  return [
+    language === "en" ? "## Other followed topics" : "## 其他关注主题",
+    ...topics.map(({ name, omittedCount }) =>
+      `- **${escapeDiscoveryProvenancePlainText(normalizeMarkdownLine(name))}** — ${noCategoryPapersText(language, omittedCount)}`),
+  ];
 }
 
 export function renderFallbackBlock(
@@ -321,20 +348,19 @@ export function renderFallbackBlock(
   const abstractLabel = language === "en" ? "Original abstract" : "原始摘要";
   const unavailable = language === "en" ? "Unavailable." : "不可用。";
   const abstract = normalizeMarkdownLine(originalAbstract);
-  const headingIndex = leadingMarkers.length;
+  // The header ends with the author and arXiv bullets. Place the warning
+  // outside the collapsed context, before the identity bullet used by parsers.
   lines.splice(
-    headingIndex + 1
-      + (paper.discoveryProvenance ? 2 : 0)
-      + (paper.personalNovelty ? 2 : 0)
-      + (paper.topicDirections ? 2 : 0),
+    lines.length - 2,
     0,
     warning,
     `<!-- ${DAILY_SUMMARY_FALLBACK_MARKER_PREFIX}:${paper.id} -->`,
     ...(!abstract
       ? [`<!-- ${DAILY_SUMMARY_ABSTRACT_ABSENT_MARKER_PREFIX}:${paper.id} -->`]
       : []),
+    "",
   );
-  lines.push(`- **${abstractLabel}**: ${abstract || unavailable}`);
+  lines.push("", `- **${abstractLabel}**: ${abstract || unavailable}`);
   return lines.join("\n");
 }
 

@@ -7,6 +7,49 @@ import {
 } from "../src/pipeline/daily-summary-parser";
 
 describe("extractPaperSummaries", () => {
+  it("reads all fields from the folded summary while ignoring unrelated quoted fields", () => {
+    const markdown = [
+      "### Current paper",
+      "> [!info]- Sources",
+      "> Source sections: Abstract, Results",
+      "> - **Research problem**: unrelated source annotation",
+      "",
+      "- **arXiv**: [2609.00001](https://arxiv.org/abs/2609.00001)",
+      "- **Core results**: Measured $z<0.1$.",
+      "",
+      "> [!abstract]- Background, methods and limits",
+      "> - **Research problem**: Specific question.",
+      ">",
+      "> - **Method design**: Validated method.",
+      ">",
+      "> - **Research value**: Concrete value.",
+      ">",
+      "> - **Scope and limits**: Limited sample.",
+    ].join("\n");
+
+    expect(extractPaperSummaries(markdown)).toEqual({
+      "2609.00001": {
+        sourceSections: "Abstract, Results", coreProblem: "Specific question.",
+        keyMethod: "Validated method.", mainResult: "Measured $z<0.1$.",
+        whyRelevant: "Concrete value.", limitations: "Limited sample.",
+      },
+    });
+  });
+
+  it("does not import another topic's text into the last paper's summary", () => {
+    const markdown = [
+      "### Legacy paper",
+      "- **arXiv**: [2609.00001](https://arxiv.org/abs/2609.00001)",
+      "- **Core results**: Recorded result.",
+      "",
+      "## Other followed topics",
+      "- **Research problem**: A topic description, not this paper.",
+    ].join("\n");
+    expect(extractPaperSummaries(markdown)).toEqual({
+      "2609.00001": { mainResult: "Recorded result." },
+    });
+  });
+
   it("extracts only the exact standalone stable emergency marker", () => {
     expect(
       hasEmergencyDailySummaryMarker(

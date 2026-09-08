@@ -43,8 +43,9 @@ export function extractPaperSummaries(
     const sourceSections = extractSourceSections(block);
     if (sourceSections) summary.sourceSections = sourceSections;
 
+    const fields = unquoteSummaryCallouts(block);
     for (const [key, labels] of FIELD_LABELS) {
-      const value = extractAnyBulletField(block, labels);
+      const value = extractAnyBulletField(fields, labels);
       if (value) summary[key] = value;
     }
 
@@ -85,7 +86,22 @@ export function extractFallbackAbstracts(markdown: string): Record<string, strin
 }
 
 function paperBlocks(markdown: string): string[] {
-  return stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1);
+  return stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1)
+    .map((block) => block.split(/^#{1,2}[\t ]+/m, 1)[0]!);
+}
+
+/** Unquote only summary callouts, leaving source annotations and identity untouched. */
+function unquoteSummaryCallouts(block: string): string {
+  let inSummary = false;
+  return block.split(/\r?\n/).map((line) => {
+    if (/^> \[!abstract\][+-]?(?:\s|$)/.test(line)) {
+      inSummary = true;
+      return "";
+    }
+    if (inSummary && (line === ">" || line.startsWith("> "))) return line.slice(2);
+    inSummary = false;
+    return line;
+  }).join("\n");
 }
 
 function extractFallbackId(block: string): string | null {

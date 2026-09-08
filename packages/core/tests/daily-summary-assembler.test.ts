@@ -455,7 +455,7 @@ describe("assembleDailySummary", () => {
     const markdown = assembleDailySummary(input());
 
     expect(markdown).toContain("# arXiv astro-ph, cs.AI 每日追踪 2026-07-22");
-    expect(markdown).toContain("共 3 篇相关论文，其中 2 篇详细收录。");
+    expect(markdown).toContain("共 3 篇相关论文，其中 2 篇附独立论文总结。");
     expect(markdown).not.toContain("回退内容");
     expect(markdown.indexOf("## Methods")).toBeLessThan(markdown.indexOf("## Results"));
     expect(markdown.indexOf("### First Results")).toBeLessThan(
@@ -465,10 +465,10 @@ describe("assembleDailySummary", () => {
     expect(markdown).toContain(
       "### Second Results → [2607.00003](../papers/2607.00003.md)",
     );
-    expect(markdown).toContain("### Methods Paper\n> 信息来源： Abstract, Results");
+    expect(markdown).toContain("### Methods Paper\n> [!info]- 信息来源\n> 信息来源： Abstract, Results\n\n");
     expect(markdown).toContain("- **作者**: Methods Paper Author");
     expect(markdown).toContain("- **研究问题**: 2607.00002 problem");
-    expect(markdown).toContain("## Empty\n今日无相关论文更新。");
+    expect(markdown).toContain("## 其他关注主题\n- **Empty** — 今日无相关论文更新。");
   });
 
   it("renders typed English fallback content with accurate counts and parser behavior", () => {
@@ -479,7 +479,7 @@ describe("assembleDailySummary", () => {
     );
     const markdown = assembleDailySummary(assemblyInput);
 
-    expect(markdown).toContain("3 relevant papers, including 2 with detail notes.");
+    expect(markdown).toContain("3 relevant papers, including 2 with separate paper notes.");
     expect(markdown).toContain("1 paper uses fallback content.");
     expect(markdown).toContain("### First Results → [[2607.00001]]");
     expect(markdown).toContain(
@@ -994,9 +994,9 @@ describe("the report says which directions selected each paper", () => {
   ];
 
   it.each([
-    ["zh", "命中方向：主题 methods — photo\\-z with neural nets、catalog comparisons"],
-    ["en", "Matched directions: topic methods — photo\\-z with neural nets; catalog comparisons"],
-  ] as const)("names the topic and every matched direction in %s", (language, line) => {
+    ["zh", "命中方向与信息来源", "命中方向", "信息来源："],
+    ["en", "Matched directions and sources", "Matched directions", "Source sections:"],
+  ] as const)("folds sources and lists each matched direction separately in %s", (language, title, label, sourceLabel) => {
     const assemblyInput = input({ summaryLanguage: language });
     assemblyInput.slots[0] = {
       ...assemblyInput.slots[0]!,
@@ -1005,7 +1005,25 @@ describe("the report says which directions selected each paper", () => {
 
     const markdown = assembleDailySummary(assemblyInput);
 
-    expect(markdown).toContain(line);
+    const callout = markdown.match(new RegExp(
+      `^> \\[!info\\]- ${title}\\n(?:>[^\\n]*\\n)*`, "m",
+    ))?.[0];
+    expect(callout).toBeDefined();
+    expect(callout).toContain("> <!-- arxiv-daily-topic-directions:v1:");
+    expect(callout).toContain(`> **${label}**\n> - photo\\-z with neural nets\n> - catalog comparisons\n`);
+    expect(callout).toContain(`> ${sourceLabel} Abstract, Results`);
+    expect(callout).not.toContain("主题 methods");
+    expect(callout).not.toContain("topic methods");
+    expect(callout).not.toContain("**arXiv**");
+    expect(markdown).not.toMatch(/^<!-- arxiv-daily-topic-directions:/m);
+    expect(extractPaperSummaries(markdown)["2607.00001"]).toEqual({
+      sourceSections: "Abstract, Results",
+      coreProblem: "2607.00001 problem",
+      keyMethod: "2607.00001 method",
+      mainResult: "2607.00001 result",
+      whyRelevant: "2607.00001 value",
+      limitations: "2607.00001 limits",
+    });
     expect(parseDailyReportTopicDirections(markdown, "2026-07-22")).toEqual({
       kind: "valid",
       occurrences: [{ arxivId: "2607.00001", hits }],
@@ -1030,24 +1048,99 @@ describe("the report says which directions selected each paper", () => {
 
     expect(markdown).not.toContain("<script>");
     expect(markdown).not.toContain("](https://evil.test)");
-    expect(markdown).toContain("命中方向：主题 methods —");
+    expect(markdown).toContain("> **命中方向**");
   });
 
-  it("stays readable by all three marker parsers when a paper carries every family", () => {
+  it.each([
+    ["discovery provenance", { discoveryProvenance: provenance }, true],
+    ["personal novelty", { personalNovelty: noveltyWithBasis }, true],
+    ["both legacy families", { discoveryProvenance: provenance, personalNovelty: noveltyWithBasis }, true],
+    ["discovery without directions", { discoveryProvenance: provenance }, false],
+  ] as const)("starts a separate callout after %s and preserves marker parsing", (_name, metadata, includeDirections) => {
     const assemblyInput = input();
     assemblyInput.slots = [
       structuredSlot(paper("2607.00020", "Structured", "methods", {
-        discoveryProvenance: provenance,
-        personalNovelty: noveltyWithBasis,
-        topicDirections: [{ tag: "methods", id: "d1", text: "one line" }],
+        ...metadata,
+        ...(includeDirections ? { topicDirections: [{ tag: "methods", id: "d1", text: "one line" }] } : {}),
       })),
     ];
 
     const markdown = assembleDailySummary(assemblyInput);
 
+    expect(markdown).toMatch(/\n\n> \[!info\]- /);
     expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22").kind).toBe("valid");
     expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22").kind).toBe("valid");
     expect(parseDailyReportTopicDirections(markdown, "2026-07-22").kind).toBe("valid");
+  });
+
+  it.each([
+    ["normal", assembleDailySummary],
+    ["emergency", assembleEmergencyDailySummary],
+  ] as const)("keeps fallback warnings visible and directions readable in %s reports", (_name, render) => {
+    const assemblyInput = input();
+    assemblyInput.slots = [fallbackSlot(paper("2607.00020", "Fallback", "methods", {
+      discoveryProvenance: provenance,
+      personalNovelty: noveltyWithBasis,
+      topicDirections: hits,
+    }), "original abstract")];
+
+    const markdown = render(assemblyInput);
+
+    expect(markdown).toContain("> [!info]- 命中方向与信息来源\n> <!-- arxiv-daily-topic-directions:");
+    expect(markdown).toContain("\n\n> **自动摘要不可用。**");
+    expect(extractFallbackPaperIds(markdown)).toEqual(["2607.00020"]);
+    expect(extractFallbackAbstracts(markdown)).toEqual({ "2607.00020": "original abstract" });
+    expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22").kind).toBe("valid");
+    expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22").kind).toBe("valid");
+    expect(parseDailyReportTopicDirections(markdown, "2026-07-22")).toEqual({
+      kind: "valid", occurrences: [{ arxivId: "2607.00020", hits }],
+    });
+  });
+});
+
+describe("future daily report reading order", () => {
+  it.each([
+    ["zh", "其他关注主题", "研究背景、方法与边界", "核心结果", "研究问题"],
+    ["en", "Other followed topics", "Background, methods and limits", "Core results", "Research problem"],
+  ] as const)("puts results first and empty topics last in %s", (language, footer, details, resultLabel, problemLabel) => {
+    const value = input({ summaryLanguage: language, omittedByTopic: { limited: 2 } });
+    value.arxivSettings.topics = [
+      { ...topics[2]!, id: "unmatched", tag: "unmatched", name: "Unmatched" },
+      topics[0]!,
+      { ...topics[2]!, id: "limited", tag: "limited", name: "Limited" },
+      topics[1]!,
+    ];
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const markdown = render(value);
+      expect(markdown).not.toMatch(/^## (Unmatched|Limited)$/m);
+      expect(markdown.indexOf("### Second Results")).toBeLessThan(markdown.indexOf(`## ${footer}`));
+      expect(markdown.indexOf("## Methods")).toBeLessThan(markdown.indexOf("## Results"));
+      expect(markdown).toContain(`- **Unmatched** — ${language === "zh" ? "今日无相关论文更新。" : "No relevant paper updates today."}`);
+      expect(markdown).toContain(`- **Limited** — ${language === "zh" ? "因每日总数上限，2 篇相关论文未展示。" : "2 relevant papers were omitted because of the daily paper limit."}`);
+
+      const block = markdown.split(/^### /m).find((entry) => entry.startsWith("Methods Paper\n"))!;
+      const visible = block.split("\n").filter((line) => !line.startsWith(">")).join("\n");
+      expect(visible).toContain(`- **${resultLabel}**: 2607.00002 result`);
+      expect(visible).not.toContain("2607.00002 problem");
+      expect(visible).not.toContain("2607.00002 method");
+      expect(visible).not.toContain("2607.00002 value");
+      expect(visible).not.toContain("2607.00002 limits");
+      expect(block).toContain(`> [!abstract]- ${details}\n> - **${problemLabel}**: 2607.00002 problem`);
+      expect(extractPaperSummaries(markdown)["2607.00002"]).toEqual({
+        sourceSections: "Abstract, Results", coreProblem: "2607.00002 problem",
+        keyMethod: "2607.00002 method", mainResult: "2607.00002 result",
+        whyRelevant: "2607.00002 value", limitations: "2607.00002 limits",
+      });
+    }
+  });
+
+  it("keeps an entirely empty day explicit without creating empty paper sections", () => {
+    const markdown = assembleDailySummary(input({ slots: [] }));
+    expect(markdown).toContain("共 0 篇相关论文");
+    expect(markdown).not.toMatch(/^### /m);
+    expect(markdown.match(/^## .+$/gm)).toEqual(["## 其他关注主题"]);
+    expect(markdown.match(/今日无相关论文更新。/g)).toHaveLength(3);
+    expect(extractPaperSummaries(markdown)).toEqual({});
   });
 });
 
@@ -1074,8 +1167,8 @@ describe("daily limit omissions", () => {
       expect(markdown).toContain(total);
       expect(markdown.indexOf(total)).toBeLessThan(markdown.indexOf("## Methods"));
       expect(markdown).toContain(`## Methods\n${partial}\n\n### Methods Paper`);
-      expect(markdown).toContain(`## Empty\n${empty}`);
-      expect(markdown).not.toContain(`## Empty\n${none}`);
+      expect(markdown).toContain(`- **Empty** — ${empty}`);
+      expect(markdown).not.toContain(`- **Empty** — ${none}`);
       expect(Object.keys(extractPaperSummaries(markdown)).sort())
         .toEqual(["2607.00001", "2607.00002", "2607.00003"]);
     }

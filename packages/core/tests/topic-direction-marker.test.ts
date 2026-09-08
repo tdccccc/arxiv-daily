@@ -51,6 +51,52 @@ describe("topic direction marker", () => {
     });
   });
 
+  it.each(["[!info]- 命中方向与信息来源", "[!info]+ Matched directions and sources"])(
+    "reads a marker inside the canonical metadata callout %s",
+    (heading) => {
+      const markdown = block([
+        `> ${heading}`,
+        `> ${renderTopicDirectionMarker(hits, arxivId, reportDate)}`,
+        "> - photo-z methods",
+        "> - photo-z catalog comparisons",
+        ">",
+      ]);
+
+      expect(parseDailyReportTopicDirections(markdown, reportDate)).toEqual({
+        kind: "valid", occurrences: [{ arxivId, hits }],
+      });
+    },
+  );
+
+  it.each([
+    ["an ordinary quote", "> Metadata"],
+    ["a callout later in the paper", "> Information\n> [!info]- Sources"],
+  ])("rejects a quoted marker inside %s", (_name, heading) => {
+    const markdown = block([
+      heading,
+      `> ${renderTopicDirectionMarker(hits, arxivId, reportDate)}`,
+    ]);
+
+    expect(parseDailyReportTopicDirections(markdown, reportDate))
+      .toEqual({ kind: "invalid", reason: "topic direction marker placement is invalid" });
+  });
+
+  it("rejects duplicate markers across old and folded placements", () => {
+    const marker = renderTopicDirectionMarker(hits, arxivId, reportDate);
+    const markdown = block([marker, "> [!info]- Sources", `> ${marker}`]);
+
+    expect(parseDailyReportTopicDirections(markdown, reportDate))
+      .toEqual({ kind: "invalid", reason: "topic direction marker count is invalid" });
+  });
+
+  it("still validates the identity of a folded marker", () => {
+    const other = renderTopicDirectionMarker(hits, "2609.00002", reportDate);
+    const markdown = block(["> [!info]- Sources", `> ${other}`]);
+
+    expect(parseDailyReportTopicDirections(markdown, reportDate))
+      .toEqual({ kind: "invalid", reason: "topic direction marker identity does not match its report occurrence" });
+  });
+
   it("rejects a marker whose paper or date is not the one it sits with", () => {
     const other = renderTopicDirectionMarker(hits, "2609.00002", reportDate);
 

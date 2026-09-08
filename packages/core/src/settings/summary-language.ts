@@ -22,10 +22,10 @@ export function dailyCountLine(
   if (normalizeSummaryLanguage(language) === "en") {
     return (
       `${nTotal} relevant ${plural(nTotal, "paper")}, ` +
-      `including ${nDetail} with detail ${plural(nDetail, "note")}.`
+      `including ${nDetail} with separate paper ${plural(nDetail, "note")}.`
     );
   }
-  return `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇详细收录。`;
+  return `共 ${nTotal} 篇相关论文，其中 ${nDetail} 篇附独立论文总结。`;
 }
 
 export function noCategoryPapersText(

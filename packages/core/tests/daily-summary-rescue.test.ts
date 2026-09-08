@@ -7,6 +7,7 @@ import {
   assembleEmergencyDailySummary,
 } from "../src/pipeline/daily-summary-assembler";
 import { parseDailyReportDiscoveryProvenance } from "../src/pipeline/discovery-provenance-marker";
+import { parseDailyReportTopicDirections } from "../src/pipeline/topic-direction-marker";
 import {
   buildDailySummaryRescueContract,
   DailySummaryRescueExhaustedError,
@@ -85,56 +86,18 @@ function logger() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 }
 
-function formatTransportedEnglishContract(contract: any): string {
-  const out = [
-    "<!-- arxiv-daily-rescue-report:start -->",
-    `# arXiv ${contract.categories} Daily Digest ${contract.date}`,
-    `${contract.counts.total} relevant ${contract.counts.total === 1 ? "paper" : "papers"}, including ${contract.counts.detail} with detail ${contract.counts.detail === 1 ? "note" : "notes"}.`,
-  ];
-  if (contract.counts.fallback > 0) {
-    out.push(`${contract.counts.fallback} ${contract.counts.fallback === 1 ? "paper uses" : "papers use"} fallback content.`);
-  }
+function copyTransportedContract(contract: any): string {
+  const out = [...contract.fixedPrefix];
   contract.topics.forEach((topic: any, topicIndex: number) => {
-    out.push("", `<!-- arxiv-daily-rescue-topic:${topicIndex} -->`, `## ${topic.name}`);
     const slots = contract.slots.filter((slot: any) => slot.paper.category === topic.tag);
-    if (slots.length === 0) {
-      out.push("No relevant paper updates today.");
-      return;
-    }
+    if (slots.length === 0) return;
+    out.push("", `<!-- arxiv-daily-rescue-topic:${topicIndex} -->`, `## ${topic.name}`);
+    if (topic.omissionText) out.push(topic.omissionText);
     for (const slot of slots) {
-      const detail = slot.paper.detailLink ? ` → ${slot.paper.detailLink}` : "";
-      const lines = [
-        `<!-- arxiv-daily-rescue-paper:${slot.paper.id}:${slot.result.kind} -->`,
-        `### ${slot.paper.title}${detail}`,
-      ];
-      if (slot.result.kind === "fallback") {
-        lines.push(
-          `> **Summary unavailable.** Read the [original paper on arXiv](${slot.paper.arxivLink}) directly.`,
-          `<!-- arxiv-daily-fallback:${slot.paper.id} -->`,
-        );
-        if (!slot.result.originalAbstract) {
-          lines.push(`<!-- arxiv-daily-fallback-abstract-absent:${slot.paper.id} -->`);
-        }
-      }
-      lines.push(
-        `> Source sections: ${slot.paper.sourceSections}`,
-        `- **Authors**: ${slot.paper.authors}`,
-        `- **arXiv**: [${slot.paper.id}](${slot.paper.arxivLink})`,
-      );
-      if (slot.result.kind === "structured") {
-        lines.push(
-          `- **Research problem**: ${slot.result.summary.coreProblem}`,
-          `- **Method design**: ${slot.result.summary.keyMethod}`,
-          `- **Core results**: ${slot.result.summary.mainResult}`,
-          `- **Research value**: ${slot.result.summary.whyRelevant}`,
-          `- **Scope and limits**: ${slot.result.summary.limitations}`,
-        );
-      } else {
-        lines.push(`- **Original abstract**: ${slot.result.originalAbstract || "Unavailable."}`);
-      }
-      out.push("", lines.join("\n"));
+      out.push("", ...(slot.fixedLines ?? []));
     }
   });
+  if (contract.emptyTopicLines?.length) out.push("", ...contract.emptyTopicLines);
   out.push("", "<!-- arxiv-daily-rescue-report:end -->");
   return out.join("\n");
 }
@@ -237,7 +200,8 @@ describe("rescueDailySummary", () => {
       call: vi.fn(async (messages: any[]) => {
         const payload = messages[1].content as string;
         expect(payload.match(/<\/rescue_contract>/gi)).toHaveLength(1);
-        expect(payload.match(/&lt;\/rescue_contract&gt;/g)).toHaveLength(3);
+        // The title and abstract are also carried in the copyable paper lines.
+        expect(payload.match(/&lt;\/rescue_contract&gt;/g)).toHaveLength(5);
         const serialized = /<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(payload)![1]!;
         return renderDailySummaryRescueMarkdown(JSON.parse(serialized));
       }),
@@ -286,7 +250,7 @@ describe("rescueDailySummary", () => {
         expect(contract.slots[1].result.originalAbstract).toBe(
           "fallback abstract &lt;![CDATA[unsafe]]> <mailto:user@example.org>",
         );
-        return formatTransportedEnglishContract(contract);
+        return copyTransportedContract(contract);
       }),
     };
 
@@ -302,6 +266,33 @@ describe("rescueDailySummary", () => {
       requiredMarkdown(assemblyInput),
       buildDailySummaryRescueContract(assemblyInput),
     )).not.toThrow();
+  });
+
+  it.each(["zh", "en"] as const)("transports folded direction metadata as complete copyable lines in %s", async (language) => {
+    const assemblyInput = input();
+    assemblyInput.summaryLanguage = language;
+    const hits = [
+      { tag: "a", id: "d1", text: "星系与 $H_0$" },
+      { tag: "a", id: "d2", text: "catalog [comparisons]" },
+    ];
+    assemblyInput.slots[0]!.paper.topicDirections = hits;
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const payload = messages[1].content as string;
+        const contract = JSON.parse(/<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(payload)![1]!);
+        return copyTransportedContract(contract);
+      }),
+    };
+
+    const markdown = await rescueDailySummary(assemblyInput, { llm: llm as any, logger: logger() as any });
+
+    expect(llm.call).toHaveBeenCalledTimes(1);
+    expect(markdown).toMatch(/^> \[!info\]- .+\n> <!-- arxiv-daily-topic-directions:/m);
+    expect(parseDailyReportTopicDirections(markdown, assemblyInput.dateStr)).toEqual({
+      kind: "valid", occurrences: [{ arxivId: "2607.00001", hits }],
+    });
+    expect(extractPaperSummaries(markdown)["2607.00001"]?.sourceSections).toBe("Abstract, Results");
+    expect(extractFallbackAbstracts(markdown)).toEqual({ "2607.00002": "trusted fallback abstract" });
   });
 
   it.each([
@@ -488,10 +479,10 @@ describe("rescueDailySummary", () => {
 
 describe("validateDailySummaryRescueMarkdown", () => {
   const mutations: Array<[string, (markdown: string) => string]> = [
-    ["paper omission", (v) => v.replace(/<!-- arxiv-daily-rescue-paper:2607\.00002:fallback -->[\s\S]*?(?=\n<!-- arxiv-daily-rescue-topic:2 -->)/, "")],
+    ["paper omission", (v) => v.replace(/<!-- arxiv-daily-rescue-paper:2607\.00002:fallback -->[\s\S]*?(?=\n## Other followed topics)/, "")],
     ["paper duplicate", (v) => `${v}\n${v.match(/<!-- arxiv-daily-rescue-paper:2607\.00001:structured -->[\s\S]*?(?=\n<!-- arxiv-daily-rescue-topic:1 -->)/)![0]}`],
     ["unknown ID", (v) => v.replaceAll("2607.00001", "2607.99999")],
-    ["topic omission", (v) => v.replace("<!-- arxiv-daily-rescue-topic:2 -->\n## Topic C\nNo relevant paper updates today.\n", "")],
+    ["topic omission", (v) => v.replace("- **Topic C** — No relevant paper updates today.\n", "")],
     ["topic order", (v) => v.replace("## Topic A", "## TEMP TOPIC").replace("## Topic B", "## Topic A").replace("## TEMP TOPIC", "## Topic B")],
     ["paper order", (v) => v.replace("arxiv-daily-rescue-paper:2607.00001", "arxiv-daily-rescue-paper:2607.00002")],
     ["title", (v) => v.replace("Structured Title", "Changed Title")],
@@ -538,6 +529,10 @@ describe("daily limit omissions in rescue", () => {
     expect(contract.fixedPrefix).toContain(total);
     expect(contract.topics[0]).toMatchObject({ omitted: 1, omissionText: partial });
     expect(contract.topics[2]).toMatchObject({ omitted: 2, emptyText: empty });
+    expect(contract.emptyTopicLines).toEqual([
+      language === "zh" ? "## 其他关注主题" : "## Other followed topics",
+      `- **Topic C** — ${empty}`,
+    ]);
     const llm = {
       call: async (messages: Array<{ content: string }>) => {
         const serialized = /<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(messages[1]!.content)![1]!;
@@ -547,7 +542,9 @@ describe("daily limit omissions in rescue", () => {
     const output = await rescueDailySummary(value, { llm: llm as any, logger: logger() as any });
     expect(output).toContain(total);
     expect(output).toContain(`## Topic A\n${partial}\n`);
-    expect(output).toContain(`## Topic C\n${empty}\n`);
+    expect(output).toContain(`- **Topic C** — ${empty}\n`);
+    expect(output).not.toContain("## Topic C");
+    expect(output.indexOf("### Fallback Title")).toBeLessThan(output.indexOf(`- **Topic C** — ${empty}`));
     expect(() => validateDailySummaryRescueMarkdown(output, requiredMarkdown(value), contract)).not.toThrow();
     expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
     expect(Object.keys(extractPaperSummaries(output))).toEqual(["2607.00001"]);

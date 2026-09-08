@@ -74,10 +74,11 @@ export function parseTopicDirectionMarker(line: string): MarkerPayload | null {
 /**
  * Parse the whole report's topic-direction markers.
  *
- * The marker family sits last among the three, after discovery provenance and
- * personal novelty, so adding it leaves both of those parsers' canonical slot
- * arithmetic untouched. Its own expected slot is therefore the first line of
- * the block plus two lines for each preceding family that is present.
+ * The marker family sits after discovery provenance and personal novelty.
+ * Legacy reports put the bare marker in that slot; current reports put a
+ * metadata callout there (separated from preceding quotes by a blank line) and
+ * its quoted marker immediately after it. Both layouts preserve the other
+ * families' canonical slots.
  */
 export function parseDailyReportTopicDirections(
   markdown: string,
@@ -85,8 +86,10 @@ export function parseDailyReportTopicDirections(
 ): DailyReportTopicDirectionParseResult {
   if (!isReportDate(reportDate)) return { kind: "invalid", reason: "invalid report date" };
   const lines = markdown.split(/\r?\n/);
-  const markerLineIndexes = lines.flatMap((line, index) =>
-    line.startsWith(`<!-- ${TOPIC_DIRECTION_MARKER_PREFIX}:`) ? [index] : []);
+  const markerLineIndexes = lines.flatMap((line, index) => {
+    const markerLine = line.startsWith("> ") ? line.slice(2) : line;
+    return markerLine.startsWith(`<!-- ${TOPIC_DIRECTION_MARKER_PREFIX}:`) ? [index] : [];
+  });
   if (markerLineIndexes.length === 0) return { kind: "valid", occurrences: [] };
 
   const blocks: Array<{ start: number; end: number }> = [];
@@ -113,7 +116,15 @@ export function parseDailyReportTopicDirections(
       .filter((prefix) => lines.slice(block.start + 1, block.end)
         .some((line) => line.startsWith(`<!-- ${prefix}:`)));
     const markerIndex = markerIndexes[0]!;
-    if (markerIndex !== block.start + 1 + preceding.length * 2) {
+    const canonicalSlot = block.start + 1 + preceding.length * 2;
+    const calloutSlot = canonicalSlot + (lines[canonicalSlot] === "" ? 1 : 0);
+    const markerLine = lines[markerIndex]!;
+    const quoted = markerLine.startsWith("> ");
+    const canonicalPlacement = quoted
+      ? markerIndex === calloutSlot + 1
+        && /^> \[!info\][+-]?(?:\s|$)/.test(lines[calloutSlot] ?? "")
+      : markerIndex === canonicalSlot;
+    if (!canonicalPlacement) {
       return { kind: "invalid", reason: "topic direction marker placement is invalid" };
     }
     const arxivIds: string[] = [];
@@ -123,7 +134,7 @@ export function parseDailyReportTopicDirections(
       if (match) arxivIds.push(match[1]!);
     }
     if (arxivIds.length !== 1) return { kind: "invalid", reason: "marked paper identity is ambiguous" };
-    const payload = parseTopicDirectionMarker(lines[markerIndex] ?? "");
+    const payload = parseTopicDirectionMarker(quoted ? markerLine.slice(2) : markerLine);
     if (!payload) return { kind: "invalid", reason: "topic direction marker is malformed" };
     const arxivId = arxivIds[0]!;
     if (payload.d !== reportDate || payload.id !== arxivId) {

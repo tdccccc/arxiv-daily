@@ -2,7 +2,6 @@ import { formatArxivCategories } from "../settings/categories";
 import {
   dailyCountLine,
   dailyHeader,
-  noCategoryPapersText,
   normalizeSummaryLanguage,
   omittedPapersText,
 } from "../settings/summary-language";
@@ -19,6 +18,7 @@ import {
   renderFallbackBlock,
   renderPaperHeader,
   renderStructuredFields,
+  renderEmptyTopics,
   normalizeMarkdownLine,
 } from "./daily-summary-rendering";
 
@@ -287,17 +287,20 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
   if (fallbackCount > 0) out.push(fallbackCountLine(language, fallbackCount));
   if (omissions.total > 0) out.push(omittedPapersText(language, omissions.total, true));
 
+  const emptyTopics: Array<{ name: string; omittedCount: number }> = [];
   for (const topic of arxivSettings.topics) {
-    out.push("", `## ${normalizeMarkdownLine(topic.name)}`);
     const topicSlots = slotsByTopic.get(topic.tag) ?? [];
     const omittedCount = omissions.byTopic.get(topic.tag) ?? 0;
     if (topicSlots.length === 0) {
-      out.push(noCategoryPapersText(language, omittedCount));
+      emptyTopics.push({ name: topic.name, omittedCount });
       continue;
     }
+    out.push("", `## ${normalizeMarkdownLine(topic.name)}`);
     if (omittedCount > 0) out.push(omittedPapersText(language, omittedCount, true));
     for (const slot of topicSlots) out.push("", renderSlot(slot, language, dateStr));
   }
+  const emptyTopicLines = renderEmptyTopics(emptyTopics, language);
+  if (emptyTopicLines.length > 0) out.push("", ...emptyTopicLines);
   return out.join("\n");
 }
 
@@ -318,6 +321,7 @@ function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage, reportDate:
   }
   return [
     ...renderPaperHeader(slot.paper, language, [], reportDate),
+    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

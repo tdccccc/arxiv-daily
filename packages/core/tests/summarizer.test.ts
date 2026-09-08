@@ -148,7 +148,7 @@ describe("summarizeDaily", () => {
     const output = dailyResult.markdown;
     const parsed = extractPaperSummaries(output);
 
-    expect(output).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
+    expect(output).toContain("共 2 篇相关论文，其中 1 篇附独立论文总结。");
     expect(output).toContain(
       "### Title 2607.00001 → [2607.00001](../papers/2607.00001.md)",
     );

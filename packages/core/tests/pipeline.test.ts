@@ -1743,7 +1743,7 @@ describe("ArxivPipeline", () => {
     expect(paperIndex.setPaperPath).toHaveBeenCalledWith(existingId, canonicalPath);
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
     const daily = d.writer.writeDaily.mock.calls[0]?.[1] as string;
-    expect(daily).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
+    expect(daily).toContain("共 2 篇相关论文，其中 1 篇附独立论文总结。");
     expect(daily).toContain(`→ [[${existingId}]]`);
     expect(daily).not.toContain(`→ [[${candidateId}]]`);
   });
