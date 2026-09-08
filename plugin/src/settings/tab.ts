@@ -158,6 +158,17 @@ interface LibraryRowElements {
   cancel?: ButtonComponent;
 }
 
+interface TopicFocusSnapshot {
+  topicId: string;
+  field: "name" | "direction" | "detail";
+  directionId?: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  selectionDirection: "forward" | "backward" | "none" | null;
+  scrollTop: number;
+  scrollLeft: number;
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
   private libraryRowElements: LibraryRowElements | undefined;
@@ -168,6 +179,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
   private pendingTopicFocusId: string | undefined;
   private pendingTopicDeletionAnchor:
@@ -242,7 +254,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderHostedTokenRow(this, setting),
       addCategory: () => void this.addCategory(),
       deleteCategory: (index) => void this.deleteCategory(index),
-      addTopic: () => void this.addTopic(),
+      addTopic: () => this.runAction("add topic", () => this.addTopic()),
     });
   }
 
@@ -837,6 +849,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
   public refreshSettings(): void {
     const scrollSnapshot = this.captureSettingsScroll();
+    const focusSnapshot = this.captureTopicFocus();
     if (
       requireApiVersion("1.13.0") &&
       this.getSettingDefinitions().length > 0
@@ -846,8 +859,55 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.renderLegacySettings();
     }
     if (!this.pendingTopicFocusId && !this.pendingTopicDeletionAnchor) {
+      this.restoreTopicFocus(focusSnapshot);
       this.restoreSettingsScroll(scrollSnapshot);
     }
+  }
+
+  /** Refresh external topic changes only after the visible edits have settled. */
+  public async refreshAfterTopicChanges(): Promise<void> {
+    await this.plugin.settingsChanges.changeComputed(() => ({ changes: [] }));
+    // Input can continue while the first save is pending. Include those newer
+    // edits and their failure restoration before replacing any controls.
+    while (this.pendingTopicEdits.size > 0) {
+      await Promise.allSettled([...this.pendingTopicEdits]);
+    }
+    this.refreshSettings();
+  }
+
+  private captureTopicFocus(): TopicFocusSnapshot | null {
+    const input = this.containerEl.ownerDocument.activeElement;
+    if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)
+      || !this.containerEl.contains(input)) return null;
+    const topicId = input.closest<HTMLElement>(".arxiv-daily-settings__topic-card")?.dataset.arxivDailyTopicId;
+    if (!topicId) return null;
+    const field = input.dataset.directionId ? "direction"
+      : input.classList.contains("arxiv-daily-settings__topic-name-input") ? "name"
+        : input.classList.contains("arxiv-daily-settings__topic-detail-checkbox") ? "detail" : null;
+    if (!field) return null;
+    return {
+      topicId, field, directionId: input.dataset.directionId,
+      selectionStart: input.selectionStart, selectionEnd: input.selectionEnd,
+      selectionDirection: input.selectionDirection, scrollTop: input.scrollTop, scrollLeft: input.scrollLeft,
+    };
+  }
+
+  private restoreTopicFocus(snapshot: TopicFocusSnapshot | null): void {
+    if (!snapshot) return;
+    const card = this.findTopicCard(snapshot.topicId);
+    if (!card) return;
+    const input = snapshot.field === "direction"
+      ? Array.from(card.querySelectorAll<HTMLTextAreaElement>(".arxiv-daily-settings__topic-direction-input"))
+        .find((item) => item.dataset.directionId === snapshot.directionId)
+      : card.querySelector<HTMLInputElement>(snapshot.field === "name"
+        ? ".arxiv-daily-settings__topic-name-input" : ".arxiv-daily-settings__topic-detail-checkbox");
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+      input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd, snapshot.selectionDirection ?? undefined);
+    }
+    input.scrollTop = snapshot.scrollTop;
+    input.scrollLeft = snapshot.scrollLeft;
   }
 
   private captureSettingsScroll(): Array<{
@@ -915,26 +975,30 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Append a blank, expanded topic card. */
   public async addTopic(): Promise<void> {
     const newId = crypto.randomUUID();
-    const topics = this.plugin.settings.arxiv.topics;
-    topics.push(normalizeTopic({
-      id: newId,
-      name: "",
-      // Deleting a topic frees its ordinal, so the plain count can collide.
-      tag: uniqueTopicTag(topics, -1, `topic-${topics.length + 1}`),
-      detail: false,
-    }));
+    await this.plugin.settingsChanges.changeComputed((current) => {
+      const topics = current.arxiv.topics;
+      topics.push(normalizeTopic({
+        id: newId,
+        name: "",
+        // Deleting a topic frees its ordinal, so the plain count can collide.
+        tag: uniqueTopicTag(topics, -1, `topic-${topics.length + 1}`),
+        detail: false,
+      }));
+      return { changes: [{ key: "arxiv.topics", value: topics }] };
+    });
     this.expandedTopics.add(newId);
     this.pendingTopicFocusId = newId;
-    await this.plugin.saveSettings();
     this.refreshSettings();
     this.focusPendingTopic();
   }
 
   /** Delete a topic after confirmation; returns whether it was deleted. */
-  public async deleteTopic(index: number): Promise<boolean> {
+  public async deleteTopic(topicRef: number | string): Promise<boolean> {
     const topics = this.plugin.settings.arxiv.topics;
+    const index = typeof topicRef === "number" ? topicRef : topics.findIndex(({ id }) => id === topicRef);
     const topic = topics[index];
     if (!topic) return false;
+    const topicId = topic.id;
     const topicName = topic.name.trim() || "(unnamed)";
     const confirmed = await this.confirmReplace(
       `Delete the research topic "${topicName}"? This cannot be undone.`,
@@ -944,9 +1008,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.pendingTopicDeletionAnchor = this.captureTopicDeletionAnchor(
       topics[index + 1]?.id ?? topics[index - 1]?.id,
     );
-    topics.splice(index, 1);
-    this.expandedTopics.delete(topic.id);
-    await this.plugin.saveSettings();
+    await this.plugin.settingsChanges.changeComputed((current) => ({
+      changes: [{ key: "arxiv.topics", value: current.arxiv.topics.filter(({ id }) => id !== topicId) }],
+    }));
+    this.expandedTopics.delete(topicId);
     this.refreshSettings();
     this.restoreTopicDeletionAnchor();
     return true;
@@ -962,10 +1027,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const settings = this.plugin.settings;
     const categories = arxivCategories(settings.arxiv);
     const apply = async () => {
-      settings.arxiv.category = tpl.category;
-      settings.arxiv.categories = [tpl.category];
-      settings.arxiv.topics = tpl.topics.map(topicFromSeed);
-      await this.plugin.saveSettings();
+      await this.plugin.settingsChanges.changeComputed(() => ({ changes: [
+        { key: "arxiv.category", value: tpl.category },
+        { key: "arxiv.categories", value: [tpl.category] },
+        { key: "arxiv.topics", value: tpl.topics.map(topicFromSeed) },
+      ] }));
       this.refreshSettings();
     };
     const replacesCategories = categoriesWillChange(categories, [tpl.category]);
@@ -1431,11 +1497,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.onChange(async (id) => {
           if (!id) return;
           d.setValue("");
-          await this.applyTopicTemplate(id);
+          await this.runActionAndWait("apply topic template", () => this.applyTopicTemplate(id));
         });
       })
       .addButton((b) => {
-        b.setButtonText("Add topic").onClick(() => void this.addTopic());
+        b.setButtonText("Add topic").onClick(() => this.runAction("add topic", () => this.addTopic()));
       });
 
     const topicsContainer = containerEl.createDiv();
@@ -2382,14 +2448,61 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
+  /** Apply only this edit to the latest queued topic, preserving other changes. */
+  private async changeTopic(
+    topicId: string,
+    edit: (topic: Topic, topics: Topic[], index: number) => void,
+  ): Promise<void> {
+    await this.plugin.settingsChanges.changeComputed((current) => {
+      const topics = current.arxiv.topics;
+      const index = topics.findIndex(({ id }) => id === topicId);
+      const topic = topics[index];
+      if (!topic) throw new Error("This topic no longer exists. Reopen settings to refresh the list.");
+      edit(topic, topics, index);
+      // Empty rows remain editable drafts, as in the existing editor. Use the
+      // shared shadow rule without normalizing those rows out while typing.
+      topic.description = deriveTopicDescription(topic.directions);
+      return { changes: [{ key: "arxiv.topics", value: topics }] };
+    });
+  }
+
   private renderTopicCard(
     container: HTMLElement,
     topics: Topic[],
     index: number,
     compact = false,
   ): void {
-    const topic = topics[index];
-    if (!topic) return;
+    const storedTopic = topics[index];
+    if (!storedTopic) return;
+    // Renderers never own live settings objects: another queued transaction
+    // can replace their contents while the user continues typing here.
+    const topic: Topic = {
+      ...storedTopic,
+      directions: storedTopic.directions.map((direction) => ({ ...direction })),
+    };
+    const createdDirections = new Set<string>();
+    const liveTopic = () => this.plugin.settings.arxiv.topics.find(({ id }) => id === topic.id);
+    const persistEdit = (
+      control: object,
+      action: string,
+      edit: (current: Topic, topics: Topic[], index: number) => void,
+      restore: () => void,
+    ): Promise<void> => {
+      const revision = this.beginControlChange(control);
+      const saving = (async () => {
+        try {
+          await this.changeTopic(topic.id, edit);
+          if (this.isCurrentControlChange(control, revision)) this.refreshSetupGuide();
+        } catch (error) {
+          if (this.isCurrentControlChange(control, revision)) restore();
+          this.reportActionError(action, error);
+        }
+      })();
+      this.pendingTopicEdits.add(saving);
+      const settled = () => { this.pendingTopicEdits.delete(saving); };
+      void saving.then(settled, settled);
+      return saving;
+    };
     const isExpanded = this.expandedTopics.has(topic.id);
     const idPrefix = `arxiv-daily-topic-${stableDomId(topic.id)}`;
     const formId = `${idPrefix}-form`;
@@ -2474,22 +2587,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     // that can produce one. A tag that is still the machine form of the old
     // name follows the rename; one that was typed by hand while the field
     // existed is left alone, because nothing on screen could restore it.
-    const tagFollowsName = isDerivedTopicTag(topic.tag, topic.name)
-      || isPlaceholderTopicTag(topic.tag)
-      || !topic.tag;
-
     nameInput.oninput = async () => {
-      topic.name = nameInput.value;
-      if (tagFollowsName) {
-        topic.tag = uniqueTopicTag(
-          topics,
-          index,
-          slugify(topic.name) || `topic-${index + 1}`,
-        );
-      }
+      const name = nameInput.value;
+      topic.name = name;
       refreshHeader();
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
+      await persistEdit(nameInput, "rename topic", (current, currentTopics, currentIndex) => {
+        const tagFollowsName = isDerivedTopicTag(current.tag, current.name)
+          || isPlaceholderTopicTag(current.tag) || !current.tag;
+        current.name = name;
+        if (tagFollowsName) {
+          current.tag = uniqueTopicTag(currentTopics, currentIndex, slugify(name) || `topic-${currentIndex + 1}`);
+        }
+      }, () => {
+        topic.name = liveTopic()?.name ?? storedTopic.name;
+        nameInput.value = topic.name;
+        refreshHeader();
+      });
     };
 
     // Directions
@@ -2513,24 +2626,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         : { id: dirId, "aria-describedby": dirHintId },
     });
 
-    // `description` is the rollback shadow of the first direction, so it is
-    // re-derived here rather than edited (ADR 0012).
-    const persistDirections = async () => {
-      topic.description = deriveTopicDescription(topic.directions);
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-    };
-
     // Re-checked when the card expands: a hidden field measures as zero, so
     // the truncation marker cannot be decided until it is on screen.
     const directionOverflowChecks: Array<() => void> = [];
 
     const appendDirection = async () => {
-      topic.directions.push({
+      const direction: Topic["directions"][number] = {
         id: crypto.randomUUID(),
         text: "",
         origin: "manual",
-      });
+      };
+      createdDirections.add(direction.id);
+      topic.directions.push(direction);
       renderDirections();
       dirList
         .querySelectorAll<HTMLTextAreaElement>(
@@ -2538,7 +2645,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         )
         .item(topic.directions.length - 1)
         ?.focus();
-      await persistDirections();
+      await persistEdit(direction, "add direction", (current) => {
+        current.directions.push({ id: direction.id, text: "", origin: "manual" });
+      }, () => {
+        topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
+        createdDirections.delete(direction.id);
+        renderDirections();
+      });
     };
 
     const renderDirections = () => {
@@ -2558,6 +2671,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         const dirInput = field.createEl("textarea", {
           cls: "arxiv-daily-settings__topic-direction-input",
         });
+        dirInput.dataset.directionId = direction.id;
         dirInput.value = direction.text;
         dirInput.rows = 1;
         dirInput.placeholder = "One specific direction";
@@ -2592,7 +2706,29 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           if (flattened !== dirInput.value) dirInput.value = flattened;
           direction.text = flattened;
           syncField();
-          await persistDirections();
+          await persistEdit(direction, "edit direction", (current) => {
+            const existing = current.directions.find(({ id }) => id === direction.id);
+            if (existing) existing.text = flattened;
+            else if (createdDirections.has(direction.id)) {
+              // The blank-row save may have failed ahead of this newer text.
+              // Keep the explicit Add action recoverable through its stable id.
+              current.directions.push({ id: direction.id, text: flattened, origin: "manual" });
+            } else {
+              throw new Error("This direction no longer exists. Reopen settings to refresh the list.");
+            }
+          }, () => {
+            const saved = liveTopic()?.directions.find(({ id }) => id === direction.id);
+            if (!saved) {
+              topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
+              renderDirections();
+              return;
+            }
+            direction.text = saved.text;
+            const visibleInput = Array.from(dirList.querySelectorAll<HTMLTextAreaElement>("textarea"))
+              .find((input) => input.dataset.directionId === direction.id);
+            if (visibleInput) visibleInput.value = direction.text;
+            for (const check of directionOverflowChecks) check();
+          });
         };
         dirInput.onfocus = () => {
           field.removeClass("is-collapsed");
@@ -2622,9 +2758,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           },
         });
         removeBtn.onclick = async () => {
-          topic.directions.splice(directionIndex, 1);
+          topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
           renderDirections();
-          await persistDirections();
+          await persistEdit(direction, "remove direction", (current) => {
+            current.directions = current.directions.filter(({ id }) => id !== direction.id);
+          }, () => {
+            const saved = liveTopic()?.directions.find(({ id }) => id === direction.id);
+            if (saved && !topic.directions.some(({ id }) => id === direction.id)) {
+              topic.directions.splice(Math.min(directionIndex, topic.directions.length), 0, { ...saved });
+              renderDirections();
+            }
+          });
         };
       });
       const addBtn = dirList.createEl("button", {
@@ -2651,9 +2795,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     detailCheckbox.checked = topic.detail;
     detailCheckbox.addClass("arxiv-daily-settings__topic-detail-checkbox");
     detailLabel.appendText("Detail report");
-    detailCheckbox.onchange = async () => {
-      topic.detail = detailCheckbox.checked;
-      await this.plugin.saveSettings();
+    const refreshDetail = () => {
       // Refresh the header star indicator without a full re-render.
       star?.remove();
       star = null;
@@ -2665,6 +2807,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       }
     };
+    detailCheckbox.onchange = async () => {
+      const detail = detailCheckbox.checked;
+      topic.detail = detail;
+      refreshDetail();
+      await persistEdit(detailCheckbox, "change detail report", (current) => {
+        current.detail = detail;
+      }, () => {
+        topic.detail = liveTopic()?.detail ?? storedTopic.detail;
+        detailCheckbox.checked = topic.detail;
+        refreshDetail();
+      });
+    };
 
     const delBtn = footer.createEl("button", {
       text: "Delete",
@@ -2673,7 +2827,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     delBtn.classList.add("mod-warning");
     delBtn.onclick = async (e) => {
       e.stopPropagation();
-      await this.deleteTopic(index);
+      await this.runActionAndWait("delete topic", () => this.deleteTopic(topic.id));
     };
 
     // Toggle expand/collapse on header click

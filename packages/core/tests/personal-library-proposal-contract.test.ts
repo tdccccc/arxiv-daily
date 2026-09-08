@@ -5,6 +5,7 @@ import {
   PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
   PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
   PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
+  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   createPersonalLibraryCatalogInputFingerprint,
   createPersonalLibraryCatalogInputManifest,
   createPersonalLibraryGenerationContractFingerprint,
@@ -74,7 +75,7 @@ function representative(entry = paper("2608.00001")): PersonalLibraryRepresentat
 function proposal(): PersonalLibraryDirectionProposal {
   const representatives = [representative()];
   return {
-    schemaVersion: 3,
+    schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
     revision: 0,
     proposalId: "proposal.1",
     scopeFingerprint,
@@ -87,15 +88,14 @@ function proposal(): PersonalLibraryDirectionProposal {
     catalogInputPapers: createPersonalLibraryCatalogInputManifest(Object.values(catalog().papers)),
     generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint("contract-v1"),
     generatedAt: now,
-    candidates: [{
+    topics: [{ id: "topic.1", suggestedName: "Efficient language models", directions: [{
       id: "candidate.1",
-      name: "Efficient language models",
-      description: "Methods that reduce inference cost.",
+      text: "Methods that reduce language model inference cost.",
       discoveryCues: ["efficient inference", "model compression"],
       representatives,
       representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(representatives),
       lineage: { candidateIds: ["candidate.1", "historical.1"] },
-    }],
+    }] }],
   };
 }
 
@@ -232,5 +232,62 @@ describe("personal library fingerprints", () => {
       .toThrow(/exact canonical/);
     expect(() => createPersonalLibraryPaperEvidenceFingerprint(paper("2608.00001", { filePaths: ["b.pdf", "a.pdf"] })))
       .toThrow(/exact canonical/);
+  });
+});
+
+describe("reviewed proposal contract", () => {
+  it("round-trips covered evidence and explicit target IDs using schema 6", () => {
+    const value = proposal();
+    value.coveredPaperKeys = ["arxiv:2608.00002"];
+    value.topics[0]!.targetTopicId = "settings-topic.1";
+    expect(decodePersonalLibraryDirectionProposal(value)).toEqual({ ...value, schemaVersion: 6 });
+    expect(decodePersonalLibraryDirectionProposal({ ...value, schemaVersion: 5 })).toBeNull();
+  });
+
+  it("accepts a fully covered empty proposal and preserves omitted optional fields", () => {
+    const value = { ...proposal(), topics: [], coveredPaperKeys: ["arxiv:2608.00001", "arxiv:2608.00002"] };
+    expect(decodePersonalLibraryDirectionProposal(value)).toEqual(value);
+    expect(decodePersonalLibraryDirectionProposal(proposal())).toEqual(proposal());
+    expect(decodePersonalLibraryDirectionProposal(proposal())).not.toHaveProperty("coveredPaperKeys");
+    expect(decodePersonalLibraryDirectionProposal(proposal())!.topics[0]).not.toHaveProperty("targetTopicId");
+  });
+
+  it.each([
+    null, "arxiv:2608.00001", [17], ["arxiv:2608.00001v2"], ["not-a-paper"],
+    ["arxiv:2608.00001", "arxiv:2608.00001"], ["arxiv:2608.00002", "arxiv:2608.00001"], ["arxiv:2608.00099"],
+  ].map((coveredPaperKeys) => ({ coveredPaperKeys })))(
+    "rejects noncanonical, duplicate, unordered or out-of-manifest coverage $coveredPaperKeys", ({ coveredPaperKeys }) => {
+      expect(decodePersonalLibraryDirectionProposal({ ...proposal(), topics: [], coveredPaperKeys })).toBeNull();
+    },
+  );
+
+  it("rejects covered papers that also occur in candidate evidence", () => {
+    const value = proposal();
+    expect(decodePersonalLibraryDirectionProposal({ ...value, coveredPaperKeys: ["arxiv:2608.00001"] })).toBeNull();
+    value.topics[0]!.directions[0]!.clusterMembers = [
+      { paperKey: "arxiv:2608.00001", confidence: 1 },
+      { paperKey: "arxiv:2608.00002", confidence: 0.5 },
+    ];
+    expect(decodePersonalLibraryDirectionProposal({ ...value, coveredPaperKeys: ["arxiv:2608.00002"] })).toBeNull();
+  });
+
+  it.each([null, "", " ", "id with spaces", "x".repeat(129)])("rejects malformed persisted target IDs %j", (targetTopicId) => {
+    const value = proposal();
+    expect(decodePersonalLibraryDirectionProposal({ ...value, topics: [{ ...value.topics[0], targetTopicId }] })).toBeNull();
+  });
+
+  it("bounds candidate count across all proposal topics", () => {
+    const value = proposal();
+    const template = value.topics[0]!.directions[0]!;
+    value.topics = [0, 1].map((topicIndex) => ({
+      id: `topic.${topicIndex}`, suggestedName: `Topic ${topicIndex}`,
+      directions: Array.from({ length: 6 }, (_, index) => {
+        const id = `candidate.${topicIndex}.${index}`;
+        return { ...template, id, lineage: { candidateIds: [id] } };
+      }),
+    }));
+    expect(decodePersonalLibraryDirectionProposal(value)).toEqual(value);
+    value.topics[1]!.directions.push({ ...template, id: "candidate.1.6", lineage: { candidateIds: ["candidate.1.6"] } });
+    expect(decodePersonalLibraryDirectionProposal(value)).toBeNull();
   });
 });

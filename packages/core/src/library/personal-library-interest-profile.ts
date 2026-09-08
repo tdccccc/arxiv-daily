@@ -5,9 +5,9 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-// Version 5 retires two-level generated proposals. Their shape was similar,
-// but changing an opaque generation fingerprint alone did not invalidate load.
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 5 as const;
+// Version 6 records existing coverage and stable targets. Earlier generations
+// cannot express those decisions and must be regenerated against current topics.
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 6 as const;
 /**
  * Storage/editing bounds for both levels of a proposal. Initial organization
  * uses the tighter limits in personal-library-topic-organization.ts; retaining
@@ -91,6 +91,8 @@ export function isThinEvidenceDirectionCandidate(
 export interface PersonalLibraryProposedTopic {
   id: string;
   suggestedName: string;
+  /** Existing settings topic identity; absent means a proposed new topic. */
+  targetTopicId?: string;
   directions: PersonalLibraryDirectionCandidate[];
 }
 
@@ -105,6 +107,8 @@ export interface PersonalLibraryDirectionProposal {
   generationContractFingerprint: string;
   generatedAt: string;
   topics: PersonalLibraryProposedTopic[];
+  /** Canonical evidence already covered by existing directions, outside candidates. */
+  coveredPaperKeys?: string[];
 }
 
 /**
@@ -233,9 +237,35 @@ export function createPersonalLibraryGenerationContractFingerprint(contract: str
 export function decodePersonalLibraryDirectionProposal(
   value: unknown,
 ): PersonalLibraryDirectionProposal | null {
+  return decodeDirectionProposal(value, PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES);
+}
+
+/** Validate retired documents only to authorize regeneration, never to reuse them. */
+export function decodeRetiredPersonalLibraryProposalIdentity(
+  value: unknown,
+): Pick<PersonalLibraryDirectionProposal, "scopeFingerprint" | "identificationFingerprint"> | null {
+  if (!isPlainObject(value) || (value.schemaVersion !== 4 && value.schemaVersion !== 5)
+    || Object.hasOwn(value, "coveredPaperKeys")
+    || !Array.isArray(value.topics)
+    || value.topics.some((topic: unknown) => isPlainObject(topic) && Object.hasOwn(topic, "targetTopicId"))) return null;
+  // v4/v5 bounded each topic separately. A valid old generation may exceed
+  // today's total candidate limit; it still needs regeneration, not repair.
+  const decoded = decodeDirectionProposal(
+    { ...value, schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION },
+    PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS * PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS,
+  );
+  return decoded ? {
+    scopeFingerprint: decoded.scopeFingerprint,
+    identificationFingerprint: decoded.identificationFingerprint,
+  } : null;
+}
+
+function decodeDirectionProposal(value: unknown, maxCandidates: number): PersonalLibraryDirectionProposal | null {
+  const hasCoveredPaperKeys = isPlainObject(value) && Object.hasOwn(value, "coveredPaperKeys");
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
     "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
+    ...(hasCoveredPaperKeys ? ["coveredPaperKeys"] : []),
   ])
     // Only the current schema decodes. Earlier proposals were a flat candidate
     // list with name+description directions; both shapes changed in v4 and the
@@ -260,11 +290,23 @@ export function decodePersonalLibraryDirectionProposal(
     catalogInputPapers,
   }) !== value.catalogInputFingerprint) return null;
 
+  let coveredPaperKeys: string[] | undefined;
+  if (hasCoveredPaperKeys) {
+    const manifestKeys = new Set(catalogInputPapers.map(({ paperKey }) => paperKey));
+    if (!Array.isArray(value.coveredPaperKeys)
+      || value.coveredPaperKeys.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS
+      || !value.coveredPaperKeys.every((key: unknown) => isCanonicalProposalPaperKey(key) && manifestKeys.has(key))
+      || !isStrictlyOrderedUnique(value.coveredPaperKeys)) return null;
+    coveredPaperKeys = [...value.coveredPaperKeys];
+  }
+  const covered = new Set(coveredPaperKeys);
   const topics: PersonalLibraryProposedTopic[] = [];
   const directionIds: string[] = [];
   for (const rawTopic of value.topics) {
-    if (!isExactObject(rawTopic, ["id", "suggestedName", "directions"])
+    const hasTargetTopicId = isPlainObject(rawTopic) && Object.hasOwn(rawTopic, "targetTopicId");
+    if (!isExactObject(rawTopic, ["id", "suggestedName", "directions", ...(hasTargetTopicId ? ["targetTopicId"] : [])])
       || !isOpaqueId(rawTopic.id)
+      || (hasTargetTopicId && !isOpaqueId(rawTopic.targetTopicId))
       || !isBoundedText(rawTopic.suggestedName, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
       || !Array.isArray(rawTopic.directions)
       || rawTopic.directions.length < 1
@@ -273,15 +315,23 @@ export function decodePersonalLibraryDirectionProposal(
     for (const raw of rawTopic.directions) {
       const candidate = decodeCandidate(raw);
       if (!candidate) return null;
+      if (candidate.representatives.some(({ paperKey }) => covered.has(paperKey))
+        || candidate.clusterMembers?.some(({ paperKey }) => covered.has(paperKey))) return null;
       directions.push(candidate);
     }
     if (!isStrictlyOrderedUnique(directions.map(({ id }) => id))) return null;
     directionIds.push(...directions.map(({ id }) => id));
-    topics.push({ id: rawTopic.id, suggestedName: rawTopic.suggestedName, directions });
+    topics.push({
+      id: rawTopic.id,
+      suggestedName: rawTopic.suggestedName,
+      ...(hasTargetTopicId ? { targetTopicId: rawTopic.targetTopicId } : {}),
+      directions,
+    });
   }
   // A direction belongs to exactly one topic (ADR 0014 §1): an id appearing
   // twice means the proposal was assembled wrong, not that it is ambiguous.
   if (!isStrictlyOrderedUnique(topics.map(({ id }) => id))
+    || directionIds.length > maxCandidates
     || new Set(directionIds).size !== directionIds.length) return null;
   return {
     schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
@@ -294,6 +344,7 @@ export function decodePersonalLibraryDirectionProposal(
     generationContractFingerprint: value.generationContractFingerprint,
     generatedAt: value.generatedAt,
     topics,
+    ...(coveredPaperKeys !== undefined ? { coveredPaperKeys } : {}),
   };
 }
 

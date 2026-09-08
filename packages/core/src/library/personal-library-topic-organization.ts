@@ -4,6 +4,9 @@ import {
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
   PERSONAL_LIBRARY_MAX_NAME_LENGTH,
+  PERSONAL_LIBRARY_MAX_ID_LENGTH,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
+  PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_DISCOVERY_CUES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
@@ -18,6 +21,19 @@ export interface PersonalLibraryOrganizationGroup {
   papers: readonly { paperKey: string }[];
 }
 
+/** The existing settings needed for organization, without host-only fields. */
+export interface PersonalLibraryExistingTopic {
+  readonly id: string;
+  readonly name: string;
+  readonly directions: readonly { readonly id: string; readonly text: string }[];
+}
+
+export interface PersonalLibraryCoveredGroup {
+  groupId: string;
+  topicId: string;
+  directionId: string;
+}
+
 export interface OrganizedDirection {
   text: string;
   discoveryCues: string[];
@@ -27,11 +43,13 @@ export interface OrganizedDirection {
 
 export interface OrganizedTopic {
   suggestedName: string;
+  targetTopicId?: string;
   directions: OrganizedDirection[];
 }
 
 export interface OrganizedTopicsResult {
   topics: OrganizedTopic[];
+  coveredGroups?: PersonalLibraryCoveredGroup[];
 }
 
 export type OrganizationValidationReason =
@@ -50,6 +68,7 @@ export type OrganizationValidationReason =
 export function decodeOrganizedTopics(
   raw: string,
   groups: readonly PersonalLibraryOrganizationGroup[],
+  existingTopics: readonly PersonalLibraryExistingTopic[] = [],
 ): { ok: true; value: OrganizedTopicsResult }
   | { ok: false; reason: OrganizationValidationReason } {
   let value: unknown;
@@ -58,12 +77,17 @@ export function decodeOrganizedTopics(
   } catch {
     return { ok: false, reason: "not-json" };
   }
-  if (!isExactObject(value, ["topics"]) || !Array.isArray(value.topics)) {
+  if (!isExactObject(value, ["topics"], ["coveredGroups"]) || !Array.isArray(value.topics)) {
     return { ok: false, reason: "wrong-shape" };
   }
-  const minimumTopics = groups.length === 1 ? 1 : PERSONAL_LIBRARY_ORGANIZATION_MIN_TOPICS;
+  const rawCoveredGroups = Object.hasOwn(value, "coveredGroups") ? value.coveredGroups : [];
+  if (!Array.isArray(rawCoveredGroups)) return { ok: false, reason: "wrong-shape" };
+  const minimumTopics = existingTopics.length > 0 ? 0
+    : groups.length === 1 ? 1 : PERSONAL_LIBRARY_ORGANIZATION_MIN_TOPICS;
+  const maximumTopics = existingTopics.length > 0 ? PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS
+    : PERSONAL_LIBRARY_ORGANIZATION_MAX_TOPICS;
   if (value.topics.length < minimumTopics
-    || value.topics.length > Math.min(PERSONAL_LIBRARY_ORGANIZATION_MAX_TOPICS, groups.length)) {
+    || value.topics.length > Math.min(maximumTopics, groups.length)) {
     return { ok: false, reason: "topic-count" };
   }
 
@@ -74,17 +98,66 @@ export function decodeOrganizedTopics(
     }
     groupById.set(group.id, group);
   }
+  const existingById = new Map<string, PersonalLibraryExistingTopic>();
+  for (const topic of existingTopics) {
+    if (!isOpaqueId(topic.id) || existingById.has(topic.id)) {
+      return { ok: false, reason: "reference-out-of-scope" };
+    }
+    existingById.set(topic.id, topic);
+  }
   const assignedGroups = new Set<string>();
+  const coveredGroups: PersonalLibraryCoveredGroup[] = [];
+  for (const rawCoverage of rawCoveredGroups) {
+    if (!isExactObject(rawCoverage, ["groupId", "topicId", "directionId"])) {
+      return { ok: false, reason: "wrong-shape" };
+    }
+    if (typeof rawCoverage.groupId !== "string"
+      || !groupById.has(rawCoverage.groupId) || assignedGroups.has(rawCoverage.groupId)) {
+      return { ok: false, reason: "group-assignment" };
+    }
+    if (!isOpaqueId(rawCoverage.topicId) || !isOpaqueId(rawCoverage.directionId)) {
+      return { ok: false, reason: "reference-out-of-scope" };
+    }
+    const topic = existingById.get(rawCoverage.topicId);
+    const matchingDirections = topic?.directions.filter(({ id }) => id === rawCoverage.directionId) ?? [];
+    if (matchingDirections.length !== 1 || !matchingDirections[0]!.text.trim()) {
+      return { ok: false, reason: "reference-out-of-scope" };
+    }
+    assignedGroups.add(rawCoverage.groupId);
+    coveredGroups.push({ groupId: rawCoverage.groupId, topicId: rawCoverage.topicId, directionId: rawCoverage.directionId });
+  }
   const topics: OrganizedTopic[] = [];
+  const extendedTopics = new Set<string>();
+  let newTopics = 0;
+  let directionCount = 0;
   for (const rawTopic of value.topics) {
-    if (!isExactObject(rawTopic, ["suggestedName", "directions"]) || !Array.isArray(rawTopic.directions)) {
+    if (!isExactObject(rawTopic, ["suggestedName", "directions"], ["targetTopicId"]) || !Array.isArray(rawTopic.directions)) {
       return { ok: false, reason: "wrong-shape" };
     }
     if (!isSingleLineText(rawTopic.suggestedName, PERSONAL_LIBRARY_MAX_NAME_LENGTH)) {
       return { ok: false, reason: "text-bounds" };
     }
+    let target: PersonalLibraryExistingTopic | undefined;
+    if (Object.hasOwn(rawTopic, "targetTopicId")) {
+      if (!isOpaqueId(rawTopic.targetTopicId)
+        || !(target = existingById.get(rawTopic.targetTopicId))
+        || extendedTopics.has(rawTopic.targetTopicId)) {
+        return { ok: false, reason: "reference-out-of-scope" };
+      }
+      extendedTopics.add(target.id);
+    } else {
+      if (existingTopics.some(({ name }) => name === rawTopic.suggestedName)) {
+        return { ok: false, reason: "reference-out-of-scope" };
+      }
+      newTopics += 1;
+      if (newTopics > PERSONAL_LIBRARY_ORGANIZATION_MAX_TOPICS) {
+        return { ok: false, reason: "topic-count" };
+      }
+    }
+    directionCount += rawTopic.directions.length;
     if (rawTopic.directions.length < 1
-      || rawTopic.directions.length > PERSONAL_LIBRARY_ORGANIZATION_MAX_DIRECTIONS_PER_TOPIC) {
+      || rawTopic.directions.length > PERSONAL_LIBRARY_ORGANIZATION_MAX_DIRECTIONS_PER_TOPIC
+      || directionCount > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) {
       return { ok: false, reason: "direction-count" };
     }
     const directions: OrganizedDirection[] = [];
@@ -134,18 +207,29 @@ export function decodeOrganizedTopics(
         representativePaperKeys: [...rawDirection.representativePaperKeys].sort(codeUnitCompare),
       });
     }
-    topics.push({ suggestedName: rawTopic.suggestedName, directions });
+    topics.push({
+      suggestedName: target && isSingleLineText(target.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
+        ? target.name : rawTopic.suggestedName,
+      ...(target ? { targetTopicId: target.id } : {}),
+      directions,
+    });
   }
   if (assignedGroups.size !== groupById.size) {
     return { ok: false, reason: "group-assignment" };
   }
-  return { ok: true, value: { topics } };
+  coveredGroups.sort((left, right) => codeUnitCompare(left.groupId, right.groupId));
+  return { ok: true, value: { topics, coveredGroups } };
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+function isExactObject(value: unknown, keys: readonly string[], optionalKeys: readonly string[] = []): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    && Object.keys(value).length === keys.length
+    && Object.keys(value).every((key) => keys.includes(key) || optionalKeys.includes(key))
     && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isOpaqueId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= PERSONAL_LIBRARY_MAX_ID_LENGTH
+    && /^[A-Za-z0-9._~-]+$/.test(value);
 }
 
 function isBoundedText(value: unknown, maximum: number): value is string {

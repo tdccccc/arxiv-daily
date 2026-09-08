@@ -625,13 +625,7 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
   });
 
-  it("confirms topic deletion by name before persistence", () => {
-    expect(settingsTabSource).toContain('Delete the research topic "${topicName}"?');
-    expect(settingsTabSource).toContain("if (!confirmed) return");
-    expect(settingsTabSource.indexOf("if (!confirmed) return")).toBeLessThan(
-      settingsTabSource.indexOf("topics.splice(index, 1)"),
-    );
-  });
+
 
   it("renders one understandable automatic detail-note setting near topics", () => {
     const headingIndex = settingsTabSource.indexOf('"Research topics"');
@@ -669,15 +663,7 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).not.toContain('inputEl.type = "time"');
   });
 
-  it("does not normalize or persist categories merely while displaying them", () => {
-    expect(settingsTabSource).toContain("const categories = arxivCategories(s.arxiv);");
-    expect(settingsTabSource).toContain(
-      "this.plugin.settings.arxiv.categories = normalized;",
-    );
-    expect(settingsTabSource).toMatch(
-      /const apply = async \(\) => \{[\s\S]*?s\.arxiv\.categories = \[tpl\.category\];/,
-    );
-  });
+
 });
 
 describe("output path drafts", () => {

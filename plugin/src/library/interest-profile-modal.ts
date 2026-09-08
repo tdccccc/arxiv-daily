@@ -3,9 +3,12 @@ import {
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH,
+  PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   isThinEvidenceDirectionCandidate,
+  matchingProposalAcceptance,
+  resolveProposedTopicTarget,
   type DirectionProposalProgress,
   type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
@@ -15,6 +18,7 @@ import {
   type PersonalLibraryDirectionTextPatch,
   type PersonalLibraryProposedTopic,
   type PersonalLibraryRepresentativeEvidence,
+  type Topic,
   topicNameKey,
 } from "@arxiv-daily/core";
 import type { PersonalLibraryProfileSnapshot } from "../../main";
@@ -51,6 +55,11 @@ export interface InterestProfileReviewController {
   }): Promise<InterestProfileReviewSnapshot>;
   discardProposal(candidateId: string): Promise<InterestProfileReviewSnapshot>;
   renameTopic(input: { topicId: string; suggestedName: string }): Promise<InterestProfileReviewSnapshot>;
+  moveDirection?(input: {
+    candidateId: string;
+    targetTopicId: string | null;
+    suggestedName?: string;
+  }): Promise<InterestProfileReviewSnapshot>;
   /** Omit candidateIds to accept every direction in the kept topics. */
   acceptTopics(topicIds: readonly string[], candidateIds?: readonly string[]): Promise<InterestProfileReviewSnapshot>;
 }
@@ -67,13 +76,19 @@ interface ReviewedDirectionDraft {
 
 interface DirectionFields {
   text: HTMLTextAreaElement;
-  cues: HTMLTextAreaElement;
+  discoveryCues: string[];
   representatives: HTMLSelectElement;
+  initial: ReviewedDirectionDraft;
 }
 
 interface TopicCoverage {
   topic: PersonalLibraryProposedTopic;
   paperCount: number;
+}
+
+interface TopicDestination {
+  target: Topic | null;
+  error: string | null;
 }
 
 export class PersonalLibraryInterestProfileModal extends Modal {
@@ -90,17 +105,23 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private preselectedProposal: string | null = null;
   private generationProgress: DirectionProposalProgress | null = null;
   private fields = new Map<string, DirectionFields>();
+  private drafts = new Map<string, ReviewedDirectionDraft>();
+  private draftProposalIdentity: string | null = null;
+  private detailElements = new Map<string, HTMLDetailsElement>();
+  private expandedDirections = new Set<string>();
 
   constructor(app: App, private readonly controller: InterestProfileReviewController) {
     super(app);
   }
 
   onOpen(): void {
+    if (this.closed) this.preselectedProposal = null;
     this.closed = false;
     this.render();
   }
 
   onClose(): void {
+    this.captureDrafts();
     this.closed = true;
     this.renderVersion += 1;
     this.contentEl.empty();
@@ -109,8 +130,30 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private render(): void {
     if (this.closed) return;
     this.renderVersion += 1;
-    this.fields.clear();
     const snapshot = this.controller.snapshot();
+    const identity = snapshot.proposal
+      ? JSON.stringify([snapshot.proposal.scopeFingerprint, snapshot.proposal.proposalId]) : null;
+    const unavailable = !snapshot.proposal && snapshot.proposalLoadError !== null
+      && snapshot.authorization.kind !== "disconnected";
+    if (identity === this.draftProposalIdentity || unavailable) {
+      for (const [id, detail] of this.detailElements) {
+        if (detail.open) this.expandedDirections.add(id);
+        else this.expandedDirections.delete(id);
+      }
+    } else this.expandedDirections.clear();
+    this.detailElements.clear();
+    if (identity === this.draftProposalIdentity || unavailable) this.captureDrafts();
+    else {
+      this.drafts.clear();
+    }
+    if (!unavailable) this.draftProposalIdentity = identity;
+    this.fields.clear();
+    const pendingIds = new Set(snapshot.proposal?.topics.flatMap(({ directions }) =>
+      directions.map(({ id }) => id)) ?? []);
+    const processed = processedCandidateIds(snapshot);
+    for (const id of this.drafts.keys()) {
+      if (!unavailable && (!pendingIds.has(id) || processed.has(id))) this.drafts.delete(id);
+    }
     const root = this.contentEl;
     root.empty();
     root.addClass("arxiv-daily-interest-review");
@@ -188,8 +231,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     button.disabled = this.pending;
     button.addEventListener("click", () => this.activateTab(tab, false));
     button.addEventListener("keydown", (event) => {
-      // One tab left after the confirmed half retired (ADR 0012 / ADR 0014),
-      // so arrow/Home/End have nowhere to move.
+      // The proposed-direction review is the only tab at this stage.
       const next: ReviewTab | null = null;
       if (!next) return;
       event.preventDefault();
@@ -208,26 +250,42 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 
   private renderProposed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
+    if (snapshot.acceptanceLoadError) {
+      parent.createEl("p", {
+        cls: "arxiv-daily-interest-review__document-error",
+        attr: { role: "status" },
+        text: acceptanceLoadMessage,
+      });
+    }
     const topics = topicsByCoverage(snapshot.proposal?.topics ?? []);
     const candidates = topics.flatMap(({ topic }) => topic.directions);
-    // A topic whose name a prior accept already wrote into settings is not
-    // selectable a second time (ADR 0014 §1's "accepting stays a no-op").
-    const added = addedTopicIds(snapshot.proposal?.topics ?? [], snapshot.settingsTopicNames);
+    const processed = processedCandidateIds(snapshot);
+    const added = addedTopicIds(snapshot.proposal?.topics ?? [], processed);
     if (!snapshot.proposal && !snapshot.proposalLoadError) {
       parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "No proposal has been generated." });
       return;
     }
     if (snapshot.proposal && candidates.length === 0) {
-      parent.createEl("p", { cls: "arxiv-daily-interest-review__empty", text: "This proposal contains no directions." });
+      const coveredCount = new Set(snapshot.proposal.coveredPaperKeys ?? []).size;
+      parent.createEl("p", {
+        cls: "arxiv-daily-interest-review__empty",
+        attr: { role: "status" },
+        text: coveredCount > 0
+          ? `Already covered: ${coveredCount} ${coveredCount === 1 ? "paper" : "papers"} match your existing directions; no new directions are needed.`
+          : "This proposal contains no directions.",
+      });
+      this.renderBufferPool(parent, snapshot);
+      this.renderIncrementalNotice(parent);
       return;
     }
     // A load error can leave no proposal at all while still rendering the tab.
-    if (snapshot.proposal) this.preselectProposals(snapshot.proposal, topics, candidates, added);
+    if (snapshot.proposal) this.preselectProposals(snapshot.proposal, topics, candidates, added, processed);
     const allowedKeys = proposalPaperKeys(snapshot);
     // The whole structure is the unit of acceptance (ADR 0014 §1), so the
     // action sits above the list rather than on each row.
     if (topics.length > 0) {
       const reviewed = this.reviewedTopics();
+      const blocked = acceptanceBlockReason(snapshot, reviewed);
       const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
       const accept = bar.createEl("button", {
         text: `Accept ${reviewed.length} topic(s) into settings`,
@@ -237,9 +295,13 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         },
       });
       accept.addClass("mod-cta");
-      accept.disabled = this.pending || reviewed.length === 0;
+      accept.disabled = this.pending || reviewed.length === 0 || blocked !== null;
       accept.addEventListener("click", () => void this.acceptSelectedTopics());
-      if (reviewed.length < this.selectedTopics.size) {
+      if (blocked) {
+        if (!snapshot.acceptanceLoadError) {
+          bar.createSpan({ cls: "arxiv-daily-interest-review__hint", attr: { role: "status" }, text: blocked });
+        }
+      } else if (reviewed.length < this.selectedTopics.size) {
         bar.createSpan({
           cls: "arxiv-daily-interest-review__hint",
           attr: { role: "status" },
@@ -260,12 +322,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       });
       const heading = section.createEl("summary", { cls: "arxiv-daily-interest-review__topic-heading" });
       const isAdded = added.has(topic.id);
+      const destination = proposedTopicDestination(topic, snapshot);
+      const name = destination.target?.name ?? topic.suggestedName;
       const select = heading.createEl("input", { type: "checkbox" });
       select.checked = !isAdded && this.selectedTopics.has(topic.id);
-      select.setAttribute("aria-label", `Accept ${topic.suggestedName}`);
+      select.setAttribute("aria-label", `Accept ${name}`);
       select.disabled = this.pending || isAdded;
       if (isAdded) {
-        select.setAttribute("title", "This topic is already in your research settings.");
+        select.setAttribute("title", "All proposed directions were already processed. Later edits and deletions in settings are preserved.");
       }
       select.addEventListener("click", (event) => event.stopPropagation());
       select.addEventListener("change", () => {
@@ -273,33 +337,45 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         else this.selectedTopics.delete(topic.id);
         this.render();
       });
-      heading.createEl("strong", { text: topic.suggestedName });
+      heading.createEl("strong", { text: name });
       heading.createSpan({
         cls: "arxiv-daily-interest-review__topic-count",
         text: `${paperCount} ${paperCount === 1 ? "paper" : "papers"} · ${topic.directions.length} ${topic.directions.length === 1 ? "direction" : "directions"}`,
       });
       if (isAdded) {
         heading.createSpan({ cls: "arxiv-daily-interest-review__status", text: "Added" });
+      } else if (destination.target) {
+        heading.createSpan({ cls: "arxiv-daily-interest-review__status", text: "Add to existing topic" });
       }
       if (index >= 2) {
         heading.createSpan({ cls: "arxiv-daily-interest-review__status", text: "Optional" });
       }
       const body = section.createDiv({ cls: "arxiv-daily-interest-review__topic-body" });
-      // The generated name is a suggestion; the machine tag is derived from
-      // whatever it says at acceptance, so it is editable right here.
-      const nameField = body.createEl("label", { cls: "arxiv-daily-interest-review__field" });
-      nameField.createSpan({ text: "Topic name" });
-      const name = nameField.createEl("input", { type: "text", value: topic.suggestedName });
-      name.setAttribute("aria-label", "Topic name");
-      name.disabled = this.pending;
-      name.addEventListener("change", () => {
-        const next = name.value.trim();
-        if (!next || next === topic.suggestedName) return;
-        void this.run("rename proposed topic", () =>
-          this.controller.renameTopic({ topicId: topic.id, suggestedName: next }));
-      });
+      if (destination.target) {
+        body.createEl("p", {
+          cls: "arxiv-daily-interest-review__hint",
+          text: `${isAdded ? "Added to topic" : "Add to existing topic"}: ${destination.target.name}`,
+        });
+      } else if (destination.error && !isAdded) {
+        body.createEl("p", {
+          cls: "arxiv-daily-interest-review__document-error",
+          attr: { role: "status" }, text: destination.error,
+        });
+      } else if (!isAdded) {
+        const nameField = body.createEl("label", { cls: "arxiv-daily-interest-review__field" });
+        nameField.createSpan({ text: "Topic name" });
+        const nameInput = nameField.createEl("input", { type: "text", value: topic.suggestedName });
+        nameInput.setAttribute("aria-label", "Topic name");
+        nameInput.disabled = this.pending;
+        nameInput.addEventListener("change", () => {
+          const next = nameInput.value.trim();
+          if (!next || next === topic.suggestedName) return;
+          void this.run("rename proposed topic", () =>
+            this.controller.renameTopic({ topicId: topic.id, suggestedName: next }));
+        });
+      }
       for (const candidate of topic.directions) {
-        this.renderDirectionCard(body, candidate, allowedKeys, "proposal", snapshot);
+        this.renderDirectionCard(body, candidate, allowedKeys, "proposal", snapshot, topic, processed.has(candidate.id));
       }
     }
     this.renderBufferPool(parent, snapshot);
@@ -322,30 +398,54 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private async acceptSelectedTopics(): Promise<void> {
     const reviewed = this.reviewedTopics();
     const ids = reviewed.map(({ id }) => id);
-    if (ids.length === 0) return;
+    if (ids.length === 0 || acceptanceBlockReason(this.controller.snapshot(), reviewed)) return;
     const candidateIds = reviewed.flatMap(({ directions }) => directions.map(({ id }) => id));
+    this.captureDrafts();
+    const edits = candidateIds.flatMap((id) => {
+      const draft = this.drafts.get(id);
+      return draft ? [{ id, draft }] : [];
+    });
+    for (const { draft } of edits) {
+      const error = validateDraft(draft);
+      if (error) {
+        this.errorMessage = error;
+        this.renderErrorOnly();
+        return;
+      }
+    }
+    const proposal = this.controller.snapshot().proposal;
+    const assertSameProposal = (): void => {
+      const current = this.controller.snapshot().proposal;
+      if (!current || current.proposalId !== proposal?.proposalId
+        || current.scopeFingerprint !== proposal.scopeFingerprint
+        || current.identificationFingerprint !== proposal.identificationFingerprint) {
+        throw Object.assign(new Error("The proposal changed. Review the new proposal before accepting."), { code: "conflict" });
+      }
+    };
     await this.run("accept proposed topics", async () => {
-      const snapshot = await this.controller.acceptTopics(ids, candidateIds);
-      this.selectedTopics.clear();
-      return snapshot;
+      for (const { id, draft } of edits) {
+        assertSameProposal();
+        await this.persistDraft(id, draft);
+      }
+      assertSameProposal();
+      return this.controller.acceptTopics(ids, candidateIds);
     });
   }
 
   /**
    * Reads the live snapshot rather than taking a proposal, because it also
-   * has to exclude topics already in settings — a selected id can point to
-   * one of those between a stale render and this call, and the accept count
-   * and payload have to agree with what the checkboxes actually offer.
+   * has to exclude processed directions even when acceptance happened after
+   * the last render. The accept count and payload use the same selection.
    */
   private reviewedTopics(): PersonalLibraryProposedTopic[] {
     const snapshot = this.controller.snapshot();
-    const added = addedTopicIds(snapshot.proposal?.topics ?? [], snapshot.settingsTopicNames);
+    const processed = processedCandidateIds(snapshot);
     const topics = new Map(snapshot.proposal?.topics.map((topic) => [topic.id, topic]) ?? []);
     return [...this.selectedTopics].flatMap((id) => {
-      if (added.has(id)) return [];
       const topic = topics.get(id);
       if (!topic) return [];
-      const directions = topic.directions.filter((direction) => this.selectedProposals.has(direction.id));
+      const directions = topic.directions.filter((direction) =>
+        this.selectedProposals.has(direction.id) && !processed.has(direction.id));
       return directions.length > 0 ? [{ ...topic, directions }] : [];
     });
   }
@@ -356,6 +456,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     allowedPaperKeys: string[],
     kind: "proposal" | "confirmed",
     snapshot: InterestProfileReviewSnapshot,
+    topic: PersonalLibraryProposedTopic,
+    processed: boolean,
   ): void {
     const card = parent.createEl("article", { cls: "arxiv-daily-interest-review__card" });
     const heading = card.createDiv({ cls: "arxiv-daily-interest-review__card-heading" });
@@ -363,8 +465,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const terminal = !("status" in direction) || direction.status !== "merged";
     const selectLabel = heading.createEl("label", { cls: "arxiv-daily-interest-review__select" });
     const checkbox = selectLabel.createEl("input", { type: "checkbox" });
-    checkbox.checked = selected.has(direction.id);
-    checkbox.disabled = this.pending || !terminal;
+    checkbox.checked = !processed && selected.has(direction.id);
+    checkbox.disabled = this.pending || !terminal || processed;
     checkbox.setAttribute("aria-label", kind === "proposal"
       ? `Select ${direction.text}`
       : `Select ${direction.text} for merge`);
@@ -374,6 +476,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       this.render();
     });
     heading.createEl("strong", { text: direction.text });
+    if (processed) heading.createSpan({ cls: "arxiv-daily-interest-review__status", text: "Added" });
     if (kind === "proposal" && isThinEvidenceDirectionCandidate(direction)) {
       heading.createSpan({
         text: "thin evidence",
@@ -391,15 +494,32 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     // Proposals are reviewed by scanning many rows and deselecting a few, so
     // the editor is collapsed behind the row rather than stacked in front of
     // it; nothing is removed, only folded away until it is wanted.
-    const body = kind === "proposal"
-      ? this.createCardDetail(card)
-      : card;
-    const form = body.createDiv({ cls: "arxiv-daily-interest-review__form" });
-    const text = this.textArea(form, "Direction (one line)", direction.text, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH, 2);
-    const cues = this.textArea(form, "Discovery cues (one per line)", direction.discoveryCues.join("\n"), undefined, 4);
-    cues.maxLength = (PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH + 1) * PERSONAL_LIBRARY_MAX_DISCOVERY_CUES;
-    const representatives = this.representativeSelect(form, allowedPaperKeys, direction.representatives.map((item) => item.paperKey));
-    this.fields.set(direction.id, { text, cues, representatives });
+    const detail = kind === "proposal" ? this.createCardDetail(card, processed ? "Details" : "Edit") : null;
+    const body = detail ?? card;
+    if (detail) {
+      detail.open = this.expandedDirections.has(direction.id);
+      this.detailElements.set(direction.id, detail);
+    }
+    if (!processed) {
+      const form = body.createDiv({ cls: "arxiv-daily-interest-review__form" });
+      const initial: ReviewedDirectionDraft = {
+        text: direction.text, discoveryCues: [...direction.discoveryCues],
+        representativePaperKeys: direction.representatives.map(({ paperKey }) => paperKey),
+      };
+      const draft = this.drafts.get(direction.id) ?? initial;
+      const text = this.textArea(form, "Direction (one line)", draft.text, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH, 2);
+      this.renderDirectionDestination(form, direction, topic, snapshot);
+      const representatives = this.representativeSelect(form,
+        [...new Set([...allowedPaperKeys, ...draft.representativePaperKeys])].sort(codeUnitCompare),
+        draft.representativePaperKeys);
+      this.fields.set(direction.id, { text, discoveryCues: [...direction.discoveryCues], representatives, initial });
+    }
+
+    const hints = body.createDiv({ cls: "arxiv-daily-interest-review__hint" });
+    hints.createEl("strong", { text: "Evidence hints" });
+    hints.createEl("p", { text: "Only the direction text drives matching; these hints explain the library evidence." });
+    const cues = hints.createEl("ul");
+    for (const cue of direction.discoveryCues) cues.createEl("li", { text: cue });
 
     const evidence = body.createEl("details", { cls: "arxiv-daily-interest-review__evidence" });
     evidence.createEl("summary", { text: `Evidence: ${direction.representatives.length} representative paper(s), metadata and abstract only` });
@@ -416,6 +536,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (direction.clusterMembers && direction.clusterMembers.length > 0) {
       this.renderClusterMembers(body, direction.clusterMembers, snapshot);
     }
+    if (processed) return;
     const actions = body.createDiv({ cls: "arxiv-daily-interest-review__card-actions" });
     const save = actions.createEl("button", { text: "Save edits", attr: { type: "button" } });
     save.disabled = this.pending || !terminal;
@@ -423,15 +544,84 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     this.renderProposalActions(actions, direction.id);
   }
 
-  /**
-   * The collapsed half of a proposal row. Rendering it closed on every render
-   * is deliberate: a re-render follows selection changes and saves, and a row
-   * that reopened itself would fight the scan the list exists for.
-   */
-  private createCardDetail(card: HTMLElement): HTMLElement {
+  /** Details start collapsed; the current edit stays open through async work. */
+  private createCardDetail(card: HTMLElement, label: string): HTMLDetailsElement {
     const detail = card.createEl("details", { cls: "arxiv-daily-interest-review__detail" });
-    detail.createEl("summary", { text: "Edit" });
+    detail.createEl("summary", { text: label });
     return detail;
+  }
+
+  private renderDirectionDestination(
+    parent: HTMLElement,
+    direction: PersonalLibraryDirectionCandidate,
+    topic: PersonalLibraryProposedTopic,
+    snapshot: InterestProfileReviewSnapshot,
+  ): void {
+    if (!this.controller.moveDirection) return;
+    const destination = proposedTopicDestination(topic, snapshot);
+    const topics = snapshot.settingsTopics ?? [];
+    const label = parent.createEl("label", { cls: "arxiv-daily-interest-review__field" });
+    label.createSpan({ text: "Destination" });
+    const select = label.createEl("select", { attr: { "aria-label": `Destination for ${direction.text}` } });
+    // The empty value is reserved for explicitly creating a topic; settings
+    // topic ids are nonempty. Keep the current unaccepted group as an option
+    // so accepting a newly proposed topic never requires a Move first.
+    const keepValue = "__keep-proposed-topic__";
+    if (!destination.target) {
+      select.createEl("option", {
+        text: destination.error ? "Choose a destination" : `New topic: ${topic.suggestedName}`,
+        value: keepValue,
+      });
+    }
+    for (const existing of topics) {
+      select.createEl("option", { text: existing.name, value: existing.id });
+    }
+    const createNew = select.createEl("option", { text: "New topic" });
+    createNew.value = "";
+    select.value = destination.target?.id ?? keepValue;
+    select.disabled = this.pending;
+
+    const nameLabel = parent.createEl("label", { cls: "arxiv-daily-interest-review__field" });
+    nameLabel.createSpan({ text: "New topic name" });
+    const name = nameLabel.createEl("input", {
+      type: "text", attr: { "aria-label": "New topic name", maxlength: String(PERSONAL_LIBRARY_MAX_NAME_LENGTH) },
+    });
+    name.disabled = this.pending;
+    const hint = parent.createEl("p", { cls: "arxiv-daily-interest-review__hint", attr: { role: "status" } });
+    const move = parent.createEl("button", { text: "Move direction", attr: { type: "button" } });
+    const update = (): void => {
+      const createNew = select.value === "";
+      const proposedName = name.value.trim();
+      const duplicate = topics.some((existing) => topicNameKey(existing.name) === topicNameKey(proposedName));
+      const validName = proposedName.length > 0 && proposedName.length <= PERSONAL_LIBRARY_MAX_NAME_LENGTH && !duplicate;
+      nameLabel.hidden = !createNew;
+      hint.hidden = !createNew || validName;
+      hint.textContent = duplicate
+        ? "This topic already exists. Select it in Destination to add this direction there."
+        : "Enter a name for the new topic.";
+      move.disabled = this.pending || select.value === keepValue
+        || select.value === destination.target?.id || (createNew && !validName);
+    };
+    select.addEventListener("change", update);
+    name.addEventListener("input", update);
+    move.addEventListener("click", () => {
+      if (move.disabled) return;
+      const targetTopicId = select.value || null;
+      const input = {
+        candidateId: direction.id, targetTopicId,
+        ...(targetTopicId === null ? { suggestedName: name.value.trim() } : {}),
+      };
+      const wasSelected = this.selectedTopics.has(topic.id);
+      const wasExpanded = this.expandedTopics.has(topic.id);
+      void this.run("move proposed direction", async () => {
+        const next = await this.controller.moveDirection!(input);
+        const movedTopic = next.proposal?.topics.find((item) => item.directions.some(({ id }) => id === direction.id));
+        if (movedTopic && wasSelected) this.selectedTopics.add(movedTopic.id);
+        if (movedTopic && wasExpanded) this.expandedTopics.add(movedTopic.id);
+        return next;
+      });
+    });
+    update();
   }
 
   private renderProposalActions(parent: HTMLElement, candidateId: string): void {
@@ -469,17 +659,12 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     section.createEl("p", { text: bufferPoolHeading(count) });
   }
 
-  /**
-   * The incremental suggestion flow filed new papers into confirmed directions
-   * of the interest profile document, which retired with ADR 0012. It is
-   * rebuilt against topics in a later phase; saying so is better than a blank
-   * space the researcher reads as a bug.
-   */
+  /** Explain the available path from newly added papers to reviewed changes. */
   private renderIncrementalNotice(parent: HTMLElement): void {
     parent.createEl("p", {
       cls: "arxiv-daily-interest-review__hint",
       attr: { role: "status" },
-      text: "Incremental suggestions for papers added after this scan are unavailable while they are rebuilt around topics. Re-running the scan proposes the whole structure again.",
+      text: "After adding papers, rebuild the library index and regenerate proposals to review new directions. Your accepted directions stay in research settings.",
     });
   }
 
@@ -523,7 +708,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const fields = this.fields.get(id);
     if (!fields) return null;
     const text = fields.text.value.trim().replace(/\s+/gu, " ");
-    const discoveryCues = normalizeLines(fields.cues.value);
+    const discoveryCues = [...fields.discoveryCues];
     const representativePaperKeys = Array.from(fields.representatives.selectedOptions, (option) => option.value).sort(codeUnitCompare);
     const error = validateDraft({ text, discoveryCues, representativePaperKeys });
     if (error) {
@@ -532,6 +717,26 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       return null;
     }
     return { text, discoveryCues, representativePaperKeys };
+  }
+
+  private captureDrafts(): void {
+    for (const [id, fields] of this.fields) {
+      const draft: ReviewedDirectionDraft = {
+        text: fields.text.value.trim().replace(/\s+/gu, " "),
+        discoveryCues: [...fields.discoveryCues],
+        representativePaperKeys: Array.from(fields.representatives.selectedOptions, ({ value }) => value).sort(codeUnitCompare),
+      };
+      if (JSON.stringify(draft) !== JSON.stringify(fields.initial)) this.drafts.set(id, draft);
+      else this.drafts.delete(id);
+    }
+  }
+
+  private async persistDraft(id: string, draft: ReviewedDirectionDraft): Promise<void> {
+    await this.controller.updateProposal({
+      candidateId: id, patch: this.patch(draft), representativePaperKeys: draft.representativePaperKeys,
+    });
+    this.drafts.delete(id);
+    this.fields.delete(id);
   }
 
   private patch(draft: ReviewedDirectionDraft): PersonalLibraryDirectionTextPatch {
@@ -604,39 +809,44 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   }
 
   private saveProposal(id: string): void {
+    if (processedCandidateIds(this.controller.snapshot()).has(id)) return;
     const draft = this.draft(id);
     if (!draft) return;
-    void this.run("save proposed direction", () => this.controller.updateProposal({ candidateId: id, patch: this.patch(draft), representativePaperKeys: draft.representativePaperKeys }));
+    void this.run("save proposed direction", () => this.persistDraft(id, draft));
   }
 
   private async discardProposal(id: string): Promise<void> {
+    if (processedCandidateIds(this.controller.snapshot()).has(id)) return;
     const choice = await chooseModal(this.app, "Discard proposed direction", "Discard this proposed direction and its reviewed edits?", [
       { label: "Cancel", value: "cancel" },
       { label: "Discard", value: "discard", warning: true },
     ]);
-    if (choice !== "discard" || this.closed) return;
+    if (choice !== "discard" || this.closed || processedCandidateIds(this.controller.snapshot()).has(id)) return;
     this.selectedProposals.delete(id);
     await this.run("discard proposed direction", () => this.controller.discardProposal(id));
   }
 
   /**
    * Start with the two topics covering the most papers, among those not
-   * already in settings — reseeding an already-added topic would just be
-   * re-offering something accepting again can only skip. Revisions from
-   * review edits keep the researcher's choices; only a new proposal seeds
-   * them again.
+   * fully processed. Review edits keep the researcher's choices; opening a
+   * proposal again seeds only its remaining candidates.
    */
   private preselectProposals(
     proposal: PersonalLibraryDirectionProposal,
     topics: readonly TopicCoverage[],
     candidates: readonly PersonalLibraryDirectionCandidate[],
     added: ReadonlySet<string>,
+    processed: ReadonlySet<string>,
   ): void {
     const available = new Set(topics.map(({ topic }) => topic.id));
     for (const id of this.selectedTopics) {
       if (!available.has(id) || added.has(id)) this.selectedTopics.delete(id);
     }
-    const identity = proposal.proposalId;
+    const availableCandidates = new Set(candidates.map(({ id }) => id));
+    for (const id of this.selectedProposals) {
+      if (!availableCandidates.has(id) || processed.has(id)) this.selectedProposals.delete(id);
+    }
+    const identity = JSON.stringify([proposal.scopeFingerprint, proposal.proposalId]);
     if (this.preselectedProposal === identity) return;
     this.preselectedProposal = identity;
     this.selectedTopics.clear();
@@ -645,7 +855,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     this.expandedTopics.clear();
     this.selectedProposals = new Set(
       candidates
-        .filter((candidate) => !isThinEvidenceDirectionCandidate(candidate))
+        .filter((candidate) => !processed.has(candidate.id) && !isThinEvidenceDirectionCandidate(candidate))
         .map(({ id }) => id),
     );
   }
@@ -689,21 +899,48 @@ export function openPersonalLibraryInterestProfileModal(
   return modal;
 }
 
-/**
- * Ids of proposed topics whose suggested name already names a settings
- * topic. Matching is by name, not by a persisted "accepted" flag on the
- * proposal — the proposal is kept around precisely so the rest can be
- * accepted later, so its own record of what happened has to stay silent on
- * this, and settings is the only source of truth for what already landed.
- */
+/** A whole topic is Added only after every one of its candidates was processed. */
 function addedTopicIds(
   proposalTopics: readonly PersonalLibraryProposedTopic[],
-  settingsTopicNames: readonly string[],
+  processed: ReadonlySet<string>,
 ): Set<string> {
-  const names = new Set(settingsTopicNames.map(topicNameKey));
   return new Set(
-    proposalTopics.filter((topic) => names.has(topicNameKey(topic.suggestedName))).map(({ id }) => id),
+    proposalTopics.filter((topic) => topic.directions.length > 0
+      && topic.directions.every(({ id }) => processed.has(id))).map(({ id }) => id),
   );
+}
+
+function processedCandidateIds(snapshot: InterestProfileReviewSnapshot): Set<string> {
+  const receipt = snapshot.proposal
+    ? matchingProposalAcceptance(snapshot.proposal, snapshot.proposalAcceptance) : null;
+  return new Set(receipt?.processedCandidateIds ?? []);
+}
+
+function proposedTopicDestination(
+  topic: PersonalLibraryProposedTopic,
+  snapshot: InterestProfileReviewSnapshot,
+): TopicDestination {
+  const receipt = snapshot.proposal
+    ? matchingProposalAcceptance(snapshot.proposal, snapshot.proposalAcceptance) : null;
+  try {
+    return { target: resolveProposedTopicTarget(topic, snapshot.settingsTopics ?? [], receipt), error: null };
+  } catch (error) {
+    return { target: null, error: safeUserError(error) };
+  }
+}
+
+const acceptanceLoadMessage = "The saved acceptance record could not be loaded. Restore the saved review state and reload before accepting directions.";
+
+function acceptanceBlockReason(
+  snapshot: InterestProfileReviewSnapshot,
+  selected: readonly PersonalLibraryProposedTopic[],
+): string | null {
+  if (snapshot.acceptanceLoadError) return acceptanceLoadMessage;
+  for (const topic of selected) {
+    const destination = proposedTopicDestination(topic, snapshot);
+    if (destination.error) return destination.error;
+  }
+  return null;
 }
 
 function topicsByCoverage(topics: readonly PersonalLibraryProposedTopic[]): TopicCoverage[] {
@@ -766,10 +1003,10 @@ export function formatTimelineTimestamp(at: string): string {
  * library this proposal does not speak for.
  */
 export function unclassifiedBufferPoolPapers(
-  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "topics"> | null,
+  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "topics" | "coveredPaperKeys"> | null,
 ): PersonalLibraryRepresentativeEvidence[] {
   if (!proposal) return [];
-  const covered = new Set<string>();
+  const covered = new Set(proposal.coveredPaperKeys ?? []);
   for (const topic of proposal.topics) {
     for (const candidate of topic.directions) {
       for (const member of candidate.clusterMembers ?? []) covered.add(member.paperKey);
@@ -842,7 +1079,8 @@ export function paperTitle(
 function proposalPaperKeys(snapshot: InterestProfileReviewSnapshot): string[] {
   const manifest = snapshot.proposal?.catalogInputPapers.map((item) => item.paperKey) ?? [];
   const current = proposablePaperKeys(snapshot);
-  return manifest.filter((key) => current.has(key)).sort(codeUnitCompare);
+  const covered = new Set(snapshot.proposal?.coveredPaperKeys ?? []);
+  return manifest.filter((key) => current.has(key) && !covered.has(key)).sort(codeUnitCompare);
 }
 
 function catalogPaperKeys(catalog: PersonalLibraryCatalog | null): string[] {
@@ -863,6 +1101,8 @@ export function safeUserError(error: unknown): string {
     "invalid-document": "The saved review data is invalid. Refresh before trying again.",
     "incompatible-catalog": "The current catalog is not compatible with this review. Refresh the library first.",
     "not-found": "That direction no longer exists. Refresh and try again.",
+    "target-missing": "The destination topic was removed. Choose a destination for each remaining direction before accepting it.",
+    "target-ambiguous": "Several topics have this name. Choose a destination for each remaining direction before accepting it.",
     conflict: "The review changed elsewhere. Refresh before trying again.",
     stale: "The review changed elsewhere. Refresh before trying again.",
     "partial-confirmation-conflict": "The review changed while saving. Refresh before trying again.",

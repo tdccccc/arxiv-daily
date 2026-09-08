@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PersonalLibraryCatalog, PersonalLibraryPaperRecord } from "../src/library/personal-library-catalog";
 import {
+  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   createPersonalLibraryCatalogInputManifest,
   createPersonalLibraryCatalogInputManifestFingerprint,
   createPersonalLibraryGenerationContractFingerprint,
@@ -19,6 +20,7 @@ import {
   enablePersonalLibraryConfirmedDirection,
   mergePersonalLibraryConfirmedDirections,
   mergePersonalLibraryDirectionCandidates,
+  movePersonalLibraryDirectionCandidate,
   removePersonalLibraryConfirmedDirection,
   removePersonalLibraryDirectionCandidate,
   updatePersonalLibraryConfirmedDirection,
@@ -69,7 +71,7 @@ function proposal(ids = ["candidate.1", "candidate.2"]): PersonalLibraryDirectio
     catalog().papers["arxiv:2608.00001"]!,
   ]);
   return {
-    schemaVersion: 5, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
+    schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION, revision: 7, proposalId: "proposal.1", scopeFingerprint: scope,
     identificationFingerprint: identification,
     catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
       scopeFingerprint: scope, identificationFingerprint: identification, catalogInputPapers,
@@ -103,6 +105,61 @@ function frozen<T>(value: T): T {
 }
 
 describe("candidate review transactions", () => {
+  function localProposal() {
+    const original = proposal(["candidate.1"]);
+    const entries = [1, 2].map((number) => ({
+      paperKey: `file:sha256:${String(number).repeat(64)}`,
+      evidenceFingerprint: `sha256:${String(number + 2).repeat(64)}`,
+    }));
+    original.catalogInputPapers = entries;
+    original.catalogInputFingerprint = createPersonalLibraryCatalogInputManifestFingerprint({
+      scopeFingerprint: scope, identificationFingerprint: identification, catalogInputPapers: entries,
+    });
+    original.topics[0]!.directions[0]!.representatives = [entries[0]!];
+    original.topics[0]!.directions[0]!.representativeSetFingerprint = createPersonalLibraryRepresentativeSetFingerprint([entries[0]!]);
+    return original;
+  }
+
+  it("saves local-file direction edits and resolves reviewed representatives from known proposal evidence", () => {
+    const original = frozen(localProposal());
+    expect(decodePersonalLibraryDirectionProposal(original)).not.toBeNull();
+    const result = updatePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", patch: { text: "Reviewed local research" },
+      representativePaperKeys: [original.catalogInputPapers[1]!.paperKey], catalog: catalog([]),
+    });
+    expect(result.topics[0]!.directions[0]!.text).toBe("Reviewed local research");
+    expect(result.topics[0]!.directions[0]!.representatives).toEqual([original.catalogInputPapers[1]]);
+    expect(decodePersonalLibraryDirectionProposal(result)).not.toBeNull();
+  });
+
+  it("rejects unknown local-file evidence and another library's catalog", () => {
+    const original = localProposal();
+    expect(() => updatePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", patch: { text: "Reviewed local research" },
+      representativePaperKeys: [`file:sha256:${"9".repeat(64)}`], catalog: catalog([]),
+    })).toThrow(expect.objectContaining({ code: "evidence-mismatch" }));
+    expect(() => updatePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", patch: { text: "Reviewed local research" },
+      representativePaperKeys: [original.catalogInputPapers[0]!.paperKey],
+      catalog: { ...catalog([]), scopeFingerprint: `sha256:${"9".repeat(64)}` },
+    })).toThrow(expect.objectContaining({ code: "incompatible-catalog" }));
+  });
+
+  it("saves mixed arXiv and local-file representatives without replacing either evidence identity", () => {
+    const original = localProposal();
+    const arxivPaper = catalog().papers["arxiv:2608.00001"]!;
+    const localEvidence = original.catalogInputPapers[0]!;
+    const result = updatePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", patch: { text: "Mixed-source research methods" },
+      representativePaperKeys: [arxivPaper.paperKey, localEvidence.paperKey], catalog: catalog(),
+    });
+    expect(result.topics[0]!.directions[0]!.representatives).toEqual([
+      { paperKey: arxivPaper.paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(arxivPaper) },
+      localEvidence,
+    ]);
+    expect(decodePersonalLibraryDirectionProposal(result)).not.toBeNull();
+  });
+
   it("updates text locally, updates representatives from strict compatible evidence, and never confirms", () => {
     const original = frozen(proposal());
     const text = updatePersonalLibraryDirectionCandidate({
@@ -150,5 +207,148 @@ describe("candidate review transactions", () => {
       proposal: proposal(), sourceCandidateIds: ["candidate.2", "candidate.1"], candidateId: "candidate.3",
       draft: draft(), catalog: catalog(),
     })).toThrow(expect.objectContaining({ code: "invalid-input" }));
+  });
+});
+
+describe("moving one proposed direction", () => {
+  it("moves only the chosen candidate and preserves its complete evidence", () => {
+    const original = proposal();
+    original.topics[0]!.targetTopicId = "settings.original";
+    original.topics[0]!.directions[0]!.clusterMembers = [
+      { paperKey: "arxiv:2608.00001", confidence: 0.95 },
+      { paperKey: "arxiv:2608.00003", confidence: 0.8 },
+    ];
+    const before = structuredClone(original);
+
+    const result = movePersonalLibraryDirectionCandidate({
+      proposal: frozen(original), candidateId: "candidate.1", targetTopicId: "settings.destination",
+      suggestedName: "Destination topic", topicId: "topic.0",
+    });
+
+    expect(result.topics).toEqual([
+      {
+        id: "topic.0", suggestedName: "Destination topic", targetTopicId: "settings.destination",
+        directions: [before.topics[0]!.directions[0]],
+      },
+      { ...before.topics[0], directions: [before.topics[0]!.directions[1]] },
+    ]);
+    expect(result).toEqual({ ...before, topics: result.topics });
+    expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
+    expect(original).toEqual(before);
+  });
+
+  it("removes the source topic when its last candidate moves", () => {
+    const original = frozen(proposal(["candidate.1"]));
+    const result = movePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", targetTopicId: "settings.destination",
+      suggestedName: "Destination topic", topicId: "topic.2",
+    });
+
+    expect(result.topics).toEqual([{
+      id: "topic.2", suggestedName: "Destination topic", targetTopicId: "settings.destination",
+      directions: original.topics[0]!.directions,
+    }]);
+    expect(original.topics[0]!.id).toBe("topic.1");
+  });
+
+  it("removes the existing target when the researcher explicitly chooses a new topic", () => {
+    const original = proposal();
+    original.topics[0]!.targetTopicId = "settings.original";
+    const result = movePersonalLibraryDirectionCandidate({
+      proposal: frozen(original), candidateId: "candidate.1", targetTopicId: null,
+      suggestedName: "New topic", topicId: "topic.2",
+    });
+
+    expect(result.topics[1]).toEqual({
+      id: "topic.2", suggestedName: "New topic", directions: [original.topics[0]!.directions[0]],
+    });
+    expect(result.topics[1]).not.toHaveProperty("targetTopicId");
+    expect(result.topics[0]!.targetTopicId).toBe("settings.original");
+  });
+
+  it("gives an explicit new topic a fresh identity even when the suggested name is unchanged", () => {
+    const original = frozen(proposal());
+    const result = movePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", targetTopicId: null,
+      suggestedName: "Reviewed topic", topicId: "topic.2",
+    });
+
+    expect(result.topics.map(({ id, directions }) => ({ id, candidateIds: directions.map(({ id }) => id) })))
+      .toEqual([
+        { id: "topic.1", candidateIds: ["candidate.2"] },
+        { id: "topic.2", candidateIds: ["candidate.1"] },
+      ]);
+  });
+
+  it("leaves an unchanged existing target and name alone without allocating a topic", () => {
+    const original = proposal();
+    original.topics[0]!.targetTopicId = "settings.original";
+    const result = movePersonalLibraryDirectionCandidate({
+      proposal: frozen(original), candidateId: "candidate.1", targetTopicId: "settings.original",
+      suggestedName: "Reviewed topic", topicId: "topic.1",
+    });
+
+    expect(result).toEqual(original);
+  });
+
+  it("rejects an occupied proposal topic identity before moving anything", () => {
+    const original = frozen(proposal(["candidate.1"]));
+    expect(() => movePersonalLibraryDirectionCandidate({
+      proposal: original, candidateId: "candidate.1", targetTopicId: "settings.destination",
+      suggestedName: "Destination topic", topicId: "topic.1",
+    })).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(original.topics[0]!.directions.map(({ id }) => id)).toEqual(["candidate.1"]);
+  });
+
+  it("rejects a candidate that is no longer in the proposal", () => {
+    expect(() => movePersonalLibraryDirectionCandidate({
+      proposal: frozen(proposal()), candidateId: "candidate.missing", targetTopicId: null,
+      suggestedName: "New topic", topicId: "topic.2",
+    })).toThrow(expect.objectContaining({ code: "not-found" }));
+  });
+
+  it.each([null, 1, "", "   ", "x".repeat(121), "Two\nlines", "Two\rlines"])(
+    "rejects an invalid destination name %j",
+    (suggestedName) => {
+      expect(() => movePersonalLibraryDirectionCandidate({
+        proposal: frozen(proposal()), candidateId: "candidate.1", targetTopicId: null,
+        suggestedName, topicId: "topic.2",
+      })).toThrow(expect.objectContaining({ code: "invalid-input" }));
+    },
+  );
+
+  it.each([
+    { targetTopicId: undefined },
+    { targetTopicId: "" },
+    { targetTopicId: "invalid id" },
+    { topicId: "" },
+    { topicId: "invalid id" },
+    { unexpected: true },
+  ])("rejects invalid or extra move fields %j", (patch) => {
+    expect(() => movePersonalLibraryDirectionCandidate({
+      proposal: frozen(proposal()), candidateId: "candidate.1", targetTopicId: null,
+      suggestedName: "New topic", topicId: "topic.2", ...patch,
+    })).toThrow(expect.objectContaining({ code: "invalid-input" }));
+  });
+
+  it("allows splitting all twelve candidates without losing any or exceeding topic bounds", () => {
+    const original = proposal(["candidate.00"]);
+    original.topics[0]!.directions = Array.from({ length: 12 }, (_, index) =>
+      candidate(`candidate.${String(index).padStart(2, "0")}`));
+    let result = frozen(original);
+    for (let index = 0; index < 11; index += 1) {
+      result = movePersonalLibraryDirectionCandidate({
+        proposal: result, candidateId: `candidate.${String(index).padStart(2, "0")}`,
+        targetTopicId: null, suggestedName: `New topic ${index}`, topicId: `new-topic.${index}`,
+      });
+    }
+
+    expect(result.topics).toHaveLength(12);
+    expect(result.topics.every(({ directions }) => directions.length === 1)).toBe(true);
+    expect(result.topics.flatMap(({ directions }) => directions).map(({ id }) => id).sort())
+      .toEqual(original.topics[0]!.directions.map(({ id }) => id));
+    expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
+    expect(original.topics).toHaveLength(1);
+    expect(original.topics[0]!.directions).toHaveLength(12);
   });
 });

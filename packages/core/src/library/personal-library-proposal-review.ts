@@ -87,6 +87,41 @@ export function renamePersonalLibraryProposedTopic(input: unknown): PersonalLibr
   return outputProposal(proposal);
 }
 
+/** Rehome one candidate without changing its evidence or its companions. */
+export function movePersonalLibraryDirectionCandidate(input: unknown): PersonalLibraryDirectionProposal {
+  const raw = exactInput(input, ["proposal", "candidateId", "targetTopicId", "suggestedName", "topicId"]);
+  const proposal = proposalDocument(raw.proposal);
+  const candidateId = opaqueId(raw.candidateId, "candidateId");
+  const topicId = opaqueId(raw.topicId, "topicId");
+  const targetTopicId = raw.targetTopicId === null ? null : opaqueId(raw.targetTopicId, "targetTopicId");
+  if (typeof raw.suggestedName !== "string") fail("invalid-input", "suggestedName must be a string");
+  const suggestedName = raw.suggestedName.trim();
+  if (!suggestedName || suggestedName.length > PERSONAL_LIBRARY_MAX_NAME_LENGTH
+    || /[\r\n]/u.test(suggestedName)) {
+    fail("invalid-input", "suggestedName must be one non-empty bounded line");
+  }
+  const { topicIndex, candidate } = locate(proposal, candidateId);
+  const source = proposal.topics[topicIndex]!;
+  if (targetTopicId !== null && source.targetTopicId === targetTopicId
+    && source.suggestedName === suggestedName) return proposal;
+  if (proposal.topics.some(({ id }) => id === topicId)) {
+    fail("conflict", "topicId already exists", { topicId });
+  }
+
+  source.directions = source.directions.filter(({ id }) => id !== candidateId);
+  if (source.directions.length === 0) proposal.topics.splice(topicIndex, 1);
+  // Explicit creation needs a new proposal identity even when its name stays
+  // the same: an earlier acceptance may have bound the source id to settings.
+  proposal.topics.push({
+    id: topicId,
+    suggestedName,
+    ...(targetTopicId !== null ? { targetTopicId } : {}),
+    directions: [candidate],
+  });
+  proposal.topics.sort(byId);
+  return outputProposal(proposal);
+}
+
 export type PersonalLibraryReviewErrorCode =
   | "invalid-input"
   | "invalid-document"
@@ -129,7 +164,7 @@ export function updatePersonalLibraryDirectionCandidate(input: unknown): Persona
     : compatibleCatalog(raw.catalog, proposal);
   const representatives = representativePaperKeys === undefined
     ? current.representatives
-    : representativesFromCatalog(representativeCatalog!, representativePaperKeys);
+    : representativesFromCatalog(representativeCatalog!, representativePaperKeys, proposal.catalogInputPapers);
   const updated = candidateFromReviewed(current.id, {
     text: patch.text ?? current.text,
     discoveryCues: patch.discoveryCues ?? current.discoveryCues,
@@ -163,7 +198,7 @@ export function mergePersonalLibraryDirectionCandidates(input: unknown): Persona
   if (lineage.length > PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS) lineageLimit("candidateIds", lineage.length);
   const draft = reviewedDraft(raw.draft);
   const catalog = compatibleCatalog(raw.catalog, proposal);
-  const representatives = representativesFromCatalog(catalog, draft.representativePaperKeys);
+  const representatives = representativesFromCatalog(catalog, draft.representativePaperKeys, proposal.catalogInputPapers);
   const merged = candidateFromReviewed(candidateId, draft, representatives, lineage,
     unionClusterMembers(sources));
   const topic = proposal.topics[topicIndex]!;
@@ -245,9 +280,14 @@ function textPatch(value: unknown): PersonalLibraryDirectionTextPatch {
 function representativesFromCatalog(
   catalog: PersonalLibraryCatalog,
   paperKeys: string[],
+  proposalEvidence: readonly PersonalLibraryRepresentativeEvidence[],
 ): PersonalLibraryRepresentativeEvidence[] {
   return paperKeys.map((paperKey) => {
     const paper = catalog.papers[paperKey];
+    if (!paper && paperKey.startsWith("file:sha256:")) {
+      const evidence = proposalEvidence.find((entry) => entry.paperKey === paperKey);
+      if (evidence) return { ...evidence };
+    }
     if (!paper) fail("evidence-mismatch", "representative paper is absent from catalog", { paperKey });
     return { paperKey, evidenceFingerprint: createPersonalLibraryPaperEvidenceFingerprint(paper) };
   });

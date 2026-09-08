@@ -1,154 +1,188 @@
 import { describe, expect, it } from "vitest";
 import { acceptProposedTopics, topicNameKey } from "../src/settings/accept-proposed-topics";
-import { normalizeTopic, deriveTopicDescription } from "../src/settings/topics";
+import { normalizeTopic } from "../src/settings/topics";
 import { validateFilterConfig } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
-/**
- * Accepting a library proposal writes product settings (ADR 0014 §1), so the
- * bar is not "produces topics" but "produces settings the product will run
- * on": unique tags, the rollback shadow intact, and `validateFilterConfig`
- * with nothing to say about them.
- */
+const scopeFingerprint = `sha256:${"a".repeat(64)}`;
+const identity = { proposalId: "proposal-current", scopeFingerprint };
 
-function proposed(suggestedName: string, texts: string[]) {
+function proposed(id: string, suggestedName: string, texts: string[], targetTopicId?: string) {
   return {
-    suggestedName,
+    id, suggestedName, ...(targetTopicId ? { targetTopicId } : {}),
     directions: texts.map((text, index) => ({
-      id: `candidate.${index}`,
-      text,
-      discoveryCues: ["cue"],
-      representatives: [],
+      id: `${id}-direction-${index}`, text, discoveryCues: ["evidence cue"], representatives: [],
       representativeSetFingerprint: `sha256:${"0".repeat(64)}`,
-      lineage: { candidateIds: [`candidate.${index}`] },
+      lineage: { candidateIds: [`${id}-direction-${index}`] },
     })),
   };
 }
 
-function settingsWith(topics: ReturnType<typeof acceptProposedTopics>) {
-  return {
-    ...DEFAULT_SETTINGS,
-    llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
-    arxiv: { ...DEFAULT_SETTINGS.arxiv, topics },
-  };
+function manualTopic(name = "Photo-z") {
+  return normalizeTopic({
+    id: "existing-topic", name, tag: "photo-z", detail: true,
+    directions: [{ id: "manual-a", text: "Redshift estimation", origin: "manual" }],
+  });
 }
 
 describe("acceptProposedTopics", () => {
-  it("writes settings the product will actually run on", () => {
-    const topics = acceptProposedTopics({
-      topics: [proposed("Photometric redshifts", [
-        "Neural network photometric redshift estimation for wide surveys",
-        "Calibrating photo-z uncertainty against spectroscopic subsamples",
-      ])],
-      existingTopics: [],
+  it("returns complete runnable settings and a receipt for the selected directions", () => {
+    const result = acceptProposedTopics({
+      ...identity, topics: [proposed("new-topic", "Galaxy clusters", ["Cluster mass calibration"])],
+      existingTopics: [manualTopic()],
     });
-    expect(topics).toHaveLength(1);
-    expect(topics[0]).toMatchObject({ name: "Photometric redshifts", tag: "photometric-redshifts" });
-    expect(topics[0]!.directions.map(({ origin }) => origin)).toEqual(["library", "library"]);
-    // ADR 0012 §1: the shadow has exactly one writer, and acceptance is not it.
-    expect(topics[0]!.description).toBe(deriveTopicDescription(topics[0]!.directions));
-    const validation = validateFilterConfig(settingsWith(topics), {});
-    expect(validation.ok).toBe(true);
-    expect(validation.reasons).toEqual([]);
+    expect(result).toMatchObject({ addedTopicCount: 1, addedDirectionCount: 1 });
+    expect(result.topics.map(({ name }) => name)).toEqual(["Photo-z", "Galaxy clusters"]);
+    expect(result.topics[1]).toMatchObject({
+      description: "Cluster mass calibration", detail: false,
+      directions: [{ id: "new-topic-direction-0", text: "Cluster mass calibration", origin: "library" }],
+    });
+    expect(result.acceptance).toMatchObject({
+      ...identity, processedCandidateIds: ["new-topic-direction-0"],
+    });
+    expect(validateFilterConfig({
+      ...DEFAULT_SETTINGS, llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+      arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: result.topics },
+    }, {}).ok).toBe(true);
   });
 
-  it("never emits a tag that collides with settings or with a sibling", () => {
-    // Three distinct names (by topicNameKey) that all slugify to the same
-    // base tag — this exercises tag collision, not the separate name-based
-    // dedup that skips a second acceptance of the same topic.
-    const topics = acceptProposedTopics({
-      topics: [
-        proposed("Galaxy clusters", ["Optical cluster catalogues from wide imaging"]),
-        proposed("Galaxy_Clusters", ["Sunyaev-Zeldovich selected cluster samples"]),
-        proposed("galaxy   clusters!", ["Cluster mass calibration from weak lensing"]),
-      ],
-      existingTopics: [{ tag: "galaxy-clusters", name: "Some other cluster topic" }],
-    });
-    const tags = topics.map(({ tag }) => tag);
-    expect(tags).toEqual(["galaxy-clusters-2", "galaxy-clusters-3", "galaxy-clusters-4"]);
-    // Duplicate tags are a hard validation error, so this is the property that
-    // decides whether an accepted proposal can run at all.
-    const validation = validateFilterConfig(
-      settingsWith([normalizeTopic({ name: "Existing", tag: "galaxy-clusters", directions: [
-        { text: "An existing hand-written direction", origin: "manual" },
-      ] }), ...topics]),
-      {},
-    );
-    expect(validation.ok).toBe(true);
+  it("keeps derived tags unique across existing settings and the same batch", () => {
+    const existing = normalizeTopic({ ...manualTopic(), name: "Existing", tag: "galaxy-clusters" });
+    const result = acceptProposedTopics({ ...identity, existingTopics: [existing], topics: [
+      proposed("a", "Galaxy clusters", ["Optical cluster catalogues"]),
+      proposed("b", "Galaxy_Clusters", ["Sunyaev-Zeldovich selected samples"]),
+      proposed("c", "galaxy   clusters!", ["Weak lensing calibration"]),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 3 });
+    expect(result.topics.map(({ tag }) => tag)).toEqual([
+      "galaxy-clusters", "galaxy-clusters-2", "galaxy-clusters-3", "galaxy-clusters-4",
+    ]);
   });
 
-  it("falls back to an ordinal tag when a name has no tag characters at all", () => {
-    const topics = acceptProposedTopics({
-      topics: [proposed("星系团", ["星系团星表与质量标定"]), proposed("测光红移", ["神经网络测光红移"])],
-      existingTopics: [],
-    });
-    expect(topics.map(({ tag }) => tag)).toEqual(["topic-1", "topic-2"]);
-    expect(topics.map(({ name }) => name)).toEqual(["星系团", "测光红移"]);
-    expect(validateFilterConfig(settingsWith(topics), {}).ok).toBe(true);
+  it("gives non-Latin topic names distinct usable tags", () => {
+    const result = acceptProposedTopics({ ...identity, existingTopics: [], topics: [
+      proposed("a", "星系团", ["星系团质量标定"]), proposed("b", "测光红移", ["神经网络测光红移"]),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 2 });
+    expect(result.topics.map(({ tag }) => tag)).toEqual(["topic-1", "topic-2"]);
   });
 
-  it("is deterministic: accepting the same proposal twice yields the same tags", () => {
-    const input = {
-      topics: [proposed("Photo z", ["A direction"]), proposed("Photo-Z", ["Another direction"])],
-      existingTopics: [],
-    };
-    // Identities are freshly minted each time, deliberately; everything the
-    // researcher sees and everything the filter keys on must not be.
-    const strip = (topics: ReturnType<typeof acceptProposedTopics>) => topics.map((topic) => ({
-      name: topic.name, tag: topic.tag, description: topic.description, detail: topic.detail,
-      directions: topic.directions.map(({ text, origin }) => ({ text, origin })),
+  it("can accept the second direction of the same proposal later", () => {
+    const topic = proposed("new-topic", "Photo-z", ["Redshift estimation", "Uncertainty calibration"]);
+    const first = acceptProposedTopics({ ...identity, existingTopics: [], topics: [
+      { ...topic, directions: topic.directions.slice(0, 1) },
+    ] });
+    expect(first).toMatchObject({ addedTopicCount: 1, addedDirectionCount: 1 });
+    const second = acceptProposedTopics({
+      ...identity, existingTopics: first.topics, acceptance: first.acceptance,
+      topics: [{ ...topic, directions: topic.directions.slice(1) }],
+    });
+    expect(second).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 1 });
+    expect(second.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Redshift estimation", "Uncertainty calibration"]);
+    expect(second.acceptance.processedCandidateIds)
+      .toEqual(["new-topic-direction-0", "new-topic-direction-1"]);
+  });
+
+  it("appends to an existing destination without changing its manual direction or detail policy", () => {
+    const existing = manualTopic();
+    const result = acceptProposedTopics({ ...identity, existingTopics: [existing], topics: [
+      proposed("extension", "Photo-z", ["Uncertainty calibration"], existing.id),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 1 });
+    expect(result.topics[0]).toMatchObject({ id: existing.id, detail: true, description: "Redshift estimation" });
+    expect(result.topics[0]!.directions[0]).toEqual(existing.directions[0]);
+    expect(existing.directions).toHaveLength(1);
+  });
+
+  it("resolves a same-name topic as a destination without treating its missing direction as accepted", () => {
+    const result = acceptProposedTopics({ ...identity, existingTopics: [manualTopic()], topics: [
+      proposed("extension", "  PHOTO-Z  ", ["Uncertainty calibration"]),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 1 });
+    expect(result.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Redshift estimation", "Uncertainty calibration"]);
+  });
+
+  it("preserves a renamed destination when the rest of its original proposal is accepted", () => {
+    const topic = proposed("new-topic", "Photo-z", ["Redshift estimation", "Uncertainty calibration"]);
+    const first = acceptProposedTopics({ ...identity, existingTopics: [], topics: [
+      { ...topic, directions: topic.directions.slice(0, 1) },
+    ] });
+    expect(first).toMatchObject({ addedTopicCount: 1 });
+    const existingTopics = first.topics.map((item) => ({ ...item, name: "Photometric redshifts", tag: "photometric-redshifts" }));
+    const result = acceptProposedTopics({ ...identity, existingTopics, acceptance: first.acceptance, topics: [topic] });
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 1 });
+    expect(result.topics.map(({ name }) => name)).toEqual(["Photometric redshifts"]);
+  });
+
+  it.each(["edited", "deleted"])("does not restore a previously accepted direction after it is %s", (change) => {
+    const topic = proposed("extension", "Photo-z", ["Uncertainty calibration"], "existing-topic");
+    const first = acceptProposedTopics({ ...identity, existingTopics: [manualTopic()], topics: [topic] });
+    expect(first).toMatchObject({ addedDirectionCount: 1 });
+    const existingTopics = first.topics.map((item) => ({
+      ...item,
+      directions: change === "deleted" ? item.directions.slice(0, 1) : item.directions.map((direction) =>
+        direction.id === "extension-direction-0" ? { ...direction, text: "User's narrower question" } : direction),
     }));
-    expect(strip(acceptProposedTopics(input))).toEqual(strip(acceptProposedTopics(input)));
-    expect(acceptProposedTopics(input).map(({ tag }) => tag)).toEqual(["photo-z", "photo-z-2"]);
+    const result = acceptProposedTopics({ ...identity, existingTopics, acceptance: first.acceptance, topics: [topic] });
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 0 });
+    expect(result.topics).toEqual(existingTopics);
   });
 
-  /**
-   * The proposal survives acceptance so the rest can be accepted later, which
-   * means the same topic can be offered again — a second accept has to be a
-   * no-op rather than a second `-2` copy of a topic the researcher already
-   * kept (the bug this module exists to close).
-   */
-  it("accepts nothing when every proposed name is already in settings", () => {
-    const topics = acceptProposedTopics({
-      topics: [proposed("Photometric redshifts", ["A direction"])],
-      existingTopics: [{ tag: "photometric-redshifts", name: "Photometric redshifts" }],
+  it("does not recreate a deleted destination for pending directions, even if its old name was reused", () => {
+    const topic = proposed("new-topic", "Photo-z", ["Redshift estimation", "Uncertainty calibration"]);
+    const acceptance = { ...identity, topicTargets: { "new-topic": "deleted-topic" }, processedCandidateIds: ["new-topic-direction-0"] };
+    expect(() => acceptProposedTopics({
+      ...identity, topics: [topic], acceptance, existingTopics: [manualTopic()],
+    })).toThrow(/destination|target/i);
+  });
+
+  it("requires a new choice when an explicitly selected target no longer exists", () => {
+    expect(() => acceptProposedTopics({ ...identity, existingTopics: [], topics: [
+      proposed("extension", "Photo-z", ["Uncertainty calibration"], "deleted-topic"),
+    ] })).toThrow(/destination|target/i);
+  });
+
+  it("records text already present as processed without modifying the manual direction", () => {
+    const existing = manualTopic();
+    const result = acceptProposedTopics({ ...identity, existingTopics: [existing], topics: [
+      proposed("extension", "Photo-z", ["  REDSHIFT   estimation  "], existing.id),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 0 });
+    expect(result.topics).toEqual([existing]);
+    expect(result.acceptance.processedCandidateIds).toEqual(["extension-direction-0"]);
+  });
+
+  it("does not infer acceptance in a different proposal from reused candidate identifiers", () => {
+    const result = acceptProposedTopics({ ...identity, existingTopics: [manualTopic()],
+      acceptance: { ...identity, proposalId: "another-proposal", topicTargets: {}, processedCandidateIds: ["extension-direction-0"] },
+      topics: [proposed("extension", "Photo-z", ["Uncertainty calibration"], "existing-topic")],
     });
-    expect(topics).toEqual([]);
+    expect(result).toMatchObject({ addedDirectionCount: 1 });
   });
 
-  it("matches an existing name regardless of case or surrounding whitespace", () => {
-    const topics = acceptProposedTopics({
-      topics: [proposed("  Photometric REDSHIFTS  ", ["A direction"])],
-      existingTopics: [{ tag: "photometric-redshifts", name: "photometric redshifts" }],
+  it("combines same-name proposals without dropping their different directions", () => {
+    const result = acceptProposedTopics({ ...identity, existingTopics: [], topics: [
+      proposed("a", "Photo-z", ["Redshift estimation"]),
+      proposed("b", "photo-z", ["Uncertainty calibration"]),
+    ] });
+    expect(result).toMatchObject({ addedTopicCount: 1, addedDirectionCount: 2 });
+    expect(result.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Redshift estimation", "Uncertainty calibration"]);
+  });
+
+  it("allows an explicit reassignment of the still-pending directions", () => {
+    const existing = manualTopic("Other topic");
+    const result = acceptProposedTopics({ ...identity, existingTopics: [existing],
+      acceptance: { ...identity, topicTargets: { extension: "deleted-topic" }, processedCandidateIds: [] },
+      topics: [proposed("extension", "Other topic", ["Uncertainty calibration"], existing.id)],
     });
-    expect(topics).toEqual([]);
+    expect(result).toMatchObject({ addedTopicCount: 0, addedDirectionCount: 1 });
+    expect(result.acceptance.topicTargets.extension).toBe("existing-topic");
   });
 
-  it("collapses two proposed topics with the same name into one accepted topic", () => {
-    const topics = acceptProposedTopics({
-      topics: [
-        proposed("Photometric redshifts", ["First direction"]),
-        proposed("photometric redshifts", ["Second direction"]),
-      ],
-      existingTopics: [],
-    });
-    expect(topics).toHaveLength(1);
-    expect(topics[0]!.directions.map(({ text }) => text)).toEqual(["First direction"]);
-  });
-
-  it("keeps only the topics that are new in a mixed batch", () => {
-    const topics = acceptProposedTopics({
-      topics: [
-        proposed("Photometric redshifts", ["A direction"]),
-        proposed("Galaxy clusters", ["Another direction"]),
-      ],
-      existingTopics: [{ tag: "photometric-redshifts", name: "Photometric redshifts" }],
-    });
-    expect(topics.map(({ name }) => name)).toEqual(["Galaxy clusters"]);
-  });
-
-  it("exposes the same normalization acceptProposedTopics matches names on", () => {
+  it("exposes consistent name normalization for the review surface", () => {
     expect(topicNameKey("  Photometric REDSHIFTS  ")).toBe(topicNameKey("photometric redshifts"));
-    expect(topicNameKey("Galaxy clusters")).not.toBe(topicNameKey("Galaxy filaments"));
   });
 });

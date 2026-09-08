@@ -160,9 +160,10 @@ describe("scope-bound paths and construction", () => {
 });
 
 describe("proposal lifecycle", () => {
-  it("retires a two-level v4 proposal on load and allows a fresh organized generation", async () => {
+
+  it.each([4, 5])("retires a v%i proposal on load and allows a fresh generation with existing coverage", async (schemaVersion) => {
     const memory = makeStorage();
-    const legacy = { ...proposal(), schemaVersion: 4 };
+    const legacy = { ...proposal(), schemaVersion };
     memory.files[proposalPath] = JSON.stringify(legacy);
     memory.files[proposalBackupPath] = JSON.stringify(legacy);
     expect(decodePersonalLibraryDirectionProposal(legacy)).toBeNull();
@@ -170,8 +171,56 @@ describe("proposal lifecycle", () => {
     await expect(store.load()).resolves.toBeNull();
     expect(memory.writeTextAtomic).not.toHaveBeenCalled();
     const fresh = await store.replace(proposal(), null);
-    expect(fresh.schemaVersion).toBe(5);
+    expect(fresh.schemaVersion).toBe(6);
     await expect(store.load()).resolves.toEqual(fresh);
+  });
+
+  it("persists covered empty generations and explicit target selections on reload", async () => {
+    const memory = makeStorage();
+    const covered = proposal({ topics: [], coveredPaperKeys: ["arxiv:2608.00001"] });
+    const first = await stores(memory.storage).proposals.replace(covered, null);
+    expect(first).toMatchObject({ topics: [], coveredPaperKeys: ["arxiv:2608.00001"], revision: 0 });
+    await expect(stores(memory.storage).proposals.load()).resolves.toEqual(first);
+    const extension = proposal();
+    extension.topics[0]!.targetTopicId = "existing-topic";
+    const second = await stores(memory.storage).proposals.replace(extension, first.revision);
+    await expect(stores(memory.storage).proposals.load()).resolves.toEqual(second);
+    expect(second.topics[0]!.targetTopicId).toBe("existing-topic");
+    expect(parse(memory.files[proposalBackupPath])).toEqual(first);
+  });
+
+  it("does not treat malformed or wrong-scope v5 data as a retired valid generation", async () => {
+    const memory = makeStorage();
+    memory.files[proposalPath] = JSON.stringify({ ...proposal(), schemaVersion: 5, coveredPaperKeys: ["arxiv:2608.00099"] });
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+    const legacy = { ...proposal(), schemaVersion: 5 };
+    memory.files[proposalPath] = JSON.stringify({ ...legacy,
+      scopeFingerprint: otherScope,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: otherScope, identificationFingerprint: identification, catalogInputPapers: legacy.catalogInputPapers,
+      }),
+    });
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "incompatible" });
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it.each([4, 5])("retires valid v%i proposals that used the former per-topic candidate bounds", async (schemaVersion) => {
+    const memory = makeStorage();
+    const legacy = proposal();
+    const template = legacy.topics[0]!.directions[0]!;
+    legacy.topics = [0, 1].map((topicIndex) => ({
+      id: `topic.${topicIndex}`, suggestedName: `Topic ${topicIndex}`,
+      directions: Array.from({ length: 7 }, (_, index) => {
+        const id = `candidate.${topicIndex}.${index}`;
+        return { ...template, id, lineage: { candidateIds: [id] } };
+      }),
+    }));
+    const raw = JSON.stringify({ ...legacy, schemaVersion });
+    memory.files[proposalPath] = raw;
+    await expect(stores(memory.storage).proposals.load()).resolves.toBeNull();
+    expect(memory.files[proposalPath]).toBe(raw);
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+    await expect(stores(memory.storage).proposals.replace(proposal(), null)).resolves.toMatchObject({ schemaVersion: 6 });
   });
 
   it("does not retire a wrong-scope or corrupt proposal as if it were empty", async () => {

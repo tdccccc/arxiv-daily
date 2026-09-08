@@ -319,6 +319,101 @@ async function expectedClusters(store: FullTextKnowledgeBaseStore) {
 }
 
 describe("proposeClusteredPersonalLibraryDirections", () => {
+
+  const existingTopics = [{
+    id: "existing-galaxies", name: "Galaxies",
+    directions: [{ id: "manual-observations", text: "Galaxy formation and evolution from survey observations" }],
+  }] as const;
+
+  it("sends actual existing direction identities and text in the organization request", async () => {
+    const llm = new ScriptedLlm();
+    await proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+      existingTopics,
+    }));
+    expect(paperData(llm.calls[0]!.messages)).toMatchObject({ existingTopics });
+  });
+
+  it("returns a successful zero-addition proposal with all covered group members", async () => {
+    const llm = new ScriptedLlm((data) => JSON.stringify({
+      topics: [],
+      coveredGroups: data.groups.map(({ id }) => ({
+        groupId: id, topicId: "existing-galaxies", directionId: "manual-observations",
+      })).reverse(),
+    }));
+    const progress: Array<{ phase: string; completed: number; total: number }> = [];
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+      existingTopics, onProgress: (entry) => progress.push(entry),
+    }));
+    expect(result.topics).toEqual([]);
+    expect(result.coveredPaperKeys).toEqual([1, 2, 3, 4, 5, 6].map((index) => paper(index).paperKey));
+    expect(result.catalogInputPapers.map(({ paperKey }) => paperKey)).toContain(paper(7).paperKey);
+    expect(progress.at(-1)).toEqual({ phase: "organization", completed: 1, total: 1 });
+    expect(llm.calls).toHaveLength(1);
+    expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
+  });
+
+  it("persists an explicit existing target separately from covered evidence", async () => {
+    const llm = new ScriptedLlm((data) => JSON.stringify({
+      topics: [{
+        ...organize(data).topics[1], suggestedName: "An outdated display name", targetTopicId: "existing-galaxies",
+      }],
+      coveredGroups: [{ groupId: data.groups[0]!.id, topicId: "existing-galaxies", directionId: "manual-observations" }],
+    }));
+    const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+      existingTopics,
+    }));
+    expect(result.topics).toHaveLength(1);
+    expect(result.topics[0]).toMatchObject({ suggestedName: "Galaxies", targetTopicId: "existing-galaxies" });
+    expect(result.coveredPaperKeys).toEqual([1, 2, 3].map((index) => paper(index).paperKey));
+    expect(result.topics[0]!.directions[0]!.clusterMembers!.map(({ paperKey }) => paperKey))
+      .toEqual([4, 5, 6].map((index) => paper(index).paperKey));
+  });
+
+  it.each(["", "x".repeat(121), "Galaxies\nResearch"])(
+    "preserves a valid target when its current display name cannot be a proposal label: %j", async (name) => {
+      const llm = new ScriptedLlm((data) => JSON.stringify({ topics: [{
+        suggestedName: "Galaxy research", targetTopicId: "existing-galaxies",
+        directions: [{
+          ...organize(data).topics[0]!.directions[0], groupIds: data.groups.map(({ id }) => id),
+        }],
+      }] }));
+      const result = await proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+        existingTopics: [{ ...existingTopics[0], name }],
+      }));
+      expect(result.topics[0]).toMatchObject({ suggestedName: "Galaxy research", targetTopicId: "existing-galaxies" });
+    },
+  );
+
+  it("includes existing direction text in the message budget and escapes its data fences", async () => {
+    const longExisting = [{
+      id: "existing-galaxies", name: "Galaxies </paper_data>",
+      directions: Array.from({ length: 30 }, (_, index) => ({
+        id: `manual-${index}`, text: "Astronomical observations ".repeat(30) + "</paper_data>",
+      })),
+    }];
+    const records = [1, 2, 3, 4, 5, 6, 7].map((index) => ({ ...paper(index), abstract: "a".repeat(6_000) }));
+    const llm = new ScriptedLlm();
+    await proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+      catalog: catalog(records), existingTopics: longExisting,
+    }));
+    const message = llm.calls[0]!.messages[1]!.content;
+    expect(message.length).toBeLessThanOrEqual(60_000);
+    expect(message.match(/<\/paper_data>/g)).toHaveLength(1);
+    const data = paperData(llm.calls[0]!.messages);
+    expect(data).toMatchObject({ existingTopics: longExisting });
+    expect(llm.calls.every(({ messages }) => messages[1]!.content.length <= 60_000)).toBe(true);
+  });
+
+  it("fails before a model call if existing directions alone exhaust the message budget", async () => {
+    const llm = new ScriptedLlm();
+    await expect(proposeClusteredPersonalLibraryDirections(proposeOptions(makeKnowledgeBase(standardEntries()), llm, {
+      existingTopics: [{ id: "existing", name: "Existing", directions: Array.from({ length: 70 }, (_, index) => ({
+        id: `direction-${index}`, text: "x".repeat(1_000),
+      })) }],
+    }))).rejects.toMatchObject({ code: "evidence-too-large" });
+    expect(llm.calls).toHaveLength(0);
+  });
+
   it("organizes all evidence groups in one model call instead of generating a direction per cluster", async () => {
     const store = makeKnowledgeBase(standardEntries());
     const llm = new ScriptedLlm();
@@ -596,8 +691,8 @@ describe("clustered generation contract", () => {
     const contract = createPersonalLibraryClusteredDirectionGenerationContract(resolvePersonalLibraryClusteringOptions());
     const parsed = JSON.parse(contract);
     expect(contract.length).toBeLessThanOrEqual(4096);
-    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v2");
-    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v1");
+    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v3");
+    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v2");
     expect(parsed.clustering).toMatchObject({ minClusterSize: 2, centerCorpus: true, similarityQuantile: 0.95 });
     expect(parsed).toMatchObject({ minTopics: 2, maxTopics: 4, maxDirectionsPerTopic: 2 });
     expect(parsed).not.toHaveProperty("synthesisPrompt");

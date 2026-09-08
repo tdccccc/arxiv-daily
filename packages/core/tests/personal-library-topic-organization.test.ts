@@ -8,6 +8,7 @@ import {
   type OrganizedTopic,
   type OrganizedTopicsResult,
   type OrganizationValidationReason,
+  type PersonalLibraryExistingTopic,
   type PersonalLibraryOrganizationGroup,
 } from "../src/library/personal-library-topic-organization";
 import {
@@ -57,8 +58,8 @@ function organization(): OrganizedTopicsResult {
   };
 }
 
-function decode(value: unknown, inputGroups = groups) {
-  return decodeOrganizedTopics(JSON.stringify(value), inputGroups);
+function decode(value: unknown, inputGroups = groups, existingTopics: readonly PersonalLibraryExistingTopic[] = []) {
+  return decodeOrganizedTopics(JSON.stringify(value), inputGroups, existingTopics);
 }
 
 function expectRejection(
@@ -81,6 +82,7 @@ describe("decodeOrganizedTopics", () => {
     expect(result).toEqual({
       ok: true,
       value: {
+        coveredGroups: [],
         topics: [
           {
             suggestedName: "Galaxies",
@@ -323,5 +325,137 @@ describe("decodeOrganizedTopics", () => {
     expect(decode(value, inputGroups).ok).toBe(true);
     const oversizedGroups = [inputGroups[0]!, group("group-b", [...indexes.slice(256), 8000]), inputGroups[2]!];
     expectRejection(value, "member-count", oversizedGroups);
+  });
+});
+
+describe("organization against existing directions", () => {
+  const existingTopics = [
+    { id: "topic-galaxies", name: "Galaxies now", directions: [
+      { id: "direction-galaxies", text: "Galaxy formation and evolution from survey observations" },
+    ] },
+    { id: "topic-methods", name: "Methods", directions: [
+      { id: "direction-methods", text: "Statistical inference for astronomical survey data" },
+      { id: "direction-blank", text: "   " },
+    ] },
+  ] as const;
+  const coveredGroups = [
+    { groupId: "group-b", topicId: "topic-galaxies", directionId: "direction-galaxies" },
+    { groupId: "group-a", topicId: "topic-galaxies", directionId: "direction-galaxies" },
+    { groupId: "group-c", topicId: "topic-methods", directionId: "direction-methods" },
+  ];
+
+  it("accepts zero additions when existing directions cover every evidence group", () => {
+    expect(decode({ topics: [], coveredGroups }, groups, existingTopics)).toEqual({
+      ok: true,
+      value: { topics: [], coveredGroups: [coveredGroups[1], coveredGroups[0], coveredGroups[2]] },
+    });
+  });
+
+  it("keeps covered and newly proposed groups disjoint and resolves an extension by stable ID", () => {
+    const result = decode({
+      topics: [{
+        suggestedName: "The previous topic name",
+        targetTopicId: "topic-galaxies",
+        directions: [direction(["group-b"], [3])],
+      }],
+      coveredGroups: coveredGroups.slice(1),
+    }, groups, existingTopics);
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        topics: [{ suggestedName: "Galaxies now", targetTopicId: "topic-galaxies" }],
+        coveredGroups: coveredGroups.slice(1),
+      },
+    });
+  });
+
+  it("allows one genuinely new topic alongside existing coverage without a minimum suggestion count", () => {
+    expect(decode({
+      topics: [{ suggestedName: "Cosmology", directions: [direction(["group-b"], [3])] }],
+      coveredGroups: coveredGroups.slice(1),
+    }, groups, existingTopics).ok).toBe(true);
+  });
+
+  it.each([
+    { label: "unknown group", patch: { groupId: "foreign-group" }, reason: "group-assignment" },
+    { label: "unknown topic", patch: { topicId: "foreign-topic" }, reason: "reference-out-of-scope" },
+    { label: "unknown direction", patch: { directionId: "foreign-direction" }, reason: "reference-out-of-scope" },
+    { label: "direction in another topic", patch: { directionId: "direction-methods" }, reason: "reference-out-of-scope" },
+    { label: "blank existing direction", patch: { topicId: "topic-methods", directionId: "direction-blank" }, reason: "reference-out-of-scope" },
+  ])("rejects covered evidence with $label", ({ patch, reason }) => {
+    expect(decode({ topics: [], coveredGroups: [{ ...coveredGroups[0], ...patch }, ...coveredGroups.slice(1)] },
+      groups, existingTopics)).toEqual({ ok: false, reason });
+  });
+
+  it("rejects coverage without supplied existing topics", () => {
+    expect(decode({ ...organization(), coveredGroups: [coveredGroups[0]] }))
+      .toEqual({ ok: false, reason: "reference-out-of-scope" });
+  });
+
+  it.each([
+    { label: "missing coverage", coverage: coveredGroups.slice(1) },
+    { label: "duplicate coverage", coverage: [...coveredGroups, coveredGroups[0]] },
+  ])("rejects $label even when there are no additions", ({ coverage }) => {
+    expect(decode({ topics: [], coveredGroups: coverage }, groups, existingTopics))
+      .toEqual({ ok: false, reason: "group-assignment" });
+  });
+
+  it("rejects a group that is both already covered and proposed as new", () => {
+    expect(decode({ ...organization(), coveredGroups: [coveredGroups[0]] }, groups, existingTopics))
+      .toEqual({ ok: false, reason: "group-assignment" });
+  });
+
+  it.each([null, {}, [null], [{ groupId: "group-a", topicId: "topic-galaxies" }], [
+    { groupId: "group-a", topicId: "topic-galaxies", directionId: "direction-galaxies", extra: true },
+  ]].map((coverage) => ({ coverage })))("rejects malformed coverage $coverage", ({ coverage }) => {
+    expect(decode({ topics: [], coveredGroups: coverage }, groups, existingTopics))
+      .toEqual({ ok: false, reason: "wrong-shape" });
+  });
+
+  it.each([null, "", " ", "missing-topic", "x".repeat(129), { id: "topic-galaxies" }])(
+    "rejects a missing or malformed explicit target %j instead of guessing by name", (targetTopicId) => {
+      expect(decode({ topics: [{
+        suggestedName: "Galaxies now", targetTopicId, directions: [direction(["group-a", "group-b", "group-c"], [1])],
+      }] }, groups, existingTopics)).toEqual({ ok: false, reason: "reference-out-of-scope" });
+    },
+  );
+
+  it("requires an explicit target for an exact existing-name collision", () => {
+    expect(decode({ topics: [{
+      suggestedName: "Galaxies now", directions: [direction(["group-a", "group-b", "group-c"], [1])],
+    }] }, groups, existingTopics)).toEqual({ ok: false, reason: "reference-out-of-scope" });
+  });
+
+  it("rejects two generated extensions for the same existing target", () => {
+    expect(decode({ topics: [
+      { suggestedName: "Galaxies now", targetTopicId: "topic-galaxies", directions: [direction(["group-a"], [1])] },
+      { suggestedName: "Galaxies now", targetTopicId: "topic-galaxies", directions: [direction(["group-b", "group-c"], [3])] },
+    ] }, groups, existingTopics)).toEqual({ ok: false, reason: "reference-out-of-scope" });
+  });
+
+  it("allows separate existing extensions beyond the initial four-topic cap and at most four new topics", () => {
+    const inputGroups = Array.from({ length: 9 }, (_, index) => group(`g${index}`, [index + 1]));
+    const existing = Array.from({ length: 5 }, (_, index) => ({ id: `t${index}`, name: `Existing ${index}`, directions: [] }));
+    const topics = inputGroups.map((item, index) => ({
+      suggestedName: `New ${index}`,
+      ...(index < 5 ? { targetTopicId: `t${index}` } : {}),
+      directions: [direction([item.id], [index + 1])],
+    }));
+    expect(decode({ topics }, inputGroups, existing).ok).toBe(true);
+    const excessiveNew = topics.map((topic, index) => index === 0
+      ? { suggestedName: "Another new topic", directions: topic.directions }
+      : topic);
+    expect(decode({ topics: excessiveNew }, inputGroups, existing)).toEqual({ ok: false, reason: "topic-count" });
+  });
+
+  it("enforces the storage candidate limit across existing target extensions", () => {
+    const inputGroups = Array.from({ length: 14 }, (_, index) => group(`g${index}`, [index + 1]));
+    const existing = Array.from({ length: 7 }, (_, index) => ({ id: `t${index}`, name: `Existing ${index}`, directions: [] }));
+    const topics = existing.map((topic, index) => ({
+      suggestedName: topic.name, targetTopicId: topic.id,
+      directions: [direction([`g${index * 2}`], [index * 2 + 1]), direction([`g${index * 2 + 1}`], [index * 2 + 2])],
+    }));
+    expect(decode({ topics: topics.slice(0, 6) }, inputGroups.slice(0, 12), existing).ok).toBe(true);
+    expect(decode({ topics }, inputGroups, existing)).toEqual({ ok: false, reason: "direction-count" });
   });
 });

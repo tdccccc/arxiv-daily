@@ -1,7 +1,12 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
-import { DEFAULT_SETTINGS, normalizeTopic } from "@arxiv-daily/core";
-import type ArxivDailyPlugin from "../main";
+import * as obsidian from "obsidian";
+import { MenuItem, Modal, Notice, Setting, ToggleComponent, type App } from "obsidian";
+import {
+  DEFAULT_SETTINGS, PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION, createEmptyPersonalLibraryCatalog,
+  createPersonalLibraryCatalogInputManifestFingerprint, createPersonalLibraryRepresentativeSetFingerprint,
+  normalizeTopic, type PersonalLibraryDirectionProposal, type PluginSettings, type ProposalAcceptanceReceipt,
+} from "@arxiv-daily/core";
+import ArxivDailyPlugin from "../main.ts";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   ArxivDailySettingTab,
@@ -110,10 +115,10 @@ function renderSetting() {
   return { settingEl, controlEl };
 }
 
-/** Tab with a mocked plugin whose settings persist through saveSettings. */
+/** Real settings queue; saveSettings is the mocked persistence boundary. */
 function makeTab() {
   const settings = structuredClone(DEFAULT_SETTINGS);
-  const saveSettings = vi.fn((_candidate?: unknown) => Promise.resolve());
+  const saveSettings = vi.fn((_candidate?: PluginSettings) => Promise.resolve());
   const plugin = {
     settings,
     saveSettings,
@@ -160,6 +165,7 @@ function makeTab() {
       restartScheduler: () => plugin.restartScheduler(),
       refreshSensitiveValues: () => plugin.refreshSensitiveValues(),
     });
+  plugin.saveSettings = () => plugin.settingsChanges.persistCurrent();
   plugin.setScheduleEnabled = vi.fn(async (enabled: boolean) => {
     await plugin.settingsChanges.changeValue("schedule.enabled", enabled);
     return true;
@@ -231,6 +237,7 @@ describe("declarative daily paper limit", () => {
 });
 
 describe("wired getSettingDefinitions", () => {
+
   it("returns non-empty definitions with section groups", () => {
     const { tab } = makeTab();
     const items = tab.getSettingDefinitions();
@@ -340,6 +347,7 @@ describe("wired getSettingDefinitions", () => {
         (item) => item.type === "list" && item.heading === "Research topics",
       );
     await topicsList?.addItem?.action();
+    await vi.waitFor(() => expect(tab.refreshSettings).toHaveBeenCalledTimes(1));
     expect(settings.arxiv.topics).toHaveLength(1);
     expect(saveSettings).toHaveBeenCalledTimes(1);
     expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
@@ -1280,13 +1288,13 @@ describe("declarative LLM and category rows", () => {
     ToggleComponent.reset();
     const { tab, settings, saveSettings } = makeTab();
     settings.llm.apiKey = "configured";
-    settings.arxiv.topics.push({
+    settings.arxiv.topics.push(normalizeTopic({
       id: "topic-1",
       name: "Language models",
       tag: "language-models",
       description: "Research about language models",
       detail: false,
-    });
+    }));
     saveSettings.mockRejectedValueOnce(new Error("disk full"));
     const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
     const setting = renderSetting();
@@ -1350,8 +1358,8 @@ describe("declarative topic cards", () => {
   it("keeps the next topic fixed in the viewport when deleting a topic", async () => {
     const { tab, settings } = makeTab();
     settings.arxiv.topics.push(
-      { id: "first", name: "First", tag: "first", description: "First", detail: false },
-      { id: "next", name: "Next", tag: "next", description: "Next", detail: false },
+      normalizeTopic({ id: "first", name: "First", tag: "first", description: "First", detail: false }),
+      normalizeTopic({ id: "next", name: "Next", tag: "next", description: "Next", detail: false }),
     );
     const viewport = document.createElement("div");
     viewport.style.overflowY = "auto";
@@ -1598,6 +1606,417 @@ describe("wired setControlValue", () => {
   });
 });
 
+describe("real acceptance refresh preserves topic editing", () => {
+  function openHostReview() {
+    // The mock 1.13 renderer is empty. Select the actual legacy renderer for
+    // this host integration, including its real guide and refresh behavior.
+    vi.spyOn(obsidian, "requireApiVersion").mockReturnValue(false);
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.arxiv.topics = [normalizeTopic({
+      id: "existing-topic", name: "Existing topic", tag: "existing-topic", detail: false,
+      directions: [{ id: "existing-direction", text: "Original handwritten direction", origin: "manual" }],
+    })];
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const evidence = `sha256:${"b".repeat(64)}`;
+    const papers = [1, 2].map((number) => ({ paperKey: `arxiv:2608.0000${number}`, evidenceFingerprint: evidence }));
+    const proposal: PersonalLibraryDirectionProposal = {
+      schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION, revision: 0,
+      proposalId: "host-proposal", scopeFingerprint: fingerprint, identificationFingerprint: fingerprint,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: fingerprint, identificationFingerprint: fingerprint, catalogInputPapers: papers,
+      }),
+      catalogInputPapers: papers, generationContractFingerprint: fingerprint, generatedAt: "2026-09-07T00:00:00.000Z",
+      topics: [{
+        id: "proposed-topic", suggestedName: "Existing topic", targetTopicId: "existing-topic",
+        directions: [{
+          id: "accepted-direction", text: "Accepted library direction", discoveryCues: ["library evidence"],
+          representatives: papers, representativeSetFingerprint: createPersonalLibraryRepresentativeSetFingerprint(papers),
+          lineage: { candidateIds: ["accepted-direction"] },
+          clusterMembers: papers.map(({ paperKey }) => ({ paperKey, confidence: 1 })),
+        }],
+      }],
+    };
+    const saved: Array<{ settings: PluginSettings; libraryProposalAcceptances?: ProposalAcceptanceReceipt[] }> = [];
+    const saveData = vi.fn(async (data: typeof saved[number]) => { saved.push(structuredClone(data)); });
+    Object.assign(plugin, {
+      app: {} as App, settings, saveData,
+      manifest: { id: "arxiv-daily", version: "0.0.0-test" },
+      logger: { error: vi.fn(), setSensitiveValues: vi.fn() },
+      stateStore: { snapshot: () => ({}) }, libraryIndexStatus: new LibraryIndexStatusStore(),
+      libraryCatalog: createEmptyPersonalLibraryCatalog(fingerprint, fingerprint),
+      libraryIndexedPapers: papers.map(({ paperKey }) => ({ paperKey, title: `Paper ${paperKey}` })),
+      libraryProposal: proposal, librarySuggestions: null, libraryProposalAcceptances: [],
+      libraryCatalogLoadError: null, libraryProposalLoadError: null, librarySuggestionsLoadError: null,
+      libraryProposalAcceptanceLoadError: null,
+      libraryConnection: undefined, libraryConnectionRevision: 0, libraryOutputRevision: 0,
+      libraryMutationRevision: 0, libraryMutationQueue: Promise.resolve(),
+    });
+    // Retain the real host persistence envelope and library queue, the same
+    // lock order the real acceptance path uses; only disk I/O is controlled.
+    const storage = plugin as unknown as {
+      enqueueLibraryMutation<T>(operation: () => Promise<T>): Promise<T>;
+      persistSettings(candidate: PluginSettings): Promise<void>;
+    };
+    Object.assign(plugin, { settingsChanges: new SettingsChangeService({
+      settings,
+      persistSettings: (candidate) => storage.enqueueLibraryMutation(() => storage.persistSettings(candidate)),
+    }) });
+    const tab = new ArxivDailySettingTab(plugin.app, plugin);
+    Object.assign(plugin, { settingsTab: tab });
+    const viewport = document.createElement("div");
+    viewport.style.overflowY = "auto";
+    viewport.appendChild(tab.containerEl);
+    document.body.appendChild(viewport);
+    tab.display();
+    tab.containerEl.querySelector<HTMLButtonElement>(".arxiv-daily-settings__topic-header")!.click();
+    plugin.openPersonalLibraryDirectionReview();
+    const modal = Modal.opened.at(-1)!;
+    modal.modalEl.appendChild(modal.contentEl);
+    document.body.appendChild(modal.modalEl);
+    const pauseSave = () => {
+      const gate = deferred();
+      const persist = saveData.getMockImplementation()!;
+      saveData.mockImplementationOnce(async (data) => { await gate.promise; await persist(data); });
+      return gate;
+    };
+    const input = (field: "direction" | "name" = "direction") => tab.containerEl.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      `.arxiv-daily-settings__topic-${field === "direction" ? "direction" : "name"}-input`,
+    )!;
+    return { plugin, tab, viewport, modal, settings, saved, saveData, pauseSave, input };
+  }
+
+  it.each(["direction", "name"] as const)("keeps a focused %s draft until all queued edits finish, then restores selection and scroll", async (field) => {
+    const made = openHostReview();
+    const acceptanceSave = made.pauseSave();
+    const accepting = made.plugin.acceptPersonalLibraryProposedTopics(["proposed-topic"], ["accepted-direction"]);
+    await vi.waitFor(() => expect(made.saveData).toHaveBeenCalledTimes(1));
+    made.modal.close();
+    const input = made.input(field);
+    input.focus();
+    input.value = "First concurrent draft";
+    const firstEditSave = made.pauseSave();
+    input.dispatchEvent(new Event("input"));
+    acceptanceSave.resolve();
+    await vi.waitFor(() => expect(made.saveData).toHaveBeenCalledTimes(2));
+    expect(input.isConnected).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(made.input(field).value).toBe("First concurrent draft");
+
+    const latestSave = made.pauseSave();
+    input.value = "Latest concurrent draft";
+    input.setSelectionRange(3, 10, "backward");
+    input.dispatchEvent(new Event("input"));
+    made.viewport.scrollTop = 241;
+    made.viewport.scrollLeft = 17;
+    firstEditSave.resolve();
+    await vi.waitFor(() => expect(made.saveData).toHaveBeenCalledTimes(3));
+    expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("Latest concurrent draft");
+    latestSave.resolve();
+    await accepting;
+
+    const visible = made.input(field);
+    expect(visible.value).toBe("Latest concurrent draft");
+    expect(document.activeElement).toBe(visible);
+    expect([visible.selectionStart, visible.selectionEnd, visible.selectionDirection]).toEqual([3, 10, "backward"]);
+    expect([made.viewport.scrollTop, made.viewport.scrollLeft]).toEqual([241, 17]);
+    expect(made.tab.containerEl.querySelector(".arxiv-daily-settings__topic-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(made.saved.at(-1)!.settings.arxiv.topics[0].directions.at(-1)!.text).toBe("Accepted library direction");
+    expect(made.settings.arxiv.topics[0][field === "name" ? "name" : "description"]).toBe("Latest concurrent draft");
+    visible.value = "Continued after refresh";
+    visible.dispatchEvent(new Event("input"));
+    await made.plugin.settingsChanges.changeComputed(() => ({ changes: [] }));
+    expect(made.saved.at(-1)!.settings.arxiv.topics[0][field === "name" ? "name" : "description"])
+      .toBe("Continued after refresh");
+    made.tab.hide();
+    made.viewport.remove();
+  });
+
+  it("refreshes the restored field after a queued edit fails while preserving the accepted direction", async () => {
+    const made = openHostReview();
+    const acceptanceSave = made.pauseSave();
+    const accepting = made.plugin.acceptPersonalLibraryProposedTopics(["proposed-topic"], ["accepted-direction"]);
+    await vi.waitFor(() => expect(made.saveData).toHaveBeenCalledTimes(1));
+    made.modal.close();
+    const input = made.input();
+    input.focus();
+    input.value = "Rejected concurrent edit";
+    const editSave = made.pauseSave();
+    input.dispatchEvent(new Event("input"));
+    acceptanceSave.resolve();
+    await vi.waitFor(() => expect(made.saveData).toHaveBeenCalledTimes(2));
+    expect(input.isConnected).toBe(true);
+    editSave.reject(new Error("edit disk full"));
+    await accepting;
+    const visible = made.input();
+    expect(visible.value).toBe("Original handwritten direction");
+    expect(document.activeElement).toBe(visible);
+    expect(made.settings.arxiv.topics[0].directions.map(({ text }) => text))
+      .toEqual(["Original handwritten direction", "Accepted library direction"]);
+    expect(made.saved.at(-1)!.settings.arxiv.topics[0].directions.map(({ text }) => text))
+      .toEqual(["Original handwritten direction", "Accepted library direction"]);
+    expect(made.plugin.logger.error).toHaveBeenCalledWith("settings: edit direction failed", expect.any(Error));
+    made.tab.hide();
+    made.viewport.remove();
+  });
+});
+
+describe("topic edits share the settings transaction queue", () => {
+  function editor() {
+    const made = makeTab();
+    made.settings.arxiv.topics.push(normalizeTopic({
+      id: "manual-topic", name: "Research agents", tag: "research-agents", detail: false,
+      directions: [
+        { id: "manual-first", text: "Original direction", origin: "manual" },
+        { id: "manual-second", text: "Other direction", origin: "manual" },
+      ],
+    }));
+    const saved: PluginSettings[] = [];
+    made.saveSettings.mockImplementation(async (candidate) => {
+      if (!candidate) throw new Error("Persistence requires the complete private candidate");
+      saved.push(structuredClone(candidate));
+    });
+    const refresh = vi.spyOn(made.tab, "refreshSettings").mockImplementation(() => {});
+    document.body.appendChild(made.tab.containerEl);
+    renderSetupGuideRow(made.tab, new Setting(made.tab.containerEl));
+    made.tab.renderTopicRow(new Setting(made.tab.containerEl), 0);
+    made.tab.containerEl.querySelector<HTMLButtonElement>(".arxiv-daily-settings__topic-header")!.click();
+    const input = () => made.tab.containerEl.querySelector<HTMLTextAreaElement>(".arxiv-daily-settings__topic-direction-input")!;
+    const pauseSave = () => {
+      const gate = deferred();
+      const persist = made.saveSettings.getMockImplementation()!;
+      made.saveSettings.mockImplementationOnce(async (candidate) => {
+        await gate.promise;
+        await persist(candidate);
+      });
+      return gate;
+    };
+    const acceptDirection = () => made.plugin.settingsChanges.changeComputed((current) => {
+      current.arxiv.topics[0].directions.push({ id: "accepted", text: "Accepted library direction", origin: "library" });
+      current.arxiv.topics = current.arxiv.topics.map(normalizeTopic);
+      return { changes: [{ key: "arxiv.topics", value: current.arxiv.topics }] };
+    });
+    const settle = () => made.plugin.settingsChanges.changeComputed(() => ({ changes: [] }));
+    return { ...made, saved, refresh, input, pauseSave, acceptDirection, settle };
+  }
+
+  it.each(["edit", "remove"] as const)("preserves a direction %s made while an accepted direction is being saved", async (action) => {
+    const made = editor();
+    const gate = made.pauseSave();
+    const accepting = made.acceptDirection();
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    if (action === "edit") {
+      made.input().value = "My reviewed direction";
+      made.input().dispatchEvent(new Event("input"));
+    } else {
+      made.tab.containerEl.querySelector<HTMLButtonElement>('[aria-label="Remove direction 1"]')!.click();
+    }
+    gate.resolve();
+    await accepting;
+    await made.settle();
+    const expected = action === "edit"
+      ? ["My reviewed direction", "Other direction", "Accepted library direction"]
+      : ["Other direction", "Accepted library direction"];
+    expect(made.settings.arxiv.topics[0].directions.map(({ text }) => text)).toEqual(expected);
+    expect(made.saved.at(-1)!.arxiv.topics[0].directions.map(({ text }) => text)).toEqual(expected);
+    expect(made.settings.arxiv.topics[0].description).toBe(expected[0]);
+    made.tab.containerEl.remove();
+  });
+
+  it("retains every later input draft and its focus while preceding saves commit", async () => {
+    const made = editor();
+    const acceptingSave = made.pauseSave();
+    const accepting = made.acceptDirection();
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const input = made.input();
+    input.focus();
+    input.value = "Research";
+    input.dispatchEvent(new Event("input"));
+    input.value = "Research agents";
+    input.dispatchEvent(new Event("input"));
+    const firstEditSave = made.pauseSave();
+    acceptingSave.resolve();
+    await accepting;
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(2));
+    input.value = "Research agents evaluation";
+    input.dispatchEvent(new Event("input"));
+    expect(made.settings.arxiv.topics[0].directions[0].text).toBe("Original direction");
+    expect(input.value).toBe("Research agents evaluation");
+    firstEditSave.resolve();
+    await made.settle();
+    expect(input.value).toBe("Research agents evaluation");
+    expect(document.activeElement).toBe(input);
+    expect(made.refresh).not.toHaveBeenCalled();
+    expect(made.settings.arxiv.topics[0].directions.map(({ text }) => text))
+      .toEqual(["Research agents evaluation", "Other direction", "Accepted library direction"]);
+    expect(made.saved.slice(1).map((settings) => settings.arxiv.topics[0].directions[0].text))
+      .toEqual(["Research", "Research agents", "Research agents evaluation"]);
+    made.tab.containerEl.remove();
+  });
+
+  it("adds and edits a new direction during acceptance without replacing the latest direction list", async () => {
+    const made = editor();
+    const gate = made.pauseSave();
+    const accepting = made.acceptDirection();
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    made.tab.containerEl.querySelector<HTMLButtonElement>(".arxiv-daily-settings__topic-direction-add")!.click();
+    const added = Array.from(made.tab.containerEl.querySelectorAll<HTMLTextAreaElement>(
+      ".arxiv-daily-settings__topic-direction-input",
+    )).at(-1)!;
+    expect(document.activeElement).toBe(added);
+    added.value = "New handwritten direction";
+    added.dispatchEvent(new Event("input"));
+    gate.resolve();
+    await accepting;
+    await made.settle();
+    expect(made.settings.arxiv.topics[0].directions.map(({ text }) => text)).toEqual([
+      "Original direction", "Other direction", "Accepted library direction", "New handwritten direction",
+    ]);
+    expect(made.saved.at(-1)!.arxiv.topics[0].directions.map(({ text }) => text)).toEqual([
+      "Original direction", "Other direction", "Accepted library direction", "New handwritten direction",
+    ]);
+    made.tab.containerEl.remove();
+  });
+
+  it("derives a renamed topic's unique tag from topics committed ahead of its edit", async () => {
+    const made = editor();
+    const gate = made.pauseSave();
+    const preceding = made.plugin.settingsChanges.changeComputed((current) => ({ changes: [{
+      key: "arxiv.topics",
+      value: [...current.arxiv.topics, normalizeTopic({ id: "new-topic", name: "Evaluation", tag: "evaluation", directions: [] })],
+    }] }));
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const name = made.tab.containerEl.querySelector<HTMLInputElement>(".arxiv-daily-settings__topic-name-input")!;
+    name.value = "Evaluation";
+    name.dispatchEvent(new Event("input"));
+    expect(made.settings.arxiv.topics[0].name).toBe("Research agents");
+    gate.resolve();
+    await preceding;
+    await made.settle();
+    expect(made.settings.arxiv.topics.map(({ name, tag }) => ({ name, tag })))
+      .toEqual([{ name: "Evaluation", tag: "evaluation-2" }, { name: "Evaluation", tag: "evaluation" }]);
+    expect(made.saved.at(-1)!.arxiv.topics[0].tag).toBe("evaluation-2");
+    made.tab.containerEl.remove();
+  });
+
+  it("commits a detail toggle together with directions accepted ahead of it", async () => {
+    const made = editor();
+    const gate = made.pauseSave();
+    const accepting = made.acceptDirection();
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const detail = made.tab.containerEl.querySelector<HTMLInputElement>(".arxiv-daily-settings__topic-detail-checkbox")!;
+    detail.click();
+    expect(made.settings.arxiv.topics[0].detail).toBe(false);
+    gate.resolve();
+    await accepting;
+    await made.settle();
+    expect(made.settings.arxiv.topics[0].detail).toBe(true);
+    expect(made.saved.at(-1)!.arxiv.topics[0].directions.at(-1)!.text).toBe("Accepted library direction");
+    expect(made.saved.at(-1)!.arxiv.topics[0].detail).toBe(true);
+    made.tab.containerEl.remove();
+  });
+
+  it("deletes the chosen topic by identity after an earlier transaction changes its position", async () => {
+    const made = editor();
+    vi.spyOn(made.tab, "confirmReplace").mockResolvedValue(true);
+    const gate = made.pauseSave();
+    const preceding = made.plugin.settingsChanges.changeComputed((current) => ({ changes: [{
+      key: "arxiv.topics",
+      value: [normalizeTopic({ id: "new-topic", name: "New", tag: "new", directions: [] }), ...current.arxiv.topics],
+    }] }));
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const remove = Array.from(made.tab.containerEl.querySelectorAll<HTMLButtonElement>("button"))
+      .find(({ textContent }) => textContent === "Delete")!;
+    remove.click();
+    await Promise.resolve();
+    gate.resolve();
+    await preceding;
+    await made.settle();
+    expect(made.settings.arxiv.topics.map(({ id }) => id)).toEqual(["new-topic"]);
+    expect(made.saved.at(-1)!.arxiv.topics.map(({ id }) => id)).toEqual(["new-topic"]);
+    made.tab.containerEl.remove();
+  });
+
+  it("queues adding a blank topic without losing accepted directions", async () => {
+    const made = editor();
+    const gate = made.pauseSave();
+    const accepting = made.acceptDirection();
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const adding = made.tab.addTopic();
+    expect(made.settings.arxiv.topics).toHaveLength(1);
+    gate.resolve();
+    await Promise.all([accepting, adding]);
+    expect(made.saved.at(-1)!.arxiv.topics).toHaveLength(2);
+    expect(made.saved.at(-1)!.arxiv.topics[0].directions.at(-1)!.text).toBe("Accepted library direction");
+    made.tab.containerEl.remove();
+  });
+
+  it.each(["text", "name", "detail", "remove"] as const)("restores a rejected %s edit without changing live settings", async (action) => {
+    const made = editor();
+    const original = structuredClone(made.settings);
+    const previousNoticeCount = Notice.calls.length;
+    made.saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    // Calling the registered DOM handler also lets the old uncaught rejection
+    // settle, so Red is about the dirty state rather than an unhandled promise.
+    if (action === "text" || action === "name") {
+      const input = action === "text" ? made.input()
+        : made.tab.containerEl.querySelector<HTMLInputElement>(".arxiv-daily-settings__topic-name-input")!;
+      input.focus();
+      input.value = "Rejected edit";
+      await Promise.resolve(input.oninput!.call(input, new Event("input"))).catch(() => undefined);
+      expect(input.value).toBe(action === "text" ? "Original direction" : "Research agents");
+      expect(document.activeElement).toBe(input);
+    } else if (action === "detail") {
+      const detail = made.tab.containerEl.querySelector<HTMLInputElement>(".arxiv-daily-settings__topic-detail-checkbox")!;
+      detail.checked = true;
+      await Promise.resolve(detail.onchange!.call(detail, new Event("change"))).catch(() => undefined);
+      expect(detail.checked).toBe(false);
+    } else {
+      const remove = made.tab.containerEl.querySelector<HTMLButtonElement>('[aria-label="Remove direction 1"]')!;
+      await Promise.resolve(remove.onclick!.call(remove, new MouseEvent("click"))).catch(() => undefined);
+      expect(made.input().value).toBe("Original direction");
+    }
+    expect(made.settings).toEqual(original);
+    expect(made.saved).toEqual([]);
+    expect(Notice.calls.slice(previousNoticeCount).map(({ message }) => message).join(" ")).toContain("failed");
+    made.tab.containerEl.remove();
+  });
+
+  it("does not restore an older failed draft over a newer queued direction edit", async () => {
+    const made = editor();
+    const oldSave = made.pauseSave();
+    const input = made.input();
+    input.value = "Older edit";
+    const older = Promise.resolve(input.oninput!.call(input, new Event("input"))).catch(() => undefined);
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(1));
+    const newerSave = made.pauseSave();
+    input.value = "Newer edit";
+    input.dispatchEvent(new Event("input"));
+    oldSave.reject(new Error("old edit failed"));
+    await older;
+    await vi.waitFor(() => expect(made.saveSettings).toHaveBeenCalledTimes(2));
+    expect(input.value).toBe("Newer edit");
+    expect(made.settings.arxiv.topics[0].directions[0].text).toBe("Original direction");
+    newerSave.resolve();
+    await made.settle();
+    expect(made.saved.at(-1)!.arxiv.topics[0].directions[0].text).toBe("Newer edit");
+    expect(made.settings.arxiv.topics[0].directions[0].text).toBe("Newer edit");
+    made.tab.containerEl.remove();
+  });
+
+  it("keeps the original topics and categories when a template replacement cannot be saved", async () => {
+    const made = editor();
+    const original = structuredClone(made.settings);
+    vi.spyOn(made.tab, "confirmReplace").mockResolvedValue(true);
+    made.saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    await made.tab.applyTopicTemplate("astro-ml").catch(() => undefined);
+    expect(made.settings).toEqual(original);
+    expect(made.saved).toEqual([]);
+    made.tab.containerEl.remove();
+  });
+});
+
 describe("topic directions editor", () => {
   function renderTopicWithDirections(texts: string[]) {
     const { tab, settings, saveSettings } = makeTab();
@@ -1702,7 +2121,8 @@ describe("topic directions editor", () => {
     // so one inside the text would break that line structure.
     input.value = "Pasted first line\nand a second line";
     input.dispatchEvent(new Event("input"));
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].directions[0].text)
+      .toBe("Pasted first line and a second line"));
 
     const stored = settings.arxiv.topics[0].directions[0].text;
     expect(stored).not.toContain("\n");
@@ -1767,7 +2187,7 @@ describe("topic directions editor", () => {
     const first = directionInputs(tab)[0];
     first.value = "New text.";
     first.dispatchEvent(new Event("input"));
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].directions[0].text).toBe("New text."));
 
     const topic = settings.arxiv.topics[0];
     expect(topic.directions[0].text).toBe("New text.");
@@ -1781,7 +2201,7 @@ describe("topic directions editor", () => {
     const second = directionInputs(tab)[1];
     second.value = "Second edited.";
     second.dispatchEvent(new Event("input"));
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].directions[1].text).toBe("Second edited."));
 
     const topic = settings.arxiv.topics[0];
     expect(topic.directions[1].text).toBe("Second edited.");
@@ -1985,7 +2405,7 @@ describe("topic header hides the machine tag", () => {
     tab.containerEl.remove();
   });
 
-  it("re-derives a tag that was still the machine form of the old name", () => {
+  it("re-derives a tag that was still the machine form of the old name", async () => {
     const { tab, settings } = renderTopic({
       id: "t1",
       name: "Photo-z",
@@ -2000,11 +2420,11 @@ describe("topic header hides the machine tag", () => {
     nameInput.value = "Weak lensing";
     nameInput.dispatchEvent(new Event("input"));
 
-    expect(settings.arxiv.topics[0].tag).toBe("weak-lensing");
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].tag).toBe("weak-lensing"));
     tab.containerEl.remove();
   });
 
-  it("leaves a hand-set tag alone when the name is renamed", () => {
+  it("leaves a hand-set tag alone when the name is renamed", async () => {
     const { tab, settings } = renderTopic({
       id: "t1",
       name: "Photo-z",
@@ -2019,11 +2439,12 @@ describe("topic header hides the machine tag", () => {
     nameInput.value = "Weak lensing";
     nameInput.dispatchEvent(new Event("input"));
 
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].name).toBe("Weak lensing"));
     expect(settings.arxiv.topics[0].tag).toBe("custom-tag");
     tab.containerEl.remove();
   });
 
-  it("makes a renamed topic's derived tag unique against a collision, not a duplicate", () => {
+  it("makes a renamed topic's derived tag unique against a collision, not a duplicate", async () => {
     const { tab, settings } = makeTab();
     settings.arxiv.topics.push(
       normalizeTopic({
@@ -2050,8 +2471,35 @@ describe("topic header hides the machine tag", () => {
     nameInput.value = "Weak lensing";
     nameInput.dispatchEvent(new Event("input"));
 
-    expect(settings.arxiv.topics[0].tag).toBe("weak-lensing-2");
+    await vi.waitFor(() => expect(settings.arxiv.topics[0].tag).toBe("weak-lensing-2"));
     expect(settings.arxiv.topics[1].tag).toBe("weak-lensing");
     tab.containerEl.remove();
+  });
+});
+
+describe("topic editor behavior contracts", () => {
+  it("asks about the named topic and preserves it when deletion is declined", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    const topic = normalizeTopic({ id: "confirmed-topic", name: "Photo-z", tag: "photo-z", directions: [] });
+    settings.arxiv.topics = [topic];
+    const confirmation = vi.spyOn(tab, "confirmReplace").mockResolvedValue(false);
+    await tab.deleteTopic(0);
+    expect(confirmation).toHaveBeenCalledWith(expect.stringContaining('"Photo-z"'), "Delete");
+    expect(settings.arxiv.topics).toEqual([topic]);
+    expect(saveSettings).not.toHaveBeenCalled();
+    confirmation.mockResolvedValue(true);
+    await tab.deleteTopic(0);
+    expect(settings.arxiv.topics).toEqual([]);
+    expect(saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it("does not rewrite or persist stored categories when rendering settings", () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph.GA", "astro-ph.GA"];
+    const before = structuredClone(settings.arxiv);
+    tab.getSettingDefinitions();
+    tab.display();
+    expect(settings.arxiv).toEqual(before);
+    expect(saveSettings).not.toHaveBeenCalled();
   });
 });

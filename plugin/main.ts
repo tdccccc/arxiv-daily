@@ -15,6 +15,9 @@ import type {
   DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
   ClusteringInputPaper,
+  ProposalAcceptanceReceipt,
+  Topic,
+  AcceptProposedTopicsResult,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
@@ -39,9 +42,12 @@ type DirectionProposalProgress,
 proposeClusteredPersonalLibraryDirections,
 PERSONAL_LIBRARY_SIMILARITY_QUANTILE,
 mergePersonalLibraryDirectionCandidates,
+movePersonalLibraryDirectionCandidate,
 removePersonalLibraryDirectionCandidate,
 renamePersonalLibraryProposedTopic,
 acceptProposedTopics,
+matchingProposalAcceptance,
+topicNameKey,
 updatePersonalLibraryDirectionCandidate,
 selectPersonalLibraryDirectionPapers,
 reconcilePersonalLibraryCatalog,
@@ -145,11 +151,13 @@ import {
   resolveLibraryPdfOpenTarget,
 } from "./src/library/pdf-opener";
 import { LibraryIndexStatusStore } from "./src/library/index-status";
+import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-acceptance-state";
 
 interface PersistedData {
   settings: PluginSettings;
   runState?: RunState;
   libraryConnection?: PersistedLibraryConnection;
+  libraryProposalAcceptances?: unknown;
 }
 
 export interface PersonalLibraryReviewLoadError {
@@ -196,6 +204,9 @@ export interface PersonalLibraryProfileSnapshot {
    * otherwise look identical whether or not it was accepted already.
    */
   settingsTopicNames: string[];
+  settingsTopics?: Topic[];
+  proposalAcceptance?: ProposalAcceptanceReceipt | null;
+  acceptanceLoadError?: string | null;
 }
 
 /**
@@ -339,6 +350,9 @@ export default class ArxivDailyPlugin extends Plugin {
    */
   private libraryMutationRevision = 0;
   private libraryProposal: PersonalLibraryDirectionProposal | null = null;
+  private libraryProposalAcceptances: ProposalAcceptanceReceipt[] = [];
+  private libraryProposalAcceptanceRaw: unknown;
+  private libraryProposalAcceptanceLoadError: string | null = null;
   private librarySuggestions: IncrementalSuggestionsDocument | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
   private librarySuggestionsLoadError: PersonalLibraryReviewLoadError | null = null;
@@ -762,6 +776,7 @@ export default class ArxivDailyPlugin extends Plugin {
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
+      moveDirection: (input) => this.movePersonalLibraryProposalCandidate(input),
       acceptTopics: (topicIds, candidateIds) => this.acceptPersonalLibraryProposedTopics(topicIds, candidateIds),
     };
   }
@@ -822,9 +837,12 @@ export default class ArxivDailyPlugin extends Plugin {
     topicId: string;
     suggestedName: string;
   }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProposal((proposal) => renamePersonalLibraryProposedTopic({
-      proposal, topicId: input.topicId, suggestedName: input.suggestedName,
-    }));
+    const candidateIds = this.libraryProposal?.topics.find(({ id }) => id === input.topicId)?.directions.map(({ id }) => id) ?? [];
+    this.assertProposalCandidatesUnprocessed(candidateIds);
+    return this.mutatePersonalLibraryProposal((proposal) => {
+      this.assertProposalCandidatesUnprocessed(candidateIds, proposal);
+      return renamePersonalLibraryProposedTopic({ proposal, topicId: input.topicId, suggestedName: input.suggestedName });
+    });
   }
 
   /**
@@ -838,52 +856,76 @@ export default class ArxivDailyPlugin extends Plugin {
   ): Promise<PersonalLibraryProfileSnapshot> {
     const proposal = this.libraryProposal;
     if (!proposal) throw new Error("Generate a direction proposal first");
-    const selectedTopics = topicIds.map((topicId) => proposal.topics.find(({ id }) => id === topicId)
-      ?? (() => { throw new Error(`Proposed topic ${topicId} is no longer in the proposal`); })());
-    if (selectedTopics.length === 0) throw new Error("Select at least one proposed topic to accept");
-    const selectedCandidates = candidateIds === undefined ? null : new Set(candidateIds);
-    const kept = selectedTopics.map((topic) => ({
-      ...topic,
-      directions: selectedCandidates
-        ? topic.directions.filter(({ id }) => selectedCandidates.has(id))
-        : topic.directions,
-    })).filter(({ directions }) => directions.length > 0);
-    if (kept.length === 0) {
-      throw new CodedError("invalid-input", "Select at least one proposed direction to accept");
-    }
-    const accepted = acceptProposedTopics({ topics: kept, existingTopics: this.settings.arxiv.topics });
-    if (accepted.length === 0) {
-      // Every kept topic's name already names a settings topic. The review
-      // page marks those as added and refuses to select them, so reaching here
-      // means settings changed underneath an open page — worth saying plainly,
-      // not worth throwing over.
-      new Notice("The selected topics are already in your research settings.");
+    if (topicIds.length === 0) throw new Error("Select at least one proposed topic to accept");
+    const connection = this.libraryConnection;
+    const connectionRevision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const proposalRevision = proposal.revision;
+    const assertCurrent = () => {
+      if (this.libraryProposalAcceptanceLoadError) {
+        throw new CodedError("acceptance-unavailable", "Library review state could not be loaded. Restore it and reload before accepting directions.");
+      }
+      if (this.libraryProposal !== proposal || proposal.revision !== proposalRevision
+        || this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision
+        || this.libraryOutputRevision !== outputRevision) {
+        throw new CodedError("conflict", "The proposal or library changed. Refresh the review before accepting.");
+      }
+    };
+    let accepted: AcceptProposedTopicsResult | undefined;
+    // Lock order is settings transaction → library storage queue. Calculation
+    // happens inside the transaction, after any earlier acceptance committed.
+    await this.settingsChanges.changeComputed((current) => {
+      assertCurrent();
+      const selected = candidateIds === undefined ? null : new Set(candidateIds);
+      const kept = topicIds.map((id) => {
+        const topic = proposal.topics.find((item) => item.id === id);
+        if (!topic) throw new CodedError("not-found", "The proposed topic no longer exists.");
+        return { ...topic, directions: selected ? topic.directions.filter(({ id }) => selected.has(id)) : topic.directions };
+      }).filter(({ directions }) => directions.length > 0);
+      if (kept.length === 0) throw new CodedError("invalid-input", "Select at least one proposed direction to accept");
+      accepted = acceptProposedTopics({
+        proposalId: proposal.proposalId, scopeFingerprint: proposal.scopeFingerprint,
+        topics: kept, existingTopics: current.arxiv.topics,
+        acceptance: this.currentProposalAcceptance(proposal),
+      });
+      const receipts = [
+        ...(this.libraryProposalAcceptances ?? []).filter((item) => item.scopeFingerprint !== proposal.scopeFingerprint),
+        accepted.acceptance,
+      ].sort((left, right) => left.scopeFingerprint.localeCompare(right.scopeFingerprint));
+      const receiptChanged = JSON.stringify(receipts) !== JSON.stringify(this.libraryProposalAcceptances ?? []);
+      return {
+        changes: [{ key: "arxiv.topics", value: accepted.topics }],
+        forcePersist: receiptChanged,
+        persist: (candidate) => this.enqueueLibraryMutation(async () => {
+          assertCurrent();
+          await this.persistSettings(candidate, receipts);
+          // This reflects the durable write even if a later view refresh fails.
+          this.libraryProposalAcceptances = receipts;
+        }),
+      };
+    });
+    if (!accepted) throw new Error("Proposal acceptance did not produce a result");
+    if (accepted.addedDirectionCount === 0) {
+      new Notice("The selected directions have already been applied to research settings.");
       return this.getPersonalLibraryProfileSnapshot();
     }
-    // Settings writes go through the same persistence path as any other
-    // settings change, so every guard that already covers them covers this.
-    this.settings.arxiv = {
-      ...this.settings.arxiv,
-      topics: [...this.settings.arxiv.topics, ...accepted],
-    };
-    await this.persistSettings();
-    // Accept runs outside the settings tab, so its already-rendered topic
-    // cards (and the 1.13+ definitions cache) need an explicit refresh.
     let refreshFailed = false;
     try {
-      this.settingsTab?.refreshSettings();
+      await this.settingsTab?.refreshAfterTopicChanges();
     } catch (error) {
-      // Persistence has succeeded. A view failure must not look like a failed
-      // acceptance and invite the researcher to append the same topics again.
       refreshFailed = true;
-      this.logger.error("settings: accepted topics were saved but the view could not refresh", error);
+      this.logger.error("settings: accepted directions were saved but the view could not refresh", error);
     }
-    const skipped = kept.length - accepted.length;
-    const skippedNote = skipped > 0
-      ? ` ${skipped} ${skipped === 1 ? "topic was" : "topics were"} already in research settings and skipped.`
-      : "";
-    new Notice(`Added ${accepted.length} ${accepted.length === 1 ? "topic" : "topics"} to research settings.${skippedNote}${refreshFailed ? " Reopen settings to refresh the list." : ""}`);
+    const newTopics = accepted.addedTopicCount > 0
+      ? ` Created ${accepted.addedTopicCount} ${accepted.addedTopicCount === 1 ? "topic" : "topics"}.` : "";
+    new Notice(`Added ${accepted.addedDirectionCount} ${accepted.addedDirectionCount === 1 ? "direction" : "directions"} to research settings.${newTopics}${refreshFailed ? " Reopen settings to refresh the list." : ""}`);
     return this.getPersonalLibraryProfileSnapshot();
+  }
+
+  private currentProposalAcceptance(proposal = this.libraryProposal): ProposalAcceptanceReceipt | null {
+    if (!proposal) return null;
+    return matchingProposalAcceptance(proposal,
+      (this.libraryProposalAcceptances ?? []).find((item) => item.scopeFingerprint === proposal.scopeFingerprint));
   }
 
   async reloadPersonalLibraryCatalog(
@@ -921,6 +963,9 @@ export default class ArxivDailyPlugin extends Plugin {
       proposalLoadError: this.libraryProposalLoadError,
       suggestionsLoadError: this.librarySuggestionsLoadError,
       settingsTopicNames: this.settings.arxiv.topics.map(({ name }) => name),
+      settingsTopics: this.settings.arxiv.topics,
+      proposalAcceptance: this.currentProposalAcceptance(),
+      acceptanceLoadError: this.libraryProposalAcceptanceLoadError ?? null,
     });
   }
 
@@ -988,6 +1033,8 @@ export default class ArxivDailyPlugin extends Plugin {
     const outputRevision = this.libraryOutputRevision;
     const authorizationFingerprint = connection.authorization?.fingerprint;
     const selectedInputFingerprint = this.selectedCatalogFingerprint(catalog);
+    const existingTopics = this.libraryExistingTopics();
+    const existingTopicsFingerprint = JSON.stringify(existingTopics);
     const expectedProposalRevision = this.libraryProposal?.revision ?? null;
     const llmSettings = structuredClone(this.settings.llm);
     const store = this.buildPersonalLibraryProfileStores(connection).proposal;
@@ -999,10 +1046,11 @@ export default class ArxivDailyPlugin extends Plugin {
     try {
       this.assertPersonalLibraryGenerationCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint,
-        catalog, selectedInputFingerprint, expectedProposalRevision,
+        catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
       });
       const proposal = await proposeClusteredPersonalLibraryDirections({
         catalog: structuredClone(catalog),
+        existingTopics,
         knowledgeBase: this.buildFullTextKnowledgeBaseStore(connection),
         // Tight groups provide evidence; the model organizes their topic scope.
         clustering: { similarityQuantile: PERSONAL_LIBRARY_SIMILARITY_QUANTILE },
@@ -1014,13 +1062,13 @@ export default class ArxivDailyPlugin extends Plugin {
       operation.signal.throwIfAborted();
       this.assertPersonalLibraryGenerationCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint,
-        catalog, selectedInputFingerprint, expectedProposalRevision,
+        catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
       });
       const result = await this.enqueueLibraryMutation(async () => {
         operation.signal.throwIfAborted();
         this.assertPersonalLibraryGenerationCurrent({
           connection, connectionRevision, outputRevision, authorizationFingerprint,
-          catalog, selectedInputFingerprint, expectedProposalRevision,
+          catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
         });
         const saved = await store.replace(proposal, expectedProposalRevision);
         this.libraryProposal = saved;
@@ -1049,8 +1097,10 @@ export default class ArxivDailyPlugin extends Plugin {
     patch: PersonalLibraryDirectionTextPatch;
     representativePaperKeys?: string[];
   }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProposal((proposal, catalog) =>
-      updatePersonalLibraryDirectionCandidate({
+    this.assertProposalCandidatesUnprocessed([input.candidateId]);
+    return this.mutatePersonalLibraryProposal((proposal, catalog) => {
+      this.assertProposalCandidatesUnprocessed([input.candidateId], proposal);
+      return updatePersonalLibraryDirectionCandidate({
         proposal,
         candidateId: input.candidateId,
         patch: input.patch,
@@ -1058,7 +1108,8 @@ export default class ArxivDailyPlugin extends Plugin {
           representativePaperKeys: input.representativePaperKeys,
           catalog,
         }),
-      }));
+      });
+    });
   }
 
   async mergePersonalLibraryProposalCandidates(input: {
@@ -1066,19 +1117,63 @@ export default class ArxivDailyPlugin extends Plugin {
     draft: PersonalLibraryReviewedDirectionDraft;
     candidateId?: string;
   }): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProposal((proposal, catalog) =>
-      mergePersonalLibraryDirectionCandidates({
+    this.assertProposalCandidatesUnprocessed(input.sourceCandidateIds);
+    return this.mutatePersonalLibraryProposal((proposal, catalog) => {
+      this.assertProposalCandidatesUnprocessed(input.sourceCandidateIds, proposal);
+      return mergePersonalLibraryDirectionCandidates({
         proposal,
         sourceCandidateIds: input.sourceCandidateIds,
         candidateId: input.candidateId ?? crypto.randomUUID(),
         draft: input.draft,
         catalog,
-      }));
+      });
+    });
   }
 
   async removePersonalLibraryProposalCandidate(candidateId: string): Promise<PersonalLibraryProfileSnapshot> {
-    return this.mutatePersonalLibraryProposal((proposal) =>
-      removePersonalLibraryDirectionCandidate({ proposal, candidateId }));
+    this.assertProposalCandidatesUnprocessed([candidateId]);
+    return this.mutatePersonalLibraryProposal((proposal) => {
+      this.assertProposalCandidatesUnprocessed([candidateId], proposal);
+      return removePersonalLibraryDirectionCandidate({ proposal, candidateId });
+    });
+  }
+
+  async movePersonalLibraryProposalCandidate(input: {
+    candidateId: string;
+    targetTopicId: string | null;
+    suggestedName?: string;
+  }): Promise<PersonalLibraryProfileSnapshot> {
+    this.assertProposalCandidatesUnprocessed([input.candidateId]);
+    const destinationName = (): string => {
+      if (input.targetTopicId !== null) {
+        const target = this.settings.arxiv.topics.find(({ id }) => id === input.targetTopicId);
+        if (!target) throw new CodedError("target-missing", "The destination topic was removed. Choose a destination again.");
+        return target.name;
+      }
+      const name = input.suggestedName?.trim();
+      if (!name || this.settings.arxiv.topics.some((topic) => topicNameKey(topic.name) === topicNameKey(name))) {
+        throw new CodedError("invalid-input", "Enter a distinct new topic name, or choose an existing destination.");
+      }
+      return name;
+    };
+    destinationName();
+    return this.mutatePersonalLibraryProposal((proposal) => {
+      this.assertProposalCandidatesUnprocessed([input.candidateId], proposal);
+      return movePersonalLibraryDirectionCandidate({
+        proposal, candidateId: input.candidateId, targetTopicId: input.targetTopicId,
+        suggestedName: destinationName(), topicId: crypto.randomUUID(),
+      });
+    });
+  }
+
+  private assertProposalCandidatesUnprocessed(
+    candidateIds: readonly string[],
+    proposal = this.libraryProposal,
+  ): void {
+    const processed = new Set(this.currentProposalAcceptance(proposal)?.processedCandidateIds ?? []);
+    if (candidateIds.some((id) => processed.has(id))) {
+      throw new CodedError("already-accepted", "This direction was already applied. Edit it in research settings.");
+    }
   }
 
   getIncrementalSuggestions(): IncrementalSuggestionsDocument | null {
@@ -1993,6 +2088,13 @@ export default class ArxivDailyPlugin extends Plugin {
     const persisted = raw && typeof raw === "object"
       ? raw as Record<string, unknown>
       : {};
+    this.libraryProposalAcceptanceRaw = persisted.libraryProposalAcceptances;
+    const receipts = decodeProposalAcceptanceReceipts(persisted.libraryProposalAcceptances);
+    this.libraryProposalAcceptances = receipts ?? [];
+    this.libraryProposalAcceptanceLoadError = receipts === null
+      ? "Library review state could not be loaded. Restore the saved review state and reload before accepting directions."
+      : null;
+    if (this.libraryProposalAcceptanceLoadError) loaded.warnings.push(this.libraryProposalAcceptanceLoadError);
     const persistedLibraryConnection = persisted.libraryConnection;
     this.libraryConnection = decodeLibraryConnection(
       persistedLibraryConnection,
@@ -2167,6 +2269,12 @@ export default class ArxivDailyPlugin extends Plugin {
     }))}`;
   }
 
+  private libraryExistingTopics() {
+    return this.settings.arxiv.topics.map(({ id, name, directions }) => ({
+      id, name, directions: directions.map(({ id, text }) => ({ id, text })),
+    }));
+  }
+
   private assertPersonalLibraryGenerationCurrent(input: {
     connection: PersistedLibraryConnection;
     connectionRevision: number;
@@ -2175,8 +2283,12 @@ export default class ArxivDailyPlugin extends Plugin {
     catalog: PersonalLibraryCatalog;
     selectedInputFingerprint: string;
     expectedProposalRevision: number | null;
+    existingTopicsFingerprint: string;
   }): void {
     this.assertLibraryConnectionCurrent(input.connection, input.connectionRevision);
+    if (JSON.stringify(this.libraryExistingTopics()) !== input.existingTopicsFingerprint) {
+      throw new CodedError("conflict", "Research topics changed during direction generation. Generate a fresh proposal.");
+    }
     if (this.libraryOutputRevision !== input.outputRevision) {
       throw new Error("Output paths changed during personal library direction generation");
     }
@@ -2340,9 +2452,16 @@ export default class ArxivDailyPlugin extends Plugin {
     return result;
   }
 
-  private async persistSettings(settings?: PluginSettings): Promise<void> {
+  private async persistSettings(
+    settings?: PluginSettings,
+    receipts?: ProposalAcceptanceReceipt[],
+  ): Promise<void> {
+    const reviewState = receipts ?? (this.libraryProposalAcceptanceLoadError
+      ? this.libraryProposalAcceptanceRaw : this.libraryProposalAcceptances ?? []);
     const data: PersistedData = {
       settings: settings ?? this.settings,
+      ...(this.libraryProposalAcceptanceLoadError || (Array.isArray(reviewState) && reviewState.length > 0)
+        ? { libraryProposalAcceptances: reviewState } : {}),
       ...(this.libraryConnection
         ? { libraryConnection: this.libraryConnection }
         : {}),

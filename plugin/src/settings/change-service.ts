@@ -24,6 +24,10 @@ export interface PreparedOutputStores {
 
 export interface ExplicitSettingsChange<TPrepared = unknown> {
   changes: readonly SettingsValueChange[];
+  /** Persist host metadata even when the settings values are unchanged. */
+  forcePersist?: boolean;
+  /** Save settings together with any host-owned transaction metadata. */
+  persist?: (candidate: PluginSettings) => Promise<void>;
   validateCandidate?: (candidate: PluginSettings) => void;
   prepare?: (candidate: PluginSettings) => Promise<TPrepared> | TPrepared;
   install?: (prepared: TPrepared, candidate: PluginSettings) => void;
@@ -111,6 +115,13 @@ export class SettingsChangeService {
     return this.enqueue(() => this.applyChange(request));
   }
 
+  /** Compute against a private snapshot after preceding transactions commit. */
+  changeComputed<TPrepared = unknown>(
+    compute: (current: PluginSettings) => ExplicitSettingsChange<TPrepared>,
+  ): Promise<void> {
+    return this.enqueue(() => this.applyChange(compute(cloneSettings(this.deps.settings))));
+  }
+
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const queued = this.queue.then(operation);
     this.queue = queued.catch(() => undefined);
@@ -134,7 +145,7 @@ export class SettingsChangeService {
         for (const change of request.changes) {
           writePath(candidate, change.key, cloneValue(change.value));
         }
-        if (requestedKeys.every(
+        if (!request.forcePersist && requestedKeys.every(
           (key) => valuesEqual(readPath(previous, key), readPath(candidate, key)),
         )) return;
         candidate.detailSelection = sanitizeDetailSelection(
@@ -147,7 +158,7 @@ export class SettingsChangeService {
           (key) => !valuesEqual(readPath(previous, key), readPath(candidate, key)),
         );
         commitPaths = changedLeafPaths(previous, candidate);
-        if (commitPaths.length === 0) return;
+        if (commitPaths.length === 0 && !request.forcePersist) return;
         assertLiveCommitEligible(this.deps.settings, candidate, commitPaths);
 
         const preparedRollback = this.deps.prepareCandidateChange?.(
@@ -176,7 +187,7 @@ export class SettingsChangeService {
         if (outputDirectoryChanged && this.deps.hasActiveOutputWork?.()) {
           throw new Error("Output directories cannot change while operations or runs are active");
         }
-        await this.deps.persistSettings(candidate);
+        await (request.persist ?? this.deps.persistSettings)(candidate);
       } catch (error) {
         if (rollbackCandidateChange) {
           try {
@@ -354,7 +365,10 @@ function cloneSettings(settings: PluginSettings): PluginSettings {
     arxiv: {
       ...settings.arxiv,
       categories: [...settings.arxiv.categories],
-      topics: settings.arxiv.topics.map((topic) => ({ ...topic })),
+      topics: settings.arxiv.topics.map((topic) => ({
+        ...topic,
+        directions: topic.directions.map((direction) => ({ ...direction })),
+      })),
     },
     detailSelection: { ...settings.detailSelection },
     output: { ...settings.output },

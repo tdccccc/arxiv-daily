@@ -2,9 +2,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Modal, Notice, type App } from "obsidian";
-import { DEFAULT_SETTINGS, normalizeTopic } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, normalizeTopic, PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION } from "@arxiv-daily/core";
 import ArxivDailyPlugin from "../main.ts";
 import { ArxivDailySettingTab } from "../src/settings/tab";
+import { SettingsChangeService } from "../src/settings/change-service";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   PersonalLibraryInterestProfileModal,
@@ -71,7 +72,7 @@ function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): Inter
       }, summary: { inventoryCount: 1, eligibleFileCount: 1, readyFileCount: 1, unsupportedFileCount: 0, unidentifiedFileCount: 0, failedFileCount: 0, paperCount: 1 },
     } as any,
     proposal: {
-      schemaVersion: 5, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
+      schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION, revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,
       identificationFingerprint: fingerprint, catalogInputFingerprint: fingerprint,
       catalogInputPapers: candidate.representatives, generationContractFingerprint: fingerprint,
       generatedAt: "2026-08-03T00:00:00.000Z",
@@ -151,8 +152,10 @@ function openPluginReview(
   const settings = structuredClone(DEFAULT_SETTINGS);
   settings.arxiv.topics = existingTopics;
   const saved: typeof settings[] = [];
+  const envelopes: { settings: typeof settings; libraryProposalAcceptances?: unknown }[] = [];
   const saveData = vi.fn(async (data: { settings: typeof settings }) => {
     saved.push(structuredClone(data.settings));
+    envelopes.push(structuredClone(data));
   });
   Object.assign(plugin, {
     app: {} as App,
@@ -167,11 +170,19 @@ function openPluginReview(
     libraryProposalLoadError: null,
     librarySuggestionsLoadError: null,
   });
+  wireSettingsTransaction(plugin);
   plugin.openPersonalLibraryDirectionReview();
   const modal = Modal.opened.at(-1)!;
   modal.modalEl.appendChild(modal.contentEl);
   document.body.appendChild(modal.modalEl);
-  return { plugin, root: modal.contentEl, saveData, saved };
+  return { plugin, root: modal.contentEl, saveData, saved, envelopes };
+}
+
+function wireSettingsTransaction(plugin: ArxivDailyPlugin): void {
+  Object.assign(plugin, { settingsChanges: new SettingsChangeService({
+    settings: plugin.settings,
+    persistSettings: (candidate) => (plugin as any).enqueueLibraryMutation(() => (plugin as any).persistSettings(candidate)),
+  }) });
 }
 
 /** A real, already-rendered settings page behind the review modal. */
@@ -362,11 +373,10 @@ describe("accepting a proposed structure", () => {
     editor.open = true;
     const fields = Array.from(editor.querySelectorAll("textarea"));
     fields[0]!.value = "Reliable research agents";
-    fields[1]!.value = "agents\nreliability";
     button(editor, "Save edits").click();
     await vi.waitFor(() => expect(ctrl.mock.updateProposal).toHaveBeenCalledWith({
       candidateId: "candidate-1",
-      patch: { text: "Reliable research agents", discoveryCues: ["agents", "reliability"] },
+      patch: { text: "Reliable research agents", discoveryCues: ["agents"] },
       representativePaperKeys: ["arxiv:2608.00001"],
     }));
     await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
@@ -526,10 +536,8 @@ describe("accepting a proposed structure", () => {
     expect(section?.textContent).toBe(bufferPoolHeading(2));
     expect(section?.querySelectorAll("li")).toHaveLength(0);
     expect(section?.textContent).not.toContain("Paper <img src=x>");
-    // The incremental flow is dark until it is rebuilt around topics; a blank
-    // space would read as a bug. It is unrelated to the buffer pool and must
-    // keep rendering regardless of how many papers are uncovered.
-    expect(root.textContent).toContain("Incremental suggestions");
+    // The next action stays visible independently of uncovered-paper counts.
+    expect(root.textContent).toContain("rebuild the library index and regenerate proposals");
   });
 
   it("renders nothing when every paper is covered by a proposed direction", () => {
@@ -549,25 +557,25 @@ describe("proposed topics already in settings", () => {
    * source of truth.
    */
   it("renders an already-added topic as unselectable and excludes it from preselection", () => {
-    const ctrl = controller(snapshot({ settingsTopicNames: ["Research agents"] }));
+    const ctrl = controller(snapshot({ proposalAcceptance: { proposalId: "proposal-1", scopeFingerprint: fingerprint, topicTargets: {}, processedCandidateIds: ["candidate-1"] } }));
     const root = open(ctrl.mock).contentEl;
     const checkbox = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
     expect(checkbox.checked).toBe(false);
     expect(checkbox.disabled).toBe(true);
-    expect(checkbox.title).toContain("already in your research settings");
+    expect(checkbox.title).toContain("already processed");
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
     expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
   });
 
-  it("matches an added topic name regardless of case or surrounding whitespace", () => {
-    const ctrl = controller(snapshot({ settingsTopicNames: ["  research AGENTS  "] }));
+  it("keeps an accepted direction marked after the settings topic is renamed", () => {
+    const ctrl = controller(snapshot({ settingsTopicNames: ["My renamed topic"], proposalAcceptance: { proposalId: "proposal-1", scopeFingerprint: fingerprint, topicTargets: {}, processedCandidateIds: ["candidate-1"] } }));
     const root = open(ctrl.mock).contentEl;
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
   });
 
   it("skips an already-added topic when choosing the two widest topics to preselect", async () => {
     const initial = topicSnapshot();
-    const ctrl = controller({ ...initial, settingsTopicNames: ["Largest coverage"] });
+    const ctrl = controller({ ...initial, proposalAcceptance: { proposalId: "proposal-1", scopeFingerprint: fingerprint, topicTargets: {}, processedCandidateIds: ["large-direction-1", "large-direction-2"] } });
     const root = open(ctrl.mock).contentEl;
     expect(topicChoices(root).map((choice) => choice.checked)).toEqual([false, true, true, false]);
     const sections = Array.from(root.querySelectorAll(".arxiv-daily-interest-review__topic"));
@@ -578,7 +586,7 @@ describe("proposed topics already in settings", () => {
     ));
   });
 
-  it("renders a proposed topic already in real settings as Added and excludes it from acceptance", async () => {
+  it("allows new directions for a same-name topic already in real settings", async () => {
     const initial = topicSnapshot();
     const existing = [normalizeTopic({
       name: "Largest coverage", tag: "largest-coverage", detail: false,
@@ -587,15 +595,14 @@ describe("proposed topics already in settings", () => {
     const { root, saved } = openPluginReview(initial, existing);
     const heading = Array.from(root.querySelectorAll<HTMLElement>(".arxiv-daily-interest-review__topic-heading"))
       .find((element) => element.textContent?.includes("Largest coverage"))!;
-    expect(heading.textContent).toContain("Added");
+    expect(heading.textContent).not.toContain("Added");
     const checkbox = heading.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    expect(checkbox.checked).toBe(false);
-    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
     button(root, "Accept 2 topic(s) into settings").click();
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
-    expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual([
-      "Largest coverage", "First tied coverage", "Second tied coverage",
-    ]);
+    expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Largest coverage", "First tied coverage"]);
+    expect(saved[0]!.arxiv.topics[0]!.directions).toHaveLength(3);
   });
 
   it("reports settings topic names in the profile snapshot", () => {
@@ -606,21 +613,21 @@ describe("proposed topics already in settings", () => {
     expect(plugin.getPersonalLibraryProfileSnapshot().settingsTopicNames).toEqual(["Existing topic"]);
   });
 
-  it("skips a topic whose name already exists in settings, without writing settings or failing loudly", async () => {
+  it("appends missing directions to a same-name topic and records the decision", async () => {
     const existing = [normalizeTopic({
       name: "Largest coverage", tag: "largest-coverage", detail: false,
       directions: [{ text: "An existing direction", origin: "manual" }],
     })];
     const { plugin, saveData } = openPluginReview(topicSnapshot(), existing);
     const result = await plugin.acceptPersonalLibraryProposedTopics(["large"]);
-    expect(saveData).not.toHaveBeenCalled();
-    expect(result.settingsTopicNames).toEqual(["Largest coverage"]);
-    expect(Notice.calls.map(({ message }) => message)).toContain(
-      "The selected topics are already in your research settings.",
-    );
+    expect(saveData).toHaveBeenCalledOnce();
+    expect(result.settingsTopics![0]!.directions.map(({ text }) => text)).toEqual([
+      "An existing direction", "Largest coverage direction 1", "Largest coverage direction 2",
+    ]);
+    expect(result.proposalAcceptance!.processedCandidateIds).toEqual(["large-direction-1", "large-direction-2"]);
   });
 
-  it("accepts the new topics in a mixed selection and says which were skipped", async () => {
+  it("reports added directions and new topics for a mixed selection", async () => {
     const existing = [normalizeTopic({
       name: "Largest coverage", tag: "largest-coverage", detail: false,
       directions: [{ text: "An existing direction", origin: "manual" }],
@@ -630,7 +637,7 @@ describe("proposed topics already in settings", () => {
     expect(saveData).toHaveBeenCalledOnce();
     expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Largest coverage", "First tied coverage"]);
     expect(Notice.calls.map(({ message }) => message)).toContain(
-      "Added 1 topic to research settings. 1 topic was already in research settings and skipped.",
+      "Added 3 directions to research settings. Created 1 topic.",
     );
   });
 });
@@ -661,7 +668,7 @@ describe("persisting the reviewed direction selection", () => {
     expect(Notice.calls).toEqual([]);
     finish();
     await accepting;
-    expect(Notice.calls.map(({ message }) => message)).toContain("Added 1 topic to research settings.");
+    expect(Notice.calls.map(({ message }) => message)).toContain("Added 2 directions to research settings. Created 1 topic.");
   });
 
   it("does not refresh the settings page or report success after a failed write", async () => {
@@ -682,7 +689,7 @@ describe("persisting the reviewed direction selection", () => {
     await plugin.acceptPersonalLibraryProposedTopics(["large"]);
     expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Existing topic", "Largest coverage"]);
     expect(Notice.calls.map(({ message }) => message)).toContain(
-      "Added 1 topic to research settings. Reopen settings to refresh the list.",
+      "Added 2 directions to research settings. Created 1 topic. Reopen settings to refresh the list.",
     );
     tab.hide();
   });
@@ -834,4 +841,136 @@ describe("review modal stylesheet", () => {
       /\.arxiv-daily-interest-review__form\s*\{[^}]*grid-template-columns/.test(block),
     )).toBe(false);
   });
+});
+
+
+describe("atomic proposal acceptance", () => {
+  it("keeps live topics private until their receipt and settings are saved together", async () => {
+    const { plugin, saveData, envelopes } = openPluginReview();
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const save = saveData.getMockImplementation()!;
+    saveData.mockImplementationOnce(async (data) => { await gate; await save(data); });
+    const accepting = plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
+    expect(plugin.settings.arxiv.topics).toEqual([]);
+    finish();
+    await accepting;
+    expect(envelopes[0]).toMatchObject({
+      libraryProposalAcceptances: [{ proposalId: "proposal-1", processedCandidateIds: ["large-direction-1"] }],
+    });
+    expect(plugin.settings.arxiv.topics[0]!.directions.map(({ id }) => id)).toEqual(["large-direction-1"]);
+  });
+
+  it("can retry a failed write without leaving an in-memory acceptance behind", async () => {
+    const { plugin, saveData } = openPluginReview();
+    saveData.mockRejectedValueOnce(new Error("disk full"));
+    await expect(plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]))
+      .rejects.toThrow("disk full");
+    expect(plugin.settings.arxiv.topics).toEqual([]);
+    expect(plugin.getPersonalLibraryProfileSnapshot().proposalAcceptance ?? null).toBeNull();
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    expect(plugin.settings.arxiv.topics).toHaveLength(1);
+    expect(plugin.settings.arxiv.topics[0]!.directions).toHaveLength(1);
+  });
+
+  it("reloads acceptance identity and preserves a user's edit while accepting the remaining direction", async () => {
+    const initial = topicSnapshot();
+    const { plugin, envelopes } = openPluginReview(initial);
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    const persisted = structuredClone(envelopes[0]!);
+    persisted.settings.arxiv.topics[0]!.name = "My renamed topic";
+    persisted.settings.arxiv.topics[0]!.directions[0]!.text = "My refined research question";
+    const reloaded = openPluginReview(initial);
+    Object.assign(reloaded.plugin, { loadData: vi.fn(async () => structuredClone(persisted)) });
+    await (reloaded.plugin as any).loadSettingsAndState();
+    wireSettingsTransaction(reloaded.plugin);
+    await reloaded.plugin.acceptPersonalLibraryProposedTopics(["large"]);
+    expect(reloaded.plugin.settings.arxiv.topics.map(({ name }) => name)).toEqual(["My renamed topic"]);
+    expect(reloaded.plugin.settings.arxiv.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["My refined research question", "Largest coverage direction 2"]);
+  });
+
+  it("retains a receipt even when all selected text was already present by hand", async () => {
+    const existing = normalizeTopic({ id: "manual-topic", name: "Largest coverage", tag: "largest", detail: true,
+      directions: [{ id: "manual-direction", text: "Largest coverage direction 1", origin: "manual" }],
+    });
+    const { plugin, envelopes } = openPluginReview(topicSnapshot(), [existing]);
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    expect(plugin.settings.arxiv.topics).toEqual([existing]);
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0]).toMatchObject({
+      libraryProposalAcceptances: [{ processedCandidateIds: ["large-direction-1"] }],
+    });
+    plugin.settings.arxiv.topics[0]!.directions = [];
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    expect(plugin.settings.arxiv.topics[0]!.directions).toEqual([]);
+  });
+
+  it("serializes two different acceptance selections without dropping either", async () => {
+    const { plugin } = openPluginReview();
+    await Promise.all([
+      plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]),
+      plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-2"]),
+    ]);
+    expect(plugin.settings.arxiv.topics).toHaveLength(1);
+    expect(plugin.settings.arxiv.topics[0]!.directions.map(({ id }) => id))
+      .toEqual(["large-direction-1", "large-direction-2"]);
+  });
+});
+
+describe("persisted proposal acceptance", () => {
+  it("retains library-specific receipts across ordinary settings writes and switching libraries", async () => {
+    const initial = topicSnapshot();
+    const { plugin, envelopes } = openPluginReview(initial);
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    plugin.settings.arxiv.topics[0]!.directions = [];
+    const other = structuredClone(initial.proposal!);
+    other.proposalId = "proposal-other-library";
+    other.scopeFingerprint = `sha256:${"c".repeat(64)}`;
+    other.topics = other.topics.filter(({ id }) => id === "tie-z");
+    Object.assign(plugin, { libraryProposal: other });
+    await plugin.acceptPersonalLibraryProposedTopics(["tie-z"]);
+    await plugin.saveSettings();
+    expect(envelopes.at(-1)!.libraryProposalAcceptances).toHaveLength(2);
+    Object.assign(plugin, { libraryProposal: initial.proposal });
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    expect(plugin.settings.arxiv.topics.find(({ id }) => id === "large")!.directions).toEqual([]);
+  });
+
+  it("blocks acceptance instead of treating an invalid receipt as a never-reviewed proposal", async () => {
+    const { plugin, saveData } = openPluginReview();
+    Object.assign(plugin, { loadData: vi.fn(async () => ({ settings: plugin.settings, libraryProposalAcceptances: "broken" })) });
+    await (plugin as any).loadSettingsAndState();
+    wireSettingsTransaction(plugin);
+    expect(plugin.getPersonalLibraryProfileSnapshot().acceptanceLoadError).toBeTruthy();
+    await expect(plugin.acceptPersonalLibraryProposedTopics(["large"]))
+      .rejects.toThrow(/review state|receipt/i);
+    expect(saveData).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("processed proposal directions", () => {
+  it("rejects editing or discarding an already applied direction through a stale controller", async () => {
+    const { plugin } = openPluginReview();
+    await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+    await expect(plugin.updatePersonalLibraryProposalCandidate({
+      candidateId: "large-direction-1", patch: { text: "Replace accepted text" },
+    })).rejects.toThrow(/already.*applied|already.*accepted/i);
+    await expect(plugin.removePersonalLibraryProposalCandidate("large-direction-1"))
+      .rejects.toThrow(/already.*applied|already.*accepted/i);
+    expect(plugin.settings.arxiv.topics[0]!.directions[0]!.text).toBe("Largest coverage direction 1");
+  });
+});
+
+it("requires a valid explicitly chosen destination before moving a candidate", async () => {
+  const { plugin } = openPluginReview();
+  await expect(plugin.movePersonalLibraryProposalCandidate({
+    candidateId: "large-direction-1", targetTopicId: "missing-topic",
+  })).rejects.toThrow(/destination|target/i);
+  await plugin.acceptPersonalLibraryProposedTopics(["large"], ["large-direction-1"]);
+  await expect(plugin.movePersonalLibraryProposalCandidate({
+    candidateId: "large-direction-1", targetTopicId: null, suggestedName: "Separate topic",
+  })).rejects.toThrow(/already.*applied|already.*accepted/i);
 });
