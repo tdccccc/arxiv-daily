@@ -160,7 +160,30 @@ function preserveFigureAndTableText(doc: Document) {
   }
 }
 
+/** Select one MathML representation before reading text from a parsed document. */
+export function preserveMathText(doc: Document) {
+  for (const math of Array.from(doc.querySelectorAll("math"))) {
+    const semantics = Array.from(math.children).find((node) => node.localName === "semantics");
+    const annotation = Array.from(semantics?.children ?? []).find((node) =>
+      node.localName === "annotation"
+      && node.getAttribute("encoding")?.toLowerCase() === "application/x-tex");
+    const tex = annotation?.textContent?.trim()
+      || (math.classList.contains("ltx_Math") ? math.getAttribute("alttext")?.trim() : "");
+    if (tex) {
+      // MathML semantics carries alternatives, not consecutive text. Keep TeX
+      // once so subscripts, fractions, and other structure survive extraction.
+      math.parentNode?.replaceChild(doc.createTextNode("$" + tex + "$"), math);
+    } else {
+      // Without TeX, keep the presentation tree and omit auxiliary encodings.
+      for (const auxiliary of Array.from(math.querySelectorAll("annotation, annotation-xml"))) {
+        auxiliary.parentNode?.removeChild(auxiliary);
+      }
+    }
+  }
+}
+
 function stripNoise(doc: Document) {
+  preserveMathText(doc);
   preserveFigureAndTableText(doc);
   for (const tag of ["script", "style", "nav", "footer"]) {
     for (const el of Array.from(doc.querySelectorAll(tag))) {

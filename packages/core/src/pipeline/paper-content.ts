@@ -5,6 +5,7 @@ import type { MarkupParser, StorageAdapter } from "../core/adapters";
 import {
   extractAbstractConclusion,
   extractSections,
+  preserveMathText,
   type ExtractSectionsOpts,
 } from "./section-extractor";
 import { extractLatexSource } from "./source-extractor";
@@ -93,8 +94,9 @@ export class PaperContentFetcher {
             fullTextSource: fs ? "arxiv-html" : undefined,
           };
         }
-        const plain = html
-          .replace(/<[^>]+>/g, " ")
+        const fallbackDoc = this.markupParser.parseFromString(html, "text/html");
+        preserveMathText(fallbackDoc);
+        const plain = textWithElementSpacing(fallbackDoc)
           .replace(/\s+/g, " ")
           .slice(0, opts.paperCharLimit);
         htmlContent = {
@@ -164,6 +166,7 @@ export class PaperContentFetcher {
         await this.cache.set(absKey, "abs", abs);
       }
       const doc = this.markupParser.parseFromString(abs, "text/html");
+      preserveMathText(doc);
       const bq = doc.querySelector("blockquote.abstract");
       const text =
         (bq?.textContent ?? "").replace(/^\s*Abstract:?\s*/, "").trim() || "N/A";
@@ -303,6 +306,14 @@ export class PaperContentFetcher {
       }
     }
   }
+}
+
+function textWithElementSpacing(node: Node): string {
+  if (node.nodeType === 3 || node.nodeType === 4) return node.textContent ?? "";
+  if (node.nodeType !== 1 && node.nodeType !== 9) return "";
+  // Match the fallback's separation between HTML elements without treating
+  // comparison operators inside attributes or mathematical text as markup.
+  return " " + Array.from(node.childNodes, textWithElementSpacing).join("") + " ";
 }
 
 export async function cleanupSourceCache(

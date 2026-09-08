@@ -1,4 +1,5 @@
 import { markupParser } from "./markup-parser";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   cleanupSourceCache,
@@ -6,6 +7,7 @@ import {
 } from "../src/pipeline/paper-content";
 import { Logger } from "../src/services/logger";
 import type { StorageAdapter } from "../src/core/adapters";
+import { HtmlCache } from "../src/pipeline/html-cache";
 
 const opts = {
   isDetail: true,
@@ -93,6 +95,103 @@ function makeCache() {
 }
 
 describe("PaperContentFetcher source fallback", () => {
+  it.each(["network", "cache"])(
+    "preserves one mathematical representation in unstructured HTML from %s",
+    async (source) => {
+      const fixture = readFileSync(
+        new URL("./fixtures/arxiv-scientific-math.html", import.meta.url),
+        "utf8",
+      );
+      const doc = markupParser.parseFromString(fixture, "text/html");
+      const paragraph = doc.getElementById("S2.I1.i3.p1.1")!.outerHTML;
+      const html = "<html><body>" + paragraph + "<p>Further measurements.</p></body></html>";
+      const { storage } = makeStorage();
+      const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+      if (source === "cache") await cache.set("html/2609.03779", "html", html);
+      const fetcher = {
+        fetchPaperHtml: vi.fn(async () => ({ ok: true, status: 200, body: html })),
+        fetchSource: vi.fn(async () => { throw new Error("unexpected source request"); }),
+        fetchPaperAbsPage: vi.fn(async () => { throw new Error("unexpected abs request"); }),
+      };
+      const paperFetcher = new PaperContentFetcher(
+        fetcher as any, cache, new Logger("error"), markupParser,
+      );
+
+      const result = await paperFetcher.fetch("2609.03779", { ...opts, isDetail: false });
+
+      expect(result.abstractConclusion).toContain(
+        "peak flux density of $F_{\\rm peak}>0.75\\,\\rm{mJy}/\\rm{beam}$; $121\\,179$ objects",
+      );
+      expect(result.abstractConclusion).toContain("condition. Further measurements.");
+      expect(result.fullSections).toBeNull();
+      expect(await cache.get("html/2609.03779", "html")).toBe(html);
+      expect(fetcher.fetchPaperHtml).toHaveBeenCalledTimes(source === "cache" ? 0 : 1);
+      expect(fetcher.fetchPaperAbsPage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["network", "cache"])(
+    "preserves mathematical object identifiers in the abs-page fallback from %s",
+    async (source) => {
+      const fixture = readFileSync(
+        new URL("./fixtures/arxiv-scientific-math.html", import.meta.url),
+        "utf8",
+      );
+      const doc = markupParser.parseFromString(fixture, "text/html");
+      const abstract = doc.querySelector(".ltx_abstract")!.innerHTML;
+      const html = '<html><body><blockquote class="abstract">Abstract: '
+        + abstract + "</blockquote></body></html>";
+      const { storage } = makeStorage();
+      const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+      if (source === "cache") await cache.set("abs/2609.03089", "abs", html);
+      const fetcher = {
+        fetchPaperHtml: vi.fn(async () => ({ ok: false, status: 404 })),
+        fetchSource: vi.fn(async () => { throw new Error("unexpected source request"); }),
+        fetchPaperAbsPage: vi.fn(async () => html),
+      };
+      const paperFetcher = new PaperContentFetcher(
+        fetcher as any, cache, new Logger("error"), markupParser,
+      );
+
+      const result = await paperFetcher.fetch("2609.03089", { ...opts, isDetail: false });
+
+      expect(result.abstractConclusion).toContain("HE0435$-$1223, PG1115$+$080, and WFI2033$-$4723");
+      expect(result.abstractConclusion).toMatch(/^## Abstract\nWe extract stellar kinematics/);
+      expect(result.fullSections).toBeNull();
+      expect(await cache.get("abs/2609.03089", "abs")).toBe(html);
+      expect(fetcher.fetchPaperAbsPage).toHaveBeenCalledTimes(source === "cache" ? 0 : 1);
+    },
+  );
+
+  it("re-extracts mathematical text from cached raw HTML without rewriting it", async () => {
+    const html = readFileSync(
+      new URL("./fixtures/arxiv-scientific-math.html", import.meta.url),
+      "utf8",
+    );
+    const { storage } = makeStorage();
+    const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+    await cache.set("html/2609.03089", "html", html);
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => { throw new Error("unexpected network request"); }),
+      fetchSource: vi.fn(async () => { throw new Error("unexpected source request"); }),
+      fetchPaperAbsPage: vi.fn(async () => { throw new Error("unexpected abs request"); }),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any,
+      cache,
+      new Logger("error"),
+      markupParser,
+    );
+
+    const result = await paperFetcher.fetch("2609.03089", opts);
+
+    expect(result.abstractConclusion).toContain("HE0435$-$1223, PG1115$+$080");
+    expect(result.fullSections).toContain("## II.1 Model and $\\alpha_{M}$ parameter");
+    expect(result.fullTextSource).toBe("arxiv-html");
+    expect(await cache.get("html/2609.03089", "html")).toBe(html);
+    expect(fetcher.fetchPaperHtml).not.toHaveBeenCalled();
+  });
+
   it("uses arXiv source when rendered HTML has no full sections", async () => {
     const tex = String.raw`
 \documentclass{article}
