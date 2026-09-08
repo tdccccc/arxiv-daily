@@ -136,6 +136,7 @@ export interface SettingDefinitionsHost {
   showSetupGuide?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
+  renderLibraryTopicEntry?: (setting: Setting) => void;
   renderTimezoneRow?: (setting: Setting) => void;
   addCategory?: () => void;
   deleteCategory?: (index: number) => void;
@@ -252,10 +253,14 @@ export function buildSettingDefinitions(
       onDelete: (index) => void host.deleteCategory?.(index),
     },
     {
+      name: "Topics from your library",
+      render: (setting: Setting) => host.renderLibraryTopicEntry?.(setting),
+    },
+    {
       type: "list",
       heading: "Research topics",
       emptyState:
-        "No topics yet. Add one to define what to track.",
+        "No topics yet. Generate from your library or add a topic.",
       items: topics.map((topic, index) => ({
         name: topic.name.trim() || "(unnamed)",
         render: (setting: Setting) => host.renderTopicRow?.(setting, index),

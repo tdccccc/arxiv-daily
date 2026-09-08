@@ -109,6 +109,18 @@ function makeLegacyApiKeyTab(
   return { tab, settings, refreshSensitiveValues, installOutputStores };
 }
 
+it("offers library direction review in the legacy research topic settings", async () => {
+  const { tab } = makeLegacyApiKeyTab(async () => undefined);
+  tab.plugin.getLibraryConnectionStatus = () => ({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+  tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+  tab.plugin.openPersonalLibraryDirectionReview = vi.fn();
+  tab.display();
+  const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review library directions");
+  expect(entry).toBeDefined();
+  entry!.click();
+  await vi.waitFor(() => expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+});
+
 function renderLegacyApiKey(tab: ArxivDailySettingTab) {
   const container = document.createElement("div");
   const render = Reflect.get(tab, "renderApiKeySetting") as (

@@ -234,6 +234,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
         declarativeRows.renderTopicRow(this, setting, index),
+      renderLibraryTopicEntry: (setting) => this.renderLibraryTopicEntry(setting),
       renderTimezoneRow: (setting) =>
         declarativeRows.renderTimezoneRow(this, setting),
       renderRunWindowRow: (setting) =>
@@ -640,6 +641,27 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.refreshSettings();
       await this.offerEmbeddingModeChoice();
     }
+  }
+
+  public renderLibraryTopicEntry(setting: Setting): void {
+    const status = this.plugin.getLibraryConnectionStatus();
+    const index = this.plugin.libraryIndexStatus.snapshot();
+    setting.setName("Topics from your library");
+    setting.addButton((button) => button
+      .setButtonText(index.lastRun?.papers ? "Review library directions" : "Generate from library")
+      .setDisabled(Boolean(index.activity))
+      .onClick(() => this.runAction("review library directions", async () => {
+        button.setDisabled(true);
+        try {
+          if (status.kind === "disconnected") await this.chooseLibraryRoot();
+          if (this.plugin.getLibraryConnectionStatus().kind === "disconnected") return;
+          if (!this.plugin.libraryIndexStatus.snapshot().lastRun?.papers) await this.indexPersonalLibraryFullText();
+          if (!this.plugin.libraryIndexStatus.snapshot().lastRun?.papers) return;
+          this.plugin.openPersonalLibraryDirectionReview();
+        } finally {
+          button.setDisabled(Boolean(this.plugin.libraryIndexStatus.snapshot().activity));
+        }
+      })));
   }
 
   /**
@@ -1486,6 +1508,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Each topic becomes one section in the daily report.",
     );
 
+    this.renderLibraryTopicEntry(new Setting(containerEl));
     new Setting(containerEl)
       .setName("Quick start")
       .setDesc("Load a preset bundle of topics or add one manually.")
@@ -1511,7 +1534,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createDiv({
-        text: "Pick a template above or click Add topic to define what to track. Daily reports need at least one topic before AI runs.",
+        text: "Generate topics from your library, pick a template, or add a topic. Daily reports need at least one topic.",
       });
     }
     for (let i = 0; i < s.arxiv.topics.length; i++) {

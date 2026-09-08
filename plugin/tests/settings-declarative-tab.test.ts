@@ -237,6 +237,47 @@ describe("declarative daily paper limit", () => {
 });
 
 describe("wired getSettingDefinitions", () => {
+  function libraryEntry(tab: ArxivDailySettingTab) {
+    const row = tab.getSettingDefinitions().find((item) => "name" in item && item.name === "Topics from your library");
+    expect(row).toBeDefined();
+    const setting = new Setting(document.createElement("div"));
+    if (row && "render" in row) row.render?.(setting);
+    const button = setting.controlEl.querySelector<HTMLButtonElement>("button");
+    expect(button).not.toBeNull();
+    return button!;
+  }
+
+  it("opens direction review from research settings when an index is ready", async () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+    plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+    libraryEntry(tab).click();
+    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+    expect(plugin.selectLibraryRoot).not.toHaveBeenCalled();
+  });
+
+  it("starts with choosing a library and stops when selection is cancelled", async () => {
+    const { tab, plugin } = makeTab();
+    libraryEntry(tab).click();
+    await vi.waitFor(() => expect(plugin.selectLibraryRoot).toHaveBeenCalledOnce());
+    expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
+  });
+
+  it("opens review only after a successful index and stops on failure", async () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+    plugin.indexPersonalLibraryFullText = vi.fn(async () => { throw new Error("index failed"); });
+    const button = libraryEntry(tab);
+    button.click();
+    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+    expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
+    plugin.indexPersonalLibraryFullText = vi.fn(async () => {
+      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+      return { indexed: 20, reused: 0, failed: 0, pruned: 0, titlesRefreshed: 0 } as Awaited<ReturnType<ArxivDailyPlugin["indexPersonalLibraryFullText"]>>;
+    });
+    button.click();
+    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+  });
 
   it("returns non-empty definitions with section groups", () => {
     const { tab } = makeTab();
