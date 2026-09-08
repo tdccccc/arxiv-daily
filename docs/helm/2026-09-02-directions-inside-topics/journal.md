@@ -411,3 +411,70 @@
 - verification: typecheck 四包干净；plugin 719 passed（42 files）；`packages/core` accept-proposed-topics 9/9；lint 0 error / 20 既有 warning。`packages/node-runtime` 的 `reconstructs filter checkpoints from backup...` 为**既有失败**，已用 stash 回到 `655a867` 复现——测试夹具手搓了一个没有 `directions` 键的 topic 绕过 `normalizeTopic`，真实设置到不了那条路径；该夹具待单独修。构建已装入测试 vault（旧文件备份 `main.js.bak-20260906-*-pretopicui` / `-prereview`）。
 - note: 排查 P11 时发现 goal 的 Non-goal「主题名仍只作标签」在代码里是**用 prompt 明文规则**落实的（`paper-filter.system.md`：判断依据是方向，不是主题名），而不是靠不给主题名——给模型的 tag 就是主题名的 slug，拉丁文主题名的词一个不少。原本设想的「把主题名加进 prompt」因此收益近零且与该规则自相矛盾，已从 P11 砍掉，Non-goals 不动、不构成 L3。附带记一笔：中日文主题名派生不出 slug，tag 退化为 `topic-N`，这类主题在筛选 prompt 里没有任何主题级线索——不影响正确性（判断本就只看方向），但中英文主题的信息量并不对等。
 - next: P10 Chunk 1——先给组织契约补「一条方向归属已有主题」的行为红测。P11 在 P10 之后做，改动会让已缓存的筛选结果整批失效，实施前再确认一次。P5/P6 仍 pending；C 类工作（把已建好但无调用方的 `library/incremental/{placement,recluster,diff-suggestions}` 接上）仍未立项。
+
+## 2026-09-07 — L2 reshape：接受按方向与稳定目标处理，接手当前 Helm
+
+- evidence: 用户要求 review 后明确“按照你说的开始完成当前 helm”。只读审查与真实函数探针确认：部分接受后其余方向被整主题同名拦截；改名后重复新建；详情评分只见首条方向；P10 不允许零新增，且失配名字回退新建。相关既有测试 217 项通过，未覆盖这些场景。另确认 cues 只供复审但仍可编辑、名额截断后空栏目误称无相关论文。
+- change: owner 从已暂停的 claude-opus-session 接为 codex-root。P10 原文件（含用户已有 revision 2 未提交修改）完整保留，标 superseded，启用 P12。P5 未实测向量归入路径由 P12 文字归属与 P14 索引后复审替代；ADR 0014 和词汇表同步。P11 增加实际命中方向参与详细总结的验收；P13 修正名额截断说明；最后回到 P6 真实日报与桌面验收。
+- disposition: 保留 P1/P2/P3/P7/P8/P9 的已验收结果及用户设置。P9 的整主题同名接受判据在 P12 被逐方向接受记录替换；P3 明确延期的详情评分问题在 P11 补齐。保留单主题归属、名称只作标签、默认 20 篇及 personal novelty 暂停。未提交、不推送、不开 PR。
+- next: P12 Chunk 1 的零新增/已有目标红测；同阶段独立开发接受事务，集成后验证实际持久化与复审流程。
+
+## 2026-09-07 — P12 组织契约接受，保存并发复核与范围校正
+
+- evidence: 组织/schema/store 先 35 Red，历史格式和异常名称追加 Red 后 159 Green；core 接受 15 Red→16 Green；插件事务 8 Red→31 Green；UI 15 Red→16 Green；真实 HTTP/ProposalStore 的设置输入与在途修改 2 Red→6 Green。插件接受/复审/事务联合 96 Green。四包 typecheck、boundaries、lint（0 error/20 既有 warning）通过。
+- review: 独立审查通过真实 host 复现：接受保存期间直接编辑 live direction，随后整数组提交覆盖编辑。P12 Chunk 2 尚不接受；设置页改用私有草稿与按身份的串行事务，补 DOM 回归。接受记录按 scope 保留各库当前提案，防止 A→B→A 忘记已删除方向。
+- regression: 全 workspace 首轮仅两项失败：node-runtime 旧筛选夹具缺 directions/relevanceScore（既有问题，journal 已记录）与空回执改变历史 envelope。夹具补到真实当前合同；无回执时保持旧 envelope；各自 25/25、40/40 Green。
+- scope: 核对 ADR 0007 与上一条接手前日志的“C 类自动增量接线未立项”后，撤回本轮额外提出的 P14 自动触发扩展，保留其编号并标 superseded。原成功标准要求后续候选可建议归属并改动，P12 的再次生成及逐候选改归属已承担，不需要把已退休画像的自动索引触发系统带回来；ADR 0005/0007 不改。P5 的向量阈值路径由 P12 文字复审替代。
+- next: 完成设置编辑的并发保护及 P12 集成检查，然后 P11/P13，最后 P6 真实模型/日报和用户桌面验收。仍未提交。
+
+
+## 2026-09-07 — P12 软件验收通过，进入 P11
+
+- verification: core 2133 passed / 2 skipped、node-runtime 45、CLI 85、plugin 772；四包typecheck、boundaries、build通过，lint 0 error/20既有warning。旧source-string两条回归被真实删除确认/只读渲染的Green行为断言替换，未削弱用户约束。
+- review: 两处重要问题均关闭：手写编辑经按身份的串行事务保留；接受后等待编辑/失败恢复，再恢复focus/selection/scroll。独立真实host复核3/3通过；reviewer认可软件部分。
+- real model: 已有授权与根目录身份核对后，对测试库196篇ready（去重189篇、42组/165篇入组），带现有6主题10方向发出真实请求。HTTP200，58.51秒；实际SSE解析→proposer→schema6校验一次通过，topics=[]、coveredPaperKeys=165。24篇聚类外论文仍未被此提案覆盖。输出位于/tmp/arxiv-helm-live；未接受或写入真实vault设置。
+- status: P12 blocked只待P6用户真实桌面确认；三个软件chunk已接受。P11 active；已向用户说明提示词升级将使旧筛选缓存失效。
+- next: P11详情方向上下文红测，及prompt v3缓存不能复用的红测。仍不提交、不推送。
+
+
+## 2026-09-07 — P11 完成，进入 P13
+
+- verification: 详情以B实际命中快照评分、无snapshot时读取全部方向，10 Red→45 Green。旧prompt v3缓存1 Red→Green；分类与cache129项、四文件联合174项、core全量及四包typecheck/boundaries通过。prompt snapshot仅新增两条已审阅裁决规则。独立review重跑详情/cache116项，无Important。
+- real model: 合成对照而非真实论文日报，实际已配置端点HTTP200/5.95秒；三个预定场景均符合预期（核心相关的具体方向、同具体度按顺序、无关skip），结果/tmp/arxiv-helm-filter/validation.json。没有对整体推荐准确率作推断。
+- change: P11 done，P13 active。名额遗漏说明不改变排序、20默认上限、详情policy或per-paper摘要缓存。
+- next: P13正常/降级输出与真实pipeline计数接线的Red，之后P6真实日报和桌面查看。仍未提交。
+
+
+## 2026-09-07 — P13 完成，P6 真实验收
+
+- verification: pipeline/summarizer 4 Red→Green；assembler/rescue 90基线→23 Red/94 Green→117 Green；四文件联合152 Green。全workspace、四包typecheck、boundaries、plugin build通过，lint0 error/20既有warning。独立review重跑152项，无Important。
+- change: 普通、emergency、rescue同源展示限额遗漏，ignored先排除；无遗漏输出不变，单篇摘要cache不变。P13 done，P6 active。
+- next: /tmp/arxiv-helm-daily脚本已离线准备，真实共享pipeline使用现有方向、默认20、邮件关闭；输出临时vault。真实arXiv API连通性探针HTTP200。随后提供测试构建与用户桌面验收；P12仍blocked于这一明确条件。未提交。
+
+
+## 2026-09-07 — P6 真实日报及测试库交付，等待用户桌面确认
+
+- verification: 最终全workspace共3075 passed（core2173、node-runtime45、CLI85、plugin772），2项既有skipped；四包typecheck、boundaries、build通过，lint0 error/20既有warning。三阶段独立review的重要问题全部关闭。
+- real run: 首次沙箱内Node网络访问失败，按工具规则获准沙箱外重跑；实际CLI composition root/shared pipeline对2026-09-04完成真实arXiv与LLM运行。保留10篇，全部有有效topic-direction标记，命中5条现有library来源方向；每篇均有五项结构化摘要字段。默认20篇、既有主题和方向保持；验收运行关闭邮件。正文与报告先写/tmp，随后复制验收日报。
+- delivery: 已获准安装main.js/styles.css和arxiv-daily/daily/2026-09-04.md到/home/tiandc/Desktop/plugin_test，源和目标逐文件SHA-256校验一致；未修改用户主题或凭据。旧构建备份：/tmp/arxiv-helm-before-install-20260907-080704。可复核产物在工作树.artifacts/directions-inside-topics/（忽略目录）；原始请求/凭据只留/tmp私密文件，没有进入Git。
+- status: 真实日报成功标准已勾选，P6真实运行与安装两块已接受；用户桌面确认未做，P6保持active、P12保持blocked，goal保持active。下一次继续从用户对复审/设置/日报的反馈开始；不得把本次软件验证冒充用户桌面确认。
+- next: 用户重载测试库插件、重新生成提案并查看复审与研究主题设置及真实日报；通过后记录确认、解除P12并关闭P6/goal。个人novelty仍按原Non-goal暂停；不提交、不推送、不开PR。
+
+## 2026-09-07 — P6 日报可读性反馈修正与交付
+
+- evidence: 用户查看2026-09-04日报后要求方向与来源默认折叠、方向不重复主题并逐行列出。整份日报方向/来源占6477字符，五项摘要合计17452字符；本轮是P6局部验收修正，P11/P13的筛选、限额与真实性规则继续有效。
+- change: 原生Obsidian callout收起方向、完整来源清单及方向机器标记；方向按条显示，正文列表加入空行，计数明确为“附独立论文总结”。方向解析兼容原裸标记和新引用内标记，仍校验身份、日期、位置及重复。rescue合同新增每篇固定行并同步中英提示词，避免模型重建编码或旧骨架；输出继续逐行校验。
+- verification: 输出/解析13 Red→86 Green；固定行传输3 Red→Green；独立审查发现旧来源引用会吞并callout，4 Red复现后以空行分隔并校正规范位置。最终全workspace3088 passed（core2186、node-runtime45、CLI85、plugin772），2项既有skipped；四包typecheck、boundaries、plugin build、diff检查通过；lint0 error/20既有warning。独立复核无未关闭问题。
+- desktop: 隔离的真实Obsidian确认默认折叠、点击展开、方向列表、机器标记隐藏、实时预览，以及4种旧来源组合；渲染器无异常。早期桌面脚本误选同一文件隐藏的另一渲染视图，校正选择器后完成上述检查；没有改动桌面验收框架或用户布局。
+- delivery: 原日报离线重排，10篇标题/作者/链接/方向/来源与50个摘要字段逐一保持一致，未重跑真实模型。已获准备份并安装测试库日报与main.js，源/目标及旧文件备份SHA-256核对一致。记录与截图：`.artifacts/daily-readability/`；旧文件：`/tmp/arxiv-daily-readability-2cjb3eez/installed-backup-0mxzmck9/`。
+- remaining: 用户尚未确认整套复审/设置/日报体验通过，P6与goal保持active、P12保持blocked。额外阅读建议为集中展示3个空主题、按阅读层次压缩长摘要；公式、单位及对象名转写疑点须核对原文，本次保留原文案。仍不提交、不推送、不开PR。
+
+## 2026-09-08 — P6 统一未来日报的阅读规则
+
+- scope: 用户澄清只改善今后生成的日报，CLI和插件必须一致，不修改任何存量日报；并授权落实额外阅读建议。在P6追加Chunk4，保留上一块已有通用折叠，不引入历史迁移或日期特例。
+- change: 共享assembler/rescue把有论文的主题保持相对顺序，空主题汇总到末尾并继续区分未匹配与因每日上限未展示；核心结果默认可见，另外四项摘要进入原生abstract折叠，完整五字段与来源仍可回读。parser只展开指定摘要callout，并停止跨H2读字段；rescue传输固定footer且仍逐行严格校验。
+- generation: 中英短摘要提示词优先关键结论与必要限定，保留原始单位、天体和数据集标识；prompt contract由1升2，结果schema仍1，未完成任务的旧摘要缓存不再复用。此规则不重写已完成的日报。
+- extraction: 真实arXiv HTML的MathML显示树与TeX辅助annotation被一起取textContent，导致公式和对象名重复。共享提取器按DOM结构选取单一数学表示，并覆盖无章节HTML和/abs备用路径；原始HTML缓存保持不变。原文2609.03779明确为峰值通量密度0.75 mJy/beam，模型误译通过单位保留约束处理，未做词语硬替换。
+- verification: 共享分组/解析/缓存9 Red、rescue7 Red后相关279 Green；MathML及备用路径分块Red→Green，96项相关回归。CLI与插件实际pipeline各观察布局Red→Green，只替换外部HTTP响应，真实写入/索引路径保留；两文件46项通过。最终全workspace3109 passed/2既有skipped，四包typecheck、boundaries、CLI/plugin build、diff检查通过，lint0 error/20既有warning；独立代码审查无Critical/Important/Minor。
+- model / desktop: 3个公开原文真实模型小样通过，中文完整样例主结果147字符、英文45词，单位片段保留0.75 mJy/beam及入选数量；这是有限样例，非整体科学准确率测量。用新生成的中英normal/emergency/rescue共6个排版样例在隔离Obsidian验证：主要结果可见、两类辅助信息默认折叠、方向逐项显示、空主题置后、点击展开与实时预览均通过，渲染器无异常。
+- delivery: CLI构建可运行，测试插件main.js已备份安装并校验；本轮只更新程序，26个既有日报文件（含备份）SHA-256均未变。证据与预览在`.artifacts/future-daily-readability/`；旧插件在`/tmp/arxiv-future-daily-ksjfscjy/plugin-backup-on8fc_v4/`。完整P6用户验收仍未记录，P6/goal保持active，P12保持blocked；不提交、不推送、不开PR。
