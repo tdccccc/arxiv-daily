@@ -564,6 +564,17 @@ describe("DailyFilterCheckpointStore", () => {
     await expect(makeStore(storage).save(reportDate, prepared({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
   });
 
+  it("does not reuse classifications made before cross-topic specificity was defined", async () => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    document.fingerprintInput.promptContractVersion = 3;
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
   it.each([
     ["extra document key", (document: any) => { document.extra = true; }],
     ["tampered fingerprint", (document: any) => { document.fingerprint = `sha256:${"0".repeat(64)}`; }],

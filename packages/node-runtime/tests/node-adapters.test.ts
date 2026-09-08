@@ -22,6 +22,7 @@ import {
   emptyDeliveryState,
   HttpTransportError,
   markDelivered,
+  normalizeTopic,
   readDeliveryState,
   isCancellationError,
   prepareDailyFilterCheckpoint,
@@ -691,7 +692,7 @@ describe("NodeStorageAdapter", () => {
         ...DEFAULT_SETTINGS.arxiv,
         categories: ["astro-ph"],
         topics: [
-          { id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false },
+          normalizeTopic({ id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false }),
         ],
       },
       llm: {
@@ -703,8 +704,8 @@ describe("NodeStorageAdapter", () => {
       },
     };
     const prepared = prepareDailyFilterCheckpoint(compatibility);
-    const first = [{ id: "2608.00001", category: "topic" }];
-    const second = [{ id: "2608.00001", category: "skip" }];
+    const first = [{ id: "2608.00001", category: "topic", directions: ["topic#1"], relevanceScore: 80 }];
+    const second = [{ id: "2608.00001", category: "skip", directions: [], relevanceScore: 0 }];
 
     await store.save("2026-08-01", prepared, first);
     await store.save("2026-08-01", prepared, second);

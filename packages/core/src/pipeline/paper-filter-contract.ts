@@ -11,11 +11,11 @@ import { escapePaperDataFence } from "./prompt-safety";
 
 export const DAILY_FILTER_FINGERPRINT_VERSION = 1 as const;
 /**
- * Version 3 asks for relevance scores and requires them in cached results.
- * The full scored classification remains reusable when only the daily output
- * limit changes; old unscored results cannot safely select the best papers.
+ * Version 4 resolves overlap between topics by the specificity of the matched
+ * direction, then by configured order. Earlier classifications may have a
+ * different owner (and therefore a different detail-note policy).
  */
-export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 3 as const;
+export const DAILY_FILTER_PROMPT_CONTRACT_VERSION = 4 as const;
 export const DAILY_FILTER_RESULT_CONTRACT_VERSION = 3 as const;
 
 /**
