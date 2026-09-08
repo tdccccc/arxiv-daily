@@ -99,6 +99,33 @@ function proposal(): PersonalLibraryDirectionProposal {
   };
 }
 
+describe("traceable existing coverage", () => {
+  function covered() {
+    const original = proposal();
+    const paperKeys = original.catalogInputPapers.map(({ paperKey }) => paperKey);
+    return {
+      ...original, topics: [], coveredPaperKeys: paperKeys,
+      coverageEvidence: [{ topicId: "existing", directionId: "direction", directionText: "Research agents", paperKeys }],
+    };
+  }
+
+  it("round-trips the exact direction text and paper membership underlying coverage", () => {
+    const input = covered();
+    expect(decodePersonalLibraryDirectionProposal(input)).toEqual(input);
+  });
+
+  it.each(["missing", "duplicate", "unknown", "text", "id"])("rejects %s coverage evidence", (kind) => {
+    const input = covered();
+    const item = input.coverageEvidence[0]!;
+    if (kind === "missing") item.paperKeys = [item.paperKeys[0]!];
+    if (kind === "duplicate") input.coverageEvidence.push({ ...item });
+    if (kind === "unknown") item.paperKeys = ["arxiv:2608.99999"];
+    if (kind === "text") item.directionText = "";
+    if (kind === "id") item.directionId = "invalid id";
+    expect(decodePersonalLibraryDirectionProposal(input)).toBeNull();
+  });
+});
+
 function direction(
   id: string,
   status: "active" | "disabled" | "merged" = "active",

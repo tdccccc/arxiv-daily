@@ -160,6 +160,15 @@ describe("scope-bound paths and construction", () => {
 });
 
 describe("proposal lifecycle", () => {
+  it("reloads coverage evidence without losing the direction comparison basis", async () => {
+    const memory = makeStorage();
+    const original = proposal();
+    const paperKeys = original.catalogInputPapers.map(({ paperKey }) => paperKey);
+    const coverageEvidence = [{ topicId: "existing", directionId: "followed", directionText: "Reliable agents", paperKeys }];
+    await stores(memory.storage).proposals.replace({ ...original, topics: [], coveredPaperKeys: paperKeys, coverageEvidence }, null);
+    const reloaded = await stores(memory.storage).proposals.load();
+    expect(reloaded?.coverageEvidence).toEqual(coverageEvidence);
+  });
 
   it.each([4, 5])("retires a v%i proposal on load and allows a fresh generation with existing coverage", async (schemaVersion) => {
     const memory = makeStorage();

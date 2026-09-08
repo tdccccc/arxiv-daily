@@ -267,13 +267,19 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
     if (snapshot.proposal && candidates.length === 0) {
       const coveredCount = new Set(snapshot.proposal.coveredPaperKeys ?? []).size;
+      const coverage = currentCoverage(snapshot);
       parent.createEl("p", {
         cls: "arxiv-daily-interest-review__empty",
         attr: { role: "status" },
-        text: coveredCount > 0
+        text: coverage.unverified > 0
+          ? `${coverage.unverified} papers have unverified coverage. Regenerate proposals to check current directions.`
+          : coverage.changed > 0
+            ? `${coverage.changed} papers need review because their covering directions changed. Regenerate proposals.`
+            : coveredCount > 0
           ? `Already covered: ${coveredCount} ${coveredCount === 1 ? "paper" : "papers"} match your existing directions; no new directions are needed.`
           : "This proposal contains no directions.",
       });
+      this.renderCoverage(parent, snapshot);
       this.renderBufferPool(parent, snapshot);
       this.renderIncrementalNotice(parent);
       return;
@@ -378,8 +384,29 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         this.renderDirectionCard(body, candidate, allowedKeys, "proposal", snapshot, topic, processed.has(candidate.id));
       }
     }
+    this.renderCoverage(parent, snapshot);
     this.renderBufferPool(parent, snapshot);
     this.renderIncrementalNotice(parent);
+  }
+
+  private renderCoverage(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
+    const coverage = currentCoverage(snapshot);
+    if (coverage.current + coverage.changed + coverage.unverified === 0) return;
+    const details = parent.createEl("details", { cls: "arxiv-daily-interest-review__coverage" });
+    details.createEl("summary", {
+      text: `Existing coverage: ${coverage.current} current, ${coverage.changed} changed, ${coverage.unverified} unverified`,
+    });
+    for (const item of coverage.items) {
+      const group = details.createEl("details");
+      group.createEl("summary", {
+        text: `${item.topicName}: ${item.evidence.directionText} (${item.evidence.paperKeys.length} papers${item.valid ? "" : "; direction changed"})`,
+      });
+      const papers = group.createEl("ul");
+      for (const key of item.evidence.paperKeys) papers.createEl("li", { text: paperTitle(snapshot, key) ?? key });
+    }
+    if (coverage.changed + coverage.unverified > 0) {
+      details.createEl("p", { text: "Regenerate proposals to verify coverage against current directions." });
+    }
   }
 
   private renderDocumentError(
@@ -914,6 +941,21 @@ function processedCandidateIds(snapshot: InterestProfileReviewSnapshot): Set<str
   const receipt = snapshot.proposal
     ? matchingProposalAcceptance(snapshot.proposal, snapshot.proposalAcceptance) : null;
   return new Set(receipt?.processedCandidateIds ?? []);
+}
+
+function currentCoverage(snapshot: InterestProfileReviewSnapshot) {
+  const proposal = snapshot.proposal;
+  const items = (proposal?.coverageEvidence ?? []).map((evidence) => {
+    const topic = snapshot.settingsTopics?.find(({ id }) => id === evidence.topicId);
+    const direction = topic?.directions.find(({ id }) => id === evidence.directionId);
+    return { evidence, valid: direction?.text === evidence.directionText, topicName: topic?.name ?? "Removed topic" };
+  });
+  return {
+    items,
+    current: items.filter(({ valid }) => valid).reduce((count, { evidence }) => count + evidence.paperKeys.length, 0),
+    changed: items.filter(({ valid }) => !valid).reduce((count, { evidence }) => count + evidence.paperKeys.length, 0),
+    unverified: proposal?.coverageEvidence === undefined ? new Set(proposal?.coveredPaperKeys ?? []).size : 0,
+  };
 }
 
 function proposedTopicDestination(

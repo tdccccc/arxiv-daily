@@ -28,6 +28,7 @@ import {
   type PersonalLibraryFallbackPaperRecord,
   type PersonalLibraryProposalPaper,
   type PersonalLibraryProposedTopic,
+  type PersonalLibraryCoverageEvidence,
 } from "./personal-library-interest-profile";
 import {
   decodePersonalLibraryCatalog,
@@ -301,6 +302,7 @@ export function createPersonalLibraryClusteredDirectionGenerationContract(
     maxAbstractCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS,
     abstractTruncation: "explicit-flag-and-codepoint-safe-prefix",
     evidenceBudget: "all-paper-identities-and-titles-equal-abstract-budget",
+    coverageEvidence: "topic-direction-identities-text-and-complete-paper-membership",
     maxClusterMembers: PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
     maxOutputCodeUnits: PERSONAL_LIBRARY_DIRECTION_MAX_OUTPUT_CODE_UNITS,
     maxCompletionTokens: PERSONAL_LIBRARY_DIRECTION_MAX_COMPLETION_TOKENS,
@@ -423,6 +425,23 @@ export async function proposeClusteredPersonalLibraryDirections(
   const organized = await callValidatedStage(userMessage, groups, { ...options, existingTopics });
   throwIfCancelled(options.signal);
   const groupById = new Map(clustering.clusters.map((group) => [group.id, group]));
+  const coverageByDirection = new Map<string, PersonalLibraryCoverageEvidence>();
+  for (const { groupId, topicId, directionId } of organized.coveredGroups ?? []) {
+    const identity = JSON.stringify([topicId, directionId]);
+    let coverage = coverageByDirection.get(identity);
+    if (!coverage) {
+      coverage = {
+        topicId, directionId,
+        directionText: existingTopics.find(({ id }) => id === topicId)!.directions.find(({ id }) => id === directionId)!.text,
+        paperKeys: [],
+      };
+      coverageByDirection.set(identity, coverage);
+    }
+    coverage.paperKeys.push(...groupById.get(groupId)!.paperKeys);
+  }
+  const coverageEvidence = [...coverageByDirection.values()].map((item) => ({
+    ...item, paperKeys: item.paperKeys.sort(codeUnitCompare),
+  })).sort((a, b) => codeUnitCompare(a.topicId, b.topicId) || codeUnitCompare(a.directionId, b.directionId));
   let candidateOrdinal = 0;
   let proposal: PersonalLibraryDirectionProposal;
   try {
@@ -464,6 +483,7 @@ export async function proposeClusteredPersonalLibraryDirections(
       ),
       generatedAt,
       topics,
+      coverageEvidence,
       coveredPaperKeys: [...new Set((organized.coveredGroups ?? []).flatMap(({ groupId }) =>
         groupById.get(groupId)!.paperKeys,
       ))].sort(codeUnitCompare),

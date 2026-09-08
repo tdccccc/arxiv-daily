@@ -346,6 +346,11 @@ describe("proposeClusteredPersonalLibraryDirections", () => {
     }));
     expect(result.topics).toEqual([]);
     expect(result.coveredPaperKeys).toEqual([1, 2, 3, 4, 5, 6].map((index) => paper(index).paperKey));
+    expect(result).toMatchObject({ coverageEvidence: [{
+      topicId: "existing-galaxies", directionId: "manual-observations",
+      directionText: "Galaxy formation and evolution from survey observations",
+      paperKeys: [1, 2, 3, 4, 5, 6].map((index) => paper(index).paperKey),
+    }] });
     expect(result.catalogInputPapers.map(({ paperKey }) => paperKey)).toContain(paper(7).paperKey);
     expect(progress.at(-1)).toEqual({ phase: "organization", completed: 1, total: 1 });
     expect(llm.calls).toHaveLength(1);

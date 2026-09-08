@@ -109,6 +109,14 @@ export interface PersonalLibraryDirectionProposal {
   topics: PersonalLibraryProposedTopic[];
   /** Canonical evidence already covered by existing directions, outside candidates. */
   coveredPaperKeys?: string[];
+  coverageEvidence?: PersonalLibraryCoverageEvidence[];
+}
+
+export interface PersonalLibraryCoverageEvidence {
+  topicId: string;
+  directionId: string;
+  directionText: string;
+  paperKeys: string[];
 }
 
 /**
@@ -262,10 +270,12 @@ export function decodeRetiredPersonalLibraryProposalIdentity(
 
 function decodeDirectionProposal(value: unknown, maxCandidates: number): PersonalLibraryDirectionProposal | null {
   const hasCoveredPaperKeys = isPlainObject(value) && Object.hasOwn(value, "coveredPaperKeys");
+  const hasCoverageEvidence = isPlainObject(value) && Object.hasOwn(value, "coverageEvidence");
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
     "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
     ...(hasCoveredPaperKeys ? ["coveredPaperKeys"] : []),
+    ...(hasCoverageEvidence ? ["coverageEvidence"] : []),
   ])
     // Only the current schema decodes. Earlier proposals were a flat candidate
     // list with name+description directions; both shapes changed in v4 and the
@@ -300,6 +310,30 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     coveredPaperKeys = [...value.coveredPaperKeys];
   }
   const covered = new Set(coveredPaperKeys);
+  let coverageEvidence: PersonalLibraryCoverageEvidence[] | undefined;
+  if (hasCoverageEvidence) {
+    if (!hasCoveredPaperKeys || !Array.isArray(value.coverageEvidence)
+      || value.coverageEvidence.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) return null;
+    coverageEvidence = [];
+    const assigned = new Set<string>();
+    const directions = new Set<string>();
+    for (const item of value.coverageEvidence) {
+      if (!isExactObject(item, ["topicId", "directionId", "directionText", "paperKeys"])
+        || !isOpaqueId(item.topicId) || !isOpaqueId(item.directionId)
+        || !isBoundedText(item.directionText, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+        || !Array.isArray(item.paperKeys) || item.paperKeys.length === 0
+        || !isStrictlyOrderedUnique(item.paperKeys)
+        || item.paperKeys.some((key: unknown) => typeof key !== "string" || !covered.has(key) || assigned.has(key))) return null;
+      const identity = JSON.stringify([item.topicId, item.directionId]);
+      if (directions.has(identity)) return null;
+      directions.add(identity);
+      for (const key of item.paperKeys) assigned.add(key);
+      coverageEvidence.push({
+        topicId: item.topicId, directionId: item.directionId, directionText: item.directionText, paperKeys: [...item.paperKeys],
+      });
+    }
+    if (assigned.size !== covered.size) return null;
+  }
   const topics: PersonalLibraryProposedTopic[] = [];
   const directionIds: string[] = [];
   for (const rawTopic of value.topics) {
@@ -345,6 +379,7 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     generatedAt: value.generatedAt,
     topics,
     ...(coveredPaperKeys !== undefined ? { coveredPaperKeys } : {}),
+    ...(coverageEvidence !== undefined ? { coverageEvidence } : {}),
   };
 }
 

@@ -490,6 +490,8 @@ describe("proposal evidence is explanatory", () => {
     ])] });
     initial.proposal = {
       ...initial.proposal!, topics: [], coveredPaperKeys: [1, 2, 3, 4].map((number) => paper(number).paperKey),
+      coverageEvidence: [{ topicId: "existing", directionId: "followed", directionText: "Research systems",
+        paperKeys: [1, 2, 3, 4].map((number) => paper(number).paperKey) }],
     };
     const root = open(controller(initial).port).contentEl;
     expect(root.textContent).toMatch(/Already covered.*4 papers.*no new directions/iu);
@@ -497,6 +499,38 @@ describe("proposal evidence is explanatory", () => {
     expect(root.querySelector(".arxiv-daily-interest-review__buffer")).toBeNull();
     expect(root.querySelector(".arxiv-daily-interest-review__accept-bar")).toBeNull();
     expect(button(root, "Regenerate proposals").disabled).toBe(false);
+  });
+
+  it.each(["edited", "deleted", "legacy"])("does not present %s coverage as a verified current match", (change) => {
+    const initial = snapshot({ settingsTopics: [settingsTopic("existing", "Research", change === "deleted" ? [] : [
+      { id: "followed", text: "A different scope", origin: "manual" },
+    ])] });
+    const paperKeys = [1, 2, 3, 4].map((number) => paper(number).paperKey);
+    initial.proposal = { ...initial.proposal!, topics: [], coveredPaperKeys: paperKeys,
+      ...(change === "legacy" ? {} : { coverageEvidence: [{
+        topicId: "existing", directionId: "followed", directionText: "Original research scope", paperKeys,
+      }] }),
+    };
+    const root = open(controller(initial).port).contentEl;
+    expect(root.textContent).not.toContain("no new directions are needed");
+    expect(root.textContent).toMatch(/4 papers.*(changed|verify|unverified)/i);
+    expect(root.textContent).toMatch(/regenerate/i);
+  });
+
+  it("shows the current topic name and paper titles behind unchanged coverage", () => {
+    const initial = snapshot({ settingsTopics: [settingsTopic("existing", "Renamed topic", [
+      { id: "followed", text: "Original research scope", origin: "manual" },
+    ])] });
+    const paperKeys = [1, 2, 3, 4].map((number) => paper(number).paperKey);
+    initial.proposal = { ...initial.proposal!, topics: [], coveredPaperKeys: paperKeys,
+      coverageEvidence: [{ topicId: "existing", directionId: "followed", directionText: "Original research scope", paperKeys }],
+    };
+    const root = open(controller(initial).port).contentEl;
+    const details = root.querySelector('.arxiv-daily-interest-review__coverage');
+    expect(details?.textContent).toContain("Renamed topic");
+    expect(details?.textContent).toContain("Original research scope");
+    expect(details?.textContent).toContain("Paper arxiv:2608.00001");
+    expect(root.textContent).toContain("no new directions are needed");
   });
 
   it("excludes existing coverage from the count of papers without a direction", () => {
