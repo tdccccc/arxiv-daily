@@ -21,6 +21,7 @@ import {
   type Topic,
   type LibraryDirectionPreview,
   topicNameKey,
+  directionTextKey,
 } from "@arxiv-daily/core";
 import type { PersonalLibraryProfileSnapshot } from "../../main";
 import type { LibraryConnectionStatus } from "./connection";
@@ -64,9 +65,10 @@ export interface InterestProfileReviewController {
   /** Omit candidateIds to accept every direction in the kept topics. */
   acceptTopics(topicIds: readonly string[], candidateIds?: readonly string[]): Promise<InterestProfileReviewSnapshot>;
   previewDirection?(input: { candidateId: string; text: string }): Promise<LibraryDirectionPreview>;
+  openPaper?(paperKey: string): Promise<unknown>;
 }
 
-type ReviewTab = "proposed";
+type ReviewTab = "proposed" | "overview";
 type EditableDirection = PersonalLibraryDirectionCandidate;
 
 /** The edited form of one proposed direction, before it is accepted. */
@@ -176,6 +178,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       attr: { role: "tablist", "aria-label": "Direction review sections" },
     });
     this.addTab(tabs, "proposed", "Proposed");
+    this.addTab(tabs, "overview", "Library overview");
     // Secondary controls share one row with the tabs; each explains itself on
     // hover instead of spending a line of the header on prose.
     const actions = toolbar.createDiv({ cls: "arxiv-daily-interest-review__toolbar-actions" });
@@ -218,7 +221,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         "aria-labelledby": `arxiv-daily-interest-${this.tab}-tab`,
       },
     });
-    this.renderProposed(panel, snapshot);
+    if (this.tab === "overview") this.renderOverview(panel, snapshot);
+    else this.renderProposed(panel, snapshot);
   }
 
   private addTab(parent: HTMLElement, tab: ReviewTab, label: string): void {
@@ -238,8 +242,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     button.disabled = this.pending;
     button.addEventListener("click", () => this.activateTab(tab, false));
     button.addEventListener("keydown", (event) => {
-      // The proposed-direction review is the only tab at this stage.
-      const next: ReviewTab | null = null;
+      const next: ReviewTab | null = event.key === "Home" ? "proposed"
+        : event.key === "End" ? "overview"
+          : event.key === "ArrowLeft" || event.key === "ArrowRight" ? tab === "proposed" ? "overview" : "proposed" : null;
       if (!next) return;
       event.preventDefault();
       this.activateTab(next, true);
@@ -396,6 +401,77 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     this.renderIncrementalNotice(parent);
   }
 
+  private renderOverview(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
+    this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
+    const proposal = snapshot.proposal;
+    if (!proposal) {
+      parent.createEl("p", { text: "No library analysis yet." });
+      return;
+    }
+    const indexedKeys = new Set(snapshot.indexedPapers.map(({ paperKey }) => paperKey));
+    const analyzedKeys = new Set(proposal.catalogInputPapers.map(({ paperKey }) => paperKey));
+    const outside = [...indexedKeys].filter((key) => !analyzedKeys.has(key)).length;
+    parent.createEl("p", { text: `${analyzedKeys.size} papers analyzed on ${new Date(proposal.generatedAt).toLocaleDateString()}.${outside ? ` ${outside} currently indexed papers were not in this analysis.` : ""}` });
+    const coverage = currentCoverage(snapshot);
+    const processed = processedCandidateIds(snapshot);
+    const rows = new Map<string, { name: string; directions: Array<{ text: string; keys: string[]; status: string }> }>();
+    const append = (id: string, name: string, text: string, keys: string[], status: string) => {
+      const row = rows.get(id) ?? { name, directions: [] };
+      row.directions.push({ text, keys, status });
+      rows.set(id, row);
+    };
+    for (const item of coverage.items) {
+      append(item.evidence.topicId, item.topicName, item.evidence.directionText, item.evidence.paperKeys,
+        item.valid ? "Current coverage" : "Direction changed; regenerate to verify");
+    }
+    for (const topic of proposal.topics) {
+      const destination = proposedTopicDestination(topic, snapshot);
+      for (const direction of topic.directions) {
+        const accepted = processed.has(direction.id);
+        const current = destination.target?.directions.find(({ id }) => id === direction.id)
+          ?? destination.target?.directions.find(({ text }) => directionTextKey(text) === directionTextKey(direction.text));
+        const unchanged = current !== undefined && directionTextKey(current.text) === directionTextKey(direction.text);
+        append(destination.target?.id ?? topic.id, destination.target?.name ?? topic.suggestedName,
+          direction.text, (direction.clusterMembers ?? direction.representatives).map(({ paperKey }) => paperKey),
+          accepted ? unchanged ? "Accepted" : "Accepted direction changed or removed" : "Proposed");
+      }
+    }
+    for (const row of rows.values()) {
+      const section = parent.createEl("section", { cls: "arxiv-daily-interest-review__overview-topic" });
+      const count = new Set(row.directions.flatMap(({ keys }) => keys)).size;
+      section.createEl("h3", { text: `${row.name} (${count} papers)` });
+      section.createEl("p", { text: row.directions.map(({ text }) => text).join("; ") });
+      for (const direction of row.directions) {
+        const details = section.createEl("details");
+        details.createEl("summary", { text: `${direction.text} (${direction.keys.length} papers; ${direction.status})` });
+        const list = details.createEl("ul");
+        for (const key of direction.keys) this.renderPaperLink(list.createEl("li"), key, snapshot);
+      }
+    }
+    if (coverage.unverified) parent.createEl("p", { text: `${coverage.unverified} papers have unverified legacy coverage. Regenerate proposals.` });
+    const uncovered = unclassifiedBufferPoolPapers(proposal);
+    if (uncovered.length) {
+      const details = parent.createEl("details", { cls: "arxiv-daily-interest-review__uncovered" });
+      details.createEl("summary", { text: `${uncovered.length} ${uncovered.length === 1 ? "paper" : "papers"} without a direction` });
+      const list = details.createEl("ul");
+      for (const { paperKey } of uncovered) this.renderPaperLink(list.createEl("li"), paperKey, snapshot);
+    }
+  }
+
+  private renderPaperLink(parent: HTMLElement, key: string, snapshot: InterestProfileReviewSnapshot): void {
+    const title = paperTitle(snapshot, key) ?? key;
+    if (!this.controller.openPaper) {
+      parent.createSpan({ text: title });
+      return;
+    }
+    const button = parent.createEl("button", {
+      cls: "arxiv-daily-interest-review__paper-link", text: title,
+      attr: { type: "button", title: "Open library PDF" },
+    });
+    button.disabled = this.pending;
+    button.addEventListener("click", () => void this.run("open library paper", () => this.controller.openPaper!(key)));
+  }
+
   private renderCoverage(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     const coverage = currentCoverage(snapshot);
     if (coverage.current + coverage.changed + coverage.unverified === 0) return;
@@ -409,7 +485,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         text: `${item.topicName}: ${item.evidence.directionText} (${item.evidence.paperKeys.length} papers${item.valid ? "" : "; direction changed"})`,
       });
       const papers = group.createEl("ul");
-      for (const key of item.evidence.paperKeys) papers.createEl("li", { text: paperTitle(snapshot, key) ?? key });
+      for (const key of item.evidence.paperKeys) this.renderPaperLink(papers.createEl("li"), key, snapshot);
     }
     if (coverage.changed + coverage.unverified > 0) {
       details.createEl("p", { text: "Regenerate proposals to verify coverage against current directions." });
@@ -597,11 +673,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const list = evidence.createEl("ul");
     for (const representative of direction.representatives) {
       const title = paperTitle(snapshot, representative.paperKey);
-      list.createEl("li", {
-        text: title
-          ? `${title} — ${representative.paperKey}`
-          : `${representative.paperKey} — missing from current library`,
-      });
+      const item = list.createEl("li");
+      if (title) this.renderPaperLink(item, representative.paperKey, snapshot);
+      else item.createSpan({ text: `${representative.paperKey} — missing from current library` });
     }
 
     if (direction.clusterMembers && direction.clusterMembers.length > 0) {

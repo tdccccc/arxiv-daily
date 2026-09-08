@@ -216,6 +216,15 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
 }
 
 describe("direction generation uses current research settings", () => {
+  it("opens reviewed evidence through the indexed PDF path and refuses unknown papers", async () => {
+    const { plugin } = generationPlugin();
+    const paths: Array<{ paperKey: string; filePath: string }> = [];
+    plugin.openPersonalLibraryFullTextEvidence = async (input) => { paths.push(input); return "file-fallback"; };
+    await plugin.openPersonalLibraryReviewPaper(paper(1).paperKey);
+    expect(paths).toEqual([{ paperKey: paper(1).paperKey, filePath: "local-1.pdf" }]);
+    await expect(plugin.openPersonalLibraryReviewPaper("file:sha256:" + "f".repeat(64))).rejects.toThrow(/available|index/i);
+    expect(paths).toHaveLength(1);
+  });
 
   it.each([false, true])("previews local evidence without writes and rejects category changes: %s", async (changeCategories) => {
     const { plugin, store } = generationPlugin();

@@ -1878,8 +1878,36 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-interest-review__toolbar-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__overview-topic {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__overview-topic h3 {
+  font-size: var(--font-ui-medium);
+}
+
+.arxiv-daily-interest-review__overview-topic,
+.arxiv-daily-interest-review__coverage,
+.arxiv-daily-interest-review__preview {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__paper-link {
+  color: var(--text-accent);
+  background: transparent;
+  box-shadow: none;
+  height: auto;
+  max-width: 100%;
+  padding: 0;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .arxiv-daily-interest-review__summary {

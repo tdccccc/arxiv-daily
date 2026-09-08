@@ -783,6 +783,7 @@ export default class ArxivDailyPlugin extends Plugin {
       moveDirection: (input) => this.movePersonalLibraryProposalCandidate(input),
       acceptTopics: (topicIds, candidateIds) => this.acceptPersonalLibraryProposedTopics(topicIds, candidateIds),
       previewDirection: (input) => this.previewPersonalLibraryDirection(input),
+      openPaper: (paperKey) => this.openPersonalLibraryReviewPaper(paperKey),
     };
   }
 
@@ -1019,6 +1020,18 @@ export default class ArxivDailyPlugin extends Plugin {
       }),
     ]);
     return this.getPersonalLibraryProfileSnapshot();
+  }
+
+  async openPersonalLibraryReviewPaper(paperKey: string): Promise<unknown> {
+    const connection = this.libraryConnection;
+    if (!connection) throw new Error("Choose a personal library first");
+    const revision = this.libraryConnectionRevision;
+    const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    const record = manifest.papers[paperKey];
+    const filePath = record?.status === "ready" ? record.filePaths[0] : undefined;
+    if (!filePath) throw new CodedError("evidence-mismatch", "The indexed PDF is no longer available");
+    return this.openPersonalLibraryFullTextEvidence({ paperKey, filePath });
   }
 
   async previewPersonalLibraryDirection(input: { candidateId: string; text: string }): Promise<LibraryDirectionPreview> {

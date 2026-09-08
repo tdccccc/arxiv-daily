@@ -466,6 +466,46 @@ describe("changing a pending direction's destination", () => {
 });
 
 describe("proposal evidence is explanatory", () => {
+  it("shows text-deduplicated accepted directions as present in the overview", () => {
+    const initial = snapshot({ settingsTopics: [settingsTopic("existing-topic", "Research agents", [
+      { id: "manual-existing", text: first.text, origin: "manual" },
+    ])], proposalAcceptance: receipt([first.id]) });
+    const root = open(controller(initial).port).contentEl;
+    button(root, "Library overview").click();
+    expect(root.textContent).not.toContain("Accepted direction changed or removed");
+    expect(root.textContent).toContain("Accepted");
+  });
+
+  it("browses a zero-addition library overview and opens a covered paper", async () => {
+    const initial = snapshot({ settingsTopics: [settingsTopic("existing", "Research systems", [
+      { id: "followed", text: "Reliable scientific agents", origin: "manual" },
+    ])] });
+    const paperKeys = [1, 2, 3].map((number) => paper(number).paperKey);
+    initial.proposal = { ...initial.proposal!, topics: [], coveredPaperKeys: paperKeys,
+      coverageEvidence: [{ topicId: "existing", directionId: "followed", directionText: "Reliable scientific agents", paperKeys }],
+    };
+    const ctrl = controller(initial);
+    const opened: string[] = [];
+    Object.assign(ctrl.port, { openPaper: async (key: string) => { opened.push(key); } });
+    const root = open(ctrl.port).contentEl;
+    button(root, "Library overview").click();
+    expect(root.textContent).toContain("Research systems");
+    expect(root.textContent).toContain("Reliable scientific agents");
+    expect(root.textContent).toMatch(/4 papers analyzed/i);
+    expect(root.textContent).toMatch(/1 paper.*without.*direction/i);
+    button(root, "Paper arxiv:2608.00001").click();
+    await ready(root);
+    expect(opened).toEqual(["arxiv:2608.00001"]);
+    expect(ctrl.snapshot().settingsTopics).toEqual(initial.settingsTopics);
+  });
+
+  it("keeps a review draft across overview navigation", () => {
+    const root = open(controller().port).contentEl;
+    card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "Draft research scope";
+    button(root, "Library overview").click();
+    button(root, "Proposed").click();
+    expect(card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Draft research scope");
+  });
 
   it("previews unsaved direction text and marks results stale after editing", async () => {
     const ctrl = controller();
@@ -516,6 +556,7 @@ describe("proposal evidence is explanatory", () => {
     await ready(root);
     expect(root.textContent).toContain("Old preview result");
     Object.assign(ctrl.snapshot(), { arxivCategories: ["cs.LG"] });
+    button(root, "Library overview").click();
     button(root, "Proposed").click();
     expect(root.textContent).not.toContain("Old preview result");
     expect(root.textContent).toMatch(/preview.*out of date/i);
