@@ -217,6 +217,38 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
 
 describe("direction generation uses current research settings", () => {
 
+  it.each([false, true])("previews local evidence without writes and rejects category changes: %s", async (changeCategories) => {
+    const { plugin, store } = generationPlugin();
+    const proposal = await plugin.generatePersonalLibraryDirections();
+    const before = JSON.stringify(plugin.settings);
+    const candidate = proposal.topics[0]!.directions[0]!;
+    const http: HttpClient = { request: async (request) => {
+      const body = JSON.parse(String(request.body));
+      expect(body.messages[0].content).toContain("Previewed research methods");
+      const ids = [...body.messages[1].content.matchAll(/^ID: (sample-\d+)$/gm)].map((match: RegExpMatchArray) => match[1]);
+      expect(ids.length).toBeGreaterThan(0);
+      if (changeCategories) plugin.settings.arxiv.categories = ["cs.LG"];
+      const content = JSON.stringify({ papers: ids.map((id, index) => ({
+        id, category: index === 0 ? "preview" : "skip", directions: index === 0 ? ["preview#1"] : [], relevanceScore: index === 0 ? 90 : 0,
+      })) });
+      return { status: 200, headers: { "content-type": "text/event-stream" }, bodyText:
+        `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\n`
+        + `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n` + "data: [DONE]\n\n" };
+    } };
+    Object.assign(plugin, { host: { http } });
+    const preview = plugin.previewPersonalLibraryDirection({ candidateId: candidate.id, text: "Previewed research methods" });
+    if (changeCategories) {
+      await expect(preview).rejects.toMatchObject({ code: "conflict" });
+      expect(await store.load()).toEqual(proposal);
+      return;
+    }
+    const result = await preview;
+    expect(result.papers.filter(({ matched }) => matched)).toHaveLength(1);
+    expect(result.papers[0]!.paperKey).toMatch(/^file:sha256:/);
+    expect(JSON.stringify(plugin.settings)).toBe(before);
+    expect(await store.load()).toEqual(proposal);
+  });
+
   it("persists edits to directions generated from non-arXiv PDFs through the actual review controller", async () => {
     const { plugin, store } = generationPlugin();
     const proposal = await plugin.generatePersonalLibraryDirections();

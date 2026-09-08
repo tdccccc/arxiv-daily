@@ -8,6 +8,7 @@ import {
   createPersonalLibraryRepresentativeSetFingerprint,
   normalizeTopic,
   updatePersonalLibraryDirectionCandidate,
+  type LibraryDirectionPreview,
   type PersonalLibraryDirectionCandidate,
   type ProposalAcceptanceReceipt,
   type Topic,
@@ -465,6 +466,60 @@ describe("changing a pending direction's destination", () => {
 });
 
 describe("proposal evidence is explanatory", () => {
+
+  it("previews unsaved direction text and marks results stale after editing", async () => {
+    const ctrl = controller();
+    const preview: LibraryDirectionPreview = {
+      directionText: "My current scope", categories: ["astro-ph"], missingCategories: ["cs.LG"],
+      papers: [{ paperKey: paper(1).paperKey, title: "A matching research paper", abstract: "Research methods",
+        categories: ["cs.LG"], matched: true, directionText: "My current scope", categoryCoverage: "outside" }],
+    };
+    Object.assign(ctrl.port, { previewDirection: async (input: { text: string }) => {
+      expect(input.text).toBe("My current scope");
+      return preview;
+    } });
+    const root = open(ctrl.port).contentEl;
+    card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "My current scope";
+    card(root, first.text).querySelector<HTMLDetailsElement>("details")!.open = true;
+    button(card(root, first.text), "Preview matches").click();
+    await ready(root);
+    expect(card(root, first.text).querySelector<HTMLDetailsElement>("details")!.open).toBe(true);
+    expect(root.textContent).toContain("A matching research paper");
+    expect(root.textContent).toContain("cs.LG");
+    expect(ctrl.snapshot().settingsTopics).toEqual([]);
+    expect(ctrl.snapshot().proposal!.topics[0]!.directions[0]!.text).toBe(first.text);
+    button(root, "Refresh").click();
+    await ready(root);
+    expect(root.textContent).not.toContain("A matching research paper");
+    button(card(root, first.text), "Preview matches").click();
+    await ready(root);
+    const input = card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "Changed after preview";
+    input.dispatchEvent(new Event("input"));
+    expect(root.textContent).toMatch(/preview.*out of date/i);
+    button(root, "Refresh").click();
+    await ready(root);
+    expect(root.textContent).not.toContain("A matching research paper");
+  });
+
+  it("invalidates a completed preview when current arXiv categories change", async () => {
+    const ctrl = controller();
+    Object.assign(ctrl.snapshot(), { arxivCategories: ["astro-ph"] });
+    Object.assign(ctrl.port, { previewDirection: async () => ({
+      directionText: first.text, categories: ["astro-ph"], missingCategories: [], papers: [{
+        paperKey: paper(1).paperKey, title: "Old preview result", abstract: "Evidence", categories: [],
+        matched: true, directionText: first.text, categoryCoverage: "unknown",
+      }],
+    }) });
+    const root = open(ctrl.port).contentEl;
+    button(card(root, first.text), "Preview matches").click();
+    await ready(root);
+    expect(root.textContent).toContain("Old preview result");
+    Object.assign(ctrl.snapshot(), { arxivCategories: ["cs.LG"] });
+    button(root, "Proposed").click();
+    expect(root.textContent).not.toContain("Old preview result");
+    expect(root.textContent).toMatch(/preview.*out of date/i);
+  });
 
   it("renders cues read-only while preserving them when direction text is saved", async () => {
     const ctrl = controller();

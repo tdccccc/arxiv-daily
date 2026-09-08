@@ -18,6 +18,8 @@ import type {
   ProposalAcceptanceReceipt,
   Topic,
   AcceptProposedTopicsResult,
+  LibraryDirectionPreview,
+  LibraryPreviewPaper,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
@@ -40,6 +42,7 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 type DirectionProposalProgress,
 proposeClusteredPersonalLibraryDirections,
+previewPersonalLibraryDirection,
 PERSONAL_LIBRARY_SIMILARITY_QUANTILE,
 mergePersonalLibraryDirectionCandidates,
 movePersonalLibraryDirectionCandidate,
@@ -205,6 +208,7 @@ export interface PersonalLibraryProfileSnapshot {
    */
   settingsTopicNames: string[];
   settingsTopics?: Topic[];
+  arxivCategories?: string[];
   proposalAcceptance?: ProposalAcceptanceReceipt | null;
   acceptanceLoadError?: string | null;
 }
@@ -778,6 +782,7 @@ export default class ArxivDailyPlugin extends Plugin {
       renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
       moveDirection: (input) => this.movePersonalLibraryProposalCandidate(input),
       acceptTopics: (topicIds, candidateIds) => this.acceptPersonalLibraryProposedTopics(topicIds, candidateIds),
+      previewDirection: (input) => this.previewPersonalLibraryDirection(input),
     };
   }
 
@@ -964,6 +969,7 @@ export default class ArxivDailyPlugin extends Plugin {
       suggestionsLoadError: this.librarySuggestionsLoadError,
       settingsTopicNames: this.settings.arxiv.topics.map(({ name }) => name),
       settingsTopics: this.settings.arxiv.topics,
+      arxivCategories: arxivCategories(this.settings.arxiv),
       proposalAcceptance: this.currentProposalAcceptance(),
       acceptanceLoadError: this.libraryProposalAcceptanceLoadError ?? null,
     });
@@ -1013,6 +1019,61 @@ export default class ArxivDailyPlugin extends Plugin {
       }),
     ]);
     return this.getPersonalLibraryProfileSnapshot();
+  }
+
+  async previewPersonalLibraryDirection(input: { candidateId: string; text: string }): Promise<LibraryDirectionPreview> {
+    const connection = this.libraryConnection;
+    const proposal = this.libraryProposal;
+    if (!connection || this.getLibraryConnectionStatus().kind !== "authorized") {
+      throw new Error("Authorize personal library model processing first");
+    }
+    const candidate = proposal?.topics.flatMap(({ directions }) => directions).find(({ id }) => id === input.candidateId);
+    if (!candidate) throw new CodedError("not-found", "The proposed direction is no longer available");
+    const revision = this.libraryConnectionRevision;
+    const outputRevision = this.libraryOutputRevision;
+    const settings = structuredClone(this.settings);
+    const catalog = this.libraryCatalog ? structuredClone(this.libraryCatalog) : null;
+    const scope = this.libraryFingerprints(connection).scopeFingerprint;
+    if (this.operations.find("personal-library-direction-generation", scope)) {
+      throw new CodedError("conflict", "Library direction processing is already running");
+    }
+    const operation = this.operations.begin("personal-library-direction-generation", "Preview direction matches", scope);
+    const assertCurrent = () => {
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      if (this.libraryProposal !== proposal || this.libraryOutputRevision !== outputRevision
+        || this.getLibraryConnectionStatus().kind !== "authorized"
+        || JSON.stringify(this.settings.llm) !== JSON.stringify(settings.llm)
+        || JSON.stringify(arxivCategories(this.settings.arxiv)) !== JSON.stringify(arxivCategories(settings.arxiv))) {
+        throw new CodedError("conflict", "The library review changed during preview");
+      }
+    };
+    try {
+      const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+      assertCurrent();
+      const keys = [...new Set([
+        ...candidate.representatives.map(({ paperKey }) => paperKey),
+        ...Object.keys(manifest.papers).sort(),
+      ])];
+      const papers: LibraryPreviewPaper[] = [];
+      for (const paperKey of keys) {
+        const indexed = manifest.papers[paperKey];
+        if (!indexed || indexed.status !== "ready") continue;
+        const record = catalog?.papers[paperKey];
+        const title = record?.title ?? indexed.title;
+        if (!title) continue;
+        papers.push({ paperKey, title, abstract: record?.abstract ?? indexed.abstract ?? "", categories: record?.categories ?? [] });
+        if (papers.length === 20) break;
+      }
+      const result = await previewPersonalLibraryDirection({
+        text: input.text, papers, categories: arxivCategories(settings.arxiv),
+        llm: new LlmClient(settings.llm, this.logger, this.host.http), signal: operation.signal,
+      });
+      assertCurrent();
+      return result;
+    } finally {
+      operation.finish();
+    }
   }
 
   async generatePersonalLibraryDirections(

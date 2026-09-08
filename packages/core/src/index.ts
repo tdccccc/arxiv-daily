@@ -47,6 +47,7 @@ export * from "./library/personal-library-catalog";
 export * from "./library/personal-library-direction-proposer";
 export * from "./library/personal-library-interest-profile";
 export * from "./library/personal-library-proposal-review";
+export * from "./library/personal-library-direction-preview";
 export * from "./library/personal-library-proposal-store";
 export * from "./library/personal-library-reconciliation";
 export * from "./library/scoped-library-source";

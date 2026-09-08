@@ -19,6 +19,7 @@ import {
   type PersonalLibraryProposedTopic,
   type PersonalLibraryRepresentativeEvidence,
   type Topic,
+  type LibraryDirectionPreview,
   topicNameKey,
 } from "@arxiv-daily/core";
 import type { PersonalLibraryProfileSnapshot } from "../../main";
@@ -62,6 +63,7 @@ export interface InterestProfileReviewController {
   }): Promise<InterestProfileReviewSnapshot>;
   /** Omit candidateIds to accept every direction in the kept topics. */
   acceptTopics(topicIds: readonly string[], candidateIds?: readonly string[]): Promise<InterestProfileReviewSnapshot>;
+  previewDirection?(input: { candidateId: string; text: string }): Promise<LibraryDirectionPreview>;
 }
 
 type ReviewTab = "proposed";
@@ -107,6 +109,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private fields = new Map<string, DirectionFields>();
   private drafts = new Map<string, ReviewedDirectionDraft>();
   private draftProposalIdentity: string | null = null;
+  private previews = new Map<string, LibraryDirectionPreview>();
   private detailElements = new Map<string, HTMLDetailsElement>();
   private expandedDirections = new Set<string>();
 
@@ -145,6 +148,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (identity === this.draftProposalIdentity || unavailable) this.captureDrafts();
     else {
       this.drafts.clear();
+      this.previews.clear();
     }
     if (!unavailable) this.draftProposalIdentity = identity;
     this.fields.clear();
@@ -194,7 +198,10 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       attr: { type: "button", "aria-label": "Refresh personal library directions" },
     });
     refresh.disabled = this.pending;
-    refresh.addEventListener("click", () => void this.run("refresh directions", () => this.controller.reload()));
+    refresh.addEventListener("click", () => {
+      this.previews.clear();
+      void this.run("refresh directions", () => this.controller.reload());
+    });
 
     const error = root.createDiv({
       cls: "arxiv-daily-interest-review__error",
@@ -540,6 +547,43 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         [...new Set([...allowedPaperKeys, ...draft.representativePaperKeys])].sort(codeUnitCompare),
         draft.representativePaperKeys);
       this.fields.set(direction.id, { text, discoveryCues: [...direction.discoveryCues], representatives, initial });
+      if (this.controller.previewDirection) {
+        const previewArea = form.createDiv({ cls: "arxiv-daily-interest-review__preview" });
+        const renderPreview = () => {
+          previewArea.empty();
+          const preview = this.previews.get(direction.id);
+          if (!preview) return;
+          if (preview.directionText !== text.value.trim().replace(/\s+/gu, " ")
+            || (snapshot.arxivCategories !== undefined
+              && JSON.stringify(preview.categories) !== JSON.stringify(snapshot.arxivCategories))) {
+            previewArea.createEl("p", { text: "Preview is out of date. Preview matches again." });
+            return;
+          }
+          previewArea.createEl("p", { text: `Library sample: ${preview.papers.length} papers; ${preview.papers.filter(({ matched }) => matched).length} matches.` });
+          previewArea.createEl("p", { text: `Current arXiv categories: ${preview.categories.join(", ")}` });
+          if (preview.missingCategories.length) previewArea.createEl("p", {
+            text: `Matching sample papers outside current categories: ${preview.missingCategories.join(", ")}. Review Paper categories in settings.`,
+          });
+          const list = previewArea.createEl("ul");
+          for (const paper of preview.papers) list.createEl("li", {
+            text: `${paper.title}: ${paper.matched ? `matches ${preview.directionText}` : "not selected"}${paper.categoryCoverage === "unknown" ? "; arXiv category unknown" : ""}`,
+          });
+        };
+        text.addEventListener("input", renderPreview);
+        renderPreview();
+        const previewButton = form.createEl("button", { text: "Preview matches", attr: { type: "button" } });
+        previewButton.disabled = this.pending;
+        previewButton.addEventListener("click", () => {
+          const draft = this.draft(direction.id);
+          if (!draft) return;
+          this.previews.delete(direction.id);
+          void this.run("preview direction matches", async () => {
+            if (this.controller.snapshot().authorization.kind !== "authorized" && !await this.controller.authorize()) return;
+            const result = await this.controller.previewDirection!({ candidateId: direction.id, text: draft.text });
+            this.previews.set(direction.id, result);
+          });
+        });
+      }
     }
 
     const hints = body.createDiv({ cls: "arxiv-daily-interest-review__hint" });
