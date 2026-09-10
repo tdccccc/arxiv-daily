@@ -115,7 +115,7 @@ it("offers library direction review in the legacy research topic settings", asyn
   tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
   tab.plugin.openPersonalLibraryDirectionReview = vi.fn();
   tab.display();
-  const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review library directions");
+  const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review suggestions");
   expect(entry).toBeDefined();
   entry!.click();
   await vi.waitFor(() => expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());

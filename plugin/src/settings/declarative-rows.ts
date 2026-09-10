@@ -201,6 +201,7 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
 
 export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
   tab.setDeclarativeSetupGuideRow(setting);
+  setting.setName("");
   clearSettingEl(setting, "arxiv-daily-setup");
   const guide = tab.createSetupGuide();
   if (guide) setting.settingEl.appendChild(guide);

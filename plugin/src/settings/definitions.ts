@@ -206,6 +206,7 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "LLM",
+      cls: "arxiv-daily-settings__section-llm",
       items: [
         ...(host.renderLlmBaseUrlRow
           ? [{
@@ -241,6 +242,7 @@ export function buildSettingDefinitions(
     {
       type: "list",
       heading: "arXiv categories",
+      cls: "arxiv-daily-settings__section-arxiv",
       emptyState: "No categories yet — use Add category to add one.",
       items: categories.map((_category, index) => ({
         name: String(index + 1),
@@ -253,12 +255,9 @@ export function buildSettingDefinitions(
       onDelete: (index) => void host.deleteCategory?.(index),
     },
     {
-      name: "Topics from your library",
-      render: (setting: Setting) => host.renderLibraryTopicEntry?.(setting),
-    },
-    {
       type: "list",
       heading: "Research topics",
+      cls: "arxiv-daily-settings__section-topics",
       emptyState:
         "No topics yet. Generate from your library or add a topic.",
       items: topics.map((topic, index) => ({
@@ -269,6 +268,10 @@ export function buildSettingDefinitions(
         name: "Add topic",
         action: () => void host.addTopic?.(),
       },
+    },
+    {
+      name: "Topics from your library",
+      render: (setting: Setting) => host.renderLibraryTopicEntry?.(setting),
     },
     {
       name: "Automatic detail notes",
@@ -290,6 +293,7 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "Output & schedule",
+      cls: "arxiv-daily-settings__section-schedule",
       items: [
         {
           name: "Daily paper limit",
@@ -516,6 +520,7 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "Advanced",
+      cls: "arxiv-daily-settings__section-advanced",
       items: [
         {
           name: "Log level",

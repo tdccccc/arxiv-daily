@@ -171,6 +171,111 @@ async function ready(root: HTMLElement): Promise<void> {
   await vi.waitFor(() => expect(button(root, "Refresh").disabled).toBe(false));
 }
 
+describe("review progress", () => {
+  it("counts selected directions and keeps unselected directions available after acceptance", async () => {
+    const ctrl = controller();
+    const root = open(ctrl.port).contentEl;
+    expect(root.querySelector(".arxiv-daily-interest-review__selection-summary")?.textContent ?? "")
+      .toContain("2 directions selected");
+    choice(root, second.text).click();
+    expect(root.querySelector(".arxiv-daily-interest-review__selection-summary")?.textContent ?? "")
+      .toContain("1 direction selected");
+    expect(ctrl.snapshot().settingsTopics).toEqual([]);
+
+    root.querySelector<HTMLButtonElement>(".arxiv-daily-interest-review__accept-bar button")!.click();
+    await ready(root);
+    expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ id }) => id)).toEqual([first.id]);
+    expect(root.querySelector(".arxiv-daily-interest-review__feedback")?.textContent)
+      .toContain("Confirmed 1 direction");
+    expect(choice(root, second.text).disabled).toBe(false);
+    expect(Array.from(root.querySelectorAll("button"), ({ textContent }) => textContent)).not.toContain("Done");
+  });
+
+  it("offers a completion action only after all directions have been reviewed", async () => {
+    const ctrl = controller();
+    const modal = open(ctrl.port);
+    const root = modal.contentEl;
+    root.querySelector<HTMLButtonElement>(".arxiv-daily-interest-review__accept-bar button")!.click();
+    await ready(root);
+    expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ id }) => id)).toEqual([first.id, second.id]);
+    expect(root.querySelector(".arxiv-daily-interest-review__completion")?.textContent ?? "")
+      .toContain("Research topics");
+    expect(Array.from(root.querySelectorAll("button"), ({ textContent }) => textContent))
+      .not.toContain("Add to research topics");
+    button(root, "Done").click();
+    expect(root.childElementCount).toBe(0);
+    expect(ctrl.snapshot().settingsTopics[0]!.directions).toHaveLength(2);
+  });
+
+  it("reports confirmation without claiming new directions when the text already exists", async () => {
+    const initial = snapshot({
+      settingsTopics: [settingsTopic("existing-topic", "Research agents", [
+        { id: "manual-direction", text: first.text, origin: "manual" },
+      ])],
+    });
+    initial.proposal!.topics[0]!.directions = [first];
+    const ctrl = controller(initial);
+    const root = open(ctrl.port).contentEl;
+    button(root, "Add to research topics").click();
+    await ready(root);
+    expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ id }) => id)).toEqual(["manual-direction"]);
+    expect(root.querySelector(".arxiv-daily-interest-review__feedback")?.textContent)
+      .toContain("Confirmed 1 direction");
+  });
+});
+
+describe("browsing supporting papers", () => {
+  it("does not return focus to a paper after the user moves focus during opening", async () => {
+    const ctrl = controller();
+    let opened!: () => void;
+    ctrl.port.openPaper = () => new Promise<void>((resolve) => { opened = resolve; });
+    const root = open(ctrl.port).contentEl;
+    const row = card(root, first.text);
+    const topic = row.closest<HTMLDetailsElement>(".arxiv-daily-interest-review__topic")!;
+    topic.open = true;
+    topic.dispatchEvent(new Event("toggle"));
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__detail")!.open = true;
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__evidence")!.open = true;
+    const link = row.querySelector<HTMLButtonElement>(".arxiv-daily-interest-review__paper-link")!;
+    link.focus();
+    link.click();
+    const options = root.querySelector<HTMLElement>(".arxiv-daily-interest-review__options summary")!;
+    options.tabIndex = 0;
+    options.focus();
+    expect(document.activeElement).toBe(options);
+    opened();
+    await ready(root);
+    expect(document.activeElement?.classList.contains("arxiv-daily-interest-review__paper-link")).toBe(false);
+  });
+
+  it.each(["pending", "reviewed"])("keeps %s evidence open and restores keyboard focus after opening a paper", async (state) => {
+    const ctrl = controller();
+    ctrl.port.openPaper = vi.fn(async () => undefined);
+    const root = open(ctrl.port).contentEl;
+    if (state === "reviewed") {
+      button(root, "Add to research topics").click();
+      await ready(root);
+      root.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__reviewed")!.open = true;
+    }
+    const row = card(root, first.text);
+    const topic = row.closest<HTMLDetailsElement>(".arxiv-daily-interest-review__topic")!;
+    topic.open = true;
+    topic.dispatchEvent(new Event("toggle"));
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__detail")!.open = true;
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__evidence")!.open = true;
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__cluster")!.open = true;
+    const link = row.querySelector<HTMLButtonElement>(".arxiv-daily-interest-review__cluster button")!;
+    link.focus();
+    link.click();
+    await ready(root);
+    const restored = card(root, first.text);
+    expect(restored.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__cluster")!.open).toBe(true);
+    if (state === "reviewed") expect(root.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__reviewed")!.open).toBe(true);
+    expect(document.activeElement).toBe(restored.querySelector(".arxiv-daily-interest-review__cluster button"));
+    expect(ctrl.port.openPaper).toHaveBeenCalledWith("arxiv:2608.00001");
+  });
+});
+
 describe("unsaved review drafts", () => {
   function editableController() {
     const ctrl = controller();
@@ -189,6 +294,8 @@ describe("unsaved review drafts", () => {
     const row = card(root, first.text);
     row.querySelector<HTMLTextAreaElement>("textarea")!.value = "My corrected research scope";
     const representatives = row.querySelector<HTMLSelectElement>("select[multiple]")!;
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__evidence")!.open = true;
+    row.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__representatives")!.open = true;
     representatives.options[0]!.selected = false;
     choice(root, second.text).click();
     button(root, "Refresh").click();
@@ -197,13 +304,15 @@ describe("unsaved review drafts", () => {
     expect(restored.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("My corrected research scope");
     expect(Array.from(restored.querySelector<HTMLSelectElement>("select[multiple]")!.selectedOptions, ({ value }) => value))
       .toEqual(["arxiv:2608.00002"]);
+    expect(restored.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__evidence")!.open).toBe(true);
+    expect(restored.querySelector<HTMLDetailsElement>(".arxiv-daily-interest-review__representatives")!.open).toBe(true);
   });
 
   it("saves the reviewed text before accepting selected directions", async () => {
     const ctrl = editableController();
     const root = open(ctrl.port).contentEl;
     card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "My corrected research scope";
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ text }) => text))
       .toEqual(["My corrected research scope", second.text]);
@@ -215,12 +324,12 @@ describe("unsaved review drafts", () => {
     ctrl.port.updateProposal = async () => { throw new Error("disk unavailable"); };
     const root = open(ctrl.port).contentEl;
     card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "My corrected research scope";
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics).toEqual([]);
     expect(card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("My corrected research scope");
     ctrl.port.updateProposal = save;
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions[0]!.text).toBe("My corrected research scope");
   });
@@ -242,7 +351,7 @@ describe("unsaved review drafts", () => {
     });
     const root = open(ctrl.port).contentEl;
     card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "My corrected scope";
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics).toEqual([]);
     expect(root.querySelector('[role="alert"]')?.textContent).toMatch(/review changed.*refresh/i);
@@ -256,7 +365,7 @@ describe("unsaved review drafts", () => {
     button(card(root, first.text), "Save edits").click();
     await ready(root);
     expect(card(root, second.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Second edited scope");
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ text }) => text))
       .toEqual(["First edited scope", "Second edited scope"]);
@@ -282,7 +391,7 @@ describe("reviewing a proposal with acceptance history", () => {
     const ctrl = controller();
     const modal = open(ctrl.port);
     choice(modal.contentEl, second.text).click();
-    button(modal.contentEl, "Accept 1 topic(s) into settings").click();
+    button(modal.contentEl, "Add to research topics").click();
     await ready(modal.contentEl);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ text }) => text)).toEqual([first.text]);
     modal.close();
@@ -293,23 +402,24 @@ describe("reviewing a proposal with acceptance history", () => {
     expect(choice(root, second.text).checked).toBe(true);
     expect(choice(root, second.text).disabled).toBe(false);
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).not.toContain("Added");
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(false);
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ text }) => text)).toEqual([first.text, second.text]);
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
-    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(Array.from(root.querySelectorAll("button"), ({ textContent }) => textContent)).not.toContain("Add to research topics");
+    expect(button(root, "Done").disabled).toBe(false);
   });
 
   it("keeps the partial topic selected so its remaining direction can be accepted without reopening", async () => {
     const ctrl = controller();
     const root = open(ctrl.port).contentEl;
     choice(root, second.text).click();
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await ready(root);
     choice(root, second.text).click();
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(false);
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ id }) => id)).toEqual([first.id, second.id]);
   });
@@ -342,7 +452,7 @@ describe("reviewing a proposal with acceptance history", () => {
     const root = open(ctrl.port).contentEl;
     expect(choice(root, first.text).disabled).toBe(false);
     expect(choice(root, first.text).checked).toBe(true);
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
+    expect(button(root, "Add to research topics").disabled).toBe(false);
   });
 
   it("shows a same-name manual topic as the destination and permits new direction text", async () => {
@@ -354,8 +464,8 @@ describe("reviewing a proposal with acceptance history", () => {
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).not.toContain("Added");
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Add to existing topic");
     expect(root.textContent).toContain(`Add to existing topic: ${existing.name}`);
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(false);
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics).toHaveLength(1);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ text }) => text))
@@ -369,8 +479,8 @@ describe("reviewing a proposal with acceptance history", () => {
     const root = open(ctrl.port).contentEl;
     expect(root.textContent).toContain("destination topic was removed");
     expect(root.textContent).toContain("Choose a destination");
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(true);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(true);
+    button(root, "Add to research topics").click();
     expect(ctrl.port.acceptTopics).not.toHaveBeenCalled();
     expect(destination(root, second.text).disabled).toBe(false);
   });
@@ -380,9 +490,9 @@ describe("reviewing a proposal with acceptance history", () => {
     const root = open(ctrl.port).contentEl;
     expect(root.textContent).toContain("acceptance record");
     expect(root.textContent).toMatch(/restore.*saved review state.*reload/iu);
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(true);
-    expect(button(root, "Regenerate proposals").disabled).toBe(false);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(true);
+    expect(button(root, "Generate again").disabled).toBe(false);
+    button(root, "Add to research topics").click();
     expect(ctrl.port.acceptTopics).not.toHaveBeenCalled();
   });
 });
@@ -405,7 +515,7 @@ describe("changing a pending direction's destination", () => {
       },
     }));
     const root = open(ctrl.port).contentEl;
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(true);
+    expect(button(root, "Add to research topics").disabled).toBe(true);
     const select = destination(root, second.text);
     select.value = "other-topic";
     select.dispatchEvent(new Event("change"));
@@ -417,8 +527,8 @@ describe("changing a pending direction's destination", () => {
     expect(heading?.textContent).toContain("Evaluation");
     expect(heading?.textContent).toContain("Add to existing topic");
     expect(choice(root, second.text).checked).toBe(true);
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
-    button(root, "Accept 1 topic(s) into settings").click();
+    expect(button(root, "Add to research topics").disabled).toBe(false);
+    button(root, "Add to research topics").click();
     await ready(root);
     expect(ctrl.snapshot().settingsTopics[0]!.directions.map(({ id }) => id)).toEqual([second.id]);
     expect(ctrl.snapshot().settingsTopics).toHaveLength(1);
@@ -503,7 +613,7 @@ describe("proposal evidence is explanatory", () => {
     const root = open(controller().port).contentEl;
     card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "Draft research scope";
     button(root, "Library overview").click();
-    button(root, "Proposed").click();
+    button(root, "Suggestions").click();
     expect(card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Draft research scope");
   });
 
@@ -557,7 +667,7 @@ describe("proposal evidence is explanatory", () => {
     expect(root.textContent).toContain("Old preview result");
     Object.assign(ctrl.snapshot(), { arxivCategories: ["cs.LG"] });
     button(root, "Library overview").click();
-    button(root, "Proposed").click();
+    button(root, "Suggestions").click();
     expect(root.textContent).not.toContain("Old preview result");
     expect(root.textContent).toMatch(/preview.*out of date/i);
   });
@@ -594,7 +704,7 @@ describe("proposal evidence is explanatory", () => {
     expect(root.textContent).not.toContain("This proposal contains no directions");
     expect(root.querySelector(".arxiv-daily-interest-review__buffer")).toBeNull();
     expect(root.querySelector(".arxiv-daily-interest-review__accept-bar")).toBeNull();
-    expect(button(root, "Regenerate proposals").disabled).toBe(false);
+    expect(button(root, "Generate again").disabled).toBe(false);
   });
 
   it.each(["edited", "deleted", "legacy"])("does not present %s coverage as a verified current match", (change) => {

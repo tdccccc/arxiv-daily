@@ -478,3 +478,26 @@
 - verification: 共享分组/解析/缓存9 Red、rescue7 Red后相关279 Green；MathML及备用路径分块Red→Green，96项相关回归。CLI与插件实际pipeline各观察布局Red→Green，只替换外部HTTP响应，真实写入/索引路径保留；两文件46项通过。最终全workspace3109 passed/2既有skipped，四包typecheck、boundaries、CLI/plugin build、diff检查通过，lint0 error/20既有warning；独立代码审查无Critical/Important/Minor。
 - model / desktop: 3个公开原文真实模型小样通过，中文完整样例主结果147字符、英文45词，单位片段保留0.75 mJy/beam及入选数量；这是有限样例，非整体科学准确率测量。用新生成的中英normal/emergency/rescue共6个排版样例在隔离Obsidian验证：主要结果可见、两类辅助信息默认折叠、方向逐项显示、空主题置后、点击展开与实时预览均通过，渲染器无异常。
 - delivery: CLI构建可运行，测试插件main.js已备份安装并校验；本轮只更新程序，26个既有日报文件（含备份）SHA-256均未变。证据与预览在`.artifacts/future-daily-readability/`；旧插件在`/tmp/arxiv-future-daily-ksjfscjy/plugin-backup-on8fc_v4/`。完整P6用户验收仍未记录，P6/goal保持active，P12保持blocked；不提交、不推送、不开PR。
+
+## 2026-09-09 — P6 主题与文献库流程的信息减负
+
+- evidence: 用户要求核对最近两项 Helm，并修正 Topics from your library 的归属及整条流程信息过载。最近两项为本 initiative（P6 待体验确认）和 9 月 8 日的 library-review-and-understanding（已完成）；没有把更早的 active initiative 混入本轮。
+- classification: L1；主题/方向与复审可靠性目标继续成立，问题在入口分组、次要信息展示和下一步提示。P6 追加 Chunk 5；9 月 8 日已完成阶段与其他 active Helm 保持原结论。
+- disposition: 保留默认前两个主题、主题和编辑区折叠、元数据/摘要授权、预览、证据及草稿/接受保护。调整新版 Settings 入口层级、入门引导、复审操作层级与概览重复文字；不改变匹配或存量日报。
+- verification: 修改前五个相关插件文件 272 项 Green；行为改变观察 Red→Green，纯布局/文案用既有回归及隔离真实 Obsidian 检查。
+- next: 先完成 Settings 入口及可用的下一步引导，再处理复审与证据展示；保留不提交、不推送、不开 PR 的本 initiative 约束。
+
+## 2026-09-10 — P6 主题流程减负完成并安装测试构建
+
+- changes: 新版 Settings 的文献库入口移到 Research topics 列表后；新旧版引导只突出当前下一步，并修复新版分区定位。复审以加入研究主题为主操作，展示所选方向数；生成/刷新与维护说明折叠，首次分析有独立生成入口，完成后明确显示 Done。证据、改归属与代表选择按需展开；代表选项显示论文标题；删除 cues 计数、概览重复方向段落与重复入门标题。
+- reliability: 继续保留授权、接受前保存、失败草稿、逐次接受和预览失效判断。独立审查复现的证据折叠与去重新增误报已修正；复核确认 Important 关闭。后续主动聚焦 More options 时的焦点回跳以额外 Red→Green 修正，打开 PDF 获得的焦点不会被旧链接夺回。
+- verification: 272 项相关基线 Green；引导/计数/完成、证据展开、去重与焦点问题分块观察 Red→Green。最终全插件 806 passed（44 files），四包 typecheck、boundaries、插件 build 和 diff check 通过，lint 0 error / 20 既有 warning。未改共享匹配/日报逻辑，未重跑 core/CLI 全套。
+- desktop: 实际 Obsidian 1.13.7 中通过 18 项，含独立 Settings 窗口、1440/560 宽度、草稿、真实保存与部分接受、完成返回、真实 PDF 打开、证据展开及首次生成到复审；1.11.5 fallback 设置另通过 5 项。两个运行均无 renderer error。桌面预览与生成使用受控响应，没有新的真实模型请求。初期脚本只观察主窗口，未找到 1.13.7 独立 Settings；改为连接实际窗口后重验，早期失败未算通过，未修改并行桌面验收框架。
+- delivery: 已备份并更新 `/home/tiandc/Desktop/plugin_test/.obsidian/plugins/arxiv-daily/` 的 main.js/styles.css，manifest 原本一致。构建与目标逐文件 SHA-256 相同，data.json 字节未变。备份：`/tmp/arxiv-topic-workflow-before-install-20260910-200610-shiuulp1/`；脚本、截图、验证日志与安装校验：`.artifacts/topic-workflow-simplicity/`。
+- status / next: Chunk 5 软件、桌面自动化及交付已接受，保留未提交。P6/goal 仍 active、P12 仍 blocked，等待用户重载测试库插件后的整体体验确认；9 月 8 日独立 Helm 及其他 active Helm 状态未改。不提交、不推送、不开 PR。
+
+## 2026-09-10 — 用户授权提交 P6 流程减负
+
+- authorization: 用户明确要求“先提交”，授权将本轮主题设置与文献库复审减负的实现、回归测试和 Helm 验收记录作为一个本地提交保存。
+- verification: 实现与已通过的 806 项插件测试、23 项桌面检查一致；提交前复核暂存差异和 whitespace 检查。
+- status: P6/goal 的整体体验确认与 P12 的用户桌面确认仍未关闭；本次提交不推进这些验收状态。

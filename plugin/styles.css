@@ -615,6 +615,16 @@
   color: var(--text-muted);
 }
 
+.arxiv-daily-setup__item:not(.is-current) {
+  border-color: transparent;
+  background: transparent;
+  padding-block: 4px;
+}
+
+.arxiv-daily-setup__item.is-current {
+  border-inline-start: 3px solid var(--interactive-accent);
+}
+
 .arxiv-daily-setup__item-body {
   min-width: 0;
 }
@@ -1851,8 +1861,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 .arxiv-daily-interest-review__tab[aria-selected="true"] {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  box-shadow: inset 0 -2px var(--interactive-accent);
 }
 
 .arxiv-daily-interest-review__error,
@@ -1867,9 +1878,8 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-interest-review__card {
   margin-block: var(--size-4-3);
-  padding: var(--size-4-3);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
+  padding-block: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .arxiv-daily-interest-review__card-heading strong {
@@ -1880,6 +1890,46 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  gap: var(--size-4-2);
+  margin-block-start: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__options {
+  margin-inline-start: auto;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-interest-review__options[open] {
+  flex-basis: 100%;
+}
+
+.arxiv-daily-interest-review__options > summary,
+.arxiv-daily-interest-review__evidence > summary,
+.arxiv-daily-interest-review__representatives > summary,
+.arxiv-daily-interest-review__destination > summary,
+.arxiv-daily-interest-review__reviewed > summary {
+  cursor: pointer;
+}
+
+.arxiv-daily-interest-review__selection-summary {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-interest-review__feedback {
+  color: var(--text-success);
+}
+
+.arxiv-daily-interest-review__completion,
+.arxiv-daily-interest-review__reviewed {
+  margin-block: var(--size-4-4);
+}
+
+.arxiv-daily-interest-review__destination[open],
+.arxiv-daily-interest-review__representatives[open] {
+  display: grid;
   gap: var(--size-4-2);
 }
 
@@ -1908,11 +1958,6 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   text-align: start;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-
-.arxiv-daily-interest-review__summary {
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
 }
 
 .arxiv-daily-interest-review__detail > summary {

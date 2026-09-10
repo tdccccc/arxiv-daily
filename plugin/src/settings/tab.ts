@@ -647,8 +647,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const status = this.plugin.getLibraryConnectionStatus();
     const index = this.plugin.libraryIndexStatus.snapshot();
     setting.setName("Topics from your library");
+    setting.setDesc("Choose which library suggestions to follow in your daily reports.");
     setting.addButton((button) => button
-      .setButtonText(index.lastRun?.papers ? "Review library directions" : "Generate from library")
+      .setButtonText(index.lastRun?.papers ? "Review suggestions" : "Use my library")
       .setDisabled(Boolean(index.activity))
       .onClick(() => this.runAction("review library directions", async () => {
         button.setDisabled(true);
@@ -2244,7 +2245,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.llmReady,
       "Connect AI",
-      "Add an API key, API base URL, and model under AI model.",
+      "Add your API key and choose a model.",
       "Connect AI",
       () => this.scrollToSection("llm"),
     );
@@ -2260,7 +2261,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.topicsReady,
       "Describe your research interests",
-      "Add at least one complete research topic under Research topics.",
+      "Use your library to suggest topics, or add your own under Research topics.",
       "Describe interests",
       () => this.scrollToSection("topics"),
     );
@@ -2292,23 +2293,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     actionLabel?: string,
     onAction?: () => void,
   ): void {
+    const current = !done && !parent.querySelector(".is-current");
     const item = parent.createEl("li", {
       cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
     });
+    if (current) {
+      item.addClass("is-current");
+      item.setAttribute("aria-current", "step");
+    }
     const body = item.createDiv({ cls: "arxiv-daily-setup__item-body" });
     body.createDiv({
       cls: "arxiv-daily-setup__label",
       text: title,
     });
-    body.createDiv({
-      cls: "arxiv-daily-setup__description",
-      text: description,
-    });
-    item.createSpan({
-      cls: "arxiv-daily-setup__status",
-      text: done ? "Complete" : "Next",
-    });
-    if (!done && actionLabel && onAction) {
+    if (current) {
+      body.createDiv({
+        cls: "arxiv-daily-setup__description",
+        text: description,
+      });
+    }
+    if (done || current) {
+      item.createSpan({
+        cls: "arxiv-daily-setup__status",
+        text: done ? "Complete" : "Next",
+      });
+    }
+    if (current && actionLabel && onAction) {
       const action = item.createEl("button", {
         cls: "arxiv-daily-setup__link",
         text: actionLabel,
@@ -2347,7 +2357,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private scrollToSection(section: "llm" | "arxiv" | "topics" | "schedule" | "advanced"): void {
     const target = this.containerEl.querySelector(
       `[data-arxiv-daily-section="${section}"]`,
-    );
+    ) ?? this.containerEl.querySelector(`.arxiv-daily-settings__section-${section}`);
     if (!target) return;
     const targetEl = target as HTMLElement;
     const view = targetEl.ownerDocument.defaultView;

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-07T04:07:50+08:00
-updated: 2026-09-08T01:34:05+08:00
-revision: 6
+updated: 2026-09-10T20:06:10+08:00
+revision: 8
 
 ## Outcome
 
@@ -63,6 +63,20 @@ revision: 6
 - [x] shared future-report behavior and host regressions verified — 共享分组/折叠/解析/缓存9 Red、rescue7 Red后相关279项Green；CLI中文和插件英文各经过真实pipeline的Red→Green，两文件46项通过，完整五字段索引与既有日报字节保留。
 - [x] source extraction and concise grounded summaries verified — MathML与HTML备用路径均有行为Red→Green，相关96项通过；4篇真实缓存页的重复片段消除且原缓存不变。3次真实模型小样通过，中文完整样例核心结果147字符、英文45词，单位样例保留0.75 mJy/beam。
 - [x] both products built, plugin installed, existing reports unchanged — 全workspace3109 passed/2既有skipped，四包typecheck、lint(0 error/20既有warning)、boundaries与CLI/plugin build通过；CLI构建可运行。中英×正常/emergency/rescue共6个隔离Obsidian样例、展开及实时预览通过，独立审查无阻塞。只安装main.js，26个既有日报文件（含备份）SHA-256保持一致，证据在`.artifacts/future-daily-readability/`。
+
+### Chunk 5 — 主题设置与文献库复审的信息减负
+
+- evidence: 用户指出 Topics from your library 应归到 Research topics 下，并反馈整条流程信息过多、难以理解。新版 declarative 设置确实把入口放在主题标题之前；复审主屏并列生成/刷新/概览/接受，概览重复方向全文，编辑区混合方向、归属与证据维护。
+- scope / classification: P6 的 L1 体验验收修正；保留现有主题、方向、授权、选择及接受合同。9 月 8 日 Helm 的可靠性与可追溯结果继续有效，不重写其历史，也不改其他 active initiative。
+- visual thesis: 沿用 Obsidian 原生界面，以简短标题、留白与单一主要操作呈现当前任务。
+- content plan: Settings 给出主题入口与当前设置步骤；复审先选择/加入方向，再按需查看证据；完成后显示结果与下一步；概览每条方向仅显示一次。
+- interaction thesis: 原生 disclosure 展开次要操作与证据；设置引导定位当前步骤；异步操作保留展开状态、草稿和焦点，遵循减少动画偏好。
+- change kind / strategy: 布局、文案和重复段落删除使用既有 Green 基线与真实桌面检查，不为可逆展示改动制造测试；下一步引导、选择计数、接受后的完成状态等行为使用最小 DOM Red→Green，并回归授权、在途/失败保存、部分接受和预览。
+- baseline: 改动前 settings-definitions、settings-tab、settings-declarative-tab、personal-library-interest-profile-modal、proposal-acceptance-ui 共 272 项通过。
+- Green / regression: 上述相关插件套件、全插件测试、四包 typecheck、boundaries、lint、插件 build 和 diff 检查；隔离 Obsidian 中验证新版/旧版 Settings 入口位置、首次生成、编辑/证据、部分与全部接受、宽窄窗口。自动化桌面结果不替代用户最终体验确认。
+- [x] Settings 入口归属与当前步骤引导验收 — 新版入口位于 Research topics 列表后；引导只突出首个未完成步骤，新版分区跳转可用，去除重复标题。两项交互 Red→Green，真实新旧版设置页均通过。
+- [x] 复审主要操作、证据渐进展示与完成反馈验收 — 生成/刷新进入 More options，默认主操作为加入研究主题并显示所选方向数；完成后出现 Done。证据、归属和代表维护按需展开；概览去除重复段落；打开论文保留展开与键盘位置，并尊重用户中途移动焦点。计数、完成、去重、展开和焦点均有 Red→Green；最终全插件 806 项通过。
+- [x] 真实桌面检查、构建及可复核证据交付 — Obsidian 1.13.7 的独立设置窗口与复审流程 18 项、1.11.5 旧版设置 5 项通过，均无 renderer error。四包 typecheck、boundaries、build、diff 检查通过；lint 0 error / 20 既有 warning。测试库构建已备份安装并核对 SHA-256，data.json 字节未变；记录和截图在 `.artifacts/topic-workflow-simplicity/`。预览/生成的桌面响应受控，未重跑真实模型或 core/CLI 全套；最终用户体验确认仍在 Chunk 2 保持未勾选。
 
 ## Phase verification
 

@@ -254,20 +254,20 @@ describe("accepting a proposed structure", () => {
 
     // This fixture has one representative, so including its direction requires
     // an explicit choice even though the topic itself starts selected.
-    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(button(root, "Add to research topics").disabled).toBe(true);
     directionChoice(root, candidate.text).click();
-    expect(button(root, "Accept 1 topic(s) into settings").disabled).toBe(false);
+    expect(button(root, "Add to research topics").disabled).toBe(false);
 
     const checkbox = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change"));
-    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(button(root, "Add to research topics").disabled).toBe(true);
 
     const reselected = root.querySelector<HTMLInputElement>('input[aria-label="Accept Research agents"]')!;
     reselected.checked = true;
     reselected.dispatchEvent(new Event("change"));
 
-    const armed = button((modal as any).contentEl, "Accept 1 topic(s) into settings");
+    const armed = button((modal as any).contentEl, "Add to research topics");
     expect(armed.disabled).toBe(false);
     armed.dispatchEvent(new Event("click"));
     await Promise.resolve();
@@ -297,7 +297,7 @@ describe("accepting a proposed structure", () => {
       .toEqual([false, false, true, true]);
     expect(sections[2]!.querySelector("summary")?.textContent).toContain("2 papers");
     expect(sections[3]!.querySelector("summary")?.textContent).toContain("1 paper");
-    button(root, "Accept 2 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await vi.waitFor(() => expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(
       ["large", "tie-z"], ["large-direction-1", "large-direction-2", "tie-z-direction-1"],
     ));
@@ -401,7 +401,7 @@ describe("accepting a proposed structure", () => {
       indexedPapers: [{ paperKey: `file:sha256:${"a".repeat(64)}`, title: "A Local Paper" }],
     }));
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    expect(button(root, "Generate proposals").disabled).toBe(false);
+    expect(button(root, "Generate topics").disabled).toBe(false);
   });
 
   it("refuses generation when neither the catalog nor the index has papers", () => {
@@ -411,7 +411,7 @@ describe("accepting a proposed structure", () => {
       indexedPapers: [],
     }));
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    const generate = button(root, "Generate proposals");
+    const generate = button(root, "Generate topics");
     expect(generate.disabled).toBe(true);
     expect(generate.getAttribute("title")).toContain("no indexed metadata-and-abstract papers");
   });
@@ -438,7 +438,7 @@ describe("accepting a proposed structure", () => {
       authorization: { kind: "connected", rootLabel: "papers" } as any,
     }));
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    const generate = button(root, "Generate proposals");
+    const generate = button(root, "Generate topics");
     expect(generate.disabled).toBe(false);
     expect(generate.getAttribute("title")).toContain("confirm what leaves this device");
 
@@ -453,7 +453,7 @@ describe("accepting a proposed structure", () => {
       authorization: { kind: "connected", rootLabel: "papers" } as any,
     }), { granted: false });
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+    button(root, "Generate topics").dispatchEvent(new Event("click"));
     await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalled());
     await Promise.resolve();
     expect(ctrl.mock.generate).not.toHaveBeenCalled();
@@ -462,7 +462,7 @@ describe("accepting a proposed structure", () => {
   it("does not re-ask for consent once the grant is recorded", async () => {
     const ctrl = controller(snapshot({ proposal: null }));
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+    button(root, "Generate topics").dispatchEvent(new Event("click"));
     await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalled());
     expect(ctrl.mock.authorize).not.toHaveBeenCalled();
   });
@@ -482,7 +482,7 @@ describe("accepting a proposed structure", () => {
     });
     (ctrl.mock.authorize as any).mockRejectedValueOnce(boom);
     const root = (open(ctrl.mock) as any).contentEl as HTMLElement;
-    button(root, "Generate proposals").dispatchEvent(new Event("click"));
+    button(root, "Generate topics").dispatchEvent(new Event("click"));
 
     await vi.waitFor(() => expect(ctrl.mock.logError).toHaveBeenCalledWith(
       "authorize personal library processing",
@@ -564,7 +564,8 @@ describe("proposed topics already in settings", () => {
     expect(checkbox.disabled).toBe(true);
     expect(checkbox.title).toContain("already processed");
     expect(root.querySelector(".arxiv-daily-interest-review__topic-heading")?.textContent).toContain("Added");
-    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(Array.from(root.querySelectorAll("button"), ({ textContent }) => textContent)).not.toContain("Add to research topics");
+    expect(button(root, "Done").disabled).toBe(false);
   });
 
   it("keeps an accepted direction marked after the settings topic is renamed", () => {
@@ -580,7 +581,7 @@ describe("proposed topics already in settings", () => {
     expect(topicChoices(root).map((choice) => choice.checked)).toEqual([false, true, true, false]);
     const sections = Array.from(root.querySelectorAll(".arxiv-daily-interest-review__topic"));
     expect(sections[0]!.querySelector("summary")?.textContent).toContain("Added");
-    button(root, "Accept 2 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await vi.waitFor(() => expect(ctrl.mock.acceptTopics).toHaveBeenCalledWith(
       ["tie-z", "tie-a"], ["tie-z-direction-1", "tie-a-direction-1"],
     ));
@@ -599,7 +600,7 @@ describe("proposed topics already in settings", () => {
     const checkbox = heading.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(checkbox.checked).toBe(true);
     expect(checkbox.disabled).toBe(false);
-    button(root, "Accept 2 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
     expect(saved[0]!.arxiv.topics.map(({ name }) => name)).toEqual(["Largest coverage", "First tied coverage"]);
     expect(saved[0]!.arxiv.topics[0]!.directions).toHaveLength(3);
@@ -649,7 +650,7 @@ describe("persisting the reviewed direction selection", () => {
     const names = () => Array.from(tab.containerEl.querySelectorAll(".arxiv-daily-settings__topic-title"),
       (element) => element.textContent);
     expect(names()).toEqual(["Existing topic"]);
-    button(root, "Accept 2 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await vi.waitFor(() => expect(names()).toEqual(["Existing topic", "Largest coverage", "First tied coverage"]));
     expect(saveData).toHaveBeenCalledOnce();
     expect(saved[0]!.arxiv.topics.map(({ name }) => name))
@@ -700,7 +701,7 @@ describe("persisting the reviewed direction selection", () => {
     topicChoices(root).find((choice) => choice.getAttribute("aria-label") === "Accept First tied coverage")!.click();
     expandTopic(root, "Largest coverage");
     directionChoice(root, "Largest coverage direction 2").click();
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
 
     await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
     expect(saved[0]!.arxiv.topics.map((topic) => ({ name: topic.name, directions: topic.directions.map(({ text }) => text) })))
@@ -715,7 +716,7 @@ describe("persisting the reviewed direction selection", () => {
     directionChoice(root, "Largest coverage direction 1").click();
     directionChoice(root, "Largest coverage direction 2").click();
     expect(topicChoices(root)[0]!.checked).toBe(true);
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
 
     await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
     expect(saved[0]!.arxiv.topics.map((topic) => ({ name: topic.name, directions: topic.directions.map(({ text }) => text) })))
@@ -727,10 +728,10 @@ describe("persisting the reviewed direction selection", () => {
     directionChoice(root, "Largest coverage direction 1").click();
     directionChoice(root, "Largest coverage direction 2").click();
     directionChoice(root, "First tied coverage direction 1").click();
-    const accept = button(root, "Accept 0 topic(s) into settings");
+    const accept = button(root, "Add to research topics");
     expect(accept.disabled).toBe(true);
     expect(root.querySelector(".arxiv-daily-interest-review__accept-bar")?.textContent)
-      .toContain("Select at least one direction in a selected topic");
+      .toMatch(/Select.*direction/i);
     accept.click();
     expect(saveData).not.toHaveBeenCalled();
     expect(plugin.settings.arxiv.topics).toEqual([]);
@@ -740,12 +741,12 @@ describe("persisting the reviewed direction selection", () => {
     const { root, saveData, saved } = openPluginReview(snapshot());
     expect(topicChoices(root)[0]!.checked).toBe(true);
     expect(directionChoice(root, candidate.text).checked).toBe(false);
-    expect(button(root, "Accept 0 topic(s) into settings").disabled).toBe(true);
+    expect(button(root, "Add to research topics").disabled).toBe(true);
     expect(saveData).not.toHaveBeenCalled();
 
     expandTopic(root, "Research agents");
     directionChoice(root, candidate.text).click();
-    button(root, "Accept 1 topic(s) into settings").click();
+    button(root, "Add to research topics").click();
     await vi.waitFor(() => expect(saveData).toHaveBeenCalledOnce());
     expect(saved[0]!.arxiv.topics[0]!.directions.map(({ text }) => text)).toEqual([candidate.text]);
   });
@@ -788,7 +789,7 @@ describe("generation progress in the review modal", () => {
       if (outcome === "failure") throw failure;
     });
     const root = open(ctrl.mock).contentEl;
-    button(root, "Generate proposals").click();
+    button(root, "Generate topics").click();
     expect(ctrl.mock.generate).toHaveBeenCalledOnce();
     report({ phase: "reading", completed: 0, total: 0 });
     expect(button(root, "Reading the index…").disabled).toBe(true);
@@ -797,7 +798,7 @@ describe("generation progress in the review modal", () => {
     report({ phase: "organization", completed: 0, total: 1 });
     expect(button(root, "Organizing topics and directions…").disabled).toBe(true);
     release();
-    await vi.waitFor(() => expect(button(root, "Generate proposals").disabled).toBe(false));
+    await vi.waitFor(() => expect(button(root, "Generate topics").disabled).toBe(false));
     if (outcome === "failure") {
       expect(ctrl.mock.logError).toHaveBeenCalledWith("generate proposals", failure);
       expect(root.querySelector('[role="alert"]')?.textContent).toContain("generated proposal was invalid");

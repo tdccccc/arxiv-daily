@@ -1477,6 +1477,52 @@ describe("declarative topic cards", () => {
   });
 });
 
+describe("next setup step", () => {
+  it("offers only the first incomplete task, then advances as settings become ready", () => {
+    const { tab, settings } = makeTab();
+    settings.llm.apiKey = "";
+    settings.arxiv.topics = [];
+    let guide = tab.createSetupGuide();
+    expect(Array.from(guide.querySelectorAll("ol button"), (button) => button.textContent))
+      .toEqual(["Connect AI"]);
+    expect(guide.querySelectorAll(".arxiv-daily-setup__description")).toHaveLength(1);
+
+    settings.llm.apiKey = "test-key";
+    settings.llm.model = "test-model";
+    guide = tab.createSetupGuide();
+    expect(Array.from(guide.querySelectorAll("ol button"), (button) => button.textContent))
+      .toEqual(["Describe interests"]);
+
+    settings.arxiv.topics = [normalizeTopic({
+      id: "research", name: "Research", tag: "research", detail: false,
+      directions: [{ id: "direction", text: "Reliable research agents", origin: "manual" }],
+    })];
+    guide = tab.createSetupGuide();
+    expect(Array.from(guide.querySelectorAll("ol button"), (button) => button.textContent))
+      .toEqual(["Generate first report"]);
+  });
+
+  it("moves focus to the current section on the declarative settings page", () => {
+    const { tab, settings } = makeTab();
+    settings.llm.apiKey = "test-key";
+    settings.llm.model = "test-model";
+    settings.arxiv.topics = [];
+    const topics = tab.getSettingDefinitions().find((item) =>
+      item.type === "list" && item.heading === "Research topics");
+    const section = document.createElement("section");
+    section.className = topics?.cls ?? "";
+    section.scrollIntoView = vi.fn();
+    tab.containerEl.appendChild(section);
+    document.body.appendChild(tab.containerEl);
+    const guide = tab.createSetupGuide();
+    tab.containerEl.prepend(guide);
+    guide.querySelector<HTMLButtonElement>("ol button")!.click();
+    expect(document.activeElement).toBe(section);
+    expect(section.scrollIntoView).toHaveBeenCalledOnce();
+    tab.containerEl.remove();
+  });
+});
+
 describe("wired getControlValue", () => {
   it("resolves every registered key against the nested settings", () => {
     const { tab } = makeTab();
