@@ -1,0 +1,2807 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="architecture-map-template-version" content="7">
+<link rel="icon" href="data:,">
+<title>架构地图</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--hi:#58a6ff;--elev:#e6edf3;--chip:#79c0ff;--danger:#f85149;--toolbar:rgba(22,27,34,.9)}
+/* Light palette: an explicit 主题 toggle; dark remains the default. */
+html[data-theme="light"]{--bg:#f6f8fa;--surface:#ffffff;--border:#d0d7de;--text:#1f2328;--muted:#59636e;--hi:#0969da;--elev:#1f2328;--chip:#0a3069;--danger:#cf222e;--toolbar:rgba(255,255,255,.92)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;flex-direction:column;overflow:hidden}
+#topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex:0 0 auto}
+#topbar>div{min-width:0}
+#topbar h1{font-size:17px;margin:0}
+#topbar .sum{color:var(--muted);font-size:12.5px;margin-top:2px}
+#search{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;width:220px;font-size:13px;outline:none}
+#search:focus{border-color:var(--hi)}
+#tabs{display:flex;gap:2px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--border);flex:0 0 auto;overflow-x:auto;scrollbar-width:thin}
+.tab{flex:0 0 auto;padding:8px 14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;font-size:13px;user-select:none;white-space:nowrap}
+.tab.active{color:var(--text);border-bottom-color:var(--hi)}
+main{position:relative;flex:1 1 auto;display:none;min-height:0}
+#view-diagram.active{display:flex;flex-direction:column;overflow:hidden}
+#view-section.active{display:block;overflow:auto;min-height:0}
+#breadcrumb{padding:8px 20px;color:var(--muted);font-size:12.5px;flex:0 0 auto;user-select:none;min-height:35px}
+#breadcrumb .crumb{cursor:pointer;color:var(--hi)}
+#breadcrumb .sep{opacity:.5}
+#canvas-wrap{flex:1 1 auto;min-height:0;overflow:hidden;padding:0;position:relative;isolation:isolate;background:radial-gradient(circle at 15% 10%,rgba(88,166,255,.06),transparent 32%),linear-gradient(180deg,rgba(255,255,255,.015),transparent 38%);cursor:grab;touch-action:none}
+#canvas-wrap.panning{cursor:grabbing}
+svg{display:block;width:100%;height:100%;min-height:240px}
+#canvas .canvas-hit-area{fill:transparent;pointer-events:all}
+#canvas .scene{will-change:transform}
+#diagram-toolbar{position:absolute;top:14px;right:16px;z-index:4;display:flex;align-items:center;gap:4px;padding:5px;background:var(--toolbar);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.22);backdrop-filter:blur(8px)}
+#diagram-toolbar button{border:1px solid transparent;background:transparent;color:var(--muted);border-radius:6px;min-width:28px;height:27px;padding:0 7px;font:12px/1 -apple-system,"Segoe UI","PingFang SC",sans-serif;cursor:pointer}
+#diagram-toolbar button:hover,#diagram-toolbar button:focus-visible{color:var(--text);border-color:var(--border);background:rgba(255,255,255,.06);outline:none}
+#diagram-toolbar button[data-canvas-action="fit"]{padding:0 9px}
+#zoom-value{min-width:42px;text-align:center;color:var(--muted);font:11px ui-monospace,Consolas,monospace}
+#canvas-hint{position:absolute;left:16px;top:14px;z-index:3;color:var(--muted);font-size:11.5px;background:rgba(22,27,34,.84);border:1px solid rgba(48,54,61,.85);border-radius:7px;padding:5px 9px;pointer-events:none;opacity:.9}
+.node{cursor:pointer;user-select:none}
+.node.dragging{cursor:grabbing}
+.node text{pointer-events:none}
+.node:hover rect{stroke-width:2.5}
+.node.dim{opacity:.16}
+.node.selected rect{stroke-width:3}
+.edge .edge-line{fill:none;stroke:#8b949e;stroke-width:1.4;opacity:.55}
+.edge.dep .edge-line{stroke-dasharray:5 4}
+.edge.mixed .edge-line{stroke-dasharray:8 3 2 3}
+.edge.route-failed .edge-line{stroke:var(--danger);stroke-dasharray:2 5;opacity:.45}
+.edge.dim .edge-line{opacity:.08}
+.edge.dim .edge-label,.edge.dim .edge-label-bg{opacity:.08}
+.edge.hi .edge-line{stroke:var(--hi);stroke-width:2.4;opacity:.95}
+/* Focus levels: the critical path (downstream flow chain) is the strongest
+   emphasis, directly connected edges keep the highlight, and upstream
+   (incoming) edges use a thinner, calmer emphasis — width and opacity carry
+   the distinction, not color alone. */
+.edge.up .edge-line{stroke-width:2;opacity:.75}
+.edge.path .edge-line{stroke:var(--hi);stroke-width:2.8;opacity:1}
+.node.on-path rect{stroke-width:2.4}
+.node.on-path:hover rect{stroke-width:2.5}
+.edge:hover .edge-line{stroke:var(--hi);opacity:.9}
+.edge .edge-hit{stroke:transparent;stroke-width:12;opacity:0;pointer-events:stroke}
+.edge-label{fill:var(--muted);font-size:10.5px;pointer-events:none;transition:opacity .12s ease}
+.edge-label-bg{fill:var(--bg);fill-opacity:.9;stroke:var(--border);stroke-width:.6;pointer-events:none;transition:opacity .12s ease}
+.edge-label.colliding,.edge-label-bg.colliding{opacity:0}
+.edge:hover .edge-label.colliding,.edge:hover .edge-label-bg.colliding,.edge.hi .edge-label.colliding,.edge.hi .edge-label-bg.colliding{opacity:1}
+#legend{position:absolute;left:16px;bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;opacity:.95}
+.legend-row{display:flex;align-items:center;gap:8px}
+.swatch{width:10px;height:10px;border-radius:2px;display:inline-block}
+#panel{position:absolute;top:0;right:0;bottom:0;width:400px;max-width:88vw;background:var(--surface);border-left:1px solid var(--border);overflow-y:auto;padding:18px 20px;display:none;z-index:10;box-shadow:-8px 0 24px rgba(0,0,0,.35)}
+#panel.open{display:block}
+#panel .close{position:absolute;top:10px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
+#panel h2{margin:0 0 4px;font-size:16px;padding-right:24px}
+#panel .path{color:var(--muted);font-size:12px;margin:0 0 10px}
+#panel .layer{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid;margin-bottom:10px}
+#panel h3{font-size:13px;margin:16px 0 6px}
+#panel p{font-size:13.5px;margin:6px 0}
+#panel ul{margin:4px 0;padding-left:18px}
+#panel li{font-size:13px;margin:3px 0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font:12px ui-monospace,Consolas,monospace;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--chip);word-break:break-all}
+.hint{color:var(--muted);font-size:12.5px;border-top:1px solid var(--border);margin-top:14px;padding-top:10px}
+#view-section article{max-width:1040px;margin:0 auto;padding:24px 28px 60px}
+#view-section h2{font-size:18px;border-bottom:1px solid var(--border);padding-bottom:8px}
+#view-section h3{font-size:14.5px;margin:24px 0 8px;color:var(--elev)}
+#view-section p{font-size:14px;line-height:1.75;max-width:860px}
+#view-section ul{padding-left:20px}
+#view-section li{margin:3px 0}
+#view-section ol.steps{padding-left:26px;margin:8px 0 18px}
+#view-section ol.steps li{margin:7px 0;padding-left:4px;line-height:1.65}
+#view-section .section-table-wrap{overflow-x:auto;margin:10px 0 20px;border:1px solid var(--border);border-radius:8px}
+#view-section table.report-table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.55}
+#view-section table.report-table th{background:rgba(88,166,255,.08);color:var(--elev);text-align:left;font-weight:600;white-space:nowrap}
+#view-section table.report-table th,#view-section table.report-table td{padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+#view-section table.report-table tr:last-child td{border-bottom:0}
+#view-section table.report-table tbody tr:hover{background:rgba(255,255,255,.025)}
+#view-section pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font:12.5px ui-monospace,Consolas,monospace}
+#fatal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(13,17,23,.9);z-index:99}
+#fatal div{max-width:640px;background:var(--surface);border:1px solid var(--danger);border-radius:10px;padding:20px;font:13px ui-monospace,Consolas,monospace;white-space:pre-wrap;color:var(--danger);word-break:break-all}
+.hidden{display:none!important}
+/* Keep the detail drawer from covering the diagram. The diagram re-fits when
+   this reservation is toggled; on narrower viewports the drawer becomes a
+   bottom sheet so the graph and explanation remain separately readable. */
+#view-diagram.panel-open #canvas-wrap{margin-right:400px}
+@media (max-width:1100px){
+  #panel{top:auto;left:0;right:0;bottom:0;width:100%;max-width:none;height:min(42vh,360px);border-left:0;border-top:1px solid var(--border);padding:16px 18px}
+  #view-diagram.panel-open #canvas-wrap{margin-right:0;margin-bottom:min(42vh,360px)}
+}
+@media (max-width:700px){
+  #topbar{align-items:flex-start;flex-wrap:wrap;padding:10px 14px}
+  #topbar>div{flex:1 1 100%}
+  #search{width:min(100%,320px)}
+  #tabs{padding:0 10px}
+}
+</style>
+</head>
+<body>
+<header id="topbar">
+  <div>
+    <h1 id="title"></h1>
+    <div class="sum" id="summary"></div>
+  </div>
+  <input id="search" type="search" placeholder="搜索当前视图中的模块…" autocomplete="off">
+</header>
+<nav id="tabs"></nav>
+<main id="view-diagram" class="active">
+  <div id="breadcrumb"></div>
+  <div id="canvas-wrap">
+    <div id="diagram-toolbar" role="toolbar" aria-label="架构图操作">
+      <button type="button" data-canvas-action="zoom-out" aria-label="缩小">−</button>
+      <span id="zoom-value" aria-live="polite">100%</span>
+      <button type="button" data-canvas-action="zoom-in" aria-label="放大">+</button>
+      <button type="button" data-canvas-action="fit" aria-label="适配画布">适配</button>
+      <button type="button" data-canvas-action="reset" aria-label="重置布局">重置</button>
+      <button type="button" data-canvas-action="theme" aria-label="切换明暗主题">主题</button>
+    </div>
+    <div id="canvas-hint">拖动节点调整布局 · 拖动画布平移 · 滚轮缩放</div>
+    <svg id="canvas" role="application" aria-label="交互式架构图"></svg>
+  </div>
+  <!-- 面板锚定在 #view-diagram（position:relative）内：宽屏下从 tab 栏下沿开始，
+       不会盖住顶栏与搜索框；≤1100px 时按媒体查询变为底部抽屉。 -->
+  <aside id="panel"></aside>
+</main>
+<main id="view-section">
+  <article id="section-body"></article>
+</main>
+<div id="legend"></div>
+<div id="fatal" class="hidden"><div id="fatal-msg"></div></div>
+
+<!-- 报告内容位于下方 report-data JSON 块中；内容更新只编辑该块。
+     模板壳升级由 scripts/refresh-template.mjs 完成，不在项目报告中手改模板代码。 -->
+<script type="application/json" id="report-data">
+{
+  "title": "arXiv Daily 架构地图",
+  "summary": "Obsidian 插件和一次性 CLI 都在本机加载同一个业务 Core；Core 生成日报和论文笔记，把内容与运行状态写进 Vault，并可直接或经官方 Relay 发送邮件。VS Code Companion 独立读取索引并启动 CLI。",
+  "modules": [
+    {
+      "id": "plugin",
+      "label": "Obsidian 插件 / Host",
+      "layer": "frontend",
+      "summary": "组装 Core，承载 UI 与调度",
+      "detail": "Obsidian 加载插件后，`onload` 构造宿主能力适配器、共享 Core 服务、Dashboard、命令和进程内 Scheduler。插件负责产品生命周期与界面；日报、索引和投递规则由共享 Core 实现。",
+      "notes": [
+        "onload 时若 schedule.enabled 为 true，构造并启动 Core 的 SchedulerService：默认每 20 分钟检查一次，在 5 天回看窗口内处理符合条件的日期；关闭 Obsidian 或停用调度后定时器不再运行。",
+        "插件设置通过 Obsidian 的 loadData/saveData 保存，与 CLI 的 TOML 配置互不同步。",
+        "插件还维护 Atom metadata、HTML 和 source cache；这些可丢弃缓存不等同于 .index 下的索引或 checkpoint。",
+        "日报完成回调在 Scheduler 提交 completed 后调用邮件投递。"
+      ],
+      "evidence": [
+        "plugin/main.ts (ArxivDailyPlugin.onload)",
+        "plugin/main.ts (ArxivDailyPlugin.deliverCompletedDigest)",
+        "plugin/src/hosts/obsidian/index.ts (buildObsidianHostAdapters)",
+        "packages/core/src/services/scheduler.ts (SchedulerService)",
+        "packages/core/src/services/scheduling/constants.ts (LOOKBACK_DAYS)",
+        "packages/core/src/settings/defaults.ts (DEFAULT_SETTINGS.schedule)"
+      ]
+    },
+    {
+      "id": "plugin.composition",
+      "label": "插件组装入口",
+      "parent": "plugin",
+      "layer": "frontend",
+      "summary": "组装能力接口并注册入口",
+      "detail": "`ArxivDailyPlugin.onload` 是插件的组装入口（composition root）。它先加载插件设置，再组装宿主能力接口、状态存储、运行历史、Scheduler 和手动论文服务，最后注册设置页、Dashboard 与命令。定时器和日报命令进入 Scheduler，单篇命令进入 Manual Fetch，Dashboard 进入阅读模型；日报完成回调和测试邮件进入 Delivery。",
+      "evidence": [
+        "plugin/main.ts (ArxivDailyPlugin.onload)"
+      ]
+    },
+    {
+      "id": "plugin.ui",
+      "label": "设置、Dashboard 与命令",
+      "parent": "plugin",
+      "layer": "frontend",
+      "summary": "接收操作并展示阅读状态",
+      "detail": "设置页修改插件自己的产品设置；命令触发日报、单篇论文和阅读操作；Dashboard 调用 Core 的查询、动作和历史同步逻辑。界面不直接实现日报生成算法。",
+      "evidence": [
+        "plugin/src/settings/tab.ts (ArxivDailySettingTab)",
+        "plugin/src/commands.ts (registerCommands)",
+        "plugin/src/dashboard/view.ts (registerDashboardView)"
+      ]
+    },
+    {
+      "id": "plugin.adapters",
+      "label": "Obsidian 宿主适配器",
+      "parent": "plugin",
+      "layer": "infra",
+      "summary": "把 Obsidian API 接到六类能力",
+      "detail": "插件为 Core 提供 HTTP、Storage、Secrets、Progress、Resource opener 和 Markup parser 六个实现。Core 因而不需要直接引用 Obsidian 全局对象。",
+      "evidence": [
+        "plugin/src/hosts/obsidian/index.ts (buildObsidianHostAdapters)"
+      ]
+    },
+    {
+      "id": "cli",
+      "label": "CLI / 一次性 Host",
+      "layer": "entry",
+      "summary": "按命令组装 Core，执行后退出",
+      "detail": "`arxiv-daily` 是 Node.js 20.11+ 的一次性命令产品，不是常驻 daemon。用户、VS Code Companion 或 OS cron 启动进程后，CLI 读取固定 TOML、组装 Node adapters 与共享 Core，执行命令并用退出码报告结果。",
+      "notes": [
+        "`run --today` 与 `run --date` 经过 Core Scheduler；`run --id` 调用独立的 Manual Fetch 用例。",
+        "schedule 子命令生成调用 arxiv-daily run --today 的 cron 行并负责 show/install/uninstall；真正的定时唤醒由操作系统 cron 执行，不会启动仓库内 daemon。",
+        "CLI 的 Atom metadata、HTML 和 source cache 由运行时组装入口创建并按过期时间清理；init/update/schedule/data/status 等直接命令不组装 Core。",
+        "CLI 配置默认位于 XDG/APPDATA 下的 arxiv-daily/config.toml，不在 Vault 内；从中读取 Vault 根目录、产品设置和 secrets，不会读取或同步 Obsidian 插件数据。"
+      ],
+      "evidence": [
+        "apps/cli/src/main.ts (runCli)",
+        "apps/cli/src/runtime.ts (buildCliRuntime)",
+        "apps/cli/src/config-path.ts (resolveCliConfigPath)",
+        "apps/cli/src/schedule-cmd.ts (buildCronLines)",
+        "apps/cli/src/config.ts (loadCliConfig)"
+      ]
+    },
+    {
+      "id": "cli.command",
+      "label": "命令入口",
+      "parent": "cli",
+      "layer": "entry",
+      "summary": "解析命令、输出与退出码",
+      "detail": "`runCli` 解析 init、run、email、schedule、data 和 update 命令。init/update、schedule、data 与 email status 在入口直接处理；只有 run、email test/verify 等需要 Core 的路径才调用 `buildRuntime`，并把取消、命令错误或子流程结果映射为终端输出与退出码。",
+      "evidence": [
+        "apps/cli/src/main.ts (runCli)"
+      ]
+    },
+    {
+      "id": "cli.composition",
+      "label": "CLI 运行时组装",
+      "parent": "cli",
+      "layer": "entry",
+      "summary": "为 run/email 组装同一 Core",
+      "detail": "`buildCliRuntime` 只为需要 Core 的路径构造 LLM、arXiv source、Markdown writer、索引、checkpoint、状态库、Pipeline、Manual Fetch 和 Scheduler。`run --today/--date` 进入 Scheduler，`run --id` 进入 Manual Fetch，`email test` 进入 Delivery，`email verify-start` 只调用验证用的 HTTP 路径；init、update、schedule、data 和 email status 在命令入口直接处理。插件和 CLI 使用同一套 Core 类型，只是宿主适配器和配置来源不同。",
+      "evidence": [
+        "apps/cli/src/runtime.ts (buildCliRuntime)"
+      ]
+    },
+    {
+      "id": "cli.adapters",
+      "label": "Node 宿主适配库",
+      "parent": "cli",
+      "layer": "infra",
+      "summary": "CLI 内部库，不单独运行",
+      "detail": "`@arxiv-daily/node-runtime` 为 Core 提供 Node 环境下的 HTTP、文件存储、secret 读取、进度、资源打开和 HTML 解析。这个 package 没有启动入口；CLI 在自己的进程内加载它。当前 CLI 的 LLM/Resend secret 直接从 `config.toml` 读取并注入设置，运行路径没有把 `host.secrets` 当作配置来源。",
+      "evidence": [
+        "packages/node-runtime/package.json (description)",
+        "packages/node-runtime/src/index.ts (buildNodeHostAdapters)"
+      ]
+    },
+    {
+      "id": "core",
+      "label": "共享业务 Core",
+      "layer": "core",
+      "summary": "实现日报、阅读、状态与投递规则",
+      "detail": "Core 是仓库内唯一业务核心，同时被插件 Host 和 CLI Host 直接加载。它实现日报生成、手动论文、调度状态、Dashboard 模型、索引修复和邮件投递；需要 HTTP、文件、secret、进度、资源打开和 markup 时，通过六类宿主能力接口访问。",
+      "notes": [
+        "Core 是库，不是单独进程，也没有 Plugin 与 CLI 之间的网络协议。",
+        "边界检查禁止 Core 引用 Node、Obsidian globals、深层 workspace 路径和非白名单依赖。"
+      ],
+      "evidence": [
+        "packages/core/src/index.ts (public exports)",
+        "packages/core/src/core/adapters.ts (HostAdapters)",
+        "scripts/check-boundaries.mjs (source dependency rules)"
+      ]
+    },
+    {
+      "id": "core.ports",
+      "label": "宿主能力接口",
+      "parent": "core",
+      "layer": "core",
+      "summary": "隔离 Obsidian 与 Node API",
+      "detail": "`HostAdapters` 规定 Core 需要的六类宿主能力：HTTP、文件存储、secret、进度、资源打开和 markup 解析。插件和 CLI 各自提供实现；Core 只调用这些接口，不直接引用 Obsidian 或 Node 全局对象。",
+      "evidence": [
+        "packages/core/src/core/adapters.ts (HostAdapters)"
+      ]
+    },
+    {
+      "id": "core.scheduler",
+      "label": "调度与运行状态",
+      "parent": "core",
+      "layer": "core",
+      "summary": "按日期运行并提交最终状态",
+      "detail": "Scheduler 先用进程内 `RunLock` 阻止同一 Host 同时运行同一日期，再把状态写成 running 并调用 Daily Pipeline。Pipeline 返回后，Scheduler 先把 completed 写进 run-state，再尽力追加运行历史，最后调用 Host 的完成回调。",
+      "notes": [
+        "邮件回调失败只记录日志；已经提交的日报运行仍保持 completed。",
+        "可重试失败最多累计 10 次，之后 StateStore 把它写成 failed_permanent。",
+        "重启时，StateStore 会把超过 1 小时仍为 running 的日期标记为 failed_permanent；旧进程内尚未提交的 completion 不会跨进程保留。"
+      ],
+      "evidence": [
+        "packages/core/src/services/scheduling/scheduler-driver.ts (SchedulerDriver)",
+        "packages/core/src/services/run-lock.ts (RunLock)",
+        "packages/core/src/services/state-store.ts (StateStore.setFailed)"
+      ]
+    },
+    {
+      "id": "core.daily",
+      "label": "日报生成用例",
+      "parent": "core",
+      "layer": "core",
+      "summary": "发现、过滤、总结并写 Markdown",
+      "detail": "Daily Pipeline 通过 `SourceAdapter` 发现论文，当前选中的实现是 arXiv。它先过滤和登记论文，再抓正文、按需写 Paper Note、逐篇生成结构化摘要，最后写 Daily Markdown、清理临时 checkpoint、补齐索引并构造 Digest。",
+      "notes": [
+        "已有 Daily Markdown 就是已经落盘的结果：再次运行只对账索引，不重新生成，也不返回 Digest。",
+        "单篇正文抓取失败会写入降级文本并继续其他论文；正文并发上限为 6。",
+        "filter checkpoint 或过滤响应校验失败会产生可重试失败；只有被识别为永久 LLM 错误的请求才直接成为 failed_permanent。",
+        "Daily Markdown 写入后若索引补齐失败，本次仍返回可重试失败；下次通过已有日报修复索引。",
+        "Daily Pipeline 从结构化摘要槽位构造 DailyDigest 并随 completed 结果返回；它是给邮件渲染的数据，不是 Vault 中 Daily Markdown 的原文。"
+      ],
+      "evidence": [
+        "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.runForDate)",
+        "packages/core/src/sources/types.ts (SourceAdapter)",
+        "packages/core/src/pipeline/summarizer.ts (summarizeDaily)"
+      ]
+    },
+    {
+      "id": "core.manual",
+      "label": "手动论文用例",
+      "parent": "core",
+      "layer": "core",
+      "summary": "按 arXiv ID 生成单篇 Paper Note",
+      "detail": "Manual Fetch 是独立用例，不是 Daily Pipeline 的一步。它规范化 arXiv ID，检查现有文件，抓取 Atom metadata 与全文，调用 LLM 生成详细总结，先写 Paper Note，成功后才更新索引。",
+      "notes": [
+        "当前实现直接依赖 arXiv fetcher，而不是通用 SourceAdapter，因此是 arXiv-specific。",
+        "检测到用户内容或身份冲突时会保护现有文件，不覆盖。"
+      ],
+      "evidence": [
+        "packages/core/src/services/manual-fetch.ts (ManualFetchService.fetchAndSummarize)"
+      ]
+    },
+    {
+      "id": "core.reading",
+      "label": "阅读与 Dashboard 模型",
+      "parent": "core",
+      "layer": "core",
+      "summary": "查询、筛选并修改阅读状态",
+      "detail": "Core 提供 Dashboard 查询、tab 规则、统计、动作规划、本地搜索和 Markdown 历史对账。Obsidian Dashboard 复用这些函数，并通过 `PaperIndexStore` 更新阅读状态、优先级、项目关联、PDF 和 Project Note。",
+      "notes": [
+        "VS Code Companion 没有复用这组 Core 模型和写入语义；它保留自己的 JavaScript Dashboard model。"
+      ],
+      "evidence": [
+        "packages/core/src/dashboard/model.ts (queryDashboard)",
+        "packages/core/src/dashboard/history-sync.ts (syncDashboardHistory)",
+        "packages/core/src/dashboard/paper-search-index.ts (PaperSearchIndex)",
+        "packages/core/src/services/pdf.ts (PdfService)",
+        "packages/core/src/services/project-notes.ts (ProjectNotesService)"
+      ]
+    },
+    {
+      "id": "core.persistence",
+      "label": "索引与运行数据服务",
+      "parent": "core",
+      "layer": "core",
+      "summary": "写索引、状态、checkpoint 与 claim",
+      "detail": "Core 中的存储服务定义 `papers.json` 的格式和写入队列，维护 run-state、尽力追加的 run history、两类临时 checkpoint，以及投递记录和抢占文件。真正的文件读写仍经过 Host 提供的 StorageAdapter。",
+      "notes": [
+        "PaperIndexStore 按路径串行化本进程内写入，并用主文件/备份恢复；VS Code Companion 不经过这条路径。",
+        "StateStore 写入后从 authoritative 路径重新读取，确认持久化结果。"
+      ],
+      "evidence": [
+        "packages/core/src/services/paper-index.ts (PaperIndexStore)",
+        "packages/core/src/services/state-store.ts (StateStore)",
+        "packages/core/src/services/run-history.ts (RunHistoryStore)",
+        "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)",
+        "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
+        "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)"
+      ]
+    },
+    {
+      "id": "core.delivery",
+      "label": "邮件投递用例",
+      "parent": "core",
+      "layer": "core",
+      "summary": "完成提交后直接或经 Relay 发信",
+      "detail": "Scheduler 提交 completed 后，Host 的完成回调把可选 Digest 交给 `deliverDailyEmailIfEnabled`；已有日报的修复路径没有 Digest，因此不会自动发邮件。Delivery 先渲染邮件并创建本地抢占记录（claim），再记录邮件服务商是否已经开始调用；self 模式直连 Resend，hosted 模式调用官方 Relay，最后把成功、明确失败或结果未知写回 delivery state。",
+      "notes": [
+        "投递函数把邮件服务商或状态异常转换成结果，调用者不会把邮件失败改写成 Pipeline 失败。",
+        "服务商已被调用但结果未知时记录 ambiguous，避免无条件重发造成重复邮件。"
+      ],
+      "evidence": [
+        "packages/core/src/delivery/deliver-email.ts (deliverDailyEmailIfEnabled)",
+        "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
+        "packages/core/src/delivery/hosted.ts (sendViaHosted)",
+        "packages/core/src/delivery/resend.ts (sendViaResend)"
+      ]
+    },
+    {
+      "id": "vault",
+      "label": "共享 Vault 数据",
+      "layer": "data",
+      "summary": "保存 Markdown 与跨 Host 运行记忆",
+      "detail": "当插件与 CLI 指向同一个 Vault 与输出目录时，它们共享 Daily Markdown、Paper Notes、PDF、论文索引、运行状态、checkpoints 和投递状态。Vault 数据不包含插件设置或 CLI TOML；共享 Vault 不等于共享配置。",
+      "notes": [
+        "索引根目录由 dailyDir 与 papersDir 推导，默认位于 arxiv-daily/.index。",
+        "不同数据具有不同权威性和恢复方式，不能把整个 .index 统一称为缓存或投影。"
+      ],
+      "evidence": [
+        "packages/core/src/services/paper-index.ts (derivePaperInboxPaths)",
+        "packages/core/src/services/state-store.ts (deriveStorageStateStorePaths)",
+        "CONTEXT.md (Vault data)"
+      ]
+    },
+    {
+      "id": "vault.content",
+      "label": "用户可见内容",
+      "parent": "vault",
+      "layer": "data",
+      "summary": "Daily、Paper Note 与 PDF",
+      "detail": "Markdown 和 PDF 是用户能直接打开的内容文件。正常非空日报只要 Daily Markdown 写成功，内容就已经落盘；Paper Note 也必须先写成功，索引中的路径才会被确认。",
+      "evidence": [
+        "packages/core/src/pipeline/markdown-writer.ts (MarkdownWriter)",
+        "packages/core/src/services/pdf.ts (PdfService)"
+      ]
+    },
+    {
+      "id": "vault.content.daily",
+      "label": "Daily Markdown",
+      "parent": "vault.content",
+      "layer": "data",
+      "summary": "一次日期运行的权威内容提交",
+      "detail": "Pipeline 把完整日报写入配置的 dailyDir。文件存在时，后续运行把它视为已提交结果，并从中修复索引引用与结构化摘要。",
+      "evidence": [
+        "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.repairExistingDaily)",
+        "packages/core/src/pipeline/markdown-writer.ts (MarkdownWriter.writeDaily)"
+      ]
+    },
+    {
+      "id": "vault.content.paper-notes",
+      "label": "Paper Notes",
+      "parent": "vault.content",
+      "layer": "data",
+      "summary": "单篇论文的长期 Markdown 内容",
+      "detail": "Daily Pipeline 的 detail 选择和 Manual Fetch 都能写 Paper Note。写入前会识别可替换 stub、已验证 detail 与用户内容冲突，避免覆盖不属于生成器的内容。",
+      "evidence": [
+        "packages/core/src/services/manual-fetch.ts (ManualFetchService.fetchAndSummarize)",
+        "packages/core/src/dashboard/paper-note-classifier.ts (classifyPaperNote)"
+      ]
+    },
+    {
+      "id": "vault.content.pdfs",
+      "label": "PDF 文件",
+      "parent": "vault.content",
+      "layer": "data",
+      "summary": "按论文 ID 保存的本地附件",
+      "detail": "PDF 服务把下载结果写入 `derivePaperInboxPaths(output).rootDir` 下的 `pdfs` 目录；默认布局是 `arxiv-daily/pdfs`，自定义 daily/papers 目录时路径随输出布局变化。服务再把本地路径记录到论文索引，下载失败不会改写已有阅读状态。",
+      "evidence": [
+        "packages/core/src/services/pdf.ts (PdfService)"
+      ]
+    },
+    {
+      "id": "vault.paper-index",
+      "label": "papers.json",
+      "parent": "vault",
+      "layer": "data",
+      "summary": "用户状态与可修复字段并存",
+      "detail": "`papers.json` 是会被多个界面修改的共享索引，不是可以整文件重建的投影。status、priority、projects、citation 和 Zotero 关联等字段承载用户决策；dailyReports、结构化 summary、detail/paperPath 等生成字段可以根据 Markdown 和已验证文件做对账修复。",
+      "notes": [
+        "当前 schemaVersion 为 4，map key 是 paperKey，例如 arxiv:2606.12345。",
+        "PaperIndexStore 接受 bare arXiv ID 做兼容查询，但写回磁盘时规范化为 paperKey。"
+      ],
+      "evidence": [
+        "packages/core/src/services/paper-index.ts (PAPER_INBOX_SCHEMA_VERSION)",
+        "packages/core/src/services/paper-index.ts (PaperIndexEntry)",
+        "packages/core/src/dashboard/history-sync.ts (syncDashboardHistory)"
+      ]
+    },
+    {
+      "id": "vault.run-control",
+      "label": "运行控制数据",
+      "parent": "vault",
+      "layer": "data",
+      "summary": "状态、历史与生成 checkpoints",
+      "detail": "Scheduler 和 Daily Pipeline 在 `.index` 下保存运行状态、追加历史和两类日期 checkpoint。这些文件分别服务于调度决策、诊断和中断恢复，语义不同。",
+      "evidence": [
+        "packages/core/src/services/state-store.ts (deriveStorageStateStorePaths)",
+        "packages/core/src/services/daily-filter-checkpoint-store.ts (deriveDailyFilterCheckpointPaths)",
+        "packages/core/src/services/daily-summary-checkpoint-store.ts (deriveDailySummaryCheckpointPaths)"
+      ]
+    },
+    {
+      "id": "vault.run-control.state",
+      "label": "run-state.json",
+      "parent": "vault.run-control",
+      "layer": "data",
+      "summary": "Scheduler 的权威运行状态",
+      "detail": "StateStore 记录每个日期的 `pending`、`running`、`completed`、`failed_transient`、`failed_permanent` 或 `skipped`，以及尝试次数和错误。Scheduler 用这些状态决定是否跳过、退避或重试；启动时超过 1 小时仍为 `running` 的日期会被标记为 `failed_permanent`。",
+      "evidence": [
+        "packages/core/src/services/state-store.ts (StateStore)"
+      ]
+    },
+    {
+      "id": "vault.run-control.history",
+      "label": "run-history.jsonl",
+      "parent": "vault.run-control",
+      "layer": "data",
+      "summary": "尽力追加运行事件",
+      "detail": "RunHistoryStore 追加 started、completed、failed、pending 和 skipped 事件。它是诊断用的尽力历史；追加失败只记录 warning，不会撤销已经完成的日报或权威 run-state。",
+      "evidence": [
+        "packages/core/src/services/run-history.ts (RunHistoryStore.safeAppend)"
+      ]
+    },
+    {
+      "id": "vault.run-control.filter",
+      "label": "Filter checkpoints",
+      "parent": "vault.run-control",
+      "layer": "data",
+      "summary": "复用已验证的过滤批次",
+      "detail": "过滤 checkpoint 按日期保存完整请求身份和已验证分类结果。请求或生成身份不匹配时不能复用；日报提交后该日期 checkpoint 被删除。",
+      "evidence": [
+        "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)"
+      ]
+    },
+    {
+      "id": "vault.run-control.summary",
+      "label": "Summary checkpoints",
+      "parent": "vault.run-control",
+      "layer": "data",
+      "summary": "复用已完成的逐篇总结",
+      "detail": "结构化总结 checkpoint 保存逐篇完成结果及兼容指纹，让中断后的运行跳过已完成论文。完整 Daily Markdown 提交后，Pipeline 删除这些临时恢复数据。",
+      "evidence": [
+        "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
+        "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.cleanupCommittedCheckpoints)"
+      ]
+    },
+    {
+      "id": "vault.delivery",
+      "label": "投递记录与抢占文件",
+      "parent": "vault",
+      "layer": "data",
+      "summary": "同一 Vault 下防止重复自动发送",
+      "detail": "自动邮件在调用邮件服务商前先创建一次性的 generation 抢占文件（claim），并把开始调用、成功、失败或结果未知写入 delivery state。只有插件和 CLI 指向同一 Vault，且文件适配器支持“只能创建一次”的原子操作时，这份数据才可以协调两个 Host 的自动投递。",
+      "evidence": [
+        "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
+        "packages/core/src/delivery/delivery-state.ts (finalizeAutomaticDelivery)"
+      ]
+    },
+    {
+      "id": "vault.delivery.state",
+      "label": "delivery-state.json",
+      "parent": "vault.delivery",
+      "layer": "data",
+      "summary": "记录收件人与通道的投递结果",
+      "detail": "状态文件保存自动投递记录，不保存邮件正文。`deliveryRecordKey` 可把日期、规范化收件人和通道分开记录；读取时会与 claim 文件合并，避免漏掉正在进行或结果不明的邮件服务商调用。自动 claim 的 key 只由日期和规范化收件人决定，self/hosted 通道共用这条防重边界。",
+      "evidence": [
+        "packages/core/src/delivery/delivery-state.ts (deliveryStatePath)",
+        "packages/core/src/delivery/delivery-state.ts (normalizeDeliveryState)",
+        "packages/core/src/delivery/delivery-state.ts (deliveryRecordKey)",
+        "packages/core/src/delivery/deliver-email.ts (automaticDeliveryIdempotencyKey)"
+      ]
+    },
+    {
+      "id": "vault.delivery.claims",
+      "label": "投递 claim 目录",
+      "parent": "vault.delivery",
+      "layer": "data",
+      "summary": "记录一次服务商尝试的唯一占位",
+      "detail": "claims 目录按 generation 保存 claim、decision 和 result 文档。Node StorageAdapter 在 Vault 根目录内用“只能创建一次”的操作建立唯一所有者；不支持这个原语的存储不能保证两个 Host 不会同时抢到同一封自动邮件。",
+      "evidence": [
+        "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
+        "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.createTextExclusive)"
+      ]
+    },
+    {
+      "id": "vscode",
+      "label": "VS Code Companion",
+      "layer": "frontend",
+      "summary": "独立读索引，并启动 CLI",
+      "detail": "Companion 是独立 VS Code 扩展，不是共享 Core 的第三个 Host。它显示自己的 Webview Dashboard，直接读写固定路径的 `papers.json`，并通过 `ProcessExecution` 启动外部 `arxiv-daily` CLI。",
+      "notes": [
+        "扩展复制了一套 JavaScript Dashboard model，没有调用 Core 的 query/action/history-sync。",
+        "它固定读取 arxiv-daily/.index/papers.json，无法跟随 Core 根据自定义 dailyDir/papersDir 推导出的索引位置。",
+        "当前 Dashboard 发回 bare arXiv ID，但 Core v4 的 map key 是 paperKey；在 v4 索引上修改状态或打开资源可能得到“not in papers.json”。",
+        "直接 read-modify-write 绕过 PaperIndexStore 的写入队列、校验和备份恢复，和 Plugin/CLI 并发写入时可能覆盖更新。"
+      ],
+      "evidence": [
+        "extensions/vscode-arxiv-daily/src/extension.js (activate)",
+        "extensions/vscode-arxiv-daily/src/dashboard.js (updatePaperStatus)",
+        "extensions/vscode-arxiv-daily/src/workspace.js (PAPER_INDEX_PATH)",
+        "extensions/vscode-arxiv-daily/src/pipeline-commands.js (runCliTask)",
+        "packages/core/src/services/paper-index.ts (PAPER_INBOX_SCHEMA_VERSION)"
+      ]
+    },
+    {
+      "id": "vscode.dashboard",
+      "label": "Webview Dashboard",
+      "parent": "vscode",
+      "layer": "frontend",
+      "summary": "复制阅读模型并发送消息",
+      "detail": "扩展激活命令后创建 Webview，并用本地 JavaScript model 生成 tab、搜索、统计和表格。Webview 把 setStatus 与 openResource 消息发回 extension host。",
+      "evidence": [
+        "extensions/vscode-arxiv-daily/src/dashboard.js (openDashboard)",
+        "extensions/vscode-arxiv-daily/src/dashboard-model.js (buildDashboardState)"
+      ]
+    },
+    {
+      "id": "vscode.index",
+      "label": "固定路径索引读写",
+      "parent": "vscode",
+      "layer": "frontend",
+      "summary": "直接 JSON read-modify-write",
+      "detail": "Companion 通过 VS Code workspace.fs 读取和覆盖固定索引文件。它没有构造 `PaperIndexStore`，也没有把 v4 paperKey 作为写入 lookup key。",
+      "evidence": [
+        "extensions/vscode-arxiv-daily/src/dashboard.js (loadPaperIndex)",
+        "extensions/vscode-arxiv-daily/src/dashboard.js (updatePaperStatus)",
+        "extensions/vscode-arxiv-daily/src/workspace.js (createVsCodeStorageAdapter)"
+      ]
+    },
+    {
+      "id": "vscode.cli",
+      "label": "CLI ProcessExecution bridge",
+      "parent": "vscode",
+      "layer": "frontend",
+      "summary": "启动 run --today 或 run --id",
+      "detail": "扩展把用户动作转换为 CLI 参数，通过 VS Code Task API 启动独立进程，并等待 process exit code。CLI 路径来自 `arxivDaily.cliPath` 设置。",
+      "evidence": [
+        "extensions/vscode-arxiv-daily/src/pipeline-commands.js (runCliTask)"
+      ]
+    },
+    {
+      "id": "relay",
+      "label": "官方邮件 Relay",
+      "layer": "infra",
+      "summary": "验证、限流、幂等并代发邮件",
+      "detail": "Relay 是独立 Cloudflare Worker 产品，只参与 hosted 邮件模式。它负责邮箱验证、device token 鉴权、readiness/cutover 检查、限流、Durable Object 发送记录与每日配额，然后调用 Resend；插件和 CLI 的 self 模式不经过它。",
+      "notes": [
+        "Worker、KV 和 DeliverGate Durable Object 共同构成服务端信任边界。",
+        "当前仓库 CI 只执行 typecheck、test 和 wrangler dry-run，不执行线上 deploy。"
+      ],
+      "evidence": [
+        "services/email-relay/src/index.ts (default.fetch)",
+        "services/email-relay/src/deliver-gate.ts (DeliverGate)",
+        "services/email-relay/wrangler.toml (bindings)",
+        ".github/workflows/email-relay.yml (Email relay verification)"
+      ]
+    },
+    {
+      "id": "relay.http",
+      "label": "Worker HTTP API",
+      "parent": "relay",
+      "layer": "infra",
+      "summary": "处理验证、鉴权与 deliver 路由",
+      "detail": "Worker 暴露 health/readiness、verify start/complete、deliver 与内部 cutover 管理路由（/internal/delivery-v2/cutover）。deliver 先验证有限长度的 Idempotency-Key、Bearer device token 与 cutover readiness，再按收件人或设备范围选择 DeliverGate。",
+      "evidence": [
+        "services/email-relay/src/index.ts (handle)",
+        "services/email-relay/src/index.ts (deliverViaGate)",
+        "services/email-relay/src/index.ts (cutoverControl)"
+      ]
+    },
+    {
+      "id": "relay.kv",
+      "label": "Cloudflare KV",
+      "parent": "relay",
+      "layer": "data",
+      "summary": "保存 pending、device 与限流数据",
+      "detail": "KV 保存验证 pending token、已签发 device、rate-limit 计数和 cutover 相关数据。Worker 先用 KV 鉴权和检查速率，再进入 Durable Object。",
+      "evidence": [
+        "services/email-relay/src/kv.ts (putPending)",
+        "services/email-relay/src/kv.ts (authenticateDevice)",
+        "services/email-relay/src/kv.ts (checkAndIncrRateLimit)"
+      ]
+    },
+    {
+      "id": "relay.gate",
+      "label": "串行投递门（DeliverGate）",
+      "parent": "relay",
+      "layer": "infra",
+      "summary": "按范围检查记录与每日配额",
+      "detail": "每个收件人自动投递范围或设备测试范围都会路由到一个 Durable Object。`blockConcurrencyWhile` 和 storage transaction 让它按顺序检查发送记录、请求指纹、预留和每日配额，再决定是否调用 Resend。",
+      "notes": [
+        "已完成请求直接返回记录结果；已经调用但未确认的请求返回 ambiguous，而不是再次调用服务商。"
+      ],
+      "evidence": [
+        "services/email-relay/src/deliver-gate.ts (DeliverGate.fetch)",
+        "services/email-relay/src/deliver-gate.ts (DeliverGate.prepare)"
+      ]
+    },
+    {
+      "id": "relay.resend",
+      "label": "Relay Resend client",
+      "parent": "relay",
+      "layer": "infra",
+      "summary": "提交最终服务商请求",
+      "detail": "Relay 最终向 `https://api.resend.com/emails` 提交邮件。它校验成功响应中的服务商 id，但不把收件人、正文或服务商响应正文写入公开响应和发送记录。",
+      "evidence": [
+        "services/email-relay/src/resend.ts (sendResendEmail)"
+      ]
+    },
+    {
+      "id": "external",
+      "label": "外部 API",
+      "layer": "external",
+      "summary": "Core 与 Relay 调用的外部服务",
+      "detail": "本地 Core 访问 arXiv 获取论文列表与正文，访问 OpenAI-compatible LLM 端点完成过滤和总结，并在 self 模式调用 Resend。官方 Relay 也调用同一个邮件服务商，但拥有独立的验证、每日配额和防重复边界。",
+      "evidence": [
+        "packages/core/src/sources/types.ts (SourceAdapter)",
+        "packages/core/src/llm/client.ts (LlmClient)",
+        "packages/core/src/delivery/resend.ts (sendViaResend)",
+        "services/email-relay/src/resend.ts (sendResendEmail)"
+      ]
+    },
+    {
+      "id": "external.arxiv",
+      "label": "arXiv",
+      "parent": "external",
+      "layer": "external",
+      "summary": "论文发现、metadata 与正文来源",
+      "detail": "默认 `ArxivSourceAdapter` 组合 recent 列表、Atom metadata 和正文抓取。Daily Pipeline 通过 SourceAdapter 使用它；Manual Fetch 当前直接使用 arXiv fetcher。",
+      "evidence": [
+        "packages/core/src/sources/arxiv-source-adapter.ts (ArxivSourceAdapter)",
+        "packages/core/src/services/manual-fetch.ts (ManualFetchService.fetchAndSummarize)"
+      ]
+    },
+    {
+      "id": "external.llm",
+      "label": "OpenAI-compatible LLM",
+      "parent": "external",
+      "layer": "external",
+      "summary": "过滤、结构化总结与详报生成",
+      "detail": "`LlmClient` 调用配置的 OpenAI-compatible endpoint。Core 对输出做 schema/结构校验，并按错误类型返回可重试、永久失败或降级报告结果。",
+      "evidence": [
+        "packages/core/src/llm/client.ts (LlmClient)",
+        "packages/core/src/pipeline/paper-filter.ts (filterPapers)",
+        "packages/core/src/pipeline/summarizer.ts (summarizeDaily)"
+      ]
+    },
+    {
+      "id": "external.resend",
+      "label": "Resend",
+      "parent": "external",
+      "layer": "external",
+      "summary": "self 与 Relay 的最终邮件服务商",
+      "detail": "self 模式由 Core 直接调用 Resend；hosted 模式由 Relay 在完成鉴权、发送记录和每日配额检查后调用。两条路径分别维护本地 claim 和服务端发送记录。",
+      "evidence": [
+        "packages/core/src/delivery/resend.ts (sendViaResend)",
+        "services/email-relay/src/resend.ts (sendResendEmail)"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "plugin.composition",
+      "to": "plugin.adapters",
+      "label": "构造六个端口",
+      "kind": "dep"
+    },
+    {
+      "from": "plugin.composition",
+      "to": "plugin.ui",
+      "label": "注册产品入口",
+      "kind": "flow"
+    },
+    {
+      "from": "plugin.composition",
+      "to": "core.ports",
+      "kind": "dep"
+    },
+    {
+      "from": "cli.command",
+      "to": "cli.composition",
+      "label": "运行/邮件路径创建 runtime",
+      "kind": "flow"
+    },
+    {
+      "from": "cli.composition",
+      "to": "cli.adapters",
+      "label": "构造 Node 端口",
+      "kind": "dep"
+    },
+    {
+      "from": "cli.composition",
+      "to": "core.ports",
+      "kind": "dep"
+    },
+    {
+      "from": "core.scheduler",
+      "to": "core.daily",
+      "label": "按日期运行",
+      "kind": "flow"
+    },
+    {
+      "from": "core.scheduler",
+      "to": "core.delivery",
+      "label": "completed 后触发（携带可选 Digest）",
+      "kind": "flow"
+    },
+    {
+      "from": "core.persistence",
+      "to": "vault",
+      "label": "读写状态",
+      "kind": "flow"
+    },
+    {
+      "from": "core.daily",
+      "to": "vault",
+      "label": "写日报",
+      "kind": "flow"
+    },
+    {
+      "from": "vscode.dashboard",
+      "to": "vscode.index",
+      "label": "状态和资源消息",
+      "kind": "flow"
+    },
+    {
+      "from": "vscode.dashboard",
+      "to": "vscode.cli",
+      "label": "运行命令",
+      "kind": "flow"
+    },
+    {
+      "from": "vscode.cli",
+      "to": "cli.command",
+      "label": "启动子进程",
+      "kind": "flow"
+    },
+    {
+      "from": "vscode.index",
+      "to": "vault.paper-index",
+      "label": "直读直写",
+      "kind": "flow"
+    },
+    {
+      "from": "core.daily",
+      "to": "external.arxiv",
+      "label": "通过 SourceAdapter 获取论文",
+      "kind": "flow"
+    },
+    {
+      "from": "core.daily",
+      "to": "external.llm",
+      "kind": "flow"
+    },
+    {
+      "from": "core.delivery",
+      "to": "external.resend",
+      "label": "self 直接发送",
+      "kind": "flow"
+    },
+    {
+      "from": "core.delivery",
+      "to": "relay.http",
+      "label": "hosted 交给 Relay",
+      "kind": "flow"
+    },
+    {
+      "from": "relay.http",
+      "to": "relay.kv",
+      "label": "验证、鉴权与限流",
+      "kind": "flow"
+    },
+    {
+      "from": "relay.http",
+      "to": "relay.gate",
+      "label": "自动按收件人；测试按设备",
+      "kind": "flow"
+    },
+    {
+      "from": "plugin.composition",
+      "to": "core",
+      "label": "插件触发",
+      "kind": "flow"
+    },
+    {
+      "from": "cli.composition",
+      "to": "core",
+      "label": "CLI 触发 run/email",
+      "kind": "flow"
+    },
+    {
+      "from": "relay.gate",
+      "to": "relay.resend",
+      "label": "记录检查通过后发送",
+      "kind": "flow"
+    },
+    {
+      "from": "relay.resend",
+      "to": "external.resend",
+      "label": "邮件请求",
+      "kind": "flow"
+    },
+    {
+      "from": "core.daily",
+      "to": "vault",
+      "label": "修复路径补齐引用与 paperPath",
+      "kind": "flow"
+    },
+    {
+      "from": "core.delivery",
+      "to": "vault.delivery",
+      "label": "抢占并记录结果",
+      "kind": "flow"
+    }
+  ],
+  "sections": [
+    {
+      "title": "运行时与技术",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "真正会启动的只有四类东西：Obsidian 插件、一次性 Node CLI、VS Code 扩展和 Cloudflare Relay。共享 Core 与 node-runtime 只是被这些入口加载的代码库，不会自己启动进程。"
+        },
+        {
+          "type": "heading",
+          "text": "谁会运行，谁只是代码库"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "运行单元或库",
+            "如何启动 / 生命周期",
+            "边界技术",
+            "实际职责"
+          ],
+          "rows": [
+            [
+              "Obsidian 插件 / Host",
+              "Obsidian 加载插件；只在应用打开期间驻留",
+              "TypeScript bundle + Obsidian API",
+              "组装 Core、提供 UI/命令/设置；启用后运行进程内 Scheduler"
+            ],
+            [
+              "CLI / 一次性 Host",
+              "用户、VS Code 或 OS cron 启动；命令结束后退出",
+              "Node.js >=20.11，CJS CLI bundle",
+              "读取 TOML；run 和 email test/verify 会组装 Core，init、update、schedule、data、email status 在入口直接处理"
+            ],
+            [
+              "VS Code Companion",
+              "用户执行扩展命令时激活",
+              "JavaScript extension host + Webview + Task API",
+              "显示独立 Dashboard，直接访问索引，并启动 CLI 子进程"
+            ],
+            [
+              "官方邮件 Relay",
+              "Cloudflare 按 HTTP 请求唤醒；DeliverGate 按收件人或设备范围保存状态",
+              "Worker + KV + SQLite Durable Object",
+              "验证邮箱和 token，检查发送记录和每日配额，再调用 Resend"
+            ],
+            [
+              "共享业务 Core",
+              "由 Plugin/CLI 在各自进程内 import",
+              "TypeScript ES2022 library",
+              "实现日报、论文、阅读、索引、状态和投递规则；不是独立进程"
+            ],
+            [
+              "Node 宿主适配库",
+              "只由 CLI 运行时组装入口加载",
+              "Node fs/fetch + linkedom",
+              "实现六类宿主能力；不是 daemon 或独立产品"
+            ]
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "这些技术各自负责哪一段"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "技术",
+            "在本项目中的具体工作"
+          ],
+          "rows": [
+            [
+              "Obsidian API",
+              "提供 Vault 文件访问、插件数据、命令、设置页、状态栏和 Dashboard 宿主"
+            ],
+            [
+              "Node.js",
+              "运行 CLI，并通过受根目录约束的文件 adapter 访问 Vault"
+            ],
+            [
+              "OpenAI-compatible chat API",
+              "把论文列表过滤成候选，把每篇论文整理成结构化摘要，并生成 Paper Note；组装失败时还会生成救援报告"
+            ],
+            [
+              "Markdown + JSON + TOML",
+              "Markdown 保存用户能读的内容，JSON 保存索引和运行记忆，TOML 只保存 CLI 自己的设置"
+            ],
+            [
+              "Cloudflare Worker / KV / Durable Object",
+              "接收 hosted 邮件请求，保存验证数据，并按收件人或设备顺序检查发送记录和每日配额"
+            ]
+          ]
+        },
+        {
+          "type": "anchors",
+          "items": [
+            "package.json (engines and workspace scripts)",
+            "plugin/main.ts (ArxivDailyPlugin.onload)",
+            "apps/cli/src/runtime.ts (buildCliRuntime)",
+            "packages/core/src/core/adapters.ts (HostAdapters)",
+            "services/email-relay/wrangler.toml (runtime bindings)",
+            "extensions/vscode-arxiv-daily/package.json (activationEvents)"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "数据与状态",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Vault 里的文件用途不同：Daily Markdown 和 Paper Note 是用户内容，papers.json 把用户标记与生成字段放在一起，run-state 决定调度，checkpoint 只在中断后帮助继续。缓存可以丢弃；Plugin 设置和 CLI TOML 也不会互相同步。"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "数据",
+            "谁会改 / 谁会读",
+            "它能不能重建",
+            "写入或读取失败时"
+          ],
+          "rows": [
+            [
+              "Daily Markdown",
+              "Daily Pipeline 写；Dashboard、用户和修复路径读",
+              "正常非空日报的落盘结果；可以据此修复日报引用和结构化摘要",
+              "文件写成功但索引没补齐时，本次标为可重试失败；下次运行从已有文件修复"
+            ],
+            [
+              "Paper Notes",
+              "Daily detail / Manual Fetch 写；用户与 Dashboard 读",
+              "长期内容文件；用户写过的内容受保护，paperPath 可以从已验证文件修复",
+              "note 未写成功时不提交索引路径"
+            ],
+            [
+              "PDF 文件",
+              "PdfService 写；Dashboard/资源打开器读",
+              "可重新下载的附件；索引里的本地路径是生成字段",
+              "下载失败不改变阅读状态"
+            ],
+            [
+              "papers.json (schema v4)",
+              "Core PaperIndexStore 与 VS Code Companion 写；多个界面读",
+              "混合存储：status/priority/projects 等是用户状态；dailyReports/summary/paperPath 等是可对账的生成字段，整文件不能无损重建",
+              "Core 路径有队列、校验和备份恢复；Companion 直接覆盖 JSON"
+            ],
+            [
+              "run-state.json",
+              "Scheduler/StateStore 写读",
+              "每个日期的权威运行状态和尝试次数；状态区分可重试失败与永久失败",
+              "写入失败时 Scheduler 不把运行当作完成；重启时超过 1 小时仍 running 的日期会被标为永久失败"
+            ],
+            [
+              "run-history.jsonl",
+              "Scheduler 追加；Dashboard/诊断读取",
+              "尽力追加的事件历史，不参与完成判定",
+              "追加失败只告警，不撤销 run-state 或日报"
+            ],
+            [
+              "Filter / Summary checkpoints",
+              "Pipeline 写读",
+              "中断后可复用的临时阶段结果；Daily Markdown 提交后删除。文件可能含研究主题、过滤请求、正文片段和模型结果，应按敏感 Vault 数据保护",
+              "损坏或校验失败会让该阶段重试，或放弃这个 checkpoint；Node 主文件、临时文件和备份使用 0600"
+            ],
+            [
+              "Atom / HTML / source cache",
+              "CLI 与 Plugin 的 fetcher 写；后续请求读；Host 按过期时间清理",
+              "可丢弃的网络缓存，不决定 papers.json、日报或 checkpoint 是否正确",
+              "缓存损坏或过期时重新请求；清理失败只记录 warning"
+            ],
+            [
+              "delivery-state.json + claim 目录",
+              "Core delivery 写读；同 Vault 的 Plugin/CLI 共享",
+              "记录 key 可以包含 channel；自动防重的 key 只看日期和规范化收件人；这里不保存邮件正文",
+              "结果未知（ambiguous）时阻止盲目重发；没有只能创建一次的文件操作时，不能建立跨 Host 抢占"
+            ],
+            [
+              "Plugin settings",
+              "插件设置页与 Obsidian loadData/saveData",
+              "插件产品自己的设置和 secrets",
+              "不会自动同步到 CLI"
+            ],
+            [
+              "CLI config.toml",
+              "init/用户编辑；CLI 读取",
+              "该机器的 CLI 设置、Vault 路径与 secrets",
+              "缺失或非法配置会在 CLI 入口失败，不影响插件设置"
+            ],
+            [
+              "data export archive",
+              "CLI data export 写；data import 读",
+              "Vault 数据的 ZIP 归档，可能包含 `.index`、checkpoint 和研究内容；不是公开产物",
+              "导出文件应按敏感 Vault 数据保护；没有 `outputLayout` 的旧归档，只有在当前 index 仍是默认 `arxiv-daily/.index` 时才兼容导入 `.index`，自定义 indexDir 会跳过它"
+            ]
+          ]
+        },
+        {
+          "type": "anchors",
+          "items": [
+            "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.runForDate)",
+            "packages/core/src/services/paper-index.ts (PaperIndexEntry)",
+            "packages/core/src/services/state-store.ts (StateStore)",
+            "packages/core/src/services/run-history.ts (RunHistoryStore)",
+            "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
+            "apps/cli/src/runtime.ts (AtomMetadataCache/HtmlCache/PaperContentFetcher)",
+            "plugin/main.ts (cleanupCaches)",
+            "apps/cli/src/data-cmd.ts (dataExport/dataImport)",
+            "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)",
+            "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
+            "plugin/main.ts (persistSettings)",
+            "apps/cli/src/config-path.ts (resolveCliConfigPath)"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "关键执行流程",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "系统有三条主流程：按日期生成日报、按 ID 生成一篇 Paper Note、以及日报完成后的邮件投递。三条流程共用 Core 和 Vault，但谁来启动、什么时候算完成、失败后怎么恢复都不同。"
+        },
+        {
+          "type": "heading",
+          "text": "按日期生成一份日报"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "Plugin Scheduler、插件命令或 CLI run 先给出一个日期；Scheduler 只在当前进程内用 RunLock 防止同一天重复进入。",
+            "Scheduler 把该日期写成 running，再尽力追加一条 started 历史。",
+            "Pipeline 先看 Daily Markdown 是否已经存在。文件存在时，它把文件当作已经落盘的结果，只修复索引，不重新调用 LLM，也不生成 Digest。",
+            "Pipeline 通过 SourceAdapter 找论文；当前选中的实现从 arXiv 的 recent、Atom 和正文接口取数据。",
+            "LLM 先过滤论文，并把通过校验的结果写进可复用的 filter checkpoint；返回内容不符合结构时，这一步会失败并允许重试。",
+            "PaperIndexStore 先登记论文基本信息，Pipeline 再同时抓正文，最多并发 6 篇；单篇失败会写占位，不会中止其他论文。",
+            "Detail selector 决定哪些论文需要 Paper Note；只有文件真的写出来后，索引才确认 detail 和 paperPath。",
+            "Pipeline 逐篇生成结构化摘要，能复用的就读取 summary checkpoint，最后组装完整 Daily Markdown。",
+            "Pipeline 先写 Daily Markdown；文件写成功就是内容提交。随后删除 checkpoint，并补齐 papers.json 的日报引用和 summary。",
+            "Pipeline 从摘要槽位构造 Digest，并把它随 completed 结果返回；Pipeline 自己不发送邮件。",
+            "Scheduler 先把 completed 写入 run-state，再尽力追加 completed 历史，最后调用 Host completion hook。",
+            "completion hook 再决定是否投递邮件；邮件失败不会把已经完成的日报状态改回 failed。"
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "手动生成一篇 Paper Note"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "Plugin 命令或 CLI `run --id` 先把输入整理成标准的 arXiv ID。",
+            "Manual Fetch 先检查目标文件：安全的 stub 可以替换，已经验证过的 Paper Note 可以对账；发现用户内容冲突就停止。",
+            "这个用例直接从 arXiv 取 Atom metadata 和全文；它目前没有经过日报使用的 SourceAdapter。",
+            "LLM 生成详细总结，Markdown writer 把结果写成 Paper Note。",
+            "Paper Note 写成功后，PaperIndexStore 才写入 detail、paperPath 和 metadata。",
+            "如果索引更新失败，已经写好的 Paper Note 会保留；后续历史同步可以重新发现并对账。"
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "完成后的自动邮件"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "Scheduler 已经提交 completed 后，Host completion hook 收到可选 Digest。没有 Digest 的修复路径不会自动发邮件。",
+            "Core 生成邮件 subject、HTML 和 text，并按日期与规范化收件人计算自动投递 key；self 和 hosted 通道共用这个 key。",
+            "自动发送先在 Vault 中创建一次性的 generation 抢占记录；已经 delivered、结果未知（ambiguous）或仍有 active claim 时，会跳过或阻止重复发送。",
+            "调用邮件服务商（provider）前先写入 attempt-started，区分“还没调用服务商”和“已经调用但结果可能未知”。",
+            "self 模式直接调用 Resend；hosted 模式把请求交给 Relay。",
+            "Relay 先验证 token 和 readiness，再在 DeliverGate 的事务里检查发送记录和每日配额，最后调用 Resend。",
+            "Core 把成功、明确失败或结果未知写回本地 delivery state；任何邮件结果都不改日报的 run-state。"
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "重要分支与恢复结果"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "情况",
+            "实际结果",
+            "接下来怎么做"
+          ],
+          "rows": [
+            [
+              "arXiv 暂时没有论文",
+              "Pipeline 返回 pending，不写空日报",
+              "下一次 Scheduler tick 再试"
+            ],
+            [
+              "过滤后 0 篇或全部 ignored",
+              "返回 completed 和 0 篇 Digest，不写 Daily Markdown",
+              "run-state 记录 completed；开启邮件时仍可发送空结果 Digest"
+            ],
+            [
+              "已有 Daily Markdown",
+              "进入修复路径，不重新生成，也不返回 Digest",
+              "修复 papers.json 的日报引用、summary 和已验证 detail path"
+            ],
+            [
+              "单篇正文抓取失败",
+              "该论文使用获取失败占位，其余论文继续",
+              "整批仍可完成"
+            ],
+            [
+              "filter checkpoint 或 LLM JSON 校验失败",
+              "可重试失败（failed_transient）",
+              "Scheduler 根据退避和尝试次数重试，不会立即记成永久失败"
+            ],
+            [
+              "被识别为永久的 LLM 认证/请求错误",
+              "永久失败（failed_permanent）",
+              "普通调度不再自动重试；修正配置后可显式强制运行"
+            ],
+            [
+              "Daily Markdown 已写、索引补齐失败",
+              "本次标为可重试失败，但内容已经落盘",
+              "下次运行从已有日报修复索引"
+            ],
+            [
+              "邮件服务商结果未知",
+              "日报保持 completed；投递记录写成结果未知（ambiguous）",
+              "抢占记录阻止无条件重复发送"
+            ],
+            [
+              "Scheduler completion commit 失败",
+              "completed 还没有写进 run-state；当前进程保留 pending completion，并返回可重试失败",
+              "后续 tick 或 retry 可以再次提交；进程重启后不会保留这份内存 pending"
+            ],
+            [
+              "启动发现 running 超过 1 小时",
+              "StateStore 将该日期标记为永久失败",
+              "普通调度跳过；需要显式 force/retry 才会再次运行"
+            ]
+          ]
+        },
+        {
+          "type": "anchors",
+          "items": [
+            "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.runForDate)",
+            "packages/core/src/services/manual-fetch.ts (ManualFetchService.fetchAndSummarize)",
+            "packages/core/src/services/scheduling/scheduler-driver.ts (SchedulerDriver.finalizePendingCompletionLocked)",
+            "packages/core/src/delivery/deliver-email.ts (deliverDailyEmailIfEnabled)",
+            "services/email-relay/src/index.ts (deliverViaGate)",
+            "services/email-relay/src/deliver-gate.ts (DeliverGate.prepare)"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "构建、测试与部署",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "代码怎么运行，和代码怎么发布，是两件事。Plugin、Core、node-runtime 与 CLI 一起构建；Relay 和 VS Code Companion 各自有 package、lockfile 和 CI 检查。下面分别说明依赖边界、检查内容和产物去向。"
+        },
+        {
+          "type": "heading",
+          "text": "代码可以往哪个方向依赖"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "单元",
+            "允许依赖",
+            "这样做带来的边界"
+          ],
+          "rows": [
+            [
+              "Core",
+              "只能用白名单通用依赖；不能引用 Node 或 Obsidian 全局对象",
+              "同一套业务逻辑可以被两个 Host 加载"
+            ],
+            [
+              "node-runtime",
+              "Core",
+              "只实现 Node 宿主适配器，不反向放入业务规则"
+            ],
+            [
+              "CLI",
+              "Core + node-runtime",
+              "命令和运行时组装留在 CLI 产品"
+            ],
+            [
+              "Plugin",
+              "Core",
+              "Obsidian 宿主和 UI 不依赖 Node 适配库"
+            ],
+            [
+              "Relay / Companion",
+              "各自独立 package 边界",
+              "它们不进入根 workspace 的运行时依赖链"
+            ]
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "CI 检查什么，最终产物去哪里"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "范围",
+            "主要检查 / 构建",
+            "产物与去向"
+          ],
+          "rows": [
+            [
+              "根 workspace",
+              "边界检查、lint、typecheck、workspace tests、build、smoke:build",
+              "验证 Plugin、Core、node-runtime 和 CLI 这组同步版本代码"
+            ],
+            [
+              "Obsidian release",
+              "从不可变 tag 构建、预检 Obsidian 提交要求并生成 attestation",
+              "GitHub Release 上传 plugin/manifest.json、main.js、styles.css"
+            ],
+            [
+              "CLI publish",
+              "Obsidian release 成功后，或人工指定已有 release 后再次验证",
+              "把 apps/cli 发布到 npm；不会覆盖已有版本"
+            ],
+            [
+              "Email Relay",
+              "独立 npm ci、typecheck、tests、preflight readonly check、wrangler dry-run",
+              "只验证 Worker bundle；当前 workflow 不执行线上 deploy"
+            ],
+            [
+              "VS Code Companion",
+              "独立 build、tests、smoke、vsce package",
+              "生成 Runner 临时 VSIX；当前 workflow 不发布 Marketplace"
+            ]
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "跨产品接口如何保持一致"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "接口",
+            "现在检查什么",
+            "仍可能发生什么"
+          ],
+          "rows": [
+            [
+              "Companion → CLI",
+              "contracts/companion-cli-commands.json 与 CLI 参数测试",
+              "Companion workflow 没有把 papers.json 的 schema/key 纳入兼容性输入"
+            ],
+            [
+              "Core → Relay",
+              "hosted client、Relay routes 和独立 workflow paths",
+              "仓库里的 Relay 服务仍需要单独部署证据；CI 只验证 bundle"
+            ],
+            [
+              "Host → Core",
+              "TypeScript typecheck、boundary script 与各 workspace tests",
+              "这些检查不能证明某个外部环境已经部署了当前代码"
+            ]
+          ]
+        },
+        {
+          "type": "heading",
+          "text": "CLI 数据导出与导入"
+        },
+        {
+          "type": "p",
+          "text": "`data export/import` 是 CLI 入口直接处理的归档操作，不会组装共享 Core。`data export` 只按当前输出布局收集文件并生成 ZIP；`data import` 才检查 ZIP 条目和资源限制，再写入同目录 staging 区并执行 promotion/rollback。两条路径的安全检查不要混在一起。"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "操作",
+            "实际边界",
+            "结果"
+          ],
+          "rows": [
+            [
+              "data export",
+              "按当前输出布局收集 daily、papers 与 `.index`，检查选中的 Vault 路径后直接生成 ZIP",
+              "得到应按敏感 Vault 数据保护的归档；不会改变运行状态"
+            ],
+            [
+              "data import",
+              "校验 path traversal、symlink、CRC、压缩比和累计大小；staging 后 promotion，异常时 rollback",
+              "非法归档被拒绝；没有 `outputLayout` 的旧归档只有在当前 index 仍是默认 `arxiv-daily/.index` 时才导入 `.index`，自定义 indexDir 会跳过它"
+            ]
+          ]
+        },
+        {
+          "type": "anchors",
+          "items": [
+            "scripts/check-boundaries.mjs (source dependency rules)",
+            "product-units.json (product units)",
+            ".github/workflows/release.yml (Release Obsidian plugin)",
+            ".github/workflows/publish-cli.yml (Publish CLI to npm)",
+            ".github/workflows/email-relay.yml (Email relay verification)",
+            ".github/workflows/vscode-companion.yml (VS Code companion verification)"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "安全与故障行为",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "每项检查都在固定执行点挡住具体路径：Core/Host 依赖边界、Vault 相对路径、Node 文件根目录、secrets 日志、同日期重入、Relay 鉴权与配额、VS Code 索引写入。下表逐项说明它实际挡住或降级什么，以及用户会看到什么。"
+        },
+        {
+          "type": "table",
+          "columns": [
+            "检查点",
+            "在哪里执行",
+            "它实际挡住或降级什么",
+            "用户会看到什么"
+          ],
+          "rows": [
+            [
+              "Core / Host 依赖边界",
+              "HostAdapters 类型 + scripts/check-boundaries.mjs",
+              "拒绝 Core 引用 Node/Obsidian 全局对象、反向依赖和深层 workspace import",
+              "构建或 CI 失败；Core 仍保持不依赖宿主 API 的边界"
+            ],
+            [
+              "Vault 相对路径",
+              "settings validation、MarkdownWriter、PaperIndexStore",
+              "非法或冲突的 dailyDir/papersDir 在写入前被拒绝",
+              "阻止配置中的绝对路径或 `..` 词法逃逸；普通 I/O 仍可能跟随 Vault 内的 symlink"
+            ],
+            [
+              "Node 文件根目录",
+              "NodeStorageAdapter",
+              "普通 read/write/rename 先做词法根路径校验；投递 claim 和 recovery 另外使用 no-follow 与 descriptor 检查",
+              "越界路径被拒绝；目录或 descriptor 被替换时，只有 claim/recovery 路径会额外拒绝操作"
+            ],
+            [
+              "Secrets 与日志",
+              "Core Logger、CLI stdout/stderr wrapper、Plugin sensitive values",
+              "已配置的 API key/token 在日志和错误文本中被替换；配置文件本身不会因此变成加密存储",
+              "诊断仍可读，但不会输出完整 secret"
+            ],
+            [
+              "同日期运行互斥",
+              "RunLock",
+              "只在一个 Plugin 或 CLI 进程内阻止同日期重入；不同 Host/进程之间没有共享 run lock",
+              "共享 Vault 的 Plugin 与 CLI 仍可能同时开始同一日期；run-state 不会把两次运行合并，文件更新可能互相覆盖"
+            ],
+            [
+              "Daily Pipeline 失败分类",
+              "Pipeline + StateStore",
+              "checkpoint/JSON 校验和多数网络错误可重试；识别出的永久 LLM 错误不再自动重试；单篇正文失败会降级继续",
+              "Scheduler 重试可重试错误；达到 10 次后写成永久失败"
+            ],
+            [
+              "日报提交顺序",
+              "ArxivPipeline",
+              "先写 Daily Markdown，再清 checkpoint 和补索引",
+              "文件写成功后即使后续出错也不会丢日报；下次运行进入修复路径"
+            ],
+            [
+              "自动邮件去重",
+              "delivery-state.json 的 claim 目录 + StorageAdapter 只能创建一次的操作",
+              "调用服务商前抢占；调用后记录成功/失败/结果未知；结果未知时不盲目重发",
+              "投递记录可能显示结果未知，但日报 run-state 仍保持 completed"
+            ],
+            [
+              "Relay 鉴权与配额",
+              "Worker routes、KV、DeliverGate",
+              "验证 email/token、有限长度的幂等 key、cutover readiness 和每日配额；无效请求返回 4xx/503",
+              "hosted 投递可能失败或被限流；self 模式不经过 Relay"
+            ],
+            [
+              "CLI data export/import",
+              "apps/cli/src/data-cmd.ts",
+              "export 只按输出布局收集文件；import 才校验 ZIP 中央目录、条目与字节上限、压缩比、CRC、path traversal 和 symlink，并用 staging/promotion/rollback",
+              "非法导入归档被拒绝；promotion 失败时尽量回滚，无法回滚时保留可恢复备份"
+            ],
+            [
+              "Checkpoint 与导出归档敏感性",
+              "Filter/Summary checkpoint store、Node StorageAdapter",
+              "文件可能含研究主题、过滤请求、正文片段和模型结果；Node 主文件、临时文件和备份使用 0600。fingerprint 只判断能否复用，不是防篡改签名",
+              "应按敏感 Vault 数据保护；泄露会暴露研究内容，不能把归档当公开产物"
+            ],
+            [
+              "VS Code 索引写入",
+              "Companion dashboard.js",
+              "固定路径、bare-ID lookup 和普通 read-modify-write 绕过 Core v4 key/queue/backup 语义",
+              "v4 索引上修改状态或打开资源可能报 not in papers.json；并发写入可能覆盖其他 Host 更新"
+            ]
+          ]
+        },
+        {
+          "type": "anchors",
+          "items": [
+            "scripts/check-boundaries.mjs (source dependency rules)",
+            "packages/core/src/settings/validation.ts (validateVaultRelativeDirectory)",
+            "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter)",
+            "packages/core/src/services/run-lock.ts (RunLock)",
+            "packages/core/src/services/state-store.ts (StateStore.recoverStaleRunning)",
+            "packages/core/src/services/scheduling/scheduler-driver.ts (finalizePendingCompletionLocked)",
+            "packages/core/src/pipeline/pipeline.ts (ArxivPipeline.runForDate)",
+            "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
+            "services/email-relay/src/index.ts (deliverViaGate)",
+            "extensions/vscode-arxiv-daily/src/dashboard.js (updatePaperStatus)",
+            "apps/cli/src/data-cmd.ts (dataExport/dataImport)",
+            "apps/cli/tests/cli-data.test.ts (data import safety tests)",
+            "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)",
+            "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
+            "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.writeTextWithMode)"
+          ]
+        }
+      ]
+    }
+  ]
+}
+</script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var svg = $('#canvas');
+  var POINTER_EVENTS = typeof window.PointerEvent === 'function';
+
+  var data;
+  try {
+    data = JSON.parse(document.getElementById('report-data').textContent);
+  } catch (e) {
+    $('#fatal').classList.remove('hidden');
+    $('#fatal-msg').textContent = 'report-data 解析失败：' + e.message;
+    return;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    $('#fatal').classList.remove('hidden');
+    $('#fatal-msg').textContent = 'report-data 必须是一个 JSON 对象。';
+    return;
+  }
+  data.modules = Array.isArray(data.modules) ? data.modules : [];
+  data.edges = Array.isArray(data.edges) ? data.edges : [];
+  data.sections = Array.isArray(data.sections) ? data.sections : [];
+
+  var LAYER_NAMES = {
+    entry: '入口', core: '核心逻辑', data: '数据存储',
+    infra: '基础设施', external: '外部系统', frontend: '前端'
+  };
+  var LAYER_PALETTES = {
+    dark: {
+      entry:    { fill: '#1a3a2a', stroke: '#3fb950' },
+      core:     { fill: '#1a2a3a', stroke: '#58a6ff' },
+      data:     { fill: '#2a1a3a', stroke: '#bc8cff' },
+      infra:    { fill: '#3a2a1a', stroke: '#d29922' },
+      external: { fill: '#2a1a1a', stroke: '#f85149' },
+      frontend: { fill: '#1a3a3a', stroke: '#39d2c0' }
+    },
+    light: {
+      entry:    { fill: '#dafbe1', stroke: '#1a7f37' },
+      core:     { fill: '#ddf4ff', stroke: '#0969da' },
+      data:     { fill: '#fbefff', stroke: '#8250df' },
+      infra:    { fill: '#fff8c5', stroke: '#9a6700' },
+      external: { fill: '#ffebe9', stroke: '#cf222e' },
+      frontend: { fill: '#e6fffd', stroke: '#0e8a7a' }
+    }
+  };
+  var THEME_FG = {
+    dark: { text: '#e6edf3', muted: '#8b949e' },
+    light: { text: '#1f2328', muted: '#59636e' }
+  };
+  var THEME = (function () {
+    var t = null;
+    try { t = localStorage.getItem('arch-map-theme'); } catch (e) { /* offline file may block storage */ }
+    return t === 'light' ? 'light' : 'dark';
+  })();
+  document.documentElement.setAttribute('data-theme', THEME);
+  function layerStyle(layer) {
+    var pal = LAYER_PALETTES[THEME] || LAYER_PALETTES.dark;
+    var s = pal[layer] || pal.core;
+    return { name: LAYER_NAMES[layer] || LAYER_NAMES.core, fill: s.fill, stroke: s.stroke };
+  }
+  function fg() { return THEME_FG[THEME] || THEME_FG.dark; }
+  function toggleTheme() {
+    THEME = THEME === 'light' ? 'dark' : 'light';
+    try { localStorage.setItem('arch-map-theme', THEME); } catch (e) { /* keep session theme */ }
+    document.documentElement.setAttribute('data-theme', THEME);
+    renderDiagram();
+    buildLegend();
+  }
+
+  var byId = {};
+  var topIds = [];
+  data.modules.forEach(function (m) {
+    if (byId[m.id]) {
+      console.warn('架构地图：重复的模块 id，忽略后续条目：' + m.id);
+      return;
+    }
+    byId[m.id] = m;
+    m._children = [];
+  });
+  data.modules.forEach(function (m) {
+    if (byId[m.id] !== m) return;
+    var p = m.parent || null;
+    if (p && byId[p]) { byId[p]._children.push(m.id); m._p = p; }
+    else { m._p = null; topIds.push(m.id); }
+  });
+
+  function chain(id) {
+    var out = [];
+    var m = byId[id];
+    while (m) { out.unshift(m.id); m = byId[m._p]; }
+    return out;
+  }
+
+  var state = {
+    path: [], selected: null, query: '',
+    zoom: 1, panX: 0, panY: 0, viewKey: null,
+    positions: {}, rendered: null, fitRequested: true,
+    gesture: null, suppressClickUntil: 0
+  };
+
+  function currentParent() {
+    return state.path.length ? state.path[state.path.length - 1] : null;
+  }
+
+  function viewItems(parent) {
+    var ids = parent ? (byId[parent] || { _children: [] })._children.slice() : topIds.slice();
+    var nodes = ids.map(function (id) { return byId[id]; }).filter(Boolean);
+    var set = {};
+    nodes.forEach(function (n) { set[n.id] = true; });
+    function visAnc(id) {
+      var m = byId[id];
+      while (m && !set[m.id]) m = byId[m._p];
+      return m ? m.id : null;
+    }
+    var edges = [], seen = {}, extOrder = [], extSet = {}, boundary = 0;
+    function addExt(id) {
+      if (byId[id] && id !== parent && !extSet[id]) { extSet[id] = true; extOrder.push(id); }
+    }
+    function pushEdge(f, t, e) {
+      var k = f + '\u2192' + t;
+      var label = e.label || '', kind = e.kind || 'flow';
+      if (seen[k]) {
+        seen[k].count++;
+        if (label && seen[k].labels.indexOf(label) < 0) seen[k].labels.push(label);
+        if (seen[k].kinds.indexOf(kind) < 0) seen[k].kinds.push(kind);
+        seen[k].kind = seen[k].kinds.length > 1 ? 'mixed' : seen[k].kinds[0];
+        return;
+      }
+      var edge = { from: f, to: t, label: label, kind: kind, kinds: [kind], count: 1, labels: label ? [label] : [] };
+      seen[k] = edge;
+      edges.push(edge);
+    }
+    data.edges.forEach(function (e) {
+      var fa = visAnc(e.from), ta = visAnc(e.to);
+      if (fa && ta) { if (fa !== ta) pushEdge(fa, ta, e); return; }
+      if (fa && !ta) {
+        if (e.to === parent) { boundary++; pushEdge(fa, '__parent', e); }
+        else { addExt(e.to); pushEdge(fa, e.to, e); }
+        return;
+      }
+      if (!fa && ta) {
+        if (e.from === parent) { boundary++; pushEdge('__parent', ta, e); }
+        else { addExt(e.from); pushEdge(e.from, ta, e); }
+        return;
+      }
+      if (e.to === parent) { boundary++; addExt(e.from); pushEdge(e.from, '__parent', e); }
+      else if (e.from === parent) { boundary++; addExt(e.to); pushEdge('__parent', e.to, e); }
+    });
+    edges.forEach(function (e) {
+      if (e.count > 1) {
+        var joined = e.labels.join(' · ');
+        e.label = joined && e.labels.length <= 2 && est(joined, 10.5) + 12 <= 170 ? joined : e.count + ' 条关系';
+        e.title = e.count + ' 条关系' + (e.labels.length ? '：' + e.labels.join('；') : '');
+      } else {
+        e.title = e.label;
+      }
+      if (e.kind === 'mixed') {
+        e.title = '混合关系（调用/数据流 + 依赖/部署）' + (e.title ? '；' + e.title : '');
+      }
+    });
+    var ext = extOrder.map(function (id) { return byId[id]; });
+    var parentNode = null;
+    if (parent && boundary > 0) {
+      var p = byId[parent];
+      parentNode = { id: '__parent', label: '↑ ' + (p.label || p.id) + '（模块入口）', layer: p.layer, summary: '', _children: [] };
+    }
+    return { nodes: nodes, ext: ext, parentNode: parentNode, edges: edges };
+  }
+
+  function est(s, px) {
+    var w = 0;
+    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); w += c < 128 ? px * 0.55 : px; }
+    return w;
+  }
+  function trunc(s, px, max) {
+    var w = 0, out = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i), cw = c < 128 ? px * 0.55 : px;
+      if (w + cw > max) return out + '\u2026';
+      w += cw; out += s[i];
+    }
+    return out;
+  }
+  function nodeW(n) {
+    return Math.max(96, Math.min(240, Math.ceil(est(n.label || n.id, 12.5)) + 28));
+  }
+  var NODE_H = 58, ROW_GAP = 42, LAYER_GAP = 150, MARGIN = 64;
+  var MIN_ZOOM = 0.28, MAX_ZOOM = 3.2;
+
+  function currentViewKey() { return state.path.length ? state.path.join('/') : '__root__'; }
+
+  function viewportSize() {
+    var wrap = $('#canvas-wrap');
+    var w = wrap && wrap.clientWidth ? wrap.clientWidth : 960;
+    var h = wrap && wrap.clientHeight ? wrap.clientHeight : 640;
+    return { w: Math.max(320, w), h: Math.max(240, h) };
+  }
+
+  function clampZoom(z) { return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z)); }
+
+  function applyTransform() {
+    var scene = $('#scene');
+    if (scene) scene.setAttribute('transform', 'translate(' + state.panX.toFixed(2) + ' ' + state.panY.toFixed(2) + ') scale(' + state.zoom.toFixed(3) + ')');
+    var z = $('#zoom-value');
+    if (z) z.textContent = Math.round(state.zoom * 100) + '%';
+  }
+
+  function positionSnapshot(base, items, key) {
+    var saved = state.positions[key] || {};
+    var out = {};
+    items.forEach(function (it) {
+      var id = it.n.id, p = saved[id] || base.pos[id];
+      if (p) out[id] = { x: p.x, y: p.y, w: p.w, h: p.h };
+    });
+    state.positions[key] = out;
+    return out;
+  }
+
+  function layout(items, edges) {
+    var normal = items.filter(function (x) { return !x.ext; });
+    var ids = {}, adj = {}, indeg = {}, depth = {};
+    normal.forEach(function (x) { ids[x.n.id] = true; adj[x.n.id] = []; indeg[x.n.id] = 0; depth[x.n.id] = 0; });
+    edges.forEach(function (e) {
+      if (e.from === e.to || !ids[e.from] || !ids[e.to]) return;
+      if (adj[e.from].indexOf(e.to) >= 0) return;
+      adj[e.from].push(e.to); indeg[e.to]++;
+    });
+    var queue = [];
+    normal.forEach(function (x) { if (indeg[x.n.id] === 0) queue.push(x.n.id); });
+    var seen = {};
+    while (queue.length) {
+      var id = queue.shift(); seen[id] = true;
+      adj[id].forEach(function (to) {
+        depth[to] = Math.max(depth[to], depth[id] + 1);
+        if (--indeg[to] === 0) queue.push(to);
+      });
+    }
+    /* Cycles are legal in an architecture map. Relax only a bounded number of
+       times so a cycle cannot make the renderer hang or grow without bound. */
+    for (var pass = 0; pass < normal.length; pass++) {
+      var changed = false;
+      normal.forEach(function (x) {
+        adj[x.n.id].forEach(function (to) {
+          if (depth[to] < depth[x.n.id] + 1 && !seen[to]) { depth[to] = depth[x.n.id] + 1; changed = true; }
+        });
+      });
+      if (!changed) break;
+    }
+    normal.forEach(function (x) {
+      if (depth[x.n.id] > normal.length) depth[x.n.id] = normal.length;
+    });
+    items.forEach(function (x) {
+      if (!x.ext) return;
+      var n = x.n, maxIn = -1, minOut = Infinity;
+      edges.forEach(function (e) {
+        if (e.to === n.id && ids[e.from]) maxIn = Math.max(maxIn, depth[e.from]);
+        if (e.from === n.id && ids[e.to]) minOut = Math.min(minOut, depth[e.to]);
+      });
+      if (x.up) depth[n.id] = minOut < Infinity ? minOut - 1 : 0;
+      else if (maxIn >= 0) depth[n.id] = maxIn + 1;
+      else if (minOut < Infinity) depth[n.id] = Math.max(0, minOut - 1);
+      else depth[n.id] = 0;
+    });
+    var minD = Infinity;
+    items.forEach(function (x) { minD = Math.min(minD, depth[x.n.id]); });
+    if (minD < 0) items.forEach(function (x) { depth[x.n.id] -= minD; });
+
+    var layers = {}, ds;
+    items.forEach(function (x) { var d = depth[x.n.id]; (layers[d] = layers[d] || []).push(x); });
+    ds = Object.keys(layers).map(Number).sort(function (a, b) { return a - b; });
+    var order = {};
+    function stableItemOrder(a, b) {
+      var al = a.n.label || a.n.id, bl = b.n.label || b.n.id;
+      if (al !== bl) return al < bl ? -1 : 1;
+      return a.n.id < b.n.id ? -1 : a.n.id > b.n.id ? 1 : 0;
+    }
+    ds.forEach(function (d) {
+      order[d] = layers[d].slice().sort(stableItemOrder);
+    });
+    function barycenter(item, usePrev) {
+      var weighted = 0, totalWeight = 0, itemDepth = depth[item.n.id];
+      edges.forEach(function (e) {
+        var other = null;
+        if (usePrev && e.to === item.n.id) other = e.from;
+        if (!usePrev && e.from === item.n.id) other = e.to;
+        if (other === null || depth[other] === undefined) return;
+        var otherDepth = depth[other];
+        if ((usePrev && otherDepth >= itemDepth) || (!usePrev && otherDepth <= itemDepth)) return;
+        var peers = order[otherDepth] || [], index = -1;
+        for (var oi = 0; oi < peers.length; oi++) {
+          if (peers[oi].n.id === other) { index = oi; break; }
+        }
+        if (index < 0 || !peers.length) return;
+        var normalizedRank = (index + 0.5) / peers.length;
+        var weight = 1 / Math.max(1, Math.abs(itemDepth - otherDepth));
+        weighted += normalizedRank * weight;
+        totalWeight += weight;
+      });
+      if (!totalWeight) return 1e6;
+      return weighted / totalWeight;
+    }
+    /* A few alternating barycentric sweeps use both adjacent and long edges.
+       This prevents an adjacent-only sort from placing a long relationship on
+       the wrong side of a shorter path and forcing an avoidable crossing. */
+    for (var sweep = 0; sweep < 4; sweep++) {
+      for (var di = 1; di < ds.length; di++) {
+        var d1 = ds[di];
+        order[d1].sort(function (a, b) {
+          var av = barycenter(a, true), bv = barycenter(b, true);
+          return av - bv || stableItemOrder(a, b);
+        });
+      }
+      for (var ri = ds.length - 2; ri >= 0; ri--) {
+        var d2 = ds[ri];
+        order[d2].sort(function (a, b) {
+          var av = barycenter(a, false), bv = barycenter(b, false);
+          return av - bv || stableItemOrder(a, b);
+        });
+      }
+    }
+
+    var pos = {}, x = MARGIN, boxes = [];
+    ds.forEach(function (d) {
+      var arr = order[d], maxW = 96;
+      arr.forEach(function (it) { maxW = Math.max(maxW, nodeW(it.n)); });
+      var h = Math.max(NODE_H, arr.length * NODE_H + Math.max(0, arr.length - 1) * ROW_GAP);
+      boxes.push({ arr: arr, w: maxW, h: h });
+      x += maxW + LAYER_GAP;
+    });
+    var width = Math.max(320, x - LAYER_GAP + MARGIN), height = 180;
+    boxes.forEach(function (b) { height = Math.max(height, b.h); });
+    x = MARGIN;
+    boxes.forEach(function (b) {
+      var y = (height - b.h) / 2;
+      b.arr.forEach(function (it) {
+        pos[it.n.id] = { x: x, y: y, w: b.w, h: NODE_H };
+        y += NODE_H + ROW_GAP;
+      });
+      x += b.w + LAYER_GAP;
+    });
+    return { pos: pos, width: width, height: height };
+  }
+
+  function roundedPath(points, radius) {
+    var d = 'M' + points[0].x + ',' + points[0].y;
+    for (var i = 1; i < points.length; i++) {
+      var prev = points[i - 1], cur = points[i], next = points[i + 1];
+      if (!next || radius <= 0) { d += ' L' + cur.x + ',' + cur.y; continue; }
+      var inLen = Math.max(Math.abs(cur.x - prev.x), Math.abs(cur.y - prev.y));
+      var outLen = Math.max(Math.abs(next.x - cur.x), Math.abs(next.y - cur.y));
+      var r = Math.min(radius, inLen / 2, outLen / 2);
+      var before = { x: cur.x, y: cur.y }, after = { x: cur.x, y: cur.y };
+      if (prev.x !== cur.x) before.x = cur.x + (prev.x < cur.x ? -r : r);
+      else before.y = cur.y + (prev.y < cur.y ? -r : r);
+      if (next.x !== cur.x) after.x = cur.x + (next.x < cur.x ? -r : r);
+      else after.y = cur.y + (next.y < cur.y ? -r : r);
+      d += ' L' + before.x + ',' + before.y + ' Q' + cur.x + ',' + cur.y + ' ' + after.x + ',' + after.y;
+    }
+    return d;
+  }
+
+  function uniqueSorted(values) {
+    var seen = {}, out = [];
+    values.forEach(function (v) {
+      var n = Math.round(v * 100) / 100, key = n.toFixed(2);
+      if (!seen[key]) { seen[key] = true; out.push(n); }
+    });
+    out.sort(function (a, b) { return a - b; });
+    var withMids = out.slice();
+    for (var i = 1; i < out.length; i++) {
+      if (out[i] - out[i - 1] > 64) withMids.push((out[i] + out[i - 1]) / 2);
+    }
+    return withMids.sort(function (a, b) { return a - b; });
+  }
+
+  function expandedBox(p, gap, id) {
+    return { id: id, left: p.x - gap, top: p.y - gap, right: p.x + p.w + gap, bottom: p.y + p.h + gap };
+  }
+
+  function pointBlocked(x, y, boxes) {
+    var eps = 0.1;
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      if (x > b.left + eps && x < b.right - eps && y > b.top + eps && y < b.bottom - eps) return true;
+    }
+    return false;
+  }
+
+  function segmentClear(a, b, boxes) {
+    var eps = 0.1, horizontal = Math.abs(a.y - b.y) < eps;
+    if (!horizontal && Math.abs(a.x - b.x) >= eps) return false;
+    for (var i = 0; i < boxes.length; i++) {
+      var r = boxes[i];
+      if (horizontal) {
+        if (!(a.y > r.top + eps && a.y < r.bottom - eps)) continue;
+        var minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+        if (maxX > r.left + eps && minX < r.right - eps) return false;
+      } else {
+        if (!(a.x > r.left + eps && a.x < r.right - eps)) continue;
+        var minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+        if (maxY > r.top + eps && minY < r.bottom - eps) return false;
+      }
+    }
+    return true;
+  }
+
+  function rangesOverlap(a1, a2, b1, b2) {
+    return Math.max(0, Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2)));
+  }
+
+  var ROUTE_OVERLAP_BASE = 70, ROUTE_OVERLAP_FACTOR = 2;
+  var ROUTE_CROSS_PENALTY = 250, ROUTE_TOUCH_PENALTY = 40;
+
+  function edgesShareEndpoint(a, b) {
+    if (!a || !b) return false;
+    return a.from === b.from || a.from === b.to || a.to === b.from || a.to === b.to;
+  }
+
+  function intervalTouches(a1, a2, b1, b2) {
+    var left = Math.max(Math.min(a1, a2), Math.min(b1, b2));
+    var right = Math.min(Math.max(a1, a2), Math.max(b1, b2));
+    return Math.abs(left - right) < 0.1;
+  }
+
+  function routePenalty(a, b, routed, owner) {
+    var horizontal = Math.abs(a.y - b.y) < 0.1, penalty = 0;
+    routed.forEach(function (s) {
+      var otherHorizontal = Math.abs(s.a.y - s.b.y) < 0.1;
+      if (horizontal === otherHorizontal) {
+        if (horizontal && Math.abs(a.y - s.a.y) < 0.1) {
+          var overlapX = rangesOverlap(a.x, b.x, s.a.x, s.b.x);
+          if (overlapX > 0.1) penalty += overlapX * ROUTE_OVERLAP_FACTOR + ROUTE_OVERLAP_BASE;
+          else if (intervalTouches(a.x, b.x, s.a.x, s.b.x) && !edgesShareEndpoint(owner, s.owner)) penalty += ROUTE_TOUCH_PENALTY;
+        }
+        if (!horizontal && Math.abs(a.x - s.a.x) < 0.1) {
+          var overlapY = rangesOverlap(a.y, b.y, s.a.y, s.b.y);
+          if (overlapY > 0.1) penalty += overlapY * ROUTE_OVERLAP_FACTOR + ROUTE_OVERLAP_BASE;
+          else if (intervalTouches(a.y, b.y, s.a.y, s.b.y) && !edgesShareEndpoint(owner, s.owner)) penalty += ROUTE_TOUCH_PENALTY;
+        }
+      } else {
+        var h = horizontal ? { a: a, b: b } : s;
+        var v = horizontal ? s : { a: a, b: b };
+        var hx1 = Math.min(h.a.x, h.b.x), hx2 = Math.max(h.a.x, h.b.x);
+        var vy1 = Math.min(v.a.y, v.b.y), vy2 = Math.max(v.a.y, v.b.y);
+        var xInside = v.a.x >= hx1 - 0.1 && v.a.x <= hx2 + 0.1;
+        var yInside = h.a.y >= vy1 - 0.1 && h.a.y <= vy2 + 0.1;
+        if (!xInside || !yInside) return;
+        var proper = v.a.x > hx1 + 0.1 && v.a.x < hx2 - 0.1 && h.a.y > vy1 + 0.1 && h.a.y < vy2 - 0.1;
+        if (proper) penalty += ROUTE_CROSS_PENALTY;
+        else if (!edgesShareEndpoint(owner, s.owner)) penalty += ROUTE_TOUCH_PENALTY;
+      }
+    });
+    return penalty;
+  }
+
+  function heapPush(heap, item) {
+    heap.push(item);
+    var i = heap.length - 1;
+    while (i > 0) {
+      var p = Math.floor((i - 1) / 2);
+      if (heap[p].cost <= item.cost) break;
+      heap[i] = heap[p]; i = p;
+    }
+    heap[i] = item;
+  }
+
+  function heapPop(heap) {
+    if (!heap.length) return null;
+    var top = heap[0], last = heap.pop();
+    if (!heap.length) return top;
+    var i = 0;
+    while (true) {
+      var l = i * 2 + 1, r = l + 1, child = l;
+      if (l >= heap.length) break;
+      if (r < heap.length && heap[r].cost < heap[l].cost) child = r;
+      if (heap[child].cost >= last.cost) break;
+      heap[i] = heap[child]; i = child;
+    }
+    heap[i] = last;
+    return top;
+  }
+
+  function portsFor(p, toward, clearance) {
+    var cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    return [
+      { side: 'r', axis: 0, edge: { x: p.x + p.w, y: cy }, point: { x: p.x + p.w + clearance, y: cy }, pref: toward.x >= cx ? 0 : 54 },
+      { side: 'l', axis: 0, edge: { x: p.x, y: cy }, point: { x: p.x - clearance, y: cy }, pref: toward.x <= cx ? 0 : 54 },
+      { side: 'b', axis: 1, edge: { x: cx, y: p.y + p.h }, point: { x: cx, y: p.y + p.h + clearance }, pref: toward.y >= cy ? 12 : 66 },
+      { side: 't', axis: 1, edge: { x: cx, y: p.y }, point: { x: cx, y: p.y - clearance }, pref: toward.y <= cy ? 12 : 66 }
+    ];
+  }
+
+  function simplifyPoints(points) {
+    var out = [];
+    points.forEach(function (p) {
+      var last = out[out.length - 1];
+      if (!last || Math.abs(last.x - p.x) > 0.1 || Math.abs(last.y - p.y) > 0.1) out.push({ x: p.x, y: p.y });
+    });
+    for (var i = out.length - 2; i > 0; i--) {
+      var a = out[i - 1], b = out[i], c = out[i + 1];
+      if ((Math.abs(a.x - b.x) < 0.1 && Math.abs(b.x - c.x) < 0.1) ||
+          (Math.abs(a.y - b.y) < 0.1 && Math.abs(b.y - c.y) < 0.1)) out.splice(i, 1);
+    }
+    return out;
+  }
+
+  function routeEdge(a, b, allBoxes, routed, owner, requestedClearance) {
+    var clearance = requestedClearance === undefined ? 18 : requestedClearance;
+    var sourceCenter = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+    var targetCenter = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+    var sourcePorts = portsFor(a, targetCenter, clearance), targetPorts = portsFor(b, sourceCenter, clearance);
+    var xs = [], ys = [], outer = 56;
+    allBoxes.forEach(function (r) { xs.push(r.left, r.right); ys.push(r.top, r.bottom); });
+    sourcePorts.concat(targetPorts).forEach(function (p) { xs.push(p.point.x); ys.push(p.point.y); });
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs), minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    xs.push(minX - outer, minX - outer * 2, maxX + outer, maxX + outer * 2);
+    ys.push(minY - outer, minY - outer * 2, maxY + outer, maxY + outer * 2);
+    xs = uniqueSorted(xs); ys = uniqueSorted(ys);
+    function coordIndex(values, value) {
+      for (var i = 0; i < values.length; i++) if (Math.abs(values[i] - value) < 0.1) return i;
+      return -1;
+    }
+    var targetAt = {};
+    targetPorts.forEach(function (p) {
+      var xi = coordIndex(xs, p.point.x), yi = coordIndex(ys, p.point.y);
+      var k = xi + ',' + yi;
+      (targetAt[k] = targetAt[k] || []).push(p);
+    });
+    var heap = [], dist = {}, prev = {}, origin = {};
+    function stateKey(xi, yi, dir) { return xi + ',' + yi + ',' + dir; }
+    sourcePorts.forEach(function (p) {
+      var xi = coordIndex(xs, p.point.x), yi = coordIndex(ys, p.point.y), key = stateKey(xi, yi, p.axis);
+      if (pointBlocked(xs[xi], ys[yi], allBoxes)) return;
+      if (dist[key] === undefined || p.pref < dist[key]) {
+        dist[key] = p.pref; origin[key] = p; prev[key] = null;
+        heapPush(heap, { xi: xi, yi: yi, dir: p.axis, key: key, cost: p.pref });
+      }
+    });
+    var best = null, bestCost = Infinity;
+    while (heap.length) {
+      var cur = heapPop(heap);
+      if (cur.cost !== dist[cur.key]) continue;
+      if (cur.cost >= bestCost) break;
+      var targets = targetAt[cur.xi + ',' + cur.yi] || [];
+      targets.forEach(function (tp) {
+        var total = cur.cost + tp.pref + (cur.dir !== tp.axis ? 28 : 0);
+        if (total < bestCost) { bestCost = total; best = { key: cur.key, target: tp }; }
+      });
+      var moves = [[-1, 0, 0], [1, 0, 0], [0, -1, 1], [0, 1, 1]];
+      moves.forEach(function (m) {
+        var nx = cur.xi + m[0], ny = cur.yi + m[1], nd = m[2];
+        if (nx < 0 || ny < 0 || nx >= xs.length || ny >= ys.length) return;
+        var pa = { x: xs[cur.xi], y: ys[cur.yi] }, pb = { x: xs[nx], y: ys[ny] };
+        if (pointBlocked(pb.x, pb.y, allBoxes) || !segmentClear(pa, pb, allBoxes)) return;
+        var step = Math.abs(pb.x - pa.x) + Math.abs(pb.y - pa.y);
+        var cost = cur.cost + step + (cur.dir !== 2 && cur.dir !== nd ? 28 : 0) + routePenalty(pa, pb, routed, owner);
+        var nk = stateKey(nx, ny, nd);
+        if (dist[nk] === undefined || cost < dist[nk]) {
+          dist[nk] = cost; prev[nk] = cur.key; origin[nk] = origin[cur.key];
+          heapPush(heap, { xi: nx, yi: ny, dir: nd, key: nk, cost: cost });
+        }
+      });
+    }
+    if (!best) {
+      if (clearance > 2) {
+        var nextClearance = clearance > 8 ? 8 : 2, shrink = clearance - nextClearance;
+        var smallerBoxes = allBoxes.map(function (r) {
+          return { id: r.id, left: r.left + shrink, top: r.top + shrink, right: r.right - shrink, bottom: r.bottom - shrink };
+        });
+        return routeEdge(a, b, smallerBoxes, routed, owner, nextClearance);
+      }
+      var fallbackSource = sourcePorts[0], fallbackTarget = targetPorts[1];
+      var mid = (fallbackSource.point.x + fallbackTarget.point.x) / 2;
+      var fallback = simplifyPoints([fallbackSource.edge, fallbackSource.point, { x: mid, y: fallbackSource.point.y }, { x: mid, y: fallbackTarget.point.y }, fallbackTarget.point, fallbackTarget.edge]);
+      fallback.routeFailed = true;
+      fallback.routeClearance = clearance;
+      return fallback;
+    }
+    var grid = [], k = best.key;
+    while (k) {
+      var parts = k.split(',');
+      grid.push({ x: xs[Number(parts[0])], y: ys[Number(parts[1])] });
+      k = prev[k];
+    }
+    grid.reverse();
+    var source = origin[best.key];
+    var result = simplifyPoints([source.edge].concat(grid, [best.target.edge]));
+    result.routeClearance = clearance;
+    return result;
+  }
+
+  function segmentsFor(points, owner) {
+    var out = [];
+    for (var i = 1; i < points.length; i++) out.push({ a: points[i - 1], b: points[i], owner: owner });
+    return out;
+  }
+
+  function boxesOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function labelPosition(points, label, occupied) {
+    var width = Math.max(28, est(label, 10.5) + 12), height = 18, candidates = [];
+    for (var i = 1; i < points.length; i++) {
+      var a = points[i - 1], b = points[i], horizontal = Math.abs(a.y - b.y) < 0.1;
+      var len = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+      [0.5, 0.32, 0.68].forEach(function (ratio) {
+        var x = a.x + (b.x - a.x) * ratio, y = a.y + (b.y - a.y) * ratio;
+        var offsets = [0, height + 5, -(height + 5), height + 13, -(height + 13)];
+        offsets.forEach(function (offset, offsetIndex) {
+          candidates.push({
+            x: horizontal ? x : x + offset,
+            y: horizontal ? y + offset : y,
+            score: len + (horizontal ? 80 : 0) - Math.abs(ratio - 0.5) * 20 - offsetIndex * 18
+          });
+        });
+      });
+    }
+    candidates.sort(function (a, b) { return b.score - a.score; });
+    for (var j = 0; j < candidates.length; j++) {
+      var c = candidates[j], box = { x: c.x - width / 2, y: c.y - height / 2, w: width, h: height };
+      var collision = occupied.some(function (x) { return boxesOverlap(box, x); });
+      if (!collision) { occupied.push(box); return { x: c.x, y: c.y + 3.5, box: box, text: label, hidden: false }; }
+    }
+    /* A short edge can have less free space than its full label even when the
+       relationship itself is useful. Keep it visible with a measured ellipsis;
+       the <title> above still exposes the complete wording on hover. */
+    var longest = 0;
+    for (var k = 1; k < points.length; k++) {
+      longest = Math.max(longest, Math.abs(points[k].x - points[k - 1].x) + Math.abs(points[k].y - points[k - 1].y));
+    }
+    var clearance = points.routeClearance || 18;
+    var shortText = trunc(label, 10.5, Math.max(44, Math.min(150, longest - clearance * 2 - 8)));
+    var shortWidth = Math.max(28, est(shortText, 10.5) + 12);
+    for (var s = 0; s < candidates.length; s++) {
+      var sc = candidates[s], shortBox = { x: sc.x - shortWidth / 2, y: sc.y - height / 2, w: shortWidth, h: height };
+      var shortCollision = occupied.some(function (x) { return boxesOverlap(shortBox, x); });
+      if (!shortCollision) { occupied.push(shortBox); return { x: sc.x, y: sc.y + 3.5, box: shortBox, text: shortText, hidden: false }; }
+    }
+    var first = candidates[0] || { x: points[0].x, y: points[0].y };
+    return { x: first.x, y: first.y + 3.5, box: { x: first.x - width / 2, y: first.y - height / 2, w: width, h: height }, text: label, hidden: true };
+  }
+
+  function mk(tag, attrs, cls) {
+    var el = document.createElementNS(SVG_NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    if (cls) el.setAttribute('class', cls);
+    return el;
+  }
+
+  function reflowAfterPanelChange() {
+    if (!$('#view-diagram').classList.contains('active')) return;
+    window.requestAnimationFrame(function () {
+      state.fitRequested = true;
+      renderDiagram();
+    });
+  }
+
+  function closePanel() {
+    $('#panel').classList.remove('open');
+    $('#view-diagram').classList.remove('panel-open');
+    reflowAfterPanelChange();
+  }
+
+  function openPanel(n) {
+    var panel = $('#panel');
+    panel.innerHTML = '';
+    panel.classList.add('open');
+    $('#view-diagram').classList.add('panel-open');
+    var close = document.createElement('button');
+    close.className = 'close';
+    close.textContent = '\u2715';
+    close.addEventListener('click', closePanel);
+    panel.appendChild(close);
+    var h2 = document.createElement('h2');
+    h2.textContent = n.label || n.id;
+    panel.appendChild(h2);
+    var pathEl = document.createElement('div');
+    pathEl.className = 'path';
+    pathEl.textContent = '系统 / ' + chain(n.id).map(function (id) { return byId[id].label || id; }).join(' / ');
+    panel.appendChild(pathEl);
+    var layer = layerStyle(n.layer);
+    var badge = document.createElement('span');
+    badge.className = 'layer';
+    badge.textContent = layer.name;
+    badge.style.borderColor = layer.stroke;
+    badge.style.color = layer.stroke;
+    panel.appendChild(badge);
+    if (n.summary) {
+      var s = document.createElement('p');
+      s.textContent = n.summary;
+      panel.appendChild(s);
+    }
+    if (n.detail) {
+      var d = document.createElement('p');
+      d.textContent = n.detail;
+      panel.appendChild(d);
+    }
+    if (n.notes && n.notes.length) {
+      var h3 = document.createElement('h3');
+      h3.textContent = '机制说明';
+      panel.appendChild(h3);
+      var ul = document.createElement('ul');
+      n.notes.forEach(function (t) {
+        var li = document.createElement('li');
+        li.textContent = t;
+        ul.appendChild(li);
+      });
+      panel.appendChild(ul);
+    }
+    if (n.evidence && n.evidence.length) {
+      var h3b = document.createElement('h3');
+      h3b.textContent = '代码证据';
+      panel.appendChild(h3b);
+      var chips = document.createElement('div');
+      chips.className = 'chips';
+      n.evidence.forEach(function (t) {
+        var c = document.createElement('span');
+        c.className = 'chip';
+        c.textContent = t;
+        chips.appendChild(c);
+      });
+      panel.appendChild(chips);
+    }
+    if (n._children.length) {
+      var hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = '该模块含 ' + n._children.length + ' 个子模块，图中已下钻。点击面包屑或「系统」逐级返回。';
+      panel.appendChild(hint);
+    }
+    reflowAfterPanelChange();
+  }
+
+  function renderBreadcrumb() {
+    var bc = $('#breadcrumb');
+    bc.innerHTML = '';
+    var root = document.createElement('span');
+    root.className = 'crumb';
+    root.textContent = '系统';
+    root.addEventListener('click', function () {
+      state.path = []; state.selected = null;
+      state.viewKey = null;
+      renderDiagram(); closePanel();
+    });
+    bc.appendChild(root);
+    state.path.forEach(function (id) {
+      var sep = document.createElement('span');
+      sep.className = 'sep';
+      sep.textContent = ' / ';
+      bc.appendChild(sep);
+      var c = document.createElement('span');
+      c.className = 'crumb';
+      c.textContent = byId[id].label || id;
+      c.addEventListener('click', function () {
+        state.path = state.path.slice(0, state.path.indexOf(id) + 1);
+        state.selected = null;
+        state.viewKey = null;
+        renderDiagram(); closePanel();
+      });
+      bc.appendChild(c);
+    });
+  }
+
+  function eventPoint(e) {
+    return { x: typeof e.clientX === 'number' ? e.clientX : 0, y: typeof e.clientY === 'number' ? e.clientY : 0 };
+  }
+
+  function viewportPoint(e) {
+    var vp = viewportSize(), rect = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
+    var rw = rect && rect.width ? rect.width : vp.w, rh = rect && rect.height ? rect.height : vp.h;
+    var left = rect && typeof rect.left === 'number' ? rect.left : 0, top = rect && typeof rect.top === 'number' ? rect.top : 0;
+    return { x: (eventPoint(e).x - left) * vp.w / rw, y: (eventPoint(e).y - top) * vp.h / rh };
+  }
+
+  function fitToContent() {
+    var r = state.rendered, vp = viewportSize();
+    if (!r || !r.positions || !Object.keys(r.positions).length) {
+      state.zoom = 1; state.panX = 0; state.panY = 0; applyTransform(); return;
+    }
+    var bounds = r.routeBounds;
+    var minX = bounds ? bounds.minX : Infinity, minY = bounds ? bounds.minY : Infinity;
+    var maxX = bounds ? bounds.maxX : -Infinity, maxY = bounds ? bounds.maxY : -Infinity;
+    if (!bounds) Object.keys(r.positions).forEach(function (id) {
+      var p = r.positions[id];
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + p.w); maxY = Math.max(maxY, p.y + p.h);
+    });
+    var pad = 72, w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    state.zoom = clampZoom(Math.min((vp.w - pad * 2) / w, (vp.h - pad * 2) / h));
+    state.panX = (vp.w - w * state.zoom) / 2 - minX * state.zoom;
+    state.panY = (vp.h - h * state.zoom) / 2 - minY * state.zoom;
+    applyTransform();
+  }
+
+  function zoomAt(factor, point) {
+    var old = state.zoom, next = clampZoom(old * factor);
+    if (next === old) return;
+    var p = point || { x: viewportSize().w / 2, y: viewportSize().h / 2 };
+    var wx = (p.x - state.panX) / old, wy = (p.y - state.panY) / old;
+    state.zoom = next;
+    state.panX = p.x - wx * next;
+    state.panY = p.y - wy * next;
+    applyTransform();
+  }
+
+  function resetLayout() {
+    delete state.positions[state.viewKey || currentViewKey()];
+    state.fitRequested = true;
+    renderDiagram();
+  }
+
+  function beginNodeGesture(e, id, element) {
+    if (state.gesture || (e.button !== undefined && e.button !== 0)) return;
+    var p = eventPoint(e), positions = state.positions[state.viewKey || currentViewKey()];
+    if (!positions || !positions[id]) return;
+    e.preventDefault();
+    e.stopPropagation();
+    state.gesture = { type: 'node', id: id, key: state.viewKey || currentViewKey(), start: p,
+      origin: { x: positions[id].x, y: positions[id].y }, moved: false };
+    if (element) element.classList.add('dragging');
+  }
+
+  function beginPanGesture(e) {
+    if (state.gesture || (e.button !== undefined && e.button !== 0)) return;
+    var target = e.target, isNode = target && target.closest && target.closest('.node');
+    if (isNode) return;
+    var p = eventPoint(e);
+    e.preventDefault();
+    state.gesture = { type: 'pan', start: p, panX: state.panX, panY: state.panY, moved: false };
+    $('#canvas-wrap').classList.add('panning');
+  }
+
+  function moveGesture(e) {
+    var g = state.gesture;
+    if (!g) return;
+    var p = eventPoint(e), dx = p.x - g.start.x, dy = p.y - g.start.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) g.moved = true;
+    if (g.type === 'node') {
+      var positions = state.positions[g.key];
+      if (!positions || !positions[g.id]) return;
+      positions[g.id].x = g.origin.x + dx / state.zoom;
+      positions[g.id].y = g.origin.y + dy / state.zoom;
+      renderDiagram();
+    } else {
+      state.panX = g.panX + dx;
+      state.panY = g.panY + dy;
+      applyTransform();
+    }
+    e.preventDefault();
+  }
+
+  function endGesture() {
+    var g = state.gesture;
+    if (!g) return;
+    state.suppressClickUntil = g.moved ? Date.now() + 450 : 0;
+    state.gesture = null;
+    $('#canvas-wrap').classList.remove('panning');
+    document.querySelectorAll('#canvas .node.dragging').forEach(function (n) { n.classList.remove('dragging'); });
+  }
+
+  function consumeSuppressedClick() {
+    if (Date.now() > state.suppressClickUntil) return false;
+    state.suppressClickUntil = 0;
+    return true;
+  }
+
+  function renderDiagram() {
+    var parent = currentParent();
+    var key = currentViewKey();
+    if (state.viewKey !== key) { state.viewKey = key; state.fitRequested = true; }
+    var view = viewItems(parent);
+    var items = view.nodes.map(function (n) { return { n: n, ext: false, up: false }; });
+    view.ext.forEach(function (n) { items.push({ n: n, ext: true, up: false }); });
+    if (view.parentNode) items.push({ n: view.parentNode, ext: true, up: true });
+    var L = layout(items, view.edges);
+    var vp = viewportSize(), positions = positionSnapshot(L, items, key);
+    state.rendered = { key: key, view: view, items: items, layout: L, positions: positions };
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', '100%');
+    svg.setAttribute('viewBox', '0 0 ' + vp.w + ' ' + vp.h);
+    svg.innerHTML = '';
+    var defs = document.createElementNS(SVG_NS, 'defs');
+    function marker(id, color) {
+      var m = document.createElementNS(SVG_NS, 'marker');
+      m.setAttribute('id', id);
+      m.setAttribute('viewBox', '0 0 10 10');
+      m.setAttribute('refX', '9');
+      m.setAttribute('refY', '5');
+      m.setAttribute('markerWidth', '7');
+      m.setAttribute('markerHeight', '7');
+      m.setAttribute('orient', 'auto-start-reverse');
+      var p = document.createElementNS(SVG_NS, 'path');
+      p.setAttribute('d', 'M0,0 L10,5 L0,10 z');
+      p.setAttribute('fill', color);
+      m.appendChild(p);
+      return m;
+    }
+    defs.appendChild(marker('arr', '#8b949e'));
+    defs.appendChild(marker('arr-hi', '#58a6ff'));
+    svg.appendChild(defs);
+
+    var hit = mk('rect', { x: 0, y: 0, width: vp.w, height: vp.h }, 'canvas-hit-area');
+    svg.appendChild(hit);
+    var scene = mk('g', {}, 'scene');
+    scene.setAttribute('id', 'scene');
+    svg.appendChild(scene);
+
+    if (!items.length) {
+      var msg = mk('text', { x: MARGIN, y: 60, fill: fg().muted, 'font-size': 13 });
+      msg.textContent = '（该视图没有模块数据）';
+      scene.appendChild(msg);
+      renderBreadcrumb();
+      if (state.fitRequested) { fitToContent(); state.fitRequested = false; } else applyTransform();
+      return;
+    }
+
+    var sel = state.selected;
+    var q = state.query.trim().toLowerCase();
+    function matches(n) {
+      if (!q) return true;
+      return (
+        n.label + ' ' + (n.summary || '') + ' ' + (n.detail || '') +
+        ' ' + (Array.isArray(n.notes) ? n.notes : []).join(' ') +
+        ' ' + (Array.isArray(n.evidence) ? n.evidence : []).join(' ')
+      ).toLowerCase().indexOf(q) >= 0;
+    }
+    var dimmed = {};
+    items.forEach(function (it) { if (!matches(it.n)) dimmed[it.n.id] = true; });
+    var connected = {};
+    var reachable = {}, pathEdge = {};
+    if (sel) {
+      view.edges.forEach(function (e) {
+        if (e.from === sel || e.to === sel) { connected[e.from] = true; connected[e.to] = true; }
+      });
+      connected[sel] = true;
+      /* Critical path: continue the focus along directed flow edges toward
+         the durable result or external effect. Edges on that downstream
+         chain receive the strongest emphasis. */
+      var queue = [sel], queued = {}; queued[sel] = true;
+      while (queue.length) {
+        var cur = queue.shift();
+        reachable[cur] = true;
+        view.edges.forEach(function (e) {
+          if (e.kind === 'flow' && e.from === cur && !queued[e.to]) { queued[e.to] = true; queue.push(e.to); }
+        });
+      }
+      view.edges.forEach(function (e) {
+        if (e.kind === 'flow' && reachable[e.from] && reachable[e.to]) pathEdge[e.from + '\u2192' + e.to] = true;
+      });
+    }
+
+    var routingBoxes = [], routedSegments = [], occupiedLabels = [];
+    var routeBounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    Object.keys(positions).forEach(function (id) {
+      var p = positions[id];
+      routingBoxes.push(expandedBox(p, 18, id));
+      occupiedLabels.push({ x: p.x - 5, y: p.y - 5, w: p.w + 10, h: p.h + 10 });
+      routeBounds.minX = Math.min(routeBounds.minX, p.x); routeBounds.minY = Math.min(routeBounds.minY, p.y);
+      routeBounds.maxX = Math.max(routeBounds.maxX, p.x + p.w); routeBounds.maxY = Math.max(routeBounds.maxY, p.y + p.h);
+    });
+    var edgesToRender = view.edges.slice().sort(function (ea, eb) {
+      function span(e) {
+        var a = positions[e.from], b = positions[e.to];
+        if (!a || !b) return Infinity;
+        return Math.abs((a.x + a.w / 2) - (b.x + b.w / 2)) + Math.abs((a.y + a.h / 2) - (b.y + b.h / 2));
+      }
+      return span(ea) - span(eb);
+    });
+    edgesToRender.forEach(function (e) {
+      var a = positions[e.from], b = positions[e.to];
+      if (!a || !b) return;
+      var points = routeEdge(a, b, routingBoxes, routedSegments, e);
+      var cornerRadius = Math.max(0, Math.min(10, (points.routeClearance || 2) - 2));
+      var d = roundedPath(points, cornerRadius);
+      segmentsFor(points, e).forEach(function (s) { routedSegments.push(s); });
+      points.forEach(function (p) {
+        routeBounds.minX = Math.min(routeBounds.minX, p.x); routeBounds.minY = Math.min(routeBounds.minY, p.y);
+        routeBounds.maxX = Math.max(routeBounds.maxX, p.x); routeBounds.maxY = Math.max(routeBounds.maxY, p.y);
+      });
+      var cls = 'edge';
+      if (e.kind === 'dep') cls += ' dep';
+      if (e.kind === 'mixed') cls += ' mixed';
+      if (points.routeFailed) cls += ' route-failed';
+      var hi = sel && (e.from === sel || e.to === sel);
+      var onPath = !!pathEdge[e.from + '\u2192' + e.to];
+      var up = hi && !onPath && e.to === sel;
+      var searchDim = dimmed[e.from] || dimmed[e.to];
+      var selDim = sel && !(e.from === sel || e.to === sel) && !onPath;
+      if (onPath) cls += ' path';
+      else if (up) cls += ' up';
+      else if (hi) cls += ' hi';
+      else if (searchDim || selDim) cls += ' dim';
+      var g = mk('g', {}, cls);
+      g.setAttribute('data-from', e.from);
+      g.setAttribute('data-to', e.to);
+      g.setAttribute('data-edge-count', String(e.count || 1));
+      g.setAttribute('data-edge-kinds', (e.kinds || [e.kind || 'flow']).join(','));
+      g.setAttribute('data-route', points.map(function (p) { return p.x.toFixed(2) + ',' + p.y.toFixed(2); }).join(';'));
+      if (points.routeFailed) g.setAttribute('data-route-failed', 'true');
+      if (e.title || e.label) {
+        var title = mk('title', {});
+        title.textContent = e.title || e.label;
+        g.appendChild(title);
+      }
+      var hitPath = mk('path', { d: d, fill: 'none' }, 'edge-hit');
+      g.appendChild(hitPath);
+      var path = mk('path', { d: d, fill: 'none', 'marker-end': 'url(#' + (onPath || hi ? 'arr-hi' : 'arr') + ')' }, 'edge-line');
+      g.appendChild(path);
+      if (e.label) {
+        var lp = labelPosition(points, e.label, occupiedLabels);
+        var labelClass = lp.hidden ? 'edge-label-bg colliding' : 'edge-label-bg';
+        var bg = mk('rect', { x: lp.box.x, y: lp.box.y, width: lp.box.w, height: lp.box.h, rx: 4 }, labelClass);
+        g.appendChild(bg);
+        var t = mk('text', { x: lp.x, y: lp.y, 'text-anchor': 'middle' }, lp.hidden ? 'edge-label colliding' : 'edge-label');
+        t.textContent = lp.text || e.label;
+        g.appendChild(t);
+        if (!lp.hidden) {
+          routeBounds.minX = Math.min(routeBounds.minX, lp.box.x); routeBounds.minY = Math.min(routeBounds.minY, lp.box.y);
+          routeBounds.maxX = Math.max(routeBounds.maxX, lp.box.x + lp.box.w); routeBounds.maxY = Math.max(routeBounds.maxY, lp.box.y + lp.box.h);
+        }
+      }
+      scene.appendChild(g);
+    });
+    state.rendered.routeBounds = routeBounds;
+
+    items.forEach(function (it) {
+      var n = it.n, p = positions[n.id];
+      if (!p) return;
+      var layer = layerStyle(n.layer);
+      var nodeClass = 'node';
+      if (it.up) nodeClass += ' boundary-entry';
+      if (dimmed[n.id]) nodeClass += ' dim';
+      if (sel && n.id === sel) nodeClass += ' selected';
+      if (sel && reachable[n.id] && n.id !== sel) nodeClass += ' on-path';
+      if (sel && !connected[n.id] && !reachable[n.id]) nodeClass += ' dim';
+      var g = mk('g', {}, nodeClass);
+      g.setAttribute('data-id', n.id);
+      if (state.gesture && state.gesture.type === 'node' && state.gesture.id === n.id) g.classList.add('dragging');
+      var rect = mk('rect', {
+        x: p.x, y: p.y, width: p.w, height: p.h, rx: 8,
+        fill: layer.fill, stroke: layer.stroke, 'stroke-width': 1.5
+      });
+      if (it.ext) { rect.setAttribute('stroke-dasharray', '5 4'); rect.setAttribute('fill-opacity', '0.55'); }
+      if (it.up) { rect.setAttribute('stroke-width', 2.2); rect.setAttribute('stroke-dasharray', '7 4'); }
+      g.appendChild(rect);
+      var t1 = mk('text', { x: p.x + p.w / 2, y: p.y + 23, 'text-anchor': 'middle', fill: fg().text, 'font-size': 12.5, 'font-weight': 600 });
+      t1.textContent = trunc(n.label || n.id, 12.5, p.w - 18);
+      g.appendChild(t1);
+      if (n.summary) {
+        var t2 = mk('text', { x: p.x + p.w / 2, y: p.y + 40, 'text-anchor': 'middle', fill: fg().muted, 'font-size': 11 });
+        t2.textContent = trunc(n.summary, 11, p.w - 18);
+        g.appendChild(t2);
+      }
+      if (n._children.length) {
+        var t3 = mk('text', { x: p.x + p.w - 8, y: p.y + p.h - 8, 'text-anchor': 'end', fill: layer.stroke, 'font-size': 9.5 });
+        t3.textContent = '+' + n._children.length;
+        g.appendChild(t3);
+      }
+      g.addEventListener('click', function () { onNodeClick(n.id, it); });
+      g.addEventListener(POINTER_EVENTS ? 'pointerdown' : 'mousedown', function (e) { beginNodeGesture(e, n.id, g); });
+      scene.appendChild(g);
+    });
+
+    renderBreadcrumb();
+    if (state.fitRequested) { fitToContent(); state.fitRequested = false; } else applyTransform();
+  }
+
+  function onNodeClick(id, it) {
+    if (consumeSuppressedClick()) return;
+    if (it.up) {
+      state.path.pop();
+      state.selected = null;
+      state.viewKey = null;
+      renderDiagram();
+      closePanel();
+      return;
+    }
+    if (byId[id]._children.length) {
+      state.path = chain(id);
+      state.selected = null;
+      state.viewKey = null;
+    } else {
+      state.selected = id;
+    }
+    renderDiagram();
+    openPanel(byId[id]);
+  }
+
+  function renderSection(sec) {
+    var body = $('#section-body');
+    body.innerHTML = '';
+    var h2 = document.createElement('h2');
+    h2.textContent = sec.title || '未命名';
+    body.appendChild(h2);
+    (sec.blocks || []).forEach(function (b) {
+      if (b.type === 'p') {
+        var p = document.createElement('p');
+        p.textContent = b.text || '';
+        body.appendChild(p);
+      } else if (b.type === 'heading') {
+        var h3 = document.createElement('h3');
+        h3.textContent = b.text || '';
+        body.appendChild(h3);
+      } else if (b.type === 'steps') {
+        var ol = document.createElement('ol');
+        ol.className = 'steps';
+        (b.items || []).forEach(function (t) {
+          var step = document.createElement('li');
+          step.textContent = t;
+          ol.appendChild(step);
+        });
+        body.appendChild(ol);
+      } else if (b.type === 'table') {
+        var wrap = document.createElement('div');
+        wrap.className = 'section-table-wrap';
+        var table = document.createElement('table');
+        table.className = 'report-table';
+        var columns = Array.isArray(b.columns) ? b.columns : [];
+        if (columns.length) {
+          var thead = document.createElement('thead');
+          var headRow = document.createElement('tr');
+          columns.forEach(function (value) {
+            var th = document.createElement('th');
+            th.textContent = value === undefined || value === null ? '' : String(value);
+            headRow.appendChild(th);
+          });
+          thead.appendChild(headRow);
+          table.appendChild(thead);
+        }
+        var tbody = document.createElement('tbody');
+        (b.rows || []).forEach(function (row) {
+          var tr = document.createElement('tr');
+          (Array.isArray(row) ? row : []).forEach(function (value) {
+            var td = document.createElement('td');
+            td.textContent = value === undefined || value === null ? '' : String(value);
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        body.appendChild(wrap);
+      } else if (b.type === 'bullets') {
+        var ul = document.createElement('ul');
+        (b.items || []).forEach(function (t) {
+          var li = document.createElement('li');
+          li.textContent = t;
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+      } else if (b.type === 'code') {
+        var pre = document.createElement('pre');
+        pre.textContent = b.text || '';
+        body.appendChild(pre);
+      } else if (b.type === 'anchors') {
+        var chips = document.createElement('div');
+        chips.className = 'chips';
+        (b.items || []).forEach(function (t) {
+          var c = document.createElement('span');
+          c.className = 'chip';
+          c.textContent = t;
+          chips.appendChild(c);
+        });
+        body.appendChild(chips);
+      }
+    });
+  }
+
+  function buildTabs() {
+    var tabs = $('#tabs');
+    tabs.innerHTML = '';
+    var defs = [{ id: 'diagram', title: '架构', sec: null }];
+    data.sections.forEach(function (s, i) { defs.push({ id: 'sec' + i, title: s.title || '未命名', sec: s }); });
+    defs.forEach(function (d) {
+      var t = document.createElement('div');
+      t.className = 'tab' + (d.id === 'diagram' ? ' active' : '');
+      t.textContent = d.title;
+      t.addEventListener('click', function () {
+        document.querySelectorAll('#tabs .tab').forEach(function (x) { x.classList.remove('active'); });
+        t.classList.add('active');
+        if (d.sec === null) {
+          $('#view-section').classList.remove('active');
+          $('#view-diagram').classList.add('active');
+          $('#search').classList.remove('hidden');
+          $('#legend').classList.remove('hidden');
+          renderDiagram();
+        } else {
+          $('#view-diagram').classList.remove('active');
+          $('#view-section').classList.add('active');
+          $('#search').classList.add('hidden');
+          $('#legend').classList.add('hidden');
+          closePanel();
+          renderSection(d.sec);
+        }
+      });
+      tabs.appendChild(t);
+    });
+  }
+
+  function buildLegend() {
+    var used = {};
+    data.modules.forEach(function (m) { if (LAYER_NAMES[m.layer]) used[m.layer] = true; });
+    var lg = $('#legend');
+    lg.innerHTML = '';
+    Object.keys(LAYER_NAMES).forEach(function (k) {
+      if (!used[k]) return;
+      var row = document.createElement('div');
+      row.className = 'legend-row';
+      var sw = document.createElement('span');
+      sw.className = 'swatch';
+      sw.style.background = layerStyle(k).stroke;
+      row.appendChild(sw);
+      var lb = document.createElement('span');
+      lb.textContent = layerStyle(k).name;
+      row.appendChild(lb);
+      lg.appendChild(row);
+    });
+  }
+
+  $('#title').textContent = data.title || '架构地图';
+  $('#summary').textContent = data.summary || '';
+  document.title = (data.title || '架构地图') + ' · 架构地图';
+  $('#search').addEventListener('input', function (e) {
+    state.query = e.target.value;
+    renderDiagram();
+  });
+  svg.addEventListener(POINTER_EVENTS ? 'pointerdown' : 'mousedown', beginPanGesture);
+  window.addEventListener(POINTER_EVENTS ? 'pointermove' : 'mousemove', moveGesture);
+  window.addEventListener(POINTER_EVENTS ? 'pointerup' : 'mouseup', endGesture);
+  if (POINTER_EVENTS) window.addEventListener('pointercancel', endGesture);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    zoomAt(e.deltaY > 0 ? 0.9 : 1.1, viewportPoint(e));
+  }, { passive: false });
+  svg.addEventListener('click', function (e) {
+    if (consumeSuppressedClick()) return;
+    if (e.target.closest && e.target.closest('.node')) return;
+    state.selected = null;
+    renderDiagram();
+    closePanel();
+  });
+  document.querySelectorAll('[data-canvas-action]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var action = button.getAttribute('data-canvas-action');
+      if (action === 'zoom-in') zoomAt(1.18);
+      else if (action === 'zoom-out') zoomAt(1 / 1.18);
+      else if (action === 'fit') fitToContent();
+      else if (action === 'reset') resetLayout();
+      else if (action === 'theme') toggleTheme();
+    });
+  });
+  window.addEventListener('keydown', function (e) {
+    var tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
+    if (e.key === 'Escape') { state.selected = null; $('#search').value = ''; state.query = ''; closePanel(); renderDiagram(); }
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomAt(1.18); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomAt(1 / 1.18); }
+    else if (e.key === '0') { e.preventDefault(); fitToContent(); }
+  });
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    if (resizeTimer) window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(function () {
+      resizeTimer = null;
+      if ($('#view-diagram').classList.contains('active')) renderDiagram();
+    }, 80);
+  });
+  buildTabs();
+  buildLegend();
+  renderDiagram();
+})();
+</script>
+</body>
+</html>
