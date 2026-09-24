@@ -89,7 +89,37 @@ describe("getSetupStatus", () => {
     expect(shouldRenderSetupGuide(beforeFirstReport)).toBe(true);
     expect(afterFirstReport.firstReportComplete).toBe(true);
     expect(afterFirstReport.latestCompletedReportDate).toBe("2026-07-15");
-    expect(shouldRenderSetupGuide(afterFirstReport)).toBe(false);
+    expect(shouldRenderSetupGuide(afterFirstReport)).toBe(true);
+  });
+
+  it("keeps the guide until daily runs are turned on", () => {
+    const topics = [{
+      id: "topic",
+      name: "Compact objects",
+      tag: "compact-objects",
+      description: "Neutron stars and black holes",
+      detail: false,
+    }];
+    const runState = {
+      "2026-07-15": { status: "completed" as const, lastAttempt: 1, attempts: 1 },
+    };
+    const paused = getSetupStatus(
+      makeSettings({ llm: { apiKey: "sk-test" }, arxiv: { topics } }),
+      runState,
+    );
+    const running = getSetupStatus(
+      makeSettings({
+        llm: { apiKey: "sk-test" },
+        arxiv: { topics },
+        schedule: { enabled: true },
+      }),
+      runState,
+    );
+
+    expect(paused.scheduleEnabled).toBe(false);
+    expect(shouldRenderSetupGuide(paused)).toBe(true);
+    expect(running.scheduleEnabled).toBe(true);
+    expect(shouldRenderSetupGuide(running)).toBe(false);
   });
 
   it("returns the guide when configuration becomes invalid after a report", () => {

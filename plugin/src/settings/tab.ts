@@ -2122,16 +2122,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       status.categoriesReady,
       status.topicsReady,
       status.firstReportComplete,
+      status.scheduleEnabled,
     ].filter(Boolean).length;
     header.createDiv({
       cls: "arxiv-daily-setup__progress-summary",
-      text: `${completedCount} of 4 complete`,
+      text: `${completedCount} of 5 complete`,
       attr: { "aria-live": "polite" },
     });
     const progress = guide.createEl("progress", {
       cls: "arxiv-daily-setup__progress",
       attr: {
-        max: "4",
+        max: "5",
         value: String(completedCount),
         "aria-label": "Setup progress",
       },
@@ -2178,6 +2179,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       status.readyToRun
         ? () => {
             this.runAction("generate first report", () => this.generateFirstReport());
+          }
+        : undefined,
+    );
+    this.renderSetupItem(
+      list,
+      status.scheduleEnabled,
+      "Turn on daily reports",
+      status.readyToRun
+        ? "Reports then run by themselves on weekdays, inside the run window below."
+        : "Available once the configuration above is complete.",
+      status.readyToRun ? "Turn on daily reports" : undefined,
+      status.readyToRun
+        ? () => {
+            this.runAction("turn on daily reports", () => this.enableDailyReports());
           }
         : undefined,
     );
@@ -2326,6 +2341,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const selector = fields.find(([value]) => !value.trim())?.[1]
       ?? ".arxiv-daily-settings__topic-name-input";
     card.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+  }
+
+  /** Guide step 5: the same path as the Enable toggle (validation + run-today choice). */
+  public async enableDailyReports(): Promise<void> {
+    await this.plugin.setScheduleEnabled(true);
+    this.refreshSettings();
   }
 
   public async generateFirstReport(): Promise<void> {

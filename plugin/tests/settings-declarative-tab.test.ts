@@ -1444,6 +1444,7 @@ describe("declarative setup guide refresh after setup", () => {
   function completeSetup() {
     const made = makeTab();
     made.settings.llm.apiKey = "sk-test";
+    made.settings.schedule.enabled = true;
     made.settings.arxiv.topics.push({
       id: "t1",
       name: "Galaxies",
@@ -1581,6 +1582,30 @@ describe("declarative setup guide actions", () => {
     clickGuideButton(tab, "Describe interests");
 
     expect(addTopic).toHaveBeenCalledTimes(1);
+    tab.containerEl.remove();
+  });
+
+  it("turns on daily runs from the last step", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.llm.apiKey = "sk-test";
+    settings.arxiv.topics.push({
+      id: "t1",
+      name: "Galaxies",
+      tag: "galaxies",
+      description: "Galaxy evolution",
+      detail: false,
+    });
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    document.body.appendChild(tab.containerEl);
+    renderSetupGuideRow(tab, new Setting(tab.containerEl));
+    expect(tab.containerEl.textContent).toMatch(/3 of 5 complete/);
+
+    clickGuideButton(tab, "Turn on daily reports");
+
+    await vi.waitFor(() => {
+      expect(plugin.setScheduleEnabled).toHaveBeenCalledWith(true);
+      expect(settings.schedule.enabled).toBe(true);
+    });
     tab.containerEl.remove();
   });
 

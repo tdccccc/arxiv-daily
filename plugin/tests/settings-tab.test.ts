@@ -479,14 +479,14 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('this.reportActionError("save run window"');
   });
 
-  it("renders an accessible four-step first-report guide without duplicate inputs", () => {
+  it("renders an accessible five-step first-report guide without duplicate inputs", () => {
     const guideBody = settingsTabSource.match(
       /public createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
     )?.[0];
     expect(guideBody).toBeDefined();
     expect(guideBody).toContain('createEl("ol"');
     expect(settingsTabSource).toContain('parent.createEl("li"');
-    expect(guideBody).toContain('text: `${completedCount} of 4 complete`');
+    expect(guideBody).toContain('text: `${completedCount} of 5 complete`');
     expect(guideBody).toContain('"Connect AI"');
     expect(guideBody).toContain('"Choose paper sources"');
     expect(guideBody).toContain('"Describe your research interests"');

@@ -9,15 +9,16 @@ export interface SetupStatus {
   topicsReady: boolean;
   readyToRun: boolean;
   firstReportComplete: boolean;
+  scheduleEnabled: boolean;
   latestCompletedReportDate?: string;
   reasons: string[];
   schedulerReasons: string[];
 }
 
 export function shouldRenderSetupGuide(
-  status: Pick<SetupStatus, "readyToRun" | "firstReportComplete">,
+  status: Pick<SetupStatus, "readyToRun" | "firstReportComplete" | "scheduleEnabled">,
 ): boolean {
-  return !status.readyToRun || !status.firstReportComplete;
+  return !status.readyToRun || !status.firstReportComplete || !status.scheduleEnabled;
 }
 
 export function getSetupStatus(
@@ -54,6 +55,7 @@ export function getSetupStatus(
     topicsReady,
     readyToRun: validation.ok,
     firstReportComplete: latestCompletedReportDate !== undefined,
+    scheduleEnabled: settings.schedule.enabled,
     latestCompletedReportDate,
     reasons: validation.reasons,
     schedulerReasons: schedulerValidation.reasons,
