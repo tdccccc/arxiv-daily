@@ -223,6 +223,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderTopicRow(this, setting, index),
       renderTimezoneRow: (setting) =>
         declarativeRows.renderTimezoneRow(this, setting),
+      renderOutputDirectoryRow: (setting, key) =>
+        declarativeRows.renderOutputDirectoryRow(this, setting, key),
+      renderEmailSenderRow: (setting, key) =>
+        declarativeRows.renderEmailSenderRow(this, setting, key),
       renderRunWindowRow: (setting) =>
         declarativeRows.renderRunWindowRow(this, setting),
       renderTickIntervalRow: (setting) =>
@@ -1132,7 +1136,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private async applyOutputDirectoryDraft(
+  public async applyOutputDirectoryDraft(
     key: "dailyDir" | "papersDir",
     draft: string,
     input: HTMLInputElement,

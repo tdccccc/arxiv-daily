@@ -114,7 +114,6 @@ export function writeSettingValue(
 import type { Setting, SettingDefinitionItem } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
 import { arxivCategories } from "@arxiv-daily/core";
-import { validateOutputDirectoryDraft } from "./tab";
 import {
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_REPO_URL,
@@ -136,6 +135,8 @@ export interface SettingDefinitionsHost {
   renderCategoryRow?: (setting: Setting, index: number) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
   renderTimezoneRow?: (setting: Setting) => void;
+  renderOutputDirectoryRow?: (setting: Setting, key: "dailyDir" | "papersDir") => void;
+  renderEmailSenderRow?: (setting: Setting, key: "fromEmail" | "fromName") => void;
   addCategory?: () => void;
   deleteCategory?: (index: number) => void;
   addTopic?: () => void;
@@ -310,33 +311,19 @@ export function buildSettingDefinitions(
       type: "group",
       heading: "Output & schedule",
       items: [
-        {
-          name: "Daily reports folder",
-          desc: "Folder in this vault for daily report notes (relative path).",
-          control: {
-            type: "text",
-            key: SETTING_KEYS.output.dailyDir,
-            validate: (value) => {
-              const validation = validateOutputDirectoryDraft(value);
-              return validation.ok ? undefined : (validation.reason ?? "Invalid path.");
-            },
-          },
-        },
-        {
-          name: "Paper notes folder",
-          desc: "Folder in this vault for per-paper notes (relative path).",
-          control: {
-            type: "text",
-            key: SETTING_KEYS.output.papersDir,
-            validate: (value) => {
-              const validation = validateOutputDirectoryDraft(
-                value,
-                plugin.settings.output.dailyDir,
-              );
-              return validation.ok ? undefined : (validation.reason ?? "Invalid path.");
-            },
-          },
-        },
+        ...(host.renderOutputDirectoryRow
+          ? [{
+              name: "Daily reports folder",
+              desc: "Folder in this vault for daily report notes (relative path).",
+              render: (setting: Setting) =>
+                host.renderOutputDirectoryRow?.(setting, "dailyDir"),
+            } satisfies SettingDefinitionItem, {
+              name: "Paper notes folder",
+              desc: "Folder in this vault for per-paper notes (relative path).",
+              render: (setting: Setting) =>
+                host.renderOutputDirectoryRow?.(setting, "papersDir"),
+            } satisfies SettingDefinitionItem]
+          : []),
         {
           name: "Link style",
           desc: "How links between notes are written in daily reports.",
@@ -503,24 +490,19 @@ export function buildSettingDefinitions(
                       host.renderEmailApiKeyRow?.(setting),
                   } satisfies SettingDefinitionItem]
                 : []),
-              {
-                name: "From email",
-                desc: "Optional. Leave blank for the simplest setup (mail may only go to your Resend account email). Use an address on a domain you verified in Resend to send more freely.",
-                control: {
-                  type: "text",
-                  key: SETTING_KEYS.email.fromEmail,
-                  placeholder: "Leave blank for simplest setup",
-                },
-              } satisfies SettingDefinitionItem,
-              {
-                name: "From name",
-                desc: "Optional name shown as the sender. Default is \"arXiv Daily\".",
-                control: {
-                  type: "text",
-                  key: SETTING_KEYS.email.fromName,
-                  placeholder: "arXiv Daily",
-                },
-              } satisfies SettingDefinitionItem,
+              ...(host.renderEmailSenderRow
+                ? [{
+                    name: "From email",
+                    desc: "Optional. Leave blank for the simplest setup (mail may only go to your Resend account email). Use an address on a domain you verified in Resend to send more freely.",
+                    render: (setting: Setting) =>
+                      host.renderEmailSenderRow?.(setting, "fromEmail"),
+                  } satisfies SettingDefinitionItem, {
+                    name: "From name",
+                    desc: "Optional name shown as the sender. Default is \"arXiv Daily\".",
+                    render: (setting: Setting) =>
+                      host.renderEmailSenderRow?.(setting, "fromName"),
+                  } satisfies SettingDefinitionItem]
+                : []),
             ]),
         {
           name: "Daily auto-send",

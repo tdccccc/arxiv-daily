@@ -11,6 +11,7 @@ import {
   modelFetchNoticeMessage,
   renderRunWindowTimeSelect,
   TIMEZONE_OPTIONS,
+  validateOutputDirectoryDraft,
 } from "./tab";
 import { arxivCategories, LlmClient } from "@arxiv-daily/core";
 
@@ -272,6 +273,69 @@ export function renderTimezoneRow(
     placeholder: "Or enter custom timezone",
   });
   tab.bindTimezoneDraftInput(input, select);
+}
+
+/**
+ * Output folder: validated while typing, committed once on change (blur or
+ * Enter). A plain declarative text control would commit — and switch the
+ * output stores — on every keystroke.
+ */
+export function renderOutputDirectoryRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "dailyDir" | "papersDir",
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", { type: "text" });
+  input.value = tab.plugin.settings.output[key];
+  const sibling = key === "dailyDir" ? "papersDir" : "dailyDir";
+  input.addEventListener("input", () => {
+    const validation = validateOutputDirectoryDraft(
+      input.value,
+      tab.plugin.settings.output[sibling],
+    );
+    input.setCustomValidity(validation.ok ? "" : (validation.reason ?? "Invalid path."));
+    input.toggleClass("is-invalid", !validation.ok);
+  });
+  input.addEventListener("change", () => {
+    tab.runAction(
+      key === "dailyDir" ? "update daily path" : "update papers path",
+      () => tab.applyOutputDirectoryDraft(key, input.value, input),
+    );
+  });
+}
+
+/** From email / From name: committed once on change, like display(). */
+export function renderEmailSenderRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "fromEmail" | "fromName",
+): void {
+  prepareRow(setting);
+  const settingKey = `email.${key}`;
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    attr: {
+      placeholder: key === "fromEmail" ? "Leave blank for simplest setup" : "arXiv Daily",
+    },
+  });
+  input.value = tab.plugin.settings.email[key] ?? "";
+  input.addEventListener("change", () => {
+    // From email is an address and is trimmed; From name is kept as typed.
+    const next = key === "fromEmail" ? input.value.trim() : input.value;
+    const revision = tab.beginControlChange(input);
+    tab.runAction(`save From ${key === "fromEmail" ? "email" : "name"}`, async () => {
+      try {
+        await tab.changeSettingValue(settingKey, next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, settingKey);
+        }
+        throw error;
+      }
+    });
+  });
 }
 
 /** Scheduler enable toggle; routes through setScheduleEnabled (validation + modal). */

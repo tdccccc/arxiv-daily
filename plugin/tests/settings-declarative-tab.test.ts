@@ -12,6 +12,7 @@ import {
   buildSettingDefinitions,
   readSettingValue,
   SETTING_KEYS,
+  writeSettingValue,
 } from "../src/settings/definitions";
 import {
   renderApiKeyRow,
@@ -1467,6 +1468,67 @@ describe("topic tags and blocked first report", () => {
     expect(
       firstReportStep?.querySelector(".arxiv-daily-setup__description")?.textContent,
     ).toMatch(/Duplicate arXiv category: astro-ph/);
+  });
+});
+
+describe("declarative text rows commit when editing ends", () => {
+  function rowFor(tab: ArxivDailySettingTab, name: string): Setting {
+    let found: Setting | undefined;
+    walkItems(tab.getSettingDefinitions(), (item) => {
+      if (item.name !== name) return;
+      expect(item, `${name} renders its own input`).toHaveProperty("render");
+      const setting = new Setting(tab.containerEl);
+      (item.render as (setting: Setting) => void)(setting);
+      found = setting;
+    });
+    expect(found, name).toBeDefined();
+    return found!;
+  }
+
+  function type(input: HTMLInputElement, text: string): void {
+    for (const character of text) {
+      input.value += character;
+      input.dispatchEvent(new Event("input"));
+    }
+  }
+
+  it.each([
+    ["Daily reports folder", "output.dailyDir", "notes/daily", "notes/daily"],
+    ["Paper notes folder", "output.papersDir", "notes/papers", "notes/papers"],
+    ["From email", "email.fromEmail", " me@example.com ", "me@example.com"],
+    ["From name", "email.fromName", "Papers", "Papers"],
+  ])("%s saves once on change, not per keystroke", async (name, key, typed, saved) => {
+    const { tab, settings } = makeTab();
+    // Output folders need store preparation the mock plugin lacks; record the value.
+    const change = vi
+      .spyOn(tab.plugin.settingsChanges, "changeValue")
+      .mockImplementation(async (changedKey, value) => {
+        writeSettingValue(settings, changedKey, value);
+      });
+    const input = rowFor(tab, name).controlEl.querySelector("input")!;
+
+    input.value = "";
+    type(input, typed);
+    expect(change).not.toHaveBeenCalled();
+
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(change).toHaveBeenCalledTimes(1));
+    expect(readSettingValue(settings, key)).toBe(saved);
+  });
+
+  it("marks an unsafe folder draft invalid and does not save it", async () => {
+    const { tab, settings } = makeTab();
+    const change = vi.spyOn(tab.plugin.settingsChanges, "changeValue");
+    const input = rowFor(tab, "Daily reports folder").controlEl.querySelector("input")!;
+
+    input.value = "../outside";
+    input.dispatchEvent(new Event("input"));
+    expect(input.classList).toContain("is-invalid");
+    input.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(change).not.toHaveBeenCalled();
+    expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
   });
 });
 
