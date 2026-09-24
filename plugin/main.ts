@@ -26,6 +26,7 @@ import type {
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
+import { migrateLegacyRunState } from "./src/services/legacy-run-state";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
@@ -415,12 +416,11 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger,
     );
     await this.stateStore.load();
-    if (
-      Object.keys(this.stateStore.snapshot()).length === 0 &&
-      Object.keys(this.legacyRunState).length > 0
-    ) {
-      await this.stateStore.replaceAll(this.legacyRunState);
-    }
+    await migrateLegacyRunState(
+      this.stateStore,
+      this.legacyRunState,
+      (message) => this.logger.warn(`settings: ${message}`),
+    );
 
     try {
       this.progress = new StatusBarController(
