@@ -1533,6 +1533,29 @@ describe("declarative text rows commit when editing ends", () => {
   });
 });
 
+describe("category rows", () => {
+  it("refuses a category another row already has instead of dropping a row", async () => {
+    const { Notice } = await import("obsidian");
+    const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
+    notices.length = 0;
+    const { tab, settings } = makeTab();
+    settings.arxiv.categories = ["astro-ph", "gr-qc"];
+    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const setting = new Setting(tab.containerEl);
+    renderCategoryRow(tab, setting, 1);
+    const select = setting.controlEl.querySelector("select")!;
+
+    select.value = "astro-ph";
+    select.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settings.arxiv.categories).toEqual(["astro-ph", "gr-qc"]);
+    expect(select.value).toBe("gr-qc");
+    expect(notices.map((call) => call.message).join("\n")).toMatch(/already/i);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
 describe("model field", () => {
   it("accepts a typed model name and saves it when editing ends", async () => {
     const { tab, settings } = makeTab();

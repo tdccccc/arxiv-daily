@@ -1370,6 +1370,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .addDropdown((d) => {
           addCategoryOptions(d.selectEl, category);
           d.setValue(category).onChange(async (v) => {
+            if (categories.some((other, j) => j !== i && other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              d.setValue(category);
+              return;
+            }
             const next = [...categories];
             next[i] = v;
             await this.setArxivCategories(next);

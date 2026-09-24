@@ -249,6 +249,11 @@ export function renderCategoryRow(
   addCategoryOptions(select, current);
   select.value = current;
   select.addEventListener("change", () => {
+    if (categories.some((category, other) => other !== index && category === select.value)) {
+      new Notice(`arXiv Daily: ${select.value} is already in the list.`);
+      select.value = current;
+      return;
+    }
     const next = [...categories];
     next[index] = select.value;
     void tab.runAction("save category", async () => {
