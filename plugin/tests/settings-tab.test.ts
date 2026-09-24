@@ -506,7 +506,7 @@ describe("settings tab regressions", () => {
     )?.[0];
     expect(guideBody).toContain("this.plugin.stateStore.snapshot()");
     expect(guideBody).toContain("status.firstReportComplete");
-    expect(guideBody).toContain("status.readyToRun ? \"Generate first report\" : undefined");
+    expect(guideBody).toContain('"Generate first report"');
     expect(guideBody).toContain('this.runAction("generate first report"');
     expect(firstReportBody).toContain("await this.plugin.scheduler.runForDateNow(date)");
     expect(firstReportBody).toContain("this.refreshSetupGuide()");

@@ -167,6 +167,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private declarativeSetupGuideRow: Setting | undefined;
   private pendingTopicFocusId: string | undefined;
+  /** Kept on the tab so a guide re-render during the run still shows it. */
+  private firstReportRunning = false;
   private pendingTopicDeletionAnchor:
     | { topicId: string; scroller: HTMLElement; top: number }
     | undefined;
@@ -2175,12 +2177,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         : status.llmReady && status.categoriesReady && status.topicsReady
           ? `Fix before generating: ${status.reasons.join("; ")}.`
           : "Complete the earlier configuration steps before generating a report.",
-      status.readyToRun ? "Generate first report" : undefined,
+      !status.readyToRun
+        ? undefined
+        : this.firstReportRunning
+          ? "Generating…"
+          : "Generate first report",
       status.readyToRun
         ? () => {
             this.runAction("generate first report", () => this.generateFirstReport());
           }
         : undefined,
+      this.firstReportRunning,
     );
     this.renderSetupItem(
       list,
@@ -2209,6 +2216,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     description: string,
     actionLabel?: string,
     onAction?: () => void,
+    busy = false,
   ): void {
     const item = parent.createEl("li", {
       cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
@@ -2232,6 +2240,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         text: actionLabel,
         attr: { type: "button" },
       });
+      if (busy) {
+        action.disabled = true;
+        action.setAttribute("aria-busy", "true");
+      }
       action.addEventListener("click", onAction);
     }
   }
@@ -2350,14 +2362,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   public async generateFirstReport(): Promise<void> {
-    const date = formatDate(
-      todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
-    );
-    this.plugin.logger.info(`settings: first report requested for ${date}`);
-    new Notice(`arXiv Daily: running for ${date}…`);
-    const result = await this.plugin.scheduler.runForDateNow(date);
-    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    if (this.firstReportRunning) return;
+    this.firstReportRunning = true;
     this.refreshSetupGuide();
+    try {
+      const date = formatDate(
+        todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
+      );
+      this.plugin.logger.info(`settings: first report requested for ${date}`);
+      new Notice(`arXiv Daily: running for ${date}…`);
+      const result = await this.plugin.scheduler.runForDateNow(date);
+      new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    } finally {
+      this.firstReportRunning = false;
+      this.refreshSetupGuide();
+    }
   }
 
   /** Reveal and focus a topic created by Add topic after the settings list updates. */

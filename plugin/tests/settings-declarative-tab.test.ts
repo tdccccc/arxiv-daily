@@ -1609,6 +1609,42 @@ describe("declarative setup guide actions", () => {
     tab.containerEl.remove();
   });
 
+  it("shows the first report as running and ignores repeat clicks", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.llm.apiKey = "sk-test";
+    settings.arxiv.topics.push({
+      id: "t1",
+      name: "Galaxies",
+      tag: "galaxies",
+      description: "Galaxy evolution",
+      detail: false,
+    });
+    const run = deferred();
+    const runForDateNow = vi.fn(async () => {
+      await run.promise;
+      return { kind: "completed" as const, papersWritten: 3 };
+    });
+    (plugin as unknown as { scheduler: unknown }).scheduler = { runForDateNow };
+    (plugin.logger as unknown as { info: () => void }).info = vi.fn();
+    document.body.appendChild(tab.containerEl);
+    renderSetupGuideRow(tab, new Setting(tab.containerEl));
+
+    clickGuideButton(tab, "Generate first report");
+    await vi.waitFor(() => expect(runForDateNow).toHaveBeenCalledTimes(1));
+    const busy = Array.from(
+      tab.containerEl.querySelectorAll<HTMLButtonElement>(".arxiv-daily-setup button"),
+    ).find((button) => button.textContent === "Generating…");
+    expect(busy?.disabled).toBe(true);
+    await tab.generateFirstReport();
+    expect(runForDateNow).toHaveBeenCalledTimes(1);
+
+    run.resolve();
+    await vi.waitFor(() => {
+      expect(tab.containerEl.textContent).not.toContain("Generating…");
+    });
+    tab.containerEl.remove();
+  });
+
   it("says where to go instead of doing nothing when a section is missing", async () => {
     const { Notice } = await import("obsidian");
     const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
