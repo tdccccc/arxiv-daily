@@ -281,6 +281,40 @@ describe("ArxivPipeline", () => {
     );
   });
 
+  it.each([
+    ["a storage error", () => new Error("index busy"), { kind: "failed_transient", reason: "paper index update failed: index busy" }],
+    ["a cancellation", () => new RunCancelledError("run cancelled"), { kind: "cancelled", reason: "run cancelled" }],
+  ])("reports %s while indexing filtered papers like the other index steps", async (_label, error, expected) => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+    );
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async () => {
+        throw error();
+      }),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate(date)).resolves.toEqual(expected);
+    expect(paperIndex.upsertManyFromDailyPapers).toHaveBeenCalled();
+  });
+
   it("fails permanently when the date is older than /recent", async () => {
     const d = makeDeps();
     d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);

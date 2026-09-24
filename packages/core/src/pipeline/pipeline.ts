@@ -860,10 +860,13 @@ export class ArxivPipeline {
         }),
       };
     } catch (e) {
+      // Same class of failure as the later index steps: a cancellation stays
+      // a cancellation, and a storage error can succeed on retry.
+      if (isCancellationError(e)) throw e;
       return {
         kind: "error",
         result: {
-          kind: "failed_permanent",
+          kind: "failed_transient",
           reason: `paper index update failed: ${(e as Error).message}`,
         },
       };
