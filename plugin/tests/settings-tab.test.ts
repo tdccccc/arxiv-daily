@@ -712,11 +712,9 @@ describe("settings tab regressions", () => {
 
   it("does not normalize or persist categories merely while displaying them", () => {
     expect(settingsTabSource).toContain("const categories = arxivCategories(s.arxiv);");
-    expect(settingsTabSource).toContain(
-      "this.plugin.settings.arxiv.categories = normalized;",
-    );
+    expect(settingsTabSource).toContain("arxiv.categories = normalized;");
     expect(settingsTabSource).toMatch(
-      /const apply = async \(\) => \{[\s\S]*?s\.arxiv\.categories = \[tpl\.category\];/,
+      /const apply = async \(\) => \{[\s\S]*?arxiv\.categories = \[tpl\.category\];/,
     );
   });
 });

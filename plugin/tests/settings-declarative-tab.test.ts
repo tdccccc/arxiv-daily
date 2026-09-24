@@ -321,10 +321,10 @@ describe("wired getSettingDefinitions", () => {
       .find(
         (item) => item.type === "list" && item.heading === "Research topics",
       );
-    await topicsList?.addItem?.action();
+    await topicsList?.addItem?.action(document.createElement("button"));
+    await vi.waitFor(() => expect(tab.refreshSettings).toHaveBeenCalledTimes(1));
     expect(settings.arxiv.topics).toHaveLength(1);
     expect(saveSettings).toHaveBeenCalledTimes(1);
-    expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
 
     expect(topicsList?.onReorder).toBeUndefined();
   });
@@ -1530,6 +1530,70 @@ describe("declarative text rows commit when editing ends", () => {
 
     expect(change).not.toHaveBeenCalled();
     expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
+  });
+});
+
+describe("topic and category saves that fail", () => {
+  async function noticesDuring(run: () => Promise<unknown>): Promise<string> {
+    const { Notice } = await import("obsidian");
+    const calls = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
+    calls.length = 0;
+    await run();
+    return calls.map((call) => call.message).join("\n");
+  }
+
+  it("rolls back an added topic and reports", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    const notices = await noticesDuring(() => tab.addTopic());
+
+    expect(settings.arxiv.topics).toEqual([]);
+    expect(notices).toMatch(/disk full/);
+  });
+
+  it("rolls back a deleted topic and reports", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push({ id: "t1", name: "A", tag: "a", description: "A", detail: false });
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    const notices = await noticesDuring(() => tab.deleteTopic(0));
+
+    expect(settings.arxiv.topics.map((topic) => topic.id)).toEqual(["t1"]);
+    expect(notices).toMatch(/disk full/);
+  });
+
+  it("rolls back an added category and reports", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    const notices = await noticesDuring(() => tab.addCategory());
+
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(notices).toMatch(/disk full/);
+  });
+
+  it("reports a failed topic field save", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.topics.push({ id: "t1", name: "A", tag: "a", description: "A", detail: false });
+    const setting = new Setting(tab.containerEl);
+    tab.renderTopicRow(setting, 0);
+    const input = setting.settingEl.querySelector(
+      ".arxiv-daily-settings__topic-description",
+    ) as HTMLTextAreaElement;
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+
+    const notices = await noticesDuring(async () => {
+      input.value = "B";
+      input.dispatchEvent(new Event("input"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(notices).toMatch(/disk full/);
   });
 });
 

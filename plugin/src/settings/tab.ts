@@ -29,6 +29,7 @@ import {
   isCancellationError,
   todayInTz,
   type LogLevel,
+  type PluginSettings,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
 import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
@@ -828,11 +829,51 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     return true;
   }
 
-  public async setArxivCategories(categories: string[]): Promise<void> {
+  /** Returns whether the new categories were saved (a failure is rolled back and reported). */
+  public async setArxivCategories(categories: string[]): Promise<boolean> {
     const normalized = normalizeUniqueCategories(categories);
-    this.plugin.settings.arxiv.categories = normalized;
-    if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
-    await this.plugin.saveSettings();
+    return this.saveArxivEdit("save categories", (arxiv) => {
+      arxiv.categories = normalized;
+      if (normalized[0]) arxiv.category = normalized[0];
+    });
+  }
+
+  /**
+   * Apply a topic/category edit to the live settings and save it. Topics and
+   * categories are edited in place (not through a settings transaction), so
+   * a failed save restores the previous lists, reports, and re-renders.
+   */
+  private async saveArxivEdit(
+    action: string,
+    mutate: (arxiv: PluginSettings["arxiv"]) => void,
+  ): Promise<boolean> {
+    const arxiv = this.plugin.settings.arxiv;
+    const before = {
+      category: arxiv.category,
+      categories: arxiv.categories,
+      topics: [...arxiv.topics],
+    };
+    mutate(arxiv);
+    try {
+      await this.plugin.saveSettings();
+      return true;
+    } catch (error) {
+      arxiv.category = before.category;
+      arxiv.categories = before.categories;
+      arxiv.topics.splice(0, arxiv.topics.length, ...before.topics);
+      this.reportActionError(action, error);
+      this.refreshSettings();
+      return false;
+    }
+  }
+
+  /** Save an in-place topic field edit; a failure is reported, the draft kept. */
+  private async saveTopicField(): Promise<void> {
+    try {
+      await this.plugin.saveSettings();
+    } catch (error) {
+      this.reportActionError("save topic", error);
+    }
   }
 
   /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
@@ -898,10 +939,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Append a category (the first arXiv option not already in the list). */
   public async addCategory(): Promise<void> {
     const categories = arxivCategories(this.plugin.settings.arxiv);
-    await this.setArxivCategories([
+    if (!await this.setArxivCategories([
       ...categories,
       nextCategoryCandidate(categories),
-    ]);
+    ])) return;
     this.refreshSettings();
   }
 
@@ -909,24 +950,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   public async deleteCategory(index: number): Promise<void> {
     const categories = arxivCategories(this.plugin.settings.arxiv);
     if (categories.length <= 1) return;
-    await this.setArxivCategories(categories.filter((_, j) => j !== index));
+    if (!await this.setArxivCategories(categories.filter((_, j) => j !== index))) return;
     this.refreshSettings();
   }
 
   /** Append a blank, expanded topic card. */
   public async addTopic(): Promise<void> {
     const newId = crypto.randomUUID();
-    const topics = this.plugin.settings.arxiv.topics;
-    topics.push({
-      id: newId,
-      name: "",
-      tag: autoTopicTag("", topics, newId),
-      description: "",
-      detail: false,
+    const saved = await this.saveArxivEdit("add topic", ({ topics }) => {
+      topics.push({
+        id: newId,
+        name: "",
+        tag: autoTopicTag("", topics, newId),
+        description: "",
+        detail: false,
+      });
     });
+    if (!saved) return;
     this.expandedTopics.add(newId);
     this.pendingTopicFocusId = newId;
-    await this.plugin.saveSettings();
     this.refreshSettings();
     this.focusPendingTopic();
   }
@@ -945,9 +987,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.pendingTopicDeletionAnchor = this.captureTopicDeletionAnchor(
       topics[index + 1]?.id ?? topics[index - 1]?.id,
     );
-    topics.splice(index, 1);
+    const saved = await this.saveArxivEdit("delete topic", (arxiv) => {
+      arxiv.topics.splice(index, 1);
+    });
+    if (!saved) {
+      this.pendingTopicDeletionAnchor = undefined;
+      return false;
+    }
     this.expandedTopics.delete(topic.id);
-    await this.plugin.saveSettings();
     this.refreshSettings();
     this.restoreTopicDeletionAnchor();
     return true;
@@ -963,14 +1010,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const settings = this.plugin.settings;
     const categories = arxivCategories(settings.arxiv);
     const apply = async () => {
-      settings.arxiv.category = tpl.category;
-      settings.arxiv.categories = [tpl.category];
-      settings.arxiv.topics = tpl.topics.map((t) => ({
-        ...t,
-        id: crypto.randomUUID(),
-      }));
-      await this.plugin.saveSettings();
-      this.refreshSettings();
+      const saved = await this.saveArxivEdit("apply topic template", (arxiv) => {
+        arxiv.category = tpl.category;
+        arxiv.categories = [tpl.category];
+        arxiv.topics.splice(
+          0,
+          arxiv.topics.length,
+          ...tpl.topics.map((t) => ({ ...t, id: crypto.randomUUID() })),
+        );
+      });
+      if (saved) this.refreshSettings();
     };
     const replacesCategories = categoriesWillChange(categories, [tpl.category]);
     if (settings.arxiv.topics.length === 0 && !replacesCategories) {
@@ -2678,14 +2727,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       }
       refreshAutoBadge();
       refreshHeader();
-      await this.plugin.saveSettings();
+      await this.saveTopicField();
       this.refreshSetupGuide();
     };
 
     tagInput.oninput = async () => {
       topic.tag = tagInput.value;
       refreshAutoBadge();
-      await this.plugin.saveSettings();
+      await this.saveTopicField();
       this.refreshSetupGuide();
     };
 
@@ -2714,7 +2763,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     descArea.placeholder = "What papers belong in this topic?";
     descArea.oninput = async () => {
       topic.description = descArea.value;
-      await this.plugin.saveSettings();
+      await this.saveTopicField();
       this.refreshSetupGuide();
     };
 
@@ -2735,7 +2784,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     detailLabel.appendText("Detail report");
     detailCheckbox.onchange = async () => {
       topic.detail = detailCheckbox.checked;
-      await this.plugin.saveSettings();
+      await this.saveTopicField();
       // Refresh the header star indicator without a full re-render.
       star?.remove();
       star = null;
