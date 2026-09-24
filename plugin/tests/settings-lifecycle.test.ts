@@ -342,6 +342,41 @@ describe("plugin settings reload lifecycle", () => {
     expect(scheduler.tickToday).not.toHaveBeenCalled();
   });
 
+  it("returns from enabling with Run today while the run is still going", async () => {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.apiKey = "configured";
+    settings.arxiv.topics.push({
+      id: "topic-1",
+      name: "Language models",
+      tag: "language-models",
+      description: "Language model research",
+      detail: false,
+    });
+    let finishRun!: () => void;
+    const run = new Promise<undefined>((resolve) => { finishRun = () => resolve(undefined); });
+    const scheduler = { start: vi.fn(), stop: vi.fn(), tickToday: vi.fn(() => run) };
+    Object.assign(plugin, {
+      settings,
+      scheduler,
+      progress: { setDisabled: vi.fn() },
+      stateStore: { setSkipped: vi.fn() },
+      logger: { notice: vi.fn(), error: vi.fn() },
+    });
+    vi.spyOn(plugin as any, "chooseScheduleEnableAction").mockResolvedValue("run");
+    plugin.settingsChanges = new SettingsChangeService({
+      settings,
+      persistSettings: vi.fn().mockResolvedValue(undefined),
+      setScheduleEnabled: (enabled) => (plugin as any).applyScheduleEnabledRuntime(enabled),
+    });
+
+    await expect(plugin.setScheduleEnabled(true)).resolves.toBe(true);
+    expect(scheduler.tickToday).toHaveBeenCalledTimes(1);
+    await expect(plugin.setScheduleEnabled(false)).resolves.toBe(true);
+    expect(settings.schedule.enabled).toBe(false);
+    finishRun();
+  });
+
   it("does not stop a running scheduler when disabling persistence fails", async () => {
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
     const settings = structuredClone(DEFAULT_SETTINGS);

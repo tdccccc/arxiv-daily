@@ -2301,14 +2301,22 @@ export default class ArxivDailyPlugin extends Plugin {
           this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
         }
       } else {
-        const result = await this.scheduler.tickToday();
-        if (
-          revision === this.scheduleIntentRevision &&
-          result?.kind === "skipped" &&
-          result.reason === "weekend"
-        ) {
-          this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
-        }
+        // Today's run can take minutes; it reports through the status bar and
+        // notices, so the toggle (and later intents) must not wait for it.
+        void Promise.resolve()
+          .then(() => this.scheduler.tickToday())
+          .then((result) => {
+            if (
+              revision === this.scheduleIntentRevision &&
+              result?.kind === "skipped" &&
+              result.reason === "weekend"
+            ) {
+              this.logger.notice("arXiv Daily: weekend, no update — will check next workday");
+            }
+          })
+          .catch((error: unknown) => {
+            this.logger.error("scheduler: run today after enabling failed", error);
+          });
       }
       return revision === this.scheduleIntentRevision;
     });
