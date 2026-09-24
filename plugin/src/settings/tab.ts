@@ -1196,7 +1196,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    this.sectionHeading(containerEl, "AI model", "llm");
+    this.sectionHeading(containerEl, "LLM", "llm");
 
     // Base URL — always editable, default to DeepSeek
     new Setting(containerEl)
@@ -1366,7 +1366,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── arXiv ────────────────────────────────────────
-    this.sectionHeading(containerEl, "arXiv", "arxiv");
+    this.sectionHeading(containerEl, "arXiv categories", "arxiv");
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
@@ -2148,7 +2148,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.llmReady,
       "Connect AI",
-      "Add an API key, API base URL, and model under AI model.",
+      "Add an API key, API base URL, and model under LLM.",
       "Connect AI",
       () => this.scrollToSection("llm"),
     );
@@ -2156,7 +2156,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.categoriesReady,
       "Choose paper sources",
-      "Select at least one arXiv category under arXiv.",
+      "Select at least one arXiv category under arXiv categories.",
       "Choose sources",
       () => this.scrollToSection("arxiv"),
     );

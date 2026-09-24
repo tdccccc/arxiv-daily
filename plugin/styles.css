@@ -166,6 +166,15 @@
   display: none;
 }
 
+.arxiv-daily-settings__setup-guide-host {
+  display: block;
+}
+
+.arxiv-daily-settings__setup-guide-host .setting-item-info,
+.arxiv-daily-settings__setup-guide-host .setting-item-control {
+  display: none;
+}
+
 .arxiv-daily-settings__email-guide {
   box-sizing: border-box;
   width: 100%;

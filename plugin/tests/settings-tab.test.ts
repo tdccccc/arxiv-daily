@@ -192,8 +192,8 @@ describe("legacy section order", () => {
       .filter((setting) => setting.settingEl.hasAttribute("data-arxiv-daily-section"))
       .map((setting) => setting.nameEl.textContent ?? "");
     expect(headings).toEqual([
-      "AI model",
-      "arXiv",
+      "LLM",
+      "arXiv categories",
       "Research topics",
       "Output & schedule",
       "Personal library",

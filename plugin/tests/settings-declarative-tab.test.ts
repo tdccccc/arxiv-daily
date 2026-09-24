@@ -259,7 +259,6 @@ describe("wired getSettingDefinitions", () => {
       });
     expect(names).toEqual(
       expect.arrayContaining([
-        "Getting started",
         "Enable · Paused",
         "Library",
         "Embedding",
@@ -278,6 +277,37 @@ describe("wired getSettingDefinitions", () => {
     expect(names).not.toContain("Library connection");
     expect(names).not.toContain("Embedding mode");
     expect(names).not.toContain("Use local parser sidecar");
+  });
+
+  it("renders the setup guide as a full-width row without a second title", () => {
+    const { tab } = makeTab();
+    const guideRow = tab.getSettingDefinitions()[0] as Record<string, unknown>;
+    expect(guideRow.name).toBe("");
+    expect(guideRow).toHaveProperty("render");
+    const setting = new Setting(tab.containerEl);
+    renderSetupGuideRow(tab, setting);
+    expect(setting.settingEl.classList).toContain("arxiv-daily-settings__setup-guide-host");
+    expect(setting.settingEl.querySelectorAll(".arxiv-daily-setup")).toHaveLength(1);
+  });
+
+  it("offers category deletion only while more than one category remains", () => {
+    const { tab, settings } = makeTab();
+    const categoriesList = () =>
+      tab.getSettingDefinitions().find(
+        (item) => item.type === "list" && item.heading === "arXiv categories",
+      ) as { onDelete?: unknown } | undefined;
+    settings.arxiv.categories = ["astro-ph"];
+    expect(categoriesList()?.onDelete).toBeUndefined();
+    settings.arxiv.categories = ["astro-ph", "gr-qc"];
+    expect(categoriesList()?.onDelete).toEqual(expect.any(Function));
+  });
+
+  it("names guide sections as they appear on the page", () => {
+    const { tab } = makeTab();
+    const text = tab.createSetupGuide().textContent ?? "";
+    expect(text).toContain("under LLM");
+    expect(text).toContain("under arXiv categories");
+    expect(text).not.toContain("under AI model");
   });
 
   it("routes list mutations and actions to the tab's public methods", async () => {

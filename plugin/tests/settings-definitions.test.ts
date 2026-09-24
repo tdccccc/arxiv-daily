@@ -7,6 +7,7 @@ import {
   writeSettingValue,
 } from "../src/settings/definitions";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { SettingDefinitionItem } from "obsidian";
 
 describe("setting key path mapping", () => {
   it("registers flat keys for every settings section", () => {
@@ -186,11 +187,11 @@ describe("buildSettingDefinitions structure", () => {
 
   it("only includes Getting started while setup is incomplete", () => {
     const host = makeFullHost();
-    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
-      .toBe(true);
+    const isGuideRow = (item: SettingDefinitionItem) =>
+      item.name === "" && "render" in item;
+    expect(buildSettingDefinitions(host).some(isGuideRow)).toBe(true);
     host.showSetupGuide = false;
-    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
-      .toBe(false);
+    expect(buildSettingDefinitions(host).some(isGuideRow)).toBe(false);
   });
 
   it("resolves every declarative control key through readSettingValue", () => {
@@ -210,6 +211,7 @@ describe("buildSettingDefinitions structure", () => {
 
   it("renders categories and topics without drag-to-reorder affordances", () => {
     const host = makeHost();
+    host.plugin.settings.arxiv.categories = ["astro-ph", "gr-qc"];
     const lists = buildSettingDefinitions(host).filter(
       (item) => item.type === "list",
     );

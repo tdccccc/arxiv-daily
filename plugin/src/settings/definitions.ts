@@ -204,7 +204,9 @@ export function buildSettingDefinitions(
   return [
     ...(host.renderSetupGuideRow && host.showSetupGuide
       ? [{
-          name: "Getting started",
+          // The card carries its own "Getting started" title; a row name
+          // would repeat it and squeeze the card into the control column.
+          name: "",
           render: (setting: Setting) => host.renderSetupGuideRow?.(setting),
         } satisfies SettingDefinitionItem]
       : []),
@@ -267,7 +269,10 @@ export function buildSettingDefinitions(
         name: "Add category",
         action: () => void host.addCategory?.(),
       },
-      onDelete: (index) => void host.deleteCategory?.(index),
+      // The last category cannot be removed, so it gets no delete button.
+      ...(categories.length > 1
+        ? { onDelete: (index: number) => void host.deleteCategory?.(index) }
+        : {}),
     },
     {
       type: "list",
