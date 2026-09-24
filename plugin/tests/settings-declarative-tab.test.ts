@@ -1528,6 +1528,18 @@ describe("first report date", () => {
     expect(runForDateNow).toHaveBeenCalledWith("2026-09-23");
   });
 
+  it("refreshes open dashboards once the first report finishes", async () => {
+    const { tab, plugin } = readyTab(recentDates([]));
+    const refreshFromVault = vi.fn(async () => undefined);
+    (plugin as unknown as { app: unknown }).app = {
+      workspace: { getLeavesOfType: vi.fn(() => [{ view: { refreshFromVault } }]) },
+    };
+
+    await tab.generateFirstReport();
+
+    expect(refreshFromVault).toHaveBeenCalledOnce();
+  });
+
   it("falls back to today when the announced days cannot be loaded", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-26T04:00:00Z"));

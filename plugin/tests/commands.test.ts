@@ -379,6 +379,31 @@ describe("registerCommands", () => {
     );
   });
 
+  it("refreshes open dashboards after Run today", async () => {
+    const plugin = makePlugin();
+    const refreshFromVault = vi.fn(async () => undefined);
+    Object.assign(plugin.app.workspace, {
+      getLeavesOfType: vi.fn(() => [{ view: { refreshFromVault } }]),
+    });
+    plugin.settings = {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", detail: false }],
+      },
+    };
+    plugin.scheduler.runForDateNow.mockResolvedValue({ kind: "completed", papersWritten: 2 });
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "run-now");
+
+    command?.callback?.();
+
+    await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
+  });
+
   it("registers and routes personal library direction review through the shared plugin entry", () => {
     const plugin = makePlugin();
     registerCommands(plugin as any);

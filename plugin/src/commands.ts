@@ -79,6 +79,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     notice(`arXiv Daily: running for ${date}…`);
     const result = await plugin.scheduler.runForDateNow(date);
     notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    await refreshOpenDashboardViews(plugin);
   }
 
   async function runAllPending() {
@@ -93,6 +94,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       .map((r) => `${r.date}: ${describeResult(r.result)}`)
       .join("\n");
     notice(`arXiv Daily (lookback):\n${summary}`, 10_000);
+    await refreshOpenDashboardViews(plugin);
   }
 
   async function retryFailedInLookback() {
@@ -104,6 +106,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       return;
     }
     notice(`arXiv Daily retry:\n${describeRunResults(results)}`, 10_000);
+    await refreshOpenDashboardViews(plugin);
   }
 
   function openDatePicker() {
@@ -116,6 +119,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
             notice(`arXiv Daily: running for ${date}…`);
             const result = await plugin.scheduler.runForDateNow(date);
             notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+            await refreshOpenDashboardViews(plugin);
           })(),
           `run for ${date}`,
         );
@@ -135,6 +139,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
             notice(`arXiv Daily: force running for ${date}…`);
             const result = await plugin.scheduler.forceRunForDate(date);
             notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+            await refreshOpenDashboardViews(plugin);
           })(),
           `force run for ${date}`,
         );

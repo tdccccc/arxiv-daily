@@ -40,7 +40,7 @@ import {
 } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
-import { openDashboardView } from "../dashboard/view";
+import { openDashboardView, refreshOpenDashboardViews } from "../dashboard/view";
 import { LlmClient, redactText } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -2397,6 +2397,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
       const result = await this.plugin.scheduler.runForDateNow(date);
       new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+      await refreshOpenDashboardViews(this.plugin).catch((error: unknown) => {
+        this.plugin.logger.warn("settings: dashboard refresh after first report failed", error);
+      });
     } finally {
       this.firstReportRunning = false;
       this.refreshSetupGuide();
