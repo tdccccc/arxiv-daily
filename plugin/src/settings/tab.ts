@@ -2355,6 +2355,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     card.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   }
 
+  /**
+   * The first report should succeed whatever the day: weekends and the hours
+   * before arXiv's announcement have no listing for today, so use the latest
+   * announced day that is not after today. Falls back to today when the
+   * announced days cannot be loaded.
+   */
+  private async latestAnnouncedDate(today: string): Promise<string> {
+    try {
+      await this.plugin.recentDates.refresh();
+    } catch (error) {
+      this.plugin.logger.warn("settings: could not load announced arXiv days", error);
+      return today;
+    }
+    const announced = Array.from(this.plugin.recentDates.snapshot().dates)
+      .filter((date) => date <= today)
+      .sort();
+    return announced.at(-1) ?? today;
+  }
+
   /** Guide step 5: the same path as the Enable toggle (validation + run-today choice). */
   public async enableDailyReports(): Promise<void> {
     await this.plugin.setScheduleEnabled(true);
@@ -2366,11 +2385,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.firstReportRunning = true;
     this.refreshSetupGuide();
     try {
-      const date = formatDate(
+      const today = formatDate(
         todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
       );
+      const date = await this.latestAnnouncedDate(today);
       this.plugin.logger.info(`settings: first report requested for ${date}`);
-      new Notice(`arXiv Daily: running for ${date}…`);
+      new Notice(
+        date === today
+          ? `arXiv Daily: running for ${date}…`
+          : `arXiv Daily: today's papers are not announced yet, so the first report uses the latest announced day, ${date}…`,
+      );
       const result = await this.plugin.scheduler.runForDateNow(date);
       new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     } finally {

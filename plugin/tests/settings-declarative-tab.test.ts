@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
@@ -1467,6 +1467,78 @@ describe("topic tags and blocked first report", () => {
     expect(
       firstReportStep?.querySelector(".arxiv-daily-setup__description")?.textContent,
     ).toMatch(/Duplicate arXiv category: astro-ph/);
+  });
+});
+
+describe("first report date", () => {
+  function readyTab(recentDates: unknown) {
+    const made = makeTab();
+    made.settings.llm.apiKey = "sk-test";
+    made.settings.arxiv.topics.push({
+      id: "t1",
+      name: "Galaxies",
+      tag: "galaxies",
+      description: "Galaxy evolution",
+      detail: false,
+    });
+    const runForDateNow = vi.fn(async () => ({
+      kind: "completed" as const,
+      papersWritten: 1,
+    }));
+    const plugin = made.plugin as unknown as Record<string, unknown>;
+    plugin.scheduler = { runForDateNow };
+    plugin.recentDates = recentDates;
+    (made.plugin.logger as unknown as { info: () => void }).info = vi.fn();
+    vi.spyOn(made.tab, "refreshSetupGuide").mockImplementation(() => {});
+    return { ...made, runForDateNow };
+  }
+
+  function recentDates(dates: string[]) {
+    return {
+      refresh: vi.fn().mockResolvedValue(undefined),
+      snapshot: () => ({ status: "ready", dates: new Set(dates), refreshedAt: 1 }),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses the latest announced day on a weekend", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-26T04:00:00Z")); // Saturday noon in Shanghai
+    const { tab, runForDateNow } = readyTab(
+      recentDates(["2026-09-22", "2026-09-25", "2026-09-24"]),
+    );
+
+    await tab.generateFirstReport();
+
+    expect(runForDateNow).toHaveBeenCalledWith("2026-09-25");
+  });
+
+  it("ignores announced days after today", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-24T04:00:00Z"));
+    const { tab, runForDateNow } = readyTab(
+      recentDates(["2026-09-23", "2026-09-25"]),
+    );
+
+    await tab.generateFirstReport();
+
+    expect(runForDateNow).toHaveBeenCalledWith("2026-09-23");
+  });
+
+  it("falls back to today when the announced days cannot be loaded", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-26T04:00:00Z"));
+    const { tab, runForDateNow } = readyTab({
+      refresh: vi.fn().mockRejectedValue(new Error("offline")),
+      snapshot: () => ({ status: "failed", dates: new Set(), refreshedAt: 1 }),
+    });
+
+    await tab.generateFirstReport();
+
+    expect(runForDateNow).toHaveBeenCalledWith("2026-09-26");
   });
 });
 
