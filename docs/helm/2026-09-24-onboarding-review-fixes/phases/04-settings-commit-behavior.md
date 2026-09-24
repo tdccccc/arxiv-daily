@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T22:05:00+08:00
-updated: 2026-09-24T22:05:00+08:00
-revision: 1
+updated: 2026-09-24T22:40:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ Render rows for output folders and From email/name that validate while typing an
 - Red / baseline signal: tests: typing (`input` events) into Daily reports folder / Paper notes folder / From email / From name rows commits nothing; `change` commits once; an invalid folder draft is marked invalid and not committed — fail today (plain `text` controls, no render rows)
 - Green check: focused vitest in `tests/settings-declarative-tab.test.ts`, `tests/settings-definitions.test.ts`
 - regression checks: `cd plugin && npm run typecheck && npm test`; real Obsidian probe `textcontrol` shows zero commits during typing
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — sidecar address can move (F12)
 
@@ -38,7 +38,7 @@ Render rows for output folders and From email/name that validate while typing an
 - Red / baseline signal: test: with the sidecar enabled, changing the capability URL to port 5002 saves both URLs on 5002 — fails today (same-origin rejection)
 - Green check: focused vitest
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — legacy text fields stop acting per keystroke (F13)
 
@@ -47,7 +47,7 @@ Render rows for output folders and From email/name that validate while typing an
 - Red / baseline signal: make the `TextComponent` mock fire `onChange` on `input` like Obsidian; tests: typing into the legacy custom category, embedding base URL/model, sidecar URLs does not save or re-render until `change`; a rejected legacy sidecar toggle restores the toggle and reports instead of an unhandled rejection — fail today
 - Green check: focused vitest in `tests/settings-tab.test.ts`
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — model can be typed, Get models only suggests (F14, C3)
 
@@ -56,7 +56,7 @@ Render rows for output folders and From email/name that validate while typing an
 - Red / baseline signal: tests: the model row is a text input that commits a typed model on change; Get models with a list lacking the current model keeps it and offers the list as suggestions — fail today
 - Green check: focused vitest in both settings test files
 - regression checks: `cd plugin && npm test`; guide "Connect AI" still focuses the model field when only the model is missing
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 5 — duplicate category choice is refused visibly (F16)
 
@@ -65,7 +65,7 @@ Render rows for output folders and From email/name that validate while typing an
 - Red / baseline signal: test: choosing another row's category shows a notice, keeps both rows and restores the select — fails today (row silently disappears)
 - Green check: focused vitest
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 

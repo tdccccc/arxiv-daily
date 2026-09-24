@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-24T20:50:00+08:00
-updated: 2026-09-24T22:05:00+08:00
-revision: 4
+updated: 2026-09-24T22:40:00+08:00
+revision: 5
 owner: claude-main-session-2026-09-24
 
 ## Intent
@@ -42,8 +42,8 @@ daily schedule without dead ends.
 1. P1 — 1.13+ guide buttons reach and focus their section; topic edits keep focus after setup (F1, F2) — status: done
 2. P2 — Guide tells the truth: unique topic tags, visible blocking reasons, schedule step, busy state, copy, full-width card, last-category delete (F4, F10, F7, F6, F8, F9) — status: done
 3. P3 — First report uses the latest announced date; runs refresh open dashboards (F3, F18) — status: done
-4. P4 — Settings controls commit once and consistently (F11, F12, F13, F14, F16) — status: active
-5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: pending
+4. P4 — Settings controls commit once and consistently (F11, F12, F13, F14, F16) — status: done
+5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: active
 6. P6 — Remaining low-priority findings fixed or waived (C1, C4, F15, F17) — status: pending
 
 ## Decisions
