@@ -1379,6 +1379,47 @@ describe("declarative topic cards", () => {
   });
 });
 
+describe("declarative setup guide refresh after setup", () => {
+  function completeSetup() {
+    const made = makeTab();
+    made.settings.llm.apiKey = "sk-test";
+    made.settings.arxiv.topics.push({
+      id: "t1",
+      name: "Galaxies",
+      tag: "galaxies",
+      description: "Galaxy evolution",
+      detail: false,
+    });
+    (made.plugin as unknown as { stateStore: unknown }).stateStore = {
+      snapshot: () => ({
+        "2026-09-23": { status: "completed", lastAttempt: 1, attempts: 1 },
+      }),
+    };
+    return made;
+  }
+
+  it("leaves the page alone while the guide stays hidden", () => {
+    const { tab, settings } = completeSetup();
+    const refresh = vi.spyOn(tab, "refreshSettings");
+    expect(tab.shouldShowSetupGuide()).toBe(false);
+
+    settings.arxiv.topics[0]!.name = "Galaxies and clusters";
+    tab.refreshSetupGuide();
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("re-renders once when the guide has to come back", () => {
+    const { tab, settings } = completeSetup();
+    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+
+    settings.arxiv.topics[0]!.description = "";
+    tab.refreshSetupGuide();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("declarative setup guide actions", () => {
   /** A rendered 1.13 group: Obsidian puts the definition's `cls` on it. */
   function renderGroup(tab: ArxivDailySettingTab, cls: string): HTMLElement {

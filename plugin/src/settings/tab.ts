@@ -2048,7 +2048,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       declarativeRows.renderSetupGuideRow(this, setting);
       return;
     }
-    this.refreshSettings();
+    // Only a guide that has to reappear needs the full update; re-rendering
+    // for every keystroke in a topic card would replace the focused input.
+    if (this.shouldShowSetupGuide()) this.refreshSettings();
   }
 
   public refreshSetupGuide(): void {
