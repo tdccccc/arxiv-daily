@@ -249,6 +249,21 @@ describe("legacy embedding rows", () => {
   });
 });
 
+describe("legacy reasoning effort", () => {
+  it("shows Thinking mode on after choosing an effort turns it on", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.llm.thinkingMode = false;
+    const rows = renderLegacySettings(tab);
+    const thinking = componentOf(rows.get("Thinking mode"), ToggleComponent as never) as ToggleComponent;
+    const effort = componentOf(rows.get("Reasoning effort"), DropdownComponent as never) as DropdownComponent;
+
+    await effort.trigger("high");
+
+    expect(settings.llm.thinkingMode).toBe(true);
+    expect(thinking.value).toBe(true);
+  });
+});
+
 describe("legacy model field", () => {
   it("saves a typed model on change and restores it when persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));

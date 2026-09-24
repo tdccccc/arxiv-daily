@@ -1331,11 +1331,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         ? "Let the model spend extra effort on harder questions (DeepSeek reasoning)."
         : "Let the model spend extra effort on harder questions when the provider supports it.";
 
+    let thinkingToggle: { setValue(value: boolean): unknown } | undefined;
     new Setting(containerEl)
       .setName("Thinking mode")
       .setDesc(thinkingDesc)
       .addToggle((t) =>
-        t.setValue(s.llm.thinkingMode).onChange(async (v) => {
+        (thinkingToggle = t).setValue(s.llm.thinkingMode).onChange(async (v) => {
           await this.saveLegacyControl(
             t,
             "save thinking mode",
@@ -1367,7 +1368,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }
         d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0]!)
           .onChange(async (v) => {
-            await this.saveLegacyControl(
+            // Choosing an effort also turns thinking on; keep that toggle in step.
+            const saved = await this.saveLegacyControl(
               d,
               "save reasoning effort",
               SETTING_KEYS.llm.reasoningEffort,
@@ -1379,6 +1381,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
                 d.setValue(typeof value === "string" ? value : efforts[0]!);
               },
             );
+            if (saved) thinkingToggle?.setValue(this.plugin.settings.llm.thinkingMode);
           });
       })
       .addText((t) => {
