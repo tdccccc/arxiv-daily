@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T21:10:00+08:00
-updated: 2026-09-24T21:10:00+08:00
-revision: 1
+updated: 2026-09-24T21:45:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ Change `getSetupStatus` so the topic step matches what `validateFilterConfig` ch
 - Red / baseline signal: tests: adding a topic after deleting the first one never duplicates an existing tag; typing a name into a new topic derives the tag from it, with a suffix on collision; `getSetupStatus` marks topics not ready when tags collide; the guide's step 4 shows the `validateFilterConfig` reasons when steps 1–3 are done but the run is blocked — all fail today
 - Green check: `cd plugin && npx vitest run tests/onboarding.test.ts tests/settings-declarative-tab.test.ts`
 - regression checks: `cd plugin && npm run typecheck && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — step 5 turns on daily runs (F10)
 
@@ -37,7 +37,7 @@ Change `getSetupStatus` so the topic step matches what `validateFilterConfig` ch
 - Red / baseline signal: tests: `shouldRenderSetupGuide` stays true while the schedule is off even after a completed report; the guide lists a fifth step whose button calls `plugin.setScheduleEnabled(true)` and refreshes the guide; the step is complete when the schedule is on — fail today
 - Green check: `cd plugin && npx vitest run tests/onboarding.test.ts tests/settings-declarative-tab.test.ts tests/settings-tab.test.ts`
 - regression checks: `cd plugin && npm test`; dashboard empty-state copy still accurate (`tests/dashboard-view.test.ts`)
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — first report busy state (F7)
 
@@ -46,7 +46,7 @@ Change `getSetupStatus` so the topic step matches what `validateFilterConfig` ch
 - Red / baseline signal: test: while `generateFirstReport` is pending the guide (including after a guide re-render) shows a disabled "Generating…" button and a second click does not start another run — fails today
 - Green check: focused vitest on the new test
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — copy, full-width card, last-category delete (F6, F8, F9)
 
@@ -55,7 +55,7 @@ Change `getSetupStatus` so the topic step matches what `validateFilterConfig` ch
 - Red / baseline signal: tests: guide copy names "LLM" and "arXiv categories"; the declarative guide row has an empty name and the host class; the category list has no `onDelete` when only one category remains — fail today
 - Green check: focused vitest
 - regression checks: `cd plugin && npm test`; real Obsidian screenshot of the guide shows one "Getting started" title and a full-width card
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
