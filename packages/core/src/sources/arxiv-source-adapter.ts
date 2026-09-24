@@ -101,7 +101,9 @@ export class ArxivSourceAdapter implements SourceAdapter {
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
         failures.push({
-          kind: "failed_transient",
+          // /recent only ever moves forward: a date older than its oldest
+          // day can never appear again, so retrying it cannot succeed.
+          kind: bounds && dateStr < bounds.oldest ? "failed_permanent" : "failed_transient",
           reason: missingRecentDateReason(dateStr, category, buckets, bounds),
         });
         logger.warn(
@@ -413,6 +415,12 @@ function missingRecentDateReason(
     );
   }
   const have = buckets.map((b) => b.announceDate).join(",");
+  if (bounds && dateStr < bounds.oldest) {
+    return (
+      `date ${dateStr} is older than the oldest ${category} /recent bucket ` +
+      `${bounds.oldest}; arXiv no longer lists it there (have: ${have})`
+    );
+  }
   return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
 }
 

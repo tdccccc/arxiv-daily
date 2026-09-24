@@ -214,6 +214,36 @@ describe("ArxivSourceAdapter", () => {
     expect(fetcher.fetchMetadataByIds).toHaveBeenCalledTimes(1);
   });
 
+  it("fails permanently for a date that has scrolled out of /recent", async () => {
+    const dates = parseRecent(recentHtml, markupParser)
+      .map((bucket) => bucket.announceDate)
+      .sort();
+    const shift = (date: string, days: number) => {
+      const next = new Date(`${date}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + days);
+      return next.toISOString().slice(0, 10);
+    };
+    const adapter = new ArxivSourceAdapter({
+      fetcher: {
+        fetchRecent: vi.fn().mockResolvedValue(recentHtml),
+        fetchMetadataByIds: vi.fn(),
+      } as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["astro-ph"],
+    });
+
+    await expect(adapter.listForDate(shift(dates[0]!, -7))).resolves.toMatchObject({
+      kind: "error",
+      failureKind: "failed_permanent",
+    });
+    await expect(adapter.listForDate(shift(dates.at(-1)!, 1))).resolves.toMatchObject({
+      kind: "error",
+      failureKind: "failed_transient",
+    });
+  });
+
   it("makes a mixed transient/permanent category failure transient", async () => {
     const fetcher = {
       fetchRecent: vi.fn()

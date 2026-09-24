@@ -281,7 +281,7 @@ describe("ArxivPipeline", () => {
     );
   });
 
-  it("returns failed_transient when /recent misses the date", async () => {
+  it("fails permanently when the date is older than /recent", async () => {
     const d = makeDeps();
     d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);
     const pipeline = new ArxivPipeline({
@@ -298,8 +298,8 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
     const result = await pipeline.runForDate("1999-01-01");
-    expect(result.kind).toBe("failed_transient");
-    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(result.kind).toBe("failed_permanent");
+    expect((result as any).reason).toContain("older than the oldest astro-ph /recent bucket");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
   });
 
@@ -673,8 +673,8 @@ describe("ArxivPipeline", () => {
 
     const result = await pipeline.runForDate("2026-06-09");
 
-    expect(result.kind).toBe("failed_transient");
-    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(result.kind).toBe("failed_permanent");
+    expect((result as any).reason).toContain("older than the oldest astro-ph /recent bucket");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
