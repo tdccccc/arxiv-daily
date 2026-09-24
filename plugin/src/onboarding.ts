@@ -30,6 +30,7 @@ export function getSetupStatus(
       settings.llm.model.trim(),
   );
   const categoriesReady = arxivCategories(settings.arxiv).length > 0;
+  const topicTags = settings.arxiv.topics.map((topic) => topic.tag.trim());
   const topicsReady =
     settings.arxiv.topics.length > 0 &&
     settings.arxiv.topics.every(
@@ -37,7 +38,8 @@ export function getSetupStatus(
         topic.name.trim() &&
         topic.tag.trim() &&
         topic.description.trim(),
-    );
+    ) &&
+    new Set(topicTags).size === topicTags.length;
   const validation = validateFilterConfig(settings);
   const schedulerValidation = validateSchedulerConfig(settings);
   const latestCompletedReportDate = Object.entries(runState)

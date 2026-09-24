@@ -914,7 +914,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     topics.push({
       id: newId,
       name: "",
-      tag: `topic-${topics.length + 1}`,
+      tag: autoTopicTag("", topics, newId),
       description: "",
       detail: false,
     });
@@ -2171,7 +2171,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Generate your first report",
       status.readyToRun
         ? "Your configuration is ready. Generate a report to finish setup."
-        : "Complete the earlier configuration steps before generating a report.",
+        : status.llmReady && status.categoriesReady && status.topicsReady
+          ? `Fix before generating: ${status.reasons.join("; ")}.`
+          : "Complete the earlier configuration steps before generating a report.",
       status.readyToRun ? "Generate first report" : undefined,
       status.readyToRun
         ? () => {
@@ -2563,7 +2565,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           text: "Auto",
         });
     const refreshAutoBadge = () => {
-      autoBadge?.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
+      autoBadge?.toggleClass(
+        "is-hidden",
+        topic.tag !== autoTopicTag(topic.name, topics, topic.id),
+      );
     };
     refreshAutoBadge();
 
@@ -2574,11 +2579,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     nameInput.oninput = async () => {
-      const wasAuto = topic.tag === slugify(topic.name);
+      const wasAuto = topic.tag === autoTopicTag(topic.name, topics, topic.id);
       topic.name = nameInput.value;
       if (wasAuto) {
-        const derived = slugify(topic.name);
-        topic.tag = derived || `topic-${index + 1}`;
+        topic.tag = autoTopicTag(topic.name, topics, topic.id);
         tagInput.value = topic.tag;
       }
       refreshAutoBadge();
@@ -2751,6 +2755,27 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         t.inputEl.addClass("arxiv-daily-settings__textarea");
       });
   }
+}
+
+/**
+ * Tag a topic gets from its name: the slug, or `topic-N` when the name has
+ * no usable characters, with a numeric suffix until no other topic has it.
+ */
+export function autoTopicTag(name: string, topics: readonly Topic[], selfId: string): string {
+  const taken = new Set(
+    topics.filter((topic) => topic.id !== selfId).map((topic) => topic.tag.trim()),
+  );
+  const base = slugify(name);
+  if (!base) {
+    const position = topics.findIndex((topic) => topic.id === selfId);
+    let n = (position >= 0 ? position : topics.length) + 1;
+    while (taken.has(`topic-${n}`)) n += 1;
+    return `topic-${n}`;
+  }
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
 }
 
 function stableDomId(value: string): string {

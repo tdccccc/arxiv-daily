@@ -126,4 +126,23 @@ describe("getSetupStatus", () => {
     expect(status.reasons.join("; ")).toMatch(/tag is empty/i);
     expect(status.reasons.join("; ")).toMatch(/description is empty/i);
   });
+
+  it("does not call topics ready when two topics share a tag", () => {
+    const topic = (id: string, name: string) => ({
+      id,
+      name,
+      tag: "shared",
+      description: `${name} papers`,
+      detail: false,
+    });
+    const status = getSetupStatus(
+      makeSettings({
+        llm: { apiKey: "sk-test" },
+        arxiv: { topics: [topic("a", "First"), topic("b", "Second")] },
+      }),
+    );
+
+    expect(status.topicsReady).toBe(false);
+    expect(status.reasons.join("; ")).toMatch(/duplicate topic tag/i);
+  });
 });

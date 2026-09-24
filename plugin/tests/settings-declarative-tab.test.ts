@@ -1379,6 +1379,67 @@ describe("declarative topic cards", () => {
   });
 });
 
+describe("topic tags and blocked first report", () => {
+  it("never gives a new topic a tag another topic already has", async () => {
+    const { tab, settings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    vi.spyOn(tab, "confirmReplace").mockResolvedValue(true);
+    await tab.addTopic();
+    await tab.addTopic();
+    await tab.deleteTopic(0);
+
+    await tab.addTopic();
+
+    const tags = settings.arxiv.topics.map((topic) => topic.tag);
+    expect(new Set(tags).size).toBe(tags.length);
+  });
+
+  it("derives a new topic's tag from its name and avoids collisions", async () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.topics.push({
+      id: "existing",
+      name: "Dark matter",
+      tag: "dark-matter",
+      description: "Existing",
+      detail: false,
+    });
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    await tab.addTopic();
+    const setting = new Setting(tab.containerEl);
+    tab.renderTopicRow(setting, 1);
+    const name = setting.settingEl.querySelector(
+      ".arxiv-daily-settings__topic-name-input",
+    ) as HTMLInputElement;
+
+    name.value = "Dark matter";
+    name.dispatchEvent(new Event("input"));
+
+    expect(settings.arxiv.topics[1]!.tag).toBe("dark-matter-2");
+  });
+
+  it("names what blocks the first report when the earlier steps look done", () => {
+    const { tab, settings } = makeTab();
+    settings.llm.apiKey = "sk-test";
+    settings.arxiv.topics.push({
+      id: "t1",
+      name: "Galaxies",
+      tag: "galaxies",
+      description: "Galaxy evolution",
+      detail: false,
+    });
+    settings.arxiv.categories = ["astro-ph", "astro-ph"];
+
+    const guide = tab.createSetupGuide();
+    const firstReportStep = Array.from(
+      guide.querySelectorAll(".arxiv-daily-setup__item"),
+    ).find((item) => item.textContent?.includes("Generate your first report"));
+
+    expect(
+      firstReportStep?.querySelector(".arxiv-daily-setup__description")?.textContent,
+    ).toMatch(/Duplicate arXiv category: astro-ph/);
+  });
+});
+
 describe("declarative setup guide refresh after setup", () => {
   function completeSetup() {
     const made = makeTab();
