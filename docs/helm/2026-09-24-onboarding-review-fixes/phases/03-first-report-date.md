@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T21:45:00+08:00
-updated: 2026-09-24T21:45:00+08:00
-revision: 1
+updated: 2026-09-24T22:05:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ Pick the first-report date from the recent-dates snapshot (latest date ≤ today
 - Red / baseline signal: tests with the clock on a Saturday: recent dates {Thu, Fri} → `runForDateNow` gets Friday; recent refresh rejects → today is used; dates after today are ignored — first fails today (today is used)
 - Green check: focused vitest in `plugin/tests/settings-declarative-tab.test.ts`
 - regression checks: `cd plugin && npm run typecheck && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — runs refresh open dashboards (F18)
 
@@ -36,7 +36,7 @@ Pick the first-report date from the recent-dates snapshot (latest date ≤ today
 - Red / baseline signal: tests: after `generateFirstReport` and after the "Run today" command, open dashboard leaves get `refreshFromVault` — fail today
 - Green check: focused vitest (`tests/settings-declarative-tab.test.ts`, `tests/commands.test.ts`)
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
