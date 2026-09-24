@@ -142,24 +142,40 @@ export function renderReasoningEffortRow(
   });
 }
 
+let modelSuggestionListCount = 0;
+
+/**
+ * Model name: typed freely and saved when editing ends. Get models only
+ * fills the suggestion list — providers without a model list still work,
+ * and a current model missing from the list is kept. Shared by display().
+ */
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  const select = setting.controlEl.createEl("select", {
-    cls: "arxiv-daily-settings__model-select",
+  modelSuggestionListCount += 1;
+  const listId = `arxiv-daily-model-options-${modelSuggestionListCount}`;
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__model-input",
+    type: "text",
+    attr: { list: listId, placeholder: "Model name", "aria-label": "Model" },
   });
-  const current = tab.plugin.settings.llm.model;
-  if (current) select.createEl("option", { value: current, text: current });
-  select.value = current;
-  select.addEventListener("change", () => {
-    const next = select.value;
-    const revision = tab.beginControlChange(select);
+  input.value = tab.plugin.settings.llm.model;
+  const suggestions = setting.controlEl.createEl("datalist");
+  suggestions.id = listId;
+  input.addEventListener("change", () => {
+    const next = input.value.trim();
+    if (next === tab.plugin.settings.llm.model) {
+      input.value = next;
+      return;
+    }
+    const revision = tab.beginControlChange(input);
     tab.runAction("save model", async () => {
       try {
         await tab.changeSettingValue("llm.model", next);
-        tab.refreshDeclarativeSetupGuide();
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+        tab.refreshSetupGuide();
       } catch (error) {
-        if (tab.isCurrentControlChange(select, revision)) {
-          select.value = tab.restoreCurrentStringControlValue(error, "llm.model");
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, "llm.model");
         }
         throw error;
       }
@@ -181,9 +197,19 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
+      suggestions.replaceChildren();
+      for (const model of models) {
+        suggestions.createEl("option", { value: model });
+      }
       if (models.length > 0) {
-        tab.showModelDropdown(models, setting.settingEl);
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
+        const current = tab.plugin.settings.llm.model;
+        if (current && !models.includes(current)) {
+          new Notice(
+            `arXiv Daily: the provider did not list "${current}". It is kept; type or pick another model if needed.`,
+            10_000,
+          );
+        }
       } else {
         new Notice(modelFetchNoticeMessage({ kind: "empty" }));
       }

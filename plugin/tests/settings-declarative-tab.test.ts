@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MenuItem, Setting, ToggleComponent, type App } from "obsidian";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, LlmClient } from "@arxiv-daily/core";
 import type ArxivDailyPlugin from "../main";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
@@ -1530,6 +1530,53 @@ describe("declarative text rows commit when editing ends", () => {
 
     expect(change).not.toHaveBeenCalled();
     expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
+  });
+});
+
+describe("model field", () => {
+  it("accepts a typed model name and saves it when editing ends", async () => {
+    const { tab, settings } = makeTab();
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const input = setting.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    );
+    expect(input).not.toBeNull();
+
+    input!.value = "my-";
+    input!.dispatchEvent(new Event("input"));
+    input!.value = "my-model";
+    input!.dispatchEvent(new Event("input"));
+    expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
+    input!.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.llm.model).toBe("my-model"));
+  });
+
+  it("offers fetched models as suggestions without replacing the current one", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    document.body.appendChild(tab.containerEl);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+
+    button.click();
+
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      const options = Array.from(
+        setting.settingEl.querySelectorAll<HTMLOptionElement>("datalist option"),
+      ).map((option) => option.value);
+      expect(options).toEqual(["provider-a", "provider-b"]);
+    });
+    expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
+    fetchModels.mockRestore();
+    tab.containerEl.remove();
   });
 });
 

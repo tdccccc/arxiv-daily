@@ -249,6 +249,25 @@ describe("legacy embedding rows", () => {
   });
 });
 
+describe("legacy model field", () => {
+  it("saves a typed model on change and restores it when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const rows = renderLegacySettings(tab);
+    const input = rows.get("Model")?.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    );
+    expect(input).toBeTruthy();
+
+    input!.value = "candidate-model";
+    input!.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(input!.value).toBe(DEFAULT_SETTINGS.llm.model));
+    expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
+  });
+});
+
 describe("legacy text fields act when editing ends", () => {
   function typeInto(input: HTMLInputElement, text: string): void {
     for (const character of text) {
@@ -327,7 +346,6 @@ describe("legacy text fields act when editing ends", () => {
 describe("legacy transactional renderers", () => {
   it.each([
     ["API base URL", TextComponent, "https://candidate.example/v1", "llm", "baseUrl"],
-    ["Model", DropdownComponent, "candidate-model", "llm", "model"],
     ["Thinking mode", ToggleComponent, false, "llm", "thinkingMode"],
     ["Reasoning effort", DropdownComponent, "high", "llm", "reasoningEffort"],
     ["Link style", DropdownComponent, "relative", "output", "linkStyle"],
@@ -552,7 +570,6 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('this.runAction("update daily path"');
     expect(settingsTabSource).toContain('this.runAction("generate first report"');
     expect(settingsTabSource).toContain('this.runAction("open dashboard"');
-    expect(settingsTabSource).toContain('this.runAction("save selected model"');
     expect(settingsTabSource).toContain('this.reportActionError("save run window"');
   });
 
@@ -632,15 +649,6 @@ describe("settings tab regressions", () => {
     expect(apiKeyBody).not.toContain('text: configured ? "Replace" : "Save"');
     expect(apiKeyBody).not.toContain('text: "Cancel"');
     expect(apiKeyBody).not.toContain('text: "Clear"');
-  });
-
-  it("does not register a second change listener when models are fetched", () => {
-    const showModelDropdownBody = settingsTabSource.match(
-      /public showModelDropdown\([\s\S]*?\n  private textareaSetting/,
-    )?.[0];
-
-    expect(showModelDropdownBody).toBeDefined();
-    expect(showModelDropdownBody).not.toContain('select.addEventListener("change"');
   });
 
   it("warns that quick-start templates replace categories", () => {

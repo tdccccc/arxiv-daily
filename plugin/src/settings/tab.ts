@@ -41,7 +41,7 @@ import {
 import { arxivCategories } from "@arxiv-daily/core";
 import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
 import { openDashboardView, refreshOpenDashboardViews } from "../dashboard/view";
-import { LlmClient, redactText } from "@arxiv-daily/core";
+import { redactText } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_REPO_URL,
@@ -1269,57 +1269,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.renderApiKeySetting(containerEl);
 
-    // Model — Get Models button + dropdown
+    // Model — typed name with Get models suggestions (shared with 1.13+)
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Choose a model, or click get models to load the list from your provider.");
-
-    // Get models button
-    modelSetting.addButton((b) => {
-      b.setButtonText("Get models");
-      b.onClick(async () => {
-        b.setButtonText("Fetching…");
-        b.setDisabled(true);
-        try {
-          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient());
-          const models = await client.fetchModels();
-          if (models.length > 0) {
-            this.showModelDropdown(models, modelSetting.settingEl);
-            new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
-          } else {
-            new Notice(modelFetchNoticeMessage({ kind: "empty" }));
-          }
-        } catch (e) {
-          new Notice(modelFetchNoticeMessage(
-            { kind: "error", message: e instanceof Error ? e.message : String(e) },
-            [this.plugin.settings.llm.apiKey],
-          ));
-        } finally {
-          b.setButtonText("Get models");
-          b.setDisabled(false);
-        }
-      });
-    });
-
-    // Model dropdown (empty by default, populated by Get models)
-    modelSetting.addDropdown((d) => {
-      d.selectEl.addClass("arxiv-daily-settings__model-select");
-      if (s.llm.model) {
-        d.addOption(s.llm.model, s.llm.model);
-      }
-      d.setValue(s.llm.model).onChange(async (v) => {
-        const saved = await this.saveLegacyControl(
-          d,
-          "save model",
-          SETTING_KEYS.llm.model,
-          [{ key: SETTING_KEYS.llm.model, value: v }],
-          (value) => {
-            d.setValue(typeof value === "string" ? value : "");
-          },
-        );
-        if (saved) this.refreshSetupGuide();
-      });
-    });
+      .setDesc("Type a model name, or click get models to see what your provider offers.");
+    declarativeRows.renderModelRow(this, modelSetting);
 
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
@@ -2388,7 +2342,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       const baseUrl = query(".arxiv-daily-settings__llm-url-input");
       if (baseUrl) return baseUrl;
     }
-    return query(".arxiv-daily-settings__model-select");
+    return query(".arxiv-daily-settings__model-input");
   }
 
   /** Open the first topic missing a field and focus that field; add one if there are none. */
@@ -2835,40 +2789,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       modal.onClose = () => finish(false);
       modal.open();
     });
-  }
-
-  public showModelDropdown(models: string[], container: HTMLElement): void {
-    // Find the existing dropdown in the model setting
-    const modelSetting = container.closest(".setting-item");
-    if (!modelSetting) return;
-
-    const select = modelSetting.querySelector("select") as HTMLSelectElement;
-    if (!select) return;
-
-    // Clear existing options without parsing HTML.
-    select.replaceChildren();
-
-    // Add new options
-    for (const model of models) {
-      select.createEl("option", { value: model, text: model });
-    }
-
-    // Pre-select current model if in list
-    const currentModel = this.plugin.settings.llm.model;
-    if (models.includes(currentModel)) {
-      select.value = currentModel;
-    } else if (models.length > 0) {
-      // Select first model if current not in list
-      select.value = models[0]!;
-      this.runAction("save selected model", async () => {
-        try {
-          await this.changeSettingValue("llm.model", models[0]!);
-        } catch (error) {
-          select.value = this.restoreStringControlValue(error, "llm.model");
-          throw error;
-        }
-      });
-    }
   }
 
   private textareaSetting(
