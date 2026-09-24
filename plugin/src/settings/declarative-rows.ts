@@ -795,8 +795,10 @@ function renderPdfParserSidecarUrlRow(
     const revision = tab.beginControlChange(input);
     tab.runAction("save local parser sidecar URL", async () => {
       try {
-        await tab.changeSettingValue(key, next);
+        const changes = tab.sidecarUrlChanges(key, next);
+        await tab.changeSettingValues(changes);
         if (tab.isCurrentControlChange(input, revision)) input.value = next;
+        if (changes.length > 1) tab.refreshSettings();
       } catch (error) {
         if (tab.isCurrentControlChange(input, revision)) {
           input.value = tab.restoreCurrentStringControlValue(error, key);

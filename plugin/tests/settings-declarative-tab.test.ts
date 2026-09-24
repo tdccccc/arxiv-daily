@@ -25,6 +25,7 @@ import {
   renderHostedTokenRow,
   renderLlmBaseUrlRow,
   renderModelRow,
+  renderPdfParserSidecarCapabilitiesUrlRow,
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderScheduleEnabledRow,
@@ -1529,6 +1530,26 @@ describe("declarative text rows commit when editing ends", () => {
 
     expect(change).not.toHaveBeenCalled();
     expect(settings.output.dailyDir).toBe(DEFAULT_SETTINGS.output.dailyDir);
+  });
+});
+
+describe("local parser sidecar address", () => {
+  it("moves both endpoints when one moves to another port", async () => {
+    const { tab, settings } = makeTab();
+    settings.pdfParserSidecar.enabled = true;
+    const setting = new Setting(tab.containerEl);
+    renderPdfParserSidecarCapabilitiesUrlRow(tab, setting);
+    const input = setting.controlEl.querySelector("input")!;
+
+    input.value = "http://127.0.0.1:5002/v1/capabilities";
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => {
+      expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
+        "http://127.0.0.1:5002/v1/capabilities",
+      );
+      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse");
+    });
   });
 });
 
