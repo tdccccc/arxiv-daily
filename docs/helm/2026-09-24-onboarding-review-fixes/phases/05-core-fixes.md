@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T22:40:00+08:00
-updated: 2026-09-24T22:40:00+08:00
-revision: 1
+updated: 2026-09-24T23:05:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ Small, local fixes in `packages/core`, each with a core test written first. The 
 - Red / baseline signal: `packages/core/tests/markdown-writer.test.ts`: a topic tag `AI: Robotics` or `ml,dl` produces frontmatter that a YAML parser reads back as the same `primary_topic` and tag — fails today (unquoted)
 - Green check: `cd packages/core && npx vitest run tests/markdown-writer.test.ts`
 - regression checks: core markdown / pipeline tests; slug tags render byte-identically
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — refreshing frontmatter keeps user properties (review F21)
 
@@ -37,7 +37,7 @@ Small, local fixes in `packages/core`, each with a core test written first. The 
 - Red / baseline signal: a paper note with extra keys (`rating: 5`, block `aliases`) and an extra tag keeps them after `refreshPaperNoteFrontmatter` — fails today (whole block replaced)
 - Green check: focused vitest
 - regression checks: existing `refreshPaperNoteFrontmatter` and manual-fetch tests
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — dates older than the recent listing fail permanently (review F22)
 
@@ -46,7 +46,7 @@ Small, local fixes in `packages/core`, each with a core test written first. The 
 - Red / baseline signal: `listForDate` for a date older than the oldest `/recent` bucket returns `failed_permanent`; a date newer than the newest stays `failed_transient` — first fails today
 - Green check: focused vitest on the source adapter tests
 - regression checks: core scheduler / pipeline tests (`NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1` in packages/core)
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
