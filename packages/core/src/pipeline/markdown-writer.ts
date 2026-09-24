@@ -334,6 +334,18 @@ function escapeYaml(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+/**
+ * A frontmatter value that is plain when it is an ordinary slug — so the
+ * usual `photo-z` output is unchanged — and double-quoted otherwise. Topic
+ * tags are user text and may contain `:`, `,`, `[` or `#`, which would
+ * otherwise change or break the YAML.
+ */
+function yamlScalar(value: string): string {
+  const plain = /^\p{L}[\p{L}\p{N}_./-]*$/u.test(value) &&
+    !/^(?:true|false|null|yes|no|on|off|y|n)$/i.test(value);
+  return plain ? value : `"${escapeYaml(value)}"`;
+}
+
 function paperFrontmatter(meta: {
   title: string;
   authors: string;
@@ -353,9 +365,9 @@ function paperFrontmatter(meta: {
     `title: "${escapeYaml(meta.title)}"\n` +
     `authors: "${escapeYaml(meta.authors)}"\n` +
     `arxiv_id: "${meta.arxivId}"\n` +
-    `primary_topic: ${meta.primaryTopic}\n` +
+    `primary_topic: ${yamlScalar(meta.primaryTopic)}\n` +
     published +
-    `tags: [${meta.tags.join(", ")}]\n` +
+    `tags: [${meta.tags.map(yamlScalar).join(", ")}]\n` +
     `---\n\n`
   );
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
@@ -558,6 +559,46 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).toContain("- **arXiv**: [2605.06587]");
     expect(written).toContain("## Notes");
   });
+
+  it.each(["AI: Robotics", "ml,dl", "[draft]", "#hash"])(
+    "keeps frontmatter valid YAML for the topic tag %s",
+    async (tag) => {
+      const { files, writer } = makeWriter();
+      await writer.writePaperNote({
+        arxivId: "2605.06587",
+        paperKey: "arxiv:2605.06587",
+        externalId: "2605.06587",
+        source: "arxiv",
+        title: "T",
+        authors: ["A"],
+        published: "2026-06-09",
+        updated: "2026-06-10",
+        category: "astro-ph",
+        topics: [tag],
+        primaryTopic: tag,
+        detail: false,
+        status: "inbox",
+        priority: "normal",
+        seenDates: ["2026-06-10"],
+        dailyReports: [],
+        paperPath: null,
+        arxivUrl: "https://arxiv.org/abs/2605.06587",
+        pdfUrl: "https://arxiv.org/pdf/2605.06587",
+        pdfPath: "",
+        zoteroKey: "",
+        zoteroUri: "",
+        citationKey: "",
+        projects: [],
+      });
+      const written = files["arxiv-daily/papers/2605.06587.md"]!;
+      const frontmatter = parseYaml(written.split("---\n")[1]!) as {
+        primary_topic: unknown;
+        tags: unknown;
+      };
+      expect(frontmatter.primary_topic).toBe(tag);
+      expect(frontmatter.tags).toEqual(["arxiv", "paper", tag]);
+    },
+  );
 
   it("refreshPaperNoteFrontmatter preserves body and uses the daily report date", async () => {
     const { files, writer } = makeWriter({
