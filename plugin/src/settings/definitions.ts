@@ -157,6 +157,24 @@ export interface SettingDefinitionsHost {
   renderPdfParserSidecarParseUrlRow?: (setting: Setting) => void;
 }
 
+export type SettingsSection =
+  | "llm"
+  | "library"
+  | "arxiv"
+  | "topics"
+  | "schedule"
+  | "email"
+  | "advanced";
+
+/**
+ * Class marking a settings section on both render paths: the declarative
+ * group/list element on 1.13+, the section heading row in display(). The
+ * setup guide scrolls to it.
+ */
+export function settingsSectionClass(section: SettingsSection): string {
+  return `arxiv-daily-settings__section--${section}`;
+}
+
 /** Detail-notes profile options; mirrors display()'s conditional "custom" row. */
 function detailNotesOptions(settings: PluginSettings): Record<string, string> {
   const options: Record<string, string> = {
@@ -203,6 +221,7 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "LLM",
+      cls: settingsSectionClass("llm"),
       items: [
         ...(host.renderLlmBaseUrlRow
           ? [{
@@ -238,6 +257,7 @@ export function buildSettingDefinitions(
     {
       type: "list",
       heading: "arXiv categories",
+      cls: settingsSectionClass("arxiv"),
       emptyState: "No categories yet — use Add category to add one.",
       items: categories.map((_category, index) => ({
         name: String(index + 1),
@@ -252,6 +272,7 @@ export function buildSettingDefinitions(
     {
       type: "list",
       heading: "Research topics",
+      cls: settingsSectionClass("topics"),
       emptyState:
         "No topics yet. Add one to define what to track.",
       items: topics.map((topic, index) => ({

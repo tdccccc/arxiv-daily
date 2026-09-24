@@ -129,6 +129,7 @@ function makeTab() {
       setLevel: vi.fn(),
       setTimezone: vi.fn(),
       error: vi.fn(),
+      warn: vi.fn(),
     },
     refreshSensitiveValues: vi.fn(),
     restartScheduler: vi.fn(),
@@ -1374,6 +1375,124 @@ describe("declarative topic cards", () => {
     }
 
     expect(refresh).not.toHaveBeenCalled();
+    tab.containerEl.remove();
+  });
+});
+
+describe("declarative setup guide actions", () => {
+  /** A rendered 1.13 group: Obsidian puts the definition's `cls` on it. */
+  function renderGroup(tab: ArxivDailySettingTab, cls: string): HTMLElement {
+    const group = document.createElement("div");
+    group.className = `setting-group ${cls}`;
+    Object.defineProperty(group, "scrollIntoView", { value: vi.fn() });
+    tab.containerEl.appendChild(group);
+    return group;
+  }
+
+  function clickGuideButton(tab: ArxivDailySettingTab, label: string): void {
+    const button = Array.from(
+      tab.containerEl.querySelectorAll<HTMLButtonElement>(".arxiv-daily-setup button"),
+    ).find((candidate) => candidate.textContent === label);
+    expect(button, `guide button ${label}`).toBeDefined();
+    button!.click();
+  }
+
+  function sectionClass(tab: ArxivDailySettingTab, heading: string): string {
+    const section = tab
+      .getSettingDefinitions()
+      .find((item) => (item.type === "group" || item.type === "list") && item.heading === heading);
+    const cls = section && "cls" in section ? section.cls : undefined;
+    expect(cls, `${heading} section class`).toEqual(expect.any(String));
+    return cls!;
+  }
+
+  it("gives the sections the guide points at a stable class", () => {
+    const { tab } = makeTab();
+    const classes = ["LLM", "arXiv categories", "Research topics"].map(
+      (heading) => sectionClass(tab, heading),
+    );
+    expect(new Set(classes).size).toBe(3);
+  });
+
+  it("scrolls to the LLM group and focuses the empty API key on Connect AI", () => {
+    const { tab } = makeTab();
+    document.body.appendChild(tab.containerEl);
+    const guideSetting = new Setting(tab.containerEl);
+    renderSetupGuideRow(tab, guideSetting);
+    const group = renderGroup(tab, sectionClass(tab, "LLM"));
+    const apiKeySetting = new Setting(group);
+    renderApiKeyRow(tab, apiKeySetting);
+
+    clickGuideButton(tab, "Connect AI");
+
+    expect(group.scrollIntoView).toHaveBeenCalled();
+    expect(document.activeElement).toBe(
+      group.querySelector('input[aria-label="LLM API key"]'),
+    );
+    tab.containerEl.remove();
+  });
+
+  it("opens the first incomplete topic and focuses its first empty field", () => {
+    const { tab, settings } = makeTab();
+    settings.llm.apiKey = "sk-test";
+    settings.arxiv.topics.push({
+      id: "done",
+      name: "Done",
+      tag: "done",
+      description: "Complete topic",
+      detail: false,
+    }, {
+      id: "draft",
+      name: "Draft",
+      tag: "draft",
+      description: "",
+      detail: false,
+    });
+    document.body.appendChild(tab.containerEl);
+    renderSetupGuideRow(tab, new Setting(tab.containerEl));
+    const group = renderGroup(tab, sectionClass(tab, "Research topics"));
+    tab.renderTopicRow(new Setting(group), 0);
+    tab.renderTopicRow(new Setting(group), 1);
+
+    clickGuideButton(tab, "Describe interests");
+
+    const draftCard = group.querySelector<HTMLElement>(
+      '[data-arxiv-daily-topic-id="draft"]',
+    )!;
+    expect(group.scrollIntoView).toHaveBeenCalled();
+    expect(draftCard.querySelector<HTMLElement>(".arxiv-daily-settings__topic-form")?.hidden)
+      .toBe(false);
+    expect(document.activeElement).toBe(
+      draftCard.querySelector(".arxiv-daily-settings__topic-description"),
+    );
+    tab.containerEl.remove();
+  });
+
+  it("adds a first topic when Describe interests has none to open", () => {
+    const { tab, settings } = makeTab();
+    settings.llm.apiKey = "sk-test";
+    document.body.appendChild(tab.containerEl);
+    renderSetupGuideRow(tab, new Setting(tab.containerEl));
+    renderGroup(tab, sectionClass(tab, "Research topics"));
+    const addTopic = vi.spyOn(tab, "addTopic").mockResolvedValue(undefined);
+
+    clickGuideButton(tab, "Describe interests");
+
+    expect(addTopic).toHaveBeenCalledTimes(1);
+    tab.containerEl.remove();
+  });
+
+  it("says where to go instead of doing nothing when a section is missing", async () => {
+    const { Notice } = await import("obsidian");
+    const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
+    notices.length = 0;
+    const { tab } = makeTab();
+    document.body.appendChild(tab.containerEl);
+    renderSetupGuideRow(tab, new Setting(tab.containerEl));
+
+    clickGuideButton(tab, "Connect AI");
+
+    expect(notices.map((call) => call.message).join("\n")).toMatch(/LLM/);
     tab.containerEl.remove();
   });
 });

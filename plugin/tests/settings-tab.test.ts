@@ -529,11 +529,11 @@ describe("settings tab regressions", () => {
     const scrollBody = settingsTabSource.match(
       /private scrollToSection\([\s\S]*?\n  public async generateFirstReport/,
     )?.[0];
-    expect(scrollBody).toContain("targetEl.ownerDocument.defaultView");
+    expect(scrollBody).toContain("target.ownerDocument.defaultView");
     expect(scrollBody).toContain('matchMedia?.("(prefers-reduced-motion: reduce)")');
-    expect(scrollBody).toContain('targetEl.setAttribute("tabindex", "-1")');
+    expect(scrollBody).toContain('target.setAttribute("tabindex", "-1")');
     expect(scrollBody).toContain('behavior: reduceMotion ? "auto" : "smooth"');
-    expect(scrollBody).toContain("targetEl.focus({ preventScroll: true })");
+    expect(scrollBody).toContain("focus({ preventScroll: true })");
   });
 
   it("uses clear sentence-case labels", () => {

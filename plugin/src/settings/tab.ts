@@ -13,6 +13,8 @@ import {
   buildSettingDefinitions,
   readSettingValue,
   SETTING_KEYS,
+  settingsSectionClass,
+  type SettingsSection,
 } from "./definitions";
 import {
   SettingsChangeError,
@@ -397,12 +399,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
+    section: SettingsSection,
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
     if (desc) heading.setDesc(desc);
-    heading.settingEl.addClass("arxiv-daily-settings__section");
+    heading.settingEl.addClass("arxiv-daily-settings__section", settingsSectionClass(section));
     heading.settingEl.setAttribute("data-arxiv-daily-section", section);
     // Ensure heading name is easy to scan in long settings pages.
     heading.nameEl?.addClass("arxiv-daily-settings__section-title");
@@ -2241,20 +2243,85 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
   }
 
-  private scrollToSection(section: "llm" | "arxiv" | "topics" | "schedule" | "advanced"): void {
-    const target = this.containerEl.querySelector(
-      `[data-arxiv-daily-section="${section}"]`,
+  /**
+   * Bring a guide step's section into view and put the cursor where the step
+   * still needs input. The section is the 1.13+ group element or, in
+   * display(), its heading row; both carry settingsSectionClass().
+   */
+  private scrollToSection(section: "llm" | "arxiv" | "topics"): void {
+    const target = this.containerEl.querySelector<HTMLElement>(
+      `.${settingsSectionClass(section)}`,
     );
-    if (!target) return;
-    const targetEl = target as HTMLElement;
-    const view = targetEl.ownerDocument.defaultView;
+    if (!target) {
+      const heading = { llm: "LLM", arxiv: "arXiv categories", topics: "Research topics" }[section];
+      this.plugin.logger.warn(`settings: setup guide could not find the ${section} section`);
+      new Notice(`arXiv Daily: scroll down to "${heading}" to continue setup.`);
+      return;
+    }
+    const view = target.ownerDocument.defaultView;
     const reduceMotion = view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (!targetEl.hasAttribute("tabindex")) targetEl.setAttribute("tabindex", "-1");
-    targetEl.scrollIntoView({
+    target.scrollIntoView({
       block: "start",
       behavior: reduceMotion ? "auto" : "smooth",
     });
-    targetEl.focus({ preventScroll: true });
+    if (section === "topics") {
+      this.focusIncompleteTopic();
+      return;
+    }
+    const field = this.firstPendingField(section);
+    if (field) {
+      field.focus({ preventScroll: true });
+      return;
+    }
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }
+
+  private firstPendingField(section: "llm" | "arxiv"): HTMLElement | null {
+    const query = (selector: string) =>
+      this.containerEl.querySelector<HTMLElement>(selector);
+    if (section === "arxiv") {
+      return query(".arxiv-daily-settings__category-select");
+    }
+    const { llm } = this.plugin.settings;
+    if (!llm.apiKey.trim()) {
+      const apiKey = query('input[aria-label="LLM API key"]');
+      if (apiKey) return apiKey;
+    }
+    if (!llm.baseUrl.trim()) {
+      const baseUrl = query(".arxiv-daily-settings__llm-url-input");
+      if (baseUrl) return baseUrl;
+    }
+    return query(".arxiv-daily-settings__model-select");
+  }
+
+  /** Open the first topic missing a field and focus that field; add one if there are none. */
+  private focusIncompleteTopic(): void {
+    const topics = this.plugin.settings.arxiv.topics;
+    if (topics.length === 0) {
+      this.runAction("add topic", () => this.addTopic());
+      return;
+    }
+    const topic = topics.find(
+      (candidate) =>
+        !candidate.name.trim() ||
+        !candidate.tag.trim() ||
+        !candidate.description.trim(),
+    ) ?? topics[0]!;
+    const card = this.findTopicCard(topic.id);
+    if (!card) return;
+    const form = card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-form");
+    if (form?.hidden) {
+      card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-header")?.click();
+    }
+    const fields = [
+      [topic.name, ".arxiv-daily-settings__topic-name-input"],
+      [topic.tag, ".arxiv-daily-settings__topic-tag-input"],
+      [topic.description, ".arxiv-daily-settings__topic-description"],
+    ] as const;
+    const selector = fields.find(([value]) => !value.trim())?.[1]
+      ?? ".arxiv-daily-settings__topic-name-input";
+    card.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   }
 
   public async generateFirstReport(): Promise<void> {
