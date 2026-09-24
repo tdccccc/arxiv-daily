@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T23:05:00+08:00
-updated: 2026-09-24T23:05:00+08:00
-revision: 1
+updated: 2026-09-24T23:40:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ Local fixes in `plugin/main.ts` and `plugin/src/settings/tab.ts`, each test-firs
 - Red / baseline signal: `tests/settings-lifecycle.test.ts`: with `tickToday` pending, `setScheduleEnabled(true)` + "run" resolves true, and a following `setScheduleEnabled(false)` resolves without waiting for the run — fails today (awaits the run)
 - Green check: focused vitest
 - regression checks: existing lifecycle intent-queue tests; `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — malformed legacy run state does not stop loading (F17)
 
@@ -36,7 +36,7 @@ Local fixes in `plugin/main.ts` and `plugin/src/settings/tab.ts`, each test-firs
 - Red / baseline signal: test: migrating a legacy run state with one invalid entry keeps the valid entries, drops the invalid one with a warning, and does not throw — fails today (strict store rejects the write)
 - Green check: focused vitest
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — topic and category saves report and roll back (C1)
 
@@ -45,7 +45,7 @@ Local fixes in `plugin/main.ts` and `plugin/src/settings/tab.ts`, each test-firs
 - Red / baseline signal: tests: with persistence failing, adding/deleting a topic or changing categories restores the previous list and reports; a failing topic field save reports instead of an unhandled rejection — fail today
 - Green check: focused vitest in `tests/settings-declarative-tab.test.ts`
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — legacy Thinking mode follows Reasoning effort (C4)
 
@@ -54,7 +54,7 @@ Local fixes in `plugin/main.ts` and `plugin/src/settings/tab.ts`, each test-firs
 - Red / baseline signal: legacy test: with thinking off, choosing an effort turns thinking on and the Thinking mode toggle shows on — fails today (toggle stays off)
 - Green check: focused vitest in `tests/settings-tab.test.ts`
 - regression checks: `cd plugin && npm test`
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 

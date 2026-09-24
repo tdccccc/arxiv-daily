@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-24T20:50:00+08:00
-updated: 2026-09-24T23:05:00+08:00
-revision: 6
+updated: 2026-09-24T23:40:00+08:00
+revision: 7
 owner: claude-main-session-2026-09-24
 
 ## Intent
@@ -44,7 +44,7 @@ daily schedule without dead ends.
 3. P3 — First report uses the latest announced date; runs refresh open dashboards (F3, F18) — status: done
 4. P4 — Settings controls commit once and consistently (F11, F12, F13, F14, F16) — status: done
 5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: blocked
-6. P6 — Remaining low-priority findings fixed or waived (C1, C4, F15, F17) — status: active
+6. P6 — Remaining low-priority findings fixed or waived (C1, C4, F15, F17) — status: done
 
 ## Decisions
 
