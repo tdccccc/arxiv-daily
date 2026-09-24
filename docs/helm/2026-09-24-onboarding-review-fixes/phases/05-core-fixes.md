@@ -2,22 +2,24 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T22:40:00+08:00
-updated: 2026-09-24T23:05:00+08:00
-revision: 2
+updated: 2026-09-25T00:20:00+08:00
+revision: 3
 
 ## Outcome
 
-The confirmed core defects that can be fixed without live provider access are fixed: paper-note frontmatter stays valid YAML for any topic tag, refreshing a paper note's frontmatter keeps the user's own properties and tags, and a date that has scrolled out of arXiv's recent listing fails permanently instead of being retried ten times.
+The confirmed core / CLI / relay defects that can be fixed without live provider access are fixed: paper-note frontmatter stays valid YAML for any topic tag, refreshing a paper note's frontmatter keeps the user's own properties and tags, a date that has scrolled out of arXiv's recent listing fails permanently instead of being retried ten times, a run interrupted by a crash is retried automatically, a filter answer wrapped in one code fence is accepted, hosts that cannot send automatic email say so, and the CLI / node-runtime / relay code has been reviewed.
 
 ## Assumptions
 
 - Slug-shaped values (the common case) must keep their current unquoted output, so existing notes and byte-identical rendering tests stay unchanged; only YAML-unsafe values get quoted.
 - Frontmatter the plugin writes is line-based (`key: value`, flow list for `tags`); preserving unknown top-level keys verbatim, with their indented continuation lines, is enough to keep user properties.
-- The review agent's remaining batches may add chunks here (L1) once their High findings are verified.
+- The review agent died after batches A and B (API 503); batch C is reviewed in this session (user decision 2026-09-25). Its CONFIRMED High findings become further chunks here (L1).
+- The existing transient-retry cap (`MAX_TRANSIENT_ATTEMPTS`) is the right bound for crash-recovered runs too.
+- Allowing exactly one outer ```` ```json ```` fence does not weaken the 08-10 filter contract: everything inside is still validated strictly.
 
 ## Approach
 
-Small, local fixes in `packages/core`, each with a core test written first. The thinking-parameter finding (`extra_body` never flattened) changes what is sent to every provider and cannot be verified without real API calls; it is recorded in the review and left for a user decision.
+Small, local fixes, each with a test written first. The thinking-parameter finding (`extra_body` never flattened) changes what is sent to every provider and cannot be verified without real API calls; it is recorded in the review and left for a user decision. Cross-platform automatic email (exclusive create on macOS / Windows) is out of scope; it is a follow-up initiative after this one (user decision 2026-09-25) — here we only make the gap visible. Cross-process locking (RunLock, PaperIndexStore) is recorded, not fixed.
 
 ## Chunks
 
@@ -48,6 +50,44 @@ Small, local fixes in `packages/core`, each with a core test written first. The 
 - regression checks: core scheduler / pipeline tests (`NODE_OPTIONS=--max-old-space-size=8192 npm test -- --maxWorkers=1` in packages/core)
 - [x] implementation and tests accepted
 
+### Chunk 3b — paper index failures during filtering are retryable (review batch A)
+
+- landed as 7aa19aa before this revision; recorded here for completeness
+- [x] implementation and tests accepted
+
+### Chunk 4 — a run interrupted by a crash is retried automatically (review batch B, F25)
+
+- change kind: bug fix
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: `packages/core/tests/state-store.test.ts`: a stale `running` entry with attempts below the cap recovers to `failed_transient`; at the cap it becomes `failed_permanent` with a "retries exhausted" message — first fails today (always permanent)
+- Green check: `cd packages/core && npx vitest run tests/state-store.test.ts`
+- regression checks: core scheduler tests; full core suite
+- [ ] implementation and tests accepted
+
+### Chunk 5 — a filter answer in one outer code fence is accepted (review batch A, F26)
+
+- change kind: bug fix
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: `packages/core/tests` paper-filter test: a response that is exactly ```` ```json\n{"papers":[…]}\n``` ```` yields the same records as the bare JSON — fails today (`invalid-json`); text around the fence, two fences, or invalid JSON inside the fence still fail as before
+- Green check: focused vitest on the paper-filter tests
+- regression checks: filter-response-validation tests, pipeline tests
+- [ ] implementation and tests accepted
+
+### Chunk 6 — hosts that cannot send automatic email say so (review batch B, F27)
+
+- change kind: bug fix (visibility only; the delivery safety design is unchanged)
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: on a storage adapter without exclusive create, (a) a successful test send reports that automatic daily email is unsupported on this system, in the plugin and the CLI; (b) the plugin settings email section shows the same warning; (c) an automatic send refused for `delivery_storage_unsupported` produces a user-visible notice in the plugin (CLI: a warning on stderr) — fail today
+- Green check: focused vitest in plugin and CLI
+- regression checks: plugin and CLI email tests, core delivery tests
+- [ ] implementation and tests accepted
+
+### Chunk 7 — review CLI, node-runtime and email relay (batch C)
+
+- change kind: read-only review, in this session, no subagents
+- output: findings added to `docs/reviews/2026-09-24-main-review.md`; each CONFIRMED High finding becomes its own chunk here (L1); lower ones recorded
+- [ ] review done and recorded
+
 ## Phase verification
 
 - Full check set from goal.md constraints
@@ -56,3 +96,5 @@ Small, local fixes in `packages/core`, each with a core test written first. The 
 
 - If quoting changes any existing byte-identical rendering fixture for slug tags, stop and narrow the quoting rule (L1).
 - If the scheduler relies on `failed_transient` for old dates in some catch-up path (e.g. a fallback source), stop and reconsider chunk 3.
+- If making the email gap visible needs changes to the claim / idempotency design itself, stop — that belongs to the follow-up initiative.
+- If batch C turns up more High findings than fit in this phase, split them into a new phase (P7).

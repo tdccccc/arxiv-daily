@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-24T20:50:00+08:00
-updated: 2026-09-24T23:40:00+08:00
-revision: 7
+updated: 2026-09-25T00:20:00+08:00
+revision: 8
 owner: claude-main-session-2026-09-24
 
 ## Intent
@@ -28,6 +28,7 @@ daily schedule without dead ends.
 - No quick-start topic templates on the 1.13+ settings page (user decision 2026-09-24)
 - No settings page redesign beyond the guide card layout fix
 - No push / PR without explicit user approval
+- No cross-platform automatic email (exclusive create on macOS / Windows) — follow-up initiative after this one closes (user decision 2026-09-25)
 
 ## Constraints
 
@@ -43,9 +44,10 @@ daily schedule without dead ends.
 2. P2 — Guide tells the truth: unique topic tags, visible blocking reasons, schedule step, busy state, copy, full-width card, last-category delete (F4, F10, F7, F6, F8, F9) — status: done
 3. P3 — First report uses the latest announced date; runs refresh open dashboards (F3, F18) — status: done
 4. P4 — Settings controls commit once and consistently (F11, F12, F13, F14, F16) — status: done
-5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: blocked
+5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: active
 6. P6 — Remaining low-priority findings fixed or waived (C1, C4, F15, F17) — status: done
 
 ## Decisions
 
 - 2026-09-24 (user): guide buttons scroll and focus the first pending field; no 1.13+ topic templates; guide gets a fifth "turn on daily reports" step; full-width guide card; model field accepts free text and Get models never replaces it.
+- 2026-09-25 (user): accept a filter answer wrapped in one code fence; crash-interrupted runs retry automatically; automatic email on macOS / Windows is only made visible now, real support is the next initiative; batch C review done in this session; avoid subagents.
