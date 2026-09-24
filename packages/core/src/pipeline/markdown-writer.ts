@@ -177,8 +177,9 @@ export class MarkdownWriter {
     );
     const markdown = await this.opts.storage.readText(path);
     const body = stripFrontmatter(markdown).replace(/^\s+/, "");
-    const fm = await this.paperFrontmatterForEntry(entry);
-    await this.writeMarkdown(path, fm + body);
+    const kept = userFrontmatter(markdown);
+    const fm = await this.paperFrontmatterForEntry(entry, kept.tags);
+    await this.writeMarkdown(path, withExtraFrontmatter(fm, kept.lines) + body);
     this.opts.logger.info(`refreshed paper frontmatter: ${path}`);
     return path;
   }
@@ -275,9 +276,13 @@ export class MarkdownWriter {
       : undefined;
   }
 
-  private async paperFrontmatterForEntry(entry: PaperIndexEntry): Promise<string> {
+  private async paperFrontmatterForEntry(
+    entry: PaperIndexEntry,
+    extraTags: readonly string[] = [],
+  ): Promise<string> {
     const topic = this.opts.arxiv.topics.find((t) => t.tag === entry.primaryTopic);
     const tags = ["arxiv", "paper", topic?.tag ?? entry.primaryTopic].filter(Boolean);
+    for (const tag of extraTags) if (!tags.includes(tag)) tags.push(tag);
     const published = dateOnly(displayDateFromIndexEntry(entry));
     return paperFrontmatter({
       title: entry.title,
@@ -391,6 +396,65 @@ function firstDailyReportDate(paths: string[]): string | undefined {
     .filter((date): date is string => Boolean(date))
     .sort();
   return dates[0];
+}
+
+/** Frontmatter keys the plugin writes and recomputes on refresh. */
+const MANAGED_FRONTMATTER_KEYS = new Set([
+  "title",
+  "authors",
+  "arxiv_id",
+  "primary_topic",
+  "published",
+  "tags",
+]);
+
+/**
+ * What a user added to a paper note's frontmatter: top-level keys the plugin
+ * does not manage (kept verbatim with their indented lines) and the tags in
+ * the `tags` list, so a refresh does not drop either.
+ */
+function userFrontmatter(markdown: string): { lines: string[]; tags: string[] } {
+  const match = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/.exec(markdown.trimStart());
+  if (!match) return { lines: [], tags: [] };
+  const lines: string[] = [];
+  const tags: string[] = [];
+  let keep = false;
+  let inTags = false;
+  for (const line of match[1]!.split("\n")) {
+    const key = /^([^\s#-][^:]*):(.*)$/.exec(line);
+    if (key) {
+      const name = key[1]!.trim();
+      keep = !MANAGED_FRONTMATTER_KEYS.has(name);
+      inTags = name === "tags";
+      if (keep) lines.push(line);
+      if (inTags) {
+        const flow = /^\s*\[(.*)\]\s*$/.exec(key[2]!);
+        if (flow) tags.push(...flow[1]!.split(",").map(unquoteYaml).filter(Boolean));
+      }
+      continue;
+    }
+    if (keep) lines.push(line);
+    else if (inTags) {
+      const item = /^\s*-\s+(.*)$/.exec(line);
+      if (item) tags.push(unquoteYaml(item[1]!));
+    }
+  }
+  return { lines, tags };
+}
+
+function unquoteYaml(value: string): string {
+  const trimmed = value.trim();
+  const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(trimmed);
+  if (quoted) return quoted[1]!.replace(/\\(.)/g, "$1");
+  const single = /^'(.*)'$/.exec(trimmed);
+  return single ? single[1]!.replace(/''/g, "'") : trimmed;
+}
+
+/** Insert preserved user lines just before the closing `---`. */
+function withExtraFrontmatter(frontmatter: string, lines: readonly string[]): string {
+  if (lines.length === 0) return frontmatter;
+  const close = frontmatter.lastIndexOf("---\n");
+  return `${frontmatter.slice(0, close)}${lines.join("\n")}\n${frontmatter.slice(close)}`;
 }
 
 function stripFrontmatter(markdown: string): string {

@@ -600,6 +600,58 @@ describe("MarkdownWriter strictness on existing files", () => {
     },
   );
 
+  it("refreshPaperNoteFrontmatter keeps properties and tags the user added", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/papers/2606.12938.md": [
+        "---",
+        'title: "Old title"',
+        "rating: 5",
+        "aliases:",
+        "  - Cluster paper",
+        "tags: [arxiv, paper, galaxy-cluster, to-read]",
+        "primary_topic: galaxy-cluster",
+        "---",
+        "",
+        "body",
+      ].join("\n"),
+    });
+
+    await writer.refreshPaperNoteFrontmatter({
+      arxivId: "2606.12938",
+      paperKey: "arxiv:2606.12938",
+      externalId: "2606.12938",
+      source: "arxiv",
+      title: "New title",
+      authors: ["A"],
+      published: "2026-06-11",
+      updated: "2026-06-11",
+      category: "astro-ph.CO",
+      topics: ["galaxy-cluster"],
+      primaryTopic: "galaxy-cluster",
+      detail: true,
+      status: "inbox",
+      priority: "high",
+      seenDates: ["2026-06-12"],
+      dailyReports: [],
+      paperPath: "arxiv-daily/papers/2606.12938.md",
+      arxivUrl: "https://arxiv.org/abs/2606.12938",
+      pdfUrl: "https://arxiv.org/pdf/2606.12938",
+      pdfPath: "",
+      zoteroKey: "",
+      zoteroUri: "",
+      citationKey: "",
+      projects: [],
+    });
+
+    const written = files["arxiv-daily/papers/2606.12938.md"]!;
+    const frontmatter = parseYaml(written.split("---\n")[1]!) as Record<string, unknown>;
+    expect(frontmatter.title).toBe("New title");
+    expect(frontmatter.rating).toBe(5);
+    expect(frontmatter.aliases).toEqual(["Cluster paper"]);
+    expect(frontmatter.tags).toEqual(["arxiv", "paper", "galaxy-cluster", "to-read"]);
+    expect(written).toContain("body");
+  });
+
   it("refreshPaperNoteFrontmatter preserves body and uses the daily report date", async () => {
     const { files, writer } = makeWriter({
       "arxiv-daily/daily/2026-06-12.md": "daily",
