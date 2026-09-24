@@ -237,13 +237,90 @@ describe("legacy embedding rows", () => {
       TextComponent as never,
     ) as TextComponent;
 
-    await input.trigger("https://elsewhere.example.com/v1");
+    input.inputEl.value = "https://elsewhere.example.com/v1";
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
 
     expect(save).toHaveBeenCalledWith(
       "embedding.baseUrl",
       "https://elsewhere.example.com/v1",
     );
     expect(input.inputEl.value).toBe("https://embed.example.com/v1");
+  });
+});
+
+describe("legacy text fields act when editing ends", () => {
+  function typeInto(input: HTMLInputElement, text: string): void {
+    for (const character of text) {
+      input.value += character;
+      input.dispatchEvent(new Event("input"));
+    }
+  }
+
+  it("does not turn each keystroke of a custom category into a category", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const display = vi.spyOn(tab, "display");
+    const input = componentOf(rows.get("Category 1"), TextComponent as never) as TextComponent;
+
+    typeInto(input.inputEl, "cs.LG");
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(display).not.toHaveBeenCalled();
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["cs.LG"]));
+  });
+
+  it.each([
+    ["Embedding API base URL", "embedding.baseUrl", "https://embed.example.com/v1"],
+    ["Embedding model", "embedding.model", "text-embedding-3-large"],
+  ])("saves %s once on change, not per keystroke", async (name, key, typed) => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.embedding.mode = "remote";
+    const save = vi.spyOn(tab, "saveEmbeddingEndpointField").mockImplementation(
+      async (_key, next) => next,
+    );
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(rows.get(name), TextComponent as never) as TextComponent;
+    input.inputEl.value = "";
+
+    typeInto(input.inputEl, typed);
+    expect(save).not.toHaveBeenCalled();
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith(key, typed);
+  });
+
+  it("moves both sidecar URLs on change and not while typing", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.pdfParserSidecar.enabled = true;
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(
+      rows.get("Sidecar capability URL"),
+      TextComponent as never,
+    ) as TextComponent;
+    input.inputEl.value = "";
+
+    typeInto(input.inputEl, "http://127.0.0.1:5002/v1/capabilities");
+    expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
+      DEFAULT_SETTINGS.pdfParserSidecar.capabilitiesUrl,
+    );
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() =>
+      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse"));
+  });
+
+  it("restores the sidecar toggle and reports when enabling is rejected", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockRejectedValue(new Error("disk full")));
+    const rows = renderLegacySettings(tab);
+    const toggle = componentOf(rows.get("Better PDF parser"), ToggleComponent as never) as ToggleComponent;
+
+    await expect(toggle.trigger(true)).resolves.toBeUndefined();
+
+    expect(settings.pdfParserSidecar.enabled).toBe(false);
+    expect(toggle.value).toBe(false);
   });
 });
 

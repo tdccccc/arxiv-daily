@@ -1423,16 +1423,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
         })
         .addText((t) => {
-          t.setPlaceholder("Or enter custom category")
-            .setValue("")
-            .onChange(async (v) => {
-              if (v.trim()) {
-                const next = [...categories];
-                next[i] = v.trim();
-                await this.setArxivCategories(next);
-                this.renderLegacySettings();
-              }
+          t.setPlaceholder("Or enter custom category").setValue("");
+          // Commit when editing ends: each keystroke would become a category
+          // and the re-render would remove the input being typed in.
+          t.inputEl.addEventListener("change", () => {
+            const v = t.inputEl.value.trim();
+            if (!v) return;
+            const next = [...categories];
+            next[i] = v;
+            this.runAction("save category", async () => {
+              await this.setArxivCategories(next);
+              this.renderLegacySettings();
             });
+          });
         })
         .addButton((b) =>
           b
@@ -1690,19 +1693,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Embedding API base URL")
         .setDesc("OpenAI-compatible embeddings endpoint.")
         .addText((t) => {
-          t.setPlaceholder("https://api.openai.com/v1")
-            .setValue(s.embedding.baseUrl)
-            .onChange(async (v) => {
+          t.setPlaceholder("https://api.openai.com/v1").setValue(s.embedding.baseUrl);
+          // On change only: each save may re-ask for remote consent.
+          t.inputEl.addEventListener("change", () => {
+            void (async () => {
               try {
                 t.setValue(await this.saveEmbeddingEndpointField(
                   SETTING_KEYS.embedding.baseUrl,
-                  v.trim(),
+                  t.inputEl.value.trim(),
                 ));
               } catch (error) {
                 t.setValue(this.plugin.settings.embedding.baseUrl);
                 this.reportActionError("save embedding base url", error);
               }
-            });
+            })();
+          });
         });
       new Setting(containerEl)
         .setName("Embedding API key")
@@ -1720,19 +1725,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Embedding model")
         .setDesc("Model name sent to the endpoint.")
         .addText((t) => {
-          t.setPlaceholder("text-embedding-3-small")
-            .setValue(s.embedding.model)
-            .onChange(async (v) => {
+          t.setPlaceholder("text-embedding-3-small").setValue(s.embedding.model);
+          t.inputEl.addEventListener("change", () => {
+            void (async () => {
               try {
                 t.setValue(await this.saveEmbeddingEndpointField(
                   SETTING_KEYS.embedding.model,
-                  v.trim(),
+                  t.inputEl.value.trim(),
                 ));
               } catch (error) {
                 t.setValue(this.plugin.settings.embedding.model);
                 this.reportActionError("save embedding model", error);
               }
-            });
+            })();
+          });
         });
       new Setting(containerEl)
         .setName("Embedding dimension")
@@ -1755,8 +1761,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Optional local sidecar. Off by default; PDFs stay on this device either way.")
       .addToggle((toggle) => {
         toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
-          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
-          this.renderLegacySettings();
+          try {
+            await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
+            this.renderLegacySettings();
+          } catch (error) {
+            toggle.setValue(this.plugin.settings.pdfParserSidecar.enabled);
+            this.reportActionError("save local parser sidecar", error);
+          }
         });
       });
     if (s.pdfParserSidecar.enabled) {
@@ -1764,21 +1775,41 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Sidecar capability URL")
         .setDesc("Local loopback endpoint that reports parser capabilities.")
         .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
-            .setValue(s.pdfParserSidecar.capabilitiesUrl)
-            .onChange(async (value) => {
-              await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities").setValue(s.pdfParserSidecar.capabilitiesUrl);
+          text.inputEl.addEventListener("change", () => {
+            this.runAction("save local parser sidecar URL", async () => {
+              try {
+                await this.changeSettingValues(this.sidecarUrlChanges(
+                  "pdfParserSidecar.capabilitiesUrl",
+                  text.inputEl.value.trim(),
+                ));
+                this.renderLegacySettings();
+              } catch (error) {
+                text.setValue(this.plugin.settings.pdfParserSidecar.capabilitiesUrl);
+                throw error;
+              }
             });
+          });
         });
       new Setting(containerEl)
         .setName("Sidecar parse URL")
         .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
         .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
-            .setValue(s.pdfParserSidecar.parseUrl)
-            .onChange(async (value) => {
-              await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse").setValue(s.pdfParserSidecar.parseUrl);
+          text.inputEl.addEventListener("change", () => {
+            this.runAction("save local parser sidecar URL", async () => {
+              try {
+                await this.changeSettingValues(this.sidecarUrlChanges(
+                  "pdfParserSidecar.parseUrl",
+                  text.inputEl.value.trim(),
+                ));
+                this.renderLegacySettings();
+              } catch (error) {
+                text.setValue(this.plugin.settings.pdfParserSidecar.parseUrl);
+                throw error;
+              }
             });
+          });
         });
     }
 
