@@ -207,13 +207,86 @@ core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and rel
 
 ## Core, CLI and relay findings
 
-（后台 agent 审查中，完成后补入。）
+以下来自后台审查（agent 在批次 A 中又分出三个子 agent 看 LLM 客户端、arXiv 抓取与日期、Markdown 输出；这超出了“只用一个 agent”的约定，已叫停，其结论由主会话逐条复核）。批次 B（状态与投递）和批次 C（CLI 与邮件中继）见后续补充。
+
+### F19 — 推理 / thinking 参数包在 `extra_body` 里发出，从未到达服务商
+
+**Priority: P1 · CONFIRMED（代码路径）· 需用户决定**
+
+`packages/core/src/llm/client.ts:255-262` 把 `thinking` 参数放进 `params.extra_body`，`requestChat` 直接 `JSON.stringify` 发送（`client.ts:352-370`），全仓库没有任何地方展开 `extra_body`。`extra_body` 是 OpenAI Python/Node SDK 的约定（由 SDK 展开到顶层），这里没用 SDK，所以请求体里是字面量的 `"extra_body"` 字段：Anthropic 预设的 extended thinking 从未开启；DeepSeek 的 `thinking` 开关同样无效；对严格校验参数的服务商，未知字段还可能被拒。
+
+修改会改变发给每个服务商的请求，本环境无法用真实 API 验证，**未修**，留给用户决定（建议：按服务商把 `thinking` 放到顶层，并用真实 key 各验一次）。
+
+### F20 — 论文笔记 frontmatter 的 `primary_topic` / `tags` 未加引号
+
+**Priority: P2 · CONFIRMED · 已修（df8d1c0）**
+
+`packages/core/src/pipeline/markdown-writer.ts` 的 `paperFrontmatter` 对 `title`、`authors` 加引号转义，但 `primary_topic` 和每个标签原样输出；主题标签是设置里的自由文本，`AI: Robotics`、`ml,dl`、`#hash` 会让 YAML 解析失败或被拆开。修复后普通 slug 输出不变，其它值加引号。
+
+### F21 — 刷新论文笔记 frontmatter 会丢掉用户自己加的属性和标签
+
+**Priority: P2 · CONFIRMED · 已修（2abb4c6）**
+
+`refreshPaperNoteFrontmatter`（`markdown-writer.ts:171-184`）整块替换 frontmatter；对已验证的详情笔记重新执行 “Summarize by paper ID” 会走到这里（`packages/core/src/services/manual-fetch.ts:304-347`）。修复后只重算插件管理的字段，其它键原样保留，用户额外的标签接在插件标签后面。
+
+### F22 — 已滚出 `/recent` 的日期被当作临时失败反复重试
+
+**Priority: P2 · CONFIRMED · 已修（3413d35）**
+
+`packages/core/src/sources/arxiv-source-adapter.ts:100-106` 对“不在 `/recent`”一律返回 `failed_transient`；`/recent` 只含最近几个公告日，早已没有其它回退来源，比最旧一天还早的日期永远拿不到，却会被调度器重试最多 10 次。修复后这类日期直接 `failed_permanent`；比最新一天还新的日期（尚未公告）仍是临时失败。两个钉住旧行为的 pipeline 测试同步改为新预期。
+
+### F23 — 流式“空闲超时”实际上不起作用
+
+**Priority: P3 · CONFIRMED · 未修**
+
+`postChatStream`（`client.ts:340-350`）先等整个响应体到手再解析 SSE，两个 `HttpClient` 实现都一次性返回完整文本，所以 120 秒的空闲超时永远量不到网络空闲，卡住的服务商只受 300 秒总超时约束，加上 3 次重试最长约 15 分钟才失败。要修需要让 `HttpClient` 支持增量读取，改动面大，本轮不做。
+
+### F24 — 按固定长度截断论文文本可能切开代理对
+
+**Priority: P3 · PLAUSIBLE · 未修**
+
+`packages/core/src/pipeline/detail-selector.ts:148`、`personalized-paper-filter.ts:535` 用 `.slice()` 截断，边界处的 emoji 等字符可能变成孤立代理项。不崩溃，仅影响边界一个字符。
+
+### 已核对、不构成缺陷
+
+- `/recent` 请求 `show=2000` 不分页：2026-09-24 实测 cs.LG 最近 5 个公告日共 1198 条，远低于 2000，暂不构成问题。
+- LLM URL 拼接、鉴权头与密钥脱敏、重试与取消清理、过滤响应校验、每日摘要解析与渲染转义、prompt 注入防护、Markdown 写入的覆盖保护：子 agent 读代码未发现问题。
 
 ## 需人工验证
 
 - F8 修复后的卡片排版（窄窗、宽窗、亮/暗主题）。
 - F1 修复后在真实 Obsidian 中点击三个引导按钮，确认滚动到对应分组并聚焦。
 - C2：用窗口关闭按钮、Esc、切换到其它设置标签页三种方式关闭时，未失焦的输入是否保存。
+
+## Fix status（分支 `fix/onboarding-review`，未推送）
+
+| 问题 | 状态 | 提交 |
+| --- | --- | --- |
+| F1 引导按钮没反应 | 已修，真实 Obsidian 复核 | 4cb2742 |
+| F2 设置完成后编辑主题失焦 | 已修，真实 Obsidian 复核 | b5ce048 |
+| F3 首份报告用今天 | 已修（改用最近已公告日） | 33a40d4 |
+| F4 标签重复、第 4 步无原因 | 已修 | c1efaf2 |
+| F5 1.13+ 无主题模板 | 用户决定不做 | — |
+| F6 文案与标题不符 | 已修 | 1c39c8a |
+| F7 首份报告无进度 | 已修 | 30612f0 |
+| F8 引导卡片排版 | 已修，真实 Obsidian 截图复核 | 1c39c8a |
+| F9 最后一个分类的删除按钮 | 已修，真实 Obsidian 复核 | 1c39c8a |
+| F10 每日运行默认关闭 | 按用户决定加第 5 步 | 0d1091e |
+| F11 1.13+ 文本控件逐键提交 | 已修，真实 Obsidian 复核 | 7d5fabf |
+| F12 sidecar 地址改不了 | 已修 | d4a9662 |
+| F13 旧版逐键保存 | 已修 | 6112c86 |
+| F14 模型只能从列表选（含 C3） | 按用户决定改为可手填 | c20b9f6 |
+| F15 Enable + Run today 卡住设置页 | 已修 | fa13654 |
+| F16 重复分类静默丢行 | 已修 | 7f27e4c |
+| F17 旧 runState 导致插件加载失败 | 已修，真实 Obsidian 复核 | 9ded48a |
+| F18 运行后 Dashboard 不刷新（C7） | 已修 | d93f268 |
+| C1 主题 / 分类保存失败无回滚 | 已修 | eea6192 |
+| C4 旧版 Thinking 开关不同步 | 已修 | 21eb465 |
+| F19 thinking 参数未到达服务商 | 待用户决定 | — |
+| F20 frontmatter 未加引号 | 已修 | df8d1c0 |
+| F21 刷新 frontmatter 丢用户属性 | 已修 | 2abb4c6 |
+| F22 滚出 `/recent` 的日期反复重试 | 已修 | 3413d35 |
+| F23、F24 | 记录，未修 | — |
 
 ## Recommended fix order
 
