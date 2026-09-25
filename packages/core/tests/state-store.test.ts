@@ -117,7 +117,7 @@ describe("StateStore", () => {
     });
   });
 
-  it("recovers stale running dates to permanent failures", async () => {
+  it("recovers stale running dates to transient failures so they are retried", async () => {
     const { store } = makeStore({
       "2026-06-13": {
         status: "running",
@@ -135,9 +135,26 @@ describe("StateStore", () => {
     await expect(store.recoverStaleRunning(3_700_001, 3_600_000))
       .resolves.toEqual(["2026-06-13"]);
 
-    expect(store.get("2026-06-13").status).toBe("failed_permanent");
+    expect(store.get("2026-06-13").status).toBe("failed_transient");
     expect(store.get("2026-06-13").attempts).toBe(3);
+    expect(store.isDone("2026-06-13")).toBe(false);
     expect(store.get("2026-06-14").status).toBe("running");
+  });
+
+  it("recovers a stale running date permanently once retries are exhausted", async () => {
+    const { store } = makeStore({
+      "2026-06-13": {
+        status: "running",
+        lastAttempt: 1,
+        attempts: 10,
+      },
+    });
+    await store.load();
+
+    await store.recoverStaleRunning(3_700_001, 3_600_000);
+
+    expect(store.get("2026-06-13").status).toBe("failed_permanent");
+    expect(store.get("2026-06-13").error).toMatch(/^retries exhausted after 10 attempts: /);
   });
 
   it("isDone returns true for completed and failed_permanent", async () => {
