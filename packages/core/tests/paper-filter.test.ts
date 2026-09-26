@@ -220,8 +220,26 @@ describe("filterPapers", () => {
   });
 
   it.each([
+    ["json-tagged fence", '```json\n{"papers":[{"id":"2601.12345","category":"photo-z"}]}\n```'],
+    ["bare fence with surrounding whitespace", '\n  ```\n{"papers":[{"id":"2601.12345","category":"photo-z"}]}\n```  \n'],
+  ])("accepts a response wrapped in one outer code fence (%s)", async (_label, raw) => {
+    const llm = { call: vi.fn().mockResolvedValue(raw) };
+    const out = await filterPapers([samplePaper], {
+      llm: llm as any,
+      logger: new Logger("error"),
+      arxivSettings: makeArxiv(makeTopics()),
+      ...checkpointScope,
+    });
+    expect(out).toMatchObject([{ id: "2601.12345", category: "photo-z" }]);
+  });
+
+  it.each([
     ["non-JSON", "not JSON", "invalid-json"],
-    ["markdown-wrapped JSON", '```json\n{"papers":[]}\n```', "invalid-json"],
+    ["prose around a fence", 'Here you go:\n```json\n{"papers":[]}\n```', "invalid-json"],
+    ["two fences", '```json\n{"papers":[]}\n```\n```json\n{"papers":[]}\n```', "invalid-json"],
+    ["invalid JSON inside a fence", '```json\n{"papers":[}\n```', "invalid-json"],
+    ["unclosed fence", '```json\n{"papers":[]}', "invalid-json"],
+    ["fenced contract violation", '```json\n{"papers":{}}\n```', "invalid-contract"],
     ["array root", JSON.stringify([]), "invalid-contract"],
     ["extra root key", JSON.stringify({ papers: [], extra: true }), "invalid-contract"],
     ["missing papers", JSON.stringify({}), "invalid-contract"],

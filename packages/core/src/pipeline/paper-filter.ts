@@ -268,7 +268,7 @@ async function filterPapersManualOnly(
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(unwrapSingleCodeFence(raw));
     } catch {
       throw new PaperFilterResponseValidationError(
         "response is not strict JSON",
@@ -335,6 +335,17 @@ async function filterPapersManualOnly(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+/**
+ * Some models wrap the whole JSON answer in one ```json fence. Unwrap exactly
+ * that shape; anything else (prose around it, several fences) is returned
+ * unchanged so strict parsing still rejects it.
+ */
+function unwrapSingleCodeFence(raw: string): string {
+  const match = /^\s*```[A-Za-z]*[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(raw);
+  if (!match || match[1].includes("```")) return raw;
+  return match[1];
 }
 
 function isErrorLike(value: unknown): value is Error & Record<string, unknown> {
