@@ -343,9 +343,9 @@ async function filterPapersManualOnly(
  * unchanged so strict parsing still rejects it.
  */
 function unwrapSingleCodeFence(raw: string): string {
-  const match = /^\s*```[A-Za-z]*[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(raw);
-  if (!match || match[1].includes("```")) return raw;
-  return match[1];
+  const inner = /^\s*```[A-Za-z]*[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(raw)?.[1];
+  if (inner === undefined || inner.includes("```")) return raw;
+  return inner;
 }
 
 function isErrorLike(value: unknown): value is Error & Record<string, unknown> {
