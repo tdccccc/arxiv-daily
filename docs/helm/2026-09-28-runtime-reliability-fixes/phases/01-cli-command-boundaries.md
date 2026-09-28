@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:28:57+08:00
-revision: 3
+updated: 2026-09-28T22:33:38+08:00
+revision: 4
 
 ## Outcome
 
@@ -46,7 +46,7 @@ CLI 生成的 cron 命令准确保留可执行路径，非法时间窗不会改�
 - Red / baseline signal: `runCli` 的 init/update/schedule/data/email 子命令 Promise 拒绝时解析为非零退出码，输出脱敏；等待中的 email 命令保留信号处理器，完成后移除。原实现部分 Promise 越过 catch/finally。
 - Green check: `npm test --workspace arxiv-daily -- tests/cli-main.test.ts tests/cli-email.test.ts`
 - regression checks: 完整 CLI suite、root typecheck/build/boundaries；本地假 HTTP、临时文件与注入任务，不发送真实邮件。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (12 observed Reds; 37 focused Greens; CLI 107 tests and root typecheck/build/boundaries passed)
 
 ## Phase verification
 

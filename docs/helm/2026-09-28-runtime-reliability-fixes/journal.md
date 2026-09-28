@@ -25,3 +25,10 @@
 - evidence: F30 had two expected failures (TOML accepted the reversed window; install returned success and touched crontab). After validation, focused tests 23 and full CLI 95 pass, along with CLI typecheck. Valid single-run, equal-boundary and recurring windows retain their behavior.
 - checkpoint: On track; isolated F30 implementation and tests committed.
 - next: F31 async command errors and handler lifetime.
+
+## 2026-09-28 — P1 done, start P2
+
+- evidence: F31 had 12 expected failures across command rejection, configuration exit codes and email signal-handler lifetime. All 37 focused tests and 107 CLI tests now pass; root typecheck, build and boundaries pass. F29/F30 retain their accepted evidence.
+- checkpoint: On track; P1 complete after its three isolated fix commits.
+- change: check F29–F31 criteria, mark P1 done and activate P2 for relay request JSON shape validation.
+- next: F32 failing request-boundary tests; no real mail or live cutover operations.
