@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:22:37+08:00
-revision: 1
+updated: 2026-09-28T22:27:38+08:00
+revision: 2
 owner: codex-root-session-2026-09-28
 
 ## Intent
@@ -32,6 +32,7 @@ owner: codex-root-session-2026-09-28
 - 从已验收的 6de54d9 创建本地分支 `fix/review-followups`，旧 helm 保持 done 与原历史。
 - 沿用不使用子代理的偏好；每个阶段由当前会话串行推进。
 - 当前只展开 P1；后续阶段到启动时才写具体方案与测试策略。
+- 2026-09-28 用户决定：先完成跨平台实现和 CI 验收配置，原生平台验收单独保留 P6 待办。
 - 不以普通 write-before-check、缩短占位寿命或仅凭墙钟超时破坏现有防重复投递与路径边界。
 - 用户本轮明确点名的项目未经用户重新决定不豁免；缺真实接口或原生平台证据时保留未完成状态并写明阻碍。
 - commit 使用 Conventional Commits 英文动词主题，多个 -m 分别写 Why/What/Validation；提交前检查 staged diff。
@@ -42,9 +43,10 @@ owner: codex-root-session-2026-09-28
 2. P2 — 邮件中继拒绝非法 JSON 对象形状（F32） — status: pending
 3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: pending
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: pending
-5. P5 — 三个桌面平台可靠自动投递并完成原生验收 — status: pending
+5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: pending
+6. P6 — macOS/Windows 原生平台验收（按用户决定保留待办） — status: pending
 
 ## Open questions
 
 - F19 使用哪个已配置接口进行合成提示词实测？已向用户询问；本地契约测试可先执行。
-- macOS/Windows 是否由用户提供原生验收环境，或先交付可运行的验收配置？真实平台验收不会用 Linux 模拟结果替代。
+
