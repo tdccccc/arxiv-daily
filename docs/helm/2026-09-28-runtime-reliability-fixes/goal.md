@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:44:52+08:00
-revision: 4
+updated: 2026-09-28T22:56:01+08:00
+revision: 5
 owner: codex-root-session-2026-09-28
 
 ## Intent
@@ -45,8 +45,3 @@ owner: codex-root-session-2026-09-28
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: pending
 5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: pending
 6. P6 — macOS/Windows 原生平台验收（按用户决定保留待办） — status: pending
-
-## Open questions
-
-- F19 使用哪个已配置接口进行合成提示词实测？已向用户询问；本地契约测试可先执行。
-

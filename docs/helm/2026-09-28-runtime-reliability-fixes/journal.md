@@ -41,3 +41,11 @@
 - sources: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/ ; https://api-docs.deepseek.com/guides/thinking_mode ; https://platform.claude.com/docs/en/api/openai-sdk ; https://docs.bigmodel.cn/cn/guide/capabilities/thinking
 - environment: installed plugin selects DeepSeek but names a GPT model through a private gateway; do not infer the gateway protocol from the preset or mutate the user's configuration. A concise synthetic live-test question is pending; no live request has been sent.
 - next: HTTP payload contract Red/Green plus checkpoint invalidation, then the selected live-interface acceptance when authorized.
+
+## 2026-09-28 — L1 adjust P3 for current Anthropic models
+
+- evidence: all 171 focused tests and the full workspace suite passed after request correction and checkpoint versioning. User explicitly authorized the existing private gateway; one synthetic arithmetic call returned HTTP 200 and the expected digit 2 with thinking enabled/low effort. No plugin config modification or paper data was sent. Official Claude extended-thinking documentation states 4.7+ rejects manual budget_tokens, which includes the project's default Opus 4.7 preset.
+- change: retain the provider fix, add model-aware adaptive thinking and a native Messages request/parser for the official Anthropic host so effort can reach its documented output_config. Third-party compatibility endpoints retain their route. Add tests before this production extension; generation endpoint hashing follows the selected route.
+- source: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+- disposition: do not treat gateway success as a live test of Anthropic. Keep original local tests, add native response-contract coverage; adjust endpoint fingerprint fixtures only for the changed actual route. No additional live calls are needed for the unchanged private-gateway path.
+- next: observe native Anthropic contract Red, implement, and rerun focused and affected regressions before accepting P3.
