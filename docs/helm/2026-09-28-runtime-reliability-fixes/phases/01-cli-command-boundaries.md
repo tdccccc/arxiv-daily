@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:22:37+08:00
-revision: 1
+updated: 2026-09-28T22:26:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ CLI 生成的 cron 命令准确保留可执行路径，非法时间窗不会改�
 - Red / baseline signal: 新建 `apps/cli/tests/cli-schedule.test.ts`；生成含空格、单引号、反斜线、美元符、反引号和百分号路径的 cron 行，经 cron 命令预处理和真实 `/bin/sh` 调用临时可执行文件，记录的参数须恰为 run、--today。原实现失败；含换行的路径须在 writeCrontab 前拒绝。
 - Green check: `npm test --workspace arxiv-daily -- tests/cli-schedule.test.ts`
 - regression checks: CLI 现有 schedule/config/main 测试、CLI typecheck。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (11 observed Reds; 12 focused Greens; 39 regression tests and CLI typecheck passed)
 
 ### Chunk 2 — 非法时间窗不安装空任务（F30）
 
