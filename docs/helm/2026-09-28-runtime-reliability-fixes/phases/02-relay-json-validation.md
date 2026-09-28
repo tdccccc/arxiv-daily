@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T22:33:38+08:00
-updated: 2026-09-28T22:33:38+08:00
-revision: 1
+updated: 2026-09-28T22:44:52+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ Relay 的公开 JSON 请求入口对 null、数组和标量返回 400，不因�
 - Red / baseline signal: relay tests 的 verify/start、已认证 deliver、已认证 cutover 收到 null/数组/字符串/数字/布尔时须返回 400 且无 provider 调用/状态写入；原路径 null 抛出 500，部分其它形状进入较深层字段校验。
 - Green check: `npm test --prefix services/email-relay`
 - regression checks: relay typecheck 与全部 relay 测试；合法请求的认证、配额、幂等性和控制状态机现有测试保持通过。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (12 observed Reds; 20 focused Greens; full relay 161 tests and typecheck passed)
 
 ## Phase verification
 

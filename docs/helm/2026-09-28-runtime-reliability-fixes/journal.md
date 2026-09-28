@@ -32,3 +32,12 @@
 - checkpoint: On track; P1 complete after its three isolated fix commits.
 - change: check F29–F31 criteria, mark P1 done and activate P2 for relay request JSON shape validation.
 - next: F32 failing request-boundary tests; no real mail or live cutover operations.
+
+## 2026-09-28 — P2 done, start P3
+
+- evidence: F32 produced 12 expected failures among 20 request-shape cases. Shared object parsing now passes all 20 cases and the full 161-test relay suite; typecheck passes. No provider call, gate dispatch or state write for invalid public input. Fix committed as 2b49954.
+- checkpoint: On track; P2 accepted and P3 active.
+- provider evidence: fetched official OpenAI Chat Completions reference, DeepSeek thinking guide, Anthropic OpenAI SDK compatibility and Zhipu thinking guide. SDK extra_body must be flattened; OpenAI accepts reasoning_effort without a thinking field; DeepSeek accepts thinking plus effort; Anthropic accepts top-level thinking through its compatibility endpoint; the currently preset GLM models use thinking without reasoning_effort. Transport changes must also invalidate generation checkpoints created with the old wire contract.
+- sources: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/ ; https://api-docs.deepseek.com/guides/thinking_mode ; https://platform.claude.com/docs/en/api/openai-sdk ; https://docs.bigmodel.cn/cn/guide/capabilities/thinking
+- environment: installed plugin selects DeepSeek but names a GPT model through a private gateway; do not infer the gateway protocol from the preset or mutate the user's configuration. A concise synthetic live-test question is pending; no live request has been sent.
+- next: HTTP payload contract Red/Green plus checkpoint invalidation, then the selected live-interface acceptance when authorized.
