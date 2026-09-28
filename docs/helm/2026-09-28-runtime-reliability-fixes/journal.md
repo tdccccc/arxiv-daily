@@ -56,3 +56,9 @@
 - checkpoint: On track; request and checkpoint semantics accepted together, including deterministic fingerprint fixture regeneration and adaptive checkpoint round-trips.
 - change: P3 done, P4 active. Current index code already rereads disk inside each mutation; the remaining defect is the lack of a shared lock around that full transaction, not an indefinitely cached inbox.
 - next: implement host-local locks with atomic immutable ownership/decision records and OS liveness checks, then wire daily generation and index transactions. Do not reclaim a live owner merely because time elapsed. Coordination records are local to the host and keyed by the canonical Vault root, outside exportable research data.
+
+## 2026-09-28 — P4 shared-lock primitive accepted
+
+- evidence: missing-module contract baseline followed by four actual behavioral Reds with a no-op lock. Real OS subprocess tests now prove exclusion, serialized counter updates, recovery after SIGKILL with competing contenders, and no takeover of a live holder on timeout/cancellation. Full node-runtime 49 tests and typecheck passed.
+- checkpoint: On track; shared lock port and Node implementation committed separately from host wiring. Coordination uses the same OS PID namespace and local hard-link-capable filesystem; uncertain liveness remains busy.
+- next: reproduce and repair RunLock/PaperIndexStore host wiring.

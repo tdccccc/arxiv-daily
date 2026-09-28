@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T23:16:55+08:00
-updated: 2026-09-28T23:16:55+08:00
-revision: 1
+updated: 2026-09-28T23:28:27+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ revision: 1
 - Red / baseline signal: 新端口/模块的类型契约缺失；最小可编译表面后，真实子进程争用、崩溃、双恢复者和活跃持有者等待测试未满足。
 - Green check: node-runtime real-filesystem/child-process tests；无同时进入临界区，退出后可重新取得锁，wait=false 返回忙，取消/超时不泄漏占位。
 - regression checks: node-runtime suite 与 typecheck。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (missing API baseline then four behavioral Reds; real subprocess Green; node-runtime 49/typecheck passed)
 
 ### Chunk 2 — 日运行与论文索引接入共享锁
 
