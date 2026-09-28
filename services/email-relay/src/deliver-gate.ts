@@ -1,4 +1,5 @@
 import { utcDateKey } from "./crypto";
+import { parseJsonObject } from "./json-body";
 import {
   validateDeliverRequest,
   type DeliverBody,
@@ -165,7 +166,7 @@ export class DeliverGate {
 
     let body: DeliverBody;
     try {
-      body = (await request.json()) as DeliverBody;
+      body = parseJsonObject(await request.text());
     } catch {
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
