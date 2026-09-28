@@ -318,6 +318,7 @@ function mapScheduleIntent(raw: unknown): CliScheduleIntent {
   if (!/^\d{1,2}:\d{2}$/.test(d.until)) {
     throw new CliConfigError(`invalid schedule.until: ${d.until} (use HH:MM)`);
   }
+  scheduleFireSlots(d);
   return d;
 }
 
@@ -380,6 +381,9 @@ export function scheduleFireSlots(intent: CliScheduleIntent): string[] {
   const slots: string[] = [];
   let minutes = start.h * 60 + start.m;
   const endMin = end.h * 60 + end.m;
+  if (endMin < minutes) {
+    throw new CliConfigError("schedule.until must not be earlier than schedule.on for a recurring schedule");
+  }
   const step = intent.intervalHours * 60;
   while (minutes <= endMin) {
     const h = Math.floor(minutes / 60) % 24;

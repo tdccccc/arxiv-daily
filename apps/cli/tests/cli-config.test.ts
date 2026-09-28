@@ -132,4 +132,12 @@ describe("CLI config loader (TOML / XDG)", () => {
       }),
     ).toEqual(["09:30", "13:30", "17:30"]);
   });
+
+  it("rejects a reversed recurring schedule while loading TOML", async () => {
+    const text = minimalToml.replace('on = "09:30"', 'on = "18:00"')
+      .replace('until = "18:00"', 'until = "09:00"')
+      .replace("interval_hours = 0", "interval_hours = 1");
+    await expect(loadCliConfig({ configPath: "/cfg.toml", readText: async () => text }))
+      .rejects.toThrow("schedule.until");
+  });
 });

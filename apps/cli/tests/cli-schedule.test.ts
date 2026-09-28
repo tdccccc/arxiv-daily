@@ -88,4 +88,35 @@ describe("CLI schedule command", () => {
       "30 9 * * 1-5  /usr/local/bin/arxiv-daily run --today  # arxiv-daily-managed",
     ]);
   });
+
+  it("rejects an inverted repeat window without touching existing cron jobs", async () => {
+    const cfg = config();
+    cfg.scheduleIntent = { ...cfg.scheduleIntent, on: "18:00", until: "09:00", intervalHours: 1 };
+    const { io, stderr } = captureIo();
+    const readCrontab = vi.fn().mockResolvedValue("0 9 * * * old-command # arxiv-daily-managed\n");
+    const writeCrontab = vi.fn();
+    expect(await scheduleInstall(cfg, io, { binaryPath: "/usr/bin/arxiv-daily", readCrontab, writeCrontab })).toBe(2);
+    expect(stderr.join("")).toContain("schedule.until");
+    expect(readCrontab).not.toHaveBeenCalled();
+    expect(writeCrontab).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { on: "09:30", until: "18:00", intervalHours: 4, count: 3 },
+    { on: "09:30", until: "09:30", intervalHours: 1, count: 1 },
+    { on: "18:00", until: "09:00", intervalHours: 0, count: 1 },
+  ])("installs $count jobs for a valid schedule $on/$until/$intervalHours", async (schedule) => {
+    const cfg = config();
+    cfg.scheduleIntent = { ...cfg.scheduleIntent, ...schedule };
+    const { io } = captureIo();
+    const writeCrontab = vi.fn();
+    expect(await scheduleInstall(cfg, io, {
+      binaryPath: "/usr/bin/arxiv-daily",
+      readCrontab: async () => "0 0 * * * keep-me\n",
+      writeCrontab,
+    })).toBe(0);
+    const written = writeCrontab.mock.calls[0]![0] as string;
+    expect(written).toContain("0 0 * * * keep-me");
+    expect(written.match(/arxiv-daily-managed/g)).toHaveLength(schedule.count);
+  });
 });
