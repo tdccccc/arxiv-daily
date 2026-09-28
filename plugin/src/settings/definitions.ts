@@ -113,7 +113,7 @@ export function writeSettingValue(
 
 import type { Setting, SettingDefinitionItem } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
-import { arxivCategories } from "@arxiv-daily/core";
+import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, arxivCategories } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_REPO_URL,
@@ -132,6 +132,8 @@ export interface SettingDefinitionsHost {
   renderLibraryConnectionRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
   showSetupGuide?: boolean;
+  /** False when this host refuses every automatic email send. */
+  automaticEmailSupported?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
   renderTimezoneRow?: (setting: Setting) => void;
@@ -187,6 +189,14 @@ function detailNotesOptions(settings: PluginSettings): Record<string, string> {
     options.custom = "Custom (current values)";
   }
   return options;
+}
+
+/** Daily auto-send description, shared by both render paths. */
+export function dailyAutoSendDesc(hostedMode: boolean, automaticSupported: boolean): string {
+  const desc = hostedMode
+    ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
+    : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.";
+  return automaticSupported ? desc : `${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE} ${desc}`;
 }
 
 /**
@@ -506,9 +516,7 @@ export function buildSettingDefinitions(
             ]),
         {
           name: "Daily auto-send",
-          desc: hostedMode
-            ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
-            : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
+          desc: dailyAutoSendDesc(hostedMode, host.automaticEmailSupported ?? true),
           control: {
             type: "toggle",
             key: SETTING_KEYS.email.enabled,

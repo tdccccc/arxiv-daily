@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   allSettingKeys,
   buildSettingDefinitions,
+  dailyAutoSendDesc,
   readSettingValue,
   SETTING_KEYS,
   writeSettingValue,
 } from "../src/settings/definitions";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type { SettingDefinitionItem } from "obsidian";
 
 describe("setting key path mapping", () => {
@@ -338,5 +339,23 @@ describe("buildSettingDefinitions structure", () => {
     expect(hostedNames).toContain("Verification code");
     expect(hostedNames).not.toContain("Resend API key");
     expect(hostedNames).not.toContain("From email");
+  });
+
+  it("warns on the auto-send row when this system cannot send automatic email", () => {
+    const autoSendDesc = (host: ReturnType<typeof makeFullHost>) => {
+      const items = buildSettingDefinitions(host);
+      const group = items.find(
+        (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+          item.type === "group" && item.heading === "Email delivery",
+      );
+      return group?.items.find((item) => item.name === "Daily auto-send")?.desc;
+    };
+    const host = makeFullHost();
+    expect(autoSendDesc(host)).not.toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+
+    const unsupported = { ...host, automaticEmailSupported: false };
+    expect(autoSendDesc(unsupported)).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+    expect(dailyAutoSendDesc(false, false)).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+    expect(dailyAutoSendDesc(true, true)).not.toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
   });
 });

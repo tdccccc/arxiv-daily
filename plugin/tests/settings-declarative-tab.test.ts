@@ -137,6 +137,7 @@ function makeTab() {
     restartScheduler: vi.fn(),
     sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
+    automaticEmailSupported: vi.fn().mockReturnValue(true),
     getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
     selectLibraryRoot: vi.fn().mockResolvedValue("cancelled"),

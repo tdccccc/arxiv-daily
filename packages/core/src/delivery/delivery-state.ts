@@ -303,6 +303,21 @@ export function normalizeDeliveryState(raw: unknown): DeliveryStateFile {
   };
 }
 
+export const AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE =
+  "Automatic daily email is not supported on this system yet (currently Linux only), so daily reports will not be emailed automatically. Test emails still send.";
+
+/**
+ * Automatic sends need system-wide exclusive create and a namespace guard to
+ * stay at-most-once; hosts without them refuse every automatic send.
+ */
+export function supportsAutomaticEmailDelivery(storage: StorageAdapter): boolean {
+  return Boolean(
+    storage.createTextExclusive &&
+      storage.guardClaimNamespace &&
+      storage.list,
+  );
+}
+
 /**
  * Claims are immutable generations. A same-generation decision file is the
  * exclusive race between starting the provider attempt and recovering a stale
@@ -320,6 +335,7 @@ export async function claimAutomaticDelivery(
     owner?: string;
   },
 ): Promise<DeliveryClaimResult> {
+  // Keep in step with supportsAutomaticEmailDelivery; inline for narrowing.
   if (
     !storage.createTextExclusive ||
     !storage.guardClaimNamespace ||

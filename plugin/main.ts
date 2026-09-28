@@ -27,6 +27,10 @@ import type {
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { migrateLegacyRunState } from "./src/services/legacy-run-state";
+import {
+  createUnsupportedAutomaticEmailNotifier,
+  testEmailResultMessage,
+} from "./src/services/email-delivery";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
 import { Logger } from "@arxiv-daily/core";
@@ -143,6 +147,7 @@ import {
   resolveResendApiKey,
   sampleDailyDigest,
   startHostedEmailVerification,
+  supportsAutomaticEmailDelivery,
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
 import {
@@ -3119,7 +3124,7 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger.debug(`email: no digest for ${date}; skip auto-send (repair path)`);
       return;
     }
-    await deliverDailyEmailIfEnabled(result.digest, {
+    const delivery = await deliverDailyEmailIfEnabled(result.digest, {
       storage: this.host.storage,
       http: this.host.http,
       output: this.settings.output,
@@ -3127,6 +3132,16 @@ export default class ArxivDailyPlugin extends Plugin {
       apiKey: resolveResendApiKey(this.settings.email),
       logger: this.logger,
     });
+    this.notifyUnsupportedAutomaticEmail(delivery);
+  }
+
+  private readonly notifyUnsupportedAutomaticEmail =
+    createUnsupportedAutomaticEmailNotifier((message) => {
+      new Notice(`arXiv Daily: ${message}`, 15_000);
+    });
+
+  automaticEmailSupported(): boolean {
+    return supportsAutomaticEmailDelivery(this.host.storage);
   }
 
   async sendTestEmail(date?: string): Promise<string> {
@@ -3149,16 +3164,7 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
       force: true,
     });
-    if (
-      result.kind === "delivered" ||
-      result.kind === "delivered_unrecorded"
-    ) {
-      return "Test email delivered" +
-        (result.kind === "delivered_unrecorded"
-          ? `; delivery record unavailable: ${result.reason}`
-          : "");
-    }
-    throw new Error(`${result.kind}: ${result.reason}`);
+    return testEmailResultMessage(result, this.automaticEmailSupported());
   }
 
   async sendHostedVerificationEmail(): Promise<string> {

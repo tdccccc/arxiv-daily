@@ -103,6 +103,7 @@ function makeLegacyApiKeyTab(
     manifest: { version: "0.0.0-test" },
     getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
+    automaticEmailSupported: () => true,
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);

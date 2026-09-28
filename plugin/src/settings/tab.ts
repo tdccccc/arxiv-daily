@@ -11,6 +11,7 @@ import {
 import type ArxivDailyPlugin from "../../main";
 import {
   buildSettingDefinitions,
+  dailyAutoSendDesc,
   readSettingValue,
   SETTING_KEYS,
   settingsSectionClass,
@@ -188,6 +189,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     return buildSettingDefinitions({
       plugin: this.plugin,
       showSetupGuide: this.shouldShowSetupGuide(),
+      automaticEmailSupported: this.plugin.automaticEmailSupported(),
       renderSetupGuideRow: (setting) =>
         declarativeRows.renderSetupGuideRow(this, setting),
       renderScheduleEnabledRow: (setting) =>
@@ -1958,11 +1960,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Daily auto-send")
-      .setDesc(
-        hostedMode
-          ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
-          : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
-      )
+      .setDesc(dailyAutoSendDesc(hostedMode, this.plugin.automaticEmailSupported()))
       .addToggle((t) =>
         t.setValue(s.email.enabled).onChange(async (v) => {
           await this.saveLegacyControl(
