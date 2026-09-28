@@ -12,7 +12,7 @@
 
 引导流程的其余问题集中在“看似完成、实际跑不起来”：首份报告固定用“今天”，周末或 arXiv 当天未公告时必然失败（F3）；新主题标签会重复，引导前三步都显示完成却没有生成按钮（F4）；引导显示“Setup complete”但每日自动运行默认关闭（F10）。
 
-core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and relay findings”。
+core 的批次 A/B 由早期后台 agent 审查；CLI、node-runtime 与邮件中继的批次 C 已于 2026-09-28 由接续主会话完成。最后新增的高优先级配置权限问题 F28 已修；其余问题的本轮处置见下文与 Helm journal。
 
 | 区域 | 结论 | 建议强度 |
 | --- | --- | --- |
@@ -207,7 +207,7 @@ core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and rel
 
 ## Core, CLI and relay findings
 
-以下来自后台审查（agent 在批次 A 中又分出三个子 agent 看 LLM 客户端、arXiv 抓取与日期、Markdown 输出；这超出了“只用一个 agent”的约定，已叫停，其结论由主会话逐条复核）。批次 B（状态与投递）和批次 C（CLI 与邮件中继）见后续补充。
+批次 A 来自早期后台审查（agent 又分出三个子 agent，看 LLM 客户端、arXiv 抓取与日期、Markdown 输出；这超出了“只用一个 agent”的约定，已叫停，其结论由主会话逐条复核）。以下补齐已接受的批次 B 修复与主会话独立完成的批次 C；本次接续没有使用子代理。
 
 ### F19 — 推理 / thinking 参数包在 `extra_body` 里发出，从未到达服务商
 
@@ -246,6 +246,70 @@ core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and rel
 **Priority: P3 · PLAUSIBLE · 未修**
 
 `packages/core/src/pipeline/detail-selector.ts:148`、`personalized-paper-filter.ts:535` 用 `.slice()` 截断，边界处的 emoji 等字符可能变成孤立代理项。不崩溃，仅影响边界一个字符。
+
+### F25 — 崩溃中断的运行被永久放弃
+
+**Priority: P1 · CONFIRMED · 已修（8b4b2a6）**
+
+`packages/core/src/services/state-store.ts` 的 `recoverStaleRunning` 现在将未达到重试上限的过期 running 记录恢复为 `failed_transient`；达到 10 次上限才永久失败，并说明重试耗尽。提交记录包含两条先失败的回归测试；2026-09-28 全量 core 测试复核通过。
+
+### F26 — 模型用单层代码围栏包裹 JSON 时过滤失败
+
+**Priority: P1 · CONFIRMED · 已修（25889d7、b6a06ce）**
+
+`packages/core/src/pipeline/paper-filter.ts` 只解开包裹整个回答的一层围栏，再执行原有严格 JSON 契约校验。外围说明、多段围栏、缺失闭合和内部非法 JSON 仍失败。b6a06ce 是同一修复的严格索引类型检查补充；本次全量 core 测试与工作区类型检查通过。
+
+### F27 — 不支持自动邮件的系统只记录日志，测试邮件却成功
+
+**Priority: P1 · CONFIRMED · 可见性已修（c55e53f）**
+
+无 exclusive-create 能力时，插件邮件设置、测试发送结果及被拒绝的自动发送提示都会说明限制；CLI 的 email status/test 与运行日志也说明自动发送不可用。投递安全机制保持不变。macOS/Windows 实际自动投递能力按 2026-09-25 用户决定留给后续 initiative。
+
+### 批次 B 的其他处置
+
+- 过滤阶段的 paper index 写入失败现按可重试失败处理（7aa19aa；P5 chunk 3b），本次 core 全量复核通过。
+- `RunLock`（`packages/core/src/services/run-lock.ts`）只在进程内互斥，`PaperIndexStore`（`packages/core/src/services/paper-index.ts`）的内存快照不能协调多个进程并发写同一 Vault。跨进程锁与索引一致性按既有 P5 计划记录、延期；没有宣称解决。
+- 非空旧 `topics` 数组迁移的疑点仍为 PLAUSIBLE，未获得可接受的失败复现，不作为已修问题。
+
+### F28 — CLI 初始化配置文件向其他本机用户开放密钥读取权限
+
+**Priority: P1 / High · CONFIRMED（真实文件系统）· 已修（f6ef773）**
+
+`apps/cli/src/init.ts` 的默认写入原来沿用 umask；实测新建配置为 0664，已有 0644 配置在 Overwrite 和 Keep existing 后均保持 0644。配置含 LLM API key、邮件 API key 或 hosted token，在可遍历的配置目录中会被其他本机用户读取。
+
+修复复用 `NodeStorageAdapter.writeTextAtomic`，先以 0600 写入同目录临时文件再替换目标，新建配置目录使用 0700。三条真实文件测试先失败后通过，并验证内容仍能加载、Keep existing 保留旧设置且没有临时文件残留。普通配置读取不改权限；旧安装须再次运行 init 才应用此写入规则。未验证 Windows ACL。
+
+### F29 — CLI 安装路径含空格时生成的 cron 命令无法执行
+
+**Priority: P2 · CONFIRMED（本地只读探针）· 本轮延期**
+
+`apps/cli/src/schedule-cmd.ts` 的 `buildCronLines` 直接插入 binaryPath。传入 `/tmp/my tools/arxiv-daily` 得到未加引号的 `/tmp/my tools/arxiv-daily run --today`，shell 会将它拆开。默认普通路径不受影响；后续应同时处理 shell 引号与 cron 的 `%` 语法。
+
+### F30 — 倒置的重复运行时间窗会“成功安装”零条 cron
+
+**Priority: P2 · CONFIRMED（内存 crontab 探针）· 本轮延期**
+
+`scheduleFireSlots`（`apps/cli/src/config.ts`）对 on=18:00、until=09:00、intervalHours=1 返回空数组；`scheduleInstall` 返回 0 并打印 `installed 0 cron line(s)`。它仍会移除旧托管任务，因此手工 TOML 时间窗配置错误可使定时运行停止。未修改真实 crontab。
+
+### F31 — 部分异步子命令绕过 CLI 统一错误处理
+
+**Priority: P2 · CONFIRMED（注入失败的命令探针）· 本轮延期**
+
+`apps/cli/src/main.ts` 的 data 等分支在 try 中直接 return Promise，未 await。探针对 data export 注入拒绝后，`runCli` 向调用者 reject，stderr 为空，而非进入 catch 返回 1；可执行入口最终走原始 `console.error(err)`，绕开该入口的统一输出脱敏。此探针仅使用虚构字符串，不证明真实密钥曾泄漏。后续应统一 await / 错误边界，并检查 email 分支的 signal handler 清理时机。
+
+### F32 — 邮件中继对 JSON null 返回 500
+
+**Priority: P3 · CONFIRMED（Worker handler 本地探针）· 本轮延期**
+
+`services/email-relay/src/index.ts` 的 verifyStart 将已解析 JSON 直接当对象访问；POST `/v1/verify/start` 的 body 为 `null` 时返回 500 `relay request failed`，而非 400 输入错误。没有触发邮件或泄漏底层异常；后续可统一入口 JSON 对象形状校验。
+
+### 批次 C 范围与验证（2026-09-28）
+
+- 审查 CLI 的配置与初始化、命令分派、运行时组装、cron、更新、ZIP 导入导出；Node HTTP 的超时/取消、普通和独占存储路径、受限文献目录；relay 的验证发起/完成、认证、收件人绑定、账本/配额、provider 结果分类和 cutover 的 ready/issuance/authorize/action 主路径。cutover 并非逐分支形式化验证。
+- 本地探针位于 `/tmp/arxiv-helm-review-probe.ts`，使用虚构配置、内存 crontab 和本地 Worker handler；没有真实 API 请求、邮件、cron 安装或线上 cutover 操作。
+- `NODE_OPTIONS=--max-old-space-size=8192 npm test` 在新增 F28 前通过：core 2052 passed / 2 skipped、node-runtime 45、CLI 75、plugin 751。F28 后相关完整回归：CLI 78、node-runtime 45；core/plugin 无后续改动，未重复运行。
+- 最终 root lint（0 errors / 21 existing warnings）、typecheck、build、check:boundaries、check:obsidian-submission 全部通过。relay 独立 typecheck 与 141 tests 通过；先前缺少 Cloudflare 类型，通过按现有锁文件安装依赖解决，未修改依赖声明或锁文件。
+- F28 是本批唯一新增 High；F29–F32 按 P5 chunk 7 的范围记录延期。未重跑真实 Obsidian 验收；沿用 P1–P4/P6 已记录的真实会话证据。
 
 ### 已核对、不构成缺陷
 
@@ -287,6 +351,11 @@ core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and rel
 | F21 刷新 frontmatter 丢用户属性 | 已修 | 2abb4c6 |
 | F22 滚出 `/recent` 的日期反复重试 | 已修 | 3413d35 |
 | F23、F24 | 记录，未修 | — |
+| F25 崩溃恢复不再调度 | 已修 | 8b4b2a6 |
+| F26 单层代码围栏 JSON 被拒绝 | 已修 | 25889d7、b6a06ce |
+| F27 不支持自动邮件却没有提示 | 可见性已修，跨平台能力延期 | c55e53f |
+| F28 CLI 初始化配置权限 | 已修 | f6ef773 |
+| F29–F32 | 批次 C 确认的中低优先级问题，按计划记录延期 | — |
 
 ## Recommended fix order
 
@@ -298,4 +367,4 @@ core、CLI 与邮件中继由后台 agent 审查，结论见“Core, CLI and rel
 6. core / CLI / relay 中确认的高优先级问题
 7. 其余 P3
 
-F5（模板）与 F10（引导是否要求开启每日运行）需要用户先决定。
+F5、F10 的用户决定已执行；本轮目标已收尾。F19、F23、F24、批次 B 的跨进程/迁移疑点与 F29–F32 的本轮豁免和后续边界见 `docs/helm/2026-09-24-onboarding-review-fixes/journal.md`。

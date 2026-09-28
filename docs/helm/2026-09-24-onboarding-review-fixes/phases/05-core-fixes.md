@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T22:40:00+08:00
-updated: 2026-09-28T21:01:46+08:00
-revision: 4
+updated: 2026-09-28T21:18:54+08:00
+revision: 5
 
 ## Outcome
 
@@ -62,7 +62,7 @@ Small, local fixes, each with a test written first. The thinking-parameter findi
 - Red / baseline signal: `packages/core/tests/state-store.test.ts`: a stale `running` entry with attempts below the cap recovers to `failed_transient`; at the cap it becomes `failed_permanent` with a "retries exhausted" message — first fails today (always permanent)
 - Green check: `cd packages/core && npx vitest run tests/state-store.test.ts`
 - regression checks: core scheduler tests; full core suite
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (8b4b2a6; full core regression revalidated 2026-09-28)
 
 ### Chunk 5 — a filter answer in one outer code fence is accepted (review batch A, F26)
 
@@ -71,7 +71,7 @@ Small, local fixes, each with a test written first. The thinking-parameter findi
 - Red / baseline signal: `packages/core/tests` paper-filter test: a response that is exactly ```` ```json\n{"papers":[…]}\n``` ```` yields the same records as the bare JSON — fails today (`invalid-json`); text around the fence, two fences, or invalid JSON inside the fence still fail as before
 - Green check: focused vitest on the paper-filter tests
 - regression checks: filter-response-validation tests, pipeline tests
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (25889d7 + b6a06ce; full core regression and workspace typecheck revalidated 2026-09-28)
 
 ### Chunk 6 — hosts that cannot send automatic email say so (review batch B, F27)
 
@@ -80,13 +80,13 @@ Small, local fixes, each with a test written first. The thinking-parameter findi
 - Red / baseline signal: on a storage adapter without exclusive create, (a) a successful test send reports that automatic daily email is unsupported on this system, in the plugin and the CLI; (b) the plugin settings email section shows the same warning; (c) an automatic send refused for `delivery_storage_unsupported` produces a user-visible notice in the plugin (CLI: a warning on stderr) — fail today
 - Green check: focused vitest in plugin and CLI
 - regression checks: plugin and CLI email tests, core delivery tests
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (c55e53f; core/plugin/CLI regression revalidated 2026-09-28)
 
 ### Chunk 7 — review CLI, node-runtime and email relay (batch C)
 
 - change kind: read-only review, in this session, no subagents
 - output: findings added to `docs/reviews/2026-09-24-main-review.md`; each CONFIRMED High finding becomes its own chunk here (L1); lower ones recorded
-- [ ] review done and recorded
+- [x] review done and recorded (F28–F32, main review 2026-09-28; F28 fixed in chunk 8, lower-priority findings deferred per scope)
 
 ### Chunk 8 — CLI initialization writes private config files (batch C, F28)
 
@@ -96,11 +96,15 @@ Small, local fixes, each with a test written first. The thinking-parameter findi
 - approach: use the existing Node storage adapter's private atomic-write primitive so credentials are written into a 0600 temporary file before replacing the destination. Create new config directories with mode 0700. Preserve current overwrite / keep-existing content semantics and injected wizard I/O.
 - Green check: `npm test --workspace arxiv-daily -- tests/cli-init-e2e.test.ts tests/cli-init.test.ts`
 - regression checks: full CLI suite; node-runtime atomic-write tests; root typecheck, lint, build, boundaries, submission checks. Permission assertions are POSIX-only; Windows ACL guarantees are not claimed.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (f6ef773; three observed permission Reds, six focused Greens, CLI 78 and node-runtime 45 tests passed)
 
 ## Phase verification
 
 - Full check set from goal.md constraints
+- Observed 2026-09-28: root full test run passed (core 2052 / 2 skipped, node-runtime 45, CLI 75, plugin 751); after chunk 8, full CLI 78 and node-runtime 45 passed. No core or plugin changes followed their full run.
+- Final root lint (0 errors, 21 existing warnings), typecheck, build, check:boundaries and check:obsidian-submission passed. Relay standalone typecheck and 141 tests passed after installing its locked dependencies.
+- Chunk 8 test correction: Keep existing appends an existing informational comment; verification therefore checks preserved settings and absence of the new key rather than byte-identical file contents. Production merge behavior is unchanged.
+- Architecture map: scoped CLI config persistence update; schema valid and renderer current. No renderer change or browser rerun. Real Obsidian and live LLM/arXiv/email checks were not rerun; previously accepted UI evidence is retained.
 
 ## Abort / reshape triggers
 

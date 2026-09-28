@@ -222,12 +222,15 @@ svg{display:block;width:100%;height:100%;min-height:240px}
         "`run --today` 与 `run --date` 经过 Core Scheduler；`run --id` 调用独立的 Manual Fetch 用例。",
         "schedule 子命令生成调用 arxiv-daily run --today 的 cron 行并负责 show/install/uninstall；真正的定时唤醒由操作系统 cron 执行，不会启动仓库内 daemon。",
         "CLI 的 Atom metadata、HTML 和 source cache 由运行时组装入口创建并按过期时间清理；init/update/schedule/data/status 等直接命令不组装 Core。",
-        "CLI 配置默认位于 XDG/APPDATA 下的 arxiv-daily/config.toml，不在 Vault 内；从中读取 Vault 根目录、产品设置和 secrets，不会读取或同步 Obsidian 插件数据。"
+        "CLI 配置默认位于 XDG/APPDATA 下的 arxiv-daily/config.toml，不在 Vault 内；从中读取 Vault 根目录、产品设置和 secrets，不会读取或同步 Obsidian 插件数据。",
+        "init 通过 NodeStorageAdapter.writeTextAtomic 将配置写入同目录的临时文件再 rename 到目标；POSIX 文件权限为 0600，新建配置目录为 0700。覆盖或保留现有配置的路径都使用此写入方式；不会在普通读取配置时修改权限。"
       ],
       "evidence": [
         "apps/cli/src/main.ts (runCli)",
         "apps/cli/src/runtime.ts (buildCliRuntime)",
         "apps/cli/src/config-path.ts (resolveCliConfigPath)",
+        "apps/cli/src/init.ts (runInit)",
+        "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.writeTextAtomic)",
         "apps/cli/src/schedule-cmd.ts (buildCronLines)",
         "apps/cli/src/config.ts (loadCliConfig)"
       ]

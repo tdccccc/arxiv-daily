@@ -1,9 +1,9 @@
 # Onboarding and main review fixes
 
-status: active
+status: done
 created: 2026-09-24T20:50:00+08:00
-updated: 2026-09-28T20:53:22+08:00
-revision: 9
+updated: 2026-09-28T21:18:54+08:00
+revision: 10
 owner: codex-root-session-2026-09-28
 
 ## Intent
@@ -20,8 +20,8 @@ daily schedule without dead ends.
 - [x] The guide never shows all earlier steps complete while the run is blocked without saying why; new topics never get a duplicate tag
 - [x] "Generate first report" succeeds on weekends / before the day's announcement by using the latest announced date
 - [x] The guide includes a step to turn on the daily schedule and is not "complete" until it is on (user decision 2026-09-24)
-- [ ] Every other review finding marked for fixing in the phase list is fixed or explicitly waived in `journal.md`
-- [ ] Each fix lands as its own commit with a failing-first test; `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm run check:boundaries`, `npm run check:obsidian-submission` stay green
+- [x] Every other review finding marked for fixing in the phase list is fixed or explicitly waived in `journal.md`
+- [x] Each fix lands as its own commit with a failing-first test; `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm run check:boundaries`, `npm run check:obsidian-submission` stay green
 
 ## Non-goals
 
@@ -44,7 +44,7 @@ daily schedule without dead ends.
 2. P2 — Guide tells the truth: unique topic tags, visible blocking reasons, schedule step, busy state, copy, full-width card, last-category delete (F4, F10, F7, F6, F8, F9) — status: done
 3. P3 — First report uses the latest announced date; runs refresh open dashboards (F3, F18) — status: done
 4. P4 — Settings controls commit once and consistently (F11, F12, F13, F14, F16) — status: done
-5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: active
+5. P5 — Confirmed core / CLI / relay defects from the review are fixed — status: done
 6. P6 — Remaining low-priority findings fixed or waived (C1, C4, F15, F17) — status: done
 
 ## Decisions
