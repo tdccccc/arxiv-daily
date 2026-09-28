@@ -123,21 +123,21 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     return 0;
   }
 
-  if (parsed.name === "init") {
-    const initFn = opts.init ?? runInit;
-    return initFn({ env, stdout: io.stdout, stderr: io.stderr, isTTY: opts.isTTY });
-  }
-
-  if (parsed.name === "update") {
-    const updateFn = opts.update ?? runUpdate;
-    return updateFn(io, {
-      checkOnly: parsed.checkOnly,
-      yes: parsed.yes,
-      isTTY: opts.isTTY ?? Boolean(process.stdin.isTTY),
-    });
-  }
-
   try {
+    if (parsed.name === "init") {
+      const initFn = opts.init ?? runInit;
+      return await initFn({ env, stdout: io.stdout, stderr: io.stderr, isTTY: opts.isTTY });
+    }
+
+    if (parsed.name === "update") {
+      const updateFn = opts.update ?? runUpdate;
+      return await updateFn(io, {
+        checkOnly: parsed.checkOnly,
+        yes: parsed.yes,
+        isTTY: opts.isTTY ?? Boolean(process.stdin.isTTY),
+      });
+    }
+
     const config = await loadConfig({ env });
     secrets = [
       config.settings.llm.apiKey,
@@ -147,12 +147,12 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
 
     if (parsed.name === "schedule") {
       if (parsed.sub === "show") {
-        return (opts.schedule?.show ?? scheduleShow)(config, io);
+        return await (opts.schedule?.show ?? scheduleShow)(config, io);
       }
       if (parsed.sub === "install") {
-        return (opts.schedule?.install ?? scheduleInstall)(config, io);
+        return await (opts.schedule?.install ?? scheduleInstall)(config, io);
       }
-      return (opts.schedule?.uninstall ?? scheduleUninstall)(config, io);
+      return await (opts.schedule?.uninstall ?? scheduleUninstall)(config, io);
     }
 
     if (parsed.name === "data") {
@@ -161,20 +161,20 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
           writeLine(io.stderr, "data export requires --out PATH.zip");
           return 2;
         }
-        return (opts.data?.export ?? dataExport)(config, io, parsed.out);
+        return await (opts.data?.export ?? dataExport)(config, io, parsed.out);
       }
       if (!parsed.zip) {
         writeLine(io.stderr, "data import requires PATH.zip");
         return 2;
       }
-      return (opts.data?.import ?? dataImport)(config, io, parsed.zip, {
+      return await (opts.data?.import ?? dataImport)(config, io, parsed.zip, {
         yes: parsed.yes,
         isTTY: opts.isTTY ?? Boolean(process.stdin.isTTY),
       });
     }
 
     if (parsed.name === "email" && parsed.sub === "status") {
-      return emailStatus(config, io);
+      return await emailStatus(config, io);
     }
 
     const validation =
@@ -197,9 +197,9 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
           return 1;
         }
         if (parsed.sub === "test") {
-          return emailTest(config, runtime.host, io, parsed.date, now);
+          return await emailTest(config, runtime.host, io, parsed.date, now);
         }
-        return emailVerifyStart(config, runtime.host, io);
+        return await emailVerifyStart(config, runtime.host, io);
       }
 
       if (parsed.name === "run") {
