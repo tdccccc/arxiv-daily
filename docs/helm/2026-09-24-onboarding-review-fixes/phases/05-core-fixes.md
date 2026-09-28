@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-24T22:40:00+08:00
-updated: 2026-09-25T00:20:00+08:00
-revision: 3
+updated: 2026-09-28T21:01:46+08:00
+revision: 4
 
 ## Outcome
 
@@ -87,6 +87,16 @@ Small, local fixes, each with a test written first. The thinking-parameter findi
 - change kind: read-only review, in this session, no subagents
 - output: findings added to `docs/reviews/2026-09-24-main-review.md`; each CONFIRMED High finding becomes its own chunk here (L1); lower ones recorded
 - [ ] review done and recorded
+
+### Chunk 8 — CLI initialization writes private config files (batch C, F28)
+
+- change kind: bug fix
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: real-filesystem `runInit` tests in `apps/cli/tests/cli-init-e2e.test.ts` show that fresh, overwritten, and kept config files containing credentials are not mode 0600 on POSIX (fresh file follows umask; existing 0644 files stay readable).
+- approach: use the existing Node storage adapter's private atomic-write primitive so credentials are written into a 0600 temporary file before replacing the destination. Create new config directories with mode 0700. Preserve current overwrite / keep-existing content semantics and injected wizard I/O.
+- Green check: `npm test --workspace arxiv-daily -- tests/cli-init-e2e.test.ts tests/cli-init.test.ts`
+- regression checks: full CLI suite; node-runtime atomic-write tests; root typecheck, lint, build, boundaries, submission checks. Permission assertions are POSIX-only; Windows ACL guarantees are not claimed.
+- [ ] implementation and tests accepted
 
 ## Phase verification
 

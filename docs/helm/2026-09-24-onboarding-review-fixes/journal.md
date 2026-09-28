@@ -20,3 +20,10 @@
 - change: ownership passes to `codex-root-session-2026-09-28`; continue P5 in this session without subagents, preserving all previous user decisions and the no-push constraint.
 - disposition: retain existing code and tests. Revalidate the committed fixes; do not recreate their historical Red. No live provider calls or cross-platform email implementation are added.
 - next: review batch C (CLI, node-runtime, relay), record findings and any required fix chunks, run the complete acceptance checks, then reconcile review dispositions and close the initiative if all criteria are met.
+
+## 2026-09-28 — L1 adjust P5 for CLI credential permissions
+
+- evidence: batch C found that `runInit` uses default `fs.writeFile` permissions for config.toml containing LLM and email credentials. With a usual 022 umask this creates 0644 files; overwriting or keeping an existing 0644 file also preserves broad access. Root suites currently pass (core 2052 + 2 skipped, node-runtime 45, CLI 75, plugin 751), relay tests 141 pass, and root lint/typecheck/build/boundaries/submission pass. Relay standalone typecheck cannot yet find its Cloudflare type dependency.
+- change: add P5 chunk 8 (F28) with real-filesystem failing-first tests and private config persistence; outcome and initiative scope remain unchanged. Lower-priority batch C findings will be recorded without expanding implementation, per chunk 7.
+- disposition: retain all existing changes. Reuse the already tested Node atomic writer; no delivery protocol or provider changes. Install the relay's locked dependencies to resolve the standalone verification environment.
+- next: observe F28 Red, implement the narrow fix, observe Green and relevant regressions, then close review dispositions and Helm.
