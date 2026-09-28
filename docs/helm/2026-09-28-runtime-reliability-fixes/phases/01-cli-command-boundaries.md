@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:26:00+08:00
-revision: 2
+updated: 2026-09-28T22:28:57+08:00
+revision: 3
 
 ## Outcome
 
@@ -37,7 +37,7 @@ CLI 生成的 cron 命令准确保留可执行路径，非法时间窗不会改�
 - Red / baseline signal: 倒置时间窗时 scheduleInstall 返回 2、说明原因且 read/writeCrontab 都不被调用；有效的单次和重复时间窗照常执行。原实现返回 0 并写入空任务。
 - Green check: CLI schedule/config focused tests。
 - regression checks: 完整 CLI suite、typecheck。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (2 observed Reds; 23 focused Greens; full CLI 95 tests and typecheck passed)
 
 ### Chunk 3 — await 子命令并保留统一错误边界（F31）
 

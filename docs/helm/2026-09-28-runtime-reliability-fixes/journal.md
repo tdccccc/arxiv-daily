@@ -19,3 +19,9 @@
 - change: P5 保留跨平台实现与 CI 配置，新增 P6 作为原生平台验收待办；不预建未来阶段文件，P1 继续执行。
 - disposition: 原生验收仍未完成，不用 Linux 模拟替代；不因此停止可独立进行的实现。
 - next: 完成 F30，接着 F31。
+
+## 2026-09-28 — P1 chunk 2 accepted
+
+- evidence: F30 had two expected failures (TOML accepted the reversed window; install returned success and touched crontab). After validation, focused tests 23 and full CLI 95 pass, along with CLI typecheck. Valid single-run, equal-boundary and recurring windows retain their behavior.
+- checkpoint: On track; isolated F30 implementation and tests committed.
+- next: F31 async command errors and handler lifetime.
