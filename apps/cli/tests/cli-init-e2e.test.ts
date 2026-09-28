@@ -6,6 +6,55 @@ import { runInit } from "../src/init";
 import { loadCliConfig } from "../src/config";
 
 describe("init e2e", () => {
+  it.skipIf(process.platform === "win32").each(["new", "overwrite", "keep"])(
+    "keeps credentials private when initializing a %s config",
+    async (mode) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ad-init-private-"));
+      const configDir = path.join(dir, "config");
+      const configPath = path.join(configDir, "config.toml");
+      const existing = 'vault_root = "/previous-vault"\n[llm]\napi_key = "old-test-key"\n';
+      try {
+        if (mode !== "new") {
+          await fs.mkdir(configDir);
+          await fs.writeFile(configPath, existing);
+          await fs.chmod(configPath, 0o644);
+        }
+        const answers = [
+          ...(mode === "new" ? [] : [mode === "keep" ? "m" : "o"]),
+          path.join(dir, "vault"), "1", "https://api.example.com/v1",
+          "sk-private-test-key", "n", "1", "y", "3", "1", "1",
+          "UTC", "2", "Photo-z", "photo-z", "photo-z methods", "n", "n",
+        ];
+        let i = 0;
+        expect(await runInit({
+          configPath,
+          isTTY: true,
+          ask: async () => {
+            if (i >= answers.length) throw new Error("unexpected wizard prompt");
+            return answers[i++]!;
+          },
+          stdout: { write: () => undefined },
+          stderr: { write: () => undefined },
+        })).toBe(0);
+        expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+        if (mode === "new") {
+          expect((await fs.stat(configDir)).mode & 0o777).toBe(0o700);
+        }
+        const config = await loadCliConfig({ configPath });
+        expect(config.settings.llm.apiKey).toBe(
+          mode === "keep" ? "old-test-key" : "sk-private-test-key",
+        );
+        if (mode === "keep") {
+          expect(config.vaultRoot).toBe("/previous-vault");
+          expect(await fs.readFile(configPath, "utf8")).not.toContain("sk-private-test-key");
+        }
+        expect(await fs.readdir(configDir)).toEqual(["config.toml"]);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("writes config that loadCliConfig accepts", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ad-init-"));
     const cfgPath = path.join(dir, "config.toml");

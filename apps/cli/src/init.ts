@@ -12,7 +12,7 @@ import {
   PROVIDER_PRESETS,
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
-import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
+import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { resolveCliConfigPath } from "./config-path";
 import type { WritableTextStream } from "./main-types";
 
@@ -145,12 +145,15 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   const configPath = opts.configPath ?? resolveCliConfigPath(env, platform);
   const write =
     opts.writeFile ??
-    ((filePath: string, body: string) => fs.writeFile(filePath, body, "utf8"));
+    ((filePath: string, body: string) =>
+      new NodeStorageAdapter(path.dirname(filePath)).writeTextAtomic(
+        path.basename(filePath), body, 0o600,
+      ));
   const read =
     opts.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf8"));
   const mkdir =
     opts.mkdir ??
-    ((dir: string) => fs.mkdir(dir, { recursive: true }).then(() => undefined));
+    ((dir: string) => fs.mkdir(dir, { recursive: true, mode: 0o700 }).then(() => undefined));
   const stdout = opts.stdout ?? process.stdout;
   const stderr = opts.stderr ?? process.stderr;
   const useClack = !opts.ask;
