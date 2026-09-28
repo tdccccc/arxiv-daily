@@ -13,3 +13,10 @@
 - change: P5 unblocked and extended with chunks 4–7 (crash retry, single-fence filter answers, visible email gap, in-session batch C review). Goal gets a non-goal for cross-platform email and a 2026-09-25 decision line.
 - disposition: no code discarded. The 08-10 strict-JSON contract is loosened only by one outer fence (user decision). Cross-process locking and the migration item are recorded in the review, not fixed. Cross-platform email is the next initiative.
 - next: P5 chunk 4 — failing state-store test for crash recovery.
+
+## 2026-09-28 — resume / owner handoff
+
+- evidence: user asked to finish the latest Helm. Branch `fix/onboarding-review` is clean and the earlier session has paused after c55e53f. P1–P4 and P6 are accepted; P5 chunks 4–6 have commits (8b4b2a6, 25889d7 + b6a06ce, c55e53f) with recorded Red/Green evidence but unchecked plan entries.
+- change: ownership passes to `codex-root-session-2026-09-28`; continue P5 in this session without subagents, preserving all previous user decisions and the no-push constraint.
+- disposition: retain existing code and tests. Revalidate the committed fixes; do not recreate their historical Red. No live provider calls or cross-platform email implementation are added.
+- next: review batch C (CLI, node-runtime, relay), record findings and any required fix chunks, run the complete acceptance checks, then reconcile review dispositions and close the initiative if all criteria are met.
