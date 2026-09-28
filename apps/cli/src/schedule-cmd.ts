@@ -11,6 +11,7 @@ export function buildCronLines(
   config: CliRuntimeConfig,
   binaryPath: string,
 ): string[] {
+  const executable = cronExecutable(binaryPath);
   const slots = scheduleFireSlots(config.scheduleIntent);
   const dow = config.scheduleIntent.weekdaysOnly ? "1-5" : "*";
   const lines: string[] = [];
@@ -19,10 +20,19 @@ export function buildCronLines(
     const hour = Number(hh);
     const minute = Number(mm);
     lines.push(
-      `${minute} ${hour} * * ${dow}  ${binaryPath} run --today  ${CRON_MARKER}`,
+      `${minute} ${hour} * * ${dow}  ${executable} run --today  ${CRON_MARKER}`,
     );
   }
   return lines;
+}
+
+function cronExecutable(binaryPath: string): string {
+  if (!binaryPath || /[\u0000-\u001f\u007f]/.test(binaryPath)) {
+    throw new Error("CLI executable path is empty or contains control characters");
+  }
+  // Cron removes the backslash before %, but preserves other shell escapes.
+  // Escaping each character also preserves a literal backslash preceding %.
+  return binaryPath.replace(/[^a-zA-Z0-9_./:-]/g, (character) => `\\${character}`);
 }
 
 export async function scheduleShow(
@@ -65,7 +75,13 @@ export async function scheduleInstall(
   }
   const platform = opts.platform ?? process.platform;
   const binaryPath = opts.binaryPath ?? resolveBinaryPath();
-  const managed = buildCronLines(config, binaryPath);
+  let managed: string[];
+  try {
+    managed = buildCronLines(config, binaryPath);
+  } catch (error) {
+    writeLine(io.stderr, `Invalid schedule: ${(error as Error).message}`);
+    return 2;
+  }
   if (platform === "win32" && !opts.writeCrontab) {
     writeLine(
       io.stderr,
