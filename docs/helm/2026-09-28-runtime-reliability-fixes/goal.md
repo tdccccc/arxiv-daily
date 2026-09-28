@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-28T22:56:01+08:00
-revision: 5
+updated: 2026-09-28T23:16:55+08:00
+revision: 6
 owner: codex-root-session-2026-09-28
 
 ## Intent
@@ -16,7 +16,7 @@ owner: codex-root-session-2026-09-28
 - [x] F30：非法或倒置的重复运行时间窗被拒绝，旧 crontab 不被覆盖或删除；有效时间窗及单次运行保持正常。
 - [x] F31：异步子命令失败统一返回正确退出码和脱敏错误；信号处理器在操作真正结束后清理。
 - [x] F32：中继拒绝非对象 JSON（包括 null/数组），返回明确客户端错误，不访问投递服务或修改状态。
-- [ ] F19：服务商收到其支持的推理参数，不再发送 SDK 专用 extra_body 包装；非推理模式、流式兼容回退和输出上限保持正确。请求契约与所选真实接口验收均有记录。
+- [x] F19：服务商收到其支持的推理参数，不再发送 SDK 专用 extra_body 包装；非推理模式、流式兼容回退和输出上限保持正确。请求契约与所选真实接口验收均有记录。
 - [ ] 同一台机器多个 Plugin/CLI 进程使用同一 Vault 时，运行互斥且 PaperIndexStore 更新不丢失；进程退出/崩溃和争用路径有真实多进程验证。
 - [ ] Linux/macOS/Windows 的 Plugin/CLI 自动邮件使用可靠的持久化投递占位，不因平台本身被拒绝；重复发送、崩溃、路径置换与恢复的保护保持有效，并有原生平台验收记录。
 - [ ] 所有行为修复分别提交并附 Red/Green 与相关回归证据；root lint/typecheck/test/build/boundaries/submission 和 relay 独立测试/类型检查通过，技术报告同步。
@@ -41,7 +41,7 @@ owner: codex-root-session-2026-09-28
 
 1. P1 — CLI 的 cron 安装与异步命令边界正确（F29–F31） — status: done
 2. P2 — 邮件中继拒绝非法 JSON 对象形状（F32） — status: done
-3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: active
-4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: pending
+3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: done
+4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: active
 5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: pending
 6. P6 — macOS/Windows 原生平台验收（按用户决定保留待办） — status: pending

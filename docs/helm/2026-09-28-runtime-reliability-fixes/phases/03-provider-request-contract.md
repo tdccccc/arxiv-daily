@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T22:44:52+08:00
-updated: 2026-09-28T22:56:01+08:00
-revision: 2
+updated: 2026-09-28T23:16:55+08:00
+revision: 3
 
 ## Outcome
 
@@ -30,7 +30,7 @@ LlmClient 发送服务商支持的顶层推理参数，输出预算有效，旧�
 - Red / baseline signal: 新 LlmClient HTTP 边界测试断言各 provider 的实际 JSON 不含 extra_body，正确保留/排除 thinking 和 reasoning_effort；显式禁用对支持 thinking 的服务发 disabled；Anthropic 预算小于 token cap；OpenAI token cap 使用 max_completion_tokens。旧实现不满足这些断言。补充官方 Anthropic Messages 的认证、system 消息、SSE 文本/usage/错误和自适应参数测试；checkpoint endpoint identity 需跟随实际请求 URL。各 checkpoint 的 generation 缺传输合约版本时不得解码/复用。
 - Green check: focused core LLM 与 checkpoint 测试。
 - regression checks: 完整 core suite、root typecheck、CLI/plugin LLM 相关测试与构建；流式回退保留参数，异常不泄漏密钥。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (bb3307e; payload/legacy checkpoint/native Reds and full Green regression recorded)
 
 ### Chunk 2 — 现有连接合成请求验收
 
@@ -39,7 +39,7 @@ LlmClient 发送服务商支持的顶层推理参数，输出预算有效，旧�
 - baseline: 读取已配置 provider/model/endpoint，密钥仅在内存中用于同一 endpoint，不写入报告。
 - Green check: 用户选定连接收到简短合成提示，返回预期内容且没有不支持参数错误；记录模型、协议与结果，避免记录密钥或研究内容。
 - exception: 真实连接需要可访问的 endpoint 与用户选择；不可达或未授权则保留待办，不阻塞 P4/P5 的独立实现。
-- [ ] live acceptance recorded
+- [x] live acceptance recorded (user-authorized existing gateway: HTTP 200, expected answer 2; config unchanged)
 
 ## Phase verification
 

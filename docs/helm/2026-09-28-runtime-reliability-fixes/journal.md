@@ -49,3 +49,10 @@
 - source: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 - disposition: do not treat gateway success as a live test of Anthropic. Keep original local tests, add native response-contract coverage; adjust endpoint fingerprint fixtures only for the changed actual route. No additional live calls are needed for the unchanged private-gateway path.
 - next: observe native Anthropic contract Red, implement, and rerun focused and affected regressions before accepting P3.
+
+## 2026-09-28 — P3 done, start P4
+
+- evidence: F19 committed as bb3307e. Observed 11 payload Reds, four old-checkpoint reuse Reds, and four native Anthropic Reds. Final full workspace regression: core 2074 passed / two existing skips, node-runtime 45, CLI 107, plugin 751; root lint/typecheck/build/boundaries/submission passed. The user's selected gateway accepted the synthetic request (HTTP 200, answer 2). Native Anthropic is locally contract-tested; no claim of live verification with an Anthropic key.
+- checkpoint: On track; request and checkpoint semantics accepted together, including deterministic fingerprint fixture regeneration and adaptive checkpoint round-trips.
+- change: P3 done, P4 active. Current index code already rereads disk inside each mutation; the remaining defect is the lack of a shared lock around that full transaction, not an indefinitely cached inbox.
+- next: implement host-local locks with atomic immutable ownership/decision records and OS liveness checks, then wire daily generation and index transactions. Do not reclaim a live owner merely because time elapsed. Coordination records are local to the host and keyed by the canonical Vault root, outside exportable research data.
