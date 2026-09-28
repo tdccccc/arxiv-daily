@@ -1,5 +1,5 @@
 import type { StorageAdapter } from "../core/adapters";
-import type { ChatMessage } from "../llm/client";
+import { LLM_REQUEST_CONTRACT_VERSION, type ChatMessage } from "../llm/client";
 import type { CheckpointGenerationIdentity } from "./daily-summary-checkpoint-store";
 import {
   DAILY_FILTER_FINGERPRINT_VERSION,
@@ -790,7 +790,8 @@ function isMessages(value: unknown): value is ChatMessage[] {
 }
 
 function isGeneration(value: unknown): value is CheckpointGenerationIdentity {
-  if (!isExactObject(value, ["provider", "endpointDigest", "model", "mode"]) ||
+  if (!isExactObject(value, ["requestContractVersion", "provider", "endpointDigest", "model", "mode"]) ||
+      value.requestContractVersion !== LLM_REQUEST_CONTRACT_VERSION ||
       typeof value.provider !== "string" || typeof value.model !== "string" ||
       typeof value.endpointDigest !== "string" ||
       !/^sha256:[0-9a-f]{64}$/.test(value.endpointDigest) || !isPlainObject(value.mode)) return false;
@@ -801,6 +802,10 @@ function isGeneration(value: unknown): value is CheckpointGenerationIdentity {
   if (value.mode.kind === "anthropic-thinking") {
     return value.provider === "anthropic" && isExactObject(value.mode, ["kind", "budgetTokens"]) &&
       Number.isSafeInteger(value.mode.budgetTokens) && value.mode.budgetTokens > 0;
+  }
+  if (value.mode.kind === "anthropic-adaptive") {
+    return value.provider === "anthropic" && isExactObject(value.mode, ["kind", "reasoningEffort"]) &&
+      typeof value.mode.reasoningEffort === "string";
   }
   return value.mode.kind === "reasoning-thinking" && value.provider !== "anthropic" &&
     isExactObject(value.mode, ["kind", "reasoningEffort"]) &&

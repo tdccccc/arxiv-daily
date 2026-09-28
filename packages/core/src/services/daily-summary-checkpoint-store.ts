@@ -1,5 +1,8 @@
 import type { StorageAdapter } from "../core/adapters";
-import { buildChatCompletionsUrl } from "../llm/client";
+import {
+  anthropicAdaptiveEffort, buildLlmRequestUrl, LLM_REQUEST_CONTRACT_VERSION,
+  usesAdaptiveAnthropicThinking,
+} from "../llm/client";
 import {
   DAILY_PAPER_SUMMARY_MAX_ATTEMPTS,
   isDailyPaperSummaryValidationError,
@@ -33,12 +36,14 @@ export interface DailySummaryCheckpointCompatibilityInput {
 }
 
 export interface CheckpointGenerationIdentity {
+  requestContractVersion: typeof LLM_REQUEST_CONTRACT_VERSION;
   provider: string;
   endpointDigest: string;
   model: string;
   mode:
     | { kind: "temperature"; temperature: number }
     | { kind: "anthropic-thinking"; budgetTokens: number }
+    | { kind: "anthropic-adaptive"; reasoningEffort: string }
     | { kind: "reasoning-thinking"; reasoningEffort: string };
 }
 
@@ -173,19 +178,23 @@ export function buildCheckpointGenerationIdentity(
     throw new DailySummaryCheckpointStoreError("checkpoint temperature must be finite");
   }
   return {
+    requestContractVersion: LLM_REQUEST_CONTRACT_VERSION,
     provider: llm.provider,
-    endpointDigest: buildCheckpointEndpointDigest(llm.baseUrl),
+    endpointDigest: buildCheckpointEndpointDigest(llm.baseUrl, llm.provider),
     model: llm.model,
     mode: effectiveGenerationMode(llm, temperature),
   };
 }
 
 function effectiveGenerationMode(
-  llm: Pick<LlmSettings, "provider" | "thinkingMode" | "reasoningEffort">,
+  llm: Pick<LlmSettings, "provider" | "model" | "thinkingMode" | "reasoningEffort">,
   temperature: number,
 ): DailySummaryCheckpointFingerprintInput["generation"]["mode"] {
   if (!llm.thinkingMode) return { kind: "temperature", temperature };
   if (llm.provider === "anthropic") {
+    if (usesAdaptiveAnthropicThinking(llm.model)) {
+      return { kind: "anthropic-adaptive", reasoningEffort: anthropicAdaptiveEffort(llm.reasoningEffort) };
+    }
     const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
     return {
       kind: "anthropic-thinking",
@@ -214,14 +223,18 @@ function isEffectiveGenerationMode(value: unknown, provider: string): boolean {
       isExactObject(value, ["kind", "reasoningEffort"]) &&
       typeof value.reasoningEffort === "string";
   }
+  if (value.kind === "anthropic-adaptive") {
+    return provider === "anthropic" && isExactObject(value, ["kind", "reasoningEffort"]) &&
+      typeof value.reasoningEffort === "string";
+  }
   return false;
 }
 
 /** Hash the exact effective chat request URL so no endpoint text is persisted. */
-export function buildCheckpointEndpointDigest(baseUrl: string): string {
+export function buildCheckpointEndpointDigest(baseUrl: string, provider = "custom"): string {
   let requestUrl: URL;
   try {
-    requestUrl = new URL(buildChatCompletionsUrl(baseUrl));
+    requestUrl = new URL(buildLlmRequestUrl({ baseUrl, provider }));
   } catch (error) {
     throw new DailySummaryCheckpointStoreError("checkpoint endpoint must be an absolute URL", error);
   }
@@ -533,8 +546,9 @@ function decodeFingerprintInput(value: unknown): DailySummaryCheckpointFingerpri
       (!value.paper.sourceContent.fullSections ||
         value.paper.sourceContent.fullSections !== value.paper.sourceContent.fullSections.trim())) ||
     !isExactObject(value.generation, [
-      "summaryLanguage", "provider", "endpointDigest", "model", "mode",
+      "summaryLanguage", "requestContractVersion", "provider", "endpointDigest", "model", "mode",
     ]) ||
+    value.generation.requestContractVersion !== LLM_REQUEST_CONTRACT_VERSION ||
     (value.generation.summaryLanguage !== "zh" && value.generation.summaryLanguage !== "en") ||
     typeof value.generation.provider !== "string" ||
     typeof value.generation.endpointDigest !== "string" ||

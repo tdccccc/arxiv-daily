@@ -17,6 +17,8 @@ export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
 export const LLM_MAX_OUTPUT_CODE_UNITS = 10_000_000;
 export const LLM_MAX_COMPLETION_TOKENS = 1_000_000;
+/** Invalidate generated checkpoints when the on-wire generation contract changes. */
+export const LLM_REQUEST_CONTRACT_VERSION = 2 as const;
 export const LLM_OUTPUT_LIMIT_EXCEEDED_ERROR_CODE = "ARXIV_LLM_OUTPUT_LIMIT_EXCEEDED" as const;
 
 export class LlmOutputLimitExceededError extends Error {
@@ -80,7 +82,7 @@ export interface CallOptions {
   onMetrics?: MetricsObserver;
   /** Reject accumulated response content above this UTF-16 code-unit count. */
   maxOutputCodeUnits?: number;
-  /** Provider-compatible completion-token request bound (`max_tokens`). */
+  /** Provider-compatible completion-token request bound. */
   maxCompletionTokens?: number;
 }
 
@@ -151,6 +153,28 @@ export function normalizeOpenAiBaseUrl(baseUrl: string): string {
 /** Exact effective URL identity used by chat requests. */
 export function buildChatCompletionsUrl(baseUrl: string): string {
   return `${normalizeOpenAiBaseUrl(baseUrl)}/chat/completions`;
+}
+
+function usesNativeAnthropic(settings: Pick<LlmSettings, "provider" | "baseUrl">): boolean {
+  if (settings.provider !== "anthropic") return false;
+  try { return new URL(settings.baseUrl).hostname === "api.anthropic.com"; }
+  catch { return false; }
+}
+
+export function buildLlmRequestUrl(settings: Pick<LlmSettings, "provider" | "baseUrl">): string {
+  if (!usesNativeAnthropic(settings)) return buildChatCompletionsUrl(settings.baseUrl);
+  const url = new URL(normalizeOpenAiBaseUrl(settings.baseUrl));
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/messages`;
+  return url.toString();
+}
+
+export function usesAdaptiveAnthropicThinking(model: string): boolean {
+  const match = /^claude-(?:opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?/.exec(model);
+  return Boolean(match && (Number(match[1]) > 4 || (Number(match[1]) === 4 && Number(match[2]) >= 6)));
+}
+
+export function anthropicAdaptiveEffort(effort: string): string {
+  return ["low", "medium", "high"].includes(effort) ? effort : "high";
 }
 
 export class LlmClient {
@@ -233,6 +257,7 @@ export class LlmClient {
 
   async call(messages: ChatMessage[], opts: CallOptions = {}): Promise<string> {
     const limits = validateCallLimits(opts);
+    const generationParams = generationParameters(this.settings, opts, limits.maxCompletionTokens);
     const started = Date.now();
     let attempts = 0;
     let finalUsage: TokenUsage | undefined;
@@ -248,21 +273,8 @@ export class LlmClient {
               messages,
               stream: true,
               stream_options: { include_usage: true },
+              ...generationParams,
             };
-            if (limits.maxCompletionTokens !== undefined) {
-              params.max_tokens = limits.maxCompletionTokens;
-            }
-            if (this.settings.thinkingMode) {
-              if (this.settings.provider === "anthropic") {
-                const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
-                params.extra_body = { thinking: { type: "enabled", budget_tokens: budgets[this.settings.reasoningEffort] ?? 8192 } };
-              } else {
-                params.reasoning_effort = this.settings.reasoningEffort;
-                params.extra_body = { thinking: { type: "enabled" } };
-              }
-            } else {
-              params.temperature = opts.temperature ?? LLM_TEMPERATURE;
-            }
             const abort = createAttemptAbortController(opts.signal);
             try {
               const result = await this.postChatStream(
@@ -341,7 +353,7 @@ export class LlmClient {
   ): Promise<StreamResult> {
     const raw = await this.requestChat({ ...body, stream: true }, true, signal);
     return collectStreamResultWithIdleTimeout(
-      parseSseText(raw),
+      usesNativeAnthropic(this.settings) ? parseAnthropicSseText(raw) : parseSseText(raw),
       controller,
       LLM_STREAM_IDLE_TIMEOUT_MS,
       signal,
@@ -354,9 +366,20 @@ export class LlmClient {
     stream: boolean,
     signal?: AbortSignal,
   ): Promise<string> {
-    const requestBody = { ...body, stream };
+    let requestBody: Record<string, unknown> = { ...body, stream };
+    if (usesNativeAnthropic(this.settings)) {
+      const { messages, stream_options: _streamOptions, ...parameters } = requestBody;
+      const chatMessages = messages as ChatMessage[];
+      const system = chatMessages.filter((message) => message.role === "system")
+        .map((message) => message.content).join("\n");
+      requestBody = {
+        ...parameters,
+        messages: chatMessages.filter((message) => message.role !== "system"),
+        ...(system ? { system } : {}),
+      };
+    }
     const res = await this.http.request({
-      url: buildChatCompletionsUrl(this.settings.baseUrl),
+      url: buildLlmRequestUrl(this.settings),
       method: "POST",
       headers: this.chatHeaders(),
       body: JSON.stringify(requestBody),
@@ -370,6 +393,13 @@ export class LlmClient {
   }
 
   private chatHeaders(): Record<string, string> {
+    if (usesNativeAnthropic(this.settings)) {
+      return {
+        "x-api-key": this.settings.apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      };
+    }
     return {
       "Authorization": `Bearer ${this.settings.apiKey}`,
       "Content-Type": "application/json",
@@ -379,6 +409,44 @@ export class LlmClient {
   private safeError(error: unknown): Error {
     return redactError(error, { secrets: [this.settings.apiKey] });
   }
+}
+
+function generationParameters(
+  settings: LlmSettings,
+  options: CallOptions,
+  maxCompletionTokens?: number,
+): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (maxCompletionTokens !== undefined) {
+    params[settings.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxCompletionTokens;
+  } else if (settings.provider === "anthropic") {
+    params.max_tokens = 4096;
+  }
+  const hasThinkingToggle = ["anthropic", "deepseek", "zhipu"].includes(settings.provider);
+  if (!settings.thinkingMode) {
+    params.temperature = options.temperature ?? LLM_TEMPERATURE;
+    if (hasThinkingToggle) params.thinking = { type: "disabled" };
+    return params;
+  }
+  if (settings.provider === "anthropic") {
+    if (usesAdaptiveAnthropicThinking(settings.model)) {
+      params.thinking = { type: "adaptive" };
+      params.output_config = { effort: anthropicAdaptiveEffort(settings.reasoningEffort) };
+      return params;
+    }
+    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+    const requested = budgets[settings.reasoningEffort] ?? 8192;
+    const cap = maxCompletionTokens ?? requested + 4096;
+    if (cap <= 1024) {
+      throw new TypeError("Anthropic thinking requires maxCompletionTokens greater than 1024");
+    }
+    params.max_tokens = cap;
+    params.thinking = { type: "enabled", budget_tokens: Math.min(requested, cap - 1) };
+  } else {
+    if (hasThinkingToggle) params.thinking = { type: "enabled" };
+    if (settings.provider !== "zhipu") params.reasoning_effort = settings.reasoningEffort;
+  }
+  return params;
 }
 
 export function isUnsupportedStreamOptionsError(err: unknown): boolean {
@@ -416,6 +484,39 @@ function createStatusError(
   ) as LlmStatusError;
   error.status = status;
   return error;
+}
+
+async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
+  let usage: Record<string, number> = {};
+  for await (const value of parseSseText(raw)) {
+    const event = value as {
+      type?: string;
+      message?: { usage?: Record<string, number> };
+      usage?: Record<string, number>;
+      delta?: { type?: string; text?: string };
+      content_block?: { type?: string; text?: string };
+      error?: { type?: string; message?: string };
+    };
+    if (event.type === "error") {
+      const status = event.error?.type === "invalid_request_error" ? 400 : 500;
+      throw createStatusError(status, JSON.stringify({ error: event.error }), []);
+    }
+    if (event.type === "content_block_start" && event.content_block?.type === "text") {
+      yield { choices: [{ delta: { content: event.content_block.text ?? "" } }] };
+    }
+    if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+      yield { choices: [{ delta: { content: event.delta.text ?? "" } }] };
+    }
+    const nextUsage = event.type === "message_start" ? event.message?.usage : event.usage;
+    if (nextUsage) {
+      usage = { ...usage, ...nextUsage };
+      yield { usage: {
+        ...usage,
+        input_tokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+      } };
+    }
+    if (event.type === "message_stop") return;
+  }
 }
 
 async function* parseSseText(raw: string): AsyncIterable<unknown> {

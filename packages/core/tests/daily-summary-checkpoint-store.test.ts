@@ -140,7 +140,7 @@ describe("daily summary checkpoint fingerprint", () => {
     });
 
     expect(createDailySummaryCompatibilityFingerprint(first)).toBe(
-      "sha256:c0d5e6caeb38a9f70384e1274997d4d05890367377b9c650948423bcc724d6f5",
+      "sha256:709c47bf9d8382aca24749bc23294fb77c398b92380043f6fcf942151e97224b",
     );
     expect(createDailySummaryCompatibilityFingerprint(second)).toBe(
       createDailySummaryCompatibilityFingerprint(first),
@@ -216,6 +216,25 @@ describe("daily summary checkpoint fingerprint", () => {
       .toBe(createDailySummaryCompatibilityFingerprint(medium));
     expect(buildDailySummaryCheckpointFingerprintInput(anthropic).generation.mode)
       .toEqual({ kind: "anthropic-thinking", budgetTokens: 8192 });
+  });
+
+  it("never reuses a checkpoint from the legacy provider request contract", async () => {
+    const { storage, files } = makeStorage();
+    const store = new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    const document = JSON.parse(files[documentPath]!);
+    const entry = document.entries["arxiv:2608.00001"];
+    delete entry.fingerprintInput.generation.requestContractVersion;
+    entry.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(entry.fingerprintInput))}`;
+    files[documentPath] = JSON.stringify(document);
+    expect(await store.lookupReusable(reportDate, compatibility())).toBeNull();
+  });
+
+  it("round-trips native adaptive Anthropic generation checkpoints", async () => {
+    const { storage } = makeStorage();
+    const input = compatibility({ llm: { ...compatibility().llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7", thinkingMode: true } });
+    await new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output).upsert(reportDate, input, structuredResult);
+    expect(await new DailySummaryCheckpointStore(storage, DEFAULT_SETTINGS.output).lookupReusable(reportDate, input)).toEqual(structuredResult);
   });
 
   it("digests the exact effective chat URL without exposing endpoint text", () => {

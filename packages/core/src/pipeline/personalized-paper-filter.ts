@@ -1,4 +1,4 @@
-import type { ChatMessage, CallOptions } from "../llm/client";
+import { LLM_REQUEST_CONTRACT_VERSION, type ChatMessage, type CallOptions } from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { buildCheckpointGenerationIdentity } from "../services/daily-summary-checkpoint-store";
@@ -598,7 +598,8 @@ function isValidPlan(plan: unknown): plan is PersonalizedFilterCallPlan {
 }
 
 function isCheckpointGenerationIdentity(value: unknown): boolean {
-  if (!isExactDataObject(value, ["provider", "endpointDigest", "model", "mode"])
+  if (!isExactDataObject(value, ["requestContractVersion", "provider", "endpointDigest", "model", "mode"])
+    || value.requestContractVersion !== LLM_REQUEST_CONTRACT_VERSION
     || typeof value.provider !== "string" || typeof value.model !== "string"
     || typeof value.endpointDigest !== "string"
     || !/^sha256:[0-9a-f]{64}$/.test(value.endpointDigest)
@@ -611,6 +612,10 @@ function isCheckpointGenerationIdentity(value: unknown): boolean {
     return value.provider === "anthropic"
       && isExactDataObject(value.mode, ["kind", "budgetTokens"])
       && Number.isSafeInteger(value.mode.budgetTokens) && value.mode.budgetTokens > 0;
+  }
+  if (value.mode.kind === "anthropic-adaptive") {
+    return value.provider === "anthropic" && isExactDataObject(value.mode, ["kind", "reasoningEffort"])
+      && typeof value.mode.reasoningEffort === "string";
   }
   return value.mode.kind === "reasoning-thinking" && value.provider !== "anthropic"
     && isExactDataObject(value.mode, ["kind", "reasoningEffort"])

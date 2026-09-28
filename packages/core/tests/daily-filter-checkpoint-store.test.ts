@@ -142,10 +142,10 @@ const personalizedDiscovery: PersonalizedDiscoveryInput = {
   }],
 };
 
-function personalizedPrepared() {
+function personalizedPrepared(llm = compatibility().llm) {
   const planned = planPersonalizedFilterCalls(papers, personalizedDiscovery);
   if (!planned.ok) throw new Error("unexpected plan-too-large");
-  return preparePersonalizedFilterCheckpoint({ plan: planned.value, llm: compatibility().llm as any });
+  return preparePersonalizedFilterCheckpoint({ plan: planned.value, llm: llm as any });
 }
 
 const personalizedResult: PersonalizedDirectionRecord[] = [
@@ -418,6 +418,50 @@ describe("daily filter checkpoint fingerprint", () => {
 });
 
 describe("DailyFilterCheckpointStore", () => {
+  it("round-trips adaptive Anthropic results for all filter checkpoint kinds", async () => {
+    const { storage } = makeStorage();
+    const store = makeStore(storage);
+    const llm = { ...compatibility().llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7", thinkingMode: true };
+    const plain = prepared({ llm });
+    const personalized = personalizedPrepared(llm);
+    const novelty = noveltyPrepared({ llm });
+    await store.save(reportDate, plain, result);
+    await store.savePersonalized(reportDate, personalized, personalizedResult);
+    await store.saveNovelty(reportDate, novelty, [noveltyOutcome]);
+    const reconstructed = makeStore(storage);
+    expect(await reconstructed.lookupReusable(reportDate, plain)).toEqual(result);
+    expect(await reconstructed.lookupPersonalizedReusable(reportDate, personalized)).toEqual(personalizedResult);
+    expect(await reconstructed.lookupNoveltyReusable(reportDate, novelty)).toEqual([noveltyRecord]);
+  });
+
+  it.each(["filter", "personalized", "novelty"])(
+    "does not reuse %s results from the old provider request contract",
+    async (kind) => {
+      const { storage, files } = makeStorage();
+      const store = makeStore(storage);
+      const paths = store.pathsFor(reportDate);
+      let file: string;
+      let lookup: () => Promise<unknown>;
+      if (kind === "filter") {
+        await store.save(reportDate, prepared(), result);
+        file = paths.documentPath;
+        lookup = () => makeStore(storage).lookupReusable(reportDate, prepared());
+      } else if (kind === "personalized") {
+        await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
+        file = paths.personalizedDocumentPath;
+        lookup = () => makeStore(storage).lookupPersonalizedReusable(reportDate, personalizedPrepared());
+      } else {
+        await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
+        file = paths.noveltyDocumentPath;
+        lookup = () => makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared());
+      }
+      const document = JSON.parse(files[file]!);
+      delete document.fingerprintInput.generation.requestContractVersion;
+      document.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(document.fingerprintInput))}`;
+      files[file] = JSON.stringify(document);
+      expect(await lookup()).toBeNull();
+    },
+  );
   it("derives its independent date-scoped path and validates dates", () => {
     expect(deriveDailyFilterCheckpointPaths({ normalizePath: (path) => path }, DEFAULT_SETTINGS.output, reportDate)).toEqual({
       directory: "arxiv-daily/.index/filter-checkpoints", documentPath, backupPath,
