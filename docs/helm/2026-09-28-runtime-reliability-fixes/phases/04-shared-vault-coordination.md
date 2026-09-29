@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T23:16:55+08:00
-updated: 2026-09-28T23:28:27+08:00
-revision: 2
+updated: 2026-09-29T14:57:25+08:00
+revision: 3
 
 ## Outcome
 
@@ -38,7 +38,7 @@ revision: 2
 - Red / baseline signal: 独立实例的 RunLock 不共享临界区；真实两个子进程同时更新索引丢记录。新增回归先失败再接入 StorageAdapter 锁。
 - Green check: Core RunLock/PaperIndexStore tests 与 Node 多进程索引验证；Plugin/CLI composition tests 证明选中真实锁实现。
 - regression checks: scheduler/pipeline/index suites、完整 node-runtime/CLI/plugin suites、root typecheck/boundaries/build。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (34ae7ea; observed shared-lock and transaction Reds, full workspace Green plus root typecheck/build/boundaries)
 
 ### Chunk 3 — 启动清理不干扰运行中进程
 

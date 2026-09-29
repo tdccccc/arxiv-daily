@@ -69,3 +69,10 @@
 - evidence: retained three uncommitted test changes. Reran their focused suites: RunLock 8 passed / 2 expected failures (busy shared lock and failure release); Node file-lock 4 passed / 1 expected failure (index transaction exclusion). No implementation work has been accepted for chunk 2.
 - disposition: retain accepted P1–P3 and P4 chunk 1; complete the pending Red-to-Green host integration before committing those tests. No pushes, live mail, or production operations.
 - next: finish P4 integration and startup cleanup, then plan P5. P6 still requires native macOS/Windows evidence and must not be marked done from Linux tests.
+
+## 2026-09-29 — P4 daily-run and index integration accepted
+
+- evidence: observed four RunLock behavioral Reds, two index contract Reds, the real subprocess index Red, and CLI/Plugin composition Reds. After wiring, focused Core 68, real subprocess 6, CLI 5, and Plugin 70 passed. Full workspace regression passed: Core 2080 / two existing skips, Node 51, CLI 108, Plugin 754; root typecheck/build/boundaries passed.
+- checkpoint: On track; isolated implementation and tests committed as 34ae7ea. Both hosts use one Vault-wide daily lock across dates, avoiding concurrent writers to shared run state and allowing startup cleanup to use the same resource. Index locking covers load through save, including failure release.
+- limits: tested on Linux, not native macOS/Windows; unsupported non-filesystem adapters retain local-only behavior. No live provider request or email was sent.
+- next: P4 chunk 3 startup-cleanup regression and fix, then full phase verification.
