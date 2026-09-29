@@ -40,7 +40,7 @@ export async function emailStatus(
     io.stdout,
     `auto-send: ${
       !automaticSupported
-        ? "unsupported on this system (currently Linux only); test emails still send"
+        ? "unsupported on this host (protected delivery storage unavailable); test emails still send"
         : configured.ok
           ? "would run on completed daily"
           : `off (${configured.reason})`

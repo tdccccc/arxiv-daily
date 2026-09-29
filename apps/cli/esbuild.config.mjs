@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { noticeBanner, readPakoNotice } from "../../scripts/release-utils.mjs";
+import { nativeAssetsForBuild } from "../../scripts/native-assets.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const thirdPartyBanner = noticeBanner(await readPakoNotice());
@@ -21,6 +22,7 @@ await esbuild.build({
   sourcemap: false,
   loader: { ".md": "text" },
   define: {
+    __ARXIV_DAILY_NATIVE_ASSETS__: JSON.stringify(nativeAssetsForBuild()),
     __ARXIV_DAILY_VERSION__: JSON.stringify(pkg.version ?? "0.0.0"),
   },
   banner: { js: `#!/usr/bin/env node\n${thirdPartyBanner}` },

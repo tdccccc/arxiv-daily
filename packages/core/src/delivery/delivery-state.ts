@@ -304,7 +304,7 @@ export function normalizeDeliveryState(raw: unknown): DeliveryStateFile {
 }
 
 export const AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE =
-  "Automatic daily email is not supported on this system yet (currently Linux only), so daily reports will not be emailed automatically. Test emails still send.";
+  "Automatic daily email is unavailable because this host cannot provide protected delivery storage. Test emails still send.";
 
 /**
  * Automatic sends need system-wide exclusive create and a namespace guard to

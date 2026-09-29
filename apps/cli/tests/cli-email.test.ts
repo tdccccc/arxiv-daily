@@ -97,11 +97,16 @@ describe("email test", () => {
 });
 
 describe("email status", () => {
+  it("does not describe the cross-platform storage capability as Linux-only", () => {
+    expect(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE).not.toMatch(/Linux only/i);
+    expect(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE).toMatch(/storage/i);
+  });
+
   it("says auto-send is unsupported on this system", async () => {
     const { io, stdout } = captureIo();
     await emailStatus(testConfig(), io, false);
     expect(stdout.join("")).toContain(
-      "auto-send: unsupported on this system (currently Linux only); test emails still send",
+      "auto-send: unsupported on this host (protected delivery storage unavailable); test emails still send",
     );
   });
 

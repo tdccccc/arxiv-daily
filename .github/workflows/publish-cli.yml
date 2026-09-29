@@ -20,10 +20,20 @@ permissions:
   id-token: write
 
 jobs:
+  native:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    uses: ./.github/workflows/native-storage.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ inputs.version || github.event.workflow_run.head_sha }}
+
   publish:
+    needs: native
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     env:
+      ARXIV_DAILY_NATIVE_RELEASE: "1"
       REQUESTED_VERSION: ${{ inputs.version }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
@@ -71,6 +81,15 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Install dependencies
         run: npm ci
+      - name: Download same-run verified native assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: native-storage-*
+          path: packages/node-runtime/native/prebuilds
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify complete native release matrix
+        run: node scripts/native-assets.mjs verify
       - name: Verify release candidate
         env:
           VERSION: ${{ steps.release.outputs.version }}

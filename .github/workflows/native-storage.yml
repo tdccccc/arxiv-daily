@@ -1,0 +1,98 @@
+name: Native storage verification
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Immutable caller source to build
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Native ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: windows-2022
+            target: win32-x64
+          - runner: windows-11-arm
+            target: win32-arm64
+    env:
+      ARXIV_DAILY_TEST_NATIVE: "1"
+    steps:
+      - name: Check out caller source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Prepare verified official Node SDK
+        run: node scripts/native-sdk.mjs
+      - name: Build native support
+        run: node scripts/native-build.mjs
+      - name: Test native filesystem capability
+        run: node --test --test-reporter=tap --test-reporter-destination=packages/node-runtime/native/build/native.tap packages/node-runtime/native/tests/storage.test.cjs
+      - name: Test private storage and shared locks
+        run: npm exec --workspace @arxiv-daily/node-runtime -- vitest run --config vitest.config.mts tests/native-private-storage.test.ts tests/native-storage-loader.test.ts tests/file-lock.test.ts --reporter=json --outputFile=native/build/runtime.json
+      - name: Test Node delivery composition
+        run: npm exec --workspace @arxiv-daily/node-runtime -- vitest run --config vitest.config.mts tests/node-adapters.test.ts -t "native delivery composition" --reporter=json --outputFile=native/build/node-host.json
+      - name: Test desktop delivery composition
+        run: npm exec --workspace plugin -- vitest run --config vitest.config.mts tests/obsidian-adapters.test.ts -t "uses native delivery storage" --reporter=json --outputFile=../packages/node-runtime/native/build/plugin-host.json
+      - name: Build product bundles
+        run: npm run build
+      - name: Test offline packaged native loading
+        run: node scripts/native-package-smoke.mjs
+      - name: Test offline CLI package installation
+        run: npm run smoke:install
+      - name: Export verified platform asset
+        run: node scripts/native-assets.mjs export ${{ matrix.target }}
+      - name: Upload native binary
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-storage-${{ matrix.target }}
+          path: |
+            packages/node-runtime/native/prebuilds/${{ matrix.target }}.node
+            packages/node-runtime/native/prebuilds/${{ matrix.target }}.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+      - name: Upload native verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-evidence-${{ matrix.target }}
+          path: |
+            packages/node-runtime/native/build/*.tap
+            packages/node-runtime/native/build/*host.json
+            packages/node-runtime/native/build/runtime.json
+            packages/node-runtime/native/build/native-build.json
+          if-no-files-found: warn
+          retention-days: 30

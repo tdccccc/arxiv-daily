@@ -156,7 +156,7 @@ function storagePath(input: string) {
   const normalized = input.replace(/\\/g, "/");
   const parts = normalized.split("/");
   if (path.isAbsolute(input) || normalized.includes("\0") || parts.some(part => !part || part === "." || part === ".." || part.includes(":"))) {
-    throw new Error("private storage path escapes root");
+    throw new Error("private storage path escapes root (invalid vault-relative path)");
   }
   return { normalized, name: parts.pop()!, parent: parts.join("/") };
 }

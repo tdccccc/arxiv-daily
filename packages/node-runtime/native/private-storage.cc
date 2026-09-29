@@ -205,7 +205,7 @@ struct Directory {
     if (file == invalid) systemFailure("private storage directory is unavailable");
     OwnedHandle opened(file);
     const auto info = information(file);
-    if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("unsafe reparse point in private storage path");
+    if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("unsafe symlink or reparse point in private storage path");
     return opened.release();
   }
 #endif
@@ -256,7 +256,10 @@ struct Directory {
         if (mkdirat(handles.back(), part.c_str(), 0700) != 0 && errno != EEXIST) systemFailure("cannot create private directory");
         file = openat(handles.back(), part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
       }
-      if (file == invalid) systemFailure("unsafe private storage parent");
+      if (file == invalid) {
+        if (errno == ENOTDIR || errno == ELOOP) systemFailure("unsafe symlink or non-directory in private storage path");
+        systemFailure("private storage parent is unavailable");
+      }
       handles.push_back(file);
     }
 #endif
