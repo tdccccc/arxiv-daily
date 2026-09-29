@@ -62,3 +62,10 @@
 - evidence: missing-module contract baseline followed by four actual behavioral Reds with a no-op lock. Real OS subprocess tests now prove exclusion, serialized counter updates, recovery after SIGKILL with competing contenders, and no takeover of a live holder on timeout/cancellation. Full node-runtime 49 tests and typecheck passed.
 - checkpoint: On track; shared lock port and Node implementation committed separately from host wiring. Coordination uses the same OS PID namespace and local hard-link-capable filesystem; uncertain liveness remains busy.
 - next: reproduce and repair RunLock/PaperIndexStore host wiring.
+
+## 2026-09-29 — resume P4 in the current session
+
+- handoff: the previous session paused after accepting the shared-lock primitive; the user asked this session to continue the existing initiative. Ownership moves to claude-root-session-2026-09-29; P4 remains the only active phase.
+- evidence: retained three uncommitted test changes. Reran their focused suites: RunLock 8 passed / 2 expected failures (busy shared lock and failure release); Node file-lock 4 passed / 1 expected failure (index transaction exclusion). No implementation work has been accepted for chunk 2.
+- disposition: retain accepted P1–P3 and P4 chunk 1; complete the pending Red-to-Green host integration before committing those tests. No pushes, live mail, or production operations.
+- next: finish P4 integration and startup cleanup, then plan P5. P6 still requires native macOS/Windows evidence and must not be marked done from Linux tests.
