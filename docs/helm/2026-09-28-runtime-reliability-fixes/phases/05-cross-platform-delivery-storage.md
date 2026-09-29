@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T15:41:13+08:00
-updated: 2026-09-29T16:30:36+08:00
-revision: 2
+updated: 2026-09-29T17:45:20+08:00
+revision: 3
 
 ## Outcome
 
@@ -31,7 +31,8 @@ Linux/macOS/Windows 的 CLI 与 Plugin product 具备保持现有防重复、崩
 - Red / baseline signal: `node --test packages/node-runtime/native/tests/*.test.cjs` cannot acquire a real namespace, publish exclusive private files, or reject moved/symlink parents with the no-op backend.
 - Green check: same real-filesystem suite verifies exclusive publication, private permissions/ACL, durable writes, atomic rename, traversal/reparse rejection, opened-parent movement, closed-handle errors and independent child processes.
 - regression checks: native build on current Linux, node-runtime suite/typecheck, build-tool contract tests. Mac/Windows execution deferred explicitly to P6; no fake platform result counts.
-- [ ] approach and feasibility evidence accepted
+- [x] approach and feasibility evidence accepted (8fe0c5b; missing API/no-op behavioral Reds, nine native filesystem/subprocess Greens on Linux; native Mac/Windows still unrun)
+- build adjustment: use installed CMake/C++ and official Node SDK inputs, not a newly downloaded node-gyp package. Direct compiler Green served as the before-baseline for the equivalent CMake build.
 
 ### Chunk 2 — 实现并接入共享的私有投递存储
 

@@ -1,6 +1,6 @@
 # ADR 0009: Bundled native storage for cross-platform automatic delivery
 
-Status: Proposed implementation (native-component direction accepted by the user on 2026-09-29)
+Status: Accepted (2026-09-29 direction and Linux feasibility checkpoint; native macOS/Windows acceptance remains P6)
 
 Related: ADR 0001 (TypeScript core and hosts); ADR 0003 (two products and portable Vault data); Helm 2026-09-28-runtime-reliability-fixes P5/P6.
 
