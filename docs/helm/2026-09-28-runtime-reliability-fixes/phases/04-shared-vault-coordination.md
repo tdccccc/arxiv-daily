@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-28T23:16:55+08:00
-updated: 2026-09-29T14:57:25+08:00
-revision: 3
+updated: 2026-09-29T15:41:13+08:00
+revision: 4
 
 ## Outcome
 
@@ -47,7 +47,7 @@ revision: 3
 - Red / baseline signal: 在另一实例持有日运行锁时构造 host，不得调用 Markdown 临时文件清理；现有启动路径无条件调用。
 - Green check: CLI runtime / Plugin lifecycle tests。
 - regression checks: 全 workspace tests、lint/typecheck/build/boundaries/submission。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (e2c424e; six observed cleanup Reds, Core/CLI/Plugin and real subprocess Green, full root verification passed)
 
 ## Phase verification
 

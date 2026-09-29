@@ -76,3 +76,13 @@
 - checkpoint: On track; isolated implementation and tests committed as 34ae7ea. Both hosts use one Vault-wide daily lock across dates, avoiding concurrent writers to shared run state and allowing startup cleanup to use the same resource. Index locking covers load through save, including failure release.
 - limits: tested on Linux, not native macOS/Windows; unsupported non-filesystem adapters retain local-only behavior. No live provider request or email was sent.
 - next: P4 chunk 3 startup-cleanup regression and fix, then full phase verification.
+
+## 2026-09-29 — P4 done; P5 paused at packaging decision
+
+- evidence: startup cleanup produced six expected Reds across Core (three), Node real subprocess (one), CLI runtime (one), and Plugin onload (one). Fix e2c424e passes all focused checks. Root regression: Core 2083 / two existing skips, Node 52, CLI 109, Plugin 755. Root lint/typecheck/build/boundaries/submission passed; independent relay 161 tests and typecheck passed. No live email/provider request or native macOS/Windows check ran.
+- checkpoint: On track; all P4 chunks are accepted. Mark the shared-Vault success criterion and P4 done, and synchronize the technical report's run/index/cleanup scope. Preserve earlier accepted phases.
+- P5 evidence: both existing exclusive-create paths depend on Linux `/proc/self/fd`. Official Node v22.17.0/libuv docs state O_DIRECTORY and O_NOFOLLOW are unsupported on Windows; Node chmod does not implement owner/group/others privacy there. Ordinary `wx` prevents replacing a final path but does not replace descriptor-anchored parent traversal. Merely removing platform checks would not meet the retained safety contract.
+- sources: https://github.com/nodejs/node/blob/v22.17.0/deps/uv/docs/src/fs.rst ; https://github.com/nodejs/node/blob/v22.17.0/doc/api/fs.md (retrieved through Context7).
+- decision pending: recommend investigating a narrow native storage component, but shipping platform-specific components changes CLI/Plugin packaging and has not been authorized as a product choice. No dependency, native component, or P5 production change has been added. This is a planning/packaging gate, not evidence that all possible portable designs have been exhausted.
+- change: create only the current P5 plan, mark P5 blocked pending that decision, keep the goal active and P6 pending. No success criterion is waived; no active implementation continues behind the decision gate.
+- next: ask whether to accept the native-component direction or pause cross-platform implementation. If accepted, validate the backend's feasibility and distribution contract before implementing; native results still belong to P6.
