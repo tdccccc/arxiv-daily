@@ -17,6 +17,7 @@ export default defineConfig({
   }],
   test: {
     environment: "happy-dom",
+    globalSetup: ["../packages/node-runtime/native/test-setup.mjs"],
     include: ["tests/**/*.test.ts"],
     isolate: true,
     restoreMocks: true,
@@ -29,6 +30,7 @@ export default defineConfig({
   resolve: { alias: {
     obsidian: resolve(here, "tests/__mocks__/obsidian.ts"),
     "@arxiv-daily/core": resolve(here, "../packages/core/src/index.ts"),
+    "@arxiv-daily/node-runtime/private-storage": resolve(here, "../packages/node-runtime/src/native-private-storage.ts"),
     "@arxiv-daily/node-runtime/file-lock": resolve(here, "../packages/node-runtime/src/file-lock.ts"),
     "@arxiv-daily/node-runtime/scoped-library-source": resolve(
       here,

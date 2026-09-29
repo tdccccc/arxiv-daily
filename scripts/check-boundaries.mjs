@@ -13,6 +13,7 @@ const layers = [
     workspaceSubpaths: new Set([
       "@arxiv-daily/node-runtime/scoped-library-source",
       "@arxiv-daily/node-runtime/file-lock",
+      "@arxiv-daily/node-runtime/private-storage",
     ]),
     thirdParty: new Set(["obsidian"]),
   },

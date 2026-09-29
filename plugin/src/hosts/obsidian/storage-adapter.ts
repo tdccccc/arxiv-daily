@@ -1,6 +1,7 @@
 import { normalizePath, type Vault } from "obsidian";
 import type { StorageAdapter, StorageEntry } from "@arxiv-daily/core";
 import { NodeFileLock } from "@arxiv-daily/node-runtime/file-lock";
+import { NativePrivateStorage, getNativeStorageBinding, type NativeStorageBinding } from "@arxiv-daily/node-runtime/private-storage";
 import {
   createDesktopTextExclusive,
   guardDesktopClaimNamespace,
@@ -13,11 +14,14 @@ import {
 } from "../../../node-fs-exclusive";
 
 export interface ObsidianStorageAdapterOptions {
+  /** Test-only selection of the real native backend. Production uses bundled assets. */
+  nativeBinding?: NativeStorageBinding;
   /** Test-only seams for inspecting private atomic-write artifacts. */
   privateAtomicWrite?: DesktopAtomicWriteOptions;
 }
 
 export class ObsidianStorageAdapter implements StorageAdapter {
+  private readonly nativeStorage?: NativePrivateStorage;
   readonly createTextExclusive?: (
     path: string,
     content: string,
@@ -34,8 +38,15 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     if (isFileSystemDataAdapter(adapter)) {
       const locks = new NodeFileLock(adapter.getBasePath());
       this.acquireLock = (key, options) => locks.acquire(key, options);
+      const nativeBinding = options.nativeBinding ?? getNativeStorageBinding();
+      if (nativeBinding) {
+        this.nativeStorage = new NativePrivateStorage(adapter.getBasePath(), nativeBinding, options.privateAtomicWrite);
+        this.createTextExclusive = (path, content) => this.nativeStorage!.createTextExclusive(this.normalizePath(path), content);
+        this.guardClaimNamespace = (path) => this.nativeStorage!.guardClaimNamespace(this.normalizePath(path));
+        this.recoverTextAtomic = (path, mode) => this.nativeStorage!.recoverTextAtomic(this.normalizePath(path), mode);
+      }
     }
-    if (isFileSystemDataAdapter(adapter) && supportsDesktopExclusiveCreate()) {
+    if (!this.nativeStorage && isFileSystemDataAdapter(adapter) && supportsDesktopExclusiveCreate()) {
       this.createTextExclusive = (path, content) =>
         createDesktopTextExclusive(adapter, this.normalizePath(path), content);
       this.guardClaimNamespace = (path) =>
@@ -72,6 +83,7 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     mode?: number,
   ): Promise<void> {
     if (mode !== undefined) {
+      if (this.nativeStorage) return this.nativeStorage.writeTextAtomic(this.normalizePath(path), content, mode);
       const adapter = this.vault.adapter as unknown as FileSystemDataAdapter;
       if (!isFileSystemDataAdapter(adapter) || !supportsDesktopExclusiveCreate()) {
         throw new Error("private atomic storage is unavailable on this host");

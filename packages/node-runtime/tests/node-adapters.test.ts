@@ -13,6 +13,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import type { NativeStorageBinding } from "../src/native-private-storage";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
@@ -71,6 +73,30 @@ function captureStream() {
     },
   };
 }
+
+describe("native delivery composition", () => {
+  it("uses the selected native backend and blocks a repeat automatic send", async () => {
+    const root = await makeTempDir();
+    const actual = createRequire(import.meta.url)("../native/build/Release/private_storage.node") as NativeStorageBinding;
+    const nativeBinding: NativeStorageBinding = {
+      version: 1,
+      openDirectory: vi.fn((...args: Parameters<NativeStorageBinding["openDirectory"]>) => actual.openDirectory(...args)),
+    };
+    const first = new NodeStorageAdapter(root, { nativeBinding });
+    const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText: '{"id":"native-once"}' }));
+    const options = {
+      http: { request }, output: DEFAULT_SETTINGS.output,
+      email: { enabled: true, mode: "self" as const, to: "native@example.com", fromEmail: "from@example.com", apiKey: "test" },
+      sleep: async () => {},
+    };
+    const digest = sampleDailyDigest({ date: "2026-09-28" });
+    expect((await deliverDailyEmailIfEnabled(digest, { ...options, storage: first })).kind).toBe("delivered");
+    expect(nativeBinding.openDirectory).toHaveBeenCalled();
+    const second = new NodeStorageAdapter(root, { nativeBinding });
+    expect((await deliverDailyEmailIfEnabled(digest, { ...options, storage: second })).kind).toBe("skipped");
+    expect(request).toHaveBeenCalledOnce();
+  });
+});
 
 describe("NodeHttpClient", () => {
   it("wraps fetch responses in the core HTTP contract", async () => {

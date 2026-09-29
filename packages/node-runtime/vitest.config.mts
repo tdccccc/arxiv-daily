@@ -15,7 +15,7 @@ export default defineConfig({
         : null;
     },
   }],
-  test: { environment: "node", include: ["tests/**/*.test.ts"] },
+  test: { environment: "node", include: ["tests/**/*.test.ts"], globalSetup: ["./native/test-setup.mjs"] },
   resolve: {
     alias: {
       "@arxiv-daily/core": resolve(here, "../core/src/index.ts"),

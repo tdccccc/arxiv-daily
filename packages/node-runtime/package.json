@@ -18,7 +18,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./scoped-library-source": "./src/scoped-library-source.ts",
-    "./file-lock": "./src/file-lock.ts"
+    "./file-lock": "./src/file-lock.ts",
+    "./private-storage": "./src/native-private-storage.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
