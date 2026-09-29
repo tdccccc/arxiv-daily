@@ -716,7 +716,18 @@ export class PaperIndexStore {
     return enqueuePathMutation(
       paperIndexMutationQueues,
       this.paths.papersJsonPath,
-      job,
+      async () => {
+        const lock = await this.storage.acquireLock?.(
+          `paper-index:${this.paths.papersJsonPath}`,
+          { wait: true },
+        );
+        if (lock === null) throw new PaperIndexError("paper index lock is unavailable");
+        try {
+          return await job();
+        } finally {
+          await lock?.release();
+        }
+      },
     );
   }
 

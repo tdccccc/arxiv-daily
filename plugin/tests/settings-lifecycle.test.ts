@@ -92,6 +92,17 @@ describe("plugin directory resolution", () => {
 });
 
 describe("plugin settings reload lifecycle", () => {
+  it("uses the host-shared Vault lock for daily runs", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const acquireLock = vi.fn(async () => null);
+    Object.assign(plugin, { host: { storage: { acquireLock } } });
+    const work = vi.fn(async () => 42);
+    const lock = (plugin as any).runLock as RunLock;
+    expect(await lock.withLock("2026-09-28", work)).toBeUndefined();
+    expect(acquireLock).toHaveBeenCalledWith("daily-run");
+    expect(work).not.toHaveBeenCalled();
+  });
+
   it("routes base URL persistence through effective-endpoint cancellation", async () => {
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
     const settings = structuredClone(DEFAULT_SETTINGS);

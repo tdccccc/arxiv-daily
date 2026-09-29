@@ -12,9 +12,13 @@ import type {
   StorageAdapter,
   StorageEntry,
   StorageNamespaceGuard,
+  StorageLockOptions,
 } from "@arxiv-daily/core";
+import { NodeFileLock } from "./file-lock";
 
 export interface NodeStorageAdapterOptions {
+  /** Override the machine-local coordination directory (primarily for tests). */
+  lockRoot?: string;
   /** Test-only deterministic seam after the final parent fd is opened. */
   afterFinalParentOpened?: () => Promise<void> | void;
   /** Test-only deterministic seam after the target is created but before write. */
@@ -39,6 +43,10 @@ export class NodeStorageAdapter implements StorageAdapter {
       this.createTextExclusive = (storagePath, content) =>
         this.createTextExclusiveLinux(storagePath, content);
     }
+  }
+
+  acquireLock(key: string, options?: StorageLockOptions) {
+    return new NodeFileLock(this.rootDir, this.options).acquire(key, options);
   }
 
   normalizePath(input: string): string {

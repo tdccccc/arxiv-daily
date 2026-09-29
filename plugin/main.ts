@@ -36,7 +36,7 @@ import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/c
 import { Logger } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
-import { RunLock } from "@arxiv-daily/core";
+import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
 import {
 ArxivLibraryMetadataResolver,
 extractPdfIdentificationEvidence,
@@ -326,7 +326,7 @@ export default class ArxivDailyPlugin extends Plugin {
   manualFetch!: { fetchAndSummarize: ManualFetchService["fetchAndSummarize"] };
   progress!: ProgressReporter;
   readonly operations = new SettingsOperationRegistry();
-  private runLock = new RunLock();
+  private runLock = new RunLock(() => this.host.storage.acquireLock?.(DAILY_RUN_LOCK_KEY));
   private runCancellation = new RunCancellationService(this.operations);
   private unloading = false;
   private unsubscribeOperations?: () => void;

@@ -122,6 +122,47 @@ describe("derivePaperInboxPaths", () => {
 });
 
 describe("PaperIndexStore", () => {
+  it("holds shared ownership through mutation and releases after failure", async () => {
+    const { storage } = makeStorage();
+    let held = false;
+    const shared: StorageAdapter = {
+      ...storage,
+      acquireLock: async (key, options) => {
+        expect(key).toBe("paper-index:arxiv-daily/.index/papers.json");
+        expect(options).toEqual({ wait: true });
+        held = true;
+        return { release: async () => { held = false; } };
+      },
+      exists: async (path) => {
+        expect(held).toBe(true);
+        return storage.exists(path);
+      },
+    };
+    const store = new PaperIndexStore(shared, DEFAULT_SETTINGS.output);
+    await expect(store.mutate(() => {
+      expect(held).toBe(true);
+      throw new Error("mutation failed");
+    })).rejects.toThrow("mutation failed");
+    expect(held).toBe(false);
+    await store.mutate(() => ({ changed: false, result: "next" }));
+    expect(held).toBe(false);
+  });
+
+  it("does not mutate when the advertised shared lock cannot be acquired", async () => {
+    const { storage, files } = makeStorage();
+    const store = new PaperIndexStore({
+      ...storage,
+      acquireLock: async () => null,
+    }, DEFAULT_SETTINGS.output);
+    let mutated = false;
+    await expect(store.mutate(() => {
+      mutated = true;
+      return { changed: true, result: undefined };
+    })).rejects.toThrow(/lock/i);
+    expect(mutated).toBe(false);
+    expect(files).toEqual({});
+  });
+
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({

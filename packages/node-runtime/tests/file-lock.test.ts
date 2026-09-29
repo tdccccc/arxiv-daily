@@ -6,6 +6,8 @@ import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { NodeFileLock } from "../src/file-lock";
+import { NodeStorageAdapter } from "../src/storage-adapter";
+import { DAILY_RUN_LOCK_KEY, DEFAULT_SETTINGS, PaperIndexStore, RunLock } from "@arxiv-daily/core";
 
 let root: string;
 let worker: string;
@@ -42,11 +44,51 @@ function child(vault: string, lockRoot: string, mode: string, count = 10) {
     process.once("error", reject);
     process.once("exit", (code, signal) => code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(errors || `worker exit ${code}`)));
   });
-  const acquired = new Promise<void>((resolve) => process.once("message", () => resolve()));
-  return { process, done, acquired };
+  const acquired = new Promise<void>((resolve) => process.on("message", (message) => {
+    if (message === "acquired" || message === "read") resolve();
+  }));
+  const started = new Promise<void>((resolve) => process.on("message", (message) => {
+    if (message === "started") resolve();
+  }));
+  return { process, done, acquired, started };
 }
 
 describe("machine-local file lock", () => {
+  it("excludes another daily-run host across dates and recovers after its process exits", async () => {
+    const { vault, lockRoot } = await fixture();
+    const holder = child(vault, lockRoot, "run");
+    await holder.acquired;
+    const storage = new NodeStorageAdapter(vault, { lockRoot });
+    const lock = new RunLock(() => storage.acquireLock(DAILY_RUN_LOCK_KEY));
+    expect(await lock.withLock("2026-09-29", async () => "entered")).toBeUndefined();
+    holder.process.kill("SIGKILL");
+    await holder.done;
+    expect(await lock.withLock("2026-09-29", async () => "entered")).toBe("entered");
+  });
+
+  it("holds the shared index lock across the entire read-modify-save transaction", async () => {
+    const { vault, lockRoot } = await fixture();
+    const store = new PaperIndexStore(new NodeStorageAdapter(vault, { lockRoot }), DEFAULT_SETTINGS.output);
+    await store.upsertFromDailyPaper({ arxivId: "2609.00000", title: "Seed", authors: "Test", date: "2026-09-28", arxivCategory: "cs.AI", primaryTopic: "test", detail: false });
+    const first = child(vault, lockRoot, "index", 1);
+    await first.acquired;
+    const second = child(vault, lockRoot, "index", 2);
+    let secondRead = false;
+    void second.acquired.then(() => { secondRead = true; });
+    await second.started;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(secondRead).toBe(false);
+    } finally {
+      first.process.send("continue");
+      await first.done;
+      await second.acquired;
+      second.process.send("continue");
+      await second.done;
+    }
+    expect(Object.keys((await store.load()).papers).sort()).toEqual(["arxiv:2609.00000", "arxiv:2609.00001", "arxiv:2609.00002"]);
+  });
+
   it("excludes another instance and allows reacquisition after release", async () => {
     const { vault, lockRoot, locks } = await fixture();
     const other = new NodeFileLock(vault, { lockRoot });

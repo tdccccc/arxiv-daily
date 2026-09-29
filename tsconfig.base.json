@@ -16,7 +16,8 @@
     "paths": {
       "@arxiv-daily/core": ["packages/core/src/index.ts"],
       "@arxiv-daily/node-runtime": ["packages/node-runtime/src/index.ts"],
-      "@arxiv-daily/node-runtime/scoped-library-source": ["packages/node-runtime/src/scoped-library-source.ts"]
+      "@arxiv-daily/node-runtime/scoped-library-source": ["packages/node-runtime/src/scoped-library-source.ts"],
+      "@arxiv-daily/node-runtime/file-lock": ["packages/node-runtime/src/file-lock.ts"]
     }
   }
 }

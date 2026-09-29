@@ -156,6 +156,30 @@ function testApp() {
 }
 
 describe("Obsidian host adapters", () => {
+  it("shares desktop resource locks between independently constructed hosts", async () => {
+    const root = await makeTempDir();
+    const vault = { adapter: realFilesystemAdapter(root) } as any;
+    const first: StorageAdapter = new ObsidianStorageAdapter(vault);
+    const second: StorageAdapter = new ObsidianStorageAdapter(vault);
+    expect(first.acquireLock).toBeTypeOf("function");
+    const lease = await first.acquireLock!("daily-run");
+    expect(lease).not.toBeNull();
+    try {
+      expect(await second.acquireLock!("daily-run")).toBeNull();
+    } finally {
+      await lease!.release();
+    }
+    const next = await second.acquireLock!("daily-run");
+    expect(next).not.toBeNull();
+    await next!.release();
+  });
+
+  it("does not advertise shared locks for a non-filesystem Vault", () => {
+    const { app } = testApp();
+    const storage: StorageAdapter = new ObsidianStorageAdapter(app.vault as any);
+    expect(storage.acquireLock).toBeUndefined();
+  });
+
   it("uses Obsidian's active window without globalThis", () => {
     expect(resourceOpenerSource).toContain("window.activeWindow.open");
     expect(resourceOpenerSource).not.toContain("globalThis");

@@ -1,5 +1,6 @@
 import { normalizePath, type Vault } from "obsidian";
 import type { StorageAdapter, StorageEntry } from "@arxiv-daily/core";
+import { NodeFileLock } from "@arxiv-daily/node-runtime/file-lock";
 import {
   createDesktopTextExclusive,
   guardDesktopClaimNamespace,
@@ -23,12 +24,17 @@ export class ObsidianStorageAdapter implements StorageAdapter {
   ) => Promise<boolean>;
   readonly guardClaimNamespace?: StorageAdapter["guardClaimNamespace"];
   readonly recoverTextAtomic?: StorageAdapter["recoverTextAtomic"];
+  readonly acquireLock?: StorageAdapter["acquireLock"];
 
   constructor(
     private vault: Vault,
     private readonly options: ObsidianStorageAdapterOptions = {},
   ) {
     const adapter = vault.adapter as unknown as FileSystemDataAdapter;
+    if (isFileSystemDataAdapter(adapter)) {
+      const locks = new NodeFileLock(adapter.getBasePath());
+      this.acquireLock = (key, options) => locks.acquire(key, options);
+    }
     if (isFileSystemDataAdapter(adapter) && supportsDesktopExclusiveCreate()) {
       this.createTextExclusive = (path, content) =>
         createDesktopTextExclusive(adapter, this.normalizePath(path), content);

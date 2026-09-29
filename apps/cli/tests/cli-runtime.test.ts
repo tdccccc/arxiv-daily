@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -56,6 +56,29 @@ link_style = "wikilink"
 }
 
 describe("CLI runtime", () => {
+  it("does not run a daily pipeline while another host owns the Vault run lock", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, join(root, ".cache")),
+    });
+    const host = buildNodeHostAdapters({ rootDir: root });
+    const runtime = await buildCliRuntime(config, { host });
+    const run = vi.spyOn(runtime.pipeline, "runForDate").mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    expect(host.storage.acquireLock).toBeTypeOf("function");
+    const other = buildNodeHostAdapters({ rootDir: root });
+    const lease = await other.storage.acquireLock!("daily-run");
+    expect(lease).not.toBeNull();
+    try {
+      await runtime.scheduler.runForDateNow("2026-09-28");
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      await lease!.release();
+    }
+    await runtime.scheduler.runForDateNow("2026-09-28");
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("builds pipeline dependencies on top of Node host adapters", async () => {
     const root = await makeTempDir();
     const cacheDir = join(root, ".cache");

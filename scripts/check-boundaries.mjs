@@ -10,7 +10,10 @@ const layers = [
   {
     dir: "plugin",
     workspace: new Set(["@arxiv-daily/core", "@arxiv-daily/node-runtime"]),
-    workspaceSubpaths: new Set(["@arxiv-daily/node-runtime/scoped-library-source"]),
+    workspaceSubpaths: new Set([
+      "@arxiv-daily/node-runtime/scoped-library-source",
+      "@arxiv-daily/node-runtime/file-lock",
+    ]),
     thirdParty: new Set(["obsidian"]),
   },
 ];

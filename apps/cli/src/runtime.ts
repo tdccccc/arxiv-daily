@@ -19,7 +19,7 @@ import {
   DailySummaryCheckpointStore,
 } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
-import { RunLock } from "@arxiv-daily/core";
+import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
 import {
   createStorageStateStore,
@@ -196,7 +196,7 @@ export async function buildCliRuntime(
   const scheduler = new SchedulerService({
     getSettings: () => config.settings,
     store: stateStore,
-    lock: new RunLock(),
+    lock: new RunLock(() => host.storage.acquireLock?.(DAILY_RUN_LOCK_KEY)),
     runForDate: (date, signal) => pipeline.runForDate(date, signal),
     logger,
     progress: host.progress,

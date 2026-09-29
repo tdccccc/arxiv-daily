@@ -1,7 +1,49 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { RunLock } from "../src/services/run-lock";
 
 describe("RunLock", () => {
+  it("does not enter work while its shared lock is busy", async () => {
+    const acquire = vi.fn(async () => null);
+    const lock = new RunLock(acquire);
+    const work = vi.fn(async () => 42);
+    expect(await lock.withLock("date", work)).toBeUndefined();
+    expect(acquire).toHaveBeenCalledWith("date");
+    expect(work).not.toHaveBeenCalled();
+    expect(lock.isHeld("date")).toBe(false);
+  });
+
+  it("releases both shared and local ownership when work fails", async () => {
+    const release = vi.fn(async () => {});
+    const lock = new RunLock(async () => ({ release }));
+    await expect(lock.withLock("date", async () => { throw new Error("work failed"); })).rejects.toThrow("work failed");
+    expect(release).toHaveBeenCalledOnce();
+    expect(lock.isHeld("date")).toBe(false);
+  });
+
+  it("releases shared ownership after successful work", async () => {
+    const release = vi.fn(async () => {});
+    const acquire = vi.fn(async () => ({ release }));
+    const lock = new RunLock(acquire);
+    expect(await lock.withLock("date", async () => 42)).toBe(42);
+    expect(acquire).toHaveBeenCalledWith("date");
+    expect(release).toHaveBeenCalledOnce();
+    expect(lock.isHeld("date")).toBe(false);
+  });
+
+  it("clears local ownership when acquisition or release throws", async () => {
+    const acquiring = new RunLock(async () => { throw new Error("acquire failed"); });
+    const work = vi.fn(async () => 42);
+    await expect(acquiring.withLock("date", work)).rejects.toThrow("acquire failed");
+    expect(work).not.toHaveBeenCalled();
+    expect(acquiring.isHeld("date")).toBe(false);
+
+    const releasing = new RunLock(async () => ({
+      release: async () => { throw new Error("release failed"); },
+    }));
+    await expect(releasing.withLock("date", work)).rejects.toThrow("release failed");
+    expect(releasing.isHeld("date")).toBe(false);
+  });
+
   it("first acquire succeeds", () => {
     const lock = new RunLock();
     expect(lock.tryAcquire("2026-05-11")).toBe(true);
