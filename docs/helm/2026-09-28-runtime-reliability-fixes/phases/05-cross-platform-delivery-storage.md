@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T15:41:13+08:00
-updated: 2026-09-29T20:06:23+08:00
-revision: 4
+updated: 2026-09-29T23:42:06+08:00
+revision: 5
 
 ## Outcome
 
@@ -51,7 +51,7 @@ Linux/macOS/Windows 的 CLI 与 Plugin product 具备保持现有防重复、崩
 - Red / baseline signal: package and workflow contract checks expose missing selected support artifacts/platform matrix; tests must reject falsely green jobs that skip all platform-sensitive cases.
 - Green check: clean build/install smoke finds the matching backend; native CI matrix covers Linux/macOS/Windows and uploads verification evidence without credentials or real email.
 - regression checks: release-tools/package-boundaries checks plus root validation; document exact CI commands and unrun native checks for P6.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (52fe2b2; observed packaging/SDK/workflow/copy/install Reds, 331 release-tool and 3015 workspace tests Green, native and offline package checks passed on Linux; remote/native platform results remain P6)
 
 ## Phase verification
 

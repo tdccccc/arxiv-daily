@@ -4,21 +4,51 @@ This first-party Node-API v8 component exposes only directory and private-file
 capabilities. The delivery protocol stays in TypeScript. It uses no V8 API,
 third-party native runtime, or user-install-time compilation.
 
-## Local feasibility build
+## Developer build and verification
 
-Use an installed C++17 compiler, CMake 3.20+, and Node-API headers:
+Use an installed C++17 compiler and CMake 3.20+. Supply Node-API headers through
+`NODE_INCLUDE_DIR` (and `NODE_LIBRARY` on Windows), or prepare the exact running
+Node version's official SDK first:
 
 ```sh
-cmake -S packages/node-runtime/native -B packages/node-runtime/native/build \
-  -DCMAKE_BUILD_TYPE=Release -DNODE_INCLUDE_DIR=/usr/include/node
-cmake --build packages/node-runtime/native/build --config Release
+node scripts/native-sdk.mjs
+node scripts/native-build.mjs
 node --test packages/node-runtime/native/tests/storage.test.cjs
+npm run build
+node scripts/native-package-smoke.mjs
+npm run smoke:install
 ```
 
-On Windows, also supply `NODE_LIBRARY` pointing to the matching official
-`node.lib`; MSVC and the Windows SDK are required. The delay-load hook binds to
-the hosting Node/Electron process, not a separately installed node.exe. Build
-inputs and package integration are owned by Helm P5; end users do not run CMake.
+SDK downloads are build-time headers/import libraries checked against the exact
+version's official SHASUMS256.txt, with cross-origin redirects refused. No package
+installation script is used. Linux development can use `/usr/include/node`
+instead; `native-build.mjs` also checks the active Node installation's headers.
+Windows builds require MSVC and the Windows SDK. The delay-load hook resolves
+Node-API from the hosting Node/Electron process, not a separate node.exe.
+
+To exercise default host selection with real native bytes in Vitest, set
+`ARXIV_DAILY_TEST_NATIVE=1`. The ordinary suites retain coverage of the safe Linux
+compatibility path when native assets are absent.
+
+## Distribution
+
+`native-assets.mjs export` writes only the current native target's binary and
+source/digest/API metadata into ignored `prebuilds/`. Development product builds
+embed that one target. Release jobs obtain all six x64/arm64 OS targets from the
+same workflow run and set `ARXIV_DAILY_NATIVE_RELEASE=1`; missing, corrupt or
+source-mismatched targets fail assembly rather than silently producing a partial
+release. The plugin's existing three-file install surface is unchanged.
+
+Bundles contain compressed native bytes and their digests. Runtime loads only a
+matching bundled target, validates its bytes, and uses a content-addressed,
+machine-local code cache. It never downloads executable code. The offline package
+smoke disables HTTP and clears PATH for the CLI, and installed-package smoke uses
+`--offline --ignore-scripts`, so end users need neither SDK nor compiler.
+
+The CI target set is Linux x64/arm64, macOS Intel/Apple Silicon and Windows
+x64/arm64. CMake targets macOS 11+; other runtime/OS compatibility beyond the
+actual tested runners is not inferred. Native macOS/Windows and real Electron
+loading remain explicit P6 acceptance tasks.
 
 ## Safety boundary
 

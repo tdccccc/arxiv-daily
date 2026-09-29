@@ -1,0 +1,51 @@
+# P6 — native-platform-acceptance
+
+goal_ref: ../goal.md
+created: 2026-09-29T23:42:06+08:00
+updated: 2026-09-29T23:42:06+08:00
+revision: 1
+
+## Outcome
+
+在真实 macOS/Windows 与受支持的 Obsidian/Electron 宿主上取得可复现的原生存储、自动邮件防重复和分发验收证据；失败项修复并回归后，才能完成跨平台成功标准及整个 initiative。
+
+## Assumptions
+
+- P5 只验收实现、Linux 证据和 CI 配置就绪，没有把假平台字符串、happy-dom 或 Node 中的 Obsidian adapter 测试当作真实 Electron 结果。
+- 当前会话只有 Linux 环境；没有可用的 macOS/Windows 执行环境，也未获准推送或启动远端 CI。该阻碍不构成成功标准豁免。
+- CI 的六个 native runner 使用同一源码的制品；当前 source hash 或二进制变更后，旧平台结果不能继续充当验收证据。
+- 只用临时 Vault、假凭证及拦截后的 HTTP 验证，不向真实收件人发信，不修改用户当前 Vault 或线上 relay。
+
+## Approach
+
+取得可用的原生环境后，优先运行已经配置好的 native-storage 工作流或完全相同的本地命令。保留每个平台的 OS/架构、Node/Electron 版本、源码和产物摘要、测试报告及离线安装结果；再补真实桌面宿主加载。环境或发布动作需要额外授权时先停，不把本地提交等同于推送许可。
+
+## Chunks
+
+### Chunk 1 — 原生平台构建、文件系统和离线安装
+
+- change kind: verification; any discovered code/config fix follows strict Red-Green-Refactor
+- baseline: 当前缺失 macOS/Windows 观察结果，而不是一个可标为通过的空测试。
+- checks: 按 `.github/workflows/native-storage.yml` 在 Intel/Apple Silicon macOS、Windows x64/arm64 上运行官方 SDK 校验、CMake 构建、native `storage.test.cjs`、私有存储/loader/共享锁测试、Node/Plugin adapter composition、离线 bundle 与 npm 安装冒烟。
+- acceptance: 每个声明支持的目标都有真实通过结果；目录置换可被拒绝或被 OS 句柄固定阻止，Windows ACL 必须实际验证，不能用 chmod 数字替代。没有跳过全部关键用例或忽略失败。
+- [ ] native build, storage and installation evidence accepted
+
+### Chunk 2 — 真实 Obsidian/Electron 验收
+
+- change kind: verification; behavioral fixes require an observed targeted Red before implementation
+- checks: 在隔离 Vault 中安装实际生成的插件三件套，验证匹配原生组件可加载、私有文件读写与恢复、自动投递能力提示及两个宿主重复投递保护。先禁用调度并拦截 HTTP，使用假投递响应，不调用真实 provider。
+- acceptance: 记录 Obsidian/Electron/Node/Node-API 与 OS/CPU 版本；实际桌面加载成功，状态切换与失败路径可重现。happy-dom、源码检查和 Node CLI 结果不能替代本块。
+- [ ] real desktop-host evidence accepted
+
+### Chunk 3 — 最终回归与关闭
+
+- change kind: verification and documentation; retained bug fixes remain isolated commits
+- checks: 对任何原生修复先复现 Red、再观察 Green，并重跑所有受影响平台；执行 root lint/typecheck/test/build/boundaries/submission、release-tools、build/install smoke 及 relay 独立测试/typecheck。
+- acceptance: 技术报告与实际结果一致，所有 success criteria 已满足或由用户明确重新决定；不因缺环境或 CI 权限静默豁免。各修复与状态变更分别提交，整个 goal 才能标记 done。
+- [ ] final cross-platform acceptance and close authorized by evidence
+
+## Abort / reshape triggers
+
+- 标准原生环境无法满足私有权限、原子替换或同步 namespace guard 时停止，先判断是局部实现修复还是路径需要 L2 调整。
+- 需要改变投递身份、恢复规则、Vault 数据可移植性或安全边界时先做 L2/L3 评估，不删除失败测试换取 Green。
+- 任何测试开始访问真实 provider、用户 Vault 或线上控制面时立即停止。

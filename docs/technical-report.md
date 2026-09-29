@@ -231,7 +231,9 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 5. self Resend 对 408/409/5xx 和宿主明确标记为可重试的 transport failure 做有界重试，所有物理尝试复用同一个 provider key。HTTP 400/401/403/404/422/429 是明确拒绝；其他 HTTP、transport failure 和无有效 acceptance marker 的 2xx 均按结果不明处理。
 6. provider 接受后写 `delivered` result；若最终主状态重建失败，返回 `delivered_unrecorded`，已存在的 attempt/result sidecar 仍继续阻断自动重发。provider 调用后的 ambiguous、明确拒绝或结果落盘不确定同样保留阻断；系统不自动重试这些 generation。
 
-`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient；Node 与受支持的 Obsidian 桌面文件系统将主文件和临时/备份产物强制为 `0600`，读取既有宽权限主文件时也收紧为 `0600`。Linux 宿主使用 `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`、`/proc/self/fd` descriptor 锚定和原子 rename；无法提供这些能力的宿主对自动投递 fail closed。跨文件系统 rename 不降级为 copy。
+`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient。CLI 与 Plugin product 共用受限的 Node-API v8 私有存储组件：POSIX 使用目录描述符相对操作和 `0600`；Windows 固定遍历目录的句柄、拒绝 reparse point，并在文件创建时设置当前用户的 protected DACL，而不是把 chmod 当作 ACL。既有宽权限主文件及可恢复备份在使用前收紧权限，私有替换与恢复还使用同一机器本地锁，避免清理另一个写入者的临时文件。
+
+投递协议与数据路径不变，namespace guard 仍在 provider 调用前同步验证。原生资产缺失时，Linux 保留已有 `/proc/self/fd` 兼容实现；不满足存储能力时拒绝自动投递，损坏或不兼容的已提供原生资产不静默降级。跨文件系统 rename 不降级为 copy。当前已观察到的原生组件、宿主接入和离线安装验证均在 Linux；macOS/Windows 与真实 Electron 的运行证据仍待 P6。详见 ADR 0009。
 
 显式 `force`/邮件测试不创建自动 claim，也不改写 automatic delivery state；每次生成独立 `arxiv-daily:test:<random>` key，因此不会占用正式日报 identity。self 模式的 API key 当前来自 settings/config；From 为空时使用 `onboarding@resend.dev`。hosted 模式使用 Bearer `hostedToken` 调用默认 `https://mail.arxiv-daily.top/v1/deliver`。客户端接受精确的 `{ "ok": true }`，也接受仅附带非空且不超过 128 字符 `id` 的 `{ "ok": true, "id": string }` 与额外含字面量 `"deduped": true` 的响应；整个响应体上限为 4096 字符，重复顶层成员、其他字段或类型均视为结果不明。旧响应中的 provider ID 只参与局部契约验证，随后丢弃，不进入投递结果、日志或持久状态。`OFFICIAL_DELIVERY_AVAILABLE = true` 仅表示客户端路径开启，不证明外部 Worker 已部署或可用。
 
@@ -351,7 +353,7 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。当前真实多进程验收平台为 Linux，macOS/Windows 原生结果仍待 P6。
 
-Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian Linux 文件系统使用 descriptor-anchored exclusive create、claim namespace guard 和私有原子替换，能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
+Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian 桌面宿主共用原生 private storage（Linux 无原生资产时保留 descriptor-anchored 兼容路径），能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
 
 ## External Integrations and Executable Configuration
 
@@ -410,8 +412,10 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### 构建产物
 
 
-- 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）  
-- CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，构建时复制到 `plugin/arxiv-daily-cli.cjs`；`prepack` 先 build  
+- 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）。主 bundle 内嵌受控构建的原生存储字节与摘要，不要求插件安装器额外下载 `.node` 文件。
+- CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，同样内嵌原生存储；构建时复制到 `plugin/arxiv-daily-cli.cjs`，`prepack` 先 build。
+- 原生构建：`scripts/native-build.mjs` 使用本机 CMake/C++17 与 Node-API 头文件；`native-sdk.mjs` 仅从固定 Node 版本的官方源获取并验证 SDK 校验和，不安装或执行包脚本。`native-assets.mjs` 只组装目标架构、Node-API 版本、源码摘要和二进制摘要匹配的产物。开发构建只包含当前平台，发布环境 `ARXIV_DAILY_NATIVE_RELEASE=1` 必须具备 Linux/macOS/Windows 的 x64/arm64 六项产物，否则失败。
+- 运行时原生代码缓存：只将匹配平台的已验证字节提取到机器本地 `~/.arxiv-daily/native/<sha256>/`，不从 Vault、当前工作目录或网络发现代码。文件损坏或目录链接被拒绝，不自动覆盖可疑缓存。该缓存不是研究数据，不进入 Vault 数据导出。
 - VS Code companion：清单直接以 `src/extension.js` 为 CommonJS 入口；`build` 校验清单/命令注册，`test` 覆盖 workspace adapter、Dashboard、CLI 任务契约与 smoke，`vsix:package` 生成独立 VSIX
 
 - smoke 检查含 help 退出码、坏配置、pako notice、插件包不泄漏 workspace 解析符号等
@@ -420,8 +424,9 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 
 
 - **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
-- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → release tools / boundaries / lint / typecheck / 8 GiB 全 workspace test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。
-- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → 运行同一全 workspace 验证入口 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。
+- **Native storage verification**（`native-storage.yml`）：PR、main push、手动及 reusable workflow 入口；在六个真实 OS/架构 runner 上构建和验证原生文件操作、共享锁、两个宿主的投递接入和离线安装。测试不发送真实邮件；二进制与验证报告分开上传，action 固定完整 SHA，权限仅 `contents: read`。新增配置尚不等于原生结果已通过，实际远端结果保留 P6。
+- **Release Obsidian plugin**（`release.yml`）：先依赖同一 run 的原生矩阵，下载并验证完整源码匹配的六项产物，再执行原有稳定 tag/SHA/发布说明校验、全量验证、三件套 attestation 和不可覆盖的 GitHub release 创建。
+- **Publish CLI to npm**（`publish-cli.yml`）：插件 release 成功后或手动指定已有 tag，按同一不可变源码重新完成原生矩阵；只消费同一 run 的资产，完整矩阵检查通过后执行既有验证与 trusted publishing。安装冒烟使用本地包、禁用安装脚本并离线执行；运行时测试还清空 PATH 并禁用 HTTP，验证不依赖用户编译器或运行时下载。
 - **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
 - **VS Code companion verification**（`vscode-companion.yml`）：companion、CLI command contract、workflow、产品清单及 checker 路径变更时，使用 companion 自身 lockfile 执行 build、tests、smoke，并把验证用 VSIX 写入 runner 临时目录；不发布扩展。
 - 两个独立 workflow 都在 pull request 和相应路径推送到 `main` 时运行，action 固定完整 commit SHA，权限仅 `contents: read`，checkout 不持久化凭据。

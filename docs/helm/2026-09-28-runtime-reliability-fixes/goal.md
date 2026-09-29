@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-29T16:30:36+08:00
-revision: 9
+updated: 2026-09-29T23:42:06+08:00
+revision: 10
 owner: claude-root-session-2026-09-29
 
 ## Intent
@@ -31,7 +31,7 @@ owner: claude-root-session-2026-09-29
 
 - 从已验收的 6de54d9 创建本地分支 `fix/review-followups`，旧 helm 保持 done 与原历史。
 - 沿用不使用子代理的偏好；每个阶段由当前会话串行推进。
-- 当前只展开 P1；后续阶段到启动时才写具体方案与测试策略。
+- 每次只展开当前阶段；后续阶段到启动时才写具体方案与测试策略。
 - 2026-09-28 用户决定：先完成跨平台实现和 CI 验收配置，原生平台验收单独保留 P6 待办。
 - 2026-09-29 用户选择 1A：允许随应用增加系统原生支持组件；先验证可行性，再接入和配置分发，安全要求与 P6 原生验收边界不变。
 - 不以普通 write-before-check、缩短占位寿命或仅凭墙钟超时破坏现有防重复投递与路径边界。
@@ -44,5 +44,5 @@ owner: claude-root-session-2026-09-29
 2. P2 — 邮件中继拒绝非法 JSON 对象形状（F32） — status: done
 3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: done
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: done
-5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: active
-6. P6 — macOS/Windows 原生平台验收（按用户决定保留待办） — status: pending
+5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: done
+6. P6 — macOS/Windows 原生平台验收（缺原生环境，保留待办） — status: blocked
