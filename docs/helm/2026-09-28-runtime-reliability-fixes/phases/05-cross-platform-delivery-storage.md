@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T15:41:13+08:00
-updated: 2026-09-29T15:41:13+08:00
-revision: 1
+updated: 2026-09-29T16:30:36+08:00
+revision: 2
 
 ## Outcome
 
@@ -14,19 +14,23 @@ Linux/macOS/Windows 的 CLI 与 Plugin product 具备保持现有防重复、崩
 - 现有 generation claim/decision/result 协议和 v1-compatible delivery-state 仍是稳定契约；不通过清除阻断记录或缩短恢复窗口规避问题。
 - 普通 Node `wx` 只保证最终路径不被覆盖，不能替代整个父目录链的身份锚定；Windows 不支持 libuv 的 O_DIRECTORY/O_NOFOLLOW，chmod 也不区分 owner/group/others。
 - 当前 Linux 的 `/proc/self/fd` 实现不能直接作为 macOS/Windows 实现；跨平台能力需要另外证明，不能只移除平台检查。
-- 候选路径是一个受限的系统原生存储支持组件。此路径可能增加各 OS/CPU 的构建和随应用分发产物，尚未经用户决定；在决定前不添加依赖、不改变打包方式、不修改投递生产逻辑。
+- 2026-09-29 用户选择 1A，接受系统原生组件及其随应用分发成本。选用不依赖 V8/Electron ABI 的 Node-API v8 小型 C++ 后端，仅实现目录锚定、私有文件与原子发布，不迁移 Core 投递协议。
+- POSIX 使用 openat/renameat/linkat/unlinkat 等目录描述符相对操作；Windows 对祖先目录持有不允许删除共享的句柄，拒绝 reparse point，创建文件即使用当前用户的 protected DACL，并重新验证已打开句柄。
+- 官方插件更新器仅安装 main.js/manifest/styles，故发布构建将受控 CI 产出的匹配架构原生字节和摘要内嵌于 bundle；运行时只提取匹配平台字节，不下载代码、不要求终端用户编译。开发构建可只含当前平台，发布构建缺平台必须失败。
 
 ## Approach
 
-先确认是否接受系统原生支持组件及其分发成本，再验证最小私有文件操作能力。稳定投递协议保留在 Core；系统调用、权限与 namespace guard 留在宿主边界。原生组件缺失、版本不匹配或文件系统能力不满足时明确拒绝自动发送，绝不退回普通 write-before-check。
+先以真实文件系统测试验证最小 Node-API 能力，再接入两个宿主。稳定投递协议保留在 Core；系统调用、权限与 namespace guard 留在宿主边界。原生组件缺失、版本不匹配或文件系统能力不满足时明确拒绝自动发送，绝不退回普通 write-before-check。Linux 的既有实现保留为未携带原生资产时的安全兼容路径。
 
 ## Chunks
 
 ### Chunk 1 — 选择并验证安全存储能力与分发路径
 
-- change kind: non-behavioral investigation; any executable proof then follows strict Red-Green-Refactor
-- baseline signal: Linux-only capability checks in both hosts; official Node/libuv documentation confirms missing Windows flags and chmod limitations.
-- verification: record the user's packaging decision, select a concrete backend, and define testable create/replace/recover/guard contracts before production edits. No backend has been selected or accepted yet.
+- change kind: behavior change (native primitive and build tooling)
+- strategy: strict Red-Green-Refactor; missing native API is the initial contract baseline, followed by a compilable no-op backend to observe behavioral Reds.
+- Red / baseline signal: `node --test packages/node-runtime/native/tests/*.test.cjs` cannot acquire a real namespace, publish exclusive private files, or reject moved/symlink parents with the no-op backend.
+- Green check: same real-filesystem suite verifies exclusive publication, private permissions/ACL, durable writes, atomic rename, traversal/reparse rejection, opened-parent movement, closed-handle errors and independent child processes.
+- regression checks: native build on current Linux, node-runtime suite/typecheck, build-tool contract tests. Mac/Windows execution deferred explicitly to P6; no fake platform result counts.
 - [ ] approach and feasibility evidence accepted
 
 ### Chunk 2 — 实现并接入共享的私有投递存储

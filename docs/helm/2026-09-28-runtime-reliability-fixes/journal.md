@@ -86,3 +86,10 @@
 - decision pending: recommend investigating a narrow native storage component, but shipping platform-specific components changes CLI/Plugin packaging and has not been authorized as a product choice. No dependency, native component, or P5 production change has been added. This is a planning/packaging gate, not evidence that all possible portable designs have been exhausted.
 - change: create only the current P5 plan, mark P5 blocked pending that decision, keep the goal active and P6 pending. No success criterion is waived; no active implementation continues behind the decision gate.
 - next: ask whether to accept the native-component direction or pause cross-platform implementation. If accepted, validate the backend's feasibility and distribution contract before implementing; native results still belong to P6.
+
+## 2026-09-29 — user accepts native support; resume P5
+
+- decision: user replied `1A`, accepting investigation and implementation of a system-native support component bundled with the products. P5 resumes; the prior packaging question is resolved. No authorization for push, publication, live email or production changes outside the existing scope is implied.
+- approach: implement a narrow Node-API v8 backend with POSIX directory-relative operations and Windows pinned directory handles/protected per-user DACL. Keep the generation delivery protocol and portable Vault data unchanged. Use node-gyp only as a developer build tool; end users receive precompiled, content-checked bytes inside the existing bundles because the plugin release currently distributes only manifest/main/styles.
+- verification: native API baseline then real behavioral Reds before implementation; Linux primitive and host integration evidence precede acceptance. Build/install and platform-artifact contract tests guard distribution. Native macOS/Windows runtime evidence remains P6; inability to run it here never becomes a passing result.
+- next: native primitive contract tests and smallest compilable backend, then safety implementation and host wiring. Native assets are code, not research data, and no runtime code download is introduced.

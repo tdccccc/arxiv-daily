@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-29T15:41:13+08:00
-revision: 8
+updated: 2026-09-29T16:30:36+08:00
+revision: 9
 owner: claude-root-session-2026-09-29
 
 ## Intent
@@ -33,6 +33,7 @@ owner: claude-root-session-2026-09-29
 - 沿用不使用子代理的偏好；每个阶段由当前会话串行推进。
 - 当前只展开 P1；后续阶段到启动时才写具体方案与测试策略。
 - 2026-09-28 用户决定：先完成跨平台实现和 CI 验收配置，原生平台验收单独保留 P6 待办。
+- 2026-09-29 用户选择 1A：允许随应用增加系统原生支持组件；先验证可行性，再接入和配置分发，安全要求与 P6 原生验收边界不变。
 - 不以普通 write-before-check、缩短占位寿命或仅凭墙钟超时破坏现有防重复投递与路径边界。
 - 用户本轮明确点名的项目未经用户重新决定不豁免；缺真实接口或原生平台证据时保留未完成状态并写明阻碍。
 - commit 使用 Conventional Commits 英文动词主题，多个 -m 分别写 Why/What/Validation；提交前检查 staged diff。
@@ -43,9 +44,5 @@ owner: claude-root-session-2026-09-29
 2. P2 — 邮件中继拒绝非法 JSON 对象形状（F32） — status: done
 3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: done
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: done
-5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: blocked
+5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: active
 6. P6 — macOS/Windows 原生平台验收（按用户决定保留待办） — status: pending
-
-## Open questions
-
-- P5：是否接受一个需要随 CLI/Plugin 按平台构建和分发的系统原生存储支持组件？此为当前推荐的待验证路径，不是已批准设计；决定前不放宽现有路径保护或私有权限要求。
