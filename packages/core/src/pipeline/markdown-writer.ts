@@ -1,5 +1,6 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { Logger } from "../services/logger";
+import { DAILY_RUN_LOCK_KEY } from "../services/run-lock";
 import type { ArxivSettings, OutputSettings } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
 import {
@@ -213,17 +214,23 @@ export class MarkdownWriter {
   }
 
   async cleanupTemporaryFiles(): Promise<string[]> {
-    const removed: string[] = [];
-    for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
-      const norm = this.opts.storage.normalizePath(dir);
-      const entries = await this.opts.storage.list?.(norm).catch(() => []);
-      for (const entry of entries ?? []) {
-        if (entry.type !== "file" || !entry.path.endsWith(".tmp")) continue;
-        await this.opts.storage.remove(entry.path);
-        removed.push(entry.path);
+    const lock = await this.opts.storage.acquireLock?.(DAILY_RUN_LOCK_KEY);
+    if (lock === null) return [];
+    try {
+      const removed: string[] = [];
+      for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
+        const norm = this.opts.storage.normalizePath(dir);
+        const entries = await this.opts.storage.list?.(norm).catch(() => []);
+        for (const entry of entries ?? []) {
+          if (entry.type !== "file" || !entry.path.endsWith(".tmp")) continue;
+          await this.opts.storage.remove(entry.path);
+          removed.push(entry.path);
+        }
       }
+      return removed.sort();
+    } finally {
+      await lock?.release();
     }
-    return removed.sort();
   }
 
   private tagsFor(paper: DailyPaperWithContent): string[] {

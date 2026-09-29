@@ -79,6 +79,28 @@ describe("CLI runtime", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("preserves another host's temporary Markdown during startup and cleans it after release", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, join(root, ".cache")),
+    });
+    const active = buildNodeHostAdapters({ rootDir: root });
+    const temp = "arxiv-daily/daily/2026-09-28.md.tmp";
+    await active.storage.mkdir("arxiv-daily/daily");
+    await active.storage.writeText(temp, "still writing");
+    const lease = await active.storage.acquireLock!("daily-run");
+    expect(lease).not.toBeNull();
+    try {
+      await buildCliRuntime(config);
+      expect(await active.storage.readText(temp)).toBe("still writing");
+    } finally {
+      await lease!.release();
+    }
+    await buildCliRuntime(config);
+    expect(await active.storage.exists(temp)).toBe(false);
+  });
+
   it("builds pipeline dependencies on top of Node host adapters", async () => {
     const root = await makeTempDir();
     const cacheDir = join(root, ".cache");

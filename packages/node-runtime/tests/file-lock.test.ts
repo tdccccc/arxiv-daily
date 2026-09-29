@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { NodeFileLock } from "../src/file-lock";
 import { NodeStorageAdapter } from "../src/storage-adapter";
-import { DAILY_RUN_LOCK_KEY, DEFAULT_SETTINGS, PaperIndexStore, RunLock } from "@arxiv-daily/core";
+import { DAILY_RUN_LOCK_KEY, DEFAULT_SETTINGS, Logger, MarkdownWriter, PaperIndexStore, RunLock } from "@arxiv-daily/core";
 
 let root: string;
 let worker: string;
@@ -64,6 +64,22 @@ describe("machine-local file lock", () => {
     holder.process.kill("SIGKILL");
     await holder.done;
     expect(await lock.withLock("2026-09-29", async () => "entered")).toBe("entered");
+  });
+
+  it("does not clean the temporary Markdown of a live daily-run subprocess", async () => {
+    const { vault, lockRoot } = await fixture();
+    const holder = child(vault, lockRoot, "run");
+    await holder.acquired;
+    const storage = new NodeStorageAdapter(vault, { lockRoot });
+    const writer = new MarkdownWriter({ storage, logger: new Logger("error"), arxiv: DEFAULT_SETTINGS.arxiv, output: DEFAULT_SETTINGS.output });
+    const temp = "arxiv-daily/daily/2026-09-28.md.tmp";
+    await storage.mkdir("arxiv-daily/daily");
+    await storage.writeText(temp, "in progress");
+    expect(await writer.cleanupTemporaryFiles()).toEqual([]);
+    expect(await storage.readText(temp)).toBe("in progress");
+    holder.process.kill("SIGKILL");
+    await holder.done;
+    expect(await writer.cleanupTemporaryFiles()).toEqual([temp]);
   });
 
   it("holds the shared index lock across the entire read-modify-save transaction", async () => {

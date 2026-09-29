@@ -14,6 +14,7 @@ import {
   StateStore,
   type StorageAdapter,
 } from "@arxiv-daily/core";
+import * as obsidianHost from "../src/hosts/obsidian";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 import { SettingsChangeService } from "../src/settings/change-service";
@@ -101,6 +102,34 @@ describe("plugin settings reload lifecycle", () => {
     expect(await lock.withLock("2026-09-28", work)).toBeUndefined();
     expect(acquireLock).toHaveBeenCalledWith("daily-run");
     expect(work).not.toHaveBeenCalled();
+  });
+
+  it("does not clean temporary Markdown during onload while another host is running", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => [{ path: "arxiv-daily/daily/report.md.tmp", type: "file" as const }]),
+      remove: vi.fn(async () => {}),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters").mockReturnValue({ storage } as any);
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      app: {},
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      addSettingTab: () => { throw new Error("stop after startup cleanup"); },
+    });
+    try {
+      await expect(plugin.onload()).rejects.toThrow("stop after startup cleanup");
+      expect(storage.acquireLock).toHaveBeenCalledWith("daily-run");
+      expect(storage.list).not.toHaveBeenCalled();
+      expect(storage.remove).not.toHaveBeenCalled();
+    } finally {
+      plugin.onunload();
+      buildHost.mockRestore();
+    }
   });
 
   it("routes base URL persistence through effective-endpoint cancellation", async () => {

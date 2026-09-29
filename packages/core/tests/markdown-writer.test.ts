@@ -339,6 +339,37 @@ describe("MarkdownWriter strictness on existing files", () => {
     );
   });
 
+  it.each(["busy", "unavailable"])("does not inspect temporary files when the daily lock is %s", async (state) => {
+    const { storage } = makeStorage();
+    const list = vi.fn(storage.list);
+    const acquireLock = vi.fn(async () => {
+      if (state === "unavailable") throw new Error("lock unavailable");
+      return null;
+    });
+    const writer = new MarkdownWriter({
+      storage: { ...storage, list, acquireLock },
+      logger: new Logger("error"), arxiv: DEFAULT_SETTINGS.arxiv, output: DEFAULT_SETTINGS.output,
+    });
+    if (state === "unavailable") {
+      await expect(writer.cleanupTemporaryFiles()).rejects.toThrow("lock unavailable");
+    } else {
+      expect(await writer.cleanupTemporaryFiles()).toEqual([]);
+    }
+    expect(acquireLock).toHaveBeenCalledWith("daily-run");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("releases the daily lock even when temporary-file deletion fails", async () => {
+    const { storage } = makeStorage({ "arxiv-daily/daily/report.md.tmp": "partial" });
+    const release = vi.fn(async () => {});
+    const writer = new MarkdownWriter({
+      storage: { ...storage, acquireLock: async () => ({ release }), remove: async () => { throw new Error("delete failed"); } },
+      logger: new Logger("error"), arxiv: DEFAULT_SETTINGS.arxiv, output: DEFAULT_SETTINGS.output,
+    });
+    await expect(writer.cleanupTemporaryFiles()).rejects.toThrow("delete failed");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("cleanupTemporaryFiles removes stale markdown temp files from output dirs", async () => {
     const { files, writer } = makeWriter({
       "arxiv-daily/daily/2026-05-11.md.tmp": "partial",
