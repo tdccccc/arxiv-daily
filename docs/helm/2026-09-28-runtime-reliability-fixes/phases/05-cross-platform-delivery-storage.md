@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T15:41:13+08:00
-updated: 2026-09-29T17:45:20+08:00
-revision: 3
+updated: 2026-09-29T20:06:23+08:00
+revision: 4
 
 ## Outcome
 
@@ -42,7 +42,7 @@ Linux/macOS/Windows 的 CLI 与 Plugin product 具备保持现有防重复、崩
 - Green check: both hosts advertise the complete capability set only when usable; duplicate automatic sends remain blocked, pre-attempt recovery remains possible, uncertain provider attempts remain blocking, and path replacement prevents HTTP invocation.
 - regression checks: Core delivery suites, complete Node/CLI/Plugin suites, root lint/typecheck/build/boundaries/submission and relay tests/typecheck.
 - exception: native macOS/Windows execution is unavailable in this Linux session. Linux integration and typed platform contracts are compensating evidence only; native execution must remain explicitly unaccepted until P6.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (180b420; eight orchestration/four loader/two host Reds, full root and relay Green; release asset selection remains chunk 3)
 
 ### Chunk 3 — 打包与 CI 验收配置
 

@@ -101,3 +101,11 @@
 - L1 build adjustment: permission checks denied installing and immediately executing a new node-gyp package. Did not run or retry that external script. Used already-installed C++/CMake and system Node-API headers instead; removed the unused gyp configuration and added no dependency. CMake preserves the observed direct-compiler Green baseline.
 - limits: Windows/macOS code and the Electron delay-load path have not run here. SDK collection, bundle integrity, host wiring and native CI still remain; no binary is committed and no provider request was sent.
 - next: test-first native private create/replace/recovery orchestration, then both hosts' capability wiring and consumer regressions.
+
+## 2026-09-29 — native private storage and host wiring accepted
+
+- evidence: eight orchestration Reds (including the separately corrected namespace fixture), four loader integrity Reds and two host-selection Reds preceded their fixes. Native composition tests send through a fake HTTP client once and block repeats across independent host instances. Full root regression passed: Core 2083 / two existing skips, Node 66, CLI 109, Plugin 756; lint/typecheck/build/boundaries/submission and relay 161/typecheck passed.
+- checkpoint: On track; code/tests committed as 180b420. Private replacements and recovery share a host-local lock; creates and synchronous guards use native directory capabilities. Bundled-code loading verifies content and refuses corrupt or linked cache targets. No runtime download or research-data relocation was added.
+- test setup: added a CMake test prerequisite so clean checkouts build their own native code. The first full regression exposed an incorrect relative setup import; corrected it and reran the full root suite to Green. That setup error is not counted as a behavioral Red.
+- limits: default source/development hosts still use the existing Linux fallback when no assets are supplied. Production asset embedding, full release platform checks, install smoke, updated unsupported copy and CI remain chunk 3. Native Windows/macOS and real Electron execution have not run.
+- next: package only source-matched native assets, fail release builds on missing architectures, and add native platform CI plus offline installed-consumer verification.
