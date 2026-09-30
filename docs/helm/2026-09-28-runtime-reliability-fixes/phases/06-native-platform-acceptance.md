@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T20:17:56+08:00
-revision: 5
+updated: 2026-09-30T20:25:56+08:00
+revision: 6
 
 ## Outcome
 
@@ -43,6 +43,8 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 6. **Explicit relay test types** — configuration bug fix exposed after approved dependency installation. Observed Red: tsc cannot resolve node:fs/node:url or ImportMeta.url under Vitest 4. Explicitly include the installed Node types; Green: relay typecheck, all 161 tests, read-only preflight check and Wrangler dry-run.
 
 7. **Claim guard platform assertion** — test contract correction, no production change. Observed Windows x64 Red in run 36713376132: fs.promises.rename succeeds, contradicting the test's unconditional Windows rejection assumption. The retained safety contract already allows either OS prevention or synchronous replacement detection. Exercise actual rename; tolerate only Windows permission/busy errors, otherwise replace the original directory and require guard.assertCurrent to reject the identity change. Verify the original claim content and released-handle rejection in both cases. Linux runtime 46 tests and Node typecheck are the local checks; both Windows runners must verify the revised contract.
+
+8. **Windows test argument forwarding** — workflow repair. Observed Red: run 36713890755 Windows x64 passes primitive and guard/runtime tests, then npm exec runs all 26 Node adapter tests despite -t, and emits no requested JSON reports. Three unrelated POSIX-mode assertions fail. Preserve the intended composition filters and use direct installed Vitest entry points with explicit working directories. Added workflow regression fails before the change and passes afterward (4 tests). Executed the three exact commands on Linux and parsed successful JSON with 20 runtime, 1 Node composition and 1 plugin composition pass. Native Windows runtime/artifact and offline-install checks remain mandatory.
 
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 

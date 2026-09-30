@@ -149,3 +149,10 @@
 - evidence: fb1e798 Email relay run 36713376089 passes every step. Native run 36713376132 confirms the junction fix: Windows x64 native primitive tests pass, then the guard integration test fails because asynchronous rename succeeds instead of rejecting. Linux/macOS remain green.
 - L1: correct the test's OS assumption to the existing P6 contract (prevent movement or detect replacement before invocation). No production protection is relaxed. When rename succeeds, replace the original directory, require synchronous identity-check rejection, and verify the original claim is unchanged; after release, the guard must reject. Only explicit Windows permission/busy errors qualify as prevention.
 - verification: run the 46 Linux native runtime tests and Node typecheck, then rerun the same real Windows matrix. Keep P6 desktop acceptance open.
+
+
+## 2026-09-30 — native guard passes; repair Windows workflow argument forwarding
+
+- evidence: run 36713890755 Windows x64 passes native primitives and all private-storage/shared-lock cases, including replacement detection. The following Node composition step unexpectedly runs all 26 adapter tests and no JSON reporter; its three failures assert POSIX mode bits, despite the existing workflow filter selecting only native composition.
+- L1: invoke installed Vitest directly in explicit workspace directories so PowerShell/npm argument forwarding cannot discard filters or report destinations. Retain all existing native/platform gates and root coverage; no skip, permission assertion deletion, or continue-on-error is introduced.
+- verification: workflow regression Red then all 4 checks Green. The exact three workflow commands generate parsed successful JSON reports locally (20 runtime, 1 Node host, 1 plugin host). Push only the authorized acceptance branch and inspect actual Windows reports plus downstream build/install results.
