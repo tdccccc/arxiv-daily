@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T09:10:20+08:00
-revision: 2
+updated: 2026-09-30T12:55:17+08:00
+revision: 3
 
 ## Outcome
 
@@ -29,6 +29,17 @@ revision: 2
 - checks: 按 `.github/workflows/native-storage.yml` 在 Intel/Apple Silicon macOS、Windows x64/arm64 上运行官方 SDK 校验、CMake 构建、native `storage.test.cjs`、私有存储/loader/共享锁测试、Node/Plugin adapter composition、离线 bundle 与 npm 安装冒烟。
 - acceptance: 每个声明支持的目标都有真实通过结果；目录置换可被拒绝或被 OS 句柄固定阻止，Windows ACL 必须实际验证，不能用 chmod 数字替代。没有跳过全部关键用例或忽略失败。
 - [ ] native build, storage and installation evidence accepted
+
+#### PR #51 repair checkpoints (2026-09-30, L1)
+
+Each fix remains a separate commit; local verification permits a CI candidate commit, not acceptance of an unobserved platform result.
+
+1. **Root dependencies and portable lockfile** — dependency/configuration repair. Observed Red: root audit reports GHSA-82fw-gwwq-j7x9 (`@vitest/mocker`), fast-uri and js-yaml advisories; Linux arm64/macOS jobs cannot load their missing Rollup optional packages. Add a lockfile completeness test and observe Red before regenerating without an installed dependency tree. Select patched compatible releases explicitly, no forced audit fix. Green: unchanged moderate audit threshold, lockfile test, root tests/typecheck/lint/build and release-tool checks; native and Node-version CI must rerun on the new HEAD.
+2. **Independent relay dependencies** — dependency repair. Observed Red: relay audit reports the same Vitest advisory plus sharp/undici through Wrangler/Miniflare. Green: independent moderate audit, 161 relay tests and typecheck using explicitly selected patched dependencies; no deploy or provider calls.
+3. **Windows delay-load hook** — build bug fix. Observed Red: both Windows jobs report C2373 on `__pfnDliNotifyHook2`. Match the installed MSVC declaration without changing host lookup or access protections. Local compensating check: compile the real source against a narrow declaration fixture and rerun Linux native/build tests; actual Windows build/filesystem/host/offline checks remain mandatory and cannot be replaced by that fixture.
+4. **Endpoint normalization** — performance/security bug fix. Observed Red: CodeQL check 109702178627 plus a bounded adversarial slash-input regression before changing production code. Green: linear normalization preserving URL results, provider/model-listing regression and new-HEAD CodeQL check; no suppression or live LLM requests.
+
+After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 
 ### Chunk 2 — 真实 Obsidian/Electron 验收
 
