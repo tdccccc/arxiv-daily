@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T21:23:10+08:00
-revision: 9
+updated: 2026-09-30T23:43:06+08:00
+revision: 10
 
 ## Outcome
 
@@ -28,7 +28,7 @@ revision: 9
 - baseline: 当前缺失 macOS/Windows 观察结果，而不是一个可标为通过的空测试。
 - checks: 按 `.github/workflows/native-storage.yml` 在 Intel/Apple Silicon macOS、Windows x64/arm64 上运行官方 SDK 校验、CMake 构建、native `storage.test.cjs`、私有存储/loader/共享锁测试、Node/Plugin adapter composition、离线 bundle 与 npm 安装冒烟。
 - acceptance: 每个声明支持的目标都有真实通过结果；目录置换可被拒绝或被 OS 句柄固定阻止，Windows ACL 必须实际验证，不能用 chmod 数字替代。没有跳过全部关键用例或忽略失败。
-- [x] native build, storage and installation evidence accepted — source 317d4d6; run 36715458437 passes all six real OS/architecture jobs, including offline loading/install and artifact uploads.
+- [x] native build, storage and installation evidence accepted — source 552f21c; run 36733252120 passes all six real OS/architecture jobs and the aggregate release asset assembly gate, including offline loading/install and artifact uploads.
 
 #### PR #51 repair checkpoints (2026-09-30, L1)
 
@@ -50,6 +50,8 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 
 10. **Slow-disk contention test budget** — test harness repair after run 36719082645. Linux x64's 30-increment subprocess case reaches the default 5-second timeout (5029 ms); other cases/platforms pass. Injecting 100 ms per lock-record fsync reproduces the same timeout locally. Give only the two repeated multi-process contention cases a 30-second test budget; retain all exclusion/counter/recovery assertions and production lock deadlines. The same injected-delay run passes both cases in 11.14 seconds total; normal native runtime regression passes 20 tests. Rerun the six-platform CI on the candidate.
 
+11. **Cross-platform source identity and complete assembly** — release build repair discovered by combining real CI artifacts. `readNativeAssets` rejected Windows assets from the otherwise-green matrix. Reproduced hashes match exactly the LF versus CRLF forms of the same source. A checkout fixture and missing-aggregate workflow contract both produced Red. Canonicalize source newlines, retain exact binary digests, and add same-run complete-matrix assembly. All 337 release-tool checks and local build/install checks pass; fresh run 36733252120 passes all seven native jobs and independently downloaded artifacts assemble locally.
+
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 
 ### Chunk 2 — 真实 Obsidian/Electron 验收
@@ -57,14 +59,14 @@ After these candidates, retrieve complete logs for any newly exposed native fail
 - change kind: verification; behavioral fixes require an observed targeted Red before implementation
 - checks: 在隔离 Vault 中安装实际生成的插件三件套，验证匹配原生组件可加载、私有文件读写与恢复、自动投递能力提示及两个宿主重复投递保护。先禁用调度并拦截 HTTP，使用假投递响应，不调用真实 provider。
 - acceptance: 记录 Obsidian/Electron/Node/Node-API 与 OS/CPU 版本；实际桌面加载成功，状态切换与失败路径可重现。happy-dom、源码检查和 Node CLI 结果不能替代本块。
-- [ ] real desktop-host evidence accepted
+- [x] real desktop-host evidence accepted — actual Obsidian 1.11.5 / Electron 39.2.6 on Linux x64, only `/home/tiandc/Desktop/plugin_test`; see ../evidence/desktop-native-acceptance.md. Settings/workspace restored; no real delivery.
 
 ### Chunk 3 — 最终回归与关闭
 
 - change kind: verification and documentation; retained bug fixes remain isolated commits
 - checks: 对任何原生修复先复现 Red、再观察 Green，并重跑所有受影响平台；执行 root lint/typecheck/test/build/boundaries/submission、release-tools、build/install smoke 及 relay 独立测试/typecheck。
 - acceptance: 技术报告与实际结果一致，所有 success criteria 已满足或由用户明确重新决定；不因缺环境或 CI 权限静默豁免。各修复与状态变更分别提交，整个 goal 才能标记 done。
-- [ ] final cross-platform acceptance and close authorized by evidence
+- [x] final cross-platform acceptance and close authorized by evidence — native matrix/assembly, Root, relay, CodeQL and VS Code pass on 552f21c; local release tools 337 and offline build/install pass; both technical reports synchronized and validated.
 
 ## Abort / reshape triggers
 

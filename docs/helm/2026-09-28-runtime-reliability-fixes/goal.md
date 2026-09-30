@@ -1,9 +1,9 @@
 # Review follow-ups: provider, shared Vault and delivery reliability
 
-status: active
+status: done
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-30T19:49:20+08:00
-revision: 13
+updated: 2026-09-30T23:43:06+08:00
+revision: 15
 owner: codex-p6-ci-repair-2026-09-30
 
 ## Intent
@@ -18,8 +18,8 @@ owner: codex-p6-ci-repair-2026-09-30
 - [x] F32：中继拒绝非对象 JSON（包括 null/数组），返回明确客户端错误，不访问投递服务或修改状态。
 - [x] F19：服务商收到其支持的推理参数，不再发送 SDK 专用 extra_body 包装；非推理模式、流式兼容回退和输出上限保持正确。请求契约与所选真实接口验收均有记录。
 - [x] 同一台机器多个 Plugin/CLI 进程使用同一 Vault 时，运行互斥且 PaperIndexStore 更新不丢失；进程退出/崩溃和争用路径有真实多进程验证。
-- [ ] Linux/macOS/Windows 的 Plugin/CLI 自动邮件使用可靠的持久化投递占位，不因平台本身被拒绝；重复发送、崩溃、路径置换与恢复的保护保持有效，并有原生平台验收记录。
-- [ ] 所有行为修复分别提交并附 Red/Green 与相关回归证据；root lint/typecheck/test/build/boundaries/submission 和 relay 独立测试/类型检查通过，技术报告同步。
+- [x] Linux/macOS/Windows 的 Plugin/CLI 自动邮件使用可靠的持久化投递占位，不因平台本身被拒绝；重复发送、崩溃、路径置换与恢复的保护保持有效，并有原生平台验收记录。
+- [x] 所有行为修复分别提交并附 Red/Green 与相关回归证据；root lint/typecheck/test/build/boundaries/submission 和 relay 独立测试/类型检查通过，技术报告同步。
 
 ## Non-goals
 
@@ -28,6 +28,8 @@ owner: codex-p6-ci-repair-2026-09-30
 - 不执行线上 relay cutover、不发送真实邮件、不合并或发布；推送和 PR 仅限下述本次原生验收授权。
 
 ## Constraints
+
+- 2026-09-30 用户限定：真实桌面验收仅允许使用 `/home/tiandc/Desktop/plugin_test` 测试 Vault，禁止在生产目录运行；隔离应用配置，保存并恢复已有测试设置与布局。
 
 - 从已验收的 6de54d9 创建本地分支 `fix/review-followups`，旧 helm 保持 done 与原历史。
 - 沿用不使用子代理的偏好；每个阶段由当前会话串行推进。
@@ -46,4 +48,4 @@ owner: codex-p6-ci-repair-2026-09-30
 3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: done
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: done
 5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: done
-6. P6 — macOS/Windows 原生平台验收（CI 第一关已获准，桌面验收单列） — status: active
+6. P6 — 六平台原生与 Linux Obsidian/Electron 桌面验收完成 — status: done
