@@ -10,4 +10,4 @@ static FARPROC loadNode(unsigned notification, PDelayLoadInfo info) {
   return reinterpret_cast<FARPROC>(host);
 }
 
-extern "C" { PfnDliHook __pfnDliNotifyHook2 = loadNode; }
+decltype(__pfnDliNotifyHook2) __pfnDliNotifyHook2 = loadNode;
