@@ -48,6 +48,18 @@ test("native CI uses real OS/architecture runners and mandatory capability tests
   assertNativeWorkflow(workflow("native-storage"));
 });
 
+test("native CI forwards Vitest filters and report arguments without npm shell parsing", () => {
+  const steps = workflow("native-storage").jobs.build.steps;
+  for (const name of ["Test private storage and shared locks", "Test Node delivery composition", "Test desktop delivery composition"]) {
+    const step = steps.find(value => value.name === name);
+    assert.match(step.run, /^node (?:\.\.\/)+node_modules\/vitest\/vitest\.mjs run /);
+    assert.ok(step["working-directory"]);
+    assert.match(step.run, /--reporter=json --outputFile=/);
+  }
+  assert.match(steps.find(value => value.name === "Test Node delivery composition").run, /-t "native delivery composition"/);
+  assert.match(steps.find(value => value.name === "Test desktop delivery composition").run, /-t "uses native delivery storage"/);
+});
+
 test("native CI rejects skipped tests, tolerated failures, and a fake single-platform matrix", () => {
   const original = workflow("native-storage");
   const skipped = structuredClone(original);

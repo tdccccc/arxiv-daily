@@ -60,11 +60,14 @@ jobs:
       - name: Test native filesystem capability
         run: node --test --test-reporter=tap --test-reporter-destination=packages/node-runtime/native/build/native.tap packages/node-runtime/native/tests/storage.test.cjs
       - name: Test private storage and shared locks
-        run: npm exec --workspace @arxiv-daily/node-runtime -- vitest run --config vitest.config.mts tests/native-private-storage.test.ts tests/native-storage-loader.test.ts tests/file-lock.test.ts --reporter=json --outputFile=native/build/runtime.json
+        working-directory: packages/node-runtime
+        run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.mts tests/native-private-storage.test.ts tests/native-storage-loader.test.ts tests/file-lock.test.ts --reporter=json --outputFile=native/build/runtime.json
       - name: Test Node delivery composition
-        run: npm exec --workspace @arxiv-daily/node-runtime -- vitest run --config vitest.config.mts tests/node-adapters.test.ts -t "native delivery composition" --reporter=json --outputFile=native/build/node-host.json
+        working-directory: packages/node-runtime
+        run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.mts tests/node-adapters.test.ts -t "native delivery composition" --reporter=json --outputFile=native/build/node-host.json
       - name: Test desktop delivery composition
-        run: npm exec --workspace plugin -- vitest run --config vitest.config.mts tests/obsidian-adapters.test.ts -t "uses native delivery storage" --reporter=json --outputFile=../packages/node-runtime/native/build/plugin-host.json
+        working-directory: plugin
+        run: node ../node_modules/vitest/vitest.mjs run --config vitest.config.mts tests/obsidian-adapters.test.ts -t "uses native delivery storage" --reporter=json --outputFile=../packages/node-runtime/native/build/plugin-host.json
       - name: Build product bundles
         run: npm run build
       - name: Test offline packaged native loading
