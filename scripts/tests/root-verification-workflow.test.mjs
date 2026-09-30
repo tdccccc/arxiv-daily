@@ -14,6 +14,7 @@ const expectedWorkflow = {
   permissions: { contents: "read" },
   jobs: {
     verify: {
+      name: "Root workspace verification",
       "runs-on": "ubuntu-latest",
       steps: [
         {
