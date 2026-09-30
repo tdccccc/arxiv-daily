@@ -60,6 +60,21 @@ test("native CI forwards Vitest filters and report arguments without npm shell p
   assert.match(steps.find(value => value.name === "Test desktop delivery composition").run, /-t "uses native delivery storage"/);
 });
 
+test("native CI assembles every same-run platform artifact before accepting the matrix", () => {
+  const job = workflow("native-storage").jobs.assemble;
+  assert.ok(job, "the platform matrix needs an aggregate assembly check");
+  assert.deepEqual([].concat(job.needs), ["build"]);
+  assert.equal(job["continue-on-error"], undefined);
+  const download = job.steps.find(step => step.uses?.startsWith("actions/download-artifact@"));
+  assert.equal(download.with.pattern, "native-storage-*");
+  assert.equal(download.with["merge-multiple"], true);
+  assert.equal(download.with["run-id"], undefined);
+  assert.equal(download.with["github-token"], undefined);
+  assert.equal(download.with["digest-mismatch"], "error");
+  assert.equal(download.with.path, "packages/node-runtime/native/prebuilds");
+  assert.ok(job.steps.some(step => step.run === "node scripts/native-assets.mjs verify" && step.if === undefined));
+});
+
 test("native CI rejects skipped tests, tolerated failures, and a fake single-platform matrix", () => {
   const original = workflow("native-storage");
   const skipped = structuredClone(original);

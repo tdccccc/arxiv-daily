@@ -99,3 +99,27 @@ jobs:
             packages/node-runtime/native/build/native-build.json
           if-no-files-found: warn
           retention-days: 30
+
+  assemble:
+    name: Native release asset assembly
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out caller source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.17.0
+      - name: Download complete native matrix
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: native-storage-*
+          merge-multiple: true
+          digest-mismatch: error
+          path: packages/node-runtime/native/prebuilds
+      - name: Verify release asset assembly
+        run: node scripts/native-assets.mjs verify

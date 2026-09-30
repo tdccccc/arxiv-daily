@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
-import { sha256 } from "../native-build.mjs";
+import { nativeRoot, nativeSourceFiles, nativeSourceHash, sha256 } from "../native-build.mjs";
 import { readNativeAssets, NATIVE_TARGETS } from "../native-assets.mjs";
 
 const roots = [];
@@ -20,6 +21,24 @@ function fixture(targets = ["linux-x64"]) {
   return directory;
 }
 afterEach(() => { while (roots.length) rmSync(roots.pop(), { recursive: true, force: true }); });
+
+test("native source identity is stable across LF and CRLF checkouts but detects code changes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "arxiv-native-source-"));
+  roots.push(root);
+  mkdirSync(join(root, "scripts"));
+  const source = join(root, "packages/node-runtime/native");
+  mkdirSync(source, { recursive: true });
+  const module = join(root, "scripts/native-build.mjs");
+  writeFileSync(module, readFileSync(resolve("scripts/native-build.mjs")));
+  for (const name of nativeSourceFiles) {
+    const text = readFileSync(join(nativeRoot, name), "utf8").replace(/\r\n/g, "\n");
+    writeFileSync(join(source, name), text.replace(/\n/g, "\r\n"));
+  }
+  const checkout = await import(pathToFileURL(module).href);
+  assert.equal(checkout.nativeSourceHash(), nativeSourceHash());
+  writeFileSync(join(source, nativeSourceFiles[0]), "changed build semantics\r\n");
+  assert.notEqual(checkout.nativeSourceHash(), nativeSourceHash());
+});
 
 test("native release target set covers both architectures on all three desktop systems", () => {
   assert.deepEqual(NATIVE_TARGETS, ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"]);

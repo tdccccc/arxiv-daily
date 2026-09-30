@@ -8,7 +8,12 @@ export const nativeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../p
 export const nativeSourceFiles = ["CMakeLists.txt", "private-storage.cc", "win-delay-load.cc"];
 export function nativeSourceHash() {
   const hash = createHash("sha256");
-  for (const name of nativeSourceFiles) hash.update(name).update("\0").update(readFileSync(join(nativeRoot, name))).update("\0");
+  for (const name of nativeSourceFiles) {
+    // Git may check out identical C++/CMake source with CRLF on Windows.
+    // Canonicalize line endings; binary asset digests still cover exact bytes.
+    const source = readFileSync(join(nativeRoot, name), "utf8").replace(/\r\n/g, "\n");
+    hash.update(name).update("\0").update(source).update("\0");
+  }
   return hash.digest("hex");
 }
 export function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
