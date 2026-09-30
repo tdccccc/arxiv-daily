@@ -207,9 +207,11 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "parent": "plugin",
       "layer": "infra",
       "summary": "把 Obsidian API 接到六类能力",
-      "detail": "插件为 Core 提供 HTTP、Storage、Secrets、Progress、Resource opener 和 Markup parser 六个实现。Core 因而不需要直接引用 Obsidian 全局对象。",
+      "detail": "插件把 Obsidian HTTP、Vault、设置、进度、资源打开和 Markdown 解析接到 Core。桌面文件系统通过受限的 node-runtime 入口共用机器本地锁与原生私有存储：POSIX 使用目录描述符相对操作，Windows 使用目录句柄与 protected DACL。普通 Vault I/O 与私有投递写入保持不同边界。",
       "evidence": [
-        "plugin/src/hosts/obsidian/index.ts (buildObsidianHostAdapters)"
+        "plugin/src/hosts/obsidian/index.ts (buildObsidianHostAdapters)",
+        "plugin/src/hosts/obsidian/storage-adapter.ts (ObsidianStorageAdapter)",
+        "packages/node-runtime/src/native-private-storage.ts (NativePrivateStorage)"
       ]
     },
     {
@@ -243,7 +245,12 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "summary": "解析命令、输出与退出码",
       "detail": "`runCli` 解析 init、run、email、schedule、data 和 update 命令。init/update、schedule、data 与 email status 在入口直接处理；只有 run、email test/verify 等需要 Core 的路径才调用 `buildRuntime`，并把取消、命令错误或子流程结果映射为终端输出与退出码。",
       "evidence": [
-        "apps/cli/src/main.ts (runCli)"
+        "apps/cli/src/main.ts (runCli)",
+        "apps/cli/src/schedule-cmd.ts (buildCronLines, scheduleInstall)",
+        "apps/cli/src/config.ts (scheduleFireSlots)"
+      ],
+      "notes": [
+        "异步子命令在统一错误和信号清理边界内 await。cron install 在读取或修改 crontab 前校验运行窗口与可执行路径；控制字符被拒绝，shell 特殊字符和 % 被转义。"
       ]
     },
     {
@@ -262,11 +269,13 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "label": "Node 宿主适配库",
       "parent": "cli",
       "layer": "infra",
-      "summary": "CLI 内部库，不单独运行",
-      "detail": "`@arxiv-daily/node-runtime` 为 Core 提供 Node 环境下的 HTTP、文件存储、secret 读取、进度、资源打开和 HTML 解析。这个 package 没有启动入口；CLI 在自己的进程内加载它。当前 CLI 的 LLM/Resend secret 直接从 `config.toml` 读取并注入设置，运行路径没有把 `host.secrets` 当作配置来源。",
+      "summary": "两宿主复用文件能力，不单独运行",
+      "detail": "Node 宿主适配库在 CLI 进程内实现 HTTP、文件、secret、进度、资源打开和 HTML 解析。文件适配器为日运行和索引事务提供同机跨进程锁，并把私有替换、恢复和投递占位交给内嵌的 Node-API 原生组件。插件仅复用受限的文件锁、私有存储和 scoped-library-source 入口；这些库不单独运行。CLI 的 LLM/Resend 配置由 TOML 读取后注入。",
       "evidence": [
-        "packages/node-runtime/package.json (description)",
-        "packages/node-runtime/src/index.ts (buildNodeHostAdapters)"
+        "packages/node-runtime/src/index.ts (buildNodeHostAdapters)",
+        "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter)",
+        "packages/node-runtime/src/file-lock.ts (NodeFileLock)",
+        "scripts/check-boundaries.mjs (plugin dependency rules)"
       ]
     },
     {
@@ -302,16 +311,18 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "parent": "core",
       "layer": "core",
       "summary": "按日期运行并提交最终状态",
-      "detail": "Scheduler 先用进程内 `RunLock` 阻止同一 Host 同时运行同一日期，再把状态写成 running 并调用 Daily Pipeline。Pipeline 返回后，Scheduler 先把 completed 写进 run-state，再尽力追加运行历史，最后调用 Host 的完成回调。",
+      "detail": "Scheduler 的 RunLock 同时维护进程内日期互斥，并通过 Host 注入的 acquireLock 获取 Vault-wide daily-run 锁。同机共享 Vault 的 Plugin/CLI 不同日期也不会同时进入日运行；忙时不执行回调。运行结束后先提交 completed，再尽力追加历史，最后调用邮件完成回调。",
       "notes": [
-        "邮件回调失败只记录日志；已经提交的日报运行仍保持 completed。",
-        "可重试失败最多累计 10 次，之后 StateStore 把它写成 failed_permanent。",
-        "重启时，StateStore 会把超过 1 小时仍为 running 的日期标记为 failed_permanent；旧进程内尚未提交的 completion 不会跨进程保留。"
+        "两端启动时清理 Markdown 临时文件也使用 daily-run 锁；忙时跳过，锁服务失败时不删除。",
+        "邮件回调失败不撤销已经提交的 completed。",
+        "可重试失败累计达到 10 次后标记 failed_permanent；内存 pending completion 不跨进程重启保存。"
       ],
       "evidence": [
-        "packages/core/src/services/scheduling/scheduler-driver.ts (SchedulerDriver)",
-        "packages/core/src/services/run-lock.ts (RunLock)",
-        "packages/core/src/services/state-store.ts (StateStore.setFailed)"
+        "packages/core/src/services/run-lock.ts (RunLock.withLock)",
+        "plugin/main.ts (runLock)",
+        "apps/cli/src/runtime.ts (SchedulerService composition)",
+        "packages/core/src/pipeline/markdown-writer.ts (cleanupTemporaryFiles)",
+        "packages/core/src/services/scheduling/scheduler-driver.ts (finalizePendingCompletionLocked)"
       ]
     },
     {
@@ -373,10 +384,10 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "parent": "core",
       "layer": "core",
       "summary": "写索引、状态、checkpoint 与 claim",
-      "detail": "Core 中的存储服务定义 `papers.json` 的格式和写入队列，维护 run-state、尽力追加的 run history、两类临时 checkpoint，以及投递记录和抢占文件。真正的文件读写仍经过 Host 提供的 StorageAdapter。",
+      "detail": "Core 存储服务定义索引、运行状态、checkpoint 和投递数据的格式与提交顺序。PaperIndexStore 先经过进程内路径队列，再持有机器本地索引锁执行整段读取、修改、校验和保存；异常路径也释放锁。真正 I/O 由 Host 的 StorageAdapter 执行。",
       "notes": [
-        "PaperIndexStore 按路径串行化本进程内写入，并用主文件/备份恢复；VS Code Companion 不经过这条路径。",
-        "StateStore 写入后从 authoritative 路径重新读取，确认持久化结果。"
+        "索引锁的资源名为 paper-index:<papersJsonPath>；NodeFileLock 再按 canonical Vault root 隔离，不提供跨机器分布式互斥。",
+        "StateStore 写后从权威路径重新读取；VS Code Companion 的直接索引写入不经过 Core 的队列和共享锁。"
       ],
       "evidence": [
         "packages/core/src/services/paper-index.ts (PaperIndexStore)",
@@ -396,7 +407,8 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "detail": "Scheduler 提交 completed 后，Host 的完成回调把可选 Digest 交给 `deliverDailyEmailIfEnabled`；已有日报的修复路径没有 Digest，因此不会自动发邮件。Delivery 先渲染邮件并创建本地抢占记录（claim），再记录邮件服务商是否已经开始调用；self 模式直连 Resend，hosted 模式调用官方 Relay，最后把成功、明确失败或结果未知写回 delivery state。",
       "notes": [
         "投递函数把邮件服务商或状态异常转换成结果，调用者不会把邮件失败改写成 Pipeline 失败。",
-        "服务商已被调用但结果未知时记录 ambiguous，避免无条件重发造成重复邮件。"
+        "服务商已被调用但结果未知时记录 ambiguous，避免无条件重发造成重复邮件。",
+        "自动发送要求 exclusive create、namespace guard 和目录枚举；guard 在服务商调用前同步检查。缺少能力时拒绝自动投递，显式测试发送保持独立语义。"
       ],
       "evidence": [
         "packages/core/src/delivery/deliver-email.ts (deliverDailyEmailIfEnabled)",
@@ -575,10 +587,12 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "parent": "vault.delivery",
       "layer": "data",
       "summary": "记录一次服务商尝试的唯一占位",
-      "detail": "claims 目录按 generation 保存 claim、decision 和 result 文档。Node StorageAdapter 在 Vault 根目录内用“只能创建一次”的操作建立唯一所有者；不支持这个原语的存储不能保证两个 Host 不会同时抢到同一封自动邮件。",
+      "detail": "Core 按日期与规范化收件人建立不可变 generation claim、decision 和 result；self/hosted 共用自动防重身份。Node 与 Obsidian 桌面适配器通过原生 exclusive create 竞争同名占位；Windows 对已有目录或 junction 返回名称占用，其他权限错误保留。服务商调用前的同步 namespace guard 拒绝目录身份变化。",
       "evidence": [
         "packages/core/src/delivery/delivery-state.ts (claimAutomaticDelivery)",
-        "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.createTextExclusive)"
+        "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.createTextExclusive)",
+        "packages/node-runtime/native/private-storage.cc (Directory::openFile, Directory::assertCurrent)",
+        "packages/node-runtime/src/native-private-storage.ts (guardClaimNamespace)"
       ]
     },
     {
@@ -660,11 +674,12 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "parent": "relay",
       "layer": "infra",
       "summary": "处理验证、鉴权与 deliver 路由",
-      "detail": "Worker 暴露 health/readiness、verify start/complete、deliver 与内部 cutover 管理路由（/internal/delivery-v2/cutover）。deliver 先验证有限长度的 Idempotency-Key、Bearer device token 与 cutover readiness，再按收件人或设备范围选择 DeliverGate。",
+      "detail": "Worker 暴露 health/readiness、verify start/complete、deliver 与内部 cutover 管理路由（/internal/delivery-v2/cutover）。deliver 先验证有限长度的 Idempotency-Key、Bearer device token 与 cutover readiness，再按收件人或设备范围选择 DeliverGate。 JSON 请求先验证为非 null、非数组的对象，再读取具体字段；不满足形状的请求在业务操作前返回客户端错误。",
       "evidence": [
         "services/email-relay/src/index.ts (handle)",
         "services/email-relay/src/index.ts (deliverViaGate)",
-        "services/email-relay/src/index.ts (cutoverControl)"
+        "services/email-relay/src/index.ts (cutoverControl)",
+        "services/email-relay/src/json-body.ts (parseJsonObject)"
       ]
     },
     {
@@ -733,15 +748,19 @@ svg{display:block;width:100%;height:100%;min-height:240px}
     },
     {
       "id": "external.llm",
-      "label": "OpenAI-compatible LLM",
+      "label": "LLM 服务商",
       "parent": "external",
       "layer": "external",
       "summary": "过滤、结构化总结与详报生成",
-      "detail": "`LlmClient` 调用配置的 OpenAI-compatible endpoint。Core 对输出做 schema/结构校验，并按错误类型返回可重试、永久失败或降级报告结果。",
+      "detail": "Host 按当前设置构造 LlmClient。通常发送 OpenAI-compatible chat/completions；provider 为 anthropic 且主机为 api.anthropic.com 时改用原生 Messages、x-api-key 和独立 system 字段。推理参数按服务商写入 HTTP 顶层，Anthropic 模型使用对应的 adaptive 或受输出上限约束的 budget_tokens。Core 校验返回结构，并分类重试、永久失败与降级。",
       "evidence": [
-        "packages/core/src/llm/client.ts (LlmClient)",
-        "packages/core/src/pipeline/paper-filter.ts (filterPapers)",
-        "packages/core/src/pipeline/summarizer.ts (summarizeDaily)"
+        "packages/core/src/llm/client.ts (LlmClient.requestChat, generationParameters, buildLlmRequestUrl)",
+        "apps/cli/src/runtime.ts (new LlmClient)",
+        "plugin/main.ts (buildSharedDeps)"
+      ],
+      "notes": [
+        "端点与 pathname 的末尾斜线以线性扫描移除；已含 /v1 的端点不会重复追加。",
+        "第三方 Anthropic 兼容端点仍走 chat/completions。"
       ]
     },
     {
@@ -942,7 +961,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             [
               "CLI / 一次性 Host",
               "用户、VS Code 或 OS cron 启动；命令结束后退出",
-              "Node.js >=20.11，CJS CLI bundle",
+              "Node.js >=20.19.0，CJS CLI bundle",
               "读取 TOML；run 和 email test/verify 会组装 Core，init、update、schedule、data、email status 在入口直接处理"
             ],
             [
@@ -965,8 +984,8 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             ],
             [
               "Node 宿主适配库",
-              "只由 CLI 运行时组装入口加载",
-              "Node fs/fetch + linkedom",
+              "由 CLI 加载；Plugin 复用受限的文件能力入口",
+              "Node fs/fetch、linkedom、Node-API v8 + C++17",
               "实现六类宿主能力；不是 daemon 或独立产品"
             ]
           ]
@@ -991,8 +1010,8 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "运行 CLI，并通过受根目录约束的文件 adapter 访问 Vault"
             ],
             [
-              "OpenAI-compatible chat API",
-              "把论文列表过滤成候选，把每篇论文整理成结构化摘要，并生成 Paper Note；组装失败时还会生成救援报告"
+              "服务商 HTTP 协议",
+              "LlmClient 使用 chat/completions，官方 Anthropic 端点使用 Messages；按模型与服务商选择推理参数，完成过滤、结构化摘要与详报"
             ],
             [
               "Markdown + JSON + TOML",
@@ -1001,6 +1020,10 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             [
               "Cloudflare Worker / KV / Durable Object",
               "接收 hosted 邮件请求，保存验证数据，并按收件人或设备顺序检查发送记录和每日配额"
+            ],
+            [
+              "Node-API / CMake",
+              "将受限私有文件操作编译为平台组件并内嵌产品；不承载邮件服务商逻辑，不在用户运行时下载代码"
             ]
           ]
         },
@@ -1055,7 +1078,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "papers.json (schema v4)",
               "Core PaperIndexStore 与 VS Code Companion 写；多个界面读",
               "混合存储：status/priority/projects 等是用户状态；dailyReports/summary/paperPath 等是可对账的生成字段，整文件不能无损重建",
-              "Core 路径有队列、校验和备份恢复；Companion 直接覆盖 JSON"
+              "Core 在本机跨进程锁内执行完整 mutation，并保留主文件校验和备份恢复；Companion 仍直接覆盖 JSON"
             ],
             [
               "run-state.json",
@@ -1073,7 +1096,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "Filter / Summary checkpoints",
               "Pipeline 写读",
               "中断后可复用的临时阶段结果；Daily Markdown 提交后删除。文件可能含研究主题、过滤请求、正文片段和模型结果，应按敏感 Vault 数据保护",
-              "损坏或校验失败会让该阶段重试，或放弃这个 checkpoint；Node 主文件、临时文件和备份使用 0600"
+              "校验失败时重试或放弃 checkpoint；原生私有写入在 POSIX 使用 0600，在 Windows 使用当前用户 protected DACL"
             ],
             [
               "Atom / HTML / source cache",
@@ -1085,7 +1108,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "delivery-state.json + claim 目录",
               "Core delivery 写读；同 Vault 的 Plugin/CLI 共享",
               "记录 key 可以包含 channel；自动防重的 key 只看日期和规范化收件人；这里不保存邮件正文",
-              "结果未知（ambiguous）时阻止盲目重发；没有只能创建一次的文件操作时，不能建立跨 Host 抢占"
+              "结果未知时阻止盲目重发；缺少 exclusive create、namespace guard 或目录枚举时拒绝自动发送"
             ],
             [
               "Plugin settings",
@@ -1104,6 +1127,18 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "CLI data export 写；data import 读",
               "Vault 数据的 ZIP 归档，可能包含 `.index`、checkpoint 和研究内容；不是公开产物",
               "导出文件应按敏感 Vault 数据保护；没有 `outputLayout` 的旧归档，只有在当前 index 仍是默认 `arxiv-daily/.index` 时才兼容导入 `.index`，自定义 indexDir 会跳过它"
+            ],
+            [
+              "机器本地 host-locks",
+              "Node/Obsidian 文件宿主写读，按 canonical Vault root 与资源名分区",
+              "不可变 owner/decision generation 协调同机进程；不属于 Vault 导出数据",
+              "通过 PID 存活恢复崩溃持有者；超时或未知存活状态不会夺取活跃锁"
+            ],
+            [
+              "机器本地 native 缓存",
+              "内嵌资产加载器写，Node/Electron 加载",
+              "可由 bundle 重建的代码缓存，位于 ~/.arxiv-daily/native/<sha256>/",
+              "摘要、文件类型或目录边界异常时拒绝加载；不从 Vault 或网络寻找替代代码"
             ]
           ]
         },
@@ -1121,7 +1156,9 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)",
             "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
             "plugin/main.ts (persistSettings)",
-            "apps/cli/src/config-path.ts (resolveCliConfigPath)"
+            "apps/cli/src/config-path.ts (resolveCliConfigPath)",
+            "packages/node-runtime/src/file-lock.ts (NodeFileLock.acquire)",
+            "packages/node-runtime/src/native-storage-loader.ts (loadNativeStorage)"
           ]
         }
       ]
@@ -1140,7 +1177,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
         {
           "type": "steps",
           "items": [
-            "Plugin Scheduler、插件命令或 CLI run 先给出一个日期；Scheduler 只在当前进程内用 RunLock 防止同一天重复进入。",
+            "Plugin Scheduler、插件命令或 CLI run 给出日期；Host 注入的 RunLock 获取同一 canonical Vault 的 daily-run 锁，同机不同日期也互斥。",
             "Scheduler 把该日期写成 running，再尽力追加一条 started 历史。",
             "Pipeline 先看 Daily Markdown 是否已经存在。文件存在时，它把文件当作已经落盘的结果，只修复索引，不重新调用 LLM，也不生成 Digest。",
             "Pipeline 通过 SourceAdapter 找论文；当前选中的实现从 arXiv 的 recent、Atom 和正文接口取数据。",
@@ -1180,6 +1217,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             "Core 生成邮件 subject、HTML 和 text，并按日期与规范化收件人计算自动投递 key；self 和 hosted 通道共用这个 key。",
             "自动发送先在 Vault 中创建一次性的 generation 抢占记录；已经 delivered、结果未知（ambiguous）或仍有 active claim 时，会跳过或阻止重复发送。",
             "调用邮件服务商（provider）前先写入 attempt-started，区分“还没调用服务商”和“已经调用但结果可能未知”。",
+            "两端私有存储共用原生目录能力。同步 namespace guard 在服务商调用边界检查路径身份；结果状态的原子替换与恢复还使用机器本地资源锁。",
             "self 模式直接调用 Resend；hosted 模式把请求交给 Relay。",
             "Relay 先验证 token 和 readiness，再在 DeliverGate 的事务里检查发送记录和每日配额，最后调用 Resend。",
             "Core 把成功、明确失败或结果未知写回本地 delivery state；任何邮件结果都不改日报的 run-state。"
@@ -1298,8 +1336,8 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             ],
             [
               "Plugin",
-              "Core",
-              "Obsidian 宿主和 UI 不依赖 Node 适配库"
+              "Core + 受限 node-runtime 文件能力入口",
+              "UI 和 Obsidian API 留在插件；私有存储、共享锁与 scoped-library-source 跨 Host 复用"
             ],
             [
               "Relay / Companion",
@@ -1322,12 +1360,12 @@ svg{display:block;width:100%;height:100%;min-height:240px}
           "rows": [
             [
               "根 workspace",
-              "边界检查、lint、typecheck、workspace tests、build、smoke:build",
+              "Root workspace verification 执行审计、release-tools、边界、lint、typecheck、全量测试、构建和离线安装；兼容性任务覆盖 Node 20.19.0/22.17.0",
               "验证 Plugin、Core、node-runtime 和 CLI 这组同步版本代码"
             ],
             [
               "Obsidian release",
-              "从不可变 tag 构建、预检 Obsidian 提交要求并生成 attestation",
+              "先通过同源六平台原生矩阵与聚合校验，再从不可变 tag 构建、预检并生成 attestation",
               "GitHub Release 上传 plugin/manifest.json、main.js、styles.css"
             ],
             [
@@ -1337,15 +1375,24 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             ],
             [
               "Email Relay",
-              "独立 npm ci、typecheck、tests、preflight readonly check、wrangler dry-run",
+              "独立 npm ci、moderate 级审计、typecheck、tests、preflight readonly check、Wrangler dry-run",
               "只验证 Worker bundle；当前 workflow 不执行线上 deploy"
             ],
             [
               "VS Code Companion",
               "独立 build、tests、smoke、vsce package",
               "生成 Runner 临时 VSIX；当前 workflow 不发布 Marketplace"
+            ],
+            [
+              "原生六平台矩阵",
+              "Linux/macOS/Windows x64/arm64 构建、文件能力、共享锁、宿主投递与离线安装；聚合任务验证同一 run 的完整矩阵",
+              "平台 .node 和元数据作为验证制品；发布构建将六平台字节与 SHA-256 内嵌 Plugin/CLI，终端用户不另装编译器"
             ]
           ]
+        },
+        {
+          "type": "p",
+          "text": "原生源码身份按文件名、分隔符和规范化 LF 源码计算；仅忽略 Git 检出产生的 CRLF 差异。每个二进制仍按精确字节计算摘要。缺平台、源码不符、API 不兼容或字节损坏都会阻止组装。Windows 延迟加载 hook 将 Node-API 导入绑定到宿主可执行文件或 node.dll；运行时只加载内嵌且通过摘要验证的匹配架构。pako 许可证在提取前统一换行并嵌入两份产品。"
         },
         {
           "type": "heading",
@@ -1412,7 +1459,12 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             ".github/workflows/release.yml (Release Obsidian plugin)",
             ".github/workflows/publish-cli.yml (Publish CLI to npm)",
             ".github/workflows/email-relay.yml (Email relay verification)",
-            ".github/workflows/vscode-companion.yml (VS Code companion verification)"
+            ".github/workflows/vscode-companion.yml (VS Code companion verification)",
+            ".github/workflows/native-storage.yml (build and assemble jobs)",
+            "scripts/native-build.mjs (nativeSourceHash, buildNative)",
+            "scripts/native-assets.mjs (readNativeAssets, nativeAssetsForBuild)",
+            "scripts/release-utils.mjs (readPakoNotice)",
+            "packages/node-runtime/native/win-delay-load.cc (loadNode)"
           ]
         }
       ]
@@ -1422,7 +1474,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
       "blocks": [
         {
           "type": "p",
-          "text": "每项检查都在固定执行点挡住具体路径：Core/Host 依赖边界、Vault 相对路径、Node 文件根目录、secrets 日志、同日期重入、Relay 鉴权与配额、VS Code 索引写入。下表逐项说明它实际挡住或降级什么，以及用户会看到什么。"
+          "text": "Host 边界、Vault 路径、原生私有存储、机器本地锁和 Relay 校验分别保护具体执行点；普通 I/O、私有数据提交与远程投递的保证范围不同。"
         },
         {
           "type": "table",
@@ -1446,10 +1498,10 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "阻止配置中的绝对路径或 `..` 词法逃逸；普通 I/O 仍可能跟随 Vault 内的 symlink"
             ],
             [
-              "Node 文件根目录",
-              "NodeStorageAdapter",
-              "普通 read/write/rename 先做词法根路径校验；投递 claim 和 recovery 另外使用 no-follow 与 descriptor 检查",
-              "越界路径被拒绝；目录或 descriptor 被替换时，只有 claim/recovery 路径会额外拒绝操作"
+              "私有文件边界",
+              "Node/Obsidian StorageAdapter → NativePrivateStorage",
+              "POSIX 使用目录描述符与 no-follow，Windows 拒绝 reparse point 并验证目录身份与 protected DACL；私有 rename 不降级为 copy",
+              "越界或替换被拒绝；普通 Vault I/O 不因此获得同样的原生目录边界"
             ],
             [
               "Secrets 与日志",
@@ -1458,10 +1510,10 @@ svg{display:block;width:100%;height:100%;min-height:240px}
               "诊断仍可读，但不会输出完整 secret"
             ],
             [
-              "同日期运行互斥",
-              "RunLock",
-              "只在一个 Plugin 或 CLI 进程内阻止同日期重入；不同 Host/进程之间没有共享 run lock",
-              "共享 Vault 的 Plugin 与 CLI 仍可能同时开始同一日期；run-state 不会把两次运行合并，文件更新可能互相覆盖"
+              "同机日运行与索引互斥",
+              "RunLock + NodeFileLock + PaperIndexStore",
+              "Plugin/CLI 日运行共用 Vault-wide daily-run 锁，索引共享锁覆盖完整读取到提交；启动清理也取得日运行锁",
+              "活跃运行时其他日任务不进入，清理跳过；进程崩溃后可通过 PID 检查恢复，不支持跨机器分布式锁"
             ],
             [
               "Daily Pipeline 失败分类",
@@ -1484,7 +1536,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             [
               "Relay 鉴权与配额",
               "Worker routes、KV、DeliverGate",
-              "验证 email/token、有限长度的幂等 key、cutover readiness 和每日配额；无效请求返回 4xx/503",
+              "先拒绝非对象 JSON，再验证邮箱/token、幂等 key、cutover readiness 与每日配额；无效输入在业务写入前返回错误",
               "hosted 投递可能失败或被限流；self 模式不经过 Relay"
             ],
             [
@@ -1496,7 +1548,7 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             [
               "Checkpoint 与导出归档敏感性",
               "Filter/Summary checkpoint store、Node StorageAdapter",
-              "文件可能含研究主题、过滤请求、正文片段和模型结果；Node 主文件、临时文件和备份使用 0600。fingerprint 只判断能否复用，不是防篡改签名",
+              "文件可能包含研究主题、过滤请求、正文片段和模型结果；私有组件在 POSIX 使用 0600、Windows 使用 protected DACL。fingerprint 判断可复用性，不是防篡改签名",
               "应按敏感 Vault 数据保护；泄露会暴露研究内容，不能把归档当公开产物"
             ],
             [
@@ -1524,7 +1576,11 @@ svg{display:block;width:100%;height:100%;min-height:240px}
             "apps/cli/tests/cli-data.test.ts (data import safety tests)",
             "packages/core/src/services/daily-filter-checkpoint-store.ts (DailyFilterCheckpointStore)",
             "packages/core/src/services/daily-summary-checkpoint-store.ts (DailySummaryCheckpointStore)",
-            "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.writeTextWithMode)"
+            "packages/node-runtime/src/storage-adapter.ts (NodeStorageAdapter.writeTextWithMode)",
+            "packages/node-runtime/native/private-storage.cc (Directory, privateMode)",
+            "packages/node-runtime/src/file-lock.ts (readOwner, readDecision, publish)",
+            "services/email-relay/src/json-body.ts (parseJsonObject)",
+            "packages/core/src/pipeline/markdown-writer.ts (cleanupTemporaryFiles)"
           ]
         }
       ]

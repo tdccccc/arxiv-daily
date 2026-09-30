@@ -30,7 +30,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 | 测试/类型 | Vitest、`tsc --noEmit`、ESLint（含 `eslint-plugin-obsidianmd`） | 工作区测试；边界检查脚本 |
 | 邮件 | Resend HTTP API；Cloudflare Workers + KV + Durable Objects | 自发送与官方代发 |
 | 外部数据 | arXiv HTML/Atom/源码页 | 论文发现与正文抽取 |
-| LLM | OpenAI 兼容 Chat Completions（流式） | 过滤、详报选择、日总结/详报摘要 |
+| LLM | OpenAI 兼容 Chat Completions / 官方 Anthropic Messages（SSE 响应） | 过滤、详报选择、日总结/详报摘要 |
 
 ## Frameworks and Responsibilities
 
@@ -98,7 +98,7 @@ Dashboard 行携带发现来源（occurrence provenance）时显示 **Save for l
 
 ### Email Relay Worker
 
-`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理 liveness、automatic readiness、验证起始/完成、`/v1/deliver` 与 operator-only cutover control。`DELIVER_GATE` 同一 Durable Object 类承载 cutover singleton、按收件人划分的 automatic gate 和按设备划分的 test gate；幂等 ledger 与 UTC 日配额在相应对象的 storage transaction 内更新。automatic 路径还要求 singleton 中的永久 deployment binding、control 与 KV audit marker 一致并处于 ready；绑定或运行依赖不可验证时 fail closed，不存在无 DO fallback。
+`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理 liveness、automatic readiness、验证起始/完成、`/v1/deliver` 与 operator-only cutover control。JSON 请求必须先解析为非 null、非数组的对象，才读取字段或进入后续业务写入。`DELIVER_GATE` 同一 Durable Object 类承载 cutover singleton、按收件人划分的 automatic gate 和按设备划分的 test gate；幂等 ledger 与 UTC 日配额在相应对象的 storage transaction 内更新。automatic 路径还要求 singleton 中的永久 deployment binding、control 与 KV audit marker 一致并处于 ready；绑定或运行依赖不可验证时 fail closed，不存在无 DO fallback。
 
 ### VS Code companion
 
@@ -197,7 +197,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - 仅在 `runAtLocal`–`runUntilLocal` 本地时间窗内工作（多日 tick 时时间窗主要约束“今天”）；
 - 回看 `LOOKBACK_DAYS = 5` 个日历日；配置时区下的周末跳过；
 - `checkTickGate`：已完成 / 运行中 / 窗外 / 瞬态失败退避则跳过；
-- 注入的 `RunLock` 串行化同日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- 注入的 `RunLock` 维护进程内日期互斥，并通过宿主同机共享锁串行化同一 Vault 的所有日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
 - `StateStore` mutation 从权威 primary 重载 durable state，修改 candidate，保存后精确回读整个 run-state；只有回读与 candidate 完全相等才发布到内存。保存抛错但回读已等于 candidate 时提交仍成立，其余保存或确认失败保留 mutation 前的内存快照；
 - 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
@@ -214,7 +214,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 | 执行 | 需 Obsidian 保持打开 | OS cron 调用一次性 `run --today` |
 | `run` 路径 | `runForDateNow` / force 等 | 同样经 `runForDateNow`，但**不** `start()` 定时器 |
 
-原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
+cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
 
 ### 邮件流
 
@@ -231,9 +231,9 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 5. self Resend 对 408/409/5xx 和宿主明确标记为可重试的 transport failure 做有界重试，所有物理尝试复用同一个 provider key。HTTP 400/401/403/404/422/429 是明确拒绝；其他 HTTP、transport failure 和无有效 acceptance marker 的 2xx 均按结果不明处理。
 6. provider 接受后写 `delivered` result；若最终主状态重建失败，返回 `delivered_unrecorded`，已存在的 attempt/result sidecar 仍继续阻断自动重发。provider 调用后的 ambiguous、明确拒绝或结果落盘不确定同样保留阻断；系统不自动重试这些 generation。
 
-`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient。CLI 与 Plugin product 共用受限的 Node-API v8 私有存储组件：POSIX 使用目录描述符相对操作和 `0600`；Windows 固定遍历目录的句柄、拒绝 reparse point，并在文件创建时设置当前用户的 protected DACL，而不是把 chmod 当作 ACL。既有宽权限主文件及可恢复备份在使用前收紧权限，私有替换与恢复还使用同一机器本地锁，避免清理另一个写入者的临时文件。
+`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient。CLI 与 Plugin product 共用受限的 Node-API v8 私有存储组件：POSIX 使用目录描述符相对操作和 `0600`；Windows 持有遍历目录的句柄、通过同步身份检查拒绝命名空间替换和 reparse point，并在文件创建时设置当前用户的 protected DACL，而不是把 chmod 当作 ACL。既有宽权限主文件及可恢复备份在使用前收紧权限，私有替换与恢复还使用同一机器本地锁，避免清理另一个写入者的临时文件。
 
-投递协议与数据路径不变，namespace guard 仍在 provider 调用前同步验证。原生资产缺失时，Linux 保留已有 `/proc/self/fd` 兼容实现；不满足存储能力时拒绝自动投递，损坏或不兼容的已提供原生资产不静默降级。跨文件系统 rename 不降级为 copy。当前已观察到的原生组件、宿主接入和离线安装验证均在 Linux；macOS/Windows 与真实 Electron 的运行证据仍待 P6。详见 ADR 0009。
+namespace guard 在 provider 调用前同步验证。原生资产缺失时，Linux 保留已有 `/proc/self/fd` 兼容实现；不满足存储能力时拒绝自动投递，损坏或不兼容的已提供原生资产不静默降级。跨文件系统 rename 不降级为 copy。构建矩阵覆盖 Linux/macOS/Windows 的 x64/arm64，聚合校验要求同一 run 的全部平台资产通过源身份与二进制完整性验证。详见 ADR 0009。
 
 显式 `force`/邮件测试不创建自动 claim，也不改写 automatic delivery state；每次生成独立 `arxiv-daily:test:<random>` key，因此不会占用正式日报 identity。self 模式的 API key 当前来自 settings/config；From 为空时使用 `onboarding@resend.dev`。hosted 模式使用 Bearer `hostedToken` 调用默认 `https://mail.arxiv-daily.top/v1/deliver`。客户端接受精确的 `{ "ok": true }`，也接受仅附带非空且不超过 128 字符 `id` 的 `{ "ok": true, "id": string }` 与额外含字面量 `"deduped": true` 的响应；整个响应体上限为 4096 字符，重复顶层成员、其他字段或类型均视为结果不明。旧响应中的 provider ID 只参与局部契约验证，随后丢弃，不进入投递结果、日志或持久状态。`OFFICIAL_DELIVERY_AVAILABLE = true` 仅表示客户端路径开启，不证明外部 Worker 已部署或可用。
 
@@ -319,7 +319,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 ### LLM 调用
 
-`LlmClient.call` 使用流式 `/chat/completions`（`stream_options.include_usage`；不支持时有一次去掉 `stream_options` 的回退）。默认温度 `0.1`；thinkingMode 时按 provider 注入 reasoning/thinking。客户端内重试最多 **3** 次、基础退避 **5s**；耗尽包装为 `LlmTransientExhaustedError`。永久错误：HTTP 4xx 且非 429。逻辑调用超时 **300s**；流空闲超时 **120s**。密钥经 logger redaction 屏蔽。
+`LlmClient.call` 通常请求 `/chat/completions` 并设置 `stream: true`、`stream_options.include_usage`；服务商明确不支持该选项时去掉 `stream_options` 再尝试一次。provider 为 `anthropic` 且端点主机为 `api.anthropic.com` 时使用 `/messages`、`x-api-key`、`anthropic-version` 和独立 system 字段，并解析 Anthropic SSE；第三方兼容端点仍使用 chat/completions。默认非推理温度 `0.1`。推理参数直接进入 HTTP 顶层：DeepSeek 使用 thinking/reasoning_effort，Zhipu 使用 thinking，Anthropic 按模型选择 adaptive/output_config 或受 max_tokens 限制的 budget_tokens。输出上限过小会在请求前拒绝。端点与 pathname 的末尾斜线以线性扫描规范化。客户端瞬态重试最多 **3** 次、基础退避 **5s**；耗尽包装为 `LlmTransientExhaustedError`，HTTP 4xx 且非 429 视为永久错误。每次 HTTP 请求有 **300s** 超时；**120s** 空闲计时作用于 SSE 收集器。宿主 HTTP 当前先返回完整 bodyText，再解析 SSE，不构成逐网络 chunk 的端到端流。密钥经 logger redaction 屏蔽。
 
 ### Prompt 资产
 
@@ -351,7 +351,7 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 `StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
 
-插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。当前真实多进程验收平台为 Linux，macOS/Windows 原生结果仍待 P6。
+插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。共享锁与宿主组合测试在六平台原生矩阵内运行；真实桌面宿主由隔离 Obsidian 验收入口驱动。
 
 Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian 桌面宿主共用原生 private storage（Linux 无原生资产时保留 descriptor-anchored 兼容路径），能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
 
@@ -360,7 +360,7 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### 外部系统
 
 - **arXiv**：分类 recent 列表、摘要页、HTML/源码全文、PDF。
-- **LLM 提供商**：OpenAI 兼容 API（默认 DeepSeek：`https://api.deepseek.com/v1`，模型 `deepseek-v4-pro`，`thinkingMode: true`，`reasoningEffort: "medium"`）。
+- **LLM 提供商**：OpenAI 兼容 API 与官方 Anthropic Messages（默认 DeepSeek：`https://api.deepseek.com/v1`，模型 `deepseek-v4-pro`，`thinkingMode: true`，`reasoningEffort: "medium"`）。
 - **Resend**：自发送与 Worker 出站邮件。
 - **Cloudflare**：Worker、KV `STORE`、Durable Object `DeliverGate`。
 
@@ -414,7 +414,7 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 
 - 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）。主 bundle 内嵌受控构建的原生存储字节与摘要，不要求插件安装器额外下载 `.node` 文件。
 - CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，同样内嵌原生存储；构建时复制到 `plugin/arxiv-daily-cli.cjs`，`prepack` 先 build。
-- 原生构建：`scripts/native-build.mjs` 使用本机 CMake/C++17 与 Node-API 头文件；`native-sdk.mjs` 仅从固定 Node 版本的官方源获取并验证 SDK 校验和，不安装或执行包脚本。`native-assets.mjs` 只组装目标架构、Node-API 版本、源码摘要和二进制摘要匹配的产物。开发构建只包含当前平台，发布环境 `ARXIV_DAILY_NATIVE_RELEASE=1` 必须具备 Linux/macOS/Windows 的 x64/arm64 六项产物，否则失败。
+- 原生构建：`scripts/native-build.mjs` 使用本机 CMake/C++17 与 Node-API 头文件；`native-sdk.mjs` 仅从固定 Node 版本的官方源获取并验证 SDK 校验和，不安装或执行包脚本。`native-assets.mjs` 只组装目标架构、Node-API 版本、源码摘要和二进制摘要匹配的产物。源码摘要先将 CRLF 规范化为 LF；二进制摘要始终覆盖精确字节。开发构建只包含当前平台，发布环境 `ARXIV_DAILY_NATIVE_RELEASE=1` 必须具备 Linux/macOS/Windows 的 x64/arm64 六项产物，否则失败。
 - 运行时原生代码缓存：只将匹配平台的已验证字节提取到机器本地 `~/.arxiv-daily/native/<sha256>/`，不从 Vault、当前工作目录或网络发现代码。文件损坏或目录链接被拒绝，不自动覆盖可疑缓存。该缓存不是研究数据，不进入 Vault 数据导出。
 - VS Code companion：清单直接以 `src/extension.js` 为 CommonJS 入口；`build` 校验清单/命令注册，`test` 覆盖 workspace adapter、Dashboard、CLI 任务契约与 smoke，`vsix:package` 生成独立 VSIX
 
@@ -423,11 +423,11 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### CI / 发布
 
 
-- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
-- **Native storage verification**（`native-storage.yml`）：PR、main push、手动及 reusable workflow 入口；在六个真实 OS/架构 runner 上构建和验证原生文件操作、共享锁、两个宿主的投递接入和离线安装。测试不发送真实邮件；二进制与验证报告分开上传，action 固定完整 SHA，权限仅 `contents: read`。新增配置尚不等于原生结果已通过，实际远端结果保留 P6。
+- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；主 job 使用独立检查名 `Root workspace verification`；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
+- **Native storage verification**（`native-storage.yml`）：PR、main push、手动及 reusable workflow 入口；在六个真实 OS/架构 runner 上构建和验证原生文件操作、共享锁、两个宿主的投递接入和离线安装。测试不发送真实邮件；二进制与验证报告分开上传，action 固定完整 SHA，权限仅 `contents: read`。矩阵后置聚合任务下载同一 run 的完整六平台资产并执行发布组装校验；任何平台遗漏、源身份或摘要不符都会失败。
 - **Release Obsidian plugin**（`release.yml`）：先依赖同一 run 的原生矩阵，下载并验证完整源码匹配的六项产物，再执行原有稳定 tag/SHA/发布说明校验、全量验证、三件套 attestation 和不可覆盖的 GitHub release 创建。
 - **Publish CLI to npm**（`publish-cli.yml`）：插件 release 成功后或手动指定已有 tag，按同一不可变源码重新完成原生矩阵；只消费同一 run 的资产，完整矩阵检查通过后执行既有验证与 trusted publishing。安装冒烟使用本地包、禁用安装脚本并离线执行；运行时测试还清空 PATH 并禁用 HTTP，验证不依赖用户编译器或运行时下载。
-- **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
+- **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、moderate 级依赖审计、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
 - **VS Code companion verification**（`vscode-companion.yml`）：companion、CLI command contract、workflow、产品清单及 checker 路径变更时，使用 companion 自身 lockfile 执行 build、tests、smoke，并把验证用 VSIX 写入 runner 临时目录；不发布扩展。
 - 两个独立 workflow 都在 pull request 和相应路径推送到 `main` 时运行，action 固定完整 commit SHA，权限仅 `contents: read`，checkout 不持久化凭据。
 
