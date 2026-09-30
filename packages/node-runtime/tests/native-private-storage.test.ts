@@ -123,7 +123,7 @@ describe("native private storage", () => {
     expect(await readFile(join(root, "state/delivery.json"), "utf8")).toBe("old");
   });
 
-  it("pins the claim namespace until the invocation boundary and rejects a released guard", async () => {
+  it("rejects a replaced claim namespace or prevents its move, and rejects a released guard", async () => {
     const root = await fixture();
     const outside = await fixture();
     const storage = new NativePrivateStorage(root, binding);
@@ -132,13 +132,20 @@ describe("native private storage", () => {
     const guard = await storage.guardClaimNamespace("claims/send.json");
     try {
       guard.assertCurrent();
-      if (process.platform === "win32") {
-        await expect(rename(join(root, "claims"), join(outside, "moved"))).rejects.toThrow();
-        guard.assertCurrent();
-      } else {
+      let moved = false;
+      try {
         await rename(join(root, "claims"), join(outside, "moved"));
+        moved = true;
+      } catch (error) {
+        if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      }
+      if (moved) {
         await mkdir(join(root, "claims"));
         expect(() => guard.assertCurrent()).toThrow(/replaced|changed/i);
+        expect(await readFile(join(outside, "moved/send.json"), "utf8")).toBe("claim");
+      } else {
+        guard.assertCurrent();
+        expect(await readFile(join(root, "claims/send.json"), "utf8")).toBe("claim");
       }
     } finally { await guard.release(); }
     expect(() => guard.assertCurrent()).toThrow(/closed|released/i);
