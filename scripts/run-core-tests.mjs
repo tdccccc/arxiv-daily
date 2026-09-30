@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_BATCH_SIZE = 8;
 const coreDir = resolve(import.meta.dirname, "../packages/core");
 const coreConfig = resolve(coreDir, "vitest.config.mts");
-const defaultVitestCli = fileURLToPath(import.meta.resolve("vitest/vitest.mjs"));
+const vitestPackageUrl = new URL(import.meta.resolve("vitest/package.json"));
+const { bin: vitestBin } = JSON.parse(readFileSync(vitestPackageUrl, "utf8"));
+const defaultVitestCli = fileURLToPath(new URL(vitestBin.vitest, vitestPackageUrl));
 
 function comparePaths(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
