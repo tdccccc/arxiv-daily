@@ -25,4 +25,7 @@ __pycache__/
 services/**/node_modules/
 .venv/
 .worktree/
+extensions/claude-code-arxiv-daily/dist/
+!extensions/claude-code-arxiv-daily/.claude-plugin/
+!extensions/claude-code-arxiv-daily/.claude-plugin/**
 tmp/
