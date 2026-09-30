@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T20:25:56+08:00
-revision: 6
+updated: 2026-09-30T20:32:44+08:00
+revision: 7
 
 ## Outcome
 
@@ -45,6 +45,8 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 7. **Claim guard platform assertion** — test contract correction, no production change. Observed Windows x64 Red in run 36713376132: fs.promises.rename succeeds, contradicting the test's unconditional Windows rejection assumption. The retained safety contract already allows either OS prevention or synchronous replacement detection. Exercise actual rename; tolerate only Windows permission/busy errors, otherwise replace the original directory and require guard.assertCurrent to reject the identity change. Verify the original claim content and released-handle rejection in both cases. Linux runtime 46 tests and Node typecheck are the local checks; both Windows runners must verify the revised contract.
 
 8. **Windows test argument forwarding** — workflow repair. Observed Red: run 36713890755 Windows x64 passes primitive and guard/runtime tests, then npm exec runs all 26 Node adapter tests despite -t, and emits no requested JSON reports. Three unrelated POSIX-mode assertions fail. Preserve the intended composition filters and use direct installed Vitest entry points with explicit working directories. Added workflow regression fails before the change and passes afterward (4 tests). Executed the three exact commands on Linux and parsed successful JSON with 20 runtime, 1 Node composition and 1 plugin composition pass. Native Windows runtime/artifact and offline-install checks remain mandatory.
+
+9. **Windows license notice extraction** — build bug fix. Run 36714759289 Windows x64 passes every native/runtime/host test and writes JSON evidence, then both product builds reject the existing pako notice. A temporary CRLF checkout fixture reproduces the same missing-notice Red on Linux. Normalize CRLF on read; all 9 release utility tests pass and exact license content/single banner inclusion remain asserted. Product build, offline native package smoke and offline CLI installation pass locally; Windows downstream execution remains required.
 
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 

@@ -156,3 +156,10 @@
 - evidence: run 36713890755 Windows x64 passes native primitives and all private-storage/shared-lock cases, including replacement detection. The following Node composition step unexpectedly runs all 26 adapter tests and no JSON reporter; its three failures assert POSIX mode bits, despite the existing workflow filter selecting only native composition.
 - L1: invoke installed Vitest directly in explicit workspace directories so PowerShell/npm argument forwarding cannot discard filters or report destinations. Retain all existing native/platform gates and root coverage; no skip, permission assertion deletion, or continue-on-error is introduced.
 - verification: workflow regression Red then all 4 checks Green. The exact three workflow commands generate parsed successful JSON reports locally (20 runtime, 1 Node host, 1 plugin host). Push only the authorized acceptance branch and inspect actual Windows reports plus downstream build/install results.
+
+
+## 2026-09-30 — Windows native tests pass; repair CRLF product build
+
+- evidence: b52efb1 run 36714759289 Windows x64 passes primitives, runtime guards/locks, Node composition and plugin composition, with JSON evidence produced. Product builds fail because the pako notice regex requires LF while Windows checkout uses CRLF.
+- strategy/results: copied the actual reader to an isolated temporary CRLF checkout and reproduced the identical missing-notice Red. Normalize CRLF before extraction; all 9 release utility tests pass while asserting exact license text and single banner inclusion. Both product builds, offline native package smoke and offline CLI installation pass locally.
+- next: rerun the authorized native matrix through build and offline installation. Email relay remains green; real desktop-host acceptance remains separate and open.
