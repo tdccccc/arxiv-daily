@@ -30,7 +30,7 @@ export async function readJson(relativePath) {
 }
 
 export async function readPakoNotice() {
-  const notices = await readFile(resolve(root, "THIRD_PARTY_NOTICES.md"), "utf8");
+  const notices = (await readFile(resolve(root, "THIRD_PARTY_NOTICES.md"), "utf8")).replace(/\r\n/g, "\n");
   const match = notices.match(/## pako 2\.2\.0[\s\S]*?```text\n([\s\S]*?)\n```/);
   if (!match) throw new Error("THIRD_PARTY_NOTICES.md is missing the locked pako 2.2.0 notice");
   return match[1];
