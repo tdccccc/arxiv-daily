@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T12:55:17+08:00
-revision: 3
+updated: 2026-09-30T19:49:20+08:00
+revision: 4
 
 ## Outcome
 
@@ -38,6 +38,9 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 2. **Independent relay dependencies** — dependency repair. Observed Red: relay audit reports the same Vitest advisory plus sharp/undici through Wrangler/Miniflare. Green: independent moderate audit, 161 relay tests and typecheck using explicitly selected patched dependencies; no deploy or provider calls.
 3. **Windows delay-load hook** — build bug fix. Observed Red: both Windows jobs report C2373 on `__pfnDliNotifyHook2`. Match the installed MSVC declaration without changing host lookup or access protections. Local compensating check: compile the real source against a narrow declaration fixture and rerun Linux native/build tests; actual Windows build/filesystem/host/offline checks remain mandatory and cannot be replaced by that fixture.
 4. **Endpoint normalization** — performance/security bug fix. Observed Red: CodeQL check 109702178627 plus a bounded adversarial slash-input regression before changing production code. Green: linear normalization preserving URL results, provider/model-listing regression and new-HEAD CodeQL check; no suppression or live LLM requests.
+
+5. **Windows exclusive-create directory collision** — native bug fix. Observed Red: run 36680572941, both Windows architectures, native TAP test 4 fails at createFile("link") with EACCES; all other native primitive tests pass and all four Linux/macOS jobs pass. Preserve that failing junction assertion and add ordinary-directory occupancy coverage. Normalize only confirmed directory collisions after CREATE_NEW/ERROR_ACCESS_DENIED; preserve all other permission failures and never follow/open the junction target. Local compensation: Linux native build and 10 primitive tests plus native runtime integration. Windows Green must come from the same existing test on both real runners; this Linux host cannot independently reproduce Win32 calls.
+6. **Explicit relay test types** — configuration bug fix exposed after approved dependency installation. Observed Red: tsc cannot resolve node:fs/node:url or ImportMeta.url under Vitest 4. Explicitly include the installed Node types; Green: relay typecheck, all 161 tests, read-only preflight check and Wrangler dry-run.
 
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 
