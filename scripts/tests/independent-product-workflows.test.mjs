@@ -116,6 +116,17 @@ function parseWorkflow(source) {
   return parse(source, { schema: "core", uniqueKeys: true });
 }
 
+test("root verification exposes a unique always-running required check", async () => {
+  const rootWorkflow = parseWorkflow(await readFile(`${root}/.github/workflows/lint.yml`, "utf8"));
+  assert.equal(rootWorkflow.jobs.verify.name, "Root workspace verification");
+  assert.ok(Object.hasOwn(rootWorkflow.on, "pull_request"));
+  assert.equal(rootWorkflow.on.pull_request?.paths, undefined);
+  assert.equal(rootWorkflow.on.pull_request?.["paths-ignore"], undefined);
+  for (const workflow of [expectedRelayWorkflow, expectedCompanionWorkflow]) {
+    assert.notEqual(rootWorkflow.jobs.verify.name, workflow.jobs.verify.name ?? "verify");
+  }
+});
+
 function assertPinnedActions(workflow) {
   for (const job of Object.values(workflow.jobs)) {
     for (const step of job.steps) {
