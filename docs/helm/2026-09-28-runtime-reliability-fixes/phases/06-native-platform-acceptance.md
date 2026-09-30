@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T20:40:46+08:00
-revision: 8
+updated: 2026-09-30T21:23:10+08:00
+revision: 9
 
 ## Outcome
 
@@ -47,6 +47,8 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 8. **Windows test argument forwarding** — workflow repair. Observed Red: run 36713890755 Windows x64 passes primitive and guard/runtime tests, then npm exec runs all 26 Node adapter tests despite -t, and emits no requested JSON reports. Three unrelated POSIX-mode assertions fail. Preserve the intended composition filters and use direct installed Vitest entry points with explicit working directories. Added workflow regression fails before the change and passes afterward (4 tests). Executed the three exact commands on Linux and parsed successful JSON with 20 runtime, 1 Node composition and 1 plugin composition pass. Native Windows runtime/artifact and offline-install checks remain mandatory.
 
 9. **Windows license notice extraction** — build bug fix. Run 36714759289 Windows x64 passes every native/runtime/host test and writes JSON evidence, then both product builds reject the existing pako notice. A temporary CRLF checkout fixture reproduces the same missing-notice Red on Linux. Normalize CRLF on read; all 9 release utility tests pass and exact license content/single banner inclusion remain asserted. Product build, offline native package smoke and offline CLI installation pass locally; Windows downstream execution remains required.
+
+10. **Slow-disk contention test budget** — test harness repair after run 36719082645. Linux x64's 30-increment subprocess case reaches the default 5-second timeout (5029 ms); other cases/platforms pass. Injecting 100 ms per lock-record fsync reproduces the same timeout locally. Give only the two repeated multi-process contention cases a 30-second test budget; retain all exclusion/counter/recovery assertions and production lock deadlines. The same injected-delay run passes both cases in 11.14 seconds total; normal native runtime regression passes 20 tests. Rerun the six-platform CI on the candidate.
 
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 
