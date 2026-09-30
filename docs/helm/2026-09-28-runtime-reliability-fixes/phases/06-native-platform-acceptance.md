@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T19:49:20+08:00
-revision: 4
+updated: 2026-09-30T20:17:56+08:00
+revision: 5
 
 ## Outcome
 
@@ -41,6 +41,8 @@ Each fix remains a separate commit; local verification permits a CI candidate co
 
 5. **Windows exclusive-create directory collision** — native bug fix. Observed Red: run 36680572941, both Windows architectures, native TAP test 4 fails at createFile("link") with EACCES; all other native primitive tests pass and all four Linux/macOS jobs pass. Preserve that failing junction assertion and add ordinary-directory occupancy coverage. Normalize only confirmed directory collisions after CREATE_NEW/ERROR_ACCESS_DENIED; preserve all other permission failures and never follow/open the junction target. Local compensation: Linux native build and 10 primitive tests plus native runtime integration. Windows Green must come from the same existing test on both real runners; this Linux host cannot independently reproduce Win32 calls.
 6. **Explicit relay test types** — configuration bug fix exposed after approved dependency installation. Observed Red: tsc cannot resolve node:fs/node:url or ImportMeta.url under Vitest 4. Explicitly include the installed Node types; Green: relay typecheck, all 161 tests, read-only preflight check and Wrangler dry-run.
+
+7. **Claim guard platform assertion** — test contract correction, no production change. Observed Windows x64 Red in run 36713376132: fs.promises.rename succeeds, contradicting the test's unconditional Windows rejection assumption. The retained safety contract already allows either OS prevention or synchronous replacement detection. Exercise actual rename; tolerate only Windows permission/busy errors, otherwise replace the original directory and require guard.assertCurrent to reject the identity change. Verify the original claim content and released-handle rejection in both cases. Linux runtime 46 tests and Node typecheck are the local checks; both Windows runners must verify the revised contract.
 
 After these candidates, retrieve complete logs for any newly exposed native failures and apply the same targeted Red/Green discipline. Keep all six platform gates and desktop acceptance obligations intact.
 

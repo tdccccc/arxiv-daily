@@ -142,3 +142,10 @@
 - approval: user approved installing and executing the current relay lockfile packages from registry.npmjs.org through the explicit escalation prompt, resolving the earlier source-approval block before any test execution or CI push. npm ci/audit reports zero vulnerabilities. Vitest upgrade exposes missing explicit Node test types; observed tsc Red then Green after declaring node types. All 161 relay tests, preflight read-only check and Wrangler local dry-run pass; no deployment or real email.
 - strategy: keep the existing failing Windows assertion; normalize only confirmed directory collisions, add ordinary-directory coverage, and rerun both real Windows runners. Linux native build and all 10 primitive tests pass. Initial sandbox subprocess output failures are environment failures, not behavioral Red; the identical native command passes outside that sandbox.
 - checkpoint: relay is locally verified; Windows remains a CI candidate until real platform results arrive. P6 and real Obsidian/Electron acceptance remain open. Commit relay and native changes separately, then push only fix/review-followups for the authorized PR verification.
+
+
+## 2026-09-30 — relay CI accepted; correct Windows guard test assumption
+
+- evidence: fb1e798 Email relay run 36713376089 passes every step. Native run 36713376132 confirms the junction fix: Windows x64 native primitive tests pass, then the guard integration test fails because asynchronous rename succeeds instead of rejecting. Linux/macOS remain green.
+- L1: correct the test's OS assumption to the existing P6 contract (prevent movement or detect replacement before invocation). No production protection is relaxed. When rename succeeds, replace the original directory, require synchronous identity-check rejection, and verify the original claim is unchanged; after release, the guard must reject. Only explicit Windows permission/busy errors qualify as prevention.
+- verification: run the 46 Linux native runtime tests and Node typecheck, then rerun the same real Windows matrix. Keep P6 desktop acceptance open.
