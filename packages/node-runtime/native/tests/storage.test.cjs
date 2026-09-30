@@ -51,6 +51,17 @@ test("rejects traversal, device names and alternate streams at the native bounda
   } finally { dir.close(); }
 });
 
+test("treats an existing directory as an occupied exclusive-create name", () => {
+  const root = fixture();
+  const dir = binding().openDirectory(root, "claims", true);
+  try {
+    fs.mkdirSync(path.join(root, "claims/occupied"));
+    fs.writeFileSync(path.join(root, "claims/occupied/keep"), "untouched");
+    assert.equal(dir.createFile("occupied"), null);
+    assert.equal(fs.readFileSync(path.join(root, "claims/occupied/keep"), "utf8"), "untouched");
+  } finally { dir.close(); }
+});
+
 test("does not traverse symlink parents or read a symlink target", () => {
   const root = fixture();
   const outside = fixture();

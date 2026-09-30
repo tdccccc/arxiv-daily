@@ -294,6 +294,14 @@ struct Directory {
     if (file == invalid) {
       const DWORD error = GetLastError();
       if ((create && (error == ERROR_FILE_EXISTS || error == ERROR_ALREADY_EXISTS)) || (!create && error == ERROR_FILE_NOT_FOUND)) return invalid;
+      // CREATE_NEW reports ACCESS_DENIED for an existing directory (including
+      // a junction). Confirm that collision without opening its target; other
+      // access failures must still propagate instead of becoming "busy".
+      if (create && error == ERROR_ACCESS_DENIED) {
+        const DWORD attributes = GetFileAttributesW(childPath(name).c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) return invalid;
+      }
+      SetLastError(error);
       systemFailure("cannot open private file");
     }
     OwnedHandle opened(file);
