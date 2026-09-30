@@ -267,7 +267,7 @@ async function mutateRecord(
       }
       await storage.writeTextAtomic(relative, next, 0o600);
     }
-    return readRecord(root, kind, slug);
+    return await readRecord(root, kind, slug);
   } finally { await lock.release(); }
 }
 

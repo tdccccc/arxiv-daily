@@ -27,3 +27,11 @@
 - change: 增加按分类/公告日期分页的候选清单、单篇元数据与按需有界正文提取；输出明确日期不可用、listing 无摘要和章节证据范围。
 - disposition: 接受共享抓取适配；没有新增模型 API 或复制解析算法。
 - next: 插件 manifest、Skill、JSON 命令行入口和可移动打包；3 个打包/CLI 契约已因这些表面缺失观察到 Red。
+
+## 2026-10-01 — note
+
+- evidence: 最终 11 个新宿主/打包测试、31 个 core 回归、类型检查、官方 manifest 严格校验、boundaries 和 product-units 通过。真实 arXiv 元数据获取成功；真实 Claude Code CLI 加载技能、读取合成 PDF 并保存方向/论文总结/阅读判断；独立冷进程恢复验证通过。详见 P1 Observed evidence。
+- change: 提供 `/arxiv-daily:research`、结构化 JSON helper 和可复制的 `dist/plugin/`，README 固化首次连接到下次恢复的用户流程。写入后的回读明确 await 在共享锁内，既有测试在整理前后均 Green。
+- disposition: P1 验收；P2 保持 pending，等待研究者用真实论文试用后决定范围。图形界面与后台自动推荐没有实现。默认模型不可用是本机网关状态，兼容模型只用于测试，不改全局配置。
+- isolation: 本次所有源码/文档变更均在新 worktree；原目录在其他工作中继续出现设置、嵌入模型等改动，本会话未修改或还原它们，未把这些在途改动合入实验分支。
+- next: 用户在研究目录用 `claude --plugin-dir <built plugin path>` 试用，从 `/arxiv-daily:research` 开始；重点观察等待时间、目录样本选择、方向确认和保存后的查找成本。

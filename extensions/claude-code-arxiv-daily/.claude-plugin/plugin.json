@@ -1,0 +1,10 @@
+{
+  "name": "arxiv-daily",
+  "version": "0.1.0-experimental.1",
+  "description": "Explore a local paper library, inspect arXiv papers, and preserve research directions and reading judgments across Claude Code sessions.",
+  "author": { "name": "Da-Chuan Tian" },
+  "homepage": "https://github.com/tdccccc/arxiv-daily",
+  "repository": "https://github.com/tdccccc/arxiv-daily",
+  "license": "MIT",
+  "keywords": ["arxiv", "research", "papers"]
+}
