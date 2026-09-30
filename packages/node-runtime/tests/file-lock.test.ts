@@ -12,6 +12,9 @@ import { DAILY_RUN_LOCK_KEY, DEFAULT_SETTINGS, Logger, MarkdownWriter, PaperInde
 let root: string;
 let worker: string;
 const children = new Set<ChildProcess>();
+// These cases serialize dozens of real fsync calls across processes. Keep
+// correctness assertions intact while allowing slow CI disks beyond 5 seconds.
+const contentionTestTimeoutMs = 30_000;
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "arxiv-lock-tests-"));
@@ -121,7 +124,7 @@ describe("machine-local file lock", () => {
     const { vault, lockRoot } = await fixture();
     await Promise.all([child(vault, lockRoot, "increment").done, child(vault, lockRoot, "increment").done, child(vault, lockRoot, "increment").done]);
     expect(await fs.readFile(path.join(vault, "counter"), "utf8")).toBe("30");
-  });
+  }, contentionTestTimeoutMs);
 
   it("recovers a crashed owner once despite competing recovery processes", async () => {
     const { vault, lockRoot } = await fixture();
@@ -131,7 +134,7 @@ describe("machine-local file lock", () => {
     await holder.done;
     await Promise.all([child(vault, lockRoot, "increment").done, child(vault, lockRoot, "increment").done]);
     expect(await fs.readFile(path.join(vault, "counter"), "utf8")).toBe("20");
-  });
+  }, contentionTestTimeoutMs);
 
   it("does not steal a live holder on timeout or cancellation", async () => {
     const { vault, lockRoot, locks } = await fixture();
