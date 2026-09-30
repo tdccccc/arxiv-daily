@@ -107,8 +107,14 @@ const KNOWN_MODEL_BASE_SUFFIXES = [
   "/claude",
 ];
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
 export function buildModelUrlCandidates(baseUrl: string): string[] {
-  const normalized = baseUrl.replace(/\/+$/, "");
+  const normalized = stripTrailingSlashes(baseUrl);
   const candidates: string[] = [];
   const addCandidate = (url: string): void => {
     if (!candidates.includes(url)) candidates.push(url);
@@ -133,13 +139,13 @@ export function buildModelUrlCandidates(baseUrl: string): string[] {
 }
 
 export function normalizeOpenAiBaseUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  const normalized = stripTrailingSlashes(baseUrl.trim());
   if (!normalized) return normalized;
   if (normalized.endsWith("/v1")) return normalized;
 
   try {
     const parsed = new URL(normalized);
-    const path = parsed.pathname.replace(/\/+$/, "");
+    const path = stripTrailingSlashes(parsed.pathname);
     if (!path || path === "/") {
       return `${normalized}/v1`;
     }
@@ -164,7 +170,7 @@ function usesNativeAnthropic(settings: Pick<LlmSettings, "provider" | "baseUrl">
 export function buildLlmRequestUrl(settings: Pick<LlmSettings, "provider" | "baseUrl">): string {
   if (!usesNativeAnthropic(settings)) return buildChatCompletionsUrl(settings.baseUrl);
   const url = new URL(normalizeOpenAiBaseUrl(settings.baseUrl));
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/messages`;
+  url.pathname = `${stripTrailingSlashes(url.pathname)}/messages`;
   return url.toString();
 }
 
@@ -200,7 +206,7 @@ export class LlmClient {
   }
 
   async fetchModels(): Promise<string[]> {
-    const baseUrl = this.settings.baseUrl.replace(/\/+$/, "");
+    const baseUrl = stripTrailingSlashes(this.settings.baseUrl);
     const apiKey = this.settings.apiKey;
 
     if (!baseUrl || !apiKey) {
