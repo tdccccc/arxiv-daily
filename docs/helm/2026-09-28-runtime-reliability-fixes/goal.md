@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-28T22:22:37+08:00
-updated: 2026-09-29T23:42:06+08:00
-revision: 10
+updated: 2026-09-30T09:10:20+08:00
+revision: 11
 owner: claude-root-session-2026-09-29
 
 ## Intent
@@ -25,7 +25,7 @@ owner: claude-root-session-2026-09-29
 
 - 本轮不扩展到 F23 的网络增量流式改造、F24 代理对截断及未确认的 topics 迁移疑点。
 - 不承诺多机器经网盘同步或网络文件系统的分布式互斥。
-- 不执行线上 relay cutover、不发送真实邮件、不推送、不创建 PR、不合并或发布。
+- 不执行线上 relay cutover、不发送真实邮件、不合并或发布；推送和 PR 仅限下述本次原生验收授权。
 
 ## Constraints
 
@@ -34,6 +34,7 @@ owner: claude-root-session-2026-09-29
 - 每次只展开当前阶段；后续阶段到启动时才写具体方案与测试策略。
 - 2026-09-28 用户决定：先完成跨平台实现和 CI 验收配置，原生平台验收单独保留 P6 待办。
 - 2026-09-29 用户选择 1A：允许随应用增加系统原生支持组件；先验证可行性，再接入和配置分发，安全要求与 P6 原生验收边界不变。
+- 2026-09-30 用户选择 1A：本次允许推送 `fix/review-followups` 并创建验收 PR，运行原生 CI 及同一验收任务的修复重跑；不合并、不发布、不发真实邮件，其他推送/PR 仍需另行授权。
 - 不以普通 write-before-check、缩短占位寿命或仅凭墙钟超时破坏现有防重复投递与路径边界。
 - 用户本轮明确点名的项目未经用户重新决定不豁免；缺真实接口或原生平台证据时保留未完成状态并写明阻碍。
 - commit 使用 Conventional Commits 英文动词主题，多个 -m 分别写 Why/What/Validation；提交前检查 staged diff。
@@ -45,4 +46,4 @@ owner: claude-root-session-2026-09-29
 3. P3 — 服务商推理参数按实际 HTTP 契约发送并验收（F19） — status: done
 4. P4 — 同机多个进程共享 Vault 时运行互斥、索引更新不丢失 — status: done
 5. P5 — 跨平台自动投递实现与 CI 验收配置就绪 — status: done
-6. P6 — macOS/Windows 原生平台验收（缺原生环境，保留待办） — status: blocked
+6. P6 — macOS/Windows 原生平台验收（CI 第一关已获准，桌面验收单列） — status: active

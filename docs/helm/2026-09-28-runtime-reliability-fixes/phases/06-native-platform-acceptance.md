@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-29T23:42:06+08:00
-revision: 1
+updated: 2026-09-30T09:10:20+08:00
+revision: 2
 
 ## Outcome
 
@@ -12,7 +12,7 @@ revision: 1
 ## Assumptions
 
 - P5 只验收实现、Linux 证据和 CI 配置就绪，没有把假平台字符串、happy-dom 或 Node 中的 Obsidian adapter 测试当作真实 Electron 结果。
-- 当前会话只有 Linux 环境；没有可用的 macOS/Windows 执行环境，也未获准推送或启动远端 CI。该阻碍不构成成功标准豁免。
+- 当前会话本机只有 Linux；2026-09-30 用户选择 1A，授权推送当前 `fix/review-followups` 分支并创建 PR 触发原生 CI，以及本次验收所需的同分支修复重跑。仍不合并、发布或发送真实邮件；真实 Obsidian/Electron 验收与 CI 第一关分开记录。
 - CI 的六个 native runner 使用同一源码的制品；当前 source hash 或二进制变更后，旧平台结果不能继续充当验收证据。
 - 只用临时 Vault、假凭证及拦截后的 HTTP 验证，不向真实收件人发信，不修改用户当前 Vault 或线上 relay。
 

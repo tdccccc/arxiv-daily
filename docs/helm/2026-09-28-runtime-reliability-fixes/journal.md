@@ -119,3 +119,10 @@
 - limits: no remote CI, native macOS/Windows execution, or real Electron loading was performed; no push, PR, release, live provider call or real email occurred. A transient permission-check service outage interrupted final bookkeeping, not the validated implementation; the final native suite was rerun successfully after service recovery.
 - transition: mark P5 done and create the current P6 acceptance plan. P6 is blocked because this session only has Linux and does not have authorization to push/run remote verification. Keep the initiative active and the two remaining success criteria unchecked; no criterion is waived.
 - next: obtain native macOS/Windows execution environments or separately authorized CI access, run the recorded native matrix and real isolated Obsidian/Electron checks, then fix any observed failures with Red/Green evidence before final closure.
+
+## 2026-09-30 — user authorizes PR-based native acceptance
+
+- authorization: user replied `1A` to pushing the current branch and creating a PR solely for acceptance testing. Scope is `fix/review-followups` and its native-acceptance fixes/rechecks, not a blanket permission for other branches or future publication. No merge, release, real email, or production control operation is authorized.
+- state: P6 resumes with its first gate; the goal success criteria and retained safety contracts are unchanged. Real macOS/Windows CI results and real Obsidian/Electron results remain separate acceptance obligations.
+- preparation: working tree was clean, GitHub authentication and repository/base were verified, and no existing PR for the branch was found. Fetching origin/main showed the branch contains main plus accumulated local commits; the PR will represent that full branch, not a fabricated phase-only diff.
+- next: commit this scoped authorization, push the branch without force, create a draft acceptance PR, then observe native matrix results and reproduce/fix any failures before accepting them.
