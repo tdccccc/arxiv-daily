@@ -126,3 +126,10 @@
 - state: P6 resumes with its first gate; the goal success criteria and retained safety contracts are unchanged. Real macOS/Windows CI results and real Obsidian/Electron results remain separate acceptance obligations.
 - preparation: working tree was clean, GitHub authentication and repository/base were verified, and no existing PR for the branch was found. Fetching origin/main showed the branch contains main plus accumulated local commits; the PR will represent that full branch, not a fabricated phase-only diff.
 - next: commit this scoped authorization, push the branch without force, create a draft acceptance PR, then observe native matrix results and reproduce/fix any failures before accepting them.
+
+## 2026-09-30 — handoff P6 and PR #51 CI repair
+
+- handoff: the user confirms the previous session is paused and transfers ownership to claude-p6-pr51-session-2026-09-30. Clean branch HEAD is 41da4a997f9cc71546c837a7b3f15f5fd0f2ded9; draft PR #51 targets main and includes the accumulated branch work.
+- evidence: refreshed checks confirm dependency-audit failures in root/relay, private-storage/shared-lock test failures on Linux arm64 and both macOS runners, Windows x64/arm64 build failures, and the separate high CodeQL regex finding. Complete job logs have not yet been read; no specific package or native cause is inferred from step names.
+- authorization: retain the user's scope to repair, commit and push only this acceptance branch for CI reruns. No subagents, merges, releases, real email or production relay changes.
+- next: retrieve complete logs, record targeted Red/Green strategies, then repair each isolated chunk. P6 remains active; CI and actual Obsidian/Electron evidence remain separate, and no success criterion is waived.
