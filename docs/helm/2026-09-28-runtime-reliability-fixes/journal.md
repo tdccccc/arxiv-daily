@@ -163,3 +163,11 @@
 - evidence: b52efb1 run 36714759289 Windows x64 passes primitives, runtime guards/locks, Node composition and plugin composition, with JSON evidence produced. Product builds fail because the pako notice regex requires LF while Windows checkout uses CRLF.
 - strategy/results: copied the actual reader to an isolated temporary CRLF checkout and reproduced the identical missing-notice Red. Normalize CRLF before extraction; all 9 release utility tests pass while asserting exact license text and single banner inclusion. Both product builds, offline native package smoke and offline CLI installation pass locally.
 - next: rerun the authorized native matrix through build and offline installation. Email relay remains green; real desktop-host acceptance remains separate and open.
+
+
+## 2026-09-30 — P6 native CI gate accepted on all six platforms
+
+- source: 317d4d6a9b89ec545e08c2522903e96d98f0cd59 contains every accepted CI repair. Native run https://github.com/tdccccc/arxiv-daily/actions/runs/36715458437 succeeds on Linux x64/arm64, macOS x64/arm64 and Windows x64/arm64 through build, primitive tests, runtime locks/guards, both host compositions, offline loading, offline CLI installation and artifact uploads.
+- independent checks: Email relay https://github.com/tdccccc/arxiv-daily/actions/runs/36715458428 passes; Root 36715458448, CodeQL 36715458442 and VS Code 36715458479 also pass on the same source. Windows JSON evidence confirms 20 runtime tests and one selected test per Node/plugin composition, all successful.
+- checkpoint: On track; accept P6 chunk 1 only. Original Windows junction Red, runtime guard assumption, lost workflow arguments and CRLF build failures are resolved with observed real Windows Green. Relay source approval and 161 tests/audit/typecheck/dry-run were completed before CI acceptance.
+- scope: user's two failing workflows are resolved. Keep the overall P6 and initiative active: actual isolated Obsidian/Electron desktop-host acceptance and final initiative/report closure remain separate; CI adapter tests do not establish real desktop execution. No merge, release, production relay change or real email occurred.

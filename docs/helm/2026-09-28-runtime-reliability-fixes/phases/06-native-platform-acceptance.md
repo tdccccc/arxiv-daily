@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-09-29T23:42:06+08:00
-updated: 2026-09-30T20:32:44+08:00
-revision: 7
+updated: 2026-09-30T20:40:46+08:00
+revision: 8
 
 ## Outcome
 
@@ -28,7 +28,7 @@ revision: 7
 - baseline: 当前缺失 macOS/Windows 观察结果，而不是一个可标为通过的空测试。
 - checks: 按 `.github/workflows/native-storage.yml` 在 Intel/Apple Silicon macOS、Windows x64/arm64 上运行官方 SDK 校验、CMake 构建、native `storage.test.cjs`、私有存储/loader/共享锁测试、Node/Plugin adapter composition、离线 bundle 与 npm 安装冒烟。
 - acceptance: 每个声明支持的目标都有真实通过结果；目录置换可被拒绝或被 OS 句柄固定阻止，Windows ACL 必须实际验证，不能用 chmod 数字替代。没有跳过全部关键用例或忽略失败。
-- [ ] native build, storage and installation evidence accepted
+- [x] native build, storage and installation evidence accepted — source 317d4d6; run 36715458437 passes all six real OS/architecture jobs, including offline loading/install and artifact uploads.
 
 #### PR #51 repair checkpoints (2026-09-30, L1)
 
