@@ -2,8 +2,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
-import { modernArxivResources, type HttpClient } from "@arxiv-daily/core";
-import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
+import {
+  ARXIV_CATEGORIES, ArxivFetcher, HtmlCache, Logger, PaperContentFetcher,
+  modernArxivResources, parseRecent, type HttpClient,
+} from "@arxiv-daily/core";
+import { LinkedomMarkupParser, NodeHttpClient, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { openScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 
 const OUTPUT = "arxiv-daily-agent";
@@ -45,7 +48,72 @@ export async function executeAgentCommand(
   if (command === "read") return readRecord(root, kindOf(input.kind), slugOf(input.slug));
   if (command === "save") return saveRecord(root, input);
   if (command === "confirm-direction") return confirmDirection(root, input);
+  if (command === "recent") return recentPapers(input, options);
+  if (command === "paper") return paperContent(root, input, options);
   throw new Error(`Unknown command: ${command}`);
+}
+
+function arxivServices(options: AgentOptions, category = "cs.AI") {
+  const logger = new Logger("warn");
+  const markupParser = new LinkedomMarkupParser();
+  const fetcher = new ArxivFetcher({
+    category, http: options.http ?? new NodeHttpClient(), markupParser, logger,
+    requestDelayMs: 3000, textTimeoutMs: 30_000,
+  });
+  return { logger, markupParser, fetcher };
+}
+
+async function recentPapers(input: Input, options: AgentOptions): Promise<Record<string, unknown>> {
+  const category = requiredString(input.category, "category", 64);
+  if (!ARXIV_CATEGORIES.some(group => group.categories.some(item => item.id === category))) throw new Error("Unknown arXiv category");
+  const requestedDate = optionalString(input.date, "date", 10);
+  if (requestedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+    || !Number.isFinite(Date.parse(requestedDate)) || new Date(requestedDate).toISOString().slice(0, 10) !== requestedDate)) {
+    throw new Error("Invalid date: expected a real YYYY-MM-DD date");
+  }
+  const { offset, limit } = pagination(input);
+  const { fetcher, markupParser } = arxivServices(options, category);
+  const buckets = parseRecent(await fetcher.fetchRecent(category, options.signal), markupParser);
+  const date = requestedDate || buckets[0]?.announceDate || null;
+  const selected = buckets.find(bucket => bucket.announceDate === date);
+  const papers = selected?.papers ?? [];
+  return {
+    category, date, availableDates: buckets.map(bucket => bucket.announceDate),
+    state: selected ? "ready" : requestedDate ? "date-unavailable" : "listing-unavailable",
+    total: papers.length,
+    items: papers.slice(offset, offset + limit).map(paper => ({
+      ...paper, paperKey: `arxiv:${modernArxivResources(paper.id)!.id}`,
+      evidenceDepth: paper.abstract ? "metadata-and-abstract" : "listing-metadata",
+    })),
+    nextOffset: offset + limit < papers.length ? offset + limit : null,
+  };
+}
+
+async function paperContent(root: string, input: Input, options: AgentOptions): Promise<Record<string, unknown>> {
+  const resource = modernArxivResources(requiredString(input.id, "arxiv id", 2048));
+  if (!resource) throw new Error("Invalid arXiv ID or URL");
+  const { fetcher, markupParser, logger } = arxivServices(options);
+  const metadata = (await fetcher.fetchMetadataByIds([resource.id], options.signal)).get(resource.id);
+  if (!metadata) throw new Error(`arXiv returned no metadata for ${resource.id}`);
+  let fullText: string | null = null;
+  let fullTextSource: string | null = null;
+  let fullTextFailure: string | null = null;
+  if (input.fullText === true) {
+    await ensureDirectory(path.join(root, ".cache"), true);
+    const cache = new HtmlCache({ storage: storageFor(root), rootDir: ".cache", expiryDays: 7 });
+    const content = await new PaperContentFetcher(fetcher, cache, logger, markupParser).fetch(resource.id, {
+      isDetail: true, sectionCharLimit: 12_000, paperCharLimit: 60_000,
+    }, options.signal);
+    fullText = content.fullSections;
+    fullTextSource = content.fullTextSource ?? null;
+    fullTextFailure = fullText ? null : content.fullTextFailure ?? "Usable full-text sections are unavailable; use the abstract or local PDF";
+  }
+  return {
+    paperKey: `arxiv:${resource.id}`, metadata, ...resource,
+    evidenceDepth: fullText ? "extracted-sections" : "metadata-and-abstract",
+    fullText, fullTextSource, fullTextFailure,
+    extractionLimits: input.fullText === true ? { sectionCharacters: 12_000, paperCharacters: 60_000 } : null,
+  };
 }
 
 async function initialize(root: string, input: Input): Promise<Record<string, unknown>> {

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-01T00:48:41+08:00
-updated: 2026-10-01T00:51:53+08:00
-revision: 2
+updated: 2026-10-01T00:55:40+08:00
+revision: 3
 
 ## Outcome
 
@@ -37,7 +37,7 @@ revision: 2
 - Red / baseline signal: 注入 fixture HTTP transport，经实际 core 解析器验证日期/分页/证据和正文上限，初始命令缺失。
 - Green check: 同一 Node 契约测试通过；不执行付费模型请求，不把 listing 当成包含摘要的结果。
 - regression checks: core arXiv parser 与相关抓取测试；构建检查所有内部依赖来自当前 worktree。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — recent/paper 命令缺失时 2 个契约 Red，接入后共 8 个测试通过；全文提取为已有 core 的 Green 特性验证；core 四个相关文件 31 个回归测试通过。
 
 ### Chunk 3 — Claude plugin workflow and actual host smoke
 

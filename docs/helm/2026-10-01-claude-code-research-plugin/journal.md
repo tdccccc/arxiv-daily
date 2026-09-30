@@ -20,3 +20,10 @@
 - change: 提供只读目录清单、独立 Markdown 记录、方向草稿/确认、摘要版本冲突检查及共享进程锁。目录检索明确仅匹配文件名。
 - disposition: 接受该独立变更；不修改现有 CLI/Obsidian 配置或索引；保留原文献目录只读。
 - next: 共享 arXiv 抓取与真正的 CLI 插件入口。
+
+## 2026-10-01 — note
+
+- evidence: recent/paper 契约先因命令缺失 Red，接入后 8 个测试通过；全文提取使用现有 core，新增边界验证首次即 Green，没有把它宣称为单独的 Red/Green。core arxiv-parser、atom-parser、section-extractor、paper-content 共 31 个测试通过；独立类型检查通过。
+- change: 增加按分类/公告日期分页的候选清单、单篇元数据与按需有界正文提取；输出明确日期不可用、listing 无摘要和章节证据范围。
+- disposition: 接受共享抓取适配；没有新增模型 API 或复制解析算法。
+- next: 插件 manifest、Skill、JSON 命令行入口和可移动打包；3 个打包/CLI 契约已因这些表面缺失观察到 Red。

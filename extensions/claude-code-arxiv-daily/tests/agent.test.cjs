@@ -96,3 +96,59 @@ test('reject output under the source library and unsafe stored config', async t 
   await fs.symlink(`${library}-old`, library);
   await assert.rejects(run('library', workspace), /symbolic|root|changed/i);
 });
+
+const recentHtml = `<html><dl id="articles"><h3>Wed, 30 Sep 2026</h3>
+<dt><a title="Abstract">arXiv:2609.12345</a></dt><dd><div class="list-title">Title: Efficient inference</div><div class="list-authors"><a>A. Author</a></div></dd>
+<dt><a title="Abstract">arXiv:2609.12346</a></dt><dd><div class="list-title">Title: Other work</div><div class="list-authors"><a>B. Author</a></div></dd>
+</dl></html>`;
+
+test('recent uses core listing parsing, exposes available dates, and labels missing abstracts', async t => {
+  const { library, workspace } = await fixture(t);
+  await run('init', workspace, { library });
+  const requests = [];
+  const http = { async request(req) { requests.push(req.url); return { status: 200, headers: {}, bodyText: recentHtml }; } };
+  const page = await run('recent', workspace, { category: 'cs.AI', date: '2026-09-30', limit: 1 }, { http });
+  assert.equal(requests[0], 'https://arxiv.org/list/cs.AI/recent?skip=0&show=2000');
+  assert.equal(page.total, 2);
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0].paperKey, 'arxiv:2609.12345');
+  assert.equal(page.items[0].evidenceDepth, 'listing-metadata');
+  assert.equal(page.nextOffset, 1);
+  const unavailable = await run('recent', workspace, { category: 'cs.AI', date: '2026-10-01' }, { http });
+  assert.equal(unavailable.state, 'date-unavailable');
+  assert.deepEqual(unavailable.availableDates, ['2026-09-30']);
+  assert.equal(unavailable.total, 0);
+  await assert.rejects(run('recent', workspace, { category: '../../etc' }, { http }), /category/i);
+  await assert.rejects(run('recent', workspace, { category: 'cs.AI', date: '2026-02-30' }, { http }), /date/i);
+});
+
+test('paper canonicalizes identifiers and returns actual metadata from the core Atom parser', async t => {
+  const { library, workspace } = await fixture(t);
+  await run('init', workspace, { library });
+  const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><id>https://arxiv.org/abs/2606.12345v2</id><title>Efficient inference</title><summary>An abstract about inference.</summary><published>2026-06-13T00:00:00Z</published><updated>2026-06-14T00:00:00Z</updated><author><name>A. Author</name></author><category term="cs.AI"/></entry></feed>`;
+  const urls = [];
+  const http = { async request(req) { urls.push(req.url); return { status: 200, headers: {}, bodyText: atom }; } };
+  const paper = await run('paper', workspace, { id: 'https://arxiv.org/abs/2606.12345v2' }, { http });
+  assert.match(urls[0], /id_list=2606.12345/);
+  assert.equal(paper.paperKey, 'arxiv:2606.12345');
+  assert.equal(paper.metadata.title, 'Efficient inference');
+  assert.equal(paper.metadata.abstract, 'An abstract about inference.');
+  assert.equal(paper.evidenceDepth, 'metadata-and-abstract');
+  assert.equal(paper.fullText, null);
+  await assert.rejects(run('paper', workspace, { id: 'https://evil.example/2606.12345' }, { http }), /arxiv/i);
+});
+
+test('full-text retrieval uses bounded shared extraction and reports sections rather than the whole PDF', async t => {
+  const { library, workspace } = await fixture(t);
+  await run('init', workspace, { library });
+  const atom = `<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>https://arxiv.org/abs/2606.12347</id><title>Test paper</title><summary>A test abstract.</summary><published>2026-06-13T00:00:00Z</published><updated>2026-06-13T00:00:00Z</updated><author><name>A. Author</name></author><category term="cs.AI"/></entry></feed>`;
+  const html = `<html><body><div class="ltx_abstract">A test abstract.</div><h2>Methods</h2><p>${'method '.repeat(4000)}</p><h2>Conclusion</h2><p>A finding.</p><h2>References</h2><p>Not evidence text.</p></body></html>`;
+  const http = { async request(req) { return { status: 200, headers: {}, bodyText: req.url.includes('/api/query') ? atom : html }; } };
+  const paper = await run('paper', workspace, { id: '2606.12347', fullText: true }, { http });
+  assert.equal(paper.evidenceDepth, 'extracted-sections');
+  assert.equal(paper.fullTextSource, 'arxiv-html');
+  assert.match(paper.fullText, /Methods/);
+  assert.ok(paper.fullText.length < 60000);
+  assert.doesNotMatch(paper.fullText, /Not evidence text/);
+  assert.equal(paper.extractionLimits.sectionCharacters, 12000);
+});
