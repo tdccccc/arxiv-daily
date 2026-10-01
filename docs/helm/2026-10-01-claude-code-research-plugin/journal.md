@@ -43,3 +43,10 @@
 - disposition: P1/P2 superseded。保留 P1 文件、提交与测试作为可运行原型证据，不删除用户试验记录，但不把 agent 专属 Markdown 方向档案和抽样筛选路径作为正式实现继续扩展。可复用插件打包、结构化输入输出等接口经验；原测试只能证明旧原型，不能证明新目标。筛选、日报、详细总结、Paper Index、profile 与检查点必须按现有 core 契约重新验收。
 - boundary: 已核实基础 CLI runtime 组装 ArxivPipeline 与 ManualFetchService；Obsidian 中仍有文献库 PDF/embedding 初始化和个性化快照编排。基础日报接入应先用现有 CLI/core；后续补齐宿主适配。共享数据语义不等于同步不同产品的配置。
 - next: P3，建立原有 CLI 日期日报和单篇详细总结的 Green 基线，明确配置与持久化契约，再实现完整业务任务的接入。本次仅修订文档与范围，没有修改运行时代码。
+
+## 2026-10-01 — note
+
+- evidence: 用户授权按修订目标实施，并询问旧原型是否删除；当前 P3 已由真实子进程 fixture 验收。3 篇候选筛为 2 篇日报，保留自动详情评分和一篇自动详报；另 ID 手动详报、索引/state/history、离线重跑、零命中和原笔记保护均通过。共 113 CLI tests、256 core baseline tests、6 extension package/workflow tests；workspace typecheck、boundaries、product-units 与官方插件校验通过。
+- change: 6de6d15 新增不输出密钥的 status/papers 查询，复用原有索引/词法检索；e28bd12 直接分发官方 CLI 构建并修改辅助 Skill，删除旧独立档案实现及其专属测试。
+- disposition: 保留既有 P1 用户文件和 Git 历史，不自动迁移；新实现使用 CLI TOML 和原 Vault 数据。fixture 只替换 HTTP，正常 native 模块缓存未改动；不把本次 fixture 验收说成真实供应商质量验证。
+- next: P3 done，P4 active；先核对 Node PDF/embedding 与库连接/授权的复用边界，再补齐可选增强，P3 基础主流程持续作为回归基线。

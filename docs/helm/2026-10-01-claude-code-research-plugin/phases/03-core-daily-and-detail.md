@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-01T19:42:26+08:00
-updated: 2026-10-01T19:42:26+08:00
-revision: 1
+updated: 2026-10-01T20:08:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -39,7 +39,7 @@ revision: 1
 - baseline: 运行现有 CLI run/date/id 与 core pipeline/manual-fetch 相关测试；记录无文献库、零命中、未发布、已有文件和恢复的已有行为。
 - Green check: 同样配置和固定输入生成既有日报/详报格式、索引与状态；不依赖 Claude 模型会话。
 - regression checks: CLI/runtime/core 相关测试与类型检查；只读调查本身不修改生产代码。
-- [ ] baseline and contract accepted
+- [x] baseline and contract accepted — 既有 CLI 46 tests、core pipeline/manual/checkpoint 256 tests Green。
 
 ### Chunk 2 — Connect the independent experiment to complete product tasks
 
@@ -48,7 +48,7 @@ revision: 1
 - Red: 针对试验入口调用真实产品任务的契约测试先失败，覆盖未连接文献库仍可运行、完整结果/错误返回和既有产物路径；测试不能只验证拼接命令或转发了几项参数。
 - Green: 输入有效配置与 fixture 数据后，经实际任务完成筛选、日报/详报写入及 Paper Index/state 更新；不写 P1 的独立权威档案。
 - regression checks: 原 CLI/core 测试、类型检查、boundaries、product-units；涉及 Obsidian 的共享抽取补前后 Green 回归。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 新 status/papers 契约先因命令不存在 Red；替换 bundle 测试先因目标产物不存在 Red；之后 113 个 CLI 测试与 6 个独立进程/打包测试 Green。
 
 ### Chunk 3 — Validate the product workflow without agent orchestration
 
@@ -57,9 +57,13 @@ revision: 1
 - baseline: 隔离配置/输出目录，运行普通命令；不得读写生产 Vault 或已有全局模型配置。
 - Green check: 手动主题 → 日期日报 → 单篇详细总结 → 重新读取与重复运行；核对模型调用、结果校验、持久化和恢复由产品负责。
 - regression checks: 记录真实外部依赖检查与未运行项；图形界面和库增强不冒充本阶段完成条件。
-- [ ] end-to-end acceptance complete
+- [x] end-to-end acceptance complete — 只替换 HTTP、实际使用原 CLI/scheduler/pipeline/native writer/index，完成日报、自动详报、另一 ID 手动详报、跨进程离线重跑、零命中、未发布与用户笔记保护。公网模型质量/供应商可用性不由 fixture 证明，本阶段没有借用生产配置作生成验收。
 
 ## Phase verification
+
+- Observed: 所有 workspace typecheck、boundaries、product-units、官方 strict plugin manifest 校验、git diff --check 通过。
+- 输出包直接复制官方 CLI 构建，字节一致测试通过；保留原生存储与第三方 notices。源码构建和本机 native loader 使用各自正常构建/缓存目录，未重设 HOME 或修改模型配置。
+- 6de6d15：产品状态与 Paper Index 查询；e28bd12：插件复用原 CLI，删除 P1 的 agent.ts/main.ts、独立档案和旧测试。旧用户试用文件保留，测试证据仍在 Git 历史中。
 
 - 用户可直接运行核心任务；不需要描述“先读哪些文件、再逐篇筛选、最后写报告”的长提示词。
 - 日报和详细总结均有独立可检查的持久化产物，并受原有索引和状态管理。
