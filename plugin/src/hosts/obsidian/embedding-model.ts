@@ -162,10 +162,20 @@ class LazyModelLoader {
     configureTransformersEnv(transformers.env, this.options);
 
     const device = isNodeRuntime() ? "cpu" : "wasm";
-    const extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
-      dtype: "q8",
-      device,
-    });
+    let extractor: FeatureExtractionPipeline;
+    try {
+      // This is the call that downloads the model files (config, tokenizer,
+      // q8 ONNX weights — about 130 MB total) from Hugging Face on first use;
+      // a network failure here is by far the most common way this factory
+      // fails, so it gets a message a reader can act on instead of whatever
+      // fetch/DNS error transformers.js happened to surface.
+      extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
+        dtype: "q8",
+        device,
+      });
+    } catch (error) {
+      throw isLikelyNetworkError(error) ? embeddingModelDownloadNetworkError(error) : error;
+    }
 
     // Probe the loaded model and assert the documented dimension so the port
     // contract (`dimension === 384`) is verified against the real model
@@ -393,4 +403,69 @@ function abortError(signal: AbortSignal): Error {
   const error = new Error(message);
   error.name = "AbortError";
   return error;
+}
+
+/**
+ * Prefix `embeddingModelDownloadNetworkError` puts on its message, so hosts
+ * that only see the stringified reason (e.g. a per-paper `outcome.error` in
+ * the full-text index summary, which core reduces to `message`) can still
+ * tell a failed model download apart from any other indexing failure —
+ * `isEmbeddingModelDownloadNetworkError` checks for it.
+ */
+const EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX =
+  "Couldn't download the embedding model (network problem)";
+
+/**
+ * True when `message` is the text `embeddingModelDownloadNetworkError`
+ * produces, as opposed to any other full-text indexing failure reason.
+ */
+export function isEmbeddingModelDownloadNetworkError(message: string | undefined): boolean {
+  return typeof message === "string"
+    && message.startsWith(EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX);
+}
+
+/**
+ * Wrap a model-load failure that looks network-caused in a message a reader
+ * can act on. `error.name` is also set (mirrors the `AbortError` convention
+ * above) for callers that still hold the real Error object; the message
+ * prefix is what survives into a stringified failure reason.
+ */
+function embeddingModelDownloadNetworkError(cause: unknown): Error {
+  const error = new Error(
+    `${EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX}: arXiv Daily could not reach ` +
+      "Hugging Face to download the local embedding model. Check your internet " +
+      "connection and try indexing again; the underlying error is logged to the " +
+      "developer console.",
+    { cause },
+  );
+  error.name = "EmbeddingModelDownloadError";
+  return error;
+}
+
+/**
+ * Loose, best-effort detection of a network-origin failure (fetch/DNS/
+ * timeout), looking one level into `cause` since Node's `fetch` wraps DNS
+ * failures that way. False negatives just fall back to the original error
+ * message; false positives would mislabel an unrelated load failure as a
+ * network problem, so the patterns stay specific.
+ */
+function isLikelyNetworkError(error: unknown, depth = 0): boolean {
+  if (depth > 2 || !(error instanceof Error)) return false;
+  const text = `${error.name} ${error.message}`.toLowerCase();
+  const patterns = [
+    "fetch failed",
+    "failed to fetch",
+    "networkerror",
+    "network error",
+    "enotfound",
+    "econnrefused",
+    "econnreset",
+    "etimedout",
+    "eai_again",
+    "net::err_",
+    "could not resolve host",
+    "name not resolved",
+  ];
+  if (patterns.some((pattern) => text.includes(pattern))) return true;
+  return isLikelyNetworkError((error as { cause?: unknown }).cause, depth + 1);
 }

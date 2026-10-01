@@ -13,9 +13,11 @@ export type EmbeddingMode = "local" | "remote";
 
 /**
  * Embedding backend for the personal library full-text knowledge base
- * (ADR 0008). `local` embeds offline with the bundled multilingual-e5-small
- * model; `remote` sends full-text chunks to an OpenAI-compatible embeddings
- * endpoint (requires full-text processing consent).
+ * (ADR 0008). `local` downloads the multilingual-e5-small model from
+ * Hugging Face once, on the first full-text index build (about 130 MB),
+ * then embeds locally on every run after; `remote` sends full-text chunks
+ * to an OpenAI-compatible embeddings endpoint (requires full-text
+ * processing consent).
  */
 export interface EmbeddingSettings {
   mode: EmbeddingMode;

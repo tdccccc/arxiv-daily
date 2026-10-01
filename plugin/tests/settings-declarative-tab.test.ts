@@ -715,6 +715,27 @@ describe("declarative embedding rows delegate the consent flow", () => {
     expect(select.value).toBe("local");
   });
 
+  it("labels the local option honestly about the one-time model download, not as always-offline", () => {
+    const { tab } = makeTab();
+    const setting = renderSetting();
+    renderEmbeddingModeRow(tab, setting as never);
+    const options = [...setting.controlEl.querySelectorAll("option")] as HTMLOptionElement[];
+    const local = options.find((option) => option.value === "local");
+    expect(local?.textContent).toBe("Local (default, one-time model download)");
+    expect(local?.textContent).not.toMatch(/offline, default/);
+  });
+
+  it("describes the local embedding row's one-time download and approximate size, not a bundled model", () => {
+    const { tab } = makeTab();
+    const group = tab.getSettingDefinitions().find(
+      (item) => item.type === "group" && item.heading === "Personal library",
+    ) as { items: Array<{ name: string; desc?: string }> } | undefined;
+    const embeddingItem = group?.items.find((item) => item.name === "Embedding");
+    expect(embeddingItem?.desc).toContain("downloads its model once");
+    expect(embeddingItem?.desc).toContain("130 MB");
+    expect(embeddingItem?.desc).not.toContain("bundled");
+  });
+
   it("routes the endpoint field through the shared re-ask on change", async () => {
     const { tab, plugin } = makeTab();
     plugin.settings.embedding.mode = "remote";

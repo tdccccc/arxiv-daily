@@ -274,6 +274,24 @@ describe("legacy embedding rows", () => {
     expect(dropdown.selectEl.value).toBe("local");
   });
 
+  it("labels the local option honestly about the one-time model download, not as always-offline", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const dropdown = componentOf(rows.get("Embedding"), DropdownComponent as never) as DropdownComponent;
+    const local = [...dropdown.selectEl.options].find((option) => option.value === "local");
+    expect(local?.textContent).toBe("Local (default, one-time model download)");
+    expect(local?.textContent).not.toMatch(/offline, default/);
+  });
+
+  it("describes the local embedding row's one-time download and approximate size, not a bundled model", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const desc = rows.get("Embedding")?.descEl?.textContent ?? "";
+    expect(desc).toContain("downloads its model once");
+    expect(desc).toContain("130 MB");
+    expect(desc).not.toContain("bundled");
+  });
+
   it("routes the endpoint field through the shared re-ask on change", async () => {
     const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
     settings.embedding.mode = "remote";
@@ -920,11 +938,25 @@ describe("confirmEmbeddingMode", () => {
     await expect(promise).resolves.toBe("local");
   });
 
+  it("discloses the one-time model download honestly, not a bundled/always-offline model", async () => {
+    const { Modal } = await import("obsidian");
+    Modal.opened.length = 0;
+    const promise = confirmEmbeddingMode({} as any);
+    const modal = Modal.opened.at(-1)!;
+    const text = modal.contentEl.textContent ?? "";
+    expect(text).toContain("Local (default, one-time model download)");
+    expect(text).toContain("Downloads its model once");
+    expect(text).toContain("130 MB");
+    expect(text).not.toContain("bundled");
+    Modal.opened.at(-1)!.close();
+    await promise;
+  });
+
   it("wires the guided choice into the library connection flow once", () => {
     expect(settingsTabSource).toContain("offerEmbeddingModeChoice()");
     expect(settingsTabSource).toContain("confirmEmbeddingMode(this.app)");
     expect(settingsTabSource).toContain("initialChoiceDone");
-    expect(settingsTabSource).toContain('"arXiv Daily: local embedding (offline)');
+    expect(settingsTabSource).toContain('"arXiv Daily: local embedding. Its model downloads once');
   });
 });
 

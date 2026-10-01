@@ -1576,9 +1576,10 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
-   * Embedding backend for the full-text knowledge base (ADR 0008): the
-   * bundled local transformers.js model by default, or the remote
-   * OpenAI-compatible model when the embedding mode is `remote`.
+   * Embedding backend for the full-text knowledge base (ADR 0008): the local
+   * transformers.js model by default (downloaded from Hugging Face on first
+   * use, then cached), or the remote OpenAI-compatible model when the
+   * embedding mode is `remote`.
    */
   private buildEmbeddingModel(): EmbeddingModel {
     if (this.settings.embedding.mode === "remote") {

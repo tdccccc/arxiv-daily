@@ -674,7 +674,7 @@ export function renderEmbeddingModeRow(
 ): void {
   prepareRow(setting);
   const select = setting.controlEl.createEl("select");
-  const local = select.createEl("option", { text: "Local (offline, default)" });
+  const local = select.createEl("option", { text: "Local (default, one-time model download)" });
   local.value = "local";
   const remote = select.createEl("option", { text: "Remote (fast, full text leaves this device)" });
   remote.value = "remote";

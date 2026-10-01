@@ -403,7 +403,7 @@ export function buildSettingDefinitions(
                   name: "Embedding",
                   desc: plugin.settings.embedding.mode === "remote"
                     ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
-                    : "Local embeds on this device. Switch to remote only if you have an embeddings API.",
+                    : "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.",
                   render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
                 } satisfies SettingDefinitionItem]
               : []),

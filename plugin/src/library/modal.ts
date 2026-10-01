@@ -122,8 +122,8 @@ export function confirmLibraryRevocation(
     );
     modal.contentEl.createEl("p", {
       text: options.switchesToLocal
-        ? "arXiv Daily stops sending anything from your library folder to the model endpoints, and embedding returns to local (offline) on this device."
-        : "arXiv Daily stops sending anything from your library folder to the model endpoints. Local embedding keeps working offline.",
+        ? "arXiv Daily stops sending anything from your library folder to the model endpoints, and embedding returns to local on this device — its model downloads once (if it has not already), then runs offline."
+        : "arXiv Daily stops sending anything from your library folder to the model endpoints. Local embedding downloads its model once, then keeps working offline.",
     });
     if (options.switchesToLocal) {
       modal.contentEl.createEl("p", {
@@ -236,8 +236,8 @@ export function confirmEmbeddingMode(app: App): Promise<"local" | "remote"> {
     const list = modal.contentEl.createEl("dl");
     addDisclosure(
       list,
-      "Local (offline, default)",
-      "Embeds on this device with a bundled model. Private and offline, but indexing a large library takes a long time (hours).",
+      "Local (default, one-time model download)",
+      "Downloads its model once (about 130 MB, from Hugging Face) on this first index build, then embeds on this device. Private, but indexing a large library takes a long time (hours).",
     );
     addDisclosure(
       list,

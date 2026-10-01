@@ -26,6 +26,7 @@ import {
   showLibraryInventoryPreview,
   showPersonalLibraryCatalogSummary,
 } from "./library/modal";
+import { describeFullTextIndexCompletion } from "./library/index-completion";
 
 export { bindEnterToButton, isValidCalendarDate } from "./date-picker-modal";
 export {
@@ -553,14 +554,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
           notice("arXiv Daily: indexing personal library full text…");
           try {
             const summary = await plugin.indexPersonalLibraryFullText();
-            const refreshed = summary.titlesRefreshed > 0
-              ? `, ${summary.titlesRefreshed} titles refreshed`
-              : "";
-            notice(
-              `arXiv Daily: full-text index — ${summary.indexed} indexed, `
-              + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}`,
-              10_000,
-            );
+            notice(`arXiv Daily: ${describeFullTextIndexCompletion(summary)}`, 10_000);
           } catch (error) {
             plugin.logger.error("commands: personal library full-text indexing failed", error);
             notice(`arXiv Daily: full-text indexing failed: ${errorMessage(error)}`, 10_000);

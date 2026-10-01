@@ -60,6 +60,7 @@ import {
   libraryRowPresentation,
 } from "../library/connection";
 import type { LibraryIndexStatus } from "../library/index-status";
+import { describeFullTextIndexCompletion } from "../library/index-completion";
 import {
   confirmEmbeddingMode,
   confirmLibraryAuthorization,
@@ -697,7 +698,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       new Notice(
         mode === "remote"
           ? "arXiv Daily: remote embedding enabled — confirm what leaves this device next."
-          : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
+          : "arXiv Daily: local embedding. Its model downloads once on the first index build, then runs offline. You can switch to remote in settings anytime.",
         10_000,
       );
     }
@@ -831,12 +832,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     new Notice("arXiv Daily: indexing personal library full text…");
     try {
       const summary = await this.plugin.indexPersonalLibraryFullText();
-      const refreshed = summary.titlesRefreshed > 0
-        ? `, ${summary.titlesRefreshed} titles refreshed`
-        : "";
       new Notice(
-        `arXiv Daily: full-text index — ${summary.indexed} indexed, `
-          + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}. Search from the Dashboard.`,
+        `arXiv Daily: ${describeFullTextIndexCompletion(summary, { onCompletionSuffix: "Search from the Dashboard." })}`,
         10_000,
       );
     } catch (error) {
@@ -1728,10 +1725,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc(
         s.embedding.mode === "remote"
           ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
-          : "Local embeds on this device. Switch to remote only if you have an embeddings API.",
+          : "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.",
       )
       .addDropdown((d) => {
-        d.addOption("local", "Local (offline, default)");
+        d.addOption("local", "Local (default, one-time model download)");
         d.addOption("remote", "Remote (fast, full text leaves this device)");
         d.setValue(s.embedding.mode);
         d.onChange(async (v) => {
