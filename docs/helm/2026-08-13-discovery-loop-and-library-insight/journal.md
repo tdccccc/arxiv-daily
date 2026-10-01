@@ -1,0 +1,9 @@
+## 2026-08-31 — L2 re-steer：P2/P3 停做，reading candidates 在发布前移除
+
+- evidence: 接手 P2 时 goal 与 phase 里五个任务全未勾选，但 T1–T4 的代码早已在 main 上（core 的 domain 与 store、回顾 modal、Dashboard 行上的 bookmark、命令 `review-reading-candidates`），测试全绿。缺的是 T4 自己 assumption 写下的那一半——「命令 **加 Dashboard 头部按钮**」只做了命令，于是保存完没有任何地方能回到已保存的东西。补完那个入口后走 T5 真实验收，才发现更根本的问题：**这个功能在测试库里根本无法被触发**。bookmark 只在行携带 `occurrenceProvenance` 时渲染，而来源的判定是「有手动主题 **或** 有已确认的文献库方向」，测试库两者皆为 0（91 条论文无一带 provenance，25 篇日报无一带来源标记，22 个方向候选无一确认）。也就是说要看见这个功能，得先定主题或逐个审完方向、再跑一次真实日报——而 LLM 端点当时还不通。
+- change: 用户判断整条 reading candidates（保存待读 / 按方向回顾 / 阅读反馈回流）价值不足，决定停做。**代码在发布前移除**：`packages/core/src/library/reading-candidates/`（domain + store）、`plugin/src/library/reading-candidates-modal.ts`、Dashboard 行的 Save for later 按钮、`review-reading-candidates` 命令、main.ts 里的 store 构建/并行加载/保存/决策/移除/快照字段，以及四个测试文件。刚补的那个 Dashboard 入口提交直接丢弃，从未推送。goal 的 Intent 收窄为「文献库分析」，P2/P3 标记 dropped，两条对应的成功标准划掉并注明日期与原因，P3 的开放问题一并关闭。`docs/technical-report.md` 里那一整段架构描述删除。
+- disposition: **移除的判据是「它还没上过车」**。0.4.3 / 0.4.4 / 0.4.5 / 0.4.6 四个 tag 全都不含这两个提交——它们虽然是 8月13 写的，但进入 main 是在 0.4.6（8月24 发布）之后。所以没有任何用户手上有它，删除外部零代价；反过来，留着就意味着下一次发版会把功能连同它的**存储格式**一起送出去，而存储格式一旦发布就变成兼容负担。这是「停做」与「移除」在此刻恰好同向的唯一窗口。历史仍在（`bee55d1`、`11a241c`），将来若改主意可以取回。
+- disposition: `discoveryProvenanceByReport` 这条数据链**保留不动**——它由管线在日报里写来源标记、由 history-sync 反解回 paper index，服务的是日报本身的可解释性，不是 reading candidates 专有的。Dashboard 上它现在只用于展示。P1 的三项修复、检索、索引、generation 一律不动；`2026-08-30-library-setup-path` 与 email helm 不动。
+- validation: `npm test` 全工作区绿（plugin 由 44 降至 41 个测试文件——删掉的三个正是被移除功能的）；`npm run typecheck` 四包全过；`npm run lint` 0 error；`npm run check:boundaries` OK；`npm run test:release-tools` 317/317。桌面验收未受影响（它走设置页）。
+- boundary: 只删这一个功能。测试库里可能残留 `<indexDir>/personal-library-reading-candidates/` 下的空文档（若曾保存过），代码移除后不再读写，属无害孤儿；因为从未发布，用户侧不存在这种残留。
+- next: 本 goal 只剩 P4（检索规模加固）与 P5（文献库分析）。两者都还没排期，要不要继续推由用户定。

@@ -34,8 +34,6 @@ export * from "./library/incremental/diff-suggestions";
 export * from "./library/incremental/placement";
 export * from "./library/incremental/recluster";
 export * from "./library/incremental/suggestions-store";
-export * from "./library/reading-candidates/reading-candidates";
-export * from "./library/reading-candidates/reading-candidates-store";
 export * from "./library/fulltext/ports";
 export * from "./library/fulltext/pdf-text-compat";
 export * from "./library/fulltext/remote-embedding-model";
