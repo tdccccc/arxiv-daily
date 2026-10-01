@@ -94,7 +94,7 @@ function controller(initial = snapshot()) {
   const update = vi.fn(async () => current);
   const mock: InterestProfileReviewController = {
     snapshot: () => current,
-    reload: vi.fn(async () => current), generate: vi.fn(async () => undefined),
+    reload: vi.fn(async () => current), scan: vi.fn(async () => current), generate: vi.fn(async () => undefined),
     updateProposal: update, mergeProposals: update, discardProposal: update, confirmProposal: update,
     updateConfirmed: update, mergeConfirmed: update, enable: update, disable: update, remove: update,
     applySuggestion: update, dismissSuggestion: update, lock: update, unlock: update,
@@ -108,8 +108,12 @@ function open(ctrl: InterestProfileReviewController) {
   return modal;
 }
 
+function findButton(root: HTMLElement, text: string): HTMLButtonElement | undefined {
+  return Array.from(root.querySelectorAll("button")).find((item) => item.textContent === text);
+}
+
 function button(root: HTMLElement, text: string): HTMLButtonElement {
-  const found = Array.from(root.querySelectorAll("button")).find((item) => item.textContent === text);
+  const found = findButton(root, text);
   if (!found) throw new Error(`missing button ${text}`);
   return found;
 }
@@ -178,6 +182,54 @@ describe("personal library interest profile modal", () => {
     expect(generate.title).toContain("Authorize");
     button(modal.contentEl, "Confirmed").click();
     expect(modal.contentEl.textContent).toContain("broken profile");
+  });
+
+  it("offers a Scan library button only when generation is blocked by a missing or empty catalog", () => {
+    const missing = controller(snapshot({ catalog: null }));
+    expect(findButton(open(missing.mock).contentEl, "Scan library")).toBeDefined();
+
+    const empty = controller(snapshot({ catalog: { ...snapshot().catalog!, papers: {} } }));
+    expect(findButton(open(empty.mock).contentEl, "Scan library")).toBeDefined();
+
+    const unauthorized = controller(snapshot({
+      catalog: null,
+      authorization: { kind: "authorization-required", rootLabel: "papers" } as any,
+    }));
+    expect(findButton(open(unauthorized.mock).contentEl, "Scan library")).toBeUndefined();
+
+    const ready = controller(snapshot());
+    const readyModal = open(ready.mock);
+    expect(findButton(readyModal.contentEl, "Scan library")).toBeUndefined();
+    // The fixture's default snapshot already has a proposal, so the primary
+    // action reads "Regenerate", not "Generate", proposals.
+    expect(button(readyModal.contentEl, "Regenerate proposals").disabled).toBe(false);
+  });
+
+  it("runs the library scan from the blocked-generation hint, disables the button while pending, and refreshes in place", async () => {
+    let release!: () => void;
+    const { mock, set } = controller(snapshot({ catalog: null }));
+    vi.mocked(mock.scan).mockImplementationOnce(() => new Promise((resolve) => {
+      // The modal re-renders from controller.snapshot(), not from what the
+      // action resolves to — so the fixture's state has to be advanced too.
+      release = () => { set(snapshot()); resolve(snapshot()); };
+    }));
+    const modal = open(mock);
+    findButton(modal.contentEl, "Scan library")!.click();
+    expect(findButton(modal.contentEl, "Scan library")?.disabled).toBe(true);
+    release();
+    await vi.waitFor(() => expect(mock.scan).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(findButton(modal.contentEl, "Scan library")).toBeUndefined());
+    expect(button(modal.contentEl, "Regenerate proposals").disabled).toBe(false);
+  });
+
+  it("shows a clear error when the library scan fails", async () => {
+    const { mock } = controller(snapshot({ catalog: null }));
+    vi.mocked(mock.scan).mockRejectedValueOnce(new Error("disk full"));
+    const modal = open(mock);
+    findButton(modal.contentEl, "Scan library")!.click();
+    await vi.waitFor(() => expect(modal.contentEl.querySelector('[role="alert"]')?.textContent)
+      .toBe("Personal library scan failed. Try again."));
+    expect(findButton(modal.contentEl, "Scan library")?.disabled).toBe(false);
   });
 
   it("confirms regeneration and normalizes reviewed fields before saving", async () => {

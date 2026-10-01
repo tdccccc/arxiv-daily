@@ -495,7 +495,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       lines: [
         "Optional — daily reports work the same without a library.",
         "1. Choose a folder of PDFs; nothing leaves this device.",
-        "2. Build a local search index (command palette) — its model downloads once, then runs locally.",
+        "2. Build index (button below) to search your PDFs from the command palette — its model downloads once, then runs locally.",
         "3. Optional: confirm library directions (Review directions button below) to also steer daily reports. Remote embedding and model processing always ask first.",
       ],
     };

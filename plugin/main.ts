@@ -791,6 +791,14 @@ export default class ArxivDailyPlugin extends Plugin {
         });
         return this.reloadPersonalLibraryProfileDocuments();
       },
+      // Scans the folder and rebuilds the catalog in one step — a superset of
+      // a disk reload, so it never leaves the review modal needing a second
+      // "reload from disk" action even if the in-memory catalog was stale or
+      // never loaded this session.
+      scan: async () => {
+        await this.scanPersonalLibrary();
+        return this.reloadPersonalLibraryProfileDocuments();
+      },
       generate: () => this.generatePersonalLibraryDirections(),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       mergeProposals: (input) => this.mergePersonalLibraryProposalCandidates(input),

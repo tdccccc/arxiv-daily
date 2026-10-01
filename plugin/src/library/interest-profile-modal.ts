@@ -29,6 +29,12 @@ export interface InterestProfileReviewSnapshot
 export interface InterestProfileReviewController {
   snapshot(): InterestProfileReviewSnapshot;
   reload(): Promise<InterestProfileReviewSnapshot>;
+  /**
+   * Scan the library folder and rebuild the catalog — the same work as the
+   * command-palette "Scan personal library folder" command. Resolving file
+   * identities and fetching metadata makes requests to arXiv's public API.
+   */
+  scan(): Promise<InterestProfileReviewSnapshot>;
   generate(): Promise<unknown>;
   updateProposal(input: {
     candidateId: string;
@@ -206,6 +212,11 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       cls: "arxiv-daily-interest-review__hint",
       text: generation.allowed ? "Generation sends bounded catalog metadata and abstracts to your configured model." : generation.reason,
     });
+    if (generation.blockedBy === "catalog-missing" || generation.blockedBy === "catalog-empty") {
+      const scan = controls.createEl("button", { text: "Scan library", attr: { type: "button" } });
+      scan.disabled = this.pending;
+      scan.addEventListener("click", () => void this.scanLibrary());
+    }
 
     const candidates = snapshot.proposal?.candidates ?? [];
     if (!snapshot.proposal && !snapshot.proposalLoadError) {
@@ -582,6 +593,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     });
   }
 
+  private async scanLibrary(): Promise<void> {
+    await this.run(
+      "scan personal library",
+      () => this.controller.scan(),
+      "Personal library scan failed. Try again.",
+    );
+  }
+
   private saveProposal(id: string): void {
     const draft = this.draft(id);
     if (!draft) return;
@@ -680,7 +699,11 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     await this.run(cascade ? "cascade remove direction family" : "remove direction", () => this.controller.remove({ directionId: id, mode }));
   }
 
-  private async run(action: string, operation: () => Promise<unknown>): Promise<void> {
+  private async run(
+    action: string,
+    operation: () => Promise<unknown>,
+    errorFallback?: string,
+  ): Promise<void> {
     void action;
     if (this.pending || this.closed) return;
     this.pending = true;
@@ -692,7 +715,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       if (!this.closed && version <= this.renderVersion) this.render();
     } catch (error) {
       if (!this.closed) {
-        this.errorMessage = safeUserError(error);
+        this.errorMessage = safeUserError(error, errorFallback);
         this.render();
       }
     } finally {
@@ -810,10 +833,40 @@ export function truncateReason(reason: string, maximum = 160): string {
   return `${reason.slice(0, maximum).trimEnd()}…`;
 }
 
-function generationAvailability(snapshot: InterestProfileReviewSnapshot): { allowed: boolean; reason: string } {
-  if (snapshot.authorization.kind !== "authorized") return { allowed: false, reason: "Authorize current personal-library model processing to generate proposals. Local review remains available." };
-  if (!snapshot.catalog) return { allowed: false, reason: snapshot.catalogLoadError?.message ? `Load the current catalog first: ${snapshot.catalogLoadError.message}` : "Scan and load the current personal-library catalog first." };
-  if (Object.keys(snapshot.catalog.papers).length === 0) return { allowed: false, reason: "The current catalog has no metadata-and-abstract papers to propose from." };
+/**
+ * `blockedBy` distinguishes why generation is unavailable so the UI can offer
+ * the one fix that applies: a missing or empty catalog can be fixed by
+ * scanning the library right here; a missing model authorization cannot
+ * (that is a separate consent flow, not something scanning grants).
+ */
+type GenerationBlockReason = "authorization" | "catalog-missing" | "catalog-empty";
+
+function generationAvailability(
+  snapshot: InterestProfileReviewSnapshot,
+): { allowed: boolean; reason: string; blockedBy?: GenerationBlockReason } {
+  if (snapshot.authorization.kind !== "authorized") {
+    return {
+      allowed: false,
+      reason: "Authorize current personal-library model processing to generate proposals. Local review remains available.",
+      blockedBy: "authorization",
+    };
+  }
+  if (!snapshot.catalog) {
+    return {
+      allowed: false,
+      reason: snapshot.catalogLoadError?.message
+        ? `Load the current catalog first: ${snapshot.catalogLoadError.message}`
+        : "Scan and load the current personal-library catalog first.",
+      blockedBy: "catalog-missing",
+    };
+  }
+  if (Object.keys(snapshot.catalog.papers).length === 0) {
+    return {
+      allowed: false,
+      reason: "The current catalog has no metadata-and-abstract papers to propose from.",
+      blockedBy: "catalog-empty",
+    };
+  }
   return { allowed: true, reason: "" };
 }
 
@@ -831,7 +884,7 @@ function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export function safeUserError(error: unknown): string {
+export function safeUserError(error: unknown, fallback = "Operation failed. Refresh and try again."): string {
   const code = error && typeof error === "object" && "code" in error
     && typeof (error as { code?: unknown }).code === "string"
     ? (error as { code: string }).code
@@ -855,7 +908,7 @@ export function safeUserError(error: unknown): string {
     "output-too-large": "The model response was too large. Retry generation.",
     "proposal-invariant": "The generated proposal was invalid. Retry generation.",
   };
-  return messages[code] ?? "Operation failed. Refresh and try again.";
+  return messages[code] ?? fallback;
 }
 
 function isSafeConfirmationName(name: string): boolean {

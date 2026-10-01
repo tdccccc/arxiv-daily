@@ -239,6 +239,11 @@ describe("legacy personal library guide box", () => {
     const directionsStep = content.lines[3] ?? "";
     expect(directionsStep).toContain("Review directions button below");
     expect(directionsStep).not.toContain("command palette");
+
+    const indexStep = content.lines[2] ?? "";
+    expect(indexStep).toContain("Build index (button below)");
+    expect(indexStep).toContain("command palette");
+    expect(indexStep).not.toContain("button above");
   });
 
   it("keeps showing the intro box once a folder is chosen (always visible, like the email guide)", () => {
