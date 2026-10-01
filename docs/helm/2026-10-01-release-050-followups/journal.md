@@ -31,3 +31,10 @@
 - 术语与决策合入来源CONTEXT和ADR0012/0013/0014；旧注释/说明与新语义不符处同步。旧全文索引需重建，正文独有词不再参与搜索。
 - 合并冲突以保留两侧有效行为为目标；已有实现不伪造历史Red。当前基线和新增缺口Red/Green逐步记录在/tmp/arxiv-merge-*.log/report.md；源码分工互不重叠。
 - 范围调整记录和P3计划随本次merge提交保留，避免在未解冲突的Git状态创建独立提交。CLI日常设置编辑仍是后续版本，来源既有CLI方向支持不等于新增编辑入口。
+
+## 2026-10-02 — P3验收、合并与再次部署
+
+- Checkpoint: On track。实际merge提交1f3e0d6，双父326f84a/c6dc242，来源分支仍c6dc242。新增整合回归和全量3406通过/2原有跳过；lint 0 errors/20 warnings，typecheck/build/smoke/boundaries/submission通过，release-tools337通过。
+- 旧无版本全文复用、旧键转换失败隔离、方向引导、正文披露、建完索引立即看到审核证据均有本轮Red→Green证据。合并夹具/旧文案错误不冒充Red。详见merge-verification.md及其日志索引。
+- 三件资产重新部署到原手测目录，备份suffix为20261002-pre-title-abstract-merge，SHA-256核对一致。未访问data.json或启动Obsidian，未影响来源/其他工作树。
+- P3完成，P2保持pending等待新构建手测，整体active。发行说明已改为标题摘要及新主题方向行为但仍是未跟踪草稿，不进行版本同步。没有push、PR、main合并、tag或发布。
