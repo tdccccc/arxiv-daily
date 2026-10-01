@@ -6,51 +6,38 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const plugin = path.resolve(__dirname, '..');
-const binary = path.join(plugin, 'dist/arxiv-agent.cjs');
+const binary = path.join(plugin, 'dist/arxiv-daily-cli.cjs');
 
-test('Claude plugin has a discoverable research skill and a bundled runnable command', async () => {
+test('plugin carries the exact product CLI build, including daily/detail commands', async () => {
+  assert.deepEqual(await fs.readFile(binary), await fs.readFile(path.resolve(plugin, '../../apps/cli/dist/arxiv-daily-cli.cjs')));
+  const result = spawnSync(process.execPath, [binary, 'help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /run --today/);
+  assert.match(result.stdout, /run --id ARXIV_ID/);
+  assert.match(result.stdout, /arxiv-daily status/);
   const manifest = JSON.parse(await fs.readFile(path.join(plugin, '.claude-plugin/plugin.json'), 'utf8'));
   assert.equal(manifest.name, 'arxiv-daily');
   const skill = await fs.readFile(path.join(plugin, 'skills/research/SKILL.md'), 'utf8');
-  assert.match(skill, /name: research/);
-  assert.match(skill, /CLAUDE_PLUGIN_ROOT/);
-  const help = spawnSync(process.execPath, [binary, 'help'], { encoding: 'utf8' });
+  assert.ok(skill.includes('${CLAUDE_PLUGIN_ROOT}/dist/arxiv-daily-cli.cjs'));
+  await assert.rejects(fs.access(path.join(plugin, 'dist/arxiv-agent.cjs')), { code: 'ENOENT' });
+});
+
+test('packaged CLI runs outside the repository and resolves product config without a library', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'arxiv-product-package-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  await fs.cp(path.join(plugin, 'dist/plugin'), path.join(temp, 'plugin'), { recursive: true });
+  const target = path.join(temp, 'plugin/dist/arxiv-daily-cli.cjs');
+  const env = { ...process.env, XDG_CONFIG_HOME: path.join(temp, 'config'), APPDATA: path.join(temp, 'config') };
+  delete env.NODE_OPTIONS;
+  const help = spawnSync(process.execPath, [target, 'help'], { cwd: temp, env, encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
-  assert.equal(JSON.parse(help.stdout).ok, true);
-});
-
-test('CLI saves and restores a research record across processes, with JSON-only output', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'arxiv-agent-cli-'));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
-  const library = path.join(temp, 'library with spaces');
-  const workspace = path.join(temp, 'research with spaces');
-  await fs.mkdir(library);
-  await fs.writeFile(path.join(library, 'one.pdf'), '%PDF-1.4');
-  function call(command, input = {}) {
-    const result = spawnSync(process.execPath, [binary, command, '--workspace', workspace], { input: JSON.stringify(input), encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.ok, true);
-    return parsed.data;
-  }
-  call('init', { library });
-  assert.equal(call('library').total, 1);
-  const record = call('save', { kind: 'reading', slug: 'one', title: 'Read later', body: '# Reading decision\nRead the methods next.', sources: ['one.pdf'] });
-  assert.match(record.path, /reading/);
-  assert.equal(call('status').records.reading.length, 1);
-  assert.match(call('read', { kind: 'reading', slug: 'one' }).markdown, /Read the methods next/);
-  const malformed = spawnSync(process.execPath, [binary, 'save', '--workspace', workspace], { input: 'not json', encoding: 'utf8' });
-  assert.notEqual(malformed.status, 0);
-  assert.equal(JSON.parse(malformed.stdout).ok, false);
-});
-
-test('packaged plugin is relocatable outside the repository with no node_modules', async t => {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'arxiv-plugin-package-'));
-  t.after(() => fs.rm(temp, { recursive: true, force: true }));
-  await fs.cp(path.join(plugin, 'dist/plugin'), temp, { recursive: true });
-  const manifest = JSON.parse(await fs.readFile(path.join(temp, '.claude-plugin/plugin.json'), 'utf8'));
-  assert.equal(manifest.name, 'arxiv-daily');
-  const result = spawnSync(process.execPath, [path.join(temp, 'dist/arxiv-agent.cjs'), 'help'], { cwd: temp, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).ok, true);
+  const status = spawnSync(process.execPath, [target, 'status'], { cwd: temp, env, encoding: 'utf8' });
+  assert.equal(status.status, 2);
+  assert.match(status.stderr, /CLI config not found/);
+  assert.match(status.stderr, /arxiv-daily init/);
+  assert.doesNotMatch(status.stderr, /library directory|Workspace is not connected/);
+  const old = spawnSync(process.execPath, [target, 'save'], { cwd: temp, env, encoding: 'utf8' });
+  assert.equal(old.status, 2);
+  assert.match(old.stderr, /Unknown command/);
+  await assert.rejects(fs.access(path.join(temp, 'arxiv-daily-agent')), { code: 'ENOENT' });
 });

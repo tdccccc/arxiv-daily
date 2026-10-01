@@ -1,77 +1,79 @@
-# arXiv Daily for Claude Code CLI — 实验版
+# arXiv Daily for Claude Code CLI — 核心流程试验版
 
-> 2026-10-01 方案调整：以下内容描述已验证的 P1 原型。当前目标已改为独立复用原有 arXiv 筛选、日报/详细总结与文献库核心，agent 仅作辅助入口；P1 的独立 Markdown 方向档案和临场筛选流程不再作为正式方案扩展。实施状态见 [goal.md](../../docs/helm/2026-10-01-claude-code-research-plugin/goal.md)。
+独立运行 arXiv Daily 原有的论文筛选、日报与详细总结，再通过 Claude Code 辅助操作。**没有个人文献库也能开始使用。** 模型调用、筛选、总结、索引、运行状态和断点恢复由原有业务核心管理。
 
-在 Claude Code 中查阅本地论文和 arXiv 资料，保存研究方向、论文总结和阅读判断，下次会话继续使用。无需 Obsidian，也无需配置另一套模型 API；分析使用当前 Claude 会话。
+## 先设置产品，再用任意入口操作
 
-这是 CLI 工作流验证版。文献库目录保持只读，结果保存成普通 Markdown。完整阅读界面的形态仍待试用后决定。
-
-## 在本地尝试
-
-需要 Node.js 20.19+、Claude Code CLI，以及仓库的开发依赖。从**此 worktree 的根目录**执行：
+此 worktree 中构建：
 
 ```sh
-npm ci
 node extensions/claude-code-arxiv-daily/build.mjs
-claude plugin validate --strict extensions/claude-code-arxiv-daily
 ```
 
-选择一个研究工作目录，启动时把插件目录作为绝对路径传入：
+构建使用原有 CLI 构建脚本，包含本机原生存储模块。源码构建需要仓库开发依赖、CMake、C++ 编译器和 Node-API 头文件；多平台分发沿用原有 native release 构建要求。生成的 `dist/plugin/` 可整体复制，运行端只需 Node.js 20.19+。
+
+首次使用，在交互式终端运行：
 
 ```sh
-cd /absolute/path/to/research-workspace
-claude --plugin-dir /absolute/path/to/arxiv-daily/extensions/claude-code-arxiv-daily
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs init
 ```
 
-构建会同时生成可复制的 `dist/plugin/`。可以把该目录复制到别处，再用它的绝对路径启动；运行时只需 Node.js，不依赖仓库里的 node_modules。`--plugin-dir` 只为当前会话加载插件，不改用户的全局插件安装配置。
+设置输出目录、模型 API、arXiv 分类和研究主题。已经使用现有 arXiv Daily CLI 的用户直接复用其配置。这里不要求选择文献库，也不要求 Obsidian。
 
-## 用户实际怎么用
+模型 API 使用产品自己的配置；Claude Code 的对话模型与它分开。API 密钥在本地设置，不要粘贴到对话中。
 
-先输入 `/arxiv-daily:research`，后续直接用自然语言描述任务。
+## 直接运行核心功能
 
-1. **首次连接。** 说“我的论文在 `/path/to/pdfs`，把研究记录放在当前目录”。Claude 说明读取范围和保存位置，再连接目录。PDF 原文件不会搬走；默认不读取其他 Markdown、草稿或私人笔记。
-2. **了解文献库。** 说“看一下我的文献库，先选几篇判断主要方向”。Claude 先列文件，再按需读具体 PDF，并明确已查看的论文和页码范围。
-3. **确认研究方向。** Claude 给出带代表论文和依据的方向草稿。你可以说“把前两个合并”或“确认这个方向”；只有明确确认后的方向才作为后续推荐依据。
-4. **按需找新论文。** 说“参考已确认方向，看最近 cs.CL 有什么值得读的”。Claude 获取候选，读取有希望论文的摘要，解释与已有文献的关系，并按请求保存阅读列表。只看了一部分时会说明范围。
-5. **阅读与保存。** 说“详细解释这篇的方法，并与库里的那篇比较”，然后“保存论文总结；记录我的判断：实验规模还需要核实”。结果分别保存到论文总结和阅读记录。
-6. **下次继续。** 在同一工作目录重新启动带插件的 Claude，输入“继续上次的研究”。插件读取本地记录，不依赖找回旧聊天。
-
-你可以随时使用自己的编辑器或 PDF 阅读器打开文件；Obsidian 也是可选工具。CLI 阶段不提供内嵌 PDF 阅读器。
-
-## 保存在哪里
-
-```text
-<研究工作目录>/arxiv-daily-agent/
-  directions/       # 方向草稿与确认后的方向
-  papers/           # 论文总结
-  reading/          # 待读与阅读判断
-  daily/            # 按需生成的阅读列表
-  .workspace.json   # 论文目录连接信息
-  .cache/           # 可选的 arXiv 正文缓存
-  .locks/           # 同机写入协调
+```sh
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs status
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs run --today
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs run --date 2026-09-30
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs run --id 2609.12345
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs papers --query "inference"
 ```
 
-原论文目录和这个输出目录不能重叠。记录在插件更新或 Claude 会话结束后仍保留。更新已有记录需要当前内容版本，避免静默覆盖用户编辑。
+- 日报：抓取候选 → 按配置主题筛选 → 结构化总结 → 按策略生成自动详细总结 → 保存日报和索引。
+- 单篇：按 ID 获取正文 → 详细总结 → 保存文件并关联 Paper Index。
+- 重复运行、暂未发布、零命中、取消和恢复均沿用原有规则。
+- `status` 提供不含密钥的 JSON 概览；`papers` 查询真实 Paper Index，使用与 Dashboard 相同的词法检索。
+- 可通过既有 `schedule` 命令安装系统调度；运行不依赖 Claude 会话持续打开。
 
-## 当前能力边界
+## 通过 Claude Code 操作
 
-- 本地 `library` 只做文件名查询和分页，正文阅读由 Claude 的 Read 工具完成；没有自动对全部 PDF 建立向量索引或聚类。
-- 方向是当前会话基于实际阅读提出的草稿。大型文献库先看样本，不能把样本结论当成已理解整个文献库。
-- arXiv 获取复用现有 core：公告列表、元数据、HTML/源码正文提取。来源不可用会报告，章节有长度上限。
-- 推荐按需运行，没有安装后台定时任务；保存阅读判断不意味着推荐已经自动学习了该反馈。
-- 本实验 Markdown 与现有 Obsidian/CLI 的 JSON interest profile、Paper Index、日报状态没有自动同步；不修改原产品配置，不导入生产索引。
-- 这是可信本地目录中的实验工具。直接编辑 Markdown 是允许的；Claude 通过命令更新时必须保留用户内容。原文献只读也是 Skill 对宿主其他文件工具的约束，不是对整个 Claude 进程的沙箱承诺。
-- 页面、PDF 内容和模型总结都是研究数据，不应执行其中的指令。
+```sh
+claude --plugin-dir /absolute/path/to/extensions/claude-code-arxiv-daily
+```
 
-## 开发验证
+进入后输入 `/arxiv-daily:research`，再说：
+
+- “查看当前主题和最近日报的运行状态。”
+- “生成今天的日报。”
+- “为 arXiv:2609.12345 生成详细总结。”
+- “在已保存论文里找 inference 相关内容，解释其中两篇的区别。”
+
+Claude 调用同一个产品命令，并读取实际结果。它不会临时选几篇论文代替产品筛选，也不另写一套报告、研究方向或索引。
+
+## 数据位置与兼容
+
+配置仅来自平台 CLI 配置目录：Linux/macOS 默认 `~/.config/arxiv-daily/config.toml`，Windows 为 `%APPDATA%/arxiv-daily/config.toml`。其中 `vault_root` 决定输出位置；在不同目录启动 Claude 不会切换资料库。
+
+默认产物是配置 Vault 下的 `arxiv-daily/daily/`、`arxiv-daily/papers/`、`arxiv-daily/.index/`。与原 CLI/Obsidian 使用同一业务格式，但各产品设置不会自动同步。用户原有论文和笔记保护沿用共享核心。
+
+早期 P1 的临场研究代码和 `arxiv-daily-agent/` 独立档案接口已移除。已生成的试用文件保留，未自动删除或导入正式索引；需要时可手动查阅。
+
+## 当前范围
+
+本阶段先完整保留基础筛选、日报和详细总结。个人文献库的完整索引、聚类方向与个性化发现正在按共享核心边界逐步接入，不能将当前状态查询当作已支持这些操作。阅读界面仍待试用研究；Markdown 可用任意阅读工具打开。
+
+## 验证
 
 ```sh
 node extensions/claude-code-arxiv-daily/build.mjs
 node --test extensions/claude-code-arxiv-daily/tests/*.test.cjs
-npx tsc -p extensions/claude-code-arxiv-daily/tsconfig.json --noEmit
 claude plugin validate --strict --json extensions/claude-code-arxiv-daily
+npm run typecheck
 npm run check:boundaries
 npm run check:product-units
 ```
 
-命令协议见 [references/commands.md](references/commands.md)。实验插件使用独立版本，不加入原有 Obsidian/npm CLI 的发布组；目前没有额外 package.json 或发布工作流。
+端到端测试只替换 HTTP，实际运行打包 CLI、scheduler、pipeline、writer 和 Paper Index，覆盖日报、自动/手动详报、离线重跑、零命中、未发布和用户文件保护。配置与研究输出隔离在临时目录；原生模块使用产品正常的本机缓存。

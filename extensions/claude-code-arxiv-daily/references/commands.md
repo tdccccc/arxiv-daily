@@ -1,38 +1,26 @@
-# Research command reference
+# Product command reference
 
-```text
-node "${CLAUDE_PLUGIN_ROOT}/dist/arxiv-agent.cjs" COMMAND --workspace PATH [--input REQUEST.json]
+The plugin bundles the exact arXiv Daily CLI product build, including native storage and its core dependencies:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/dist/arxiv-daily-cli.cjs" COMMAND [ARGUMENTS]
 ```
 
-The input is one JSON object from `--input` or stdin. `status` needs no fields. Missing input means `{}`. stdout is one JSON result; diagnostics use stderr. Use an absolute workspace consistently. The helper has no model key, background daemon, or implicit global configuration.
+| Command | Behavior |
+|---|---|
+| `init` | Human-operated terminal wizard for CLI TOML; needs an interactive terminal |
+| `status` | Read-only JSON: paths, topics, categories, model readiness, paper count, recent run state; no credentials or endpoints |
+| `run --today` | Full daily workflow for today in the configured timezone |
+| `run --date YYYY-MM-DD` | Full daily workflow for the requested announcement date |
+| `run --id ARXIV_ID [--date YYYY-MM-DD]` | Full detailed-note workflow, including Markdown and Paper Index updates |
+| `papers [--query TEXT] [--offset N] [--limit N]` | JSON from the existing Paper Index; query uses shared Dashboard lexical search; limit 1–100, default 30 |
+| `schedule show` | Inspect the existing scheduling configuration |
+| `schedule install` / `schedule uninstall` | Apply/remove the managed OS schedule, only when requested |
+| `data export --out PATH.zip` / `data import PATH.zip [--yes]` | Existing Vault-data portability workflow, only when requested |
+| `help` | Complete product command help |
 
-| Command | Input | Result |
-|---|---|---|
-| `init` | `library` absolute path; optional `includeMarkdown: true` | Connects once; refuses a different source or scope in an existing workspace |
-| `status` | `{}` | Connected library; saved record descriptors; `confirmedDirections`; unreadable and truncated record groups |
-| `library` | optional `query` (filename substring), `offset` (default 0), `limit` (1–100, default 30) | Paths, file sizes, filename-derived paper keys, evidence depth, `nextOffset`, `inventoryTruncated` |
-| `recent` | `category`; optional `date: YYYY-MM-DD`, `offset`, `limit` | Announcement dates, paginated metadata, `state`, `total`, `nextOffset`; omitted date explicitly selects latest available |
-| `paper` | `id` (modern arXiv ID or arxiv.org URL); optional `fullText: true` | Metadata and abstract; optional extracted sections up to 60,000 characters with 12,000 per section; source and failure details |
-| `save` | `kind`, `slug`, `title`, `body`, `sources`; optional `expectedSha256` for updates | Saved Markdown, path, hash, status; directions are drafts until confirmed |
-| `read` | `kind`, `slug` | Existing Markdown and hash |
-| `confirm-direction` | `slug`, `expectedSha256` | Marks the current direction draft confirmed; invoke only after user acceptance |
+Generation commands use progress messages and a final result line, with status 0 for completed/skipped/done/already-exists, 1 for pending/runtime failure, and 2 for configuration/argument failure. A background process ID is not a completed result. `status` and `papers` print JSON; they do not start generation or require a valid model key to inspect existing data.
 
-`kind` is `direction`, `paper`, `reading`, or `daily`. Slugs use lowercase ASCII letters, digits, hyphens, underscores, or dots; no traversal or reserved device names. A modern arXiv ID is a suitable paper/reading slug and an ISO date is a suitable daily slug. Non-arXiv papers can use a short descriptive slug; retain their actual source path in `sources`.
+Configuration is `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`) on Linux/macOS, or `%APPDATA%\\arxiv-daily\\config.toml` on Windows. `vault_root` selects the output folder. Settings are not discovered from the current directory and are not automatically copied from Obsidian. The old prototype's `--workspace`, `save`, `read`, `library`, and `confirm-direction` interface has been removed.
 
-The Markdown body includes its own heading and readable source links. `sources` is an array of at most 100 source strings, separate from the body. This minimal record format does not independently verify scholarly claims or prove human approval. The skill carries those interaction responsibilities.
-
-Example save request:
-
-```json
-{
-  "kind": "paper",
-  "slug": "2606.12345",
-  "title": "Paper title from the actual source",
-  "body": "# Paper title\n\n## Evidence scope\nAbstract only.\n\n## Summary\nWrite the actual analysis here.\n\n## Sources\nhttps://arxiv.org/abs/2606.12345",
-  "sources": ["arxiv:2606.12345"]
-}
-```
-
-The original library is scanned read-only, excluding symbolic links. `library` does not parse PDF contents; Claude's Read tool handles selected PDFs. The prototype record directory is `<workspace>/arxiv-daily-agent/`, with `directions/`, `papers/`, `reading/`, and `daily/`. `.workspace.json` holds only the source connection; `.cache/` holds optional downloaded source HTML; `.locks/` coordinates writers on this computer.
-
-Do not use this directory as input to the existing Obsidian/CLI data-import tool. There is no automatic profile or index synchronization. Use a trusted local workspace; file validation does not defend against a hostile concurrent process changing paths between checks. File caches and research records can contain private research interests and excerpts.
+Daily reports, detailed notes, Paper Index, run state and checkpoints follow the normal product output layout. Do not directly edit internal JSON, generate replacement reports in chat, or migrate old `arxiv-daily-agent/` records into it. Read the CLI exit status and preserve existing user-authored notes.
