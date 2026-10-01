@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-01T20:08:00+08:00
-updated: 2026-10-01T20:08:00+08:00
-revision: 1
+updated: 2026-10-01T21:22:11+08:00
+revision: 2
 
 ## Outcome
 
@@ -24,7 +24,7 @@ revision: 1
 - strategy: proportionate source/API inspection
 - baseline: core 的 catalog/index/proposer/review/eligibility 与 Obsidian orchestration 现状；明确 Node 缺失的 PDF、embedding、连接与授权适配。
 - check: 将可直接复用、需抽取、需新增适配的边界及测试命令记录在本阶段。
-- [ ] boundary accepted
+- [x] boundary accepted — core承接connection、PDF/embedding纯逻辑、文件识别、daily snapshot与LibraryWorkflow；Obsidian保留宿主加载/UI，Node使用缓存中的独立锁定运行组件。
 
 ### Chunk 2 — Provide the Node library runtime and commands
 
@@ -33,7 +33,7 @@ revision: 1
 - Red: CLI 库命令缺失/无法建立现有 catalog 与索引、方向 proposal/profile 契约；使用真实隔离 PDF fixture 和受控 HTTP/embedding ports。
 - Green: 同一 core 处理识别/索引/方向提议/确认；持久化文档能通过现有 decoder/store 读取；源目录字节保持不变。
 - regression: 原 Obsidian catalog/profile/fulltext 测试、Node adapter、CLI P3 全流程、typecheck/boundaries。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 共享抽取前后Green，新增workflow/CLI/授权/延迟PDF加载均观察到Red→Green；3bdbbe4、bd769cb、d2836f5分开提交。
 
 ### Chunk 3 — Feed confirmed directions into the existing daily workflow
 
@@ -42,9 +42,15 @@ revision: 1
 - Red: 有效方向未进入独立日报过滤或新意解释；无效/未授权方向不得进入模型请求。
 - Green: 手动主题与有效方向组合；同一索引/profile/input 校验和证据约束生效；未配置库仍通过 P3 流程。
 - regression: core personalized filter/novelty、incremental/review、现有每日恢复、CLI/Obsidian 测试。
-- [ ] integration accepted
+- [x] integration accepted — 真实CLI/runtime/scheduler/pipeline/writer/index在受控HTTP下生成完整个性化日报；授权时2篇、未授权时1篇，来源/新颖性写入日报和索引，未授权不调用个性化模型；运行中撤销或改端点会取消真实等待中的HTTP。
 
 ## Phase verification
+
+- CLI完整测试141 passed；core全批次、Node69 tests、Obsidian763 tests分别通过。首次root全量运行唯一失败来自正在调试的新增纵向fixture（SSE/basis/Markdown转义），修正fixture后CLI141全部通过；没有为该测试改生产算法。
+- 本机真实PDF.js 5.4.624 +真实e5 CPU完成4份PDF的CLI扫描、索引和混合检索，0失败，前三结果均为相关主题，源PDF哈希不变。记录位于忽略的 `.artifacts/library-native-smoke/verification.json`。
+- Node22实际解析和模型推理成功；另起Node20.19进程从相同缓存离线解析/推理成功（384维、单位范数）。运行依赖按锁文件准备，保留root Obsidian overrides；不将Node22的验证冒充Node20。
+- 构建、workspace typecheck、boundaries、product-units、官方插件manifest校验和lint通过；lint保留21条既有告警。
+- 未做Windows/macOS真实CPU运行、真实Obsidian桌面交互、大规模性能或真实供应商总结质量验收。同一库的跨宿主并发重建未在此阶段建立保证，用户应单宿主运行库写任务。
 
 - 真实本地文档经过 Node parser；不能用 agent 的抽样阅读冒充索引。
 - 模型是有界业务步骤，agent 会话可缺席；方向确认和阅读处理的权威状态由既有 core 管理。

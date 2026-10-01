@@ -50,3 +50,10 @@
 - change: 6de6d15 新增不输出密钥的 status/papers 查询，复用原有索引/词法检索；e28bd12 直接分发官方 CLI 构建并修改辅助 Skill，删除旧独立档案实现及其专属测试。
 - disposition: 保留既有 P1 用户文件和 Git 历史，不自动迁移；新实现使用 CLI TOML 和原 Vault 数据。fixture 只替换 HTTP，正常 native 模块缓存未改动；不把本次 fixture 验收说成真实供应商质量验证。
 - next: P3 done，P4 active；先核对 Node PDF/embedding 与库连接/授权的复用边界，再补齐可选增强，P3 基础主流程持续作为回归基线。
+
+## 2026-10-01 — note
+
+- evidence: P4完成。共享连接、parser/embedding、snapshot抽取保留原Obsidian测试Green；新LibraryWorkflow和CLI命令/授权/运行中取消经历Red→Green；141个CLI测试、原core/Node/Obsidian回归通过。真实4份PDF经Node PDF.js与e5 CPU索引检索成功且源哈希不变；Node20.19离线重开也通过。
+- change: 3bdbbe4共享核心与宿主包装；bd769cb按需Node运行组件；d2836f5独立CLI库工作流和个性化日报。修复抽取中的延迟PDF引擎加载回归，并修复原授权远程→本地深度/指纹不一致及深度篡改未失效问题。
+- disposition: 原业务schema、模型身份、索引/提议/确认/增量规则保留。Node运行依赖用独立锁文件，不修改Obsidian的空onnx override。真实总结质量、跨平台CPU、多宿主同时改同一库、大规模性能未验证；fixture不冒充这些证据。
+- next: P4 done，P5 active；更新Claude辅助入口说明，做实际宿主调用完整产品任务的验收，最后全量检查与交付。
