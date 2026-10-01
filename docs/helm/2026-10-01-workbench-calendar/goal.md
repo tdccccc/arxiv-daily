@@ -1,9 +1,9 @@
 # Workbench daily calendar
 
-status: active
+status: done
 created: 2026-10-01T23:40:36+08:00
-updated: 2026-10-01T23:40:36+08:00
-revision: 1
+updated: 2026-10-02T00:15:05+08:00
+revision: 2
 owner: /root
 
 ## Intent
@@ -12,10 +12,10 @@ Add a compact daily-report calendar to the local reading workbench, following th
 
 ## Success criteria
 
-- [ ] The daily tab offers month navigation, today, selected-date status and readable markers; paper-note search retains its existing layout.
-- [ ] Selecting a report date opens its Markdown; selecting other dates exposes accurate state and an explicit generation/retry action when the existing workflow permits it.
-- [ ] Month state combines real files and full run history: no matches, ungenerated, running, failed, skipped, missing report and future remain distinct. Browsing never calls a model or changes stored data.
-- [ ] Desktop and collapsible mobile calendars pass browser review; focused tests, relevant regressions and the portable CLI build pass, with screenshots for the user.
+- [x] The daily tab offers month navigation, today, selected-date status and readable markers; paper-note search retains its existing layout.
+- [x] Selecting a report date opens its Markdown; selecting other dates exposes accurate state and an explicit generation/retry action when the existing workflow permits it.
+- [x] Month state combines real files and full run history: no matches, ungenerated, running, failed, skipped, missing report and future remain distinct. Browsing never calls a model or changes stored data.
+- [x] Desktop and collapsible mobile calendars pass browser review; focused tests, relevant regressions and the portable CLI build pass, with screenshots for the user.
 
 ## Non-goals
 
@@ -30,4 +30,4 @@ Add a compact daily-report calendar to the local reading workbench, following th
 
 ## Phases
 
-1. P1 — Calendar navigation, authoritative day states and browser acceptance — status: active
+1. P1 — Calendar navigation, authoritative day states and browser acceptance — status: done

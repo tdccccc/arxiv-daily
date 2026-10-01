@@ -109,6 +109,8 @@ After `init`, run `arxiv-daily ui` to open the local browser reader. The command
 
 Browse daily reports and paper notes, search their titles/authors/IDs/dates, and read existing Markdown with tables, code, images and scientific math. Relative links and unambiguous Obsidian wikilinks navigate between existing reports. Source and PDF buttons open original papers. No reading action changes the original Markdown or calls a model; browser assets and math fonts are embedded in the CLI.
 
+The daily tab includes a month calendar with today navigation, date selection and a collapsible mobile view. Existing reports open directly. Other days show their persisted state and offer a date-prefilled generation/retry form when available. Completed zero-match runs remain distinct from ungenerated days, and completed runs whose files are missing do not offer a misleading rerun. Dates use the configured product timezone; browsing does not infer arXiv publication availability or trigger generation.
+
 Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. The settings dialog displays non-secret configuration; edit settings through the terminal wizard or CLI TOML, then restart the workbench. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Library indexing/review remains available through the commands below.
 
 This workbench is currently available in the experimental Claude integration worktree; use its locally built bundle until published.

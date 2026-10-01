@@ -16,6 +16,8 @@ Use the bundled product executable: `${CLAUDE_PLUGIN_ROOT}/dist/arxiv-daily-cli.
 
 The workbench reads existing Markdown from the configured daily/paper directories. It renders headings, tables, code, images, scientific formulas and existing report links. Reading triggers no model request. The settings dialog shows current non-secret settings; settings changes use the existing terminal workflow and require restarting the workbench.
 
+The daily tab includes a month calendar. Selecting an existing report opens it; other dates show their actual file/run state and, when available, an explicit date-prefilled generation or retry form. Calendar inspection never starts generation. Zero-match completion, missing report files and ungenerated dates have different meanings; do not infer publication availability from an empty date.
+
 Generation buttons invoke the original CLI pipeline, with its own model API, output protection and optional configured email delivery. Do not generate substitute Markdown in the conversation. Personal-library indexing/review remains available through `/arxiv-daily:research` and the documented product commands.
 
 Keep the server running while the user reads. To stop it when asked, send one SIGINT to the owned background process and wait for normal shutdown. Do not delete product files or kill unrelated processes. The current workbench is a reader, not a Markdown editor or a full Obsidian host.
