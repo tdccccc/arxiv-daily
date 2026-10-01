@@ -355,6 +355,7 @@ function cloneSettings(settings: PluginSettings): PluginSettings {
     email: { ...settings.email },
     embedding: { ...settings.embedding },
     pdfParserSidecar: { ...settings.pdfParserSidecar },
+    onboarding: { ...settings.onboarding },
   };
 }
 

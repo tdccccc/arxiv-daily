@@ -62,4 +62,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
     parseUrl: "http://127.0.0.1:5001/v1/parse",
   },
+  onboarding: {
+    guideCompleted: false,
+  },
 };

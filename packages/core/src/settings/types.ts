@@ -118,6 +118,17 @@ export interface EmailSettings {
   hostedBaseUrl?: string;
 }
 
+/** First-run setup guide state (ADR-less; see plugin/src/onboarding.ts). */
+export interface OnboardingSettings {
+  /**
+   * Set once every guide milestone (ready to run, first report, daily
+   * schedule) has been true at the same time. Once set, the guide never
+   * shows again, even if the user later disables the schedule or breaks
+   * their configuration.
+   */
+  guideCompleted: boolean;
+}
+
 export interface PluginSettings {
   llm: LlmSettings;
   arxiv: ArxivSettings;
@@ -128,6 +139,7 @@ export interface PluginSettings {
   email: EmailSettings;
   embedding: EmbeddingSettings;
   pdfParserSidecar: LocalPdfParserSidecarSettings;
+  onboarding: OnboardingSettings;
 }
 
 export type RunStatus =

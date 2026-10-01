@@ -15,10 +15,39 @@ export interface SetupStatus {
   schedulerReasons: string[];
 }
 
-export function shouldRenderSetupGuide(
+/** True once every guide milestone is complete at the same time. */
+export function isSetupComplete(
   status: Pick<SetupStatus, "readyToRun" | "firstReportComplete" | "scheduleEnabled">,
 ): boolean {
-  return !status.readyToRun || !status.firstReportComplete || !status.scheduleEnabled;
+  return status.readyToRun && status.firstReportComplete && status.scheduleEnabled;
+}
+
+/**
+ * The guide is for first-time setup only: it shows until every milestone is
+ * complete at once, then stays hidden for good (tracked by the persisted
+ * `settings.onboarding.guideCompleted` marker), even if the user later turns
+ * the schedule off or their configuration becomes invalid again.
+ */
+export function shouldRenderSetupGuide(
+  status: Pick<SetupStatus, "readyToRun" | "firstReportComplete" | "scheduleEnabled">,
+  guideCompleted: boolean,
+): boolean {
+  if (guideCompleted) return false;
+  return !isSetupComplete(status);
+}
+
+/**
+ * Persist the "guide completed" marker the first time all milestones are
+ * true at once. Idempotent; returns whether it just flipped from false to
+ * true so a caller can show a one-time completion confirmation.
+ */
+export function markSetupGuideCompleteIfDone(
+  settings: PluginSettings,
+  status: Pick<SetupStatus, "readyToRun" | "firstReportComplete" | "scheduleEnabled">,
+): boolean {
+  if (settings.onboarding.guideCompleted || !isSetupComplete(status)) return false;
+  settings.onboarding.guideCompleted = true;
+  return true;
 }
 
 export function getSetupStatus(

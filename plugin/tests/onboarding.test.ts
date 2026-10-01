@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { getSetupStatus, shouldRenderSetupGuide } from "../src/onboarding";
+import {
+  getSetupStatus,
+  markSetupGuideCompleteIfDone,
+  shouldRenderSetupGuide,
+} from "../src/onboarding";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import type { PluginSettings } from "@arxiv-daily/core";
 
 type SettingsOverrides = Omit<
   Partial<PluginSettings>,
-  "llm" | "arxiv" | "output" | "schedule" | "advanced"
+  "llm" | "arxiv" | "output" | "schedule" | "advanced" | "onboarding"
 > & {
   llm?: Partial<PluginSettings["llm"]>;
   arxiv?: Partial<PluginSettings["arxiv"]>;
   output?: Partial<PluginSettings["output"]>;
   schedule?: Partial<PluginSettings["schedule"]>;
   advanced?: Partial<PluginSettings["advanced"]>;
+  onboarding?: Partial<PluginSettings["onboarding"]>;
 };
 
 function makeSettings(overrides: SettingsOverrides = {}): PluginSettings {
@@ -23,6 +28,9 @@ function makeSettings(overrides: SettingsOverrides = {}): PluginSettings {
     output: { ...DEFAULT_SETTINGS.output, ...(overrides.output ?? {}) },
     schedule: { ...DEFAULT_SETTINGS.schedule, ...(overrides.schedule ?? {}) },
     advanced: { ...DEFAULT_SETTINGS.advanced, ...(overrides.advanced ?? {}) },
+    // Cloned (not just spread) so tests that flip the marker in place
+    // cannot leak the mutation back into DEFAULT_SETTINGS.
+    onboarding: { ...DEFAULT_SETTINGS.onboarding, ...(overrides.onboarding ?? {}) },
   };
 }
 
@@ -86,10 +94,10 @@ describe("getSetupStatus", () => {
     });
 
     expect(beforeFirstReport.firstReportComplete).toBe(false);
-    expect(shouldRenderSetupGuide(beforeFirstReport)).toBe(true);
+    expect(shouldRenderSetupGuide(beforeFirstReport, false)).toBe(true);
     expect(afterFirstReport.firstReportComplete).toBe(true);
     expect(afterFirstReport.latestCompletedReportDate).toBe("2026-07-15");
-    expect(shouldRenderSetupGuide(afterFirstReport)).toBe(true);
+    expect(shouldRenderSetupGuide(afterFirstReport, false)).toBe(true);
   });
 
   it("keeps the guide until daily runs are turned on", () => {
@@ -117,19 +125,21 @@ describe("getSetupStatus", () => {
     );
 
     expect(paused.scheduleEnabled).toBe(false);
-    expect(shouldRenderSetupGuide(paused)).toBe(true);
+    expect(shouldRenderSetupGuide(paused, false)).toBe(true);
     expect(running.scheduleEnabled).toBe(true);
-    expect(shouldRenderSetupGuide(running)).toBe(false);
+    expect(shouldRenderSetupGuide(running, false)).toBe(false);
   });
 
-  it("returns the guide when configuration becomes invalid after a report", () => {
+  it("keeps the guide hidden when configuration becomes invalid after completion", () => {
+    // Once the guide has completed (marker persisted), a later report that
+    // reveals a broken configuration must not resurrect the full guide.
     const status = getSetupStatus(makeSettings(), {
       "2026-07-15": { status: "completed", lastAttempt: 1, attempts: 1 },
     });
 
     expect(status.firstReportComplete).toBe(true);
     expect(status.readyToRun).toBe(false);
-    expect(shouldRenderSetupGuide(status)).toBe(true);
+    expect(shouldRenderSetupGuide(status, true)).toBe(false);
   });
 
   it("keeps incomplete topics actionable", () => {
@@ -174,5 +184,65 @@ describe("getSetupStatus", () => {
 
     expect(status.topicsReady).toBe(false);
     expect(status.reasons.join("; ")).toMatch(/duplicate topic tag/i);
+  });
+});
+
+describe("setup guide completion marker", () => {
+  const topics = [{
+    id: "topic",
+    name: "Compact objects",
+    tag: "compact-objects",
+    description: "Neutron stars and black holes",
+    detail: false,
+  }];
+  const runState = {
+    "2026-07-15": { status: "completed" as const, lastAttempt: 1, attempts: 1 },
+  };
+  function completeSettings(): PluginSettings {
+    return makeSettings({
+      llm: { apiKey: "sk-test" },
+      arxiv: { topics },
+      schedule: { enabled: true },
+    });
+  }
+
+  it("stays hidden once complete even after the schedule is turned off", () => {
+    const status = getSetupStatus(completeSettings(), runState);
+    expect(status.readyToRun && status.firstReportComplete && status.scheduleEnabled).toBe(true);
+
+    const afterScheduleOff = getSetupStatus(
+      makeSettings({ llm: { apiKey: "sk-test" }, arxiv: { topics } }),
+      runState,
+    );
+
+    expect(afterScheduleOff.scheduleEnabled).toBe(false);
+    expect(shouldRenderSetupGuide(afterScheduleOff, true)).toBe(false);
+  });
+
+  it("sets the marker the first time every milestone is true at once", () => {
+    const settings = completeSettings();
+    const status = getSetupStatus(settings, runState);
+
+    expect(settings.onboarding.guideCompleted).toBe(false);
+    expect(markSetupGuideCompleteIfDone(settings, status)).toBe(true);
+    expect(settings.onboarding.guideCompleted).toBe(true);
+  });
+
+  it("does not re-flip or report a change once the marker is already set", () => {
+    const settings = completeSettings();
+    settings.onboarding.guideCompleted = true;
+    const status = getSetupStatus(settings, runState);
+
+    expect(markSetupGuideCompleteIfDone(settings, status)).toBe(false);
+    expect(settings.onboarding.guideCompleted).toBe(true);
+  });
+
+  it("leaves the marker unset while any milestone is still incomplete", () => {
+    const settings = makeSettings({ llm: { apiKey: "sk-test" }, arxiv: { topics } });
+    const status = getSetupStatus(settings, runState);
+
+    expect(status.scheduleEnabled).toBe(false);
+    expect(markSetupGuideCompleteIfDone(settings, status)).toBe(false);
+    expect(settings.onboarding.guideCompleted).toBe(false);
   });
 });

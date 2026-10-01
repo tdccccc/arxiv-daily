@@ -939,6 +939,42 @@ describe("plugin settings reload lifecycle", () => {
     expect(loaded.settings.schedule.runUntilLocal).toBe("legacy-value");
   });
 
+  it("marks the setup guide complete on load for upgrading users already past every milestone", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        llm: { apiKey: "sk-test", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-v4-pro" },
+        arxiv: {
+          category: "astro-ph",
+          categories: ["astro-ph"],
+          topics: [{
+            id: "topic",
+            name: "Compact objects",
+            tag: "compact-objects",
+            description: "Neutron stars and black holes",
+            detail: false,
+          }],
+          timezone: "UTC",
+        },
+        schedule: { enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00", tickIntervalMin: 20 },
+      },
+      runState: {
+        "2026-07-15": { status: "completed", lastAttempt: 1, attempts: 1 },
+      },
+    });
+
+    expect(loaded.settings.onboarding.guideCompleted).toBe(true);
+  });
+
+  it("leaves the setup guide marker unset for users still mid-setup", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        arxiv: { category: "astro-ph", categories: ["astro-ph"], topics: [], timezone: "UTC" },
+      },
+    });
+
+    expect(loaded.settings.onboarding.guideCompleted).toBe(false);
+  });
+
   it("keeps plugin, scheduler, and history on the old store when reload is rejected during an active pipeline", async () => {
     const oldStore = makeStateStore();
     await oldStore.load();

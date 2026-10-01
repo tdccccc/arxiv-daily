@@ -307,7 +307,7 @@ describe("wired getSettingDefinitions", () => {
 
   it("names guide sections as they appear on the page", () => {
     const { tab } = makeTab();
-    const text = tab.createSetupGuide().textContent ?? "";
+    const text = tab.createSetupGuide()?.textContent ?? "";
     expect(text).toContain("under LLM");
     expect(text).toContain("under arXiv categories");
     expect(text).not.toContain("under AI model");
@@ -1464,7 +1464,7 @@ describe("topic tags and blocked first report", () => {
 
     const guide = tab.createSetupGuide();
     const firstReportStep = Array.from(
-      guide.querySelectorAll(".arxiv-daily-setup__item"),
+      guide?.querySelectorAll(".arxiv-daily-setup__item") ?? [],
     ).find((item) => item.textContent?.includes("Generate your first report"));
 
     expect(
@@ -1792,8 +1792,15 @@ describe("declarative setup guide refresh after setup", () => {
     return made;
   }
 
-  it("leaves the page alone while the guide stays hidden", () => {
+  it("shows the completion summary once, persists the marker, then leaves the page alone", () => {
     const { tab, settings } = completeSetup();
+    // First evaluation: every milestone just became true at once, so the
+    // one-time completion summary still shows and the marker gets set.
+    expect(tab.shouldShowSetupGuide()).toBe(true);
+    const guide = tab.createSetupGuide();
+    expect(guide?.className).toContain("arxiv-daily-setup--complete");
+    expect(settings.onboarding.guideCompleted).toBe(true);
+
     const refresh = vi.spyOn(tab, "refreshSettings");
     expect(tab.shouldShowSetupGuide()).toBe(false);
 
@@ -1803,14 +1810,17 @@ describe("declarative setup guide refresh after setup", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("re-renders once when the guide has to come back", () => {
+  it("does not bring the full guide back once completed; a compact warning explains a later break instead", () => {
     const { tab, settings } = completeSetup();
-    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    tab.createSetupGuide(); // completes and persists the marker
+    expect(settings.onboarding.guideCompleted).toBe(true);
 
     settings.arxiv.topics[0]!.description = "";
-    tab.refreshSetupGuide();
+    const guide = tab.createSetupGuide();
 
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(guide).not.toBeNull();
+    expect(guide?.querySelector(".arxiv-daily-setup__list")).toBeNull();
+    expect(guide?.textContent).toMatch(/description is empty/i);
   });
 });
 

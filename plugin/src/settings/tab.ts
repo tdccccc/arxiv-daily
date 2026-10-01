@@ -41,7 +41,12 @@ import {
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
-import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
+import {
+  getSetupStatus,
+  isSetupComplete,
+  markSetupGuideCompleteIfDone,
+  type SetupStatus,
+} from "../onboarding";
 import { openDashboardView, refreshOpenDashboardViews } from "../dashboard/view";
 import { redactText } from "@arxiv-daily/core";
 import {
@@ -2104,13 +2109,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (guide) containerEl.appendChild(guide);
   }
 
+  /**
+   * Whether the setup-guide row belongs in the settings page at all: always
+   * true before the guide has ever completed (covers both the step-by-step
+   * list and the one-time completion summary), and after that only true if
+   * something is now broken and needs a compact warning (see
+   * `createConfigurationWarning`).
+   */
   public shouldShowSetupGuide(): boolean {
-    return shouldRenderSetupGuide(
-      getSetupStatus(
-        this.plugin.settings,
-        this.plugin.stateStore.snapshot(),
-      ),
+    const status = getSetupStatus(
+      this.plugin.settings,
+      this.plugin.stateStore.snapshot(),
     );
+    if (!this.plugin.settings.onboarding.guideCompleted) return true;
+    return !status.readyToRun || status.schedulerReasons.length > 0;
   }
 
   /** Remember the host row so the guide can update without replacing active inputs. */
@@ -2147,18 +2159,66 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  public createSetupGuide(): HTMLElement {
+  /**
+   * Set the persisted "guide completed" marker the moment every milestone is
+   * true at once, and flush it to disk. A failed save is reported the same
+   * way other in-place field edits are (the draft/marker is kept locally).
+   */
+  private persistSetupGuideCompletion(status: SetupStatus): boolean {
+    if (!markSetupGuideCompleteIfDone(this.plugin.settings, status)) return false;
+    void this.plugin.saveSettings().catch((error) => {
+      this.reportActionError("save setup guide completion", error);
+    });
+    return true;
+  }
+
+  /**
+   * Once the guide is retired, an already-onboarded user who later breaks
+   * their configuration (or a scheduler setting) would otherwise get no
+   * explanation anywhere on the settings page. Reuse the same compact
+   * details disclosure the guide used, standalone, only while something is
+   * actually wrong.
+   */
+  private createConfigurationWarning(status: SetupStatus): HTMLElement | null {
+    if (status.readyToRun && status.schedulerReasons.length === 0) return null;
+    const warning = this.containerEl.createEl("section", {
+      cls: "arxiv-daily-setup",
+      attr: { "aria-labelledby": "arxiv-daily-setup-title" },
+    });
+    warning.detach();
+    warning.createDiv({
+      cls: "arxiv-daily-setup__title",
+      text: "Configuration needs attention",
+      attr: {
+        id: "arxiv-daily-setup-title",
+        role: "heading",
+        "aria-level": "2",
+      },
+    });
+    this.renderConfigurationDetails(warning, [...status.reasons, ...status.schedulerReasons]);
+    return warning;
+  }
+
+  public createSetupGuide(): HTMLElement | null {
     const status = getSetupStatus(
       this.plugin.settings,
       this.plugin.stateStore.snapshot(),
     );
+
+    // Once the guide has completed once, it is retired for good; only a
+    // compact warning (if anything is broken) may still appear.
+    if (this.plugin.settings.onboarding.guideCompleted) {
+      return this.createConfigurationWarning(status);
+    }
+
     const guide = this.containerEl.createEl("section", {
       cls: "arxiv-daily-setup",
       attr: { "aria-labelledby": "arxiv-daily-setup-title" },
     });
     guide.detach();
 
-    if (!shouldRenderSetupGuide(status)) {
+    if (isSetupComplete(status)) {
+      this.persistSetupGuideCompletion(status);
       guide.addClass("arxiv-daily-setup--complete");
       const summary = guide.createDiv({
         cls: "arxiv-daily-setup__complete-summary",
