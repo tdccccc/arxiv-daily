@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-01T22:53:43+08:00
-updated: 2026-10-01T22:53:43+08:00
-revision: 1
+updated: 2026-10-01T23:03:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ Implement in `apps/cli/src/workbench/`, preserving workspace boundaries. Use mar
 - Red / baseline signal: `npm exec --workspace apps/cli -- vitest run --config vitest.config.mts tests/workbench-markdown.test.ts`; missing rendering contract, then formatting/link/math assertions fail against minimal surface.
 - Green check: same command passes for generated report formats, frontmatter, scientific math, stable headings, links, code and untrusted source content.
 - regression checks: CLI typecheck and focused inspection tests.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — renderer behavior Red observed; 8 renderer tests and CLI typecheck pass.
 
 ### Chunk 2 — Scoped read service and product actions
 
@@ -37,7 +37,7 @@ Implement in `apps/cli/src/workbench/`, preserving workspace boundaries. Use mar
 - Red / baseline signal: HTTP integration tests in `tests/workbench-server.test.ts` fail for missing document API, protected local-file reads and action dispatch.
 - Green check: real HTTP requests against temporary output folders pass; read-only byte snapshots remain unchanged; generation callback is explicit and serialized.
 - regression checks: CLI workspace tests, boundary and product-unit checks.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — HTTP 404 baseline failed 7 tests as expected; all 7 HTTP tests pass. Full CLI: 156 tests; boundaries and product inventory pass.
 
 ## Phase verification
 

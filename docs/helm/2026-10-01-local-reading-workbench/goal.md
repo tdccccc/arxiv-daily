@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-01T22:53:43+08:00
-updated: 2026-10-01T22:53:43+08:00
-revision: 1
+updated: 2026-10-01T23:03:00+08:00
+revision: 2
 owner: /root
 
 ## Intent
@@ -33,5 +33,5 @@ Give the independently running arXiv Daily product a browser reading surface ope
 
 ## Phases
 
-1. P1 — Safe local document and rendering APIs over existing product outputs — status: active
-2. P2 — Packaged reading UI and Claude launch entry accepted in a real browser — status: pending
+1. P1 — Safe local document and rendering APIs over existing product outputs — status: done
+2. P2 — Packaged reading UI and Claude launch entry accepted in a real browser — status: active
