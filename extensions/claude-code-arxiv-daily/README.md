@@ -1,5 +1,7 @@
 # arXiv Daily for Claude Code CLI — 实验版
 
+> 2026-10-01 方案调整：以下内容描述已验证的 P1 原型。当前目标已改为独立复用原有 arXiv 筛选、日报/详细总结与文献库核心，agent 仅作辅助入口；P1 的独立 Markdown 方向档案和临场筛选流程不再作为正式方案扩展。实施状态见 [goal.md](../../docs/helm/2026-10-01-claude-code-research-plugin/goal.md)。
+
 在 Claude Code 中查阅本地论文和 arXiv 资料，保存研究方向、论文总结和阅读判断，下次会话继续使用。无需 Obsidian，也无需配置另一套模型 API；分析使用当前 Claude 会话。
 
 这是 CLI 工作流验证版。文献库目录保持只读，结果保存成普通 Markdown。完整阅读界面的形态仍待试用后决定。

@@ -8,7 +8,7 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 |---|---|
 | **Plugin product** | The Obsidian-facing product: settings UI, Dashboard, in-app scheduler while Obsidian is open. |
 | **CLI product** | The headless one-shot product for servers, cron, and long-running machines. Same pipeline engine; separate configuration and UX. |
-| **Claude Code integration** | The experimental research workflow used inside Claude Code. The researcher can begin with a local literature directory; Obsidian is optional. Research results persist independently of the conversation. |
+| **Claude Code integration** | An auxiliary conversational entry to arXiv Daily's established paper filtering, daily reports, paper notes, and library-guided discovery. The product works independently of an active agent conversation and does not require Obsidian. |
 | **Host** | A composition root that wires ports (HTTP, storage, etc.) and invokes core. Plugin and CLI are two hosts, not two business cores. |
 | **Core** | Shared pipeline, digest, delivery, index, and validation logic used by both products. |
 
