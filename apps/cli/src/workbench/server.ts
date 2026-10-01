@@ -48,11 +48,13 @@ export async function startWorkbench(options: WorkbenchOptions) {
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
-    if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin) || req.headers["sec-fetch-site"] === "cross-site") throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
+    if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
     const url = new URL(req.url || "/", origin);
     if (!url.pathname.startsWith(prefix)) throw new WorkbenchError(404, "请使用启动时显示的工作台链接。");
     const route = url.pathname.slice(prefix.length);
     const method = req.method || "GET";
+    const landing = method === "GET" && (route === "" || route === "index.html");
+    if (req.headers["sec-fetch-site"] === "cross-site" && !landing) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
     if (method === "GET" && route === "api/documents") {
       const kind = url.searchParams.get("kind") || "all";

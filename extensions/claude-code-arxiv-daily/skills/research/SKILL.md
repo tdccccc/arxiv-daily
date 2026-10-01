@@ -34,6 +34,7 @@ Existing valid notes are reused. User-authored content and conflicts are protect
 
 ## Find, read, and explain results
 
+- When the user wants a reading interface, invoke `/arxiv-daily:open` or follow its skill instructions to start the bundled `ui` command in the background and provide its actual Workbench URL. This displays existing Markdown in the local browser; do not create an ad-hoc HTML copy of their reports.
 - Use `papers --query "search terms"` to search the real Paper Index. Use `--offset`/`--limit` to paginate; query-time search makes no network or model request.
 - `papers` searches discovered/saved report entries; `library search` searches the connected PDF library's full-text index. Use the scope matching the user's question and state which collection supplied the results.
 - `status` gives output directories and recent run states. `papers` supplies existing paper paths and daily-report links. Resolve relative paths against its reported `vaultRoot`, not the shell cwd.

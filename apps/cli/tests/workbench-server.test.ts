@@ -92,6 +92,9 @@ it("requires the launch capability, correct Host and same-origin browser request
   expect(html.headers.get("referrer-policy")).toBe("no-referrer");
   expect(html.headers.get("access-control-allow-origin")).toBeNull();
   expect((await get("api/status")).headers.get("cache-control")).toBe("no-store");
+  // Users may click their private launch URL from a chat website.
+  expect((await get("", { headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" } })).status).toBe(200);
+  expect((await get("api/status", { headers: { "Sec-Fetch-Site": "cross-site" } })).status).toBe(403);
 });
 
 it("shows safe configuration and empty / missing data without calling a model", async () => {

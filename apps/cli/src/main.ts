@@ -24,6 +24,7 @@ import { runUpdate } from "./update-cmd";
 import { getCliVersion } from "./version";
 import { inspectPapers, inspectProduct } from "./inspect-cmd";
 import { runCliLibrary } from "./library-cmd";
+import { runWorkbench } from "./workbench/launch";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -66,6 +67,7 @@ export interface RunCliOptions {
     import?: typeof dataImport;
   };
   update?: typeof runUpdate;
+  ui?: typeof runWorkbench;
   isTTY?: boolean;
 }
 
@@ -73,6 +75,7 @@ type CliCommand =
   | { name: "help" }
   | { name: "init" }
   | { name: "status" }
+  | { name: "ui"; port: number; open: boolean }
   | { name: "papers"; query: string; offset: number; limit: number }
   | { name: "library"; args: string[] }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
@@ -85,6 +88,7 @@ type CliCommand =
 const USAGE = `Usage:
   arxiv-daily init
   arxiv-daily status
+  arxiv-daily ui [--port PORT] [--no-open]
   arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
   arxiv-daily library connect PATH
   arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
@@ -163,6 +167,9 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     if (parsed.name === "status") {
       writeLine(io.stdout, JSON.stringify(await inspectProduct(config)));
       return 0;
+    }
+    if (parsed.name === "ui") {
+      return await (opts.ui ?? runWorkbench)(config, io, { port: parsed.port, open: parsed.open, env });
     }
     if (parsed.name === "papers") {
       writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
@@ -314,6 +321,24 @@ function parseCli(argv: string[]): CliCommand {
   if (!commandName || commandName === "help") return { name: "help" };
   if (commandName === "init") return { name: "init" };
   if (commandName === "library") return { name: "library", args: commandArgs };
+  if (commandName === "ui") {
+    let port = 0;
+    let open = true;
+    let hasPort = false;
+    for (let i = 0; i < commandArgs.length; i++) {
+      const flag = commandArgs[i];
+      if (flag === "--no-open") { open = false; continue; }
+      if (flag === "--port" && !hasPort) {
+        const value = commandArgs[++i];
+        if (!value || !/^\d+$/.test(value) || Number(value) > 65535) throw new Error("ui --port requires an integer from 0 to 65535");
+        port = Number(value);
+        hasPort = true;
+        continue;
+      }
+      throw new Error("ui accepts --port PORT and --no-open only");
+    }
+    return { name: "ui", port, open };
+  }
   if (commandName === "status") {
     if (commandArgs.length) throw new Error("status takes no arguments");
     return { name: "status" };
