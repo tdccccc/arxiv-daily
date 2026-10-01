@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-01T23:03:00+08:00
-updated: 2026-10-01T23:03:00+08:00
-revision: 1
+updated: 2026-10-01T23:27:43+08:00
+revision: 2
 
 ## Outcome
 
@@ -32,7 +32,7 @@ Interaction thesis: restrained document transition, clear list hover/selection a
 - Red / baseline signal: DOM tests fail to show documents, navigate links, surface API errors or dispatch explicit jobs against an empty UI.
 - Green check: DOM tests using service-shaped fixtures pass for list/search/read/link navigation/settings/run states and stale-response handling.
 - regression checks: renderer/server tests, CLI typecheck; actual browser checks for typography, math fonts, narrow layout and keyboard navigation.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — UI Red observed, 8 UI tests pass; Chromium desktop and 360/390px reading checks pass.
 
 ### Chunk 2 — Portable launch and existing pipeline integration
 
@@ -41,7 +41,7 @@ Interaction thesis: restrained document transition, clear list hover/selection a
 - Red / baseline signal: CLI `ui` tests return unknown command; package test fails to launch a standalone copied CLI / load embedded assets.
 - Green check: CLI dispatch and copied-bundle process tests pass; explicit UI actions use the existing run command with correct environment/cancellation.
 - regression checks: CLI tests, existing plugin independent-process tests, workspace typechecks/build/boundaries/product inventory and strict Claude plugin validation.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — CLI and standalone-package Red observed; 168 CLI tests, 7 plugin tests, and the independent Node 20.19 workbench test pass.
 
 ## Phase verification
 
@@ -53,3 +53,10 @@ Interaction thesis: restrained document transition, clear list hover/selection a
 
 - If launch requires repository-only paths or remotely hosted frontend assets, correct packaging before acceptance.
 - If an action needs a duplicate pipeline, preserve the CLI dispatch boundary rather than reimplementing it in the browser.
+
+## Acceptance evidence
+
+- Workspace build and typechecks, boundary/product inventory, Obsidian submission and strict Claude plugin validation passed. Lint passed with 21 existing warnings.
+- Browser acceptance used real headless Chromium because this environment has no X server. Verified daily-to-paper navigation, Markdown/math/local image rendering, local font loading, metadata search, settings without credentials, generation completion with updated list, responsive reading and return-to-list. Normal navigation on the final build logged zero browser errors.
+- The browser-generated fixture daily completed with two selected papers and an automatic detailed note through the original CLI. All four pre-existing Markdown fixtures stayed byte-for-byte unchanged. Real provider quality, native browser-opening on Windows/macOS, and a fresh conversational Claude invocation of the new open skill were not run; host manifest validation and actual CLI/browser startup were verified.
+- Logs: `.artifacts/workbench-final-cli.log`, `workbench-final-package.log`, `workbench-node20.log`, `workbench-typecheck.log`; browser/data evidence in `.artifacts/workbench-demo/`. Screenshots in `output/playwright/`.

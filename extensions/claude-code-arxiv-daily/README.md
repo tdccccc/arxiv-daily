@@ -1,4 +1,4 @@
-# arXiv Daily for Claude Code CLI — 核心流程试验版
+# arXiv Daily for Claude Code CLI — 本地阅读工作台
 
 独立运行 arXiv Daily 原有的论文筛选、日报与详细总结，再通过 Claude Code 辅助操作。**没有个人文献库也能开始使用。** 模型调用、筛选、总结、索引、运行状态和断点恢复由原有业务核心管理。
 
@@ -21,6 +21,24 @@ node /absolute/plugin/path/dist/arxiv-daily-cli.cjs init
 设置输出目录、模型 API、arXiv 分类和研究主题。已经使用现有 arXiv Daily CLI 的用户直接复用其配置。这里不要求选择文献库，也不要求 Obsidian。
 
 模型 API 使用产品自己的配置；Claude Code 的对话模型与它分开。API 密钥在本地设置，不要粘贴到对话中。
+
+## 打开阅读界面
+
+初始化后直接运行：
+
+```sh
+node /absolute/plugin/path/dist/arxiv-daily-cli.cjs ui
+```
+
+命令启动本地服务并尝试打开默认浏览器。也可点击终端输出的完整 `Workbench:` 链接。保持进程运行，结束阅读后按 Ctrl+C 停止。`ui --no-open` 只显示链接；`ui --port 8123` 指定端口，默认自动选择空闲端口。服务只监听 `127.0.0.1`。
+
+- 左侧切换日报 / 论文总结，按标题、作者、arXiv ID 或日期搜索。
+- 右侧阅读 Markdown 渲染的正文：标题、表格、代码、图片和科学公式；目录可跳转章节，日报链接可打开已有论文总结。
+- “Markdown”打开原始文本；原文 / PDF 按钮打开论文来源，存在产品输出目录下的本地 PDF 时优先读取本地文件。阅读不会修改原文件。
+- 页面可以发起日报和单篇详细总结，显示进度、结果和取消操作。它调用同一 CLI 流程；启用的邮件投递配置也会生效。
+- 设置界面显示当前主题、模型和输出目录；修改仍通过终端 `init` 向导或 CLI TOML 完成，之后重启工作台。
+
+界面、样式与公式字体随插件打包，读取本地文档不调用模型，也不依赖 CDN。外链图片与论文原文仍需要相应网络连接。首版提供阅读，不提供 Markdown 编辑、双向链接图谱或完整 Obsidian 插件能力；个人文献库的索引和方向审核继续使用已有命令。
 
 ## 直接运行核心功能
 
@@ -52,6 +70,8 @@ claude --plugin-dir /absolute/path/to/extensions/claude-code-arxiv-daily
 - “在已保存论文里找 inference 相关内容，解释其中两篇的区别。”
 
 Claude 调用同一个产品命令，并读取实际结果。它不会临时选几篇论文代替产品筛选，也不另写一套报告、研究方向或索引。
+
+想用界面时，输入 `/arxiv-daily:open`，或说“打开论文阅读工作台”。Claude 会在后台启动本地服务并返回实际链接。此时“已启动”表示服务就绪，后台进程会持续运行；生成任务仍以页面或命令的实际完成结果为准。
 
 ## 数据位置与兼容
 
@@ -92,7 +112,7 @@ node "$ARXIV_DAILY_CLI" library search --query "你关心的具体问题"
 
 `prepare` 将锁定的 PDF.js 和本地推理依赖装到产品缓存；选择远程 embedding 时不安装本地 CPU 组件。本地 e5 模型权重在首次使用时下载，后续复用缓存。已在 Linux Node 20.19 和 Node 22 验证实际 PDF 解析和 CPU 推理；Windows/macOS CPU运行尚待验收。
 
-阅读界面仍待后续研究，Markdown 可用任意阅读工具打开。同一输出目录的文献库重建/审核请单宿主执行；本次没有建立 Obsidian 与 CLI 同时重建同一库的并发保证。
+Markdown 可以在工作台、Obsidian 或其他阅读工具中查看。同一输出目录的文献库重建/审核请单宿主执行；本次没有建立 Obsidian 与 CLI 同时重建同一库的并发保证。
 
 ## 验证
 

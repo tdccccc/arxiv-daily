@@ -10,6 +10,7 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/arxiv-daily-cli.cjs" COMMAND [ARGUMENTS]
 |---|---|
 | `init` | Human-operated terminal wizard for CLI TOML; needs an interactive terminal |
 | `status` | Read-only JSON: paths, topics, categories, model readiness, paper count, recent run state; no credentials or endpoints |
+| `ui [--port PORT] [--no-open]` | Local browser reader; opens the browser, prints the full private URL, and stays running until SIGINT/SIGTERM. Port 0 (default) selects an available loopback port |
 | `run --today` | Full daily workflow for today in the configured timezone |
 | `run --date YYYY-MM-DD` | Full daily workflow for the requested announcement date |
 | `run --id ARXIV_ID [--date YYYY-MM-DD]` | Full detailed-note workflow, including Markdown and Paper Index updates |

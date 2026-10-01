@@ -78,6 +78,7 @@ Remove those yourself if you want a full cleanup.
 ```text
 arxiv-daily init
 arxiv-daily status
+arxiv-daily ui [--port PORT] [--no-open]
 arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
 arxiv-daily library connect PATH
 arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
@@ -101,6 +102,16 @@ arxiv-daily help
 - **`status`** — JSON overview of the configured output paths, topics, model readiness, paper count, and latest run states. Does not start generation or return model endpoints/credentials.
 - **`papers`** — paginated JSON from the existing Paper Index; `--query` reuses Dashboard lexical search. Default limit 30, maximum 100. Does not query arXiv or the model.
 - **`schedule install`** — writes managed user crontab lines (Linux/macOS/WSL). Not supported on native Windows Task Scheduler; use WSL or the Obsidian plugin for desktop scheduling.
+
+## Local reading workbench
+
+After `init`, run `arxiv-daily ui` to open the local browser reader. The command prints a full `Workbench:` URL and keeps the service running until Ctrl+C. Use `--no-open` to open the URL yourself or `--port 8123` to choose a fixed port; the default chooses an available loopback port. It serves only on `127.0.0.1`.
+
+Browse daily reports and paper notes, search their titles/authors/IDs/dates, and read existing Markdown with tables, code, images and scientific math. Relative links and unambiguous Obsidian wikilinks navigate between existing reports. Source and PDF buttons open original papers. No reading action changes the original Markdown or calls a model; browser assets and math fonts are embedded in the CLI.
+
+Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. The settings dialog displays non-secret configuration; edit settings through the terminal wizard or CLI TOML, then restart the workbench. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Library indexing/review remains available through the commands below.
+
+This workbench is currently available in the experimental Claude integration worktree; use its locally built bundle until published.
 
 ## Optional personal library
 
