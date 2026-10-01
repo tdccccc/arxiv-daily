@@ -22,6 +22,7 @@ import {
 import { dataExport, dataImport } from "./data-cmd";
 import { runUpdate } from "./update-cmd";
 import { getCliVersion } from "./version";
+import { inspectPapers, inspectProduct } from "./inspect-cmd";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -69,6 +70,8 @@ export interface RunCliOptions {
 type CliCommand =
   | { name: "help" }
   | { name: "init" }
+  | { name: "status" }
+  | { name: "papers"; query: string; offset: number; limit: number }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
   | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
   | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
@@ -78,6 +81,8 @@ type CliCommand =
 
 const USAGE = `Usage:
   arxiv-daily init
+  arxiv-daily status
+  arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
   arxiv-daily update [--check] [--yes]
   arxiv-daily run --today
   arxiv-daily run --date YYYY-MM-DD
@@ -143,7 +148,17 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       config.settings.llm.apiKey,
       config.settings.email.apiKey,
       config.settings.email.hostedToken,
+      config.settings.embedding.apiKey,
     ].filter((value): value is string => Boolean(value));
+
+    if (parsed.name === "status") {
+      writeLine(io.stdout, JSON.stringify(await inspectProduct(config)));
+      return 0;
+    }
+    if (parsed.name === "papers") {
+      writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
+      return 0;
+    }
 
     if (parsed.name === "schedule") {
       if (parsed.sub === "show") {
@@ -287,6 +302,22 @@ function parseCli(argv: string[]): CliCommand {
   const [commandName, ...commandArgs] = rest;
   if (!commandName || commandName === "help") return { name: "help" };
   if (commandName === "init") return { name: "init" };
+  if (commandName === "status") {
+    if (commandArgs.length) throw new Error("status takes no arguments");
+    return { name: "status" };
+  }
+  if (commandName === "papers") {
+    for (let i = 0; i < commandArgs.length; i += 2) {
+      if (!["--query", "--offset", "--limit"].includes(commandArgs[i] ?? "")) throw new Error("papers accepts --query, --offset, and --limit");
+      optionValue(commandArgs.slice(i), commandArgs[i]!);
+    }
+    const offset = Number(optionValue(commandArgs, "--offset") ?? 0);
+    const limit = Number(optionValue(commandArgs, "--limit") ?? 30);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("papers requires offset >= 0 and limit 1..100");
+    }
+    return { name: "papers", query: optionValue(commandArgs, "--query") ?? "", offset, limit };
+  }
 
   if (commandName === "update") {
     return {
