@@ -111,6 +111,8 @@ Browse daily reports and paper notes, search their titles/authors/IDs/dates, and
 
 The daily tab includes a month calendar with today navigation, date selection and a collapsible mobile view. Existing reports open directly. Other days show their persisted state and offer a date-prefilled generation/retry form when available. Completed zero-match runs remain distinct from ungenerated days, and completed runs whose files are missing do not offer a misleading rerun. Dates use the configured product timezone; browsing does not infer arXiv publication availability or trigger generation.
 
+Larger colored day cells show paper counts directly. Known run totals take precedence; otherwise existing Paper Index references can provide a count for older reports. Missing counts remain unknown (—), not zero. The wider desktop sidebar adapts on smaller screens, with a collapsible mobile calendar and matching light/dark status colors.
+
 Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. The settings dialog displays non-secret configuration; edit settings through the terminal wizard or CLI TOML, then restart the workbench. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Library indexing/review remains available through the commands below.
 
 This workbench is currently available in the experimental Claude integration worktree; use its locally built bundle until published.

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-02T00:20:27+08:00
-updated: 2026-10-02T00:20:27+08:00
-revision: 1
+updated: 2026-10-02T00:36:17+08:00
+revision: 2
 
 ## Outcome
 
@@ -33,9 +33,17 @@ Interaction thesis: preserve the accepted navigation/selection/dialog behavior; 
 - Green: targeted calendar HTTP/UI tests pass with read-only index fallback and accessible count labels
 - regressions: existing calendar navigation tests, CLI typecheck, packaged workflow test
 - visual verification: desktop 1440px and medium 1100px preserve article space; 390px mobile and dark theme have no horizontal overflow, legible counts and distinct selection/status colors
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — UI count and index-fallback Red→Green observed; 185 CLI tests and 3 package checks pass; browser layout/count/contrast review accepted.
 
 ## Abort / reshape triggers
 
 - If widening the sidebar makes the reader unusably narrow, hide the optional ToC earlier and adapt the sidebar at intermediate widths.
 - If no authoritative count exists, show an unknown count rather than infer from Markdown headings or fabricate zero.
+
+## Acceptance evidence
+
+- Desktop measured sidebar420px and cells56px; at1100px the sidebar adapts to340px and the reader retains760px. Mobile390px uses52px cells and preserves collapse. No horizontal overflow or clipped three-digit counts in checked viewports.
+- Status colors use blue/green/amber/red/neutral surfaces. The initial light neutral text contrast measured3.79:1; darkening it improved this to5.00:1. Minimum checked dark-theme date-text contrast was7.08:1. These are targeted calendar measurements, not a claim of a full accessibility audit.
+- Known run totals, index fallback, unknown (—) and zero counts are tested. The Paper Index is read only; browsing preserved all18 demo source/state files, created no additional files and made no model calls.
+- CLI typecheck/build, boundaries, product inventory and strict plugin validation pass. No new provider-quality evaluation, Windows/macOS automation, or full repository test rerun was needed for this scoped CLI/UI refinement.
+- Logs: `.artifacts/calendar-readability-red.log`, `calendar-readability-cli.log`, `calendar-readability-package.log`; data/evidence in `.artifacts/calendar-readability-demo/`. Screenshots: `output/playwright/workbench-calendar-large-{desktop,dark,medium,mobile}.png`.

@@ -13,3 +13,9 @@ Evidence: 183 CLI tests, seven package tests, original 40-test plugin calendar b
 ## 2026-10-02T00:20:27+08:00 — Follow-up P2 readability
 
 The user accepted the calendar functionality but found it too small and requested a wider sidebar, colored cells and visible paper counts. Keep P1 accepted; P2 refines presentation and adds optional count recovery from the existing Paper Index. Navigation and generation semantics remain unchanged.
+
+## 2026-10-02T00:36:17+08:00 — P2 readability accepted
+
+The user asked for a larger sidebar, clearer status colors and paper counts, then authorized autonomous completion while away. P2 is accepted:420px desktop sidebar,56px date cells, semantic light/dark colors, direct per-date counts and optional read-only index fallback. Unknown is distinct from zero. Responsive layout and existing interactions remain intact.
+
+Observed Red→Green for both new count contracts, then185 CLI tests and3 portable-package checks passed. Real browser review confirmed desktop/medium/mobile layouts and fixed the observed light-theme neutral contrast issue. Screenshots and measurement details are in P2;18 fixture files remained unchanged during browsing. No goal criteria were waived. Changes are committed locally in the same worktree, not pushed or published.
