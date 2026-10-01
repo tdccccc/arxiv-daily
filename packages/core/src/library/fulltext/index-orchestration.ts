@@ -418,7 +418,7 @@ export async function indexPersonalLibraryFullText(
 export const TITLE_EXTRACTION_VERSION = 8 as const;
 
 /**
- * Index units: catalog papers plus unresolved files keyed by SHA-256 of the
+ * Index units: catalog papers plus unresolved or metadata-failed files keyed by SHA-256 of the
  * source PDF bytes. Existing content-addressed records reuse their stored hash
  * while the catalog observation is unchanged; a rename/change reads the file
  * once to recover the stable key. Legacy observation-key records are exposed
@@ -449,7 +449,7 @@ async function collectIndexUnits(input: {
   const fallbackRecords = Object.entries(input.loaded.papers)
     .filter(([paperKey]) => paperKey.startsWith("file:"));
   const unresolved = Object.entries(input.catalog.files)
-    .filter(([, record]) => record.status === "unresolved")
+    .filter(([, record]) => record.status === "unresolved" || record.status === "failed")
     .sort(([left], [right]) => left.localeCompare(right));
   const byPaperKey = new Map<string, IndexUnit>();
 

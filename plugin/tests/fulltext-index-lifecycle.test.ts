@@ -196,6 +196,11 @@ function fixture(storage: StorageAdapter) {
     identificationFingerprint,
     new Date("2026-08-18T00:00:00.000Z"),
   );
+  // These fixtures are about indexing orchestration, not scanning: a library
+  // that has already been scanned (even to an empty result) must not trigger
+  // the "never scanned" self-scan in `indexPersonalLibraryFullText`. Tests for
+  // that behavior seed `lastScan: null` explicitly instead.
+  catalog.lastScan = { ready: 0, unresolved: 0, unrelated: 0, failed: 0, papers: 0, truncated: false };
   const legacy = knowledgeBase(scopeFingerprint, identificationFingerprint);
   const model: EmbeddingModel = {
     modelId: "fixture-model",

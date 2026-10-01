@@ -2,6 +2,31 @@ import type { FullTextIndexRunSummary } from "@arxiv-daily/core";
 import { isEmbeddingModelDownloadNetworkError } from "../hosts/obsidian/embedding-model";
 
 /**
+ * What the catalog that fed a full-text index run looked like, so the
+ * completion text can explain a zero-paper result instead of just counting
+ * it. Captured by `indexPersonalLibraryFullText` (main.ts) from the catalog it
+ * indexed — scanned moments earlier when the library had never been scanned,
+ * or read as-is when it had.
+ */
+export interface FullTextIndexLibraryContext {
+  /** Every file the catalog knows about (any status), i.e. what the folder held. */
+  totalFiles: number;
+  /** Files recognized as arXiv papers — what direction proposals and daily-report steering can see. */
+  readyPapers: number;
+  /** Unrecognized or metadata-failed files still indexed as full-text-search-only fallback units. */
+  unresolvedFallbackFiles: number;
+  /**
+   * Files whose arXiv id was known but fetching its metadata failed — the one
+   * count a scan can attribute to a network problem rather than "not on
+   * arXiv" (unresolved files don't distinguish the two: a failed title search
+   * is silently indistinguishable from a paper that genuinely has none).
+   */
+  metadataFetchFailures: number;
+  /** Whether this run scanned the folder itself before indexing (first run, or a stale/missing catalog). */
+  scannedBeforeIndexing: boolean;
+}
+
+/**
  * "What happened" text for a finished full-text index run, shared by the
  * command palette entry and the settings row's own button (commands.ts,
  * settings/tab.ts) so the two surfaces agree on what a run reports.
@@ -19,6 +44,8 @@ export function describeFullTextIndexCompletion(
   options?: {
     /** Appended only when the run is not the network-download failure (e.g. "Search from the Dashboard."). */
     onCompletionSuffix?: string;
+    /** Catalog shape that produced this run; enables the zero-paper and zero-arXiv-paper explanations. */
+    libraryContext?: FullTextIndexLibraryContext;
   },
 ): string {
   const networkFailure = summary.failed > 0
@@ -29,8 +56,34 @@ export function describeFullTextIndexCompletion(
     return "couldn't download the embedding model (network problem). Check your internet "
       + "connection and try indexing again; see the developer console for details.";
   }
+  const context = options?.libraryContext;
+  // Zero indexable units: nothing was even attempted, so the generic counts
+  // ("0 indexed, 0 reused, 0 failed") would just look broken. Say why instead.
+  if (summary.outcomes.length === 0 && context) {
+    if (context.totalFiles === 0) {
+      return "no PDFs found in the personal library folder. Add PDFs to the folder, "
+        + "then use Scan library before building the index again.";
+    }
+    return "found files in the personal library folder, but none of them could be read as paper "
+      + "text (unsupported file types or unreadable PDFs). Nothing is searchable yet.";
+  }
+  if (summary.searchablePapers === 0 && summary.failed > 0) {
+    return `full-text indexing failed for ${summary.failed} PDF(s). Nothing is searchable yet. `
+      + "The PDF text could not be read or embedded; see the developer console for details.";
+  }
   const refreshed = summary.titlesRefreshed > 0 ? `, ${summary.titlesRefreshed} titles refreshed` : "";
   const suffix = options?.onCompletionSuffix ? ` ${options.onCompletionSuffix}` : "";
-  return `full-text index — ${summary.indexed} indexed, ${summary.reused} reused, `
+  let base = `full-text index — ${summary.indexed} indexed, ${summary.reused} reused, `
     + `${summary.failed} failed, ${summary.pruned} pruned${refreshed}.${suffix}`;
+  // Indexed something, but none of it was recognized as an arXiv paper: full-text
+  // search still works (that's what was just indexed), but the deeper,
+  // library-aware features only ever look at `catalog.papers`.
+  if (context?.scannedBeforeIndexing && context.readyPapers === 0 && context.unresolvedFallbackFiles > 0) {
+    base += " Full-text search works for these files, but research directions and "
+      + "daily-report steering need papers recognized as arXiv papers.";
+    if (context.metadataFetchFailures > 0) {
+      base += " Some arXiv lookups failed, possibly because this device was offline during the scan.";
+    }
+  }
+  return base;
 }

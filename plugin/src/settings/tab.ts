@@ -495,8 +495,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       lines: [
         "Optional — daily reports work the same without a library.",
         "1. Choose a folder of PDFs; nothing leaves this device.",
-        "2. Build index (button below) to search your PDFs from the command palette — its model downloads once, then runs locally.",
-        "3. Optional: confirm library directions (Review directions button below) to also steer daily reports. Remote embedding and model processing always ask first.",
+        "2. Build index (button below) to search your PDFs from the command palette — the first run also scans the folder and queries arXiv with paper IDs or titles; its model downloads once, then runs locally.",
+        "3. Full-text search covers readable PDFs. Optional: confirm library directions (Review directions button below) to steer daily reports using only successfully recognized arXiv papers. Remote embedding and model processing always ask first.",
       ],
     };
   }
@@ -837,7 +837,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     try {
       const summary = await this.plugin.indexPersonalLibraryFullText();
       new Notice(
-        `arXiv Daily: ${describeFullTextIndexCompletion(summary, { onCompletionSuffix: "Search from the Dashboard." })}`,
+        `arXiv Daily: ${describeFullTextIndexCompletion(summary, {
+          onCompletionSuffix: "Search from the Dashboard.",
+          libraryContext: this.plugin.getLastFullTextIndexLibraryContext(),
+        })}`,
         10_000,
       );
     } catch (error) {
@@ -845,7 +848,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       // must not come back as "indexing failed" over a button they just pressed.
       if (isCancellationError(error)) {
         new Notice(
-          "arXiv Daily: indexing cancelled. Nothing was saved, so the next build starts over.",
+          "arXiv Daily: indexing cancelled. You can build the index again when ready.",
           10_000,
         );
         return;

@@ -122,7 +122,12 @@ function makeTab() {
       failed: 0,
       pruned: 0,
       titlesRefreshed: 0,
+      outcomes: [{ paperKey: "arxiv:2601.00001", status: "indexed" as const, chunkCount: 1 }],
+      manifestRevision: 1,
+      manifestUpdatedAt: "2026-08-30T00:00:00.000Z",
+      searchablePapers: 1,
     })),
+    getLastFullTextIndexLibraryContext: vi.fn(() => undefined),
   } as unknown as ArxivDailyPlugin;
 
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =

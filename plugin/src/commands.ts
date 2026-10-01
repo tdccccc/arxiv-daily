@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
-import { todayInTz, formatDate } from "@arxiv-daily/core";
+import { todayInTz, formatDate, isCancellationError } from "@arxiv-daily/core";
 import { validateFilterConfig, validateLlmConfig } from "@arxiv-daily/core";
 import { chooseModal } from "./services/modal";
 import {
@@ -541,8 +541,17 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
           notice("arXiv Daily: indexing personal library full text…");
           try {
             const summary = await plugin.indexPersonalLibraryFullText();
-            notice(`arXiv Daily: ${describeFullTextIndexCompletion(summary)}`, 10_000);
+            notice(
+              `arXiv Daily: ${describeFullTextIndexCompletion(summary, {
+                libraryContext: plugin.getLastFullTextIndexLibraryContext(),
+              })}`,
+              10_000,
+            );
           } catch (error) {
+            if (isCancellationError(error)) {
+              notice("arXiv Daily: indexing cancelled. You can build the index again when ready.", 10_000);
+              return;
+            }
             plugin.logger.error("commands: personal library full-text indexing failed", error);
             notice(`arXiv Daily: full-text indexing failed: ${errorMessage(error)}`, 10_000);
           }

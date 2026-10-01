@@ -33,7 +33,7 @@ import {
 } from "./src/services/email-delivery";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
-import { Logger } from "@arxiv-daily/core";
+import { Logger, throwIfCancelled } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
@@ -189,6 +189,7 @@ import {
   resolveLibraryPdfOpenTarget,
 } from "./src/library/pdf-opener";
 import { LibraryIndexStatusStore } from "./src/library/index-status";
+import type { FullTextIndexLibraryContext } from "./src/library/index-completion";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -337,6 +338,13 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryInventoryController?: AbortController;
   private libraryCatalog: PersonalLibraryCatalog | null = null;
   private libraryCatalogLoadError: PersonalLibraryReviewLoadError | null = null;
+  /**
+   * Catalog shape behind the most recently finished full-text index run, for
+   * the completion notice to explain a zero-paper (or zero-arXiv-paper)
+   * result. Set only on a successful run; read by commands.ts/settings tab
+   * right after `indexPersonalLibraryFullText` resolves.
+   */
+  private lastFullTextIndexLibraryContext?: FullTextIndexLibraryContext;
   private libraryMutationQueue: Promise<void> = Promise.resolve();
   private librarySelectionRevision = 0;
   private libraryConnectionRevision = 0;
@@ -1381,7 +1389,14 @@ export default class ArxivDailyPlugin extends Plugin {
     const revision = this.libraryConnectionRevision;
     const store = this.buildPersonalLibraryCatalogStore();
     const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
-    if (this.operations.find("personal-library-scan", scopeFingerprint)) {
+    // A full-text index build that finds an unscanned catalog scans the
+    // folder itself (as one cancellable operation) before indexing — see
+    // `indexPersonalLibraryFullText`. The two must not run at once: both walk
+    // the folder and write the same catalog document.
+    if (
+      this.operations.find("personal-library-scan", scopeFingerprint)
+      || this.operations.find("personal-library-fulltext-index", scopeFingerprint)
+    ) {
       throw new Error("Personal library scan is already active");
     }
     const operation = this.operations.begin(
@@ -1392,113 +1407,14 @@ export default class ArxivDailyPlugin extends Plugin {
     const updateProgress = this.operations.snapshot().length === 1;
     if (updateProgress) this.progress?.setTask("Scanning personal library", "Identifying library papers");
     try {
-      operation.signal.throwIfAborted();
-      const source = this.librarySource
-        ?? await this.openLibrarySource(connection.selectedRoot);
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      if (
-        source.canonicalRoot !== connection.selectedRoot
-        || source.rootIdentity !== connection.rootIdentity
-      ) {
-        throw new Error("Library folder identity changed; choose it again");
-      }
-      this.librarySource = source;
-      const inventory = await source.inventory({ signal: operation.signal });
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      const current = await store.load(scopeFingerprint, identificationFingerprint);
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      const reconciled = await reconcilePersonalLibraryCatalog({
-        current,
-        inventory,
-        eligibleExtensions: connection.eligibleExtensions,
-        resolver: new ArxivLibraryMetadataResolver(this.buildArxivFetcher()),
-        // Content-based identification (strategy v2): files whose names carry
-        // no arXiv ID are identified from PDF text evidence, with an arXiv
-        // title-search fallback. Failures keep files unresolved.
-        identifyFile: {
-          version: PDF_IDENTIFICATION_EVIDENCE_VERSION,
-          // Identification reads bounded ranges only (header + tail), never
-          // the whole file: arXiv page headers, XMP, and Info metadata all
-          // live there, and full-file reads made scans hang on large PDFs.
-          identify: async (logicalPath, signal, size) => {
-            const source = this.librarySource;
-            if (!source) return null;
-            try {
-              const [head, tail] = await Promise.all([
-                source.readBinary(logicalPath, { signal, start: 0, end: IDENTIFICATION_HEAD_BYTES }),
-                size && size > IDENTIFICATION_HEAD_BYTES
-                  ? source.readBinary(logicalPath, {
-                      signal,
-                      start: size - IDENTIFICATION_TAIL_BYTES,
-                      end: size,
-                    })
-                  : Promise.resolve(new ArrayBuffer(0)),
-              ]);
-              const combined = new Uint8Array(head.byteLength + tail.byteLength);
-              combined.set(new Uint8Array(head), 0);
-              combined.set(new Uint8Array(tail), head.byteLength);
-              const evidence = extractPdfIdentificationEvidence(combined);
-              const directId = evidence.arxivId
-                ? normalizeArxivId(evidence.arxivId)
-                : null;
-              if (directId) {
-                // The document title is an independent witness: a title
-                // search that resolves to a DIFFERENT paper means the direct
-                // ID is a reference-list misidentification ("… arXiv:0912.0201
-                // …" in the references) — trust the title search. A failed or
-                // empty search keeps the direct ID (garbage document titles
-                // must not demote real papers).
-                if (evidence.title && !/^arxiv:/i.test(evidence.title)) {
-                  try {
-                    const result = await searchArxivTitle(this.host.http, evidence.title, signal);
-                    if (result.arxivId) {
-                      const searched = normalizeArxivId(result.arxivId);
-                      if (searched && searched !== directId) return searched;
-                    }
-                  } catch {
-                    // Search failure keeps the direct ID.
-                  }
-                }
-                return directId;
-              }
-              if (evidence.title) {
-                try {
-                  const result = await searchArxivTitle(this.host.http, evidence.title, signal);
-                  return result.arxivId ? normalizeArxivId(result.arxivId) : null;
-                } catch {
-                  return null;
-                }
-              }
-            } catch {
-              return null;
-            }
-            return null;
-          },
-        },
-        signal: operation.signal,
-      });
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
-        "personal library catalog evidence changed",
+      const saved = await this.scanPersonalLibraryFolder(
+        connection,
+        revision,
+        operation,
+        store,
+        scopeFingerprint,
+        identificationFingerprint,
       );
-      const saved = await this.enqueueLibraryMutation(async () => {
-        operation.signal.throwIfAborted();
-        this.assertLibraryConnectionCurrent(connection, revision);
-        const saved = await store.replace(reconciled.catalog);
-        // Atomic promotion cannot be interrupted. Once it succeeds, the scan is
-        // committed even if cancellation arrives during that final write.
-        this.assertLibraryConnectionCurrent(connection, revision);
-        this.libraryCatalog = saved;
-        this.libraryCatalogLoadError = null;
-        const identity = this.capturePersonalizedDiscoveryIdentity(connection);
-        if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
-        return saved;
-      });
-      this.libraryCatalog = saved;
       if (updateProgress) this.progress?.setComplete("Personal library scan complete");
       return structuredClone(saved);
     } catch (error) {
@@ -1509,6 +1425,133 @@ export default class ArxivDailyPlugin extends Plugin {
     } finally {
       operation.finish();
     }
+  }
+
+  /**
+   * Walk the library folder, re-identify files and persist the reconciled
+   * catalog. Shared by `scanPersonalLibrary` (its own operation, its own
+   * status-bar task) and `indexPersonalLibraryFullText` (which runs this
+   * under its own operation, as the first phase of one cancellable run, when
+   * the stored catalog has never been scanned). The caller owns the
+   * operation's lifecycle (begin/finish) and any status-bar/progress text;
+   * this method only does the scan and reports nothing itself.
+   */
+  private async scanPersonalLibraryFolder(
+    connection: PersistedLibraryConnection,
+    revision: number,
+    operation: OperationHandle,
+    store: PersonalLibraryCatalogStore,
+    scopeFingerprint: string,
+    identificationFingerprint: string,
+  ): Promise<PersonalLibraryCatalog> {
+    operation.signal.throwIfAborted();
+    const source = this.librarySource
+      ?? await this.openLibrarySource(connection.selectedRoot);
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    if (
+      source.canonicalRoot !== connection.selectedRoot
+      || source.rootIdentity !== connection.rootIdentity
+    ) {
+      throw new Error("Library folder identity changed; choose it again");
+    }
+    this.librarySource = source;
+    const inventory = await source.inventory({ signal: operation.signal });
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    const current = await store.load(scopeFingerprint, identificationFingerprint);
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    const reconciled = await reconcilePersonalLibraryCatalog({
+      current,
+      inventory,
+      eligibleExtensions: connection.eligibleExtensions,
+      resolver: new ArxivLibraryMetadataResolver(this.buildArxivFetcher()),
+      // Content-based identification (strategy v2): files whose names carry
+      // no arXiv ID are identified from PDF text evidence, with an arXiv
+      // title-search fallback. Failures keep files unresolved.
+      identifyFile: {
+        version: PDF_IDENTIFICATION_EVIDENCE_VERSION,
+        // Identification reads bounded ranges only (header + tail), never
+        // the whole file: arXiv page headers, XMP, and Info metadata all
+        // live there, and full-file reads made scans hang on large PDFs.
+        identify: async (logicalPath, signal, size) => {
+          const source = this.librarySource;
+          if (!source) return null;
+          try {
+            const [head, tail] = await Promise.all([
+              source.readBinary(logicalPath, { signal, start: 0, end: IDENTIFICATION_HEAD_BYTES }),
+              size && size > IDENTIFICATION_HEAD_BYTES
+                ? source.readBinary(logicalPath, {
+                    signal,
+                    start: size - IDENTIFICATION_TAIL_BYTES,
+                    end: size,
+                  })
+                : Promise.resolve(new ArrayBuffer(0)),
+            ]);
+            const combined = new Uint8Array(head.byteLength + tail.byteLength);
+            combined.set(new Uint8Array(head), 0);
+            combined.set(new Uint8Array(tail), head.byteLength);
+            const evidence = extractPdfIdentificationEvidence(combined);
+            const directId = evidence.arxivId
+              ? normalizeArxivId(evidence.arxivId)
+              : null;
+            if (directId) {
+              // The document title is an independent witness: a title
+              // search that resolves to a DIFFERENT paper means the direct
+              // ID is a reference-list misidentification ("… arXiv:0912.0201
+              // …" in the references) — trust the title search. A failed or
+              // empty search keeps the direct ID (garbage document titles
+              // must not demote real papers).
+              if (evidence.title && !/^arxiv:/i.test(evidence.title)) {
+                try {
+                  const result = await searchArxivTitle(this.host.http, evidence.title, signal);
+                  if (result.arxivId) {
+                    const searched = normalizeArxivId(result.arxivId);
+                    if (searched && searched !== directId) return searched;
+                  }
+                } catch {
+                  // Search failure keeps the direct ID.
+                }
+              }
+              return directId;
+            }
+            if (evidence.title) {
+              try {
+                const result = await searchArxivTitle(this.host.http, evidence.title, signal);
+                return result.arxivId ? normalizeArxivId(result.arxivId) : null;
+              } catch {
+                return null;
+              }
+            }
+          } catch {
+            return null;
+          }
+          return null;
+        },
+      },
+      signal: operation.signal,
+    });
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    const discoveryRevision = this.markPersonalizedDailyDiscoveryUnavailable(
+      "personal library catalog evidence changed",
+    );
+    const saved = await this.enqueueLibraryMutation(async () => {
+      operation.signal.throwIfAborted();
+      this.assertLibraryConnectionCurrent(connection, revision);
+      const saved = await store.replace(reconciled.catalog);
+      // Atomic promotion cannot be interrupted. Once it succeeds, the scan is
+      // committed even if cancellation arrives during that final write.
+      this.assertLibraryConnectionCurrent(connection, revision);
+      this.libraryCatalog = saved;
+      this.libraryCatalogLoadError = null;
+      const identity = this.capturePersonalizedDiscoveryIdentity(connection);
+      if (identity) this.restorePersonalizedDailyDiscoveryAvailability(discoveryRevision, identity);
+      return saved;
+    });
+    this.libraryCatalog = saved;
+    return saved;
   }
 
   private buildFullTextKnowledgeBaseStore(
@@ -1613,7 +1656,13 @@ export default class ArxivDailyPlugin extends Plugin {
     if (!connection) throw new Error("Choose a personal library first");
     const revision = this.libraryConnectionRevision;
     const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
-    if (this.operations.find("personal-library-fulltext-index", scopeFingerprint)) {
+    // A build that will need to scan the folder first (below) must not race a
+    // manual "Scan personal library folder" run: both walk the folder and
+    // write the same catalog document.
+    if (
+      this.operations.find("personal-library-fulltext-index", scopeFingerprint)
+      || this.operations.find("personal-library-scan", scopeFingerprint)
+    ) {
       throw new Error("Personal library full-text indexing is already active");
     }
     const operation = this.operations.begin(
@@ -1631,13 +1680,55 @@ export default class ArxivDailyPlugin extends Plugin {
     this.libraryIndexStatus.beginRun(operation.id, "reading the library catalog");
     let legacyMigrationLease: FullTextLegacyMigrationLease | undefined;
     try {
+      // Remote embedding needs authorization before any work happens: failing
+      // here is cheap, where failing after a folder scan or a full extraction
+      // pass would waste minutes of local (and, if ever reached, remote) work.
+      this.assertRemoteEmbeddingReady();
       operation.signal.throwIfAborted();
-      const catalog = await this.buildPersonalLibraryCatalogStore().load(
-        scopeFingerprint,
-        identificationFingerprint,
-      );
+      const catalogStore = this.buildPersonalLibraryCatalogStore();
+      let catalog = await catalogStore.load(scopeFingerprint, identificationFingerprint);
       operation.signal.throwIfAborted();
       this.assertLibraryConnectionCurrent(connection, revision);
+      // `lastScan === null` is the one safe signal that this exact folder (this
+      // scope/identification fingerprint) has never been scanned: `load` above
+      // already folds "no catalog file", "corrupt catalog" and "catalog from a
+      // different folder/extension set" into the same empty, unscanned
+      // catalog. A library that has been scanned before keeps reading the
+      // stored catalog exactly as before — no surprise network rescan on every
+      // build.
+      const scannedBeforeIndexing = catalog.lastScan === null;
+      if (scannedBeforeIndexing) {
+        if (updateProgress) {
+          this.progress?.setTask("Indexing personal library full text", "Scanning the library folder");
+        }
+        this.libraryIndexStatus.report({ phase: "scanning the library folder" });
+        try {
+          catalog = await this.scanPersonalLibraryFolder(
+            connection,
+            revision,
+            operation,
+            catalogStore,
+            scopeFingerprint,
+            identificationFingerprint,
+          );
+        } catch (error) {
+          // Cancellation is an outcome, not a scan fault: let it propagate
+          // as-is so the usual cancelled-run handling applies below.
+          if (operation.signal.aborted) throw error;
+          throw new Error(
+            `Could not scan the library folder before indexing: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { cause: error },
+          );
+        }
+        operation.signal.throwIfAborted();
+        this.assertLibraryConnectionCurrent(connection, revision);
+        if (updateProgress) {
+          this.progress?.setTask("Indexing personal library full text", "Extracting and embedding PDF text");
+        }
+        this.libraryIndexStatus.report({ phase: "reading the library catalog" });
+      }
       const source = this.librarySource
         ?? await this.openLibrarySource(connection.selectedRoot);
       operation.signal.throwIfAborted();
@@ -1653,7 +1744,6 @@ export default class ArxivDailyPlugin extends Plugin {
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
       const parser = await this.buildFullTextDocumentParser(operation.signal);
-      this.assertRemoteEmbeddingReady();
       const embedding = this.buildEmbeddingModel();
       const store = this.buildFullTextKnowledgeBaseStore(connection);
       const generationStore = this.buildFullTextGenerationIndexStore(connection);
@@ -1766,9 +1856,21 @@ export default class ArxivDailyPlugin extends Plugin {
           + `${summary.failed} failed, ${summary.pruned} pruned${refreshed}`,
         );
       }
+      this.lastFullTextIndexLibraryContext = {
+        totalFiles: Object.keys(catalog.files).length,
+        readyPapers: Object.keys(catalog.papers).length,
+        unresolvedFallbackFiles: Object.values(catalog.files)
+          .filter((file) => file.status === "unresolved" || file.status === "failed").length,
+        metadataFetchFailures: Object.values(catalog.files)
+          .filter((file) => file.status === "failed" && file.reason === "metadata-fetch-failed").length,
+        scannedBeforeIndexing,
+      };
       return summary;
     } catch (error) {
-      if (updateProgress && !operation.signal.aborted) {
+      // AbortSignal.throwIfAborted can throw a plain-string reason; normalize
+      // it so both UI entry points recognize cancellation as an outcome.
+      throwIfCancelled(operation.signal);
+      if (updateProgress) {
         this.progress?.setError("Personal library full-text indexing failed");
       }
       throw error;
@@ -1803,6 +1905,16 @@ export default class ArxivDailyPlugin extends Plugin {
     if (!this.operations.cancel(activity.operationId, "cancelled from settings")) return false;
     this.libraryIndexStatus.markCancelling();
     return true;
+  }
+
+  /**
+   * Catalog shape behind the full-text index run that just finished, for a
+   * completion notice that can explain a zero-paper (or zero-arXiv-paper)
+   * result instead of just counting it (`describeFullTextIndexCompletion`).
+   * `undefined` until the first successful run.
+   */
+  getLastFullTextIndexLibraryContext(): FullTextIndexLibraryContext | undefined {
+    return this.lastFullTextIndexLibraryContext;
   }
 
   /**
