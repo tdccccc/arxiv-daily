@@ -1,0 +1,6 @@
+{
+  "name": "arxiv-daily-pdf-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": { "pdfjs-dist": "5.4.624" }
+}
