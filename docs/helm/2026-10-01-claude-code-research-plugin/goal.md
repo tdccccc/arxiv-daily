@@ -1,9 +1,9 @@
 # Independent arXiv Daily core with auxiliary Claude Code access
 
-status: active
+status: done
 created: 2026-10-01T00:48:41+08:00
-updated: 2026-10-01T21:22:11+08:00
-revision: 5
+updated: 2026-10-01T21:49:36+08:00
+revision: 6
 owner: codex-claude-code-plugin-2026-10-01
 
 ## Intent
@@ -18,8 +18,8 @@ owner: codex-claude-code-plugin-2026-10-01
 - [x] 日报、论文总结、阅读状态和索引沿用既有产品的数据语义与存储规则；不另建一套 agent 专属权威研究档案。
 - [x] 个人文献库作为可选增强：复用识别、PDF 解析、全文索引、方向草稿/确认、增量建议与个性化筛选；手动主题路径始终可用。
 - [x] 无活跃 Claude 会话时，独立程序仍可按配置运行上述核心任务。模型参与筛选和总结，但调用、校验、状态与持久化由产品流程管理。
-- [ ] Claude Code 调用同一套业务任务，辅助配置、启动/取消/查询、解释推荐与按需问答；其加入不改变核心决策和数据契约。
-- [ ] 通过无文献库的基础日报/详报、带文献库的个性化发现、命令与 agent 两种入口的验收；原 Obsidian 行为回归通过。
+- [x] Claude Code 调用同一套业务任务，辅助配置、启动/取消/查询、解释推荐与按需问答；其加入不改变核心决策和数据契约。
+- [x] 通过无文献库的基础日报/详报、带文献库的个性化发现、命令与 agent 两种入口的验收；原 Obsidian 行为回归通过。
 
 ## Non-goals
 
@@ -45,9 +45,9 @@ owner: codex-claude-code-plugin-2026-10-01
 2. P2 — 围绕原型继续扩展文献库功能 — status: superseded
 3. P3 — 独立入口保留完整 arXiv 筛选、日报与详细总结沉淀 — status: done
 4. P4 — 可选文献库与方向增强复用既有核心并接入同一发现主流程 — status: done
-5. P5 — Claude Code 辅助入口与直接运行使用同一套业务能力和研究记录 — status: active
+5. P5 — Claude Code 辅助入口与直接运行使用同一套业务能力和研究记录 — status: done
 
-## Open questions
+## Follow-up research outside this experiment
 
 - 长期查看入口如何集中呈现日报、论文总结和文献库；CLI 先跑通不等于最终接受多应用切换。
 - P1 实验记录仅保留为试验资料，若未来需要迁移必须显式设计，不自动导入现有索引或 confirmed interest profile。

@@ -79,6 +79,12 @@ Remove those yourself if you want a full cleanup.
 arxiv-daily init
 arxiv-daily status
 arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
+arxiv-daily library connect PATH
+arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
+arxiv-daily library authorize --fingerprint HASH
+arxiv-daily library confirm --candidate ID --proposal-revision N --profile-revision N
+arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
+arxiv-daily library review --input REQUEST.json
 arxiv-daily update [--check] [--yes]
 arxiv-daily run --today
 arxiv-daily run --date YYYY-MM-DD
@@ -95,6 +101,18 @@ arxiv-daily help
 - **`status`** — JSON overview of the configured output paths, topics, model readiness, paper count, and latest run states. Does not start generation or return model endpoints/credentials.
 - **`papers`** — paginated JSON from the existing Paper Index; `--query` reuses Dashboard lexical search. Default limit 30, maximum 100. Does not query arXiv or the model.
 - **`schedule install`** — writes managed user crontab lines (Linux/macOS/WSL). Not supported on native Windows Task Scheduler; use WSL or the Obsidian plugin for desktop scheduling.
+
+## Optional personal library
+
+After basic setup, `library connect` selects a read-only PDF source. `library status` displays the processing scope and endpoint-bound authorization fingerprint. Authorize only the displayed scope using `library authorize --fingerprint …`; `library revoke` revokes it.
+
+Run `library prepare` to install pinned optional PDF/runtime components in the configured cache, then `library scan` and `library index`. Local embedding uses the same e5 q8 model and downloads weights on first use. Remote embedding skips the local CPU component but requires full-text processing authorization. Local indexing can run before model-processing authorization; direction generation requires authorization.
+
+`library propose` uses the shared clustered direction proposer. Review `library directions`, then confirm a candidate with its displayed proposal/profile revisions. The ordinary daily run incorporates valid confirmed directions and their personal novelty evidence automatically; absent, unauthorized or invalid library inputs retain the manual-topic path. Configuration/authorization or library-evidence changes cancel an in-flight personalized run.
+
+The catalog, full-text indexes, proposals, profile and suggestions use existing core formats under the active output layout. Library settings live in the CLI TOML and are not automatically synchronized with Obsidian settings. Connection/authorization updates preserve setting values but normalize TOML formatting. Avoid concurrent library rebuild/review writers from different hosts against the same output directory.
+
+For review request schemas and the auxiliary Claude Code workflow, see [the command reference in the source repository](https://github.com/tdccccc/arxiv-daily/blob/main/extensions/claude-code-arxiv-daily/references/commands.md). The Node CPU runtime has been exercised on Linux Node 20.19 and 22; Windows/macOS CPU smoke remains to be completed before general release.
 
 ## Interrupted daily runs and checkpoints
 

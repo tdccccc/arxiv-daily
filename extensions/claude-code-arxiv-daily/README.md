@@ -61,9 +61,38 @@ Claude 调用同一个产品命令，并读取实际结果。它不会临时选�
 
 早期 P1 的临场研究代码和 `arxiv-daily-agent/` 独立档案接口已移除。已生成的试用文件保留，未自动删除或导入正式索引；需要时可手动查阅。
 
-## 当前范围
+## 可选：接入个人文献库
 
-本阶段先完整保留基础筛选、日报和详细总结。个人文献库的完整索引、聚类方向与个性化发现正在按共享核心边界逐步接入，不能将当前状态查询当作已支持这些操作。阅读界面仍待试用研究；Markdown 可用任意阅读工具打开。
+先完成基本设置，再按需要启用：
+
+```sh
+ARXIV_DAILY_CLI="/absolute/plugin/path/dist/arxiv-daily-cli.cjs"
+node "$ARXIV_DAILY_CLI" library connect "/absolute/path/to/pdfs"
+node "$ARXIV_DAILY_CLI" library status
+# 阅读上一步显示的目录、处理深度和模型端点后，使用其指纹授权：
+node "$ARXIV_DAILY_CLI" library authorize --fingerprint "sha256:上一步的指纹"
+node "$ARXIV_DAILY_CLI" library prepare
+node "$ARXIV_DAILY_CLI" library scan
+node "$ARXIV_DAILY_CLI" library index
+node "$ARXIV_DAILY_CLI" library propose
+node "$ARXIV_DAILY_CLI" library directions
+```
+
+审核候选后，用显示的 ID 和版本确认：
+
+```sh
+node "$ARXIV_DAILY_CLI" library confirm --candidate "候选ID" --proposal-revision 0 --profile-revision 0
+node "$ARXIV_DAILY_CLI" run --today
+node "$ARXIV_DAILY_CLI" library search --query "你关心的具体问题"
+```
+
+确认后的有效方向会进入原来的日报筛选，与手动主题共同工作；日报解释发现来源和相对于已有文献的新意。新增论文后再次 `scan`、`index`，有变化的索引会按原规则生成增量建议，建议仍须人工审核。修改方向、启停、锁定、应用/忽略建议见 [命令参考](references/commands.md)。
+
+本地索引不把全文发送到模型服务，也可先索引、后为方向生成授权。远程 embedding 会发送全文片段，必须取得显示范围的授权。切换端点或处理范围会使旧授权失效；`library revoke` 可撤销。库连接保存进同一 TOML，连接/授权操作保留其他设置值，但会规范化 TOML 格式。
+
+`prepare` 将锁定的 PDF.js 和本地推理依赖装到产品缓存；选择远程 embedding 时不安装本地 CPU 组件。本地 e5 模型权重在首次使用时下载，后续复用缓存。已在 Linux Node 20.19 和 Node 22 验证实际 PDF 解析和 CPU 推理；Windows/macOS CPU运行尚待验收。
+
+阅读界面仍待后续研究，Markdown 可用任意阅读工具打开。同一输出目录的文献库重建/审核请单宿主执行；本次没有建立 Obsidian 与 CLI 同时重建同一库的并发保证。
 
 ## 验证
 
@@ -76,4 +105,4 @@ npm run check:boundaries
 npm run check:product-units
 ```
 
-端到端测试只替换 HTTP，实际运行打包 CLI、scheduler、pipeline、writer 和 Paper Index，覆盖日报、自动/手动详报、离线重跑、零命中、未发布和用户文件保护。配置与研究输出隔离在临时目录；原生模块使用产品正常的本机缓存。
+基础端到端测试只替换 HTTP，实际运行打包 CLI、scheduler、pipeline、writer 和 Paper Index，覆盖日报、自动/手动详报、离线重跑、零命中、未发布和用户文件保护。库流程另有受控端口的集成测试，以及真实 PDF.js/e5 CPU 索引与检索验证。配置与研究输出隔离在试验目录；原生模块使用产品正常的本机缓存。
