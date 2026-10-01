@@ -28,6 +28,7 @@ import {
   renderPdfParserSidecarCapabilitiesUrlRow,
   renderReasoningEffortRow,
   renderRunWindowRow,
+  renderLibraryGuideRow,
   renderScheduleEnabledRow,
   renderSetupGuideRow,
   renderTickIntervalRow,
@@ -328,6 +329,53 @@ describe("wired getSettingDefinitions", () => {
     expect(saveSettings).toHaveBeenCalledTimes(1);
 
     expect(topicsList?.onReorder).toBeUndefined();
+  });
+});
+
+describe("personal library guide row", () => {
+  function libraryGroupItems(tab: ArxivDailySettingTab) {
+    const group = tab.getSettingDefinitions().find(
+      (item) => item.type === "group" && item.heading === "Personal library",
+    ) as { items: Array<Record<string, unknown>> } | undefined;
+    return group?.items ?? [];
+  }
+
+  it("shows the intro box as the first item while no library is connected", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    const items = libraryGroupItems(tab);
+    expect(items[0]?.name).toBe("");
+    expect(items[0]).toHaveProperty("render");
+    expect(items[1]?.name).toBe("Library");
+
+    const setting = new Setting(tab.containerEl);
+    renderLibraryGuideRow(tab, setting);
+    expect(setting.settingEl.classList).toContain("arxiv-daily-settings__library-guide-host");
+    expect(setting.settingEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
+    expect(setting.settingEl.textContent).toContain("Choose a folder of PDFs");
+  });
+
+  it("keeps the intro box as the first item once a folder is chosen (always visible, like the email guide)", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const items = libraryGroupItems(tab);
+    expect(items[0]?.name).toBe("");
+    expect(items[1]?.name).toBe("Library");
+  });
+
+  it("keeps the intro box as the first item once authorized (always visible, like the email guide)", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    const items = libraryGroupItems(tab);
+    expect(items[0]?.name).toBe("");
+    expect(items[1]?.name).toBe("Library");
   });
 });
 

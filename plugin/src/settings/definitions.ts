@@ -130,6 +130,7 @@ export interface SettingDefinitionsHost {
   renderModelRow?: (setting: Setting) => void;
   renderReasoningEffortRow?: (setting: Setting) => void;
   renderLibraryConnectionRow?: (setting: Setting) => void;
+  renderLibraryGuideRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
   showSetupGuide?: boolean;
   /** False when this host refuses every automatic email send. */
@@ -383,9 +384,17 @@ export function buildSettingDefinitions(
           type: "group",
           heading: "Personal library",
           items: [
+            ...(host.renderLibraryGuideRow
+              ? [{
+                  // The box carries its own title; a row name would repeat it
+                  // and squeeze the box into the control column.
+                  name: "",
+                  render: (setting: Setting) => host.renderLibraryGuideRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
             {
               name: "Library",
-              desc: "Choose a folder of PDFs, then build a search index. Separate from daily reports.",
+              desc: "Choose a folder of PDFs, then build a search index to search them. On its own, this does not change daily reports.",
               render: (setting: Setting) =>
                 host.renderLibraryConnectionRow?.(setting),
             },

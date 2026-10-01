@@ -156,13 +156,20 @@
   font-size: 0.82em;
 }
 
-/* Email section: full-width tips aligned with setting names (not control column) */
+/* Email/library sections: full-width tips aligned with setting names (not
+   control column). Both guide boxes share one look; see renderGuideBoxRow. */
 .arxiv-daily-settings__email-guide-host {
   display: block;
 }
 
+.arxiv-daily-settings__library-guide-host {
+  display: block;
+}
+
 .arxiv-daily-settings__email-guide-host .setting-item-info,
-.arxiv-daily-settings__email-guide-host .setting-item-control {
+.arxiv-daily-settings__email-guide-host .setting-item-control,
+.arxiv-daily-settings__library-guide-host .setting-item-info,
+.arxiv-daily-settings__library-guide-host .setting-item-control {
   display: none;
 }
 
@@ -175,7 +182,8 @@
   display: none;
 }
 
-.arxiv-daily-settings__email-guide {
+.arxiv-daily-settings__email-guide,
+.arxiv-daily-settings__library-guide {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -189,18 +197,21 @@
   line-height: 1.45;
 }
 
-.arxiv-daily-settings__email-guide-title {
+.arxiv-daily-settings__email-guide-title,
+.arxiv-daily-settings__library-guide-title {
   margin: 0 0 0.4em;
   color: var(--text-normal);
   font-size: 0.95em;
   font-weight: 600;
 }
 
-.arxiv-daily-settings__email-guide-line {
+.arxiv-daily-settings__email-guide-line,
+.arxiv-daily-settings__library-guide-line {
   margin: 0.25em 0 0;
 }
 
-.arxiv-daily-settings__email-guide-line + .arxiv-daily-settings__email-guide-line {
+.arxiv-daily-settings__email-guide-line + .arxiv-daily-settings__email-guide-line,
+.arxiv-daily-settings__library-guide-line + .arxiv-daily-settings__library-guide-line {
   margin-top: 0.2em;
 }
 

@@ -433,26 +433,49 @@ export function renderTickIntervalRow(
 }
 
 /** Email delivery guide strip for the current mode. */
+/**
+ * Shared renderer for the full-width guide boxes (email, library): same
+ * layout and CSS, keyed by a class prefix so each section keeps its own
+ * host/box/title/line classes (see styles.css).
+ */
+function renderGuideBoxRow(
+  setting: Setting,
+  clsPrefix: "email-guide" | "library-guide",
+  content: { title: string; lines: string[] },
+): void {
+  clearSettingEl(setting, `arxiv-daily-settings__${clsPrefix}`);
+  setting.settingEl.addClass(`arxiv-daily-settings__${clsPrefix}-host`);
+  const wrap = setting.settingEl.createDiv({
+    cls: `arxiv-daily-settings__${clsPrefix}`,
+  });
+  wrap.createDiv({
+    cls: `arxiv-daily-settings__${clsPrefix}-title`,
+    text: content.title,
+  });
+  for (const line of content.lines) {
+    wrap.createDiv({
+      cls: `arxiv-daily-settings__${clsPrefix}-line`,
+      text: line,
+    });
+  }
+}
+
 export function renderEmailGuideRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
-  clearSettingEl(setting, "arxiv-daily-settings__email-guide");
-  setting.settingEl.addClass("arxiv-daily-settings__email-guide-host");
-  const { title, lines } = tab.emailGuideContent();
-  const wrap = setting.settingEl.createDiv({
-    cls: "arxiv-daily-settings__email-guide",
-  });
-  wrap.createDiv({
-    cls: "arxiv-daily-settings__email-guide-title",
-    text: title,
-  });
-  for (const line of lines) {
-    wrap.createDiv({
-      cls: "arxiv-daily-settings__email-guide-line",
-      text: line,
-    });
-  }
+  renderGuideBoxRow(setting, "email-guide", tab.emailGuideContent());
+}
+
+/**
+ * Personal library intro box (1.13+ path). Always included, like the email
+ * delivery guide box (renderEmailGuideRow) — see buildSettingDefinitions.
+ */
+export function renderLibraryGuideRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderGuideBoxRow(setting, "library-guide", tab.libraryGuideContent());
 }
 
 /** Email mode dropdown (Send yourself / Official delivery). */

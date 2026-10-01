@@ -225,6 +225,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
+      renderLibraryGuideRow: (setting) =>
+        declarativeRows.renderLibraryGuideRow(this, setting),
       renderCategoryRow: (setting, index) =>
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
@@ -446,23 +448,60 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
   }
 
-  private emailGuide(
+  /**
+   * Shared renderer for the full-width guide boxes (email, library): same
+   * layout and CSS, keyed by a class prefix so each section keeps its own
+   * host/box/title/line classes (see styles.css).
+   */
+  private renderGuideBox(
     containerEl: HTMLElement,
     opts: { title: string; lines: string[] },
+    clsPrefix: "email-guide" | "library-guide",
   ): void {
     const wrap = containerEl.createDiv({
-      cls: "arxiv-daily-settings__email-guide",
+      cls: `arxiv-daily-settings__${clsPrefix}`,
     });
     wrap.createDiv({
-      cls: "arxiv-daily-settings__email-guide-title",
+      cls: `arxiv-daily-settings__${clsPrefix}-title`,
       text: opts.title,
     });
     for (const line of opts.lines) {
       wrap.createDiv({
-        cls: "arxiv-daily-settings__email-guide-line",
+        cls: `arxiv-daily-settings__${clsPrefix}-line`,
         text: line,
       });
     }
+  }
+
+  private emailGuide(
+    containerEl: HTMLElement,
+    opts: { title: string; lines: string[] },
+  ): void {
+    this.renderGuideBox(containerEl, opts, "email-guide");
+  }
+
+  /**
+   * Personal library intro box copy; shared with the 1.13+ row. Always
+   * shown, like the email delivery guide — the section stays optional and
+   * its steps stay worth restating even once a library is connected.
+   */
+  public libraryGuideContent(): { title: string; lines: string[] } {
+    return {
+      title: "How this works",
+      lines: [
+        "Optional — daily reports work the same without a library.",
+        "1. Choose a folder of PDFs; nothing leaves this device.",
+        "2. Build a local search index (command palette) — its model downloads once, then runs locally.",
+        "3. Optional: confirm library directions (command palette) to also steer daily reports. Remote embedding and model processing always ask first.",
+      ],
+    };
+  }
+
+  private libraryGuide(
+    containerEl: HTMLElement,
+    opts: { title: string; lines: string[] },
+  ): void {
+    this.renderGuideBox(containerEl, opts, "library-guide");
   }
 
   public renderLibraryConnectionControls(setting: Setting): void {
@@ -1678,9 +1717,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // ─── Personal library ─────────────────────────────
     this.sectionHeading(containerEl, "Personal library", "library");
+    this.libraryGuide(containerEl, this.libraryGuideContent());
     const librarySetting = new Setting(containerEl)
       .setName("Library")
-      .setDesc("Choose a folder of PDFs, then build a search index. Separate from daily reports.");
+      .setDesc("Choose a folder of PDFs, then build a search index to search them. On its own, this does not change daily reports.");
     this.renderLibraryConnectionControls(librarySetting);
 
     new Setting(containerEl)

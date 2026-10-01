@@ -101,7 +101,7 @@ function makeLegacyApiKeyTab(
     logger: { error: vi.fn() },
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
-    getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
+    getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
     automaticEmailSupported: () => true,
   } as unknown as ArxivDailyPlugin;
@@ -205,6 +205,55 @@ describe("legacy section order", () => {
     const scheduleIndex = headings.indexOf("Output & schedule");
     expect(headings[scheduleIndex + 1]).toBe("Personal library");
     expect(headings[scheduleIndex + 2]).toBe("Email delivery");
+  });
+});
+
+describe("legacy personal library guide box", () => {
+  it("shows the intro box while no library is connected", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    renderLegacySettings(tab);
+    const boxes = tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide");
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]?.textContent).toContain("Choose a folder of PDFs");
+  });
+
+  it("keeps the intro box concise but complete, and honest about the one-time model download", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const content = tab.libraryGuideContent();
+    expect(content.lines.length).toBeLessThanOrEqual(4);
+    const text = content.lines.join(" ");
+    expect(text).toMatch(/optional/i);
+    expect(text).toContain("daily reports work the same without a library");
+    expect(text).toContain("Choose a folder of PDFs");
+    expect(text).toContain("nothing leaves this device");
+    expect(text).toMatch(/model downloads once/);
+    expect(text).toMatch(/runs locally/);
+    expect(text).toContain("confirm library directions");
+    expect(text).toContain("steer daily reports");
+    expect(text).toContain("Remote embedding and model processing always ask first");
+    expect(text).not.toContain("bundled");
+  });
+
+  it("keeps showing the intro box once a folder is chosen (always visible, like the email guide)", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    renderLegacySettings(tab);
+    expect(tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
+  });
+
+  it("keeps showing the intro box once authorized (always visible, like the email guide)", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    renderLegacySettings(tab);
+    expect(tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
   });
 });
 
