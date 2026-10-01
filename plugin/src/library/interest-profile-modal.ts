@@ -99,6 +99,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 
   onOpen(): void {
     this.closed = false;
+    this.modalEl.addClass("arxiv-daily-interest-review-modal");
     this.render();
   }
 

@@ -1742,8 +1742,16 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 
 /* Personal library direction review */
+.modal.arxiv-daily-interest-review-modal {
+  width: min(72rem, 94vw);
+  max-width: 94vw;
+  max-height: 90vh;
+}
+
 .arxiv-daily-interest-review {
-  width: min(60rem, 92vw);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 
 .arxiv-daily-interest-review__disclosure,
@@ -1829,6 +1837,14 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-interest-review__field textarea,
 .arxiv-daily-interest-review__field select {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.arxiv-daily-interest-review button {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
 }
 
 .arxiv-daily-interest-review__evidence,
@@ -1837,12 +1853,8 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 @media (max-width: 700px) {
-  .arxiv-daily-interest-review {
-    width: auto;
-  }
-
   .arxiv-daily-interest-review__form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .arxiv-daily-interest-review__toolbar,
