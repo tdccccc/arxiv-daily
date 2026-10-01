@@ -1410,6 +1410,39 @@ describe("declarative topic cards", () => {
     expect(refresh).not.toHaveBeenCalled();
     tab.containerEl.remove();
   });
+
+  it("hides the tag chip while collapsed so a long name keeps the header width", () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.topics.push({
+      id: "topic-1",
+      name: "A very long research topic name that would otherwise get truncated",
+      tag: "long-topic-tag",
+      description: "Something",
+      detail: false,
+    });
+    const topicSetting = new Setting(tab.containerEl);
+    tab.renderTopicRow(topicSetting, 0);
+
+    expect(
+      topicSetting.settingEl.querySelector(".arxiv-daily-settings__topic-tag"),
+    ).toBeNull();
+
+    const header = topicSetting.settingEl.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    ) as HTMLButtonElement;
+    header.click();
+
+    expect(
+      topicSetting.settingEl.querySelector(".arxiv-daily-settings__topic-tag")
+        ?.textContent,
+    ).toBe("#long-topic-tag");
+
+    header.click();
+
+    expect(
+      topicSetting.settingEl.querySelector(".arxiv-daily-settings__topic-tag"),
+    ).toBeNull();
+  });
 });
 
 describe("topic tags and blocked first report", () => {

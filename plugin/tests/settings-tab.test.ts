@@ -944,3 +944,41 @@ describe("personal library settings layout", () => {
   });
 });
 
+describe("legacy topic card header", () => {
+  function renderLegacyTopicCard(
+    tab: ArxivDailySettingTab,
+    topics: Array<{ id: string; name: string; tag: string; description: string; detail: boolean }>,
+  ): HTMLElement {
+    const container = document.createElement("div");
+    const render = Reflect.get(tab, "renderTopicCard") as (
+      containerEl: HTMLElement,
+      topics: unknown[],
+      index: number,
+    ) => void;
+    render.call(tab, container, topics, 0);
+    return container;
+  }
+
+  it("hides the tag chip while collapsed so a long name keeps the header width", () => {
+    const { tab } = makeLegacyApiKeyTab(async () => {});
+    const container = renderLegacyTopicCard(tab, [{
+      id: "topic-1",
+      name: "A very long research topic name that would otherwise get truncated",
+      tag: "long-topic-tag",
+      description: "Something",
+      detail: false,
+    }]);
+
+    expect(container.querySelector(".arxiv-daily-settings__topic-tag")).toBeNull();
+
+    const header = container.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    ) as HTMLButtonElement;
+    header.click();
+
+    expect(
+      container.querySelector(".arxiv-daily-settings__topic-tag")?.textContent,
+    ).toBe("#long-topic-tag");
+  });
+});
+

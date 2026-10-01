@@ -2679,6 +2679,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
+    // Collapsed cards omit the tag chip: a long topic name would otherwise
+    // be squeezed down to a few characters by the chip's reserved width.
+    // The full name is still available via the title attribute above.
     let tagChip: HTMLElement | null = null;
     const createTag = () => {
       if (!topic.tag) return;
@@ -2686,6 +2689,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         cls: "arxiv-daily-settings__topic-tag",
         text: "#" + topic.tag,
       });
+      if (compact && star) header.insertBefore(tagChip, star);
     };
     let star: HTMLElement | null = null;
     const createStar = () => {
@@ -2697,11 +2701,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
     };
     if (compact) {
-      createTag();
+      if (isExpanded) createTag();
       createStar();
     } else {
       createStar();
-      createTag();
+      if (isExpanded) createTag();
     }
 
     // ─── Expanded form (toggled via display) ────────────────
@@ -2878,6 +2882,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       form.toggleClass("is-collapsed", !expanded);
       header.setAttribute("aria-expanded", String(expanded));
       caret.textContent = expanded ? "▾" : "▸";
+      // The tag chip only exists while expanded (see createTag above).
+      if (expanded) {
+        if (!tagChip) createTag();
+      } else if (tagChip) {
+        tagChip.remove();
+        tagChip = null;
+      }
     };
   }
 
