@@ -2,11 +2,12 @@ import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
-import { modernArxivResources, redactText } from "@arxiv-daily/core";
+import { formatDate, modernArxivResources, redactText, todayInTz } from "@arxiv-daily/core";
 import type { CliRuntimeConfig } from "../config";
 import type { CliIo } from "../main-types";
 import { inspectProduct } from "../inspect-cmd";
 import { WorkbenchDocuments, WorkbenchError } from "./documents";
+import { inspectCalendar } from "./calendar";
 
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
@@ -14,11 +15,14 @@ export interface WorkbenchOptions {
   port?: number;
   assets?: Record<string, WorkbenchAsset>;
   run?: (args: string[], io: CliIo, signal: AbortSignal) => Promise<number>;
+  now?: () => Date;
 }
 
 export interface WorkbenchRun {
   id: string;
   label: string;
+  /** Configured-timezone date for daily jobs; paper-note jobs have no calendar date. */
+  date: string | null;
   status: "running" | "completed" | "failed" | "cancelled";
   output: string;
   exitCode: number | null;
@@ -29,6 +33,7 @@ export interface WorkbenchRun {
 /** Ephemeral reading server. Durable state stays owned by the existing product. */
 export async function startWorkbench(options: WorkbenchOptions) {
   const { config } = options;
+  const now = options.now ?? (() => new Date());
   if (!Number.isInteger(options.port ?? 0) || (options.port ?? 0) < 0 || (options.port ?? 0) > 65535) throw new Error("Port must be 0..65535");
   const documents = new WorkbenchDocuments(config);
   const prefix = `/${randomBytes(24).toString("hex")}/`;
@@ -56,6 +61,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     const landing = method === "GET" && (route === "" || route === "index.html");
     if (req.headers["sec-fetch-site"] === "cross-site" && !landing) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
+    if (method === "GET" && route === "api/calendar") return json(res, 200, await inspectCalendar(config, documents, url.searchParams.get("month"), now(), run));
     if (method === "GET" && route === "api/documents") {
       const kind = url.searchParams.get("kind") || "all";
       const offset = Number(url.searchParams.get("offset") ?? 0);
@@ -95,12 +101,12 @@ export async function startWorkbench(options: WorkbenchOptions) {
     if (method === "GET" && route === "api/runs/current") return json(res, 200, { run });
     if (method === "POST" && route === "api/runs") {
       const body = await readJson(req);
-      const task = parseTask(body);
+      const task = parseTask(body, formatDate(todayInTz(now(), config.settings.arxiv.timezone)));
       if (run?.status === "running") throw new WorkbenchError(409, "已有任务正在运行，请等待完成或先取消。");
       if (!options.run) throw new WorkbenchError(503, "当前工作台未提供生成操作。");
       controller = new AbortController();
       const signal = controller.signal;
-      const current: WorkbenchRun = { id: randomBytes(12).toString("hex"), label: task.label, status: "running", output: "", exitCode: null, startedAt: new Date().toISOString(), finishedAt: null };
+      const current: WorkbenchRun = { id: randomBytes(12).toString("hex"), label: task.label, date: task.date, status: "running", output: "", exitCode: null, startedAt: now().toISOString(), finishedAt: null };
       run = current;
       const write = (chunk: string) => { current.output = (current.output + redact(String(chunk))).slice(-24000); };
       running = Promise.resolve().then(() => options.run!(task.args, { stdout: { write }, stderr: { write } }, signal)).then(code => {
@@ -110,7 +116,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
         write(`\n${error instanceof Error ? error.message : "任务执行失败"}\n`);
         current.exitCode = 1;
         current.status = signal.aborted ? "cancelled" : "failed";
-      }).finally(() => { current.finishedAt = new Date().toISOString(); });
+      }).finally(() => { current.finishedAt = now().toISOString(); });
       return json(res, 202, { run: current });
     }
     if (method === "POST" && route === "api/runs/cancel") {
@@ -165,17 +171,17 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     return value as Record<string, unknown>;
   } catch { throw new WorkbenchError(400, "请求内容无效。"); }
 }
-function parseTask(body: Record<string, unknown>): { args: string[]; label: string } {
+function parseTask(body: Record<string, unknown>, today: string): { args: string[]; label: string; date: string | null } {
   if (body.kind === "daily") {
-    if (body.date === undefined) return { args: ["run", "--today"], label: "生成今日日报" };
+    if (body.date === undefined) return { args: ["run", "--today"], label: "生成今日日报", date: today };
     if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
       const parsed = new Date(body.date);
-      if (Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === body.date) return { args: ["run", "--date", body.date], label: `${body.date} 日报` };
+      if (Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === body.date) return { args: ["run", "--date", body.date], label: `${body.date} 日报`, date: body.date };
     }
   }
   if (body.kind === "paper" && typeof body.id === "string") {
     const resources = modernArxivResources(body.id);
-    if (resources) return { args: ["run", "--id", resources.id], label: `${resources.id} 详细总结` };
+    if (resources) return { args: ["run", "--id", resources.id], label: `${resources.id} 详细总结`, date: null };
   }
   throw new WorkbenchError(400, "请选择有效日期或输入 arXiv ID。");
 }

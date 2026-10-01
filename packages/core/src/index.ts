@@ -1,6 +1,7 @@
 /// <reference path="./prompts/md.d.ts" />
 
 export * from "./core/adapters";
+export * from "./utils/calendar";
 export * from "./delivery";
 export * from "./dashboard/detail-summary";
 export * from "./dashboard/history-sync";
