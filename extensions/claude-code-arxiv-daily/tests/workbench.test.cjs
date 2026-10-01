@@ -49,6 +49,11 @@ test('copied CLI serves its complete reading UI and dispatches original product 
   const document = await (await get('api/document?path=arxiv-daily/papers/existing.md')).json();
   assert.match(document.html, /katex/);
   assert.match(document.html, /<table>/);
+  const calendarBefore = await (await get('api/calendar?month=2026-05')).json();
+  assert.equal(calendarBefore.timezone, 'UTC');
+  assert.equal(calendarBefore.cells.filter(Boolean).length, 31);
+  assert.equal(calendarBefore.cells.find(day => day?.date === '2026-05-11').state, 'not-generated');
+  assert.equal((await fetch(new URL('api/calendar?month=2026-13', url))).status, 400);
   assert.equal(await fs.readFile(log, 'utf8'), '', 'reading must not trigger any HTTP/model request');
 
   const launch = await fetch(new URL('api/runs', url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'daily', date: '2026-05-11' }) });
@@ -67,6 +72,12 @@ test('copied CLI serves its complete reading UI and dispatches original product 
   assert.equal(await fs.readFile(path.join(vault, 'arxiv-daily/papers/existing.md'), 'utf8'), source);
   const listed = await (await get('api/documents?kind=daily')).json();
   assert.equal(listed.total, 1);
+  const calendarAfter = await (await get('api/calendar?month=2026-05')).json();
+  const completedDay = calendarAfter.cells.find(day => day?.date === '2026-05-11');
+  assert.equal(completedDay.state, 'has-report');
+  assert.equal(completedDay.reportPath, 'arxiv-daily/daily/2026-05-11.md');
+  assert.equal(completedDay.papers, 2);
+  assert.equal(completedDay.canGenerate, false);
 
   await fs.appendFile(configPath, '\n# changed configuration\n');
   await fetch(new URL('api/runs', url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'paper', id: '2605.09999' }) });

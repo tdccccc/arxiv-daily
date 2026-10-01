@@ -4,6 +4,7 @@ import { mountWorkbench } from "../src/workbench/web/app";
 
 const daily = { path: "arxiv-daily/daily/2026-10-01.md", kind: "daily", title: "2026-10-01 · 研究日报", date: "2026-10-01", authors: "", arxivId: "", size: 20, modifiedAt: "2026-10-01" };
 const paper = { ...daily, path: "arxiv-daily/papers/2609.12345.md", kind: "papers", title: "Efficient inference", authors: "Ada", arxivId: "2609.12345" };
+const calendar = { month: "2026-10", today: "2026-10-01", timezone: "Asia/Shanghai", previousMonth: "2026-09", nextMonth: "2026-11", cells: [null, null, null, ...Array.from({ length: 31 }, (_, index) => ({ date: `2026-10-${String(index + 1).padStart(2, "0")}`, state: index === 0 ? "has-report" : "future", reportPath: index === 0 ? daily.path : null, reportTitle: index === 0 ? daily.title : null, papers: index === 0 ? 1 : null, message: index === 0 ? "日报已保存。" : "未来日期。", canGenerate: false, actionLabel: null })), null] };
 const status = { configPath: "/test/config.toml", vaultRoot: "/test/vault", output: { dailyDirectory: "/test/vault/daily", papersDirectory: "/test/vault/papers", summaryLanguage: "zh", linkStyle: "relative" }, llm: { provider: "openai", model: "test-model", ready: true, keyConfigured: true }, topics: [{ name: "Inference", tag: "inference", description: "Fast models", detail: true }], categories: ["cs.AI"], dailyReady: true, emailEnabled: false, paperCount: 1, recentRuns: [] };
 const json = (value: unknown, code = 200) => new Response(JSON.stringify(value), { status: code, headers: { "Content-Type": "application/json" } });
 const disposers: Array<() => void> = [];
@@ -18,6 +19,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     const custom = override?.(url, init);
     if (custom) return await custom;
     if (url.pathname.endsWith("api/status")) return json(status);
+    if (url.pathname.endsWith("api/calendar")) return json(calendar);
     if (url.pathname.endsWith("api/runs/current")) return json({ run: null });
     if (url.pathname.endsWith("api/documents")) return json({ documents: url.searchParams.get("kind") === "papers" ? [paper] : [daily], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
     if (url.pathname.endsWith("api/document")) {

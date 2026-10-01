@@ -1,6 +1,8 @@
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
+import type { WorkbenchCalendarDay } from "../calendar";
+import { calendarStateLabels, mountCalendar } from "./calendar";
 
 export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
@@ -27,6 +29,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   let entries: DocumentEntry[] = [];
   let nextOffset: number | null = null;
   let selectedPath = new URL(location.href).searchParams.get("document") || "";
+  let selectedDate = selectedPath ? "" : routeDate();
   let listVersion = 0;
   let documentVersion = 0;
   let runVersion = 0;
@@ -52,6 +55,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       <aside class="library-pane" aria-label="文档列表">
         <div class="library-heading"><span>我的阅读</span><button class="icon-button" data-action="refresh" aria-label="刷新文档">↻</button></div>
         <div class="collection-tabs" role="tablist" aria-label="文档类型"><button role="tab" aria-selected="true" data-kind="daily">日报 <span data-count="daily">0</span></button><button role="tab" aria-selected="false" data-kind="papers">论文总结 <span data-count="papers">0</span></button></div>
+        <section class="calendar-panel" aria-label="日报日历"></section>
         <label class="search-box">${symbols.search}<input type="search" aria-label="搜索标题、作者、arXiv ID 或日期" placeholder="搜索标题、作者或 ID" autocomplete="off"></label>
         <div class="list-caption" aria-live="polite">正在读取文档…</div>
         <div class="document-list"></div>
@@ -65,6 +69,12 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
 
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
   const reading = find(".reading-pane");
+  const calendar = mountCalendar(find(".calendar-panel"), {
+    request,
+    selectDay: day => { if (day.reportPath) void openDocument(day.reportPath); else openDay(day); },
+    updateDay: day => { if (selectedDate === day.date && !selectedPath) renderDay(day); },
+    onError: reportConnection,
+  });
 
   async function request<T>(url: string, body?: unknown): Promise<T> {
     try {
@@ -120,7 +130,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       find('[data-count="daily"]').textContent = String(result.counts.daily);
       find('[data-count="papers"]').textContent = String(result.counts.papers);
       renderList(result.total);
-      if (autoOpen && !selectedPath && !window.matchMedia("(max-width: 760px)").matches && entries[0]) void openDocument(entries[0].path, "replace");
+      if (autoOpen && !selectedPath && !selectedDate && !window.matchMedia("(max-width: 760px)").matches && entries[0]) void openDocument(entries[0].path, "replace");
     } catch (error) {
       if (disposed || version !== listVersion) return;
       find(".list-caption").textContent = "读取未完成";
@@ -137,14 +147,16 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     }
   }
 
-  async function openDocument(path: string, historyMode: "push" | "replace" | "none" = "push", hash = ""): Promise<void> {
+  async function openDocument(path: string, historyMode: "push" | "replace" | "none" = "push", hash = "", syncCalendar = true): Promise<void> {
     const version = ++documentVersion;
     selectedPath = path;
+    selectedDate = "";
     markSelection();
     root.classList.add("is-reading");
     if (historyMode !== "none") {
       const url = new URL(location.href);
       url.searchParams.set("document", path);
+      url.searchParams.delete("date");
       url.hash = hash;
       history[historyMode === "push" ? "pushState" : "replaceState"]({}, "", url);
     }
@@ -154,12 +166,49 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       const result = await request<ReadingDocument>(`api/document?path=${encodeURIComponent(path)}`);
       if (disposed || version !== documentVersion) return;
       renderDocument(result);
+      if (syncCalendar && result.kind === "daily" && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) void calendar.selectDate(result.date);
       if (hash) scrollToHash(hash); else reading.scrollTop = 0;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
       reading.innerHTML = `<div class="empty-reading"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><h1>暂时无法打开文档</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">重试读取</button></div>`;
       if (message(error).includes("无法连接")) reportConnection(error);
     }
+  }
+
+  function setDayRoute(date: string, historyMode: "push" | "none"): void {
+    documentVersion += 1;
+    selectedPath = "";
+    selectedDate = date;
+    markSelection();
+    root.classList.add("is-reading");
+    find(".toc-pane").innerHTML = "";
+    if (historyMode === "push") {
+      const url = new URL(location.href);
+      url.searchParams.delete("document");
+      url.searchParams.set("date", date);
+      url.hash = "";
+      history.pushState({}, "", url);
+    }
+  }
+
+  function openDay(day: WorkbenchCalendarDay, historyMode: "push" | "none" = "push"): void {
+    setDayRoute(day.date, historyMode);
+    renderDay(day);
+  }
+
+  async function openDate(date: string): Promise<void> {
+    setDayRoute(date, "none");
+    const version = documentVersion;
+    reading.innerHTML = '<div class="reading-loading" role="status">正在读取日期状态…</div>';
+    const day = await calendar.selectDate(date);
+    if (disposed || version !== documentVersion) return;
+    if (day) renderDay(day);
+    else reading.innerHTML = '<div class="empty-reading"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><h1>暂时无法读取日期状态</h1><p>请刷新日历后重试。</p><button class="quiet-button" data-action="refresh">刷新</button></div>';
+  }
+
+  function renderDay(day: WorkbenchCalendarDay): void {
+    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><span class="reading-kind">研究日报</span><span class="reading-date">${day.date}</span></div><section class="day-reading"><div class="day-eyebrow">${day.date} · 研究日报</div><h1>${calendarStateLabels[day.state]}</h1><p>${escapeHtml(day.message)}</p>${day.reportPath ? `<button class="primary-button" data-document="${escapeHtml(day.reportPath)}">打开日报</button>` : day.canGenerate ? `<button class="primary-button" data-action="generate-date" data-date="${day.date}">${escapeHtml(day.actionLabel || "生成日报")}</button><span class="day-action-note">下一步确认日期与生成设置</span>` : ""}</section>`;
+    reading.scrollTop = 0;
   }
 
   function renderDocument(entry: ReadingDocument): void {
@@ -218,9 +267,10 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     showDialog("当前设置", `<p class="dialog-description">工作台使用启动时读取的 CLI 设置。</p><dl class="settings-list">${fields.map(([name, value]) => `<div><dt>${name}</dt><dd>${escapeHtml(value || "未设置")}</dd></div>`).join("")}</dl><h3 class="settings-subtitle">关注主题</h3><div class="settings-topics">${status.topics.length ? status.topics.map(topic => `<div><strong>${escapeHtml(topic.name)}</strong><p>${escapeHtml(topic.description)}</p></div>`).join("") : "尚未配置主题"}</div><div class="settings-help"><strong>修改设置</strong><p>在终端运行 <code>arxiv-daily init</code>，或编辑下方 TOML 文件。保存后重启工作台，使新设置生效。</p><code class="config-path">${escapeHtml(status.configPath)}</code><p>论文生成使用这里配置的模型 API，与 Claude Code 的对话模型独立。</p></div>`);
   }
 
-  function showGeneration(): void {
+  function showGeneration(date = ""): void {
     const unavailable = !status || !status.llm.ready;
     showDialog("生成研究内容", `<p class="dialog-description">筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。</p><form class="generation-form"><fieldset class="generation-kind"><legend>内容类型</legend><label><input type="radio" name="kind" value="daily" checked> 日报</label><label><input type="radio" name="kind" value="paper"> 单篇详细总结</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">日报日期 <span>留空生成今天的日报</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">arXiv ID 或链接</label><input id="run-paper" name="paper" type="text" placeholder="例如 2609.12345" autocomplete="off"></div>${status?.emailEnabled ? '<p class="generation-note">邮件已开启：日报成功后，会按现有配置发送邮件。</p>' : ""}${unavailable ? '<p class="generation-note">模型 API 尚未就绪，请先在终端完成配置并重启工作台。</p>' : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">取消</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>开始生成</button></div></form>`);
+    find<HTMLInputElement>("#run-date").value = date;
   }
 
   function renderRun(): void {
@@ -240,11 +290,12 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     const previous = currentRun;
     currentRun = run;
     renderRun();
+    if (run?.id !== previous?.id || run?.status !== previous?.status || run?.date !== previous?.date) void calendar.refresh();
     clearTimeout(pollTimer);
     if (run?.status === "running") pollTimer = setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
     if (run && run.status !== "running" && previous?.id === run.id && previous.status === "running") {
       void loadList(false, true);
-      if (selectedPath) void openDocument(selectedPath, "none", location.hash);
+      if (selectedPath) void openDocument(selectedPath, "none", location.hash, false);
     }
   }
 
@@ -291,6 +342,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
 
   function switchCollection(value: "daily" | "papers"): void {
     kind = value;
+    find(".calendar-panel").hidden = kind !== "daily";
     for (const tab of Array.from(root.querySelectorAll<HTMLElement>("[data-kind]"))) tab.setAttribute("aria-selected", String(tab.dataset.kind === kind));
     root.classList.remove("is-reading");
     void loadList();
@@ -299,7 +351,9 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   function reconnect(): void {
     find(".connection-banner").hidden = true;
     void loadStatus(); void loadList(false, true); void pollRun();
+    void calendar.refresh();
     if (selectedPath) void openDocument(selectedPath, "none", location.hash);
+    else if (selectedDate) void openDate(selectedDate);
   }
 
   function click(event: MouseEvent): void {
@@ -323,6 +377,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     if (tab) { switchCollection(tab.dataset.kind as typeof kind); return; }
     const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
     if (action === "generate") showGeneration();
+    else if (action === "generate-date") showGeneration(target.closest<HTMLElement>("[data-date]")!.dataset.date);
     else if (action === "settings") showSettings();
     else if (action === "close-dialog") closeDialog();
     else if (action === "reconnect" || action === "refresh") reconnect();
@@ -362,7 +417,8 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   function popstate(): void {
     const path = new URL(location.href).searchParams.get("document");
     if (path) void openDocument(path, "none", location.hash);
-    else { documentVersion += 1; selectedPath = ""; root.classList.remove("is-reading"); markSelection(); reading.innerHTML = '<div class="empty-reading"><h1>选择文档继续阅读</h1><p>日报和论文总结保存在左侧列表中。</p></div>'; find(".toc-pane").innerHTML = ""; }
+    else if (routeDate()) void openDate(routeDate());
+    else { documentVersion += 1; selectedPath = ""; selectedDate = ""; calendar.clearSelection(); root.classList.remove("is-reading"); markSelection(); reading.innerHTML = '<div class="empty-reading"><h1>选择文档继续阅读</h1><p>日报和论文总结保存在左侧列表中。</p></div>'; find(".toc-pane").innerHTML = ""; }
   }
   root.addEventListener("click", click);
   root.addEventListener("input", input);
@@ -372,8 +428,10 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   window.addEventListener("popstate", popstate);
   void loadStatus(); void loadList(false, true); void pollRun();
   if (selectedPath) void openDocument(selectedPath, "none", location.hash);
+  if (selectedDate) void openDate(selectedDate); else void calendar.load();
   return () => {
     disposed = true;
+    calendar.dispose();
     lifetime.abort();
     clearTimeout(searchTimer); clearTimeout(pollTimer);
     closeDialog();
@@ -388,6 +446,7 @@ function preference(key: string, value?: string): string | null {
 }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
 function message(error: unknown): string { return error instanceof Error ? error.message : "操作未完成，请重试。"; }
+function routeDate(): string { const date = new URL(location.href).searchParams.get("date") || ""; return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ""; }
 
 if (typeof document !== "undefined") {
   const app = document.getElementById("app");
