@@ -23,6 +23,7 @@ import {
   renderEmbeddingBaseUrlRow,
   renderEmbeddingModeRow,
   renderHostedTokenRow,
+  renderLibraryDirectionsRow,
   renderLlmBaseUrlRow,
   renderModelRow,
   renderPdfParserSidecarCapabilitiesUrlRow,
@@ -155,6 +156,7 @@ function makeTab() {
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
     cancelPersonalLibraryIndexing: vi.fn().mockReturnValue(true),
     openPersonalLibraryDirectionReview: vi.fn(),
+    getPersonalLibraryInterestProfile: vi.fn().mockReturnValue(null),
   } as unknown as ArxivDailyPlugin;
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =
     new SettingsChangeService({
@@ -376,6 +378,82 @@ describe("personal library guide row", () => {
     const items = libraryGroupItems(tab);
     expect(items[0]?.name).toBe("");
     expect(items[1]?.name).toBe("Library");
+  });
+});
+
+describe("personal library directions row", () => {
+  function libraryGroupItems(tab: ArxivDailySettingTab) {
+    const group = tab.getSettingDefinitions().find(
+      (item) => item.type === "group" && item.heading === "Personal library",
+    ) as { items: Array<Record<string, unknown>> } | undefined;
+    return group?.items ?? [];
+  }
+
+  it("is hidden while no library folder is chosen", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    const items = libraryGroupItems(tab);
+    expect(items.some((item) => item.name === "Research directions")).toBe(false);
+  });
+
+  it("shows directly below Library once a folder is chosen, before any remote authorization", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    const items = libraryGroupItems(tab);
+    const libraryIndex = items.findIndex((item) => item.name === "Library");
+    const directionsIndex = items.findIndex((item) => item.name === "Research directions");
+    expect(libraryIndex).toBeGreaterThanOrEqual(0);
+    expect(directionsIndex).toBe(libraryIndex + 1);
+    expect(items[directionsIndex]?.desc).toEqual(expect.stringContaining("daily reports"));
+  });
+
+  it("also shows once fully authorized", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    const items = libraryGroupItems(tab);
+    expect(items.some((item) => item.name === "Research directions")).toBe(true);
+  });
+
+  it("reflects a confirmed count when cheaply available, without extra I/O", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    vi.mocked(plugin.getPersonalLibraryInterestProfile).mockReturnValue({
+      schemaVersion: 1,
+      revision: 1,
+      scopeFingerprint: "scope",
+      identificationFingerprint: "id",
+      updatedAt: new Date().toISOString(),
+      directions: [
+        { id: "a", status: "active" } as never,
+        { id: "b", status: "disabled" } as never,
+        { id: "c", status: "merged" } as never,
+      ],
+    } as never);
+    const items = libraryGroupItems(tab);
+    const row = items.find((item) => item.name === "Research directions");
+    expect(row?.desc).toContain("2 confirmed");
+  });
+
+  it("opens the direction review modal when its button is clicked", async () => {
+    const { tab, plugin } = makeTab();
+    const setting = new Setting(tab.containerEl);
+    renderLibraryDirectionsRow(tab, setting);
+    const buttons = [...setting.settingEl.querySelectorAll("button")];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.textContent).toBe("Review directions");
+    buttons[0]?.click();
+    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalled());
   });
 });
 

@@ -12,6 +12,7 @@ import type ArxivDailyPlugin from "../../main";
 import {
   buildSettingDefinitions,
   dailyAutoSendDesc,
+  libraryDirectionsRowDesc,
   readSettingValue,
   SETTING_KEYS,
   settingsSectionClass,
@@ -226,6 +227,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
+      renderLibraryDirectionsRow: (setting) =>
+        declarativeRows.renderLibraryDirectionsRow(this, setting),
       renderLibraryGuideRow: (setting) =>
         declarativeRows.renderLibraryGuideRow(this, setting),
       renderCategoryRow: (setting, index) =>
@@ -493,7 +496,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         "Optional — daily reports work the same without a library.",
         "1. Choose a folder of PDFs; nothing leaves this device.",
         "2. Build a local search index (command palette) — its model downloads once, then runs locally.",
-        "3. Optional: confirm library directions (command palette) to also steer daily reports. Remote embedding and model processing always ask first.",
+        "3. Optional: confirm library directions (Review directions button below) to also steer daily reports. Remote embedding and model processing always ask first.",
       ],
     };
   }
@@ -549,9 +552,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         live.cancel = button;
       });
     }
-    // Secondary library actions (preview / scan / reload / direction review)
-    // live in the command palette only, so this row never grows past three
-    // buttons and needs no menu.
+    // Secondary library actions (preview / scan / reload) live in the command
+    // palette only, so this row never grows past three buttons and needs no
+    // menu. Direction review has its own row below instead, since it is a
+    // distinct, user-facing feature rather than upkeep.
     const revoke = row.revoke;
     if (revoke) {
       setting.addButton((button) =>
@@ -1719,6 +1723,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Library")
       .setDesc("Choose a folder of PDFs, then build a search index to search them. On its own, this does not change daily reports.");
     this.renderLibraryConnectionControls(librarySetting);
+
+    if (this.plugin.getLibraryConnectionStatus().kind !== "disconnected") {
+      new Setting(containerEl)
+        .setName("Research directions")
+        .setDesc(libraryDirectionsRowDesc(this.plugin))
+        .addButton((button) =>
+          button
+            .setButtonText("Review directions")
+            .onClick(() => this.runAction(
+              "open personal library direction review",
+              async () => this.plugin.openPersonalLibraryDirectionReview(),
+            )),
+        );
+    }
 
     new Setting(containerEl)
       .setName("Embedding")

@@ -130,6 +130,7 @@ export interface SettingDefinitionsHost {
   renderModelRow?: (setting: Setting) => void;
   renderReasoningEffortRow?: (setting: Setting) => void;
   renderLibraryConnectionRow?: (setting: Setting) => void;
+  renderLibraryDirectionsRow?: (setting: Setting) => void;
   renderLibraryGuideRow?: (setting: Setting) => void;
   renderSetupGuideRow?: (setting: Setting) => void;
   showSetupGuide?: boolean;
@@ -198,6 +199,18 @@ export function dailyAutoSendDesc(hostedMode: boolean, automaticSupported: boole
     ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
     : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.";
   return automaticSupported ? desc : `${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE} ${desc}`;
+}
+
+/**
+ * Research directions row description, shared by both render paths. The
+ * confirmed count comes from the in-memory profile the plugin already holds
+ * (loaded at startup), so reading it here adds no I/O to a settings render.
+ */
+export function libraryDirectionsRowDesc(plugin: ArxivDailyPlugin): string {
+  const base = "Directions summarize what your library is about; confirmed ones steer which papers daily reports pick.";
+  const confirmed = plugin.getPersonalLibraryInterestProfile()?.directions
+    .filter((direction) => direction.status !== "merged").length ?? 0;
+  return confirmed > 0 ? `${base} ${confirmed} confirmed.` : base;
 }
 
 /**
@@ -398,6 +411,15 @@ export function buildSettingDefinitions(
               render: (setting: Setting) =>
                 host.renderLibraryConnectionRow?.(setting),
             },
+            ...(host.renderLibraryDirectionsRow
+              && plugin.getLibraryConnectionStatus().kind !== "disconnected"
+              ? [{
+                  name: "Research directions",
+                  desc: libraryDirectionsRowDesc(plugin),
+                  render: (setting: Setting) =>
+                    host.renderLibraryDirectionsRow?.(setting),
+                } satisfies SettingDefinitionItem]
+              : []),
             ...(host.renderEmbeddingModeRow
               ? [{
                   name: "Embedding",

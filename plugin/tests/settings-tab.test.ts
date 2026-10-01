@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  ButtonComponent,
   DropdownComponent,
   Setting,
   TextComponent,
@@ -104,6 +105,8 @@ function makeLegacyApiKeyTab(
     getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
     automaticEmailSupported: () => true,
+    openPersonalLibraryDirectionReview: vi.fn(),
+    getPersonalLibraryInterestProfile: vi.fn().mockReturnValue(null),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);
@@ -233,6 +236,9 @@ describe("legacy personal library guide box", () => {
     expect(text).toContain("steer daily reports");
     expect(text).toContain("Remote embedding and model processing always ask first");
     expect(text).not.toContain("bundled");
+    const directionsStep = content.lines[3] ?? "";
+    expect(directionsStep).toContain("Review directions button below");
+    expect(directionsStep).not.toContain("command palette");
   });
 
   it("keeps showing the intro box once a folder is chosen (always visible, like the email guide)", () => {
@@ -254,6 +260,43 @@ describe("legacy personal library guide box", () => {
     });
     renderLegacySettings(tab);
     expect(tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
+  });
+});
+
+describe("legacy personal library directions row", () => {
+  it("is hidden while no library folder is chosen", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    const rows = renderLegacySettings(tab);
+    expect(rows.has("Research directions")).toBe(false);
+  });
+
+  it("shows below Library once a folder is chosen", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    renderLegacySettings(tab);
+    const names = Setting.instances.map((setting) => setting.nameEl.textContent ?? "");
+    const libraryIndex = names.indexOf("Library");
+    const directionsIndex = names.indexOf("Research directions");
+    expect(libraryIndex).toBeGreaterThanOrEqual(0);
+    expect(directionsIndex).toBe(libraryIndex + 1);
+  });
+
+  it("opens the direction review modal when its button is clicked", async () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    const rows = renderLegacySettings(tab);
+    const button = componentOf(rows.get("Research directions"), ButtonComponent as never) as ButtonComponent;
+    button.buttonEl.click();
+    await vi.waitFor(() =>
+      expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalled());
   });
 });
 

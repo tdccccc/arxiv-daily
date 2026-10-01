@@ -46,6 +46,21 @@ export function renderLibraryConnectionRow(
   tab.renderLibraryConnectionControls(setting);
 }
 
+export function renderLibraryDirectionsRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  setting.addButton((button) =>
+    button
+      .setButtonText("Review directions")
+      .onClick(() => tab.runAction(
+        "open personal library direction review",
+        async () => tab.plugin.openPersonalLibraryDirectionReview(),
+      )),
+  );
+}
+
 export function renderLlmBaseUrlRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
