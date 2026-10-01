@@ -1,9 +1,9 @@
 # Workbench daily calendar
 
-status: done
+status: active
 created: 2026-10-01T23:40:36+08:00
-updated: 2026-10-02T00:15:05+08:00
-revision: 2
+updated: 2026-10-02T00:20:27+08:00
+revision: 3
 owner: /root
 
 ## Intent
@@ -31,3 +31,5 @@ Add a compact daily-report calendar to the local reading workbench, following th
 ## Phases
 
 1. P1 — Calendar navigation, authoritative day states and browser acceptance — status: done
+
+2. P2 — Larger calendar cells, semantic colors and per-day paper counts — status: active
