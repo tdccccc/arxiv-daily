@@ -27,7 +27,7 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     <div class="calendar-body" id="daily-calendar-body"><div class="calendar-navigation"><button class="icon-button" data-calendar-action="previous" aria-label="上个月">‹</button><strong class="calendar-month" aria-live="polite">日报日历</strong><button class="icon-button" data-calendar-action="next" aria-label="下个月">›</button><button class="quiet-button calendar-today" data-calendar-action="today">回到今天</button></div>
     <div class="calendar-error" role="alert" hidden></div><div class="calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
     <div class="calendar-grid" role="group" aria-label="日报日期"><div class="calendar-loading" role="status">正在读取日历…</div></div>
-    <div class="calendar-legend"><span><i class="calendar-dot has-report"></i>有日报</span><span><i class="calendar-dot no-matches"></i>无匹配</span><span><i class="calendar-dot failed"></i>需查看</span></div>
+    <div class="calendar-legend" aria-label="日历状态图例"><span><i class="calendar-dot has-report"></i>有日报</span><span><i class="calendar-dot not-generated"></i>可生成</span><span><i class="calendar-dot running"></i>生成中</span><span><i class="calendar-dot failed"></i>需处理</span><span><i class="calendar-dot no-matches"></i>无匹配</span></div>
     <div class="calendar-summary" aria-live="polite"></div></div>`;
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => host.querySelector<T>(selector)!;
 
@@ -48,7 +48,15 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     find(".calendar-grid").setAttribute("aria-label", `${data.month} 日报日期`);
     find<HTMLButtonElement>('[data-calendar-action="previous"]').disabled = data.previousMonth === data.month;
     find<HTMLButtonElement>('[data-calendar-action="next"]').disabled = data.nextMonth === data.month;
-    find(".calendar-grid").innerHTML = data.cells.map(day => day ? `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date}，${calendarStateLabels[day.state]}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span>${Number(day.date.slice(8))}</span><i class="calendar-dot ${day.state}" aria-hidden="true"></i></button>` : '<span class="calendar-blank" aria-hidden="true"></span>').join("");
+    find(".calendar-grid").innerHTML = data.cells.map(day => {
+      if (!day) return '<span class="calendar-blank" aria-hidden="true"></span>';
+      const showCount = day.state === "has-report" || day.state === "no-matches";
+      const countLabel = showCount ? day.papers === null ? "，论文数未知" : `，${day.papers} 篇论文` : "";
+      const caption = showCount
+        ? `<span class="calendar-day-count">${day.papers === null ? "—" : `${day.papers}篇`}</span>`
+        : `<span class="calendar-day-mark" aria-hidden="true">${day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "skipped" ? "–" : ""}</span>`;
+      return `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date}，${calendarStateLabels[day.state]}${countLabel}" title="${day.date} · ${calendarStateLabels[day.state]}${countLabel}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span class="calendar-day-number">${Number(day.date.slice(8))}</span>${caption}</button>`;
+    }).join("");
     const selected = days.find(day => day.date === selectedDate);
     find(".calendar-summary").innerHTML = selected ? `<div class="calendar-selected-heading"><time datetime="${selected.date}">${selected.date}</time><span>${calendarStateLabels[selected.state]}${selected.papers !== null ? ` · ${selected.papers} 篇` : ""}</span></div>${selected.canGenerate ? `<button class="quiet-button" data-action="generate-date" data-date="${selected.date}">${escapeHtml(selected.actionLabel || "生成日报")} <span aria-hidden="true">↗</span></button>` : ""}` : '<span class="calendar-hint">选择日期查看日报或运行状态</span>';
     if (restoreDate) focusDate(restoreDate);

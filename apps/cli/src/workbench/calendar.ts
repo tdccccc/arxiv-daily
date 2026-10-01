@@ -1,4 +1,4 @@
-import { calendarCells, createStorageStateStore, formatDate, shiftMonth, todayInTz, type RunStateEntry } from "@arxiv-daily/core";
+import { calendarCells, createStorageStateStore, formatDate, PaperIndexStore, shiftMonth, todayInTz, type RunStateEntry } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../config";
 import { WorkbenchError, type DocumentEntry, type WorkbenchDocuments } from "./documents";
@@ -39,21 +39,42 @@ export async function inspectCalendar(
   if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month) || Number(month.slice(0, 4)) < 100) {
     throw new WorkbenchError(400, "月份无效，请使用 YYYY-MM 格式（年份 0100–9999）。");
   }
-  const store = createStorageStateStore(new NodeStorageAdapter(config.vaultRoot), config.settings.output);
+  const storage = new NodeStorageAdapter(config.vaultRoot);
+  const store = createStorageStateStore(storage, config.settings.output);
   const [entries] = await Promise.all([documents.list(), store.load()]);
   const states = store.snapshot();
   const reports = new Map<string, DocumentEntry>();
-  for (const entry of entries) if (entry.kind === "daily" && !reports.has(entry.date)) reports.set(entry.date, entry);
+  for (const entry of entries) if (entry.kind === "daily" && entry.date.startsWith(`${month}-`) && !reports.has(entry.date)) reports.set(entry.date, entry);
+  const indexedCounts = new Map<string, number>();
+  const missingCounts = new Set([...reports.values()].filter(report => recordedCount(states[report.date]) === null).map(report => storage.normalizePath(report.path)));
+  if (missingCounts.size) {
+    try {
+      const { inbox } = await new PaperIndexStore(storage, config.settings.output).inspect();
+      for (const entry of Object.values(inbox.papers)) {
+        for (const reportPath of new Set(entry.dailyReports.map(value => storage.normalizePath(value)))) {
+          if (missingCounts.has(reportPath)) indexedCounts.set(reportPath, (indexedCounts.get(reportPath) ?? 0) + 1);
+        }
+      }
+    } catch { /* Optional index counts must not prevent reading saved reports. */ }
+  }
   return {
     month, today, timezone,
     previousMonth: month === "0100-01" ? month : shiftMonth(month, -1).padStart(7, "0"),
     nextMonth: month === "9999-12" ? month : shiftMonth(month, 1).padStart(7, "0"),
-    cells: calendarCells(month).map(cell => cell.date ? resolveDay(cell.date, today, reports.get(cell.date), states[cell.date], ownedRun) : null),
+    cells: calendarCells(month).map(cell => {
+      if (!cell.date) return null;
+      const report = reports.get(cell.date);
+      return resolveDay(cell.date, today, report, states[cell.date], ownedRun, report ? indexedCounts.get(storage.normalizePath(report.path)) : undefined);
+    }),
   };
 }
 
-function resolveDay(date: string, today: string, report: DocumentEntry | undefined, state: RunStateEntry | undefined, ownedRun: WorkbenchRun | null): WorkbenchCalendarDay {
-  const papers = typeof state?.papersWritten === "number" && Number.isSafeInteger(state.papersWritten) && state.papersWritten >= 0 ? state.papersWritten : null;
+function recordedCount(state: RunStateEntry | undefined): number | null {
+  return typeof state?.papersWritten === "number" && Number.isSafeInteger(state.papersWritten) && state.papersWritten >= 0 ? state.papersWritten : null;
+}
+
+function resolveDay(date: string, today: string, report: DocumentEntry | undefined, state: RunStateEntry | undefined, ownedRun: WorkbenchRun | null, indexedCount?: number): WorkbenchCalendarDay {
+  const papers = recordedCount(state) ?? indexedCount ?? null;
   const base = { date, reportPath: report?.path ?? null, reportTitle: report?.title ?? null, papers, canGenerate: false, actionLabel: null };
   if (report) return { ...base, state: "has-report", message: "日报已保存，可以打开阅读。" };
   if ((ownedRun?.status === "running" && ownedRun.date === date) || state?.status === "running") {

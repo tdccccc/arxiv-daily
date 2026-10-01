@@ -1,6 +1,6 @@
 {
   "name": "arxiv-daily",
-  "version": "0.2.0-experimental.3",
+  "version": "0.2.0-experimental.4",
   "description": "Open arXiv Daily's local Markdown reading workbench and operate its shared paper filtering, daily reports, detailed paper notes, and persistent Paper Index from Claude Code.",
   "author": { "name": "Da-Chuan Tian" },
   "homepage": "https://github.com/tdccccc/arxiv-daily",

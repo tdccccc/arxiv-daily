@@ -57,6 +57,24 @@ const ready = async (root: HTMLElement) => { await vi.waitFor(() => expect(day(r
 const posted = (fetcher: ReturnType<typeof setup>["fetcher"]) => fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
 
 describe("daily calendar in the reading workbench", () => {
+  it("shows known, zero and unknown paper counts directly in report dates", async () => {
+    const { root, fetcher } = setup(url => {
+      if (!url.pathname.endsWith("api/calendar")) return;
+      const data = calendar();
+      Object.assign(data.cells.find(cell => cell?.date === "2026-10-01")!, { papers: 128 });
+      Object.assign(data.cells.find(cell => cell?.date === "2026-10-06")!, { state: "has-report", reportPath: "old.md", papers: null });
+      return json(data);
+    });
+    await ready(root);
+    expect(day(root, "2026-10-01").textContent).toContain("128篇");
+    expect(day(root, "2026-10-01").getAttribute("aria-label")).toContain("128 篇论文");
+    expect(day(root, "2026-10-02").textContent).toContain("0篇");
+    expect(day(root, "2026-10-06").textContent).toContain("—");
+    expect(day(root, "2026-10-06").getAttribute("aria-label")).toContain("论文数未知");
+    expect(day(root, "2026-10-03").textContent).not.toContain("0");
+    expect(posted(fetcher)).toHaveLength(0);
+  });
+
   it("shows a Monday-first month, today and report states and opens a report without generating", async () => {
     const { root, fetcher } = setup(); await ready(root);
     expect(root.querySelector(".calendar-weekdays")?.textContent?.replace(/\s/g, "")).toBe("一二三四五六日");

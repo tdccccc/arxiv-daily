@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SETTINGS, type RunState, type RunStateEntry } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, PaperIndexStore, type RunState, type RunStateEntry } from "@arxiv-daily/core";
+import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 
@@ -44,6 +45,23 @@ it("serves a Monday-first leap-month calendar over real HTTP using product timez
   const december = await (await get("api/calendar?month=2025-12")).json();
   expect(december.nextMonth).toBe("2026-01");
   expect(run).not.toHaveBeenCalled();
+});
+
+it("recovers missing report counts from the existing Paper Index without replacing known totals", async () => {
+  const { get, config } = await setup({ reports: ["2026-09-01", "2026-09-02", "2026-09-03"], records: { "2026-09-02": state("completed", { papersWritten: 8 }) } });
+  const storage = new NodeStorageAdapter(config.vaultRoot);
+  const index = new PaperIndexStore(storage, config.settings.output);
+  for (const [id, date] of [["2609.10001", "2026-09-01"], ["2609.10002", "2026-09-01"], ["2609.10001", "2026-09-02"]]) {
+    await index.upsertFromDailyPaper({ arxivId: id!, title: id!, authors: "An author", date: date!, arxivCategory: "cs.AI", primaryTopic: "inference", detail: false, dailyReport: `research/daily/${date}.md` });
+  }
+  const indexFile = join(config.vaultRoot, "research/.index/papers.json");
+  const before = await readFile(indexFile, "utf8");
+  const data = await (await get("api/calendar?month=2026-09")).json();
+  const day = (date: string) => data.cells.find((cell: { date: string } | null) => cell?.date === date);
+  expect(day("2026-09-01").papers).toBe(2);
+  expect(day("2026-09-02").papers).toBe(8);
+  expect(day("2026-09-03").papers).toBeNull();
+  expect(await readFile(indexFile, "utf8")).toBe(before);
 });
 
 it("combines real reports and full historical run state without modifying records or exposing secrets", async () => {
