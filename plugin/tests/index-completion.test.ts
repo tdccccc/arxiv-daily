@@ -37,19 +37,19 @@ const NETWORK_FAILURE_MESSAGE =
 describe("describeFullTextIndexCompletion", () => {
   it("reports the ordinary counts when nothing failed", () => {
     expect(describeFullTextIndexCompletion(summary())).toBe(
-      "full-text index — 3 indexed, 1 reused, 0 failed, 0 pruned.",
+      "library index (titles and abstracts) — 3 indexed, 1 reused, 0 failed, 0 pruned.",
     );
   });
 
   it("appends the optional suffix only on the ordinary path", () => {
     expect(
       describeFullTextIndexCompletion(summary(), { onCompletionSuffix: "Search from the Dashboard." }),
-    ).toBe("full-text index — 3 indexed, 1 reused, 0 failed, 0 pruned. Search from the Dashboard.");
+    ).toBe("library index (titles and abstracts) — 3 indexed, 1 reused, 0 failed, 0 pruned. Search from the Dashboard.");
   });
 
   it("mentions refreshed titles when any were refreshed", () => {
     expect(describeFullTextIndexCompletion(summary({ titlesRefreshed: 2 }))).toBe(
-      "full-text index — 3 indexed, 1 reused, 0 failed, 0 pruned, 2 titles refreshed.",
+      "library index (titles and abstracts) — 3 indexed, 1 reused, 0 failed, 0 pruned, 2 titles refreshed.",
     );
   });
 
@@ -59,7 +59,7 @@ describe("describeFullTextIndexCompletion", () => {
       outcomes: [{ paperKey: "file:abc", status: "failed", error: "could not parse PDF" }],
     });
     expect(describeFullTextIndexCompletion(withOrdinaryFailure)).toBe(
-      "full-text index — 3 indexed, 1 reused, 1 failed, 0 pruned.",
+      "library index (titles and abstracts) — 3 indexed, 1 reused, 1 failed, 0 pruned.",
     );
   });
 
@@ -127,7 +127,7 @@ describe("describeFullTextIndexCompletion", () => {
     it("does not special-case zero outcomes without a library context (backward compatible)", () => {
       const empty = summary({ indexed: 0, reused: 0, outcomes: [] });
       expect(describeFullTextIndexCompletion(empty)).toBe(
-        "full-text index — 0 indexed, 0 reused, 0 failed, 0 pruned.",
+        "library index (titles and abstracts) — 0 indexed, 0 reused, 0 failed, 0 pruned.",
       );
     });
 
@@ -142,12 +142,12 @@ describe("describeFullTextIndexCompletion", () => {
       const text = describeFullTextIndexCompletion(nonEmpty, {
         libraryContext: libraryContext({ totalFiles: 0, readyPapers: 0 }),
       });
-      expect(text).toBe("full-text index — 1 indexed, 0 reused, 0 failed, 0 pruned.");
+      expect(text).toBe("library index (titles and abstracts) — 1 indexed, 0 reused, 0 failed, 0 pruned.");
     });
   });
 
   describe("zero recognized arXiv papers", () => {
-    it("explains that full-text search still works but directions need arXiv papers", () => {
+    it("explains that unrecognized papers can still support search and directions", () => {
       const fallbackOnly = summary({
         indexed: 3,
         reused: 0,
@@ -161,8 +161,8 @@ describe("describeFullTextIndexCompletion", () => {
           scannedBeforeIndexing: true,
         }),
       });
-      expect(text).toContain("Full-text search works for these files");
-      expect(text).toContain("research directions and daily-report steering need papers recognized as arXiv papers");
+      expect(text).toContain("Search and research directions use the titles and abstracts extracted from these PDFs");
+      expect(text).not.toContain("need papers recognized as arXiv papers");
       expect(text).not.toContain("offline");
     });
 
@@ -217,7 +217,7 @@ describe("describeFullTextIndexCompletion", () => {
           scannedBeforeIndexing: false,
         }),
       });
-      expect(text).toBe("full-text index — 3 indexed, 0 reused, 0 failed, 0 pruned.");
+      expect(text).toBe("library index (titles and abstracts) — 3 indexed, 0 reused, 0 failed, 0 pruned.");
     });
 
     it("says nothing extra once some recognized arXiv papers exist", () => {
@@ -234,7 +234,7 @@ describe("describeFullTextIndexCompletion", () => {
           scannedBeforeIndexing: true,
         }),
       });
-      expect(text).toBe("full-text index — 4 indexed, 0 reused, 0 failed, 0 pruned.");
+      expect(text).toBe("library index (titles and abstracts) — 4 indexed, 0 reused, 0 failed, 0 pruned.");
     });
   });
 });

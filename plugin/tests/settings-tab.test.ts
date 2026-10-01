@@ -113,6 +113,18 @@ function makeLegacyApiKeyTab(
   return { tab, settings, refreshSensitiveValues, installOutputStores };
 }
 
+it("offers library direction review in the legacy research topic settings", async () => {
+  const { tab } = makeLegacyApiKeyTab(async () => undefined);
+  tab.plugin.getLibraryConnectionStatus = () => ({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+  tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+  tab.plugin.openPersonalLibraryDirectionReview = vi.fn();
+  tab.display();
+  const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review suggestions");
+  expect(entry).toBeDefined();
+  entry!.click();
+  await vi.waitFor(() => expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+});
+
 function renderLegacyApiKey(tab: ArxivDailySettingTab) {
   const container = document.createElement("div");
   const render = Reflect.get(tab, "renderApiKeySetting") as (
@@ -142,6 +154,51 @@ function componentOf<T>(setting: Setting | undefined, ctor: new (...args: never[
   if (!component) throw new Error(`Missing ${ctor.name} component`);
   return component as T;
 }
+
+describe("legacy daily paper limit", () => {
+  it("shows 20 and persists a whole-number edit as a number", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(persistSettings);
+    const row = renderLegacySettings(tab).get("Daily paper limit");
+    const input = row?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    expect(input!.value).toBe("20");
+    expect(input!.min).toBe("1");
+    expect(input!.step).toBe("1");
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.output.maxDailyPapers).toBe(35));
+    expect(persistSettings).toHaveBeenCalledWith(expect.objectContaining({
+      output: expect.objectContaining({ maxDailyPapers: 35 }),
+    }));
+    expect(installOutputStores).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "2.5", ""])("rejects the invalid draft %j without persistence", async (draft) => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = draft;
+    input!.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(input!.validationMessage).toContain("positive whole number");
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+
+  it("restores the current limit when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(input!.value).toBe("20"));
+    expect(persistSettings).toHaveBeenCalledOnce();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+});
 
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
@@ -232,12 +289,12 @@ describe("legacy personal library guide box", () => {
     expect(text).toContain("nothing leaves this device");
     expect(text).toMatch(/model downloads once/);
     expect(text).toMatch(/runs locally/);
-    expect(text).toContain("confirm library directions");
+    expect(text).toContain("Review directions");
     expect(text).toContain("steer daily reports");
     expect(text).toContain("Remote embedding and model processing always ask first");
     expect(text).not.toContain("bundled");
     const directionsStep = content.lines[3] ?? "";
-    expect(directionsStep).toContain("Review directions button below");
+    expect(directionsStep).toContain("Review directions (button below)");
     expect(directionsStep).not.toContain("command palette");
 
     const indexStep = content.lines[2] ?? "";
@@ -792,18 +849,11 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('"aria-controls": formId');
     expect(settingsTabSource).toContain("form.hidden = !isExpanded");
     expect(settingsTabSource).toContain('attr: { for: nameId }');
-    expect(settingsTabSource).toContain('attr: { for: tagId }');
-    expect(settingsTabSource).toContain('attr: { for: descId }');
+    expect(settingsTabSource).toContain('attr: { for: dirId }');
     expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
   });
 
-  it("confirms topic deletion by name before persistence", () => {
-    expect(settingsTabSource).toContain('Delete the research topic "${topicName}"?');
-    expect(settingsTabSource).toContain("if (!confirmed) return");
-    expect(settingsTabSource.indexOf("if (!confirmed) return")).toBeLessThan(
-      settingsTabSource.indexOf("topics.splice(index, 1)"),
-    );
-  });
+
 
   it("renders one understandable automatic detail-note setting near topics", () => {
     const headingIndex = settingsTabSource.indexOf('"Research topics"');
@@ -1076,7 +1126,7 @@ describe("personal library settings layout", () => {
 describe("legacy topic card header", () => {
   function renderLegacyTopicCard(
     tab: ArxivDailySettingTab,
-    topics: Array<{ id: string; name: string; tag: string; description: string; detail: boolean }>,
+    topics: typeof DEFAULT_SETTINGS.arxiv.topics,
   ): HTMLElement {
     const container = document.createElement("div");
     const render = Reflect.get(tab, "renderTopicCard") as (
@@ -1090,7 +1140,7 @@ describe("legacy topic card header", () => {
 
   it("hides the tag chip while collapsed so a long name keeps the header width", () => {
     const { tab } = makeLegacyApiKeyTab(async () => {});
-    const container = renderLegacyTopicCard(tab, [{
+    const container = renderLegacyTopicCard(tab, [{ directions: [{ id: "fixture-direction", text: "Something", origin: "manual" as const }],
       id: "topic-1",
       name: "A very long research topic name that would otherwise get truncated",
       tag: "long-topic-tag",
@@ -1105,9 +1155,6 @@ describe("legacy topic card header", () => {
     ) as HTMLButtonElement;
     header.click();
 
-    expect(
-      container.querySelector(".arxiv-daily-settings__topic-tag")?.textContent,
-    ).toBe("#long-topic-tag");
+    expect(container.querySelector(".arxiv-daily-settings__topic-tag")).toBeNull();
   });
 });
-

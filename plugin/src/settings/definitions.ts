@@ -26,6 +26,7 @@ export const SETTING_KEYS = {
   output: {
     dailyDir: "output.dailyDir",
     papersDir: "output.papersDir",
+    maxDailyPapers: "output.maxDailyPapers",
     linkStyle: "output.linkStyle",
     summaryLanguage: "output.summaryLanguage",
   },
@@ -138,6 +139,7 @@ export interface SettingDefinitionsHost {
   automaticEmailSupported?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
+  renderLibraryTopicEntry?: (setting: Setting) => void;
   renderTimezoneRow?: (setting: Setting) => void;
   renderOutputDirectoryRow?: (setting: Setting, key: "dailyDir" | "papersDir") => void;
   renderEmailSenderRow?: (setting: Setting, key: "fromEmail" | "fromName") => void;
@@ -147,6 +149,7 @@ export interface SettingDefinitionsHost {
   renderScheduleEnabledRow?: (setting: Setting) => void;
   renderRunWindowRow?: (setting: Setting) => void;
   renderTickIntervalRow?: (setting: Setting) => void;
+  renderDailyPaperLimitRow?: (setting: Setting) => void;
   renderEmailGuideRow?: (setting: Setting) => void;
   renderEmailModeRow?: (setting: Setting) => void;
   renderEmailToRow?: (setting: Setting) => void;
@@ -203,14 +206,12 @@ export function dailyAutoSendDesc(hostedMode: boolean, automaticSupported: boole
 
 /**
  * Research directions row description, shared by both render paths. The
- * confirmed count comes from the in-memory profile the plugin already holds
- * (loaded at startup), so reading it here adds no I/O to a settings render.
+ * saved count comes from the topics already loaded in settings.
  */
 export function libraryDirectionsRowDesc(plugin: ArxivDailyPlugin): string {
-  const base = "Directions summarize what your library is about; confirmed ones steer which papers daily reports pick.";
-  const confirmed = plugin.getPersonalLibraryInterestProfile()?.directions
-    .filter((direction) => direction.status !== "merged").length ?? 0;
-  return confirmed > 0 ? `${base} ${confirmed} confirmed.` : base;
+  const base = "Review topic suggestions from indexed paper titles and abstracts. Only directions added to Research topics steer daily reports.";
+  const count = plugin.settings.arxiv.topics.reduce((total, topic) => total + topic.directions.length, 0);
+  return count > 0 ? `${base} ${count} saved direction${count === 1 ? "" : "s"}.` : base;
 }
 
 /**
@@ -304,7 +305,7 @@ export function buildSettingDefinitions(
       heading: "Research topics",
       cls: settingsSectionClass("topics"),
       emptyState:
-        "No topics yet. Add one to define what to track.",
+        "No topics yet. Generate from your library or add a topic.",
       items: topics.map((topic, index) => ({
         name: topic.name.trim() || "(unnamed)",
         render: (setting: Setting) => host.renderTopicRow?.(setting, index),
@@ -313,6 +314,10 @@ export function buildSettingDefinitions(
         name: "Add topic",
         action: () => void host.addTopic?.(),
       },
+    },
+    {
+      name: "Topics from your library",
+      render: (setting: Setting) => host.renderLibraryTopicEntry?.(setting),
     },
     {
       name: "Automatic detail notes",
@@ -334,7 +339,13 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "Output & schedule",
+      cls: "arxiv-daily-settings__section-schedule",
       items: [
+        {
+          name: "Daily paper limit",
+          desc: "Maximum papers across all topics in each daily report. Default is 20.",
+          render: (setting: Setting) => host.renderDailyPaperLimitRow?.(setting),
+        },
         ...(host.renderOutputDirectoryRow
           ? [{
               name: "Daily reports folder",
@@ -424,7 +435,7 @@ export function buildSettingDefinitions(
               ? [{
                   name: "Embedding",
                   desc: plugin.settings.embedding.mode === "remote"
-                    ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
+                    ? "Remote sends titles and abstracts to an embeddings API. Switching modes rebuilds the index."
                     : "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.",
                   render: (setting: Setting) => host.renderEmbeddingModeRow?.(setting),
                 } satisfies SettingDefinitionItem]
@@ -457,27 +468,20 @@ export function buildSettingDefinitions(
                   render: (setting: Setting) => host.renderEmbeddingDimensionRow?.(setting),
                 } satisfies SettingDefinitionItem]
               : []),
-            ...(host.renderPdfParserSidecarEnabledRow
-              ? [{
-                  name: "Better PDF parser",
-                  desc: "Optional local sidecar. Off by default; PDFs stay on this device either way.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarEnabledRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
-            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarCapabilitiesUrlRow
-              ? [{
-                  name: "Sidecar capability URL",
-                  desc: "Local loopback endpoint that reports parser capabilities.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarCapabilitiesUrlRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
-            ...(plugin.settings.pdfParserSidecar.enabled && host.renderPdfParserSidecarParseUrlRow
-              ? [{
-                  name: "Sidecar parse URL",
-                  desc: "Same-origin local loopback endpoint that accepts one PDF byte buffer.",
-                  render: (setting: Setting) => host.renderPdfParserSidecarParseUrlRow?.(setting),
-                } satisfies SettingDefinitionItem]
-              : []),
+            // The three PDF parser sidecar rows ("Better PDF parser" and its two
+            // loopback URLs) are deliberately not listed here.
+            //
+            // Indexing covers each paper's title and abstract (ADR 0013), which
+            // needs plain text from the leading pages, so the sidecar's
+            // structured output has no consumer and switching it on would change
+            // nothing a user could observe. A toggle promising a better parser
+            // that silently does nothing is worse than no toggle.
+            //
+            // The renderers, the host wiring, the sidecar client and the stored
+            // `pdfParserSidecar` settings all remain, so restoring the rows is a
+            // matter of re-adding these entries. Whether to retire the sidecar
+            // outright is an open question tied to the conclusion-section
+            // increment in ADR 0013 §2, which would want section structure back.
           ],
         } satisfies SettingDefinitionItem]
       : []),
@@ -558,6 +562,7 @@ export function buildSettingDefinitions(
     {
       type: "group",
       heading: "Advanced",
+      cls: "arxiv-daily-settings__section-advanced",
       items: [
         {
           name: "Log level",

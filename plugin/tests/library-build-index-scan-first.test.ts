@@ -137,6 +137,7 @@ function fixture(entries: Array<{ path: string; size: number; mtimeMs: number }>
     libraryIndexStatus: new LibraryIndexStatusStore(),
     libraryConnection: connection,
     librarySource: source,
+    libraryIndexedPapers: [],
     libraryConnectionRevision: 0,
     libraryOutputRevision: 0,
     librarySelectionRevision: 0,
@@ -145,7 +146,7 @@ function fixture(entries: Array<{ path: string; size: number; mtimeMs: number }>
   });
   internals.buildFullTextKnowledgeBaseStore = vi.fn(() => legacy);
   internals.buildEmbeddingModel = vi.fn(() => embeddingModel);
-  internals.runIncrementalDirectionUpdateAfterIndex = vi.fn(async () => undefined);
+
   return { plugin, internals, source, fetchMetadataByIds, legacy };
 }
 
@@ -156,20 +157,21 @@ describe("Build index scans a never-scanned library first", () => {
     ]);
     fetchMetadataByIds.mockRejectedValueOnce(new Error("arXiv unavailable"));
     source.readBinary.mockResolvedValue(new TextEncoder().encode("readable PDF fixture").buffer);
-    internals.buildFullTextDocumentParser = vi.fn(async () => ({ parser: {
-      provenance: { id: "fixture-parser", version: "1" },
-      capabilities: ["page-text"],
-      parse: async () => ({
-        mediaType: "application/pdf",
-        blocks: [{ kind: "page", text: "Readable scientific paper content. ".repeat(100), locator: { page: 1, block: 0 } }],
+    internals.buildFullTextExtractor = vi.fn(() => ({
+      provenance: { id: "fixture-extractor", version: "1" },
+      extractPdfText: async () => ({
+        pages: ["Scientific paper title\nAbstract\n" + "Readable scientific paper content. ".repeat(30)],
       }),
-    } }));
+    }));
 
     const summary = await plugin.indexPersonalLibraryFullText();
 
     expect(fetchMetadataByIds).toHaveBeenCalledTimes(1);
     expect(summary.indexed).toBe(1);
     expect(summary.outcomes[0]?.paperKey).toMatch(/^file:/);
+    expect(plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      expect.objectContaining({ paperKey: summary.outcomes[0]?.paperKey }),
+    ]);
     expect(plugin.getLastFullTextIndexLibraryContext()).toMatchObject({
       readyPapers: 0, metadataFetchFailures: 1, unresolvedFallbackFiles: 1,
     });

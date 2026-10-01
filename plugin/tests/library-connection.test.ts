@@ -8,6 +8,7 @@ import {
   libraryAuthorizationDisclosure,
   libraryAuthorizationFingerprint,
   libraryConnectionStatus,
+  librarySetupNextStep,
   revokeLibraryConnection,
 } from "../src/library/connection";
 
@@ -18,6 +19,25 @@ const scope = (llmBaseUrl: string, embeddingBaseUrl?: string) => ({
 });
 
 describe("personal library connection", () => {
+  it("describes titles and abstracts while retaining remote authorization requirements", () => {
+    const connection = createLibraryConnection("/papers", "1:2");
+    const remoteScope = scope("https://llm.example.com", "https://embed.example.com");
+    const authorized = authorizeLibraryConnection(connection, remoteScope);
+    const statuses = [
+      libraryConnectionStatus(connection, remoteScope),
+      libraryConnectionStatus(authorized, remoteScope),
+      libraryConnectionStatus(authorized, scope("https://llm.example.com", "https://changed.example.com")),
+    ];
+    for (const status of statuses) {
+      const step = librarySetupNextStep(status, "remote");
+      expect(step.description).toContain("titles and abstracts");
+      expect(step.description).not.toMatch(/full.text/i);
+      expect(step.action).toBe("index");
+      if (step.action === "index") expect(step.remoteConsentPending).toBe(status.kind !== "authorized");
+    }
+    expect(authorized.processingDepth).toBe("full-text");
+  });
+
   it("decodes the supported persisted shape and rejects malformed values", () => {
     const decoded = decodeLibraryConnection({
       schemaVersion: 1,

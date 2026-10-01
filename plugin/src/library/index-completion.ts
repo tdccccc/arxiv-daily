@@ -11,7 +11,7 @@ import { isEmbeddingModelDownloadNetworkError } from "../hosts/obsidian/embeddin
 export interface FullTextIndexLibraryContext {
   /** Every file the catalog knows about (any status), i.e. what the folder held. */
   totalFiles: number;
-  /** Files recognized as arXiv papers — what direction proposals and daily-report steering can see. */
+  /** Files recognized as arXiv papers; local indexed PDFs can also support directions. */
   readyPapers: number;
   /** Unrecognized or metadata-failed files still indexed as full-text-search-only fallback units. */
   unresolvedFallbackFiles: number;
@@ -68,19 +68,18 @@ export function describeFullTextIndexCompletion(
       + "text (unsupported file types or unreadable PDFs). Nothing is searchable yet.";
   }
   if (summary.searchablePapers === 0 && summary.failed > 0) {
-    return `full-text indexing failed for ${summary.failed} PDF(s). Nothing is searchable yet. `
-      + "The PDF text could not be read or embedded; see the developer console for details.";
+    return `library indexing failed for ${summary.failed} PDF(s). Nothing is searchable yet. `
+      + "The PDF title or abstract could not be read or embedded; see the developer console for details.";
   }
   const refreshed = summary.titlesRefreshed > 0 ? `, ${summary.titlesRefreshed} titles refreshed` : "";
   const suffix = options?.onCompletionSuffix ? ` ${options.onCompletionSuffix}` : "";
-  let base = `full-text index — ${summary.indexed} indexed, ${summary.reused} reused, `
+  let base = `library index (titles and abstracts) — ${summary.indexed} indexed, ${summary.reused} reused, `
     + `${summary.failed} failed, ${summary.pruned} pruned${refreshed}.${suffix}`;
-  // Indexed something, but none of it was recognized as an arXiv paper: full-text
-  // search still works (that's what was just indexed), but the deeper,
-  // library-aware features only ever look at `catalog.papers`.
+  // Recognition is optional: local title/abstract evidence can support both
+  // retrieval and proposed research directions after authorization.
   if (context?.scannedBeforeIndexing && context.readyPapers === 0 && context.unresolvedFallbackFiles > 0) {
-    base += " Full-text search works for these files, but research directions and "
-      + "daily-report steering need papers recognized as arXiv papers.";
+    base += " Search and research directions use the titles and abstracts extracted from these PDFs, "
+      + "even when arXiv metadata is unavailable.";
     if (context.metadataFetchFailures > 0) {
       base += " Some arXiv lookups failed, possibly because this device was offline during the scan.";
     }

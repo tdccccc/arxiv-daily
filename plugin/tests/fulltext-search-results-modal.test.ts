@@ -44,7 +44,7 @@ describe("FullTextSearchResultsModal", () => {
 
     modal.onOpen();
 
-    expect(modal.contentEl.textContent).toContain("Full-text search results");
+    expect(modal.contentEl.textContent).toContain("Library search results");
     expect(modal.contentEl.textContent).toContain("Evidence paper");
     expect(modal.contentEl.textContent).not.toContain("Results");
     expect(modal.contentEl.textContent).not.toContain("Page 9");

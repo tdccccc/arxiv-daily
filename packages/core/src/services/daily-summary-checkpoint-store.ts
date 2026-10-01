@@ -18,7 +18,7 @@ import { derivePaperInboxPaths } from "./paper-index";
 import { paperKeyFromArxivId } from "./paper-key";
 
 export const DAILY_SUMMARY_CHECKPOINT_SCHEMA_VERSION = 1 as const;
-export const DAILY_SUMMARY_PROMPT_CONTRACT_VERSION = 1 as const;
+export const DAILY_SUMMARY_PROMPT_CONTRACT_VERSION = 2 as const;
 export const DAILY_SUMMARY_RESULT_CONTRACT_VERSION = 1 as const;
 export const DAILY_SUMMARY_FINGERPRINT_VERSION = 2 as const;
 

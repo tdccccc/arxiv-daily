@@ -338,23 +338,22 @@ test("the reader reports the heading and both labels as data, to be judged separ
   assert.match(expression, /cancel: marked\("arxiv-daily-library-authorization-cancel"\)/);
 });
 
-test("each processing depth has its own heading, and neither claims the other's", () => {
-  assert.equal(DISCLOSURE_TITLES["full-text"], "Send full text off this device?");
-  assert.equal(
-    DISCLOSURE_TITLES["metadata-and-abstracts"],
-    "Send titles and abstracts off this device?",
-  );
-  assert.doesNotMatch(DISCLOSURE_TITLES["metadata-and-abstracts"], /full text/i);
+test("both legacy processing depths describe the current title-and-abstract scope", () => {
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    assert.equal(DISCLOSURE_TITLES[depth], "Send titles and abstracts off this device?");
+    assert.equal(judgeDisclosureTitle({ present: true, title: "Send titles and abstracts off this device?" }, depth).ok, true);
+    assert.equal(judgeDisclosureButtons({ present: true, confirm: "Send titles and abstracts", cancel: "Cancel" }, depth).ok, true);
+  }
 });
 
-test("a heading judged at the wrong depth fails as a wording problem, not a missing dialog", () => {
+test("the retired full-text heading fails at either legacy depth as a wording problem", () => {
   const fullText = { present: true, title: "Send full text off this device?" };
-  assert.equal(judgeDisclosureTitle(fullText, "full-text").ok, true);
-
-  const verdict = judgeDisclosureTitle(fullText, "metadata-and-abstracts");
-  assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /titled "Send full text off this device\?", expected/);
-  assert.doesNotMatch(verdict.reason, /no .*dialog|not found|no dialog/i);
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    const verdict = judgeDisclosureTitle(fullText, depth);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /titled "Send full text off this device\?", expected/);
+    assert.doesNotMatch(verdict.reason, /no .*dialog|not found|no dialog/i);
+  }
 });
 
 test("the retired heading fails the title judge, quoting both headings", () => {
@@ -364,7 +363,7 @@ test("the retired heading fails the title judge, quoting both headings", () => {
   );
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /titled "Authorize personal library"/);
-  assert.match(verdict.reason, /expected "Send full text off this device\?"/);
+  assert.match(verdict.reason, /expected "Send titles and abstracts off this device\?"/);
 });
 
 test("a depth with no specified heading is a failure rather than a silent pass", () => {
@@ -401,17 +400,16 @@ test("the retired Authorize label fails as wording, not as a missing button", ()
     "full-text",
   );
   assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /the confirm button reads "Authorize", expected "Send full text"/);
+  assert.match(verdict.reason, /the confirm button reads "Authorize", expected "Send titles and abstracts"/);
   assert.doesNotMatch(verdict.reason, /has no|not found|missing/i);
 });
 
-test("the metadata label on a full-text dialog is a wording failure too", () => {
-  const verdict = judgeDisclosureButtons(
-    { ...dialog("full-text"), confirm: DISCLOSURE_CONFIRM_LABELS["metadata-and-abstracts"] },
-    "full-text",
-  );
-  assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /reads "Send titles and abstracts", expected "Send full text"/);
+test("the retired full-text confirmation label fails at either legacy depth", () => {
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    const verdict = judgeDisclosureButtons({ ...dialog(depth), confirm: "Send full text" }, depth);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /reads "Send full text", expected "Send titles and abstracts"/);
+  }
 });
 
 test("a genuinely missing button says so, distinctly from a reworded one", () => {

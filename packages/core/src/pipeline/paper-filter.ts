@@ -4,25 +4,17 @@ import { isCancellationError, throwIfCancelled } from "../services/cancellation"
 import type { ArxivSettings, LlmSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
 import type { MetricsObserver } from "../metrics/generation";
-import { paperKeyFromArxivId } from "../services/paper-key";
-import {
-  buildPaperDiscoveryProvenance,
-  classifyPersonalizedDirections,
-  preparePersonalizedDiscoveryInput,
-  PERSONALIZED_LIBRARY_ONLY_CATEGORY,
-  PersonalizedFilterCheckpointOperationError,
-  type PaperDiscoveryProvenance,
-  type PersonalizedDiscoveryInput,
-  type PersonalizedFilterCheckpointPort,
-} from "./personalized-paper-filter";
+import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import {
   buildPaperFilterRequest,
+  classifiableTopics,
   decodePaperFilterRecords,
   prepareDailyFilterCheckpoint,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
 import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
+import type { TopicDirectionHit } from "./topic-direction-hits";
 
 export {
   buildPaperFilterRequest,
@@ -38,9 +30,26 @@ export {
 export interface FilteredPaper extends PaperMeta {
   category: string;
   isDetail: boolean;
-  /** Present only on the personalized path; legacy manual-only objects are unchanged. */
+  /** Validated relevance score used to select papers within the daily limit. */
+  relevanceScore: number;
+  /**
+   * Directions of `category`'s topic that selected this paper, in the topic's
+   * own order. Every filtered paper now reaches the report by this one route.
+   */
+  topicDirections?: TopicDirectionHit[];
+  /**
+   * Read-only legacy field (ADR 0012 / ADR 0014). The library-profile
+   * classifier that produced it retired with the profile document, so nothing
+   * sets it any more; it stays on the type because reports and index entries
+   * already on disk carry the provenance and are still read back.
+   */
   discoveryProvenance?: PaperDiscoveryProvenance;
-  /** Validated personal novelty with trusted basis display titles, attached only to library-derived papers with a novelty outcome. */
+  /**
+   * Read-only legacy field. Personal novelty lost its comparison basis when
+   * the profile document retired (ADR 0012 §Consequences); choosing a new
+   * basis is a decision deliberately left open, so the stage no longer runs
+   * and nothing sets this.
+   */
   personalNovelty?: PersonalNoveltyWithBasis;
 }
 
@@ -63,8 +72,6 @@ export interface PaperFilterDeps {
   reportDate: string;
   llmSettings: LlmSettings;
   checkpointStore?: DailyFilterCheckpointPort;
-  personalizedDiscovery?: PersonalizedDiscoveryInput;
-  personalizedCheckpointStore?: PersonalizedFilterCheckpointPort;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
 }
@@ -114,84 +121,13 @@ export function isPaperFilterResponseValidationError(
     typeof candidate.message === "string";
 }
 
+/**
+ * The one classifier. A second, profile-driven classifier used to run
+ * alongside this one and union its results in; it retired with the profile
+ * document (ADR 0012 / ADR 0014), and topic directions (ADR 0012 §1) now carry
+ * what it was for. Papers reach the report through topics and nothing else.
+ */
 export async function filterPapers(
-  papers: PaperMeta[],
-  deps: PaperFilterDeps,
-): Promise<FilteredPaper[]> {
-  let discovery: PersonalizedDiscoveryInput | undefined;
-  try {
-    discovery = deps.personalizedDiscovery
-      ? preparePersonalizedDiscoveryInput(deps.personalizedDiscovery)
-      : undefined;
-  } catch {
-    deps.logger.warn("paper-filter: invalid personalized discovery input; using manual-only");
-  }
-  if (!discovery || discovery.directions.length === 0) {
-    return filterPapersManualOnly(papers, deps);
-  }
-
-  // Deliberately execute the existing manual classifier unchanged before the
-  // independent personalized classifier. Union authority remains local.
-  const manual = await filterPapersManualOnly(papers, deps);
-  throwIfCancelled(deps.signal);
-  let personalized;
-  try {
-    personalized = await classifyPersonalizedDirections({
-      papers,
-      discovery,
-      llm: deps.llm,
-      llmSettings: deps.llmSettings,
-      reportDate: deps.reportDate,
-      checkpointStore: deps.personalizedCheckpointStore,
-      signal: deps.signal,
-      onMetrics: deps.onMetrics,
-    });
-  } catch (error) {
-    if (isCancellationError(error)) throw error;
-    if (error instanceof PersonalizedFilterCheckpointOperationError) {
-      throw new PaperFilterCheckpointError(
-        `personalized ${error.operation} failed for ${deps.reportDate}`,
-        error.cause,
-      );
-    }
-    throw error;
-  }
-  throwIfCancelled(deps.signal);
-  if (personalized === null) {
-    deps.logger.warn("paper-filter: malformed personalized result; retaining manual results only");
-    return manual;
-  }
-
-  const matchedByKey = new Map(personalized.map((record) => [record.paperKey, record.directionIds]));
-  const emitted = new Set<string>();
-  const out: FilteredPaper[] = [];
-  for (const paper of manual) {
-    const paperKey = paperKeyFromArxivId(paper.id);
-    if (emitted.has(paperKey)) continue;
-    emitted.add(paperKey);
-    const directionIds = matchedByKey.get(paperKey) ?? [];
-    out.push({
-      ...paper,
-      discoveryProvenance: buildPaperDiscoveryProvenance([paper.category], directionIds, discovery),
-    });
-  }
-  for (const paper of papers) {
-    const paperKey = paperKeyFromArxivId(paper.id);
-    const directionIds = matchedByKey.get(paperKey) ?? [];
-    if (emitted.has(paperKey) || directionIds.length === 0) continue;
-    emitted.add(paperKey);
-    out.push({
-      ...paper,
-      category: PERSONALIZED_LIBRARY_ONLY_CATEGORY,
-      isDetail: false,
-      discoveryProvenance: buildPaperDiscoveryProvenance([], directionIds, discovery),
-    });
-  }
-  deps.logger.info(`paper-filter: union kept ${out.length}/${papers.length} papers`);
-  return out;
-}
-
-async function filterPapersManualOnly(
   papers: PaperMeta[],
   deps: PaperFilterDeps,
 ): Promise<FilteredPaper[]> {
@@ -199,9 +135,22 @@ async function filterPapersManualOnly(
   throwIfCancelled(deps.signal);
   if (papers.length === 0) return [];
 
-  const topics: Topic[] = arxivSettings.topics ?? [];
-  if (topics.length === 0) {
+  const configured: Topic[] = arxivSettings.topics ?? [];
+  if (configured.length === 0) {
     logger.warn("paper-filter: no topics configured, skipping LLM call");
+    return [];
+  }
+  const topics = classifiableTopics(arxivSettings);
+  const withoutDirections = configured.filter((topic) => !topics.includes(topic));
+  if (withoutDirections.length > 0) {
+    logger.warn(
+      `paper-filter: skipping topics with no directions: ${
+        withoutDirections.map((topic) => topic.tag).join(", ")
+      }`,
+    );
+  }
+  if (topics.length === 0) {
+    logger.warn("paper-filter: no topic has a direction, skipping LLM call");
     return [];
   }
 
@@ -280,6 +229,7 @@ async function filterPapersManualOnly(
       parsed,
       new Set(request.identity.knownIds),
       new Set(request.identity.validTags),
+      request.identity.directions,
     );
     if (!records.ok) {
       throw new PaperFilterResponseValidationError(
@@ -315,7 +265,14 @@ async function filterPapersManualOnly(
   for (const item of validatedRecords) {
     if (item.category === "skip") continue;
     const meta = idMap.get(item.id)!;
-    out.push({ ...meta, category: item.category, isDetail: false });
+    // Resolved from the frozen request, never from live settings: those may
+    // have been edited while the call was in flight. Walking the request's own
+    // direction list keeps the topic's order rather than the model's.
+    const chosen = new Set(item.directions);
+    const topicDirections = request.identity.directions
+      .filter((direction) => chosen.has(direction.ref))
+      .map(({ tag, id, text }) => ({ tag, id, text }));
+    out.push({ ...meta, category: item.category, isDetail: false, relevanceScore: item.relevanceScore, topicDirections });
   }
   logger.info(`paper-filter: kept ${out.length}/${papers.length} papers`);
 

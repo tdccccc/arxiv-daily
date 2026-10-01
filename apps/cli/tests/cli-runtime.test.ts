@@ -6,6 +6,8 @@ import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   Logger,
+  normalizeTopic,
+  parseDailyReportTopicDirections,
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
@@ -100,6 +102,91 @@ describe("CLI runtime", () => {
     await buildCliRuntime(config);
     expect(await active.storage.exists(temp)).toBe(false);
   });
+
+  it("generates a result-first daily report without rewriting saved reports", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, join(root, ".cache")),
+    });
+    config.settings.arxiv.topics = [
+      normalizeTopic({ name: "Empty topic", tag: "empty", description: "Unmatched research", detail: false }),
+      normalizeTopic({ name: "Active topic", tag: "active", detail: false, directions: [
+        { id: "d1", text: "Galaxy observations", origin: "manual" },
+        { id: "d2", text: "Catalog comparisons", origin: "manual" },
+      ] }),
+      normalizeTopic({ name: "Limited topic", tag: "limited", description: "Other research", detail: false }),
+    ];
+    config.settings.output.maxDailyPapers = 1;
+    const ids = ["2609.00001", "2609.00002"];
+    // Public arXiv HTML/Atom and OpenAI-compatible SSE shapes. Only transport
+    // is replaced; classification, content extraction, rendering and index writes run.
+    const recent = `<html><body><dl id="articles"><h3>Tue, 8 Sep 2026</h3>${ids.map((id) =>
+      `<dt><a title="Abstract">arXiv:${id}</a></dt><dd><div class="list-title">Title: Paper ${id}</div><div class="list-authors"><a>A. Author</a></div></dd>`,
+    ).join("")}</dl></body></html>`;
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map((id) =>
+      `<entry><id>http://arxiv.org/abs/${id}v1</id><title>Paper ${id}</title><author><name>A. Author</name></author><summary>Galaxy observations.</summary><published>2026-09-08T00:00:00Z</published><updated>2026-09-08T00:00:00Z</updated><arxiv:primary_category term="astro-ph"/><category term="astro-ph"/></entry>`,
+    ).join("")}</feed>`;
+    const completions = [
+      { papers: [
+        { id: ids[0], category: "active", directions: ["active#1", "active#2"], relevanceScore: 95 },
+        { id: ids[1], category: "limited", directions: ["limited#1"], relevanceScore: 70 },
+      ] },
+      { id: ids[0], coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result", whyRelevant: "Research value", limitations: "Known limits" },
+    ];
+    const host = buildNodeHostAdapters({
+      rootDir: root,
+      progressStream: { write: () => {} },
+      fetch: async (url, init) => {
+        if (url.startsWith("https://arxiv.org/list/astro-ph/recent")) return new Response(recent);
+        if (url.startsWith("https://export.arxiv.org/api/query?")) return new Response(atom);
+        if (url === "https://arxiv.org/html/2609.00001") {
+          return new Response('<html><body><div class="ltx_abstract">Galaxy observations.</div><h2>Results</h2><p>We observe a measured improvement.</p></body></html>');
+        }
+        if (url === "https://api.example.com/v1/chat/completions" && init?.method === "POST") {
+          const completion = completions.shift();
+          if (completion) return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(completion) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+        }
+        return new Response(`Unexpected fixture request: ${url}`, { status: 400 });
+      },
+    });
+    const oldPath = "arxiv-daily/daily/2026-09-07.md";
+    const oldMarkdown = "# Saved report\nKeep my annotations.\n";
+    await host.storage.mkdir("arxiv-daily/daily");
+    await host.storage.writeText(oldPath, oldMarkdown);
+    const runtime = await buildCliRuntime(config, { host, logger: new Logger("error") });
+
+    expect(await runtime.pipeline.runForDate("2026-09-08")).toMatchObject({ kind: "completed", papersWritten: 1 });
+    const markdown = await host.storage.readText("arxiv-daily/daily/2026-09-08.md");
+    expect(await runtime.pipeline.runForDate("2026-09-07")).toMatchObject({ kind: "completed" });
+    expect(await host.storage.readText(oldPath)).toBe(oldMarkdown);
+    expect((await runtime.paperIndex.get(ids[0]!))?.summary).toEqual({
+      sourceSections: expect.stringContaining("Results"),
+      coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result",
+      whyRelevant: "Research value", limitations: "Known limits",
+    });
+    expect(parseDailyReportTopicDirections(markdown, "2026-09-08")).toEqual({
+      kind: "valid", occurrences: [{ arxivId: "2609.00001", hits: [
+        { tag: "active", id: "d1", text: "Galaxy observations" },
+        { tag: "active", id: "d2", text: "Catalog comparisons" },
+      ] }],
+    });
+    expect.soft(markdown.match(/^## .+$/gm)).toEqual(["## Active topic", "## 其他关注主题"]);
+    const otherTopics = markdown.split("## 其他关注主题")[1] ?? "";
+    expect.soft(otherTopics).toMatch(/^[-*] .*Empty topic.*(?:未匹配|无相关论文).*$/m);
+    expect.soft(otherTopics).toMatch(/^[-*] .*Limited topic.*上限.*1.*未展示.*$/m);
+    expect.soft(markdown).toContain("> [!info]- 命中方向与信息来源");
+    expect.soft(markdown).toContain("> - Galaxy observations\n> - Catalog comparisons");
+    expect.soft(markdown).toContain("> [!abstract]- 研究背景、方法与边界");
+    expect.soft(markdown).toContain("\n- **核心结果**: Observed result\n");
+    expect.soft(markdown.match(/^- \*\*(?:研究问题|方法设计|核心结果|研究价值|适用边界)\*\*:/gm))
+      .toEqual(["- **核心结果**:"]);
+    const background = markdown.match(/^> \[!abstract\]-[^\n]*\n(?:>[^\n]*(?:\n|$))*/m)?.[0] ?? "";
+    for (const line of [
+      "> - **研究问题**: Research problem", "> - **方法设计**: Measured method",
+      "> - **研究价值**: Research value", "> - **适用边界**: Known limits",
+    ]) expect.soft(background).toContain(line);
+  }, 15_000);
 
   it("builds pipeline dependencies on top of Node host adapters", async () => {
     const root = await makeTempDir();

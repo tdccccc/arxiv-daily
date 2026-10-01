@@ -9,20 +9,14 @@ import {
 import {
   DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION,
   DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
   DailyFilterCheckpointStore,
   buildDailyFilterCheckpointFingerprintInput,
   createDailyFilterCompatibilityFingerprint,
   deriveDailyFilterCheckpointPaths,
   prepareDailyFilterCheckpoint,
-  PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
   NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
 } from "../src/services/daily-filter-checkpoint-store";
-import {
-  planPersonalizedFilterCalls,
-  preparePersonalizedFilterCheckpoint,
-  type PersonalizedDiscoveryInput,
-  type PersonalizedDirectionRecord,
-} from "../src/pipeline/personalized-paper-filter";
 import {
   PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
   PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
@@ -48,6 +42,7 @@ import {
 } from "../src/index";
 import { sha256ForCheckpointTests } from "../src/services/daily-summary-checkpoint-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
+import { normalizeTopic } from "../src/settings/topics";
 
 const reportDate = "2026-08-01";
 const documentPath = "arxiv-daily/.index/filter-checkpoints/2026-08-01.json";
@@ -57,8 +52,8 @@ const papers: PaperMeta[] = [
   { id: "2608.00002", title: "Second", authors: "B", abstract: "Abstract two" },
 ];
 const result: FilterRecord[] = [
-  { id: "2608.00002", category: "skip" },
-  { id: "2608.00001", category: "topic-a" },
+  { id: "2608.00002", category: "skip", directions: [], relevanceScore: 0 },
+  { id: "2608.00001", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 },
 ];
 
 function compatibility(
@@ -71,8 +66,8 @@ function compatibility(
       categories: ["astro-ph", "cs.LG"],
       timezone: "UTC",
       topics: [
-        { id: "unused-id", name: "Unused name", tag: "topic-a", description: "Topic A", detail: true },
-        { id: "unused-id-2", name: "Unused name 2", tag: "topic-b", description: "Topic B", detail: false },
+        normalizeTopic({ id: "unused-id", name: "Unused name", tag: "topic-a", directions: [{ id: "da", text: "Topic A", origin: "manual" }], detail: true }),
+        normalizeTopic({ id: "unused-id-2", name: "Unused name 2", tag: "topic-b", directions: [{ id: "db", text: "Topic B", origin: "manual" }], detail: false }),
       ],
     },
     llm: {
@@ -127,31 +122,6 @@ function makeStore(storage: StorageAdapter, warning = vi.fn()) {
     onWarning: warning,
   });
 }
-
-const personalizedDiscovery: PersonalizedDiscoveryInput = {
-  directions: [{
-    id: "direction.001",
-    name: "Direction one",
-    description: "Strict personalized direction",
-    discoveryCues: ["strict discovery"],
-    representatives: [{
-      paperKey: "arxiv:2501.00001",
-      title: "Representative one",
-      evidenceDepth: "metadata-and-abstract",
-    }],
-  }],
-};
-
-function personalizedPrepared(llm = compatibility().llm) {
-  const planned = planPersonalizedFilterCalls(papers, personalizedDiscovery);
-  if (!planned.ok) throw new Error("unexpected plan-too-large");
-  return preparePersonalizedFilterCheckpoint({ plan: planned.value, llm: llm as any });
-}
-
-const personalizedResult: PersonalizedDirectionRecord[] = [
-  { paperKey: "arxiv:2608.00001", directionIds: ["direction.001"] },
-  { paperKey: "arxiv:2608.00002", directionIds: [] },
-];
 
 function recomputeDocumentFingerprint(document: any): void {
   document.fingerprint = `sha256:${sha256ForCheckpointTests(
@@ -318,6 +288,10 @@ describe("paper filter shared contract", () => {
     expect(request.identity).toEqual({
       knownIds: ["2608.00001", "2608.00002"],
       validTags: ["topic-a", "topic-b"],
+      directions: [
+        { ref: "topic-a#1", tag: "topic-a", id: "da", text: "Topic A" },
+        { ref: "topic-b#1", tag: "topic-b", id: "db", text: "Topic B" },
+      ],
     });
     expect(request.messages[0]?.content).toContain("topic-a|topic-b|skip");
     expect(request.messages[1]?.content).toContain("ID: 2608.00001");
@@ -327,26 +301,43 @@ describe("paper filter shared contract", () => {
   it("strictly accepts ordered, omitted, and empty record lists", () => {
     const ids = new Set(papers.map((paper) => paper.id));
     const tags = new Set(["topic-a", "topic-b"]);
-    expect(decodePaperFilterRecords({ papers: result }, ids, tags)).toEqual({ ok: true, value: result });
-    expect(decodePaperFilterRecords({ papers: [] }, ids, tags)).toEqual({ ok: true, value: [] });
-    expect(decodePaperFilterRecords({ papers: [result[1]] }, ids, tags)).toEqual({
+    const dirs = buildPaperFilterRequest(papers, compatibility().arxivSettings).identity.directions;
+    expect(decodePaperFilterRecords({ papers: result }, ids, tags, dirs)).toEqual({ ok: true, value: result });
+    expect(decodePaperFilterRecords({ papers: [] }, ids, tags, dirs)).toEqual({ ok: true, value: [] });
+    expect(decodePaperFilterRecords({ papers: [result[1]] }, ids, tags, dirs)).toEqual({
       ok: true,
       value: [result[1]],
     });
   });
 
   it.each([
-    { papers: result, extra: true },
-    { papers: [{ ...result[0], extra: true }] },
-    { papers: [{ id: "unknown", category: "topic-a" }] },
-    { papers: [result[0], result[0]] },
-    { papers: [{ id: papers[0]!.id, category: "unknown" }] },
-  ])("rejects malformed records %#", (value) => {
+    {
+      label: "extra root key", value: { papers: result, extra: true },
+      reason: "root must be exactly {papers:[...]}",
+    },
+    {
+      label: "extra record key", value: { papers: [{ ...result[0], extra: true }] },
+      reason: "paper record has an invalid shape",
+    },
+    {
+      label: "unknown id", value: { papers: [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 }] },
+      reason: "paper record has an unknown id",
+    },
+    {
+      label: "duplicate id", value: { papers: [result[0], result[0]] },
+      reason: "paper record has a duplicate id",
+    },
+    {
+      label: "unknown category", value: { papers: [{ id: papers[0]!.id, category: "unknown", directions: [], relevanceScore: 80 }] },
+      reason: `paper ${papers[0]!.id} has an invalid category`,
+    },
+  ])("rejects $label for its original contract violation", ({ value, reason }) => {
     expect(decodePaperFilterRecords(
       value,
       new Set(papers.map((paper) => paper.id)),
       new Set(["topic-a"]),
-    )).toMatchObject({ ok: false });
+      buildPaperFilterRequest(papers, compatibility().arxivSettings).identity.directions,
+    )).toEqual({ ok: false, reason });
   });
 });
 
@@ -394,13 +385,13 @@ describe("daily filter checkpoint fingerprint", () => {
     ["abstract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, papers: input.papers.map((paper, i) => i ? paper : { ...paper, abstract: "changed" }) })],
     ["category rendering", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, categories: ["astro-ph"] } })],
     ["topic order", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: [...input.arxivSettings.topics].reverse() } })],
-    ["topic description", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: input.arxivSettings.topics.map((topic, i) => i ? topic : { ...topic, description: "changed" }) } })],
+    ["topic direction text", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, arxivSettings: { ...input.arxivSettings, topics: input.arxivSettings.topics.map((topic, i) => i ? topic : normalizeTopic({ ...topic, directions: [{ ...topic.directions[0]!, text: "changed" }] })) } })],
     ["provider", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, provider: "openai" } })],
     ["endpoint", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, baseUrl: "https://other.test/v1" } })],
     ["model", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, model: "model-b" } })],
     ["mode", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, llm: { ...input.llm, thinkingMode: true } })],
-    ["prompt contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, promptContractVersion: 2 })],
-    ["result contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, resultContractVersion: 2 })],
+    ["prompt contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 })],
+    ["result contract", (input: DailyFilterCheckpointCompatibilityInput) => ({ ...input, resultContractVersion: DAILY_FILTER_RESULT_CONTRACT_VERSION + 1 })],
   ])("invalidates on %s changes", (_name, mutate) => {
     const input = compatibility();
     expect(createDailyFilterCompatibilityFingerprint(mutate(input))).not.toBe(createDailyFilterCompatibilityFingerprint(input));
@@ -417,24 +408,74 @@ describe("daily filter checkpoint fingerprint", () => {
   });
 });
 
+describe("scored daily filter checkpoints", () => {
+  it("persists and reconstructs every relevance score without rounding or reordering", async () => {
+    const { files, storage } = makeStorage();
+    const records = result.map((record) => ({
+      ...record,
+      relevanceScore: record.category === "skip" ? 0 : 87.5,
+    }));
+    await makeStore(storage).save(reportDate, prepared(), records);
+    expect(JSON.parse(files[documentPath]!).result).toEqual(records);
+    const reconstructed = makeStore(storage);
+    expect(await reconstructed.load(reportDate)).toMatchObject({ result: records });
+    expect(await reconstructed.lookupReusable(reportDate, prepared())).toEqual(records);
+  });
+
+  // Keep each old contract at literal 2 independently. Valid current records
+  // isolate version rejection from the separate missing-score shape check.
+  it.each([
+    ["prompt", { promptContractVersion: 2 }],
+    ["result", { resultContractVersion: 2 }],
+  ])("rejects the old %s contract 2 independently", async (_name, stale) => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    Object.assign(document.fingerprintInput, stale);
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).load(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
+  it("refuses to save a current-contract record with a missing relevance score", async () => {
+    const { files, storage } = makeStorage();
+    await expect(makeStore(storage).save(reportDate, prepared(), [{
+      id: "2608.00001",
+      category: "topic-a",
+      directions: ["topic-a#1"],
+    }])).rejects.toThrow(/invalid daily filter checkpoint result: paper record has an invalid shape/);
+    expect(files[documentPath]).toBeUndefined();
+  });
+
+  it("refuses to load a current-contract record with a missing relevance score", async () => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    delete document.result[1].relevanceScore;
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).load(reportDate)).toBeNull();
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+});
+
 describe("DailyFilterCheckpointStore", () => {
   it("round-trips adaptive Anthropic results for all filter checkpoint kinds", async () => {
     const { storage } = makeStorage();
     const store = makeStore(storage);
     const llm = { ...compatibility().llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7", thinkingMode: true };
     const plain = prepared({ llm });
-    const personalized = personalizedPrepared(llm);
     const novelty = noveltyPrepared({ llm });
     await store.save(reportDate, plain, result);
-    await store.savePersonalized(reportDate, personalized, personalizedResult);
     await store.saveNovelty(reportDate, novelty, [noveltyOutcome]);
     const reconstructed = makeStore(storage);
     expect(await reconstructed.lookupReusable(reportDate, plain)).toEqual(result);
-    expect(await reconstructed.lookupPersonalizedReusable(reportDate, personalized)).toEqual(personalizedResult);
     expect(await reconstructed.lookupNoveltyReusable(reportDate, novelty)).toEqual([noveltyRecord]);
   });
 
-  it.each(["filter", "personalized", "novelty"])(
+  it.each(["filter", "novelty"])(
     "does not reuse %s results from the old provider request contract",
     async (kind) => {
       const { storage, files } = makeStorage();
@@ -446,10 +487,6 @@ describe("DailyFilterCheckpointStore", () => {
         await store.save(reportDate, prepared(), result);
         file = paths.documentPath;
         lookup = () => makeStore(storage).lookupReusable(reportDate, prepared());
-      } else if (kind === "personalized") {
-        await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-        file = paths.personalizedDocumentPath;
-        lookup = () => makeStore(storage).lookupPersonalizedReusable(reportDate, personalizedPrepared());
       } else {
         await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
         file = paths.noveltyDocumentPath;
@@ -502,16 +539,16 @@ describe("DailyFilterCheckpointStore", () => {
     const input = compatibility({
       arxivSettings: {
         ...compatibility().arxivSettings,
-        topics: [{
+        topics: [normalizeTopic({
           id: "pipe-tag",
           name: "NLP and LLM",
           tag: "nlp|llm",
-          description: "NLP and language models",
+          directions: [{ id: "dp", text: "NLP and language models", origin: "manual" }],
           detail: false,
-        }],
+        })],
       },
     });
-    const records = [{ id: papers[0]!.id, category: "nlp|llm" }];
+    const records = [{ id: papers[0]!.id, category: "nlp|llm", directions: ["nlp|llm#1"], relevanceScore: 80 }];
 
     await makeStore(storage).save(
       reportDate,
@@ -523,6 +560,8 @@ describe("DailyFilterCheckpointStore", () => {
     expect(persisted.fingerprintInput.request.identity).toEqual({
       knownIds: ["2608.00001", "2608.00002"],
       validTags: ["nlp|llm"],
+      // Splitting the ref on its final `#` recovers a tag that contains one.
+      directions: [{ ref: "nlp|llm#1", tag: "nlp|llm", id: "dp", text: "NLP and language models" }],
     });
     expect(persisted.fingerprintInput.request.messages[0].content)
       .toContain("nlp|llm|skip");
@@ -530,10 +569,47 @@ describe("DailyFilterCheckpointStore", () => {
     expect(await makeStore(storage).lookupReusable(reportDate, prepareDailyFilterCheckpoint(input))).toEqual(records);
   });
 
+  /**
+   * P3 moved the filter from a topic's one-line description to its directions,
+   * which invalidates every checkpoint written by the old contract. Two things
+   * this case has to get right, both learned by getting them wrong first:
+   *
+   * - One case per version. With both stale versions in a single case,
+   *   reverting either bump alone still leaves it green, and it then pins only
+   *   "at least one of them changed".
+   * - The stale value is the literal 1 the old contract shipped with, not
+   *   `CURRENT - 1`. Written relative to the constant, the case follows the
+   *   constant back down on a revert and can never fail.
+   */
+  it.each([
+    ["prompt", { promptContractVersion: 1 }],
+    ["result", { resultContractVersion: 1 }],
+  ])("never reuses a checkpoint written under the shipped %s contract 1", async (_name, stale) => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    Object.assign(document.fingerprintInput, stale);
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
+  });
+
   it("rejects invalid result and unsupported contracts", async () => {
     const { storage } = makeStorage();
-    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a" }])).rejects.toThrow(/invalid daily filter/);
+    await expect(makeStore(storage).save(reportDate, prepared(), [{ id: "unknown", category: "topic-a", directions: ["topic-a#1"], relevanceScore: 80 }])).rejects.toThrow(/paper record has an unknown id/);
     await expect(makeStore(storage).save(reportDate, prepared({ promptContractVersion: DAILY_FILTER_PROMPT_CONTRACT_VERSION + 1 }), result)).rejects.toThrow(/unsupported/);
+  });
+
+  it("does not reuse classifications made before cross-topic specificity was defined", async () => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).save(reportDate, prepared(), result);
+    const document = JSON.parse(files[documentPath]!);
+    document.fingerprintInput.promptContractVersion = 3;
+    recomputeDocumentFingerprint(document);
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
   });
 
   it.each([
@@ -705,96 +781,14 @@ describe("DailyFilterCheckpointStore", () => {
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
   });
 
-  it("persists and reconstructs a strict independent personalized checkpoint privately", async () => {
-    const { files, storage } = makeStorage();
-    const writeTextWithMode = vi.fn(async (path: string, content: string) => {
-      files[path] = content;
-    });
-    storage.writeTextWithMode = writeTextWithMode;
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-
-    expect(JSON.parse(files[paths.personalizedDocumentPath]!)).toMatchObject({
-      schemaVersion: PERSONALIZED_FILTER_CHECKPOINT_SCHEMA_VERSION,
-      reportDate,
-      result: personalizedResult,
-    });
-    expect(writeTextWithMode).toHaveBeenCalledWith(
-      expect.stringContaining(".personalized.json.tmp"), expect.any(String), 0o600,
-    );
-    expect(await makeStore(storage).lookupPersonalizedReusable(
-      reportDate, personalizedPrepared(),
-    )).toEqual(personalizedResult);
-  });
-
-  it("rejects arbitrary snapshots, unknown/duplicate/partial results, and fingerprint tampering", async () => {
-    const { files, storage } = makeStorage();
-    const store = makeStore(storage);
-    const snapshot = personalizedPrepared();
-    await expect(store.savePersonalized(
-      reportDate, JSON.parse(JSON.stringify(snapshot)) as any, personalizedResult,
-    ))
-      .rejects.toThrow(/prepared exact call-plan snapshot/);
-    for (const invalid of [
-      personalizedResult.slice(0, 1),
-      [{ paperKey: "arxiv:2608.99999", directionIds: [] }, personalizedResult[1]],
-      [{ paperKey: personalizedResult[0]!.paperKey, directionIds: ["unknown"] }, personalizedResult[1]],
-      [{ ...personalizedResult[0], extra: true }, personalizedResult[1]],
-    ]) {
-      await expect(store.savePersonalized(reportDate, snapshot, invalid))
-        .rejects.toThrow(/invalid personalized filter checkpoint/);
-    }
-    await store.savePersonalized(reportDate, snapshot, personalizedResult);
-    const paths = store.pathsFor(reportDate);
-    const document = JSON.parse(files[paths.personalizedDocumentPath]!);
-    document.fingerprintInput.plan.batches[0].request.messages[1].content = "tampered";
-    document.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(document.fingerprintInput))}`;
-    files[paths.personalizedDocumentPath] = JSON.stringify(document);
-    expect(await makeStore(storage).loadPersonalized(reportDate)).toBeNull();
-  });
-
-  it("recovers personalized backup, rotates atomically, and serializes same-path saves", async () => {
-    const { files, storage } = makeStorage({ rejectExistingRenameTarget: true });
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-    const first = files[paths.personalizedDocumentPath]!;
-    await Promise.all([
-      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), personalizedResult),
-      makeStore(storage).savePersonalized(reportDate, personalizedPrepared(), [
-        { ...personalizedResult[0]!, directionIds: [] }, personalizedResult[1]!,
-      ]),
-    ]);
-    expect(files[paths.personalizedBackupPath]).toBeTruthy();
-    expect(files[`${paths.personalizedDocumentPath}.tmp`]).toBeUndefined();
-    expect(files[`${paths.personalizedBackupPath}.tmp`]).toBeUndefined();
-    files[paths.personalizedBackupPath] = first;
-    files[paths.personalizedDocumentPath] = "corrupt";
-    expect(await makeStore(storage).lookupPersonalizedReusable(
-      reportDate, personalizedPrepared(),
-    )).toEqual(personalizedResult);
-  });
-
-  it("fails personalized lookup closed on unreadable primary", async () => {
-    const { files, storage, readText } = makeStorage();
-    const store = makeStore(storage);
-    const paths = store.pathsFor(reportDate);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
-    files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
-    readText.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
-    await expect(store.lookupPersonalizedReusable(reportDate, personalizedPrepared()))
-      .rejects.toThrow(/cannot read personalized filter checkpoint/);
-    expect(readText).toHaveBeenCalledTimes(1);
-  });
-
   it("removes manual and personalized primary, backup, and temp artifacts", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.save(reportDate, prepared(), result);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
     const paths = store.pathsFor(reportDate);
+    // The retired library-profile classifier left these behind on real vaults;
+    // nothing writes them any more, so seed them the way disk would have.
+    files[paths.personalizedDocumentPath] = "{}";
     files[backupPath] = files[documentPath]!;
     files[paths.personalizedBackupPath] = files[paths.personalizedDocumentPath]!;
     for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
@@ -1069,9 +1063,9 @@ describe("novelty filter checkpoint", () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.save(reportDate, prepared(), result);
-    await store.savePersonalized(reportDate, personalizedPrepared(), personalizedResult);
     await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
     const paths = store.pathsFor(reportDate);
+    files[paths.personalizedDocumentPath] = "{}";
     for (const path of [documentPath, backupPath, paths.personalizedDocumentPath,
       paths.personalizedBackupPath, paths.noveltyDocumentPath, paths.noveltyBackupPath]) {
       files[`${path}.tmp`] = "tmp";

@@ -7,7 +7,9 @@ import {
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   Logger,
+  normalizeTopic,
   OperationRegistry,
+  parseDailyReportTopicDirections,
   RunHistoryStore,
   RunLock,
   SchedulerService,
@@ -18,6 +20,8 @@ import * as obsidianHost from "../src/hosts/obsidian";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 import { SettingsChangeService } from "../src/settings/change-service";
+import { ObsidianHttpClient } from "../src/hosts/obsidian/http-client";
+import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 
 const pluginMainSource = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "../main.ts"),
@@ -305,6 +309,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let resolveModal!: (value: string) => void;
@@ -346,6 +351,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let finishEnableSave!: () => void;
@@ -386,7 +392,7 @@ describe("plugin settings reload lifecycle", () => {
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
     const settings = structuredClone(DEFAULT_SETTINGS);
     settings.llm.apiKey = "configured";
-    settings.arxiv.topics.push({
+    settings.arxiv.topics.push({ directions: [{ id: "fixture-direction", text: "Language model research", origin: "manual" as const }],
       id: "topic-1",
       name: "Language models",
       tag: "language-models",
@@ -711,6 +717,93 @@ describe("plugin settings reload lifecycle", () => {
     );
   });
 
+  it("generates a result-first daily report through plugin composition without rewriting saved reports", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.arxiv.topics = [
+      normalizeTopic({ name: "Empty topic", tag: "empty", description: "Unmatched research", detail: false }),
+      normalizeTopic({ name: "Active topic", tag: "active", detail: false, directions: [
+        { id: "d1", text: "Galaxy observations", origin: "manual" },
+        { id: "d2", text: "Catalog comparisons", origin: "manual" },
+      ] }),
+      normalizeTopic({ name: "Limited topic", tag: "limited", description: "Other research", detail: false }),
+    ];
+    settings.output.maxDailyPapers = 1;
+    settings.output.summaryLanguage = "en";
+    settings.llm.baseUrl = "https://api.example.com/v1";
+    settings.llm.apiKey = "test-key";
+    const ids = ["2609.00001", "2609.00002"];
+    const recent = `<html><body><dl id="articles"><h3>Tue, 8 Sep 2026</h3>${ids.map((id) =>
+      `<dt><a title="Abstract">arXiv:${id}</a></dt><dd><div class="list-title">Title: Paper ${id}</div><div class="list-authors"><a>A. Author</a></div></dd>`,
+    ).join("")}</dl></body></html>`;
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map((id) =>
+      `<entry><id>http://arxiv.org/abs/${id}v1</id><title>Paper ${id}</title><author><name>A. Author</name></author><summary>Galaxy observations.</summary><published>2026-09-08T00:00:00Z</published><updated>2026-09-08T00:00:00Z</updated><arxiv:primary_category term="astro-ph"/><category term="astro-ph"/></entry>`,
+    ).join("")}</feed>`;
+    const completions = [
+      { papers: [
+        { id: ids[0], category: "active", directions: ["active#1", "active#2"], relevanceScore: 95 },
+        { id: ids[1], category: "limited", directions: ["limited#1"], relevanceScore: 70 },
+      ] },
+      { id: ids[0], coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result", whyRelevant: "Research value", limitations: "Known limits" },
+    ];
+    // Keep the real plugin HTTP/DOM adapters and every pipeline stage; replace
+    // only Obsidian's external request boundary and vault storage.
+    const http = new ObsidianHttpClient(async (request) => {
+      const { url, method } = typeof request === "string" ? { url: request, method: "GET" } : request;
+      if (url.startsWith("https://arxiv.org/list/astro-ph/recent")) return { status: 200, text: recent };
+      if (url.startsWith("https://export.arxiv.org/api/query?")) return { status: 200, text: atom };
+      if (url === "https://arxiv.org/html/2609.00001") {
+        return { status: 200, text: '<html><body><div class="ltx_abstract">Galaxy observations.</div><h2>Results</h2><p>We observe a measured improvement.</p></body></html>' };
+      }
+      if (url === "https://api.example.com/v1/chat/completions" && method === "POST") {
+        const completion = completions.shift();
+        if (completion) return { status: 200, text: `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(completion) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n` };
+      }
+      return { status: 400, text: `Unexpected fixture request: ${url}` };
+    });
+    const oldPath = "arxiv-daily/daily/2026-09-07.md";
+    const oldMarkdown = "# Saved report\nKeep my annotations.\n";
+    const storage = memoryStorage({ [oldPath]: oldMarkdown });
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    Object.assign(plugin, {
+      settings, logger: new Logger("error"),
+      host: { storage, http, markupParser: new ObsidianMarkupParser() },
+      manifest: { id: "arxiv-daily", dir: ".obsidian/plugins/arxiv-daily" },
+      app: { vault: { configDir: ".obsidian" } },
+    });
+    const pipeline = (plugin as any).buildPipeline();
+
+    expect(await pipeline.runForDate("2026-09-08")).toMatchObject({ kind: "completed", papersWritten: 1 });
+    const markdown = await storage.readText("arxiv-daily/daily/2026-09-08.md");
+    expect(await pipeline.runForDate("2026-09-07")).toMatchObject({ kind: "completed" });
+    expect(await storage.readText(oldPath)).toBe(oldMarkdown);
+    expect((await plugin.buildPaperIndex().get(ids[0]!))?.summary).toEqual({
+      sourceSections: expect.stringContaining("Results"),
+      coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result",
+      whyRelevant: "Research value", limitations: "Known limits",
+    });
+    expect(parseDailyReportTopicDirections(markdown, "2026-09-08")).toEqual({
+      kind: "valid", occurrences: [{ arxivId: "2609.00001", hits: [
+        { tag: "active", id: "d1", text: "Galaxy observations" },
+        { tag: "active", id: "d2", text: "Catalog comparisons" },
+      ] }],
+    });
+    expect.soft(markdown.match(/^## .+$/gm)).toEqual(["## Active topic", "## Other followed topics"]);
+    const otherTopics = markdown.split("## Other followed topics")[1] ?? "";
+    expect.soft(otherTopics).toMatch(/^[-*] .*Empty topic.*(?:No relevant|No matching|no match).*$/m);
+    expect.soft(otherTopics).toMatch(/^[-*] .*Limited topic.*1.*omitted.*daily.*limit.*$/m);
+    expect.soft(markdown).toContain("> [!info]- Matched directions and sources");
+    expect.soft(markdown).toContain("> - Galaxy observations\n> - Catalog comparisons");
+    expect.soft(markdown).toContain("> [!abstract]- Background, methods and limits");
+    expect.soft(markdown).toContain("\n- **Core results**: Observed result\n");
+    expect.soft(markdown.match(/^- \*\*(?:Research problem|Method design|Core results|Research value|Scope and limits)\*\*:/gm))
+      .toEqual(["- **Core results**:"]);
+    const background = markdown.match(/^> \[!abstract\]-[^\n]*\n(?:>[^\n]*(?:\n|$))*/m)?.[0] ?? "";
+    for (const line of [
+      "> - **Research problem**: Research problem", "> - **Method design**: Measured method",
+      "> - **Research value**: Research value", "> - **Scope and limits**: Known limits",
+    ]) expect.soft(background).toContain(line);
+  }, 15_000);
+
   it("logs persisted sanitation warnings after logger initialization", () => {
     const loggerInit = pluginMainSource.indexOf("this.logger = new Logger(");
     const warningLoop = pluginMainSource.indexOf("for (const warning of settingsWarnings)");
@@ -946,7 +1039,7 @@ describe("plugin settings reload lifecycle", () => {
         arxiv: {
           category: "astro-ph",
           categories: ["astro-ph"],
-          topics: [{
+          topics: [{ directions: [{ id: "fixture-direction", text: "Neutron stars and black holes", origin: "manual" as const }],
             id: "topic",
             name: "Compact objects",
             tag: "compact-objects",

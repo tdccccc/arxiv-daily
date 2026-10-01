@@ -5,9 +5,15 @@ import {
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { sha256Hex } from "../utils/digest";
 
-export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 3 as const;
-export const PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION = 3 as const;
-export const PERSONAL_LIBRARY_LEGACY_INTEREST_PROFILE_SCHEMA_VERSION = 1 as const;
+// Version 6 records existing coverage and stable targets. Earlier generations
+// cannot express those decisions and must be regenerated against current topics.
+export const PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION = 6 as const;
+/**
+ * Storage/editing bounds for both levels of a proposal. Initial organization
+ * uses the tighter limits in personal-library-topic-organization.ts; retaining
+ * these bounds lets the researcher edit a proposal before acceptance.
+ */
+export const PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS = 12 as const;
 export const PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES = 0 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
 export const PERSONAL_LIBRARY_MIN_REPRESENTATIVES = 1 as const;
@@ -15,9 +21,6 @@ export const PERSONAL_LIBRARY_MAX_REPRESENTATIVES = 5 as const;
 export const PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS = 1_000 as const;
 export const PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS = 12 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS = 12 as const;
-export const PERSONAL_LIBRARY_MAX_DIRECTIONS = 256 as const;
-export const PERSONAL_LIBRARY_MAX_DIRECTION_ANCESTRY_IDS = 256 as const;
-export const PERSONAL_LIBRARY_MAX_PROFILE_ANCESTRY_IDS = 256 as const;
 export const PERSONAL_LIBRARY_MAX_ID_LENGTH = 128 as const;
 export const PERSONAL_LIBRARY_MAX_NAME_LENGTH = 120 as const;
 export const PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH = 1_000 as const;
@@ -25,8 +28,7 @@ export const PERSONAL_LIBRARY_MIN_DISCOVERY_CUES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUES = 12 as const;
 export const PERSONAL_LIBRARY_MAX_DISCOVERY_CUE_LENGTH = 200 as const;
 export const PERSONAL_LIBRARY_MAX_GENERATION_CONTRACT_LENGTH = 4_096 as const;
-export const PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS = 512 as const;
-export const PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS = 64 as const;
+export const PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS = PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS;
 
 export interface PersonalLibraryRepresentativeEvidence {
   paperKey: string;
@@ -38,20 +40,20 @@ export interface PersonalLibraryClusterMember {
   confidence: number;
 }
 
-export type PersonalLibraryDirectionTimelineEvent =
-  | { kind: "created"; at: string }
-  | { kind: "edited"; at: string }
-  | { kind: "members-updated"; at: string }
-  | { kind: "merged"; at: string; sourceDirectionIds: string[] }
-  | { kind: "removed"; at: string; mode: "restrict" | "cascade" }
-  | { kind: "locked"; at: string }
-  | { kind: "unlocked"; at: string }
-  | { kind: "split"; at: string; sourceDirectionId: string };
-
 export interface PersonalLibraryDirectionCandidate {
   id: string;
-  name: string;
-  description: string;
+  /**
+   * The direction itself: one line, in the form it will take in
+   * `settings.topics` if accepted (ADR 0012 §2). The organization stage writes
+   * it directly — there is no later fold from a name plus a description,
+   * because the researcher reviews exactly the text that will be used.
+   */
+  text: string;
+  /**
+   * What made this direction visible in the library. Shown on the review page
+   * to help the researcher judge the proposal; deliberately not carried into
+   * settings, where a direction is one line and nothing else.
+   */
   discoveryCues: string[];
   representatives: PersonalLibraryRepresentativeEvidence[];
   representativeSetFingerprint: string;
@@ -59,6 +61,39 @@ export interface PersonalLibraryDirectionCandidate {
   lineage: { candidateIds: string[] };
   /** Cluster membership confidence produced by the clustering proposer; absent in legacy candidates. */
   clusterMembers?: PersonalLibraryClusterMember[];
+}
+
+/**
+ * A research direction needs more than one distinct paper behind it. Cluster
+ * members describe its full evidence; representatives are a display sample.
+ * Older candidates without members fall back to their distinct representatives.
+ * Thin candidates remain confirmable but are marked and left unselected when
+ * accepting a group, so including one stays deliberate (ADR 0009 §3).
+ */
+export const PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES = 2 as const;
+
+export function isThinEvidenceDirectionCandidate(
+  candidate: Pick<PersonalLibraryDirectionCandidate, "representatives" | "clusterMembers">,
+): boolean {
+  const evidence = candidate.clusterMembers?.length
+    ? candidate.clusterMembers
+    : candidate.representatives;
+  return new Set(evidence.map(({ paperKey }) => paperKey)).size
+    < PERSONAL_LIBRARY_MIN_UNMARKED_REPRESENTATIVES;
+}
+
+/**
+ * One proposed topic: a suggested display name and the directions organized
+ * from its evidence groups (ADR 0014 §1). The name is a suggestion — the researcher can
+ * rename it before accepting — and the machine tag is derived from it at
+ * acceptance, not stored here.
+ */
+export interface PersonalLibraryProposedTopic {
+  id: string;
+  suggestedName: string;
+  /** Existing settings topic identity; absent means a proposed new topic. */
+  targetTopicId?: string;
+  directions: PersonalLibraryDirectionCandidate[];
 }
 
 export interface PersonalLibraryDirectionProposal {
@@ -71,111 +106,58 @@ export interface PersonalLibraryDirectionProposal {
   catalogInputPapers: PersonalLibraryRepresentativeEvidence[];
   generationContractFingerprint: string;
   generatedAt: string;
-  candidates: PersonalLibraryDirectionCandidate[];
+  topics: PersonalLibraryProposedTopic[];
+  /** Canonical evidence already covered by existing directions, outside candidates. */
+  coveredPaperKeys?: string[];
+  coverageEvidence?: PersonalLibraryCoverageEvidence[];
 }
 
-interface PersonalLibraryConfirmedDirectionCommon {
-  id: string;
-  name: string;
-  description: string;
-  discoveryCues: string[];
-  representatives: PersonalLibraryRepresentativeEvidence[];
-  representativeSetFingerprint: string;
-  clusterMembers: PersonalLibraryClusterMember[];
-  timeline: PersonalLibraryDirectionTimelineEvent[];
-  lineage: {
-    proposalIds: string[];
-    candidateIds: string[];
-    /** Retained merged ancestors whose merge chains terminate at this direction. */
-    directionIds: string[];
-  };
-  createdAt: string;
-  updatedAt: string;
-  /** ISO timestamp of the direction lock; absent means the direction is not locked. */
-  lockedAt?: string;
-}
-
-export type PersonalLibraryConfirmedDirection =
-  | (PersonalLibraryConfirmedDirectionCommon & { status: "active" | "disabled" })
-  | (PersonalLibraryConfirmedDirectionCommon & {
-      status: "merged";
-      mergedIntoDirectionId: string;
-    });
-
-export interface PersonalLibraryInterestProfile {
-  schemaVersion: typeof PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION;
-  revision: number;
-  scopeFingerprint: string;
-  identificationFingerprint: string;
-  updatedAt: string;
-  directions: PersonalLibraryConfirmedDirection[];
-}
-
-export function createEmptyPersonalLibraryInterestProfile(
-  scopeFingerprint: string,
-  identificationFingerprint: string,
-  now: Date = new Date(),
-): PersonalLibraryInterestProfile {
-  const profile: PersonalLibraryInterestProfile = {
-    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
-    revision: 0,
-    scopeFingerprint,
-    identificationFingerprint,
-    updatedAt: now.toISOString(),
-    directions: [],
-  };
-  const decoded = decodePersonalLibraryInterestProfile(profile);
-  if (!decoded) throw new TypeError("cannot create empty personal library interest profile");
-  return decoded;
-}
-
-export function isEmptyPersonalLibraryInterestProfile(
-  value: unknown,
-): value is PersonalLibraryInterestProfile {
-  const decoded = decodePersonalLibraryInterestProfile(value);
-  return decoded !== null && decoded.directions.length === 0;
-}
-
-export type PersonalLibraryEligibilityDocumentDiagnostic =
-  | "profile-invalid"
-  | "catalog-invalid"
-  | "profile-scope-mismatch"
-  | "profile-identification-mismatch";
-
-export type PersonalLibraryDirectionStalenessReason =
-  | "direction-disabled"
-  | "direction-merged"
-  | "representative-missing"
-  | "representative-evidence-changed";
-
-export interface PersonalLibraryDirectionStalenessDiagnostic {
+export interface PersonalLibraryCoverageEvidence {
+  topicId: string;
   directionId: string;
-  eligible: boolean;
-  reasons: Array<{
-    reason: PersonalLibraryDirectionStalenessReason;
-    paperKey?: string;
-  }>;
+  directionText: string;
+  paperKeys: string[];
 }
 
-export interface PersonalLibraryEligibleDirection {
-  id: string;
-  name: string;
-  description: string;
-  discoveryCues: string[];
-  representatives: PersonalLibraryRepresentativeEvidence[];
+/**
+ * A library file the scan could not give an arXiv identity, carried into a
+ * proposal on the evidence the index already holds: the title and abstract
+ * read from its leading pages. Identity is the content hash inside `paperKey`,
+ * so a rename does not make it a different paper.
+ */
+export interface PersonalLibraryFallbackPaperRecord {
+  paperKey: string;
+  source: "file";
+  title: string;
+  abstract: string;
+  evidenceDepth: "metadata-and-abstract";
+  filePaths: string[];
 }
 
-export interface PersonalLibraryInterestEligibility {
-  documentDiagnostics: PersonalLibraryEligibilityDocumentDiagnostic[];
-  eligibleDirections: PersonalLibraryEligibleDirection[];
-  diagnostics: PersonalLibraryDirectionStalenessDiagnostic[];
-}
+/** A paper a proposal can be built from, whichever way it was identified. */
+export type PersonalLibraryProposalPaper =
+  | PersonalLibraryPaperRecord
+  | PersonalLibraryFallbackPaperRecord;
 
 export function createPersonalLibraryPaperEvidenceFingerprint(
-  paper: PersonalLibraryPaperRecord,
+  paper: PersonalLibraryProposalPaper,
 ): string {
+  if (isCanonicalFallbackPaper(paper)) {
+    // The two kinds are already told apart by `paperKey` (an arXiv id cannot
+    // look like `file:sha256:…`); `source` rides along to keep the hashed
+    // object self-describing, matching the arXiv branch below.
+    return fingerprint({
+      paperKey: paper.paperKey,
+      source: paper.source,
+      title: paper.title,
+      abstract: paper.abstract,
+      evidenceDepth: paper.evidenceDepth,
+    });
+  }
   if (!isCanonicalCatalogPaper(paper)) {
-    throw new TypeError("paper must be an exact canonical metadata-and-abstract arXiv catalog record");
+    throw new TypeError(
+      "paper must be an exact canonical metadata-and-abstract arXiv catalog record or fallback record",
+    );
   }
   return fingerprint({
     paperKey: paper.paperKey,
@@ -194,7 +176,7 @@ export function createPersonalLibraryPaperEvidenceFingerprint(
 }
 
 export function createPersonalLibraryCatalogInputManifest(
-  papers: readonly PersonalLibraryPaperRecord[],
+  papers: readonly PersonalLibraryProposalPaper[],
 ): PersonalLibraryRepresentativeEvidence[] {
   if (!Array.isArray(papers) || papers.length === 0
     || papers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
@@ -232,7 +214,7 @@ export function createPersonalLibraryCatalogInputManifestFingerprint(input: {
 export function createPersonalLibraryCatalogInputFingerprint(input: {
   scopeFingerprint: string;
   identificationFingerprint: string;
-  papers: readonly PersonalLibraryPaperRecord[];
+  papers: readonly PersonalLibraryProposalPaper[];
 }): string {
   if (!isExactObject(input, ["scopeFingerprint", "identificationFingerprint", "papers"])) {
     throw new TypeError("catalog input must be exact");
@@ -263,12 +245,43 @@ export function createPersonalLibraryGenerationContractFingerprint(contract: str
 export function decodePersonalLibraryDirectionProposal(
   value: unknown,
 ): PersonalLibraryDirectionProposal | null {
+  return decodeDirectionProposal(value, PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES);
+}
+
+/** Validate retired documents only to authorize regeneration, never to reuse them. */
+export function decodeRetiredPersonalLibraryProposalIdentity(
+  value: unknown,
+): Pick<PersonalLibraryDirectionProposal, "scopeFingerprint" | "identificationFingerprint"> | null {
+  if (!isPlainObject(value) || (value.schemaVersion !== 4 && value.schemaVersion !== 5)
+    || Object.hasOwn(value, "coveredPaperKeys")
+    || !Array.isArray(value.topics)
+    || value.topics.some((topic: unknown) => isPlainObject(topic) && Object.hasOwn(topic, "targetTopicId"))) return null;
+  // v4/v5 bounded each topic separately. A valid old generation may exceed
+  // today's total candidate limit; it still needs regeneration, not repair.
+  const decoded = decodeDirectionProposal(
+    { ...value, schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION },
+    PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS * PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS,
+  );
+  return decoded ? {
+    scopeFingerprint: decoded.scopeFingerprint,
+    identificationFingerprint: decoded.identificationFingerprint,
+  } : null;
+}
+
+function decodeDirectionProposal(value: unknown, maxCandidates: number): PersonalLibraryDirectionProposal | null {
+  const hasCoveredPaperKeys = isPlainObject(value) && Object.hasOwn(value, "coveredPaperKeys");
+  const hasCoverageEvidence = isPlainObject(value) && Object.hasOwn(value, "coverageEvidence");
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
-    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "candidates",
+    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
+    ...(hasCoveredPaperKeys ? ["coveredPaperKeys"] : []),
+    ...(hasCoverageEvidence ? ["coverageEvidence"] : []),
   ])
-    // Schema 2 proposals remain readable: candidates gained only the optional clusterMembers field in v3.
-    || (value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION && value.schemaVersion !== 2)
+    // Only the current schema decodes. Earlier proposals were a flat candidate
+    // list with name+description directions; both shapes changed in v4 and the
+    // proposal document has never been in a release, so it is regenerated
+    // rather than migrated (goal Constraints).
+    || value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION
     || !isNonNegativeSafeInteger(value.revision)
     || !isOpaqueId(value.proposalId)
     || !isFingerprint(value.scopeFingerprint)
@@ -276,9 +289,9 @@ export function decodePersonalLibraryDirectionProposal(
     || !isFingerprint(value.catalogInputFingerprint)
     || !isFingerprint(value.generationContractFingerprint)
     || !isCanonicalTimestamp(value.generatedAt)
-    || !Array.isArray(value.candidates)
-    || value.candidates.length < PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES
-    || value.candidates.length > PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES) return null;
+    || !Array.isArray(value.topics)
+    || value.topics.length < PERSONAL_LIBRARY_MIN_PROPOSAL_CANDIDATES
+    || value.topics.length > PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS) return null;
 
   const catalogInputPapers = decodeCatalogInputManifest(value.catalogInputPapers);
   if (!catalogInputPapers || createPersonalLibraryCatalogInputManifestFingerprint({
@@ -287,13 +300,73 @@ export function decodePersonalLibraryDirectionProposal(
     catalogInputPapers,
   }) !== value.catalogInputFingerprint) return null;
 
-  const candidates: PersonalLibraryDirectionCandidate[] = [];
-  for (const raw of value.candidates) {
-    const candidate = decodeCandidate(raw);
-    if (!candidate) return null;
-    candidates.push(candidate);
+  let coveredPaperKeys: string[] | undefined;
+  if (hasCoveredPaperKeys) {
+    const manifestKeys = new Set(catalogInputPapers.map(({ paperKey }) => paperKey));
+    if (!Array.isArray(value.coveredPaperKeys)
+      || value.coveredPaperKeys.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS
+      || !value.coveredPaperKeys.every((key: unknown) => isCanonicalProposalPaperKey(key) && manifestKeys.has(key))
+      || !isStrictlyOrderedUnique(value.coveredPaperKeys)) return null;
+    coveredPaperKeys = [...value.coveredPaperKeys];
   }
-  if (!isStrictlyOrderedUnique(candidates.map(({ id }) => id))) return null;
+  const covered = new Set(coveredPaperKeys);
+  let coverageEvidence: PersonalLibraryCoverageEvidence[] | undefined;
+  if (hasCoverageEvidence) {
+    if (!hasCoveredPaperKeys || !Array.isArray(value.coverageEvidence)
+      || value.coverageEvidence.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) return null;
+    coverageEvidence = [];
+    const assigned = new Set<string>();
+    const directions = new Set<string>();
+    for (const item of value.coverageEvidence) {
+      if (!isExactObject(item, ["topicId", "directionId", "directionText", "paperKeys"])
+        || !isOpaqueId(item.topicId) || !isOpaqueId(item.directionId)
+        || !isBoundedText(item.directionText, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+        || !Array.isArray(item.paperKeys) || item.paperKeys.length === 0
+        || !isStrictlyOrderedUnique(item.paperKeys)
+        || item.paperKeys.some((key: unknown) => typeof key !== "string" || !covered.has(key) || assigned.has(key))) return null;
+      const identity = JSON.stringify([item.topicId, item.directionId]);
+      if (directions.has(identity)) return null;
+      directions.add(identity);
+      for (const key of item.paperKeys) assigned.add(key);
+      coverageEvidence.push({
+        topicId: item.topicId, directionId: item.directionId, directionText: item.directionText, paperKeys: [...item.paperKeys],
+      });
+    }
+    if (assigned.size !== covered.size) return null;
+  }
+  const topics: PersonalLibraryProposedTopic[] = [];
+  const directionIds: string[] = [];
+  for (const rawTopic of value.topics) {
+    const hasTargetTopicId = isPlainObject(rawTopic) && Object.hasOwn(rawTopic, "targetTopicId");
+    if (!isExactObject(rawTopic, ["id", "suggestedName", "directions", ...(hasTargetTopicId ? ["targetTopicId"] : [])])
+      || !isOpaqueId(rawTopic.id)
+      || (hasTargetTopicId && !isOpaqueId(rawTopic.targetTopicId))
+      || !isBoundedText(rawTopic.suggestedName, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
+      || !Array.isArray(rawTopic.directions)
+      || rawTopic.directions.length < 1
+      || rawTopic.directions.length > PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS) return null;
+    const directions: PersonalLibraryDirectionCandidate[] = [];
+    for (const raw of rawTopic.directions) {
+      const candidate = decodeCandidate(raw);
+      if (!candidate) return null;
+      if (candidate.representatives.some(({ paperKey }) => covered.has(paperKey))
+        || candidate.clusterMembers?.some(({ paperKey }) => covered.has(paperKey))) return null;
+      directions.push(candidate);
+    }
+    if (!isStrictlyOrderedUnique(directions.map(({ id }) => id))) return null;
+    directionIds.push(...directions.map(({ id }) => id));
+    topics.push({
+      id: rawTopic.id,
+      suggestedName: rawTopic.suggestedName,
+      ...(hasTargetTopicId ? { targetTopicId: rawTopic.targetTopicId } : {}),
+      directions,
+    });
+  }
+  // A direction belongs to exactly one topic (ADR 0014 §1): an id appearing
+  // twice means the proposal was assembled wrong, not that it is ambiguous.
+  if (!isStrictlyOrderedUnique(topics.map(({ id }) => id))
+    || directionIds.length > maxCandidates
+    || new Set(directionIds).size !== directionIds.length) return null;
   return {
     schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
     revision: value.revision,
@@ -304,195 +377,25 @@ export function decodePersonalLibraryDirectionProposal(
     catalogInputPapers,
     generationContractFingerprint: value.generationContractFingerprint,
     generatedAt: value.generatedAt,
-    candidates,
+    topics,
+    ...(coveredPaperKeys !== undefined ? { coveredPaperKeys } : {}),
+    ...(coverageEvidence !== undefined ? { coverageEvidence } : {}),
   };
-}
-
-export function decodePersistedPersonalLibraryInterestProfile(
-  value: unknown,
-): PersonalLibraryInterestProfile | null {
-  const profile = decodePersonalLibraryInterestProfile(value)
-    ?? migrateV2PersonalLibraryInterestProfile(value);
-  if (!profile || profile.directions.some((direction) => direction.updatedAt > profile.updatedAt)) {
-    return null;
-  }
-  return profile;
-}
-
-export function decodeDurablePersonalLibraryInterestProfile(
-  value: unknown,
-): PersonalLibraryInterestProfile | null {
-  return decodePersistedPersonalLibraryInterestProfile(value)
-    ?? migrateLegacyPersonalLibraryInterestProfile(value);
-}
-
-export function migrateLegacyPersonalLibraryInterestProfile(
-  value: unknown,
-): PersonalLibraryInterestProfile | null {
-  if (!isExactObject(value, [
-    "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
-    "directions",
-  ]) || value.schemaVersion !== PERSONAL_LIBRARY_LEGACY_INTEREST_PROFILE_SCHEMA_VERSION
-    || !Array.isArray(value.directions)) return null;
-  const directions: unknown[] = [];
-  for (const raw of value.directions) {
-    if (!isPlainObject(raw) || !isExactObject(raw.lineage, ["proposalId", "candidateIds", "directionIds"])
-      || !isOpaqueId(raw.lineage.proposalId)) return null;
-    directions.push({
-      ...raw,
-      clusterMembers: [],
-      timeline: [{ kind: "created", at: raw.createdAt }],
-      lineage: {
-        proposalIds: [raw.lineage.proposalId],
-        candidateIds: raw.lineage.candidateIds,
-        directionIds: raw.lineage.directionIds,
-      },
-    });
-  }
-  const migrated = decodePersonalLibraryInterestProfile({
-    ...value,
-    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
-    directions,
-  });
-  if (!migrated || migrated.directions.some((direction) => direction.updatedAt > migrated.updatedAt)) {
-    return null;
-  }
-  return migrated;
-}
-
-function migrateV2PersonalLibraryInterestProfile(
-  value: unknown,
-): PersonalLibraryInterestProfile | null {
-  if (!isExactObject(value, [
-    "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
-    "directions",
-  ]) || value.schemaVersion !== 2 || !Array.isArray(value.directions)) return null;
-  const directions: unknown[] = value.directions.map((raw) => {
-    if (!isPlainObject(raw)) return raw;
-    return {
-      ...raw,
-      clusterMembers: [],
-      timeline: [{ kind: "created", at: raw.createdAt }],
-    };
-  });
-  return decodePersonalLibraryInterestProfile({
-    ...value,
-    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
-    directions,
-  });
-}
-
-export function decodePersonalLibraryInterestProfile(
-  value: unknown,
-): PersonalLibraryInterestProfile | null {
-  if (!isExactObject(value, [
-    "schemaVersion", "revision", "scopeFingerprint", "identificationFingerprint", "updatedAt",
-    "directions",
-  ]) || value.schemaVersion !== PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION
-    || !isNonNegativeSafeInteger(value.revision)
-    || !isFingerprint(value.scopeFingerprint)
-    || !isFingerprint(value.identificationFingerprint)
-    || !isCanonicalTimestamp(value.updatedAt)
-    || !Array.isArray(value.directions)
-    || value.directions.length > PERSONAL_LIBRARY_MAX_DIRECTIONS) return null;
-
-  const directions: PersonalLibraryConfirmedDirection[] = [];
-  let totalAncestryIds = 0;
-  for (const raw of value.directions) {
-    const direction = decodeDirection(raw);
-    if (!direction) return null;
-    totalAncestryIds += direction.lineage.directionIds.length;
-    if (totalAncestryIds > PERSONAL_LIBRARY_MAX_PROFILE_ANCESTRY_IDS) return null;
-    directions.push(direction);
-  }
-  if (!isStrictlyOrderedUnique(directions.map(({ id }) => id))) return null;
-  const byId = new Map(directions.map((direction) => [direction.id, direction]));
-  for (const direction of directions) {
-    if (direction.status === "merged"
-      && (!byId.has(direction.mergedIntoDirectionId)
-        || direction.mergedIntoDirectionId === direction.id)) return null;
-  }
-  if (hasMergeCycle(directions)) return null;
-  for (const direction of directions) {
-    for (const ancestorId of direction.lineage.directionIds) {
-      if (ancestorId === direction.id || !mergedChainTerminatesAt(ancestorId, direction.id, byId)) {
-        return null;
-      }
-    }
-  }
-  return {
-    schemaVersion: PERSONAL_LIBRARY_INTEREST_PROFILE_SCHEMA_VERSION,
-    revision: value.revision,
-    scopeFingerprint: value.scopeFingerprint,
-    identificationFingerprint: value.identificationFingerprint,
-    updatedAt: value.updatedAt,
-    directions,
-  };
-}
-
-export function evaluatePersonalLibraryInterestEligibility(
-  profileValue: unknown,
-  catalogValue: unknown,
-): PersonalLibraryInterestEligibility {
-  const profile = decodePersistedPersonalLibraryInterestProfile(profileValue);
-  const catalog = decodePersonalLibraryCatalog(catalogValue);
-  const documentDiagnostics: PersonalLibraryEligibilityDocumentDiagnostic[] = [];
-  if (!profile) documentDiagnostics.push("profile-invalid");
-  if (!catalog) documentDiagnostics.push("catalog-invalid");
-  if (!profile || !catalog) {
-    return { documentDiagnostics, eligibleDirections: [], diagnostics: [] };
-  }
-  if (profile.scopeFingerprint !== catalog.scopeFingerprint) {
-    documentDiagnostics.push("profile-scope-mismatch");
-  }
-  if (profile.identificationFingerprint !== catalog.identificationFingerprint) {
-    documentDiagnostics.push("profile-identification-mismatch");
-  }
-  const compatible = documentDiagnostics.length === 0;
-  const eligibleDirections: PersonalLibraryEligibleDirection[] = [];
-  const diagnostics: PersonalLibraryDirectionStalenessDiagnostic[] = [];
-
-  for (const direction of profile.directions) {
-    const reasons: PersonalLibraryDirectionStalenessDiagnostic["reasons"] = [];
-    if (direction.status === "disabled") reasons.push({ reason: "direction-disabled" });
-    if (direction.status === "merged") reasons.push({ reason: "direction-merged" });
-    for (const representative of direction.representatives) {
-      const paper = catalog.papers[representative.paperKey];
-      if (!paper) {
-        reasons.push({ reason: "representative-missing", paperKey: representative.paperKey });
-      } else if (createPersonalLibraryPaperEvidenceFingerprint(paper)
-        !== representative.evidenceFingerprint) {
-        reasons.push({
-          reason: "representative-evidence-changed",
-          paperKey: representative.paperKey,
-        });
-      }
-    }
-    const eligible = compatible && direction.status === "active" && reasons.length === 0;
-    diagnostics.push({ directionId: direction.id, eligible, reasons });
-    if (eligible) {
-      eligibleDirections.push({
-        id: direction.id,
-        name: direction.name,
-        description: direction.description,
-        discoveryCues: [...direction.discoveryCues],
-        representatives: direction.representatives.map((entry) => ({ ...entry })),
-      });
-    }
-  }
-  return { documentDiagnostics, eligibleDirections, diagnostics };
 }
 
 function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | null {
   const hasClusterMembers = isPlainObject(value) && Object.hasOwn(value, "clusterMembers");
   const keys = [
-    "id", "name", "description", "discoveryCues", "representatives",
+    "id", "text", "discoveryCues", "representatives",
     "representativeSetFingerprint", "lineage",
     ...(hasClusterMembers ? ["clusterMembers"] : []),
   ];
   if (!isExactObject(value, keys)
-    || !isOpaqueId(value.id) || !isBoundedText(value.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
-    || !isBoundedText(value.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+    || !isOpaqueId(value.id)
+    // One line, bounded by the existing text bound rather than a new
+    // "how long is a line" constant; single-line-ness is the prompt's job.
+    || !isBoundedText(value.text, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+    || value.text.includes("\n")
     || !isDiscoveryCues(value.discoveryCues)
     || !isFingerprint(value.representativeSetFingerprint)
     || !isExactObject(value.lineage, ["candidateIds"])
@@ -510,8 +413,7 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
   }
   return {
     id: value.id,
-    name: value.name,
-    description: value.description,
+    text: value.text,
     discoveryCues: [...value.discoveryCues],
     representatives,
     representativeSetFingerprint: value.representativeSetFingerprint,
@@ -520,69 +422,13 @@ function decodeCandidate(value: unknown): PersonalLibraryDirectionCandidate | nu
   };
 }
 
-function decodeDirection(value: unknown): PersonalLibraryConfirmedDirection | null {
-  if (!isPlainObject(value)) return null;
-  const merged = value.status === "merged";
-  const hasLockedAt = Object.hasOwn(value, "lockedAt");
-  const keys = [
-    "id", "status", "name", "description", "discoveryCues", "representatives",
-    "representativeSetFingerprint", "clusterMembers", "timeline", "lineage", "createdAt", "updatedAt",
-    ...(merged ? ["mergedIntoDirectionId"] : []),
-    ...(hasLockedAt ? ["lockedAt"] : []),
-  ];
-  if (!isExactObject(value, keys)
-    || (value.status !== "active" && value.status !== "disabled" && !merged)
-    || !isOpaqueId(value.id)
-    || !isBoundedText(value.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
-    || !isBoundedText(value.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
-    || !isDiscoveryCues(value.discoveryCues)
-    || !isFingerprint(value.representativeSetFingerprint)
-    || !isExactObject(value.lineage, ["proposalIds", "candidateIds", "directionIds"])
-    || !isOpaqueIdArray(value.lineage.proposalIds, false, PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS)
-    || !isOpaqueIdArray(value.lineage.candidateIds, true, PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS)
-    || !isOpaqueIdArray(value.lineage.directionIds, true, PERSONAL_LIBRARY_MAX_DIRECTION_ANCESTRY_IDS)
-    || !isCanonicalTimestamp(value.createdAt)
-    || !isCanonicalTimestamp(value.updatedAt)
-    || value.createdAt > value.updatedAt
-    || (hasLockedAt && (!isCanonicalTimestamp(value.lockedAt) || value.lockedAt < value.createdAt))
-    || (merged && !isOpaqueId(value.mergedIntoDirectionId))) return null;
-  const representatives = decodeRepresentatives(value.representatives);
-  if (!representatives
-    || createPersonalLibraryRepresentativeSetFingerprint(representatives)
-      !== value.representativeSetFingerprint) return null;
-  const clusterMembers = decodeClusterMembers(value.clusterMembers);
-  const timeline = decodeTimeline(value.timeline, value.createdAt);
-  if (!clusterMembers || !timeline) return null;
-  const common: PersonalLibraryConfirmedDirectionCommon = {
-    id: value.id,
-    name: value.name,
-    description: value.description,
-    discoveryCues: [...value.discoveryCues],
-    representatives,
-    representativeSetFingerprint: value.representativeSetFingerprint,
-    clusterMembers,
-    timeline,
-    lineage: {
-      proposalIds: [...value.lineage.proposalIds],
-      candidateIds: [...value.lineage.candidateIds],
-      directionIds: [...value.lineage.directionIds],
-    },
-    createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
-    ...(hasLockedAt ? { lockedAt: value.lockedAt } : {}),
-  };
-  return merged
-    ? { ...common, status: "merged", mergedIntoDirectionId: value.mergedIntoDirectionId }
-    : { ...common, status: value.status as "active" | "disabled" };
-}
-
 function decodeCatalogInputManifest(value: unknown): PersonalLibraryRepresentativeEvidence[] | null {
   if (!Array.isArray(value) || value.length === 0
     || value.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) return null;
   const manifest: PersonalLibraryRepresentativeEvidence[] = [];
   for (const raw of value) {
     if (!isExactObject(raw, ["paperKey", "evidenceFingerprint"])
-      || !isCanonicalArxivPaperKey(raw.paperKey)
+      || !isCanonicalProposalPaperKey(raw.paperKey)
       || !isFingerprint(raw.evidenceFingerprint)) return null;
     manifest.push({ paperKey: raw.paperKey, evidenceFingerprint: raw.evidenceFingerprint });
   }
@@ -596,7 +442,7 @@ function decodeRepresentatives(value: unknown): PersonalLibraryRepresentativeEvi
   const representatives: PersonalLibraryRepresentativeEvidence[] = [];
   for (const raw of value) {
     if (!isExactObject(raw, ["paperKey", "evidenceFingerprint"])
-      || !isCanonicalArxivPaperKey(raw.paperKey)
+      || !isCanonicalProposalPaperKey(raw.paperKey)
       || !isFingerprint(raw.evidenceFingerprint)) return null;
     representatives.push({ paperKey: raw.paperKey, evidenceFingerprint: raw.evidenceFingerprint });
   }
@@ -623,74 +469,6 @@ function decodeClusterMembers(value: unknown): PersonalLibraryClusterMember[] | 
     members.push({ paperKey: raw.paperKey, confidence: raw.confidence });
   }
   return members;
-}
-
-function decodeTimeline(
-  value: unknown,
-  createdAt: string,
-): PersonalLibraryDirectionTimelineEvent[] | null {
-  if (!Array.isArray(value)
-    || value.length === 0
-    || value.length > PERSONAL_LIBRARY_MAX_TIMELINE_EVENTS) return null;
-  const events: PersonalLibraryDirectionTimelineEvent[] = [];
-  let previousAt: string | null = null;
-  for (let index = 0; index < value.length; index += 1) {
-    const event = decodeTimelineEvent(value[index]);
-    if (!event) return null;
-    if (index === 0) {
-      if (event.kind !== "created" || event.at !== createdAt) return null;
-    } else {
-      if (event.kind === "created") return null;
-      if (previousAt !== null && event.at < previousAt) return null;
-    }
-    previousAt = event.at;
-    events.push(event);
-  }
-  return events;
-}
-
-function decodeTimelineEvent(value: unknown): PersonalLibraryDirectionTimelineEvent | null {
-  if (!isPlainObject(value)
-    || typeof value.kind !== "string"
-    || !isCanonicalTimestamp(value.at)) return null;
-  switch (value.kind) {
-    case "created":
-    case "edited":
-    case "members-updated":
-      return isExactObject(value, ["kind", "at"])
-        ? { kind: value.kind, at: value.at }
-        : null;
-    case "merged":
-      return isExactObject(value, ["kind", "at", "sourceDirectionIds"])
-        && isOpaqueIdArray(value.sourceDirectionIds, false, PERSONAL_LIBRARY_MAX_DIRECTIONS)
-        ? { kind: "merged", at: value.at, sourceDirectionIds: [...value.sourceDirectionIds] }
-        : null;
-    case "removed":
-      return isExactObject(value, ["kind", "at", "mode"])
-        && (value.mode === "restrict" || value.mode === "cascade")
-        ? { kind: "removed", at: value.at, mode: value.mode }
-        : null;
-    case "locked":
-    case "unlocked":
-      return isExactObject(value, ["kind", "at"])
-        ? { kind: value.kind, at: value.at }
-        : null;
-    case "split":
-      return isExactObject(value, ["kind", "at", "sourceDirectionId"])
-        && isSplitSourceDirectionId(value.sourceDirectionId)
-        ? { kind: "split", at: value.at, sourceDirectionId: value.sourceDirectionId }
-        : null;
-    default:
-      return null;
-  }
-}
-
-function isSplitSourceDirectionId(value: unknown): value is string {
-  // Split sources are retained as opaque ids with a relaxed bound above direction ids.
-  return typeof value === "string"
-    && value.length >= 1
-    && value.length <= 256
-    && /^[A-Za-z0-9._~-]+$/.test(value);
 }
 
 function isCanonicalCatalogPaper(value: unknown): value is PersonalLibraryPaperRecord {
@@ -722,36 +500,6 @@ function isCanonicalCatalogPaper(value: unknown): value is PersonalLibraryPaperR
     && isLogicalPathArray(value.filePaths);
 }
 
-function mergedChainTerminatesAt(
-  ancestorId: string,
-  directionId: string,
-  byId: Map<string, PersonalLibraryConfirmedDirection>,
-): boolean {
-  let current = byId.get(ancestorId);
-  const visited = new Set<string>();
-  while (current?.status === "merged") {
-    if (visited.has(current.id)) return false;
-    visited.add(current.id);
-    if (current.mergedIntoDirectionId === directionId) return true;
-    current = byId.get(current.mergedIntoDirectionId);
-  }
-  return false;
-}
-
-function hasMergeCycle(directions: PersonalLibraryConfirmedDirection[]): boolean {
-  const byId = new Map(directions.map((direction) => [direction.id, direction]));
-  for (const start of directions) {
-    const visited = new Set<string>();
-    let current: PersonalLibraryConfirmedDirection | undefined = start;
-    while (current?.status === "merged") {
-      if (visited.has(current.id)) return true;
-      visited.add(current.id);
-      current = byId.get(current.mergedIntoDirectionId);
-    }
-  }
-  return false;
-}
-
 function isCanonicalArxivPaperKey(value: unknown): value is string {
   if (typeof value !== "string" || !value.startsWith("arxiv:")) return false;
   try {
@@ -759,6 +507,31 @@ function isCanonicalArxivPaperKey(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+/** `file:sha256:<64 lowercase hex>` — the index's content-addressed identity. */
+const FALLBACK_PAPER_KEY_RE = /^file:sha256:[0-9a-f]{64}$/;
+
+function isCanonicalFallbackPaperKey(value: unknown): value is string {
+  return typeof value === "string" && FALLBACK_PAPER_KEY_RE.test(value);
+}
+
+/**
+ * Paper keys a proposal may carry. Both identities are canonical and cannot
+ * collide: one is an arXiv id, the other a content hash.
+ */
+function isCanonicalProposalPaperKey(value: unknown): value is string {
+  return isCanonicalArxivPaperKey(value) || isCanonicalFallbackPaperKey(value);
+}
+
+function isCanonicalFallbackPaper(value: unknown): value is PersonalLibraryFallbackPaperRecord {
+  return isExactObject(value, ["paperKey", "source", "title", "abstract", "evidenceDepth", "filePaths"])
+    && isCanonicalFallbackPaperKey(value.paperKey)
+    && value.source === "file"
+    && isNonEmptyString(value.title)
+    && typeof value.abstract === "string"
+    && value.evidenceDepth === "metadata-and-abstract"
+    && isLogicalPathArray(value.filePaths);
 }
 
 function isDiscoveryCues(value: unknown): value is string[] {

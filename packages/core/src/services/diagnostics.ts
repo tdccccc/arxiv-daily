@@ -37,7 +37,7 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
   const version = input.version?.trim() || "unknown";
   const recentLimit = input.recentLimit ?? 10;
   const llmValidation = validateLlmConfig(settings);
-  const filterValidation = validateFilterConfig(settings);
+  const filterValidation = validateFilterConfig(settings, {});
   const dateContext = getDateContext(now, settings, runState);
   const recentEntries = Object.entries(runState)
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))

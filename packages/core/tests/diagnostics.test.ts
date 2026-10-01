@@ -115,7 +115,7 @@ describe("buildDiagnosticsReport", () => {
     expect(report).toContain("LLM API Key is empty");
     expect(report).toContain("Topic 1 name is empty");
     expect(report).toContain("Topic 1 tag is empty");
-    expect(report).toContain("Topic 1 description is empty");
+    expect(report).toContain("Topic 1 has no directions");
     expect(report).toContain("apiKeySet: no");
     expect(report).toContain('name="(empty)", tag="(empty)"');
   });

@@ -43,11 +43,33 @@ export interface LocalPdfParserSidecarSettings {
   parseUrl: string;
 }
 
+/**
+ * Where a direction's text came from. Provenance only: nothing branches on
+ * this value, because an accepted library direction must behave exactly like
+ * a hand-typed one (ADR 0012 §4).
+ */
+export type DirectionOrigin = "manual" | "migrated" | "library";
+
+/** One specific thread of interest running inside a topic (ADR 0012 §2). */
+export interface Direction {
+  id: string;
+  /** One line of text. Not a name plus a description, not a nested cue list. */
+  text: string;
+  origin: DirectionOrigin;
+}
+
 export interface Topic {
   id: string;
   name: string;
   tag: string;
+  /**
+   * Rollback shadow of `directions[0]`, kept so an older plugin or CLI build
+   * reading the same data.json keeps working unchanged. `directions` is the
+   * authority; this field is derived and must never be written directly.
+   * Invariant: `description === directions[0]?.text ?? ""`.
+   */
   description: string;
+  directions: Direction[];
   detail: boolean;
 }
 
@@ -61,6 +83,8 @@ export interface ArxivSettings {
 export interface OutputSettings {
   dailyDir: string;
   papersDir: string;
+  /** Maximum papers in a new daily report across all topics; defaults to 20. */
+  maxDailyPapers?: number;
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
 }

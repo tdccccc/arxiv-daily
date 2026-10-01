@@ -35,6 +35,17 @@ function makeSettings(overrides: SettingsOverrides = {}): PluginSettings {
 }
 
 describe("getSetupStatus", () => {
+  it("judges topic readiness by authored directions rather than the rollback description", () => {
+    const settings = makeSettings({ arxiv: { topics: [{
+      id: "topic", name: "Agents", tag: "agents", detail: false,
+      description: "Old shadow", directions: [],
+    }] } });
+    expect(getSetupStatus(settings).topicsReady).toBe(false);
+    settings.arxiv.topics[0]!.description = "";
+    settings.arxiv.topics[0]!.directions = [{ id: "d", text: "Reliable agents", origin: "manual" }];
+    expect(getSetupStatus(settings).topicsReady).toBe(true);
+  });
+
   it("reports missing LLM and topic setup from defaults", () => {
     const status = getSetupStatus(makeSettings());
 
@@ -57,6 +68,9 @@ describe("getSetupStatus", () => {
               name: "Compact objects",
               tag: "compact-objects",
               description: "Neutron stars and black holes",
+              directions: [
+                { id: "d1", text: "Neutron stars and black holes", origin: "migrated" },
+              ],
               detail: false,
             },
           ],
@@ -81,6 +95,9 @@ describe("getSetupStatus", () => {
             name: "Compact objects",
             tag: "compact-objects",
             description: "Neutron stars and black holes",
+            directions: [
+              { id: "d1", text: "Neutron stars and black holes", origin: "migrated" },
+            ],
             detail: false,
           },
         ],
@@ -101,7 +118,7 @@ describe("getSetupStatus", () => {
   });
 
   it("keeps the guide until daily runs are turned on", () => {
-    const topics = [{
+    const topics = [{ directions: [{ id: "fixture-direction", text: "Neutron stars and black holes", origin: "manual" as const }],
       id: "topic",
       name: "Compact objects",
       tag: "compact-objects",
@@ -153,6 +170,7 @@ describe("getSetupStatus", () => {
               name: "Compact objects",
               tag: "",
               description: "",
+              directions: [],
               detail: false,
             },
           ],
@@ -164,7 +182,7 @@ describe("getSetupStatus", () => {
     expect(status.topicsReady).toBe(false);
     expect(status.readyToRun).toBe(false);
     expect(status.reasons.join("; ")).toMatch(/tag is empty/i);
-    expect(status.reasons.join("; ")).toMatch(/description is empty/i);
+    expect(status.reasons.join("; ")).toMatch(/has no directions/i);
   });
 
   it("does not call topics ready when two topics share a tag", () => {
@@ -173,6 +191,7 @@ describe("getSetupStatus", () => {
       name,
       tag: "shared",
       description: `${name} papers`,
+      directions: [{ id: "direction", text: `${name} papers`, origin: "manual" as const }],
       detail: false,
     });
     const status = getSetupStatus(
@@ -188,7 +207,7 @@ describe("getSetupStatus", () => {
 });
 
 describe("setup guide completion marker", () => {
-  const topics = [{
+  const topics = [{ directions: [{ id: "fixture-direction", text: "Neutron stars and black holes", origin: "manual" as const }],
     id: "topic",
     name: "Compact objects",
     tag: "compact-objects",

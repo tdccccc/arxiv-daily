@@ -79,7 +79,7 @@ describe("librarySetupNextStep", () => {
     }, "remote");
     expect(pending.action).toBe("index");
     expect(pending).toMatchObject({ remoteConsentPending: true });
-    expect(pending.description).toMatch(/full text/i);
+    expect(pending.description).toMatch(/titles and abstracts/i);
     expect(pending.description).toMatch(/confirm/i);
 
     const invalidated = librarySetupNextStep({

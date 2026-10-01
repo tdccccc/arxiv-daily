@@ -10,7 +10,7 @@
  */
 
 import { clusterPaperVectors, type ClusteringInputPaper, type ClusteringOptions } from "../clustering/clusterer";
-import type { PersonalLibraryConfirmedDirection } from "../personal-library-interest-profile";
+import type { PlaceableDirection } from "./placeable-direction";
 
 export interface NewClusterCandidate {
   clusterId: string;
@@ -30,7 +30,7 @@ export interface ReclusterPoolOptions extends ClusteringOptions {
   /** Paper keys to consider (the buffer pool). */
   poolPaperKeys: readonly string[];
   /** Directions whose anchors provide the drift reference. */
-  directions: readonly PersonalLibraryConfirmedDirection[];
+  directions: readonly PlaceableDirection[];
 }
 
 /**
@@ -56,7 +56,7 @@ export function reclusterPool(
     minClusterSize: options.minClusterSize,
     centerCorpus: false, // caller already centered the shared space
     minSimilarity: options.minSimilarity,
-    relativeStopRatio: options.relativeStopRatio,
+    similarityQuantile: options.similarityQuantile,
   });
 
   // Anchor chunks per direction for the drift reference.

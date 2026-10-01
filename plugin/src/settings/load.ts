@@ -2,6 +2,7 @@ import {
   DEFAULT_SETTINGS,
   migrateArxivSettings,
   migrateEmailSettings,
+  normalizeMaxDailyPapers,
   sanitizeDetailSelection,
   type PluginSettings,
   type RunState,
@@ -20,6 +21,7 @@ export function settingsAndStateFromPersistedData(raw: unknown): {
     ? data.settings as Partial<PluginSettings>
     : {};
   const merged = mergeSettings(DEFAULT_SETTINGS, partial);
+  merged.output.maxDailyPapers = normalizeMaxDailyPapers(merged.output.maxDailyPapers);
   merged.arxiv = migrateArxivSettings(partial.arxiv);
   merged.email = migrateEmailSettings(partial.email);
   const persistedArxiv = isRecord(partial.arxiv) ? partial.arxiv : undefined;

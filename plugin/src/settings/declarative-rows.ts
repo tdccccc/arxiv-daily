@@ -13,7 +13,7 @@ import {
   TIMEZONE_OPTIONS,
   validateOutputDirectoryDraft,
 } from "./tab";
-import { arxivCategories, LlmClient } from "@arxiv-daily/core";
+import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -243,6 +243,7 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
 
 export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
   tab.setDeclarativeSetupGuideRow(setting);
+  setting.setName("");
   clearSettingEl(setting, "arxiv-daily-setup");
   setting.settingEl.addClass("arxiv-daily-settings__setup-guide-host");
   const guide = tab.createSetupGuide();
@@ -445,6 +446,47 @@ export function renderTickIntervalRow(
   });
   input.value = String(tab.plugin.settings.schedule.tickIntervalMin);
   tab.bindTickIntervalInput(input);
+}
+
+/** Shared by the legacy tab and the declarative settings page. */
+export function renderDailyPaperLimitRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "number",
+    attr: { "aria-label": "Daily paper limit", min: "1", step: "1" },
+  });
+  input.value = String(normalizeMaxDailyPapers(tab.plugin.settings.output.maxDailyPapers));
+  const validate = (): number | null => {
+    const value = Number(input.value.trim());
+    const valid = isValidMaxDailyPapers(value);
+    input.setCustomValidity(valid ? "" : "Enter a positive whole number.");
+    input.toggleClass("is-invalid", !valid);
+    return valid ? value : null;
+  };
+  input.addEventListener("input", () => {
+    tab.beginControlChange(input);
+    validate();
+  });
+  input.addEventListener("change", () => {
+    const revision = tab.beginControlChange(input);
+    const next = validate();
+    if (next === null) return;
+    tab.runAction("save daily paper limit", async () => {
+      try {
+        await tab.changeSettingValue("output.maxDailyPapers", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = String(next);
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = String(normalizeMaxDailyPapers(tab.restoreCurrentControlValue(error, "output.maxDailyPapers")));
+          validate();
+        }
+        throw error;
+      }
+    });
+  });
 }
 
 /** Email delivery guide strip for the current mode. */
@@ -691,7 +733,7 @@ export function renderEmbeddingModeRow(
   const select = setting.controlEl.createEl("select");
   const local = select.createEl("option", { text: "Local (default, one-time model download)" });
   local.value = "local";
-  const remote = select.createEl("option", { text: "Remote (fast, full text leaves this device)" });
+  const remote = select.createEl("option", { text: "Remote (titles and abstracts leave this device)" });
   remote.value = "remote";
   select.value = tab.plugin.settings.embedding.mode;
   select.addEventListener("change", () => {
@@ -699,7 +741,7 @@ export function renderEmbeddingModeRow(
     const revision = tab.beginControlChange(select);
     tab.runAction("save embedding mode", async () => {
       try {
-        // Switching to remote asks for full-text consent in place; a declined
+        // Switching to remote asks for title-and-abstract consent in place; a declined
         // switch leaves the mode alone, so the dropdown snaps back to it.
         await tab.applyEmbeddingModeChange(next);
         if (tab.isCurrentControlChange(select, revision)) {

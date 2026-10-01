@@ -140,7 +140,7 @@ describe("daily summary checkpoint fingerprint", () => {
     });
 
     expect(createDailySummaryCompatibilityFingerprint(first)).toBe(
-      "sha256:709c47bf9d8382aca24749bc23294fb77c398b92380043f6fcf942151e97224b",
+      "sha256:acd211853f6a211746ffd42a2ea262fe8009ca9624b425deecec36d504ef57a2",
     );
     expect(createDailySummaryCompatibilityFingerprint(second)).toBe(
       createDailySummaryCompatibilityFingerprint(first),
@@ -162,7 +162,7 @@ describe("daily summary checkpoint fingerprint", () => {
         model: "model-a",
         mode: { kind: "temperature", temperature: 0 },
       },
-      promptContractVersion: 1,
+      promptContractVersion: 2,
       resultContractVersion: 1,
     });
     expect(JSON.stringify(canonical)).not.toContain("secret");
@@ -267,7 +267,7 @@ describe("daily summary checkpoint fingerprint", () => {
       llm: { ...value.llm, thinkingMode: true, reasoningEffort: "high" },
     })],
     ["temperature", (value: DailySummaryCheckpointCompatibilityInput) => ({ ...value, temperature: 0.2 })],
-    ["prompt contract", (value: DailySummaryCheckpointCompatibilityInput) => ({ ...value, promptContractVersion: 2 })],
+    ["prompt contract", (value: DailySummaryCheckpointCompatibilityInput) => ({ ...value, promptContractVersion: 99 })],
     ["result contract", (value: DailySummaryCheckpointCompatibilityInput) => ({ ...value, resultContractVersion: 2 })],
   ])("changes when %s changes", (_name, mutate) => {
     const input = compatibility();
@@ -344,6 +344,19 @@ describe("strict DailyPaperResult decoding", () => {
 });
 
 describe("DailySummaryCheckpointStore", () => {
+  it("does not reuse a v1 summary produced before concise results and faithful units", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    await store.upsert(reportDate, compatibility(), structuredResult);
+    const document = JSON.parse(files[documentPath]!);
+    const entry = document.entries["arxiv:2608.00001"];
+    entry.fingerprintInput.promptContractVersion = 1;
+    entry.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(entry.fingerprintInput))}`;
+    files[documentPath] = JSON.stringify(document);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toBeNull();
+  });
+
   it("derives a date-scoped path under the configured hidden index", () => {
     expect(deriveDailySummaryCheckpointPaths(
       { normalizePath: (path) => path },
@@ -389,7 +402,7 @@ describe("DailySummaryCheckpointStore", () => {
   );
 
   it.each([
-    ["prompt", { promptContractVersion: 2 }],
+    ["prompt", { promptContractVersion: 99 }],
     ["result", { resultContractVersion: 2 }],
   ])("refuses to persist an unsupported %s contract", async (_name, overrides) => {
     const { storage } = makeStorage();
@@ -480,7 +493,7 @@ describe("DailySummaryCheckpointStore", () => {
     ["extra structured field", (entry: any) => { entry.result.summary.extra = "not allowed"; }],
     ["invalid structured math", (entry: any) => { entry.result.summary.mainResult = String.raw`Bare \alpha.`; }],
     ["unknown prompt contract", (entry: any) => {
-      entry.fingerprintInput.promptContractVersion = 2;
+      entry.fingerprintInput.promptContractVersion = 99;
       entry.fingerprint = `sha256:${sha256ForCheckpointTests(JSON.stringify(entry.fingerprintInput))}`;
     }],
     ["unknown result contract", (entry: any) => {

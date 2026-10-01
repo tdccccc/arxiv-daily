@@ -67,7 +67,7 @@ export function getSetupStatus(
       (topic) =>
         topic.name.trim() &&
         topic.tag.trim() &&
-        topic.description.trim(),
+        topic.directions.some((direction) => direction.text.trim()),
     ) &&
     new Set(topicTags).size === topicTags.length;
   const validation = validateFilterConfig(settings);

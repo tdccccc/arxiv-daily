@@ -348,11 +348,6 @@
   color: var(--text-accent);
 }
 
-.arxiv-daily-settings__topic-tag {
-  opacity: 0.55;
-  font-size: 0.85em;
-}
-
 .arxiv-daily-settings__topic-form {
   margin-top: 0.6em;
 }
@@ -372,23 +367,114 @@
 }
 
 .arxiv-daily-settings__topic-name-input,
-.arxiv-daily-settings__topic-description,
 .arxiv-daily-settings__textarea {
   width: 100%;
 }
 
-.arxiv-daily-settings__topic-tag-input {
-  width: 60%;
+.arxiv-daily-settings__topic-directions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  min-width: 0;
 }
 
-.arxiv-daily-settings__topic-auto {
-  margin-left: 0.5em;
-  opacity: 0.5;
-  font-size: 0.85em;
+.arxiv-daily-settings__topic-direction {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
 }
 
-.arxiv-daily-settings__topic-auto.is-hidden {
+/*
+ * The field grows with its content without any scripted height: the text is
+ * replicated into a hidden ::after that shares the single grid cell with the
+ * textarea, so the cell is as tall as the wrapped text. Collapsed, the field
+ * caps at a couple of lines; focusing lifts the cap.
+ */
+.arxiv-daily-settings__topic-direction-field {
+  --arxiv-daily-direction-lines: 1;
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.arxiv-daily-settings__topic-direction-field::after {
+  content: attr(data-replicated-value) " ";
+  visibility: hidden;
+  white-space: pre-wrap;
+}
+
+.arxiv-daily-settings__topic-direction-field > .arxiv-daily-settings__topic-direction-input,
+.arxiv-daily-settings__topic-direction-field::after {
+  box-sizing: border-box;
+  grid-area: 1 / 1 / 2 / 2;
+  width: 100%;
+  padding: 0.25em 0.5em;
+  border: 1px solid var(--background-modifier-border);
+  font: inherit;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-settings__topic-direction-input {
+  overflow: hidden;
+  resize: none;
+}
+
+.arxiv-daily-settings__topic-direction-field.is-collapsed {
+  max-height: calc(var(--arxiv-daily-direction-lines) * 1.5em + 0.5em + 2px);
+  overflow: hidden;
+}
+
+/*
+ * A textarea cannot render a marker over its own text, so the "+N" badge is a
+ * sibling pinned to the end of the collapsed line. It never takes pointer
+ * events, so clicking it still lands in the textarea and expands the field.
+ */
+.arxiv-daily-settings__topic-direction-more {
+  position: absolute;
+  top: 50%;
+  right: 0.35em;
   display: none;
+  padding: 0 0.4em;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.arxiv-daily-settings__topic-direction-more.is-visible {
+  display: block;
+}
+
+/* Keep the last words clear of the badge instead of running under it. */
+.arxiv-daily-settings__topic-direction-field.is-collapsed
+  > .arxiv-daily-settings__topic-direction-input {
+  padding-right: 3em;
+}
+
+.arxiv-daily-settings__topic-direction-remove {
+  flex: 0 0 auto;
+  padding: 0 0.5em;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.arxiv-daily-settings__topic-direction-remove:hover {
+  color: var(--text-error);
+}
+
+.arxiv-daily-settings__topic-direction-add {
+  align-self: flex-start;
+  margin-top: 0.15em;
+  font-size: 0.9em;
 }
 
 .arxiv-daily-settings__topic-footer {
@@ -407,7 +493,7 @@
 
 /* Declarative (1.13+) topic rows only: the card spans the full row width
    (the framework name column is hidden — the card header carries the
-   title), the header right-aligns star/tag, and the expanded form uses a
+   title), the header right-aligns the detail star, and the expanded form uses a
    two-column grid. The <1.13 display() path never gets this class. */
 .arxiv-daily-settings__topic-host {
   flex-wrap: wrap;
@@ -430,8 +516,7 @@
   text-overflow: ellipsis;
 }
 
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-star,
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag {
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-star {
   flex: 0 0 auto;
 }
 
@@ -452,14 +537,10 @@
 }
 
 .arxiv-daily-settings__topic-host
-  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__hint,
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
   grid-column: 1 / -1;
-}
-
-.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-tag-input {
-  width: 100%;
 }
 
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
@@ -474,7 +555,7 @@
   }
 
   .arxiv-daily-settings__topic-host
-    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-description),
+    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
   .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
     grid-column: 1;
   }
@@ -552,6 +633,16 @@
 
 .arxiv-daily-setup__item.is-done {
   color: var(--text-muted);
+}
+
+.arxiv-daily-setup__item:not(.is-current) {
+  border-color: transparent;
+  background: transparent;
+  padding-block: 4px;
+}
+
+.arxiv-daily-setup__item.is-current {
+  border-inline-start: 3px solid var(--interactive-accent);
 }
 
 .arxiv-daily-setup__item-body {
@@ -1746,6 +1837,8 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   width: min(72rem, 94vw);
   max-width: 94vw;
   max-height: 90vh;
+  resize: horizontal;
+  overflow: auto;
 }
 
 .arxiv-daily-interest-review {
@@ -1758,6 +1851,10 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 .arxiv-daily-interest-review__hint,
 .arxiv-daily-interest-review__diagnostic {
   color: var(--text-muted);
+}
+
+.arxiv-daily-interest-review__hint {
+  margin-block-start: var(--size-4-3);
 }
 
 .arxiv-daily-interest-review__pending-authorization {
@@ -1787,8 +1884,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 }
 
 .arxiv-daily-interest-review__tab[aria-selected="true"] {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  box-shadow: inset 0 -2px var(--interactive-accent);
 }
 
 .arxiv-daily-interest-review__error,
@@ -1803,13 +1901,134 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-interest-review__card {
   margin-block: var(--size-4-3);
-  padding: var(--size-4-3);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
+  padding-block: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .arxiv-daily-interest-review__card-heading strong {
   flex: 1 1 14rem;
+}
+
+.arxiv-daily-interest-review__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-block-start: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__options {
+  margin-inline-start: auto;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-interest-review__options[open] {
+  flex-basis: 100%;
+}
+
+.arxiv-daily-interest-review__options > summary,
+.arxiv-daily-interest-review__evidence > summary,
+.arxiv-daily-interest-review__representatives > summary,
+.arxiv-daily-interest-review__destination > summary,
+.arxiv-daily-interest-review__reviewed > summary {
+  cursor: pointer;
+}
+
+.arxiv-daily-interest-review__selection-summary {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-interest-review__feedback {
+  color: var(--text-success);
+}
+
+.arxiv-daily-interest-review__completion,
+.arxiv-daily-interest-review__reviewed {
+  margin-block: var(--size-4-4);
+}
+
+.arxiv-daily-interest-review__destination[open],
+.arxiv-daily-interest-review__representatives[open] {
+  display: grid;
+  gap: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__overview-topic {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__overview-topic h3 {
+  font-size: var(--font-ui-medium);
+}
+
+.arxiv-daily-interest-review__overview-topic,
+.arxiv-daily-interest-review__coverage,
+.arxiv-daily-interest-review__preview {
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__paper-link {
+  color: var(--text-accent);
+  background: transparent;
+  box-shadow: none;
+  height: auto;
+  max-width: 100%;
+  padding: 0;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__detail > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-block-start: var(--size-4-2);
+}
+
+/* The primary action stays reachable while scanning a long list rather than
+   sitting a full scroll below the rows it acts on. */
+.arxiv-daily-interest-review__accept-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-block: var(--size-4-2);
+  padding-block-end: var(--size-4-4);
+  background: var(--modal-background);
+}
+
+.arxiv-daily-interest-review__topic {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-block: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__topic-heading {
+  cursor: pointer;
+  padding-block: var(--size-4-1);
+  overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__topic-heading > input,
+.arxiv-daily-interest-review__topic-heading > strong,
+.arxiv-daily-interest-review__topic-count {
+  margin-inline-end: var(--size-4-2);
+}
+
+.arxiv-daily-interest-review__topic-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.arxiv-daily-interest-review__topic-body {
+  padding-block: var(--size-4-2);
 }
 
 .arxiv-daily-interest-review__status {
@@ -1819,11 +2038,18 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   text-transform: capitalize;
 }
 
+/* One full-width column at every width. Two columns inside a modal cut the
+   name input in half and squeezed the paper list into a slit; with a single
+   column there is nothing to collapse and no width condition to get wrong. */
 .arxiv-daily-interest-review__form {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 2fr);
+  grid-template-columns: 1fr;
   gap: var(--size-4-3);
   margin-block: var(--size-4-3);
+}
+
+.arxiv-daily-interest-review__field select[multiple] {
+  min-height: 7rem;
 }
 
 .arxiv-daily-interest-review__field {
@@ -1852,11 +2078,16 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   margin-block: var(--size-4-2);
 }
 
-@media (max-width: 700px) {
-  .arxiv-daily-interest-review__form {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* The uncovered-papers line sits after the topic list with no heading of its
+   own, so it needs the same separator the topics use plus enough room to read
+   as a distinct section rather than a trailing fragment of the last topic. */
+.arxiv-daily-interest-review__buffer {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-block-start: var(--size-4-4);
+  padding-block: var(--size-4-4);
+}
 
+@media (max-width: 700px) {
   .arxiv-daily-interest-review__toolbar,
   .arxiv-daily-interest-review__section-actions {
     align-items: stretch;

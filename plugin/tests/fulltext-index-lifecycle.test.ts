@@ -237,7 +237,6 @@ function fixture(storage: StorageAdapter) {
   }));
   internals.buildFullTextKnowledgeBaseStore = vi.fn(() => legacy.store);
   internals.buildEmbeddingModel = vi.fn(() => model);
-  internals.runIncrementalDirectionUpdateAfterIndex = vi.fn(async () => undefined);
   return {
     plugin,
     internals,
@@ -249,57 +248,34 @@ function fixture(storage: StorageAdapter) {
 }
 
 describe("personal library full-text index lifecycle", () => {
-  it("does not probe a local parser sidecar while it is disabled", async () => {
-    const memory = memoryStorage();
-    const runtime = fixture(memory.storage);
-    const request = vi.fn();
-    runtime.internals.host.http = { request };
+  // The two sidecar-probe tests that stood here lost their subject when the
+  // index moved to the extractor (ADR 0013): nothing on the index path probes a
+  // sidecar any more, whatever the setting says. `probeLoopbackSidecarParser`
+  // keeps its own tests in core while the client remains. What is worth pinning
+  // now is the opposite property — that indexing reaches no network at all.
 
-    const configured = await runtime.internals.buildFullTextDocumentParser();
-
-    expect(configured.parser?.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
-    expect(configured.parserSelector).toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("falls back to PDF.js when an enabled local sidecar cannot be probed", async () => {
+  it("builds a PDF.js extractor for indexing and never probes the sidecar", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
     runtime.internals.settings.pdfParserSidecar.enabled = true;
-    const failure = new Error("connection refused");
-    const request = vi.fn(async () => { throw failure; });
+    const request = vi.fn();
     runtime.internals.host.http = { request };
 
-    const configured = await runtime.internals.buildFullTextDocumentParser();
+    const extractor = runtime.internals.buildFullTextExtractor();
 
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({
-      method: "GET",
-      url: "http://127.0.0.1:5001/v1/capabilities",
-    }));
-    expect(configured.parser?.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
-    expect(configured.parserSelector).toBeUndefined();
-    expect(runtime.internals.logger.warn).toHaveBeenCalledWith(
-      "fulltext: local PDF parser sidecar probe failed; using PDF.js",
-      expect.anything(),
+    expect(extractor.provenance).toEqual({ id: "obsidian-pdfjs", version: "1" });
+    expect(request).not.toHaveBeenCalled();
+    expect(runtime.internals.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("sidecar is not used for indexing"),
     );
   });
 
-  it("stops an active full-text index when local sidecar settings change", () => {
-    const memory = memoryStorage();
-    const runtime = fixture(memory.storage);
-    const operation = runtime.internals.operations.begin(
-      "personal-library-fulltext-index",
-      "Personal library full-text index",
-      runtime.scopeFingerprint,
-    );
-
-    runtime.internals.preparePdfParserSidecarSettingsChange([
-      "pdfParserSidecar.parseUrl",
-    ]);
-
-    expect(operation.signal.aborted).toBe(true);
-    expect(operation.signal.reason).toBe("local PDF parser sidecar settings changed");
-  });
+  // "stops an active full-text index when local sidecar settings change" was
+  // removed here along with the behaviour itself. Interrupting a long index run
+  // made sense while the sidecar decided how PDFs were parsed; it no longer
+  // takes part in indexing, so aborting would throw away minutes of work to
+  // apply a setting that changes nothing about the result. The settings still
+  // validate on change — see settings-change-service.test.ts.
 
   it("revalidates a current indexed PDF before opening its evidence page", async () => {
     const memory = memoryStorage();
@@ -429,7 +405,6 @@ describe("personal library full-text index lifecycle", () => {
 
     expect(runtime.legacy.loadManifest).not.toHaveBeenCalled();
     expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).not.toHaveBeenCalled();
   });
 
   it("rejects fallback admission when cutover wins after preflight", async () => {
@@ -534,9 +509,9 @@ describe("personal library full-text index lifecycle", () => {
       pruned: 0,
     });
 
-    expect(runtime.legacy.loadManifest).toHaveBeenCalledTimes(1);
+    // One read builds the index; the second refreshes reviewable title metadata.
+    expect(runtime.legacy.loadManifest).toHaveBeenCalledTimes(2);
     expect(runtime.legacy.replaceManifest).toHaveBeenCalledTimes(1);
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).toHaveBeenCalledTimes(1);
     expect(runtime.internals.logger.warn).toHaveBeenCalledWith(
       "fulltext: immutable generation cutover is unavailable on this host; retaining the legacy migration fallback",
     );
@@ -549,9 +524,6 @@ describe("personal library full-text index lifecycle", () => {
     const assertOwned = vi.fn(async () => undefined);
     const release = vi.fn(async () => { lifecycle.push("release"); });
     const acquireLegacyMigrationLease = vi.fn(async () => ({ assertOwned, release }));
-    runtime.internals.runIncrementalDirectionUpdateAfterIndex = vi.fn(async () => {
-      lifecycle.push("direction");
-    });
     runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
       openCurrent: vi.fn(async () => null),
       acquireLegacyMigrationLease,
@@ -566,7 +538,7 @@ describe("personal library full-text index lifecycle", () => {
     );
     expect(assertOwned).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(1);
-    expect(lifecycle).toEqual(["release", "direction"]);
+    expect(lifecycle).toEqual(["release"]);
   });
 
   it("preserves the indexing error when legacy lease release also fails", async () => {
@@ -651,7 +623,7 @@ describe("personal library full-text index lifecycle", () => {
     })).resolves.toMatchObject({ descriptor: { generationId: "gen-plugin-preflight" } });
   });
 
-  it("preserves the post-commit direction update when generation synchronization fails", async () => {
+  it("still commits the legacy manifest when generation synchronization fails", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
     const stageAndPromote = vi.fn(async () => { throw new Error("generation promotion failed"); });
@@ -664,10 +636,6 @@ describe("personal library full-text index lifecycle", () => {
       .rejects.toThrow("generation promotion failed");
 
     expect(runtime.legacy.replaceManifest).toHaveBeenCalledTimes(1);
-    expect(runtime.internals.runIncrementalDirectionUpdateAfterIndex).toHaveBeenCalledTimes(1);
-    expect(stageAndPromote.mock.invocationCallOrder[0]).toBeLessThan(
-      runtime.internals.runIncrementalDirectionUpdateAfterIndex.mock.invocationCallOrder[0],
-    );
   });
 
   it("runs generation maintenance only through an explicit host quiet-period gate", async () => {

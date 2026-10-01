@@ -72,7 +72,19 @@ export function validateLlmConfig(settings: PluginSettings): ValidationResult {
   return { ok: reasons.length === 0, reasons };
 }
 
-export function validateFilterConfig(settings: PluginSettings): ValidationResult {
+/**
+ * ADR 0010 §1 let either a hand-written topic or an eligible library direction
+ * carry a run, because confirmed library directions drove a classifier of their
+ * own. That classifier retired with the profile document (ADR 0012 / ADR 0014)
+ * and directions now live inside topics, so a topic is the only thing that can
+ * select a paper — and the only thing worth checking for.
+ */
+export interface FilterValidationOptions {}
+
+export function validateFilterConfig(
+  settings: PluginSettings,
+  options: FilterValidationOptions = {},
+): ValidationResult {
   const llm = validateLlmConfig(settings);
   const reasons = [...llm.reasons];
   const categories = arxivCategories(settings.arxiv);
@@ -118,9 +130,7 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
     }
     seenCategories.add(trimmed);
   }
-  if (settings.arxiv.topics.length === 0) {
-    reasons.push("No research topics defined");
-  }
+  if (settings.arxiv.topics.length === 0) reasons.push("No research topics defined");
   const seenTags = new Set<string>();
   settings.arxiv.topics.forEach((topic, i) => {
     const label = `Topic ${i + 1}`;
@@ -133,7 +143,16 @@ export function validateFilterConfig(settings: PluginSettings): ValidationResult
     } else {
       seenTags.add(tag);
     }
-    if (!topic.description.trim()) reasons.push(`${label} description is empty`);
+    // Directions are what the classifier judges against (ADR 0012 §1), so an
+    // empty list is what the researcher has to fix. `description` is the
+    // rollback shadow of the first direction and is never edited directly, so
+    // naming it here would point at a field the settings page does not show.
+    // Reported, never thrown: reporting bad configuration is this function's
+    // whole job, so a topic that never went through `normalizeTopic` has to
+    // come back as a reason rather than a crash.
+    if (!(topic.directions ?? []).some((direction) => direction?.text?.trim())) {
+      reasons.push(`${label} has no directions`);
+    }
   });
   return { ok: reasons.length === 0, reasons };
 }

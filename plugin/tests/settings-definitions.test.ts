@@ -161,10 +161,11 @@ describe("buildSettingDefinitions structure", () => {
     expect(library?.items.map((item) => item.name)).toEqual([
       "Library",
       "Embedding",
-      "Better PDF parser",
     ]);
 
     host.plugin.settings.embedding.mode = "remote";
+    // Enabling the sidecar must not surface any row: it takes no part in
+    // indexing, so a visible control would promise a change it cannot deliver.
     host.plugin.settings.pdfParserSidecar.enabled = true;
     const expanded = buildSettingDefinitions(host).find(
       (item): item is Extract<(typeof items)[number], { type: "group" }> =>
@@ -177,9 +178,6 @@ describe("buildSettingDefinitions structure", () => {
       "Embedding API key",
       "Embedding model",
       "Embedding dimension",
-      "Better PDF parser",
-      "Sidecar capability URL",
-      "Sidecar parse URL",
     ]);
 
     const bare = buildSettingDefinitions(makeHost()).find(
@@ -233,14 +231,14 @@ describe("buildSettingDefinitions structure", () => {
     const host = makeHost();
     host.plugin.settings.arxiv.categories = ["cs.AI", "cs.LG"];
     host.plugin.settings.arxiv.topics = [
-      {
+      { directions: [],
         id: "t1",
         name: "Photometric redshift",
         tag: "photometric-redshift",
         description: "",
         detail: false,
       },
-      {
+      { directions: [],
         id: "t2",
         name: "",
         tag: "",

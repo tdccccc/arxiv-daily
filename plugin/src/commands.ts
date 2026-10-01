@@ -57,7 +57,10 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   };
 
   function gateFilter(): boolean {
-    const v = validateFilterConfig(plugin.settings);
+    const v = validateFilterConfig(plugin.settings, {
+      // Optional at the call site: hosts that cannot answer fall back to the
+      // topic-only rule, which is exactly the behaviour they had before.
+    });
     if (!v.ok) {
       notice(`arXiv Daily — cannot run:\n${v.reasons.map((r) => "• " + r).join("\n")}`, 10_000);
       return false;
@@ -410,36 +413,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
-    id: "check-incremental-direction-updates",
-    name: "Check incremental direction updates",
-    callback: () =>
-      runDetached(
-        (async () => {
-          notice("arXiv Daily: checking incremental direction updates…");
-          try {
-            const summary = await plugin.runIncrementalDirectionUpdate();
-            const pending = summary.pendingAuthorizationBuffered > 0
-              ? `, ${summary.pendingAuthorizationBuffered} awaiting model authorization`
-              : "";
-            const superseded = summary.superseded > 0
-              ? `, ${summary.superseded} un-reviewed suggestion(s) superseded by new evidence`
-              : "";
-            notice(
-              `arXiv Daily: incremental update — ${summary.suggestions} suggestion(s) `
-              + `stored (${summary.attachments} attachment(s)), `
-              + `${summary.buffered} paper(s) buffered${pending}${superseded}`,
-              10_000,
-            );
-          } catch (error) {
-            plugin.logger.error("commands: incremental direction update failed", error);
-            notice(`arXiv Daily: incremental update failed: ${errorMessage(error)}`, 10_000);
-          }
-        })(),
-        "check incremental direction updates",
-      ),
-  });
-
-  plugin.addCommand({
     id: "review-incremental-suggestions",
     name: "Review incremental direction suggestions",
     callback: () => {
@@ -534,11 +507,11 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "index-personal-library-fulltext",
-    name: "Index personal library full text (local embeddings)",
+    name: "Index personal library titles and abstracts",
     callback: () =>
       runDetached(
         (async () => {
-          notice("arXiv Daily: indexing personal library full text…");
+          notice("arXiv Daily: indexing personal library titles and abstracts…");
           try {
             const summary = await plugin.indexPersonalLibraryFullText();
             notice(
@@ -553,7 +526,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
               return;
             }
             plugin.logger.error("commands: personal library full-text indexing failed", error);
-            notice(`arXiv Daily: full-text indexing failed: ${errorMessage(error)}`, 10_000);
+            notice(`arXiv Daily: library indexing failed: ${errorMessage(error)}`, 10_000);
           }
         })(),
         "index personal library full text",
@@ -562,7 +535,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
 
   plugin.addCommand({
     id: "search-personal-library-fulltext",
-    name: "Search personal library full text…",
+    name: "Search personal library titles and abstracts…",
     callback: () =>
       new FullTextQueryModal(plugin.app, (query) => {
         if (!query) return;
@@ -571,7 +544,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
             try {
               const matches = await plugin.searchPersonalLibraryFullText(query);
               if (matches.length === 0) {
-                notice("arXiv Daily: no similar papers found in the full-text index", 10_000);
+                notice("arXiv Daily: no similar papers found in the title-and-abstract index", 10_000);
                 return;
               }
               new FullTextSearchResultsModal(plugin.app, matches, {
@@ -589,7 +562,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
               }).open();
             } catch (error) {
               plugin.logger.error("commands: personal library full-text search failed", error);
-              notice(`arXiv Daily: full-text search failed: ${errorMessage(error)}`, 10_000);
+              notice(`arXiv Daily: library search failed: ${errorMessage(error)}`, 10_000);
             }
           })(),
           "search personal library full text",
@@ -735,12 +708,12 @@ class FullTextQueryModal extends Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Search personal library full text" });
+    contentEl.createEl("h2", { text: "Search personal library titles and abstracts" });
     let inputEl: HTMLInputElement | null = null;
     let submitButton: HTMLButtonElement | null = null;
     new Setting(contentEl)
       .setName("Query")
-      .setDesc("A research question or description; matched against local full-text embeddings")
+      .setDesc("A research question or description; matched against indexed titles and abstracts")
       .addText((t) => {
         inputEl = t.inputEl;
         t.setPlaceholder("e.g. graph neural networks for node classification")
@@ -779,7 +752,7 @@ export class FullTextSearchResultsModal extends Modal {
   }
 
   onOpen(): void {
-    this.contentEl.createEl("h2", { text: "Full-text search results" });
+    this.contentEl.createEl("h2", { text: "Library search results" });
     const results = this.contentEl.createDiv({ cls: "arxiv-daily-fulltext-search-results" });
     renderLibrarySearchBlock(results, {
       kind: "matches",

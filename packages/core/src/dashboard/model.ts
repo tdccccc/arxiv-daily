@@ -6,8 +6,8 @@ import type {
 } from "../services/paper-index";
 import type {
   DiscoveryDirectionProvenance,
-  PersonalizedDiscoveryRepresentative,
-} from "../pipeline/personalized-paper-filter";
+  DiscoveryRepresentativeProvenance,
+} from "../pipeline/discovery-provenance-marker";
 import type {
   PersonalNovelty,
   PersonalNoveltyDifferenceType,
@@ -48,7 +48,7 @@ export interface DashboardQuery {
 export interface DashboardDiscoveryRepresentative {
   paperKey: string;
   title: string;
-  evidenceDepth: PersonalizedDiscoveryRepresentative["evidenceDepth"];
+  evidenceDepth: DiscoveryRepresentativeProvenance["evidenceDepth"];
 }
 
 export interface DashboardDiscoveryDirection {
@@ -64,7 +64,7 @@ export interface DashboardOccurrenceProvenance {
   source: "manual" | "library" | "both";
   manualTopics: Array<{ tag: string; name?: string }>;
   directions: DashboardDiscoveryDirection[];
-  evidenceDepth?: PersonalizedDiscoveryRepresentative["evidenceDepth"];
+  evidenceDepth?: DiscoveryRepresentativeProvenance["evidenceDepth"];
 }
 
 /**

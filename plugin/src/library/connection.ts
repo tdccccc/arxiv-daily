@@ -79,8 +79,8 @@ export function librarySetupNextStep(
       rootLabel,
       remoteConsentPending: true,
       description: expired
-        ? `Selected: ${rootLabel}. The embedding endpoint changed, so building the index asks you to confirm what full text leaves this device.`
-        : `Selected: ${rootLabel}. Remote embedding sends full text off this device — building the index asks you to confirm first.`,
+        ? `Selected: ${rootLabel}. The embedding endpoint changed, so building the index asks you to confirm which titles and abstracts leave this device.`
+        : `Selected: ${rootLabel}. Remote embedding sends titles and abstracts off this device — building the index asks you to confirm first.`,
     };
   }
   return {
@@ -88,7 +88,7 @@ export function librarySetupNextStep(
     rootLabel,
     remoteConsentPending: false,
     description: embeddingMode === "remote"
-      ? `Connected: ${rootLabel}. Authorized for remote full-text embedding. Build the search index next.`
+      ? `Connected: ${rootLabel}. Authorized to embed titles and abstracts remotely. Build the search index next.`
       : `Selected: ${rootLabel}. Local embedding stays on this device. Build the search index to search these PDFs.`,
   };
 }
@@ -308,8 +308,9 @@ export function authorizeLibraryConnection(
 ): PersistedLibraryConnection {
   return {
     ...connection,
-    // Remote embedding processes full text, so its grants are full-text
-    // depth (ADR 0008); local-only grants stay at metadata and abstracts.
+    // Retain the legacy "full-text" scope token and authorization checks
+    // (ADR 0008); the actual embedding content is now titles and abstracts.
+    // Local-only grants stay at metadata and abstracts.
     processingDepth: scope.embeddingEndpoint ? "full-text" : LIBRARY_PROCESSING_DEPTH,
     authorization: {
       fingerprint: libraryAuthorizationFingerprint(connection, scope),
@@ -405,7 +406,7 @@ function displayChatEndpoint(baseUrl: string): string {
 }
 
 /**
- * The URL remote embedding actually posts full text to (`{baseUrl}/embeddings`,
+ * The URL remote embedding actually posts titles and abstracts to (`{baseUrl}/embeddings`,
  * see `createRemoteEmbeddingModel`). Disclosing the chat-completions URL here
  * would name a destination nothing is ever sent to.
  */

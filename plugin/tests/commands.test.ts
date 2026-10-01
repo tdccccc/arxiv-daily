@@ -408,7 +408,7 @@ describe("registerCommands", () => {
       llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
       arxiv: {
         ...DEFAULT_SETTINGS.arxiv,
-        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", detail: false }],
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", directions: [{ id: "d", text: "Galaxies", source: "manual" }], detail: false }],
       },
     };
     plugin.scheduler.runForDateNow.mockResolvedValue({ kind: "completed", papersWritten: 2 });
@@ -662,7 +662,7 @@ describe("registerCommands", () => {
     for (let i = 0; i < 4; i++) await Promise.resolve();
 
     expect(Notice.calls.at(-1)?.message).toBe(
-      "arXiv Daily: full-text indexing failed: Could not scan the library folder before indexing: network unreachable",
+      "arXiv Daily: library indexing failed: Could not scan the library folder before indexing: network unreachable",
     );
   });
 
