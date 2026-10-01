@@ -6,14 +6,17 @@ import {
   DEFAULT_SETTINGS,
   arxivCategories,
   isValidMaxDailyPapers,
+  decodeLibraryConnection,
   normalizeCategoryList,
   normalizeTopic,
   sanitizeDetailSelection,
+  sha256Hex,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import type {
   LinkStyle,
+  PersistedLibraryConnection,
   PluginSettings,
   SummaryLanguage,
   Topic,
@@ -48,6 +51,10 @@ export interface CliRuntimeConfig {
   linkStyle: LinkStyle;
   configPath: string;
   scheduleIntent: CliScheduleIntent;
+  libraryConnection?: PersistedLibraryConnection;
+  libraryConnectionError?: string;
+  /** Fingerprint of the exact loaded bytes, used to reject stale config writes. */
+  configRevision?: string;
 }
 
 export interface LoadCliConfigOptions {
@@ -136,6 +143,15 @@ export async function loadCliConfig(
     settings.output.summaryLanguage ?? "zh",
   );
 
+  const libraryConnection = decodeLibraryConnection(parsed.library);
+  const libraryConnectionError = parsed.library === undefined
+    ? undefined
+    : !libraryConnection
+      ? "Optional library connection is invalid; reconnect the library to enable library-guided discovery."
+      : isRecord(parsed.library) && parsed.library.authorization !== undefined && !libraryConnection.authorization
+        ? "Library authorization is invalid; review its disclosure and authorize processing again."
+        : undefined;
+
   return {
     settings,
     vaultRoot,
@@ -143,6 +159,9 @@ export async function loadCliConfig(
     linkStyle,
     configPath,
     scheduleIntent: mapScheduleIntent(parsed.schedule),
+    configRevision: `sha256:${sha256Hex(raw)}`,
+    ...(libraryConnection ? { libraryConnection } : {}),
+    ...(libraryConnectionError ? { libraryConnectionError } : {}),
   };
 }
 

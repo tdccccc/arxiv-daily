@@ -1,3 +1,20 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import {
+  PdfJsDocumentParser, LOCAL_EMBEDDING_MODEL_REPO,
+  createTransformersEmbeddingModelFromLoader,
+  type PdfJsLib, type TransformersFeatureExtractor,
+} from "@arxiv-daily/core";
+import { NodeFileLock } from "./file-lock";
+import pdfPackage from "../../../tools/node-library-runtime/pdf/package.json";
+import pdfLock from "../../../tools/node-library-runtime/pdf/package-lock.json";
+import embeddingPackage from "../../../tools/node-library-runtime/embedding/package.json";
+import embeddingLock from "../../../tools/node-library-runtime/embedding/package-lock.json";
+
 export interface PrepareLibraryRuntimeOptions {
   cacheDir: string;
   localEmbedding: boolean;
@@ -100,19 +117,3 @@ export function createNodeLibraryEmbeddingModel(cacheDir: string, options: { sig
     },
   });
 }
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-import { spawn } from "node:child_process";
-import {
-  PdfJsDocumentParser, LOCAL_EMBEDDING_MODEL_REPO,
-  createTransformersEmbeddingModelFromLoader,
-  type PdfJsLib, type TransformersFeatureExtractor,
-} from "@arxiv-daily/core";
-import { NodeFileLock } from "./file-lock";
-import pdfPackage from "../../../tools/node-library-runtime/pdf/package.json";
-import pdfLock from "../../../tools/node-library-runtime/pdf/package-lock.json";
-import embeddingPackage from "../../../tools/node-library-runtime/embedding/package.json";
-import embeddingLock from "../../../tools/node-library-runtime/embedding/package-lock.json";

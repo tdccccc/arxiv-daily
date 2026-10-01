@@ -23,6 +23,7 @@ import { dataExport, dataImport } from "./data-cmd";
 import { runUpdate } from "./update-cmd";
 import { getCliVersion } from "./version";
 import { inspectPapers, inspectProduct } from "./inspect-cmd";
+import { runCliLibrary } from "./library-cmd";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -41,6 +42,7 @@ export interface CliCommandRuntime {
   operations?: OperationRegistry;
   host?: HostAdapters;
   settings?: CliRuntimeConfig["settings"];
+  dispose?: () => void;
 }
 
 export interface RunCliOptions {
@@ -72,6 +74,7 @@ type CliCommand =
   | { name: "init" }
   | { name: "status" }
   | { name: "papers"; query: string; offset: number; limit: number }
+  | { name: "library"; args: string[] }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
   | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
   | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
@@ -83,6 +86,12 @@ const USAGE = `Usage:
   arxiv-daily init
   arxiv-daily status
   arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
+  arxiv-daily library connect PATH
+  arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
+  arxiv-daily library authorize --fingerprint HASH
+  arxiv-daily library confirm --candidate ID --proposal-revision N --profile-revision N
+  arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
+  arxiv-daily library review --input REQUEST.json
   arxiv-daily update [--check] [--yes]
   arxiv-daily run --today
   arxiv-daily run --date YYYY-MM-DD
@@ -159,6 +168,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
       return 0;
     }
+    if (parsed.name === "library") return await runCliLibrary(config, parsed.args, io);
 
     if (parsed.name === "schedule") {
       if (parsed.sub === "show") {
@@ -269,6 +279,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       }
     } finally {
       removeSignalHandlers();
+      runtime.dispose?.();
     }
   } catch (e) {
     writeLine(io.stderr, (e as Error).message);
@@ -302,6 +313,7 @@ function parseCli(argv: string[]): CliCommand {
   const [commandName, ...commandArgs] = rest;
   if (!commandName || commandName === "help") return { name: "help" };
   if (commandName === "init") return { name: "init" };
+  if (commandName === "library") return { name: "library", args: commandArgs };
   if (commandName === "status") {
     if (commandArgs.length) throw new Error("status takes no arguments");
     return { name: "status" };

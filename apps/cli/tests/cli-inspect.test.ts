@@ -85,3 +85,10 @@ it("can inspect incomplete model setup and rejects malformed pagination", async 
     expect((await invoke(config, argv)).code).toBe(2);
   }
 });
+
+it("exposes optional library status through the ordinary product CLI", async () => {
+  const { config } = await setup();
+  const result = await invoke(config, ["library", "status"]);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).status.kind).toBe("disconnected");
+});

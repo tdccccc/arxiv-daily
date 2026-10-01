@@ -30,6 +30,8 @@ import {
   resolveResendApiKey,
 } from "@arxiv-daily/core";
 import type { CliRuntimeConfig } from "./config";
+import { loadCliPersonalizedDiscovery } from "./library-cmd";
+import { watchCliPersonalization } from "./personalization-watch";
 
 export interface CliRuntime {
   host: HostAdapters;
@@ -46,6 +48,7 @@ export interface CliRuntime {
   manualFetch: ManualFetchService;
   operations: OperationRegistry;
   settings: CliRuntimeConfig["settings"];
+  dispose?: () => void;
 }
 
 export interface BuildCliRuntimeOptions {
@@ -141,6 +144,8 @@ export async function buildCliRuntime(
     logger,
   );
   await stateStore.load();
+  const personalized = await loadCliPersonalizedDiscovery(config, host.storage, logger);
+  const personalizedController = personalized ? new AbortController() : undefined;
   const pipeline = new ArxivPipeline({
     fetcher,
     markupParser: host.markupParser,
@@ -159,6 +164,8 @@ export async function buildCliRuntime(
     llmSettings: config.settings.llm,
     detailSelection: config.settings.detailSelection,
     progress: host.progress,
+    ...personalized,
+    personalizedDiscoverySignal: personalizedController?.signal,
   });
   const manualFetch = new ManualFetchService({
     storage: host.storage,
@@ -206,7 +213,12 @@ export async function buildCliRuntime(
     onDailyCompleted,
   });
 
+  const dispose = personalized && personalizedController
+    ? await watchCliPersonalization(config, host.storage, personalized, personalizedController, logger)
+    : undefined;
+
   return {
+    dispose,
     host,
     logger,
     fetcher,
