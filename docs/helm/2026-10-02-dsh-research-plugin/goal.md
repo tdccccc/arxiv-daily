@@ -1,9 +1,9 @@
 # DSH research workbench plugin
 
-status: active
+status: done
 created: 2026-10-02T14:56:36+08:00
-updated: 2026-10-02T14:56:36+08:00
-revision: 1
+updated: 2026-10-02T15:40:01+08:00
+revision: 2
 owner: /root
 
 ## Intent
@@ -12,11 +12,11 @@ Make the existing research workbench an installable DSH capability with a visibl
 
 ## Success criteria
 
-- [ ] A distributable DSH bundle registers a literature button; clicking it opens the workbench in the right Sidebar without a model turn.
-- [ ] The plugin owns one lazy workbench service, deduplicates concurrent opens, reports setup/start errors, and stops it when unloaded.
-- [ ] Existing calendar, list, Markdown, persistent marks and explicit generation work through the original bundled CLI and configuration.
-- [ ] Authenticated DSH RPC controls startup; the browser receives only the capability URL. Exact loopback embedding is opt-in; standalone protection remains unchanged.
-- [ ] Contract, process, package and actual installed DSH Host checks pass with isolated configuration/data and no paid calls.
+- [x] A distributable DSH bundle registers a literature button; clicking it opens the workbench in the right Sidebar without a model turn.
+- [x] The plugin owns one lazy workbench service, deduplicates concurrent opens, reports setup/start errors, and stops it when unloaded.
+- [x] Existing calendar, list, Markdown, persistent marks and explicit generation work through the original bundled CLI and configuration.
+- [x] Authenticated DSH RPC controls startup; the browser receives only the capability URL. Exact loopback embedding is opt-in; standalone protection remains unchanged.
+- [x] Contract, process, package and actual installed DSH Host checks pass with isolated configuration/data and no paid calls.
 
 ## Non-goals
 
@@ -32,4 +32,4 @@ Make the existing research workbench an installable DSH capability with a visibl
 
 ## Phases
 
-1. P1 — Installable literature entry and managed workbench in DSH — status: active
+1. P1 — Installable literature entry and managed workbench in DSH — status: done
