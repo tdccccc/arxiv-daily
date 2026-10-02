@@ -122,6 +122,51 @@ describe("derivePaperInboxPaths", () => {
 });
 
 describe("PaperIndexStore", () => {
+  it.each([
+    ["  Ada Lovelace ,\tGrace Hopper, , \n Alan Turing  ,", ["Ada Lovelace", "Grace Hopper", "Alan Turing"]],
+    ["\u00a0Ada Lovelace\u00a0,\u2028Grace Hopper\u2029", ["Ada Lovelace", "Grace Hopper"]],
+    ["A  Long Author Name", ["A  Long Author Name"]],
+    [[" Ada, Jr. ", "", "  Grace Hopper  "], ["Ada, Jr.", "Grace Hopper"]],
+  ])("preserves author boundaries when saving and reloading %j", async (authors, expected) => {
+    const { store } = makeStore();
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Author normalization", authors,
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false,
+    });
+    expect(entry.authors).toEqual(expected);
+    expect((await store.get("2606.12345"))?.authors).toEqual(expected);
+  });
+
+  it.each([
+    ["///arxiv-daily\\\\papers///note.md///", "arxiv-daily/papers/note.md"],
+    ["////", ""],
+    ["\\\\", ""],
+    ["arxiv-daily/papers/note.md", "arxiv-daily/papers/note.md"],
+    ["///folder / name.md///", "folder / name.md"],
+  ])("normalizes note paths consistently when saving and reloading %j", async (paperPath, expected) => {
+    const { store } = makeStore();
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Path normalization", authors: "Author",
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false, paperPath,
+    });
+    expect(entry.paperPath).toBe(expected);
+    expect((await store.get("2606.12345"))?.paperPath).toBe(expected || null);
+  });
+
+  it("handles bounded long author whitespace and repeated path separators through the public store", async () => {
+    const { store } = makeStore();
+    const author = `A${" ".repeat(8_192)}Author`;
+    const slashes = "/".repeat(8_192);
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Long metadata", authors: `${author}, B Author`,
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false,
+      paperPath: `${slashes}folder${slashes}note.md${slashes}`,
+    });
+    expect(entry.authors).toEqual([author, "B Author"]);
+    expect(entry.paperPath).toBe("folder/note.md");
+    expect((await store.get("2606.12345"))?.paperPath).toBe("folder/note.md");
+  });
+
   it("holds shared ownership through mutation and releases after failure", async () => {
     const { storage } = makeStorage();
     let held = false;

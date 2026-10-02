@@ -1147,10 +1147,14 @@ function parentDir(
 }
 
 function normalizeStoragePath(path: string): string {
-  return path
+  const normalized = path
     .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/^\/+|\/+$/g, "");
+    .replace(/\/+/g, "/");
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && normalized[start] === "/") start += 1;
+  while (end > start && normalized[end - 1] === "/") end -= 1;
+  return normalized.slice(start, end);
 }
 
 function dateOnly(value: string | undefined): string {
@@ -1262,7 +1266,7 @@ function normalizeAuthors(value: string | string[] | unknown): string[] {
   }
   if (typeof value === "string") {
     return value
-      .split(/\s*,\s*/)
+      .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
   }
