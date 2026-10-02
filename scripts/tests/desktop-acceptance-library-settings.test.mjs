@@ -65,15 +65,67 @@ const buttons = (rowButtons, extra = []) => ({
 });
 
 test("the expected two-button row passes", () => {
-  const verdict = judgeLibraryButtons(buttons(["Change folder", "Build index"]), {
-    expected: ["Change folder", "Build index"],
+  const verdict = judgeLibraryButtons(buttons(["Change folder", "Retry preparation"]), {
+    expected: ["Change folder", "Retry preparation"],
   });
   assert.equal(verdict.ok, true);
 });
 
+const preparedLibrary = (overrides = {}) => ({
+  ...buttons(["Change folder"], ["Review suggestions"]),
+  selected: true, searchablePapers: 12, preparing: false,
+  legacySuggestionRows: 0,
+  reviewButtons: [{ text: "Review suggestions", disabled: false }],
+  ...overrides,
+});
+
+test("a prepared library offers review without a permanent rebuild button", () => {
+  assert.equal(judgeLibraryButtons(preparedLibrary()).ok, true);
+  const retired = judgeLibraryButtons(preparedLibrary({ ...buttons(["Change folder", "Build index"], ["Review suggestions"]) }));
+  assert.equal(retired.ok, false);
+  assert.match(retired.reason, /Build index/);
+  assert.equal(judgeLibraryButtons(preparedLibrary({ ...buttons(["Change folder", "Retry preparation"], ["Review suggestions"]) })).ok, false);
+});
+
+test("an unprepared library offers retry and keeps review disabled", () => {
+  const state = preparedLibrary({
+    ...buttons(["Change folder", "Retry preparation"], ["Review suggestions"]),
+    searchablePapers: 0, reviewButtons: [{ text: "Review suggestions", disabled: true }],
+  });
+  assert.equal(judgeLibraryButtons(state).ok, true);
+  assert.equal(judgeLibraryButtons({ ...state, reviewButtons: [{ text: "Review suggestions", disabled: false }] }).ok, false);
+  assert.equal(judgeLibraryButtons({ ...state, ...buttons(["Change folder"], ["Review suggestions"]) }).ok, false);
+});
+
+test("a preparation error requires retry and disables review despite old searchable papers", () => {
+  const state = preparedLibrary({
+    ...buttons(["Change folder", "Retry preparation"], ["Review suggestions"]),
+    preparationError: "The embedding model changed.",
+    reviewButtons: [{ text: "Review suggestions", disabled: true }],
+  });
+  assert.equal(judgeLibraryButtons(state).ok, true);
+  assert.equal(judgeLibraryButtons({ ...state, reviewButtons: [{ text: "Review suggestions", disabled: false }] }).ok, false);
+  assert.equal(judgeLibraryButtons({ ...state, ...buttons(["Change folder"], ["Review suggestions"]) }).ok, false);
+});
+
+test("preparation keeps Cancel and disables review even with an older index", () => {
+  const state = preparedLibrary({
+    ...buttons(["Change folder", "Indexing…", "Cancel"], ["Review suggestions"]),
+    preparing: true, reviewButtons: [{ text: "Review suggestions", disabled: true }],
+  });
+  assert.equal(judgeLibraryButtons(state).ok, true);
+  assert.equal(judgeLibraryButtons({ ...state, reviewButtons: [{ text: "Review suggestions", disabled: false }] }).ok, false);
+  assert.equal(judgeLibraryButtons({ ...state, ...buttons(["Change folder", "Indexing…"], ["Review suggestions"]) }).ok, false);
+});
+
+test("a duplicate library shortcut or missing review action fails", () => {
+  assert.equal(judgeLibraryButtons(preparedLibrary({ legacySuggestionRows: 1 })).ok, false);
+  assert.equal(judgeLibraryButtons(preparedLibrary({ reviewButtons: [] })).ok, false);
+});
+
 test("a fourth button fails even when the row is not otherwise checked", () => {
   const verdict = judgeLibraryButtons(
-    buttons(["Change folder", "Build index", "Revoke", "Preview"]),
+    buttons(["Change folder", "Retry preparation", "Revoke", "Preview"]),
   );
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /more than three/);
@@ -81,7 +133,7 @@ test("a fourth button fails even when the row is not otherwise checked", () => {
 
 test("any button that says authorize fails, wherever in the section it sits", () => {
   const verdict = judgeLibraryButtons(
-    buttons(["Change folder", "Build index"], ["Review & authorize"]),
+    buttons(["Change folder", "Retry preparation"], ["Review & authorize"]),
   );
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /authorization button/);
@@ -99,7 +151,7 @@ const geometry = (overrides = {}) => ({
   control: { left: 400, right: 590, scrollWidth: 190, clientWidth: 190 },
   buttons: [
     { text: "Change folder", left: 400, right: 490, top: 100 },
-    { text: "Build index", left: 498, right: 590, top: 100 },
+    { text: "Retry preparation", left: 498, right: 590, top: 100 },
   ],
   ...overrides,
 });
@@ -113,7 +165,7 @@ test("a wrapped button is caught by its top, which happy-dom cannot produce", ()
   const verdict = judgeLibraryGeometry(geometry({
     buttons: [
       { text: "Change folder", left: 400, right: 490, top: 100 },
-      { text: "Build index", left: 498, right: 590, top: 140 },
+      { text: "Retry preparation", left: 498, right: 590, top: 140 },
     ],
   }));
   assert.equal(verdict.ok, false);
@@ -124,7 +176,7 @@ test("a row whose buttons stop short of the right edge is not right-aligned", ()
   const verdict = judgeLibraryGeometry(geometry({
     buttons: [
       { text: "Change folder", left: 400, right: 490, top: 100 },
-      { text: "Build index", left: 498, right: 540, top: 100 },
+      { text: "Retry preparation", left: 498, right: 540, top: 100 },
     ],
   }));
   assert.equal(verdict.ok, false);
@@ -135,7 +187,7 @@ test("buttons spilling out of their control box, over the description, fail", ()
   const verdict = judgeLibraryGeometry(geometry({
     buttons: [
       { text: "Change folder", left: 300, right: 490, top: 100 },
-      { text: "Build index", left: 498, right: 590, top: 100 },
+      { text: "Retry preparation", left: 498, right: 590, top: 100 },
     ],
   }));
   assert.equal(verdict.ok, false);
@@ -148,7 +200,7 @@ test("buttons leaving the row entirely fail", () => {
     control: { left: 400, right: 700, scrollWidth: 300, clientWidth: 300 },
     buttons: [
       { text: "Change folder", left: 400, right: 600, top: 100 },
-      { text: "Build index", left: 608, right: 700, top: 100 },
+      { text: "Retry preparation", left: 608, right: 700, top: 100 },
     ],
   }));
   assert.equal(verdict.ok, false);
@@ -177,7 +229,7 @@ const threeButtons = (overrides = {}) => ({
   description: description(),
   buttons: [
     { text: "Change folder", left: 280, right: 390, top: 100, width: 110, height: 30 },
-    { text: "Build index", left: 398, right: 490, top: 100, width: 92, height: 30 },
+    { text: "Retry preparation", left: 398, right: 490, top: 100, width: 92, height: 30 },
     { text: "Revoke", left: 498, right: 590, top: 100, width: 92, height: 30 },
   ],
   ...overrides,
@@ -193,7 +245,7 @@ test("three buttons wrapped onto two right-aligned lines still pass — wrapping
     control: { left: 400, right: 590, scrollWidth: 190, clientWidth: 190 },
     buttons: [
       { text: "Change folder", left: 480, right: 590, top: 100, width: 110, height: 30 },
-      { text: "Build index", left: 400, right: 492, top: 140, width: 92, height: 30 },
+      { text: "Retry preparation", left: 400, right: 492, top: 140, width: 92, height: 30 },
       { text: "Revoke", left: 500, right: 590, top: 140, width: 90, height: 30 },
     ],
   }));
@@ -207,7 +259,7 @@ test("the failing state — nothing overlaps, the description is a column of let
     description: description({ left: 0, right: 6, width: 6, contentWidth: 6, lines: 57, widestLine: 6 }),
     buttons: [
       { text: "Change folder", left: 28, right: 138, top: 100, width: 110, height: 30 },
-      { text: "Build index", left: 146, right: 238, top: 100, width: 92, height: 30 },
+      { text: "Retry preparation", left: 146, right: 238, top: 100, width: 92, height: 30 },
       { text: "Revoke", left: 246, right: 330, top: 100, width: 84, height: 30 },
     ],
   }));
@@ -234,7 +286,7 @@ test("a wrapped line that stops short of the right edge is not right-aligned", (
     control: { left: 400, right: 590, scrollWidth: 190, clientWidth: 190 },
     buttons: [
       { text: "Change folder", left: 440, right: 550, top: 100, width: 110, height: 30 },
-      { text: "Build index", left: 400, right: 492, top: 140, width: 92, height: 30 },
+      { text: "Retry preparation", left: 400, right: 492, top: 140, width: 92, height: 30 },
       { text: "Revoke", left: 500, right: 590, top: 140, width: 90, height: 30 },
     ],
   }));
@@ -246,19 +298,19 @@ test("the main call to action collapsing to nothing fails even with everything e
   const verdict = judgeLibraryWrappedGeometry(threeButtons({
     buttons: [
       { text: "Change folder", left: 280, right: 390, top: 100, width: 110, height: 30 },
-      { text: "Build index", left: 490, right: 490, top: 100, width: 0, height: 30 },
+      { text: "Retry preparation", left: 490, right: 490, top: 100, width: 0, height: 30 },
       { text: "Revoke", left: 498, right: 590, top: 100, width: 92, height: 30 },
     ],
   }));
   assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /Build index is laid out 0x30/);
+  assert.match(verdict.reason, /Retry preparation is laid out 0x30/);
 });
 
 test("wrapped buttons that spill over the description still fail", () => {
   const verdict = judgeLibraryWrappedGeometry(threeButtons({
     buttons: [
       { text: "Change folder", left: 180, right: 390, top: 100, width: 210, height: 30 },
-      { text: "Build index", left: 398, right: 490, top: 100, width: 92, height: 30 },
+      { text: "Retry preparation", left: 398, right: 490, top: 100, width: 92, height: 30 },
       { text: "Revoke", left: 498, right: 590, top: 100, width: 92, height: 30 },
     ],
   }));
@@ -286,7 +338,7 @@ test("a declined disclosure has to leave the mode and the grant exactly as they 
 test("the settings-page interaction expressions address elements by their visible text", () => {
   assert.match(selectEmbeddingModeExpression("remote"), /select.value = "remote"/);
   assert.match(selectEmbeddingModeExpression("remote"), /dispatchEvent\(new Event\("change"\)\)/);
-  assert.match(clickLibraryRowButtonExpression("Build index"), /"Build index"/);
+  assert.match(clickLibraryRowButtonExpression("Retry preparation"), /"Retry preparation"/);
 });
 
 /*
@@ -338,23 +390,22 @@ test("the reader reports the heading and both labels as data, to be judged separ
   assert.match(expression, /cancel: marked\("arxiv-daily-library-authorization-cancel"\)/);
 });
 
-test("each processing depth has its own heading, and neither claims the other's", () => {
-  assert.equal(DISCLOSURE_TITLES["full-text"], "Send full text off this device?");
-  assert.equal(
-    DISCLOSURE_TITLES["metadata-and-abstracts"],
-    "Send titles and abstracts off this device?",
-  );
-  assert.doesNotMatch(DISCLOSURE_TITLES["metadata-and-abstracts"], /full text/i);
+test("both legacy processing depths describe the current title-and-abstract scope", () => {
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    assert.equal(DISCLOSURE_TITLES[depth], "Send titles and abstracts off this device?");
+    assert.equal(judgeDisclosureTitle({ present: true, title: "Send titles and abstracts off this device?" }, depth).ok, true);
+    assert.equal(judgeDisclosureButtons({ present: true, confirm: "Send titles and abstracts", cancel: "Cancel" }, depth).ok, true);
+  }
 });
 
-test("a heading judged at the wrong depth fails as a wording problem, not a missing dialog", () => {
+test("the retired full-text heading fails at either legacy depth as a wording problem", () => {
   const fullText = { present: true, title: "Send full text off this device?" };
-  assert.equal(judgeDisclosureTitle(fullText, "full-text").ok, true);
-
-  const verdict = judgeDisclosureTitle(fullText, "metadata-and-abstracts");
-  assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /titled "Send full text off this device\?", expected/);
-  assert.doesNotMatch(verdict.reason, /no .*dialog|not found|no dialog/i);
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    const verdict = judgeDisclosureTitle(fullText, depth);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /titled "Send full text off this device\?", expected/);
+    assert.doesNotMatch(verdict.reason, /no .*dialog|not found|no dialog/i);
+  }
 });
 
 test("the retired heading fails the title judge, quoting both headings", () => {
@@ -364,7 +415,7 @@ test("the retired heading fails the title judge, quoting both headings", () => {
   );
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /titled "Authorize personal library"/);
-  assert.match(verdict.reason, /expected "Send full text off this device\?"/);
+  assert.match(verdict.reason, /expected "Send titles and abstracts off this device\?"/);
 });
 
 test("a depth with no specified heading is a failure rather than a silent pass", () => {
@@ -401,17 +452,16 @@ test("the retired Authorize label fails as wording, not as a missing button", ()
     "full-text",
   );
   assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /the confirm button reads "Authorize", expected "Send full text"/);
+  assert.match(verdict.reason, /the confirm button reads "Authorize", expected "Send titles and abstracts"/);
   assert.doesNotMatch(verdict.reason, /has no|not found|missing/i);
 });
 
-test("the metadata label on a full-text dialog is a wording failure too", () => {
-  const verdict = judgeDisclosureButtons(
-    { ...dialog("full-text"), confirm: DISCLOSURE_CONFIRM_LABELS["metadata-and-abstracts"] },
-    "full-text",
-  );
-  assert.equal(verdict.ok, false);
-  assert.match(verdict.reason, /reads "Send titles and abstracts", expected "Send full text"/);
+test("the retired full-text confirmation label fails at either legacy depth", () => {
+  for (const depth of ["full-text", "metadata-and-abstracts"]) {
+    const verdict = judgeDisclosureButtons({ ...dialog(depth), confirm: "Send full text" }, depth);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /reads "Send full text", expected "Send titles and abstracts"/);
+  }
 });
 
 test("a genuinely missing button says so, distinctly from a reworded one", () => {
@@ -564,13 +614,13 @@ test("a Cancel that stopped the run but still invites a second press fails", () 
 // ── what a finished run leaves on the row ───────────────────────────────────
 
 const idleRow = (rowDescription) => ({
-  rowButtons: ["Change folder", "Build index"],
+  rowButtons: ["Change folder", "Retry preparation"],
   rowButtonStates: [
     { text: "Change folder", disabled: false, mark: null },
-    { text: "Build index", disabled: false, mark: null },
+    { text: "Retry preparation", disabled: false, mark: null },
   ],
   rowDescription,
-  groupButtons: ["Change folder", "Build index"],
+  groupButtons: ["Change folder", "Retry preparation"],
 });
 
 test("a row naming both when and how much passes", () => {

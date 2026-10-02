@@ -8,7 +8,8 @@ import {
   type Env,
 } from "./kv";
 import { sendResendEmail } from "./resend";
-import { deliveryKeyKind, type DeliverBody } from "./deliver-logic";
+import { parseJsonObject } from "./json-body";
+import { deliveryKeyKind } from "./deliver-logic";
 import {
   fetchCutoverStatus,
   fetchPublicReadiness,
@@ -91,7 +92,7 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
   assertSecrets(env);
   let body: { email?: string };
   try {
-    body = (await request.json()) as { email?: string };
+    body = parseJsonObject(await request.text());
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
@@ -219,7 +220,7 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
     return json({ error: "invalid body" }, 400);
   }
   try {
-    JSON.parse(bodyText) as DeliverBody;
+    parseJsonObject(bodyText);
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
@@ -304,7 +305,7 @@ async function forwardCutoverAction(
 ): Promise<Response> {
   let body: Record<string, unknown>;
   try {
-    body = await request.json() as Record<string, unknown>;
+    body = parseJsonObject(await request.text());
   } catch {
     return json({ error: "invalid cutover action" }, 400);
   }

@@ -11,8 +11,12 @@ import {
 import type ArxivDailyPlugin from "../../main";
 import {
   buildSettingDefinitions,
+  dailyAutoSendDesc,
+  libraryDirectionsRowDesc,
   readSettingValue,
   SETTING_KEYS,
+  settingsSectionClass,
+  type SettingsSection,
 } from "./definitions";
 import {
   SettingsChangeError,
@@ -27,9 +31,15 @@ import {
   isCancellationError,
   todayInTz,
   type LogLevel,
+  type PluginSettings,
 } from "@arxiv-daily/core";
 import { ARXIV_CATEGORIES } from "@arxiv-daily/core";
-import { TOPIC_TEMPLATES } from "@arxiv-daily/core";
+import {
+  TOPIC_TEMPLATES,
+  deriveTopicDescription,
+  normalizeTopic,
+  topicFromSeed,
+} from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
 import { slugify } from "@arxiv-daily/core";
 import {
@@ -37,9 +47,14 @@ import {
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import { arxivCategories } from "@arxiv-daily/core";
-import { getSetupStatus, shouldRenderSetupGuide } from "../onboarding";
-import { openDashboardView } from "../dashboard/view";
-import { LlmClient, redactText } from "@arxiv-daily/core";
+import {
+  getSetupStatus,
+  isSetupComplete,
+  markSetupGuideCompleteIfDone,
+  type SetupStatus,
+} from "../onboarding";
+import { openDashboardView, refreshOpenDashboardViews } from "../dashboard/view";
+import { redactText } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_REPO_URL,
@@ -51,8 +66,8 @@ import {
   libraryRowPresentation,
 } from "../library/connection";
 import type { LibraryIndexStatus } from "../library/index-status";
+import { describeFullTextIndexCompletion } from "../library/index-completion";
 import {
-  confirmEmbeddingMode,
   confirmLibraryAuthorization,
   confirmLibraryRevocation,
 } from "../library/modal";
@@ -153,18 +168,34 @@ interface LibraryRowElements {
   cancel?: ButtonComponent;
 }
 
+interface TopicFocusSnapshot {
+  topicId: string;
+  field: "name" | "direction" | "detail";
+  directionId?: string;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  selectionDirection: "forward" | "backward" | "none" | null;
+  scrollTop: number;
+  scrollLeft: number;
+}
+
 export class ArxivDailySettingTab extends PluginSettingTab {
   private expandedTopics = new Set<string>();
   private libraryRowElements: LibraryRowElements | undefined;
   /** Which structure the row was last rendered with: with a run, or without. */
   private libraryRowShowsRun = false;
+  private libraryRowHasIndex = false;
+  private libraryRowPreparationError: string | undefined;
   private libraryStatusUnsubscribe: (() => void) | undefined;
   private libraryStatusFlushTimer: number | undefined;
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
   private pendingTopicFocusId: string | undefined;
+  /** Kept on the tab so a guide re-render during the run still shows it. */
+  private firstReportRunning = false;
   private pendingTopicDeletionAnchor:
     | { topicId: string; scroller: HTMLElement; top: number }
     | undefined;
@@ -183,6 +214,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     return buildSettingDefinitions({
       plugin: this.plugin,
       showSetupGuide: this.shouldShowSetupGuide(),
+      automaticEmailSupported: this.plugin.automaticEmailSupported(),
       renderSetupGuideRow: (setting) =>
         declarativeRows.renderSetupGuideRow(this, setting),
       renderScheduleEnabledRow: (setting) =>
@@ -213,16 +245,26 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
+      renderLibraryDirectionsRow: (setting) =>
+        declarativeRows.renderLibraryDirectionsRow(this, setting),
+      renderLibraryGuideRow: (setting) =>
+        declarativeRows.renderLibraryGuideRow(this, setting),
       renderCategoryRow: (setting, index) =>
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
         declarativeRows.renderTopicRow(this, setting, index),
       renderTimezoneRow: (setting) =>
         declarativeRows.renderTimezoneRow(this, setting),
+      renderOutputDirectoryRow: (setting, key) =>
+        declarativeRows.renderOutputDirectoryRow(this, setting, key),
+      renderEmailSenderRow: (setting, key) =>
+        declarativeRows.renderEmailSenderRow(this, setting, key),
       renderRunWindowRow: (setting) =>
         declarativeRows.renderRunWindowRow(this, setting),
       renderTickIntervalRow: (setting) =>
         declarativeRows.renderTickIntervalRow(this, setting),
+      renderDailyPaperLimitRow: (setting) =>
+        declarativeRows.renderDailyPaperLimitRow(this, setting),
       renderEmailGuideRow: (setting) =>
         declarativeRows.renderEmailGuideRow(this, setting),
       renderEmailModeRow: (setting) =>
@@ -235,7 +277,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderHostedTokenRow(this, setting),
       addCategory: () => void this.addCategory(),
       deleteCategory: (index) => void this.deleteCategory(index),
-      addTopic: () => void this.addTopic(),
+      addTopic: () => this.runAction("add topic", () => this.addTopic()),
     });
   }
 
@@ -270,12 +312,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public async changeSettingValue(key: string, value: unknown): Promise<void> {
     await this.plugin.settingsChanges.changeValue(key, value);
+    await this.refreshLibraryAfterEmbeddingChange([key]);
   }
 
   public async changeSettingValues(
     changes: readonly SettingsValueChange[],
   ): Promise<void> {
     await this.plugin.settingsChanges.change({ changes });
+    await this.refreshLibraryAfterEmbeddingChange(changes.map(({ key }) => key));
+  }
+
+  private async refreshLibraryAfterEmbeddingChange(keys: readonly string[]): Promise<void> {
+    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.model", "embedding.dimension"].includes(key))) {
+      await this.plugin.refreshLibraryIndexTrace();
+    }
   }
 
   /**
@@ -397,12 +447,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private sectionHeading(
     containerEl: HTMLElement,
     name: string,
-    section: "llm" | "library" | "arxiv" | "topics" | "schedule" | "email" | "advanced",
+    section: SettingsSection,
     desc?: string,
   ): Setting {
     const heading = new Setting(containerEl).setName(name).setHeading();
     if (desc) heading.setDesc(desc);
-    heading.settingEl.addClass("arxiv-daily-settings__section");
+    heading.settingEl.addClass("arxiv-daily-settings__section", settingsSectionClass(section));
     heading.settingEl.setAttribute("data-arxiv-daily-section", section);
     // Ensure heading name is easy to scan in long settings pages.
     heading.nameEl?.addClass("arxiv-daily-settings__section-title");
@@ -430,23 +480,60 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
   }
 
-  private emailGuide(
+  /**
+   * Shared renderer for the full-width guide boxes (email, library): same
+   * layout and CSS, keyed by a class prefix so each section keeps its own
+   * host/box/title/line classes (see styles.css).
+   */
+  private renderGuideBox(
     containerEl: HTMLElement,
     opts: { title: string; lines: string[] },
+    clsPrefix: "email-guide" | "library-guide",
   ): void {
     const wrap = containerEl.createDiv({
-      cls: "arxiv-daily-settings__email-guide",
+      cls: `arxiv-daily-settings__${clsPrefix}`,
     });
     wrap.createDiv({
-      cls: "arxiv-daily-settings__email-guide-title",
+      cls: `arxiv-daily-settings__${clsPrefix}-title`,
       text: opts.title,
     });
     for (const line of opts.lines) {
       wrap.createDiv({
-        cls: "arxiv-daily-settings__email-guide-line",
+        cls: `arxiv-daily-settings__${clsPrefix}-line`,
         text: line,
       });
     }
+  }
+
+  private emailGuide(
+    containerEl: HTMLElement,
+    opts: { title: string; lines: string[] },
+  ): void {
+    this.renderGuideBox(containerEl, opts, "email-guide");
+  }
+
+  /**
+   * Personal library intro box copy; shared with the 1.13+ row. Always
+   * shown, like the email delivery guide — the section stays optional and
+   * its steps stay worth restating even once a library is connected.
+   */
+  public libraryGuideContent(): { title: string; lines: string[] } {
+    return {
+      title: "How this works",
+      lines: [
+        "Optional — daily reports work the same without a library.",
+        "1. Choose a folder of PDFs to automatically prepare a title-and-abstract search index. The first preparation scans the folder and queries arXiv with paper IDs or titles; network access is needed. Later preparations reuse the saved scan.",
+        "2. Review suggestions (button below) generates topic suggestions on first use and opens saved suggestions afterwards, including PDFs without an arXiv match when their titles and abstracts can be extracted. Only directions you add to Research topics steer daily reports. Remote embedding and model processing always ask first.",
+        "Local embedding is the default. Its model downloads once (about 130 MB), then runs locally. If preparation fails or is cancelled, use Retry preparation. Search from the command palette when ready.",
+      ],
+    };
+  }
+
+  private libraryGuide(
+    containerEl: HTMLElement,
+    opts: { title: string; lines: string[] },
+  ): void {
+    this.renderGuideBox(containerEl, opts, "library-guide");
   }
 
   public renderLibraryConnectionControls(setting: Setting): void {
@@ -456,6 +543,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       embeddingMode: this.plugin.settings.embedding.mode,
       ...(indexStatus.activity ? { activity: indexStatus.activity } : {}),
       ...(indexStatus.lastRun ? { lastRun: indexStatus.lastRun } : {}),
+      ...(indexStatus.preparationError ? { preparationError: indexStatus.preparationError } : {}),
     });
     setting.setDesc(row.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
@@ -476,7 +564,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           .setButtonText(primary.label)
           .setCta()
           .setDisabled(primary.disabled)
-          .onClick(() => this.runAction("index personal library full text", () => this.indexPersonalLibraryFullText()));
+          .onClick(() => this.runAction("index personal library titles and abstracts", () => this.indexPersonalLibraryFullText()));
         live.primary = button;
       });
     }
@@ -493,9 +581,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         live.cancel = button;
       });
     }
-    // Secondary library actions (preview / scan / reload / direction review)
-    // live in the command palette only, so this row never grows past three
-    // buttons and needs no menu.
+    // Secondary library actions (preview / scan / reload) live in the command
+    // palette only, so this row never grows past three buttons and needs no
+    // menu. Direction review has its own row below instead, since it is a
+    // distinct, user-facing feature rather than upkeep.
     const revoke = row.revoke;
     if (revoke) {
       setting.addButton((button) =>
@@ -507,6 +596,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.libraryRowElements = live;
     this.libraryRowShowsRun = Boolean(row.cancel);
+    this.libraryRowHasIndex = Boolean(indexStatus.lastRun?.papers);
+    this.libraryRowPreparationError = indexStatus.preparationError;
     this.watchLibraryIndexStatus();
   }
 
@@ -542,7 +633,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
    * keeps a half-typed value in another row from being thrown away mid-run.
    */
   private onLibraryIndexStatusChange(status: LibraryIndexStatus): void {
-    if (Boolean(status.activity) !== this.libraryRowShowsRun) {
+    if (Boolean(status.activity) !== this.libraryRowShowsRun
+      || (!status.activity && Boolean(status.lastRun?.papers) !== this.libraryRowHasIndex)
+      || status.preparationError !== this.libraryRowPreparationError) {
       this.clearLibraryStatusFlush();
       this.refreshSettings();
       return;
@@ -571,6 +664,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       embeddingMode: this.plugin.settings.embedding.mode,
       ...(status.activity ? { activity: status.activity } : {}),
       ...(status.lastRun ? { lastRun: status.lastRun } : {}),
+      ...(status.preparationError ? { preparationError: status.preparationError } : {}),
     });
     elements.descEl.textContent = row.description;
     if (elements.primary && row.primary) {
@@ -617,44 +711,28 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       return;
     }
     if (result === "selected") {
-      new Notice("arXiv Daily: personal library selected. You can preview files locally before authorizing model processing.");
       this.refreshSettings();
-      await this.offerEmbeddingModeChoice();
+      await this.indexPersonalLibraryFullText();
     }
   }
 
-  /**
-   * First-time guided choice between local and remote embedding (ADR 0008),
-   * offered once when a library is first connected. Dismissing keeps local;
-   * the mode stays changeable in settings (switching rebuilds the index).
-   *
-   * This is also where a remote switch made before any folder existed gets its
-   * disclosure: selecting the folder is the first moment the modal can name
-   * what would be sent.
-   */
-  private async offerEmbeddingModeChoice(): Promise<void> {
-    if (!this.plugin.settings.embedding.initialChoiceDone) {
-      const mode = await confirmEmbeddingMode(this.app);
-      this.plugin.settings.embedding.mode = mode;
-      this.plugin.settings.embedding.initialChoiceDone = true;
-      await this.plugin.saveSettings();
-      this.refreshSettings();
-      new Notice(
-        mode === "remote"
-          ? "arXiv Daily: remote embedding enabled — confirm what leaves this device next."
-          : "arXiv Daily: local embedding (offline). You can switch to remote in settings anytime.",
-        10_000,
-      );
-    }
-    if (this.plugin.settings.embedding.mode !== "remote") return;
-    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") return;
-    // Declining here leaves remote embedding ungranted on purpose: the same
-    // disclosure is asked again in front of indexing, so nothing is stuck.
-    await this.requestRemoteFullTextConsent();
+  public renderLibrarySuggestionsControls(setting: Setting): void {
+    const index = this.plugin.libraryIndexStatus.snapshot();
+    setting.setDesc(libraryDirectionsRowDesc(this.plugin));
+    setting.addButton((button) => button
+      .setButtonText("Review suggestions")
+      .setDisabled(Boolean(index.activity) || Boolean(index.preparationError) || !index.lastRun?.papers)
+      .onClick(() => {
+        const current = this.plugin.libraryIndexStatus.snapshot();
+        if (current.activity || current.preparationError || !current.lastRun?.papers) return;
+        this.runAction("open personal library direction review", async () => {
+          this.plugin.openPersonalLibraryDirectionReview({ generateIfMissing: true });
+        });
+      }));
   }
 
   /**
-   * The single full-text disclosure for remote embedding (ADR 0008), reached
+   * The single title-and-abstract disclosure for remote embedding (ADR 0008), reached
    * from whichever moment comes first: switching to remote, selecting a folder
    * afterwards, moving the endpoint, or building the index while a legacy
    * remote configuration is still ungranted. `undisclosable` means the folder
@@ -685,7 +763,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   /**
    * Apply an Embedding mode change from either settings path. Turning remote
-   * embedding on asks for full-text disclosure in place: confirming switches
+   * embedding on asks for title-and-abstract disclosure in place: confirming switches
    * and authorizes in one step, declining leaves the mode and the grant alone.
    */
   public async applyEmbeddingModeChange(next: "local" | "remote"): Promise<boolean> {
@@ -716,12 +794,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       await applyMode();
       return true;
     }
-    new Notice("arXiv Daily: remote embedding enabled and full-text processing authorized.");
+    new Notice("arXiv Daily: remote embedding enabled and title-and-abstract processing authorized.");
     return true;
   }
 
   /**
-   * Save an embedding field that can move where full text is sent. When the
+   * Save an embedding field that can move where titles and abstracts is sent. When the
    * change invalidates a live grant, the same disclosure is shown for the new
    * destination; declining restores the authorized value, so an authorized
    * library never silently points somewhere the user did not agree to.
@@ -773,15 +851,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public async indexPersonalLibraryFullText(): Promise<void> {
     if (!await this.ensureRemoteEmbeddingConsent()) return;
-    new Notice("arXiv Daily: indexing personal library full text…");
+    new Notice("arXiv Daily: indexing personal library titles and abstracts…");
     try {
       const summary = await this.plugin.indexPersonalLibraryFullText();
-      const refreshed = summary.titlesRefreshed > 0
-        ? `, ${summary.titlesRefreshed} titles refreshed`
-        : "";
       new Notice(
-        `arXiv Daily: full-text index — ${summary.indexed} indexed, `
-          + `${summary.reused} reused, ${summary.failed} failed, ${summary.pruned} pruned${refreshed}. Search from the Dashboard.`,
+        `arXiv Daily: ${describeFullTextIndexCompletion(summary, {
+          onCompletionSuffix: "Search from the Dashboard.",
+          libraryContext: this.plugin.getLastFullTextIndexLibraryContext(),
+        })}`,
         10_000,
       );
     } catch (error) {
@@ -789,18 +866,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       // must not come back as "indexing failed" over a button they just pressed.
       if (isCancellationError(error)) {
         new Notice(
-          "arXiv Daily: indexing cancelled. Nothing was saved, so the next build starts over.",
+          "arXiv Daily: indexing cancelled. You can build the index again when ready.",
           10_000,
         );
         return;
       }
-      this.plugin.logger.error("settings: personal library full-text indexing failed", error);
+      this.plugin.logger.error("settings: personal library title-and-abstract indexing failed", error);
       throw error;
     }
   }
 
   /**
-   * Last gate in front of remote full-text indexing. Configurations that were
+   * Last gate in front of remote title-and-abstract indexing. Configurations that were
    * remote before this consent flow existed — or whose grant an endpoint edit
    * invalidated — are asked here instead of being blocked by an error.
    */
@@ -810,7 +887,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const consent = await this.requestRemoteFullTextConsent();
     if (consent === "declined") {
       new Notice(
-        "arXiv Daily: indexing cancelled. Remote embedding needs your confirmation before full text can leave this device.",
+        "arXiv Daily: indexing cancelled. Remote embedding needs your confirmation before titles and abstracts can leave this device.",
         10_000,
       );
       return false;
@@ -820,16 +897,41 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     return true;
   }
 
-  public async setArxivCategories(categories: string[]): Promise<void> {
+  /** Returns whether the new categories were saved (a failure is rolled back and reported). */
+  public async setArxivCategories(categories: string[]): Promise<boolean> {
     const normalized = normalizeUniqueCategories(categories);
-    this.plugin.settings.arxiv.categories = normalized;
-    if (normalized[0]) this.plugin.settings.arxiv.category = normalized[0];
-    await this.plugin.saveSettings();
+    return this.saveArxivEdit("save categories", (arxiv) => {
+      arxiv.categories = normalized;
+      if (normalized[0]) arxiv.category = normalized[0];
+    });
+  }
+
+  /** Queue edits against the latest settings; failed saves leave them unchanged. */
+  private async saveArxivEdit(
+    action: string,
+    mutate: (arxiv: PluginSettings["arxiv"]) => void,
+  ): Promise<boolean> {
+    try {
+      await this.plugin.settingsChanges.changeComputed((current) => {
+        mutate(current.arxiv);
+        return { changes: [
+          { key: "arxiv.category", value: current.arxiv.category },
+          { key: "arxiv.categories", value: current.arxiv.categories },
+          { key: "arxiv.topics", value: current.arxiv.topics },
+        ] };
+      });
+      return true;
+    } catch (error) {
+      this.reportActionError(action, error);
+      this.refreshSettings();
+      return false;
+    }
   }
 
   /** Re-render the tab: declarative update() on Obsidian 1.13+, display() otherwise. */
   public refreshSettings(): void {
     const scrollSnapshot = this.captureSettingsScroll();
+    const focusSnapshot = this.captureTopicFocus();
     if (
       requireApiVersion("1.13.0") &&
       this.getSettingDefinitions().length > 0
@@ -839,8 +941,55 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       this.renderLegacySettings();
     }
     if (!this.pendingTopicFocusId && !this.pendingTopicDeletionAnchor) {
+      this.restoreTopicFocus(focusSnapshot);
       this.restoreSettingsScroll(scrollSnapshot);
     }
+  }
+
+  /** Refresh external topic changes only after the visible edits have settled. */
+  public async refreshAfterTopicChanges(): Promise<void> {
+    await this.plugin.settingsChanges.changeComputed(() => ({ changes: [] }));
+    // Input can continue while the first save is pending. Include those newer
+    // edits and their failure restoration before replacing any controls.
+    while (this.pendingTopicEdits.size > 0) {
+      await Promise.allSettled([...this.pendingTopicEdits]);
+    }
+    this.refreshSettings();
+  }
+
+  private captureTopicFocus(): TopicFocusSnapshot | null {
+    const input = this.containerEl.ownerDocument.activeElement;
+    if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)
+      || !this.containerEl.contains(input)) return null;
+    const topicId = input.closest<HTMLElement>(".arxiv-daily-settings__topic-card")?.dataset.arxivDailyTopicId;
+    if (!topicId) return null;
+    const field = input.dataset.directionId ? "direction"
+      : input.classList.contains("arxiv-daily-settings__topic-name-input") ? "name"
+        : input.classList.contains("arxiv-daily-settings__topic-detail-checkbox") ? "detail" : null;
+    if (!field) return null;
+    return {
+      topicId, field, directionId: input.dataset.directionId,
+      selectionStart: input.selectionStart, selectionEnd: input.selectionEnd,
+      selectionDirection: input.selectionDirection, scrollTop: input.scrollTop, scrollLeft: input.scrollLeft,
+    };
+  }
+
+  private restoreTopicFocus(snapshot: TopicFocusSnapshot | null): void {
+    if (!snapshot) return;
+    const card = this.findTopicCard(snapshot.topicId);
+    if (!card) return;
+    const input = snapshot.field === "direction"
+      ? Array.from(card.querySelectorAll<HTMLTextAreaElement>(".arxiv-daily-settings__topic-direction-input"))
+        .find((item) => item.dataset.directionId === snapshot.directionId)
+      : card.querySelector<HTMLInputElement>(snapshot.field === "name"
+        ? ".arxiv-daily-settings__topic-name-input" : ".arxiv-daily-settings__topic-detail-checkbox");
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (snapshot.selectionStart !== null && snapshot.selectionEnd !== null) {
+      input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd, snapshot.selectionDirection ?? undefined);
+    }
+    input.scrollTop = snapshot.scrollTop;
+    input.scrollLeft = snapshot.scrollLeft;
   }
 
   private captureSettingsScroll(): Array<{
@@ -890,10 +1039,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Append a category (the first arXiv option not already in the list). */
   public async addCategory(): Promise<void> {
     const categories = arxivCategories(this.plugin.settings.arxiv);
-    await this.setArxivCategories([
+    if (!await this.setArxivCategories([
       ...categories,
       nextCategoryCandidate(categories),
-    ]);
+    ])) return;
     this.refreshSettings();
   }
 
@@ -901,33 +1050,36 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   public async deleteCategory(index: number): Promise<void> {
     const categories = arxivCategories(this.plugin.settings.arxiv);
     if (categories.length <= 1) return;
-    await this.setArxivCategories(categories.filter((_, j) => j !== index));
+    if (!await this.setArxivCategories(categories.filter((_, j) => j !== index))) return;
     this.refreshSettings();
   }
 
   /** Append a blank, expanded topic card. */
   public async addTopic(): Promise<void> {
     const newId = crypto.randomUUID();
-    const topics = this.plugin.settings.arxiv.topics;
-    topics.push({
-      id: newId,
-      name: "",
-      tag: `topic-${topics.length + 1}`,
-      description: "",
-      detail: false,
+    const saved = await this.saveArxivEdit("add topic", ({ topics }) => {
+      topics.push(normalizeTopic({
+        id: newId,
+        name: "",
+        tag: autoTopicTag("", topics, newId),
+        description: "",
+        detail: false,
+      }));
     });
+    if (!saved) return;
     this.expandedTopics.add(newId);
     this.pendingTopicFocusId = newId;
-    await this.plugin.saveSettings();
     this.refreshSettings();
     this.focusPendingTopic();
   }
 
   /** Delete a topic after confirmation; returns whether it was deleted. */
-  public async deleteTopic(index: number): Promise<boolean> {
+  public async deleteTopic(topicRef: number | string): Promise<boolean> {
     const topics = this.plugin.settings.arxiv.topics;
+    const index = typeof topicRef === "number" ? topicRef : topics.findIndex(({ id }) => id === topicRef);
     const topic = topics[index];
     if (!topic) return false;
+    const topicId = topic.id;
     const topicName = topic.name.trim() || "(unnamed)";
     const confirmed = await this.confirmReplace(
       `Delete the research topic "${topicName}"? This cannot be undone.`,
@@ -937,9 +1089,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.pendingTopicDeletionAnchor = this.captureTopicDeletionAnchor(
       topics[index + 1]?.id ?? topics[index - 1]?.id,
     );
-    topics.splice(index, 1);
+    const saved = await this.saveArxivEdit("delete topic", (arxiv) => {
+      const currentIndex = arxiv.topics.findIndex(({ id }) => id === topicId);
+      if (currentIndex >= 0) arxiv.topics.splice(currentIndex, 1);
+    });
+    if (!saved) {
+      this.pendingTopicDeletionAnchor = undefined;
+      return false;
+    }
     this.expandedTopics.delete(topic.id);
-    await this.plugin.saveSettings();
     this.refreshSettings();
     this.restoreTopicDeletionAnchor();
     return true;
@@ -955,14 +1113,16 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const settings = this.plugin.settings;
     const categories = arxivCategories(settings.arxiv);
     const apply = async () => {
-      settings.arxiv.category = tpl.category;
-      settings.arxiv.categories = [tpl.category];
-      settings.arxiv.topics = tpl.topics.map((t) => ({
-        ...t,
-        id: crypto.randomUUID(),
-      }));
-      await this.plugin.saveSettings();
-      this.refreshSettings();
+      const saved = await this.saveArxivEdit("apply topic template", (arxiv) => {
+        arxiv.category = tpl.category;
+        arxiv.categories = [tpl.category];
+        arxiv.topics.splice(
+          0,
+          arxiv.topics.length,
+          ...tpl.topics.map(topicFromSeed),
+        );
+      });
+      if (saved) this.refreshSettings();
     };
     const replacesCategories = categoriesWillChange(categories, [tpl.category]);
     if (settings.arxiv.topics.length === 0 && !replacesCategories) {
@@ -977,6 +1137,36 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       ),
     );
     if (confirmed) await apply();
+  }
+
+  /**
+   * Changes for one sidecar endpoint edit. Both endpoints must share an
+   * origin, and each field saves alone, so moving one endpoint to another
+   * host or port moves the other to the same origin in the same change.
+   */
+  public sidecarUrlChanges(
+    key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
+    next: string,
+  ): SettingsValueChange[] {
+    const changes: SettingsValueChange[] = [{ key, value: next }];
+    const otherKey = key === SETTING_KEYS.pdfParserSidecar.capabilitiesUrl
+      ? SETTING_KEYS.pdfParserSidecar.parseUrl
+      : SETTING_KEYS.pdfParserSidecar.capabilitiesUrl;
+    const otherValue = this.getControlValue(otherKey);
+    const other = typeof otherValue === "string" ? otherValue : "";
+    try {
+      const nextUrl = new URL(next);
+      const otherUrl = new URL(other);
+      if (nextUrl.origin !== otherUrl.origin) {
+        changes.push({
+          key: otherKey,
+          value: `${nextUrl.origin}${otherUrl.pathname}${otherUrl.search}`,
+        });
+      }
+    } catch {
+      // An unparsable URL is left to the settings validation to reject.
+    }
+    return changes;
   }
 
   public async saveTimezone(timezone: string): Promise<void> {
@@ -1128,7 +1318,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  private async applyOutputDirectoryDraft(
+  public async applyOutputDirectoryDraft(
     key: "dailyDir" | "papersDir",
     draft: string,
     input: HTMLInputElement,
@@ -1192,7 +1382,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // ─── LLM ──────────────────────────────────────────
-    this.sectionHeading(containerEl, "AI model", "llm");
+    this.sectionHeading(containerEl, "LLM", "llm");
 
     // Base URL — always editable, default to DeepSeek
     new Setting(containerEl)
@@ -1231,57 +1421,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.renderApiKeySetting(containerEl);
 
-    // Model — Get Models button + dropdown
+    // Model — typed name with Get models suggestions (shared with 1.13+)
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc("Choose a model, or click get models to load the list from your provider.");
-
-    // Get models button
-    modelSetting.addButton((b) => {
-      b.setButtonText("Get models");
-      b.onClick(async () => {
-        b.setButtonText("Fetching…");
-        b.setDisabled(true);
-        try {
-          const client = new LlmClient(this.plugin.settings.llm, this.plugin.logger, this.plugin.getHttpClient());
-          const models = await client.fetchModels();
-          if (models.length > 0) {
-            this.showModelDropdown(models, modelSetting.settingEl);
-            new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
-          } else {
-            new Notice(modelFetchNoticeMessage({ kind: "empty" }));
-          }
-        } catch (e) {
-          new Notice(modelFetchNoticeMessage(
-            { kind: "error", message: e instanceof Error ? e.message : String(e) },
-            [this.plugin.settings.llm.apiKey],
-          ));
-        } finally {
-          b.setButtonText("Get models");
-          b.setDisabled(false);
-        }
-      });
-    });
-
-    // Model dropdown (empty by default, populated by Get models)
-    modelSetting.addDropdown((d) => {
-      d.selectEl.addClass("arxiv-daily-settings__model-select");
-      if (s.llm.model) {
-        d.addOption(s.llm.model, s.llm.model);
-      }
-      d.setValue(s.llm.model).onChange(async (v) => {
-        const saved = await this.saveLegacyControl(
-          d,
-          "save model",
-          SETTING_KEYS.llm.model,
-          [{ key: SETTING_KEYS.llm.model, value: v }],
-          (value) => {
-            d.setValue(typeof value === "string" ? value : "");
-          },
-        );
-        if (saved) this.refreshSetupGuide();
-      });
-    });
+      .setDesc("Type a model name, or click get models to see what your provider offers.");
+    declarativeRows.renderModelRow(this, modelSetting);
 
     // Thinking mode — desc varies by provider
     const thinkingDesc = s.llm.provider === "anthropic"
@@ -1290,11 +1434,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         ? "Let the model spend extra effort on harder questions (DeepSeek reasoning)."
         : "Let the model spend extra effort on harder questions when the provider supports it.";
 
+    let thinkingToggle: { setValue(value: boolean): unknown } | undefined;
     new Setting(containerEl)
       .setName("Thinking mode")
       .setDesc(thinkingDesc)
       .addToggle((t) =>
-        t.setValue(s.llm.thinkingMode).onChange(async (v) => {
+        (thinkingToggle = t).setValue(s.llm.thinkingMode).onChange(async (v) => {
           await this.saveLegacyControl(
             t,
             "save thinking mode",
@@ -1326,7 +1471,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         }
         d.setValue(efforts.includes(s.llm.reasoningEffort) ? s.llm.reasoningEffort : efforts[0]!)
           .onChange(async (v) => {
-            await this.saveLegacyControl(
+            // Choosing an effort also turns thinking on; keep that toggle in step.
+            const saved = await this.saveLegacyControl(
               d,
               "save reasoning effort",
               SETTING_KEYS.llm.reasoningEffort,
@@ -1338,6 +1484,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
                 d.setValue(typeof value === "string" ? value : efforts[0]!);
               },
             );
+            if (saved) thinkingToggle?.setValue(this.plugin.settings.llm.thinkingMode);
           });
       })
       .addText((t) => {
@@ -1362,7 +1509,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
 
     // ─── arXiv ────────────────────────────────────────
-    this.sectionHeading(containerEl, "arXiv", "arxiv");
+    this.sectionHeading(containerEl, "arXiv categories", "arxiv");
 
     const categories = arxivCategories(s.arxiv);
     new Setting(containerEl)
@@ -1378,6 +1525,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .addDropdown((d) => {
           addCategoryOptions(d.selectEl, category);
           d.setValue(category).onChange(async (v) => {
+            if (categories.some((other, j) => j !== i && other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              d.setValue(category);
+              return;
+            }
             const next = [...categories];
             next[i] = v;
             await this.setArxivCategories(next);
@@ -1385,16 +1537,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           });
         })
         .addText((t) => {
-          t.setPlaceholder("Or enter custom category")
-            .setValue("")
-            .onChange(async (v) => {
-              if (v.trim()) {
-                const next = [...categories];
-                next[i] = v.trim();
-                await this.setArxivCategories(next);
-                this.renderLegacySettings();
-              }
+          t.setPlaceholder("Or enter custom category").setValue("");
+          // Commit when editing ends: each keystroke would become a category
+          // and the re-render would remove the input being typed in.
+          t.inputEl.addEventListener("change", () => {
+            const v = t.inputEl.value.trim();
+            if (!v) return;
+            const next = [...categories];
+            next[i] = v;
+            this.runAction("save category", async () => {
+              await this.setArxivCategories(next);
+              this.renderLegacySettings();
             });
+          });
         })
         .addButton((b) =>
           b
@@ -1427,11 +1582,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         d.onChange(async (id) => {
           if (!id) return;
           d.setValue("");
-          await this.applyTopicTemplate(id);
+          await this.runActionAndWait("apply topic template", () => this.applyTopicTemplate(id));
         });
       })
       .addButton((b) => {
-        b.setButtonText("Add topic").onClick(() => void this.addTopic());
+        b.setButtonText("Add topic").onClick(() => this.runAction("add topic", () => this.addTopic()));
       });
 
     const topicsContainer = containerEl.createDiv();
@@ -1441,7 +1596,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       });
       empty.createEl("strong", { text: "No topics yet." });
       empty.createDiv({
-        text: "Pick a template above or click Add topic to define what to track. Daily reports need at least one topic before AI runs.",
+        text: "Generate topics from your library, pick a template, or add a topic. Daily reports need at least one topic.",
       });
     }
     for (let i = 0; i < s.arxiv.topics.length; i++) {
@@ -1510,6 +1665,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // ─── Output & Schedule ────────────────────────────
     this.sectionHeading(containerEl, "Output & schedule", "schedule");
+
+    declarativeRows.renderDailyPaperLimitRow(
+      this,
+      new Setting(containerEl)
+        .setName("Daily paper limit")
+        .setDesc("Maximum papers across all topics in each daily report. Default is 20."),
+    );
 
     new Setting(containerEl)
       .setName("Daily reports folder")
@@ -1619,21 +1781,27 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     // ─── Personal library ─────────────────────────────
     this.sectionHeading(containerEl, "Personal library", "library");
+    this.libraryGuide(containerEl, this.libraryGuideContent());
     const librarySetting = new Setting(containerEl)
       .setName("Library")
-      .setDesc("Choose a folder of PDFs, then build a search index. Separate from daily reports.");
+      .setDesc("Choose a folder of PDFs to prepare its search index automatically. Only suggestions you accept change daily reports.");
     this.renderLibraryConnectionControls(librarySetting);
+
+    if (this.plugin.getLibraryConnectionStatus().kind !== "disconnected") {
+      const suggestions = new Setting(containerEl).setName("Topics from library");
+      this.renderLibrarySuggestionsControls(suggestions);
+    }
 
     new Setting(containerEl)
       .setName("Embedding")
       .setDesc(
         s.embedding.mode === "remote"
-          ? "Remote sends full text to an embeddings API. Switching modes rebuilds the index."
-          : "Local embeds on this device. Switch to remote only if you have an embeddings API.",
+          ? "Remote sends titles and abstracts to an embeddings API. Switching modes rebuilds the index."
+          : "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.",
       )
       .addDropdown((d) => {
-        d.addOption("local", "Local (offline, default)");
-        d.addOption("remote", "Remote (fast, full text leaves this device)");
+        d.addOption("local", "Local (default, one-time model download)");
+        d.addOption("remote", "Remote (fast, titles and abstracts leaves this device)");
         d.setValue(s.embedding.mode);
         d.onChange(async (v) => {
           const next = v === "remote" ? "remote" : "local";
@@ -1652,19 +1820,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Embedding API base URL")
         .setDesc("OpenAI-compatible embeddings endpoint.")
         .addText((t) => {
-          t.setPlaceholder("https://api.openai.com/v1")
-            .setValue(s.embedding.baseUrl)
-            .onChange(async (v) => {
+          t.setPlaceholder("https://api.openai.com/v1").setValue(s.embedding.baseUrl);
+          // On change only: each save may re-ask for remote consent.
+          t.inputEl.addEventListener("change", () => {
+            void (async () => {
               try {
                 t.setValue(await this.saveEmbeddingEndpointField(
                   SETTING_KEYS.embedding.baseUrl,
-                  v.trim(),
+                  t.inputEl.value.trim(),
                 ));
               } catch (error) {
                 t.setValue(this.plugin.settings.embedding.baseUrl);
                 this.reportActionError("save embedding base url", error);
               }
-            });
+            })();
+          });
         });
       new Setting(containerEl)
         .setName("Embedding API key")
@@ -1682,19 +1852,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Embedding model")
         .setDesc("Model name sent to the endpoint.")
         .addText((t) => {
-          t.setPlaceholder("text-embedding-3-small")
-            .setValue(s.embedding.model)
-            .onChange(async (v) => {
+          t.setPlaceholder("text-embedding-3-small").setValue(s.embedding.model);
+          t.inputEl.addEventListener("change", () => {
+            void (async () => {
               try {
                 t.setValue(await this.saveEmbeddingEndpointField(
                   SETTING_KEYS.embedding.model,
-                  v.trim(),
+                  t.inputEl.value.trim(),
                 ));
               } catch (error) {
                 t.setValue(this.plugin.settings.embedding.model);
                 this.reportActionError("save embedding model", error);
               }
-            });
+            })();
+          });
         });
       new Setting(containerEl)
         .setName("Embedding dimension")
@@ -1717,8 +1888,13 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Optional local sidecar. Off by default; PDFs stay on this device either way.")
       .addToggle((toggle) => {
         toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
-          await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
-          this.renderLegacySettings();
+          try {
+            await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
+            this.renderLegacySettings();
+          } catch (error) {
+            toggle.setValue(this.plugin.settings.pdfParserSidecar.enabled);
+            this.reportActionError("save local parser sidecar", error);
+          }
         });
       });
     if (s.pdfParserSidecar.enabled) {
@@ -1726,21 +1902,41 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .setName("Sidecar capability URL")
         .setDesc("Local loopback endpoint that reports parser capabilities.")
         .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities")
-            .setValue(s.pdfParserSidecar.capabilitiesUrl)
-            .onChange(async (value) => {
-              await this.changeSettingValue("pdfParserSidecar.capabilitiesUrl", value.trim());
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities").setValue(s.pdfParserSidecar.capabilitiesUrl);
+          text.inputEl.addEventListener("change", () => {
+            this.runAction("save local parser sidecar URL", async () => {
+              try {
+                await this.changeSettingValues(this.sidecarUrlChanges(
+                  "pdfParserSidecar.capabilitiesUrl",
+                  text.inputEl.value.trim(),
+                ));
+                this.renderLegacySettings();
+              } catch (error) {
+                text.setValue(this.plugin.settings.pdfParserSidecar.capabilitiesUrl);
+                throw error;
+              }
             });
+          });
         });
       new Setting(containerEl)
         .setName("Sidecar parse URL")
         .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
         .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse")
-            .setValue(s.pdfParserSidecar.parseUrl)
-            .onChange(async (value) => {
-              await this.changeSettingValue("pdfParserSidecar.parseUrl", value.trim());
+          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse").setValue(s.pdfParserSidecar.parseUrl);
+          text.inputEl.addEventListener("change", () => {
+            this.runAction("save local parser sidecar URL", async () => {
+              try {
+                await this.changeSettingValues(this.sidecarUrlChanges(
+                  "pdfParserSidecar.parseUrl",
+                  text.inputEl.value.trim(),
+                ));
+                this.renderLegacySettings();
+              } catch (error) {
+                text.setValue(this.plugin.settings.pdfParserSidecar.parseUrl);
+                throw error;
+              }
             });
+          });
         });
     }
 
@@ -1878,11 +2074,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Daily auto-send")
-      .setDesc(
-        hostedMode
-          ? "When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues."
-          : "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.",
-      )
+      .setDesc(dailyAutoSendDesc(hostedMode, this.plugin.automaticEmailSupported()))
       .addToggle((t) =>
         t.setValue(s.email.enabled).onChange(async (v) => {
           await this.saveLegacyControl(
@@ -2026,13 +2218,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (guide) containerEl.appendChild(guide);
   }
 
+  /**
+   * Whether the setup-guide row belongs in the settings page at all: always
+   * true before the guide has ever completed (covers both the step-by-step
+   * list and the one-time completion summary), and after that only true if
+   * something is now broken and needs a compact warning (see
+   * `createConfigurationWarning`).
+   */
   public shouldShowSetupGuide(): boolean {
-    return shouldRenderSetupGuide(
-      getSetupStatus(
-        this.plugin.settings,
-        this.plugin.stateStore.snapshot(),
-      ),
+    const status = getSetupStatus(
+      this.plugin.settings,
+      this.plugin.stateStore.snapshot(),
     );
+    if (!this.plugin.settings.onboarding.guideCompleted) return true;
+    return !status.readyToRun || status.schedulerReasons.length > 0;
   }
 
   /** Remember the host row so the guide can update without replacing active inputs. */
@@ -2046,7 +2245,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       declarativeRows.renderSetupGuideRow(this, setting);
       return;
     }
-    this.refreshSettings();
+    // Only a guide that has to reappear needs the full update; re-rendering
+    // for every keystroke in a topic card would replace the focused input.
+    if (this.shouldShowSetupGuide()) this.refreshSettings();
   }
 
   public refreshSetupGuide(): void {
@@ -2067,18 +2268,66 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     }
   }
 
-  public createSetupGuide(): HTMLElement {
+  /**
+   * Set the persisted "guide completed" marker the moment every milestone is
+   * true at once, and flush it to disk. A failed save is reported the same
+   * way other in-place field edits are (the draft/marker is kept locally).
+   */
+  private persistSetupGuideCompletion(status: SetupStatus): boolean {
+    if (!markSetupGuideCompleteIfDone(this.plugin.settings, status)) return false;
+    void this.plugin.saveSettings().catch((error) => {
+      this.reportActionError("save setup guide completion", error);
+    });
+    return true;
+  }
+
+  /**
+   * Once the guide is retired, an already-onboarded user who later breaks
+   * their configuration (or a scheduler setting) would otherwise get no
+   * explanation anywhere on the settings page. Reuse the same compact
+   * details disclosure the guide used, standalone, only while something is
+   * actually wrong.
+   */
+  private createConfigurationWarning(status: SetupStatus): HTMLElement | null {
+    if (status.readyToRun && status.schedulerReasons.length === 0) return null;
+    const warning = this.containerEl.createEl("section", {
+      cls: "arxiv-daily-setup",
+      attr: { "aria-labelledby": "arxiv-daily-setup-title" },
+    });
+    warning.detach();
+    warning.createDiv({
+      cls: "arxiv-daily-setup__title",
+      text: "Configuration needs attention",
+      attr: {
+        id: "arxiv-daily-setup-title",
+        role: "heading",
+        "aria-level": "2",
+      },
+    });
+    this.renderConfigurationDetails(warning, [...status.reasons, ...status.schedulerReasons]);
+    return warning;
+  }
+
+  public createSetupGuide(): HTMLElement | null {
     const status = getSetupStatus(
       this.plugin.settings,
       this.plugin.stateStore.snapshot(),
     );
+
+    // Once the guide has completed once, it is retired for good; only a
+    // compact warning (if anything is broken) may still appear.
+    if (this.plugin.settings.onboarding.guideCompleted) {
+      return this.createConfigurationWarning(status);
+    }
+
     const guide = this.containerEl.createEl("section", {
       cls: "arxiv-daily-setup",
       attr: { "aria-labelledby": "arxiv-daily-setup-title" },
     });
     guide.detach();
 
-    if (!shouldRenderSetupGuide(status)) {
+    if (isSetupComplete(status)) {
+      this.persistSetupGuideCompletion(status);
       guide.addClass("arxiv-daily-setup--complete");
       const summary = guide.createDiv({
         cls: "arxiv-daily-setup__complete-summary",
@@ -2118,16 +2367,17 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       status.categoriesReady,
       status.topicsReady,
       status.firstReportComplete,
+      status.scheduleEnabled,
     ].filter(Boolean).length;
     header.createDiv({
       cls: "arxiv-daily-setup__progress-summary",
-      text: `${completedCount} of 4 complete`,
+      text: `${completedCount} of 5 complete`,
       attr: { "aria-live": "polite" },
     });
     const progress = guide.createEl("progress", {
       cls: "arxiv-daily-setup__progress",
       attr: {
-        max: "4",
+        max: "5",
         value: String(completedCount),
         "aria-label": "Setup progress",
       },
@@ -2141,7 +2391,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.llmReady,
       "Connect AI",
-      "Add an API key, API base URL, and model under AI model.",
+      "Add an API key, API base URL, and model under LLM.",
       "Connect AI",
       () => this.scrollToSection("llm"),
     );
@@ -2149,7 +2399,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.categoriesReady,
       "Choose paper sources",
-      "Select at least one arXiv category under arXiv.",
+      "Select at least one arXiv category under arXiv categories.",
       "Choose sources",
       () => this.scrollToSection("arxiv"),
     );
@@ -2157,7 +2407,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       list,
       status.topicsReady,
       "Describe your research interests",
-      "Add at least one complete research topic under Research topics.",
+      "Use your library to suggest topics, or add your own under Research topics.",
       "Describe interests",
       () => this.scrollToSection("topics"),
     );
@@ -2167,11 +2417,32 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Generate your first report",
       status.readyToRun
         ? "Your configuration is ready. Generate a report to finish setup."
-        : "Complete the earlier configuration steps before generating a report.",
-      status.readyToRun ? "Generate first report" : undefined,
+        : status.llmReady && status.categoriesReady && status.topicsReady
+          ? `Fix before generating: ${status.reasons.join("; ")}.`
+          : "Complete the earlier configuration steps before generating a report.",
+      !status.readyToRun
+        ? undefined
+        : this.firstReportRunning
+          ? "Generating…"
+          : "Generate first report",
       status.readyToRun
         ? () => {
             this.runAction("generate first report", () => this.generateFirstReport());
+          }
+        : undefined,
+      this.firstReportRunning,
+    );
+    this.renderSetupItem(
+      list,
+      status.scheduleEnabled,
+      "Turn on daily reports",
+      status.readyToRun
+        ? "Reports then run by themselves on weekdays, inside the run window below."
+        : "Available once the configuration above is complete.",
+      status.readyToRun ? "Turn on daily reports" : undefined,
+      status.readyToRun
+        ? () => {
+            this.runAction("turn on daily reports", () => this.enableDailyReports());
           }
         : undefined,
     );
@@ -2188,29 +2459,43 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     description: string,
     actionLabel?: string,
     onAction?: () => void,
+    busy = false,
   ): void {
+    const current = !done && !parent.querySelector(".is-current");
     const item = parent.createEl("li", {
       cls: `arxiv-daily-setup__item ${done ? "is-done" : "is-pending"}`,
     });
+    if (current) {
+      item.addClass("is-current");
+      item.setAttribute("aria-current", "step");
+    }
     const body = item.createDiv({ cls: "arxiv-daily-setup__item-body" });
     body.createDiv({
       cls: "arxiv-daily-setup__label",
       text: title,
     });
-    body.createDiv({
-      cls: "arxiv-daily-setup__description",
-      text: description,
-    });
-    item.createSpan({
-      cls: "arxiv-daily-setup__status",
-      text: done ? "Complete" : "Next",
-    });
-    if (!done && actionLabel && onAction) {
+    if (current) {
+      body.createDiv({
+        cls: "arxiv-daily-setup__description",
+        text: description,
+      });
+    }
+    if (done || current) {
+      item.createSpan({
+        cls: "arxiv-daily-setup__status",
+        text: done ? "Complete" : "Next",
+      });
+    }
+    if (current && actionLabel && onAction) {
       const action = item.createEl("button", {
         cls: "arxiv-daily-setup__link",
         text: actionLabel,
         attr: { type: "button" },
       });
+      if (busy) {
+        action.disabled = true;
+        action.setAttribute("aria-busy", "true");
+      }
       action.addEventListener("click", onAction);
     }
   }
@@ -2241,31 +2526,137 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
   }
 
-  private scrollToSection(section: "llm" | "arxiv" | "topics" | "schedule" | "advanced"): void {
-    const target = this.containerEl.querySelector(
-      `[data-arxiv-daily-section="${section}"]`,
+  /**
+   * Bring a guide step's section into view and put the cursor where the step
+   * still needs input. The section is the 1.13+ group element or, in
+   * display(), its heading row; both carry settingsSectionClass().
+   */
+  private scrollToSection(section: "llm" | "arxiv" | "topics"): void {
+    const target = this.containerEl.querySelector<HTMLElement>(
+      `.${settingsSectionClass(section)}`,
     );
-    if (!target) return;
-    const targetEl = target as HTMLElement;
-    const view = targetEl.ownerDocument.defaultView;
+    if (!target) {
+      const heading = { llm: "LLM", arxiv: "arXiv categories", topics: "Research topics" }[section];
+      this.plugin.logger.warn(`settings: setup guide could not find the ${section} section`);
+      new Notice(`arXiv Daily: scroll down to "${heading}" to continue setup.`);
+      return;
+    }
+    const view = target.ownerDocument.defaultView;
     const reduceMotion = view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (!targetEl.hasAttribute("tabindex")) targetEl.setAttribute("tabindex", "-1");
-    targetEl.scrollIntoView({
+    target.scrollIntoView({
       block: "start",
       behavior: reduceMotion ? "auto" : "smooth",
     });
-    targetEl.focus({ preventScroll: true });
+    if (section === "topics") {
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      this.focusIncompleteTopic();
+      return;
+    }
+    const field = this.firstPendingField(section);
+    if (field) {
+      field.focus({ preventScroll: true });
+      return;
+    }
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }
+
+  private firstPendingField(section: "llm" | "arxiv"): HTMLElement | null {
+    const query = (selector: string) =>
+      this.containerEl.querySelector<HTMLElement>(selector);
+    if (section === "arxiv") {
+      return query(".arxiv-daily-settings__category-select");
+    }
+    const { llm } = this.plugin.settings;
+    if (!llm.apiKey.trim()) {
+      const apiKey = query('input[aria-label="LLM API key"]');
+      if (apiKey) return apiKey;
+    }
+    if (!llm.baseUrl.trim()) {
+      const baseUrl = query(".arxiv-daily-settings__llm-url-input");
+      if (baseUrl) return baseUrl;
+    }
+    return query(".arxiv-daily-settings__model-input");
+  }
+
+  /** Open the first topic missing a field and focus that field; add one if there are none. */
+  private focusIncompleteTopic(): void {
+    const topics = this.plugin.settings.arxiv.topics;
+    if (topics.length === 0) {
+      this.runAction("add topic", () => this.addTopic());
+      return;
+    }
+    const topic = topics.find(
+      (candidate) =>
+        !candidate.name.trim() ||
+        !candidate.tag.trim() ||
+        !candidate.directions.some((direction) => direction.text.trim()),
+    ) ?? topics[0]!;
+    const card = this.findTopicCard(topic.id);
+    if (!card) return;
+    const form = card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-form");
+    if (form?.hidden) {
+      card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-header")?.click();
+    }
+    const direction = Array.from(card.querySelectorAll<HTMLTextAreaElement>(
+      ".arxiv-daily-settings__topic-direction-input",
+    )).find((input) => !input.value.trim());
+    const field = !topic.name.trim()
+      ? card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-name-input")
+      : direction ?? card.querySelector<HTMLElement>(".arxiv-daily-settings__topic-direction-add");
+    field?.focus({ preventScroll: true });
+  }
+
+  /**
+   * The first report should succeed whatever the day: weekends and the hours
+   * before arXiv's announcement have no listing for today, so use the latest
+   * announced day that is not after today. Falls back to today when the
+   * announced days cannot be loaded.
+   */
+  private async latestAnnouncedDate(today: string): Promise<string> {
+    try {
+      await this.plugin.recentDates.refresh();
+    } catch (error) {
+      this.plugin.logger.warn("settings: could not load announced arXiv days", error);
+      return today;
+    }
+    const announced = Array.from(this.plugin.recentDates.snapshot().dates)
+      .filter((date) => date <= today)
+      .sort();
+    return announced.at(-1) ?? today;
+  }
+
+  /** Guide step 5: the same path as the Enable toggle (validation + run-today choice). */
+  public async enableDailyReports(): Promise<void> {
+    await this.plugin.setScheduleEnabled(true);
+    this.refreshSettings();
   }
 
   public async generateFirstReport(): Promise<void> {
-    const date = formatDate(
-      todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
-    );
-    this.plugin.logger.info(`settings: first report requested for ${date}`);
-    new Notice(`arXiv Daily: running for ${date}…`);
-    const result = await this.plugin.scheduler.runForDateNow(date);
-    new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    if (this.firstReportRunning) return;
+    this.firstReportRunning = true;
     this.refreshSetupGuide();
+    try {
+      const today = formatDate(
+        todayInTz(new Date(), this.plugin.settings.arxiv.timezone),
+      );
+      const date = await this.latestAnnouncedDate(today);
+      this.plugin.logger.info(`settings: first report requested for ${date}`);
+      new Notice(
+        date === today
+          ? `arXiv Daily: running for ${date}…`
+          : `arXiv Daily: today's papers are not announced yet, so the first report uses the latest announced day, ${date}…`,
+      );
+      const result = await this.plugin.scheduler.runForDateNow(date);
+      new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+      await refreshOpenDashboardViews(this.plugin).catch((error: unknown) => {
+        this.plugin.logger.warn("settings: dashboard refresh after first report failed", error);
+      });
+    } finally {
+      this.firstReportRunning = false;
+      this.refreshSetupGuide();
+    }
   }
 
   /** Reveal and focus a topic created by Add topic after the settings list updates. */
@@ -2368,14 +2759,61 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     );
   }
 
+  /** Apply only this edit to the latest queued topic, preserving other changes. */
+  private async changeTopic(
+    topicId: string,
+    edit: (topic: Topic, topics: Topic[], index: number) => void,
+  ): Promise<void> {
+    await this.plugin.settingsChanges.changeComputed((current) => {
+      const topics = current.arxiv.topics;
+      const index = topics.findIndex(({ id }) => id === topicId);
+      const topic = topics[index];
+      if (!topic) throw new Error("This topic no longer exists. Reopen settings to refresh the list.");
+      edit(topic, topics, index);
+      // Empty rows remain editable drafts, as in the existing editor. Use the
+      // shared shadow rule without normalizing those rows out while typing.
+      topic.description = deriveTopicDescription(topic.directions);
+      return { changes: [{ key: "arxiv.topics", value: topics }] };
+    });
+  }
+
   private renderTopicCard(
     container: HTMLElement,
     topics: Topic[],
     index: number,
     compact = false,
   ): void {
-    const topic = topics[index];
-    if (!topic) return;
+    const storedTopic = topics[index];
+    if (!storedTopic) return;
+    // Renderers never own live settings objects: another queued transaction
+    // can replace their contents while the user continues typing here.
+    const topic: Topic = {
+      ...storedTopic,
+      directions: storedTopic.directions.map((direction) => ({ ...direction })),
+    };
+    const createdDirections = new Set<string>();
+    const liveTopic = () => this.plugin.settings.arxiv.topics.find(({ id }) => id === topic.id);
+    const persistEdit = (
+      control: object,
+      action: string,
+      edit: (current: Topic, topics: Topic[], index: number) => void,
+      restore: () => void,
+    ): Promise<void> => {
+      const revision = this.beginControlChange(control);
+      const saving = (async () => {
+        try {
+          await this.changeTopic(topic.id, edit);
+          if (this.isCurrentControlChange(control, revision)) this.refreshSetupGuide();
+        } catch (error) {
+          if (this.isCurrentControlChange(control, revision)) restore();
+          this.reportActionError(action, error);
+        }
+      })();
+      this.pendingTopicEdits.add(saving);
+      const settled = () => { this.pendingTopicEdits.delete(saving); };
+      void saving.then(settled, settled);
+      return saving;
+    };
     const isExpanded = this.expandedTopics.has(topic.id);
     const idPrefix = `arxiv-daily-topic-${stableDomId(topic.id)}`;
     const formId = `${idPrefix}-form`;
@@ -2407,29 +2845,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     titleSpan.toggleClass("is-muted", !topic.name.trim());
 
-    let tagChip: HTMLElement | null = null;
-    const createTag = () => {
-      if (!topic.tag) return;
-      tagChip = header.createSpan({
-        cls: "arxiv-daily-settings__topic-tag",
-        text: "#" + topic.tag,
-      });
-    };
+    // The header carries the name alone: a topic name and its machine tag
+    // together outran the row, and the tag is derived from the name anyway.
     let star: HTMLElement | null = null;
-    const createStar = () => {
-      if (!topic.detail) return;
+    if (topic.detail) {
       star = header.createSpan({
         cls: "arxiv-daily-settings__topic-star",
         text: "★",
         attr: { title: "Detail report enabled" },
       });
-    };
-    if (compact) {
-      createTag();
-      createStar();
-    } else {
-      createStar();
-      createTag();
     }
 
     // ─── Expanded form (toggled via display) ────────────────
@@ -2464,95 +2888,208 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     nameInput.value = topic.name;
     nameInput.placeholder = "Topic name";
 
-    // Tag row
-    const tagRow = form.createDiv({
-      cls: "arxiv-daily-settings__topic-row",
-    });
-    const tagId = `${idPrefix}-tag`;
-    const tagHintId = `${tagId}-hint`;
-    tagRow.createEl("label", {
-      cls: "arxiv-daily-settings__topic-label",
-      text: "Tag",
-      attr: { for: tagId },
-    });
-    if (!compact) {
-      this.hint(tagRow, "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", tagHintId);
-    }
-    const tagInput = tagRow.createEl("input", {
-      cls: "arxiv-daily-settings__topic-tag-input",
-      type: "text",
-      attr: compact
-        ? { id: tagId }
-        : { id: tagId, "aria-describedby": tagHintId },
-    });
-    tagInput.value = topic.tag;
-    tagInput.placeholder = "Topic tag";
-    const autoBadge = compact
-      ? null
-      : tagRow.createSpan({
-          cls: "arxiv-daily-settings__topic-auto",
-          text: "Auto",
-        });
-    const refreshAutoBadge = () => {
-      autoBadge?.toggleClass("is-hidden", topic.tag !== slugify(topic.name));
-    };
-    refreshAutoBadge();
-
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
       titleSpan.title = topic.name;
       titleSpan.toggleClass("is-muted", !topic.name.trim());
     };
 
+    // Settings no longer shows the tag, so the name is the only thing left
+    // that can produce one. A tag that is still the machine form of the old
+    // name follows the rename; one that was typed by hand while the field
+    // existed is left alone, because nothing on screen could restore it.
     nameInput.oninput = async () => {
-      const wasAuto = topic.tag === slugify(topic.name);
-      topic.name = nameInput.value;
-      if (wasAuto) {
-        const derived = slugify(topic.name);
-        topic.tag = derived || `topic-${index + 1}`;
-        tagInput.value = topic.tag;
-      }
-      refreshAutoBadge();
+      const name = nameInput.value;
+      topic.name = name;
       refreshHeader();
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
+      await persistEdit(nameInput, "rename topic", (current, currentTopics, currentIndex) => {
+        const tagFollowsName = isDerivedTopicTag(current.tag, current.name)
+          || isPlaceholderTopicTag(current.tag) || !current.tag;
+        current.name = name;
+        if (tagFollowsName) {
+          current.tag = uniqueTopicTag(currentTopics, currentIndex, slugify(name) || `topic-${currentIndex + 1}`);
+        }
+      }, () => {
+        topic.name = liveTopic()?.name ?? storedTopic.name;
+        nameInput.value = topic.name;
+        refreshHeader();
+      });
     };
 
-    tagInput.oninput = async () => {
-      topic.tag = tagInput.value;
-      refreshAutoBadge();
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
-    };
-
-    // Description
-    const descRow = form.createDiv({
+    // Directions
+    const dirRow = form.createDiv({
       cls: "arxiv-daily-settings__topic-row",
     });
-    const descId = `${idPrefix}-description`;
-    const descHintId = `${descId}-hint`;
-    descRow.createEl("label", {
+    const dirId = `${idPrefix}-directions`;
+    const dirHintId = `${dirId}-hint`;
+    dirRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
-      text: "Description",
-      attr: { for: descId },
+      text: "Directions",
+      attr: { for: dirId },
     });
     if (!compact) {
-      this.hint(descRow, "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", descHintId);
+      this.hint(dirRow, "One line per specific thread you follow inside this topic. The AI matches papers against these.", dirHintId);
     }
-    const descArea = descRow.createEl("textarea", {
-      cls: "arxiv-daily-settings__topic-description",
+    const dirList = dirRow.createDiv({
+      cls: "arxiv-daily-settings__topic-directions",
       attr: compact
-        ? { id: descId }
-        : { id: descId, "aria-describedby": descHintId },
+        ? { id: dirId }
+        : { id: dirId, "aria-describedby": dirHintId },
     });
-    descArea.value = topic.description;
-    descArea.rows = 3;
-    descArea.placeholder = "What papers belong in this topic?";
-    descArea.oninput = async () => {
-      topic.description = descArea.value;
-      await this.plugin.saveSettings();
-      this.refreshSetupGuide();
+
+    // Re-checked when the card expands: a hidden field measures as zero, so
+    // the truncation marker cannot be decided until it is on screen.
+    const directionOverflowChecks: Array<() => void> = [];
+
+    const appendDirection = async () => {
+      const direction: Topic["directions"][number] = {
+        id: crypto.randomUUID(),
+        text: "",
+        origin: "manual",
+      };
+      createdDirections.add(direction.id);
+      topic.directions.push(direction);
+      renderDirections();
+      dirList
+        .querySelectorAll<HTMLTextAreaElement>(
+          ".arxiv-daily-settings__topic-direction-input",
+        )
+        .item(topic.directions.length - 1)
+        ?.focus();
+      await persistEdit(direction, "add direction", (current) => {
+        current.directions.push({ id: direction.id, text: "", origin: "manual" });
+      }, () => {
+        topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
+        createdDirections.delete(direction.id);
+        renderDirections();
+      });
     };
+
+    const renderDirections = () => {
+      dirList.empty();
+      directionOverflowChecks.length = 0;
+      topic.directions.forEach((direction, directionIndex) => {
+        const line = dirList.createDiv({
+          cls: "arxiv-daily-settings__topic-direction",
+        });
+        // The field grows with its content by replicating the text into a
+        // hidden ::after in the same grid cell, so no height is ever assigned
+        // from script and a field hidden inside a collapsed card still sizes
+        // itself correctly the moment it is shown.
+        const field = line.createDiv({
+          cls: "arxiv-daily-settings__topic-direction-field is-collapsed",
+        });
+        const dirInput = field.createEl("textarea", {
+          cls: "arxiv-daily-settings__topic-direction-input",
+        });
+        dirInput.dataset.directionId = direction.id;
+        dirInput.value = direction.text;
+        dirInput.rows = 1;
+        dirInput.placeholder = "One specific direction";
+        // A textarea cannot render a marker over its own text, so the "there
+        // is more" badge is a sibling, shown only when the collapsed field is
+        // really cut off. It counts lines because that is what can be measured
+        // exactly; the title spells the number out.
+        const more = field.createSpan({
+          cls: "arxiv-daily-settings__topic-direction-more",
+        });
+
+        const syncField = () => {
+          field.dataset.replicatedValue = dirInput.value;
+          const collapsed = field.classList.contains("is-collapsed");
+          const lineHeight = Number.parseFloat(
+            getComputedStyle(dirInput).lineHeight,
+          );
+          const hidden = collapsed && Number.isFinite(lineHeight) && lineHeight > 0
+            ? Math.round((field.scrollHeight - field.clientHeight) / lineHeight)
+            : 0;
+          more.toggleClass("is-visible", hidden > 0);
+          more.setText(hidden > 0 ? `+${hidden}` : "");
+          more.title = hidden === 1 ? "1 more line" : `${hidden} more lines`;
+        };
+        directionOverflowChecks.push(syncField);
+        syncField();
+
+        dirInput.oninput = async () => {
+          // The filter prompt joins topics with "\n", so a pasted newline
+          // would break that line structure. Keep the stored value one line.
+          const flattened = dirInput.value.replace(/\s*\n+\s*/g, " ");
+          if (flattened !== dirInput.value) dirInput.value = flattened;
+          direction.text = flattened;
+          syncField();
+          await persistEdit(direction, "edit direction", (current) => {
+            const existing = current.directions.find(({ id }) => id === direction.id);
+            if (existing) existing.text = flattened;
+            else if (createdDirections.has(direction.id)) {
+              // The blank-row save may have failed ahead of this newer text.
+              // Keep the explicit Add action recoverable through its stable id.
+              current.directions.push({ id: direction.id, text: flattened, origin: "manual" });
+            } else {
+              throw new Error("This direction no longer exists. Reopen settings to refresh the list.");
+            }
+          }, () => {
+            const saved = liveTopic()?.directions.find(({ id }) => id === direction.id);
+            if (!saved) {
+              topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
+              renderDirections();
+              return;
+            }
+            direction.text = saved.text;
+            const visibleInput = Array.from(dirList.querySelectorAll<HTMLTextAreaElement>("textarea"))
+              .find((input) => input.dataset.directionId === direction.id);
+            if (visibleInput) visibleInput.value = direction.text;
+            for (const check of directionOverflowChecks) check();
+          });
+        };
+        dirInput.onfocus = () => {
+          field.removeClass("is-collapsed");
+          syncField();
+        };
+        dirInput.onblur = () => {
+          field.addClass("is-collapsed");
+          syncField();
+        };
+        dirInput.onkeydown = (event: KeyboardEvent) => {
+          // A direction is one line of text: the filter prompt joins topics
+          // with newlines, so one stored here would break that structure.
+          // Enter cannot insert one, so it confirms instead — the field
+          // collapses back and gives up focus. Adding a direction stays the
+          // Add button's job.
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          dirInput.blur();
+        };
+
+        const removeBtn = line.createEl("button", {
+          cls: "arxiv-daily-settings__topic-direction-remove",
+          text: "×",
+          attr: {
+            type: "button",
+            "aria-label": `Remove direction ${directionIndex + 1}`,
+          },
+        });
+        removeBtn.onclick = async () => {
+          topic.directions = topic.directions.filter(({ id }) => id !== direction.id);
+          renderDirections();
+          await persistEdit(direction, "remove direction", (current) => {
+            current.directions = current.directions.filter(({ id }) => id !== direction.id);
+          }, () => {
+            const saved = liveTopic()?.directions.find(({ id }) => id === direction.id);
+            if (saved && !topic.directions.some(({ id }) => id === direction.id)) {
+              topic.directions.splice(Math.min(directionIndex, topic.directions.length), 0, { ...saved });
+              renderDirections();
+            }
+          });
+        };
+      });
+      const addBtn = dirList.createEl("button", {
+        cls: "arxiv-daily-settings__topic-direction-add",
+        text: "Add direction",
+        attr: { type: "button" },
+      });
+      addBtn.onclick = () => void appendDirection();
+    };
+    renderDirections();
 
     // Detail toggle + delete (right-aligned, only visible when expanded)
     if (!compact) {
@@ -2569,9 +3106,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     detailCheckbox.checked = topic.detail;
     detailCheckbox.addClass("arxiv-daily-settings__topic-detail-checkbox");
     detailLabel.appendText("Detail report");
-    detailCheckbox.onchange = async () => {
-      topic.detail = detailCheckbox.checked;
-      await this.plugin.saveSettings();
+    const refreshDetail = () => {
       // Refresh the header star indicator without a full re-render.
       star?.remove();
       star = null;
@@ -2581,8 +3116,19 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           text: "★",
           attr: { title: "Detail report enabled" },
         });
-        if (!compact && tagChip) header.insertBefore(star, tagChip);
       }
+    };
+    detailCheckbox.onchange = async () => {
+      const detail = detailCheckbox.checked;
+      topic.detail = detail;
+      refreshDetail();
+      await persistEdit(detailCheckbox, "change detail report", (current) => {
+        current.detail = detail;
+      }, () => {
+        topic.detail = liveTopic()?.detail ?? storedTopic.detail;
+        detailCheckbox.checked = topic.detail;
+        refreshDetail();
+      });
     };
 
     const delBtn = footer.createEl("button", {
@@ -2592,7 +3138,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     delBtn.classList.add("mod-warning");
     delBtn.onclick = async (e) => {
       e.stopPropagation();
-      await this.deleteTopic(index);
+      await this.runActionAndWait("delete topic", () => this.deleteTopic(topic.id));
     };
 
     // Toggle expand/collapse on header click
@@ -2604,6 +3150,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       form.toggleClass("is-collapsed", !expanded);
       header.setAttribute("aria-expanded", String(expanded));
       caret.textContent = expanded ? "▾" : "▸";
+      // Directions could not be measured while the form was hidden.
+      if (expanded) for (const check of directionOverflowChecks) check();
     };
   }
 
@@ -2632,40 +3180,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
   }
 
-  public showModelDropdown(models: string[], container: HTMLElement): void {
-    // Find the existing dropdown in the model setting
-    const modelSetting = container.closest(".setting-item");
-    if (!modelSetting) return;
-
-    const select = modelSetting.querySelector("select") as HTMLSelectElement;
-    if (!select) return;
-
-    // Clear existing options without parsing HTML.
-    select.replaceChildren();
-
-    // Add new options
-    for (const model of models) {
-      select.createEl("option", { value: model, text: model });
-    }
-
-    // Pre-select current model if in list
-    const currentModel = this.plugin.settings.llm.model;
-    if (models.includes(currentModel)) {
-      select.value = currentModel;
-    } else if (models.length > 0) {
-      // Select first model if current not in list
-      select.value = models[0]!;
-      this.runAction("save selected model", async () => {
-        try {
-          await this.changeSettingValue("llm.model", models[0]!);
-        } catch (error) {
-          select.value = this.restoreStringControlValue(error, "llm.model");
-          throw error;
-        }
-      });
-    }
-  }
-
   private textareaSetting(
     container: HTMLElement,
     name: string,
@@ -2684,9 +3198,67 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 }
 
+/**
+ * Tag a topic gets from its name: the slug, or `topic-N` when the name has
+ * no usable characters, with a numeric suffix until no other topic has it.
+ */
+export function autoTopicTag(name: string, topics: readonly Topic[], selfId: string): string {
+  const taken = new Set(
+    topics.filter((topic) => topic.id !== selfId).map((topic) => topic.tag.trim()),
+  );
+  const base = slugify(name);
+  if (!base) {
+    const position = topics.findIndex((topic) => topic.id === selfId);
+    let n = (position >= 0 ? position : topics.length) + 1;
+    while (taken.has(`topic-${n}`)) n += 1;
+    return `topic-${n}`;
+  }
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
 function stableDomId(value: string): string {
   const normalized = value.replace(/[^A-Za-z0-9_-]/g, "-");
   return normalized || "unnamed";
+}
+
+/** The stand-in tag a blank topic starts with, before it has a name. */
+export function isPlaceholderTopicTag(tag: string): boolean {
+  return /^topic-\d+$/.test(tag);
+}
+
+/**
+ * Whether `tag` is the machine form of `name`: the slug, or the slug plus the
+ * numeric suffix uniqueness adds. Retiring the tag field made this the test
+ * for "nobody chose this tag on purpose", so renaming may replace it.
+ */
+export function isDerivedTopicTag(tag: string, name: string): boolean {
+  const base = slugify(name);
+  if (!base) return false;
+  // `base` is a slug, so it holds no regular-expression metacharacters.
+  return tag === base || new RegExp(`^${base}-\\d+$`).test(tag);
+}
+
+/**
+ * First free tag for `base`, ignoring the topic at `index` so a topic keeps
+ * its own tag. Duplicate tags fail validation outright, and the settings page
+ * no longer offers a field to resolve a collision by hand.
+ */
+export function uniqueTopicTag(
+  topics: readonly Topic[],
+  index: number,
+  base: string,
+): string {
+  const taken = new Set(
+    topics.filter((_, position) => position !== index).map(({ tag }) => tag),
+  );
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 export function isValidLocalTime(value: string): boolean {

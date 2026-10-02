@@ -68,7 +68,7 @@ export function librarySetupNextStep(
   if (status.kind === "disconnected") {
     return {
       action: "choose-folder",
-      description: "Choose a folder of PDFs. Searching uses this library, not the daily report list.",
+      description: "Choose a folder of PDFs to automatically prepare a title-and-abstract search index.",
     };
   }
   const rootLabel = status.rootLabel;
@@ -79,8 +79,8 @@ export function librarySetupNextStep(
       rootLabel,
       remoteConsentPending: true,
       description: expired
-        ? `Selected: ${rootLabel}. The embedding endpoint changed, so building the index asks you to confirm what full text leaves this device.`
-        : `Selected: ${rootLabel}. Remote embedding sends full text off this device — building the index asks you to confirm first.`,
+        ? `Selected: ${rootLabel}. The embedding endpoint changed, so building the index asks you to confirm which titles and abstracts leave this device.`
+        : `Selected: ${rootLabel}. Remote embedding sends titles and abstracts off this device — building the index asks you to confirm first.`,
     };
   }
   return {
@@ -88,8 +88,8 @@ export function librarySetupNextStep(
     rootLabel,
     remoteConsentPending: false,
     description: embeddingMode === "remote"
-      ? `Connected: ${rootLabel}. Authorized for remote full-text embedding. Build the search index next.`
-      : `Selected: ${rootLabel}. Local embedding stays on this device. Build the search index to search these PDFs.`,
+      ? `Connected: ${rootLabel}. Authorized to embed titles and abstracts remotely.`
+      : `Selected: ${rootLabel}. Local embedding stays on this device.`,
   };
 }
 
@@ -134,6 +134,7 @@ export interface LibraryRowInput {
   };
   /** What the previous run left in the manifest. */
   lastRun?: { updatedAt: string; papers: number };
+  preparationError?: string;
 }
 
 export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresentation {
@@ -156,8 +157,8 @@ export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresen
     return {
       description: activity.cancelling
         ? `Stopping the index run for ${next.rootLabel} — it finishes the step it is on first.`
-        : `Indexing ${next.rootLabel} — ${activity.phase}. Nothing is saved until the run finishes, `
-          + "so cancelling discards it.",
+        : `Preparing ${next.rootLabel} — ${activity.phase}. Scan results may already be saved; `
+          + "cancelling stops the remaining work.",
       primary: { label: indexingLabel(activity), disabled: true },
       chooseFolder: { label: chooseFolderLabel, disabled: true },
       cancel: {
@@ -168,10 +169,12 @@ export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresen
     };
   }
 
-  const trace = input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
+  const trace = input.preparationError
+    ? ` ${input.preparationError}`
+    : input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
   return {
     description: `${next.description}${trace}`,
-    primary: { label: "Build index", disabled: false },
+    ...(!input.lastRun?.papers || input.preparationError ? { primary: { label: "Retry preparation", disabled: false } } : {}),
     chooseFolder: { label: chooseFolderLabel, disabled: false },
     ...(input.status.kind === "authorized"
       ? { revoke: { label: "Revoke", disabled: false } }
@@ -308,8 +311,9 @@ export function authorizeLibraryConnection(
 ): PersistedLibraryConnection {
   return {
     ...connection,
-    // Remote embedding processes full text, so its grants are full-text
-    // depth (ADR 0008); local-only grants stay at metadata and abstracts.
+    // Retain the legacy "full-text" scope token and authorization checks
+    // (ADR 0008); the actual embedding content is now titles and abstracts.
+    // Local-only grants stay at metadata and abstracts.
     processingDepth: scope.embeddingEndpoint ? "full-text" : LIBRARY_PROCESSING_DEPTH,
     authorization: {
       fingerprint: libraryAuthorizationFingerprint(connection, scope),
@@ -405,7 +409,7 @@ function displayChatEndpoint(baseUrl: string): string {
 }
 
 /**
- * The URL remote embedding actually posts full text to (`{baseUrl}/embeddings`,
+ * The URL remote embedding actually posts titles and abstracts to (`{baseUrl}/embeddings`,
  * see `createRemoteEmbeddingModel`). Disclosing the chat-completions URL here
  * would name a destination nothing is ever sent to.
  */

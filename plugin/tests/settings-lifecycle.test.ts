@@ -7,16 +7,21 @@ import {
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   Logger,
+  normalizeTopic,
   OperationRegistry,
+  parseDailyReportTopicDirections,
   RunHistoryStore,
   RunLock,
   SchedulerService,
   StateStore,
   type StorageAdapter,
 } from "@arxiv-daily/core";
+import * as obsidianHost from "../src/hosts/obsidian";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 import { SettingsChangeService } from "../src/settings/change-service";
+import { ObsidianHttpClient } from "../src/hosts/obsidian/http-client";
+import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 
 const pluginMainSource = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "../main.ts"),
@@ -92,6 +97,45 @@ describe("plugin directory resolution", () => {
 });
 
 describe("plugin settings reload lifecycle", () => {
+  it("uses the host-shared Vault lock for daily runs", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const acquireLock = vi.fn(async () => null);
+    Object.assign(plugin, { host: { storage: { acquireLock } } });
+    const work = vi.fn(async () => 42);
+    const lock = (plugin as any).runLock as RunLock;
+    expect(await lock.withLock("2026-09-28", work)).toBeUndefined();
+    expect(acquireLock).toHaveBeenCalledWith("daily-run");
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("does not clean temporary Markdown during onload while another host is running", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => [{ path: "arxiv-daily/daily/report.md.tmp", type: "file" as const }]),
+      remove: vi.fn(async () => {}),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters").mockReturnValue({ storage } as any);
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      app: {},
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      addSettingTab: () => { throw new Error("stop after startup cleanup"); },
+    });
+    try {
+      await expect(plugin.onload()).rejects.toThrow("stop after startup cleanup");
+      expect(storage.acquireLock).toHaveBeenCalledWith("daily-run");
+      expect(storage.list).not.toHaveBeenCalled();
+      expect(storage.remove).not.toHaveBeenCalled();
+    } finally {
+      plugin.onunload();
+      buildHost.mockRestore();
+    }
+  });
+
   it("routes base URL persistence through effective-endpoint cancellation", async () => {
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
     const settings = structuredClone(DEFAULT_SETTINGS);
@@ -265,6 +309,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let resolveModal!: (value: string) => void;
@@ -306,6 +351,7 @@ describe("plugin settings reload lifecycle", () => {
       name: "Language models",
       tag: "language-models",
       description: "Language model research",
+      directions: [{ id: "d1", text: "Language model research", origin: "migrated" }],
       detail: false,
     });
     let finishEnableSave!: () => void;
@@ -340,6 +386,41 @@ describe("plugin settings reload lifecycle", () => {
     expect(scheduler.start).toHaveBeenCalledTimes(1);
     expect(scheduler.stop).toHaveBeenCalledTimes(1);
     expect(scheduler.tickToday).not.toHaveBeenCalled();
+  });
+
+  it("returns from enabling with Run today while the run is still going", async () => {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.llm.apiKey = "configured";
+    settings.arxiv.topics.push({ directions: [{ id: "fixture-direction", text: "Language model research", origin: "manual" as const }],
+      id: "topic-1",
+      name: "Language models",
+      tag: "language-models",
+      description: "Language model research",
+      detail: false,
+    });
+    let finishRun!: () => void;
+    const run = new Promise<undefined>((resolve) => { finishRun = () => resolve(undefined); });
+    const scheduler = { start: vi.fn(), stop: vi.fn(), tickToday: vi.fn(() => run) };
+    Object.assign(plugin, {
+      settings,
+      scheduler,
+      progress: { setDisabled: vi.fn() },
+      stateStore: { setSkipped: vi.fn() },
+      logger: { notice: vi.fn(), error: vi.fn() },
+    });
+    vi.spyOn(plugin as any, "chooseScheduleEnableAction").mockResolvedValue("run");
+    plugin.settingsChanges = new SettingsChangeService({
+      settings,
+      persistSettings: vi.fn().mockResolvedValue(undefined),
+      setScheduleEnabled: (enabled) => (plugin as any).applyScheduleEnabledRuntime(enabled),
+    });
+
+    await expect(plugin.setScheduleEnabled(true)).resolves.toBe(true);
+    expect(scheduler.tickToday).toHaveBeenCalledTimes(1);
+    await expect(plugin.setScheduleEnabled(false)).resolves.toBe(true);
+    expect(settings.schedule.enabled).toBe(false);
+    finishRun();
   });
 
   it("does not stop a running scheduler when disabling persistence fails", async () => {
@@ -636,6 +717,93 @@ describe("plugin settings reload lifecycle", () => {
     );
   });
 
+  it("generates a result-first daily report through plugin composition without rewriting saved reports", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.arxiv.topics = [
+      normalizeTopic({ name: "Empty topic", tag: "empty", description: "Unmatched research", detail: false }),
+      normalizeTopic({ name: "Active topic", tag: "active", detail: false, directions: [
+        { id: "d1", text: "Galaxy observations", origin: "manual" },
+        { id: "d2", text: "Catalog comparisons", origin: "manual" },
+      ] }),
+      normalizeTopic({ name: "Limited topic", tag: "limited", description: "Other research", detail: false }),
+    ];
+    settings.output.maxDailyPapers = 1;
+    settings.output.summaryLanguage = "en";
+    settings.llm.baseUrl = "https://api.example.com/v1";
+    settings.llm.apiKey = "test-key";
+    const ids = ["2609.00001", "2609.00002"];
+    const recent = `<html><body><dl id="articles"><h3>Tue, 8 Sep 2026</h3>${ids.map((id) =>
+      `<dt><a title="Abstract">arXiv:${id}</a></dt><dd><div class="list-title">Title: Paper ${id}</div><div class="list-authors"><a>A. Author</a></div></dd>`,
+    ).join("")}</dl></body></html>`;
+    const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map((id) =>
+      `<entry><id>http://arxiv.org/abs/${id}v1</id><title>Paper ${id}</title><author><name>A. Author</name></author><summary>Galaxy observations.</summary><published>2026-09-08T00:00:00Z</published><updated>2026-09-08T00:00:00Z</updated><arxiv:primary_category term="astro-ph"/><category term="astro-ph"/></entry>`,
+    ).join("")}</feed>`;
+    const completions = [
+      { papers: [
+        { id: ids[0], category: "active", directions: ["active#1", "active#2"], relevanceScore: 95 },
+        { id: ids[1], category: "limited", directions: ["limited#1"], relevanceScore: 70 },
+      ] },
+      { id: ids[0], coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result", whyRelevant: "Research value", limitations: "Known limits" },
+    ];
+    // Keep the real plugin HTTP/DOM adapters and every pipeline stage; replace
+    // only Obsidian's external request boundary and vault storage.
+    const http = new ObsidianHttpClient(async (request) => {
+      const { url, method } = typeof request === "string" ? { url: request, method: "GET" } : request;
+      if (url.startsWith("https://arxiv.org/list/astro-ph/recent")) return { status: 200, text: recent };
+      if (url.startsWith("https://export.arxiv.org/api/query?")) return { status: 200, text: atom };
+      if (url === "https://arxiv.org/html/2609.00001") {
+        return { status: 200, text: '<html><body><div class="ltx_abstract">Galaxy observations.</div><h2>Results</h2><p>We observe a measured improvement.</p></body></html>' };
+      }
+      if (url === "https://api.example.com/v1/chat/completions" && method === "POST") {
+        const completion = completions.shift();
+        if (completion) return { status: 200, text: `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(completion) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n` };
+      }
+      return { status: 400, text: `Unexpected fixture request: ${url}` };
+    });
+    const oldPath = "arxiv-daily/daily/2026-09-07.md";
+    const oldMarkdown = "# Saved report\nKeep my annotations.\n";
+    const storage = memoryStorage({ [oldPath]: oldMarkdown });
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    Object.assign(plugin, {
+      settings, logger: new Logger("error"),
+      host: { storage, http, markupParser: new ObsidianMarkupParser() },
+      manifest: { id: "arxiv-daily", dir: ".obsidian/plugins/arxiv-daily" },
+      app: { vault: { configDir: ".obsidian" } },
+    });
+    const pipeline = (plugin as any).buildPipeline();
+
+    expect(await pipeline.runForDate("2026-09-08")).toMatchObject({ kind: "completed", papersWritten: 1 });
+    const markdown = await storage.readText("arxiv-daily/daily/2026-09-08.md");
+    expect(await pipeline.runForDate("2026-09-07")).toMatchObject({ kind: "completed" });
+    expect(await storage.readText(oldPath)).toBe(oldMarkdown);
+    expect((await plugin.buildPaperIndex().get(ids[0]!))?.summary).toEqual({
+      sourceSections: expect.stringContaining("Results"),
+      coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result",
+      whyRelevant: "Research value", limitations: "Known limits",
+    });
+    expect(parseDailyReportTopicDirections(markdown, "2026-09-08")).toEqual({
+      kind: "valid", occurrences: [{ arxivId: "2609.00001", hits: [
+        { tag: "active", id: "d1", text: "Galaxy observations" },
+        { tag: "active", id: "d2", text: "Catalog comparisons" },
+      ] }],
+    });
+    expect.soft(markdown.match(/^## .+$/gm)).toEqual(["## Active topic", "## Other followed topics"]);
+    const otherTopics = markdown.split("## Other followed topics")[1] ?? "";
+    expect.soft(otherTopics).toMatch(/^[-*] .*Empty topic.*(?:No relevant|No matching|no match).*$/m);
+    expect.soft(otherTopics).toMatch(/^[-*] .*Limited topic.*1.*omitted.*daily.*limit.*$/m);
+    expect.soft(markdown).toContain("> [!info]- Matched directions and sources");
+    expect.soft(markdown).toContain("> - Galaxy observations\n> - Catalog comparisons");
+    expect.soft(markdown).toContain("> [!abstract]- Background, methods and limits");
+    expect.soft(markdown).toContain("\n- **Core results**: Observed result\n");
+    expect.soft(markdown.match(/^- \*\*(?:Research problem|Method design|Core results|Research value|Scope and limits)\*\*:/gm))
+      .toEqual(["- **Core results**:"]);
+    const background = markdown.match(/^> \[!abstract\]-[^\n]*\n(?:>[^\n]*(?:\n|$))*/m)?.[0] ?? "";
+    for (const line of [
+      "> - **Research problem**: Research problem", "> - **Method design**: Measured method",
+      "> - **Research value**: Research value", "> - **Scope and limits**: Known limits",
+    ]) expect.soft(background).toContain(line);
+  }, 15_000);
+
   it("logs persisted sanitation warnings after logger initialization", () => {
     const loggerInit = pluginMainSource.indexOf("this.logger = new Logger(");
     const warningLoop = pluginMainSource.indexOf("for (const warning of settingsWarnings)");
@@ -862,6 +1030,42 @@ describe("plugin settings reload lifecycle", () => {
 
     expect(loaded.settings.schedule.runAtLocal).toBe("24:00");
     expect(loaded.settings.schedule.runUntilLocal).toBe("legacy-value");
+  });
+
+  it("marks the setup guide complete on load for upgrading users already past every milestone", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        llm: { apiKey: "sk-test", provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-v4-pro" },
+        arxiv: {
+          category: "astro-ph",
+          categories: ["astro-ph"],
+          topics: [{ directions: [{ id: "fixture-direction", text: "Neutron stars and black holes", origin: "manual" as const }],
+            id: "topic",
+            name: "Compact objects",
+            tag: "compact-objects",
+            description: "Neutron stars and black holes",
+            detail: false,
+          }],
+          timezone: "UTC",
+        },
+        schedule: { enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00", tickIntervalMin: 20 },
+      },
+      runState: {
+        "2026-07-15": { status: "completed", lastAttempt: 1, attempts: 1 },
+      },
+    });
+
+    expect(loaded.settings.onboarding.guideCompleted).toBe(true);
+  });
+
+  it("leaves the setup guide marker unset for users still mid-setup", () => {
+    const loaded = settingsAndStateFromPersistedData({
+      settings: {
+        arxiv: { category: "astro-ph", categories: ["astro-ph"], topics: [], timezone: "UTC" },
+      },
+    });
+
+    expect(loaded.settings.onboarding.guideCompleted).toBe(false);
   });
 
   it("keeps plugin, scheduler, and history on the old store when reload is rejected during an active pipeline", async () => {

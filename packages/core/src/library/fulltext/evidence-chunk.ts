@@ -30,9 +30,26 @@ export interface EvidenceDerivation {
   readonly embeddingInputVersion: number;
 }
 
+/**
+ * Derivation versions of the current indexing rules. Both take part in the
+ * reuse decision, so raising either rebuilds every stored paper (ADR 0013 §3
+ * chooses rebuilding over migration).
+ *
+ * `chunkerVersion` 3 — chunks come from one assembled title-and-abstract block
+ * with the short-paragraph noise filter off, replacing per-page blocks fed
+ * through the full-text path (2 was structured section-aware chunking).
+ *
+ * `embeddingInputVersion` 2 — the embedded text is a paper's title and
+ * abstract rather than its full text.
+ *
+ * Both are raised explicitly even though the extractor provenance change
+ * already forces a rebuild on its own: a rebuild that happens only as a side
+ * effect stops happening the moment someone restores that provenance, and
+ * nothing would report the loss.
+ */
 export const CHUNK_DERIVATION_VERSIONS = {
-  chunkerVersion: 2,
-  embeddingInputVersion: 1,
+  chunkerVersion: 3,
+  embeddingInputVersion: 2,
 } as const;
 
 export interface EvidenceChunk {

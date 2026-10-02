@@ -4,9 +4,11 @@ import {
   sampleDailyDigest,
 } from "../../src/delivery/deliver-email";
 import {
+  AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
   deliveryStatePath,
   loadDeliveryState,
   shouldSendEmail,
+  supportsAutomaticEmailDelivery,
 } from "../../src/delivery/delivery-state";
 import { RESEND_API_URL, sendViaResend } from "../../src/delivery/resend";
 import {
@@ -330,6 +332,41 @@ describe("deliverDailyEmailIfEnabled", () => {
     });
     expect(second.kind).toBe("skipped");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports whether the host can send automatic email", () => {
+    expect(supportsAutomaticEmailDelivery(memoryStorage())).toBe(true);
+    const unsupported = memoryStorage();
+    (unsupported as { createTextExclusive?: unknown }).createTextExclusive = undefined;
+    expect(supportsAutomaticEmailDelivery(unsupported)).toBe(false);
+  });
+
+  it("explains in the log when automatic email is unsupported on this system", async () => {
+    const storage = memoryStorage();
+    (storage as { createTextExclusive?: unknown }).createTextExclusive = undefined;
+    const request = vi.fn();
+    const error = vi.fn();
+
+    const result = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      email: {
+        enabled: true,
+        mode: "self" as const,
+        to: "you@example.com",
+        fromEmail: "",
+        apiKey: "re_key",
+      },
+      logger: { error, info: vi.fn(), warn: vi.fn(), debug: vi.fn() } as never,
+      sleep: async () => {},
+    });
+
+    expect(result).toMatchObject({ kind: "failed", reason: "delivery_storage_unsupported" });
+    expect(request).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      `email: ${digest.date}: ${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE}`,
+    );
   });
 
   it("force test-send does not mark the day delivered for auto-send skip", async () => {

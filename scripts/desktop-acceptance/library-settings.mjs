@@ -45,7 +45,7 @@ export const DISCLOSURE_MODAL_CLASS = "arxiv-daily-library-authorization-modal";
  * The dialog's two answers, located the same way and for the same reason.
  *
  * Clicking them by label was the same mistake one level down: the confirm
- * label follows the processing depth, so rewording it broke the scenario at
+ * label describes what is sent, so rewording it broke the scenario at
  * "the modal has no Authorize button", which reads like the dialog lost its
  * button. Marked buttons make a reworded label fail on `judgeDisclosureButtons`
  * instead. Guarded on the plugin side by `plugin/tests/library-modal.test.ts`.
@@ -54,17 +54,12 @@ export const DISCLOSURE_CONFIRM_BUTTON_CLASS = "arxiv-daily-library-authorizatio
 export const DISCLOSURE_CANCEL_BUTTON_CLASS = "arxiv-daily-library-authorization-cancel";
 
 /**
- * What the heading has to read at each processing depth. Two entries because
- * the depth is not fixed: a grant that covers full text says so, and one that
- * covers metadata and abstracts must not claim otherwise.
- *
- * Only `full-text` is reachable from this scenario — the settings page refuses
- * to disclose at all unless there is an embedding endpoint to name, so every
- * dialog it can open is a full-text one. The metadata heading is asserted in
- * `plugin/tests/library-modal.test.ts`, which can call the dialog directly.
+ * Both persisted processing-depth keys now describe titles and abstracts.
+ * The legacy `full-text` key still identifies the embedding grant; its name
+ * must not make the disclosure claim that the paper body is sent.
  */
 export const DISCLOSURE_TITLES = {
-  "full-text": "Send full text off this device?",
+  "full-text": "Send titles and abstracts off this device?",
   "metadata-and-abstracts": "Send titles and abstracts off this device?",
 };
 
@@ -73,14 +68,11 @@ export const DISCLOSURE_TITLES = {
  * answered in the heading's own words, rather than "Authorize", which answers a
  * question the dialog never asked.
  *
- * Keyed by depth alongside `DISCLOSURE_TITLES` because both come from one
- * branch on the depth in the plugin (`libraryAuthorizationCopy`); a third depth
+ * Keyed by the persisted depth alongside `DISCLOSURE_TITLES`; a third depth
  * has to gain an entry in both, and a missing entry fails loudly below.
- * `metadata-and-abstracts` is unreachable from this scenario for the reason
- * given above, and is asserted in `plugin/tests/library-modal.test.ts`.
  */
 export const DISCLOSURE_CONFIRM_LABELS = {
-  "full-text": "Send full text",
+  "full-text": "Send titles and abstracts",
   "metadata-and-abstracts": "Send titles and abstracts",
 };
 
@@ -215,7 +207,17 @@ export const LIBRARY_ROW_EXPRESSION = inRenderer(`
   if (!group) return JSON.stringify({ error: "the settings page has no Personal library section" });
   const row = namedRow("Library");
   if (!row) return JSON.stringify({ error: "the Personal library section has no Library row" });
+  const plugin = ${PLUGIN};
+  const index = plugin.libraryIndexStatus.snapshot();
+  const reviewRows = allRows().filter((item) => rowName(item) === "Topics from library");
   return JSON.stringify({
+    selected: plugin.getLibraryConnectionStatus().kind !== "disconnected",
+    searchablePapers: index.lastRun?.papers ?? 0,
+    preparing: Boolean(index.activity),
+    preparationError: index.preparationError ?? null,
+    legacySuggestionRows: allRows().filter((item) => rowName(item) === "Topics from your library").length,
+    reviewButtons: reviewRows.flatMap((item) => Array.from(item.querySelectorAll(".setting-item-control button")))
+      .map((button) => ({ text: (button.textContent ?? "").trim(), disabled: button.disabled === true })),
     rowButtons: buttonTexts(row),
     /*
      * The same buttons with the two facts a label cannot carry: whether the
@@ -331,7 +333,7 @@ export function beginIndexRunExpression({ phase, completed, total }) {
     const plugin = ${PLUGIN};
     const operation = plugin.operations.begin(
       "personal-library-fulltext-index",
-      "Personal library full-text index",
+      "Personal library title-and-abstract index",
       "acceptance-index-probe",
     );
     window[${asCode(INDEX_PROBE_GLOBAL)}] = operation;
@@ -510,6 +512,26 @@ export function judgeGroupOrder(headings, expected = EXPECTED_GROUP_ORDER) {
 export function judgeLibraryButtons(snapshot, { expected } = {}) {
   const { rowButtons, groupButtons } = snapshot;
   const problems = [];
+  if (rowButtons.includes("Build index")) problems.push("the retired Build index button is still present");
+  if (snapshot.legacySuggestionRows > 0) problems.push("a duplicate Topics from your library shortcut is still present");
+  if (snapshot.selected !== undefined) {
+    const review = snapshot.reviewButtons ?? [];
+    const needsPreparation = Boolean(snapshot.preparationError) || !(snapshot.searchablePapers > 0);
+    if (snapshot.selected) {
+      if (review.length !== 1 || review[0]?.text !== "Review suggestions") {
+        problems.push("the selected library must have exactly one Review suggestions action");
+      } else if (review[0].disabled !== (snapshot.preparing || needsPreparation)) {
+        problems.push("Review suggestions availability does not match preparation and searchable papers");
+      }
+      if (snapshot.preparing) {
+        if (!rowButtons.some((text) => text === "Cancel" || text === "Cancelling…")) problems.push("preparation has no Cancel action");
+      } else if (rowButtons.includes("Retry preparation") !== needsPreparation) {
+        problems.push("Retry preparation must be offered when preparation failed or no searchable index is available");
+      }
+    } else if (review.length !== 0) {
+      problems.push("review is shown before a library is selected");
+    }
+  }
   if (rowButtons.length > 3) {
     problems.push(`the row shows ${rowButtons.length} buttons (${rowButtons.join(", ")}), more than three`);
   }
@@ -657,7 +679,7 @@ export function judgeDescriptionReadable(description, {
  */
 export function judgeLibraryWrappedGeometry(geometry, {
   tolerance = ALIGNMENT_TOLERANCE_PX,
-  mainCallToAction = "Build index",
+  mainCallToAction = geometry.buttons.some(({ text }) => text === "Retry preparation") ? "Retry preparation" : "Change folder",
   ...readability
 } = {}) {
   const { buttons, control, row, info, description } = geometry;
@@ -922,8 +944,8 @@ export function judgeDisclosureTitle(modal, depth, titles = DISCLOSURE_TITLES) {
  *
  * Separate from finding them, exactly as the heading is separate from finding
  * the dialog. The buttons are located by their marks, so a reworded confirm
- * label reaches this judge and fails as `reads "Authorize", expected "Send full
- * text"` rather than as "the modal has no Authorize button" — the second reads
+ * label reaches this judge and fails as `reads "Authorize", expected "Send titles
+ * and abstracts"` rather than as "the modal has no Authorize button" — the second reads
  * like the dialog lost its affirmative, which is a lie about what happened.
  *
  * A missing mark is still reported, and says so in those words, because that is
@@ -1026,7 +1048,7 @@ export async function librarySettingsScenarios({
   if (local.error) {
     results.push(fail("library-row-buttons-local", local.error));
   } else {
-    const verdict = judgeLibraryButtons(local, { expected: ["Change folder", "Build index"] });
+    const verdict = judgeLibraryButtons(local, { expected: local.searchablePapers > 0 && !local.preparationError ? ["Change folder"] : ["Change folder", "Retry preparation"] });
     results.push((verdict.ok ? pass : fail)("library-row-buttons-local", verdict.reason));
   }
   await shot("personal-library-section-local-embedding", { rect: await sectionRect() });
@@ -1194,7 +1216,7 @@ export async function librarySettingsScenarios({
     if (!trace.ok) problems.push(trace.reason);
     // The row also has to come back: a run that ends leaving its own controls
     // behind would be worse than never showing them.
-    const backToIdle = judgeLibraryButtons(afterRun, { expected: ["Change folder", "Build index"] });
+    const backToIdle = judgeLibraryButtons(afterRun, { expected: ["Change folder"] });
     if (!backToIdle.ok) problems.push(backToIdle.reason);
     results.push(
       problems.length === 0
@@ -1220,13 +1242,13 @@ export async function librarySettingsScenarios({
         "remote-switch-asks-in-place",
         `switching Embedding to remote opened no .${DISCLOSURE_MODAL_CLASS} dialog`,
       ));
-    } else if (!/full text/i.test(modal.text)) {
+    } else if (!/titles and abstracts/i.test(modal.text)) {
       results.push(fail(
         "remote-switch-asks-in-place",
-        `the dialog opened but never mentions full text: ${modal.text.slice(0, 200)}`,
+        `the dialog opened but never mentions titles and abstracts: ${modal.text.slice(0, 200)}`,
       ));
     } else {
-      await shot("remote-full-text-disclosure-modal", { rect: modal.rect });
+      await shot("remote-title-and-abstract-disclosure-modal", { rect: modal.rect });
       results.push(pass(
         "remote-switch-asks-in-place",
         `the dropdown alone opened the disclosure offering ${modal.buttons.join(" / ")}`,
@@ -1235,8 +1257,8 @@ export async function librarySettingsScenarios({
 
     // 4b — the heading, judged apart from the lookup that found the dialog.
     //
-    // Remote embedding is the only depth this page can disclose at, so this is
-    // the full-text heading; the metadata one is asserted in the plugin units.
+    // Remote embedding retains its legacy depth key, but both current
+    // disclosures must describe the actual title-and-abstract payload.
     if (!modal.present) {
       results.push(fail(
         "remote-disclosure-title",
@@ -1250,8 +1272,8 @@ export async function librarySettingsScenarios({
     // 4c — the two answers, judged the same way and apart from the marks the
     // clicks below use to find them. The confirm button has to answer the
     // heading in the heading's own words; "Authorize" would be a different
-    // concept the reader has to translate. Only the full-text pair is reachable
-    // here, for the same reason as the heading.
+    // concept the reader has to translate. The legacy full-text key still
+    // identifies the remote embedding grant in this scenario.
     if (!modal.present) {
       results.push(fail(
         "remote-disclosure-buttons",
@@ -1303,13 +1325,13 @@ export async function librarySettingsScenarios({
   if (remote.error) {
     results.push(fail("library-row-buttons-remote", remote.error));
   } else {
-    const verdict = judgeLibraryButtons(remote, { expected: ["Change folder", "Build index"] });
+    const verdict = judgeLibraryButtons(remote, { expected: ["Change folder", "Retry preparation"] });
     results.push((verdict.ok ? pass : fail)("library-row-buttons-remote", verdict.reason));
   }
   await shot("personal-library-section-remote-embedding", { rect: await sectionRect() });
 
   const beforeIndex = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);
-  const clicked = await readJson(evaluate, clickLibraryRowButtonExpression("Build index"));
+  const clicked = await readJson(evaluate, clickLibraryRowButtonExpression("Retry preparation"));
   if (clicked.error) {
     results.push(fail("build-index-asks-before-remote-indexing", clicked.error));
   } else {
@@ -1317,7 +1339,7 @@ export async function librarySettingsScenarios({
     if (!modal.present) {
       results.push(fail(
         "build-index-asks-before-remote-indexing",
-        `Build index started without opening the .${DISCLOSURE_MODAL_CLASS} dialog`,
+        `Retry preparation started without opening the .${DISCLOSURE_MODAL_CLASS} dialog`,
       ));
     } else {
       await evaluate(clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS));
@@ -1326,7 +1348,7 @@ export async function librarySettingsScenarios({
       const afterCancel = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);
       const unchanged = judgeUnchanged(beforeIndex, afterCancel);
       const indexing = afterCancel.operations.filter((kind) => kind.includes("fulltext"));
-      const started = afterCancel.notices.filter((text) => /indexing personal library full text/i.test(text));
+      const started = afterCancel.notices.filter((text) => /indexing personal library (?:titles and abstracts|full text)/i.test(text));
       if (!unchanged.ok) {
         results.push(fail("build-index-asks-before-remote-indexing", unchanged.reason));
       } else if (indexing.length > 0) {
@@ -1342,7 +1364,7 @@ export async function librarySettingsScenarios({
       } else {
         results.push(pass(
           "build-index-asks-before-remote-indexing",
-          `Build index asked first; cancelling started no indexing operation and left embedding.mode `
+          `Retry preparation asked first; cancelling started no indexing operation and left embedding.mode `
             + `${afterCancel.embedding.mode} with the connection ${afterCancel.status.kind}`,
         ));
       }
@@ -1353,7 +1375,7 @@ export async function librarySettingsScenarios({
   //
   // Reached the way a person reaches it: the mode goes back to local, the
   // dropdown asks for remote, and this time the disclosure is accepted. Going
-  // through Build index would grant too, but it would also start indexing.
+  // through Retry preparation would grant too, but it would also start indexing.
   await evaluate(
     `${PLUGIN}.settingsChanges.changeValue("embedding.mode", "local").then(() => "changed")`,
   );

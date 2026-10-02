@@ -207,3 +207,66 @@ describe("ObsidianPdfTextExtractor", () => {
     expect(result.metadataTitle)
       .toBe("Redshift Assessment Infrastructure Layers (RAIL): Rubin-era photometric redshift stress-testing and at-scale production");
   });
+
+describe("ObsidianPdfTextExtractor page bound", () => {
+  /** A document of `numPages` pages whose `getPage` calls are observable. */
+  function pdfJsWithPages(numPages: number): {
+    lib: PdfJsLib;
+    getPage: ReturnType<typeof vi.fn>;
+  } {
+    const getPage = vi.fn(async (pageNumber: number) => ({
+      getTextContent: vi.fn(async () => ({
+        items: [{ str: `Body of page ${pageNumber}`, hasEOL: false }],
+      })),
+      cleanup: vi.fn(),
+    }));
+    return {
+      getPage,
+      lib: {
+        getDocument: vi.fn(() => ({
+          promise: Promise.resolve({
+            numPages,
+            getPage,
+            getMetadata: vi.fn(async () => ({ info: {} })),
+          }),
+          destroy: vi.fn(async () => {}),
+        })),
+      } as unknown as PdfJsLib,
+    };
+  }
+
+  it("stops opening pages once maxPages is reached", async () => {
+    const { lib, getPage } = pdfJsWithPages(10);
+
+    const result = await new ObsidianPdfTextExtractor(lib)
+      .extractPdfText(new Uint8Array([1]), { maxPages: 2 });
+
+    expect(result.pages).toHaveLength(2);
+    // The point of the bound is unopened pages, not a truncated return value:
+    // slicing the result would cost exactly as much parsing as before.
+    expect(getPage).toHaveBeenCalledTimes(2);
+    expect(getPage).toHaveBeenCalledWith(1);
+    expect(getPage).toHaveBeenCalledWith(2);
+    expect(getPage).not.toHaveBeenCalledWith(3);
+  });
+
+  it("reads the whole document when maxPages is absent", async () => {
+    const { lib, getPage } = pdfJsWithPages(4);
+
+    const result = await new ObsidianPdfTextExtractor(lib)
+      .extractPdfText(new Uint8Array([1]));
+
+    expect(result.pages).toHaveLength(4);
+    expect(getPage).toHaveBeenCalledTimes(4);
+  });
+
+  it("reads the whole document when maxPages exceeds its length", async () => {
+    const { lib, getPage } = pdfJsWithPages(3);
+
+    const result = await new ObsidianPdfTextExtractor(lib)
+      .extractPdfText(new Uint8Array([1]), { maxPages: 50 });
+
+    expect(result.pages).toHaveLength(3);
+    expect(getPage).toHaveBeenCalledTimes(3);
+  });
+});

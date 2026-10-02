@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   verify:
+    name: Root workspace verification
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

@@ -12,9 +12,16 @@ import type {
   StorageAdapter,
   StorageEntry,
   StorageNamespaceGuard,
+  StorageLockOptions,
 } from "@arxiv-daily/core";
+import { NodeFileLock } from "./file-lock";
+import { NativePrivateStorage, getNativeStorageBinding, type NativeStorageBinding } from "./native-private-storage";
 
 export interface NodeStorageAdapterOptions {
+  /** Test-only selection of the real native backend. Production uses bundled assets. */
+  nativeBinding?: NativeStorageBinding;
+  /** Override the machine-local coordination directory (primarily for tests). */
+  lockRoot?: string;
   /** Test-only deterministic seam after the final parent fd is opened. */
   afterFinalParentOpened?: () => Promise<void> | void;
   /** Test-only deterministic seam after the target is created but before write. */
@@ -24,6 +31,7 @@ export interface NodeStorageAdapterOptions {
 }
 
 export class NodeStorageAdapter implements StorageAdapter {
+  private readonly nativeStorage?: NativePrivateStorage;
   private rootDir: string;
   readonly createTextExclusive?: (
     storagePath: string,
@@ -35,10 +43,18 @@ export class NodeStorageAdapter implements StorageAdapter {
     private readonly options: NodeStorageAdapterOptions = {},
   ) {
     this.rootDir = path.resolve(rootDir);
-    if (supportsDescriptorAnchoredCreate()) {
+    const nativeBinding = options.nativeBinding ?? getNativeStorageBinding();
+    if (nativeBinding) {
+      this.nativeStorage = new NativePrivateStorage(this.rootDir, nativeBinding, options);
+      this.createTextExclusive = (storagePath, content) => this.nativeStorage!.createTextExclusive(storagePath, content);
+    } else if (supportsDescriptorAnchoredCreate()) {
       this.createTextExclusive = (storagePath, content) =>
         this.createTextExclusiveLinux(storagePath, content);
     }
+  }
+
+  acquireLock(key: string, options?: StorageLockOptions) {
+    return new NodeFileLock(this.rootDir, this.options).acquire(key, options);
   }
 
   normalizePath(input: string): string {
@@ -68,6 +84,9 @@ export class NodeStorageAdapter implements StorageAdapter {
     content: string,
     mode?: number,
   ): Promise<void> {
+    if (mode !== undefined && this.nativeStorage) {
+      return this.nativeStorage.writeTextAtomic(storagePath, content, mode);
+    }
     const target = this.toFsPath(storagePath);
     const suffix = crypto.randomUUID().replace(/-/g, "");
     const tmp = this.toFsPath(`${storagePath}.tmp-${suffix}`);
@@ -91,6 +110,7 @@ export class NodeStorageAdapter implements StorageAdapter {
     storagePath: string,
     mode: number,
   ): Promise<void> {
+    if (this.nativeStorage) return this.nativeStorage.recoverTextAtomic(storagePath, mode);
     if (!supportsDescriptorAnchoredCreate() || mode !== 0o600) {
       throw new Error("private descriptor-anchored recovery is unavailable");
     }
@@ -179,6 +199,7 @@ export class NodeStorageAdapter implements StorageAdapter {
   }
 
   async guardClaimNamespace(claimPath: string): Promise<StorageNamespaceGuard> {
+    if (this.nativeStorage) return this.nativeStorage.guardClaimNamespace(claimPath);
     if (!supportsDescriptorAnchoredCreate()) {
       throw new Error("descriptor-backed claim namespace guard is unavailable");
     }

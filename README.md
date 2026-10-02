@@ -9,7 +9,7 @@ Filter new arXiv papers by your research topics and write Markdown daily reports
 ## What it does
 
 - **Filters the flood** — listings down to papers relevant to *your* topics
-- **Writes a daily report** — one Markdown file per day, grouped by topic, with a short structured summary per paper
+- **Writes a daily report** — up to 20 papers per day by default, ranked by relevance and grouped by topic, with a short structured summary per paper; adjust **Daily paper limit** in settings
 - **Can add paper notes** — longer per-paper notes when you want more depth (automatic or by arXiv ID)
 - **Helps you review** — Dashboard with calendar, search, topics, and stars
 - **Runs on a schedule** — in Obsidian while the app is open, or via CLI on a machine that stays online
@@ -84,7 +84,7 @@ The plugin can connect one local paper-library folder, including a folder outsid
 - **Inventory preview stays local** and shows which PDFs are eligible or ignored; it does not require model-processing authorization.
 - **Model processing is separately authorized** after showing the selected folder, eligible file types, processing depth, and effective model endpoint.
 - Changing the folder, endpoint, eligible file types, or processing depth invalidates authorization. You can also revoke it at any time.
-- The current preview does not change daily filtering, reports, paper notes, or email delivery.
+- The library can propose a few broad topics and directions. Accept your selected topics and directions into settings to use them for daily filtering.
 
 ---
 

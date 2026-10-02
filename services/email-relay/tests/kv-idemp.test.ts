@@ -509,6 +509,55 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("request JSON object boundary", () => {
+  const invalidBodies = ["null", "[]", '"text"', "42", "true"];
+  for (const route of ["/v1/verify/start", "/v1/deliver", "/internal/delivery-v2/cutover"]) {
+    it.each(invalidBodies)(`${route} rejects %s before side effects`, async (body) => {
+      const { kv, env } = await authenticatedEnv({ stageCutover: false });
+      env.DELIVERY_V2_CUTOVER_TOKEN = "operator-token";
+      const before = Array.from(kv._map);
+      const provider = vi.fn();
+      vi.stubGlobal("fetch", provider);
+      const gate = vi.spyOn(env.DELIVER_GATE!, "get");
+      const res = await worker.fetch(new Request(`https://example.com${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${route.includes("cutover") ? "operator-token" : "device-token"}`,
+          "Idempotency-Key": TEST_KEY_A,
+        },
+        body,
+      }), env);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toHaveProperty("error");
+      expect(provider).not.toHaveBeenCalled();
+      expect(gate).not.toHaveBeenCalled();
+      expect(Array.from(kv._map)).toEqual(before);
+    });
+  }
+
+  it.each(invalidBodies)("DeliverGate rejects direct non-object body %s", async (body) => {
+    const durable = durableState();
+    const gate = new DeliverGate(durable.state, envWith(memoryKv()));
+    const provider = vi.fn();
+    vi.stubGlobal("fetch", provider);
+    const res = await gate.fetch(new Request("https://deliver-gate/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Device-Identity": "a".repeat(64),
+        "X-Recipient-Identity": "b".repeat(64),
+        "X-Device-Created-At": "2026-09-28T00:00:00.000Z",
+        "Idempotency-Key": TEST_KEY_A,
+      },
+      body,
+    }));
+    expect(res.status).toBe(400);
+    expect(durable.records.size).toBe(0);
+    expect(provider).not.toHaveBeenCalled();
+  });
+});
+
 describe("legacy automatic evidence scanner", () => {
   it("recognizes both production automatic key generations across pages and ignores supported tests", async () => {
     const kv = memoryKv();

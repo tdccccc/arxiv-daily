@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  ButtonComponent,
   DropdownComponent,
   Setting,
   TextComponent,
@@ -101,13 +102,31 @@ function makeLegacyApiKeyTab(
     logger: { error: vi.fn() },
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
-    getLibraryConnectionStatus: () => ({ kind: "disconnected" }),
+    getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
+    automaticEmailSupported: () => true,
+    openPersonalLibraryDirectionReview: vi.fn(),
+    refreshLibraryIndexTrace: vi.fn(async () => undefined),
+    getPersonalLibraryInterestProfile: vi.fn().mockReturnValue(null),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);
   vi.spyOn(tab, "refreshSetupGuide").mockImplementation(() => undefined);
   return { tab, settings, refreshSensitiveValues, installOutputStores };
 }
+
+it("offers only one library suggestion entry in legacy settings", async () => {
+  const { tab } = makeLegacyApiKeyTab(async () => undefined);
+  tab.plugin.getLibraryConnectionStatus = () => ({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+  tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+  tab.plugin.openPersonalLibraryDirectionReview = vi.fn();
+  tab.display();
+  const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review suggestions");
+  expect(entry).toBeDefined();
+  expect(Array.from(tab.containerEl.querySelectorAll("button")).filter(({ textContent }) => /Review suggestions|Use my library|Review directions/.test(textContent ?? ""))).toHaveLength(1);
+  expect(tab.containerEl.textContent).not.toContain("Topics from your library");
+  entry!.click();
+  await vi.waitFor(() => expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+});
 
 function renderLegacyApiKey(tab: ArxivDailySettingTab) {
   const container = document.createElement("div");
@@ -138,6 +157,51 @@ function componentOf<T>(setting: Setting | undefined, ctor: new (...args: never[
   if (!component) throw new Error(`Missing ${ctor.name} component`);
   return component as T;
 }
+
+describe("legacy daily paper limit", () => {
+  it("shows 20 and persists a whole-number edit as a number", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(persistSettings);
+    const row = renderLegacySettings(tab).get("Daily paper limit");
+    const input = row?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    expect(input!.value).toBe("20");
+    expect(input!.min).toBe("1");
+    expect(input!.step).toBe("1");
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.output.maxDailyPapers).toBe(35));
+    expect(persistSettings).toHaveBeenCalledWith(expect.objectContaining({
+      output: expect.objectContaining({ maxDailyPapers: 35 }),
+    }));
+    expect(installOutputStores).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "2.5", ""])("rejects the invalid draft %j without persistence", async (draft) => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = draft;
+    input!.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(input!.validationMessage).toContain("positive whole number");
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+
+  it("restores the current limit when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
+    expect(input).toBeDefined();
+    input!.value = "35";
+    input!.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(input!.value).toBe("20"));
+    expect(persistSettings).toHaveBeenCalledOnce();
+    expect(settings.output.maxDailyPapers).toBe(20);
+  });
+});
 
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
@@ -192,8 +256,8 @@ describe("legacy section order", () => {
       .filter((setting) => setting.settingEl.hasAttribute("data-arxiv-daily-section"))
       .map((setting) => setting.nameEl.textContent ?? "");
     expect(headings).toEqual([
-      "AI model",
-      "arXiv",
+      "LLM",
+      "arXiv categories",
       "Research topics",
       "Output & schedule",
       "Personal library",
@@ -204,6 +268,118 @@ describe("legacy section order", () => {
     const scheduleIndex = headings.indexOf("Output & schedule");
     expect(headings[scheduleIndex + 1]).toBe("Personal library");
     expect(headings[scheduleIndex + 2]).toBe("Email delivery");
+  });
+});
+
+describe("legacy personal library guide box", () => {
+  it("shows the intro box while no library is connected", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    renderLegacySettings(tab);
+    const boxes = tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide");
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]?.textContent).toContain("Choose a folder of PDFs");
+  });
+
+  it("keeps the intro box concise but complete, and honest about the one-time model download", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const content = tab.libraryGuideContent();
+    expect(content.lines.length).toBeLessThanOrEqual(4);
+    const text = content.lines.join(" ");
+    expect(text).toMatch(/optional/i);
+    expect(text).toContain("daily reports work the same without a library");
+    expect(text).toContain("Choose a folder of PDFs");
+    expect(text).toContain("automatically");
+    expect(text).toContain("130 MB");
+    expect(text).toMatch(/model downloads once/);
+    expect(text).toMatch(/runs locally/);
+    expect(text).toContain("Review suggestions");
+    expect(text).toContain("steer daily reports");
+    expect(text).toContain("Remote embedding and model processing always ask first");
+    expect(text).not.toContain("bundled");
+    expect(content.lines.filter((line) => /^\d\./.test(line))).toHaveLength(2);
+    const directionsStep = content.lines[2] ?? "";
+    expect(directionsStep).toContain("Review suggestions (button below)");
+    expect(directionsStep).not.toContain("command palette");
+
+    const indexStep = content.lines[3] ?? "";
+    expect(indexStep).toContain("Retry preparation");
+    expect(text).toContain("arXiv");
+    expect(indexStep).not.toContain("button above");
+  });
+
+  it("keeps showing the intro box once a folder is chosen (always visible, like the email guide)", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    renderLegacySettings(tab);
+    expect(tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
+  });
+
+  it("keeps showing the intro box once authorized (always visible, like the email guide)", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    renderLegacySettings(tab);
+    expect(tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide")).toHaveLength(1);
+  });
+});
+
+describe("legacy personal library directions row", () => {
+  it("is hidden while no library folder is chosen", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
+    const rows = renderLegacySettings(tab);
+    expect(rows.has("Topics from library")).toBe(false);
+  });
+
+  it("shows below Library once a folder is chosen", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorization-required",
+      rootLabel: "papers",
+    });
+    renderLegacySettings(tab);
+    const names = Setting.instances.map((setting) => setting.nameEl.textContent ?? "");
+    const libraryIndex = names.indexOf("Library");
+    const directionsIndex = names.indexOf("Topics from library");
+    expect(libraryIndex).toBeGreaterThanOrEqual(0);
+    expect(directionsIndex).toBe(libraryIndex + 1);
+    const row = Setting.instances.find((setting) => setting.nameEl.textContent === "Topics from library")!;
+    expect(row.controlEl.querySelector("button")?.disabled).toBe(true);
+    expect(row.descEl.textContent).toMatch(/prepar/i);
+  });
+
+  it("opens the direction review modal when its button is clicked", async () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
+      kind: "authorized",
+      rootLabel: "papers",
+      grantedAt: new Date().toISOString(),
+    });
+    tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
+    const rows = renderLegacySettings(tab);
+    const button = componentOf(rows.get("Topics from library"), ButtonComponent as never) as ButtonComponent;
+    button.buttonEl.click();
+    await vi.waitFor(() =>
+      expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledWith({ generateIfMissing: true }));
+  });
+
+  it("disables review during preparation even with an older usable index", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
+    tab.plugin.libraryIndexStatus.beginRun("preparing", "scanning");
+    const row = renderLegacySettings(tab).get("Topics from library")!;
+    expect(row.controlEl.querySelector("button")?.disabled).toBe(true);
+    tab.plugin.libraryIndexStatus.endRun();
+    const restored = renderLegacySettings(tab).get("Topics from library")!;
+    expect(restored.controlEl.querySelector("button")?.disabled).toBe(false);
   });
 });
 
@@ -224,6 +400,24 @@ describe("legacy embedding rows", () => {
     expect(dropdown.selectEl.value).toBe("local");
   });
 
+  it("labels the local option honestly about the one-time model download, not as always-offline", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const dropdown = componentOf(rows.get("Embedding"), DropdownComponent as never) as DropdownComponent;
+    const local = [...dropdown.selectEl.options].find((option) => option.value === "local");
+    expect(local?.textContent).toBe("Local (default, one-time model download)");
+    expect(local?.textContent).not.toMatch(/offline, default/);
+  });
+
+  it("describes the local embedding row's one-time download and approximate size, not a bundled model", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const desc = rows.get("Embedding")?.descEl?.textContent ?? "";
+    expect(desc).toContain("downloads its model once");
+    expect(desc).toContain("130 MB");
+    expect(desc).not.toContain("bundled");
+  });
+
   it("routes the endpoint field through the shared re-ask on change", async () => {
     const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
     settings.embedding.mode = "remote";
@@ -237,7 +431,9 @@ describe("legacy embedding rows", () => {
       TextComponent as never,
     ) as TextComponent;
 
-    await input.trigger("https://elsewhere.example.com/v1");
+    input.inputEl.value = "https://elsewhere.example.com/v1";
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
 
     expect(save).toHaveBeenCalledWith(
       "embedding.baseUrl",
@@ -247,10 +443,118 @@ describe("legacy embedding rows", () => {
   });
 });
 
+describe("legacy reasoning effort", () => {
+  it("shows Thinking mode on after choosing an effort turns it on", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.llm.thinkingMode = false;
+    const rows = renderLegacySettings(tab);
+    const thinking = componentOf(rows.get("Thinking mode"), ToggleComponent as never) as ToggleComponent;
+    const effort = componentOf(rows.get("Reasoning effort"), DropdownComponent as never) as DropdownComponent;
+
+    await effort.trigger("high");
+
+    expect(settings.llm.thinkingMode).toBe(true);
+    expect(thinking.value).toBe(true);
+  });
+});
+
+describe("legacy model field", () => {
+  it("saves a typed model on change and restores it when persistence fails", async () => {
+    const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const rows = renderLegacySettings(tab);
+    const input = rows.get("Model")?.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    );
+    expect(input).toBeTruthy();
+
+    input!.value = "candidate-model";
+    input!.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(input!.value).toBe(DEFAULT_SETTINGS.llm.model));
+    expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
+  });
+});
+
+describe("legacy text fields act when editing ends", () => {
+  function typeInto(input: HTMLInputElement, text: string): void {
+    for (const character of text) {
+      input.value += character;
+      input.dispatchEvent(new Event("input"));
+    }
+  }
+
+  it("does not turn each keystroke of a custom category into a category", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const rows = renderLegacySettings(tab);
+    const display = vi.spyOn(tab, "display");
+    const input = componentOf(rows.get("Category 1"), TextComponent as never) as TextComponent;
+
+    typeInto(input.inputEl, "cs.LG");
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(display).not.toHaveBeenCalled();
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["cs.LG"]));
+  });
+
+  it.each([
+    ["Embedding API base URL", "embedding.baseUrl", "https://embed.example.com/v1"],
+    ["Embedding model", "embedding.model", "text-embedding-3-large"],
+  ])("saves %s once on change, not per keystroke", async (name, key, typed) => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.embedding.mode = "remote";
+    const save = vi.spyOn(tab, "saveEmbeddingEndpointField").mockImplementation(
+      async (_key, next) => next,
+    );
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(rows.get(name), TextComponent as never) as TextComponent;
+    input.inputEl.value = "";
+
+    typeInto(input.inputEl, typed);
+    expect(save).not.toHaveBeenCalled();
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith(key, typed);
+  });
+
+  it("moves both sidecar URLs on change and not while typing", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    settings.pdfParserSidecar.enabled = true;
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(
+      rows.get("Sidecar capability URL"),
+      TextComponent as never,
+    ) as TextComponent;
+    input.inputEl.value = "";
+
+    typeInto(input.inputEl, "http://127.0.0.1:5002/v1/capabilities");
+    expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
+      DEFAULT_SETTINGS.pdfParserSidecar.capabilitiesUrl,
+    );
+
+    input.inputEl.dispatchEvent(new Event("change"));
+    await vi.waitFor(() =>
+      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse"));
+  });
+
+  it("restores the sidecar toggle and reports when enabling is rejected", async () => {
+    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockRejectedValue(new Error("disk full")));
+    const rows = renderLegacySettings(tab);
+    const toggle = componentOf(rows.get("Better PDF parser"), ToggleComponent as never) as ToggleComponent;
+
+    await expect(toggle.trigger(true)).resolves.toBeUndefined();
+
+    expect(settings.pdfParserSidecar.enabled).toBe(false);
+    expect(toggle.value).toBe(false);
+  });
+});
+
 describe("legacy transactional renderers", () => {
   it.each([
     ["API base URL", TextComponent, "https://candidate.example/v1", "llm", "baseUrl"],
-    ["Model", DropdownComponent, "candidate-model", "llm", "model"],
     ["Thinking mode", ToggleComponent, false, "llm", "thinkingMode"],
     ["Reasoning effort", DropdownComponent, "high", "llm", "reasoningEffort"],
     ["Link style", DropdownComponent, "relative", "output", "linkStyle"],
@@ -475,18 +779,17 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('this.runAction("update daily path"');
     expect(settingsTabSource).toContain('this.runAction("generate first report"');
     expect(settingsTabSource).toContain('this.runAction("open dashboard"');
-    expect(settingsTabSource).toContain('this.runAction("save selected model"');
     expect(settingsTabSource).toContain('this.reportActionError("save run window"');
   });
 
-  it("renders an accessible four-step first-report guide without duplicate inputs", () => {
+  it("renders an accessible five-step first-report guide without duplicate inputs", () => {
     const guideBody = settingsTabSource.match(
       /public createSetupGuide\(\)[\s\S]*?\n  private renderSetupItem/,
     )?.[0];
     expect(guideBody).toBeDefined();
     expect(guideBody).toContain('createEl("ol"');
     expect(settingsTabSource).toContain('parent.createEl("li"');
-    expect(guideBody).toContain('text: `${completedCount} of 4 complete`');
+    expect(guideBody).toContain('text: `${completedCount} of 5 complete`');
     expect(guideBody).toContain('"Connect AI"');
     expect(guideBody).toContain('"Choose paper sources"');
     expect(guideBody).toContain('"Describe your research interests"');
@@ -506,7 +809,7 @@ describe("settings tab regressions", () => {
     )?.[0];
     expect(guideBody).toContain("this.plugin.stateStore.snapshot()");
     expect(guideBody).toContain("status.firstReportComplete");
-    expect(guideBody).toContain("status.readyToRun ? \"Generate first report\" : undefined");
+    expect(guideBody).toContain('"Generate first report"');
     expect(guideBody).toContain('this.runAction("generate first report"');
     expect(firstReportBody).toContain("await this.plugin.scheduler.runForDateNow(date)");
     expect(firstReportBody).toContain("this.refreshSetupGuide()");
@@ -529,11 +832,11 @@ describe("settings tab regressions", () => {
     const scrollBody = settingsTabSource.match(
       /private scrollToSection\([\s\S]*?\n  public async generateFirstReport/,
     )?.[0];
-    expect(scrollBody).toContain("targetEl.ownerDocument.defaultView");
+    expect(scrollBody).toContain("target.ownerDocument.defaultView");
     expect(scrollBody).toContain('matchMedia?.("(prefers-reduced-motion: reduce)")');
-    expect(scrollBody).toContain('targetEl.setAttribute("tabindex", "-1")');
+    expect(scrollBody).toContain('target.setAttribute("tabindex", "-1")');
     expect(scrollBody).toContain('behavior: reduceMotion ? "auto" : "smooth"');
-    expect(scrollBody).toContain("targetEl.focus({ preventScroll: true })");
+    expect(scrollBody).toContain("focus({ preventScroll: true })");
   });
 
   it("uses clear sentence-case labels", () => {
@@ -557,15 +860,6 @@ describe("settings tab regressions", () => {
     expect(apiKeyBody).not.toContain('text: "Clear"');
   });
 
-  it("does not register a second change listener when models are fetched", () => {
-    const showModelDropdownBody = settingsTabSource.match(
-      /public showModelDropdown\([\s\S]*?\n  private textareaSetting/,
-    )?.[0];
-
-    expect(showModelDropdownBody).toBeDefined();
-    expect(showModelDropdownBody).not.toContain('select.addEventListener("change"');
-  });
-
   it("warns that quick-start templates replace categories", () => {
     expect(settingsTabSource).toContain("and arXiv categories");
   });
@@ -576,18 +870,11 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('"aria-controls": formId');
     expect(settingsTabSource).toContain("form.hidden = !isExpanded");
     expect(settingsTabSource).toContain('attr: { for: nameId }');
-    expect(settingsTabSource).toContain('attr: { for: tagId }');
-    expect(settingsTabSource).toContain('attr: { for: descId }');
+    expect(settingsTabSource).toContain('attr: { for: dirId }');
     expect(settingsTabSource).toContain('"aria-describedby": nameHintId');
   });
 
-  it("confirms topic deletion by name before persistence", () => {
-    expect(settingsTabSource).toContain('Delete the research topic "${topicName}"?');
-    expect(settingsTabSource).toContain("if (!confirmed) return");
-    expect(settingsTabSource.indexOf("if (!confirmed) return")).toBeLessThan(
-      settingsTabSource.indexOf("topics.splice(index, 1)"),
-    );
-  });
+
 
   it("renders one understandable automatic detail-note setting near topics", () => {
     const headingIndex = settingsTabSource.indexOf('"Research topics"');
@@ -627,11 +914,9 @@ describe("settings tab regressions", () => {
 
   it("does not normalize or persist categories merely while displaying them", () => {
     expect(settingsTabSource).toContain("const categories = arxivCategories(s.arxiv);");
-    expect(settingsTabSource).toContain(
-      "this.plugin.settings.arxiv.categories = normalized;",
-    );
+    expect(settingsTabSource).toContain("arxiv.categories = normalized;");
     expect(settingsTabSource).toMatch(
-      /const apply = async \(\) => \{[\s\S]*?s\.arxiv\.categories = \[tpl\.category\];/,
+      /const apply = async \(\) => \{[\s\S]*?arxiv\.categories = \[tpl\.category\];/,
     );
   });
 });
@@ -772,11 +1057,25 @@ describe("confirmEmbeddingMode", () => {
     await expect(promise).resolves.toBe("local");
   });
 
-  it("wires the guided choice into the library connection flow once", () => {
-    expect(settingsTabSource).toContain("offerEmbeddingModeChoice()");
-    expect(settingsTabSource).toContain("confirmEmbeddingMode(this.app)");
+  it("discloses the one-time model download honestly, not a bundled/always-offline model", async () => {
+    const { Modal } = await import("obsidian");
+    Modal.opened.length = 0;
+    const promise = confirmEmbeddingMode({} as any);
+    const modal = Modal.opened.at(-1)!;
+    const text = modal.contentEl.textContent ?? "";
+    expect(text).toContain("Local (default, one-time model download)");
+    expect(text).toContain("Downloads its model once");
+    expect(text).toContain("130 MB");
+    expect(text).not.toContain("bundled");
+    Modal.opened.at(-1)!.close();
+    await promise;
+  });
+
+  it("keeps embedding configurable without an extra first-selection popup", () => {
+    expect(settingsTabSource).not.toContain("offerEmbeddingModeChoice()");
+    expect(settingsTabSource).not.toContain("confirmEmbeddingMode(this.app)");
     expect(settingsTabSource).toContain("initialChoiceDone");
-    expect(settingsTabSource).toContain('"arXiv Daily: local embedding (offline)');
+    expect(settingsTabSource).toContain("about 130 MB");
   });
 });
 
@@ -845,3 +1144,38 @@ describe("personal library settings layout", () => {
   });
 });
 
+describe("legacy topic card header", () => {
+  function renderLegacyTopicCard(
+    tab: ArxivDailySettingTab,
+    topics: typeof DEFAULT_SETTINGS.arxiv.topics,
+  ): HTMLElement {
+    const container = document.createElement("div");
+    const render = Reflect.get(tab, "renderTopicCard") as (
+      containerEl: HTMLElement,
+      topics: unknown[],
+      index: number,
+    ) => void;
+    render.call(tab, container, topics, 0);
+    return container;
+  }
+
+  it("hides the tag chip while collapsed so a long name keeps the header width", () => {
+    const { tab } = makeLegacyApiKeyTab(async () => {});
+    const container = renderLegacyTopicCard(tab, [{ directions: [{ id: "fixture-direction", text: "Something", origin: "manual" as const }],
+      id: "topic-1",
+      name: "A very long research topic name that would otherwise get truncated",
+      tag: "long-topic-tag",
+      description: "Something",
+      detail: false,
+    }]);
+
+    expect(container.querySelector(".arxiv-daily-settings__topic-tag")).toBeNull();
+
+    const header = container.querySelector(
+      ".arxiv-daily-settings__topic-header",
+    ) as HTMLButtonElement;
+    header.click();
+
+    expect(container.querySelector(".arxiv-daily-settings__topic-tag")).toBeNull();
+  });
+});

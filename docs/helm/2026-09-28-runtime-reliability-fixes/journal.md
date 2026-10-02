@@ -1,0 +1,198 @@
+# Journal
+
+## 2026-09-28 — frame and start P1
+
+- evidence: 用户明确要求新开 helm 修复 F19、跨进程一致性、跨平台自动邮件和 F29–F32。旧 initiative 的记录延期不能作为新 initiative 的完成证据；基线 6de54d9 已在最终提交上完整复测通过，工作树干净。
+- change: 创建独立目标与 `fix/review-followups` 分支，全部七项纳入成功条件；只展开 P1（CLI cron 与异步边界），其它阶段保持结果索引。
+- disposition: 保留既有代码/测试和旧 helm 历史，不沿用这些条目的豁免。缺真实 provider 或原生平台时记录未验证，不将其标成修复完成。已询问用户验收接口与环境，P1 可独立推进。
+- next: F29 真实 shell 回归 Red → 最小编码修复 → Green 与 CLI 回归。
+
+## 2026-09-28 — P1 chunk 1 accepted
+
+- evidence: F29 had 11 expected failures (eight executable path round-trips and three invalid-path checks); all 12 focused cases now pass. CLI schedule/config/main 39 tests and CLI typecheck pass. The shell is real; cron percent preprocessing is modeled from its command grammar, and no actual crontab is installed.
+- checkpoint: On track; isolated implementation and tests committed.
+- next: F30 invalid schedule window regression.
+
+## 2026-09-28 — native-platform validation sequencing
+
+- evidence: 用户选择先完成实现和 CI 验收配置，保留平台验收待办。F19 的接口问题已用产品语言解释；到该阶段先辨认当前配置，再说明可验证的服务。
+- change: P5 保留跨平台实现与 CI 配置，新增 P6 作为原生平台验收待办；不预建未来阶段文件，P1 继续执行。
+- disposition: 原生验收仍未完成，不用 Linux 模拟替代；不因此停止可独立进行的实现。
+- next: 完成 F30，接着 F31。
+
+## 2026-09-28 — P1 chunk 2 accepted
+
+- evidence: F30 had two expected failures (TOML accepted the reversed window; install returned success and touched crontab). After validation, focused tests 23 and full CLI 95 pass, along with CLI typecheck. Valid single-run, equal-boundary and recurring windows retain their behavior.
+- checkpoint: On track; isolated F30 implementation and tests committed.
+- next: F31 async command errors and handler lifetime.
+
+## 2026-09-28 — P1 done, start P2
+
+- evidence: F31 had 12 expected failures across command rejection, configuration exit codes and email signal-handler lifetime. All 37 focused tests and 107 CLI tests now pass; root typecheck, build and boundaries pass. F29/F30 retain their accepted evidence.
+- checkpoint: On track; P1 complete after its three isolated fix commits.
+- change: check F29–F31 criteria, mark P1 done and activate P2 for relay request JSON shape validation.
+- next: F32 failing request-boundary tests; no real mail or live cutover operations.
+
+## 2026-09-28 — P2 done, start P3
+
+- evidence: F32 produced 12 expected failures among 20 request-shape cases. Shared object parsing now passes all 20 cases and the full 161-test relay suite; typecheck passes. No provider call, gate dispatch or state write for invalid public input. Fix committed as 2b49954.
+- checkpoint: On track; P2 accepted and P3 active.
+- provider evidence: fetched official OpenAI Chat Completions reference, DeepSeek thinking guide, Anthropic OpenAI SDK compatibility and Zhipu thinking guide. SDK extra_body must be flattened; OpenAI accepts reasoning_effort without a thinking field; DeepSeek accepts thinking plus effort; Anthropic accepts top-level thinking through its compatibility endpoint; the currently preset GLM models use thinking without reasoning_effort. Transport changes must also invalidate generation checkpoints created with the old wire contract.
+- sources: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/ ; https://api-docs.deepseek.com/guides/thinking_mode ; https://platform.claude.com/docs/en/api/openai-sdk ; https://docs.bigmodel.cn/cn/guide/capabilities/thinking
+- environment: installed plugin selects DeepSeek but names a GPT model through a private gateway; do not infer the gateway protocol from the preset or mutate the user's configuration. A concise synthetic live-test question is pending; no live request has been sent.
+- next: HTTP payload contract Red/Green plus checkpoint invalidation, then the selected live-interface acceptance when authorized.
+
+## 2026-09-28 — L1 adjust P3 for current Anthropic models
+
+- evidence: all 171 focused tests and the full workspace suite passed after request correction and checkpoint versioning. User explicitly authorized the existing private gateway; one synthetic arithmetic call returned HTTP 200 and the expected digit 2 with thinking enabled/low effort. No plugin config modification or paper data was sent. Official Claude extended-thinking documentation states 4.7+ rejects manual budget_tokens, which includes the project's default Opus 4.7 preset.
+- change: retain the provider fix, add model-aware adaptive thinking and a native Messages request/parser for the official Anthropic host so effort can reach its documented output_config. Third-party compatibility endpoints retain their route. Add tests before this production extension; generation endpoint hashing follows the selected route.
+- source: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+- disposition: do not treat gateway success as a live test of Anthropic. Keep original local tests, add native response-contract coverage; adjust endpoint fingerprint fixtures only for the changed actual route. No additional live calls are needed for the unchanged private-gateway path.
+- next: observe native Anthropic contract Red, implement, and rerun focused and affected regressions before accepting P3.
+
+## 2026-09-28 — P3 done, start P4
+
+- evidence: F19 committed as bb3307e. Observed 11 payload Reds, four old-checkpoint reuse Reds, and four native Anthropic Reds. Final full workspace regression: core 2074 passed / two existing skips, node-runtime 45, CLI 107, plugin 751; root lint/typecheck/build/boundaries/submission passed. The user's selected gateway accepted the synthetic request (HTTP 200, answer 2). Native Anthropic is locally contract-tested; no claim of live verification with an Anthropic key.
+- checkpoint: On track; request and checkpoint semantics accepted together, including deterministic fingerprint fixture regeneration and adaptive checkpoint round-trips.
+- change: P3 done, P4 active. Current index code already rereads disk inside each mutation; the remaining defect is the lack of a shared lock around that full transaction, not an indefinitely cached inbox.
+- next: implement host-local locks with atomic immutable ownership/decision records and OS liveness checks, then wire daily generation and index transactions. Do not reclaim a live owner merely because time elapsed. Coordination records are local to the host and keyed by the canonical Vault root, outside exportable research data.
+
+## 2026-09-28 — P4 shared-lock primitive accepted
+
+- evidence: missing-module contract baseline followed by four actual behavioral Reds with a no-op lock. Real OS subprocess tests now prove exclusion, serialized counter updates, recovery after SIGKILL with competing contenders, and no takeover of a live holder on timeout/cancellation. Full node-runtime 49 tests and typecheck passed.
+- checkpoint: On track; shared lock port and Node implementation committed separately from host wiring. Coordination uses the same OS PID namespace and local hard-link-capable filesystem; uncertain liveness remains busy.
+- next: reproduce and repair RunLock/PaperIndexStore host wiring.
+
+## 2026-09-29 — resume P4 in the current session
+
+- handoff: the previous session paused after accepting the shared-lock primitive; the user asked this session to continue the existing initiative. Ownership moves to claude-root-session-2026-09-29; P4 remains the only active phase.
+- evidence: retained three uncommitted test changes. Reran their focused suites: RunLock 8 passed / 2 expected failures (busy shared lock and failure release); Node file-lock 4 passed / 1 expected failure (index transaction exclusion). No implementation work has been accepted for chunk 2.
+- disposition: retain accepted P1–P3 and P4 chunk 1; complete the pending Red-to-Green host integration before committing those tests. No pushes, live mail, or production operations.
+- next: finish P4 integration and startup cleanup, then plan P5. P6 still requires native macOS/Windows evidence and must not be marked done from Linux tests.
+
+## 2026-09-29 — P4 daily-run and index integration accepted
+
+- evidence: observed four RunLock behavioral Reds, two index contract Reds, the real subprocess index Red, and CLI/Plugin composition Reds. After wiring, focused Core 68, real subprocess 6, CLI 5, and Plugin 70 passed. Full workspace regression passed: Core 2080 / two existing skips, Node 51, CLI 108, Plugin 754; root typecheck/build/boundaries passed.
+- checkpoint: On track; isolated implementation and tests committed as 34ae7ea. Both hosts use one Vault-wide daily lock across dates, avoiding concurrent writers to shared run state and allowing startup cleanup to use the same resource. Index locking covers load through save, including failure release.
+- limits: tested on Linux, not native macOS/Windows; unsupported non-filesystem adapters retain local-only behavior. No live provider request or email was sent.
+- next: P4 chunk 3 startup-cleanup regression and fix, then full phase verification.
+
+## 2026-09-29 — P4 done; P5 paused at packaging decision
+
+- evidence: startup cleanup produced six expected Reds across Core (three), Node real subprocess (one), CLI runtime (one), and Plugin onload (one). Fix e2c424e passes all focused checks. Root regression: Core 2083 / two existing skips, Node 52, CLI 109, Plugin 755. Root lint/typecheck/build/boundaries/submission passed; independent relay 161 tests and typecheck passed. No live email/provider request or native macOS/Windows check ran.
+- checkpoint: On track; all P4 chunks are accepted. Mark the shared-Vault success criterion and P4 done, and synchronize the technical report's run/index/cleanup scope. Preserve earlier accepted phases.
+- P5 evidence: both existing exclusive-create paths depend on Linux `/proc/self/fd`. Official Node v22.17.0/libuv docs state O_DIRECTORY and O_NOFOLLOW are unsupported on Windows; Node chmod does not implement owner/group/others privacy there. Ordinary `wx` prevents replacing a final path but does not replace descriptor-anchored parent traversal. Merely removing platform checks would not meet the retained safety contract.
+- sources: https://github.com/nodejs/node/blob/v22.17.0/deps/uv/docs/src/fs.rst ; https://github.com/nodejs/node/blob/v22.17.0/doc/api/fs.md (retrieved through Context7).
+- decision pending: recommend investigating a narrow native storage component, but shipping platform-specific components changes CLI/Plugin packaging and has not been authorized as a product choice. No dependency, native component, or P5 production change has been added. This is a planning/packaging gate, not evidence that all possible portable designs have been exhausted.
+- change: create only the current P5 plan, mark P5 blocked pending that decision, keep the goal active and P6 pending. No success criterion is waived; no active implementation continues behind the decision gate.
+- next: ask whether to accept the native-component direction or pause cross-platform implementation. If accepted, validate the backend's feasibility and distribution contract before implementing; native results still belong to P6.
+
+## 2026-09-29 — user accepts native support; resume P5
+
+- decision: user replied `1A`, accepting investigation and implementation of a system-native support component bundled with the products. P5 resumes; the prior packaging question is resolved. No authorization for push, publication, live email or production changes outside the existing scope is implied.
+- approach: implement a narrow Node-API v8 backend with POSIX directory-relative operations and Windows pinned directory handles/protected per-user DACL. Keep the generation delivery protocol and portable Vault data unchanged. Use node-gyp only as a developer build tool; end users receive precompiled, content-checked bytes inside the existing bundles because the plugin release currently distributes only manifest/main/styles.
+- verification: native API baseline then real behavioral Reds before implementation; Linux primitive and host integration evidence precede acceptance. Build/install and platform-artifact contract tests guard distribution. Native macOS/Windows runtime evidence remains P6; inability to run it here never becomes a passing result.
+- next: native primitive contract tests and smallest compilable backend, then safety implementation and host wiring. Native assets are code, not research data, and no runtime code download is introduced.
+
+## 2026-09-29 — native primitive feasibility accepted
+
+- evidence: missing native API baseline, then a compiled no-op surface produced behavioral Reds for exclusive creation, path rejection, identity validation, private existing files and subprocess contention. Corrected the moved-parent fixture to precreate its tree and separately observed the intended missing-guard Red. The real backend passes all nine native tests; direct compiler and equivalent CMake builds pass with warnings as errors. Existing node-runtime 52 tests and typecheck pass.
+- checkpoint: On track; native implementation/tests committed as 8fe0c5b. Accept the backend architecture and Linux feasibility, not Windows/macOS execution. No host uses it yet.
+- L1 build adjustment: permission checks denied installing and immediately executing a new node-gyp package. Did not run or retry that external script. Used already-installed C++/CMake and system Node-API headers instead; removed the unused gyp configuration and added no dependency. CMake preserves the observed direct-compiler Green baseline.
+- limits: Windows/macOS code and the Electron delay-load path have not run here. SDK collection, bundle integrity, host wiring and native CI still remain; no binary is committed and no provider request was sent.
+- next: test-first native private create/replace/recovery orchestration, then both hosts' capability wiring and consumer regressions.
+
+## 2026-09-29 — native private storage and host wiring accepted
+
+- evidence: eight orchestration Reds (including the separately corrected namespace fixture), four loader integrity Reds and two host-selection Reds preceded their fixes. Native composition tests send through a fake HTTP client once and block repeats across independent host instances. Full root regression passed: Core 2083 / two existing skips, Node 66, CLI 109, Plugin 756; lint/typecheck/build/boundaries/submission and relay 161/typecheck passed.
+- checkpoint: On track; code/tests committed as 180b420. Private replacements and recovery share a host-local lock; creates and synchronous guards use native directory capabilities. Bundled-code loading verifies content and refuses corrupt or linked cache targets. No runtime download or research-data relocation was added.
+- test setup: added a CMake test prerequisite so clean checkouts build their own native code. The first full regression exposed an incorrect relative setup import; corrected it and reran the full root suite to Green. That setup error is not counted as a behavioral Red.
+- limits: default source/development hosts still use the existing Linux fallback when no assets are supplied. Production asset embedding, full release platform checks, install smoke, updated unsupported copy and CI remain chunk 3. Native Windows/macOS and real Electron execution have not run.
+- next: package only source-matched native assets, fail release builds on missing architectures, and add native platform CI plus offline installed-consumer verification.
+
+## 2026-09-29 — P5 complete; P6 awaits native execution environments
+
+- evidence: observed six initial artifact/bundle Reds, three missing workflow/release-gate Reds, three SDK contract Reds, an installed-package verification Red, two obsolete Linux-only copy Reds, and a real packaged CLI failure before native bytes were embedded. Their focused checks now pass. Enabling real native assets also exposed two legacy error-message contract mismatches; kept the assertions and corrected the messages before rerunning to Green.
+- final verification: root tests passed (Core 2083 with two existing skips, Node 66, CLI 110, Plugin 756: 3015 passes); release tools 331 passed; native filesystem/subprocess tests 9 passed; native-default Node 46 and Plugin 29 passed. Root lint passed with 21 existing warnings / zero errors; typecheck/build/boundaries/submission, build smoke, and offline installed CLI smoke passed. Relay 161 tests and typecheck passed again after the final implementation changes.
+- SDK/build evidence: official SDK headers for the running Node version were actually downloaded, checksum-verified and extracted on Linux using the first-party preparer. Windows import-library preparation was contract-tested with fixtures, not misrepresented as a Windows build. End-user smoke disables HTTP, clears PATH, and installs the local CLI archive offline with installation scripts disabled.
+- checkpoint: On track; P5 chunk 3 implementation/tests committed as 52fe2b2. Both bundles now carry checked native bytes; release workflows require all six same-run source-matched platform artifacts. Technical report and native build/distribution documentation synchronized. Native binaries and SDK caches remain untracked generated artifacts.
+- limits: no remote CI, native macOS/Windows execution, or real Electron loading was performed; no push, PR, release, live provider call or real email occurred. A transient permission-check service outage interrupted final bookkeeping, not the validated implementation; the final native suite was rerun successfully after service recovery.
+- transition: mark P5 done and create the current P6 acceptance plan. P6 is blocked because this session only has Linux and does not have authorization to push/run remote verification. Keep the initiative active and the two remaining success criteria unchecked; no criterion is waived.
+- next: obtain native macOS/Windows execution environments or separately authorized CI access, run the recorded native matrix and real isolated Obsidian/Electron checks, then fix any observed failures with Red/Green evidence before final closure.
+
+## 2026-09-30 — user authorizes PR-based native acceptance
+
+- authorization: user replied `1A` to pushing the current branch and creating a PR solely for acceptance testing. Scope is `fix/review-followups` and its native-acceptance fixes/rechecks, not a blanket permission for other branches or future publication. No merge, release, real email, or production control operation is authorized.
+- state: P6 resumes with its first gate; the goal success criteria and retained safety contracts are unchanged. Real macOS/Windows CI results and real Obsidian/Electron results remain separate acceptance obligations.
+- preparation: working tree was clean, GitHub authentication and repository/base were verified, and no existing PR for the branch was found. Fetching origin/main showed the branch contains main plus accumulated local commits; the PR will represent that full branch, not a fabricated phase-only diff.
+- next: commit this scoped authorization, push the branch without force, create a draft acceptance PR, then observe native matrix results and reproduce/fix any failures before accepting them.
+
+## 2026-09-30 — handoff P6 and PR #51 CI repair
+
+- handoff: the user confirms the previous session is paused and transfers ownership to claude-p6-pr51-session-2026-09-30. Clean branch HEAD is 41da4a997f9cc71546c837a7b3f15f5fd0f2ded9; draft PR #51 targets main and includes the accumulated branch work.
+- evidence: refreshed checks confirm dependency-audit failures in root/relay, private-storage/shared-lock test failures on Linux arm64 and both macOS runners, Windows x64/arm64 build failures, and the separate high CodeQL regex finding. Complete job logs have not yet been read; no specific package or native cause is inferred from step names.
+- authorization: retain the user's scope to repair, commit and push only this acceptance branch for CI reruns. No subagents, merges, releases, real email or production relay changes.
+- next: retrieve complete logs, record targeted Red/Green strategies, then repair each isolated chunk. P6 remains active; CI and actual Obsidian/Electron evidence remain separate, and no success criterion is waived.
+
+
+## 2026-09-30 — resume P6 remaining CI repairs
+
+- handoff: user asks to resolve the remaining Email relay and Native storage failures after the previous repair report; take over the paused P6 as codex-p6-ci-repair-2026-09-30. Retain existing acceptance-branch push/recheck authorization and no-subagent constraint.
+- evidence: latest a78417c run has green Root, CodeQL and VS Code checks. Native run 36680572941 passes Linux/macOS on all four runners; Windows x64/arm64 build successfully but native TAP test 4 fails on CREATE_NEW against a junction (EACCES instead of occupied/null). Relay run 36680572991 stops at dependency audit; the dependency candidate was still uncommitted.
+- approval: user approved installing and executing the current relay lockfile packages from registry.npmjs.org through the explicit escalation prompt, resolving the earlier source-approval block before any test execution or CI push. npm ci/audit reports zero vulnerabilities. Vitest upgrade exposes missing explicit Node test types; observed tsc Red then Green after declaring node types. All 161 relay tests, preflight read-only check and Wrangler local dry-run pass; no deployment or real email.
+- strategy: keep the existing failing Windows assertion; normalize only confirmed directory collisions, add ordinary-directory coverage, and rerun both real Windows runners. Linux native build and all 10 primitive tests pass. Initial sandbox subprocess output failures are environment failures, not behavioral Red; the identical native command passes outside that sandbox.
+- checkpoint: relay is locally verified; Windows remains a CI candidate until real platform results arrive. P6 and real Obsidian/Electron acceptance remain open. Commit relay and native changes separately, then push only fix/review-followups for the authorized PR verification.
+
+
+## 2026-09-30 — relay CI accepted; correct Windows guard test assumption
+
+- evidence: fb1e798 Email relay run 36713376089 passes every step. Native run 36713376132 confirms the junction fix: Windows x64 native primitive tests pass, then the guard integration test fails because asynchronous rename succeeds instead of rejecting. Linux/macOS remain green.
+- L1: correct the test's OS assumption to the existing P6 contract (prevent movement or detect replacement before invocation). No production protection is relaxed. When rename succeeds, replace the original directory, require synchronous identity-check rejection, and verify the original claim is unchanged; after release, the guard must reject. Only explicit Windows permission/busy errors qualify as prevention.
+- verification: run the 46 Linux native runtime tests and Node typecheck, then rerun the same real Windows matrix. Keep P6 desktop acceptance open.
+
+
+## 2026-09-30 — native guard passes; repair Windows workflow argument forwarding
+
+- evidence: run 36713890755 Windows x64 passes native primitives and all private-storage/shared-lock cases, including replacement detection. The following Node composition step unexpectedly runs all 26 adapter tests and no JSON reporter; its three failures assert POSIX mode bits, despite the existing workflow filter selecting only native composition.
+- L1: invoke installed Vitest directly in explicit workspace directories so PowerShell/npm argument forwarding cannot discard filters or report destinations. Retain all existing native/platform gates and root coverage; no skip, permission assertion deletion, or continue-on-error is introduced.
+- verification: workflow regression Red then all 4 checks Green. The exact three workflow commands generate parsed successful JSON reports locally (20 runtime, 1 Node host, 1 plugin host). Push only the authorized acceptance branch and inspect actual Windows reports plus downstream build/install results.
+
+
+## 2026-09-30 — Windows native tests pass; repair CRLF product build
+
+- evidence: b52efb1 run 36714759289 Windows x64 passes primitives, runtime guards/locks, Node composition and plugin composition, with JSON evidence produced. Product builds fail because the pako notice regex requires LF while Windows checkout uses CRLF.
+- strategy/results: copied the actual reader to an isolated temporary CRLF checkout and reproduced the identical missing-notice Red. Normalize CRLF before extraction; all 9 release utility tests pass while asserting exact license text and single banner inclusion. Both product builds, offline native package smoke and offline CLI installation pass locally.
+- next: rerun the authorized native matrix through build and offline installation. Email relay remains green; real desktop-host acceptance remains separate and open.
+
+
+## 2026-09-30 — P6 native CI gate accepted on all six platforms
+
+- source: 317d4d6a9b89ec545e08c2522903e96d98f0cd59 contains every accepted CI repair. Native run https://github.com/tdccccc/arxiv-daily/actions/runs/36715458437 succeeds on Linux x64/arm64, macOS x64/arm64 and Windows x64/arm64 through build, primitive tests, runtime locks/guards, both host compositions, offline loading, offline CLI installation and artifact uploads.
+- independent checks: Email relay https://github.com/tdccccc/arxiv-daily/actions/runs/36715458428 passes; Root 36715458448, CodeQL 36715458442 and VS Code 36715458479 also pass on the same source. Windows JSON evidence confirms 20 runtime tests and one selected test per Node/plugin composition, all successful.
+- checkpoint: On track; accept P6 chunk 1 only. Original Windows junction Red, runtime guard assumption, lost workflow arguments and CRLF build failures are resolved with observed real Windows Green. Relay source approval and 161 tests/audit/typecheck/dry-run were completed before CI acceptance.
+- scope: user's two failing workflows are resolved. Keep the overall P6 and initiative active: actual isolated Obsidian/Electron desktop-host acceptance and final initiative/report closure remain separate; CI adapter tests do not establish real desktop execution. No merge, release, production relay change or real email occurred.
+
+
+## 2026-09-30 — follow-up CI timing failure and main protection preparation
+
+- evidence: documentation-only 331c0c8 rerun 36719082645 fails Linux x64's repeated subprocess contention test at 5029 ms; the other five native platforms and Root/relay/CodeQL/VS Code pass. The earlier six-platform success remains an observed result, not proof against intermittent timing failures.
+- L1: reproduce with a temporary Node preload adding 100 ms to owner/decision fsync operations. Original five-second test fails with the same timeout. Raise only the two repeated real-disk contention test budgets to 30 seconds; same-delay tests pass (11.14 seconds total), normal native regression passes 20 tests. No production lock change, assertion removal or automatic retry.
+- separate user request: configure main branch protection. Read-only inspection confirms admin rights, no existing rulesets/protection, and three ambiguous verify check names. Give the root job the unique name Root workspace verification; workflow regression Red then 11 focused checks Green. Preserve the independent path-filtered workflows and require only unconditional checks in the ruleset.
+- next: push these isolated commits, observe native CI and the renamed root check, then create/read back protect-main with PRs, zero mandatory approvals, resolved conversations, no force pushes/deletion and required root/compatibility/native checks. No merge or release is authorized.
+
+
+## 2026-09-30 — slow-disk CI passes and main ruleset enabled
+
+- evidence: native run 36723359175 passes all six platforms on 03633e1, including the formerly timing-out Linux x64 test. Relay/VS Code/CodeQL and both Node compatibility jobs also pass. Root's full release-tools step exposes two strict fixture failures from the newly explicit job name; synchronize the existing expected workflow name, then rerun all 335 release-tool tests and product-unit inventory locally to Green.
+- repository settings: created active protect-main ruleset 24249118 and read back effective main rules. It blocks deletion and non-fast-forward pushes, requires PRs and resolved review threads, allows zero mandatory approvals, and requires the unique Root workspace verification, two Node compatibility and six native check contexts from GitHub Actions. No bypass actors; strict branch freshness is disabled; path-filtered relay/companion jobs are not required contexts. Rule: https://github.com/tdccccc/arxiv-daily/rules/24249118 .
+- next: push the strict-fixture correction and observe the final renamed Root check plus native matrix. P6 real desktop-host acceptance remains pending; do not merge or release.
+
+
+## 2026-09-30 — P6 complete and runtime reliability initiative closed
+
+- user boundary: all real desktop sessions used only `/home/tiandc/Desktop/plugin_test`. No production Vault was opened. Xvfb, a disposable application configuration and temporary HOME isolated the process and native cache. Original test settings/workspace hashes match after all sessions; generated acceptance directories were removed. The tested branch build remains deployed only in the designated test Vault.
+- desktop evidence: Obsidian 1.11.5 / Electron 39.2.6 / Node 22.21.1 / Node-API 10 on Linux x64 loads the bundled native backend. Actual adapter operations verify private exclusive creation, atomic replacement/backup recovery, namespace replacement rejection and released guards. Two separate real desktop sessions produce 1 then 0 intercepted delivery requests; a separate native Node host returns already_delivered with 0 requests. Real settings controls switch on/off and display the explicit unavailable-storage warning under injected capability loss. All startup diagnostics are complete with zero renderer errors. See evidence/desktop-native-acceptance.md, JSON and screenshots. This does not claim real Windows/macOS Obsidian execution; those systems have native CI evidence, while the desktop-host acceptance ran on the available real Linux host.
+- release finding and repair: combining the six real assets exposed a Windows source-hash mismatch; CRLF and LF hashes reproduced the exact values. Keep all native runtime semantics and binary digests; normalize only source line endings and add the missing same-run aggregate assembly job. Two regression Reds preceded fix 552f21c. Local release tools 337, product inventory, build, native package smoke and offline CLI install pass. Fresh CI 36733252120 passes all six platforms plus assembly; independently downloaded final assets also pass readNativeAssets. Add the verified assembly check to active protect-main ruleset 24249118 without changing the other protections.
+- final regression: Root 36733252255 passes its audit, release tools, boundaries, lint, typecheck, full workspaces, settings regression, build, submission and offline installation steps. Relay 36733252368, CodeQL 36733252168 and VS Code 36733252297 pass on the same implementation source. No live provider call, email, deployment, merge or release was performed; P1–P4's already accepted interface and regression evidence remains recorded in earlier entries.
+- report operation: status: updated; report: docs/architecture-map.html (with docs/technical-report.md synchronized); scope: P1–P6 CLI/relay/LLM boundaries, shared run/index locks, native private storage and distribution; summary: the reports describe verified current wiring and remove stale single-process/Linux-only claims; evidence: host composition, RunLock/PaperIndexStore/MarkdownWriter, LlmClient, relay parser, native build/assets/loader and workflows. JSON validation passes and the report shell is current. No claim of a full unrelated-area architecture audit.
+- checkpoint/close: On track. Every success criterion is satisfied within its recorded scope; no criterion is waived. P6 chunks 1–3 accepted, phase P6 done and initiative done. The last code change preserves the Linux native source identity and the rebuilt plugin SHA-256 exactly matches the desktop-tested bundle, so desktop evidence remains valid. Closing commits contain only reports and acceptance records; push the authorized acceptance branch and observe final CI, without merging or publishing.

@@ -4,17 +4,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { smokeNativePackage } from "./native-package-smoke.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const version = JSON.parse(await readFile(resolve(root, "package.json"), "utf8")).version;
 const temp = await mkdtemp(resolve(tmpdir(), "arxiv-daily-install-smoke-"));
 
+function runNpm(args) {
+  if (process.env.npm_execpath) {
+    return spawnSync(process.execPath, [process.env.npm_execpath, ...args], { cwd: root, encoding: "utf8" });
+  }
+  if (process.platform === "win32") throw new Error("Run this check through npm run smoke:install");
+  return spawnSync("npm", args, { cwd: root, encoding: "utf8" });
+}
+
 try {
-  const pack = spawnSync(
-    "npm",
-    ["pack", "--workspace", "apps/cli", "--pack-destination", temp],
-    { cwd: root, encoding: "utf8" },
-  );
+  const pack = runNpm(["pack", "--workspace", "apps/cli", "--pack-destination", temp]);
   if (pack.status !== 0) fail("npm pack failed", pack);
   const archiveName = pack.stdout.trim().split(/\r?\n/).at(-1);
   if (!archiveName || !archiveName.endsWith(".tgz")) {
@@ -22,21 +27,21 @@ try {
   }
 
   const installRoot = resolve(temp, "install");
-  const install = spawnSync(
-    "npm",
-    ["install", "--prefix", installRoot, resolve(temp, archiveName)],
-    { cwd: root, encoding: "utf8" },
-  );
+  const install = runNpm([
+    "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund",
+    "--prefix", installRoot, resolve(temp, archiveName),
+  ]);
   if (install.status !== 0) fail("npm install of packed CLI failed", install);
 
-  const binary = resolve(installRoot, "node_modules/.bin/arxiv-daily");
-  const help = spawnSync(binary, ["--help"], {
+  const binary = resolve(installRoot, "node_modules/arxiv-daily/dist/arxiv-daily-cli.cjs");
+  const help = spawnSync(process.execPath, [binary, "--help"], {
     cwd: installRoot,
     encoding: "utf8",
   });
   if (help.status !== 0 || !help.stdout.includes("Usage:") || !help.stdout.includes(`Version: ${version}`)) {
     fail("installed CLI help smoke failed", help);
   }
+  await smokeNativePackage(binary);
   console.log("CLI package install smoke OK");
 } finally {
   await rm(temp, { recursive: true, force: true });

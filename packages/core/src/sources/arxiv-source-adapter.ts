@@ -101,7 +101,9 @@ export class ArxivSourceAdapter implements SourceAdapter {
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
         failures.push({
-          kind: "failed_transient",
+          // /recent only ever moves forward: a date older than its oldest
+          // day can never appear again, so retrying it cannot succeed.
+          kind: bounds && dateStr < bounds.oldest ? "failed_permanent" : "failed_transient",
           reason: missingRecentDateReason(dateStr, category, buckets, bounds),
         });
         logger.warn(
@@ -312,10 +314,33 @@ function deriveQuality(
 function extractAbstractText(abstractConclusion: string): string {
   const text = abstractConclusion.trim();
   if (!text) return "";
-  // Common extractor shape: "## Abstract\n..."
-  const m = /^##\s*Abstract\s*\n([\s\S]*?)(?=\n##\s|\s*$)/i.exec(text);
-  if (m?.[1]) return m[1].trim();
-  return text.replace(/^##\s*Abstract\s*/i, "").trim();
+  // Common extractor shape: "## Abstract\n...". Scan positions instead of
+  // retrying a whitespace-to-end assertion at every character of the body.
+  if (!text.startsWith("##")) return text;
+  let cursor = 2;
+  while (cursor < text.length && /\s/u.test(text[cursor]!)) cursor += 1;
+  if (text.slice(cursor, cursor + 8).toLowerCase() !== "abstract") return text;
+  cursor += 8;
+  let bodyStart = -1;
+  while (cursor < text.length && /\s/u.test(text[cursor]!)) {
+    if (text[cursor] === "\n") bodyStart = cursor + 1;
+    cursor += 1;
+  }
+  if (bodyStart >= 0) {
+    let bodyEnd = text.length;
+    let nextHeading = text.indexOf("\n##", bodyStart - 1);
+    while (nextHeading >= 0) {
+      if (/\s/u.test(text[nextHeading + 3] ?? "")) {
+        bodyEnd = Math.max(bodyStart, nextHeading);
+        break;
+      }
+      nextHeading = text.indexOf("\n##", nextHeading + 3);
+    }
+    const abstract = text.slice(bodyStart, bodyEnd).trim();
+    if (abstract) return abstract;
+  }
+  // Preserve the legacy fallback for an inline heading or an empty section.
+  return text.slice(cursor).trim();
 }
 
 function parseSectionsMarkdown(
@@ -413,6 +438,12 @@ function missingRecentDateReason(
     );
   }
   const have = buckets.map((b) => b.announceDate).join(",");
+  if (bounds && dateStr < bounds.oldest) {
+    return (
+      `date ${dateStr} is older than the oldest ${category} /recent bucket ` +
+      `${bounds.oldest}; arXiv no longer lists it there (have: ${have})`
+    );
+  }
   return `date ${dateStr} is not in ${category} /recent (have: ${have})`;
 }
 

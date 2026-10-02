@@ -122,6 +122,92 @@ describe("derivePaperInboxPaths", () => {
 });
 
 describe("PaperIndexStore", () => {
+  it.each([
+    ["  Ada Lovelace ,\tGrace Hopper, , \n Alan Turing  ,", ["Ada Lovelace", "Grace Hopper", "Alan Turing"]],
+    ["\u00a0Ada Lovelace\u00a0,\u2028Grace Hopper\u2029", ["Ada Lovelace", "Grace Hopper"]],
+    ["A  Long Author Name", ["A  Long Author Name"]],
+    [[" Ada, Jr. ", "", "  Grace Hopper  "], ["Ada, Jr.", "Grace Hopper"]],
+  ])("preserves author boundaries when saving and reloading %j", async (authors, expected) => {
+    const { store } = makeStore();
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Author normalization", authors,
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false,
+    });
+    expect(entry.authors).toEqual(expected);
+    expect((await store.get("2606.12345"))?.authors).toEqual(expected);
+  });
+
+  it.each([
+    ["///arxiv-daily\\\\papers///note.md///", "arxiv-daily/papers/note.md"],
+    ["////", ""],
+    ["\\\\", ""],
+    ["arxiv-daily/papers/note.md", "arxiv-daily/papers/note.md"],
+    ["///folder / name.md///", "folder / name.md"],
+  ])("normalizes note paths consistently when saving and reloading %j", async (paperPath, expected) => {
+    const { store } = makeStore();
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Path normalization", authors: "Author",
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false, paperPath,
+    });
+    expect(entry.paperPath).toBe(expected);
+    expect((await store.get("2606.12345"))?.paperPath).toBe(expected || null);
+  });
+
+  it("handles bounded long author whitespace and repeated path separators through the public store", async () => {
+    const { store } = makeStore();
+    const author = `A${" ".repeat(8_192)}Author`;
+    const slashes = "/".repeat(8_192);
+    const { entry } = await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "Long metadata", authors: `${author}, B Author`,
+      date: "2026-06-11", arxivCategory: "cs.AI", primaryTopic: "topic", detail: false,
+      paperPath: `${slashes}folder${slashes}note.md${slashes}`,
+    });
+    expect(entry.authors).toEqual([author, "B Author"]);
+    expect(entry.paperPath).toBe("folder/note.md");
+    expect((await store.get("2606.12345"))?.paperPath).toBe("folder/note.md");
+  });
+
+  it("holds shared ownership through mutation and releases after failure", async () => {
+    const { storage } = makeStorage();
+    let held = false;
+    const shared: StorageAdapter = {
+      ...storage,
+      acquireLock: async (key, options) => {
+        expect(key).toBe("paper-index:arxiv-daily/.index/papers.json");
+        expect(options).toEqual({ wait: true });
+        held = true;
+        return { release: async () => { held = false; } };
+      },
+      exists: async (path) => {
+        expect(held).toBe(true);
+        return storage.exists(path);
+      },
+    };
+    const store = new PaperIndexStore(shared, DEFAULT_SETTINGS.output);
+    await expect(store.mutate(() => {
+      expect(held).toBe(true);
+      throw new Error("mutation failed");
+    })).rejects.toThrow("mutation failed");
+    expect(held).toBe(false);
+    await store.mutate(() => ({ changed: false, result: "next" }));
+    expect(held).toBe(false);
+  });
+
+  it("does not mutate when the advertised shared lock cannot be acquired", async () => {
+    const { storage, files } = makeStorage();
+    const store = new PaperIndexStore({
+      ...storage,
+      acquireLock: async () => null,
+    }, DEFAULT_SETTINGS.output);
+    let mutated = false;
+    await expect(store.mutate(() => {
+      mutated = true;
+      return { changed: true, result: undefined };
+    })).rejects.toThrow(/lock/i);
+    expect(mutated).toBe(false);
+    expect(files).toEqual({});
+  });
+
   it("loads an empty index when papers.json is missing", async () => {
     const { store } = makeStore();
     await expect(store.load()).resolves.toEqual({

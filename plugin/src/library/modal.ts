@@ -25,31 +25,14 @@ export const LIBRARY_AUTHORIZATION_MODAL_CLASS = "arxiv-daily-library-authorizat
 export const LIBRARY_AUTHORIZATION_CONFIRM_CLASS = "arxiv-daily-library-authorization-confirm";
 export const LIBRARY_AUTHORIZATION_CANCEL_CLASS = "arxiv-daily-library-authorization-cancel";
 
-/**
- * The words the dialog asks and answers with, taken from the depth in one
- * place.
- *
- * The heading names what leaves the device, and it has to name the depth the
- * grant actually covers: a fixed "full text" heading would misdescribe a
- * metadata-and-abstracts grant exactly the way the depth and endpoint fields
- * used to before they were made to follow the scope being asked about.
- *
- * The confirm button has to answer that heading in the same words. "Authorize"
- * answers a question nobody was asked: the heading asks whether to send
- * something, so the affirmative is sending it, not granting an authorization
- * the reader then has to translate back. Heading and button are returned
- * together, from a single branch on the depth, so a third depth cannot be
- * added to one of them and forgotten in the other.
- */
+/** The stored scope retains its legacy depth name; this index only sends titles and abstracts. */
 export function libraryAuthorizationCopy(
-  processingDepth: LibraryAuthorizationDisclosure["processingDepth"],
+  _processingDepth: LibraryAuthorizationDisclosure["processingDepth"],
 ): { title: string; confirm: string } {
-  return processingDepth === "full-text"
-    ? { title: "Send full text off this device?", confirm: "Send full text" }
-    : {
-        title: "Send titles and abstracts off this device?",
-        confirm: "Send titles and abstracts",
-      };
+  return {
+    title: "Send titles and abstracts off this device?",
+    confirm: "Send titles and abstracts",
+  };
 }
 
 export function confirmLibraryAuthorization(
@@ -71,7 +54,7 @@ export function confirmLibraryAuthorization(
       list,
       "Depth",
       disclosure.processingDepth === "full-text"
-        ? "Full text (remote embedding sends full-text chunks to the embedding endpoint)"
+        ? "Titles and abstracts (remote embedding sends their chunks to the embedding endpoint)"
         : "Metadata and abstracts only",
     );
     addDisclosure(list, "Endpoint", disclosure.endpoint);
@@ -80,8 +63,8 @@ export function confirmLibraryAuthorization(
     }
     modal.contentEl.createEl("p", {
       text: disclosure.processingDepth === "full-text"
-        ? "Authorizing permits full-text chunks from that folder to be sent to the endpoints above, where they are turned into similarity vectors for library search. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoints, file types, or depth invalidates it."
-        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoint in later profile-building steps. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoint, file types, or depth invalidates it.",
+        ? "Authorizing permits titles and abstracts extracted from PDFs in that folder to be sent to the endpoints above, where they are turned into similarity vectors for library search. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoints, file types, or depth invalidates it."
+        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoints in later direction-generation steps. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoint, file types, or depth invalidates it.",
     });
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
     let settled = false;
@@ -122,12 +105,12 @@ export function confirmLibraryRevocation(
     );
     modal.contentEl.createEl("p", {
       text: options.switchesToLocal
-        ? "arXiv Daily stops sending anything from your library folder to the model endpoints, and embedding returns to local (offline) on this device."
-        : "arXiv Daily stops sending anything from your library folder to the model endpoints. Local embedding keeps working offline.",
+        ? "arXiv Daily stops sending anything from your library folder to the model endpoints, and embedding returns to local on this device — its model downloads once (if it has not already), then runs offline."
+        : "arXiv Daily stops sending anything from your library folder to the model endpoints. Local embedding downloads its model once, then keeps working offline.",
     });
     if (options.switchesToLocal) {
       modal.contentEl.createEl("p", {
-        text: "The existing search index was built with the remote embedding model. Local and remote vectors cannot be mixed, so the index stops being usable and has to be rebuilt on this device (that takes hours for a large library).",
+        text: "The existing search index was built with the remote embedding model. Local and remote vectors cannot be mixed, so the index stops being usable and has to be rebuilt on this device.",
       });
     }
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
@@ -172,7 +155,7 @@ export function showPersonalLibraryCatalogSummary(
   modal.contentEl.createEl("p", {
     cls: "mod-hint",
     text: "Unresolved files have no arXiv id; they are indexed and searchable as local "
-      + "documents by the full-text index (Run index-personal-library-fulltext).",
+      + "documents by the title-and-abstract index (Run index-personal-library-fulltext).",
   });
   const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
   actions.createEl("button", { text: "Close" }).onclick = () => modal.close();
@@ -230,19 +213,19 @@ export function confirmEmbeddingMode(app: App): Promise<"local" | "remote"> {
     const modal = new Modal(app);
     modal.titleEl.setText("Embedding mode");
     modal.contentEl.createEl("p", {
-      text: "How should arXiv Daily turn your library's full text into similarity vectors? "
+      text: "How should arXiv Daily turn your library's titles and abstracts into similarity vectors? "
         + "You can change this later in settings — switching modes rebuilds the index.",
     });
     const list = modal.contentEl.createEl("dl");
     addDisclosure(
       list,
-      "Local (offline, default)",
-      "Embeds on this device with a bundled model. Private and offline, but indexing a large library takes a long time (hours).",
+      "Local (default, one-time model download)",
+      "Downloads its model once (about 130 MB, from Hugging Face) on this first index build, then embeds on this device. Only titles and abstracts are embedded; time depends on library size and this device.",
     );
     addDisclosure(
       list,
       "Remote (fast)",
-      "Sends full-text chunks to an embeddings API. Indexing takes minutes; requires model authorization at full-text depth; full text leaves this device.",
+      "Sends title-and-abstract chunks to an embeddings API after authorization. PDF bodies are not sent for embedding.",
     );
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
     let settled = false;

@@ -2,12 +2,14 @@ import {
   DEFAULT_SETTINGS,
   migrateArxivSettings,
   migrateEmailSettings,
+  normalizeMaxDailyPapers,
   sanitizeDetailSelection,
   type PluginSettings,
   type RunState,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
+import { getSetupStatus, markSetupGuideCompleteIfDone } from "../onboarding";
 
 export function settingsAndStateFromPersistedData(raw: unknown): {
   settings: PluginSettings;
@@ -19,6 +21,7 @@ export function settingsAndStateFromPersistedData(raw: unknown): {
     ? data.settings as Partial<PluginSettings>
     : {};
   const merged = mergeSettings(DEFAULT_SETTINGS, partial);
+  merged.output.maxDailyPapers = normalizeMaxDailyPapers(merged.output.maxDailyPapers);
   merged.arxiv = migrateArxivSettings(partial.arxiv);
   merged.email = migrateEmailSettings(partial.email);
   const persistedArxiv = isRecord(partial.arxiv) ? partial.arxiv : undefined;
@@ -33,9 +36,14 @@ export function settingsAndStateFromPersistedData(raw: unknown): {
       hasPersistedTimezone,
     ),
   ];
+  const runState = isRecord(data.runState) ? data.runState as RunState : {};
+  // Existing users upgrading whose state already satisfies every guide
+  // milestone should never see the guide; mark it complete on load rather
+  // than waiting for a settings-tab render to notice.
+  markSetupGuideCompleteIfDone(merged, getSetupStatus(merged, runState));
   return {
     settings: merged,
-    runState: isRecord(data.runState) ? data.runState as RunState : {},
+    runState,
     warnings,
   };
 }
@@ -54,6 +62,7 @@ function mergeSettings(
     email: migrateEmailSettings(partial.email ?? defaults.email),
     embedding: { ...defaults.embedding, ...(partial.embedding ?? {}) },
     pdfParserSidecar: migratePdfParserSidecarSettings(partial.pdfParserSidecar),
+    onboarding: { ...defaults.onboarding, ...(partial.onboarding ?? {}) },
   };
 }
 

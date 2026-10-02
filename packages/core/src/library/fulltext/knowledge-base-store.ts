@@ -13,14 +13,9 @@
  * Design decisions:
  * - Manifest writes rotate a `.backup` before atomic promotion of the primary
  *   (commit-wins; the backup always holds the previous primary content).
- * - `modelId`/`dimension` are global to the knowledge base: a different model
- *   indexing the same scope/identification produces different content. This
- *   stage treats a model switch under the same scope/id as delete-and-rebuild:
- *   `replaceManifest` never migrates; when the loaded manifest already has
- *   papers and `next.modelId` differs, the replacement is rejected as
- *   `invalid` and the caller must call `removeAll()` first (or the knowledge
- *   base directory is deleted externally). An empty knowledge base (no
- *   papers) may adopt any model id.
+ * - Model changes write to a model/dimension-specific paper directory first.
+ *   Only a validated atomic manifest promotion exposes those new vectors;
+ *   cancellation or a failed promotion leaves the old model's files intact.
  * - `removeAll` removes every file under `papers/` (recursively via
  *   `storage.list` when available, otherwise enumerated through the
  *   manifest's records) plus the manifest and its backup. `StorageAdapter`
@@ -35,6 +30,7 @@
 
 import type { StorageAdapter, StorageEntry } from "../../core/adapters";
 import type { OutputSettings } from "../../settings/types";
+import { sha256Hex } from "../../utils/digest";
 import {
   FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
   createFullTextKnowledgeBasePaperPath,
@@ -148,14 +144,23 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
       if (expectedRevision !== current.revision) {
         throw stale(expectedRevision, current.revision);
       }
-      // Model switch policy: the manifest's modelId/dimension are global. A different model
-      // re-indexing the same scope/id produces different content, so a switch while the
-      // knowledge base holds papers requires delete-and-rebuild (removeAll first).
-      if (loaded !== null
-        && Object.keys(loaded.document.papers).length > 0
-        && candidate.modelId !== current.modelId) {
-        throw error("invalid",
-          "full-text knowledge base model switch requires rebuilding: remove all papers before indexing with a different model");
+      const changesModel = loaded !== null && Object.keys(current.papers).length > 0
+        && (candidate.modelId !== current.modelId || candidate.dimension !== current.dimension);
+      if (changesModel) {
+        if (candidate.paperStorage !== "model-scoped") {
+          throw error("invalid", "model changes require separately staged paper files");
+        }
+        for (const record of Object.values(candidate.papers)) {
+          if (record.modelId !== candidate.modelId || record.dimension !== candidate.dimension) {
+            throw error("invalid", "cannot mix embedding models or dimensions in one index");
+          }
+          if (record.status !== "ready") continue;
+          const staged = await readDocument(this.storage, this.modelPaperPath(record.paperKey, candidate), decodeFullTextPaperDocument);
+          if (staged.kind !== "valid" || staged.document.modelId !== candidate.modelId
+            || staged.document.dimension !== candidate.dimension) {
+            throw error("invalid", "new-model paper files must be staged before switching the index");
+          }
+        }
       }
       if (current.revision === Number.MAX_SAFE_INTEGER) {
         throw error("invalid", "full-text knowledge base manifest revision is exhausted");
@@ -170,8 +175,11 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
     });
   }
 
-  loadPaper(paperKey: string): Promise<FullTextPaperDocument | null> {
-    const path = createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
+  async loadPaper(paperKey: string, selectedManifest?: FullTextKnowledgeBaseManifest): Promise<FullTextPaperDocument | null> {
+    const manifest = selectedManifest ?? await this.loadManifest();
+    const path = manifest.paperStorage === "model-scoped"
+      ? this.modelPaperPath(paperKey, manifest)
+      : createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
     return enqueue(this.storage, path, async () => {
       const read = await readDocument(this.storage, path, decodeFullTextPaperDocument);
       if (read.kind === "missing") return null;
@@ -189,14 +197,20 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
     });
   }
 
-  savePaper(document: FullTextPaperDocument): Promise<void> {
+  async savePaper(document: FullTextPaperDocument): Promise<void> {
     // decodeFullTextPaperDocument reads the persisted JSON form (vectors as
     // base64), so validate the exact serialized bytes we are about to write.
     const serialized = serializeFullTextPaperDocument(document);
     if (!decodeFullTextPaperDocument(JSON.parse(serialized))) {
       return Promise.reject(error("invalid", "cannot persist invalid full-text paper document"));
     }
-    const path = createFullTextKnowledgeBasePaperPath(this.storage, this.paths, document.paperKey);
+    const manifest = await this.loadManifest();
+    const stageModel = manifest.paperStorage === "model-scoped"
+      || (Object.keys(manifest.papers).length > 0
+        && (manifest.modelId !== document.modelId || manifest.dimension !== document.dimension));
+    const path = stageModel
+      ? this.modelPaperPath(document.paperKey, document)
+      : createFullTextKnowledgeBasePaperPath(this.storage, this.paths, document.paperKey);
     return enqueue(this.storage, path, async () => {
       requireAtomic(this.storage);
       const existing = await readDocument(this.storage, path, decodeFullTextPaperDocument);
@@ -205,7 +219,7 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
           `refusing to overwrite incompatible full-text paper schema version ${existing.schemaVersion}: ${path}`);
       }
       try {
-        await ensureDirDeep(this.storage, this.paths.papersDirectory);
+        await ensureDirDeep(this.storage, path.slice(0, path.lastIndexOf("/")));
         // Derived, content-addressed data: idempotent rewrite, no backup needed.
         await this.storage.writeTextAtomic!(path, serialized);
       } catch (caught) {
@@ -214,8 +228,11 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
     });
   }
 
-  removePaper(paperKey: string): Promise<void> {
-    const path = createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
+  async removePaper(paperKey: string): Promise<void> {
+    const manifest = await this.loadManifest();
+    const path = manifest.paperStorage === "model-scoped"
+      ? this.modelPaperPath(paperKey, manifest)
+      : createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
     return enqueue(this.storage, path, async () => {
       if (!(await this.storage.exists(path))) return; // idempotent: missing paper is already gone
       try {
@@ -242,6 +259,11 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
         }
       }
     });
+  }
+
+  private modelPaperPath(paperKey: string, model: { modelId: string; dimension: number }): string {
+    const namespace = sha256Hex(JSON.stringify([model.modelId, model.dimension]));
+    return this.storage.normalizePath(`${this.paths.papersDirectory}/models/${namespace}/${sha256Hex(paperKey)}.json`);
   }
 
   private loadDurableManifest(): Promise<{ document: FullTextKnowledgeBaseManifest; raw: string } | null> {
@@ -294,7 +316,9 @@ export class FullTextKnowledgeBaseFileStore implements FullTextKnowledgeBaseStor
         const manifest = await this.loadDurableManifest();
         if (manifest) {
           for (const paperKey of Object.keys(manifest.document.papers)) {
-            const path = createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
+            const path = manifest.document.paperStorage === "model-scoped"
+              ? this.modelPaperPath(paperKey, manifest.document)
+              : createFullTextKnowledgeBasePaperPath(this.storage, this.paths, paperKey);
             if (await this.storage.exists(path)) {
               await this.removePaperFile(path);
             }
@@ -548,6 +572,7 @@ function clonePaperDocument(document: FullTextPaperDocument): FullTextPaperDocum
     textHash: document.textHash,
     contentHash: document.contentHash,
     title: document.title,
+    abstract: document.abstract,
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],

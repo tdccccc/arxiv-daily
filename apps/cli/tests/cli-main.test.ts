@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliCommandRuntime } from "../src/main";
+import { CliConfigError } from "../src/config";
+import * as emailCommands from "../src/email-cmd";
+import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../src/config";
 import { DEFAULT_CLI_SCHEDULE } from "../src/config";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, OperationRegistry } from "@arxiv-daily/core";
 
 interface CompanionCliContract {
   schemaVersion: number;
@@ -42,6 +45,7 @@ function testConfig(): CliRuntimeConfig {
             name: "Topic",
             tag: "topic",
             description: "topic description",
+            directions: [{ id: "d1", text: "topic description", origin: "migrated" }],
             detail: false,
           },
         ],
@@ -73,6 +77,71 @@ function fakeRuntime(): CliCommandRuntime {
 }
 
 describe("CLI main", () => {
+  it.each([
+    ["init"], ["update"], ["schedule", "show"], ["schedule", "install"],
+    ["schedule", "uninstall"], ["data", "export", "--out", "/tmp/unused.zip"],
+    ["data", "import", "/tmp/unused.zip"], ["email", "status"],
+    ["email", "test"], ["email", "verify-start"],
+  ])("handles a rejected async %s command inside the CLI boundary", async (...argv) => {
+    const capture = captureIo();
+    const cfg = testConfig();
+    const secret = "configured-cli-secret-value";
+    cfg.settings.llm.apiKey = secret;
+    const message = argv[0] === "init" || argv[0] === "update"
+      ? "early command failed" : `command failed with ${secret}`;
+    const fail = vi.fn(async () => { throw new Error(message); });
+    vi.spyOn(emailCommands, "emailStatus").mockImplementation(fail);
+    vi.spyOn(emailCommands, "emailTest").mockImplementation(fail);
+    vi.spyOn(emailCommands, "emailVerifyStart").mockImplementation(fail);
+    const runtime = { ...fakeRuntime(), host: buildNodeHostAdapters({ rootDir: "/tmp/unused-cli-host" }) };
+    const code = await runCli({
+      argv, io: capture.io, loadConfig: async () => cfg, buildRuntime: () => runtime,
+      init: fail, update: fail,
+      schedule: { show: fail, install: fail, uninstall: fail },
+      data: { export: fail, import: fail },
+    });
+    expect(code).toBe(1);
+    expect(fail).toHaveBeenCalledOnce();
+    expect(capture.stderr.join("")).toContain("command failed");
+    expect(capture.stderr.join("")).not.toContain(secret);
+  });
+
+  it("classifies asynchronous configuration failures as exit code 2", async () => {
+    const capture = captureIo();
+    expect(await runCli({
+      argv: ["schedule", "show"], io: capture.io, loadConfig: async () => testConfig(),
+      schedule: { show: async () => { throw new CliConfigError("invalid schedule"); } },
+    })).toBe(2);
+    expect(capture.stderr.join("")).toContain("invalid schedule");
+  });
+
+  it("keeps signal handlers until an asynchronous email command settles", async () => {
+    const capture = captureIo();
+    const cfg = testConfig();
+    cfg.settings.email.to = "test@example.com";
+    const operations = new OperationRegistry();
+    const host = buildNodeHostAdapters({ rootDir: "/tmp/unused-cli-host" });
+    let resolveResponse!: (value: { status: number; headers: {}; bodyText: string }) => void;
+    const response = new Promise<{ status: number; headers: {}; bodyText: string }>((resolve) => { resolveResponse = resolve; });
+    const request = vi.spyOn(host.http, "request").mockReturnValue(response);
+    const beforeInt = process.listenerCount("SIGINT");
+    const beforeTerm = process.listenerCount("SIGTERM");
+    const running = runCli({
+      argv: ["email", "verify-start"], io: capture.io, loadConfig: async () => cfg,
+      buildRuntime: () => ({ ...fakeRuntime(), host, operations }),
+    });
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(process.listenerCount("SIGINT")).toBe(beforeInt + 1);
+      expect(process.listenerCount("SIGTERM")).toBe(beforeTerm + 1);
+    } finally {
+      resolveResponse({ status: 200, headers: {}, bodyText: '{"ok":true}' });
+      await running;
+    }
+    expect(process.listenerCount("SIGINT")).toBe(beforeInt);
+    expect(process.listenerCount("SIGTERM")).toBe(beforeTerm);
+  });
+
   it("prints help without loading config", async () => {
     const io = captureIo();
     const loadConfig = vi.fn();

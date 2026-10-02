@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CliConfigError, loadCliConfig, scheduleFireSlots } from "../src/config";
+import { buildPaperFilterRequest } from "@arxiv-daily/core";
 
 const minimalToml = `
 schema_version = 1
@@ -88,6 +89,7 @@ describe("CLI config loader (TOML / XDG)", () => {
     expect(cfg.settings.arxiv.topics[0]?.tag).toBe("ml");
     expect(cfg.settings.output.linkStyle).toBe("relative");
     expect(cfg.settings.output.summaryLanguage).toBe("en");
+    expect(cfg.settings.output.maxDailyPapers).toBe(20);
     expect(cfg.settings.email.to).toBe("a@b.com");
     expect(cfg.settings.detailSelection.profile).toBe("balanced");
     expect(cfg.scheduleIntent.on).toBe("09:30");
@@ -102,6 +104,24 @@ describe("CLI config loader (TOML / XDG)", () => {
 
     expect(cfg.settings.advanced.requestDelayMs).toBe(3000);
   });
+
+  it.each([1, 35, Number.MAX_SAFE_INTEGER])("loads output.max_daily_papers = %s", async (limit) => {
+    const cfg = await loadCliConfig({
+      configPath: "/cfg.toml",
+      readText: async () => minimalToml.replace("[output]", `[output]\nmax_daily_papers = ${limit}`),
+    });
+    expect(cfg.settings.output.maxDailyPapers).toBe(limit);
+  });
+
+  it.each(["0", "-1", "1.5", "nan", "inf", '"20"', "true", "[20]", "9.007199254740992e15"])(
+    "rejects invalid output.max_daily_papers = %s",
+    async (value) => {
+      await expect(loadCliConfig({
+        configPath: "/cfg.toml",
+        readText: async () => minimalToml.replace("[output]", `[output]\nmax_daily_papers = ${value}`),
+      })).rejects.toThrow(/invalid output.max_daily_papers/);
+    },
+  );
 
   it("rejects invalid request delay configuration", async () => {
     await expect(
@@ -131,5 +151,56 @@ describe("CLI config loader (TOML / XDG)", () => {
         weekdaysOnly: true,
       }),
     ).toEqual(["09:30", "13:30", "17:30"]);
+  });
+
+  it("rejects a reversed recurring schedule while loading TOML", async () => {
+    const text = minimalToml.replace('on = "09:30"', 'on = "18:00"')
+      .replace('until = "18:00"', 'until = "09:00"')
+      .replace("interval_hours = 0", "interval_hours = 1");
+    await expect(loadCliConfig({ configPath: "/cfg.toml", readText: async () => text }))
+      .rejects.toThrow("schedule.until");
+  });
+});
+
+/**
+ * P3: the CLI and the plugin classify through the same core path, so the CLI
+ * must reach the filter with directions too. A TOML topic written the legacy
+ * way — one `description` line, no `directions` — has to arrive as a topic the
+ * filter can judge against (ADR 0003 keeps the two products consistent).
+ */
+describe("CLI topics reach the direction-driven filter", () => {
+  it("turns a legacy description-only TOML topic into a classifiable direction", async () => {
+    const cfg = await loadCliConfig({
+      configPath: "/cfg.toml",
+      readText: async () => minimalToml,
+    });
+
+    const request = buildPaperFilterRequest(
+      [{ id: "2609.00001", title: "T", authors: "A", abstract: "B" }],
+      cfg.settings.arxiv,
+    );
+
+    expect(request.messages[0]!.content).toContain("- ml:\n  - ml#1: machine learning");
+    expect(request.identity.directions).toMatchObject([
+      { ref: "ml#1", tag: "ml", text: "machine learning" },
+    ]);
+  });
+
+  it("carries an explicit TOML direction list through in order", async () => {
+    const toml = minimalToml.replace(
+      'description = "machine learning"',
+      'directions = [{ id = "d1", text = "graph neural networks" }, { id = "d2", text = "diffusion models" }]',
+    );
+    const cfg = await loadCliConfig({ configPath: "/cfg.toml", readText: async () => toml });
+
+    const request = buildPaperFilterRequest(
+      [{ id: "2609.00001", title: "T", authors: "A", abstract: "B" }],
+      cfg.settings.arxiv,
+    );
+
+    expect(request.identity.directions.map(({ ref, text }) => ({ ref, text }))).toEqual([
+      { ref: "ml#1", text: "graph neural networks" },
+      { ref: "ml#2", text: "diffusion models" },
+    ]);
   });
 });

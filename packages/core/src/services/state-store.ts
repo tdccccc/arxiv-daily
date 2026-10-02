@@ -186,11 +186,16 @@ export class StateStore {
       for (const [date, entry] of Object.entries(candidate)) {
         if (entry.status !== "running") continue;
         if (now - entry.lastAttempt < maxAgeMs) continue;
+        // A crash or force-quit is transient; the retry cap still applies.
+        const message = "recovered stale running state after startup";
+        const retriesExhausted = entry.attempts >= MAX_TRANSIENT_ATTEMPTS;
         candidate[date] = {
           ...entry,
-          status: "failed_permanent",
+          status: retriesExhausted ? "failed_permanent" : "failed_transient",
           lastAttempt: now,
-          error: "recovered stale running state after startup",
+          error: retriesExhausted
+            ? `retries exhausted after ${entry.attempts} attempts: ${message}`
+            : message,
         };
         recovered.push(date);
       }

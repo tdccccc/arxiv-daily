@@ -1,0 +1,79 @@
+{
+  "vaultPath": "/home/tiandc/Desktop/plugin_test",
+  "prefix": "__arxiv_native_acceptance_1790778542243",
+  "statePath": "__arxiv_native_acceptance_1790778542243/.index/delivery-state.json",
+  "stages": [
+    {
+      "attempt": 1,
+      "requests": 1,
+      "checks": [
+        "exclusive private native write",
+        "private atomic replacement and backup recovery",
+        "directory replacement and released guard rejected",
+        "persistent duplicate-send protection",
+        "automatic email settings rendered"
+      ],
+      "platform": "linux",
+      "arch": "x64",
+      "versions": {
+        "electron": "39.2.6",
+        "node": "22.21.1",
+        "napi": "10"
+      },
+      "obsidian": "1.11.5",
+      "nativeVersion": 1
+    },
+    {
+      "attempt": 2,
+      "requests": 0,
+      "checks": [
+        "persistent duplicate-send protection",
+        "automatic email settings rendered"
+      ],
+      "platform": "linux",
+      "arch": "x64",
+      "versions": {
+        "electron": "39.2.6",
+        "node": "22.21.1",
+        "napi": "10"
+      },
+      "obsidian": "1.11.5",
+      "nativeVersion": 1
+    }
+  ],
+  "nodeRepeat": {
+    "kind": "skipped",
+    "reason": "already_delivered",
+    "requests": 0,
+    "native": true
+  },
+  "settingsAndWorkspaceRestored": true,
+  "pluginSha256": "aa1e4f511adbeeca51c2fb79b108bcf3eaae774c8d3c20c2e72f6d26fd14c723",
+  "ui": {
+    "first": {
+      "enabled": true,
+      "desc": "When on, a digest is emailed after each successful daily report. Email problems do not stop report generation."
+    },
+    "unavailable": {
+      "supported": false,
+      "desc": "Automatic daily email is unavailable because this host cannot provide protected delivery storage. Test emails still send. When on, a digest is emailed after each successful daily report. Email problems do not stop report generation."
+    },
+    "restored": {
+      "enabled": false,
+      "supported": true
+    },
+    "errors": []
+  },
+  "implementationCommit": "552f21ca21de9fd06362be5d134d870ec9f3bc2b",
+  "nativeMatrixRun": "https://github.com/tdccccc/arxiv-daily/actions/runs/36733252120",
+  "desktopScope": "Real Obsidian on Linux x64; macOS/Windows native storage and packaging are verified separately by the six-platform CI, not represented as real Obsidian sessions.",
+  "screenshots": {
+    "email-supported.png": "bc04376d4e1811b42136d8e8d4f3019332027f8ccee27f9ecd1a0db2955ad1d6",
+    "email-unavailable.png": "d28c0487260803a682c170a34302b63b6fdfad5f050e925792b8b095eb4a3166"
+  },
+  "probeSources": {
+    "accept-native.mjs": "7f49e2a19c0043341fb4d197befbd7a069dac88a27d6d47cab9573c8529af662",
+    "ui-native.mjs": "80411a135885333a93e84245ec15eef90d6fcf4226212d2d7d1cb32b3c648edf",
+    "build-fixture.mjs": "eaf7bb3282502e959b9e312b7fe7ff369207cef8634e29299fb5fe5d5c0748ff"
+  }
+}

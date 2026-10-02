@@ -42,7 +42,9 @@ import {
 import type { FilteredPaper } from "./paper-filter";
 import { escapePaperDataFence } from "./prompt-safety";
 
-export interface DailyPaperWithContent extends FilteredPaper {
+export interface DailyPaperWithContent extends Omit<FilteredPaper, "relevanceScore"> {
+  /** Manual paper fetches bypass classification and have no relevance score. */
+  relevanceScore?: number;
   abstractConclusion: string;
   fullSections: string | null;
   published?: string;
@@ -75,6 +77,8 @@ export interface SummarizerDeps {
   advanced: AdvancedSettings;
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
+  /** Counts omitted by the report limit, separate from per-paper summaries. */
+  omittedByTopic?: Readonly<Record<string, number>>;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
@@ -106,6 +110,7 @@ export async function summarizeDaily(
     detailLink: paper.detailLink,
     discoveryProvenance: paper.discoveryProvenance,
     personalNovelty: paper.personalNovelty,
+    topicDirections: paper.topicDirections,
   }));
   preflightDailySummaryPapers(assemblyPapers, deps.arxivSettings);
 
@@ -185,6 +190,7 @@ export async function summarizeDaily(
     dateStr,
     arxivSettings: deps.arxivSettings,
     summaryLanguage: deps.summaryLanguage,
+    ...(deps.omittedByTopic ? { omittedByTopic: deps.omittedByTopic } : {}),
   };
   preflightDailySummaryAssembly(assemblyInput);
 

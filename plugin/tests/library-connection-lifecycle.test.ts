@@ -5,6 +5,7 @@ import {
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import ArxivDailyPlugin from "../main.ts";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   createLibraryConnection,
   libraryAuthorizationDisclosure,
@@ -17,6 +18,7 @@ function makePlugin() {
   const setSensitiveValues = vi.fn();
   const files = new Map<string, string>();
   Object.assign(plugin, {
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     settings: structuredClone(DEFAULT_SETTINGS),
     logger: { setSensitiveValues, error: vi.fn(), warn: vi.fn() },
     host: { storage: {
@@ -79,7 +81,7 @@ describe("librarySetupNextStep", () => {
     }, "remote");
     expect(pending.action).toBe("index");
     expect(pending).toMatchObject({ remoteConsentPending: true });
-    expect(pending.description).toMatch(/full text/i);
+    expect(pending.description).toMatch(/titles and abstracts/i);
     expect(pending.description).toMatch(/confirm/i);
 
     const invalidated = librarySetupNextStep({

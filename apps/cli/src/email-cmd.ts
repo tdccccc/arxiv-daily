@@ -1,4 +1,5 @@
 import {
+  AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
   deliverDailyEmailIfEnabled,
   isEmailCredentialsReady,
   isEmailDeliveryConfigured,
@@ -6,17 +7,22 @@ import {
   resolveResendApiKey,
   sampleDailyDigest,
   startHostedEmailVerification,
+  supportsAutomaticEmailDelivery,
   formatDate,
   todayInTz,
   arxivCategories,
 } from "@arxiv-daily/core";
 import type { HostAdapters } from "@arxiv-daily/core";
+import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "./config";
 import type { CliIo } from "./main-types";
 
 export async function emailStatus(
   config: CliRuntimeConfig,
   io: CliIo,
+  automaticSupported = supportsAutomaticEmailDelivery(
+    new NodeStorageAdapter(config.vaultRoot),
+  ),
 ): Promise<number> {
   const email = config.settings.email;
   const mode = resolveEmailDeliveryMode(email);
@@ -32,7 +38,13 @@ export async function emailStatus(
   );
   writeLine(
     io.stdout,
-    `auto-send: ${configured.ok ? "would run on completed daily" : `off (${configured.reason})`}`,
+    `auto-send: ${
+      !automaticSupported
+        ? "unsupported on this host (protected delivery storage unavailable); test emails still send"
+        : configured.ok
+          ? "would run on completed daily"
+          : `off (${configured.reason})`
+    }`,
   );
   return 0;
 }
@@ -73,6 +85,9 @@ export async function emailTest(
           ? ` (delivery record unavailable: ${result.reason})`
           : ""),
     );
+    if (!supportsAutomaticEmailDelivery(host.storage)) {
+      writeLine(io.stderr, `warning: ${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE}`);
+    }
     return 0;
   }
   writeLine(io.stderr, `email test: ${result.kind} (${result.reason})`);

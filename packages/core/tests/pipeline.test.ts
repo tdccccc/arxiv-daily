@@ -1,4 +1,5 @@
 import { markupParser } from "./markup-parser";
+import { normalizeTopic } from "../src/settings/topics";
 import { describe, it, expect, vi } from "vitest";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
@@ -37,8 +38,8 @@ const testDetailSelection = {
 const testArxiv = {
   ...DEFAULT_SETTINGS.arxiv,
   topics: [
-    { id: "t1", name: "Photo-z", tag: "photo-z", description: "photo-z methods", detail: true },
-    { id: "t2", name: "Galaxy Cluster", tag: "galaxy-cluster", description: "cluster surveys", detail: true },
+    normalizeTopic({ id: "t1", name: "Photo-z", tag: "photo-z", directions: [{ id: "d1", text: "photo-z methods", origin: "manual" }], detail: true }),
+    normalizeTopic({ id: "t2", name: "Galaxy Cluster", tag: "galaxy-cluster", directions: [{ id: "d2", text: "cluster surveys", origin: "manual" }], detail: true }),
   ],
 };
 
@@ -227,34 +228,6 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
 
-  it("honors a captured personalized lifecycle signal before any fetch", async () => {
-    const d = makeDeps();
-    const lifecycle = new AbortController();
-    lifecycle.abort("personalized authorization revoked");
-    const pipeline = new ArxivPipeline({
-      markupParser,
-      fetcher: d.fetcher as any,
-      paperFetcher: d.paperFetcher as any,
-      writer: d.writer as any,
-      llm: d.llm as any,
-      logger: d.logger,
-      arxiv: testArxiv,
-      advanced: DEFAULT_SETTINGS.advanced,
-      output: DEFAULT_SETTINGS.output,
-      llmSettings: DEFAULT_SETTINGS.llm,
-      detailSelection: testDetailSelection,
-      personalizedDiscovery: { directions: [] },
-      personalizedDiscoverySignal: lifecycle.signal,
-    });
-
-    await expect(pipeline.runForDate(firstDateFromFixture())).resolves.toEqual({
-      kind: "cancelled",
-      reason: "personalized authorization revoked",
-    });
-    expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
-    expect(d.llm.call).not.toHaveBeenCalled();
-  });
-
   it("passes the abort signal to recent and metadata fetches", async () => {
     const d = makeDeps();
     const controller = new AbortController();
@@ -281,7 +254,41 @@ describe("ArxivPipeline", () => {
     );
   });
 
-  it("returns failed_transient when /recent misses the date", async () => {
+  it.each([
+    ["a storage error", () => new Error("index busy"), { kind: "failed_transient", reason: "paper index update failed: index busy" }],
+    ["a cancellation", () => new RunCancelledError("run cancelled"), { kind: "cancelled", reason: "run cancelled" }],
+  ])("reports %s while indexing filtered papers like the other index steps", async (_label, error, expected) => {
+    const d = makeDeps();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    d.llm.call = vi.fn(async () =>
+      JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80 }] }),
+    );
+    const paperIndex = {
+      upsertManyFromDailyPapers: vi.fn(async () => {
+        throw error();
+      }),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate(date)).resolves.toEqual(expected);
+    expect(paperIndex.upsertManyFromDailyPapers).toHaveBeenCalled();
+  });
+
+  it("fails permanently when the date is older than /recent", async () => {
     const d = makeDeps();
     d.fetcher.fetchBySubmittedDate = vi.fn().mockResolvedValue([]);
     const pipeline = new ArxivPipeline({
@@ -298,8 +305,8 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
     const result = await pipeline.runForDate("1999-01-01");
-    expect(result.kind).toBe("failed_transient");
-    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(result.kind).toBe("failed_permanent");
+    expect((result as any).reason).toContain("older than the oldest astro-ph /recent bucket");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
   });
 
@@ -484,9 +491,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -539,9 +546,9 @@ describe("ArxivPipeline", () => {
         response.coreProblem = String.raw`Constraint \(z<0.1\) with \(\alpha_i^2\).`;
         return JSON.stringify(response);
       }
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -604,9 +611,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       return "";
@@ -673,8 +680,8 @@ describe("ArxivPipeline", () => {
 
     const result = await pipeline.runForDate("2026-06-09");
 
-    expect(result.kind).toBe("failed_transient");
-    expect((result as any).reason).toContain("not in astro-ph /recent");
+    expect(result.kind).toBe("failed_permanent");
+    expect((result as any).reason).toContain("older than the oldest astro-ph /recent bucket");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
   });
@@ -699,9 +706,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       throw new Error("daily summarizer should not be called");
@@ -920,7 +927,7 @@ describe("ArxivPipeline", () => {
     });
     d.writer.readDaily = vi.fn(async (writtenDate: string) => d.writes[`daily/${writtenDate}.md`] ?? "");
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     let failDailyLink = true;
     const paperIndex = {
@@ -1454,7 +1461,7 @@ describe("ArxivPipeline", () => {
     const id = firstBucketPapersFromFixture()[0]!.id;
     const controller = new AbortController();
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     const checkpointStore = {
       lookupReusable: vi.fn(),
@@ -1664,9 +1671,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -1728,11 +1735,11 @@ describe("ArxivPipeline", () => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
-      if (system.includes("选择最匹配的主题")) {
+      if (system.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
           papers: [
-            { id: existingId, category: "photo-z" },
-            { id: candidateId, category: "photo-z" },
+            { relevanceScore: 80, id: existingId, category: "photo-z", directions: ["photo-z#1"] },
+            { relevanceScore: 80, id: candidateId, category: "photo-z", directions: ["photo-z#1"] },
           ],
         });
       }
@@ -1770,7 +1777,7 @@ describe("ArxivPipeline", () => {
     expect(paperIndex.setPaperPath).toHaveBeenCalledWith(existingId, canonicalPath);
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
     const daily = d.writer.writeDaily.mock.calls[0]?.[1] as string;
-    expect(daily).toContain("共 2 篇相关论文，其中 1 篇详细收录。");
+    expect(daily).toContain("共 2 篇相关论文，其中 1 篇附独立论文总结。");
     expect(daily).toContain(`→ [[${existingId}]]`);
     expect(daily).not.toContain(`→ [[${candidateId}]]`);
   });
@@ -1781,7 +1788,7 @@ describe("ArxivPipeline", () => {
     const id = firstBucketPapersFromFixture()[0]!.id;
     const controller = new AbortController();
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     const paperIndex = {
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
@@ -1838,7 +1845,7 @@ describe("ArxivPipeline", () => {
       return `daily/${writtenDate}.md`;
     });
     d.llm.call = vi.fn(async () =>
-      JSON.stringify({ papers: [{ id, category: "photo-z" }] }),
+      JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     let failDailyLink = true;
     const paperIndex = {
@@ -1922,8 +1929,8 @@ describe("ArxivPipeline", () => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
-      if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       return summary;
     });
@@ -2008,9 +2015,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -2060,9 +2067,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: [{ id: arxivId, category: "photo-z" }],
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
         });
       }
       if (sys.includes("strict research-paper evaluator")) {
@@ -2109,9 +2116,9 @@ describe("ArxivPipeline", () => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
-      if (system.includes("选择最匹配的主题")) return JSON.stringify({ papers: [
-        { id: selectedId, category: "photo-z" },
-        { id: unselectedId, category: "photo-z" },
+      if (system.includes("判断它命中了哪些方向")) return JSON.stringify({ papers: [
+        { relevanceScore: 80, id: selectedId, category: "photo-z", directions: ["photo-z#1"] },
+        { relevanceScore: 80, id: unselectedId, category: "photo-z", directions: ["photo-z#1"] },
       ] });
       if (system.includes("strict research-paper evaluator")) {
         selectorCalls += 1;
@@ -2146,8 +2153,8 @@ describe("ArxivPipeline", () => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
-      if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) throw new Error("selector unavailable");
       return "## daily still generated\n";
@@ -2176,8 +2183,8 @@ describe("ArxivPipeline", () => {
       const system = messages[0]?.content ?? "";
       const daily = structuredDailyResponse(messages);
       if (daily) return daily;
-      if (system.includes("选择最匹配的主题")) {
-        return JSON.stringify({ papers: [{ id, category: "photo-z" }] });
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
       }
       if (system.includes("strict research-paper evaluator")) {
         return JSON.stringify({ papers: [{ id, score: 85, reason: "direct contribution" }] });
@@ -2206,9 +2213,9 @@ describe("ArxivPipeline", () => {
       const sys = msgs[0]?.content ?? "";
       const daily = structuredDailyResponse(msgs);
       if (daily) return daily;
-      if (sys.includes("选择最匹配的主题")) {
+      if (sys.includes("判断它命中了哪些方向")) {
         return JSON.stringify({
-          papers: ids.map((id) => ({ id, category: "photo-z" })),
+          papers: ids.map((id) => ({ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] })),
         });
       }
       if (sys.includes("strict research-paper evaluator")) {

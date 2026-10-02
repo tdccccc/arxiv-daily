@@ -2,7 +2,7 @@ import type { StorageAdapter } from "../core/adapters";
 import {
   normalizePaperDiscoveryProvenance,
 } from "../pipeline/discovery-provenance-marker";
-import type { PaperDiscoveryProvenance } from "../pipeline/personalized-paper-filter";
+import type { PaperDiscoveryProvenance } from "../pipeline/discovery-provenance-marker";
 import { normalizePersonalNovelty } from "../pipeline/personalized-novelty";
 import type { PersonalNovelty } from "../pipeline/personalized-novelty";
 import type { OutputSettings } from "../settings/types";
@@ -716,7 +716,18 @@ export class PaperIndexStore {
     return enqueuePathMutation(
       paperIndexMutationQueues,
       this.paths.papersJsonPath,
-      job,
+      async () => {
+        const lock = await this.storage.acquireLock?.(
+          `paper-index:${this.paths.papersJsonPath}`,
+          { wait: true },
+        );
+        if (lock === null) throw new PaperIndexError("paper index lock is unavailable");
+        try {
+          return await job();
+        } finally {
+          await lock?.release();
+        }
+      },
     );
   }
 
@@ -1136,10 +1147,14 @@ function parentDir(
 }
 
 function normalizeStoragePath(path: string): string {
-  return path
+  const normalized = path
     .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/^\/+|\/+$/g, "");
+    .replace(/\/+/g, "/");
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && normalized[start] === "/") start += 1;
+  while (end > start && normalized[end - 1] === "/") end -= 1;
+  return normalized.slice(start, end);
 }
 
 function dateOnly(value: string | undefined): string {
@@ -1251,7 +1266,7 @@ function normalizeAuthors(value: string | string[] | unknown): string[] {
   }
   if (typeof value === "string") {
     return value
-      .split(/\s*,\s*/)
+      .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
   }

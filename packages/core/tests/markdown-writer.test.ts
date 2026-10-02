@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
@@ -338,6 +339,37 @@ describe("MarkdownWriter strictness on existing files", () => {
     );
   });
 
+  it.each(["busy", "unavailable"])("does not inspect temporary files when the daily lock is %s", async (state) => {
+    const { storage } = makeStorage();
+    const list = vi.fn(storage.list);
+    const acquireLock = vi.fn(async () => {
+      if (state === "unavailable") throw new Error("lock unavailable");
+      return null;
+    });
+    const writer = new MarkdownWriter({
+      storage: { ...storage, list, acquireLock },
+      logger: new Logger("error"), arxiv: DEFAULT_SETTINGS.arxiv, output: DEFAULT_SETTINGS.output,
+    });
+    if (state === "unavailable") {
+      await expect(writer.cleanupTemporaryFiles()).rejects.toThrow("lock unavailable");
+    } else {
+      expect(await writer.cleanupTemporaryFiles()).toEqual([]);
+    }
+    expect(acquireLock).toHaveBeenCalledWith("daily-run");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("releases the daily lock even when temporary-file deletion fails", async () => {
+    const { storage } = makeStorage({ "arxiv-daily/daily/report.md.tmp": "partial" });
+    const release = vi.fn(async () => {});
+    const writer = new MarkdownWriter({
+      storage: { ...storage, acquireLock: async () => ({ release }), remove: async () => { throw new Error("delete failed"); } },
+      logger: new Logger("error"), arxiv: DEFAULT_SETTINGS.arxiv, output: DEFAULT_SETTINGS.output,
+    });
+    await expect(writer.cleanupTemporaryFiles()).rejects.toThrow("delete failed");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("cleanupTemporaryFiles removes stale markdown temp files from output dirs", async () => {
     const { files, writer } = makeWriter({
       "arxiv-daily/daily/2026-05-11.md.tmp": "partial",
@@ -557,6 +589,98 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).not.toContain("priority: normal");
     expect(written).toContain("- **arXiv**: [2605.06587]");
     expect(written).toContain("## Notes");
+  });
+
+  it.each(["AI: Robotics", "ml,dl", "[draft]", "#hash"])(
+    "keeps frontmatter valid YAML for the topic tag %s",
+    async (tag) => {
+      const { files, writer } = makeWriter();
+      await writer.writePaperNote({
+        arxivId: "2605.06587",
+        paperKey: "arxiv:2605.06587",
+        externalId: "2605.06587",
+        source: "arxiv",
+        title: "T",
+        authors: ["A"],
+        published: "2026-06-09",
+        updated: "2026-06-10",
+        category: "astro-ph",
+        topics: [tag],
+        primaryTopic: tag,
+        detail: false,
+        status: "inbox",
+        priority: "normal",
+        seenDates: ["2026-06-10"],
+        dailyReports: [],
+        paperPath: null,
+        arxivUrl: "https://arxiv.org/abs/2605.06587",
+        pdfUrl: "https://arxiv.org/pdf/2605.06587",
+        pdfPath: "",
+        zoteroKey: "",
+        zoteroUri: "",
+        citationKey: "",
+        projects: [],
+      });
+      const written = files["arxiv-daily/papers/2605.06587.md"]!;
+      const frontmatter = parseYaml(written.split("---\n")[1]!) as {
+        primary_topic: unknown;
+        tags: unknown;
+      };
+      expect(frontmatter.primary_topic).toBe(tag);
+      expect(frontmatter.tags).toEqual(["arxiv", "paper", tag]);
+    },
+  );
+
+  it("refreshPaperNoteFrontmatter keeps properties and tags the user added", async () => {
+    const { files, writer } = makeWriter({
+      "arxiv-daily/papers/2606.12938.md": [
+        "---",
+        'title: "Old title"',
+        "rating: 5",
+        "aliases:",
+        "  - Cluster paper",
+        "tags: [arxiv, paper, galaxy-cluster, to-read]",
+        "primary_topic: galaxy-cluster",
+        "---",
+        "",
+        "body",
+      ].join("\n"),
+    });
+
+    await writer.refreshPaperNoteFrontmatter({
+      arxivId: "2606.12938",
+      paperKey: "arxiv:2606.12938",
+      externalId: "2606.12938",
+      source: "arxiv",
+      title: "New title",
+      authors: ["A"],
+      published: "2026-06-11",
+      updated: "2026-06-11",
+      category: "astro-ph.CO",
+      topics: ["galaxy-cluster"],
+      primaryTopic: "galaxy-cluster",
+      detail: true,
+      status: "inbox",
+      priority: "high",
+      seenDates: ["2026-06-12"],
+      dailyReports: [],
+      paperPath: "arxiv-daily/papers/2606.12938.md",
+      arxivUrl: "https://arxiv.org/abs/2606.12938",
+      pdfUrl: "https://arxiv.org/pdf/2606.12938",
+      pdfPath: "",
+      zoteroKey: "",
+      zoteroUri: "",
+      citationKey: "",
+      projects: [],
+    });
+
+    const written = files["arxiv-daily/papers/2606.12938.md"]!;
+    const frontmatter = parseYaml(written.split("---\n")[1]!) as Record<string, unknown>;
+    expect(frontmatter.title).toBe("New title");
+    expect(frontmatter.rating).toBe(5);
+    expect(frontmatter.aliases).toEqual(["Cluster paper"]);
+    expect(frontmatter.tags).toEqual(["arxiv", "paper", "galaxy-cluster", "to-read"]);
+    expect(written).toContain("body");
   });
 
   it("refreshPaperNoteFrontmatter preserves body and uses the daily report date", async () => {

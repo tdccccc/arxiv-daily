@@ -17,7 +17,7 @@ import injectionGuard from "../../prompts/injection-guard.en.md";
 import type { ChatMessage } from "../../llm/client";
 import { renderPrompt } from "../../prompts/render";
 import { throwIfCancelled } from "../../services/cancellation";
-import type { PersonalLibraryConfirmedDirection } from "../personal-library-interest-profile";
+import type { PlaceableDirection } from "./placeable-direction";
 import type { PersonalLibraryDirectionLlmPort } from "../personal-library-direction-proposer";
 import type { NewClusterCandidate } from "./recluster";
 
@@ -63,7 +63,7 @@ export class DirectionDiffError extends Error {
 }
 
 export interface SuggestDirectionDiffInput {
-  directions: readonly PersonalLibraryConfirmedDirection[];
+  directions: readonly PlaceableDirection[];
   clusters: readonly NewClusterCandidate[];
   llm: PersonalLibraryDirectionLlmPort;
   signal?: AbortSignal;
@@ -90,7 +90,7 @@ export interface DirectionDiffContext {
 }
 
 export function renderDirectionDiffContext(
-  directions: readonly PersonalLibraryConfirmedDirection[],
+  directions: readonly PlaceableDirection[],
   clusters: readonly NewClusterCandidate[],
 ): DirectionDiffContext {
   return {
@@ -113,7 +113,7 @@ const DATA_SUFFIX = "\n</paper_data>";
 const PAPER_DATA_CLOSE_TAG = /<\/\s*paper_data\s*>/gi;
 
 export function renderDirectionDiffUserMessage(
-  directions: readonly PersonalLibraryConfirmedDirection[],
+  directions: readonly PlaceableDirection[],
   clusters: readonly NewClusterCandidate[],
 ): string {
   const data = JSON.stringify(renderDirectionDiffContext(directions, clusters));
@@ -122,7 +122,7 @@ export function renderDirectionDiffUserMessage(
 
 export function validateDirectionDiffSuggestions(
   raw: string,
-  directions: readonly PersonalLibraryConfirmedDirection[],
+  directions: readonly PlaceableDirection[],
   clusters: readonly NewClusterCandidate[],
 ): { ok: true; suggestions: DirectionDiffSuggestion[] }
   | { ok: false; reason: DirectionDiffValidationReason } {
@@ -237,7 +237,7 @@ function suggestionSortKey(suggestion: DirectionDiffSuggestion): string[] {
 
 function decodeSuggestion(
   raw: unknown,
-  byId: Map<string, PersonalLibraryConfirmedDirection>,
+  byId: Map<string, PlaceableDirection>,
   lockedIds: ReadonlySet<string>,
   clusterKeySets: readonly ReadonlySet<string>[],
 ): { ok: true; suggestion: DirectionDiffSuggestion }

@@ -1,35 +1,57 @@
 /**
- * Deterministic single-linkage clustering with an outlier pool — the
- * HDBSCAN equivalent for the knowledge base (goal: "HDBSCAN 或等价").
+ * Deterministic average-linkage clustering with an outlier pool.
  *
  * L2 reshape history (2026-08-06): absolute-threshold centroid clustering
  * and a mutual-top-k SNN graph were both measured unusable on real e5-small
  * embeddings — the cosine distribution is saturated (unrelated academic
  * papers score 0.85+ on raw vectors) and weak best-passage matches bridge
- * theme clusters in rank-based graphs. Single-linkage clustering on the
- * ranked edge order is robust to both:
+ * theme clusters in rank-based graphs. Corpus centering plus best-passage
+ * similarity fixed both, and single linkage on the ranked edge order was the
+ * first merging rule tried on top of them.
+ *
+ * Measured again on the frozen 207-paper corpus (2026-09-05), single linkage
+ * did not survive. Two properties of it were doing the damage:
+ *
+ *   - It chains. A likes B and B likes C welds A to C however unrelated they
+ *     are, so one weak bridge merges two themes. At every stop ratio below
+ *     the shattering point, 176 of 189 papers landed in one component.
+ *   - The stop floor was a fraction of the single strongest edge, and that
+ *     edge is a near-duplicate pair. The whole scale hung on one number:
+ *     max 0.786 against a p99 of 0.424 and a median of 0.027, so a ratio of
+ *     0.6 cut above the 99th percentile and still produced a 24-paper blob.
+ *
+ * Together they left no usable setting: below the transition one blob, above
+ * it fragments plus most of the library in the outlier pool. The evidence was
+ * never the problem — three photometric-redshift method papers scored
+ * 0.36–0.47 against a 0.027 median, and 0.017 against an unrelated survey
+ * paper — the merging rule was.
+ *
+ * So:
  *
  *   1. corpus-level centering of chunk vectors (suppress the shared academic
  *      language direction that dominates raw cosine);
  *   2. paper-to-paper similarity = strongest chunk-pair cosine (best-passage
  *      evidence, same semantics as full-text retrieval);
- *   3. edges sorted by descending similarity, merged in Kruskal fashion
- *      (union-find) while the edge is at or above the stop floor — the floor
- *      is RELATIVE (fraction of the strongest edge) so it adapts to
- *      saturated or low-scoring distributions instead of assuming an
- *      absolute semantic scale;
- *   4. the resulting components are the clusters; components below
- *      `minClusterSize` land in the outlier pool (the P3 buffering source);
- *   5. member confidence = the member's strongest in-cluster edge, clamped
+ *   3. agglomerative merging by AVERAGE linkage: two groups merge on the mean
+ *      similarity across every pair between them, so a single strong pair
+ *      cannot drag two themes together;
+ *   4. the floor is a QUANTILE of the corpus's own pairwise similarities, not
+ *      a fraction of its strongest pair — it still adapts to saturated or
+ *      low-scoring distributions, without one near-duplicate setting the
+ *      scale for everything else;
+ *   5. groups below `minClusterSize` land in the outlier pool (the P3
+ *      buffering source);
+ *   6. member confidence = the member's strongest in-cluster edge, clamped
  *      to [0, 1] for the proposal schema.
  *
- * Determinism: input order is normalized (paperKey sort), edge ties resolve
- * by paperKey index, and components are enumerated in paperKey order. Same
- * input, same output, always.
+ * Determinism: input order is normalized (paperKey sort), every tie resolves
+ * by the lowest member index, and clusters are enumerated in paperKey order.
+ * Same input, same output, always.
  *
- * Cost: O(n^2 * c^2) cosine evaluations + O(n^2 log n) edge sorting (n
- * papers, c chunks each). For a personal library (hundreds of papers, ~30
- * chunks each) this is seconds — clustering is a low-frequency,
+ * Cost: O(n^2 * c^2) cosine evaluations to build the matrix, then merging
+ * with a nearest-neighbour array — O(n^2) in the typical case for n papers.
+ * For a personal library (hundreds of papers, one or two chunks each after
+ * ADR 0013) this is well under a second; clustering is a low-frequency,
  * user-triggered operation, not on the daily report path.
  */
 
@@ -73,17 +95,36 @@ export interface ClusteringOptions {
    */
   minSimilarity?: number;
   /**
-   * Merging stops when the next edge falls below this fraction of the
-   * strongest edge in the corpus — the "similarity gap" between theme
-   * density and coincidental matches. Default 0.65 (tuned on a real
-   * heterogeneous corpus: tight enough to keep weak bridges out, loose
-   * enough to keep strong themes whole).
+   * Merging stops when the closest remaining pair of groups falls below this
+   * quantile of the corpus's own pairwise similarities. 0.95 keeps the top
+   * 5% of pairs as merge evidence; higher is tighter (more, smaller groups
+   * and a larger outlier pool), lower is looser.
+   *
+   * A quantile rather than a fraction of the strongest pair: the strongest
+   * pair is typically a near-duplicate, and anchoring on it let one paper
+   * decide the scale for the whole library.
    */
-  relativeStopRatio?: number;
+  similarityQuantile?: number;
 }
 
 const DEFAULT_MIN_CLUSTER_SIZE = 2;
-const DEFAULT_RELATIVE_STOP_RATIO = 0.65;
+/**
+ * Treats the bottom 80% of pairs as coincidence and lets the rest be merge
+ * evidence — average linkage still refuses most of them, because a group only
+ * grows while the mean similarity across every pair between two groups holds
+ * up.
+ *
+ * On a fixture of three unambiguous themes plus noise, every value from 0.70
+ * to 0.86 recovers exactly those three and pools the noise; below it themes
+ * merge into each other, above it the smallest theme is lost. 0.8 is the
+ * middle of that plateau.
+ *
+ * It is a granularity knob, not a universal constant: the right value tracks
+ * what share of a corpus's pairs are genuinely related, which shrinks as a
+ * library grows. The proposal's tight evidence-grouping pass uses its measured
+ * cut; topic and direction breadth is decided later by semantic organization.
+ */
+const DEFAULT_SIMILARITY_QUANTILE = 0.8;
 
 export function clusterPaperVectors(
   input: readonly ClusteringInputPaper[],
@@ -92,8 +133,8 @@ export function clusterPaperVectors(
   const minClusterSize = requirePositiveInteger(options?.minClusterSize, "minClusterSize", DEFAULT_MIN_CLUSTER_SIZE);
   const centerCorpus = options?.centerCorpus ?? true;
   const minSimilarity = requireFiniteInRange(options?.minSimilarity, "minSimilarity", 0, 0, 1);
-  const relativeStopRatio = requireFiniteInRange(
-    options?.relativeStopRatio, "relativeStopRatio", DEFAULT_RELATIVE_STOP_RATIO, 0, 1,
+  const similarityQuantile = requireFiniteInRange(
+    options?.similarityQuantile, "similarityQuantile", DEFAULT_SIMILARITY_QUANTILE, 0, 1,
   );
 
   const papers = input
@@ -119,44 +160,89 @@ export function clusterPaperVectors(
       similarity[j * n + i] = score;
     }
   }
-  const edges: Array<{ i: number; j: number; score: number }> = [];
+  // The floor is a quantile of this corpus's own pairwise similarities, so a
+  // saturated library and a sparse one both get a cut in the same place
+  // relative to their own evidence.
+  const pairScores: number[] = [];
   for (let i = 0; i < n; i += 1) {
-    for (let j = i + 1; j < n; j += 1) {
-      const score = similarity[i * n + j]!;
-      if (score >= minSimilarity) edges.push({ i, j, score });
-    }
+    for (let j = i + 1; j < n; j += 1) pairScores.push(similarity[i * n + j]!);
   }
-  edges.sort((left, right) =>
-    right.score !== left.score ? right.score - left.score : left.i !== right.i ? left.i - right.i : left.j - right.j);
+  pairScores.sort((left, right) => left - right);
+  const quantileFloor = pairScores.length === 0
+    ? -Infinity
+    : pairScores[Math.min(pairScores.length - 1, Math.floor(pairScores.length * similarityQuantile))]!;
+  // `minSimilarity` is an absolute veto on top of the adaptive floor: a corpus
+  // where even the top pairs are coincidental must not cluster just because
+  // its own quantile says they are its best.
+  const stop = Math.max(quantileFloor, minSimilarity);
 
-  // Kruskal merging: union edges from strongest to weakest, stopping at the
-  // relative floor (a fraction of the strongest edge).
-  const parent = Array.from({ length: n }, (_, index) => index);
-  const find = (x: number): number => {
-    let root = x;
-    while (parent[root] !== root) root = parent[root]!;
-    while (parent[x] !== x) {
-      const next = parent[x]!;
-      parent[x] = root;
-      x = next;
+  // Average-linkage agglomeration. `groupSimilarity` holds the mean similarity
+  // between live groups and is updated by the Lance-Williams rule for average
+  // linkage, so it never needs recomputing from members.
+  const groupSimilarity = Float64Array.from(similarity);
+  const size = new Int32Array(n).fill(1);
+  const alive = new Uint8Array(n).fill(1);
+  const membersOf: number[][] = Array.from({ length: n }, (_, index) => [index]);
+
+  // Nearest-neighbour array: the best live partner of each live group. Finding
+  // the global best pair is then a scan, and only groups whose partner was
+  // just consumed need recomputing — O(n^2) in the typical case instead of the
+  // O(n^3) a full rescan per merge would cost.
+  const partner = new Int32Array(n).fill(-1);
+  const partnerScore = new Float64Array(n).fill(-Infinity);
+  const refreshPartner = (a: number): void => {
+    let bestScore = -Infinity;
+    let best = -1;
+    for (let b = 0; b < n; b += 1) {
+      if (b === a || !alive[b]) continue;
+      const score = groupSimilarity[a * n + b]!;
+      // Ties go to the lowest index, which is the lowest paperKey: the input
+      // was sorted, so the same corpus always merges in the same order.
+      if (score > bestScore) { bestScore = score; best = b; }
     }
-    return root;
+    partner[a] = best;
+    partnerScore[a] = bestScore;
   };
-  const stop = edges.length === 0 ? -1 : edges[0]!.score * relativeStopRatio;
-  for (const edge of edges) {
-    if (edge.score < stop) break;
-    const rootI = find(edge.i);
-    const rootJ = find(edge.j);
-    if (rootI !== rootJ) parent[rootI] = rootJ;
+  for (let a = 0; a < n; a += 1) refreshPartner(a);
+
+  for (let merges = 0; merges < n - 1; merges += 1) {
+    let left = -1;
+    let bestScore = -Infinity;
+    for (let a = 0; a < n; a += 1) {
+      if (!alive[a] || partner[a]! < 0) continue;
+      if (partnerScore[a]! > bestScore) { bestScore = partnerScore[a]!; left = a; }
+    }
+    if (left < 0 || bestScore < stop) break;
+    const right = partner[left]!;
+    // Keep the lower index alive so cluster order stays paperKey order.
+    const kept = Math.min(left, right);
+    const dropped = Math.max(left, right);
+
+    for (let other = 0; other < n; other += 1) {
+      if (other === kept || other === dropped || !alive[other]) continue;
+      const merged = (size[kept]! * groupSimilarity[kept * n + other]!
+        + size[dropped]! * groupSimilarity[dropped * n + other]!)
+        / (size[kept]! + size[dropped]!);
+      groupSimilarity[kept * n + other] = merged;
+      groupSimilarity[other * n + kept] = merged;
+    }
+    membersOf[kept] = [...membersOf[kept]!, ...membersOf[dropped]!];
+    size[kept] = size[kept]! + size[dropped]!;
+    alive[dropped] = 0;
+    partner[dropped] = -1;
+    partnerScore[dropped] = -Infinity;
+
+    refreshPartner(kept);
+    for (let a = 0; a < n; a += 1) {
+      if (!alive[a] || a === kept) continue;
+      if (partner[a] === dropped || partner[a] === kept) refreshPartner(a);
+    }
   }
 
-  // Components, enumerated in paperKey order (deterministic).
   const byRoot = new Map<number, number[]>();
   for (let index = 0; index < n; index += 1) {
-    const root = find(index);
-    const members = byRoot.get(root);
-    if (members) members.push(index);
-    else byRoot.set(root, [index]);
+    if (!alive[index]) continue;
+    byRoot.set(index, membersOf[index]!.slice().sort((a, b) => a - b));
   }
   const roots = [...byRoot.keys()].sort((a, b) => a - b);
   const clusters: PaperCluster[] = [];

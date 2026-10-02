@@ -1,4 +1,5 @@
 import { markupParser } from "./markup-parser";
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   classifySection,
@@ -17,7 +18,89 @@ const sample = `
 </body></html>
 `;
 
+const scientificMathSample = readFileSync(
+  new URL("./fixtures/arxiv-scientific-math.html", import.meta.url),
+  "utf8",
+);
+
 describe("section-extractor", () => {
+  it("extracts one mathematical representation from public arXiv headings and body text", () => {
+    const out = extractSections(scientificMathSample, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+    }, markupParser);
+
+    expect(out).toContain("## II.1 Model and $\\alpha_{M}$ parameter");
+    expect(out).toContain("## 2.1 $w$CDM DE models");
+    expect(out).toContain("peak flux density of $F_{\\rm peak}>0.75\\,\\rm{mJy}/\\rm{beam}$");
+    expect(out).toContain("$121\\,179$ objects satisfied this condition.");
+  });
+
+  it("preserves object identifiers and numerical ranges in abstract and conclusion MathML", () => {
+    const out = extractAbstractConclusion(scientificMathSample, {
+      sectionCharLimit: 8000,
+    }, markupParser);
+
+    expect(out).toContain("HE0435$-$1223, PG1115$+$080, and WFI2033$-$4723");
+    expect(out).toContain("uncertainties of $6$–$11\\%$");
+    expect(out).toContain("errors of only $\\sim 1.2\\%$");
+  });
+
+  it("preserves MathML structure before flattening figure and table captions", () => {
+    const html = '<html><body><h2>Results</h2>'
+      + '<figure><figcaption>Estimate <math><semantics><msub><mi>H</mi><mn>0</mn></msub>'
+      + '<annotation encoding="application/x-tex">H_{0}</annotation></semantics></math>.</figcaption></figure>'
+      + '<table><caption>Fraction <math><semantics><mfrac><mn>1</mn><mn>2</mn></mfrac>'
+      + '<annotation encoding="application/x-tex">\\frac{1}{2}</annotation></semantics></math>.</caption></table>'
+      + '</body></html>';
+
+    const out = extractSections(html, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+    }, markupParser);
+
+    expect(out).toContain("Figure caption: Estimate $H_{0}$.");
+    expect(out).toContain("Table text: Fraction $\\frac{1}{2}$.");
+  });
+
+  it("uses LaTeXML alttext when the TeX annotation is unavailable", () => {
+    const html = '<html><body><h2>Results</h2><p>Value '
+      + '<math class="ltx_Math" alttext="x_{1}"><msub><mi>x</mi><mn>1</mn></msub></math>.'
+      + '</p></body></html>';
+
+    expect(extractSections(html, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+    }, markupParser)).toContain("Value $x_{1}$.");
+  });
+
+  it("excludes non-TeX auxiliary representations without deduplicating literal scientific text", () => {
+    const html = '<html><body><h2>Results</h2><p>'
+      + '<math alttext="energy sum"><semantics><mrow><mi>E</mi><mo>+</mo><mi>E</mi></mrow>'
+      + '<annotation encoding="application/json">{"symbol":"E"}</annotation>'
+      + '<annotation-xml encoding="MathML-Content"><apply><plus/><ci>E</ci><ci>E</ci></apply></annotation-xml>'
+      + '</semantics></math>; C++ and ww remain literal.'
+      + '</p></body></html>';
+
+    expect(extractSections(html, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+    }, markupParser)).toBe("## Results\nE+E; C++ and ww remain literal.");
+  });
+
+  it("does not select TeX embedded inside an auxiliary XML representation", () => {
+    const html = '<html><body><h2>Results</h2><p>'
+      + '<math><semantics><mi>E</mi><annotation-xml encoding="application/xhtml+xml">'
+      + '<math><semantics><mi>q</mi><annotation encoding="application/x-tex">q</annotation></semantics></math>'
+      + '</annotation-xml></semantics></math>'
+      + '</p></body></html>';
+
+    expect(extractSections(html, {
+      sectionCharLimit: 8000,
+      paperCharLimit: 50000,
+    }, markupParser)).toBe("## Results\nE");
+  });
+
   it("classifies domain-specific non-standard section titles", () => {
     expect(classifySection("Photometric redshift inference")).toContain("method");
     expect(classifySection("The weak-lensing shear catalogue")).toContain("data");

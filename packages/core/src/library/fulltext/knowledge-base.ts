@@ -55,8 +55,15 @@ export interface FullTextPaperDocument {
    */
   title?: string;
   /**
-   * Version of the extraction rules that produced `title`; reuse refreshes
-   * fallback titles when the rules advance (`TITLE_EXTRACTION_VERSION`).
+   * Abstract extracted from the leading pages at index time, kept beside
+   * `title` for the same reason: a fallback-indexed file has no catalog record
+   * to read it from later, and the chunk texts cannot be reversed back into it
+   * once the chunker has split and overlapped them.
+   */
+  abstract?: string;
+  /**
+   * Version of the extraction rules that produced `title` and `abstract`;
+   * reuse refreshes both when the rules advance (`TITLE_EXTRACTION_VERSION`).
    */
   titleVersion?: number;
   /** Catalog file paths observed at index time (change detection). */
@@ -83,7 +90,9 @@ export interface FullTextPaperKnowledgeRecord {
   contentHash?: string;
   /** Extracted title for fallback-indexed files; arXiv papers use the catalog. */
   title?: string;
-  /** Extraction-rule version of `title`; see `FullTextPaperDocument`. */
+  /** Extracted abstract for fallback-indexed files; see `FullTextPaperDocument`. */
+  abstract?: string;
+  /** Extraction-rule version of `title` and `abstract`; see `FullTextPaperDocument`. */
   titleVersion?: number;
   filePaths: readonly string[];
   observationFingerprints: readonly string[];
@@ -94,6 +103,8 @@ export interface FullTextPaperKnowledgeRecord {
 }
 
 export interface FullTextKnowledgeBaseManifest {
+  /** New-model files are isolated until this manifest is atomically promoted. */
+  paperStorage?: "model-scoped";
   schemaVersion: typeof FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION;
   revision: number;
   scopeFingerprint: string;
@@ -125,7 +136,8 @@ export interface FullTextKnowledgeBaseStore {
   readonly paths: FullTextKnowledgeBasePaths;
   loadManifest(): Promise<FullTextKnowledgeBaseManifest>;
   replaceManifest(next: FullTextKnowledgeBaseManifest, expectedRevision: number): Promise<FullTextKnowledgeBaseManifest>;
-  loadPaper(paperKey: string): Promise<FullTextPaperDocument | null>;
+  /** Bind reads to a captured manifest when a later model may become current. */
+  loadPaper(paperKey: string, manifest?: FullTextKnowledgeBaseManifest): Promise<FullTextPaperDocument | null>;
   savePaper(document: FullTextPaperDocument): Promise<void>;
   removePaper(paperKey: string): Promise<void>;
   /** Delete the whole knowledge base for this scope/identification (rebuild path). */
@@ -176,6 +188,7 @@ export interface FullTextPaperDocumentJson {
   textHash: string;
   contentHash?: string;
   title?: string;
+  abstract?: string;
   titleVersion?: number;
   filePaths: string[];
   observationFingerprints: string[];
@@ -223,6 +236,9 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
   if (value.title !== undefined && (typeof value.title !== "string" || value.title.length === 0)) {
     return null;
   }
+  if (value.abstract !== undefined && (typeof value.abstract !== "string" || value.abstract.length === 0)) {
+    return null;
+  }
   if (value.titleVersion !== undefined && !isPositiveInteger(value.titleVersion)) {
     return null;
   }
@@ -236,6 +252,7 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
     textHash: value.textHash,
     contentHash: value.contentHash,
     title: value.title,
+    abstract: value.abstract,
     titleVersion: value.titleVersion,
     filePaths: [...value.filePaths],
     observationFingerprints: [...value.observationFingerprints],
@@ -248,6 +265,7 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
 
 export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKnowledgeBaseManifest | null {
   if (!isPlainObject(value)) return null;
+  if (value.paperStorage !== undefined && value.paperStorage !== "model-scoped") return null;
   const sourceSchemaVersion = value.schemaVersion;
   if (sourceSchemaVersion !== LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
     && sourceSchemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
@@ -285,6 +303,9 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
     if (record.title !== undefined && (typeof record.title !== "string" || record.title.length === 0)) {
       return null;
     }
+    if (record.abstract !== undefined && (typeof record.abstract !== "string" || record.abstract.length === 0)) {
+      return null;
+    }
     if (record.titleVersion !== undefined && !isPositiveInteger(record.titleVersion)) {
       return null;
     }
@@ -301,6 +322,7 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
       ...(record.textHash === undefined ? {} : { textHash: record.textHash }),
       ...(record.contentHash === undefined ? {} : { contentHash: record.contentHash }),
       ...(record.title === undefined ? {} : { title: record.title }),
+      ...(record.abstract === undefined ? {} : { abstract: record.abstract }),
       ...(record.titleVersion === undefined ? {} : { titleVersion: record.titleVersion }),
       filePaths: [...record.filePaths],
       observationFingerprints: [...record.observationFingerprints],
@@ -312,6 +334,7 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
   }
   return {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+    ...(value.paperStorage === "model-scoped" ? { paperStorage: "model-scoped" as const } : {}),
     revision: value.revision,
     scopeFingerprint: value.scopeFingerprint,
     identificationFingerprint: value.identificationFingerprint,
@@ -336,6 +359,7 @@ function toJsonDocument(document: FullTextPaperDocument): FullTextPaperDocumentJ
     textHash: document.textHash,
     contentHash: document.contentHash,
     title: document.title,
+    abstract: document.abstract,
     titleVersion: document.titleVersion,
     filePaths: [...document.filePaths],
     observationFingerprints: [...document.observationFingerprints],

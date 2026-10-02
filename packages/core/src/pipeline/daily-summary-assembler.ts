@@ -2,13 +2,13 @@ import { formatArxivCategories } from "../settings/categories";
 import {
   dailyCountLine,
   dailyHeader,
-  noCategoryPapersText,
   normalizeSummaryLanguage,
+  omittedPapersText,
 } from "../settings/summary-language";
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
-import type { PaperDiscoveryProvenance } from "./personalized-paper-filter";
+import { normalizeTopicDirectionHits, type TopicDirectionHit } from "./topic-direction-hits";
+import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import { normalizePersonalNoveltyWithBasis } from "./personalized-novelty";
 import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import {
@@ -18,6 +18,7 @@ import {
   renderFallbackBlock,
   renderPaperHeader,
   renderStructuredFields,
+  renderEmptyTopics,
   normalizeMarkdownLine,
 } from "./daily-summary-rendering";
 
@@ -48,6 +49,12 @@ export interface DailySummaryAssemblyPaper {
    * contracts may carry it; persisted markers stay minimal.
    */
   personalNovelty?: PersonalNoveltyWithBasis;
+  /**
+   * Directions of this paper's own topic that selected it, in the topic's
+   * order. Kept beside `discoveryProvenance` rather than inside it: a topic
+   * direction carries no representative evidence (ADR 0012 §4).
+   */
+  topicDirections?: TopicDirectionHit[];
 }
 
 export type DailyPaperFallbackReasonCode =
@@ -73,6 +80,34 @@ export interface DailySummaryAssemblyInput {
   dateStr: string;
   arxivSettings: ArxivSettings;
   summaryLanguage?: SummaryLanguage;
+  /** Matched, non-ignored papers omitted only because of the daily limit. */
+  omittedByTopic?: Readonly<Record<string, number>>;
+}
+
+/** Share the trusted omission snapshot between normal and rescue rendering. */
+export function validateDailySummaryOmissions(
+  input: Pick<DailySummaryAssemblyInput, "arxivSettings" | "omittedByTopic">,
+): { total: number; byTopic: ReadonlyMap<string, number> } {
+  const byTopic = new Map<string, number>();
+  const counts = input.omittedByTopic;
+  if (counts === undefined) return { total: 0, byTopic };
+  if (typeof counts !== "object" || counts === null || Array.isArray(counts)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(counts))) {
+    throw new Error("preflightDailySummaryAssembly: invalid omittedByTopic object");
+  }
+  const tags = new Set(input.arxivSettings.topics.map(({ tag }) => tag));
+  let total = 0;
+  for (const [tag, count] of Object.entries(counts)) {
+    if (!tags.has(tag) || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`preflightDailySummaryAssembly: invalid omittedByTopic count for ${tag}`);
+    }
+    total += count;
+    if (!Number.isSafeInteger(total)) {
+      throw new Error("preflightDailySummaryAssembly: invalid omittedByTopic total");
+    }
+    byTopic.set(tag, count);
+  }
+  return { total, byTopic };
 }
 
 const FALLBACK_REASON_CODES = new Set<DailyPaperFallbackReasonCode>([
@@ -126,12 +161,15 @@ export function preflightDailySummaryPapers(
       && !normalizePersonalNoveltyWithBasis(paper.personalNovelty)) {
       throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid personal novelty`);
     }
+    if (paper.topicDirections
+      && !normalizeTopicDirectionHits(paper.topicDirections)) {
+      throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid topic directions`);
+    }
     if (paperIds.has(paper.id)) {
       throw new Error(`preflightDailySummaryAssembly: duplicate input paper ID: ${paper.id}`);
     }
     paperIds.add(paper.id);
-    if (!topicsByTag.has(paper.category)
-      && paper.category !== PERSONALIZED_LIBRARY_ONLY_CATEGORY) {
+    if (!topicsByTag.has(paper.category)) {
       throw new Error(
         `preflightDailySummaryAssembly: paper ${paper.id} has unknown category tag: ${paper.category}`,
       );
@@ -141,6 +179,7 @@ export function preflightDailySummaryPapers(
 
 export function preflightDailySummaryAssembly(input: DailySummaryAssemblyInput): void {
   preflightDailySummaryPapers(input.slots.map(({ paper }) => paper), input.arxivSettings);
+  validateDailySummaryOmissions(input);
   for (const { paper, result } of input.slots) {
     if (result.kind === "structured") {
       for (const field of STRUCTURED_FIELDS) {
@@ -231,6 +270,7 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
   const { slots, dateStr, arxivSettings } = input;
   const language = normalizeSummaryLanguage(input.summaryLanguage);
   const slotsByTopic = groupSlots(slots, arxivSettings);
+  const omissions = validateDailySummaryOmissions(input);
   const detailCount = slots.filter(({ paper }) => paper.isDetail || Boolean(paper.paperPath)).length;
   const fallbackCount = slots.filter(({ result }) => result.kind === "fallback").length;
   const out = emergency
@@ -245,21 +285,22 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
     dailyCountLine(language, slots.length, detailCount),
   );
   if (fallbackCount > 0) out.push(fallbackCountLine(language, fallbackCount));
+  if (omissions.total > 0) out.push(omittedPapersText(language, omissions.total, true));
 
+  const emptyTopics: Array<{ name: string; omittedCount: number }> = [];
   for (const topic of arxivSettings.topics) {
-    out.push("", `## ${normalizeMarkdownLine(topic.name)}`);
     const topicSlots = slotsByTopic.get(topic.tag) ?? [];
+    const omittedCount = omissions.byTopic.get(topic.tag) ?? 0;
     if (topicSlots.length === 0) {
-      out.push(noCategoryPapersText(language));
+      emptyTopics.push({ name: topic.name, omittedCount });
       continue;
     }
+    out.push("", `## ${normalizeMarkdownLine(topic.name)}`);
+    if (omittedCount > 0) out.push(omittedPapersText(language, omittedCount, true));
     for (const slot of topicSlots) out.push("", renderSlot(slot, language, dateStr));
   }
-  const librarySlots = slotsByTopic.get(PERSONALIZED_LIBRARY_ONLY_CATEGORY) ?? [];
-  if (librarySlots.length > 0) {
-    out.push("", `## ${language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`);
-    for (const slot of librarySlots) out.push("", renderSlot(slot, language, dateStr));
-  }
+  const emptyTopicLines = renderEmptyTopics(emptyTopics, language);
+  if (emptyTopicLines.length > 0) out.push("", ...emptyTopicLines);
   return out.join("\n");
 }
 
@@ -267,10 +308,9 @@ function groupSlots(
   slots: DailyPaperSlot[],
   arxivSettings: ArxivSettings,
 ): Map<string, DailyPaperSlot[]> {
-  const slotsByTopic = new Map([
-    ...arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]] as const),
-    [PERSONALIZED_LIBRARY_ONLY_CATEGORY, [] as DailyPaperSlot[]] as const,
-  ]);
+  const slotsByTopic = new Map(
+    arxivSettings.topics.map((topic) => [topic.tag, [] as DailyPaperSlot[]] as const),
+  );
   for (const slot of slots) slotsByTopic.get(slot.paper.category)!.push(slot);
   return slotsByTopic;
 }
@@ -281,6 +321,7 @@ function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage, reportDate:
   }
   return [
     ...renderPaperHeader(slot.paper, language, [], reportDate),
+    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

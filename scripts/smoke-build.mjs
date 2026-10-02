@@ -81,6 +81,10 @@ const allowedRuntimeRequires = new Set([
   "node:fs",
   "node:fs/promises",
   "node:path",
+  "node:os",
+  "node:crypto",
+  "node:module",
+  "node:zlib",
 ]);
 for (const specifier of runtimeRequires) {
   if (!allowedRuntimeRequires.has(specifier)) {

@@ -48,6 +48,8 @@ export interface LibraryIndexRun {
 export interface LibraryIndexStatus {
   activity?: LibraryIndexActivity;
   lastRun?: LibraryIndexRun;
+  /** Safe user-facing reason the current configuration needs preparation again. */
+  preparationError?: string;
 }
 
 export type LibraryIndexStatusListener = (status: LibraryIndexStatus) => void;
@@ -118,6 +120,13 @@ export class LibraryIndexStatusStore {
   setLastRun(run: LibraryIndexRun | undefined): void {
     if (sameRun(this.status.lastRun, run)) return;
     this.status = run ? { ...this.status, lastRun: run } : dropLastRun(this.status);
+    this.notify();
+  }
+
+  setPreparationError(message?: string): void {
+    if (message === this.status.preparationError) return;
+    const { preparationError: _previous, ...rest } = this.status;
+    this.status = message === undefined ? rest : { ...rest, preparationError: message };
     this.notify();
   }
 

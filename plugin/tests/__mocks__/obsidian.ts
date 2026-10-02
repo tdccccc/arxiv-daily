@@ -109,9 +109,10 @@ export class TextComponent {
     return this;
   }
 
+  /** Like Obsidian, text components report every keystroke (`input`), not `change`. */
   onChange(callback: (value: string) => unknown): this {
     this.callback = callback;
-    this.inputEl.addEventListener("change", () => {
+    this.inputEl.addEventListener("input", () => {
       void this.callback?.(this.inputEl.value);
     });
     return this;

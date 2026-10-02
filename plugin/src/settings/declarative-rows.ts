@@ -11,8 +11,9 @@ import {
   modelFetchNoticeMessage,
   renderRunWindowTimeSelect,
   TIMEZONE_OPTIONS,
+  validateOutputDirectoryDraft,
 } from "./tab";
-import { arxivCategories, LlmClient } from "@arxiv-daily/core";
+import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -43,6 +44,14 @@ export function renderLibraryConnectionRow(
 ): void {
   prepareRow(setting);
   tab.renderLibraryConnectionControls(setting);
+}
+
+export function renderLibraryDirectionsRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  tab.renderLibrarySuggestionsControls(setting);
 }
 
 export function renderLlmBaseUrlRow(
@@ -141,24 +150,40 @@ export function renderReasoningEffortRow(
   });
 }
 
+let modelSuggestionListCount = 0;
+
+/**
+ * Model name: typed freely and saved when editing ends. Get models only
+ * fills the suggestion list — providers without a model list still work,
+ * and a current model missing from the list is kept. Shared by display().
+ */
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  const select = setting.controlEl.createEl("select", {
-    cls: "arxiv-daily-settings__model-select",
+  modelSuggestionListCount += 1;
+  const listId = `arxiv-daily-model-options-${modelSuggestionListCount}`;
+  const input = setting.controlEl.createEl("input", {
+    cls: "arxiv-daily-settings__model-input",
+    type: "text",
+    attr: { list: listId, placeholder: "Model name", "aria-label": "Model" },
   });
-  const current = tab.plugin.settings.llm.model;
-  if (current) select.createEl("option", { value: current, text: current });
-  select.value = current;
-  select.addEventListener("change", () => {
-    const next = select.value;
-    const revision = tab.beginControlChange(select);
+  input.value = tab.plugin.settings.llm.model;
+  const suggestions = setting.controlEl.createEl("datalist");
+  suggestions.id = listId;
+  input.addEventListener("change", () => {
+    const next = input.value.trim();
+    if (next === tab.plugin.settings.llm.model) {
+      input.value = next;
+      return;
+    }
+    const revision = tab.beginControlChange(input);
     tab.runAction("save model", async () => {
       try {
         await tab.changeSettingValue("llm.model", next);
-        tab.refreshDeclarativeSetupGuide();
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+        tab.refreshSetupGuide();
       } catch (error) {
-        if (tab.isCurrentControlChange(select, revision)) {
-          select.value = tab.restoreCurrentStringControlValue(error, "llm.model");
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, "llm.model");
         }
         throw error;
       }
@@ -180,9 +205,19 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
+      suggestions.replaceChildren();
+      for (const model of models) {
+        suggestions.createEl("option", { value: model });
+      }
       if (models.length > 0) {
-        tab.showModelDropdown(models, setting.settingEl);
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));
+        const current = tab.plugin.settings.llm.model;
+        if (current && !models.includes(current)) {
+          new Notice(
+            `arXiv Daily: the provider did not list "${current}". It is kept; type or pick another model if needed.`,
+            10_000,
+          );
+        }
       } else {
         new Notice(modelFetchNoticeMessage({ kind: "empty" }));
       }
@@ -201,7 +236,9 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
 
 export function renderSetupGuideRow(tab: ArxivDailySettingTab, setting: Setting): void {
   tab.setDeclarativeSetupGuideRow(setting);
+  setting.setName("");
   clearSettingEl(setting, "arxiv-daily-setup");
+  setting.settingEl.addClass("arxiv-daily-settings__setup-guide-host");
   const guide = tab.createSetupGuide();
   if (guide) setting.settingEl.appendChild(guide);
 }
@@ -221,6 +258,11 @@ export function renderCategoryRow(
   addCategoryOptions(select, current);
   select.value = current;
   select.addEventListener("change", () => {
+    if (categories.some((category, other) => other !== index && category === select.value)) {
+      new Notice(`arXiv Daily: ${select.value} is already in the list.`);
+      select.value = current;
+      return;
+    }
     const next = [...categories];
     next[index] = select.value;
     void tab.runAction("save category", async () => {
@@ -271,6 +313,69 @@ export function renderTimezoneRow(
     placeholder: "Or enter custom timezone",
   });
   tab.bindTimezoneDraftInput(input, select);
+}
+
+/**
+ * Output folder: validated while typing, committed once on change (blur or
+ * Enter). A plain declarative text control would commit — and switch the
+ * output stores — on every keystroke.
+ */
+export function renderOutputDirectoryRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "dailyDir" | "papersDir",
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", { type: "text" });
+  input.value = tab.plugin.settings.output[key];
+  const sibling = key === "dailyDir" ? "papersDir" : "dailyDir";
+  input.addEventListener("input", () => {
+    const validation = validateOutputDirectoryDraft(
+      input.value,
+      tab.plugin.settings.output[sibling],
+    );
+    input.setCustomValidity(validation.ok ? "" : (validation.reason ?? "Invalid path."));
+    input.toggleClass("is-invalid", !validation.ok);
+  });
+  input.addEventListener("change", () => {
+    tab.runAction(
+      key === "dailyDir" ? "update daily path" : "update papers path",
+      () => tab.applyOutputDirectoryDraft(key, input.value, input),
+    );
+  });
+}
+
+/** From email / From name: committed once on change, like display(). */
+export function renderEmailSenderRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+  key: "fromEmail" | "fromName",
+): void {
+  prepareRow(setting);
+  const settingKey = `email.${key}`;
+  const input = setting.controlEl.createEl("input", {
+    type: "text",
+    attr: {
+      placeholder: key === "fromEmail" ? "Leave blank for simplest setup" : "arXiv Daily",
+    },
+  });
+  input.value = tab.plugin.settings.email[key] ?? "";
+  input.addEventListener("change", () => {
+    // From email is an address and is trimmed; From name is kept as typed.
+    const next = key === "fromEmail" ? input.value.trim() : input.value;
+    const revision = tab.beginControlChange(input);
+    tab.runAction(`save From ${key === "fromEmail" ? "email" : "name"}`, async () => {
+      try {
+        await tab.changeSettingValue(settingKey, next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = tab.restoreCurrentStringControlValue(error, settingKey);
+        }
+        throw error;
+      }
+    });
+  });
 }
 
 /** Scheduler enable toggle; routes through setScheduleEnabled (validation + modal). */
@@ -336,27 +441,91 @@ export function renderTickIntervalRow(
   tab.bindTickIntervalInput(input);
 }
 
+/** Shared by the legacy tab and the declarative settings page. */
+export function renderDailyPaperLimitRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  prepareRow(setting);
+  const input = setting.controlEl.createEl("input", {
+    type: "number",
+    attr: { "aria-label": "Daily paper limit", min: "1", step: "1" },
+  });
+  input.value = String(normalizeMaxDailyPapers(tab.plugin.settings.output.maxDailyPapers));
+  const validate = (): number | null => {
+    const value = Number(input.value.trim());
+    const valid = isValidMaxDailyPapers(value);
+    input.setCustomValidity(valid ? "" : "Enter a positive whole number.");
+    input.toggleClass("is-invalid", !valid);
+    return valid ? value : null;
+  };
+  input.addEventListener("input", () => {
+    tab.beginControlChange(input);
+    validate();
+  });
+  input.addEventListener("change", () => {
+    const revision = tab.beginControlChange(input);
+    const next = validate();
+    if (next === null) return;
+    tab.runAction("save daily paper limit", async () => {
+      try {
+        await tab.changeSettingValue("output.maxDailyPapers", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = String(next);
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = String(normalizeMaxDailyPapers(tab.restoreCurrentControlValue(error, "output.maxDailyPapers")));
+          validate();
+        }
+        throw error;
+      }
+    });
+  });
+}
+
 /** Email delivery guide strip for the current mode. */
+/**
+ * Shared renderer for the full-width guide boxes (email, library): same
+ * layout and CSS, keyed by a class prefix so each section keeps its own
+ * host/box/title/line classes (see styles.css).
+ */
+function renderGuideBoxRow(
+  setting: Setting,
+  clsPrefix: "email-guide" | "library-guide",
+  content: { title: string; lines: string[] },
+): void {
+  clearSettingEl(setting, `arxiv-daily-settings__${clsPrefix}`);
+  setting.settingEl.addClass(`arxiv-daily-settings__${clsPrefix}-host`);
+  const wrap = setting.settingEl.createDiv({
+    cls: `arxiv-daily-settings__${clsPrefix}`,
+  });
+  wrap.createDiv({
+    cls: `arxiv-daily-settings__${clsPrefix}-title`,
+    text: content.title,
+  });
+  for (const line of content.lines) {
+    wrap.createDiv({
+      cls: `arxiv-daily-settings__${clsPrefix}-line`,
+      text: line,
+    });
+  }
+}
+
 export function renderEmailGuideRow(
   tab: ArxivDailySettingTab,
   setting: Setting,
 ): void {
-  clearSettingEl(setting, "arxiv-daily-settings__email-guide");
-  setting.settingEl.addClass("arxiv-daily-settings__email-guide-host");
-  const { title, lines } = tab.emailGuideContent();
-  const wrap = setting.settingEl.createDiv({
-    cls: "arxiv-daily-settings__email-guide",
-  });
-  wrap.createDiv({
-    cls: "arxiv-daily-settings__email-guide-title",
-    text: title,
-  });
-  for (const line of lines) {
-    wrap.createDiv({
-      cls: "arxiv-daily-settings__email-guide-line",
-      text: line,
-    });
-  }
+  renderGuideBoxRow(setting, "email-guide", tab.emailGuideContent());
+}
+
+/**
+ * Personal library intro box (1.13+ path). Always included, like the email
+ * delivery guide box (renderEmailGuideRow) — see buildSettingDefinitions.
+ */
+export function renderLibraryGuideRow(
+  tab: ArxivDailySettingTab,
+  setting: Setting,
+): void {
+  renderGuideBoxRow(setting, "library-guide", tab.libraryGuideContent());
 }
 
 /** Email mode dropdown (Send yourself / Official delivery). */
@@ -555,9 +724,9 @@ export function renderEmbeddingModeRow(
 ): void {
   prepareRow(setting);
   const select = setting.controlEl.createEl("select");
-  const local = select.createEl("option", { text: "Local (offline, default)" });
+  const local = select.createEl("option", { text: "Local (default, one-time model download)" });
   local.value = "local";
-  const remote = select.createEl("option", { text: "Remote (fast, full text leaves this device)" });
+  const remote = select.createEl("option", { text: "Remote (titles and abstracts leave this device)" });
   remote.value = "remote";
   select.value = tab.plugin.settings.embedding.mode;
   select.addEventListener("change", () => {
@@ -565,7 +734,7 @@ export function renderEmbeddingModeRow(
     const revision = tab.beginControlChange(select);
     tab.runAction("save embedding mode", async () => {
       try {
-        // Switching to remote asks for full-text consent in place; a declined
+        // Switching to remote asks for title-and-abstract consent in place; a declined
         // switch leaves the mode alone, so the dropdown snaps back to it.
         await tab.applyEmbeddingModeChange(next);
         if (tab.isCurrentControlChange(select, revision)) {
@@ -730,8 +899,10 @@ function renderPdfParserSidecarUrlRow(
     const revision = tab.beginControlChange(input);
     tab.runAction("save local parser sidecar URL", async () => {
       try {
-        await tab.changeSettingValue(key, next);
+        const changes = tab.sidecarUrlChanges(key, next);
+        await tab.changeSettingValues(changes);
         if (tab.isCurrentControlChange(input, revision)) input.value = next;
+        if (changes.length > 1) tab.refreshSettings();
       } catch (error) {
         if (tab.isCurrentControlChange(input, revision)) {
           input.value = tab.restoreCurrentStringControlValue(error, key);

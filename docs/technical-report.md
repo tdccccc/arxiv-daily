@@ -30,7 +30,7 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 | 测试/类型 | Vitest、`tsc --noEmit`、ESLint（含 `eslint-plugin-obsidianmd`） | 工作区测试；边界检查脚本 |
 | 邮件 | Resend HTTP API；Cloudflare Workers + KV + Durable Objects | 自发送与官方代发 |
 | 外部数据 | arXiv HTML/Atom/源码页 | 论文发现与正文抽取 |
-| LLM | OpenAI 兼容 Chat Completions（流式） | 过滤、详报选择、日总结/详报摘要 |
+| LLM | OpenAI 兼容 Chat Completions / 官方 Anthropic Messages（SSE 响应） | 过滤、详报选择、日总结/详报摘要 |
 
 ## Frameworks and Responsibilities
 
@@ -47,7 +47,6 @@ arXiv Daily 是一个以研究主题过滤 arXiv 论文、生成 Markdown 日报
 - **数据面**：`PaperIndexStore`、`StateStore`、`RunHistoryStore`、过滤/日总结 checkpoint、邮件 `delivery-state`。
 - **全文知识库**（`packages/core/src/library/fulltext/`）：全文索引与相似检索的 host-neutral 编排。Core 的通用 `DocumentParser` 契约以按阅读顺序排列的 `ParsedDocument` block、1-based 页码 locator、可选行级 layout 和显式 capability 描述结构化解析结果；当前 Obsidian 全文索引入口直接向 core 注入 PDF.js `DocumentParser`；不声明文档结构能力的逐页 block 经兼容投影后沿用既有分页分块语义，声明结构能力的 parser 则进入章节感知分块。旧 `PdfTextExtractor` 输入仍作为兼容入口。`EmbeddingModel`（文本批量 → Float32 向量）同样由宿主实现；端口声明 `prefixPolicy`（`e5` 或 `none`）——编排只在 e5 模型上应用 `applyEmbeddingPrefix` 的 query/passage 前缀，远程模型嵌入纯文本。`chunkFullText` 对逐页文本执行段落聚合 + 约 10% 重叠（token 估算 `ceil(chars/4)`）；`chunkParsedDocument` 对声明文档结构能力的 block 维护 heading stack，在章节边界内合并、切分和重叠。持久化 `EvidenceChunk` 含 canonical SHA-256 ID、正文、heading 上下文、起始页及可选结束页/block/bbox locator，并记录 parser、chunker 和 embedding-input derivation；当前 PDF.js page-only 路径保持旧 chunk 正文和 embedding 输入。旁路 store `FullTextKnowledgeBaseFileStore` 不写入 papers.json，路径按 scope/identification fingerprint 分片到 `<indexDir>/personal-library-knowledge-base/<scopeHex>/<idHex>/`：`manifest.json`（primary/backup、expectedRevision CAS、严格 decoder、语义重放幂等）为权威索引，`papers/<sha256(paperKey)>.json` 保存 chunk 证据与行主序 Float32 向量（base64 序列化，原子幂等重写）；schema v2 可读取 v1 manifest/paper 并在内存中补充 legacy derivation 和稳定 chunk ID，后续写入渐进升级，读取本身不重写旧文件；未来 schema 被明确拒绝，paper 保存和索引错误恢复都不会覆盖、删除或把对应 ready record 降级。非空知识库在索引入口拒绝切换 modelId，要求先删除重建。`indexPersonalLibraryFullText` 同时处理 catalog 中的 arXiv paper 与 unresolved PDF；fallback paperKey 为完整 PDF bytes 摘要 `file:sha256:<digest>`，文档和 manifest 同时保存 `contentHash`、相对文件路径、首页提取的可选标题及标题规则版本。同一内容的多个 unresolved 路径合并到一个文档；path/size/mtime 观测未变时复用已保存的内容摘要，观测变化时重读 PDF，因此改名后重新读取成功且内容未变时 paperKey 保持不变。缺少 `contentHash` 的 ready fallback 文档会在索引时按 PDF 摘要重新绑定键和路径并复用 chunks/vectors；fallback 标题规则版本当前为 5：标题提取优先使用宿主提供的文档元数据标题（`info.Title`，机器可读；垃圾元数据——路径、文件名、页码引用、arXiv stamp、LaTeX 残留——被拒绝，pdf.js 遗留的 HTML 实体如 `&ndash;`/`&#x00D7;` 被解码；若字体结果 token 集合已覆盖元数据且更长，如元数据丢失下标字符，则字体结果胜出），其次使用宿主提供的行级 typography layout（每行 text/fontSize/topFraction，与页文本同 hasEOL 行分组），core 按字号 band 选标题——逐行排除页边文本（基线在页框上方）、arXiv stamp、预印本编号/DOI，顶部条带（页高 13% 内）且下一 band 达最大字号 93% 时判定为期刊刊头跳过，run 装配跳过下标短行、作者行（姓名模式 + 首字母或 and 前瞻）断行，候选须过形状检查（长度、首字符、节标题/期刊引用/日期/email/URL 行），标题选中后以续行（小写开头、罗马数字部分、无姓名首字母的长短语）扩展；无 layout 的宿主回退到纯文本行启发式（arXiv/reprint 页眉与 `Advance Access …` 过滤仍在兜底路径）；manifest 中的版本不匹配时重新提取 PDF 文本并更新 `title` / `titleVersion`，保留已有 chunks/vectors。刷新提取失败会保留旧标题与旧版本，使下一轮索引继续重试；`titlesRefreshed` 统计成功执行的版本刷新，即使标题文本未变化也计数。arXiv paper 按 catalog observation fingerprint、模型 id 与已记录 derivation 增量复用，fallback 还可按内容摘要复用；从 v1 提升且没有原始 derivation 的记录可继续复用既有向量，新写入 v2 后 parser、chunker 或 embedding-input 版本变化会触发重建。新建文档的摘要准备、提取、嵌入或保存失败按论文写入 failed 记录并在后续索引重试；复用/迁移文档的加载或保存失败同样按论文隔离（记录 failed 并丢弃该论文遗留的旧文档，不中止整轮）。若重索引失败覆盖了先前 ready 的记录，对应的旧 paper 文档会被删除以免残留孤儿；剪枝以及最终 manifest 替换失败仍会中止整轮。paper 文件写入/删除与 manifest 替换不构成跨文件事务。`searchFullTextKnowledgeBase` 在任何查询嵌入前比对 manifest modelId 与当前嵌入模型，非空知识库模型不一致时抛错并要求删除重建；检索循环跳过加载失败（损坏）的文档并经可选 logger 记录警告。默认 `hybrid` 模式只生成一次查询向量：dense 分支通过 `searchKnowledgeBase` 对候选论文的全部 chunk 与查询向量做 corpus-level centering（减 chunk 均值后重归一化，可 `centerCorpus: false` 关闭），每篇以最佳 centered chunk cosine 形成论文级候选；lexical 分支使用 NFKC/Unicode token 与汉字 bigram，对本次 query terms 做两遍 chunk-level BM25 扫描，以每篇最佳 chunk 形成有界论文候选，并在同一 lexical rank 中保留标题 exact/prefix 和短查询 compact alias。两路先各自聚合到 paper，再以 RRF 融合；同一论文在每个通道只投一票，EvidenceChunk hits 按通道交错、chunk ID 去重并保留各自 `source` 与 `scoreKind`。`dense`/`lexical` 模式作为诊断入口，其中 lexical 不调用 embedding。普通搜索的 BM25 使用完整 query；相似论文入口显式以标题作为 lexical query，同时 dense 继续使用标题+摘要。返回值将最终 `rankingScore`/`rankingScoreKind` 与最佳 evidence `score`/`scoreKind` 分开，插件不把 RRF 或 BM25 分数显示成 cosine similarity：有 dense 证据时显示 best semantic evidence，否则显示 lexical match。chunk hits 携带 chunk ID、heading、page/block/bbox locator 与原文。当前文件型查询仍逐篇加载 JSON/base64 vectors，dense centering会复制候选向量；BM25 的同步两遍扫描也只能在 paper 加载边界检查取消。远程嵌入为 core 侧 `createRemoteEmbeddingModel`：OpenAI 兼容 `POST {baseUrl}/embeddings`（`{model, input}` → `{data:[{index, embedding}]}`），批量 ≤64、超时、逐响应断言维度；modelId 为 `remote:{model}:{dimension}`（不含端点 URL）。
 - **聚类与方向草案**（`packages/core/src/library/clustering/` 与 `personal-library-direction-proposer.ts`）：`buildClusteringInput` 从知识库按 recency 加载每篇 ready 论文的 chunk 向量（arXiv paperKey 的 YYMM 前缀新到旧、无日期的 fallback `file:sha256:` key 排在最后，长文截断到 80 chunk，上限 2000 篇）；`clusterPaperVectors` 做 single-linkage 聚类（Kruskal 合并）：corpus-level centering（减去语料 chunk 均值，抑制 e5-small 的饱和余弦中的公共学术方向）→ 论文间相似度 = 最强 chunk 对余弦（best-passage 证据，与检索同语义）→ 边按强度降序合并，在**相对停止线**（最强边的 `relativeStopRatio`，默认 0.65）处停——该相对规则对 e5 饱和/低分分布自适应，绝对阈值在该模型上实测不可靠 → 连通分量成簇、小于 `minClusterSize` 的进缓冲池（outlier pool），成员置信度 = 簇内最强边（clamp [0,1]）。方向生成入口 `proposeClusteredPersonalLibraryDirections`（schema v3）：校验 KB 与 catalog 的 scope/identification 指纹一致后，每簇一次有界 extraction 调用（复用 extraction system prompt 与 validation/重试），候选携带 `clusterMembers`（全成员 + 置信度），跳过跨簇 synthesis；`catalogInputPapers` 覆盖簇成员 ∪ 缓冲池，缓冲池由审核界面即时派生（`catalogInputPapers` − ∪`clusterMembers`）。
-- **阅读候选**（`packages/core/src/library/reading-candidates/`）：ADR 0004 第 7–8 步的持久化投影。候选记录快照论文身份、发现来源（触发方向/手动主题 + 日报路径与日期）、相关先验工作（触发方向代表论文的 paperKey + 标题）与 provisional novelty 证据（差异类型/比较基准/解释），并携带可选的阅读决策（`read-closely` / `skim` / `dismiss`）。文档经严格解码（字段有界、paperKey 与 arxivId 一致、数组去重上限），pending 候选上限 500，超出时按 `savedAt` 淘汰最旧未决策项（已决策候选保留为历史）；重复保存刷新快照但保留既有决策。`ReadingCandidatesStore` 按 scope/identification 指纹分片到 `<indexDir>/personal-library-reading-candidates/<scopeHex>/<idHex>/reading-candidates.json`，采用与建议文档相同的 primary/backup、expectedRevision CAS 与语义重放幂等；`readingCandidateFromRowSnapshot` 只接受携带发现来源的 Dashboard 行快照，无来源返回 null。
 - **方向增量更新**（`packages/core/src/library/incremental/`）：`suggestIncrementalPlacement` 对未归入任何已确认方向的已索引论文，与各方向代表论文锚（≤5 篇）在语料 centered chunk 空间做 best-passage 余弦比较，按相对规则判定：超过绝对下限 `minSimilarity`（默认 0.25）**且**领先次强方向至少 `minMargin`（默认 0.05）才就近归入，否则进缓冲池。缓冲池论文达触发条件后经 `reclusterPool` 产出新簇候选与 `nearestDirection` 漂移信号：聚类输入先把每篇论文的 centered chunks 压成一个归一化质心，single-linkage 的两两比较规模按论文数增长；漂移参考仍以完整 chunk sets 与方向锚比较。`suggestDirectionDiff` 用独立 `LlmClient` 对簇 + 现有方向生成 diff 建议（attach/new/split/merge），输出经严格校验（kind/direction/paperKey/reason/conflict，锁定方向 split/merge 拒绝）并最多重试 3 次。placement 无需模型处理许可；缓冲池达阈值后的 recluster + LLM diff 阶段要求 `personal-library-direction-generation` 授权门与当前 authorization fingerprint，无许可时跳过并写 `pendingAuthorization`（缓冲论文数 + 时间戳）到建议文档，审核 UI 显示待授权横幅。建议持久化到独立 CAS 文档 `<indexDir>/personal-library-incremental-suggestions/<scopeHex>/<idHex>/incremental-suggestions.json`（`IncrementalSuggestionsStore`：primary/backup、expectedRevision CAS、精确语义重放幂等、backup 恢复修复 primary），仅审核后生效。应用：attach 追加方向 `clusterMembers`（固定置信度 `SUGGESTION_MEMBER_CONFIDENCE` 0.9，禁止重复归入）+ `members-updated` 事件；new 只产出候选草案（`buildNewDirectionDraft`）走既有确认流程；split 从源方向移除成员并派生新方向（`split-derived` 血缘标记）；merge 镜像 review merge 语义（两个终态未锁定方向）；锁定方向接受 attach、拒绝 split/merge。
 - **投递编排**（`deliverDailyEmailIfEnabled`）：self Resend 与 hosted 中继；返回 `DeliverEmailResult`，失败不回写流水线 run-state。
 - **设置**：`PluginSettings`、默认值、校验、迁移、主题模板、详情选择策略。
@@ -82,7 +81,7 @@ core 源码禁止 Node 内置模块、未白名单第三方，以及 `process`/`
 
 选中文献库时，插件还会按 scope 与识别策略 identity 从 Vault index root 下独立加载可替换的 direction proposal 和研究者确认的 interest profile；缺失 proposal 表示尚无提议，缺失 profile 表示严格空 profile，一个文档损坏不会清空另一个。两者使用独立 primary/backup、原子整文档写入、语义 revision 与 CAS；确认操作按 profile-first 协调，避免在权威 profile 写入失败时先消费 proposal candidate。方向实体为 schema v3：候选可带 `clusterMembers`（paperKey + confidence），确认后的方向带必填 `clusterMembers` 与 `timeline` 事件（created/edited/members-updated/merged/removed/locked/unlocked/split，上限 64，迁移自 v2 时注入 created 事件）；confirmed direction 可锁定（可选 `lockedAt`，decoder 按存在与否接受该键，旧文档兼容加载）：锁定方向不参与自动 split/merge，但新论文仍可归入（attach）。插件内部的生成入口只接受当前有效的模型处理许可与已加载 catalog，以**聚类驱动**（`proposeClusteredPersonalLibraryDirections`，输入为知识库全文向量，KB 空时提示先运行全文索引）替代一次性 LLM 分批提取，使用独立 `LlmClient` 每簇一次有界提取调用，并在提交前复核连接、输出位置、许可和精确 catalog evidence fingerprint；目录、输出位置、有效 endpoint 或撤销许可会定向取消生成。
 
-Dashboard 行携带发现来源（occurrence provenance）时显示 **Save for later** 按钮，把行快照保存为阅读候选（`saveReadingCandidateForRow`，经 `readingCandidateFromRowSnapshot` 映射后写入阅读候选 store，保存失败按 Notice 提示；无来源的行不显示该按钮）。命令 `review-reading-candidates` 打开独立的 **Reading candidates** modal：按方向（首个触发方向）或手动主题分组、组内按保存时间新到旧排列，每条候选展示标题、作者、主题、日报日期、相关先验工作与 novelty 解释，并提供 Read closely / Skim / Dismiss 决策与移除按钮；决策写入候选记录、从待决策列表消失，已决策数量在头部计数。阅读候选随 `reloadPersonalLibraryProfileDocuments` 与 catalog/profile/proposal/suggestions 一起并行加载，加载失败单独降级不影响其他文档。
+Dashboard 行的发现来源（occurrence provenance）目前只用于展示，不再有保存动作。
 
 设置页的 **Review directions** 和命令 `review-personal-library-directions` 打开同一个 Proposed/Confirmed modal。Proposed 候选可检查和修改名称、描述、discovery cues 与 1–5 篇代表论文，也可显式合并、移除或确认；只有确认操作会把候选转入研究者权威 profile。候选的 `clusterMembers` 以"Cluster members N · avg. confidence X%"摘要展示（可展开成员列表与置信度），另渲染"Unclustered (buffer pool) N"区块（`catalogInputPapers` 中未被任何候选覆盖的论文）；Confirmed 方向展示 `clusterMembers` 摘要与最近 5 条 `timeline` 事件。Confirmed 方向保留 active/disabled/merged 状态、代表论文与 evidence diagnostics，并通过显式操作编辑、启停、合并或按 restrict/cascade 删除（操作写入 timeline 事件）。同一 modal 顶部渲染**增量建议区块**：列出 `IncrementalSuggestionsStore` 中 pending 的 diff 建议（kind 徽标 attach/new/split/merge、目标方向名、涉及论文数、截断理由），每条带 Apply/Ignore 按钮；apply "new" 建议会把候选草案写入 proposal store 并切到 Proposed tab 走既有确认交互，apply attach/split/merge 直接经 profile 持久化路径生效，成功后建议从文档移除；Confirmed 方向卡片按 `lockedAt` 显示 locked 徽标并提供 Lock/Unlock 按钮（mutation 写 locked/unlocked 事件）。modal 将模型和 catalog 内容按纯文本渲染；本地查看与 review 不要求仍持有模型处理许可，重新生成则要求当前许可。
 
@@ -98,7 +97,7 @@ Dashboard 行携带发现来源（occurrence provenance）时显示 **Save for l
 
 ### Email Relay Worker
 
-`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理 liveness、automatic readiness、验证起始/完成、`/v1/deliver` 与 operator-only cutover control。`DELIVER_GATE` 同一 Durable Object 类承载 cutover singleton、按收件人划分的 automatic gate 和按设备划分的 test gate；幂等 ledger 与 UTC 日配额在相应对象的 storage transaction 内更新。automatic 路径还要求 singleton 中的永久 deployment binding、control 与 KV audit marker 一致并处于 ready；绑定或运行依赖不可验证时 fail closed，不存在无 DO fallback。
+`services/email-relay` 是独立 Wrangler Worker；仓库配置的默认 `PUBLIC_BASE_URL` 为 `https://mail.arxiv-daily.top`。它处理 liveness、automatic readiness、验证起始/完成、`/v1/deliver` 与 operator-only cutover control。JSON 请求必须先解析为非 null、非数组的对象，才读取字段或进入后续业务写入。`DELIVER_GATE` 同一 Durable Object 类承载 cutover singleton、按收件人划分的 automatic gate 和按设备划分的 test gate；幂等 ledger 与 UTC 日配额在相应对象的 storage transaction 内更新。automatic 路径还要求 singleton 中的永久 deployment binding、control 与 KV audit marker 一致并处于 ready；绑定或运行依赖不可验证时 fail closed，不存在无 DO fallback。
 
 ### VS Code companion
 
@@ -175,7 +174,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 
 1. **已有日报**：若 `MarkdownWriter.dailyExists(date)`，清理已提交 checkpoint，并对 Paper Index 做修复后返回 `completed`（修复路径可不带 digest）。  
 2. **发现**：默认 `ArxivSourceAdapter.listForDate`（arXiv `/recent` + 摘要 enrichment）；空列表 → `pending`（不写空文件）。  
-3. **LLM 过滤**：`filterPapers`；可写 `filter-checkpoints`。模型响应必须是严格的 `{ "papers": [...] }` JSON，记录仅接受当前请求中的 ID、唯一 ID，以及配置 topic tag 或 `skip`；响应 JSON/契约校验失败 → **`failed_transient`**，不保存 checkpoint，也不进入 Paper Index 与后续生成。永久/瞬态 LLM 调用错误映射为对应失败 kind。
+3. **LLM 过滤**：`filterPapers`；可写 `filter-checkpoints`。模型响应必须是严格的 `{ "papers": [...] }` JSON（整段响应恰好包在一个外层 ```` ``` ```` 代码块里时先去掉这层包装，其余文字或多个代码块仍视为非法），记录仅接受当前请求中的 ID、唯一 ID，以及配置 topic tag 或 `skip`；响应 JSON/契约校验失败 → **`failed_transient`**，不保存 checkpoint，也不进入 Paper Index 与后续生成。永久/瞬态 LLM 调用错误映射为对应失败 kind。
 4. **过滤结果为空**：严格验证后的空数组或全部合法 `skip` 直接 `completed`（`papersWritten: 0`，空 digest），**不写** Paper Index。
 5. **索引入库**：`PaperIndexStore` upsert；失败 → **`failed_permanent`**。`ignored` 不进入后续可见集合；若全部 ignored → `completed`（0 篇，空 digest）。  
 6. **正文获取**：并发度 6；经 `SourceAdapter.fetchContent`；失败降级为错误占位文本，不中断整日。  
@@ -197,11 +196,11 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - 仅在 `runAtLocal`–`runUntilLocal` 本地时间窗内工作（多日 tick 时时间窗主要约束“今天”）；
 - 回看 `LOOKBACK_DAYS = 5` 个日历日；配置时区下的周末跳过；
 - `checkTickGate`：已完成 / 运行中 / 窗外 / 瞬态失败退避则跳过；
-- 注入的 `RunLock` 串行化同日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
+- 注入的 `RunLock` 维护进程内日期互斥，并通过宿主同机共享锁串行化同一 Vault 的所有日运行；`StateStore` 记录 `pending|running|completed|failed_*|skipped`；
 - `StateStore` mutation 从权威 primary 重载 durable state，修改 candidate，保存后精确回读整个 run-state；只有回读与 candidate 完全相等才发布到内存。保存抛错但回读已等于 candidate 时提交仍成立，其余保存或确认失败保留 mutation 前的内存快照；
 - 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
-- 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_permanent`**（错误文案：`recovered stale running state after startup`）；
+- 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_transient`**（错误文案：`recovered stale running state after startup`），由正常调度继续重试；`attempts` 已达 `MAX_TRANSIENT_ATTEMPTS` 时标为 `failed_permanent`；
 - run history、进度/日志、取消清理和 `onDailyCompleted` 是 completed hard commit 之后的 best-effort effect，任一失败不撤销已确认的 run-state。pending completion 不持久化为 outbox；进程退出后不保证原 digest、history 或完成回调重放。
 
 **插件 vs CLI 调度：**
@@ -214,7 +213,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 | 执行 | 需 Obsidian 保持打开 | OS cron 调用一次性 `run --today` |
 | `run` 路径 | `runForDateNow` / force 等 | 同样经 `runForDateNow`，但**不** `start()` 定时器 |
 
-原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
+cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
 
 ### 邮件流
 
@@ -231,7 +230,9 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 5. self Resend 对 408/409/5xx 和宿主明确标记为可重试的 transport failure 做有界重试，所有物理尝试复用同一个 provider key。HTTP 400/401/403/404/422/429 是明确拒绝；其他 HTTP、transport failure 和无有效 acceptance marker 的 2xx 均按结果不明处理。
 6. provider 接受后写 `delivered` result；若最终主状态重建失败，返回 `delivered_unrecorded`，已存在的 attempt/result sidecar 仍继续阻断自动重发。provider 调用后的 ambiguous、明确拒绝或结果落盘不确定同样保留阻断；系统不自动重试这些 generation。
 
-`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient；Node 与受支持的 Obsidian 桌面文件系统将主文件和临时/备份产物强制为 `0600`，读取既有宽权限主文件时也收紧为 `0600`。Linux 宿主使用 `O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW`、`/proc/self/fd` descriptor 锚定和原子 rename；无法提供这些能力的宿主对自动投递 fail closed。跨文件系统 rename 不降级为 copy。
+`delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient。CLI 与 Plugin product 共用受限的 Node-API v8 私有存储组件：POSIX 使用目录描述符相对操作和 `0600`；Windows 持有遍历目录的句柄、通过同步身份检查拒绝命名空间替换和 reparse point，并在文件创建时设置当前用户的 protected DACL，而不是把 chmod 当作 ACL。既有宽权限主文件及可恢复备份在使用前收紧权限，私有替换与恢复还使用同一机器本地锁，避免清理另一个写入者的临时文件。
+
+namespace guard 在 provider 调用前同步验证。原生资产缺失时，Linux 保留已有 `/proc/self/fd` 兼容实现；不满足存储能力时拒绝自动投递，损坏或不兼容的已提供原生资产不静默降级。跨文件系统 rename 不降级为 copy。构建矩阵覆盖 Linux/macOS/Windows 的 x64/arm64，聚合校验要求同一 run 的全部平台资产通过源身份与二进制完整性验证。详见 ADR 0009。
 
 显式 `force`/邮件测试不创建自动 claim，也不改写 automatic delivery state；每次生成独立 `arxiv-daily:test:<random>` key，因此不会占用正式日报 identity。self 模式的 API key 当前来自 settings/config；From 为空时使用 `onboarding@resend.dev`。hosted 模式使用 Bearer `hostedToken` 调用默认 `https://mail.arxiv-daily.top/v1/deliver`。客户端接受精确的 `{ "ok": true }`，也接受仅附带非空且不超过 128 字符 `id` 的 `{ "ok": true, "id": string }` 与额外含字面量 `"deduped": true` 的响应；整个响应体上限为 4096 字符，重复顶层成员、其他字段或类型均视为结果不明。旧响应中的 provider ID 只参与局部契约验证，随后丢弃，不进入投递结果、日志或持久状态。`OFFICIAL_DELIVERY_AVAILABLE = true` 仅表示客户端路径开启，不证明外部 Worker 已部署或可用。
 
@@ -317,7 +318,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 ### LLM 调用
 
-`LlmClient.call` 使用流式 `/chat/completions`（`stream_options.include_usage`；不支持时有一次去掉 `stream_options` 的回退）。默认温度 `0.1`；thinkingMode 时按 provider 注入 reasoning/thinking。客户端内重试最多 **3** 次、基础退避 **5s**；耗尽包装为 `LlmTransientExhaustedError`。永久错误：HTTP 4xx 且非 429。逻辑调用超时 **300s**；流空闲超时 **120s**。密钥经 logger redaction 屏蔽。
+`LlmClient.call` 通常请求 `/chat/completions` 并设置 `stream: true`、`stream_options.include_usage`；服务商明确不支持该选项时去掉 `stream_options` 再尝试一次。provider 为 `anthropic` 且端点主机为 `api.anthropic.com` 时使用 `/messages`、`x-api-key`、`anthropic-version` 和独立 system 字段，并解析 Anthropic SSE；第三方兼容端点仍使用 chat/completions。默认非推理温度 `0.1`。推理参数直接进入 HTTP 顶层：DeepSeek 使用 thinking/reasoning_effort，Zhipu 使用 thinking，Anthropic 按模型选择 adaptive/output_config 或受 max_tokens 限制的 budget_tokens。输出上限过小会在请求前拒绝。端点与 pathname 的末尾斜线以线性扫描规范化。客户端瞬态重试最多 **3** 次、基础退避 **5s**；耗尽包装为 `LlmTransientExhaustedError`，HTTP 4xx 且非 429 视为永久错误。每次 HTTP 请求有 **300s** 超时；**120s** 空闲计时作用于 SSE 收集器。宿主 HTTP 当前先返回完整 bodyText，再解析 SSE，不构成逐网络 chunk 的端到端流。密钥经 logger redaction 屏蔽。
 
 ### Prompt 资产
 
@@ -339,7 +340,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 `PaperIndexStore`（`packages/core/src/services/paper-index.ts`）按 primary `papers.json` → `.bak` → legacy `index/papers.json` 的顺序选择首个有效文档；任一路径的真实读取错误直接失败，候选文件存在但均无法解析时也不会构造空索引。读取兼容 schema 1–4，内存归一为 schema 4，后续保存写 schema 4。
 
-索引写入先生成 `.tmp`，再把已验证的旧 primary 发布为 `.bak`，最后以 `.tmp → papers.json` rename 作为新内容的提交点。primary 缺失或损坏时不会用它覆盖有效 backup；提升失败时只尝试恢复提交前已验证的 primary、backup 或 legacy 内容。`PaperIndexStore` 的领域 mutation 在模块级、按 primary 路径共享的 Promise 队列中执行完整的读取、修改、校验和保存事务；该串行范围限于同一 JavaScript realm，不提供跨进程锁或 `fsync` 级掉电保证。
+索引写入先生成 `.tmp`，再把已验证的旧 primary 发布为 `.bak`，最后以 `.tmp → papers.json` rename 作为新内容的提交点。primary 缺失或损坏时不会用它覆盖有效 backup；提升失败时只尝试恢复提交前已验证的 primary、backup 或 legacy 内容。`PaperIndexStore` 的领域 mutation 先进入模块级、按 primary 路径共享的 Promise 队列；宿主提供 `acquireLock` 时，再取得该索引的机器本地共享锁，覆盖完整的读取、修改、校验和保存事务，失败也释放锁。CLI 与 Obsidian 桌面文件系统共用此实现，同机独立进程的更新不会相互覆盖；不提供多机器同步目录/网络文件系统的分布式协调或 `fsync` 级掉电保证。
 
 Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫描日报和论文笔记，再在同一索引 mutation 中重读当前状态。日报证据可补建非详情索引投影；论文详情必须由无歧义、身份一致的受管笔记证明。重复或冲突的顶层 `arxiv_id` / `arxiv` 标量会保护涉及的全部论文身份，嵌套字段、数组和正文不参与身份判断。破坏性清理还会比较扫描基线与 mutation 开始时的当前投影；扫描期间被其他操作删除或修改的详情不会被陈旧候选复活或清理。
 
@@ -349,16 +350,16 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 `StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
 
-插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该协调和 pending completion 都是单进程语义，没有 Plugin/CLI 跨进程锁。
+插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。共享锁与宿主组合测试在六平台原生矩阵内运行；真实桌面宿主由隔离 Obsidian 验收入口驱动。
 
-Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian Linux 文件系统使用 descriptor-anchored exclusive create、claim namespace guard 和私有原子替换，能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
+Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAtomic` 或同路径 mutation queue。邮件 automatic delivery 以不可变 claim/decision/result generation 记录 provider attempt 边界，再从 sidecar 重建 v1-compatible `delivery-state.json`；受支持的 Node/Obsidian 桌面宿主共用原生 private storage（Linux 无原生资产时保留 descriptor-anchored 兼容路径），能力不足时拒绝 automatic delivery。日报 Markdown 存在即视为该日已提交的权威信号。
 
 ## External Integrations and Executable Configuration
 
 ### 外部系统
 
 - **arXiv**：分类 recent 列表、摘要页、HTML/源码全文、PDF。
-- **LLM 提供商**：OpenAI 兼容 API（默认 DeepSeek：`https://api.deepseek.com/v1`，模型 `deepseek-v4-pro`，`thinkingMode: true`，`reasoningEffort: "medium"`）。
+- **LLM 提供商**：OpenAI 兼容 API 与官方 Anthropic Messages（默认 DeepSeek：`https://api.deepseek.com/v1`，模型 `deepseek-v4-pro`，`thinkingMode: true`，`reasoningEffort: "medium"`）。
 - **Resend**：自发送与 Worker 出站邮件。
 - **Cloudflare**：Worker、KV `STORE`、Durable Object `DeliverGate`。
 
@@ -410,8 +411,10 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### 构建产物
 
 
-- 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）  
-- CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，构建时复制到 `plugin/arxiv-daily-cli.cjs`；`prepack` 先 build  
+- 插件：`plugin/main.js`、`styles.css`、`manifest.json`（esbuild 外置 `obsidian`/`electron`）。主 bundle 内嵌受控构建的原生存储字节与摘要，不要求插件安装器额外下载 `.node` 文件。
+- CLI：`apps/cli/dist/arxiv-daily-cli.cjs`，同样内嵌原生存储；构建时复制到 `plugin/arxiv-daily-cli.cjs`，`prepack` 先 build。
+- 原生构建：`scripts/native-build.mjs` 使用本机 CMake/C++17 与 Node-API 头文件；`native-sdk.mjs` 仅从固定 Node 版本的官方源获取并验证 SDK 校验和，不安装或执行包脚本。`native-assets.mjs` 只组装目标架构、Node-API 版本、源码摘要和二进制摘要匹配的产物。源码摘要先将 CRLF 规范化为 LF；二进制摘要始终覆盖精确字节。开发构建只包含当前平台，发布环境 `ARXIV_DAILY_NATIVE_RELEASE=1` 必须具备 Linux/macOS/Windows 的 x64/arm64 六项产物，否则失败。
+- 运行时原生代码缓存：只将匹配平台的已验证字节提取到机器本地 `~/.arxiv-daily/native/<sha256>/`，不从 Vault、当前工作目录或网络发现代码。文件损坏或目录链接被拒绝，不自动覆盖可疑缓存。该缓存不是研究数据，不进入 Vault 数据导出。
 - VS Code companion：清单直接以 `src/extension.js` 为 CommonJS 入口；`build` 校验清单/命令注册，`test` 覆盖 workspace adapter、Dashboard、CLI 任务契约与 smoke，`vsix:package` 生成独立 VSIX
 
 - smoke 检查含 help 退出码、坏配置、pako notice、插件包不泄漏 workspace 解析符号等
@@ -419,10 +422,11 @@ Paper Index 与 checkpoint 使用各自的临时文件和 rename、`writeTextAto
 ### CI / 发布
 
 
-- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
-- **Release Obsidian plugin**（`release.yml`）：推送稳定 SemVer tag → 校验 tag/SHA/`docs/releases/<tag>.md`、拒绝覆盖已有 release → release tools / boundaries / lint / typecheck / 8 GiB 全 workspace test / build / smoke → 对插件三件套做 build-provenance attestation → `gh release create`。
-- **Publish CLI to npm**（`publish-cli.yml`）：插件 release **成功后**自动，或 `workflow_dispatch` 指定已有 tag → 校验 GH release 与 npm 版本未覆盖 → 运行同一全 workspace 验证入口 → trusted publishing `npm publish --workspace apps/cli`（包名 `arxiv-daily`）。
-- **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
+- **Root verification**（`lint.yml`）：所有 pull request 与直接推送到 `main` 时运行；主 job 使用独立检查名 `Root workspace verification`；固定 action commit，在根 lockfile 上执行 `npm ci`，依次检查 release tools、boundaries、lint、typecheck、8 GiB / 单 worker 的全 workspace 测试、build 与 smoke build。普通 PR 分支的 push 不单独触发该工作流。
+- **Native storage verification**（`native-storage.yml`）：PR、main push、手动及 reusable workflow 入口；在六个真实 OS/架构 runner 上构建和验证原生文件操作、共享锁、两个宿主的投递接入和离线安装。测试不发送真实邮件；二进制与验证报告分开上传，action 固定完整 SHA，权限仅 `contents: read`。矩阵后置聚合任务下载同一 run 的完整六平台资产并执行发布组装校验；任何平台遗漏、源身份或摘要不符都会失败。
+- **Release Obsidian plugin**（`release.yml`）：先依赖同一 run 的原生矩阵，下载并验证完整源码匹配的六项产物，再执行原有稳定 tag/SHA/发布说明校验、全量验证、三件套 attestation 和不可覆盖的 GitHub release 创建。
+- **Publish CLI to npm**（`publish-cli.yml`）：插件 release 成功后或手动指定已有 tag，按同一不可变源码重新完成原生矩阵；只消费同一 run 的资产，完整矩阵检查通过后执行既有验证与 trusted publishing。安装冒烟使用本地包、禁用安装脚本并离线执行；运行时测试还清空 PATH 并禁用 HTTP，验证不依赖用户编译器或运行时下载。
+- **Email relay verification**（`email-relay.yml`）：relay 或 hosted delivery contract、workflow、产品清单及 checker 路径变更时，使用 relay 自身 lockfile 执行 `npm ci`、moderate 级依赖审计、typecheck、tests 和 Wrangler `deploy --dry-run`；bundle 写入 runner 临时目录，不部署 Worker，也不读取生产凭据。
 - **VS Code companion verification**（`vscode-companion.yml`）：companion、CLI command contract、workflow、产品清单及 checker 路径变更时，使用 companion 自身 lockfile 执行 build、tests、smoke，并把验证用 VSIX 写入 runner 临时目录；不发布扩展。
 - 两个独立 workflow 都在 pull request 和相应路径推送到 `main` 时运行，action 固定完整 commit SHA，权限仅 `contents: read`，checkout 不持久化凭据。
 

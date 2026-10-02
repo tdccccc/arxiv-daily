@@ -212,23 +212,71 @@ describe("clusterPaperVectors (SNN)", () => {
     expect(result.outliers).toEqual(["p-solo"]);
   });
 
-  it("stops merging at the relative similarity gap", () => {
-    // Theme A members share the identical theme chunk (score 1); a weak
-    // bridge paper blends half theme A with half theme B (centered cosine to
-    // theme A around 0.5-0.6 — below the 0.8 tight floor, above the 0.2
-    // loose floor). A tight stop ratio (0.8) keeps the bridge out; a loose
-    // one (0.2) pulls it in.
+  it("stops merging at the similarity quantile", () => {
+    // Theme A members share the identical theme chunk (score 1); a weak bridge
+    // paper blends half theme A with half theme B. A tight quantile treats the
+    // bridge's link as coincidence and leaves it out; a loose one lets it in.
     const papers = [
       paper("p-a1", THEME_A, randomVector(1)),
       paper("p-a2", THEME_A, randomVector(3)),
       paper("p-bridge", blend(0.5, THEME_A, 0.5, oneHot(1))),
     ];
-    const tight = clusterPaperVectors(papers, { relativeStopRatio: 0.8, minSimilarity: 0 });
+    const tight = clusterPaperVectors(papers, { similarityQuantile: 0.8, minSimilarity: 0 });
     expect(tight.clusters.length).toBe(1);
     expect(tight.outliers).toEqual(["p-bridge"]);
-    const loose = clusterPaperVectors(papers, { relativeStopRatio: 0.2 });
+    const loose = clusterPaperVectors(papers, { similarityQuantile: 0.2 });
     expect(loose.clusters.length).toBe(1);
     expect(loose.clusters[0]!.paperKeys).toHaveLength(3);
+  });
+
+  it("does not let one near-duplicate pair set the floor for the corpus", () => {
+    // The floor used to be a fraction of the strongest pair. Themes whose
+    // members are alike but not identical then depended on what else was in
+    // the library: drop in two papers that are near-copies of each other and
+    // the bar rose above the themes, which stopped merging. A quantile floor
+    // is a property of the whole distribution, so the same themes survive.
+    const themed = (base: Float32Array, seed: number) => blend(1, base, 0.9, randomVector(seed));
+    const base = [
+      paper("p-a1", themed(THEME_A, 1)),
+      paper("p-a2", themed(THEME_A, 2)),
+      paper("p-a3", themed(THEME_A, 3)),
+      paper("p-b1", themed(THEME_B, 4)),
+      paper("p-b2", themed(THEME_B, 5)),
+      paper("p-b3", themed(THEME_B, 6)),
+    ];
+    const themesOf = (input: ClusteringInputPaper[]) =>
+      clusterPaperVectors(input, { similarityQuantile: 0.6 }).clusters
+        .map((cluster) => cluster.paperKeys.slice().sort())
+        .filter((keys) => keys.every((key) => key.startsWith("p-a") || key.startsWith("p-b")))
+        .sort((left, right) => (left[0]! < right[0]! ? -1 : 1));
+
+    expect(themesOf(base)).toEqual([["p-a1", "p-a2", "p-a3"], ["p-b1", "p-b2", "p-b3"]]);
+
+    // Two identical papers: the strongest pair in the corpus by a wide margin.
+    const twin = oneHot(7);
+    expect(themesOf([...base, paper("p-t1", twin), paper("p-t2", twin)]))
+      .toEqual([["p-a1", "p-a2", "p-a3"], ["p-b1", "p-b2", "p-b3"]]);
+  });
+
+  it("does not let one strong pair chain two themes together", () => {
+    // The failure single linkage could not avoid: a bridge paper close to one
+    // member of each theme welds both themes into one component, however
+    // unrelated the themes are. Average linkage weighs every pair between the
+    // groups, so the bridge cannot carry two themes across on its own.
+    const papers = [
+      paper("p-a1", THEME_A, randomVector(1)),
+      paper("p-a2", THEME_A, randomVector(2)),
+      paper("p-a3", THEME_A, randomVector(3)),
+      paper("p-b1", THEME_B, randomVector(4)),
+      paper("p-b2", THEME_B, randomVector(5)),
+      paper("p-b3", THEME_B, randomVector(6)),
+      paper("p-bridge", blend(0.72, THEME_A, 0.72, THEME_B)),
+    ];
+    const result = clusterPaperVectors(papers, { similarityQuantile: 0.8 });
+    const themes = result.clusters.map((cluster) => cluster.paperKeys.slice().sort());
+    expect(themes).toContainEqual(["p-a1", "p-a2", "p-a3"]);
+    expect(themes).toContainEqual(["p-b1", "p-b2", "p-b3"]);
+    expect(themes.some((keys) => keys.includes("p-a1") && keys.includes("p-b1"))).toBe(false);
   });
 
   it("returns an empty result for empty input", () => {
@@ -237,7 +285,7 @@ describe("clusterPaperVectors (SNN)", () => {
 
   it("rejects invalid options", () => {
     expect(() => clusterPaperVectors([], { minClusterSize: 0 })).toThrow(TypeError);
-    expect(() => clusterPaperVectors([], { relativeStopRatio: 1.5 })).toThrow(TypeError);
+    expect(() => clusterPaperVectors([], { similarityQuantile: 1.5 })).toThrow(TypeError);
     expect(() => clusterPaperVectors([], { minSimilarity: -0.1 })).toThrow(TypeError);
   });
 });
@@ -308,7 +356,7 @@ describe("buildClusteringInput", () => {
     for (const paperKey of keys) {
       await store.savePaper(documentWithChunks(paperKey, 1));
     }
-    const papers = await buildClusteringInput(store);
+    const { papers } = await buildClusteringInput(store);
     expect(papers.map(({ paperKey }) => paperKey)).toEqual([
       "arxiv:2608.00001",
       "arxiv:2305.00001",
@@ -320,10 +368,74 @@ describe("buildClusteringInput", () => {
   it("collects ready papers with chunk vectors, skipping failures", async () => {
     const store = new MemoryStore();
     await store.savePaper(documentWithChunks("arxiv:1", 3));
-    const papers = await buildClusteringInput(store);
+    const { papers } = await buildClusteringInput(store);
     expect(papers.length).toBe(1);
     expect(papers[0]!.paperKey).toBe("arxiv:1");
     expect(papers[0]!.chunks.length).toBe(3);
     expect(papers[0]!.chunks[0]!.length).toBe(DIMENSION);
+  });
+
+  /** Same paper, different file: byte hashing cannot see it, so the title does. */
+  function readyWithTitle(paperKey: string, title: string): FullTextPaperDocument {
+    return { ...documentWithChunks(paperKey, 1), title };
+  }
+
+
+  it("merges papers whose normalized titles are identical and reports them", async () => {
+    const store = new MemoryStore();
+    const title = "A Catalog of 1.58 Million Clusters of Galaxies from the Legacy Surveys";
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb", "file:sha256:cccc"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    // Two spellings of one paper, plus an unrelated one.
+    await store.savePaper(readyWithTitle(keys[0]!, title));
+    await store.savePaper(readyWithTitle(keys[1]!, `  ${title.toUpperCase()}!! `));
+    await store.savePaper(readyWithTitle(keys[2]!, "Photometric Redshift Estimation with Neural Networks"));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.map((p) => p.paperKey)).toEqual([keys[0], keys[2]]);
+    expect(mergedDuplicates).toEqual([
+      { keptPaperKey: keys[0], droppedPaperKeys: [keys[1]], title },
+    ]);
+  });
+
+  it("keeps papers whose titles are too short to identify a work", async () => {
+    // "Erratum" appearing twice is not evidence of the same paper.
+    const store = new MemoryStore();
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    for (const key of keys) await store.savePaper(readyWithTitle(key, "Erratum"));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.length).toBe(2);
+    expect(mergedDuplicates).toEqual([]);
+  });
+
+  it("keeps papers with no extracted title", async () => {
+    const store = new MemoryStore();
+    const keys = ["file:sha256:aaaa", "file:sha256:bbbb"];
+    store.manifest.papers = Object.fromEntries(keys.map((paperKey) => [paperKey, {
+      paperKey, status: "ready" as const, modelId: "fake", dimension: DIMENSION,
+      textHash: `sha256:${"1".repeat(64)}`, filePaths: ["a.pdf"],
+      observationFingerprints: [`sha256:${"c".repeat(64)}`], chunkCount: 1,
+      updatedAt: "2026-08-05T00:00:00.000Z",
+    }]));
+    for (const key of keys) await store.savePaper(documentWithChunks(key, 1));
+
+    const { papers, mergedDuplicates } = await buildClusteringInput(store);
+
+    expect(papers.length).toBe(2);
+    expect(mergedDuplicates).toEqual([]);
   });
 });

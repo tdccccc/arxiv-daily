@@ -9,6 +9,7 @@ import {
 } from "../src/settings/validation";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { PluginSettings } from "../src/settings/types";
+import { normalizeTopic } from "../src/settings/topics";
 
 function makeSettings(overrides: Partial<PluginSettings> = {}): PluginSettings {
   return {
@@ -115,6 +116,38 @@ describe("validateFilterConfig", () => {
     expect(r.reasons.join("; ")).toMatch(/topic/i);
   });
 
+  // ADR 0010 §1 let a connected library with eligible confirmed directions
+  // stand in for a hand-written topic, because those directions drove a
+  // classifier of their own. That classifier retired with the profile document
+  // (ADR 0012 / ADR 0014), so a topic is the only thing that can select a paper
+  // and a run without one is refused however rich the library is.
+  it("refuses a run without topics no matter what the library holds", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+      }),
+      {},
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons).toContain("No research topics defined");
+    expect(r.reasons.join("; ")).not.toMatch(/library/i);
+  });
+
+  it("keeps the topic-only wording when no library is involved", () => {
+    // The CLI product has no personal library and passes nothing: its refusal
+    // must stay exactly what it is today.
+    const settings = makeSettings({
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+      arxiv: { ...DEFAULT_SETTINGS.arxiv, topics: [] },
+    });
+    expect(validateFilterConfig(settings).reasons).toContain("No research topics defined");
+    expect(validateFilterConfig(settings).reasons)
+      .toEqual(validateFilterConfig(settings, {}).reasons);
+    expect(validateFilterConfig(settings, { library: { connected: false, eligibleDirections: 0 } }).reasons)
+      .toContain("No research topics defined");
+  });
+
   it("combines LLM and topics reasons", () => {
     const r = validateFilterConfig(
       makeSettings({
@@ -132,7 +165,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
       }),
     );
@@ -146,7 +179,7 @@ describe("validateFilterConfig", () => {
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
           categories: ["astro-ph", " ", "astro-ph"],
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
       }),
     );
@@ -175,7 +208,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
         output: {
           ...DEFAULT_SETTINGS.output,
@@ -193,7 +226,7 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: "T", tag: "t", description: "x", detail: false }],
+          topics: [normalizeTopic({ id: "t", name: "T", tag: "t", directions: [{ id: "d", text: "x", origin: "manual" }], detail: false })],
         },
         output: {
           ...DEFAULT_SETTINGS.output,
@@ -211,14 +244,34 @@ describe("validateFilterConfig", () => {
         llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
         arxiv: {
           ...DEFAULT_SETTINGS.arxiv,
-          topics: [{ id: "t", name: " ", tag: "", description: " ", detail: false }],
+          topics: [{ id: "t", name: " ", tag: "", description: " ", directions: [], detail: false }],
         },
       }),
     );
     expect(r.ok).toBe(false);
     expect(r.reasons.join("; ")).toMatch(/name is empty/i);
     expect(r.reasons.join("; ")).toMatch(/tag is empty/i);
-    expect(r.reasons.join("; ")).toMatch(/description is empty/i);
+    expect(r.reasons.join("; ")).toMatch(/has no directions/i);
+  });
+
+  /**
+   * P3: a topic with no directions has nothing for the classifier to judge
+   * against, so the check must say that rather than name the `description`
+   * shadow the researcher never edits directly.
+   */
+  it("says a topic has no directions rather than naming the shadow field", () => {
+    const r = validateFilterConfig(
+      makeSettings({
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [normalizeTopic({ id: "t", name: "Topic", tag: "topic", directions: [], detail: false })],
+        },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.reasons.join("; ")).toMatch(/has no directions/i);
+    expect(r.reasons.join("; ")).not.toMatch(/description/i);
   });
 
   it("flags duplicate topic tags", () => {

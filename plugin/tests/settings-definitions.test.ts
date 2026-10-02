@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   allSettingKeys,
   buildSettingDefinitions,
+  dailyAutoSendDesc,
   readSettingValue,
   SETTING_KEYS,
   writeSettingValue,
 } from "../src/settings/definitions";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import type { SettingDefinitionItem } from "obsidian";
 
 describe("setting key path mapping", () => {
   it("registers flat keys for every settings section", () => {
@@ -59,6 +61,77 @@ describe("setting key path mapping", () => {
     writeSettingValue(settings, "missing.deep.value", 1);
     expect(settings).toEqual(structuredClone(DEFAULT_SETTINGS));
   });
+
+  it("does not pollute Object.prototype through a settings path", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const sentinel = "__arxivSettingsPrototypeSentinel__";
+    const before = Object.getOwnPropertyDescriptor(Object.prototype, sentinel);
+    try {
+      writeSettingValue(settings, `__proto__.${sentinel}`, "polluted");
+      expect(Object.getOwnPropertyDescriptor(Object.prototype, sentinel)).toEqual(before);
+      expect(settings).toEqual(DEFAULT_SETTINGS);
+    } finally {
+      if (before) Object.defineProperty(Object.prototype, sentinel, before);
+      else Reflect.deleteProperty(Object.prototype, sentinel);
+    }
+  });
+
+  it.each(["__proto__", "constructor", "prototype"])("rejects %s at every path position without changing settings", (segment) => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const originalPrototype = Object.getPrototypeOf(settings.llm);
+    const originalSettingsPrototype = Object.getPrototypeOf(settings);
+    writeSettingValue(settings, segment, { sentinel: true });
+    writeSettingValue(settings, `llm.${segment}`, { sentinel: true });
+    expect(Object.getPrototypeOf(settings)).toBe(originalSettingsPrototype);
+    expect(Object.getPrototypeOf(settings.llm)).toBe(originalPrototype);
+    expect(settings).toEqual(DEFAULT_SETTINGS);
+
+    // Own object-valued reserved keys must not become a traversal bypass.
+    Object.defineProperty(settings.llm, segment, {
+      value: { model: "original" }, enumerable: true, configurable: true, writable: true,
+    });
+    const before = structuredClone(settings);
+    writeSettingValue(settings, `llm.${segment}.model`, "polluted");
+    expect(settings).toEqual(before);
+  });
+
+  it("rejects a dangerous later segment before reading any intermediate property", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    let reads = 0;
+    Object.defineProperty(settings, "draft", {
+      get: () => { reads += 1; return { value: "original" }; },
+    });
+    writeSettingValue(settings, "draft.prototype.value", "polluted");
+    expect(reads).toBe(0);
+  });
+
+  it("does not modify an inherited intermediate object", () => {
+    const shared = { model: "original" };
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    Object.setPrototypeOf(settings, { inherited: shared });
+    writeSettingValue(settings, "inherited.model", "polluted");
+    expect(shared.model).toBe("original");
+    expect(Object.hasOwn(settings, "inherited")).toBe(false);
+  });
+
+  it("does not invoke an inherited setter for the final segment", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    let value = "original";
+    const inherited = Object.create(null);
+    Object.defineProperty(inherited, "draft", { set: (next: string) => { value = next; } });
+    Object.setPrototypeOf(settings.llm, inherited);
+    writeSettingValue(settings, "llm.draft", "polluted");
+    expect(value).toBe("original");
+    expect(Object.hasOwn(settings.llm, "draft")).toBe(false);
+  });
+
+  it("continues allowing new ordinary leaf keys without creating missing parents", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    writeSettingValue(settings, "llm.futureOption", "supported");
+    expect(readSettingValue(settings, "llm.futureOption")).toBe("supported");
+    writeSettingValue(settings, "futureSection.option", "ignored");
+    expect(Object.hasOwn(settings, "futureSection")).toBe(false);
+  });
 });
 
 describe("buildSettingDefinitions structure", () => {
@@ -86,6 +159,8 @@ describe("buildSettingDefinitions structure", () => {
       renderCategoryRow: () => {},
       renderTopicRow: () => {},
       renderTimezoneRow: () => {},
+      renderOutputDirectoryRow: () => {},
+      renderEmailSenderRow: () => {},
       addCategory: () => {},
       deleteCategory: () => {},
       addTopic: () => {},
@@ -157,10 +232,11 @@ describe("buildSettingDefinitions structure", () => {
     expect(library?.items.map((item) => item.name)).toEqual([
       "Library",
       "Embedding",
-      "Better PDF parser",
     ]);
 
     host.plugin.settings.embedding.mode = "remote";
+    // Enabling the sidecar must not surface any row: it takes no part in
+    // indexing, so a visible control would promise a change it cannot deliver.
     host.plugin.settings.pdfParserSidecar.enabled = true;
     const expanded = buildSettingDefinitions(host).find(
       (item): item is Extract<(typeof items)[number], { type: "group" }> =>
@@ -173,9 +249,6 @@ describe("buildSettingDefinitions structure", () => {
       "Embedding API key",
       "Embedding model",
       "Embedding dimension",
-      "Better PDF parser",
-      "Sidecar capability URL",
-      "Sidecar parse URL",
     ]);
 
     const bare = buildSettingDefinitions(makeHost()).find(
@@ -186,11 +259,11 @@ describe("buildSettingDefinitions structure", () => {
 
   it("only includes Getting started while setup is incomplete", () => {
     const host = makeFullHost();
-    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
-      .toBe(true);
+    const isGuideRow = (item: SettingDefinitionItem) =>
+      item.name === "" && "render" in item;
+    expect(buildSettingDefinitions(host).some(isGuideRow)).toBe(true);
     host.showSetupGuide = false;
-    expect(buildSettingDefinitions(host).some((item) => item.name === "Getting started"))
-      .toBe(false);
+    expect(buildSettingDefinitions(host).some(isGuideRow)).toBe(false);
   });
 
   it("resolves every declarative control key through readSettingValue", () => {
@@ -210,6 +283,7 @@ describe("buildSettingDefinitions structure", () => {
 
   it("renders categories and topics without drag-to-reorder affordances", () => {
     const host = makeHost();
+    host.plugin.settings.arxiv.categories = ["astro-ph", "gr-qc"];
     const lists = buildSettingDefinitions(host).filter(
       (item) => item.type === "list",
     );
@@ -228,14 +302,14 @@ describe("buildSettingDefinitions structure", () => {
     const host = makeHost();
     host.plugin.settings.arxiv.categories = ["cs.AI", "cs.LG"];
     host.plugin.settings.arxiv.topics = [
-      {
+      { directions: [],
         id: "t1",
         name: "Photometric redshift",
         tag: "photometric-redshift",
         description: "",
         detail: false,
       },
-      {
+      { directions: [],
         id: "t2",
         name: "",
         tag: "",
@@ -334,5 +408,23 @@ describe("buildSettingDefinitions structure", () => {
     expect(hostedNames).toContain("Verification code");
     expect(hostedNames).not.toContain("Resend API key");
     expect(hostedNames).not.toContain("From email");
+  });
+
+  it("warns on the auto-send row when this system cannot send automatic email", () => {
+    const autoSendDesc = (host: ReturnType<typeof makeFullHost>) => {
+      const items = buildSettingDefinitions(host);
+      const group = items.find(
+        (item): item is Extract<(typeof items)[number], { type: "group" }> =>
+          item.type === "group" && item.heading === "Email delivery",
+      );
+      return group?.items.find((item) => item.name === "Daily auto-send")?.desc;
+    };
+    const host = makeFullHost();
+    expect(autoSendDesc(host)).not.toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+
+    const unsupported = { ...host, automaticEmailSupported: false };
+    expect(autoSendDesc(unsupported)).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+    expect(dailyAutoSendDesc(false, false)).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
+    expect(dailyAutoSendDesc(true, true)).not.toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
   });
 });

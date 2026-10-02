@@ -1,5 +1,6 @@
 import type { PluginSettings } from "./types";
 import { detailSelectionPreset } from "./detail-selection";
+import { DEFAULT_MAX_DAILY_PAPERS } from "./daily-paper-limit";
 
 export const DEFAULT_SETTINGS: PluginSettings = {
   llm: {
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   output: {
     dailyDir: "arxiv-daily/daily",
     papersDir: "arxiv-daily/papers",
+    maxDailyPapers: DEFAULT_MAX_DAILY_PAPERS,
     linkStyle: "wikilink",
     summaryLanguage: "zh",
   },
@@ -61,5 +63,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     enabled: false,
     capabilitiesUrl: "http://127.0.0.1:5001/v1/capabilities",
     parseUrl: "http://127.0.0.1:5001/v1/parse",
+  },
+  onboarding: {
+    guideCompleted: false,
   },
 };

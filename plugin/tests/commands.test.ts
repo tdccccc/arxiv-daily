@@ -151,6 +151,24 @@ function makePlugin() {
     })),
     scanPersonalLibrary: vi.fn(async () => makeCatalog()),
     reloadPersonalLibraryCatalog: vi.fn(async () => makeCatalog()),
+    indexPersonalLibraryFullText: vi.fn(async () => ({
+      indexed: 0,
+      reused: 0,
+      titlesRefreshed: 0,
+      failed: 0,
+      pruned: 0,
+      outcomes: [],
+      manifestRevision: 1,
+      manifestUpdatedAt: "2026-09-01T00:00:00.000Z",
+      searchablePapers: 0,
+    })),
+    getLastFullTextIndexLibraryContext: vi.fn(() => ({
+      totalFiles: 0,
+      readyPapers: 0,
+      unresolvedFallbackFiles: 0,
+      metadataFetchFailures: 0,
+      scannedBeforeIndexing: true,
+    })),
   };
 }
 
@@ -379,6 +397,31 @@ describe("registerCommands", () => {
     );
   });
 
+  it("refreshes open dashboards after Run today", async () => {
+    const plugin = makePlugin();
+    const refreshFromVault = vi.fn(async () => undefined);
+    Object.assign(plugin.app.workspace, {
+      getLeavesOfType: vi.fn(() => [{ view: { refreshFromVault } }]),
+    });
+    plugin.settings = {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", directions: [{ id: "d", text: "Galaxies", source: "manual" }], detail: false }],
+      },
+    };
+    plugin.scheduler.runForDateNow.mockResolvedValue({ kind: "completed", papersWritten: 2 });
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "run-now");
+
+    command?.callback?.();
+
+    await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
+  });
+
   it("registers and routes personal library direction review through the shared plugin entry", () => {
     const plugin = makePlugin();
     registerCommands(plugin as any);
@@ -571,6 +614,56 @@ describe("registerCommands", () => {
     expect(Notice.calls.some((c) => c.message.includes("loadPdfJs rejected"))).toBe(true);
     expect(Notice.calls.some((c) => c.message.includes("embeddings FAIL"))).toBe(true);
     expect(Notice.calls.some((c) => c.message.includes("fetch failed"))).toBe(true);
+  });
+
+  it("explains a zero-paper result from the command-palette build (first scan found nothing)", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "index-personal-library-fulltext");
+
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+
+    expect(plugin.indexPersonalLibraryFullText).toHaveBeenCalledOnce();
+    expect(plugin.getLastFullTextIndexLibraryContext).toHaveBeenCalled();
+    expect(Notice.calls.at(-1)?.message).toBe(
+      "arXiv Daily: no PDFs found in the personal library folder. Add PDFs to the folder, then use Scan library before building the index again.",
+    );
+  });
+
+  it("reports a cancelled command-palette build as cancellation", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.indexPersonalLibraryFullText.mockRejectedValue(new DOMException("Stopped", "AbortError"));
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "index-personal-library-fulltext");
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(Notice.calls.at(-1)?.message).toBe("arXiv Daily: indexing cancelled. You can build the index again when ready.");
+    expect(plugin.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("reports the command-palette build failing (e.g. the scan it ran first failed)", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    const failure = new Error("Could not scan the library folder before indexing: network unreachable");
+    plugin.indexPersonalLibraryFullText.mockRejectedValue(failure);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "index-personal-library-fulltext");
+
+    command?.callback?.();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+
+    expect(Notice.calls.at(-1)?.message).toBe(
+      "arXiv Daily: library indexing failed: Could not scan the library folder before indexing: network unreachable",
+    );
   });
 
   it("notices and logs when the diagnostics probe itself rejects", async () => {

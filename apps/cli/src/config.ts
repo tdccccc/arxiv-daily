@@ -5,7 +5,9 @@ import { parse as parseToml } from "smol-toml";
 import {
   DEFAULT_SETTINGS,
   arxivCategories,
+  isValidMaxDailyPapers,
   normalizeCategoryList,
+  normalizeTopic,
   sanitizeDetailSelection,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
@@ -202,6 +204,12 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
 
   const output = asTable(root.output);
   if (output) {
+    if (output.max_daily_papers !== undefined) {
+      if (!isValidMaxDailyPapers(output.max_daily_papers)) {
+        throw new CliConfigError("invalid output.max_daily_papers: expected a positive safe integer");
+      }
+      base.output.maxDailyPapers = output.max_daily_papers;
+    }
     base.output.dailyDir = stringField(output, "daily_dir", base.output.dailyDir);
     base.output.papersDir = stringField(
       output,
@@ -299,7 +307,10 @@ function mapTopic(raw: unknown, index: number): Topic {
     typeof raw.id === "string" && raw.id.trim()
       ? raw.id.trim()
       : `topic-${index + 1}`;
-  return { id, name, tag, description, detail };
+  // `detail` keeps the CLI's own default (true) rather than the shared one;
+  // everything else goes through normalizeTopic so the plugin and the CLI
+  // derive the description shadow the same way (ADR 0012).
+  return normalizeTopic({ id, name, tag, description, directions: raw.directions, detail });
 }
 
 function mapScheduleIntent(raw: unknown): CliScheduleIntent {
@@ -318,6 +329,7 @@ function mapScheduleIntent(raw: unknown): CliScheduleIntent {
   if (!/^\d{1,2}:\d{2}$/.test(d.until)) {
     throw new CliConfigError(`invalid schedule.until: ${d.until} (use HH:MM)`);
   }
+  scheduleFireSlots(d);
   return d;
 }
 
@@ -380,6 +392,9 @@ export function scheduleFireSlots(intent: CliScheduleIntent): string[] {
   const slots: string[] = [];
   let minutes = start.h * 60 + start.m;
   const endMin = end.h * 60 + end.m;
+  if (endMin < minutes) {
+    throw new CliConfigError("schedule.until must not be earlier than schedule.on for a recurring schedule");
+  }
   const step = intent.intervalHours * 60;
   while (minutes <= endMin) {
     const h = Math.floor(minutes / 60) % 24;

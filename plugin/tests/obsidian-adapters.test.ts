@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { normalizeTopic } from "../../packages/core/src/settings/topics";
 import {
   chmod,
   mkdir,
@@ -12,6 +13,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import type { NativeStorageBinding } from "../../packages/node-runtime/src/native-private-storage";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,6 +31,8 @@ import {
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   deliveryStatePath,
+  deliverDailyEmailIfEnabled,
+  sampleDailyDigest,
   emptyDeliveryState,
   isCancellationError,
   Logger,
@@ -86,7 +91,12 @@ function realFilesystemAdapter(root: string) {
       await rm(join(root, path), { recursive: true, force: true });
     },
     async list(path: string) {
-      return { files: [], folders: [], path };
+      const entries = await fsReaddir(join(root, path), { withFileTypes: true });
+      return {
+        files: entries.filter(entry => entry.isFile()).map(entry => `${path}/${entry.name}`),
+        folders: entries.filter(entry => entry.isDirectory()).map(entry => `${path}/${entry.name}`),
+        path,
+      };
     },
   };
 }
@@ -156,6 +166,53 @@ function testApp() {
 }
 
 describe("Obsidian host adapters", () => {
+  it("uses native delivery storage and blocks repeats across desktop host instances", async () => {
+    const root = await makeTempDir();
+    const actual = createRequire(import.meta.url)("../../packages/node-runtime/native/build/Release/private_storage.node") as NativeStorageBinding;
+    const nativeBinding: NativeStorageBinding = {
+      version: 1,
+      openDirectory: vi.fn((...args: Parameters<NativeStorageBinding["openDirectory"]>) => actual.openDirectory(...args)),
+    };
+    const vault = { adapter: realFilesystemAdapter(root) } as any;
+    const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText: '{"id":"native-once"}' }));
+    const options = {
+      http: { request }, output: DEFAULT_SETTINGS.output,
+      email: { enabled: true, mode: "self" as const, to: "native@example.com", fromEmail: "from@example.com", apiKey: "test" },
+      sleep: async () => {},
+    };
+    const digest = sampleDailyDigest({ date: "2026-09-28" });
+    const first = new ObsidianStorageAdapter(vault, { nativeBinding });
+    expect((await deliverDailyEmailIfEnabled(digest, { ...options, storage: first })).kind).toBe("delivered");
+    expect(nativeBinding.openDirectory).toHaveBeenCalled();
+    const second = new ObsidianStorageAdapter(vault, { nativeBinding });
+    expect((await deliverDailyEmailIfEnabled(digest, { ...options, storage: second })).kind).toBe("skipped");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("shares desktop resource locks between independently constructed hosts", async () => {
+    const root = await makeTempDir();
+    const vault = { adapter: realFilesystemAdapter(root) } as any;
+    const first: StorageAdapter = new ObsidianStorageAdapter(vault);
+    const second: StorageAdapter = new ObsidianStorageAdapter(vault);
+    expect(first.acquireLock).toBeTypeOf("function");
+    const lease = await first.acquireLock!("daily-run");
+    expect(lease).not.toBeNull();
+    try {
+      expect(await second.acquireLock!("daily-run")).toBeNull();
+    } finally {
+      await lease!.release();
+    }
+    const next = await second.acquireLock!("daily-run");
+    expect(next).not.toBeNull();
+    await next!.release();
+  });
+
+  it("does not advertise shared locks for a non-filesystem Vault", () => {
+    const { app } = testApp();
+    const storage: StorageAdapter = new ObsidianStorageAdapter(app.vault as any);
+    expect(storage.acquireLock).toBeUndefined();
+  });
+
   it("uses Obsidian's active window without globalThis", () => {
     expect(resourceOpenerSource).toContain("window.activeWindow.open");
     expect(resourceOpenerSource).not.toContain("globalThis");
@@ -686,7 +743,7 @@ describe("Obsidian host adapters", () => {
         ...DEFAULT_SETTINGS.arxiv,
         categories: ["astro-ph"],
         topics: [
-          { id: "topic-id", name: "Topic", tag: "topic", description: "Topic", detail: false },
+          normalizeTopic({ id: "topic-id", name: "Topic", tag: "topic", directions: [{ id: "topic-d1", text: "Topic", origin: "manual" }], detail: false }),
         ],
       },
       llm: {
@@ -698,8 +755,8 @@ describe("Obsidian host adapters", () => {
       },
     };
     const prepared = prepareDailyFilterCheckpoint(compatibility);
-    const first = [{ id: "2608.00001", category: "topic" }];
-    const second = [{ id: "2608.00001", category: "skip" }];
+    const first = [{ id: "2608.00001", category: "topic", directions: ["topic#1"], relevanceScore: 80 }];
+    const second = [{ id: "2608.00001", category: "skip", directions: [], relevanceScore: 0 }];
 
     await store.save("2026-08-01", prepared, first);
     await store.save("2026-08-01", prepared, second);

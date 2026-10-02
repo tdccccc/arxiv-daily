@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import { resolve } from "node:path";
 import { noticeBanner, readPakoNotice } from "../scripts/release-utils.mjs";
+import { nativeAssetsForBuild } from "../scripts/native-assets.mjs";
 
 const prod = process.argv[2] === "production";
 const thirdPartyBanner = noticeBanner(await readPakoNotice());
@@ -23,6 +24,7 @@ const options = {
   treeShaking: true,
   minify: prod,
   loader: { ".md": "text" },
+  define: { __ARXIV_DAILY_NATIVE_ASSETS__: JSON.stringify(nativeAssetsForBuild()) },
   banner: { js: thirdPartyBanner },
   legalComments: "inline",
   // transformers.js: bundle its web build (Electron/Chromium renderer), not

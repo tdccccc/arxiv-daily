@@ -6,6 +6,7 @@ import {
 } from "../services/cancellation";
 import type { EmailSettings, OutputSettings } from "../settings/types";
 import {
+  AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
   claimAutomaticDelivery,
   finalizeAutomaticDelivery,
   markAutomaticDeliveryAttemptStarted,
@@ -192,7 +193,11 @@ export async function deliverDailyEmailIfEnabled(
       return { kind: "skipped", reason: claimed.reason };
     }
     if (claimed.kind === "failed") {
-      deps.logger?.error(`email: cannot claim ${digest.date}: ${claimed.reason}`);
+      deps.logger?.error(
+        claimed.reason === "delivery_storage_unsupported"
+          ? `email: ${digest.date}: ${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE}`
+          : `email: cannot claim ${digest.date}: ${claimed.reason}`,
+      );
       return { kind: "failed", reason: claimed.reason, attempts: 0 };
     }
     claim = claimed;

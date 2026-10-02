@@ -8,6 +8,7 @@ import type { Logger } from "../services/logger";
 import type { Topic } from "../settings/types";
 import type { DailyPaperWithContent } from "./summarizer";
 import { escapePaperDataFence } from "./prompt-safety";
+import { normalizeTopicDirectionHits } from "./topic-direction-hits";
 
 export const DETAIL_SELECTOR_FULL_TEXT_CHAR_LIMIT = 12_000;
 export const DETAIL_SELECTOR_REASON_CHAR_LIMIT = 500;
@@ -146,17 +147,30 @@ export async function selectDetailPapers(
 function buildCandidateContent(candidates: readonly DetailCandidate[]): string {
   const blocks = candidates.map(({ paper, topic }) => {
     const fullText = paper.fullSections!.trim().slice(0, DETAIL_SELECTOR_FULL_TEXT_CHAR_LIMIT);
+    const directions = scoringDirections(paper, topic)
+      .map((text) => `- ${escapePaperDataFence(text)}`).join("\n");
     return [
       "---",
       `ID: ${escapePaperDataFence(paper.id)}`,
       `Title: ${escapePaperDataFence(paper.title)}`,
       `Abstract: ${escapePaperDataFence(paper.abstract)}`,
-      `Topic: ${escapePaperDataFence(topic.tag)}`,
-      `Topic description: ${escapePaperDataFence(topic.description)}`,
+      `Topic tag: ${escapePaperDataFence(topic.tag)}`,
+      `Research directions:\n${directions}`,
       `Key full-text excerpt:\n${escapePaperDataFence(fullText)}`,
     ].join("\n");
   });
   return `Score every candidate below.\n\n<paper_data>\n${blocks.join("\n")}\n</paper_data>`;
+}
+
+function scoringDirections(paper: DailyPaperWithContent, topic: Topic): string[] {
+  const hits = normalizeTopicDirectionHits(paper.topicDirections);
+  if (hits && hits.every(({ tag, text }) =>
+    tag === paper.category && tag === topic.tag && text.trim().length > 0)) {
+    // The filter's snapshot remains the scoring context even if settings were
+    // edited afterwards; current direction text must not rewrite that match.
+    return hits.map(({ text }) => text);
+  }
+  return topic.directions.map(({ text }) => text.trim()).filter(Boolean);
 }
 
 function parseEvaluations(

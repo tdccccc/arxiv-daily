@@ -75,7 +75,19 @@ export interface StorageNamespaceGuard {
   release(): Promise<void>;
 }
 
+export interface StorageLock {
+  release(): Promise<void>;
+}
+
+export interface StorageLockOptions {
+  wait?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
 export interface StorageAdapter {
+  /** Acquires a host-shared resource lock; null means busy in non-waiting mode. */
+  acquireLock?(key: string, options?: StorageLockOptions): Promise<StorageLock | null>;
   normalizePath(path: string): string;
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;

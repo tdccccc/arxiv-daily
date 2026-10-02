@@ -13,9 +13,11 @@ export type EmbeddingMode = "local" | "remote";
 
 /**
  * Embedding backend for the personal library full-text knowledge base
- * (ADR 0008). `local` embeds offline with the bundled multilingual-e5-small
- * model; `remote` sends full-text chunks to an OpenAI-compatible embeddings
- * endpoint (requires full-text processing consent).
+ * (ADR 0008). `local` downloads the multilingual-e5-small model from
+ * Hugging Face once, on the first full-text index build (about 130 MB),
+ * then embeds locally on every run after; `remote` sends full-text chunks
+ * to an OpenAI-compatible embeddings endpoint (requires full-text
+ * processing consent).
  */
 export interface EmbeddingSettings {
   mode: EmbeddingMode;
@@ -41,11 +43,33 @@ export interface LocalPdfParserSidecarSettings {
   parseUrl: string;
 }
 
+/**
+ * Where a direction's text came from. Provenance only: nothing branches on
+ * this value, because an accepted library direction must behave exactly like
+ * a hand-typed one (ADR 0012 §4).
+ */
+export type DirectionOrigin = "manual" | "migrated" | "library";
+
+/** One specific thread of interest running inside a topic (ADR 0012 §2). */
+export interface Direction {
+  id: string;
+  /** One line of text. Not a name plus a description, not a nested cue list. */
+  text: string;
+  origin: DirectionOrigin;
+}
+
 export interface Topic {
   id: string;
   name: string;
   tag: string;
+  /**
+   * Rollback shadow of `directions[0]`, kept so an older plugin or CLI build
+   * reading the same data.json keeps working unchanged. `directions` is the
+   * authority; this field is derived and must never be written directly.
+   * Invariant: `description === directions[0]?.text ?? ""`.
+   */
   description: string;
+  directions: Direction[];
   detail: boolean;
 }
 
@@ -59,6 +83,8 @@ export interface ArxivSettings {
 export interface OutputSettings {
   dailyDir: string;
   papersDir: string;
+  /** Maximum papers in a new daily report across all topics; defaults to 20. */
+  maxDailyPapers?: number;
   linkStyle?: LinkStyle;
   summaryLanguage?: SummaryLanguage;
 }
@@ -118,6 +144,17 @@ export interface EmailSettings {
   hostedBaseUrl?: string;
 }
 
+/** First-run setup guide state (ADR-less; see plugin/src/onboarding.ts). */
+export interface OnboardingSettings {
+  /**
+   * Set once every guide milestone (ready to run, first report, daily
+   * schedule) has been true at the same time. Once set, the guide never
+   * shows again, even if the user later disables the schedule or breaks
+   * their configuration.
+   */
+  guideCompleted: boolean;
+}
+
 export interface PluginSettings {
   llm: LlmSettings;
   arxiv: ArxivSettings;
@@ -128,6 +165,7 @@ export interface PluginSettings {
   email: EmailSettings;
   embedding: EmbeddingSettings;
   pdfParserSidecar: LocalPdfParserSidecarSettings;
+  onboarding: OnboardingSettings;
 }
 
 export type RunStatus =

@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS } from "./defaults";
 import type { ArxivSettings, EmailSettings, Topic } from "./types";
 import { normalizeCategoryList } from "./categories";
+import { normalizeTopic } from "./topics";
 
 function titleCase(slug: string): string {
   return slug
@@ -32,7 +33,7 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
       : DEFAULT_SETTINGS.arxiv.timezone;
 
   if (Array.isArray(arxiv.topics) && arxiv.topics.length > 0) {
-    return { category, categories, topics: arxiv.topics as Topic[], timezone };
+    return { category, categories, topics: arxiv.topics.map(normalizeTopic), timezone };
   }
 
   const detailCategories = Array.isArray(arxiv.detailCategories)
@@ -50,6 +51,7 @@ export function migrateArxivSettings(raw: unknown): ArxivSettings {
           name: displayMap[tag] ?? titleCase(tag),
           tag,
           description: "",
+          directions: [],
           detail: true,
         }))
       : freshDefaults();

@@ -5,15 +5,17 @@ The JSON object must contain exactly these keys with exactly this spelling and c
 
 Requirements:
 - `id` must copy the supplied paper ID exactly.
-- `coreProblem`: identify the concrete problem and explicit bottleneck rather than merely restating the abstract.
-- `keyMethod`: identify the key methods, data, models, observations, simulations, or theoretical tools and what they do.
-- `mainResult`: prioritize numerical evidence, errors, significance, improvements, sample sizes, parameter ranges, and baseline comparisons; when no numbers are supplied, clearly state the qualitative result claimed by the authors.
-- `whyRelevant`: state specifically what judgment changes, what problem is solved or constrained, or what scenario the work applies to; avoid generic praise.
-- `limitations`: state applicable conditions, boundaries, uncertainties, and uncovered questions.
+- This is a short summary for daily scanning. Give each field a distinct role; do not repeat background, procedures, or the same results, and do not enumerate every section's details.
+- `coreProblem`: use one short sentence to state the concrete question and main bottleneck rather than restating the abstract.
+- `keyMethod`: use one or two short sentences for the key method, data, and purpose, without reproducing the full experimental procedure.
+- `mainResult`: lead directly with the central finding. Use one to three short sentences with the one or two most informative quantitative results, errors, or baseline comparisons and the conditions needed to interpret them. Aim for 35–75 words; never remove an essential qualification or truncate a statement to meet this target. If no numbers are supplied, clearly state the authors' qualitative claim. Omit secondary-result inventories.
+- `whyRelevant`: use one short sentence to explain the concrete implication or use case without repeating the result; avoid generic praise.
+- `limitations`: use one or two short sentences for the most important conditions, uncertainties, or uncovered questions.
 - All six values must be non-empty strings. Use only the supplied content; do not add external knowledge or guesses.
 - Distinguish results supported by data, experiments, or theoretical derivation from claims merely made by the authors. When evidence details are insufficient, say "The authors claim".
 - When information for any field is missing, use the exact text "Not specified in the source text" for that field.
 - Write the semantic fields in English. Mathematical expressions must use Obsidian inline `$...$` only.
+- Preserve original scientific unit symbols and dimensions (such as `mJy/beam`). Copy astronomical object, instrument, and dataset identifiers exactly, including signs, decimal points, and leading zeros; do not invent expansions or repair names by guessing.
 - Do not use `\(...\)`, `\[...\]`, or `$$...$$`.
 - Keep every TeX command inside math delimiters.
 - Never split a single formula into multiple adjacent `$...$` spans; genuinely separate formulas may use separate spans.

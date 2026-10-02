@@ -10,6 +10,7 @@ import {
   dailyHeader,
   noCategoryPapersText,
   normalizeSummaryLanguage,
+  omittedPapersText,
 } from "../settings/summary-language";
 import type { SummaryLanguage } from "../settings/types";
 import type {
@@ -17,17 +18,18 @@ import type {
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
+import { validateDailySummaryOmissions } from "./daily-summary-assembler";
 import {
   extractFallbackPaperIds,
   extractPaperSummaries,
 } from "./daily-summary-parser";
-import { PERSONALIZED_LIBRARY_ONLY_CATEGORY } from "./personalized-paper-filter";
 import {
   fallbackCountLine,
   normalizeMarkdownLine,
   renderFallbackBlock,
   renderPaperHeader,
   renderStructuredFields,
+  renderEmptyTopics,
   safeDetailLink,
   trustedArxivUrl,
 } from "./daily-summary-rendering";
@@ -96,9 +98,12 @@ type RescueContract = {
   language: SummaryLanguage;
   date: string;
   categories: string;
-  topics: Array<{ tag: string; name: string }>;
-  counts: { total: number; detail: number; fallback: number };
+  fixedPrefix: string[];
+  emptyTopicLines: string[];
+  topics: Array<{ tag: string; name: string; omitted: number; emptyText: string; omissionText?: string }>;
+  counts: { total: number; detail: number; fallback: number; omitted: number };
   slots: Array<{
+    fixedLines: string[];
     paper: DailySummaryAssemblyPaper & { hasDetail: boolean; arxivLink: string };
     result:
       | { kind: "structured"; summary: StructuredPaperSummary }
@@ -168,6 +173,7 @@ export function buildDailySummaryRescueContract(
   input: DailySummaryAssemblyInput,
 ): RescueContract {
   const language = normalizeSummaryLanguage(input.summaryLanguage);
+  const omissions = validateDailySummaryOmissions(input);
   const display = (value: string): string =>
     protectRescueContractDelimiter(normalizeMarkdownLine(value));
   const slots = input.slots.map(({ paper, result }) => {
@@ -214,21 +220,53 @@ export function buildDailySummaryRescueContract(
           },
     };
   });
+  const date = display(input.dateStr);
+  const categories = display(formatArxivCategories(input.arxivSettings));
+  const counts = {
+    total: slots.length,
+    detail: slots.filter(({ paper }) => paper.hasDetail).length,
+    fallback: slots.filter(({ result }) => result.kind === "fallback").length,
+    omitted: omissions.total,
+  };
+  const fixedPrefix = [
+    "<!-- arxiv-daily-rescue-report:start -->",
+    dailyHeader(language, normalizeMarkdownLine(categories), normalizeMarkdownLine(date)),
+    dailyCountLine(language, counts.total, counts.detail),
+  ];
+  if (counts.fallback > 0) fixedPrefix.push(fallbackCountLine(language, counts.fallback));
+  if (counts.omitted > 0) fixedPrefix.push(omittedPapersText(language, counts.omitted, true));
   return {
     version: 1,
     language,
-    date: display(input.dateStr),
-    categories: display(formatArxivCategories(input.arxivSettings)),
-    topics: input.arxivSettings.topics.map(({ tag, name }) => ({
-      tag: protectRescueContractDelimiter(tag),
-      name: display(name),
+    date,
+    categories,
+    fixedPrefix,
+    emptyTopicLines: renderEmptyTopics(
+      input.arxivSettings.topics
+        .filter((topic) => !input.slots.some(({ paper }) => paper.category === topic.tag))
+        .map((topic) => ({
+          name: display(topic.name),
+          omittedCount: omissions.byTopic.get(topic.tag) ?? 0,
+        })),
+      language,
+    ),
+    topics: input.arxivSettings.topics.map(({ tag, name }) => {
+      const omitted = omissions.byTopic.get(tag) ?? 0;
+      return {
+        tag: protectRescueContractDelimiter(tag),
+        name: display(name),
+        omitted,
+        emptyText: noCategoryPapersText(language, omitted),
+        ...(omitted > 0 ? { omissionText: omittedPapersText(language, omitted, true) } : {}),
+      };
+    }),
+    counts,
+    // Encoded provenance and fold boundaries must be copied, not reconstructed
+    // by the repair model from direction text or a prose formatting skeleton.
+    slots: slots.map((slot) => ({
+      ...slot,
+      fixedLines: renderRescueSlot(slot, language, date).split("\n"),
     })),
-    counts: {
-      total: slots.length,
-      detail: slots.filter(({ paper }) => paper.hasDetail).length,
-      fallback: slots.filter(({ result }) => result.kind === "fallback").length,
-    },
-    slots,
   };
 }
 
@@ -295,55 +333,30 @@ function validateRescueParserProjection(
 }
 
 export function renderDailySummaryRescueMarkdown(contract: RescueContract): string {
-  const out = [
-    "<!-- arxiv-daily-rescue-report:start -->",
-    dailyHeader(
-      contract.language,
-      normalizeMarkdownLine(contract.categories),
-      normalizeMarkdownLine(contract.date),
-    ),
-    dailyCountLine(contract.language, contract.counts.total, contract.counts.detail),
-  ];
-  if (contract.counts.fallback > 0) {
-    out.push(fallbackCountLine(contract.language, contract.counts.fallback));
-  }
+  const out = [...contract.fixedPrefix];
   for (let topicIndex = 0; topicIndex < contract.topics.length; topicIndex += 1) {
     const topic = contract.topics[topicIndex]!;
+    const topicSlots = contract.slots.filter(
+      ({ paper }) => paper.category === topic.tag,
+    );
+    if (topicSlots.length === 0) continue;
     out.push(
       "",
       `<!-- arxiv-daily-rescue-topic:${topicIndex} -->`,
       `## ${normalizeMarkdownLine(topic.name)}`,
     );
-    const topicSlots = contract.slots.filter(
-      ({ paper }) => paper.category === topic.tag,
-    );
-    if (topicSlots.length === 0) {
-      out.push(noCategoryPapersText(contract.language));
-      continue;
-    }
+    if (topic.omissionText) out.push(topic.omissionText);
     for (const slot of topicSlots) {
       out.push("", renderRescueSlot(slot, contract.language, contract.date));
     }
   }
-  const librarySlots = contract.slots.filter(
-    ({ paper }) => paper.category === PERSONALIZED_LIBRARY_ONLY_CATEGORY,
-  );
-  if (librarySlots.length > 0) {
-    out.push(
-      "",
-      "<!-- arxiv-daily-rescue-library-only -->",
-      `## ${contract.language === "en" ? "Library-guided discoveries" : "个人文献库引导发现"}`,
-    );
-    for (const slot of librarySlots) {
-      out.push("", renderRescueSlot(slot, contract.language, contract.date));
-    }
-  }
+  if (contract.emptyTopicLines.length > 0) out.push("", ...contract.emptyTopicLines);
   out.push("", "<!-- arxiv-daily-rescue-report:end -->");
   return out.join("\n");
 }
 
 function renderRescueSlot(
-  slot: RescueContract["slots"][number],
+  slot: Pick<RescueContract["slots"][number], "paper" | "result">,
   language: SummaryLanguage,
   reportDate: string,
 ): string {
@@ -359,6 +372,7 @@ function renderRescueSlot(
   }
   return [
     ...renderPaperHeader(slot.paper, language, [marker], reportDate),
+    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

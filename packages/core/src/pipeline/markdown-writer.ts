@@ -1,5 +1,6 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { Logger } from "../services/logger";
+import { DAILY_RUN_LOCK_KEY } from "../services/run-lock";
 import type { ArxivSettings, OutputSettings } from "../settings/types";
 import { formatArxivCategories } from "../settings/categories";
 import {
@@ -177,8 +178,9 @@ export class MarkdownWriter {
     );
     const markdown = await this.opts.storage.readText(path);
     const body = stripFrontmatter(markdown).replace(/^\s+/, "");
-    const fm = await this.paperFrontmatterForEntry(entry);
-    await this.writeMarkdown(path, fm + body);
+    const kept = userFrontmatter(markdown);
+    const fm = await this.paperFrontmatterForEntry(entry, kept.tags);
+    await this.writeMarkdown(path, withExtraFrontmatter(fm, kept.lines) + body);
     this.opts.logger.info(`refreshed paper frontmatter: ${path}`);
     return path;
   }
@@ -212,17 +214,23 @@ export class MarkdownWriter {
   }
 
   async cleanupTemporaryFiles(): Promise<string[]> {
-    const removed: string[] = [];
-    for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
-      const norm = this.opts.storage.normalizePath(dir);
-      const entries = await this.opts.storage.list?.(norm).catch(() => []);
-      for (const entry of entries ?? []) {
-        if (entry.type !== "file" || !entry.path.endsWith(".tmp")) continue;
-        await this.opts.storage.remove(entry.path);
-        removed.push(entry.path);
+    const lock = await this.opts.storage.acquireLock?.(DAILY_RUN_LOCK_KEY);
+    if (lock === null) return [];
+    try {
+      const removed: string[] = [];
+      for (const dir of [this.opts.output.dailyDir, this.opts.output.papersDir]) {
+        const norm = this.opts.storage.normalizePath(dir);
+        const entries = await this.opts.storage.list?.(norm).catch(() => []);
+        for (const entry of entries ?? []) {
+          if (entry.type !== "file" || !entry.path.endsWith(".tmp")) continue;
+          await this.opts.storage.remove(entry.path);
+          removed.push(entry.path);
+        }
       }
+      return removed.sort();
+    } finally {
+      await lock?.release();
     }
-    return removed.sort();
   }
 
   private tagsFor(paper: DailyPaperWithContent): string[] {
@@ -275,9 +283,13 @@ export class MarkdownWriter {
       : undefined;
   }
 
-  private async paperFrontmatterForEntry(entry: PaperIndexEntry): Promise<string> {
+  private async paperFrontmatterForEntry(
+    entry: PaperIndexEntry,
+    extraTags: readonly string[] = [],
+  ): Promise<string> {
     const topic = this.opts.arxiv.topics.find((t) => t.tag === entry.primaryTopic);
     const tags = ["arxiv", "paper", topic?.tag ?? entry.primaryTopic].filter(Boolean);
+    for (const tag of extraTags) if (!tags.includes(tag)) tags.push(tag);
     const published = dateOnly(displayDateFromIndexEntry(entry));
     return paperFrontmatter({
       title: entry.title,
@@ -334,6 +346,18 @@ function escapeYaml(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+/**
+ * A frontmatter value that is plain when it is an ordinary slug — so the
+ * usual `photo-z` output is unchanged — and double-quoted otherwise. Topic
+ * tags are user text and may contain `:`, `,`, `[` or `#`, which would
+ * otherwise change or break the YAML.
+ */
+function yamlScalar(value: string): string {
+  const plain = /^\p{L}[\p{L}\p{N}_./-]*$/u.test(value) &&
+    !/^(?:true|false|null|yes|no|on|off|y|n)$/i.test(value);
+  return plain ? value : `"${escapeYaml(value)}"`;
+}
+
 function paperFrontmatter(meta: {
   title: string;
   authors: string;
@@ -353,9 +377,9 @@ function paperFrontmatter(meta: {
     `title: "${escapeYaml(meta.title)}"\n` +
     `authors: "${escapeYaml(meta.authors)}"\n` +
     `arxiv_id: "${meta.arxivId}"\n` +
-    `primary_topic: ${meta.primaryTopic}\n` +
+    `primary_topic: ${yamlScalar(meta.primaryTopic)}\n` +
     published +
-    `tags: [${meta.tags.join(", ")}]\n` +
+    `tags: [${meta.tags.map(yamlScalar).join(", ")}]\n` +
     `---\n\n`
   );
 }
@@ -379,6 +403,65 @@ function firstDailyReportDate(paths: string[]): string | undefined {
     .filter((date): date is string => Boolean(date))
     .sort();
   return dates[0];
+}
+
+/** Frontmatter keys the plugin writes and recomputes on refresh. */
+const MANAGED_FRONTMATTER_KEYS = new Set([
+  "title",
+  "authors",
+  "arxiv_id",
+  "primary_topic",
+  "published",
+  "tags",
+]);
+
+/**
+ * What a user added to a paper note's frontmatter: top-level keys the plugin
+ * does not manage (kept verbatim with their indented lines) and the tags in
+ * the `tags` list, so a refresh does not drop either.
+ */
+function userFrontmatter(markdown: string): { lines: string[]; tags: string[] } {
+  const match = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/.exec(markdown.trimStart());
+  if (!match) return { lines: [], tags: [] };
+  const lines: string[] = [];
+  const tags: string[] = [];
+  let keep = false;
+  let inTags = false;
+  for (const line of match[1]!.split("\n")) {
+    const key = /^([^\s#-][^:]*):(.*)$/.exec(line);
+    if (key) {
+      const name = key[1]!.trim();
+      keep = !MANAGED_FRONTMATTER_KEYS.has(name);
+      inTags = name === "tags";
+      if (keep) lines.push(line);
+      if (inTags) {
+        const flow = /^\s*\[(.*)\]\s*$/.exec(key[2]!);
+        if (flow) tags.push(...flow[1]!.split(",").map(unquoteYaml).filter(Boolean));
+      }
+      continue;
+    }
+    if (keep) lines.push(line);
+    else if (inTags) {
+      const item = /^\s*-\s+(.*)$/.exec(line);
+      if (item) tags.push(unquoteYaml(item[1]!));
+    }
+  }
+  return { lines, tags };
+}
+
+function unquoteYaml(value: string): string {
+  const trimmed = value.trim();
+  const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(trimmed);
+  if (quoted) return quoted[1]!.replace(/\\(.)/g, "$1");
+  const single = /^'(.*)'$/.exec(trimmed);
+  return single ? single[1]!.replace(/''/g, "'") : trimmed;
+}
+
+/** Insert preserved user lines just before the closing `---`. */
+function withExtraFrontmatter(frontmatter: string, lines: readonly string[]): string {
+  if (lines.length === 0) return frontmatter;
+  const close = frontmatter.lastIndexOf("---\n");
+  return `${frontmatter.slice(0, close)}${lines.join("\n")}\n${frontmatter.slice(close)}`;
 }
 
 function stripFrontmatter(markdown: string): string {

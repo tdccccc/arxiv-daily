@@ -41,17 +41,61 @@ export function comparePaperKeysByRecency(left: string, right: string): number {
 }
 
 /**
+ * Shortest normalized title treated as identifying a specific work.
+ *
+ * Content hashing already collapses byte-identical copies, so what reaches
+ * title matching is "same paper, different file" — a re-download, a publisher
+ * copy versus a preprint. Equal titles are strong evidence there, but generic
+ * stubs (`Erratum`, `Introduction`, a bare journal name) are not, and merging
+ * on those would silently fuse unrelated papers into one cluster member.
+ *
+ * This is a conservatism floor, not a tuned parameter: no corpus was fit to
+ * it. It sits far above generic stubs and far below real paper titles, whose
+ * median length in the frozen corpus is well over a hundred characters.
+ */
+const MIN_IDENTIFYING_TITLE_CHARS = 30;
+
+/** One group of papers collapsed to a single clustering member by title. */
+export interface MergedDuplicatePapers {
+  /** The paper that stayed in the clustering input. */
+  readonly keptPaperKey: string;
+  /** Papers dropped as the same work, in input order. */
+  readonly droppedPaperKeys: readonly string[];
+  /** The kept paper's title, verbatim, so a caller can show what was matched. */
+  readonly title: string;
+}
+
+export interface ClusteringInputResult {
+  readonly papers: ClusteringInputPaper[];
+  /** Empty when nothing was merged. Reported so a merge is never silent. */
+  readonly mergedDuplicates: readonly MergedDuplicatePapers[];
+}
+
+/** Case, spacing and punctuation carry no identity; the words do. */
+function normalizeTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
  * Load every ready paper's chunk vectors from the knowledge base,
  * deterministically (newest arXiv papers first, fallback keys last), up to
  * `limit`. Papers without usable chunks are skipped; long papers are
  * truncated to the chunk cap.
+ *
+ * Papers sharing a normalized title collapse to their first occurrence: the
+ * same work filed twice would otherwise contribute two near-identical members,
+ * inflating a real cluster's apparent coherence and fabricating two-member
+ * clusters out of nothing but a duplicate. What was merged is returned rather
+ * than logged away, because a wrong merge has to be answerable.
  */
 export async function buildClusteringInput(
   store: FullTextKnowledgeBaseStore,
   limit: number = MAX_CLUSTERING_INPUT_PAPERS,
-): Promise<ClusteringInputPaper[]> {
+): Promise<ClusteringInputResult> {
   const manifest = await store.loadManifest();
   const papers: ClusteringInputPaper[] = [];
+  const merges = new Map<string, { keptPaperKey: string; droppedPaperKeys: string[]; title: string }>();
+  const seenTitles = new Map<string, string>();
   for (const paperKey of Object.keys(manifest.papers).sort(comparePaperKeysByRecency)) {
     if (papers.length >= limit) break;
     const record = manifest.papers[paperKey];
@@ -66,7 +110,22 @@ export async function buildClusteringInput(
       chunks.push(chunk);
     }
     if (chunks.length === 0) continue;
+
+    const normalized = document.title === undefined ? "" : normalizeTitle(document.title);
+    if (normalized.length >= MIN_IDENTIFYING_TITLE_CHARS) {
+      const keptPaperKey = seenTitles.get(normalized);
+      if (keptPaperKey !== undefined) {
+        const group = merges.get(normalized);
+        if (group) group.droppedPaperKeys.push(paperKey);
+        continue;
+      }
+      seenTitles.set(normalized, paperKey);
+      merges.set(normalized, { keptPaperKey: paperKey, droppedPaperKeys: [], title: document.title! });
+    }
     papers.push({ paperKey, chunks });
   }
-  return papers;
+  return {
+    papers,
+    mergedDuplicates: [...merges.values()].filter((group) => group.droppedPaperKeys.length > 0),
+  };
 }

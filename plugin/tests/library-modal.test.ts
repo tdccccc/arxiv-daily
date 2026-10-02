@@ -74,15 +74,16 @@ describe("personal library authorization modal", () => {
     const modal = Modal.opened.at(-1)!;
     const text = modal.contentEl.textContent ?? "";
 
-    expect(modal.titleEl.textContent).toBe("Send full text off this device?");
+    expect(modal.titleEl.textContent).toBe("Send titles and abstracts off this device?");
     expect(text).toContain("/private/papers");
-    expect(text).toContain("Full text");
+    expect(text).toContain("Titles and abstracts");
+    expect(text).not.toContain("full-text chunks");
     expect(text).toContain("https://embed.example.com/v1/embeddings");
     expect(text).toMatch(/similarity vectors/i);
     expect(text).toMatch(/nothing else/i);
     expect(text).toMatch(/revoke/i);
     const buttons = [...modal.contentEl.querySelectorAll<HTMLButtonElement>("button")];
-    expect(buttons.map((button) => button.textContent)).toEqual(["Cancel", "Send full text"]);
+    expect(buttons.map((button) => button.textContent)).toEqual(["Cancel", "Send titles and abstracts"]);
     buttons[1]?.click();
     await expect(result).resolves.toBe(true);
   });
@@ -146,7 +147,7 @@ describe("personal library authorization modal", () => {
     const confirm = modal.contentEl.querySelector<HTMLButtonElement>(
       "button.arxiv-daily-library-authorization-confirm",
     );
-    expect(confirm?.textContent).toBe("Send full text");
+    expect(confirm?.textContent).toBe("Send titles and abstracts");
     expect(confirm?.classList.contains("mod-cta")).toBe(true);
     confirm?.click();
     await expect(result).resolves.toBe(true);

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   manifestFiles,
@@ -124,6 +127,22 @@ test("the bundle banner contains the complete locked pako license exactly once",
   assert.match(notice, /Copyright \(C\) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn/);
   assert.match(notice, /OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\nTHE SOFTWARE\.$/);
   assert.equal(banner.split(notice).length - 1, 1);
+});
+
+test("the bundle notice survives a Windows CRLF checkout without changing license content", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "arxiv-notice-crlf-"));
+  try {
+    await mkdir(join(fixture, "scripts"));
+    const modulePath = join(fixture, "scripts/release-utils.mjs");
+    await copyFile(`${root}/scripts/release-utils.mjs`, modulePath);
+    const notices = (await readFile(`${root}/THIRD_PARTY_NOTICES.md`, "utf8")).replace(/\r\n/g, "\n");
+    await writeFile(join(fixture, "THIRD_PARTY_NOTICES.md"), notices.replace(/\n/g, "\r\n"));
+    const fixtureUtils = await import(pathToFileURL(modulePath).href);
+    const notice = await fixtureUtils.readPakoNotice();
+    const license = (await readFile(`${root}/node_modules/pako/LICENSE`, "utf8")).replace(/\r\n/g, "\n").trimEnd();
+    assert.equal(notice, license);
+    assert.equal(fixtureUtils.noticeBanner(notice).split(license).length - 1, 1);
+  } finally { await rm(fixture, { recursive: true, force: true }); }
 });
 
 test("release checker accepts current metadata and both tools reject malformed versions", async () => {

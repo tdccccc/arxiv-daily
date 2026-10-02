@@ -1,6 +1,9 @@
 
 .*
 apps/cli/dist/
+packages/node-runtime/native/build/
+packages/node-runtime/native/prebuilds/
+packages/node-runtime/native/sdk/
 .cache/
 .codex-runs/
 .env

@@ -46,7 +46,7 @@ import type {
   EmbeddingModel,
   EmbeddingOptions,
 } from "@arxiv-daily/core";
-import type { FeatureExtractionPipeline } from "@huggingface/transformers";
+import type { FeatureExtractionPipeline, ProgressInfo } from "@huggingface/transformers";
 
 /** Stable model identifier shared with core's knowledge-base manifest. */
 export const EMBEDDING_MODEL_ID = "multilingual-e5-small-q8";
@@ -60,7 +60,16 @@ const EXPECTED_DIMENSION = 384;
 /** Texts per inference call: bounds q8-session memory and gives abort granularity. */
 const EMBED_BATCH_SIZE = 8;
 
+export interface ModelPreparationProgress {
+  phase: "loading" | "downloading" | "ready";
+  message: string;
+  /** Percentage for the model file or aggregate named by the message. */
+  progress?: number;
+}
+
 export interface TransformersEmbeddingModelOptions {
+  /** Preparation updates for active embed calls; silenced after cancellation. */
+  onProgress?: (progress: ModelPreparationProgress) => void;
   /**
    * Hugging Face mirror base URL, e.g. `"https://hf-mirror.com"`. Applied to
    * transformers.js `env.remoteHost` before the first model load; the default
@@ -139,6 +148,8 @@ export function createTransformersEmbeddingModel(
 class LazyModelLoader {
   private modulePromise: Promise<TransformersModule> | null = null;
   private pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
+  private ready = false;
+  private readonly progressListeners = new Set<(progress: ModelPreparationProgress) => void>();
 
   constructor(private readonly options?: TransformersEmbeddingModelOptions) {}
 
@@ -147,9 +158,38 @@ class LazyModelLoader {
    * signal. The underlying load is never cancelled — aborting only rejects
    * this caller — so a later embed reuses the completed load.
    */
-  ensure(signal?: AbortSignal): Promise<FeatureExtractionPipeline> {
-    const loading = this.pipelinePromise ?? this.startLoad();
-    return signal ? raceWithAbort(loading, signal) : loading;
+  async ensure(signal?: AbortSignal): Promise<FeatureExtractionPipeline> {
+    const report = (progress: ModelPreparationProgress) => {
+      if (!signal?.aborted && !this.options?.signal?.aborted) this.options?.onProgress?.(progress);
+    };
+    this.progressListeners.add(report);
+    try {
+      if (!this.ready) report({
+        phase: "loading",
+        message: "Loading local model files; first use may download about 130 MB.",
+      });
+      const loading = this.pipelinePromise ?? this.startLoad();
+      const extractor = await (signal ? raceWithAbort(loading, signal) : loading);
+      report({ phase: "ready", message: "Local model ready; extracting and embedding titles and abstracts." });
+      return extractor;
+    } finally {
+      this.progressListeners.delete(report);
+    }
+  }
+
+  private reportPreparation(event: ProgressInfo): void {
+    // Transformers emits `download` and `progress` even for browser-cache
+    // reads. These events prove file loading, not a network download; reserve
+    // the downloading phase for a future source that can tell the difference.
+    const progress = "progress" in event && Number.isFinite(event.progress)
+      ? Math.min(100, Math.max(0, event.progress))
+      : undefined;
+    const message = event.status === "ready"
+      ? "Initializing the local model."
+      : "file" in event
+        ? `Loading local model file: ${event.file}.`
+        : "Loading local model files.";
+    for (const report of this.progressListeners) report({ phase: "loading", message, progress });
   }
 
   private startLoad(): Promise<FeatureExtractionPipeline> {
@@ -162,10 +202,21 @@ class LazyModelLoader {
     configureTransformersEnv(transformers.env, this.options);
 
     const device = isNodeRuntime() ? "cpu" : "wasm";
-    const extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
-      dtype: "q8",
-      device,
-    });
+    let extractor: FeatureExtractionPipeline;
+    try {
+      // This is the call that downloads the model files (config, tokenizer,
+      // q8 ONNX weights — about 130 MB total) from Hugging Face on first use;
+      // a network failure here is by far the most common way this factory
+      // fails, so it gets a message a reader can act on instead of whatever
+      // fetch/DNS error transformers.js happened to surface.
+      extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
+        dtype: "q8",
+        device,
+        progress_callback: this.options?.onProgress ? (event) => this.reportPreparation(event) : undefined,
+      });
+    } catch (error) {
+      throw isLikelyNetworkError(error) ? embeddingModelDownloadNetworkError(error) : error;
+    }
 
     // Probe the loaded model and assert the documented dimension so the port
     // contract (`dimension === 384`) is verified against the real model
@@ -180,6 +231,7 @@ class LazyModelLoader {
           "refusing to serve inconsistent vectors.",
       );
     }
+    this.ready = true;
     return extractor;
   }
 
@@ -393,4 +445,69 @@ function abortError(signal: AbortSignal): Error {
   const error = new Error(message);
   error.name = "AbortError";
   return error;
+}
+
+/**
+ * Prefix `embeddingModelDownloadNetworkError` puts on its message, so hosts
+ * that only see the stringified reason (e.g. a per-paper `outcome.error` in
+ * the full-text index summary, which core reduces to `message`) can still
+ * tell a failed model download apart from any other indexing failure —
+ * `isEmbeddingModelDownloadNetworkError` checks for it.
+ */
+const EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX =
+  "Couldn't download the embedding model (network problem)";
+
+/**
+ * True when `message` is the text `embeddingModelDownloadNetworkError`
+ * produces, as opposed to any other full-text indexing failure reason.
+ */
+export function isEmbeddingModelDownloadNetworkError(message: string | undefined): boolean {
+  return typeof message === "string"
+    && message.startsWith(EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX);
+}
+
+/**
+ * Wrap a model-load failure that looks network-caused in a message a reader
+ * can act on. `error.name` is also set (mirrors the `AbortError` convention
+ * above) for callers that still hold the real Error object; the message
+ * prefix is what survives into a stringified failure reason.
+ */
+function embeddingModelDownloadNetworkError(cause: unknown): Error {
+  const error = new Error(
+    `${EMBEDDING_MODEL_DOWNLOAD_NETWORK_ERROR_PREFIX}: arXiv Daily could not reach ` +
+      "Hugging Face to download the local embedding model. Check your internet " +
+      "connection and try indexing again; the underlying error is logged to the " +
+      "developer console.",
+    { cause },
+  );
+  error.name = "EmbeddingModelDownloadError";
+  return error;
+}
+
+/**
+ * Loose, best-effort detection of a network-origin failure (fetch/DNS/
+ * timeout), looking one level into `cause` since Node's `fetch` wraps DNS
+ * failures that way. False negatives just fall back to the original error
+ * message; false positives would mislabel an unrelated load failure as a
+ * network problem, so the patterns stay specific.
+ */
+function isLikelyNetworkError(error: unknown, depth = 0): boolean {
+  if (depth > 2 || !(error instanceof Error)) return false;
+  const text = `${error.name} ${error.message}`.toLowerCase();
+  const patterns = [
+    "fetch failed",
+    "failed to fetch",
+    "networkerror",
+    "network error",
+    "enotfound",
+    "econnrefused",
+    "econnreset",
+    "etimedout",
+    "eai_again",
+    "net::err_",
+    "could not resolve host",
+    "name not resolved",
+  ];
+  if (patterns.some((pattern) => text.includes(pattern))) return true;
+  return isLikelyNetworkError((error as { cause?: unknown }).cause, depth + 1);
 }

@@ -17,6 +17,19 @@ function makeSettings() {
   return structuredClone(DEFAULT_SETTINGS);
 }
 
+function makeSettingsWithTopic() {
+  const settings = makeSettings();
+  settings.arxiv.topics = [{
+    id: "topic-1",
+    name: "Research topic",
+    tag: "research-topic",
+    description: "Original direction",
+    directions: [{ id: "direction-1", text: "Original direction", origin: "manual" }],
+    detail: false,
+  }];
+  return settings;
+}
+
 describe("SettingsChangeService", () => {
   it("keeps live settings and runtime untouched when persistence fails", async () => {
     const settings = makeSettings();
@@ -255,6 +268,7 @@ describe("SettingsChangeService", () => {
       name: "Language models",
       tag: "language-models",
       description: "Research about language models",
+      directions: [{ id: "d1", text: "Research about language models", origin: "migrated" }],
       detail: false,
     });
     const save = deferred();
@@ -347,6 +361,7 @@ describe("SettingsChangeService", () => {
       name: "Language models",
       tag: "language-models",
       description: "Research about language models",
+      directions: [{ id: "d1", text: "Research about language models", origin: "migrated" }],
       detail: false,
     });
     const identities = {
@@ -389,6 +404,7 @@ describe("SettingsChangeService", () => {
       name: "Original topic",
       tag: "original-topic",
       description: "Original description",
+      directions: [{ id: "d1", text: "Original description", origin: "migrated" }],
       detail: false,
     });
     const save = deferred();
@@ -670,5 +686,240 @@ describe("SettingsChangeService", () => {
     expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
     expect(settings.llm.baseUrl).toBe("https://accepted.example/v1");
     expect(persistSettings).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SettingsChangeService computed and coordinated changes", () => {
+  it("computes a topic append from the preceding committed settings", async () => {
+    const settings = makeSettings();
+    settings.arxiv.topics = [];
+    const firstSave = deferred();
+    const attempted: Array<ReturnType<typeof makeSettings>> = [];
+    const saved: Array<ReturnType<typeof makeSettings>> = [];
+    const observedTopics: string[][] = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => {
+        attempted.push(structuredClone(candidate));
+        if (attempted.length === 1) await firstSave.promise;
+        saved.push(structuredClone(candidate));
+      },
+    });
+
+    const first = service.change({
+      changes: [{ key: "arxiv.topics", value: makeSettingsWithTopic().arxiv.topics }],
+    });
+    try {
+      const second = service.changeComputed((current) => {
+        observedTopics.push(current.arxiv.topics.map(({ name }) => name));
+        current.arxiv.topics[0]!.directions.push({
+          id: "direction-2", text: "Additional direction", origin: "library",
+        });
+        return { changes: [{ key: "arxiv.topics", value: current.arxiv.topics }] };
+      });
+      await vi.waitFor(() => expect(attempted).toHaveLength(1));
+      expect(observedTopics).toEqual([]);
+      expect(settings.arxiv.topics).toEqual([]);
+      expect(saved).toEqual([]);
+
+      firstSave.resolve();
+      await Promise.all([first, second]);
+      expect(observedTopics).toEqual([["Research topic"]]);
+      expect(saved.map((candidate) => candidate.arxiv.topics[0]!.directions.map(({ text }) => text)))
+        .toEqual([["Original direction"], ["Original direction", "Additional direction"]]);
+      expect(settings.arxiv.topics[0]!.directions.map(({ text }) => text))
+        .toEqual(["Original direction", "Additional direction"]);
+    } finally {
+      firstSave.resolve();
+      await first;
+    }
+  });
+
+  it("keeps computed direction edits private when persistence fails", async () => {
+    const settings = makeSettingsWithTopic();
+    const before = structuredClone(settings);
+    const attempted: Array<ReturnType<typeof makeSettings>> = [];
+    const liveDuringSave: Array<ReturnType<typeof makeSettings>> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => {
+        attempted.push(structuredClone(candidate));
+        liveDuringSave.push(structuredClone(settings));
+        throw new Error("disk full");
+      },
+    });
+
+    await expect(service.changeComputed((current) => {
+      const topic = current.arxiv.topics[0]!;
+      topic.directions[0]!.text = "Edited direction";
+      topic.directions.push({ id: "direction-2", text: "New direction", origin: "library" });
+      topic.description = "Edited direction";
+      return { changes: [{ key: "arxiv.topics", value: current.arxiv.topics }] };
+    })).rejects.toThrow("disk full");
+
+    expect(attempted[0]!.arxiv.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Edited direction", "New direction"]);
+    expect(liveDuringSave).toEqual([before]);
+    expect(settings).toEqual(before);
+  });
+
+  it("keeps prepared direction edits private when persistence fails", async () => {
+    const settings = makeSettingsWithTopic();
+    const before = structuredClone(settings);
+    const attempted: Array<ReturnType<typeof makeSettings>> = [];
+    const liveDuringSave: Array<ReturnType<typeof makeSettings>> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => {
+        attempted.push(structuredClone(candidate));
+        liveDuringSave.push(structuredClone(settings));
+        throw new Error("disk full");
+      },
+    });
+
+    await expect(service.change({
+      changes: [{ key: "llm.model", value: "prepared-model" }],
+      prepare: (candidate) => {
+        candidate.arxiv.topics[0]!.directions[0]!.text = "Prepared direction";
+        candidate.arxiv.topics[0]!.directions.push({
+          id: "direction-2", text: "Prepared addition", origin: "library",
+        });
+      },
+    })).rejects.toThrow("disk full");
+
+    expect(attempted[0]!.arxiv.topics[0]!.directions.map(({ text }) => text))
+      .toEqual(["Prepared direction", "Prepared addition"]);
+    expect(liveDuringSave).toEqual([before]);
+    expect(settings).toEqual(before);
+  });
+
+  it("validates and saves a forced transaction without settings changes", async () => {
+    const settings = makeSettingsWithTopic();
+    const before = structuredClone(settings);
+    const saved: Array<ReturnType<typeof makeSettings>> = [];
+    const order: string[] = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => {
+        order.push("save");
+        saved.push(structuredClone(candidate));
+      },
+    });
+
+    await service.change({
+      changes: [],
+      forcePersist: true,
+      validateCandidate: () => { order.push("validate"); },
+    });
+
+    expect(order).toEqual(["validate", "save"]);
+    expect(saved).toEqual([before]);
+    expect(settings).toEqual(before);
+  });
+
+  it("rejects invalid unchanged settings before a forced save", async () => {
+    const settings = makeSettings();
+    settings.output.maxDailyPapers = 0;
+    const before = structuredClone(settings);
+    const saved: Array<ReturnType<typeof makeSettings>> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => { saved.push(structuredClone(candidate)); },
+    });
+
+    await expect(service.change({ changes: [], forcePersist: true }))
+      .rejects.toThrow("Invalid output.maxDailyPapers");
+    expect(saved).toEqual([]);
+    expect(settings).toEqual(before);
+  });
+
+  it("commits live settings only after the custom persistence finishes", async () => {
+    const settings = makeSettings();
+    const before = structuredClone(settings);
+    const save = deferred();
+    const attempted: Array<ReturnType<typeof makeSettings>> = [];
+    const saved: Array<{ via: string; model: string }> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => { saved.push({ via: "default", model: candidate.llm.model }); },
+    });
+
+    const changing = service.change({
+      changes: [{ key: "llm.model", value: "custom-model" }],
+      persist: async (candidate) => {
+        attempted.push(structuredClone(candidate));
+        await save.promise;
+        saved.push({ via: "custom", model: candidate.llm.model });
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(attempted).toHaveLength(1));
+      expect(attempted[0]!.llm.model).toBe("custom-model");
+      expect(settings).toEqual(before);
+      expect(saved).toEqual([]);
+      save.resolve();
+      await changing;
+      expect(saved).toEqual([{ via: "custom", model: "custom-model" }]);
+      expect(settings.llm.model).toBe("custom-model");
+    } finally {
+      save.resolve();
+      await changing;
+    }
+  });
+
+  it("leaves live settings untouched when custom persistence fails", async () => {
+    const settings = makeSettings();
+    const before = structuredClone(settings);
+    const attempted: Array<{ via: string; model: string }> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => { attempted.push({ via: "default", model: candidate.llm.model }); },
+    });
+
+    await expect(service.change({
+      changes: [{ key: "llm.model", value: "custom-model" }],
+      persist: async (candidate) => {
+        attempted.push({ via: "custom", model: candidate.llm.model });
+        throw new Error("receipt write failed");
+      },
+    })).rejects.toThrow("receipt write failed");
+    expect(attempted).toEqual([{ via: "custom", model: "custom-model" }]);
+    expect(settings).toEqual(before);
+  });
+
+  it("validates the candidate before using custom persistence", async () => {
+    const settings = makeSettings();
+    const before = structuredClone(settings);
+    const saved: Array<ReturnType<typeof makeSettings>> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => { saved.push(structuredClone(candidate)); },
+    });
+
+    await expect(service.change({
+      changes: [{ key: "output.maxDailyPapers", value: 0 }],
+      persist: async (candidate) => { saved.push(structuredClone(candidate)); },
+    })).rejects.toThrow("Invalid output.maxDailyPapers");
+    expect(saved).toEqual([]);
+    expect(settings).toEqual(before);
+  });
+
+  it("continues the queue after a computed request throws", async () => {
+    const settings = makeSettingsWithTopic();
+    const saved: Array<ReturnType<typeof makeSettings>> = [];
+    const service = new SettingsChangeService({
+      settings,
+      persistSettings: async (candidate) => { saved.push(structuredClone(candidate)); },
+    });
+
+    const rejected = service.changeComputed(() => { throw new Error("proposal changed"); });
+    const next = service.changeComputed((current) => ({
+      changes: [{ key: "llm.model", value: current.arxiv.topics[0]!.name }],
+    }));
+    await expect(rejected).rejects.toThrow("proposal changed");
+    await next;
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.llm.model).toBe("Research topic");
+    expect(settings.llm.model).toBe("Research topic");
   });
 });
