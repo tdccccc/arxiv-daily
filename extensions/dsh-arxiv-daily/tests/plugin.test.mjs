@@ -4,13 +4,19 @@ import { installHost } from '../src/host.mjs';
 import { createOpener, installClient } from '../src/client.mjs';
 const URL = 'http://127.0.0.1:8123/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/';
 function host() {
-  const calls = [], cleanup = []; let handler, matches;
+  const calls = [], cleanup = []; let route;
   const manager = { async open(origin) { calls.push(origin); return URL; }, async dispose() { calls.push('disposed'); } };
-  const ctx = { webServer: { port: 3080 }, effect(fn) { cleanup.push(fn()); }, connection: { rpc: { intercept(channel, match, handle) { assert.equal(channel, '/api'); matches = match; handler = handle; return () => calls.push('unregistered'); } } } };
-  installHost(ctx, manager); return { calls, manager, cleanup, get handler() { return handler; }, get matches() { return matches; } };
+  const ctx = { webServer: { port: 3080 }, effect(fn) { cleanup.push(fn()); }, connection: { fetch: { register(value) { route = value; return () => calls.push('unregistered'); } } } };
+  installHost(ctx, manager);
+  const handler = async (method, payload, signal) => {
+    const response = await route.fetch(new Request('http://127.0.0.1:3080' + route.path, { method: 'POST', signal, body: JSON.stringify({ type: 'client-request', rpcId: 'test', method, payload }) }));
+    const result = await response.json(); return response.ok ? result.result : { ok: false };
+  };
+  return { calls, manager, cleanup, handler, route };
 }
 test('registers only its authenticated endpoint, validates frame origin and disposes its process', async () => {
-  const h = host(); assert.equal(h.matches?.('arxiv-daily/open'), true); assert.equal(h.matches('session/list'), false);
+  const h = host(); assert.equal(h.route.path, '/api/arxiv-daily/open'); assert.deepEqual(h.route.methods, ['POST']);
+  assert.equal((await h.handler('session/list', {}, new AbortController().signal)).ok, false);
   assert.deepEqual(await h.handler('arxiv-daily/open', { frameOrigin: 'http://127.0.0.1:3080' }, new AbortController().signal), { ok: true, value: { url: URL } });
   for (const body of [{ frameOrigin: 'https://example.com' }, { frameOrigin: 'http://127.0.0.1:9999' }, { executable: 'bad' }, null]) {
     assert.equal((await h.handler('arxiv-daily/open', body, new AbortController().signal)).ok, false);
@@ -52,4 +58,14 @@ test('registers a native composer entry and releases its slots and dictionaries'
 test('capability validation handles malformed ports without throwing', async () => {
   const { isWorkbenchUrl } = await import('../src/protocol.mjs');
   assert.equal(isWorkbenchUrl('http://127.0.0.1:99999/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/'), false);
+});
+
+
+test('the exact route rejects invalid RPC envelopes before starting a process', async () => {
+  const h = host();
+  for (const body of ['not json', '{}', JSON.stringify({ type: 'client-request', rpcId: '', method: 'arxiv-daily/open', payload: {} }), JSON.stringify({ type: 'client-request', rpcId: 'test', method: 'session/list', payload: {} })]) {
+    const response = await h.route.fetch(new Request('http://127.0.0.1:3080' + h.route.path, { method: 'POST', body }));
+    assert.equal(response.status, 400);
+  }
+  assert.equal(h.calls.length, 0);
 });

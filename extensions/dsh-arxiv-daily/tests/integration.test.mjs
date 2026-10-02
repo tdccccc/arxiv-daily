@@ -44,6 +44,10 @@ test('packed plugin installs into actual DSH and serves authenticated research w
   const cookie = exchange.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
   const rootPage = await fetch(origin, { headers: { Cookie: cookie } });
   assert.match(await rootPage.text(), /dsh-arxiv-daily/);
+  const gatewayResponse = await fetch(origin + '/api/pluginManager/listPlugins', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin }, body: JSON.stringify({ type: 'client-request', rpcId: 'gateway-check', method: 'pluginManager/listPlugins', payload: { args: {} } }) });
+  assert.equal(gatewayResponse.status, 200);
+  const gateway = await gatewayResponse.json(); assert.equal(gateway.result.ok, true);
+  for (const moduleName of ['dsh-arxiv-daily', '@deepseek-ai/dsh-api-gateway']) assert.equal(gateway.result.value.find(plugin => plugin.moduleName === moduleName)?.fiberPhase, 'active', moduleName + ': ' + output);
   const request = { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, Origin: origin }, body: JSON.stringify({ type: 'client-request', rpcId: 'arxiv-test', method: 'arxiv-daily/open', payload: { frameOrigin: origin } }) };
   assert.equal((await fetch(origin + '/api/arxiv-daily/open', { ...request, headers: { 'Content-Type': 'application/json' } })).status, 401);
   assert.equal((await fetch(origin + '/api/arxiv-daily/open', { ...request, headers: { ...request.headers, Origin: 'https://example.com' } })).status, 403);
@@ -67,7 +71,20 @@ test('packed plugin installs into actual DSH and serves authenticated research w
   assert.equal(actual.status, 'to_read'); assert.equal(actual.starred, true);
   assert.equal((await post('api/preferences', { sidebarWidth: 530, sidebarCollapsed: false })).status, 200);
   assert.equal((await (await get('api/preferences')).json()).sidebarWidth, 530);
-  assert.doesNotMatch(output, /fixture-secret-never-log/);
+  const gatewayCall = async (method, args) => {
+    const response = await fetch(origin + '/api/' + method, { ...request, body: JSON.stringify({ type: 'client-request', rpcId: 'host-action', method, payload: { args } }) });
+    assert.equal(response.status, 200); const envelope = await response.json(); assert.equal(envelope.result.ok, true, JSON.stringify(envelope)); return envelope.result.value;
+  };
+  const id = gateway.result.value.find(plugin => plugin.moduleName === 'dsh-arxiv-daily').entryId;
+  await gatewayCall('pluginManager/setPluginEnabled', { id, enabled: false });
+  await assert.rejects(fetch(url), 'disabling the plugin stops its workbench');
+  assert.equal((await gatewayCall('pluginManager/listPlugins', {})).find(plugin => plugin.moduleName === '@deepseek-ai/dsh-api-gateway').fiberPhase, 'active');
+  await gatewayCall('pluginManager/setPluginEnabled', { id, enabled: true });
+  const reopened = await (await fetch(origin + '/api/arxiv-daily/open', request)).json();
+  assert.equal(reopened.result.ok, true); assert.notEqual(reopened.result.value.url, url);
+  const saved = await (await fetch(new URL(`api/paper?key=${encodeURIComponent(paper.key)}`, reopened.result.value.url))).json();
+  assert.equal(saved.paper.status, 'to_read'); assert.equal(saved.paper.starred, true);
+  assert.doesNotMatch(output, /fixture-secret-never-log|did not activate|already has an interceptor/);
   child.kill('SIGTERM'); await exited;
-  await assert.rejects(fetch(url), 'DSH shutdown must close its workbench listener');
+  await assert.rejects(fetch(reopened.result.value.url), 'DSH shutdown must close its workbench listener');
 });

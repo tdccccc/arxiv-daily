@@ -18,15 +18,25 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package
 ```
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.0.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.1.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.0.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.1.tgz
 ```
 
 重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会启用 DSH 自带的侧栏 Browser 组件。
+
+## 从 0.1.0 升级
+
+0.1.1 修复了与 DSH API Gateway 争用共享 RPC 拦截器导致的启用失败。Web profile 可用新包替换旧依赖：
+
+```sh
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.1.tgz
+```
+
+然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
 
 ## 使用
 
