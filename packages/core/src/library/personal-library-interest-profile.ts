@@ -252,6 +252,9 @@ export function decodePersonalLibraryDirectionProposal(
 export function decodeRetiredPersonalLibraryProposalIdentity(
   value: unknown,
 ): Pick<PersonalLibraryDirectionProposal, "scopeFingerprint" | "identificationFingerprint"> | null {
+  if (isPlainObject(value) && (value.schemaVersion === 2 || value.schemaVersion === 3)) {
+    return decodeRetiredFlatProposalIdentity(value);
+  }
   if (!isPlainObject(value) || (value.schemaVersion !== 4 && value.schemaVersion !== 5)
     || Object.hasOwn(value, "coveredPaperKeys")
     || !Array.isArray(value.topics)
@@ -262,6 +265,46 @@ export function decodeRetiredPersonalLibraryProposalIdentity(
     { ...value, schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION },
     PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS * PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS,
   );
+  return decoded ? {
+    scopeFingerprint: decoded.scopeFingerprint,
+    identificationFingerprint: decoded.identificationFingerprint,
+  } : null;
+}
+
+/** Check the former flat name/description contract without migrating reviewed text. */
+function decodeRetiredFlatProposalIdentity(
+  value: Record<string, unknown>,
+): Pick<PersonalLibraryDirectionProposal, "scopeFingerprint" | "identificationFingerprint"> | null {
+  if (!isExactObject(value, [
+    "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
+    "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "candidates",
+  ]) || !Array.isArray(value.candidates) || value.candidates.length > 12
+    || !Array.isArray(value.catalogInputPapers)
+    || value.catalogInputPapers.some((paper) => !isPlainObject(paper) || !isCanonicalArxivPaperKey(paper.paperKey))) return null;
+  const directions: PersonalLibraryDirectionCandidate[] = [];
+  for (const raw of value.candidates) {
+    const hasMembers = isPlainObject(raw) && Object.hasOwn(raw, "clusterMembers");
+    if (!isExactObject(raw, [
+      "id", "name", "description", "discoveryCues", "representatives", "representativeSetFingerprint", "lineage",
+      ...(hasMembers ? ["clusterMembers"] : []),
+    ]) || !isBoundedText(raw.name, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
+      || !isBoundedText(raw.description, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
+      || !Array.isArray(raw.representatives)
+      || raw.representatives.some((paper: unknown) => !isPlainObject(paper) || !isCanonicalArxivPaperKey(paper.paperKey))
+      || (hasMembers && (!Array.isArray(raw.clusterMembers) || raw.clusterMembers.length > 512))) return null;
+    // The old description allowed line breaks. Only reuse the unchanged
+    // evidence/id validators here; this placeholder is never returned or saved.
+    const { name: _name, description: _description, ...evidence } = raw;
+    const candidate = decodeCandidate({ ...evidence, text: "Retired direction" });
+    if (!candidate) return null;
+    directions.push(candidate);
+  }
+  const { candidates: _candidates, ...identity } = value;
+  const decoded = decodeDirectionProposal({
+    ...identity,
+    schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+    topics: directions.length ? [{ id: "retired", suggestedName: "Retired", directions }] : [],
+  }, 12);
   return decoded ? {
     scopeFingerprint: decoded.scopeFingerprint,
     identificationFingerprint: decoded.identificationFingerprint,

@@ -148,6 +148,118 @@ function deferred() {
   return { promise, resolve };
 }
 
+function flatLegacyProposal(schemaVersion: 2 | 3 = 3) {
+  const { topics, ...fields } = proposal();
+  return {
+    ...fields,
+    schemaVersion,
+    candidates: topics.flatMap(({ directions }) => directions.map(({ text, ...direction }) => ({
+      ...direction,
+      name: "Reviewed legacy name",
+      description: `${text}\nPreserved reviewed detail`,
+      clusterMembers: [{ paperKey: "arxiv:2608.00001", confidence: 0.9 }],
+    }))),
+  };
+}
+
+describe("explicit regeneration of retired proposals", () => {
+  it.each([2, 3] as const)("archives both v%i files without overwriting older archives", async (version) => {
+    const memory = makeStorage();
+    const store = new PersonalLibraryDirectionProposalStore(memory.storage, DEFAULT_SETTINGS.output, scope, identification, {
+      now: () => secondTime,
+    });
+    const primaryRaw = JSON.stringify(flatLegacyProposal(version), null, 4);
+    const backupRaw = JSON.stringify({ ...flatLegacyProposal(version), revision: 1 });
+    memory.files[proposalPath] = primaryRaw;
+    memory.files[proposalBackupPath] = backupRaw;
+    const oldArchive = `${proposalPath}.retired-20260803T130000000Z-0`;
+    memory.files[oldArchive] = "Do not overwrite this archive";
+    const fresh = await store.replace(proposal(), null, { regenerateRetired: true });
+    expect(fresh).toMatchObject({ schemaVersion: 6, revision: 0 });
+    expect(memory.files[oldArchive]).toBe("Do not overwrite this archive");
+    expect(memory.files[`${proposalPath}.retired-20260803T130000000Z-1`]).toBe(primaryRaw);
+    expect(memory.files[`${proposalBackupPath}.retired-20260803T130000000Z-1`]).toBe(backupRaw);
+    await expect(store.load()).resolves.toEqual(fresh);
+  });
+
+  it.each(["current primary", "current backup", "corrupt", "foreign scope", "missing"])(
+    "refuses explicit regeneration of %s",
+    async (kind) => {
+      const memory = makeStorage();
+      const legacy = flatLegacyProposal();
+      if (kind !== "missing") memory.files[proposalPath] = JSON.stringify(legacy);
+      if (kind === "current primary") memory.files[proposalPath] = JSON.stringify(proposal());
+      if (kind === "current backup") memory.files[proposalBackupPath] = JSON.stringify(proposal());
+      if (kind === "corrupt") memory.files[proposalPath] = "corrupt JSON";
+      if (kind === "foreign scope") memory.files[proposalPath] = JSON.stringify({
+        ...legacy, scopeFingerprint: otherScope,
+        catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+          scopeFingerprint: otherScope, identificationFingerprint: identification, catalogInputPapers: legacy.catalogInputPapers,
+        }),
+      });
+      const originals = { ...memory.files };
+      await expect(stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true })).rejects.toMatchObject({
+        code: kind === "foreign scope" ? "incompatible" : kind === "corrupt" ? "corrupt-or-unreadable" : "stale",
+      });
+      expect(memory.files).toEqual(originals);
+      expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the original files if archiving fails", async () => {
+    const memory = makeStorage();
+    const raw = JSON.stringify(flatLegacyProposal());
+    memory.files[proposalPath] = raw;
+    memory.files[proposalBackupPath] = raw;
+    memory.setAtomicImplementation(async () => { throw new Error("archive write failed"); });
+    await expect(stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true }))
+      .rejects.toMatchObject({ code: "save-failed" });
+    expect(memory.files).toEqual({ [proposalPath]: raw, [proposalBackupPath]: raw });
+  });
+
+  it("retains both archived originals when promotion of the generated proposal fails", async () => {
+    const memory = makeStorage();
+    const primaryRaw = JSON.stringify({ ...flatLegacyProposal(), revision: 2 });
+    const backupRaw = JSON.stringify({ ...flatLegacyProposal(), revision: 1 });
+    memory.files[proposalPath] = primaryRaw;
+    memory.files[proposalBackupPath] = backupRaw;
+    memory.setAtomicImplementation(async (path, content) => {
+      if (path === proposalPath) throw new Error("promotion failed");
+      memory.files[path] = content;
+    });
+    await expect(stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true }))
+      .rejects.toMatchObject({ code: "save-failed" });
+    const archives = Object.entries(memory.files).filter(([path]) => path.includes(".retired-"));
+    expect(archives.map(([, raw]) => raw)).toEqual([primaryRaw, backupRaw]);
+    expect(memory.files[proposalPath]).toBe(primaryRaw);
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "regeneration-required" });
+  });
+
+  it("archives and replaces a valid retired backup when there is no primary", async () => {
+    const memory = makeStorage();
+    const raw = JSON.stringify(flatLegacyProposal());
+    memory.files[proposalBackupPath] = raw;
+    const fresh = await stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true });
+    expect(Object.entries(memory.files).filter(([path]) => path.includes(".retired-")))
+      .toEqual([[expect.stringContaining(`${proposalBackupPath}.retired-`), raw]]);
+    await expect(stores(memory.storage).proposals.load()).resolves.toEqual(fresh);
+  });
+
+  it("rechecks saved files after archiving and refuses a newly saved current draft", async () => {
+    const memory = makeStorage();
+    memory.files[proposalPath] = JSON.stringify(flatLegacyProposal());
+    const otherDraft = JSON.stringify(proposal({ proposalId: "other-reviewed-draft" }));
+    memory.setAtomicImplementation(async (path, content) => {
+      memory.files[path] = content;
+      if (path.includes(".retired-")) memory.files[proposalPath] = otherDraft;
+    });
+    await expect(stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true }))
+      .rejects.toMatchObject({ code: "stale" });
+    expect(memory.files[proposalPath]).toBe(otherDraft);
+    expect(memory.files[proposalBackupPath]).toBeUndefined();
+  });
+});
+
 describe("scope-bound paths and construction", () => {
   it("validates bound fingerprints before path normalization or I/O", () => {
     const { storage } = makeStorage();
@@ -160,6 +272,73 @@ describe("scope-bound paths and construction", () => {
 });
 
 describe("proposal lifecycle", () => {
+  it.each([2, 3] as const)("identifies valid flat v%i proposals without replacing either saved file", async (version) => {
+    const memory = makeStorage();
+    const legacy = flatLegacyProposal(version);
+    const primaryRaw = JSON.stringify({ ...legacy, revision: 2 });
+    const backupRaw = JSON.stringify({ ...legacy, revision: 1 });
+    memory.files[proposalPath] = primaryRaw;
+    memory.files[proposalBackupPath] = backupRaw;
+    const store = stores(memory.storage).proposals;
+    await expect(store.load()).rejects.toMatchObject({ code: "regeneration-required" });
+    await expect(store.replace(proposal(), null)).rejects.toMatchObject({ code: "regeneration-required" });
+    expect(memory.files[proposalPath]).toBe(primaryRaw);
+    expect(memory.files[proposalBackupPath]).toBe(backupRaw);
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it("recognizes a valid legacy backup when the primary is missing", async () => {
+    const memory = makeStorage();
+    memory.files[proposalBackupPath] = JSON.stringify(flatLegacyProposal());
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "regeneration-required" });
+    expect(memory.files[proposalPath]).toBeUndefined();
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing fields", "candidate shape", "fingerprint", "current corruption", "unreadable primary"])(
+    "does not treat %s as a regeneratable flat legacy proposal",
+    async (kind) => {
+      const memory = makeStorage();
+      const legacy = flatLegacyProposal();
+      if (kind === "missing fields") memory.files[proposalPath] = JSON.stringify({ schemaVersion: 3 });
+      if (kind === "candidate shape") memory.files[proposalPath] = JSON.stringify({
+        ...legacy, candidates: [{ ...legacy.candidates[0], name: "" }],
+      });
+      if (kind === "fingerprint") memory.files[proposalPath] = JSON.stringify({ ...legacy, catalogInputFingerprint: otherScope });
+      if (kind === "current corruption") memory.files[proposalPath] = JSON.stringify({ ...proposal(), topics: null });
+      if (kind === "unreadable primary") {
+        memory.files[proposalPath] = JSON.stringify(legacy);
+        vi.mocked(memory.storage.readText).mockRejectedValueOnce(new Error("permission denied"));
+      }
+      memory.files[proposalBackupPath] = JSON.stringify(legacy);
+      await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "corrupt-or-unreadable" });
+      expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a valid legacy generation belonging to another scope", async () => {
+    const memory = makeStorage();
+    const legacy = flatLegacyProposal();
+    memory.files[proposalPath] = JSON.stringify({
+      ...legacy,
+      scopeFingerprint: otherScope,
+      catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+        scopeFingerprint: otherScope, identificationFingerprint: identification, catalogInputPapers: legacy.catalogInputPapers,
+      }),
+    });
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "incompatible" });
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
+  it("keeps a usable current proposal even when an older backup remains", async () => {
+    const memory = makeStorage();
+    const current = proposal();
+    memory.files[proposalPath] = JSON.stringify(current);
+    memory.files[proposalBackupPath] = JSON.stringify(flatLegacyProposal());
+    await expect(stores(memory.storage).proposals.load()).resolves.toEqual(current);
+    expect(memory.writeTextAtomic).not.toHaveBeenCalled();
+  });
+
   it("reloads coverage evidence without losing the direction comparison basis", async () => {
     const memory = makeStorage();
     const original = proposal();
@@ -177,9 +356,9 @@ describe("proposal lifecycle", () => {
     memory.files[proposalBackupPath] = JSON.stringify(legacy);
     expect(decodePersonalLibraryDirectionProposal(legacy)).toBeNull();
     const store = stores(memory.storage).proposals;
-    await expect(store.load()).resolves.toBeNull();
+    await expect(store.load()).rejects.toMatchObject({ code: "regeneration-required" });
     expect(memory.writeTextAtomic).not.toHaveBeenCalled();
-    const fresh = await store.replace(proposal(), null);
+    const fresh = await store.replace(proposal(), null, { regenerateRetired: true });
     expect(fresh.schemaVersion).toBe(6);
     await expect(store.load()).resolves.toEqual(fresh);
   });
@@ -226,10 +405,11 @@ describe("proposal lifecycle", () => {
     }));
     const raw = JSON.stringify({ ...legacy, schemaVersion });
     memory.files[proposalPath] = raw;
-    await expect(stores(memory.storage).proposals.load()).resolves.toBeNull();
+    await expect(stores(memory.storage).proposals.load()).rejects.toMatchObject({ code: "regeneration-required" });
     expect(memory.files[proposalPath]).toBe(raw);
     expect(memory.writeTextAtomic).not.toHaveBeenCalled();
-    await expect(stores(memory.storage).proposals.replace(proposal(), null)).resolves.toMatchObject({ schemaVersion: 6 });
+    await expect(stores(memory.storage).proposals.replace(proposal(), null, { regenerateRetired: true }))
+      .resolves.toMatchObject({ schemaVersion: 6 });
   });
 
   it("does not retire a wrong-scope or corrupt proposal as if it were empty", async () => {

@@ -122,6 +122,7 @@ export class PersonalLibraryDirectionProposalStore {
   replace(
     next: PersonalLibraryDirectionProposal,
     expectedRevision: number | null,
+    options: { regenerateRetired?: boolean } = {},
   ): Promise<PersonalLibraryDirectionProposal> {
     const validated = decodePersonalLibraryDirectionProposal(next);
     if (!validated || !this.matchesBoundIdentity(validated)) {
@@ -133,6 +134,26 @@ export class PersonalLibraryDirectionProposalStore {
         "personal library direction proposal expected revision must be null or a non-negative safe integer"));
     }
     return enqueue(this.storage, this.paths.documentPath, async () => {
+      if (options.regenerateRetired) {
+        if (expectedRevision !== null) throw stale("proposal", expectedRevision, null);
+        const input = {
+          storage: this.storage,
+          paths: this.paths,
+          scopeFingerprint: this.scopeFingerprint,
+          identificationFingerprint: this.identificationFingerprint,
+        };
+        const retired = await readRetiredDocuments(input);
+        await archiveRetiredDocuments(this.storage, this.paths, retired, this.options.now?.() ?? new Date());
+        // A host can write while archives are being saved. Never promote the
+        // generated result over a current draft or changed retired document.
+        const current = await readRetiredDocuments(input);
+        if (current.primary !== retired.primary || current.backup !== retired.backup) {
+          throw stale("proposal", null, null);
+        }
+        const candidate = { ...clone(validated), revision: 0 };
+        await saveDocument(this.storage, this.paths, "proposal", candidate, retired.primary);
+        return clone(candidate);
+      }
       const loaded = await this.loadDocument();
       const candidate = clone(validated);
       candidate.schemaVersion = PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION;
@@ -238,9 +259,9 @@ async function loadDurableDocument<T>(input: {
     return { document: backup.document as T & Fingerprinted, raw };
   }
   if (primary.kind === "missing" && backup.kind === "missing") return null;
-  // v4/v5 proposals cannot express existing coverage or stable targets. They
-  // are not migrated: keep disk untouched until generation
-  // succeeds, and let replace(..., null) install a new generation. Only retire
+  // Earlier proposals cannot express the current organization/coverage model.
+  // They are not migrated: keep disk untouched and require the researcher to
+  // explicitly regenerate. Only recognize
   // fully decodable, scope-matching retired documents; an unreadable/current corrupt
   // primary must still fail closed rather than being mistaken for empty state.
   const retiredBackup = readRetiredTopicProposal(backup);
@@ -251,8 +272,8 @@ async function loadDurableDocument<T>(input: {
         throw error(input.kind, "incompatible", "retired personal library proposal has a different scope");
       }
     }
-    input.onWarning?.("Personal library proposals use a new organization model; generate proposals again.");
-    return null;
+    throw error("proposal", "regeneration-required",
+      "Saved suggestions use an earlier format. Regenerate suggestions to use the current research topics; the old files will be archived.");
   }
   if (input.kind === "proposal" && (isLegacyProposalRead(primary) || isLegacyProposalRead(backup))) {
     throw error("proposal", "regeneration-required",
@@ -261,6 +282,63 @@ async function loadDurableDocument<T>(input: {
   throw error(input.kind, "corrupt-or-unreadable",
     `corrupt or unreadable personal library ${label(input.kind)}: ${input.paths.documentPath}`,
     { cause: readCause(backup) ?? readCause(primary) });
+}
+
+interface RetiredDocuments { primary: string | null; backup: string | null }
+
+async function readRetiredDocuments(input: {
+  storage: StorageAdapter;
+  paths: PersonalLibraryInterestProfileDocumentPaths;
+  scopeFingerprint: string;
+  identificationFingerprint: string;
+}): Promise<RetiredDocuments> {
+  const reads = [
+    await readDocument(input.storage, input.paths.documentPath, decodePersonalLibraryDirectionProposal),
+    await readDocument(input.storage, input.paths.backupPath, decodePersonalLibraryDirectionProposal),
+  ];
+  const raw: Array<string | null> = [];
+  for (const result of reads) {
+    if (result.kind === "missing") {
+      raw.push(null);
+      continue;
+    }
+    if (result.kind === "valid") throw stale("proposal", null, result.document.revision);
+    const retired = readRetiredTopicProposal(result);
+    if (!retired) {
+      throw error("proposal", "corrupt-or-unreadable", "Cannot regenerate a corrupt or unreadable saved proposal.",
+        { cause: readCause(result) });
+    }
+    if (!compatible(retired, input)) {
+      throw error("proposal", "incompatible", "retired personal library proposal has a different scope");
+    }
+    raw.push(result.kind === "corrupt" ? result.raw! : null);
+  }
+  if (raw.every((value) => value === null)) throw stale("proposal", null, null);
+  return { primary: raw[0]!, backup: raw[1]! };
+}
+
+async function archiveRetiredDocuments(
+  storage: StorageAdapter,
+  paths: PersonalLibraryInterestProfileDocumentPaths,
+  retired: RetiredDocuments,
+  now: Date,
+): Promise<void> {
+  requireAtomic(storage, "proposal");
+  try {
+    const stamp = now.toISOString().replace(/[-:.]/g, "");
+    let suffix = 0;
+    let primaryArchive: string;
+    let backupArchive: string;
+    do {
+      const ending = `.retired-${stamp}-${suffix++}`;
+      primaryArchive = `${paths.documentPath}${ending}`;
+      backupArchive = `${paths.backupPath}${ending}`;
+    } while (await storage.exists(primaryArchive) || await storage.exists(backupArchive));
+    if (retired.primary !== null) await storage.writeTextAtomic!(primaryArchive, retired.primary, 0o600);
+    if (retired.backup !== null) await storage.writeTextAtomic!(backupArchive, retired.backup, 0o600);
+  } catch (cause) {
+    throw error("proposal", "save-failed", "Could not preserve the previous suggestions; regeneration was not saved.", { cause });
+  }
 }
 
 async function readDocument<T>(storage: StorageAdapter, path: string, decoder: Decoder<T>): Promise<ReadResult<T>> {
