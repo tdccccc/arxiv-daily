@@ -52,3 +52,10 @@
 - Checkpoint: On track。7914545提交两步流程与必要进度/取消衔接，暂存范围核对，无发行草稿混入。3432项全量通过/2项既有跳过；lint0 errors/19 warnings；typecheck/build/smoke/boundaries/submission通过；release-tools341通过。
 - main.js/styles.css备份后重新部署三件资产，suffix20261002-pre-two-step-library，源目标SHA-256相同；未打开data.json，未启动Obsidian。来源分支保持c6dc242，受保护worktree未修改。
 - P4完成，P2继续等待真实宿主手测，尚未同步0.5.0版本或执行远程动作。实际模型下载与库全集计时未测；细节和手测清单见two-step-verification.md。
+
+## 2026-10-02 — 真实手测暴露升级阻断，P5接续
+
+- 用户仅确认弹窗可打开，随后提供13:10错误日志：旧remote:nomic-embed-text:768到local模型被拒绝，203复用后generation严格一致性失败，v3方向建议被误报损坏。P2仍pending，不同步版本、不称已具备发布条件。
+- 只读测试.index结构验证混配1摘要chunk/116旧全文chunk，建议主备份均合法v3；未修改真实数据。P1/P3/P4保留历史测试验收，新增P5覆盖此前缺失的升级场景，不重写历史或忽略报错。
+- 修复分工隔离：scan_fix处理core fulltext存储/索引，cli_recon处理core旧建议识别/显式归档，modal_fix处理UI状态与恢复按钮，主负责main状态/恢复意图接线。全部新增行为采用实际Red→Green；报告在/tmp/arxiv-upgrade-*-report.md。
+- 对用户解释：catalog从备份恢复是已有防护，少数PDF前两页无文字是单篇失败；整库构建与重试入口必须恢复。新模型先隔离暂存再原子切换，旧建议只有显式恢复才归档和重写。

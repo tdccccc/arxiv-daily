@@ -56,7 +56,11 @@ export interface InterestProfileReviewController {
    * not the researcher — and every failure looked identical.
    */
   logError(action: string, error: unknown): void;
-  generate(onProgress?: (progress: DirectionProposalProgress) => void, signal?: AbortSignal): Promise<unknown>;
+  generate(
+    onProgress?: (progress: DirectionProposalProgress) => void,
+    signal?: AbortSignal,
+    options?: { regenerateRetired?: boolean },
+  ): Promise<unknown>;
   updateProposal(input: {
     candidateId: string;
     patch: PersonalLibraryDirectionTextPatch;
@@ -266,7 +270,8 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     snapshot: InterestProfileReviewSnapshot,
     primary = false,
   ): void {
-    const generation = generationAvailability(snapshot);
+    const regenerateRetired = needsRetiredProposalRegeneration(snapshot);
+    const generation = generationAvailability(snapshot, regenerateRetired);
     const button = parent.createEl("button", {
       cls: "arxiv-daily-interest-review__generate",
       text: this.generationLabel(snapshot),
@@ -281,7 +286,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     });
     if (primary) button.addClass("mod-cta");
     button.disabled = this.pending || this.generationRequest !== null || !generation.allowed;
-    button.addEventListener("click", () => void this.generate(snapshot));
+    button.addEventListener("click", () => void this.generate(snapshot, false, regenerateRetired));
     if (primary && !generation.allowed) {
       parent.createEl("p", { attr: { role: "status" }, text: generation.reason });
     }
@@ -329,7 +334,13 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   }
 
   private renderProposed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
-    this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
+    if (needsRetiredProposalRegeneration(snapshot)) {
+      parent.createEl("p", {
+        cls: "arxiv-daily-interest-review__document-error",
+        attr: { role: "status" },
+        text: "Suggestions from an older version need to be regenerated. The old file will be preserved. Choose Regenerate suggestions when you are ready.",
+      });
+    } else this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
     if (snapshot.acceptanceLoadError) {
       parent.createEl("p", {
         cls: "arxiv-daily-interest-review__document-error",
@@ -1033,8 +1044,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     return { text: draft.text, discoveryCues: draft.discoveryCues };
   }
 
-  private async generate(snapshot: InterestProfileReviewSnapshot, onlyIfMissing = false): Promise<void> {
+  private async generate(snapshot: InterestProfileReviewSnapshot, onlyIfMissing = false, regenerateRetired = false): Promise<void> {
     if (this.closed || this.pending || this.generationRequest) return;
+    if (snapshot.proposalLoadError && !(regenerateRetired && needsRetiredProposalRegeneration(snapshot))) return;
     const request = new AbortController();
     this.generationRequest = request;
     this.render();
@@ -1063,6 +1075,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       // Authorization can outlive a refresh or another review window. Opening
       // suggestions must never replace a proposal that appeared while waiting.
       if (onlyIfMissing && !canGenerateMissingProposal(this.controller.snapshot())) return;
+      if (regenerateRetired && !needsRetiredProposalRegeneration(this.controller.snapshot())) return;
       // Progress lands on the button that started it: this modal covers the
       // status bar, so anything reported there would be invisible here.
       this.generationProgress = null;
@@ -1070,11 +1083,13 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       try {
         await this.run("generate proposals", async () => {
           try {
-            await this.controller.generate((progress) => {
+            const report = (progress: DirectionProposalProgress) => {
               if (request.signal.aborted) return;
               this.generationProgress = progress;
               this.updateGenerationLabel();
-            }, request.signal);
+            };
+            if (regenerateRetired) await this.controller.generate(report, request.signal, { regenerateRetired: true });
+            else await this.controller.generate(report, request.signal);
             if (request.signal.aborted || this.closed) return;
             return await this.controller.reload();
           } catch (error) {
@@ -1102,6 +1117,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (progress?.phase === "organization") return "Organizing topics and directions…";
     if (progress) return `Generating… (${progress.completed}/${progress.total})`;
     if (this.generating) return "Generating topics…";
+    if (needsRetiredProposalRegeneration(snapshot)) return "Regenerate suggestions";
     return snapshot.proposal ? "Generate again" : "Generate topics";
   }
 
@@ -1372,7 +1388,14 @@ function canGenerateMissingProposal(snapshot: InterestProfileReviewSnapshot): bo
     && snapshot.indexedPapers.length > 0 && generationAvailability(snapshot).allowed;
 }
 
-function generationAvailability(snapshot: InterestProfileReviewSnapshot): { allowed: boolean; reason: string } {
+function needsRetiredProposalRegeneration(snapshot: InterestProfileReviewSnapshot): boolean {
+  return !snapshot.proposal && snapshot.proposalLoadError?.code === "regeneration-required";
+}
+
+function generationAvailability(snapshot: InterestProfileReviewSnapshot, regenerateRetired = false): { allowed: boolean; reason: string } {
+  if (snapshot.proposalLoadError && !(regenerateRetired && needsRetiredProposalRegeneration(snapshot))) {
+    return { allowed: false, reason: "The saved suggestions could not be loaded. Refresh or resolve the file error before generating." };
+  }
   // Being unauthorized is deliberately not a reason to disable: the grant is
   // asked for on the first click. Disabling on it stranded every local-embedding
   // library, because no other path in the plugin asks for that grant.

@@ -216,6 +216,13 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
 }
 
 describe("direction generation uses current research settings", () => {
+  it("passes explicit retired-proposal recovery through to the store", async () => {
+    const { plugin, store } = generationPlugin();
+    const replace = vi.spyOn(store, "replace").mockImplementation(async (proposal) => proposal);
+    await plugin.generatePersonalLibraryDirections(undefined, undefined, { regenerateRetired: true });
+    expect(replace).toHaveBeenCalledWith(expect.any(Object), null, { regenerateRetired: true });
+  });
+
   it("does not start a generation after the review caller has closed", async () => {
     const { plugin, requests, store } = generationPlugin();
     const caller = new AbortController();

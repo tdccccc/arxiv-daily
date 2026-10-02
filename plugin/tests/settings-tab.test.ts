@@ -106,6 +106,7 @@ function makeLegacyApiKeyTab(
     libraryIndexStatus: new LibraryIndexStatusStore(),
     automaticEmailSupported: () => true,
     openPersonalLibraryDirectionReview: vi.fn(),
+    refreshLibraryIndexTrace: vi.fn(async () => undefined),
     getPersonalLibraryInterestProfile: vi.fn().mockReturnValue(null),
   } as unknown as ArxivDailyPlugin;
   const tab = new ArxivDailySettingTab({} as App, plugin);

@@ -214,6 +214,7 @@ export const LIBRARY_ROW_EXPRESSION = inRenderer(`
     selected: plugin.getLibraryConnectionStatus().kind !== "disconnected",
     searchablePapers: index.lastRun?.papers ?? 0,
     preparing: Boolean(index.activity),
+    preparationError: index.preparationError ?? null,
     legacySuggestionRows: allRows().filter((item) => rowName(item) === "Topics from your library").length,
     reviewButtons: reviewRows.flatMap((item) => Array.from(item.querySelectorAll(".setting-item-control button")))
       .map((button) => ({ text: (button.textContent ?? "").trim(), disabled: button.disabled === true })),
@@ -515,16 +516,17 @@ export function judgeLibraryButtons(snapshot, { expected } = {}) {
   if (snapshot.legacySuggestionRows > 0) problems.push("a duplicate Topics from your library shortcut is still present");
   if (snapshot.selected !== undefined) {
     const review = snapshot.reviewButtons ?? [];
+    const needsPreparation = Boolean(snapshot.preparationError) || !(snapshot.searchablePapers > 0);
     if (snapshot.selected) {
       if (review.length !== 1 || review[0]?.text !== "Review suggestions") {
         problems.push("the selected library must have exactly one Review suggestions action");
-      } else if (review[0].disabled !== (snapshot.preparing || !(snapshot.searchablePapers > 0))) {
+      } else if (review[0].disabled !== (snapshot.preparing || needsPreparation)) {
         problems.push("Review suggestions availability does not match preparation and searchable papers");
       }
       if (snapshot.preparing) {
         if (!rowButtons.some((text) => text === "Cancel" || text === "Cancelling…")) problems.push("preparation has no Cancel action");
-      } else if (rowButtons.includes("Retry preparation") !== !(snapshot.searchablePapers > 0)) {
-        problems.push("Retry preparation must be offered only when no searchable index is available");
+      } else if (rowButtons.includes("Retry preparation") !== needsPreparation) {
+        problems.push("Retry preparation must be offered when preparation failed or no searchable index is available");
       }
     } else if (review.length !== 0) {
       problems.push("review is shown before a library is selected");
@@ -1046,7 +1048,7 @@ export async function librarySettingsScenarios({
   if (local.error) {
     results.push(fail("library-row-buttons-local", local.error));
   } else {
-    const verdict = judgeLibraryButtons(local, { expected: local.searchablePapers > 0 ? ["Change folder"] : ["Change folder", "Retry preparation"] });
+    const verdict = judgeLibraryButtons(local, { expected: local.searchablePapers > 0 && !local.preparationError ? ["Change folder"] : ["Change folder", "Retry preparation"] });
     results.push((verdict.ok ? pass : fail)("library-row-buttons-local", verdict.reason));
   }
   await shot("personal-library-section-local-embedding", { rect: await sectionRect() });

@@ -10,6 +10,7 @@ import {
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import ArxivDailyPlugin from "../main.ts";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import { createLibraryConnection } from "../src/library/connection";
 
 function makeStorage(initial: Record<string, string> = {}) {
@@ -97,6 +98,7 @@ function makePlugin(storage = makeStorage().storage) {
     }),
   };
   Object.assign(plugin, {
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     settings: structuredClone(DEFAULT_SETTINGS),
     logger: { warn: vi.fn(), error: vi.fn(), setSensitiveValues: vi.fn() },
     host: { storage, http: {}, markupParser: {} },

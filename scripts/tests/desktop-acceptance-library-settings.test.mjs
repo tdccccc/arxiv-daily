@@ -97,6 +97,17 @@ test("an unprepared library offers retry and keeps review disabled", () => {
   assert.equal(judgeLibraryButtons({ ...state, ...buttons(["Change folder"], ["Review suggestions"]) }).ok, false);
 });
 
+test("a preparation error requires retry and disables review despite old searchable papers", () => {
+  const state = preparedLibrary({
+    ...buttons(["Change folder", "Retry preparation"], ["Review suggestions"]),
+    preparationError: "The embedding model changed.",
+    reviewButtons: [{ text: "Review suggestions", disabled: true }],
+  });
+  assert.equal(judgeLibraryButtons(state).ok, true);
+  assert.equal(judgeLibraryButtons({ ...state, reviewButtons: [{ text: "Review suggestions", disabled: false }] }).ok, false);
+  assert.equal(judgeLibraryButtons({ ...state, ...buttons(["Change folder"], ["Review suggestions"]) }).ok, false);
+});
+
 test("preparation keeps Cancel and disables review even with an older index", () => {
   const state = preparedLibrary({
     ...buttons(["Change folder", "Indexing…", "Cancel"], ["Review suggestions"]),

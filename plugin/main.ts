@@ -165,6 +165,10 @@ import type { TransformersEmbeddingModelOptions } from "./src/hosts/obsidian/emb
 import type { FullTextIndexLibraryContext } from "./src/library/index-completion";
 import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-acceptance-state";
 
+const LIBRARY_MODEL_PREPARATION_REQUIRED = "The embedding model changed. Retry preparation to rebuild this library safely.";
+const LIBRARY_SEARCH_PREPARATION_REQUIRED = "The search index is not ready. Retry preparation to finish rebuilding it.";
+const LIBRARY_INDEX_READ_FAILED = "Could not read the library index. Retry preparation to repair it.";
+
 interface PersistedData {
   settings: PluginSettings;
   runState?: RunState;
@@ -799,7 +803,7 @@ export default class ArxivDailyPlugin extends Plugin {
       },
       authorize: () => this.confirmPersonalLibraryDirectionAuthorization(),
       logError: (action, error) => this.logger.error(`library review: ${action} failed`, error),
-      generate: (onProgress, signal) => this.generatePersonalLibraryDirections(onProgress, signal),
+      generate: (onProgress, signal, options) => this.generatePersonalLibraryDirections(onProgress, signal, options),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
@@ -1029,7 +1033,11 @@ export default class ArxivDailyPlugin extends Plugin {
         this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
         this.libraryProposal = null;
         this.libraryProposalLoadError = this.safeProfileLoadError("proposal", error);
-        this.logger?.error("personal library direction proposal load failed", error);
+        if (this.libraryProposalLoadError.code === "regeneration-required") {
+          this.logger?.warn("Older library suggestions need regeneration; the original files are preserved.");
+        } else {
+          this.logger?.error("personal library direction proposal load failed", error);
+        }
       }),
       stores.suggestions.load().then((suggestions) => {
         this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
@@ -1115,6 +1123,7 @@ export default class ArxivDailyPlugin extends Plugin {
   async generatePersonalLibraryDirections(
     onProgress?: (progress: DirectionProposalProgress) => void,
     callerSignal?: AbortSignal,
+    options?: { regenerateRetired?: boolean },
   ): Promise<PersonalLibraryDirectionProposal> {
     throwIfCancelled(callerSignal);
     const connection = this.libraryConnection;
@@ -1173,7 +1182,9 @@ export default class ArxivDailyPlugin extends Plugin {
           connection, connectionRevision, outputRevision, authorizationFingerprint,
           catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
         });
-        const saved = await store.replace(proposal, expectedProposalRevision);
+        const saved = options?.regenerateRetired
+          ? await store.replace(proposal, expectedProposalRevision, { regenerateRetired: true })
+          : await store.replace(proposal, expectedProposalRevision);
         this.libraryProposal = saved;
         this.libraryProposalLoadError = null;
         return structuredClone(saved);
@@ -1753,6 +1764,11 @@ export default class ArxivDailyPlugin extends Plugin {
       this.assertLibraryConnectionCurrent(connection, revision);
       operation.signal.throwIfAborted();
       if (generationFailed) throw generationFailure;
+      const readinessError = this.libraryIndexStatus.snapshot().preparationError;
+      if (readinessError !== LIBRARY_MODEL_PREPARATION_REQUIRED && readinessError !== LIBRARY_INDEX_READ_FAILED
+        && readinessError !== LIBRARY_SEARCH_PREPARATION_REQUIRED) {
+        this.libraryIndexStatus.setPreparationError(undefined);
+      }
       if (updateProgress) {
         const refreshed = summary.titlesRefreshed > 0
           ? `, ${summary.titlesRefreshed} titles refreshed`
@@ -1776,8 +1792,10 @@ export default class ArxivDailyPlugin extends Plugin {
       // AbortSignal.throwIfAborted can throw a plain-string reason; normalize
       // it so both UI entry points recognize cancellation as an outcome.
       throwIfCancelled(operation.signal);
+      this.libraryIndexStatus.setPreparationError("Library preparation failed. Retry preparation to repair or rebuild the index; see logs for details.");
+      this.libraryIndexedPapers = [];
       if (updateProgress) {
-        this.progress?.setError("Personal library full-text indexing failed");
+        this.progress?.setError("Personal library preparation failed");
       }
       throw error;
     } finally {
@@ -1836,14 +1854,48 @@ export default class ArxivDailyPlugin extends Plugin {
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryIndexStatus.setLastRun(undefined);
+      this.libraryIndexStatus.setPreparationError(undefined);
+      this.libraryIndexedPapers = [];
       return;
     }
+    const connectionRevision = this.libraryConnectionRevision;
     try {
       const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+      if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
+      const expected = this.buildEmbeddingModel();
       const readyPapers = Object.values(manifest.papers).filter((paper) => paper.status === "ready");
       this.libraryIndexStatus.setLastRun(
         manifest.revision > 0 ? { updatedAt: manifest.updatedAt, papers: readyPapers.length } : undefined,
       );
+      if (Object.keys(manifest.papers).length > 0
+        && (manifest.modelId !== expected.modelId || manifest.dimension !== expected.dimension)) {
+        this.libraryIndexStatus.setPreparationError(LIBRARY_MODEL_PREPARATION_REQUIRED);
+        this.libraryIndexedPapers = [];
+        return;
+      }
+      const storage = this.host.storage;
+      let generationVerified = false;
+      if (readyPapers.length > 0 && storage.readBinary && storage.writeBinary
+        && storage.writeTextAtomic && storage.createTextExclusive && storage.list) {
+        const current = await this.buildFullTextGenerationIndexStore(connection).openCurrent();
+        try {
+          if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
+          if (!current || current.descriptor.sourceRevision !== manifest.revision
+            || current.descriptor.modelId !== expected.modelId || current.descriptor.dimension !== expected.dimension) {
+            this.libraryIndexStatus.setPreparationError(LIBRARY_SEARCH_PREPARATION_REQUIRED);
+            this.libraryIndexedPapers = [];
+            return;
+          }
+          generationVerified = true;
+        } finally {
+          await current?.close();
+        }
+      }
+      const previousError = this.libraryIndexStatus.snapshot().preparationError;
+      if (previousError === LIBRARY_MODEL_PREPARATION_REQUIRED || previousError === LIBRARY_INDEX_READ_FAILED
+        || (generationVerified && previousError === LIBRARY_SEARCH_PREPARATION_REQUIRED)) {
+        this.libraryIndexStatus.setPreparationError(undefined);
+      }
       // Only papers the index had to name itself: an arXiv paper's title lives
       // in the catalog and stays the one source for it.
       this.libraryIndexedPapers = readyPapers
@@ -1851,6 +1903,9 @@ export default class ArxivDailyPlugin extends Plugin {
         .map((paper) => ({ paperKey: paper.paperKey, title: paper.title! }))
         .sort((left, right) => (left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0));
     } catch (error) {
+      if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
+      this.libraryIndexStatus.setPreparationError(LIBRARY_INDEX_READ_FAILED);
+      this.libraryIndexedPapers = [];
       // A row that cannot read the manifest says nothing about past runs; it
       // must not say the index is gone.
       this.logger.warn("fulltext: could not read the index manifest for the settings row", error);

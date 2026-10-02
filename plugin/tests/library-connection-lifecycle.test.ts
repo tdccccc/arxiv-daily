@@ -5,6 +5,7 @@ import {
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
 import ArxivDailyPlugin from "../main.ts";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   createLibraryConnection,
   libraryAuthorizationDisclosure,
@@ -17,6 +18,7 @@ function makePlugin() {
   const setSensitiveValues = vi.fn();
   const files = new Map<string, string>();
   Object.assign(plugin, {
+    libraryIndexStatus: new LibraryIndexStatusStore(),
     settings: structuredClone(DEFAULT_SETTINGS),
     logger: { setSensitiveValues, error: vi.fn(), warn: vi.fn() },
     host: { storage: {

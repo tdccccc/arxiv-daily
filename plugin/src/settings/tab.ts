@@ -185,6 +185,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Which structure the row was last rendered with: with a run, or without. */
   private libraryRowShowsRun = false;
   private libraryRowHasIndex = false;
+  private libraryRowPreparationError: string | undefined;
   private libraryStatusUnsubscribe: (() => void) | undefined;
   private libraryStatusFlushTimer: number | undefined;
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
@@ -311,12 +312,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public async changeSettingValue(key: string, value: unknown): Promise<void> {
     await this.plugin.settingsChanges.changeValue(key, value);
+    await this.refreshLibraryAfterEmbeddingChange([key]);
   }
 
   public async changeSettingValues(
     changes: readonly SettingsValueChange[],
   ): Promise<void> {
     await this.plugin.settingsChanges.change({ changes });
+    await this.refreshLibraryAfterEmbeddingChange(changes.map(({ key }) => key));
+  }
+
+  private async refreshLibraryAfterEmbeddingChange(keys: readonly string[]): Promise<void> {
+    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.model", "embedding.dimension"].includes(key))) {
+      await this.plugin.refreshLibraryIndexTrace();
+    }
   }
 
   /**
@@ -534,6 +543,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       embeddingMode: this.plugin.settings.embedding.mode,
       ...(indexStatus.activity ? { activity: indexStatus.activity } : {}),
       ...(indexStatus.lastRun ? { lastRun: indexStatus.lastRun } : {}),
+      ...(indexStatus.preparationError ? { preparationError: indexStatus.preparationError } : {}),
     });
     setting.setDesc(row.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
@@ -587,6 +597,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.libraryRowElements = live;
     this.libraryRowShowsRun = Boolean(row.cancel);
     this.libraryRowHasIndex = Boolean(indexStatus.lastRun?.papers);
+    this.libraryRowPreparationError = indexStatus.preparationError;
     this.watchLibraryIndexStatus();
   }
 
@@ -623,7 +634,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
    */
   private onLibraryIndexStatusChange(status: LibraryIndexStatus): void {
     if (Boolean(status.activity) !== this.libraryRowShowsRun
-      || (!status.activity && Boolean(status.lastRun?.papers) !== this.libraryRowHasIndex)) {
+      || (!status.activity && Boolean(status.lastRun?.papers) !== this.libraryRowHasIndex)
+      || status.preparationError !== this.libraryRowPreparationError) {
       this.clearLibraryStatusFlush();
       this.refreshSettings();
       return;
@@ -652,6 +664,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       embeddingMode: this.plugin.settings.embedding.mode,
       ...(status.activity ? { activity: status.activity } : {}),
       ...(status.lastRun ? { lastRun: status.lastRun } : {}),
+      ...(status.preparationError ? { preparationError: status.preparationError } : {}),
     });
     elements.descEl.textContent = row.description;
     if (elements.primary && row.primary) {
@@ -708,10 +721,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     setting.setDesc(libraryDirectionsRowDesc(this.plugin));
     setting.addButton((button) => button
       .setButtonText("Review suggestions")
-      .setDisabled(Boolean(index.activity) || !index.lastRun?.papers)
+      .setDisabled(Boolean(index.activity) || Boolean(index.preparationError) || !index.lastRun?.papers)
       .onClick(() => {
         const current = this.plugin.libraryIndexStatus.snapshot();
-        if (current.activity || !current.lastRun?.papers) return;
+        if (current.activity || current.preparationError || !current.lastRun?.papers) return;
         this.runAction("open personal library direction review", async () => {
           this.plugin.openPersonalLibraryDirectionReview({ generateIfMissing: true });
         });

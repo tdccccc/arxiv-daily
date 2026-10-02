@@ -865,6 +865,56 @@ describe("review suggestions generates a missing proposal on request", () => {
     return openPersonalLibraryInterestProfileModal({} as App, ctrl, { generateIfMissing: true });
   }
 
+  it("requires an explicit recovery click for retired suggestions and preserves the old-file disclosure", async () => {
+    const ctrl = controller(preparedSnapshot({
+      proposalLoadError: { kind: "proposal", code: "regeneration-required", message: "Retired proposal" },
+    }));
+    const modal = openAutomatic(ctrl.mock);
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    expect(modal.contentEl.textContent).toMatch(/older version.*regenerat/i);
+    expect(modal.contentEl.textContent).toMatch(/old file.*preserv/i);
+    button(modal.contentEl, "Regenerate suggestions").click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledWith(
+      expect.any(Function), expect.any(AbortSignal), { regenerateRetired: true },
+    ));
+  });
+
+  it.each(["unreadable", "invalid"])("does not turn an %s proposal into a regeneration permission", (code) => {
+    const ctrl = controller(preparedSnapshot({
+      proposalLoadError: { kind: "proposal", code, message: "Cannot read saved draft" },
+    }));
+    const modal = openAutomatic(ctrl.mock);
+    expect(findButton(modal.contentEl, "Regenerate suggestions")).toBeUndefined();
+    expect(button(modal.contentEl, "Generate topics").disabled).toBe(true);
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
+  it("cancels retired-proposal recovery when its authorization is declined", async () => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "authorization-required", rootLabel: "papers" },
+      proposalLoadError: { kind: "proposal", code: "regeneration-required", message: "Retired proposal" },
+    }), { granted: false });
+    const modal = openAutomatic(ctrl.mock);
+    button(modal.contentEl, "Regenerate suggestions").click();
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalledOnce());
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a proposal appearing while retired-proposal recovery awaits consent", async () => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "authorization-required", rootLabel: "papers" },
+      proposalLoadError: { kind: "proposal", code: "regeneration-required", message: "Retired proposal" },
+    }));
+    let grant!: (allowed: boolean) => void;
+    vi.mocked(ctrl.mock.authorize).mockImplementation(() => new Promise((resolve) => { grant = resolve; }));
+    const modal = openAutomatic(ctrl.mock);
+    button(modal.contentEl, "Regenerate suggestions").click();
+    ctrl.set(snapshot());
+    grant(true);
+    await vi.waitFor(() => expect(button(modal.contentEl, "Generate again").disabled).toBe(false));
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
   it("asks for authorization, displays generation progress, then opens the saved suggestions", async () => {
     const ctrl = controller(preparedSnapshot({
       authorization: { kind: "connected", rootLabel: "papers" } as any,
@@ -879,6 +929,7 @@ describe("review suggestions generates a missing proposal on request", () => {
     const modal = openAutomatic(ctrl.mock);
     await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
     expect(ctrl.mock.authorize).toHaveBeenCalledOnce();
+    expect(vi.mocked(ctrl.mock.generate).mock.calls[0]).toHaveLength(2);
     expect(modal.contentEl.querySelector('[role="status"]')?.textContent)
       .toBe("Organizing topics and directions…");
     release();
@@ -969,8 +1020,10 @@ describe("review suggestions generates a missing proposal on request", () => {
     expect(ctrl.mock.generate).not.toHaveBeenCalled();
   });
 
-  it("cancels active generation when closed and skips reload and failure reporting", async () => {
-    const ctrl = controller(preparedSnapshot());
+  it.each([false, true])("cancels active generation when closed (retired recovery: %s) and skips reload and failure reporting", async (retired) => {
+    const ctrl = controller(preparedSnapshot(retired ? {
+      proposalLoadError: { kind: "proposal", code: "regeneration-required", message: "Retired proposal" },
+    } : {}));
     let generationSignal: AbortSignal | undefined;
     let release!: () => void;
     const work = new Promise<void>((resolve) => { release = resolve; });
@@ -980,6 +1033,7 @@ describe("review suggestions generates a missing proposal on request", () => {
       signal?.throwIfAborted();
     });
     const modal = openAutomatic(ctrl.mock);
+    if (retired) button(modal.contentEl, "Regenerate suggestions").click();
     await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
     modal.close();
     release();

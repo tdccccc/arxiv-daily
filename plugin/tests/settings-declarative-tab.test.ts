@@ -161,6 +161,7 @@ function makeTab() {
     revokeLibraryProcessing: vi.fn().mockResolvedValue(undefined),
     cancelPersonalLibraryIndexing: vi.fn().mockReturnValue(true),
     openPersonalLibraryDirectionReview: vi.fn(),
+    refreshLibraryIndexTrace: vi.fn(async () => undefined),
     getLastFullTextIndexLibraryContext: vi.fn().mockReturnValue(undefined),
     getPersonalLibraryInterestProfile: vi.fn().mockReturnValue(null),
   } as unknown as ArxivDailyPlugin;
@@ -245,6 +246,30 @@ describe("declarative daily paper limit", () => {
 });
 
 describe("wired getSettingDefinitions", () => {
+  it.each([
+    ["embedding.mode", "remote"],
+    ["embedding.baseUrl", "https://embedding.example/v1"],
+    ["embedding.model", "new-model"],
+    ["embedding.dimension", 768],
+  ])("rechecks the library only after saving %s", async (key, value) => {
+    const { tab, plugin, saveSettings } = makeTab();
+    const saving = deferred();
+    saveSettings.mockImplementationOnce(() => saving.promise);
+    const change = tab.changeSettingValue(String(key), value);
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    expect(plugin.refreshLibraryIndexTrace).not.toHaveBeenCalled();
+    saving.resolve();
+    await change;
+    expect(plugin.refreshLibraryIndexTrace).toHaveBeenCalledOnce();
+  });
+
+  it("does not change index readiness when an embedding setting fails to save", async () => {
+    const { tab, plugin, saveSettings } = makeTab();
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    await expect(tab.changeSettingValue("embedding.model", "new-model")).rejects.toThrow();
+    expect(plugin.refreshLibraryIndexTrace).not.toHaveBeenCalled();
+  });
+
   function libraryEntry(tab: ArxivDailySettingTab) {
     const groups = tab.getSettingDefinitions();
     expect(groups.some((item) => item.name === "Topics from your library")).toBe(false);
@@ -290,6 +315,18 @@ describe("wired getSettingDefinitions", () => {
     plugin.libraryIndexStatus.beginRun("preparing", "scanning");
     const { button } = libraryEntry(tab);
     expect(button.disabled).toBe(true);
+    button.click();
+    expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
+  });
+
+  it("blocks review on preparation failure even when an old index remains", () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 12 });
+    plugin.libraryIndexStatus.setPreparationError("The embedding model changed.");
+    const { button, setting } = libraryEntry(tab);
+    expect(button.disabled).toBe(true);
+    expect(setting.descEl.textContent).toContain("embedding model changed");
     button.click();
     expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
   });
@@ -876,6 +913,21 @@ describe("personal library settings row", () => {
       plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
       expect(tab.refreshSettings).toHaveBeenCalledOnce();
       expect(renderLibraryButtons(tab).buttons.map(({ text }) => text)).toEqual(["Change folder"]);
+    });
+
+    it("refreshes the recovery controls when preparation errors appear or clear", () => {
+      const { tab, plugin } = connectedTab();
+      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      plugin.libraryIndexStatus.setPreparationError("Prepare again");
+      expect(tab.refreshSettings).toHaveBeenCalledOnce();
+      const failed = renderLibraryButtons(tab);
+      expect(failed.buttons.map(({ text }) => text)).toContain("Retry preparation");
+      vi.mocked(tab.refreshSettings).mockClear();
+      plugin.libraryIndexStatus.setPreparationError();
+      expect(tab.refreshSettings).toHaveBeenCalledOnce();
+      expect(renderLibraryButtons(tab).buttons.map(({ text }) => text)).not.toContain("Retry preparation");
     });
 
     it("stops following the run once the tab is closed", () => {

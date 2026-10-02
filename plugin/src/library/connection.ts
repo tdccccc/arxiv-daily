@@ -134,6 +134,7 @@ export interface LibraryRowInput {
   };
   /** What the previous run left in the manifest. */
   lastRun?: { updatedAt: string; papers: number };
+  preparationError?: string;
 }
 
 export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresentation {
@@ -168,10 +169,12 @@ export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresen
     };
   }
 
-  const trace = input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
+  const trace = input.preparationError
+    ? ` ${input.preparationError}`
+    : input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
   return {
     description: `${next.description}${trace}`,
-    ...(!input.lastRun?.papers ? { primary: { label: "Retry preparation", disabled: false } } : {}),
+    ...(!input.lastRun?.papers || input.preparationError ? { primary: { label: "Retry preparation", disabled: false } } : {}),
     chooseFolder: { label: chooseFolderLabel, disabled: false },
     ...(input.status.kind === "authorized"
       ? { revoke: { label: "Revoke", disabled: false } }

@@ -248,6 +248,61 @@ function fixture(storage: StorageAdapter) {
 }
 
 describe("personal library full-text index lifecycle", () => {
+  it.each([
+    { modelId: "remote:old-model:768", dimension: 768 },
+    { modelId: "fixture-model", dimension: 768 },
+  ])("marks an old model or dimension as needing preparation: %o", async (identity) => {
+    const runtime = fixture(memoryStorage().storage);
+    const manifest = await runtime.legacy.loadManifest();
+    manifest.revision = 2;
+    Object.assign(manifest, identity);
+    manifest.papers["arxiv:2601.00001"] = {
+      paperKey: "arxiv:2601.00001", status: "ready", ...identity,
+      title: "Existing paper", textHash: "sha256:old", chunkCount: 1,
+      filePaths: ["paper.pdf"], observationFingerprints: ["fingerprint"],
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    await runtime.plugin.refreshLibraryIndexTrace();
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/model.*prepar/i);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().lastRun?.papers).toBe(1);
+    expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+  });
+
+  it("keeps retry available after restarting with an unfinished search generation", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    const manifest = await runtime.legacy.loadManifest();
+    Object.assign(manifest, { revision: 2, modelId: "fixture-model", dimension: 2 });
+    manifest.papers["arxiv:2601.00001"] = {
+      paperKey: "arxiv:2601.00001", status: "ready", modelId: "fixture-model", dimension: 2,
+      title: "Existing paper", textHash: "sha256:old", chunkCount: 1,
+      filePaths: ["paper.pdf"], observationFingerprints: ["fingerprint"],
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    const close = vi.fn(async () => undefined);
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => ({
+        descriptor: { modelId: "fixture-model", dimension: 2, sourceRevision: 1 }, close,
+      })),
+    }));
+    await runtime.plugin.refreshLibraryIndexTrace();
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/search index.*retry preparation/i);
+    expect(close).toHaveBeenCalledOnce();
+    expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+  });
+
+  it("keeps a read failure visible without deleting the old index", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    runtime.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-08-18T00:00:00.000Z", papers: 5 });
+    runtime.legacy.loadManifest.mockRejectedValue(new Error("unreadable manifest"));
+    await runtime.plugin.refreshLibraryIndexTrace();
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/could not.*index/i);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().lastRun?.papers).toBe(5);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+  });
+
   // The two sidecar-probe tests that stood here lost their subject when the
   // index moved to the extractor (ADR 0013): nothing on the index path probes a
   // sidecar any more, whatever the setting says. `probeLoopbackSidecarParser`
@@ -581,7 +636,7 @@ describe("personal library full-text index lifecycle", () => {
 
     expect(runtime.internals.progress.setComplete).not.toHaveBeenCalled();
     expect(runtime.internals.progress.setError).toHaveBeenCalledWith(
-      "Personal library full-text indexing failed",
+      "Personal library preparation failed",
     );
   });
 
@@ -636,6 +691,7 @@ describe("personal library full-text index lifecycle", () => {
       .rejects.toThrow("generation promotion failed");
 
     expect(runtime.legacy.replaceManifest).toHaveBeenCalledTimes(1);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/retry preparation/i);
   });
 
   it("runs generation maintenance only through an explicit host quiet-period gate", async () => {

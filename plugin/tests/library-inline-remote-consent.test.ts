@@ -128,6 +128,7 @@ function makeTab() {
       searchablePapers: 1,
     })),
     getLastFullTextIndexLibraryContext: vi.fn(() => undefined),
+    refreshLibraryIndexTrace: vi.fn(async () => undefined),
   } as unknown as ArxivDailyPlugin;
 
   (plugin as unknown as { settingsChanges: SettingsChangeService }).settingsChanges =

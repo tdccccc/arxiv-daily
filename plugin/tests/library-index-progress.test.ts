@@ -32,6 +32,33 @@ function buttons(row: ReturnType<typeof libraryRowPresentation>) {
 }
 
 describe("the Library row while indexing", () => {
+  it("shows a preparation error and retry instead of claiming old papers are searchable", () => {
+    const row = libraryRowPresentation({
+      status: CONNECTED, embeddingMode: "local",
+      lastRun: { updatedAt: "2026-10-02T00:00:00.000Z", papers: 12 },
+      preparationError: "The embedding model changed. Prepare this library again.",
+    });
+    expect(row.primary?.label).toBe("Retry preparation");
+    expect(row.description).toContain("embedding model changed");
+    expect(row.description).not.toContain("12 papers searchable");
+  });
+
+  it("publishes and clears a preparation error while preserving the previous run", () => {
+    const store = new LibraryIndexStatusStore();
+    const lastRun = { updatedAt: "2026-10-02T00:00:00.000Z", papers: 12 };
+    store.setLastRun(lastRun);
+    const observe = vi.fn();
+    store.subscribe(observe);
+    store.setPreparationError("Prepare again");
+    expect(store.snapshot()).toEqual({ lastRun, preparationError: "Prepare again" });
+    expect(observe).toHaveBeenCalledTimes(2);
+    store.setPreparationError("Prepare again");
+    expect(observe).toHaveBeenCalledTimes(2);
+    store.setPreparationError();
+    expect(store.snapshot()).toEqual({ lastRun });
+    expect(observe).toHaveBeenCalledTimes(3);
+  });
+
   it("offers retry only while no searchable index exists", () => {
     const initial = libraryRowPresentation({ status: CONNECTED, embeddingMode: "local" });
     expect(initial.primary?.label).toBe("Retry preparation");
