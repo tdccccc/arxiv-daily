@@ -1,8 +1,10 @@
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
-import type { WorkbenchCalendarDay } from "../calendar";
-import { calendarStateLabels, mountCalendar } from "./calendar";
+import { mountCalendar } from "./calendar";
+import { mountSidebar } from "./sidebar";
+import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
+import { scopes, marks, paperRows, dayHeading, overview } from "./papers";
 
 export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
@@ -24,12 +26,19 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   const lifetime = new AbortController();
   let disposed = false;
   let status: ProductStatus | null = null;
-  let kind: "daily" | "papers" = "daily";
-  let query = "";
+  let kind: "all" | "daily" | "papers" = "all";
+  let query = "", scope: PaperScope = "all", topic = "", sort = "published", direction = "desc", offset = 0;
+  let documentsMode = false;
   let entries: DocumentEntry[] = [];
   let nextOffset: number | null = null;
-  let selectedPath = new URL(location.href).searchParams.get("document") || "";
-  let selectedDate = selectedPath ? "" : routeDate();
+  let paperList: WorkbenchPaperList | null = null;
+  let activePaper: WorkbenchPaper | null = null;
+  let selectedKey = "";
+  let selectedPath = "";
+  let selectedDate = "";
+  let listScroll = 0;
+  const scrollPositions = new Map<string, number>();
+  const pendingMarks = new Set<string>();
   let listVersion = 0;
   let documentVersion = 0;
   let runVersion = 0;
@@ -42,6 +51,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   let fontSize = Math.max(14, Math.min(22, Number(preference("font-size")) || 17));
 
   root.className = "workbench";
+  root.dataset.view = "list";
   root.dataset.theme = preference("theme") || "light";
   root.style.setProperty("--reading-size", `${fontSize}px`);
   root.innerHTML = `
@@ -52,16 +62,15 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     </header>
     <div class="connection-banner" role="alert" hidden></div>
     <div class="workspace">
-      <aside class="library-pane" aria-label="文档列表">
-        <div class="library-heading"><span>我的阅读</span><button class="icon-button" data-action="refresh" aria-label="刷新文档">↻</button></div>
-        <div class="collection-tabs" role="tablist" aria-label="文档类型"><button role="tab" aria-selected="true" data-kind="daily">日报 <span data-count="daily">0</span></button><button role="tab" aria-selected="false" data-kind="papers">论文总结 <span data-count="papers">0</span></button></div>
+      <aside class="library-pane" aria-label="日历与筛选">
+        <div class="library-heading"><span>我的阅读</span><button class="quiet-button show-filters" data-action="show-filters">返回列表</button><button class="icon-button" data-action="refresh" aria-label="刷新文档">↻</button></div>
         <section class="calendar-panel" aria-label="日报日历"></section>
-        <label class="search-box">${symbols.search}<input type="search" aria-label="搜索标题、作者、arXiv ID 或日期" placeholder="搜索标题、作者或 ID" autocomplete="off"></label>
-        <div class="list-caption" aria-live="polite">正在读取文档…</div>
-        <div class="document-list"></div>
-        <div class="list-footer"><button class="quiet-button" data-action="more" hidden>加载更多</button><span>本地 Markdown</span></div>
+        <label class="search-box">${symbols.search}<input type="search" aria-label="搜索标题、作者、arXiv ID 或日期" placeholder="搜索标题、作者或关键词" autocomplete="off"></label>
+        <nav class="paper-scopes" aria-label="阅读筛选">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${label}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
+        <label class="topic-filter">主题<select data-filter="topic" aria-label="筛选主题"><option value="">全部主题</option></select></label>
+        <div class="navigation-footer"><button class="quiet-button" data-action="clear-date">浏览全部日期</button><button class="quiet-button" data-action="browse-documents">浏览 Markdown 文件 ↗</button></div>
       </aside>
-      <main class="reading-pane" id="reading-content" tabindex="-1"><div class="empty-reading"><span class="empty-symbol" aria-hidden="true">≡</span><h1>从这里开始阅读</h1><p>选择一份日报或论文总结。</p></div></main>
+      <main class="reading-pane" id="reading-content" tabindex="-1"></main>
       <aside class="toc-pane" aria-label="文章目录"></aside>
     </div>
     <section class="run-tray" aria-label="生成任务" hidden></section>
@@ -71,10 +80,18 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   const reading = find(".reading-pane");
   const calendar = mountCalendar(find(".calendar-panel"), {
     request,
-    selectDay: day => { if (day.reportPath) void openDocument(day.reportPath); else openDay(day); },
-    updateDay: day => { if (selectedDate === day.date && !selectedPath) renderDay(day); },
+    selectDay: day => { selectedDate = day.date; documentsMode = false; offset = 0; void showList(true); },
+    updateDay: day => {
+      if (selectedDate === day.date && paperList && !documentsMode) {
+        paperList.day = day;
+        const header = reading.querySelector(".day-reading");
+        if (root.dataset.view === "list" && header) header.outerHTML = dayHeading(day);
+      }
+    },
     onError: reportConnection,
   });
+
+  const disposeSidebar = mountSidebar(root, { request });
 
   async function request<T>(url: string, body?: unknown): Promise<T> {
     try {
@@ -106,62 +123,101 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     } catch (error) { reportConnection(error); }
   }
 
-  function renderList(total: number): void {
-    find(".list-caption").textContent = query ? `${total} 项匹配 · 标题、作者、ID、日期` : `${total} 份${kind === "daily" ? "日报" : "论文总结"}`;
-    find(".document-list").innerHTML = entries.length ? entries.map(entry => `
-      <button class="document-row${entry.path === selectedPath ? " is-selected" : ""}" data-document="${escapeHtml(entry.path)}" ${entry.path === selectedPath ? 'aria-current="page"' : ""}>
-        <span class="document-row-meta">${escapeHtml(entry.date || (entry.kind === "daily" ? "日报" : "论文总结"))}${entry.arxivId ? ` <span>· ${escapeHtml(entry.arxivId)}</span>` : ""}</span>
-        <span class="document-row-title">${escapeHtml(entry.title)}</span>
-        ${entry.authors ? `<span class="document-row-authors">${escapeHtml(entry.authors)}</span>` : ""}
-      </button>`).join("") : `<div class="list-empty"><strong>${query ? "没有匹配的文档" : kind === "daily" ? "还没有日报" : "还没有论文总结"}</strong><p>${query ? "试试其他标题、作者、ID 或日期。" : "通过右上角“生成”保存第一份文档。"}</p></div>`;
-    find<HTMLButtonElement>('[data-action="more"]').hidden = nextOffset === null;
+  function syncMarkValues(): void {
+    for (const select of Array.from(root.querySelectorAll<HTMLSelectElement>('[data-mark="status"]'))) {
+      const key = select.closest<HTMLElement>("[data-key]")?.dataset.key;
+      const paper = activePaper?.key === key ? activePaper : paperList?.papers.find(item => item.key === key);
+      if (paper) select.value = paper.status;
+    }
   }
-
-  async function loadList(append = false, autoOpen = false): Promise<void> {
+  function listIdentity(): string { return JSON.stringify([documentsMode, kind, selectedDate, query, scope, topic, sort, direction, offset]); }
+  function rememberScroll(): void {
+    if (root.dataset.view !== "list") return;
+    listScroll = reading.scrollTop;
+    scrollPositions.set(listIdentity(), listScroll);
+    history.replaceState({ ...history.state, listScroll }, "");
+  }
+  function route(mode: "push" | "replace" = "push"): void {
+    const url = new URL(location.href);
+    const values = { q: query, scope: scope === "all" ? "" : scope, topic, sort, direction, offset: offset ? String(offset) : "", date: selectedDate, files: documentsMode ? "1" : "", kind: documentsMode ? kind : "", document: selectedPath, paper: selectedKey };
+    for (const [key, value] of Object.entries(values)) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
+    url.hash = "";
+    history[mode === "push" ? "pushState" : "replaceState"]({ listScroll }, "", url);
+  }
+  function readRoute(): void {
+    const params = new URL(location.href).searchParams;
+    query = params.get("q") || ""; scope = Object.hasOwn(scopes, params.get("scope") || "") ? params.get("scope") as PaperScope : "all";
+    topic = params.get("topic") || ""; sort = params.get("sort") || "published"; direction = params.get("direction") || "desc";
+    offset = Math.max(0, Number(params.get("offset")) || 0); selectedDate = routeDate();
+    documentsMode = params.get("files") === "1"; kind = params.get("kind") === "daily" ? "daily" : params.get("kind") === "papers" ? "papers" : "all";
+    selectedPath = params.get("document") || ""; selectedKey = params.get("paper") || "";
+    listScroll = scrollPositions.get(listIdentity()) ?? history.state?.listScroll ?? 0;
+  }
+  function syncFilters(): void {
+    find<HTMLInputElement>('input[type="search"]').value = query;
+    for (const button of Array.from(root.querySelectorAll<HTMLElement>("[data-scope]"))) button.setAttribute("aria-pressed", String(button.dataset.scope === scope && !documentsMode));
+    find<HTMLSelectElement>('[data-filter="topic"]').value = topic;
+    find<HTMLSelectElement>('[data-filter="topic"]').disabled = documentsMode;
+  }
+  function listToolbar(): string {
+    return `<div class="paper-list-heading"><div><span class="day-eyebrow">${documentsMode ? "本地研究记录" : selectedDate || "我的文献"}</span><h1>${documentsMode ? "Markdown 文件" : scopes[scope]}</h1></div><button class="quiet-button show-filters" data-action="show-filters">日历与筛选</button></div>`;
+  }
+  function renderList(): void {
+    if (root.dataset.view !== "list" || !paperList) return;
+    const unknown = paperList.total === 0 && paperList.day?.reportPath && paperList.day.papers !== 0 && !query && !topic && scope === "all";
+    reading.innerHTML = `<div class="paper-workspace">${listToolbar()}${dayHeading(paperList.day)}<div class="paper-list-tools"><span class="list-caption" aria-live="polite">${unknown ? "日报已保存，论文索引尚无可用条目" : `${paperList.total} 篇论文`}</span><label>排序 <select data-filter="sort" aria-label="论文排序">${Object.entries({ published: "发表日期", title: "标题", priority: "优先级", relevance: "相关度" }).map(([value, label]) => `<option value="${value}" ${sort === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="quiet-button" data-action="direction" aria-label="切换排序方向">${direction === "asc" ? "↑ 升序" : "↓ 降序"}</button></div><div class="paper-list">${paperRows(paperList, pendingMarks) || `<div class="list-empty"><h2>${unknown ? "可直接阅读完整日报" : "没有匹配的论文"}</h2><p>${unknown ? "尚未找到对应的论文索引；原始 Markdown 仍可阅读。" : "可调整日期或筛选条件，也可通过“生成”获取新论文。"}</p></div>`}</div>${pagination(paperList.total, paperList.nextOffset)}</div>`;
+    for (const [key, count] of Object.entries(paperList.counts)) find(`[data-count="${key}"]`).textContent = String(count);
+    find<HTMLSelectElement>('[data-filter="topic"]').innerHTML = `<option value="">全部主题</option>${[...new Set([...paperList.topics, ...(topic ? [topic] : [])])].map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+    syncFilters(); syncMarkValues();
+  }
+  function pagination(total: number, next: number | null): string {
+    return `<div class="paper-pagination"><button class="quiet-button" data-action="previous-page" ${offset === 0 ? "disabled" : ""}>← 上一页</button><span>第 ${Math.floor(offset / 20) + 1} 页${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}</span><button class="quiet-button" data-action="next-page" ${next === null ? "disabled" : ""}>下一页 →</button></div>`;
+  }
+  async function loadList(restore = false): Promise<void> {
     const version = ++listVersion;
-    const offset = append ? nextOffset ?? 0 : 0;
-    find(".list-caption").textContent = "正在读取文档…";
+    const scroll = restore ? listScroll : 0;
+    reading.innerHTML = '<div class="reading-loading" role="status">正在读取列表…</div>';
     try {
-      const params = new URLSearchParams({ kind, q: query, offset: String(offset), limit: "60" });
-      const result = await request<DocumentList>(`api/documents?${params}`);
-      if (disposed || version !== listVersion) return;
-      entries = append ? [...entries, ...result.documents] : result.documents;
-      nextOffset = result.nextOffset;
-      find('[data-count="daily"]').textContent = String(result.counts.daily);
-      find('[data-count="papers"]').textContent = String(result.counts.papers);
-      renderList(result.total);
-      if (autoOpen && !selectedPath && !selectedDate && !window.matchMedia("(max-width: 760px)").matches && entries[0]) void openDocument(entries[0].path, "replace");
+      const params = new URLSearchParams({ q: query, offset: String(offset), limit: "20" });
+      if (documentsMode) {
+        params.set("kind", kind);
+        const result = await request<DocumentList>(`api/documents?${params}`);
+        if (disposed || version !== listVersion || root.dataset.view !== "list") return;
+        entries = result.documents; nextOffset = result.nextOffset;
+        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="文档类型">${Object.entries({ all: "全部文件", daily: "日报", papers: "论文总结" }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${label}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || "已保存文档")}</span><span class="document-row-title">${escapeHtml(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || '<div class="list-empty">暂无匹配文件</div>'}</div>${pagination(result.total, result.nextOffset)}</div>`;
+      } else {
+        for (const [key, value] of Object.entries({ scope, topic, sort, direction, date: selectedDate })) if (value) params.set(key, value);
+        const result = await request<WorkbenchPaperList>(`api/papers?${params}`);
+        if (disposed || version !== listVersion || root.dataset.view !== "list") return;
+        paperList = result; nextOffset = result.nextOffset; renderList();
+      }
+      reading.scrollTop = scroll;
     } catch (error) {
-      if (disposed || version !== listVersion) return;
-      find(".list-caption").textContent = "读取未完成";
-      find(".document-list").innerHTML = `<div class="list-empty"><strong>文档列表暂时不可用</strong><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">重试</button></div>`;
+      if (disposed || version !== listVersion || root.dataset.view !== "list") return;
+      reading.innerHTML = `<div class="empty-reading"><h1>列表暂时不可用</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">重试</button><button class="quiet-button" data-action="browse-documents">浏览 Markdown 文件</button></div>`;
       reportConnection(error);
     }
   }
-
-  function markSelection(): void {
-    for (const row of Array.from(root.querySelectorAll<HTMLElement>("[data-document]"))) {
-      const selected = row.dataset.document === selectedPath;
-      row.classList.toggle("is-selected", selected);
-      if (selected) row.setAttribute("aria-current", "page"); else row.removeAttribute("aria-current");
-    }
-  }
-
-  async function openDocument(path: string, historyMode: "push" | "replace" | "none" = "push", hash = "", syncCalendar = true): Promise<void> {
-    const version = ++documentVersion;
-    selectedPath = path;
-    selectedDate = "";
-    markSelection();
-    root.classList.add("is-reading");
-    if (historyMode !== "none") {
-      const url = new URL(location.href);
-      url.searchParams.set("document", path);
-      url.searchParams.delete("date");
-      url.hash = hash;
-      history[historyMode === "push" ? "pushState" : "replaceState"]({}, "", url);
-    }
-    reading.innerHTML = `<div class="reading-loading" role="status">正在打开文档…</div>`;
+  async function showList(push = false, restore = false, keepFilters = false): Promise<void> {
+    documentVersion += 1; selectedPath = ""; selectedKey = ""; activePaper = null;
+    root.dataset.view = "list"; root.classList.remove("is-reading");
+    if (!keepFilters) root.classList.remove("show-filters");
     find(".toc-pane").innerHTML = "";
+    if (push) route();
+    syncFilters();
+    await loadList(restore);
+  }
+  function beginReading(captureScroll: boolean): void {
+    if (captureScroll) rememberScroll(); listVersion += 1;
+    root.dataset.view = "reading"; root.classList.add("is-reading"); root.classList.remove("show-filters");
+    find(".toc-pane").innerHTML = "";
+  }
+  async function openDocument(path: string, historyMode: "push" | "replace" | "none" = "push", hash = "", syncCalendar = true): Promise<void> {
+    beginReading(historyMode !== "none");
+    const version = ++documentVersion;
+    selectedPath = path; selectedKey = ""; activePaper = null;
+    if (historyMode !== "none") { route(historyMode); if (hash) { const url = new URL(location.href); url.hash = hash; history.replaceState(history.state, "", url); } }
+    reading.innerHTML = '<div class="reading-loading" role="status">正在打开文档…</div>';
     try {
       const result = await request<ReadingDocument>(`api/document?path=${encodeURIComponent(path)}`);
       if (disposed || version !== documentVersion) return;
@@ -170,49 +226,57 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       if (hash) scrollToHash(hash); else reading.scrollTop = 0;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
-      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><h1>暂时无法打开文档</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">重试读取</button></div>`;
+      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">← 返回列表</button><h1>暂时无法打开文档</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">重试读取</button></div>`;
       if (message(error).includes("无法连接")) reportConnection(error);
     }
   }
-
-  function setDayRoute(date: string, historyMode: "push" | "none"): void {
-    documentVersion += 1;
-    selectedPath = "";
-    selectedDate = date;
-    markSelection();
-    root.classList.add("is-reading");
-    find(".toc-pane").innerHTML = "";
-    if (historyMode === "push") {
-      const url = new URL(location.href);
-      url.searchParams.delete("document");
-      url.searchParams.set("date", date);
-      url.hash = "";
-      history.pushState({}, "", url);
+  async function openPaper(key: string, push = true, preserveScroll = false): Promise<void> {
+    const scroll = reading.scrollTop;
+    beginReading(push); const version = ++documentVersion;
+    selectedKey = key; selectedPath = "";
+    if (push) route();
+    reading.innerHTML = '<div class="reading-loading" role="status">正在打开论文…</div>';
+    try {
+      const result = await request<{ paper: WorkbenchPaper }>(`api/paper?key=${encodeURIComponent(key)}`);
+      if (disposed || version !== documentVersion) return;
+      activePaper = result.paper; reading.innerHTML = overview(result.paper, pendingMarks.has(key)); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0;
+    } catch (error) {
+      if (disposed || version !== documentVersion) return;
+      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">← 返回列表</button><h1>论文暂时不可用</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="retry-paper">重试</button></div>`;
+    }
+  }
+  async function saveMark(key: string, action: "status" | "star", value: string | boolean): Promise<void> {
+    const paper = activePaper?.key === key ? activePaper : paperList?.papers.find(item => item.key === key);
+    if (!paper || pendingMarks.has(key)) return;
+    const viewVersion = documentVersion;
+    pendingMarks.add(key); listVersion += 1;
+    function renderMarks(current: WorkbenchPaper): void {
+      if (activePaper?.key === key) activePaper = current;
+      if (paperList) paperList.papers = paperList.papers.map(item => item.key === key ? current : item);
+      for (const container of Array.from(root.querySelectorAll<HTMLElement>(".paper-marks"))) if (container.dataset.key === key) container.outerHTML = marks(current, pendingMarks.has(key));
+      syncMarkValues();
+    }
+    renderMarks(paper);
+    try {
+      const result = await request<{ paper: WorkbenchPaper }>("api/paper/mark", { key, action, value, expected: action === "status" ? paper.status : paper.priority });
+      if (disposed) return;
+      pendingMarks.delete(key); renderMarks(result.paper);
+      if (activePaper?.key === key) activePaper = result.paper;
+    } catch (error) {
+      if (disposed) return;
+      reportConnection(error);
+      try {
+        const result = await request<{ paper: WorkbenchPaper }>(`api/paper?key=${encodeURIComponent(key)}`);
+        if (!disposed) { pendingMarks.delete(key); renderMarks(result.paper); if (activePaper?.key === key) activePaper = result.paper; }
+      } catch { /* Keep the error visible; a fresh list below retries persisted state. */ }
+    } finally {
+      pendingMarks.delete(key);
+      if (!disposed && root.dataset.view === "list" && viewVersion === documentVersion) { listScroll = reading.scrollTop; void loadList(true); }
     }
   }
 
-  function openDay(day: WorkbenchCalendarDay, historyMode: "push" | "none" = "push"): void {
-    setDayRoute(day.date, historyMode);
-    renderDay(day);
-  }
-
-  async function openDate(date: string): Promise<void> {
-    setDayRoute(date, "none");
-    const version = documentVersion;
-    reading.innerHTML = '<div class="reading-loading" role="status">正在读取日期状态…</div>';
-    const day = await calendar.selectDate(date);
-    if (disposed || version !== documentVersion) return;
-    if (day) renderDay(day);
-    else reading.innerHTML = '<div class="empty-reading"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><h1>暂时无法读取日期状态</h1><p>请刷新日历后重试。</p><button class="quiet-button" data-action="refresh">刷新</button></div>';
-  }
-
-  function renderDay(day: WorkbenchCalendarDay): void {
-    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><span class="reading-kind">研究日报</span><span class="reading-date">${day.date}</span></div><section class="day-reading"><div class="day-eyebrow">${day.date} · 研究日报</div><h1>${calendarStateLabels[day.state]}</h1><p>${escapeHtml(day.message)}</p>${day.reportPath ? `<button class="primary-button" data-document="${escapeHtml(day.reportPath)}">打开日报</button>` : day.canGenerate ? `<button class="primary-button" data-action="generate-date" data-date="${day.date}">${escapeHtml(day.actionLabel || "生成日报")}</button><span class="day-action-note">下一步确认日期与生成设置</span>` : ""}</section>`;
-    reading.scrollTop = 0;
-  }
-
   function renderDocument(entry: ReadingDocument): void {
-    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button mobile-back" data-action="back">← 返回列表</button><span class="reading-kind">${entry.kind === "daily" ? "研究日报" : "论文总结"}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="缩小字号">A−</button><button class="icon-button" data-action="font-up" aria-label="放大字号">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
+    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">← 返回列表</button><span class="reading-kind">${entry.kind === "daily" ? "研究日报" : "论文总结"}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="缩小字号">A−</button><button class="icon-button" data-action="font-up" aria-label="放大字号">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
       <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || "已保存文档")}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${escapeHtml(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, "arXiv 原文", "original")}${sourceLink(entry.pdfUrl, "阅读 PDF", "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">来源日报 · ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="文档正文"></article><footer class="article-footer"><span>Markdown 保存在本地</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
     // The local service owns Markdown sanitization. All other API text is escaped above.
     find("article").innerHTML = entry.html;
@@ -294,8 +358,9 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     clearTimeout(pollTimer);
     if (run?.status === "running") pollTimer = setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
     if (run && run.status !== "running" && previous?.id === run.id && previous.status === "running") {
-      void loadList(false, true);
-      if (selectedPath) void openDocument(selectedPath, "none", location.hash, false);
+      if (root.dataset.view === "list") { listScroll = reading.scrollTop; void loadList(true); }
+      if (selectedKey) void openPaper(selectedKey, false, true);
+      else if (selectedPath) void openDocument(selectedPath, "none", location.hash, false);
     }
   }
 
@@ -340,20 +405,16 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     catch (error) { reportConnection(error); void pollRun(); }
   }
 
-  function switchCollection(value: "daily" | "papers"): void {
-    kind = value;
-    find(".calendar-panel").hidden = kind !== "daily";
-    for (const tab of Array.from(root.querySelectorAll<HTMLElement>("[data-kind]"))) tab.setAttribute("aria-selected", String(tab.dataset.kind === kind));
-    root.classList.remove("is-reading");
-    void loadList();
+  function switchCollection(value: typeof kind, focus = false): void {
+    kind = value; documentsMode = true; offset = 0;
+    void showList(true).then(() => { if (focus && !disposed) root.querySelector<HTMLButtonElement>(`[data-kind="${kind}"]`)?.focus(); });
   }
-
   function reconnect(): void {
     find(".connection-banner").hidden = true;
-    void loadStatus(); void loadList(false, true); void pollRun();
-    void calendar.refresh();
+    void loadStatus(); void pollRun(); void calendar.refresh();
     if (selectedPath) void openDocument(selectedPath, "none", location.hash);
-    else if (selectedDate) void openDate(selectedDate);
+    else if (selectedKey) void openPaper(selectedKey, false, true);
+    else { listScroll = reading.scrollTop; void loadList(true); }
   }
 
   function click(event: MouseEvent): void {
@@ -371,6 +432,12 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       }
       if (link.getAttribute("href")?.startsWith("#")) { event.preventDefault(); history.pushState({}, "", url); scrollToHash(url.hash); return; }
     }
+    const markButton = target.closest<HTMLElement>('[data-mark="star"]');
+    if (markButton) { const key = markButton.closest<HTMLElement>("[data-key]")!.dataset.key!; void saveMark(key, "star", markButton.getAttribute("aria-pressed") !== "true"); return; }
+    const paperButton = target.closest<HTMLElement>("[data-paper]");
+    if (paperButton) { void openPaper(paperButton.dataset.paper!); return; }
+    const scopeButton = target.closest<HTMLElement>("[data-scope]");
+    if (scopeButton) { scope = scopeButton.dataset.scope as PaperScope; documentsMode = false; offset = 0; void showList(true); return; }
     const documentButton = target.closest<HTMLElement>("[data-document]");
     if (documentButton) { void openDocument(documentButton.dataset.document!); return; }
     const tab = target.closest<HTMLElement>("[data-kind]");
@@ -381,9 +448,20 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "settings") showSettings();
     else if (action === "close-dialog") closeDialog();
     else if (action === "reconnect" || action === "refresh") reconnect();
-    else if (action === "more") void loadList(true);
+    else if (action === "next-page" && nextOffset !== null) { offset = nextOffset; void showList(true); }
+    else if (action === "previous-page") { offset = Math.max(0, offset - 20); void showList(true); }
+    else if (action === "direction") { direction = direction === "asc" ? "desc" : "asc"; offset = 0; void showList(true); }
+    else if (action === "read-day" && paperList?.day?.reportPath) void openDocument(paperList.day.reportPath);
+    else if (action === "browse-documents") { documentsMode = true; offset = 0; void showList(true); }
+    else if (action === "clear-date") { selectedDate = ""; calendar.clearSelection(); offset = 0; void showList(true); }
+    else if (action === "show-filters") { root.classList.toggle("show-filters"); }
+    else if (action === "retry-paper" && selectedKey) void openPaper(selectedKey, false);
+    else if (action === "generate-paper" && activePaper) {
+      showGeneration(); find<HTMLInputElement>('input[name="kind"][value="paper"]').checked = true;
+      find(".daily-fields").hidden = true; find(".paper-fields").hidden = false; find<HTMLInputElement>("#run-paper").value = activePaper.arxivId;
+    }
     else if (action === "retry-document" && selectedPath) void openDocument(selectedPath, "none", location.hash);
-    else if (action === "back") { root.classList.remove("is-reading"); find<HTMLInputElement>('input[type="search"]').focus(); }
+    else if (action === "back") { void showList(true, true).then(() => reading.focus()); }
     else if (action === "cancel-run") void cancelRun();
     else if (action === "dismiss-run") { dismissedRun = currentRun?.id || ""; renderRun(); }
     else if (action === "theme") { root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark"; preference("theme", root.dataset.theme); }
@@ -396,7 +474,16 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       query = target.value.trim();
       listVersion += 1;
       clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => { void loadList(); }, options.searchDelayMs ?? 180);
+      offset = 0; documentVersion += 1;
+      searchTimer = setTimeout(() => { void showList(true, false, root.classList.contains("show-filters")); }, options.searchDelayMs ?? 180);
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.mark === "status") {
+      const key = target.closest<HTMLElement>("[data-key]")!.dataset.key!; void saveMark(key, "status", target.value);
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.filter) {
+      if (target.dataset.filter === "topic") topic = target.value;
+      else if (target.dataset.filter === "sort") { sort = target.value; direction = sort === "title" || sort === "priority" ? "asc" : "desc"; }
+      offset = 0; void showList(true);
     }
     if (target instanceof HTMLInputElement && target.name === "kind") {
       find(".daily-fields").hidden = target.value !== "daily";
@@ -411,14 +498,17 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     if (!(event.target instanceof HTMLElement) || !event.target.closest("[data-kind]")) return;
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    switchCollection(event.key === "Home" ? "daily" : event.key === "End" ? "papers" : kind === "daily" ? "papers" : "daily");
-    find<HTMLButtonElement>(`[data-kind="${kind}"]`).focus();
+    const values = ["all", "daily", "papers"] as const;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : (values.indexOf(event.target.closest<HTMLElement>("[data-kind]")!.dataset.kind as typeof kind) + (event.key === "ArrowLeft" ? 2 : 1)) % 3;
+    switchCollection(values[next]!, true);
   }
   function popstate(): void {
-    const path = new URL(location.href).searchParams.get("document");
-    if (path) void openDocument(path, "none", location.hash);
-    else if (routeDate()) void openDate(routeDate());
-    else { documentVersion += 1; selectedPath = ""; selectedDate = ""; calendar.clearSelection(); root.classList.remove("is-reading"); markSelection(); reading.innerHTML = '<div class="empty-reading"><h1>选择文档继续阅读</h1><p>日报和论文总结保存在左侧列表中。</p></div>'; find(".toc-pane").innerHTML = ""; }
+    listVersion += 1; documentVersion += 1; clearTimeout(searchTimer);
+    readRoute(); syncFilters();
+    if (selectedPath) void openDocument(selectedPath, "none", location.hash);
+    else if (selectedKey) void openPaper(selectedKey, false);
+    else void showList(false, true);
+    if (selectedDate) void calendar.selectDate(selectedDate); else calendar.clearSelection();
   }
   root.addEventListener("click", click);
   root.addEventListener("input", input);
@@ -426,12 +516,14 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   root.addEventListener("submit", submit);
   root.addEventListener("keydown", keydown);
   window.addEventListener("popstate", popstate);
-  void loadStatus(); void loadList(false, true); void pollRun();
+  readRoute(); syncFilters(); void loadStatus(); void pollRun();
   if (selectedPath) void openDocument(selectedPath, "none", location.hash);
-  if (selectedDate) void openDate(selectedDate); else void calendar.load();
+  else if (selectedKey) void openPaper(selectedKey, false);
+  else void showList(false, true);
+  if (selectedDate) void calendar.selectDate(selectedDate); else void calendar.load();
   return () => {
     disposed = true;
-    calendar.dispose();
+    calendar.dispose(); disposeSidebar();
     lifetime.abort();
     clearTimeout(searchTimer); clearTimeout(pollTimer);
     closeDialog();

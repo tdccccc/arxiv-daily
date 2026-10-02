@@ -11,13 +11,14 @@ const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach(dispose => dispose()); document.body.innerHTML = ""; vi.restoreAllMocks(); });
 
 function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, pollIntervalMs = 10) {
-  window.history.replaceState({}, "", "/capability/");
+  window.history.replaceState({}, "", `/capability/?document=${encodeURIComponent(daily.path)}`);
   const root = document.createElement("div");
   document.body.append(root);
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.href);
     const custom = override?.(url, init);
     if (custom) return await custom;
+    if (url.pathname.endsWith("api/preferences")) return json({ sidebarWidth: null, sidebarCollapsed: false });
     if (url.pathname.endsWith("api/status")) return json(status);
     if (url.pathname.endsWith("api/calendar")) return json(calendar);
     if (url.pathname.endsWith("api/runs/current")) return json({ run: null });
@@ -56,6 +57,8 @@ describe("reading workbench UI", () => {
       if (url.searchParams.get("q") === "new") return json({ documents: [{ ...paper, title: "New result" }], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
     });
     await vi.waitFor(() => expect(root.querySelector("article")?.textContent).toContain("Saved research"));
+    root.querySelector<HTMLButtonElement>('[data-action="browse-documents"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector(".document-list")).toBeTruthy());
     const input = root.querySelector<HTMLInputElement>('input[type="search"]')!;
     input.value = "old"; input.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.waitFor(() => expect(completeOld).toBeTypeOf("function"));
@@ -82,7 +85,7 @@ describe("reading workbench UI", () => {
     const { root, fetcher } = setup((url, init) => {
       if (url.pathname.endsWith("api/runs") && init?.method === "POST") { started = true; return json({ run }, 202); }
       if (url.pathname.endsWith("api/runs/current") && started) return json({ run: { ...run, status: "completed", output: "Saved <script>ignored</script>", exitCode: 0, finishedAt: "2026-10-01" } });
-      if (url.pathname.endsWith("api/documents")) reads += 1;
+      if (url.pathname.endsWith("api/document")) reads += 1;
     });
     await vi.waitFor(() => expect(root.querySelector("article")?.textContent).toContain("Saved research"));
     button(root, "生成").click();
@@ -145,10 +148,12 @@ describe("reading workbench UI", () => {
     await vi.waitFor(() => expect(root.querySelector("article")?.textContent).toContain("Saved research"));
     root.querySelector<HTMLAnchorElement>(".skip-link")!.click();
     expect(document.activeElement).toBe(root.querySelector(".reading-pane"));
+    root.querySelector<HTMLButtonElement>('[data-action="browse-documents"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-kind="daily"]')).toBeTruthy());
     const tab = root.querySelector<HTMLButtonElement>('[data-kind="daily"]')!;
     tab.focus();
     tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
-    expect(root.querySelector('[data-kind="papers"]')?.getAttribute("aria-selected")).toBe("true");
+    await vi.waitFor(() => expect(root.querySelector('[data-kind="papers"]')?.getAttribute("aria-selected")).toBe("true"));
     expect(document.activeElement).toBe(root.querySelector('[data-kind="papers"]'));
   });
 });

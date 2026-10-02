@@ -39,6 +39,11 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     const custom = override?.(url, init);
     if (custom) return await custom;
     if (url.pathname.endsWith("api/calendar")) return json(calendar(url.searchParams.get("month") || undefined));
+    if (url.pathname.endsWith("api/preferences")) return json({ sidebarWidth: null, sidebarCollapsed: false });
+    if (url.pathname.endsWith("api/papers")) {
+      const date = url.searchParams.get("date");
+      return json({ papers: [], total: 0, offset: 0, limit: 20, nextOffset: null, counts: { all: 0, inbox: 0, to_read: 0, read: 0, starred: 0 }, libraryCount: 0, topics: [], day: date ? calendar(date.slice(0, 7)).cells.find(cell => cell?.date === date) : null });
+    }
     if (url.pathname.endsWith("api/status")) return json(status);
     if (url.pathname.endsWith("api/runs/current")) return json({ run: null });
     if (url.pathname.endsWith("api/documents")) return json({ documents: url.searchParams.get("kind") === "papers" ? [paper] : [daily], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
@@ -82,6 +87,8 @@ describe("daily calendar in the reading workbench", () => {
     expect(day(root, "2026-10-15").getAttribute("aria-current")).toBe("date");
     expect(day(root, "2026-10-01").getAttribute("aria-label")).toContain("已有日报");
     day(root, "2026-10-01").click();
+    await vi.waitFor(() => expect(root.querySelector('[data-action="read-day"]')).toBeTruthy());
+    root.querySelector<HTMLButtonElement>('[data-action="read-day"]')!.click();
     await vi.waitFor(() => expect(root.querySelector(".document-title")?.textContent).toBe(daily.title));
     expect(root.querySelector(".calendar-summary")?.textContent).toContain("3 篇");
     expect(posted(fetcher)).toHaveLength(0);
@@ -207,17 +214,19 @@ describe("daily calendar in the reading workbench", () => {
     expect(posted(fetcher)).toHaveLength(0);
   });
 
-  it("collapses the mobile calendar, hides it on papers and retains the reading return action", async () => {
+  it("opens mobile filters, selects a date into the right list, and returns there from reading", async () => {
     const { root } = setup(undefined, { mobile: true }); await ready(root);
+    root.querySelector<HTMLButtonElement>('[data-action="show-filters"]')!.click();
+    expect(root.classList.contains("show-filters")).toBe(true);
     const toggle = button(root, "展开日历"); expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(root.querySelector<HTMLElement>(".calendar-body")!.hidden).toBe(true);
     toggle.click(); expect(root.querySelector<HTMLElement>(".calendar-body")!.hidden).toBe(false);
-    day(root, "2026-10-02").click();
-    expect(root.classList.contains("is-reading")).toBe(true);
-    button(root, "← 返回列表").click(); expect(root.classList.contains("is-reading")).toBe(false);
-    root.querySelector<HTMLButtonElement>('[data-kind="papers"]')!.click();
-    expect(root.querySelector<HTMLElement>(".calendar-panel")!.hidden).toBe(true);
-    root.querySelector<HTMLButtonElement>('[data-kind="daily"]')!.click();
-    expect(root.querySelector<HTMLElement>(".calendar-panel")!.hidden).toBe(false);
+    day(root, "2026-10-01").click();
+    await vi.waitFor(() => expect(root.querySelector('[data-action="read-day"]')).toBeTruthy());
+    expect(root.dataset.view).toBe("list"); expect(root.classList.contains("show-filters")).toBe(false);
+    root.querySelector<HTMLButtonElement>('[data-action="read-day"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector("article")).toBeTruthy());
+    button(root, "← 返回列表").click();
+    await vi.waitFor(() => expect(root.dataset.view).toBe("list"));
+    expect(root.classList.contains("show-filters")).toBe(false);
   });
 });
