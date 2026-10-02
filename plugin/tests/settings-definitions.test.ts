@@ -61,6 +61,77 @@ describe("setting key path mapping", () => {
     writeSettingValue(settings, "missing.deep.value", 1);
     expect(settings).toEqual(structuredClone(DEFAULT_SETTINGS));
   });
+
+  it("does not pollute Object.prototype through a settings path", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const sentinel = "__arxivSettingsPrototypeSentinel__";
+    const before = Object.getOwnPropertyDescriptor(Object.prototype, sentinel);
+    try {
+      writeSettingValue(settings, `__proto__.${sentinel}`, "polluted");
+      expect(Object.getOwnPropertyDescriptor(Object.prototype, sentinel)).toEqual(before);
+      expect(settings).toEqual(DEFAULT_SETTINGS);
+    } finally {
+      if (before) Object.defineProperty(Object.prototype, sentinel, before);
+      else Reflect.deleteProperty(Object.prototype, sentinel);
+    }
+  });
+
+  it.each(["__proto__", "constructor", "prototype"])("rejects %s at every path position without changing settings", (segment) => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    const originalPrototype = Object.getPrototypeOf(settings.llm);
+    const originalSettingsPrototype = Object.getPrototypeOf(settings);
+    writeSettingValue(settings, segment, { sentinel: true });
+    writeSettingValue(settings, `llm.${segment}`, { sentinel: true });
+    expect(Object.getPrototypeOf(settings)).toBe(originalSettingsPrototype);
+    expect(Object.getPrototypeOf(settings.llm)).toBe(originalPrototype);
+    expect(settings).toEqual(DEFAULT_SETTINGS);
+
+    // Own object-valued reserved keys must not become a traversal bypass.
+    Object.defineProperty(settings.llm, segment, {
+      value: { model: "original" }, enumerable: true, configurable: true, writable: true,
+    });
+    const before = structuredClone(settings);
+    writeSettingValue(settings, `llm.${segment}.model`, "polluted");
+    expect(settings).toEqual(before);
+  });
+
+  it("rejects a dangerous later segment before reading any intermediate property", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    let reads = 0;
+    Object.defineProperty(settings, "draft", {
+      get: () => { reads += 1; return { value: "original" }; },
+    });
+    writeSettingValue(settings, "draft.prototype.value", "polluted");
+    expect(reads).toBe(0);
+  });
+
+  it("does not modify an inherited intermediate object", () => {
+    const shared = { model: "original" };
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    Object.setPrototypeOf(settings, { inherited: shared });
+    writeSettingValue(settings, "inherited.model", "polluted");
+    expect(shared.model).toBe("original");
+    expect(Object.hasOwn(settings, "inherited")).toBe(false);
+  });
+
+  it("does not invoke an inherited setter for the final segment", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    let value = "original";
+    const inherited = Object.create(null);
+    Object.defineProperty(inherited, "draft", { set: (next: string) => { value = next; } });
+    Object.setPrototypeOf(settings.llm, inherited);
+    writeSettingValue(settings, "llm.draft", "polluted");
+    expect(value).toBe("original");
+    expect(Object.hasOwn(settings.llm, "draft")).toBe(false);
+  });
+
+  it("continues allowing new ordinary leaf keys without creating missing parents", () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    writeSettingValue(settings, "llm.futureOption", "supported");
+    expect(readSettingValue(settings, "llm.futureOption")).toBe("supported");
+    writeSettingValue(settings, "futureSection.option", "ignored");
+    expect(Object.hasOwn(settings, "futureSection")).toBe(false);
+  });
 });
 
 describe("buildSettingDefinitions structure", () => {

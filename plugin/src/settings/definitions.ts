@@ -98,17 +98,19 @@ export function writeSettingValue(
   value: unknown,
 ): void {
   const parts = key.split(".");
-  if (parts.length === 0) return;
+  // Reject the whole path before resolving any property, including accessors.
+  const last = parts.pop();
+  if (last === undefined || last === "__proto__" || last === "constructor" || last === "prototype") return;
+  if (parts.some((part) => part === "__proto__" || part === "constructor" || part === "prototype")) return;
   let target: Record<string, unknown> = settings as unknown as Record<string, unknown>;
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    const part = parts[i];
-    if (part === undefined) return;
+  for (const part of parts) {
+    if (!Object.hasOwn(target, part)) return;
     const next = target[part];
     if (next == null || typeof next !== "object") return;
     target = next as Record<string, unknown>;
   }
-  const last = parts[parts.length - 1];
-  if (last === undefined) return;
+  // Ordinary new leaf keys remain supported; inherited values/setters do not.
+  if (!Object.hasOwn(target, last) && last in target) return;
   target[last] = value;
 }
 
