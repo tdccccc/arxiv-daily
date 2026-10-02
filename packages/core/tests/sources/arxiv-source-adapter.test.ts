@@ -24,6 +24,22 @@ const recentHtml = readFileSync(
 );
 
 describe("mapLegacyPaperContent / legacyContentFromNormalized", () => {
+  it.each([
+    ["## Abstract\nFirst line.\nSecond line.\n## Methods\nDetails.", "First line.\nSecond line."],
+    ["## Abstract\r\nFirst line.\r\n## Methods\r\nDetails.", "First line."],
+    ["##aBsTrAcT\nBody text.", "Body text."],
+    ["##\nAbstract\nBody text.", "Body text."],
+    ["No abstract heading\nBody text.", "No abstract heading\nBody text."],
+    ["## Abstract Inline body.", "Inline body."],
+    ["## Abstract", ""],
+    ["## Abstract\n\n## Conclusion\nConclusion.", "## Conclusion\nConclusion."],
+    [" ".repeat(16_000), ""],
+    ["## Abstract\n" + " ".repeat(16_000) + "payload", "payload"],
+    ["##" + " ".repeat(16_000) + "no heading", "##" + " ".repeat(16_000) + "no heading"],
+  ])("preserves normalized abstract text (case %#)", (abstractConclusion, expected) => {
+    expect(mapLegacyPaperContent({ abstractConclusion, fullSections: null }, "", "2606.12345").abstract).toBe(expected);
+  });
+
   it("maps abstract + sections markdown into normalized content", () => {
     const normalized = mapLegacyPaperContent(
       {

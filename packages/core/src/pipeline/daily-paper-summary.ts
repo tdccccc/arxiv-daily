@@ -424,9 +424,31 @@ function extractSectionTitles(markdown: string | null | undefined): string[] {
 
 function extractAbstractSection(markdown: string | null | undefined): string {
   if (!markdown) return "";
-  const match =
-    /^##\s+(?:Abstract|摘要)\s*\n([\s\S]*?)(?=^##\s+|$)/im.exec(markdown);
-  return match?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+  // Locate heading markers separately from whitespace and body scanning, so
+  // long runs of whitespace never participate in overlapping regex searches.
+  const headings = /^##/gm;
+  let heading: RegExpExecArray | null;
+  while ((heading = headings.exec(markdown)) !== null) {
+    let cursor = heading.index + 2;
+    if (!/\s/u.test(markdown[cursor] ?? "")) continue;
+    while (cursor < markdown.length && /\s/u.test(markdown[cursor]!)) cursor += 1;
+    if (markdown.slice(cursor, cursor + 8).toLowerCase() === "abstract") cursor += 8;
+    else if (markdown.slice(cursor, cursor + 2) === "摘要") cursor += 2;
+    else continue;
+
+    let bodyStart = -1;
+    while (cursor < markdown.length && /\s/u.test(markdown[cursor]!)) {
+      if (markdown[cursor] === "\n") bodyStart = cursor + 1;
+      cursor += 1;
+    }
+    if (bodyStart < 0) continue;
+    if (markdown.startsWith("##", bodyStart) && /\s/u.test(markdown[bodyStart + 2] ?? "")) return "";
+    // The existing multiline-end-anchor contract takes the first content line.
+    let bodyEnd = bodyStart;
+    while (bodyEnd < markdown.length && !/[\r\n\u2028\u2029]/u.test(markdown[bodyEnd]!)) bodyEnd += 1;
+    return markdown.slice(bodyStart, bodyEnd).replace(/\s+/g, " ").trim();
+  }
+  return "";
 }
 
 function isErrorLike(value: unknown): value is Error & Record<string, unknown> {

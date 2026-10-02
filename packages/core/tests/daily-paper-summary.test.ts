@@ -630,6 +630,22 @@ describe("derivePaperSourceSections", () => {
 });
 
 describe("resolveTrustedOriginalAbstract", () => {
+  it.each([
+    ["## Abstract\nFirst line.\nSecond line.\n## Methods\nDetails.", "First line."],
+    ["## Abstract\r\nFirst line.\r\n## Methods\r\nDetails.", "First line."],
+    ["Preface\n## 摘要\n中文摘要。\n## 方法\n细节。", "中文摘要。"],
+    ["## aBsTrAcT\n\n  Body text.  \n## Results", "Body text."],
+    ["##\nAbstract\nBody text.", "Body text."],
+    ["No abstract heading\nBody text.", ""],
+    ["## Abstract", ""],
+    ["## Abstract\n\n## Conclusion\nConclusion.", ""],
+    [" ".repeat(16_000), ""],
+    ["## Abstract\n" + " ".repeat(16_000) + "payload", "payload"],
+    ["##" + " ".repeat(16_000) + "no heading", ""],
+  ])("preserves the abstract-section contract (case %#)", (abstractConclusion, expected) => {
+    expect(resolveTrustedOriginalAbstract({ abstractConclusion })).toBe(expected);
+  });
+
   it("prefers paper.abstract over abstract section text", () => {
     expect(resolveTrustedOriginalAbstract(paper)).toBe(
       "Trusted abstract from metadata.",
