@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-01T23:06:37+08:00
-updated: 2026-10-02T12:39:43+08:00
-revision: 6
+updated: 2026-10-02T13:01:11+08:00
+revision: 7
 owner: codex-root-2026-10-01
 
 ## Intent
@@ -12,7 +12,7 @@ owner: codex-root-2026-10-01
 
 ## Success criteria
 
-- [ ] 设置页选择目录后自动准备标题摘要索引；取消与整体失败不继续，失败有重试；Review suggestions首次生成并审核，已有建议直接打开。
+- [x] 设置页选择目录后自动准备标题摘要索引；取消与整体失败不继续，失败有重试；Review suggestions首次生成并审核，已有建议直接打开（本地回归通过，真实宿主待手测）。
 - [x] 索引只处理标题摘要；旧全文索引不被错误复用；arXiv查询失败的本地PDF仍可参与摘要搜索和方向生成（回归通过，实际资料库耗时待手测）。
 - [ ] 审核对话框大屏有足够空间，小窗口可以滚动与操作。
 - [x] 两个修复独立提交，要求的检查有实际记录，备份后部署手测文件且不碰 data.json。
@@ -36,7 +36,7 @@ owner: codex-root-2026-10-01
 1. P1 — 两个中断修复通过本地验证、独立提交并部署手测 — status: done
 2. P2 — 合并后手测通过再完成 0.5.0 元数据与发行说明、本地发布前验证 — status: pending
 3. P3 — 整分支融合、标题摘要重建与新主题方向流程通过回归并部署 — status: done
-4. P4 — 单一Personal library区域，选择目录自动准备、首次审核自动生成 — status: active
+4. P4 — 单一Personal library区域，选择目录自动准备、首次审核自动生成 — status: done
 
 ## Open questions
 

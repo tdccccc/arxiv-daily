@@ -46,3 +46,9 @@
 - 选择后的本地/远程选择弹窗移除，本地默认，Embedding设置仍可调整；已有远程模式在索引前只询问一次授权。加载模型状态使用真实文件进度，但库API在缓存命中也发download事件，因此不伪称每次下载130MB。
 - 分工：modal_fix负责设置/connection，cli_recon负责审核modal，scan_fix负责本地模型加载回调，主负责main桥接/取消/记录。禁止触碰其它worktree或继续派生。
 - 旧方案中断前仅有300通过基线与/tmp报告，无源码修改，不丢弃用户工作。新增两步流程/首次自动生成/关闭中止/模型状态均先观察Red，再最小补齐。
+
+## 2026-10-02 — P4提交并部署
+
+- Checkpoint: On track。7914545提交两步流程与必要进度/取消衔接，暂存范围核对，无发行草稿混入。3432项全量通过/2项既有跳过；lint0 errors/19 warnings；typecheck/build/smoke/boundaries/submission通过；release-tools341通过。
+- main.js/styles.css备份后重新部署三件资产，suffix20261002-pre-two-step-library，源目标SHA-256相同；未打开data.json，未启动Obsidian。来源分支保持c6dc242，受保护worktree未修改。
+- P4完成，P2继续等待真实宿主手测，尚未同步0.5.0版本或执行远程动作。实际模型下载与库全集计时未测；细节和手测清单见two-step-verification.md。

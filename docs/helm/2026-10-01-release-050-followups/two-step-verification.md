@@ -39,4 +39,12 @@
 
 命令面板仍保留扫描与手动索引入口，可用于更新资料库；该底层选目录命令与设置页引导是不同入口。新增PDF后应重新扫描再索引。
 
-发行说明草稿已同步两步行为但仍单独留到版本同步提交。版本仍0.4.6；新构建手测通过后继续0.5.0准备。来源分支与受保护工作树没有修改，没有push、PR、tag或发布。提交和部署完成后补记。
+发行说明草稿已同步两步行为但仍单独留到版本同步提交。版本仍0.4.6；新构建手测通过后继续0.5.0准备。来源分支与受保护工作树没有修改，没有push、PR、tag或发布。
+
+## 提交与部署
+
+功能提交`7914545 feat(settings): consolidate library setup into two steps`。部署目标`/home/tiandc/Desktop/plugin_test/.obsidian/plugins/arxiv-daily/`，先检查文件，再独占创建`main.js.bak-20261002-pre-two-step-library`和`styles.css.bak-20261002-pre-two-step-library`，未覆盖旧备份。
+
+源/目标校验一致：main.js `eed36525182f699fb6f9d6820c258694bd55b16111b3a125d688206782867c00`；styles.css `c1b84403be62a5ad5de4e5ed42e387176b0a8607fac395146749f41fefbe696d`；manifest.json `b54f7e409c97338a4b2b2457195f426b16d908a181457de2ffa410e8f9cdae91`。完整记录`/tmp/arxiv-050-two-step-deploy.json`。data.json未打开或修改，Obsidian未启动。
+
+重启后的最小手测：选择一个小资料库应直接准备；准备中取消后可重试；准备完成后Review suggestions首次授权生成，关闭时停止；已有建议再次打开保持原文；研究主题区不再出现重复准备入口。
