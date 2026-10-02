@@ -59,3 +59,10 @@
 - 只读测试.index结构验证混配1摘要chunk/116旧全文chunk，建议主备份均合法v3；未修改真实数据。P1/P3/P4保留历史测试验收，新增P5覆盖此前缺失的升级场景，不重写历史或忽略报错。
 - 修复分工隔离：scan_fix处理core fulltext存储/索引，cli_recon处理core旧建议识别/显式归档，modal_fix处理UI状态与恢复按钮，主负责main状态/恢复意图接线。全部新增行为采用实际Red→Green；报告在/tmp/arxiv-upgrade-*-report.md。
 - 对用户解释：catalog从备份恢复是已有防护，少数PDF前两页无文字是单篇失败；整库构建与重试入口必须恢复。新模型先隔离暂存再原子切换，旧建议只有显式恢复才归档和重写。
+
+## 2026-10-02 — P5本地验证与部署完成
+
+- Checkpoint: On track。分别提交dd29ff2（索引一致性与模型安全切换）、014786c（合法旧建议识别/归档恢复）、319c10b（主流程与UI恢复入口）。暂存范围逐次审查，发行说明草稿未混入。
+- 最终3479测试通过/2既有跳过，lint0 errors/20 warnings；typecheck/build/smoke/boundaries/submission通过，release-tools342通过。首次全量旧fixture缺indexStatus的3失败已补齐并重新全量验证，不计为通过。
+- 三件资产备份后部署，suffix20261002-pre-upgrade-recovery，SHA-256核对一致；main.js新hash78521db050d98f2e801bdaa015424289f2bb5eaa648098b8a0aa2ad4c0b1bfdf。未写真实.index/data.json，未启动Obsidian，未触碰来源/受保护worktree。
+- P5完成指代码与本地验证完成，用户库实际恢复仍待重启Retry/Regenerate复测；相应成功标准保持未勾选。P2继续pending，无版本同步、push、PR、main合并、tag或发布。

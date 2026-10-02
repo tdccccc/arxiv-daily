@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-01T23:06:37+08:00
-updated: 2026-10-02T14:09:55+08:00
-revision: 8
+updated: 2026-10-02T14:39:18+08:00
+revision: 9
 owner: codex-root-2026-10-01
 
 ## Intent
@@ -38,8 +38,9 @@ owner: codex-root-2026-10-01
 2. P2 — 合并后手测通过再完成 0.5.0 元数据与发行说明、本地发布前验证 — status: pending
 3. P3 — 整分支融合、标题摘要重建与新主题方向流程通过回归并部署 — status: done
 4. P4 — 单一Personal library区域，选择目录自动准备、首次审核自动生成 — status: done
-5. P5 — 已有资料库的模型、缓存和旧建议升级可恢复，界面保留重试 — status: active
+5. P5 — 已有资料库的模型、缓存和旧建议升级可恢复，界面保留重试 — status: done
 
 ## Open questions
 
 - 合并后的构建需重新手测；P1旧构建验收不能代替新主题方向流程的验收。
+- P5修复已部署；等待用户实际资料库Retry preparation与旧建议Regenerate suggestions成功，不能以仅弹窗正常认定发布验收通过。

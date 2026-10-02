@@ -39,4 +39,12 @@
 - 旧模型与失败暂存文件保留，占用额外磁盘；本轮不自动清理。旧建议归档只在用户明确重新生成并保存时发生。
 - 本轮未实际重建用户资料库、未请求真实LLM/模型下载、未启动Obsidian。不能据单测断言用户库已恢复。
 - 部署后用户重启，点击Retry preparation；完成后点击Review suggestions，若提示旧版，点击Regenerate suggestions。核对保存后再次打开仍保留，反馈成功/失败数量与错误日志。
-- 本地提交/部署完成后补记；版本仍0.4.6，发行说明草稿未提交，0.5.0发布仍等实际流程复测。无push/PR/tag/发布，无其他worktree修改。
+- UI与主流程提交`319c10b`；版本仍0.4.6，发行说明草稿未提交，0.5.0发布仍等实际流程复测。无push/PR/tag/发布，无其他worktree修改。
+
+## 部署
+
+目标：`/home/tiandc/Desktop/plugin_test/.obsidian/plugins/arxiv-daily/`。先看目标，独占创建`main.js.bak-20261002-pre-upgrade-recovery`和`styles.css.bak-20261002-pre-upgrade-recovery`，没有覆盖已有备份。
+
+三件资产源目标hash一致：main.js `78521db050d98f2e801bdaa015424289f2bb5eaa648098b8a0aa2ad4c0b1bfdf`，styles.css `c1b84403be62a5ad5de4e5ed42e387176b0a8607fac395146749f41fefbe696d`，manifest.json `b54f7e409c97338a4b2b2457195f426b16d908a181457de2ffa410e8f9cdae91`。完整记录`/tmp/arxiv-050-upgrade-deploy.json`。
+
+未启动Obsidian，未删除或手工改写用户索引、旧建议或data.json。真正恢复会在用户重启后点击Retry preparation/Regenerate suggestions时执行。
