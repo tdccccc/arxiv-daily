@@ -3,6 +3,7 @@ import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import type { CliIo } from "../main-types";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
+import { WorkbenchError } from "./documents";
 
 export interface RunWorkbenchOptions {
   port: number;
@@ -13,11 +14,14 @@ export interface RunWorkbenchOptions {
 export async function runWorkbench(config: CliRuntimeConfig, io: CliIo, options: RunWorkbenchOptions): Promise<number> {
   const executable = process.argv[1];
   if (!executable) throw new Error("The workbench must be launched from the built CLI");
+  const beforeWrite = async () => {
+    const current = await loadCliConfig({ env: options.env });
+    if (current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, "配置已改变，请重启工作台后再操作。");
+  };
   const app = await startWorkbench({
-    config, port: options.port, assets: workbenchAssets(),
+    config, port: options.port, assets: workbenchAssets(), beforeWrite,
     run: async (args, output, signal) => {
-      const current = await loadCliConfig({ env: options.env });
-      if (current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new Error("配置已改变，请重启工作台后再生成。");
+      await beforeWrite();
       if (signal.aborted) return 1;
       return new Promise<number>((resolve, reject) => {
         // Dispatch the same executable; do not reconstruct scheduler / manual-fetch behavior here.

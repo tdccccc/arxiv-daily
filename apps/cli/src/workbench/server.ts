@@ -8,6 +8,8 @@ import type { CliIo } from "../main-types";
 import { inspectProduct } from "../inspect-cmd";
 import { WorkbenchDocuments, WorkbenchError } from "./documents";
 import { inspectCalendar } from "./calendar";
+import { WorkbenchPapers } from "./papers";
+import { readPreferences, savePreferences } from "./preferences";
 
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
@@ -16,6 +18,7 @@ export interface WorkbenchOptions {
   assets?: Record<string, WorkbenchAsset>;
   run?: (args: string[], io: CliIo, signal: AbortSignal) => Promise<number>;
   now?: () => Date;
+  beforeWrite?: () => Promise<void>;
 }
 
 export interface WorkbenchRun {
@@ -36,6 +39,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
   const now = options.now ?? (() => new Date());
   if (!Number.isInteger(options.port ?? 0) || (options.port ?? 0) < 0 || (options.port ?? 0) > 65535) throw new Error("Port must be 0..65535");
   const documents = new WorkbenchDocuments(config);
+  const papers = new WorkbenchPapers(config, documents);
   const prefix = `/${randomBytes(24).toString("hex")}/`;
   const secrets = [config.settings.llm.apiKey, config.settings.embedding.apiKey, config.settings.email.apiKey, config.settings.email.hostedToken].filter((value): value is string => Boolean(value));
   const redact = (text: string) => redactText(text, { secrets });
@@ -62,6 +66,11 @@ export async function startWorkbench(options: WorkbenchOptions) {
     if (req.headers["sec-fetch-site"] === "cross-site" && !landing) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
     if (method === "GET" && route === "api/calendar") return json(res, 200, await inspectCalendar(config, documents, url.searchParams.get("month"), now(), run));
+    if (method === "GET" && route === "api/papers") return json(res, 200, await papers.list(url.searchParams, now(), run));
+    if (method === "GET" && route === "api/paper") return json(res, 200, { paper: await papers.paper(url.searchParams.get("key") || "") });
+    if (method === "POST" && route === "api/paper/mark") return json(res, 200, { paper: await papers.mark(await readJson(req), options.beforeWrite) });
+    if (method === "GET" && route === "api/preferences") return json(res, 200, await readPreferences(config.configPath));
+    if (method === "POST" && route === "api/preferences") return json(res, 200, await savePreferences(config.configPath, await readJson(req)));
     if (method === "GET" && route === "api/documents") {
       const kind = url.searchParams.get("kind") || "all";
       const offset = Number(url.searchParams.get("offset") ?? 0);
