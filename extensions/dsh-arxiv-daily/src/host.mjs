@@ -12,7 +12,7 @@ export function installHost(ctx, manager) {
       const bad = () => ({ ok: false, error: { code: 'invalid-request', message: '请选择本机 DSH 工作区打开文献。', details: {} } });
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'frameOrigin') || signal.aborted) return bad();
       const frameOrigin = body.frameOrigin;
-      if (frameOrigin !== undefined && !['127.0.0.1', 'localhost', '[::1]'].map(host => `http://${host}:${ctx.webServer.port}`).includes(frameOrigin)) return bad();
+      if (frameOrigin !== undefined && frameOrigin !== 'dsh-app://app' && !['127.0.0.1', 'localhost', '[::1]'].map(host => `http://${host}:${ctx.webServer.port}`).includes(frameOrigin)) return bad();
       try { return { ok: true, value: { url: await manager.open(frameOrigin) } }; }
       catch (error) {
         return { ok: false, error: { code: errorCodes.has(error.code) ? error.code : 'start-failed', message: errorCodes.has(error.code) ? error.message : '无法打开文献工作台，请检查配置并重试。', details: {} } };

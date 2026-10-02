@@ -33,11 +33,11 @@ function client(result = { ok: true, value: { url: URL } }, location = { protoco
   const ctx = { connection: { isLoopback: true, rpc: { async call(...args) { calls.push(['rpc', ...args]); return typeof result === 'function' ? result() : result; } } }, sidebarRight: { openTab(...args) { calls.push(['tab', ...args]); } } };
   return { calls, ctx, opener: createOpener(ctx, location) };
 }
-test('a click invokes host code and opens the exact browser tab without a model request', async () => {
-  const { opener, calls } = client(); await opener.open();
+test('resolves a workbench address without a conversation or model request', async () => {
+  const { opener, calls } = client(); assert.equal(await opener.open(), URL);
   assert.deepEqual(calls[0].slice(0, 4), ['rpc', '/api', 'arxiv-daily/open', { frameOrigin: 'http://127.0.0.1:3080' }]);
-  assert.deepEqual(calls[1], ['tab', 'browser', { params: { url: URL } }]);
-  const desktop = client(undefined, { protocol: 'dsh-app:', origin: 'null' }); await desktop.opener.open(); assert.deepEqual(desktop.calls[0][3], {});
+  assert.equal(calls.length, 1, 'loading an address does not need a mounted conversation');
+  const desktop = client(undefined, { protocol: 'dsh-app:', origin: 'null' }); await desktop.opener.open(); assert.deepEqual(desktop.calls[0][3], { frameOrigin: 'dsh-app://app' });
 });
 test('rejects unsafe destinations, remote clients and late navigation after disposal', async () => {
   const bad = client({ ok: true, value: { url: 'https://example.com' } }); await assert.rejects(bad.opener.open()); assert.equal(bad.calls.length, 1);
@@ -46,14 +46,17 @@ test('rejects unsafe destinations, remote clients and late navigation after disp
   const pending = slow.opener.open(); slow.opener.dispose(); resolve({ ok: true, value: { url: URL } }); await pending;
   assert.equal(slow.calls.filter(call => call[0] === 'tab').length, 0);
 });
-test('registers a native composer entry and releases its slots and dictionaries', () => {
-  const slots = [], cleanup = [], removed = [];
-  const ctx = { effect(fn) { cleanup.push(fn()); }, locale: { register() { return () => removed.push('locale'); }, bind() { return key => key; } }, slots: { inject(name, fn) { assert.equal(name, 'conversation.composer.dock'); return fn(); }, register(meta, component) { slots.push({ meta, component }); return () => removed.push('slot'); } } };
+test('registers a global footer/overlay and right Sidebar guide without a composer entry', () => {
+  const slots = [], definitions = [], cleanup = [], removed = [];
+  const ctx = { effect(fn) { cleanup.push(fn()); }, locale: { register() { return () => removed.push('locale'); }, bind() { return key => key; } },
+    sidebarRightTabs: { register(definition) { definitions.push(definition); return () => removed.push('tab'); } },
+    slots: { inject(_name, fn) { return fn(); }, register(meta, component) { slots.push({ meta, component }); return () => removed.push(meta.name); } } };
   installClient(ctx, { createElement() {} }, {});
-  assert.equal(slots.length, 1); assert.equal(slots[0].meta.id, 'dsh-arxiv-daily'); assert.equal(typeof slots[0].component, 'function');
-  cleanup.reverse().forEach(fn => fn()); assert.deepEqual(removed.sort(), ['locale', 'slot']);
+  assert.deepEqual(slots.map(slot => slot.meta.name).sort(), ['shell.overlay', 'sidebar.footer.action', 'sidebar.right.pane.tab', 'sidebar.right.pane.tab.title'].sort());
+  assert.equal(definitions[0].kind, 'dsh-arxiv-daily'); assert.equal(definitions[0].guide[0].id, 'workbench');
+  assert.equal(slots.find(slot => slot.meta.name === 'sidebar.right.pane.tab').meta.key, definitions[0].id);
+  cleanup.reverse().forEach(fn => fn()); assert.equal(removed.length, 6);
 });
-
 
 test('capability validation handles malformed ports without throwing', async () => {
   const { isWorkbenchUrl } = await import('../src/protocol.mjs');
@@ -68,4 +71,11 @@ test('the exact route rejects invalid RPC envelopes before starting a process', 
     assert.equal(response.status, 400);
   }
   assert.equal(h.calls.length, 0);
+});
+
+test('permits the fixed Desktop frame origin without permitting arbitrary schemes', async () => {
+  const h = host();
+  assert.equal((await h.handler('arxiv-daily/open', { frameOrigin: 'dsh-app://app' }, new AbortController().signal)).ok, true);
+  assert.equal((await h.handler('arxiv-daily/open', { frameOrigin: 'dsh-app://evil' }, new AbortController().signal)).ok, false);
+  assert.deepEqual(h.calls, ['dsh-app://app']);
 });

@@ -1,6 +1,6 @@
 {
   "name": "dsh-arxiv-daily",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Read, filter and save research papers in the DSH sidebar with arXiv Daily",
   "type": "module",
   "license": "MIT",
@@ -35,7 +35,7 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
-        "@deepseek-ai/dsh-client-ui-sidebar-browser"
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ]
     }
   },

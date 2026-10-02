@@ -60,3 +60,12 @@ it("accepts one exact local embedding origin and rejects broad or malformed ance
   }
   expect(loadConfig).not.toHaveBeenCalled();
 });
+
+it("allows only the fixed DSH desktop application origin among custom schemes", async () => {
+  const { config, io } = fixture(); const ui = vi.fn(async () => 0), loadConfig = vi.fn(async () => config);
+  expect(await runCli({ argv: ["ui", "--frame-origin", "dsh-app://app"], loadConfig, io, ui })).toBe(0);
+  expect(ui).toHaveBeenCalledWith(config, expect.anything(), expect.objectContaining({ frameOrigin: "dsh-app://app" }));
+  loadConfig.mockClear();
+  for (const origin of ["dsh-app://evil", "dsh-app://app/path", "file://", "null", "dsh-app:"]) expect(await runCli({ argv: ["ui", "--frame-origin", origin], loadConfig, io, ui })).toBe(2);
+  expect(loadConfig).not.toHaveBeenCalled();
+});

@@ -167,3 +167,10 @@ it("allows an explicitly configured local frame without admitting that parent's 
   expect((await fetch(new URL("api/preferences", framed.url), { method: "POST", headers: { Origin: "http://127.0.0.1:3080", "Content-Type": "application/json" }, body: '{}' })).status).toBe(403);
   await expect(startWorkbench({ config, frameOrigin: "https://example.com" })).rejects.toThrow();
 });
+
+it("permits the DSH desktop frame but still refuses API writes from its parent", async () => {
+  const { config } = await setup();
+  const app = await startWorkbench({ config, frameOrigin: "dsh-app://app" }); cleanup.push(app.close);
+  expect((await fetch(new URL("api/status", app.url))).headers.get("content-security-policy")).toContain("frame-ancestors dsh-app://app");
+  expect((await fetch(new URL("api/preferences", app.url), { method: "POST", headers: { Origin: "dsh-app://app", "Content-Type": "application/json" }, body: '{}' })).status).toBe(403);
+});
