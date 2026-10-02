@@ -103,6 +103,8 @@ export interface FullTextPaperKnowledgeRecord {
 }
 
 export interface FullTextKnowledgeBaseManifest {
+  /** New-model files are isolated until this manifest is atomically promoted. */
+  paperStorage?: "model-scoped";
   schemaVersion: typeof FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION;
   revision: number;
   scopeFingerprint: string;
@@ -134,7 +136,8 @@ export interface FullTextKnowledgeBaseStore {
   readonly paths: FullTextKnowledgeBasePaths;
   loadManifest(): Promise<FullTextKnowledgeBaseManifest>;
   replaceManifest(next: FullTextKnowledgeBaseManifest, expectedRevision: number): Promise<FullTextKnowledgeBaseManifest>;
-  loadPaper(paperKey: string): Promise<FullTextPaperDocument | null>;
+  /** Bind reads to a captured manifest when a later model may become current. */
+  loadPaper(paperKey: string, manifest?: FullTextKnowledgeBaseManifest): Promise<FullTextPaperDocument | null>;
   savePaper(document: FullTextPaperDocument): Promise<void>;
   removePaper(paperKey: string): Promise<void>;
   /** Delete the whole knowledge base for this scope/identification (rebuild path). */
@@ -262,6 +265,7 @@ export function decodeFullTextPaperDocument(value: unknown): FullTextPaperDocume
 
 export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKnowledgeBaseManifest | null {
   if (!isPlainObject(value)) return null;
+  if (value.paperStorage !== undefined && value.paperStorage !== "model-scoped") return null;
   const sourceSchemaVersion = value.schemaVersion;
   if (sourceSchemaVersion !== LEGACY_FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
     && sourceSchemaVersion !== FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) return null;
@@ -330,6 +334,7 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
   }
   return {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+    ...(value.paperStorage === "model-scoped" ? { paperStorage: "model-scoped" as const } : {}),
     revision: value.revision,
     scopeFingerprint: value.scopeFingerprint,
     identificationFingerprint: value.identificationFingerprint,

@@ -164,7 +164,7 @@ async function synchronizeFullTextGenerationIndexOnce(
     );
     const built = await buildFullTextGeneration({
       manifest,
-      loadPaper: (paperKey) => input.sourceStore.loadPaper(paperKey),
+      loadPaper: (paperKey) => input.sourceStore.loadPaper(paperKey, manifest),
       generationId,
       indexDerivation,
       spool,

@@ -149,17 +149,14 @@ export async function indexPersonalLibraryFullText(
     );
   }
   const hasPapers = Object.keys(loaded.papers).length > 0;
-  if (hasPapers && loaded.modelId !== embedding.modelId) {
-    throw new Error(
-      `full-text knowledge base was built with model ${loaded.modelId || "(unknown)"} but the current `
-      + `model is ${embedding.modelId}; delete the knowledge base and re-index (rebuild) before switching models`,
-    );
-  }
-
-  const papers: Record<string, FullTextPaperKnowledgeRecord> = { ...loaded.papers };
+  const modelChanged = hasPapers && (loaded.modelId !== embedding.modelId || loaded.dimension !== embedding.dimension);
+  // A different model starts a complete candidate index. The file store writes
+  // its papers separately; the committed old model stays intact until CAS.
+  const papers: Record<string, FullTextPaperKnowledgeRecord> = modelChanged ? {} : { ...loaded.papers };
   const next: FullTextKnowledgeBaseManifest = {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
     revision: loaded.revision,
+    ...(modelChanged || loaded.paperStorage === "model-scoped" ? { paperStorage: "model-scoped" as const } : {}),
     scopeFingerprint: loaded.scopeFingerprint,
     identificationFingerprint: loaded.identificationFingerprint,
     modelId: embedding.modelId,
@@ -216,15 +213,25 @@ export async function indexPersonalLibraryFullText(
 
     // Every paper carries an extracted title now, not just fallback ones, so a
     // stale title version invalidates reuse for the whole library.
+    let repairRequired = false;
     if (exactReady && previous.titleVersion === TITLE_EXTRACTION_VERSION) {
-      outcomes.push({ paperKey, status: "reused" });
-      continue;
+      try {
+        const document = await store.loadPaper(paperKey, loaded);
+        if (document && matchesStoredPaper(previous, document)) {
+          outcomes.push({ paperKey, status: "reused" });
+          continue;
+        }
+      } catch (caught) {
+        if (isCancellationErrorLike(caught, input.signal) || isIncompatibleStoreError(caught)) throw caught;
+      }
+      repairRequired = true;
+      log?.warn(`fulltext: rebuilding inconsistent stored paper ${paperKey}`);
     }
 
     // Content-addressed fallback papers can retain their chunks/vectors when a
     // path observation changes (for example, a rename) or when a legacy
     // observation-key document is migrated to its PDF-byte hash key.
-    if (unit.fallback) {
+    if (unit.fallback && !repairRequired) {
       const reuseSourceKey = exactReady
         ? paperKey
         : previous?.status === "ready"
@@ -242,8 +249,8 @@ export async function indexPersonalLibraryFullText(
       if (reuseSourceKey) {
         try {
           const sourceRecord = papers[reuseSourceKey]!;
-          const existing = await store.loadPaper(reuseSourceKey);
-          if (existing) {
+          const existing = await store.loadPaper(reuseSourceKey, loaded);
+          if (existing && matchesStoredPaper(sourceRecord, existing)) {
             const refreshTitle = sourceRecord.titleVersion !== TITLE_EXTRACTION_VERSION;
             let rebound: FullTextPaperDocument;
             let titleRefreshed = false;
@@ -295,19 +302,8 @@ export async function indexPersonalLibraryFullText(
           if (isCancellationErrorLike(caught, input.signal) || isIncompatibleStoreError(caught)) throw caught;
           const message = describeRefreshError(caught);
           log?.warn(`fulltext: reusing ${reuseSourceKey} for ${paperKey} failed: ${message}`);
-          outcomes.push(recordFailed(
-            paperKey,
-            message,
-            nowIso,
-            papers,
-            embedding.modelId,
-            embedding.dimension,
-            unit,
-          ));
-          if (previous?.status === "ready") {
-            await discardOrphanedPaperDocument(store, paperKey, log);
-          }
-          continue;
+          // A missing or corrupt reusable document can be rebuilt from its PDF.
+
         }
       }
     }
@@ -395,6 +391,10 @@ export async function indexPersonalLibraryFullText(
     if (!completedMigrationKeys.has(paperKey)) pruned += 1;
   }
 
+  if (modelChanged && total > 0 && !outcomes.some((outcome) => outcome.status === "indexed")) {
+    throw new Error("No papers could be indexed with the selected model; the previous index was preserved. Check the model and retry.");
+  }
+  throwIfCancelled(input.signal);
   await input.beforeManifestCommit?.();
   const saved = await store.replaceManifest(next, loaded.revision);
   await input.afterManifestCommit?.();
@@ -679,6 +679,24 @@ async function extractIndexPages(
   };
 }
 
+function matchesStoredPaper(record: FullTextPaperKnowledgeRecord, document: FullTextPaperDocument): boolean {
+  const same = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+  return document.schemaVersion === FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION
+    && record.paperKey === document.paperKey
+    && record.modelId === document.modelId && record.dimension === document.dimension
+    && record.textHash === document.textHash && record.contentHash === document.contentHash
+    && record.title === document.title && record.abstract === document.abstract
+    && record.titleVersion === document.titleVersion && record.updatedAt === document.updatedAt
+    && same(record.filePaths, document.filePaths)
+    && same(record.observationFingerprints, document.observationFingerprints)
+    && record.derivation !== undefined && document.derivation !== undefined
+    && sameDerivation(record.derivation, document.derivation)
+    && record.chunkCount === document.chunks.length
+    && document.vectors.length === document.chunks.length * document.dimension
+    && document.vectors.every(Number.isFinite);
+}
+
 function recordFromDocument(
   document: FullTextPaperDocument,
   nowIso: string,
@@ -853,8 +871,7 @@ export async function searchFullTextKnowledgeBase(
   if (manifest.modelId && manifest.modelId !== input.embedding.modelId) {
     throw new Error(
       `full-text knowledge base was built with model ${manifest.modelId} but the `
-      + `current embedding model is ${input.embedding.modelId}; delete the knowledge `
-      + "base and re-index (rebuild) before searching",
+      + `current embedding model is ${input.embedding.modelId}; rebuild the index before searching`,
     );
   }
   const mode = input.mode ?? "hybrid";
@@ -866,7 +883,7 @@ export async function searchFullTextKnowledgeBase(
     if (record.status !== "ready") continue;
     let document: FullTextPaperDocument | null;
     try {
-      document = await input.store.loadPaper(paperKey);
+      document = await input.store.loadPaper(paperKey, manifest);
     } catch (caught) {
       input.logger?.warn(
         `fulltext: skipping corrupt paper document ${paperKey} during search: `

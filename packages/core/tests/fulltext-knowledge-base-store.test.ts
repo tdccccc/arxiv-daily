@@ -11,6 +11,8 @@ import {
   FullTextKnowledgeBaseFileStore,
   FullTextKnowledgeBaseStoreError,
 } from "../src/library/fulltext/knowledge-base-store";
+import { indexPersonalLibraryFullText } from "../src/library/fulltext/index-orchestration";
+import { createEmptyPersonalLibraryCatalog } from "../src/library/personal-library-catalog";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 
 const scope = `sha256:${"a".repeat(64)}`;
@@ -314,6 +316,35 @@ describe("manifest lifecycle", () => {
     expect(rebuilt).toMatchObject({ revision: 1, modelId: "other-model-q8" });
   });
 
+  it("stages a different model without changing the committed paper until manifest promotion", async () => {
+    const memory = makeStorage();
+    const kb = store(memory.storage);
+    const oldDocument = paperDocument();
+    const key = oldDocument.paperKey;
+    const oldRecord = { ...readyRecord(key), dimension: oldDocument.dimension };
+    await kb.savePaper(oldDocument);
+    await kb.replaceManifest(manifest({ dimension: 4, papers: { [key]: oldRecord } }), 0);
+    const oldManifestBytes = memory.files[manifestPath];
+    const oldManifest = await kb.loadManifest();
+    const newDocument = { ...oldDocument, modelId: "other-model", dimension: 8, vectors: new Float32Array(16) };
+
+    await kb.savePaper(newDocument);
+
+    // Cancellation or failure before promotion must leave the old model usable.
+    expect(memory.files[manifestPath]).toBe(oldManifestBytes);
+    expect((await kb.loadPaper(key))?.modelId).toBe(oldDocument.modelId);
+    const switched = await kb.replaceManifest(manifest({
+      modelId: newDocument.modelId,
+      dimension: 8,
+      paperStorage: "model-scoped",
+      papers: { [key]: { ...oldRecord, modelId: newDocument.modelId, dimension: 8 } },
+    }), 1);
+    expect(switched.modelId).toBe("other-model");
+    expect((await store(memory.storage).loadPaper(key))?.dimension).toBe(8);
+    expect((await kb.loadPaper(key, oldManifest))?.dimension).toBe(4);
+    expect(memory.files[manifestBackupPath]).toBe(oldManifestBytes);
+  });
+
   it("reports an unknown future manifest version as incompatible without repairing or overwriting", async () => {
     const memory = makeStorage();
     memory.files[manifestPath] = `${JSON.stringify({ ...manifest(), schemaVersion: 3 }, null, 2)}\n`;
@@ -519,7 +550,7 @@ describe("removeAll", () => {
     delete memory.storage.list;
     const kb = store(memory.storage);
     await kb.replaceManifest(
-      manifest({ papers: { "arxiv:2403.19236": readyRecord("arxiv:2403.19236") } }), 0,
+      manifest({ dimension: 4, papers: { "arxiv:2403.19236": { ...readyRecord("arxiv:2403.19236"), dimension: 4 } } }), 0,
     );
     await kb.savePaper(paperDocument());
     await kb.removeAll();
@@ -580,5 +611,71 @@ describe("concurrency", () => {
     const b = await kb.loadPaper("arxiv:2309.11425");
     expect(a!.paperKey).toBe("arxiv:2403.19236");
     expect(b!.paperKey).toBe("arxiv:2309.11425");
+  });
+});
+
+
+describe("model-switch rebuilds with the real file store", () => {
+  function fixture() {
+    const memory = makeStorage();
+    const kb = store(memory.storage);
+    const catalog = createEmptyPersonalLibraryCatalog(scope, identification);
+    for (const path of ["library/a.pdf", "library/b.pdf"]) catalog.files[path] = {
+      path, status: "unresolved", reason: "unrecognized-filename", observationFingerprint: scope,
+      updatedAt: firstTime.toISOString(),
+    };
+    const source = {
+      inventory: async () => ({ entries: [], truncated: false }),
+      readBinary: async (path: string) => new TextEncoder().encode(path).buffer,
+    };
+    const extractor = {
+      provenance: { id: "fixture", version: "1" },
+      extractPdfText: async () => ({ pages: ["Scientific Paper Title\nAbstract\n" + "A scientific abstract with usable text. ".repeat(20)] }),
+    };
+    const model = (modelId: string, dimension: number) => ({
+      modelId, dimension, prefixPolicy: "none" as const,
+      embed: async (texts: readonly string[]) => texts.map(() => new Float32Array(dimension).fill(1)),
+    });
+    const run = (modelId: string, dimension: number, signal?: AbortSignal) => indexPersonalLibraryFullText({
+      catalog, source, extractor, embedding: model(modelId, dimension), store: kb, signal,
+    });
+    return { memory, kb, run };
+  }
+
+  it("rebuilds for model and dimension changes, including switching back", async () => {
+    const { kb, run } = fixture();
+    await run("remote-model", 8);
+    for (const [id, dimension] of [["local-model", 4], ["local-model", 6], ["remote-model", 8]] as const) {
+      expect(await run(id, dimension)).toMatchObject({ indexed: 2, reused: 0, failed: 0 });
+      const current = await kb.loadManifest();
+      expect(current).toMatchObject({ modelId: id, dimension, paperStorage: "model-scoped" });
+      for (const key of Object.keys(current.papers)) {
+        expect(await kb.loadPaper(key, current)).toMatchObject({ modelId: id, dimension });
+      }
+      expect(await run(id, dimension)).toMatchObject({ indexed: 0, reused: 2, failed: 0 });
+    }
+  });
+
+  it.each(["cancel", "commit-failure"] as const)("preserves the current index after %s during a model switch", async (failure) => {
+    const { memory, kb, run } = fixture();
+    await run("remote-model", 8);
+    const previous = await kb.loadManifest();
+    const bytesBefore = memory.files[manifestPath];
+    const controller = new AbortController();
+    memory.setAtomicImplementation(async (path, content) => {
+      if (failure === "commit-failure" && path === manifestPath) throw new Error("disk full");
+      memory.files[path] = content;
+      if (failure === "cancel" && path.includes("/models/")) controller.abort("cancel model rebuild");
+    });
+
+    await expect(run("local-model", 4, controller.signal)).rejects.toThrow();
+
+    expect(memory.files[manifestPath]).toBe(bytesBefore);
+    expect((await kb.loadManifest()).modelId).toBe("remote-model");
+    for (const key of Object.keys(previous.papers)) {
+      expect(await kb.loadPaper(key, previous)).toMatchObject({ modelId: "remote-model", dimension: 8 });
+    }
+    memory.setAtomicImplementation(null);
+    expect(await run("local-model", 4)).toMatchObject({ indexed: 2, failed: 0 });
   });
 });

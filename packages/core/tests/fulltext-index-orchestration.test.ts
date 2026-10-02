@@ -68,8 +68,9 @@ class MemoryStore implements FullTextKnowledgeBaseStore {
     if (expectedRevision !== this.manifest.revision) {
       throw new Error(`stale revision: expected ${expectedRevision}, current ${this.manifest.revision}`);
     }
-    if (Object.keys(this.manifest.papers).length > 0 && this.manifest.modelId !== next.modelId) {
-      throw new Error("model switch requires rebuilding");
+    if (Object.keys(this.manifest.papers).length > 0 && this.manifest.modelId !== next.modelId
+      && next.paperStorage !== "model-scoped") {
+      throw new Error("model switch requires separately staged papers");
     }
     const decoded = decodeFullTextKnowledgeBaseManifest(JSON.parse(JSON.stringify(next)));
     if (!decoded) throw new Error("manifest failed strict decode");
@@ -774,7 +775,36 @@ describe("full-text indexing orchestration", () => {
     expect((await store.loadManifest()).papers).toEqual({});
   });
 
-  it("rejects a model switch over a populated knowledge base", async () => {
+  it.each([false, true])("repairs a manifest whose ready paper file was overwritten (fallback: %s)", async (fallback) => {
+    const path = "lib/a.pdf";
+    const key = fallback ? fallbackPaperKey(path) : "arxiv:2403.19236";
+    const catalog = fallback
+      ? makeCatalog([], [{ path, fingerprint: fingerprint("f1") }])
+      : makeCatalog([{ paperKey: key, filePaths: [path], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor({ [path]: [LONG_ALPHA] });
+    const embedding = new FakeEmbedding();
+    await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store });
+    const previous = (await store.loadPaper(key))!;
+    // Reproduce the real snapshot: current abstract manifest, but an older
+    // full-text document at the same paper path.
+    previous.titleVersion = TITLE_EXTRACTION_VERSION - 1;
+    previous.derivation = { ...previous.derivation!, chunkerVersion: 2, embeddingInputVersion: 1 };
+    previous.textHash = fingerprint("aa");
+    await store.savePaper(previous);
+    const callsBefore = extractor.calls;
+
+    const summary = await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store });
+
+    expect(summary).toMatchObject({ indexed: 1, reused: 0, failed: 0 });
+    expect(extractor.calls).toBe(callsBefore + 1);
+    const repaired = (await store.loadPaper(key))!;
+    expect(repaired.textHash).toBe(store.manifest.papers[key]?.textHash);
+    expect(repaired.derivation).toEqual(store.manifest.papers[key]?.derivation);
+    expect(repaired.titleVersion).toBe(TITLE_EXTRACTION_VERSION);
+  });
+
+  it("rebuilds a populated knowledge base when the embedding model changes", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",
       filePaths: ["lib/a.pdf"],
@@ -786,14 +816,12 @@ describe("full-text indexing orchestration", () => {
 
     const otherModel = new FakeEmbedding();
     (otherModel as unknown as { modelId: string }).modelId = "other-model";
-    await expect(indexPersonalLibraryFullText({
-      catalog,
-      source: new FakeSource(),
-      extractor,
-      embedding: otherModel,
-      store,
-      now: () => new Date(NOW),
-    })).rejects.toThrow(/rebuild/);
+    const switched = await indexPersonalLibraryFullText({
+      catalog, source: new FakeSource(), extractor, embedding: otherModel, store, now: () => new Date(NOW),
+    });
+    expect(switched).toMatchObject({ indexed: 1, reused: 0, failed: 0 });
+    expect((await store.loadManifest()).modelId).toBe("other-model");
+    expect((await store.loadPaper("arxiv:2403.19236"))?.modelId).toBe("other-model");
   });
 
   it("rejects a store bound to different fingerprints", async () => {
@@ -1597,6 +1625,9 @@ describe("full-text indexing orchestration", () => {
     const manifest = await store.loadManifest();
     const record = { ...manifest.papers[fallbackKey]! };
     delete record.titleVersion;
+    const oldDocument = (await store.loadPaper(fallbackKey))!;
+    delete oldDocument.titleVersion;
+    await store.savePaper(oldDocument);
     await store.replaceManifest(
       { ...manifest, papers: { ...manifest.papers, [fallbackKey]: record } },
       manifest.revision,
