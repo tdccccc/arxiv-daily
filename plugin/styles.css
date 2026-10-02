@@ -1844,10 +1844,36 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   overflow: auto;
 }
 
+.arxiv-daily-interest-review-modal--summary {
+  width: min(94vw, 44rem);
+}
+
 .arxiv-daily-interest-review {
   min-height: 0;
   overflow-y: auto;
   overflow-wrap: anywhere;
+}
+
+.arxiv-daily-interest-review__state {
+  padding-block: var(--size-4-3) var(--size-4-4);
+}
+
+.arxiv-daily-interest-review__state h3 {
+  margin: 0 0 var(--size-4-2);
+  font-size: var(--font-ui-large);
+  line-height: 1.4;
+}
+
+.arxiv-daily-interest-review__state > p {
+  max-inline-size: 54ch;
+  margin: 0 0 var(--size-4-5);
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.arxiv-daily-interest-review__disclosure {
+  max-inline-size: 64ch;
+  line-height: 1.5;
 }
 
 .arxiv-daily-interest-review__disclosure,
@@ -1878,18 +1904,9 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-interest-review__toolbar {
   justify-content: space-between;
-  margin-block: var(--size-4-3);
-}
-
-.arxiv-daily-interest-review__tabs {
-  display: flex;
-  gap: var(--size-4-1);
-}
-
-.arxiv-daily-interest-review__tab[aria-selected="true"] {
-  background: var(--background-modifier-hover);
-  color: var(--text-normal);
-  box-shadow: inset 0 -2px var(--interactive-accent);
+  margin-block: var(--size-4-3) 0;
+  padding-block-start: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .arxiv-daily-interest-review__error,
@@ -1910,6 +1927,27 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
 
 .arxiv-daily-interest-review__card-heading strong {
   flex: 1 1 14rem;
+  max-inline-size: 68ch;
+  font-weight: var(--font-normal);
+  line-height: 1.5;
+}
+
+.arxiv-daily-interest-review__card-heading {
+  align-items: flex-start;
+}
+
+.arxiv-daily-interest-review__rename {
+  margin-block-start: var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.arxiv-daily-interest-review__rename > summary {
+  cursor: pointer;
+}
+
+.arxiv-daily-interest-review__rename .arxiv-daily-interest-review__field {
+  margin-block-start: var(--size-4-2);
 }
 
 .arxiv-daily-interest-review__toolbar-actions {
@@ -1993,18 +2031,18 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
   margin-block-start: var(--size-4-2);
 }
 
-/* The primary action stays reachable while scanning a long list rather than
-   sitting a full scroll below the rows it acts on. */
+/* Read and select first; keep the shared action reachable below the list. */
 .arxiv-daily-interest-review__accept-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--size-4-2);
   position: sticky;
-  top: 0;
+  bottom: 0;
   z-index: 1;
-  padding-block: var(--size-4-2);
-  padding-block-end: var(--size-4-4);
+  margin-block-start: var(--size-4-3);
+  padding-block: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
   background: var(--modal-background);
 }
 

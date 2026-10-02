@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-09-02T12:50:27+08:00
-updated: 2026-09-10T20:06:10+08:00
-revision: 18
+updated: 2026-09-11T00:19:55+08:00
+revision: 19
 owner: codex-root
 
 ## Intent
@@ -47,7 +47,7 @@ owner: codex-root
 3. P3 — 筛选按方向工作，日报标出命中的方向 — status: done
 4. P4 — 两级聚类提议主题与方向（实测粒度不合适，由 P7 替代）— status: superseded
 5. P5 — 增量候选按向量相似度阈值归入（由 P12 的文字判定与复审路径替代）— status: superseded
-6. P6 — 真实日报、测试构建与主题流程减负已交付，待用户桌面确认 — status: active
+6. P6 — 真实日报、测试构建与复审下一步引导已交付，待用户桌面确认 — status: active
 7. P7 — LLM 将证据小组组织为少量主题与方向，复审默认选择主要主题 — status: done
 8. P8 — 每日报告按相关性限制论文总数，默认 20 篇 — status: done
 9. P9 — 桌面验收暴露的复审页与设置页修正：接受幂等、隐藏机器 tag、未覆盖证据收成一行 — status: done

@@ -26,6 +26,7 @@ beforeAll(() => {
   type Options = { cls?: string; text?: string; type?: string; value?: string; attr?: Record<string, string> };
   Object.assign(HTMLElement.prototype, {
     addClass(this: HTMLElement, ...classes: string[]) { this.classList.add(...classes); },
+    setText(this: HTMLElement, text: string) { this.textContent = text; },
     empty(this: HTMLElement) { this.replaceChildren(); },
     createEl(this: HTMLElement, tag: string, options: Options = {}) {
       const element = document.createElement(tag);
@@ -172,6 +173,93 @@ async function ready(root: HTMLElement): Promise<void> {
 }
 
 describe("review progress", () => {
+  it.each(["legacy", "changed"])("offers an immediate update for %s coverage and returns to useful suggestions", async (kind) => {
+    const initial = snapshot({ settingsTopics: [settingsTopic("existing", "Research", [
+      { id: "followed", text: "My current scope", origin: "manual" },
+    ])] });
+    const paperKeys = [1, 2, 3, 4].map((number) => paper(number).paperKey);
+    initial.proposal = { ...initial.proposal!, topics: [], coveredPaperKeys: paperKeys,
+      ...(kind === "changed" ? { coverageEvidence: [{
+        topicId: "existing", directionId: "followed", directionText: "Previous scope", paperKeys,
+      }] } : {}),
+    };
+    const ctrl = controller(initial);
+    ctrl.port.generate = vi.fn(async () => { ctrl.set(snapshot({ settingsTopics: initial.settingsTopics })); });
+    const root = open(ctrl.port).contentEl;
+    const update = root.querySelector<HTMLButtonElement>(".mod-cta");
+    expect(update?.textContent).toBe("Update suggestions");
+    expect(update?.closest("details")).toBeNull();
+    update!.click();
+    await vi.waitFor(() => expect(ctrl.port.generate).toHaveBeenCalledOnce());
+    await ready(root);
+    expect(Modal.opened).toHaveLength(1);
+    expect(button(root, "Add to research topics").disabled).toBe(false);
+    expect(ctrl.snapshot().settingsTopics).toEqual(initial.settingsTopics);
+  });
+
+  it("keeps the update available after processing consent is declined", async () => {
+    const initial = snapshot({ authorization: { kind: "authorization-required", rootLabel: "papers" } });
+    initial.proposal = { ...initial.proposal!, topics: [], coveredPaperKeys: [paper(1).paperKey] };
+    const ctrl = controller(initial);
+    ctrl.port.authorize = vi.fn(async () => false);
+    const root = open(ctrl.port).contentEl;
+    button(root, "Update suggestions").click();
+    await vi.waitFor(() => expect(ctrl.port.authorize).toHaveBeenCalledOnce());
+    expect(ctrl.port.generate).not.toHaveBeenCalled();
+    expect(button(root, "Update suggestions").disabled).toBe(false);
+    expect(ctrl.snapshot().settingsTopics).toEqual([]);
+  });
+
+  it("offers a direct retry for an unreadable review without generating new content", async () => {
+    const ctrl = controller(snapshot({ proposal: null, proposalLoadError: {
+      kind: "proposal", code: "unreadable", message: "Temporary read failure",
+    } }));
+    ctrl.port.reload = vi.fn(async () => ctrl.set(snapshot()));
+    const root = open(ctrl.port).contentEl;
+    const retry = root.querySelector<HTMLButtonElement>(".mod-cta");
+    expect(retry?.textContent).toBe("Try again");
+    retry!.click();
+    await vi.waitFor(() => expect(button(root, "Add to research topics").disabled).toBe(false));
+    expect(ctrl.port.generate).not.toHaveBeenCalled();
+  });
+
+  it("keeps generation visible but disabled as a fallback when a review cannot be reloaded", async () => {
+    // Generation stays disabled for a generic (non-retired) read failure: the
+    // saved review might still be fixable by a refresh, and regenerating over
+    // an unresolved error could silently discard whatever the old file held.
+    // It still renders in More options — as a visible, explained fallback —
+    // rather than disappearing, matching the retired-proposal case below.
+    const ctrl = controller(snapshot({ proposal: null, proposalLoadError: {
+      kind: "proposal", code: "unreadable", message: "Unreadable saved review",
+    } }));
+    const root = open(ctrl.port).contentEl;
+    button(root, "Try again").click();
+    await ready(root);
+    const generate = button(root, "Generate topics");
+    expect(generate.closest(".arxiv-daily-interest-review__options")).not.toBeNull();
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toContain("Refresh or resolve the file error before generating");
+    generate.click();
+    expect(ctrl.port.generate).not.toHaveBeenCalled();
+  });
+
+  it("still asks before replacing unreviewed directions and keeps edits when cancelled", async () => {
+    const ctrl = controller();
+    const root = open(ctrl.port).contentEl;
+    card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "My unsaved direction";
+    button(root, "Generate again").click();
+    await vi.waitFor(() => expect(Modal.opened).toHaveLength(2));
+    expect(ctrl.port.generate).not.toHaveBeenCalled();
+    button(Modal.opened.at(-1)!.contentEl, "Cancel").click();
+    await Promise.resolve();
+    expect(card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("My unsaved direction");
+    expect(ctrl.port.generate).not.toHaveBeenCalled();
+    button(root, "Generate again").click();
+    await vi.waitFor(() => expect(Modal.opened).toHaveLength(3));
+    button(Modal.opened.at(-1)!.contentEl, "Regenerate").click();
+    await vi.waitFor(() => expect(ctrl.port.generate).toHaveBeenCalledOnce());
+  });
+
   it("counts selected directions and keeps unselected directions available after acceptance", async () => {
     const ctrl = controller();
     const root = open(ctrl.port).contentEl;
@@ -613,7 +701,7 @@ describe("proposal evidence is explanatory", () => {
     const root = open(controller().port).contentEl;
     card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value = "Draft research scope";
     button(root, "Library overview").click();
-    button(root, "Suggestions").click();
+    button(root, "Back to review").click();
     expect(card(root, first.text).querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Draft research scope");
   });
 
@@ -667,7 +755,7 @@ describe("proposal evidence is explanatory", () => {
     expect(root.textContent).toContain("Old preview result");
     Object.assign(ctrl.snapshot(), { arxivCategories: ["cs.LG"] });
     button(root, "Library overview").click();
-    button(root, "Suggestions").click();
+    button(root, "Back to review").click();
     expect(root.textContent).not.toContain("Old preview result");
     expect(root.textContent).toMatch(/preview.*out of date/i);
   });
@@ -700,7 +788,8 @@ describe("proposal evidence is explanatory", () => {
         paperKeys: [1, 2, 3, 4].map((number) => paper(number).paperKey) }],
     };
     const root = open(controller(initial).port).contentEl;
-    expect(root.textContent).toMatch(/Already covered.*4 papers.*no new directions/iu);
+    expect(root.querySelector(".arxiv-daily-interest-review__completion")?.textContent)
+      .toMatch(/No new directions.*already cover 4 papers/iu);
     expect(root.textContent).not.toContain("This proposal contains no directions");
     expect(root.querySelector(".arxiv-daily-interest-review__buffer")).toBeNull();
     expect(root.querySelector(".arxiv-daily-interest-review__accept-bar")).toBeNull();
@@ -719,8 +808,9 @@ describe("proposal evidence is explanatory", () => {
     };
     const root = open(controller(initial).port).contentEl;
     expect(root.textContent).not.toContain("no new directions are needed");
-    expect(root.textContent).toMatch(/4 papers.*(changed|verify|unverified)/i);
-    expect(root.textContent).toMatch(/regenerate/i);
+    expect(root.querySelector(".mod-cta")?.textContent).toBe("Update suggestions");
+    expect(root.querySelector(".arxiv-daily-interest-review__coverage")?.textContent)
+      .toMatch(change === "legacy" ? /4 unverified/ : /4 changed/);
   });
 
   it("shows the current topic name and paper titles behind unchanged coverage", () => {
@@ -736,7 +826,8 @@ describe("proposal evidence is explanatory", () => {
     expect(details?.textContent).toContain("Renamed topic");
     expect(details?.textContent).toContain("Original research scope");
     expect(details?.textContent).toContain("Paper arxiv:2608.00001");
-    expect(root.textContent).toContain("no new directions are needed");
+    expect(root.querySelector(".arxiv-daily-interest-review__completion")?.textContent)
+      .toContain("No new directions to add");
   });
 
   it("excludes existing coverage from the count of papers without a direction", () => {

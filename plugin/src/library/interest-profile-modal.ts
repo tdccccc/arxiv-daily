@@ -195,38 +195,50 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const root = this.contentEl;
     root.empty();
     root.addClass("arxiv-daily-interest-review");
-    root.createEl("h2", { text: "Topics from your library", attr: { id: "arxiv-daily-interest-title" } });
+    // Width belongs on the modal box: Obsidian sizes .modal itself, so asking
+    // the content element to be wide only makes it overflow and clip. The
+    // modal class itself is added once in onOpen (it also sets the dialog's
+    // enlarged base size); here only the narrower "summary" variant toggles.
+    this.modalEl.classList.toggle("arxiv-daily-interest-review-modal--summary",
+      this.tab === "proposed" && ![...pendingIds].some((id) => !processed.has(id)));
+    root.createEl("h2", {
+      text: this.tab === "overview" ? "Library overview" : "Topics from your library",
+      attr: { id: "arxiv-daily-interest-title", tabindex: "-1" },
+    });
     root.createEl("p", {
       cls: "arxiv-daily-interest-review__disclosure",
       text: snapshot.proposal
-        ? "Choose the directions you want your daily reports to follow."
+        ? "Open a topic, choose directions to follow, then add them to your research topics."
         : "Find research topics in your papers, then choose what to follow.",
     });
 
     const toolbar = root.createDiv({ cls: "arxiv-daily-interest-review__toolbar" });
-    if (snapshot.proposal) {
-      const tabs = toolbar.createDiv({
-        cls: "arxiv-daily-interest-review__tabs",
-        attr: { role: "tablist", "aria-label": "Direction review sections" },
-      });
-      this.addTab(tabs, "proposed", "Suggestions");
-      this.addTab(tabs, "overview", "Library overview");
+    if (this.tab === "overview") {
+      root.querySelector(".arxiv-daily-interest-review__disclosure")?.remove();
+      const back = toolbar.createEl("button", { text: "Back to review", attr: { type: "button" } });
+      back.disabled = this.pending;
+      back.addEventListener("click", () => this.activateTab("proposed"));
     }
     const options = toolbar.createEl("details", { cls: "arxiv-daily-interest-review__options" });
     options.open = optionsOpen;
     options.createEl("summary", { text: "More options" });
     this.optionsElement = options;
     const actions = options.createDiv({ cls: "arxiv-daily-interest-review__toolbar-actions" });
-    if (snapshot.proposal) this.renderGenerateButton(actions, snapshot);
+    if (snapshot.proposal && this.tab === "proposed") {
+      const overview = actions.createEl("button", { text: "Library overview", attr: { type: "button" } });
+      overview.disabled = this.pending;
+      overview.addEventListener("click", () => this.activateTab("overview"));
+    }
+    if ((snapshot.proposalLoadError && !needsRetiredProposalRegeneration(snapshot))
+      || (snapshot.proposal && (this.tab === "overview" || !needsCoverageUpdate(snapshot)))) {
+      this.renderGenerateButton(actions, snapshot);
+    }
     const refresh = actions.createEl("button", {
       text: "Refresh",
       attr: { type: "button", "aria-label": "Refresh personal library directions" },
     });
     refresh.disabled = this.pending;
-    refresh.addEventListener("click", () => {
-      this.previews.clear();
-      void this.run("refresh directions", () => this.controller.reload());
-    });
+    refresh.addEventListener("click", () => this.reloadReview());
     options.createEl("p", {
       cls: "arxiv-daily-interest-review__hint",
       text: "Suggestions use paper titles and abstracts. Only directions you add affect your daily reports.",
@@ -255,14 +267,18 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const panel = root.createEl("section", {
       cls: "arxiv-daily-interest-review__panel",
       attr: {
-        role: "tabpanel",
+        role: "region",
         id: `arxiv-daily-interest-${this.tab}-panel`,
-        "aria-labelledby": snapshot.proposal
-          ? `arxiv-daily-interest-${this.tab}-tab` : "arxiv-daily-interest-title",
+        "aria-labelledby": "arxiv-daily-interest-title",
       },
     });
     if (this.tab === "overview") this.renderOverview(panel, snapshot);
     else this.renderProposed(panel, snapshot);
+    if (this.tab === "proposed") {
+      this.renderCoverage(options, snapshot);
+      this.renderBufferPool(options, snapshot);
+      root.appendChild(toolbar);
+    }
   }
 
   private renderGenerateButton(
@@ -298,49 +314,22 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     }
   }
 
-  private addTab(parent: HTMLElement, tab: ReviewTab, label: string): void {
-    const selected = this.tab === tab;
-    const button = parent.createEl("button", {
-      cls: "arxiv-daily-interest-review__tab",
-      text: label,
-      attr: {
-        type: "button",
-        role: "tab",
-        id: `arxiv-daily-interest-${tab}-tab`,
-        "aria-selected": String(selected),
-        "aria-controls": `arxiv-daily-interest-${tab}-panel`,
-        tabindex: selected ? "0" : "-1",
-      },
-    });
-    button.disabled = this.pending;
-    button.addEventListener("click", () => this.activateTab(tab, false));
-    button.addEventListener("keydown", (event) => {
-      const next: ReviewTab | null = event.key === "Home" ? "proposed"
-        : event.key === "End" ? "overview"
-          : event.key === "ArrowLeft" || event.key === "ArrowRight" ? tab === "proposed" ? "overview" : "proposed" : null;
-      if (!next) return;
-      event.preventDefault();
-      this.activateTab(next, true);
-    });
+  private reloadReview(): void {
+    this.previews.clear();
+    void this.run("refresh directions", () => this.controller.reload());
   }
 
-  private activateTab(tab: ReviewTab, focus: boolean): void {
+  private activateTab(tab: ReviewTab): void {
     this.tab = tab;
     this.errorMessage = "";
     this.render();
-    if (focus && !this.closed) {
-      this.contentEl.querySelector<HTMLButtonElement>(`#arxiv-daily-interest-${tab}-tab`)?.focus();
+    if (!this.closed) {
+      this.contentEl.scrollTop = 0;
+      this.contentEl.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
     }
   }
 
   private renderProposed(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
-    if (needsRetiredProposalRegeneration(snapshot)) {
-      parent.createEl("p", {
-        cls: "arxiv-daily-interest-review__document-error",
-        attr: { role: "status" },
-        text: "Suggestions from an older version need to be regenerated. The old file will be preserved. Choose Regenerate suggestions when you are ready.",
-      });
-    } else this.renderDocumentError(parent, "Proposal", snapshot.proposalLoadError);
     if (snapshot.acceptanceLoadError) {
       parent.createEl("p", {
         cls: "arxiv-daily-interest-review__document-error",
@@ -353,49 +342,54 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     const processed = processedCandidateIds(snapshot);
     const added = addedTopicIds(snapshot.proposal?.topics ?? [], processed);
     if (!snapshot.proposal) {
-      if (!snapshot.proposalLoadError) {
+      if (needsRetiredProposalRegeneration(snapshot)) {
+        // Reloading a retired proposal just reads the same incompatible file
+        // again; only an explicit regenerate actually recovers it, and the
+        // old file is preserved by the controller until that succeeds.
+        const state = this.renderState(parent, "Suggestions need to be regenerated",
+          "Suggestions from an older version need to be regenerated. The old file will be preserved.");
+        this.renderGenerateButton(state, snapshot, true);
+      } else if (snapshot.proposalLoadError) {
+        const state = this.renderState(parent, "Couldn't open your suggestions", "Try loading your saved review again.");
+        this.renderDocumentError(state, "Saved review", snapshot.proposalLoadError);
+        const retry = state.createEl("button", { text: "Try again", cls: "mod-cta", attr: { type: "button" } });
+        retry.disabled = this.pending;
+        retry.addEventListener("click", () => this.reloadReview());
+      } else {
         const papers = proposablePaperKeys(snapshot).size;
-        parent.createEl("p", {
-          cls: "arxiv-daily-interest-review__empty",
-          text: papers > 0
-            ? `${papers} ${papers === 1 ? "paper" : "papers"} ready. Generate suggestions to get started.`
-            : "Prepare your library in settings to get started.",
-        });
+        const state = this.renderState(parent, "Find topics to follow", papers > 0
+          ? `Use your ${papers} library ${papers === 1 ? "paper" : "papers"} to suggest research directions.`
+          : "Prepare your library in settings to get started.");
+        this.renderGenerateButton(state, snapshot, true);
       }
-      this.renderGenerateButton(parent, snapshot, true);
       return;
     }
+    this.renderDocumentError(parent, "Saved review", snapshot.proposalLoadError);
     if (snapshot.proposal && candidates.length === 0) {
       const coveredCount = new Set(snapshot.proposal.coveredPaperKeys ?? []).size;
       const coverage = currentCoverage(snapshot);
-      parent.createEl("p", {
-        cls: "arxiv-daily-interest-review__empty",
-        attr: { role: "status" },
-        text: coverage.unverified > 0
-          ? `${coverage.unverified} papers have unverified coverage. Regenerate proposals to check current directions.`
-          : coverage.changed > 0
-            ? `${coverage.changed} papers need review because their covering directions changed. Regenerate proposals.`
-            : coveredCount > 0
-          ? `Already covered: ${coveredCount} ${coveredCount === 1 ? "paper" : "papers"} match your existing directions; no new directions are needed.`
-          : "This proposal contains no directions.",
-      });
-      this.renderCoverage(parent, snapshot);
-      this.renderBufferPool(parent, snapshot);
-      if (coveredCount > 0 && coverage.changed + coverage.unverified === 0) {
-        this.renderCompletion(parent, "Your existing directions already describe these papers. Manage them in Research topics.");
+      if (coverage.changed + coverage.unverified > 0) {
+        const state = this.renderState(parent, "This review needs an update",
+          "Check your library against the research topics you follow now.");
+        this.renderGenerateButton(state, snapshot, true);
+      } else {
+        this.renderCompletion(parent, coveredCount > 0
+          ? `Your current directions already cover ${coveredCount} ${coveredCount === 1 ? "paper" : "papers"}.`
+          : "You can add a direction in Research topics whenever you need one.",
+        "No new directions to add");
       }
       return;
     }
     // A load error can leave no proposal at all while still rendering the tab.
     if (snapshot.proposal) this.preselectProposals(snapshot.proposal, topics, candidates, added, processed);
     const allowedKeys = proposalPaperKeys(snapshot);
-    // The whole structure is the unit of acceptance (ADR 0014 §1), so the
-    // action sits above the list rather than on each row.
+    // Selection is reviewed across topics; the shared action follows the list.
     let topicsParent = parent;
+    let acceptBar: HTMLElement | undefined;
     const complete = candidates.length > 0 && candidates.every(({ id }) => processed.has(id))
       && !snapshot.acceptanceLoadError;
     if (complete) {
-      this.renderCompletion(parent, "Review complete. You can edit your directions in Research topics.");
+      this.renderCompletion(parent, "You can edit your directions in Research topics.");
       const reviewed = parent.createEl("details", { cls: "arxiv-daily-interest-review__reviewed" });
       this.rememberDetail(["reviewed"], reviewed);
       reviewed.createEl("summary", { text: "Reviewed topics" });
@@ -405,6 +399,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       const directionCount = reviewed.reduce((count, { directions }) => count + directions.length, 0);
       const blocked = acceptanceBlockReason(snapshot, reviewed);
       const bar = parent.createDiv({ cls: "arxiv-daily-interest-review__accept-bar" });
+      acceptBar = bar;
       const accept = bar.createEl("button", {
         text: "Add to research topics",
         attr: {
@@ -467,6 +462,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
         heading.createSpan({ cls: "arxiv-daily-interest-review__status", text: "Optional" });
       }
       const body = section.createDiv({ cls: "arxiv-daily-interest-review__topic-body" });
+      let rename: HTMLDetailsElement | undefined;
       if (destination.target) {
         body.createEl("p", {
           cls: "arxiv-daily-interest-review__hint",
@@ -478,7 +474,10 @@ export class PersonalLibraryInterestProfileModal extends Modal {
           attr: { role: "status" }, text: destination.error,
         });
       } else if (!isAdded) {
-        const nameField = body.createEl("label", { cls: "arxiv-daily-interest-review__field" });
+        rename = body.createEl("details", { cls: "arxiv-daily-interest-review__rename" });
+        this.rememberDetail([topic.id, "rename"], rename);
+        rename.createEl("summary", { text: "Rename topic" });
+        const nameField = rename.createEl("label", { cls: "arxiv-daily-interest-review__field" });
         nameField.createSpan({ text: "Topic name" });
         const nameInput = nameField.createEl("input", { type: "text", value: topic.suggestedName });
         nameInput.setAttribute("aria-label", "Topic name");
@@ -493,15 +492,22 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       for (const candidate of topic.directions) {
         this.renderDirectionCard(body, candidate, allowedKeys, "proposal", snapshot, topic, processed.has(candidate.id));
       }
+      if (rename) body.appendChild(rename);
     }
-    this.renderCoverage(parent, snapshot);
-    this.renderBufferPool(parent, snapshot);
+    if (acceptBar) parent.appendChild(acceptBar);
   }
 
-  private renderCompletion(parent: HTMLElement, message: string): void {
+  private renderState(parent: HTMLElement, title: string, message: string): HTMLElement {
     this.contentEl.querySelector(".arxiv-daily-interest-review__disclosure")?.remove();
-    const completion = parent.createDiv({ cls: "arxiv-daily-interest-review__completion" });
-    completion.createEl("p", { text: message });
+    const state = parent.createDiv({ cls: "arxiv-daily-interest-review__state" });
+    state.createEl("h3", { text: title });
+    state.createEl("p", { text: message, attr: { role: "status" } });
+    return state;
+  }
+
+  private renderCompletion(parent: HTMLElement, message: string, title = "Review complete"): void {
+    const completion = this.renderState(parent, title, message);
+    completion.addClass("arxiv-daily-interest-review__completion");
     const done = completion.createEl("button", { cls: "mod-cta", text: "Done", attr: { type: "button" } });
     done.disabled = this.pending;
     done.addEventListener("click", () => this.close());
@@ -1051,7 +1057,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     this.generationRequest = request;
     this.render();
     try {
-      if (snapshot.proposal) {
+      // Confirm only when regenerating would discard something: an unreviewed
+      // direction still awaiting a decision, or an edit that was never saved.
+      // A proposal that is already fully reviewed (or has none yet) can
+      // regenerate without asking.
+      const processed = processedCandidateIds(snapshot);
+      const hasUnreviewedDirections = snapshot.proposal?.topics.some(({ directions }) =>
+        directions.some(({ id }) => !processed.has(id)));
+      if (hasUnreviewedDirections || this.drafts.size > 0) {
         const choice = await chooseModal(this.app, "Regenerate proposed directions", "Replace the current proposal and all unconfirmed edits with newly generated directions?", [
           { label: "Cancel", value: "cancel" },
           { label: "Regenerate", value: "regenerate", warning: true },
@@ -1118,6 +1131,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     if (progress) return `Generating… (${progress.completed}/${progress.total})`;
     if (this.generating) return "Generating topics…";
     if (needsRetiredProposalRegeneration(snapshot)) return "Regenerate suggestions";
+    if (needsCoverageUpdate(snapshot)) return "Update suggestions";
     return snapshot.proposal ? "Generate again" : "Generate topics";
   }
 
@@ -1250,6 +1264,12 @@ function processedCandidateIds(snapshot: InterestProfileReviewSnapshot): Set<str
   const receipt = snapshot.proposal
     ? matchingProposalAcceptance(snapshot.proposal, snapshot.proposalAcceptance) : null;
   return new Set(receipt?.processedCandidateIds ?? []);
+}
+
+function needsCoverageUpdate(snapshot: InterestProfileReviewSnapshot): boolean {
+  if (!snapshot.proposal || snapshot.proposal.topics.some(({ directions }) => directions.length > 0)) return false;
+  const coverage = currentCoverage(snapshot);
+  return coverage.changed + coverage.unverified > 0;
 }
 
 function currentCoverage(snapshot: InterestProfileReviewSnapshot) {
