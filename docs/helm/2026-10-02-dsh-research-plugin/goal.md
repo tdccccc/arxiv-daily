@@ -1,9 +1,9 @@
 # DSH research workbench plugin
 
-status: active
+status: done
 created: 2026-10-02T14:56:36+08:00
-updated: 2026-10-02T21:33:39+08:00
-revision: 5
+updated: 2026-10-02T22:36:21+08:00
+revision: 6
 owner: /root
 
 ## Intent
@@ -18,7 +18,7 @@ Make the existing research workbench an installable DSH capability with a visibl
 - [x] Authenticated DSH RPC controls startup; the browser receives only the capability URL. Exact loopback embedding is opt-in; standalone protection remains unchanged.
 - [x] Contract, process, package and actual installed DSH Host checks pass with isolated configuration/data and no paid calls.
 
-- [ ] A fixed entry above Settings opens the workbench without a session; the right Sidebar guide provides the same workbench as a dedicated tab.
+- [x] A fixed entry above Settings opens the workbench without a session; the right Sidebar guide provides the same workbench as a dedicated tab.
 
 ## Non-goals
 
@@ -29,11 +29,11 @@ Make the existing research workbench an installable DSH capability with a visibl
 
 - Existing claude-code-research-plugin worktree only; leave the original checkout and real DSH/config/Vault data alone.
 - DSH-specific integration stays in extensions/dsh-arxiv-daily; CLI changes are host-neutral and tested.
-- Use installed DSH 0.1.7-alpha.1 contracts as the observed baseline; avoid claiming untested versions.
+- Use observed installed DSH contracts: initial Host checks used 0.1.7-alpha.1; P3 uses the now-installed 0.2.0-rc.2. Avoid claiming untested versions.
 - User requested no Computer Use. Use HTTP/DOM and real Host tests; do not automate their desktop.
 
 ## Phases
 
 1. P1 — Installable literature entry and managed workbench in DSH — status: superseded
 2. P2 — Coexist with the DSH gateway during startup and plugin activation — status: done
-3. P3 — Global literature entry and dedicated right Sidebar tab — status: active
+3. P3 — Global literature entry and dedicated right Sidebar tab — status: done

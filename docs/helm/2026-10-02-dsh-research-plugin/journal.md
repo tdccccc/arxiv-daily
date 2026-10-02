@@ -26,3 +26,9 @@ Sixteen DSH checks pass, including the screenshot reproduction now Green, explic
 ## 2026-10-02T21:33:39+08:00 — Add P3 for fixed literature navigation
 
 The user confirmed the composer button exists inside a conversation but requested the dsh-context pattern: left footer above Settings and a right-Sidebar guide entry. Verified dsh-context client/index.ts, components/overviewButton.tsx, components/overviewPanel.tsx and sidebar.ts. P2 remains accepted. P3 adds root navigation and a dedicated tab, sharing the existing workbench through an isolated frame; the composer-only entry is removed.
+
+## 2026-10-02T22:36:21+08:00 — P3 accepted as 0.1.2
+
+Fixed entry placement now follows dsh-context: a root footer action above Settings opens a session-independent workbench overlay, and the right Sidebar guide provides a dedicated literature tab. Both share an isolated frame and the original managed service/data. Composer-only navigation was removed. The new success criterion is accepted; P2 remains done and P3/the initiative are done.
+
+Verification: 19 DSH tests (none skipped), 28 focused CLI/HTTP regressions, typecheck, boundaries and inventory. The machine's installed DSH is now 0.2.0-rc.2, against which SlotCore and Host were checked. Desktop frame origins are narrowed to the known dsh-app://app application origin; no Computer Use or production-profile mutation. Archive dsh-arxiv-daily-0.1.2.tgz is ready for an explicit update/restart.
