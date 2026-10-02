@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-02T12:40:00+08:00
-updated: 2026-10-02T12:40:00+08:00
-revision: 1
+updated: 2026-10-02T12:56:20+08:00
+revision: 2
 
 ## Outcome
 
@@ -58,3 +58,31 @@ Interaction thesis: stable list/reading history, persisted-only mark feedback, p
 - If a right-side route loses its return context, fix navigation before adding more controls.
 - If an index write requires direct raw JSON manipulation outside core mutation, keep the operation blocked until it uses the existing transaction.
 - If a missing report/index cannot be identified, show an explicit unavailable state rather than infer zero papers or overwrite a user note.
+
+## Implementation contract for continuation
+
+### Paper APIs (not implemented yet)
+
+- `GET api/papers?scope=all|inbox|to_read|read|starred&q=&topic=&date=YYYY-MM-DD&sort=published|title|priority|relevance&direction=asc|desc&offset=0&limit=20` (max100). Response: `{papers,total,offset,limit,nextOffset,counts:{all,inbox,to_read,read,starred},libraryCount,topics:string[],day:WorkbenchCalendarDay|null}`. Counts are after date/search/topic but before scope; libraryCount excludes ignored using existing core rules. Date must match daily-report references, not a manual note's incidental seenDate.
+- `GET api/paper?key=paperKey` returns `{paper}`. Paper DTO: `{key,arxivId,title,authors:string[],published,topics:string[],category,status:PaperStatus,priority:PaperPriority,starred,abstract,summary:PaperSummary|null,detailPath:string|null,reports:[{path,date,title,available}],originalUrl,pdfUrl,provenance:DashboardOccurrenceProvenance|null,novelty:DashboardPersonalNovelty|null}`. Export types from server `workbench/papers.ts`; frontend imports them with `import type`.
+- Availability/paths are checked against existing scoped document catalog, not blindly trusted from index strings. Canonical arXiv URLs or validated HTTP(S) links only. No hidden history reconciliation or parsing new papers into the index on GET. Core queryDashboard/PaperSearchIndex provide established search/filter/sort/provenance logic.
+- `POST api/paper/mark`: `{key,action:'status',value:'inbox'|'to_read'|'read',expected:oldPaperStatus}` or `{key,action:'star',value:boolean,expected:oldPriority}`. Return `{paper}`. Use PaperIndexStore.mutate to atomically reload, reject stale field conflicts409, update only the chosen field, save via existing persistence. Desired value already current is an idempotent no-op. Favorite is high priority, independent of status; unstar high→normal, preserve low if already unstarred. Missing404, invalid400.
+- Add optional `WorkbenchOptions.beforeWrite` gate, supplied by launch using the existing config-revision check; use for mark writes so an old UI cannot silently edit after a config change. Existing run behavior stays intact.
+- `GET api/preferences` returns `{sidebarWidth:number|null,sidebarCollapsed:boolean}`, default null/false with no file write. POST same shape persists private/atomic non-secret layout preferences beside configPath (e.g. workbench-ui.json); width must be null or finite280..900. This survives new localhost ports. Do not edit CLI TOML or Vault files.
+
+### Client structure
+
+- Rework `web/app.ts` around right-side list/reading routes; optional `web/papers.ts` owns rendering. Preserve public mountWorkbench(root, options) and existing Markdown renderer, generation/settings dialog and run handling.
+- Left: calendar plus scope/search/topic filters, secondary document-file access. No paper or Markdown result rows on the left. Right list includes metadata/recommendation, known note availability, independent persisted star/status controls and pagination/sort.
+- Date click filters the right list. Explicit `read-day` opens the whole saved report. Paper click opens existing overview; explicit detail view or generation uses old operations. `back` restores date/search/scope/sort/offset and right-pane scroll. Retain standalone Markdown file list on the right via `browse-documents`.
+- Root `data-view='list'|'reading'`; preserve `.workspace`, `.library-pane`, `.reading-pane`, `.toc-pane`, `.header-actions`. Mobile defaults to right list, `.show-filters` toggles the left; selecting date/filter returns to list. Desktop ToC appears only during reading.
+- New `mountSidebar(root,{request})` in `web/sidebar.ts` returns a cleanup function. It adds the divider and desktop collapse control, persists layout through preferences APIs, and reacts to data-view/viewport changes. Add `sidebar.css` after main CSS in the existing build asset collector; it is not yet included or mounted.
+- Persist-only mark UI: disable saving control, apply returned state only after success, refresh actual values on conflict/error without false success. Preserve legacy saved/reading/ignored labels until explicitly changed. On detail-generation completion refresh availability without stealing the reading selection.
+
+### Current evidence and unfinished files
+
+- Last committed code baseline remains the prior calendar/reader implementation; `8664203` committed the latest plan only. Current UI bundle still runs the old left-list layout.
+- Uncommitted `web/sidebar.ts` + `web/sidebar.css` are implemented but not wired into app/build. `workbench-sidebar.test.ts`:4 expected failures against the stub, then4 Green after implementation. DOM checks cover remembered width, keyboard/pointer constraints, collapse, delayed-load protection and save-error/mobile handling. Integration/browser acceptance still required.
+- `workbench-paper-ui.test.ts` (8 cases) is a useful initial fixture suite written by a failed delegate. `workbench-papers.test.ts` (5 actual HTTP/persistence cases) was added by owner. Their combined run has13 expected Red failures because APIs/right-side UI are absent. Log: `.artifacts/paper-workspace-red.log`. Do not commit these tests as accepted until Green.
+- Two delegate turns failed on model token rate limits. No backend implementation was produced. The UI delegate wrote only the initial8-case test file; all other current work is owner-authored. No running test/server process needs resuming.
+- Next concrete step: implement `workbench/papers.ts`, `preferences.ts`, wire routes in server.ts and the write gate in launch.ts to turn the5 HTTP tests Green; then implement the right-side client and integrate sidebar, preserving existing navigation/security/Markdown tests wherever their old placement assumptions are not superseded.
