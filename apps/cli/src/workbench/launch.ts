@@ -8,6 +8,7 @@ import { WorkbenchError } from "./documents";
 export interface RunWorkbenchOptions {
   port: number;
   open: boolean;
+  frameOrigin?: string;
   env: Record<string, string | undefined>;
 }
 
@@ -19,7 +20,7 @@ export async function runWorkbench(config: CliRuntimeConfig, io: CliIo, options:
     if (current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, "配置已改变，请重启工作台后再操作。");
   };
   const app = await startWorkbench({
-    config, port: options.port, assets: workbenchAssets(), beforeWrite,
+    config, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
     run: async (args, output, signal) => {
       await beforeWrite();
       if (signal.aborted) return 1;

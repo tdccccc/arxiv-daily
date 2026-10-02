@@ -49,3 +49,14 @@ it("waits for the workbench lifetime and redacts launch errors", async () => {
   expect(text.join("")).toContain("could not listen");
   expect(text.join("")).not.toContain("secret-in-launch-error");
 });
+
+it("accepts one exact local embedding origin and rejects broad or malformed ancestors before config", async () => {
+  const { config, io } = fixture(); const ui = vi.fn(async () => 0), loadConfig = vi.fn(async () => config);
+  expect(await runCli({ argv: ["ui", "--no-open", "--frame-origin", "http://127.0.0.1:3080"], loadConfig, io, ui })).toBe(0);
+  expect(ui).toHaveBeenCalledWith(config, expect.anything(), expect.objectContaining({ frameOrigin: "http://127.0.0.1:3080" }));
+  loadConfig.mockClear();
+  for (const value of ["*", "https://example.com", "http://localhost:3080/path", "http://localhost:3080?x=1", "http://user@localhost:3080", "http://localhost:3080#x", "http://127.0.0.2:3080"]) {
+    expect(await runCli({ argv: ["ui", "--frame-origin", value], loadConfig, io, ui })).toBe(2);
+  }
+  expect(loadConfig).not.toHaveBeenCalled();
+});

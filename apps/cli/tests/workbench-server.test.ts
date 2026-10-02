@@ -157,3 +157,13 @@ it("cancels a run using its AbortSignal and exposes execution failures", async (
     expect(result.output).not.toContain("secret-model-key");
   });
 });
+
+it("allows an explicitly configured local frame without admitting that parent's API writes", async () => {
+  const { config, get } = await setup();
+  expect((await get("")).headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  const framed = await startWorkbench({ config, frameOrigin: "http://127.0.0.1:3080" }); cleanup.push(framed.close);
+  const response = await fetch(new URL("api/status", framed.url));
+  expect(response.headers.get("content-security-policy")).toContain("frame-ancestors http://127.0.0.1:3080");
+  expect((await fetch(new URL("api/preferences", framed.url), { method: "POST", headers: { Origin: "http://127.0.0.1:3080", "Content-Type": "application/json" }, body: '{}' })).status).toBe(403);
+  await expect(startWorkbench({ config, frameOrigin: "https://example.com" })).rejects.toThrow();
+});

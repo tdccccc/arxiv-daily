@@ -8,6 +8,7 @@ import type { CliIo } from "../main-types";
 import { inspectProduct } from "../inspect-cmd";
 import { WorkbenchDocuments, WorkbenchError } from "./documents";
 import { inspectCalendar } from "./calendar";
+import { validateFrameOrigin } from "./embedding";
 import { WorkbenchPapers } from "./papers";
 import { readPreferences, savePreferences } from "./preferences";
 
@@ -19,6 +20,7 @@ export interface WorkbenchOptions {
   run?: (args: string[], io: CliIo, signal: AbortSignal) => Promise<number>;
   now?: () => Date;
   beforeWrite?: () => Promise<void>;
+  frameOrigin?: string;
 }
 
 export interface WorkbenchRun {
@@ -36,6 +38,7 @@ export interface WorkbenchRun {
 /** Ephemeral reading server. Durable state stays owned by the existing product. */
 export async function startWorkbench(options: WorkbenchOptions) {
   const { config } = options;
+  const frameAncestor = options.frameOrigin === undefined ? "'none'" : validateFrameOrigin(options.frameOrigin);
   const now = options.now ?? (() => new Date());
   if (!Number.isInteger(options.port ?? 0) || (options.port ?? 0) < 0 || (options.port ?? 0) > 65535) throw new Error("Port must be 0..65535");
   const documents = new WorkbenchDocuments(config);
@@ -56,7 +59,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; font-src 'self'; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors ${frameAncestor}`);
     if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
     const url = new URL(req.url || "/", origin);
     if (!url.pathname.startsWith(prefix)) throw new WorkbenchError(404, "请使用启动时显示的工作台链接。");
