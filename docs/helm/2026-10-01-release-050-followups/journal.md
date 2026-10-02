@@ -79,3 +79,17 @@
 - 用户完整Linux手测与本轮候选检查覆盖本地成功标准，全部勾选，P2及goal done。后续远程发布从push授权点继续，不把本地done写成已发布。详情release-verification.md。
 - 手测目录manifest同步0.5.0；main.js/styles.css与用户验收通过的字节一致，保留pre-release-050备份，未触碰data.json或启动Obsidian。
 - 后续依次：授权push → 当前提交10个CI门禁 → 授权PR51说明/ready → 授权合并 → 授权tag/发布；CLI配置编辑仍留后续版本。
+
+## 2026-10-02 — 授权push与CodeQL后续
+
+- 用户A授权push并等待CI。实际push成功，PR51与origin/fix/review-followups指向163f2f63be2a70b54ea0b4d47f3660ec7ecb1604，PR保持Draft，未改说明或合并。
+- 10required检查全成功：Root workspace、Node20.19/22.17、六native平台及资产组装。Root run36979970181、native run36979970112均同SHA。CodeQL workflow成功但结果检查110752751156失败，5条本次告警（14/15/17/35/36）。没有把扫描运行成功误报为安全结果通过。
+- P1–P5与P2已验本地结果保留；新P6处理远程新增证据，goal恢复active。代码分工：scan_fix两个摘要解析器、cli_recon索引路径/作者、modal_fix设置写入。禁止派生/触碰worktree/远程修改。主负责核对与提交，再次push须单次授权。
+- 原始check与annotations保存在/tmp/arxiv-050-codeql-check.json、/tmp/arxiv-050-codeql-annotations.json；历史open alerts不当作本次五条的同义词。
+
+## 2026-10-02 — P6本地修复完成，等待再次push
+
+- 三项独立提交005906f（摘要扫描）、2f01ac0（作者/路径处理）、534fb2f（设置原型路径保护）。性能修复采用公共契约Green和真实前后测量，只有有证据的source/author称实测加速；设置保护有7项有效Red。
+- 最终本地3519通过/2既有跳过，lint0 errors/20 warnings，typecheck/build/boundaries/submission/version-check、342release-tools及build/install smoke通过。说明新增元数据/设置安全处理一行。
+- 手测目录备份pre-codeql-fixes后更新三件资产，未改data.json或启动Obsidian。详细CI链接、告警对应提交和限制见codeql-verification.md。
+- P6仍active：当前远程CodeQL结果只对应163f2f6。没有第二次push授权，没有关闭/抑制告警；请求用户单次授权后重跑再验收。
