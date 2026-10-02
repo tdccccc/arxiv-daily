@@ -66,3 +66,16 @@
 - 最终3479测试通过/2既有跳过，lint0 errors/20 warnings；typecheck/build/smoke/boundaries/submission通过，release-tools342通过。首次全量旧fixture缺indexStatus的3失败已补齐并重新全量验证，不计为通过。
 - 三件资产备份后部署，suffix20261002-pre-upgrade-recovery，SHA-256核对一致；main.js新hash78521db050d98f2e801bdaa015424289f2bb5eaa648098b8a0aa2ad4c0b1bfdf。未写真实.index/data.json，未启动Obsidian，未触碰来源/受保护worktree。
 - P5完成指代码与本地验证完成，用户库实际恢复仍待重启Retry/Regenerate复测；相应成功标准保持未勾选。P2继续pending，无版本同步、push、PR、main合并、tag或发布。
+
+## 2026-10-02 — 用户完整手测通过，开始P2
+
+- 用户先确认Retry preparation“点击了，可以了”，随后明确选择A：建议生成、接受到主题、重新打开保存及窗口操作均正常。按实际反馈接受Linux核心流程；没有把仅弹窗能打开扩张为完整通过。
+- P2开始，版本同步0.5.0及一致性检查已通过，未push。目录权限仍仅保证新建配置目录0700，Paper Index实际写5，主题tag完全隐藏，发行说明相应校正。CLI后续编辑命令不纳入。
+- 为避免npm ci影响其他工作树，在/tmp/arxiv-050-release-check-6tt3cmxz复制当前已跟踪源码与候选元数据/发行说明，独立npm ci成功（429包，审计0漏洞）。在此副本执行发布门禁；不将此称作跨平台CI验证。
+
+## 2026-10-02 — P2完成，本地发布准备结束
+
+- 71d6453提交0.5.0版本与最终发行说明。独立npm ci/audit为0漏洞；3479测试通过/2既有跳过，lint0 errors/20 warnings；typecheck/build/boundaries/submission、342release-tools、build与CLI安装smoke均通过。源/元数据与被测副本比对一致。
+- 用户完整Linux手测与本轮候选检查覆盖本地成功标准，全部勾选，P2及goal done。后续远程发布从push授权点继续，不把本地done写成已发布。详情release-verification.md。
+- 手测目录manifest同步0.5.0；main.js/styles.css与用户验收通过的字节一致，保留pre-release-050备份，未触碰data.json或启动Obsidian。
+- 后续依次：授权push → 当前提交10个CI门禁 → 授权PR51说明/ready → 授权合并 → 授权tag/发布；CLI配置编辑仍留后续版本。
