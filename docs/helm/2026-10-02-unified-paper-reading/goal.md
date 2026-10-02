@@ -1,9 +1,9 @@
 # Split workbench with a unified paper workspace
 
-status: active
+status: done
 created: 2026-10-02T11:59:48+08:00
-updated: 2026-10-02T12:40:00+08:00
-revision: 3
+updated: 2026-10-02T13:59:30+08:00
+revision: 4
 owner: /root
 
 ## Intent
@@ -12,12 +12,12 @@ Keep the accepted split workbench: calendar and filters on the left, a paper lis
 
 ## Success criteria
 
-- [ ] Right-side list includes all indexed discoveries, including papers without detailed notes; date/search/topic/reading/favorite filters and sorting/pagination use actual core data.
-- [ ] Selecting a date shows its paper list. Explicit actions open the whole report or a single paper in the same right-side area; returning restores filters, page and scroll position. No duplicated paper list remains on the left.
-- [ ] To-read/read/unmarked and independent favorites persist in the existing Paper Index, reject stale conflicting edits and preserve unrelated metadata and Markdown.
-- [ ] Existing full Markdown reports and standalone summary files remain accessible; unknown/missing index data is not mislabeled as zero selected papers.
-- [ ] Sidebar width is draggable/keyboard-adjustable, remembered across service launches and responsive to viewport constraints; desktop collapse and mobile navigation preserve reading space.
-- [ ] Protected HTTP/persistence, DOM, portable bundle and real browser acceptance verify the full workflow with isolated fixtures and no real paid model calls.
+- [x] Right-side list includes all indexed discoveries, including papers without detailed notes; date/search/topic/reading/favorite filters and sorting/pagination use actual core data.
+- [x] Selecting a date shows its paper list. Explicit actions open the whole report or a single paper in the same right-side area; returning restores filters, page and scroll position. No duplicated paper list remains on the left.
+- [x] To-read/read/unmarked and independent favorites persist in the existing Paper Index, reject stale conflicting edits and preserve unrelated metadata and Markdown.
+- [x] Existing full Markdown reports and standalone summary files remain accessible; unknown/missing index data is not mislabeled as zero selected papers.
+- [x] Sidebar width is draggable/keyboard-adjustable, remembered across service launches and responsive to viewport constraints; desktop collapse and mobile navigation preserve reading space.
+- [x] Protected HTTP/persistence, DOM, portable bundle and real browser acceptance verify the full workflow with isolated fixtures and no real paid model calls.
 
 ## Non-goals
 
@@ -36,4 +36,4 @@ Keep the accepted split workbench: calendar and filters on the left, a paper lis
 1. P1 — Reader-style unified paper workflow — status: superseded
 2. P2 — Original Dashboard parity inventory — status: superseded
 3. P3 — Full Dashboard port — status: superseded
-4. P4 — Right-side paper workspace, persistent marks and adjustable navigation — status: active
+4. P4 — Right-side paper workspace, persistent marks and adjustable navigation — status: done
