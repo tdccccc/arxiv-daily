@@ -79,7 +79,35 @@ test('copied CLI serves its complete reading UI and dispatches original product 
   assert.equal(completedDay.papers, 2);
   assert.equal(completedDay.canGenerate, false);
 
+  const papers = await (await get('api/papers?date=2026-05-11')).json();
+  assert.equal(papers.total, 2);
+  const indexOnly = papers.papers.find(paper => paper.arxivId === '2605.08068');
+  assert.equal(indexOnly.detailPath, null, 'discoveries without a note remain visible');
+  assert.ok(indexOnly.summary.whyRelevant);
+  const post = (endpoint, body) => fetch(new URL(endpoint, url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post('api/paper/mark', { key: indexOnly.key, action: 'status', value: 'to_read', expected: 'inbox' })).status, 200);
+  assert.equal((await post('api/paper/mark', { key: indexOnly.key, action: 'star', value: true, expected: 'normal' })).status, 200);
+  assert.equal((await post('api/preferences', { sidebarWidth: 570, sidebarCollapsed: true })).status, 200);
+  assert.match(await (await get('style.css')).text(), /sidebar-resize/);
+  assert.match(await (await get('app.js')).text(), /paper-overview/);
+
+  // A fresh copied-CLI process observes durable state, independent of browser ports.
+  const fresh = spawn(process.execPath, [binary, 'ui', '--no-open'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const freshExit = new Promise(resolve => fresh.once('exit', resolve));
+  t.after(async () => { if (fresh.exitCode === null && fresh.signalCode === null) { fresh.kill('SIGTERM'); await freshExit; } });
+  const freshUrl = await new Promise((resolve, reject) => {
+    let text = '';
+    const timer = setTimeout(() => reject(new Error('Fresh workbench failed to start')), 10000);
+    fresh.stdout.on('data', chunk => { text += chunk; const found = /Workbench: (http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]+\/)/.exec(text); if (found) { clearTimeout(timer); resolve(found[1]); } });
+    fresh.once('error', error => { clearTimeout(timer); reject(error); });
+  });
+  const reread = await (await fetch(new URL(`api/paper?key=${encodeURIComponent(indexOnly.key)}`, freshUrl))).json();
+  assert.equal(reread.paper.status, 'to_read'); assert.equal(reread.paper.starred, true);
+  assert.deepEqual(await (await fetch(new URL('api/preferences', freshUrl))).json(), { sidebarWidth: 570, sidebarCollapsed: true });
+  fresh.kill('SIGTERM'); await freshExit;
+
   await fs.appendFile(configPath, '\n# changed configuration\n');
+  assert.equal((await post('api/paper/mark', { key: indexOnly.key, action: 'status', value: 'read', expected: 'to_read' })).status, 409);
   await fetch(new URL('api/runs', url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'paper', id: '2605.09999' }) });
   for (let i = 0; i < 50; i++) {
     run = (await (await get('api/runs/current')).json()).run;
