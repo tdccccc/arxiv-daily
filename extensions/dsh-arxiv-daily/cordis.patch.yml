@@ -1,0 +1,6 @@
+- id: ui-sidebar-browser
+  disabled: false
+- insert:
+    - id: dsh-arxiv-daily
+      name: dsh-arxiv-daily
+      config: {}

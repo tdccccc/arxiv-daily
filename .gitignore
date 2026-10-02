@@ -30,3 +30,5 @@ extensions/claude-code-arxiv-daily/dist/
 !extensions/claude-code-arxiv-daily/.claude-plugin/**
 tmp/
 /output/playwright/
+
+extensions/dsh-arxiv-daily/dist/

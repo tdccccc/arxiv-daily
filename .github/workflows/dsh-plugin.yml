@@ -1,0 +1,73 @@
+name: DSH research plugin verification
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - extensions/dsh-arxiv-daily/**
+      - apps/cli/**
+      - packages/core/**
+      - packages/node-runtime/**
+      - package.json
+      - package-lock.json
+      - scripts/native-build.mjs
+      - scripts/native-assets.mjs
+      - scripts/release-utils.mjs
+      - extensions/claude-code-arxiv-daily/tests/fixtures/core-http.cjs
+      - .github/workflows/dsh-plugin.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+  pull_request:
+    paths:
+      - extensions/dsh-arxiv-daily/**
+      - apps/cli/**
+      - packages/core/**
+      - packages/node-runtime/**
+      - package.json
+      - package-lock.json
+      - scripts/native-build.mjs
+      - scripts/native-assets.mjs
+      - scripts/release-utils.mjs
+      - extensions/claude-code-arxiv-daily/tests/fixtures/core-http.cjs
+      - .github/workflows/dsh-plugin.yml
+      - product-units.json
+      - scripts/check-product-units.mjs
+      - scripts/tests/product-units.test.mjs
+      - scripts/tests/independent-product-workflows.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extensions/dsh-arxiv-daily/package-lock.json
+      - name: Install workspace dependencies
+        run: npm ci
+      - name: Install plugin test dependencies
+        run: npm ci --prefix extensions/dsh-arxiv-daily --ignore-scripts
+      - name: Install verified DSH baseline
+        run: npm install --prefix "$RUNNER_TEMP/dsh-host" --ignore-scripts @deepseek-ai/dsh@0.1.7-alpha.1
+      - name: Build exact CLI and plugin package
+        run: node extensions/dsh-arxiv-daily/build.mjs
+      - name: Verify plugin and authenticated Host workflows
+        run: DSH_CLI="$RUNNER_TEMP/dsh-host/node_modules/@deepseek-ai/dsh/lib/bin.js" node --test extensions/dsh-arxiv-daily/tests/*.test.mjs
+      - name: Check CLI types and product boundaries
+        run: |
+          npm run typecheck --workspace apps/cli
+          npm run check:boundaries
+          npm run check:product-units

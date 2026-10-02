@@ -155,6 +155,49 @@
           ]
         }
       ]
+    },
+    {
+      "id": "dsh-research-plugin",
+      "classification": "independent-extension",
+      "roots": [
+        "extensions/dsh-arxiv-daily"
+      ],
+      "manifests": [
+        "extensions/dsh-arxiv-daily/package.json"
+      ],
+      "lockfiles": [
+        "extensions/dsh-arxiv-daily/package-lock.json"
+      ],
+      "workspaces": [],
+      "versionPolicy": {
+        "kind": "independent",
+        "authority": "extensions/dsh-arxiv-daily/package.json",
+        "lockfile": "extensions/dsh-arxiv-daily/package-lock.json"
+      },
+      "workflows": [
+        {
+          "path": ".github/workflows/dsh-plugin.yml",
+          "role": "verification-package",
+          "pathPolicy": "listed-paths",
+          "requiredPaths": [
+            "extensions/dsh-arxiv-daily/**",
+            "apps/cli/**",
+            "packages/core/**",
+            "packages/node-runtime/**",
+            "package.json",
+            "package-lock.json",
+            "scripts/native-build.mjs",
+            "scripts/native-assets.mjs",
+            "scripts/release-utils.mjs",
+            "extensions/claude-code-arxiv-daily/tests/fixtures/core-http.cjs",
+            ".github/workflows/dsh-plugin.yml",
+            "product-units.json",
+            "scripts/check-product-units.mjs",
+            "scripts/tests/product-units.test.mjs",
+            "scripts/tests/independent-product-workflows.test.mjs"
+          ]
+        }
+      ]
     }
   ]
 }
