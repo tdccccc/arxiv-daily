@@ -22,3 +22,7 @@ The user's screenshot shows DSH refusing the plugin because /api already has an 
 The fault was our use of Connection's single /api interceptor, which belongs to the built-in Gateway. Exact authenticated Fetch-route registration fixes both load orders and keeps the existing UI/RPC contract. A separate channel was evaluated and rejected after the installed Host exposed a webServer injection failure. No host patch or permission weakening was introduced.
 
 Sixteen DSH checks pass, including the screenshot reproduction now Green, explicit Gateway/plugin activation state, actual Plugin Manager disable/re-enable, persisted marks and lifecycle cleanup. Inventory and boundaries pass. All original success criteria are re-accepted with this stronger coexistence evidence; P2 and the initiative are done. New local 0.1.1 archive is ready for the user's installation. Their live DSH profile and research files were not changed.
+
+## 2026-10-02T21:33:39+08:00 — Add P3 for fixed literature navigation
+
+The user confirmed the composer button exists inside a conversation but requested the dsh-context pattern: left footer above Settings and a right-Sidebar guide entry. Verified dsh-context client/index.ts, components/overviewButton.tsx, components/overviewPanel.tsx and sidebar.ts. P2 remains accepted. P3 adds root navigation and a dedicated tab, sharing the existing workbench through an isolated frame; the composer-only entry is removed.

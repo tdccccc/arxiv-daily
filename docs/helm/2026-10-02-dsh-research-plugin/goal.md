@@ -1,9 +1,9 @@
 # DSH research workbench plugin
 
-status: done
+status: active
 created: 2026-10-02T14:56:36+08:00
-updated: 2026-10-02T20:03:50+08:00
-revision: 4
+updated: 2026-10-02T21:33:39+08:00
+revision: 5
 owner: /root
 
 ## Intent
@@ -17,6 +17,8 @@ Make the existing research workbench an installable DSH capability with a visibl
 - [x] Existing calendar, list, Markdown, persistent marks and explicit generation work through the original bundled CLI and configuration.
 - [x] Authenticated DSH RPC controls startup; the browser receives only the capability URL. Exact loopback embedding is opt-in; standalone protection remains unchanged.
 - [x] Contract, process, package and actual installed DSH Host checks pass with isolated configuration/data and no paid calls.
+
+- [ ] A fixed entry above Settings opens the workbench without a session; the right Sidebar guide provides the same workbench as a dedicated tab.
 
 ## Non-goals
 
@@ -34,3 +36,4 @@ Make the existing research workbench an installable DSH capability with a visibl
 
 1. P1 — Installable literature entry and managed workbench in DSH — status: superseded
 2. P2 — Coexist with the DSH gateway during startup and plugin activation — status: done
+3. P3 — Global literature entry and dedicated right Sidebar tab — status: active
