@@ -215,6 +215,46 @@ describe("switching the embedding mode asks in place (ADR 0008)", () => {
   });
 });
 
+describe("choosing a library prepares it automatically", () => {
+  it("continues into local indexing after a successful folder choice", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.embedding.initialChoiceDone = false;
+    confirmMode.mockResolvedValue("local");
+    await tab.chooseLibraryRoot();
+    expect(plugin.indexPersonalLibraryFullText).toHaveBeenCalledOnce();
+    expect(confirmAuthorization).not.toHaveBeenCalled();
+    expect(confirmMode).not.toHaveBeenCalled();
+  });
+
+  it("never prepares after the folder picker is cancelled", async () => {
+    const { tab, plugin } = makeTab();
+    vi.mocked(plugin.selectLibraryRoot).mockResolvedValueOnce("cancelled");
+    await tab.chooseLibraryRoot();
+    expect(plugin.indexPersonalLibraryFullText).not.toHaveBeenCalled();
+    expect(confirmMode).not.toHaveBeenCalled();
+  });
+
+  it("asks for remote permission once and stops if declined", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.embedding.initialChoiceDone = true;
+    settings.embedding.mode = "remote";
+    settings.embedding.baseUrl = "https://embed.example.com/v1";
+    confirmAuthorization.mockResolvedValue(false);
+    await tab.chooseLibraryRoot();
+    expect(confirmAuthorization).toHaveBeenCalledOnce();
+    expect(plugin.indexPersonalLibraryFullText).not.toHaveBeenCalled();
+  });
+
+  it("surfaces preparation failure and allows an explicit retry", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.embedding.initialChoiceDone = true;
+    vi.mocked(plugin.indexPersonalLibraryFullText).mockRejectedValueOnce(new Error("preparation failed"));
+    await expect(tab.chooseLibraryRoot()).rejects.toThrow("preparation failed");
+    await tab.indexPersonalLibraryFullText();
+    expect(plugin.indexPersonalLibraryFullText).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("moving the authorized endpoint re-asks", () => {
   async function authorizedRemoteTab() {
     const made = makeTab();

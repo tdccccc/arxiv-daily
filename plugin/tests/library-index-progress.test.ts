@@ -32,6 +32,16 @@ function buttons(row: ReturnType<typeof libraryRowPresentation>) {
 }
 
 describe("the Library row while indexing", () => {
+  it("offers retry only while no searchable index exists", () => {
+    const initial = libraryRowPresentation({ status: CONNECTED, embeddingMode: "local" });
+    expect(initial.primary?.label).toBe("Retry preparation");
+    const empty = libraryRowPresentation({ status: CONNECTED, embeddingMode: "local", lastRun: { updatedAt: "2026-10-02T00:00:00.000Z", papers: 0 } });
+    expect(empty.primary?.label).toBe("Retry preparation");
+    const ready = libraryRowPresentation({ status: CONNECTED, embeddingMode: "local", lastRun: { updatedAt: "2026-10-02T00:00:00.000Z", papers: 12 } });
+    expect(ready.primary).toBeUndefined();
+    expect(ready.description).not.toMatch(/build .*next|build the search index/i);
+  });
+
   it("puts the count on the main button and stops offering to start again", () => {
     const row = libraryRowPresentation({
       status: CONNECTED,
@@ -84,14 +94,14 @@ describe("the Library row while indexing", () => {
     expect(row.chooseFolder.disabled).toBe(true);
   });
 
-  /** Nothing is committed until the run ends, and the row has to say so. */
-  it("warns that a cancelled run leaves nothing behind", () => {
+  it("explains cancellation without claiming completed scans are discarded", () => {
     const row = libraryRowPresentation({
       status: CONNECTED,
       embeddingMode: "local",
       activity: { phase: "extracting and embedding PDF text", cancelling: false },
     });
-    expect(row.description).toContain("Nothing is saved until the run finishes");
+    expect(row.description).toContain("Scan results may already be saved");
+    expect(row.description).not.toContain("Nothing is saved until the run finishes");
   });
 
   /**
@@ -127,7 +137,7 @@ describe("the Library row while indexing", () => {
 
   it("hides Revoke on a granted library while its index is building", () => {
     const idle = libraryRowPresentation({ status: AUTHORIZED, embeddingMode: "remote" });
-    expect(buttons(idle)).toEqual(["Change folder", "Build index", "Revoke"]);
+    expect(buttons(idle)).toEqual(["Change folder", "Retry preparation", "Revoke"]);
     const running = libraryRowPresentation({
       status: AUTHORIZED,
       embeddingMode: "remote",
@@ -151,7 +161,7 @@ describe("what an index run leaves on the row", () => {
     expect(row.description).toContain("128 papers searchable");
     expect(row.description).toContain("Last indexed");
     // The next step it replaced is still there; the trace is added to it.
-    expect(row.description).toContain("Build the search index");
+    expect(row.description).not.toContain("Build the search index");
   });
 
   it("says nothing about past runs when there have been none", () => {

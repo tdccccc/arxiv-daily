@@ -113,7 +113,7 @@ function makeLegacyApiKeyTab(
   return { tab, settings, refreshSensitiveValues, installOutputStores };
 }
 
-it("offers library direction review in the legacy research topic settings", async () => {
+it("offers only one library suggestion entry in legacy settings", async () => {
   const { tab } = makeLegacyApiKeyTab(async () => undefined);
   tab.plugin.getLibraryConnectionStatus = () => ({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
   tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
@@ -121,6 +121,8 @@ it("offers library direction review in the legacy research topic settings", asyn
   tab.display();
   const entry = Array.from(tab.containerEl.querySelectorAll("button")).find(({ textContent }) => textContent === "Review suggestions");
   expect(entry).toBeDefined();
+  expect(Array.from(tab.containerEl.querySelectorAll("button")).filter(({ textContent }) => /Review suggestions|Use my library|Review directions/.test(textContent ?? ""))).toHaveLength(1);
+  expect(tab.containerEl.textContent).not.toContain("Topics from your library");
   entry!.click();
   await vi.waitFor(() => expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
 });
@@ -286,20 +288,22 @@ describe("legacy personal library guide box", () => {
     expect(text).toMatch(/optional/i);
     expect(text).toContain("daily reports work the same without a library");
     expect(text).toContain("Choose a folder of PDFs");
-    expect(text).toContain("nothing leaves this device");
+    expect(text).toContain("automatically");
+    expect(text).toContain("130 MB");
     expect(text).toMatch(/model downloads once/);
     expect(text).toMatch(/runs locally/);
-    expect(text).toContain("Review directions");
+    expect(text).toContain("Review suggestions");
     expect(text).toContain("steer daily reports");
     expect(text).toContain("Remote embedding and model processing always ask first");
     expect(text).not.toContain("bundled");
-    const directionsStep = content.lines[3] ?? "";
-    expect(directionsStep).toContain("Review directions (button below)");
+    expect(content.lines.filter((line) => /^\d\./.test(line))).toHaveLength(2);
+    const directionsStep = content.lines[2] ?? "";
+    expect(directionsStep).toContain("Review suggestions (button below)");
     expect(directionsStep).not.toContain("command palette");
 
-    const indexStep = content.lines[2] ?? "";
-    expect(indexStep).toContain("Build index (button below)");
-    expect(indexStep).toContain("command palette");
+    const indexStep = content.lines[3] ?? "";
+    expect(indexStep).toContain("Retry preparation");
+    expect(text).toContain("arXiv");
     expect(indexStep).not.toContain("button above");
   });
 
@@ -330,7 +334,7 @@ describe("legacy personal library directions row", () => {
     const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
     const rows = renderLegacySettings(tab);
-    expect(rows.has("Research directions")).toBe(false);
+    expect(rows.has("Topics from library")).toBe(false);
   });
 
   it("shows below Library once a folder is chosen", () => {
@@ -342,9 +346,12 @@ describe("legacy personal library directions row", () => {
     renderLegacySettings(tab);
     const names = Setting.instances.map((setting) => setting.nameEl.textContent ?? "");
     const libraryIndex = names.indexOf("Library");
-    const directionsIndex = names.indexOf("Research directions");
+    const directionsIndex = names.indexOf("Topics from library");
     expect(libraryIndex).toBeGreaterThanOrEqual(0);
     expect(directionsIndex).toBe(libraryIndex + 1);
+    const row = Setting.instances.find((setting) => setting.nameEl.textContent === "Topics from library")!;
+    expect(row.controlEl.querySelector("button")?.disabled).toBe(true);
+    expect(row.descEl.textContent).toMatch(/prepar/i);
   });
 
   it("opens the direction review modal when its button is clicked", async () => {
@@ -354,11 +361,24 @@ describe("legacy personal library directions row", () => {
       rootLabel: "papers",
       grantedAt: new Date().toISOString(),
     });
+    tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
     const rows = renderLegacySettings(tab);
-    const button = componentOf(rows.get("Research directions"), ButtonComponent as never) as ButtonComponent;
+    const button = componentOf(rows.get("Topics from library"), ButtonComponent as never) as ButtonComponent;
     button.buttonEl.click();
     await vi.waitFor(() =>
-      expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalled());
+      expect(tab.plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledWith({ generateIfMissing: true }));
+  });
+
+  it("disables review during preparation even with an older usable index", () => {
+    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
+    tab.plugin.libraryIndexStatus.beginRun("preparing", "scanning");
+    const row = renderLegacySettings(tab).get("Topics from library")!;
+    expect(row.controlEl.querySelector("button")?.disabled).toBe(true);
+    tab.plugin.libraryIndexStatus.endRun();
+    const restored = renderLegacySettings(tab).get("Topics from library")!;
+    expect(restored.controlEl.querySelector("button")?.disabled).toBe(false);
   });
 });
 
@@ -1050,11 +1070,11 @@ describe("confirmEmbeddingMode", () => {
     await promise;
   });
 
-  it("wires the guided choice into the library connection flow once", () => {
-    expect(settingsTabSource).toContain("offerEmbeddingModeChoice()");
-    expect(settingsTabSource).toContain("confirmEmbeddingMode(this.app)");
+  it("keeps embedding configurable without an extra first-selection popup", () => {
+    expect(settingsTabSource).not.toContain("offerEmbeddingModeChoice()");
+    expect(settingsTabSource).not.toContain("confirmEmbeddingMode(this.app)");
     expect(settingsTabSource).toContain("initialChoiceDone");
-    expect(settingsTabSource).toContain('"arXiv Daily: local embedding. Its model downloads once');
+    expect(settingsTabSource).toContain("about 130 MB");
   });
 });
 

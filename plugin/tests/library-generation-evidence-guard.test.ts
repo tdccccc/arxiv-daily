@@ -216,6 +216,39 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
 }
 
 describe("direction generation uses current research settings", () => {
+  it("does not start a generation after the review caller has closed", async () => {
+    const { plugin, requests, store } = generationPlugin();
+    const caller = new AbortController();
+    caller.abort("review closed");
+    await expect(plugin.generatePersonalLibraryDirections(undefined, caller.signal)).rejects.toThrow();
+    expect(requests).toHaveLength(0);
+    expect(await store.load()).toBeNull();
+    expect(plugin.operations.snapshot()).toEqual([]);
+  });
+
+  it("cancels only the caller's generation and does not save its late response", async () => {
+    const response = deferred();
+    const { plugin, requests, store } = generationPlugin(() => response.promise);
+    const caller = new AbortController();
+    const other = plugin.operations.begin("paper-note", "Unrelated operation", "another-paper");
+    const generating = plugin.generatePersonalLibraryDirections(undefined, caller.signal).then(
+      () => "completed", () => "cancelled",
+    );
+    try {
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      caller.abort("review closed");
+      response.resolve();
+      expect(await generating).toBe("cancelled");
+      expect(await store.load()).toBeNull();
+      expect(other.signal.aborted).toBe(false);
+    } finally {
+      response.resolve();
+      await generating;
+      other.finish();
+    }
+    expect(plugin.operations.snapshot()).toEqual([]);
+  });
+
   it("opens reviewed evidence through the indexed PDF path and refuses unknown papers", async () => {
     const { plugin } = generationPlugin();
     const paths: Array<{ paperKey: string; filePath: string }> = [];

@@ -151,6 +151,25 @@ function fixture(entries: Array<{ path: string; size: number; mtimeMs: number }>
 }
 
 describe("Build index scans a never-scanned library first", () => {
+  it("shows local model preparation in the active library operation", async () => {
+    const { plugin, internals } = fixture([]);
+    const embedding = internals.buildEmbeddingModel();
+    internals.buildEmbeddingModel.mockImplementation((options: {
+      signal: AbortSignal;
+      onProgress: (progress: { phase: string; message: string; progress?: number }) => void;
+    }) => {
+      expect(options?.signal).toBeInstanceOf(AbortSignal);
+      expect(options?.onProgress).toBeTypeOf("function");
+      options.onProgress({ phase: "loading", message: "Loading local model files", progress: 42 });
+      expect(plugin.libraryIndexStatus.snapshot().activity?.phase).toContain("Loading local model files");
+      expect(plugin.libraryIndexStatus.snapshot().activity?.phase).toContain("42%");
+      options.onProgress({ phase: "ready", message: "Model ready" });
+      expect(plugin.libraryIndexStatus.snapshot().activity?.phase).toBe("extracting and embedding titles and abstracts");
+      return embedding;
+    });
+    await plugin.indexPersonalLibraryFullText();
+  });
+
   it("indexes readable PDFs even when their arXiv metadata lookup fails", async () => {
     const { plugin, source, internals, fetchMetadataByIds } = fixture([
       { path: "2601.00001.pdf", size: 100, mtimeMs: 12 },

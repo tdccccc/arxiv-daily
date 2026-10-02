@@ -9,6 +9,7 @@ import { SettingsChangeService } from "../src/settings/change-service";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import {
   PersonalLibraryInterestProfileModal,
+  openPersonalLibraryInterestProfileModal,
   bufferPoolHeading,
   describeClusterMembers,
   formatConfidence,
@@ -848,6 +849,160 @@ describe("generation progress in the review modal", () => {
     } else {
       expect(ctrl.mock.reload).toHaveBeenCalledOnce();
     }
+  });
+});
+
+describe("review suggestions generates a missing proposal on request", () => {
+  function preparedSnapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}) {
+    return snapshot({
+      proposal: null,
+      indexedPapers: [{ paperKey: "arxiv:2608.00001", title: "Prepared paper" }],
+      ...overrides,
+    });
+  }
+
+  function openAutomatic(ctrl: InterestProfileReviewController) {
+    return openPersonalLibraryInterestProfileModal({} as App, ctrl, { generateIfMissing: true });
+  }
+
+  it("asks for authorization, displays generation progress, then opens the saved suggestions", async () => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }));
+    let release!: () => void;
+    const work = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(ctrl.mock.generate).mockImplementation(async (report) => {
+      report?.({ phase: "organization", completed: 0, total: 1 });
+      await work;
+      ctrl.set(snapshot());
+    });
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    expect(ctrl.mock.authorize).toHaveBeenCalledOnce();
+    expect(modal.contentEl.querySelector('[role="status"]')?.textContent)
+      .toBe("Organizing topics and directions…");
+    release();
+    await vi.waitFor(() => expect(findButton(modal.contentEl, "Generate again")).toBeDefined());
+    expect(modal.contentEl.textContent).toContain("Research agents");
+    expect(ctrl.mock.reload).toHaveBeenCalledOnce();
+  });
+
+  it("opens an existing proposal without regenerating or replacing its edited draft", async () => {
+    const ctrl = controller();
+    const modal = openAutomatic(ctrl.mock);
+    const field = modal.contentEl.querySelector<HTMLTextAreaElement>("textarea")!;
+    field.value = "My reviewed draft";
+    modal.close();
+    modal.open();
+    await Promise.resolve();
+    expect(modal.contentEl.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("My reviewed draft");
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    expect(ctrl.mock.authorize).not.toHaveBeenCalled();
+  });
+
+  it.each(["no index", "unreadable proposal", "disconnected"])("does not generate for %s", async (reason) => {
+    const ctrl = controller(preparedSnapshot(reason === "no index" ? { indexedPapers: [] }
+      : reason === "disconnected" ? { authorization: { kind: "disconnected" } }
+        : { proposalLoadError: { kind: "proposal", code: "unreadable", message: "Cannot read saved draft" } }));
+    openAutomatic(ctrl.mock);
+    await Promise.resolve();
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    expect(ctrl.mock.authorize).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal review entry manual when the option is omitted", async () => {
+    const ctrl = controller(preparedSnapshot());
+    const modal = open(ctrl.mock);
+    await Promise.resolve();
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    button(modal.contentEl, "Generate topics").click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+  });
+
+  it("leaves a declined authorization available for a deliberate manual retry", async () => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }), { granted: false });
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalledOnce());
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    expect(modal.contentEl.querySelector('[role="alert"]')?.textContent).toBe("");
+    modal.close();
+    modal.open();
+    await Promise.resolve();
+    expect(ctrl.mock.authorize).toHaveBeenCalledOnce();
+    vi.mocked(ctrl.mock.authorize).mockResolvedValue(true);
+    button(modal.contentEl, "Generate topics").click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+  });
+
+  it.each([false, true])("does not start generation after closing during authorization (reopened: %s)", async (reopen) => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }));
+    let grant!: (value: boolean) => void;
+    vi.mocked(ctrl.mock.authorize).mockImplementation(() => new Promise((resolve) => { grant = resolve; }));
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalledOnce());
+    modal.close();
+    if (reopen) modal.open();
+    grant(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    expect(ctrl.mock.reload).not.toHaveBeenCalled();
+    if (!reopen) expect(modal.contentEl.textContent).toBe("");
+    expect(ctrl.mock.authorize).toHaveBeenCalledOnce();
+  });
+
+  it("does not overwrite a proposal that appears while authorization is open", async () => {
+    const ctrl = controller(preparedSnapshot({
+      authorization: { kind: "connected", rootLabel: "papers" } as any,
+    }));
+    let grant!: (value: boolean) => void;
+    vi.mocked(ctrl.mock.authorize).mockImplementation(() => new Promise((resolve) => { grant = resolve; }));
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(ctrl.mock.authorize).toHaveBeenCalledOnce());
+    ctrl.set(snapshot());
+    grant(true);
+    await vi.waitFor(() => expect(modal.contentEl.textContent).toContain("Research agents"));
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+  });
+
+  it("cancels active generation when closed and skips reload and failure reporting", async () => {
+    const ctrl = controller(preparedSnapshot());
+    let generationSignal: AbortSignal | undefined;
+    let release!: () => void;
+    const work = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(ctrl.mock.generate).mockImplementation(async (_report, signal) => {
+      generationSignal = signal;
+      await work;
+      signal?.throwIfAborted();
+    });
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    modal.close();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(generationSignal?.aborted).toBe(true);
+    expect(ctrl.mock.reload).not.toHaveBeenCalled();
+    expect(ctrl.mock.logError).not.toHaveBeenCalled();
+    expect(modal.contentEl.textContent).toBe("");
+  });
+
+  it("shows a generation failure and allows manual retry without automatically looping", async () => {
+    const ctrl = controller(preparedSnapshot());
+    const failure = Object.assign(new Error("invalid organization"), { code: "proposal-invariant" });
+    vi.mocked(ctrl.mock.generate).mockRejectedValueOnce(failure);
+    const modal = openAutomatic(ctrl.mock);
+    await vi.waitFor(() => expect(button(modal.contentEl, "Generate topics").disabled).toBe(false));
+    expect(ctrl.mock.generate).toHaveBeenCalledOnce();
+    expect(ctrl.mock.logError).toHaveBeenCalledWith("generate proposals", failure);
+    expect(modal.contentEl.querySelector('[role="alert"]')?.textContent).toContain("generated proposal was invalid");
+    button(modal.contentEl, "Generate topics").click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledTimes(2));
+    expect(ctrl.mock.authorize).not.toHaveBeenCalled();
   });
 });
 

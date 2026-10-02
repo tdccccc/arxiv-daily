@@ -139,7 +139,6 @@ export interface SettingDefinitionsHost {
   automaticEmailSupported?: boolean;
   renderCategoryRow?: (setting: Setting, index: number) => void;
   renderTopicRow?: (setting: Setting, index: number) => void;
-  renderLibraryTopicEntry?: (setting: Setting) => void;
   renderTimezoneRow?: (setting: Setting) => void;
   renderOutputDirectoryRow?: (setting: Setting, key: "dailyDir" | "papersDir") => void;
   renderEmailSenderRow?: (setting: Setting, key: "fromEmail" | "fromName") => void;
@@ -210,6 +209,9 @@ export function dailyAutoSendDesc(hostedMode: boolean, automaticSupported: boole
  */
 export function libraryDirectionsRowDesc(plugin: ArxivDailyPlugin): string {
   const base = "Review topic suggestions from indexed paper titles and abstracts. Only directions added to Research topics steer daily reports.";
+  const index = plugin.libraryIndexStatus.snapshot();
+  if (index.activity) return `${base} Preparation is running; review will be available when it finishes.`;
+  if (!index.lastRun?.papers) return `${base} Finish preparing the library first. Use Retry preparation above if needed.`;
   const count = plugin.settings.arxiv.topics.reduce((total, topic) => total + topic.directions.length, 0);
   return count > 0 ? `${base} ${count} saved direction${count === 1 ? "" : "s"}.` : base;
 }
@@ -316,10 +318,6 @@ export function buildSettingDefinitions(
       },
     },
     {
-      name: "Topics from your library",
-      render: (setting: Setting) => host.renderLibraryTopicEntry?.(setting),
-    },
-    {
       name: "Automatic detail notes",
       desc: "How often the plugin writes a longer note for a paper. Only topics with Detail report turned on are considered. Manual “summarize paper” is unchanged.",
       control: {
@@ -418,14 +416,14 @@ export function buildSettingDefinitions(
               : []),
             {
               name: "Library",
-              desc: "Choose a folder of PDFs, then build a search index to search them. On its own, this does not change daily reports.",
+              desc: "Choose a folder of PDFs to prepare its search index automatically. Only suggestions you accept change daily reports.",
               render: (setting: Setting) =>
                 host.renderLibraryConnectionRow?.(setting),
             },
             ...(host.renderLibraryDirectionsRow
               && plugin.getLibraryConnectionStatus().kind !== "disconnected"
               ? [{
-                  name: "Research directions",
+                  name: "Topics from library",
                   desc: libraryDirectionsRowDesc(plugin),
                   render: (setting: Setting) =>
                     host.renderLibraryDirectionsRow?.(setting),

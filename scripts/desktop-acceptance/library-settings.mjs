@@ -207,7 +207,16 @@ export const LIBRARY_ROW_EXPRESSION = inRenderer(`
   if (!group) return JSON.stringify({ error: "the settings page has no Personal library section" });
   const row = namedRow("Library");
   if (!row) return JSON.stringify({ error: "the Personal library section has no Library row" });
+  const plugin = ${PLUGIN};
+  const index = plugin.libraryIndexStatus.snapshot();
+  const reviewRows = allRows().filter((item) => rowName(item) === "Topics from library");
   return JSON.stringify({
+    selected: plugin.getLibraryConnectionStatus().kind !== "disconnected",
+    searchablePapers: index.lastRun?.papers ?? 0,
+    preparing: Boolean(index.activity),
+    legacySuggestionRows: allRows().filter((item) => rowName(item) === "Topics from your library").length,
+    reviewButtons: reviewRows.flatMap((item) => Array.from(item.querySelectorAll(".setting-item-control button")))
+      .map((button) => ({ text: (button.textContent ?? "").trim(), disabled: button.disabled === true })),
     rowButtons: buttonTexts(row),
     /*
      * The same buttons with the two facts a label cannot carry: whether the
@@ -502,6 +511,25 @@ export function judgeGroupOrder(headings, expected = EXPECTED_GROUP_ORDER) {
 export function judgeLibraryButtons(snapshot, { expected } = {}) {
   const { rowButtons, groupButtons } = snapshot;
   const problems = [];
+  if (rowButtons.includes("Build index")) problems.push("the retired Build index button is still present");
+  if (snapshot.legacySuggestionRows > 0) problems.push("a duplicate Topics from your library shortcut is still present");
+  if (snapshot.selected !== undefined) {
+    const review = snapshot.reviewButtons ?? [];
+    if (snapshot.selected) {
+      if (review.length !== 1 || review[0]?.text !== "Review suggestions") {
+        problems.push("the selected library must have exactly one Review suggestions action");
+      } else if (review[0].disabled !== (snapshot.preparing || !(snapshot.searchablePapers > 0))) {
+        problems.push("Review suggestions availability does not match preparation and searchable papers");
+      }
+      if (snapshot.preparing) {
+        if (!rowButtons.some((text) => text === "Cancel" || text === "Cancelling…")) problems.push("preparation has no Cancel action");
+      } else if (rowButtons.includes("Retry preparation") !== !(snapshot.searchablePapers > 0)) {
+        problems.push("Retry preparation must be offered only when no searchable index is available");
+      }
+    } else if (review.length !== 0) {
+      problems.push("review is shown before a library is selected");
+    }
+  }
   if (rowButtons.length > 3) {
     problems.push(`the row shows ${rowButtons.length} buttons (${rowButtons.join(", ")}), more than three`);
   }
@@ -649,7 +677,7 @@ export function judgeDescriptionReadable(description, {
  */
 export function judgeLibraryWrappedGeometry(geometry, {
   tolerance = ALIGNMENT_TOLERANCE_PX,
-  mainCallToAction = "Build index",
+  mainCallToAction = geometry.buttons.some(({ text }) => text === "Retry preparation") ? "Retry preparation" : "Change folder",
   ...readability
 } = {}) {
   const { buttons, control, row, info, description } = geometry;
@@ -1018,7 +1046,7 @@ export async function librarySettingsScenarios({
   if (local.error) {
     results.push(fail("library-row-buttons-local", local.error));
   } else {
-    const verdict = judgeLibraryButtons(local, { expected: ["Change folder", "Build index"] });
+    const verdict = judgeLibraryButtons(local, { expected: local.searchablePapers > 0 ? ["Change folder"] : ["Change folder", "Retry preparation"] });
     results.push((verdict.ok ? pass : fail)("library-row-buttons-local", verdict.reason));
   }
   await shot("personal-library-section-local-embedding", { rect: await sectionRect() });
@@ -1186,7 +1214,7 @@ export async function librarySettingsScenarios({
     if (!trace.ok) problems.push(trace.reason);
     // The row also has to come back: a run that ends leaving its own controls
     // behind would be worse than never showing them.
-    const backToIdle = judgeLibraryButtons(afterRun, { expected: ["Change folder", "Build index"] });
+    const backToIdle = judgeLibraryButtons(afterRun, { expected: ["Change folder"] });
     if (!backToIdle.ok) problems.push(backToIdle.reason);
     results.push(
       problems.length === 0
@@ -1295,13 +1323,13 @@ export async function librarySettingsScenarios({
   if (remote.error) {
     results.push(fail("library-row-buttons-remote", remote.error));
   } else {
-    const verdict = judgeLibraryButtons(remote, { expected: ["Change folder", "Build index"] });
+    const verdict = judgeLibraryButtons(remote, { expected: ["Change folder", "Retry preparation"] });
     results.push((verdict.ok ? pass : fail)("library-row-buttons-remote", verdict.reason));
   }
   await shot("personal-library-section-remote-embedding", { rect: await sectionRect() });
 
   const beforeIndex = await readJson(evaluate, PLUGIN_STATE_EXPRESSION);
-  const clicked = await readJson(evaluate, clickLibraryRowButtonExpression("Build index"));
+  const clicked = await readJson(evaluate, clickLibraryRowButtonExpression("Retry preparation"));
   if (clicked.error) {
     results.push(fail("build-index-asks-before-remote-indexing", clicked.error));
   } else {
@@ -1309,7 +1337,7 @@ export async function librarySettingsScenarios({
     if (!modal.present) {
       results.push(fail(
         "build-index-asks-before-remote-indexing",
-        `Build index started without opening the .${DISCLOSURE_MODAL_CLASS} dialog`,
+        `Retry preparation started without opening the .${DISCLOSURE_MODAL_CLASS} dialog`,
       ));
     } else {
       await evaluate(clickModalButtonExpression(DISCLOSURE_CANCEL_BUTTON_CLASS));
@@ -1334,7 +1362,7 @@ export async function librarySettingsScenarios({
       } else {
         results.push(pass(
           "build-index-asks-before-remote-indexing",
-          `Build index asked first; cancelling started no indexing operation and left embedding.mode `
+          `Retry preparation asked first; cancelling started no indexing operation and left embedding.mode `
             + `${afterCancel.embedding.mode} with the connection ${afterCancel.status.kind}`,
         ));
       }
@@ -1345,7 +1373,7 @@ export async function librarySettingsScenarios({
   //
   // Reached the way a person reaches it: the mode goes back to local, the
   // dropdown asks for remote, and this time the disclosure is accepted. Going
-  // through Build index would grant too, but it would also start indexing.
+  // through Retry preparation would grant too, but it would also start indexing.
   await evaluate(
     `${PLUGIN}.settingsChanges.changeValue("embedding.mode", "local").then(() => "changed")`,
   );

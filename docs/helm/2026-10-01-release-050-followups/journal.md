@@ -38,3 +38,11 @@
 - 旧无版本全文复用、旧键转换失败隔离、方向引导、正文披露、建完索引立即看到审核证据均有本轮Red→Green证据。合并夹具/旧文案错误不冒充Red。详见merge-verification.md及其日志索引。
 - 三件资产重新部署到原手测目录，备份suffix为20261002-pre-title-abstract-merge，SHA-256核对一致。未访问data.json或启动Obsidian，未影响来源/其他工作树。
 - P3完成，P2保持pending等待新构建手测，整体active。发行说明已改为标题摘要及新主题方向行为但仍是未跟踪草稿，不进行版本同步。没有push、PR、main合并、tag或发布。
+
+## 2026-10-02 — 用户把资料库设置收敛为两步
+
+- 用户指出Topics from your library和Personal library重复，并进一步选择“选择目录后自动构建索引 → Review suggestions”。新指令取代旧的“选目录不扫描”。本轮继续用同一initiative，P1/P3历史验收保留，新P4跟进改变的交互。
+- Research topics只管理已采纳的方向；Personal library统一选择、准备进度/取消/重试和审核。首次审核无proposal时在授权后自动生成；有草稿或读取失败不覆盖，关闭本次窗口取消其生成而非其他运行。
+- 选择后的本地/远程选择弹窗移除，本地默认，Embedding设置仍可调整；已有远程模式在索引前只询问一次授权。加载模型状态使用真实文件进度，但库API在缓存命中也发download事件，因此不伪称每次下载130MB。
+- 分工：modal_fix负责设置/connection，cli_recon负责审核modal，scan_fix负责本地模型加载回调，主负责main桥接/取消/记录。禁止触碰其它worktree或继续派生。
+- 旧方案中断前仅有300通过基线与/tmp报告，无源码修改，不丢弃用户工作。新增两步流程/首次自动生成/关闭中止/模型状态均先观察Red，再最小补齐。

@@ -32,6 +32,11 @@ export interface InterestProfileReviewSnapshot
   authorization: LibraryConnectionStatus;
 }
 
+export interface InterestProfileReviewOptions {
+  /** On the first open, generate only when indexed evidence exists and no saved proposal is available. */
+  generateIfMissing?: boolean;
+}
+
 export interface InterestProfileReviewController {
   snapshot(): InterestProfileReviewSnapshot;
   reload(): Promise<InterestProfileReviewSnapshot>;
@@ -51,7 +56,7 @@ export interface InterestProfileReviewController {
    * not the researcher — and every failure looked identical.
    */
   logError(action: string, error: unknown): void;
-  generate(onProgress?: (progress: DirectionProposalProgress) => void): Promise<unknown>;
+  generate(onProgress?: (progress: DirectionProposalProgress) => void, signal?: AbortSignal): Promise<unknown>;
   updateProposal(input: {
     candidateId: string;
     patch: PersonalLibraryDirectionTextPatch;
@@ -119,8 +124,14 @@ export class PersonalLibraryInterestProfileModal extends Modal {
   private optionsElement: HTMLDetailsElement | null = null;
   private generating = false;
   private acceptedFeedback = "";
+  private automaticGenerationChecked = false;
+  private generationRequest: AbortController | null = null;
 
-  constructor(app: App, private readonly controller: InterestProfileReviewController) {
+  constructor(
+    app: App,
+    private readonly controller: InterestProfileReviewController,
+    private readonly options: InterestProfileReviewOptions = {},
+  ) {
     super(app);
   }
 
@@ -129,11 +140,19 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     this.closed = false;
     this.modalEl.addClass("arxiv-daily-interest-review-modal");
     this.render();
+    if (!this.automaticGenerationChecked) {
+      this.automaticGenerationChecked = true;
+      const snapshot = this.controller.snapshot();
+      if (this.options.generateIfMissing && canGenerateMissingProposal(snapshot)) {
+        void this.generate(snapshot, true);
+      }
+    }
   }
 
   onClose(): void {
     this.captureDrafts();
     this.closed = true;
+    this.generationRequest?.abort("Review window closed");
     this.renderVersion += 1;
     this.contentEl.empty();
   }
@@ -261,7 +280,7 @@ export class PersonalLibraryInterestProfileModal extends Modal {
       },
     });
     if (primary) button.addClass("mod-cta");
-    button.disabled = this.pending || !generation.allowed;
+    button.disabled = this.pending || this.generationRequest !== null || !generation.allowed;
     button.addEventListener("click", () => void this.generate(snapshot));
     if (primary && !generation.allowed) {
       parent.createEl("p", { attr: { role: "status" }, text: generation.reason });
@@ -1014,46 +1033,61 @@ export class PersonalLibraryInterestProfileModal extends Modal {
     return { text: draft.text, discoveryCues: draft.discoveryCues };
   }
 
-  private async generate(snapshot: InterestProfileReviewSnapshot): Promise<void> {
-    if (snapshot.proposal) {
-      const choice = await chooseModal(this.app, "Regenerate proposed directions", "Replace the current proposal and all unconfirmed edits with newly generated directions?", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Regenerate", value: "regenerate", warning: true },
-      ]);
-      if (choice !== "regenerate" || this.closed) return;
-    }
-    // Consent is asked here rather than gating the button, so declining leaves
-    // the page usable and nothing has been sent.
-    if (snapshot.authorization.kind !== "authorized") {
-      let granted = false;
-      try {
-        granted = await this.controller.authorize();
-      } catch (error) {
-        this.controller.logError("authorize personal library processing", error);
-        this.errorMessage = safeUserError(error);
-        this.render();
-        return;
-      }
-      if (!granted || this.closed) {
-        this.render();
-        return;
-      }
-    }
-    // Progress lands on the button that started it: this modal covers the
-    // status bar, so anything reported there would be invisible here.
-    this.generationProgress = null;
-    this.generating = true;
+  private async generate(snapshot: InterestProfileReviewSnapshot, onlyIfMissing = false): Promise<void> {
+    if (this.closed || this.pending || this.generationRequest) return;
+    const request = new AbortController();
+    this.generationRequest = request;
+    this.render();
     try {
-      await this.run("generate proposals", async () => {
-        await this.controller.generate((progress) => {
-          this.generationProgress = progress;
-          this.updateGenerationLabel();
-        });
-        return this.controller.reload();
-      });
-    } finally {
-      this.generating = false;
+      if (snapshot.proposal) {
+        const choice = await chooseModal(this.app, "Regenerate proposed directions", "Replace the current proposal and all unconfirmed edits with newly generated directions?", [
+          { label: "Cancel", value: "cancel" },
+          { label: "Regenerate", value: "regenerate", warning: true },
+        ]);
+        if (choice !== "regenerate" || request.signal.aborted || this.closed) return;
+      }
+      // Consent is asked here rather than gating the button, so declining leaves
+      // the page usable and nothing has been sent.
+      if (snapshot.authorization.kind !== "authorized") {
+        let granted = false;
+        try {
+          granted = await this.controller.authorize();
+        } catch (error) {
+          if (request.signal.aborted || this.closed) return;
+          this.controller.logError("authorize personal library processing", error);
+          this.errorMessage = safeUserError(error);
+          return;
+        }
+        if (!granted || request.signal.aborted || this.closed) return;
+      }
+      // Authorization can outlive a refresh or another review window. Opening
+      // suggestions must never replace a proposal that appeared while waiting.
+      if (onlyIfMissing && !canGenerateMissingProposal(this.controller.snapshot())) return;
+      // Progress lands on the button that started it: this modal covers the
+      // status bar, so anything reported there would be invisible here.
       this.generationProgress = null;
+      this.generating = true;
+      try {
+        await this.run("generate proposals", async () => {
+          try {
+            await this.controller.generate((progress) => {
+              if (request.signal.aborted) return;
+              this.generationProgress = progress;
+              this.updateGenerationLabel();
+            }, request.signal);
+            if (request.signal.aborted || this.closed) return;
+            return await this.controller.reload();
+          } catch (error) {
+            if (!request.signal.aborted) throw error;
+          }
+        });
+      } finally {
+        this.generating = false;
+        this.generationProgress = null;
+        this.render();
+      }
+    } finally {
+      if (this.generationRequest === request) this.generationRequest = null;
       this.render();
     }
   }
@@ -1178,8 +1212,9 @@ export class PersonalLibraryInterestProfileModal extends Modal {
 export function openPersonalLibraryInterestProfileModal(
   app: App,
   controller: InterestProfileReviewController,
+  options: InterestProfileReviewOptions = {},
 ): PersonalLibraryInterestProfileModal {
-  const modal = new PersonalLibraryInterestProfileModal(app, controller);
+  const modal = new PersonalLibraryInterestProfileModal(app, controller, options);
   modal.open();
   return modal;
 }
@@ -1330,6 +1365,11 @@ export function incrementalSuggestionPaperCount(suggestion: DirectionDiffSuggest
 export function truncateReason(reason: string, maximum = 160): string {
   if (reason.length <= maximum) return reason;
   return `${reason.slice(0, maximum).trimEnd()}…`;
+}
+
+function canGenerateMissingProposal(snapshot: InterestProfileReviewSnapshot): boolean {
+  return !snapshot.proposal && !snapshot.proposalLoadError
+    && snapshot.indexedPapers.length > 0 && generationAvailability(snapshot).allowed;
 }
 
 function generationAvailability(snapshot: InterestProfileReviewSnapshot): { allowed: boolean; reason: string } {

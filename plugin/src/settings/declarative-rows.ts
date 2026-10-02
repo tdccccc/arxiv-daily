@@ -51,14 +51,7 @@ export function renderLibraryDirectionsRow(
   setting: Setting,
 ): void {
   prepareRow(setting);
-  setting.addButton((button) =>
-    button
-      .setButtonText("Review directions")
-      .onClick(() => tab.runAction(
-        "open personal library direction review",
-        async () => tab.plugin.openPersonalLibraryDirectionReview(),
-      )),
-  );
+  tab.renderLibrarySuggestionsControls(setting);
 }
 
 export function renderLlmBaseUrlRow(

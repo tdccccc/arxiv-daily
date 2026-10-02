@@ -75,3 +75,85 @@ describe("embedding model download failure classification", () => {
     expect(isEmbeddingModelDownloadNetworkError(undefined)).toBe(false);
   });
 });
+
+function featureExtractor() {
+  return vi.fn(async (texts: string | string[]) => ({
+    dims: [typeof texts === "string" ? 1 : texts.length, 384],
+    data: new Float32Array((typeof texts === "string" ? 1 : texts.length) * 384),
+  }));
+}
+
+describe("local model preparation progress", () => {
+  it("reports loading and file progress, then ready before embedding starts", async () => {
+    const onProgress = vi.fn();
+    const extractor = featureExtractor();
+    pipelineMock.mockImplementationOnce(async (_task, _repo, options) => {
+      // Transformers emits 'download' even when reading browser cache, so the
+      // callback cannot truthfully distinguish this from a network transfer.
+      options.progress_callback?.({ status: "download", name: "model", file: "weights.onnx" });
+      options.progress_callback?.({ status: "progress", name: "model", file: "weights.onnx", progress: 25, loaded: 25, total: 100 });
+      return extractor;
+    });
+    const model = createTransformersEmbeddingModel({ onProgress });
+    expect(onProgress).not.toHaveBeenCalled();
+
+    await model.embed(["hello"]);
+
+    expect(onProgress.mock.calls[0]?.[0]).toMatchObject({ phase: "loading" });
+    expect(onProgress.mock.calls.some(([event]) => event.phase === "loading" && event.progress === 25)).toBe(true);
+    expect(onProgress.mock.calls.at(-1)?.[0]).toMatchObject({ phase: "ready" });
+    expect(onProgress.mock.calls.some(([event]) => event.phase === "downloading")).toBe(false);
+    expect(onProgress.mock.calls.some(([event]) => /first use.*130 MB/i.test(event.message))).toBe(true);
+    expect(onProgress.mock.invocationCallOrder.at(-1)).toBeLessThan(extractor.mock.invocationCallOrder[1]!);
+
+    onProgress.mockClear();
+    await model.embed(["second call"]);
+    expect(pipelineMock).toHaveBeenCalledTimes(1);
+    expect(onProgress.mock.calls.map(([event]) => event.phase)).toEqual(["ready"]);
+  });
+
+  it.each(["factory", "embed"] as const)("stops notices after %s cancellation while loading continues", async (signalOwner) => {
+    let finishLoad!: () => void;
+    let report!: (event: Record<string, unknown>) => void;
+    const extractor = featureExtractor();
+    pipelineMock.mockImplementationOnce((_task, _repo, options) => {
+      report = options.progress_callback;
+      return new Promise((resolve) => { finishLoad = () => resolve(extractor); });
+    });
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    const model = createTransformersEmbeddingModel({
+      signal: signalOwner === "factory" ? controller.signal : undefined,
+      onProgress,
+    });
+    const pending = model.embed(["hello"], signalOwner === "embed" ? { signal: controller.signal } : undefined);
+    const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(pipelineMock).toHaveBeenCalledTimes(1));
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: "loading" }));
+    expect(report).toBeTypeOf("function");
+    controller.abort("cancelled by user");
+    await rejection;
+    const callsAtCancellation = onProgress.mock.calls.length;
+
+    report?.({ status: "progress", name: "model", file: "weights.onnx", progress: 75, loaded: 75, total: 100 });
+    finishLoad();
+    await vi.waitFor(() => expect(extractor).toHaveBeenCalledTimes(1));
+
+    expect(onProgress.mock.calls.length).toBe(callsAtCancellation);
+    expect(onProgress.mock.calls.some(([event]) => event.phase === "ready")).toBe(false);
+    if (signalOwner === "embed") {
+      onProgress.mockClear();
+      await model.embed(["retry"]);
+      expect(pipelineMock).toHaveBeenCalledTimes(1);
+      expect(onProgress.mock.calls.map(([event]) => event.phase)).toEqual(["ready"]);
+    }
+  });
+
+  it("does not announce ready after model loading fails", async () => {
+    const onProgress = vi.fn();
+    pipelineMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    await expect(createTransformersEmbeddingModel({ onProgress }).embed(["hello"])).rejects.toThrow(/download/);
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ phase: "loading" }));
+    expect(onProgress.mock.calls.some(([event]) => event.phase === "ready")).toBe(false);
+  });
+});

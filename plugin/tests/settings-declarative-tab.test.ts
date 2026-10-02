@@ -246,45 +246,52 @@ describe("declarative daily paper limit", () => {
 
 describe("wired getSettingDefinitions", () => {
   function libraryEntry(tab: ArxivDailySettingTab) {
-    const row = tab.getSettingDefinitions().find((item) => "name" in item && item.name === "Topics from your library");
-    expect(row).toBeDefined();
+    const groups = tab.getSettingDefinitions();
+    expect(groups.some((item) => item.name === "Topics from your library")).toBe(false);
+    const library = groups.find((item) => item.type === "group" && item.heading === "Personal library");
+    const entries = library?.type === "group" ? library.items.filter((item) => item.name === "Topics from library") : [];
+    expect(entries).toHaveLength(1);
     const setting = new Setting(document.createElement("div"));
-    if (row && "render" in row) row.render?.(setting);
-    const button = setting.controlEl.querySelector<HTMLButtonElement>("button");
-    expect(button).not.toBeNull();
-    return button!;
+    entries[0]?.render?.(setting);
+    const button = setting.controlEl.querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent).toBe("Review suggestions");
+    return { button, setting };
   }
 
-  it("opens direction review from research settings when an index is ready", async () => {
+  it("keeps one library suggestion entry and only opens review when indexed", async () => {
     const { tab, plugin } = makeTab();
-    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    plugin.indexPersonalLibraryFullText = vi.fn();
     plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
-    libraryEntry(tab).click();
-    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
+    const { button } = libraryEntry(tab);
+    expect(button.disabled).toBe(false);
+    button.click();
+    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledWith({ generateIfMissing: true }));
     expect(plugin.selectLibraryRoot).not.toHaveBeenCalled();
+    expect(plugin.indexPersonalLibraryFullText).not.toHaveBeenCalled();
   });
 
-  it("starts with choosing a library and stops when selection is cancelled", async () => {
+  it("keeps unprepared review disabled without starting another index", () => {
     const { tab, plugin } = makeTab();
-    libraryEntry(tab).click();
-    await vi.waitFor(() => expect(plugin.selectLibraryRoot).toHaveBeenCalledOnce());
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    plugin.indexPersonalLibraryFullText = vi.fn();
+    const { button, setting } = libraryEntry(tab);
+    expect(button.disabled).toBe(true);
+    expect(setting.descEl.textContent).toMatch(/prepar/i);
+    button.click();
     expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
+    expect(plugin.indexPersonalLibraryFullText).not.toHaveBeenCalled();
   });
 
-  it("opens review only after a successful index and stops on failure", async () => {
+  it("disables review while preparing even if an older index exists", () => {
     const { tab, plugin } = makeTab();
-    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
-    plugin.indexPersonalLibraryFullText = vi.fn(async () => { throw new Error("index failed"); });
-    const button = libraryEntry(tab);
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
+    plugin.libraryIndexStatus.beginRun("preparing", "scanning");
+    const { button } = libraryEntry(tab);
+    expect(button.disabled).toBe(true);
     button.click();
-    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
     expect(plugin.openPersonalLibraryDirectionReview).not.toHaveBeenCalled();
-    plugin.indexPersonalLibraryFullText = vi.fn(async () => {
-      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
-      return { indexed: 20, reused: 0, failed: 0, pruned: 0, titlesRefreshed: 0, outcomes: [] } as Awaited<ReturnType<ArxivDailyPlugin["indexPersonalLibraryFullText"]>>;
-    });
-    button.click();
-    await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalledOnce());
   });
 
   it("returns non-empty definitions with section groups", () => {
@@ -496,7 +503,7 @@ describe("personal library directions row", () => {
     const { tab, plugin } = makeTab();
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
     const items = libraryGroupItems(tab);
-    expect(items.some((item) => item.name === "Research directions")).toBe(false);
+    expect(items.some((item) => item.name === "Topics from library")).toBe(false);
   });
 
   it("shows directly below Library once a folder is chosen, before any remote authorization", () => {
@@ -507,7 +514,7 @@ describe("personal library directions row", () => {
     });
     const items = libraryGroupItems(tab);
     const libraryIndex = items.findIndex((item) => item.name === "Library");
-    const directionsIndex = items.findIndex((item) => item.name === "Research directions");
+    const directionsIndex = items.findIndex((item) => item.name === "Topics from library");
     expect(libraryIndex).toBeGreaterThanOrEqual(0);
     expect(directionsIndex).toBe(libraryIndex + 1);
     expect(items[directionsIndex]?.desc).toEqual(expect.stringContaining("daily reports"));
@@ -521,11 +528,12 @@ describe("personal library directions row", () => {
       grantedAt: new Date().toISOString(),
     });
     const items = libraryGroupItems(tab);
-    expect(items.some((item) => item.name === "Research directions")).toBe(true);
+    expect(items.some((item) => item.name === "Topics from library")).toBe(true);
   });
 
   it("reflects saved topic directions without loading a retired profile", () => {
     const { tab, plugin } = makeTab();
+    plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
     vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
       rootLabel: "papers",
@@ -538,17 +546,19 @@ describe("personal library directions row", () => {
       ],
     })];
     const items = libraryGroupItems(tab);
-    const row = items.find((item) => item.name === "Research directions");
+    const row = items.find((item) => item.name === "Topics from library");
     expect(row?.desc).toContain("2 saved directions");
   });
 
   it("opens the direction review modal when its button is clicked", async () => {
     const { tab, plugin } = makeTab();
+    vi.mocked(plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
+    plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
     const setting = new Setting(tab.containerEl);
     renderLibraryDirectionsRow(tab, setting);
     const buttons = [...setting.settingEl.querySelectorAll("button")];
     expect(buttons).toHaveLength(1);
-    expect(buttons[0]?.textContent).toBe("Review directions");
+    expect(buttons[0]?.textContent).toBe("Review suggestions");
     buttons[0]?.click();
     await vi.waitFor(() => expect(plugin.openPersonalLibraryDirectionReview).toHaveBeenCalled());
   });
@@ -619,7 +629,7 @@ describe("personal library settings row", () => {
     );
   });
 
-  it("offers Build index after a local folder is selected without requiring authorization", () => {
+  it("offers Retry preparation after a local folder is selected without requiring authorization", () => {
     const { tab, plugin } = makeTab();
     plugin.settings.embedding.mode = "local";
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
@@ -630,7 +640,7 @@ describe("personal library settings row", () => {
     const { buttons, setting } = renderLibraryButtons(tab);
     expect(buttons.map((button) => button.text)).toEqual([
       "Change folder",
-      "Build index",
+      "Retry preparation",
     ]);
     expect(buttons[1]?.cta).toBe(true);
     expect(setting.setDesc).toHaveBeenCalledWith(
@@ -643,7 +653,7 @@ describe("personal library settings row", () => {
     );
   });
 
-  it("keeps Build index as the main action while remote consent is still pending", () => {
+  it("keeps Retry preparation as the main action while remote consent is still pending", () => {
     const { tab, plugin } = makeTab();
     plugin.settings.embedding.mode = "remote";
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
@@ -654,7 +664,7 @@ describe("personal library settings row", () => {
     const pending = renderLibraryButtons(tab);
     expect(pending.buttons.map((button) => button.text)).toEqual([
       "Change folder",
-      "Build index",
+      "Retry preparation",
     ]);
     expect(pending.buttons[1]?.cta).toBe(true);
     // The row still says the remote grant is missing; only the button changed.
@@ -675,7 +685,7 @@ describe("personal library settings row", () => {
     const authorized = renderLibraryButtons(tab);
     expect(authorized.buttons.map((button) => button.text)).toEqual([
       "Change folder",
-      "Build index",
+      "Retry preparation",
       "Revoke",
     ]);
     expect(authorized.buttons[1]?.cta).toBe(true);
@@ -737,7 +747,7 @@ describe("personal library settings row", () => {
           expect(label.toLowerCase()).not.toContain("authoriz");
         }
         // The main action is always folder selection or indexing.
-        expect(["Choose folder", "Build index"]).toContain(labels.at(-1) === "Revoke"
+        expect(["Choose folder", "Retry preparation"]).toContain(labels.at(-1) === "Revoke"
           ? labels.at(-2)
           : labels.at(-1));
       }
@@ -746,7 +756,7 @@ describe("personal library settings row", () => {
     openMenu.mockRestore();
   });
 
-  it("shows Build index for a legacy remote library that was never granted", () => {
+  it("shows Retry preparation for a legacy remote library that was never granted", () => {
     const { tab, plugin } = makeTab();
     plugin.settings.embedding.mode = "remote";
     const runAction = vi.spyOn(tab, "runAction").mockImplementation(() => {});
@@ -758,7 +768,7 @@ describe("personal library settings row", () => {
 
     expect(buttons.map((button) => button.text)).toEqual([
       "Change folder",
-      "Build index",
+      "Retry preparation",
     ]);
     expect(setting.setDesc).toHaveBeenCalledWith(
       expect.stringMatching(/changed/i),
@@ -857,6 +867,15 @@ describe("personal library settings row", () => {
       vi.mocked(tab.refreshSettings).mockClear();
       plugin.libraryIndexStatus.endRun();
       expect(tab.refreshSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes retry and review availability when a saved index becomes available while idle", () => {
+      const { tab, plugin } = connectedTab();
+      renderLibraryButtons(tab);
+      vi.mocked(tab.refreshSettings).mockClear();
+      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
+      expect(tab.refreshSettings).toHaveBeenCalledOnce();
+      expect(renderLibraryButtons(tab).buttons.map(({ text }) => text)).toEqual(["Change folder"]);
     });
 
     it("stops following the run once the tab is closed", () => {

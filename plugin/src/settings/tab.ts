@@ -68,7 +68,6 @@ import {
 import type { LibraryIndexStatus } from "../library/index-status";
 import { describeFullTextIndexCompletion } from "../library/index-completion";
 import {
-  confirmEmbeddingMode,
   confirmLibraryAuthorization,
   confirmLibraryRevocation,
 } from "../library/modal";
@@ -185,6 +184,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private libraryRowElements: LibraryRowElements | undefined;
   /** Which structure the row was last rendered with: with a run, or without. */
   private libraryRowShowsRun = false;
+  private libraryRowHasIndex = false;
   private libraryStatusUnsubscribe: (() => void) | undefined;
   private libraryStatusFlushTimer: number | undefined;
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
@@ -252,7 +252,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderCategoryRow(this, setting, index),
       renderTopicRow: (setting, index) =>
         declarativeRows.renderTopicRow(this, setting, index),
-      renderLibraryTopicEntry: (setting) => this.renderLibraryTopicEntry(setting),
       renderTimezoneRow: (setting) =>
         declarativeRows.renderTimezoneRow(this, setting),
       renderOutputDirectoryRow: (setting, key) =>
@@ -514,9 +513,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       title: "How this works",
       lines: [
         "Optional — daily reports work the same without a library.",
-        "1. Choose a folder of PDFs; nothing leaves this device.",
-        "2. Build index (button below) to search paper titles and abstracts from the command palette — the first run also scans the folder and queries arXiv with paper IDs or titles; its model downloads once, then runs locally. Later builds reuse the saved scan.",
-        "3. Review directions (button below) suggests topics from indexed titles and abstracts, including PDFs without an arXiv match when that text can be extracted. Only directions you add to Research topics steer daily reports. Remote embedding and model processing always ask first.",
+        "1. Choose a folder of PDFs to automatically prepare a title-and-abstract search index. The first preparation scans the folder and queries arXiv with paper IDs or titles; network access is needed. Later preparations reuse the saved scan.",
+        "2. Review suggestions (button below) generates topic suggestions on first use and opens saved suggestions afterwards, including PDFs without an arXiv match when their titles and abstracts can be extracted. Only directions you add to Research topics steer daily reports. Remote embedding and model processing always ask first.",
+        "Local embedding is the default. Its model downloads once (about 130 MB), then runs locally. If preparation fails or is cancelled, use Retry preparation. Search from the command palette when ready.",
       ],
     };
   }
@@ -587,6 +586,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.libraryRowElements = live;
     this.libraryRowShowsRun = Boolean(row.cancel);
+    this.libraryRowHasIndex = Boolean(indexStatus.lastRun?.papers);
     this.watchLibraryIndexStatus();
   }
 
@@ -622,7 +622,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
    * keeps a half-typed value in another row from being thrown away mid-run.
    */
   private onLibraryIndexStatusChange(status: LibraryIndexStatus): void {
-    if (Boolean(status.activity) !== this.libraryRowShowsRun) {
+    if (Boolean(status.activity) !== this.libraryRowShowsRun
+      || (!status.activity && Boolean(status.lastRun?.papers) !== this.libraryRowHasIndex)) {
       this.clearLibraryStatusFlush();
       this.refreshSettings();
       return;
@@ -697,62 +698,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       return;
     }
     if (result === "selected") {
-      new Notice("arXiv Daily: personal library selected. You can preview files locally before authorizing model processing.");
       this.refreshSettings();
-      await this.offerEmbeddingModeChoice();
+      await this.indexPersonalLibraryFullText();
     }
   }
 
-  public renderLibraryTopicEntry(setting: Setting): void {
-    const status = this.plugin.getLibraryConnectionStatus();
+  public renderLibrarySuggestionsControls(setting: Setting): void {
     const index = this.plugin.libraryIndexStatus.snapshot();
-    setting.setName("Topics from your library");
-    setting.setDesc("Choose which library suggestions to follow in your daily reports.");
+    setting.setDesc(libraryDirectionsRowDesc(this.plugin));
     setting.addButton((button) => button
-      .setButtonText(index.lastRun?.papers ? "Review suggestions" : "Use my library")
-      .setDisabled(Boolean(index.activity))
-      .onClick(() => this.runAction("review library directions", async () => {
-        button.setDisabled(true);
-        try {
-          if (status.kind === "disconnected") await this.chooseLibraryRoot();
-          if (this.plugin.getLibraryConnectionStatus().kind === "disconnected") return;
-          if (!this.plugin.libraryIndexStatus.snapshot().lastRun?.papers) await this.indexPersonalLibraryFullText();
-          if (!this.plugin.libraryIndexStatus.snapshot().lastRun?.papers) return;
-          this.plugin.openPersonalLibraryDirectionReview();
-        } finally {
-          button.setDisabled(Boolean(this.plugin.libraryIndexStatus.snapshot().activity));
-        }
-      })));
-  }
-
-  /**
-   * First-time guided choice between local and remote embedding (ADR 0008),
-   * offered once when a library is first connected. Dismissing keeps local;
-   * the mode stays changeable in settings (switching rebuilds the index).
-   *
-   * This is also where a remote switch made before any folder existed gets its
-   * disclosure: selecting the folder is the first moment the modal can name
-   * what would be sent.
-   */
-  private async offerEmbeddingModeChoice(): Promise<void> {
-    if (!this.plugin.settings.embedding.initialChoiceDone) {
-      const mode = await confirmEmbeddingMode(this.app);
-      this.plugin.settings.embedding.mode = mode;
-      this.plugin.settings.embedding.initialChoiceDone = true;
-      await this.plugin.saveSettings();
-      this.refreshSettings();
-      new Notice(
-        mode === "remote"
-          ? "arXiv Daily: remote embedding enabled — confirm what leaves this device next."
-          : "arXiv Daily: local embedding. Its model downloads once on the first index build, then runs offline. You can switch to remote in settings anytime.",
-        10_000,
-      );
-    }
-    if (this.plugin.settings.embedding.mode !== "remote") return;
-    if (this.plugin.getLibraryConnectionStatus().kind === "authorized") return;
-    // Declining here leaves remote embedding ungranted on purpose: the same
-    // disclosure is asked again in front of indexing, so nothing is stuck.
-    await this.requestRemoteFullTextConsent();
+      .setButtonText("Review suggestions")
+      .setDisabled(Boolean(index.activity) || !index.lastRun?.papers)
+      .onClick(() => {
+        const current = this.plugin.libraryIndexStatus.snapshot();
+        if (current.activity || !current.lastRun?.papers) return;
+        this.runAction("open personal library direction review", async () => {
+          this.plugin.openPersonalLibraryDirectionReview({ generateIfMissing: true });
+        });
+      }));
   }
 
   /**
@@ -1595,7 +1558,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Each topic becomes one section in the daily report.",
     );
 
-    this.renderLibraryTopicEntry(new Setting(containerEl));
     new Setting(containerEl)
       .setName("Quick start")
       .setDesc("Load a preset bundle of topics or add one manually.")
@@ -1809,21 +1771,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.libraryGuide(containerEl, this.libraryGuideContent());
     const librarySetting = new Setting(containerEl)
       .setName("Library")
-      .setDesc("Choose a folder of PDFs, then build a search index to search them. On its own, this does not change daily reports.");
+      .setDesc("Choose a folder of PDFs to prepare its search index automatically. Only suggestions you accept change daily reports.");
     this.renderLibraryConnectionControls(librarySetting);
 
     if (this.plugin.getLibraryConnectionStatus().kind !== "disconnected") {
-      new Setting(containerEl)
-        .setName("Research directions")
-        .setDesc(libraryDirectionsRowDesc(this.plugin))
-        .addButton((button) =>
-          button
-            .setButtonText("Review directions")
-            .onClick(() => this.runAction(
-              "open personal library direction review",
-              async () => this.plugin.openPersonalLibraryDirectionReview(),
-            )),
-        );
+      const suggestions = new Setting(containerEl).setName("Topics from library");
+      this.renderLibrarySuggestionsControls(suggestions);
     }
 
     new Setting(containerEl)

@@ -82,6 +82,7 @@ import { chooseModal } from "./src/services/modal";
 import {
   openPersonalLibraryInterestProfileModal,
   type InterestProfileReviewController,
+  type InterestProfileReviewOptions,
 } from "./src/library/interest-profile-modal";
 import { LlmClient } from "@arxiv-daily/core";
 import { ArxivFetcher } from "@arxiv-daily/core";
@@ -160,6 +161,7 @@ import {
   resolveLibraryPdfOpenTarget,
 } from "./src/library/pdf-opener";
 import { LibraryIndexStatusStore } from "./src/library/index-status";
+import type { TransformersEmbeddingModelOptions } from "./src/hosts/obsidian/embedding-model";
 import type { FullTextIndexLibraryContext } from "./src/library/index-completion";
 import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-acceptance-state";
 
@@ -769,8 +771,8 @@ export default class ArxivDailyPlugin extends Plugin {
       : null;
   }
 
-  openPersonalLibraryDirectionReview(): void {
-    openPersonalLibraryInterestProfileModal(this.app, this.personalLibraryReviewController());
+  openPersonalLibraryDirectionReview(options?: InterestProfileReviewOptions): void {
+    openPersonalLibraryInterestProfileModal(this.app, this.personalLibraryReviewController(), options);
   }
 
   private personalLibraryReviewController(): InterestProfileReviewController {
@@ -797,7 +799,7 @@ export default class ArxivDailyPlugin extends Plugin {
       },
       authorize: () => this.confirmPersonalLibraryDirectionAuthorization(),
       logError: (action, error) => this.logger.error(`library review: ${action} failed`, error),
-      generate: (onProgress) => this.generatePersonalLibraryDirections(onProgress),
+      generate: (onProgress, signal) => this.generatePersonalLibraryDirections(onProgress, signal),
       updateProposal: (input) => this.updatePersonalLibraryProposalCandidate(input),
       discardProposal: (candidateId) => this.removePersonalLibraryProposalCandidate(candidateId),
       renameTopic: (input) => this.renamePersonalLibraryProposedTopic(input),
@@ -1112,7 +1114,9 @@ export default class ArxivDailyPlugin extends Plugin {
 
   async generatePersonalLibraryDirections(
     onProgress?: (progress: DirectionProposalProgress) => void,
+    callerSignal?: AbortSignal,
   ): Promise<PersonalLibraryDirectionProposal> {
+    throwIfCancelled(callerSignal);
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
     if (this.getLibraryConnectionStatus().kind !== "authorized") {
@@ -1138,7 +1142,11 @@ export default class ArxivDailyPlugin extends Plugin {
       "Personal library direction generation",
       scopeFingerprint,
     );
+    const cancelFromCaller = () => this.operations.cancel(operation.id, "review closed");
+    callerSignal?.addEventListener("abort", cancelFromCaller, { once: true });
+    if (callerSignal?.aborted) cancelFromCaller();
     try {
+      throwIfCancelled(operation.signal);
       this.assertPersonalLibraryGenerationCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint,
         catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
@@ -1183,6 +1191,7 @@ export default class ArxivDailyPlugin extends Plugin {
       if (this.isReviewPersistenceConflict(error)) await this.reloadPersonalLibraryProfileDocuments();
       throw error;
     } finally {
+      callerSignal?.removeEventListener("abort", cancelFromCaller);
       operation.finish();
     }
   }
@@ -1477,7 +1486,7 @@ export default class ArxivDailyPlugin extends Plugin {
    * use, then cached), or the remote OpenAI-compatible model when the
    * embedding mode is `remote`.
    */
-  private buildEmbeddingModel(): EmbeddingModel {
+  private buildEmbeddingModel(options?: TransformersEmbeddingModelOptions): EmbeddingModel {
     if (this.settings.embedding.mode === "remote") {
       return createRemoteEmbeddingModel({
         baseUrl: this.settings.embedding.baseUrl,
@@ -1487,7 +1496,7 @@ export default class ArxivDailyPlugin extends Plugin {
         http: this.host.http,
       });
     }
-    return createTransformersEmbeddingModel();
+    return createTransformersEmbeddingModel(options);
   }
 
   /**
@@ -1527,14 +1536,14 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
-   * Incrementally index the personal library's full text into the local
+   * Incrementally index the personal library's titles and abstracts into the local
    * knowledge base: extract (Obsidian built-in pdf.js) → chunk → embed
    * (multilingual-e5-small q8, or the remote endpoint in remote mode) →
    * store. Unchanged papers are reused via their
    * catalog observation fingerprints; failures are recorded and retried on
    * the next run. Local mode is independent of any model processing
-   * authorization; remote mode requires full-text authorization and sends
-   * full-text chunks to the configured embedding endpoint.
+   * authorization; remote mode requires authorization and sends title-and-abstract
+   * chunks to the configured embedding endpoint.
    */
   async indexPersonalLibraryFullText(): Promise<FullTextIndexRunSummary> {
     const connection = this.libraryConnection;
@@ -1629,7 +1638,18 @@ export default class ArxivDailyPlugin extends Plugin {
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
       const extractor = this.buildFullTextExtractor();
-      const embedding = this.buildEmbeddingModel();
+      let paperProgress: { completed?: number; total?: number } = {};
+      const embedding = this.buildEmbeddingModel({
+        signal: operation.signal,
+        onProgress: (progress) => {
+          if (operation.signal.aborted || this.libraryIndexStatus.snapshot().activity?.operationId !== operation.id) return;
+          const phase = progress.phase === "ready"
+            ? "extracting and embedding titles and abstracts"
+            : `${progress.message}${progress.progress === undefined ? "" : ` (${Math.round(progress.progress)}%)`}`;
+          this.libraryIndexStatus.report({ phase, ...(progress.phase === "ready" ? paperProgress : {}) });
+          if (updateProgress) this.progress?.setTask("Preparing personal library", phase);
+        },
+      });
       const store = this.buildFullTextKnowledgeBaseStore(connection);
       const generationStore = this.buildFullTextGenerationIndexStore(connection);
       const generationWriterToken = createFullTextGenerationWriterToken();
@@ -1657,6 +1677,7 @@ export default class ArxivDailyPlugin extends Plugin {
           : undefined,
         onProgress: (detail, progress) => {
           operation.signal.throwIfAborted();
+          paperProgress = progress ? { completed: progress.completed, total: progress.total } : {};
           if (updateProgress) this.progress?.setTask("Indexing library titles and abstracts", detail);
           this.libraryIndexStatus.report({
             phase: progress?.phase === "preparing"

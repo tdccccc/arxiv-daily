@@ -46,7 +46,7 @@ import type {
   EmbeddingModel,
   EmbeddingOptions,
 } from "@arxiv-daily/core";
-import type { FeatureExtractionPipeline } from "@huggingface/transformers";
+import type { FeatureExtractionPipeline, ProgressInfo } from "@huggingface/transformers";
 
 /** Stable model identifier shared with core's knowledge-base manifest. */
 export const EMBEDDING_MODEL_ID = "multilingual-e5-small-q8";
@@ -60,7 +60,16 @@ const EXPECTED_DIMENSION = 384;
 /** Texts per inference call: bounds q8-session memory and gives abort granularity. */
 const EMBED_BATCH_SIZE = 8;
 
+export interface ModelPreparationProgress {
+  phase: "loading" | "downloading" | "ready";
+  message: string;
+  /** Percentage for the model file or aggregate named by the message. */
+  progress?: number;
+}
+
 export interface TransformersEmbeddingModelOptions {
+  /** Preparation updates for active embed calls; silenced after cancellation. */
+  onProgress?: (progress: ModelPreparationProgress) => void;
   /**
    * Hugging Face mirror base URL, e.g. `"https://hf-mirror.com"`. Applied to
    * transformers.js `env.remoteHost` before the first model load; the default
@@ -139,6 +148,8 @@ export function createTransformersEmbeddingModel(
 class LazyModelLoader {
   private modulePromise: Promise<TransformersModule> | null = null;
   private pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
+  private ready = false;
+  private readonly progressListeners = new Set<(progress: ModelPreparationProgress) => void>();
 
   constructor(private readonly options?: TransformersEmbeddingModelOptions) {}
 
@@ -147,9 +158,38 @@ class LazyModelLoader {
    * signal. The underlying load is never cancelled — aborting only rejects
    * this caller — so a later embed reuses the completed load.
    */
-  ensure(signal?: AbortSignal): Promise<FeatureExtractionPipeline> {
-    const loading = this.pipelinePromise ?? this.startLoad();
-    return signal ? raceWithAbort(loading, signal) : loading;
+  async ensure(signal?: AbortSignal): Promise<FeatureExtractionPipeline> {
+    const report = (progress: ModelPreparationProgress) => {
+      if (!signal?.aborted && !this.options?.signal?.aborted) this.options?.onProgress?.(progress);
+    };
+    this.progressListeners.add(report);
+    try {
+      if (!this.ready) report({
+        phase: "loading",
+        message: "Loading local model files; first use may download about 130 MB.",
+      });
+      const loading = this.pipelinePromise ?? this.startLoad();
+      const extractor = await (signal ? raceWithAbort(loading, signal) : loading);
+      report({ phase: "ready", message: "Local model ready; extracting and embedding titles and abstracts." });
+      return extractor;
+    } finally {
+      this.progressListeners.delete(report);
+    }
+  }
+
+  private reportPreparation(event: ProgressInfo): void {
+    // Transformers emits `download` and `progress` even for browser-cache
+    // reads. These events prove file loading, not a network download; reserve
+    // the downloading phase for a future source that can tell the difference.
+    const progress = "progress" in event && Number.isFinite(event.progress)
+      ? Math.min(100, Math.max(0, event.progress))
+      : undefined;
+    const message = event.status === "ready"
+      ? "Initializing the local model."
+      : "file" in event
+        ? `Loading local model file: ${event.file}.`
+        : "Loading local model files.";
+    for (const report of this.progressListeners) report({ phase: "loading", message, progress });
   }
 
   private startLoad(): Promise<FeatureExtractionPipeline> {
@@ -172,6 +212,7 @@ class LazyModelLoader {
       extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
         dtype: "q8",
         device,
+        progress_callback: this.options?.onProgress ? (event) => this.reportPreparation(event) : undefined,
       });
     } catch (error) {
       throw isLikelyNetworkError(error) ? embeddingModelDownloadNetworkError(error) : error;
@@ -190,6 +231,7 @@ class LazyModelLoader {
           "refusing to serve inconsistent vectors.",
       );
     }
+    this.ready = true;
     return extractor;
   }
 

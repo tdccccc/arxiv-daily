@@ -68,7 +68,7 @@ export function librarySetupNextStep(
   if (status.kind === "disconnected") {
     return {
       action: "choose-folder",
-      description: "Choose a folder of PDFs. Searching uses this library, not the daily report list.",
+      description: "Choose a folder of PDFs to automatically prepare a title-and-abstract search index.",
     };
   }
   const rootLabel = status.rootLabel;
@@ -88,8 +88,8 @@ export function librarySetupNextStep(
     rootLabel,
     remoteConsentPending: false,
     description: embeddingMode === "remote"
-      ? `Connected: ${rootLabel}. Authorized to embed titles and abstracts remotely. Build the search index next.`
-      : `Selected: ${rootLabel}. Local embedding stays on this device. Build the search index to search these PDFs.`,
+      ? `Connected: ${rootLabel}. Authorized to embed titles and abstracts remotely.`
+      : `Selected: ${rootLabel}. Local embedding stays on this device.`,
   };
 }
 
@@ -156,8 +156,8 @@ export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresen
     return {
       description: activity.cancelling
         ? `Stopping the index run for ${next.rootLabel} — it finishes the step it is on first.`
-        : `Indexing ${next.rootLabel} — ${activity.phase}. Nothing is saved until the run finishes, `
-          + "so cancelling discards it.",
+        : `Preparing ${next.rootLabel} — ${activity.phase}. Scan results may already be saved; `
+          + "cancelling stops the remaining work.",
       primary: { label: indexingLabel(activity), disabled: true },
       chooseFolder: { label: chooseFolderLabel, disabled: true },
       cancel: {
@@ -171,7 +171,7 @@ export function libraryRowPresentation(input: LibraryRowInput): LibraryRowPresen
   const trace = input.lastRun ? ` ${lastIndexedSentence(input.lastRun)}` : "";
   return {
     description: `${next.description}${trace}`,
-    primary: { label: "Build index", disabled: false },
+    ...(!input.lastRun?.papers ? { primary: { label: "Retry preparation", disabled: false } } : {}),
     chooseFolder: { label: chooseFolderLabel, disabled: false },
     ...(input.status.kind === "authorized"
       ? { revoke: { label: "Revoke", disabled: false } }
