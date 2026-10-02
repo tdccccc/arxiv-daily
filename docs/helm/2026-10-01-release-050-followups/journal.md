@@ -93,3 +93,12 @@
 - 最终本地3519通过/2既有跳过，lint0 errors/20 warnings，typecheck/build/boundaries/submission/version-check、342release-tools及build/install smoke通过。说明新增元数据/设置安全处理一行。
 - 手测目录备份pre-codeql-fixes后更新三件资产，未改data.json或启动Obsidian。详细CI链接、告警对应提交和限制见codeql-verification.md。
 - P6仍active：当前远程CodeQL结果只对应163f2f6。没有第二次push授权，没有关闭/抑制告警；请求用户单次授权后重跑再验收。
+
+## 2026-10-02 — PR51合并与main原生测试异常
+
+- 用户分别授权第二次push、按已展示草稿更新PR51/Ready、普通merge。ace7745全部14个checks成功（10required），CodeQL结果0新annotations且五条告警不在PR open列表。
+- PR51与PR43均merged到c620caeda05af5bfa5c4236f935b6b30d75fb8b6；merge tree与ace7745一致。未reset本地main，未创建0.5.0标签/GitHub Release/npm版本。远程Tag为空、Release与npm0.5.0查询均不存在。
+- main native run37012308927第一次macOS arm64 test8备份读到3NUL，expected old；其余9测试通过，新primary=new。下载TAP证据在/tmp/arxiv-main-native-darwin-arm64-evidence。第一次下载TLS超时，第二次成功。
+- 只读C++/测试复核未定位确定缺陷，也未发现fixture并行/互删；测试首次读old太晚，无法区分写入/硬链/改名阶段。Linux10/10与四模式各100次通过不代表macOS通过。
+- 作为定位实验执行同SHA失败任务rerun，attempt2全部native/assembly成功；不把这写成第一次异常已解决。报告/tmp/arxiv-native-backup-corruption-review.md、/tmp/arxiv-native-backup-test-review.md。
+- 从c620cae创建本地fix/native-backup-diagnostics，P7只准备诊断与测试，不改C++生产逻辑。推送与创建诊断PR尚未授权，正式发布继续停在授权点。

@@ -56,9 +56,13 @@ jobs:
       - name: Prepare verified official Node SDK
         run: node scripts/native-sdk.mjs
       - name: Build native support
+        id: native_build
         run: node scripts/native-build.mjs
       - name: Test native filesystem capability
         run: node --test --test-reporter=tap --test-reporter-destination=packages/node-runtime/native/build/native.tap packages/node-runtime/native/tests/storage.test.cjs
+      - name: Diagnose native hard-link backup integrity
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        run: node packages/node-runtime/native/tests/backup-diagnostic.cjs > packages/node-runtime/native/build/backup-diagnostic.json
       - name: Test private storage and shared locks
         working-directory: packages/node-runtime
         run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.mts tests/native-private-storage.test.ts tests/native-storage-loader.test.ts tests/file-lock.test.ts --reporter=json --outputFile=native/build/runtime.json
@@ -97,6 +101,7 @@ jobs:
             packages/node-runtime/native/build/*host.json
             packages/node-runtime/native/build/runtime.json
             packages/node-runtime/native/build/native-build.json
+            packages/node-runtime/native/build/backup-diagnostic.json
           if-no-files-found: warn
           retention-days: 30
 
