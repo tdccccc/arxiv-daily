@@ -16,3 +16,9 @@ Final verification: 13 DSH tests (including actual 0.1.7-alpha.1 Host, none skip
 ## 2026-10-02T19:45:14+08:00 — Revisit P1 via P2 after an activation collision
 
 The user's screenshot shows DSH refusing the plugin because /api already has an interceptor. Installed Connection source confirms that interceptor is a single slot; installed API Gateway claims it. P1's isolated smoke test accepted our response without asserting Gateway health, so it could miss the opposite activation order failing the built-in gateway. That integration acceptance is superseded. Retain the process controller, UI, workbench, data and security boundary; replace only the transport registration and strengthen tests. P2 is the only active phase.
+
+## 2026-10-02T20:03:50+08:00 — P2 accepted, activation fix packaged as 0.1.1
+
+The fault was our use of Connection's single /api interceptor, which belongs to the built-in Gateway. Exact authenticated Fetch-route registration fixes both load orders and keeps the existing UI/RPC contract. A separate channel was evaluated and rejected after the installed Host exposed a webServer injection failure. No host patch or permission weakening was introduced.
+
+Sixteen DSH checks pass, including the screenshot reproduction now Green, explicit Gateway/plugin activation state, actual Plugin Manager disable/re-enable, persisted marks and lifecycle cleanup. Inventory and boundaries pass. All original success criteria are re-accepted with this stronger coexistence evidence; P2 and the initiative are done. New local 0.1.1 archive is ready for the user's installation. Their live DSH profile and research files were not changed.

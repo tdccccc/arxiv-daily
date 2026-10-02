@@ -1,9 +1,9 @@
 # DSH research workbench plugin
 
-status: active
+status: done
 created: 2026-10-02T14:56:36+08:00
-updated: 2026-10-02T19:45:14+08:00
-revision: 3
+updated: 2026-10-02T20:03:50+08:00
+revision: 4
 owner: /root
 
 ## Intent
@@ -33,4 +33,4 @@ Make the existing research workbench an installable DSH capability with a visibl
 ## Phases
 
 1. P1 — Installable literature entry and managed workbench in DSH — status: superseded
-2. P2 — Coexist with the DSH gateway during startup and plugin activation — status: active
+2. P2 — Coexist with the DSH gateway during startup and plugin activation — status: done
