@@ -13,3 +13,9 @@ P1 on track：无配置打开、图形编辑保存、立即运行日报已打通
 ## 2026-10-03T12:53:53+08:00 — L3 settings parity
 
 用户拒绝自创“每日发现”等分组，并明确下拉/开关/选项均依照Obsidian。新增P5先补设置复刻，P2暂回pending。P1首次启动与保存证据保留；自定义设置布局由P5替换。基准为1.13+主路径，legacy仅对照不混入。
+
+## 2026-10-03T13:24:49+08:00 — P5 accepted
+
+On track: replaced the custom settings design with the Obsidian 1.13+ controls and section order. P5 evidence and host adaptations are recorded in its phase. New 0.1.5 archive is ready, not automatically installed in the user's running DSH. Restart is required after upgrade.
+
+Return focus to P2: connection, consent and build controls are now available in Settings through P5. Remaining library product work is the dedicated catalog/search/review experience; P3 direction review and P4 richer run management are still pending. Do not redo the accepted settings layer or claim full application parity.
