@@ -83,15 +83,19 @@ function fakeListener() {
 /**
  * Session stub for the full-text extractor build. `enabled` drives two
  * things at once, mirroring `buildFullTextExtractor` in plugin/main.ts: it is
- * read back from the settings JSON, and it is what makes the real plugin log
- * the "not used for indexing" note. `probes` simulates a regression where
- * building the extractor talks to the sidecar anyway.
+ * read back from the settings JSON, and it is what makes the real plugin
+ * append the "not used for indexing" note to its diagnostics *log buffer*
+ * (`Logger.getBuffer()`) -- not the console, which `Logger.info` only writes
+ * to when the log level is turned up to "debug" (see readLoggerBuffer's
+ * comment in scenarios.mjs). `probes` simulates a regression where building
+ * the extractor talks to the sidecar anyway.
  */
 function sidecarSession(
   { enabled, builtProvenanceId = "obsidian-pdfjs", probes, errorsOnChange = [], preexisting = [] },
   listener,
 ) {
-  const entries = [...preexisting];
+  const buffer = [];
+  const errors = [...preexisting];
   return {
     evaluate: async (expression) => {
       if (expression.includes("pdfParserSidecar ?? null")) {
@@ -101,26 +105,26 @@ function sidecarSession(
           parseUrl: listener.parseUrl,
         });
       }
+      if (expression.includes("getBuffer")) {
+        return JSON.stringify(buffer);
+      }
       if (expression.includes("settingsChanges.changeValue")) {
-        entries.push(...errorsOnChange);
+        errors.push(...errorsOnChange);
         return "changed";
       }
       if (expression.includes("buildFullTextExtractor")) {
         if (probes) listener.record();
         if (enabled) {
-          entries.push({
-            source: "console",
-            level: "info",
-            text: "[arxiv-daily] fulltext: the local PDF parser sidecar is not used for indexing; the index reads titles and abstracts with PDF.js",
-          });
+          buffer.push(
+            "[INFO] fulltext: the local PDF parser sidecar is not used for indexing; the index reads titles and abstracts with PDF.js",
+          );
         }
         return JSON.stringify({ provenanceId: builtProvenanceId });
       }
       return "waited";
     },
     diagnostics: {
-      errors: () => entries.filter((entry) => entry.level === "error"),
-      entries: () => [...entries],
+      errors: () => [...errors],
     },
   };
 }
@@ -194,15 +198,42 @@ test("the enabled-ignored scenario fails when no documented note was logged", as
 test("the enabled-ignored scenario fails when the settings transaction rejected the change", async () => {
   const listener = fakeListener();
   const session = {
-    evaluate: async (expression) =>
-      expression.includes("settingsChanges.changeValue")
-        ? "ERROR: Invalid sidecar configuration"
-        : "waited",
-    diagnostics: { errors: () => [], entries: () => [] },
+    evaluate: async (expression) => {
+      if (expression.includes("getBuffer")) return JSON.stringify([]);
+      if (expression.includes("settingsChanges.changeValue")) return "ERROR: Invalid sidecar configuration";
+      return "waited";
+    },
+    diagnostics: { errors: () => [] },
   };
   const result = await sidecarEnabledIgnoredScenario({ session, listener });
   assert.equal(result.passed, false);
   assert.match(result.detail, /Invalid sidecar configuration/);
+});
+
+test("the enabled-ignored scenario fails when the plugin exposes no logger buffer", async () => {
+  const listener = fakeListener();
+  const session = {
+    evaluate: async (expression) => (expression.includes("getBuffer") ? JSON.stringify(null) : "waited"),
+    diagnostics: { errors: () => [] },
+  };
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /logger buffer/);
+});
+
+test("the enabled-ignored scenario fails when enabling it raised a renderer error", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession(
+    {
+      enabled: true,
+      probes: false,
+      errorsOnChange: [{ source: "console", level: "error", text: "sidecar settings write exploded" }],
+    },
+    listener,
+  );
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /exploded/);
 });
 
 test("the migration scenario passes when old settings gained the sidecar defaults", async () => {

@@ -36,6 +36,28 @@ async function buildExtractor(evaluate) {
   return JSON.parse(raw);
 }
 
+/**
+ * Reads the plugin's own diagnostics log buffer (`Logger.getBuffer()`),
+ * the channel documented in plugin/main.ts for `buildFullTextExtractor`'s
+ * "not used for indexing" note. `Logger.info` only ever prints to the
+ * browser console when the user has turned the log level up to "debug" (a
+ * deliberate choice: "keep operational detail available in the diagnostics
+ * buffer without flooding the production console at the default info
+ * level") — it still *buffers* every info-and-above entry regardless of
+ * level, which is what "Copy diagnostics" exposes to a real user. CDP
+ * console capture would therefore observe nothing at the test vault's
+ * default level and fail a scenario whose premise is actually true.
+ */
+async function readLoggerBuffer(evaluate) {
+  const raw = await evaluate(
+    'JSON.stringify(app.plugins.plugins["arxiv-daily"]?.logger?.getBuffer?.() ?? null)',
+  );
+  if (typeof raw !== "string") return { error: "the plugin exposes no logger buffer" };
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return { error: "the plugin exposes no logger buffer" };
+  return { lines: parsed };
+}
+
 /** The real settings transaction path: validates the loopback URLs, persists
  * the change and cancels in-flight work, none of which a direct field
  * assignment would exercise. `enabled` is omitted to leave the toggle as-is. */
@@ -160,12 +182,19 @@ export async function sidecarDisabledScenario({ session, listener }) {
  * listener we control, rather than merely reading the setting back, is what
  * makes the absence meaningful: the harness proves indexing ignores a sidecar
  * that is actually reachable, not one that was never configured.
+ *
+ * The note is read back from the plugin's diagnostics log buffer, not the
+ * CDP console: see `readLoggerBuffer` above for why the console is the wrong
+ * channel to observe it on.
  */
 export async function sidecarEnabledIgnoredScenario({ session, listener }) {
   const name = "sidecar-enabled-ignored-by-index";
   const { evaluate, diagnostics } = session;
-  const entriesBefore = diagnostics.entries().length;
+  const errorsBefore = diagnostics.errors().length;
   const requestsBefore = listener.requests().length;
+
+  const bufferBefore = await readLoggerBuffer(evaluate);
+  if (bufferBefore.error) return fail(name, bufferBefore.error);
 
   const pointed = await pointSidecarAt(evaluate, listener, { enabled: true });
   if (pointed.error) {
@@ -189,8 +218,10 @@ export async function sidecarEnabledIgnoredScenario({ session, listener }) {
     );
   }
 
-  const introduced = diagnostics.entries().slice(entriesBefore);
-  const noted = introduced.some((entry) => /not used for indexing/.test(entry.text));
+  const bufferAfter = await readLoggerBuffer(evaluate);
+  if (bufferAfter.error) return fail(name, bufferAfter.error);
+  const introduced = bufferAfter.lines.slice(bufferBefore.lines.length);
+  const noted = introduced.some((line) => /not used for indexing/.test(line));
   if (!noted) {
     return fail(
       name,
@@ -198,9 +229,17 @@ export async function sidecarEnabledIgnoredScenario({ session, listener }) {
     );
   }
 
+  const introducedErrors = diagnostics.errors().slice(errorsBefore);
+  if (introducedErrors.length > 0) {
+    return fail(
+      name,
+      `enabling the sidecar raised: ${introducedErrors.map((entry) => entry.text).join("; ")}`,
+    );
+  }
+
   return pass(
     name,
-    `enabled through the settings transaction and pointed at ${listener.origin}, building the full-text extractor still sent nothing, still returned PDF.js, and logged the documented note`,
+    `enabled through the settings transaction and pointed at ${listener.origin}, building the full-text extractor still sent nothing, still returned PDF.js, and logged the documented note to its diagnostics buffer without a renderer error`,
   );
 }
 
