@@ -102,3 +102,11 @@
 - 只读C++/测试复核未定位确定缺陷，也未发现fixture并行/互删；测试首次读old太晚，无法区分写入/硬链/改名阶段。Linux10/10与四模式各100次通过不代表macOS通过。
 - 作为定位实验执行同SHA失败任务rerun，attempt2全部native/assembly成功；不把这写成第一次异常已解决。报告/tmp/arxiv-native-backup-corruption-review.md、/tmp/arxiv-native-backup-test-review.md。
 - 从c620cae创建本地fix/native-backup-diagnostics，P7只准备诊断与测试，不改C++生产逻辑。推送与创建诊断PR尚未授权，正式发布继续停在授权点。
+
+## 2026-10-03 — PR52合并，分支fix/release-050-readiness处理另17条历史告警与发行说明
+
+- PR52（native备份诊断）已获授权push与merge，合并提交`bdfec4e`：2000次诊断循环覆盖6平台全部通过、零失败，原始macOS arm64异常仍未复现、根因未定。详见native-backup-diagnostics.md的后续更新。
+- 新分支`fix/release-050-readiness`从main@bdfec4e创建，处理与PR51/52无关、自2026-08-23起即存在的17条open high-severity CodeQL告警（11条polynomial-redos、3条incomplete-multi-character-sanitization、2条bad-tag-filter、1条incomplete-url-substring-sanitization）。14条本地修复（位置扫描替代回溯正则、`trimEnd()`替代`/\s+$/`、`indexOf`扫描替代惰性双定界符正则、闭合标签允许空白、跨行HTML注释匹配），均附回归测试；3条判定误报/不适用并写入具体理由（测试内mock URL判断；两条因DOMParser/linkedom解析结果从不挂载到真实DOM而不可达）。详见codeql-verification.md新增小节。
+- 发行说明`docs/releases/0.5.0.md`新增"Known issues"小节记录native备份异常（诚实陈述：单次复现、同SHA复跑通过、2000次诊断循环无复现、根因未知、诊断保留在CI），并在"Security and dependencies"补充本轮17条CodeQL处理结果的一行摘要。
+- 同分支另处理两条桌面验收场景（`buildFullTextDocumentParser`已在main随标题摘要索引改造移除）：retarget为基于现有`buildFullTextExtractor()`的场景，其中一条改名为验证"即使手动开启sidecar并指向可达监听端口，索引仍不发起请求、仍返回PDF.js、且记录文档化的info日志"，取代已不存在的"探测失败回退"叙事。
+- 本分支未push、未创建/修改PR、未合并到main、未打tag、未发布，也未触碰任何`.worktree`。

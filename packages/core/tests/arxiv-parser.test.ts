@@ -91,4 +91,41 @@ describe("parseRecent", () => {
       "2606.12345v2",
     ]);
   });
+
+  it("keeps script and style text out of parsed fields whatever their end tags look like", () => {
+    const html = `
+      <script>should not run</script >
+      <style>.x { color: red } </style  >
+      <dl id="articles">
+        <h3>Wed, 10 Jun 2026 (showing 1 of 1 entries )</h3>
+        <dt><a title="Abstract" href="/abs/2606.11165">arXiv:2606.11165</a></dt>
+        <dd>
+          <div class="list-title">Title: Example <script>leak()</script\t\n bar>Paper</div>
+          <div class="list-authors">Authors: Jane Doe<style>.y{}</style x><link rel="stylesheet" href="a.css"></div>
+        </dd>
+      </dl>
+    `;
+    const buckets = parseRecent(html, markupParser);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].papers[0].id).toBe("2606.11165");
+    expect(buckets[0].papers[0].title).toBe("Example Paper");
+    expect(buckets[0].papers[0].authors).toBe("Jane Doe");
+  });
+
+  it("drops an unterminated script instead of reading it as text", () => {
+    const html = `
+      <dl id="articles">
+        <h3>Wed, 10 Jun 2026 (showing 1 of 1 entries )</h3>
+        <dt><a title="Abstract" href="/abs/2606.11165">arXiv:2606.11165</a></dt>
+        <dd>
+          <div class="list-title">Title: Example Paper</div>
+          <div class="list-authors">Authors: Jane Doe</div>
+        </dd>
+      </dl>
+      <script>never closed
+    `;
+    const buckets = parseRecent(html, markupParser);
+    expect(buckets[0].papers[0].title).toBe("Example Paper");
+    expect(JSON.stringify(buckets)).not.toContain("never closed");
+  });
 });

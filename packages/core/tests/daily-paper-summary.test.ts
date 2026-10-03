@@ -613,6 +613,25 @@ describe("derivePaperSourceSections", () => {
     ).toBe("Abstract, Conclusion, Methods, Results");
   });
 
+  it("completes quickly on long-whitespace section headings (CodeQL js/polynomial-redos)", () => {
+    const start = performance.now();
+    const titles = derivePaperSourceSections({
+      abstractConclusion: `##${" ".repeat(50_000)}Real Title\nbody`,
+      fullSections: null,
+    });
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(titles).toBe("Real Title");
+
+    const start2 = performance.now();
+    const noHeading = derivePaperSourceSections({
+      abstractConclusion: `##${" ".repeat(50_000)}`,
+      fullSections: null,
+    });
+    expect(performance.now() - start2).toBeLessThan(200);
+    expect(noHeading).toBe("正文摘录");
+  });
+
   it("preserves failure and body-excerpt fallbacks", () => {
     expect(
       derivePaperSourceSections({

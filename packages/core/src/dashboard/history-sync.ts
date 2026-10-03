@@ -931,10 +931,26 @@ function extractArxivIds(text: string): string[] {
 }
 
 function cleanDailyHeading(heading: string): string {
-  return heading
-    .replace(/\s*(?:→|->)\s*(?:\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))\s*$/g, "")
-    .replace(/<!--.*?-->/g, "")
-    .trim();
+  return stripHtmlComments(
+    heading.replace(/\s*(?:→|->)\s*(?:\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))\s*$/g, ""),
+  ).trim();
+}
+
+/**
+ * Remove HTML comments until none remain. A removal can join text into a new
+ * "<!--" (e.g. "<!<!---->--"), so the scan resumes just before each cut, and
+ * an unterminated comment drops the rest of the text as HTML would. The
+ * result never contains "<!--"; each pass shortens the text, so it ends.
+ */
+function stripHtmlComments(text: string): string {
+  let out = text;
+  let start = out.indexOf("<!--");
+  while (start !== -1) {
+    const end = out.indexOf("-->", start + 4);
+    out = end === -1 ? out.slice(0, start) : out.slice(0, start) + out.slice(end + 3);
+    start = out.indexOf("<!--", Math.max(0, start - 3));
+  }
+  return out;
 }
 
 function firstH1(markdown: string): string {
@@ -999,5 +1015,13 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function normalizeVaultPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+  // Scan the slash boundaries instead of /^\/+|\/+$/g, which forces the
+  // regex engine to retry across a long run of repeated slashes
+  // (CodeQL js/polynomial-redos; same fix as paper-index's normalizeStoragePath).
+  const normalized = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && normalized[start] === "/") start += 1;
+  while (end > start && normalized[end - 1] === "/") end -= 1;
+  return normalized.slice(start, end);
 }

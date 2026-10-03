@@ -147,6 +147,31 @@ describe("email render", () => {
     expect(emailProse("$\\alpha\\approx 0.3$")).toMatch(/α≈\s*0\.3/);
   });
 
+  it("emailProse simplifies display/block math delimiters ($$, \\[ \\], \\( \\))", () => {
+    expect(emailProse("Energy: $$E=mc^2$$ done")).toBe("Energy: E=mc^2 done");
+    expect(emailProse("Energy: \\[E=mc^2\\] done")).toBe("Energy: E=mc^2 done");
+    expect(emailProse("Energy: \\(E=mc^2\\) done")).toBe("Energy: E=mc^2 done");
+  });
+
+  it("emailProse leaves an unterminated display-math delimiter's tail untouched", () => {
+    expect(emailProse("before $$never closes")).toBe("before $$never closes");
+    // simplifyLatex still unwraps a leftover, unterminated "\[" bracket
+    // outside any delimiter span; replaceDelimited correctly left it alone.
+    expect(emailProse("before \\[never closes")).toBe("before [never closes");
+  });
+
+  it("emailProse completes quickly on repeated unterminated delimiters (CodeQL js/polynomial-redos)", () => {
+    const adversarialDollar = "$$" + "a".repeat(20_000);
+    const adversarialBracket = "\\[" + "a".repeat(20_000);
+    const start = performance.now();
+    const resultDollar = emailProse(adversarialDollar.repeat(50));
+    const resultBracket = emailProse(adversarialBracket.repeat(50));
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(500);
+    expect(resultDollar.length).toBeGreaterThan(0);
+    expect(resultBracket.length).toBeGreaterThan(0);
+  });
+
   it("escapeHtml encodes markup-sensitive characters", () => {
     expect(escapeHtml(`<script>alert("x")</script>`)).toBe(
       "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;",

@@ -4,6 +4,7 @@ import {
   GenerationMetricsCollector,
   appendGenerationMetrics,
   parseTokenUsage,
+  stripGenerationMetrics,
 } from "../src/metrics/generation";
 import { extractPaperSummaries } from "../src/pipeline/daily-summary-parser";
 import { looksLikeDetailSummary } from "../src/dashboard/detail-summary";
@@ -36,6 +37,20 @@ describe("generation metrics", () => {
     expect(written.match(new RegExp(GENERATION_METRICS_MARKER, "g"))).toHaveLength(1);
     expect(written).toMatch(/Provider token usage: unavailable or incomplete\n$/);
     expect(written.indexOf(GENERATION_METRICS_MARKER)).toBeGreaterThan(written.indexOf("body"));
+  });
+
+  it("trims trailing whitespace the same way before and after stripping metrics", () => {
+    expect(stripGenerationMetrics(`body\n\n  \t${GENERATION_METRICS_MARKER}\nold callout`)).toBe("body");
+    expect(appendGenerationMetrics("body\n\n  \t", {
+      logicalCalls: 1, attempts: 1, elapsedMs: 1, usageComplete: false,
+    })).toMatch(/^body\n\n<!--/);
+  });
+
+  it("completes quickly on long trailing whitespace before an existing marker (CodeQL js/polynomial-redos)", () => {
+    const adversarial = `body${" ".repeat(200_000)}${GENERATION_METRICS_MARKER}\nold callout`;
+    const start = performance.now();
+    expect(stripGenerationMetrics(adversarial)).toBe("body");
+    expect(performance.now() - start).toBeLessThan(200);
   });
 
   it("keeps metrics out of daily summary fields and detail detection", () => {

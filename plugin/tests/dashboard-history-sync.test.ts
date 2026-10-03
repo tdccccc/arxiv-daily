@@ -1437,4 +1437,127 @@ describe("syncDashboardHistory", () => {
       "arxiv:2606.30001",
     ]);
   });
+
+  it("normalizes a daily_report wikilink with repeated and surrounding slashes when deriving its date", async () => {
+    // daily_report is free-form user/editor text (a wikilink target), unlike
+    // the validated dailyDir/papersDir settings, so it is the reachable input
+    // for normalizeVaultPath's slash-collapsing behavior. The normalized
+    // path's date substring is used as the candidate's seen date.
+    const detail = detailMarkdown("2606.00005", "Slash Paper").replace(
+      'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+      'daily_report: "[[//arxiv//daily//2026-06-10//|2026-06-10]]"',
+    );
+    const { files, storage } = makeStorage({
+      "arxiv/papers/2606.00005.md": detail,
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["arxiv:2606.00005"]).toMatchObject({
+      title: "Slash Paper",
+      seenDates: ["2026-06-10"],
+    });
+  });
+
+  it("completes quickly when a daily_report wikilink has a long run of repeated slashes (CodeQL js/polynomial-redos)", async () => {
+    const adversarialSlashes = "/".repeat(30_000);
+    const detail = detailMarkdown("2606.00007", "Slash Timing Paper").replace(
+      'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+      `daily_report: "[[${adversarialSlashes}arxiv${adversarialSlashes}daily${adversarialSlashes}2026-06-10${adversarialSlashes}|2026-06-10]]"`,
+    );
+    const { files, storage } = makeStorage({
+      "arxiv/papers/2606.00007.md": detail,
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const start = performance.now();
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(index.papers["arxiv:2606.00007"]).toMatchObject({
+      seenDates: ["2026-06-10"],
+    });
+  });
+
+  it("strips a daily heading's trailing link and an inline HTML comment (CodeQL js/bad-tag-filter)", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "---",
+        "date: 2026-06-10",
+        "---",
+        "",
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Commented Paper <!-- reviewer note --> → [[2606.00006]]",
+        "- **作者**: A. Author",
+        "- **arXiv**: [2606.00006](https://arxiv.org/abs/2606.00006)",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["arxiv:2606.00006"]).toMatchObject({
+      title: "Commented Paper",
+    });
+  });
+
+  it("leaves no comment opener in a daily heading after nested or unterminated comments", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "---",
+        "date: 2026-06-10",
+        "---",
+        "",
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Nested <!<!---->-- Paper <!-- unterminated → [[2606.00008]]",
+        "- **作者**: A. Author",
+        "- **arXiv**: [2606.00008](https://arxiv.org/abs/2606.00008)",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["arxiv:2606.00008"]).toMatchObject({ title: "Nested" });
+  });
 });

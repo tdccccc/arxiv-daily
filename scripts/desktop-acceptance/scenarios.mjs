@@ -16,20 +16,65 @@ const REQUIRED_SETTINGS_SECTIONS = [
   "pdfParserSidecar",
 ];
 
-async function buildParser(evaluate) {
-  const raw = await evaluate(`(async () => {
+/**
+ * Builds the full-text index's PDF extractor the same way indexing does
+ * (`buildFullTextExtractor` in plugin/main.ts). Since title+abstract indexing
+ * replaced full-text chunking (docs/helm/2026-09-02-directions-inside-
+ * topics), this always returns a PDF.js extractor and never consults the
+ * sidecar; `provenanceId` is how a scenario tells which engine it got.
+ */
+async function buildExtractor(evaluate) {
+  const raw = await evaluate(`(() => {
     try {
-      const built = await app.plugins.plugins["arxiv-daily"].buildFullTextDocumentParser();
-      return JSON.stringify({
-        parser: Boolean(built?.parser),
-        parserSelector: Boolean(built?.parserSelector),
-      });
+      const built = app.plugins.plugins["arxiv-daily"].buildFullTextExtractor();
+      return JSON.stringify({ provenanceId: built?.provenance?.id ?? null });
     } catch (error) {
       return "ERROR: " + (error?.message ?? String(error));
     }
   })()`);
   if (typeof raw === "string" && raw.startsWith("ERROR:")) return { error: raw.slice(7).trim() };
   return JSON.parse(raw);
+}
+
+/**
+ * Reads the plugin's own diagnostics log buffer (`Logger.getBuffer()`),
+ * the channel documented in plugin/main.ts for `buildFullTextExtractor`'s
+ * "not used for indexing" note. `Logger.info` only ever prints to the
+ * browser console when the user has turned the log level up to "debug" (a
+ * deliberate choice: "keep operational detail available in the diagnostics
+ * buffer without flooding the production console at the default info
+ * level") — it still *buffers* every info-and-above entry regardless of
+ * level, which is what "Copy diagnostics" exposes to a real user. CDP
+ * console capture would therefore observe nothing at the test vault's
+ * default level and fail a scenario whose premise is actually true.
+ */
+async function readLoggerBuffer(evaluate) {
+  const raw = await evaluate(
+    'JSON.stringify(app.plugins.plugins["arxiv-daily"]?.logger?.getBuffer?.() ?? null)',
+  );
+  if (typeof raw !== "string") return { error: "the plugin exposes no logger buffer" };
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return { error: "the plugin exposes no logger buffer" };
+  return { lines: parsed };
+}
+
+/** The real settings transaction path: validates the loopback URLs, persists
+ * the change and cancels in-flight work, none of which a direct field
+ * assignment would exercise. `enabled` is omitted to leave the toggle as-is. */
+async function pointSidecarAt(evaluate, listener, { enabled } = {}) {
+  const raw = await evaluate(`(async () => {
+    try {
+      const plugin = app.plugins.plugins["arxiv-daily"];
+      await plugin.settingsChanges.changeValue("pdfParserSidecar.capabilitiesUrl", ${JSON.stringify(listener.capabilitiesUrl)});
+      await plugin.settingsChanges.changeValue("pdfParserSidecar.parseUrl", ${JSON.stringify(listener.parseUrl)});
+      ${enabled === undefined ? "" : `await plugin.settingsChanges.changeValue("pdfParserSidecar.enabled", ${JSON.stringify(enabled)});`}
+      return "changed";
+    } catch (error) {
+      return "ERROR: " + (error?.message ?? String(error));
+    }
+  })()`);
+  if (typeof raw === "string" && raw.startsWith("ERROR:")) return { error: raw.slice(7).trim() };
+  return { ok: true };
 }
 
 const wait = (evaluate, ms) => evaluate(`new Promise((resolve) => setTimeout(resolve, ${ms}))`);
@@ -82,9 +127,9 @@ export async function pdfPageLocationScenario({ session, page = 4, settleMs = 60
 }
 
 /**
- * Proves the optional sidecar is inert unless explicitly enabled: with the
+ * Proves the sidecar sends nothing when disabled (its default): with the
  * endpoints pointed at a listener we control and the feature off, building the
- * parser performs no request at all.
+ * full-text index's PDF extractor performs no request at all.
  *
  * The listener is what makes the absence meaningful. The plugin's HTTP goes out
  * through Obsidian's `requestUrl` in the Electron main process, so watching the
@@ -101,25 +146,16 @@ export async function sidecarDisabledScenario({ session, listener }) {
     return fail(name, `pdfParserSidecar.enabled is ${JSON.stringify(settings.enabled)}, expected false`);
   }
 
-  const pointed = await evaluate(`(async () => {
-    try {
-      const plugin = app.plugins.plugins["arxiv-daily"];
-      await plugin.settingsChanges.changeValue("pdfParserSidecar.capabilitiesUrl", ${JSON.stringify(listener.capabilitiesUrl)});
-      await plugin.settingsChanges.changeValue("pdfParserSidecar.parseUrl", ${JSON.stringify(listener.parseUrl)});
-      return "pointed";
-    } catch (error) {
-      return "ERROR: " + (error?.message ?? String(error));
-    }
-  })()`);
-  if (typeof pointed === "string" && pointed.startsWith("ERROR:")) {
-    return fail(name, `could not point the sidecar at the listener: ${pointed.slice(7).trim()}`);
+  const pointed = await pointSidecarAt(evaluate, listener);
+  if (pointed.error) {
+    return fail(name, `could not point the sidecar at the listener: ${pointed.error}`);
   }
 
   const before = listener.requests().length;
-  const built = await buildParser(evaluate);
-  if (built.error) return fail(name, `building the parser threw: ${built.error}`);
-  if (built.parserSelector) {
-    return fail(name, `the sidecar is disabled but the build produced ${built.parserSelector}`);
+  const built = await buildExtractor(evaluate);
+  if (built.error) return fail(name, `building the full-text extractor threw: ${built.error}`);
+  if (built.provenanceId !== "obsidian-pdfjs") {
+    return fail(name, `expected the PDF.js extractor, got provenance ${JSON.stringify(built.provenanceId)}`);
   }
 
   const sent = listener.requests().slice(before);
@@ -129,71 +165,81 @@ export async function sidecarDisabledScenario({ session, listener }) {
       `the sidecar is disabled but ${sent.length} request(s) reached it: ${sent.map((r) => `${r.method} ${r.path}`).join(", ")}`,
     );
   }
-  return pass(name, `disabled, and building the parser sent nothing to ${listener.origin}`);
+  return pass(name, `disabled, and building the full-text extractor sent nothing to ${listener.origin}`);
 }
 
 /**
- * Proves the documented probe-failure path end to end: the setting is turned on
- * through the real settings transaction, the parser build actually reaches the
- * configured endpoint, that endpoint refuses, and PDF.js is selected instead.
+ * Proves the documented boundary end to end: title+abstract indexing
+ * (docs/helm/2026-09-02-directions-inside-topics) replaced the structured
+ * parser/parserSelector sidecar assembly on the index path, which was that
+ * assembly's only caller. The sidecar settings and client code were
+ * deliberately left in place pending a separate removal decision, so the UI
+ * can still be switched on — but indexing must never act on it. This
+ * replaces the old "probe fails, falls back to PDF.js" scenario, which
+ * exercised a probe (`buildFullTextDocumentParser`) that no longer exists.
  *
- * The observed request matters. Building returns PDF.js whenever the sidecar is
- * off, so "got PDF.js" alone would prove nothing about a failed probe.
+ * Enabling it (through the real settings transaction) and pointing it at a
+ * listener we control, rather than merely reading the setting back, is what
+ * makes the absence meaningful: the harness proves indexing ignores a sidecar
+ * that is actually reachable, not one that was never configured.
+ *
+ * The note is read back from the plugin's diagnostics log buffer, not the
+ * CDP console: see `readLoggerBuffer` above for why the console is the wrong
+ * channel to observe it on.
  */
-export async function sidecarFallbackScenario({ session, listener, settleMs = 1000 }) {
-  const name = "sidecar-probe-fails-to-pdfjs";
+export async function sidecarEnabledIgnoredScenario({ session, listener }) {
+  const name = "sidecar-enabled-ignored-by-index";
   const { evaluate, diagnostics } = session;
   const errorsBefore = diagnostics.errors().length;
   const requestsBefore = listener.requests().length;
 
-  // The real transaction path: it validates the loopback URLs, persists the
-  // change and cancels in-flight work, none of which a direct field assignment
-  // would exercise.
-  const changed = await evaluate(`(async () => {
-    try {
-      const plugin = app.plugins.plugins["arxiv-daily"];
-      await plugin.settingsChanges.changeValue("pdfParserSidecar.capabilitiesUrl", ${JSON.stringify(listener.capabilitiesUrl)});
-      await plugin.settingsChanges.changeValue("pdfParserSidecar.parseUrl", ${JSON.stringify(listener.parseUrl)});
-      await plugin.settingsChanges.changeValue("pdfParserSidecar.enabled", true);
-      return "changed";
-    } catch (error) {
-      return "ERROR: " + (error?.message ?? String(error));
-    }
-  })()`);
-  if (typeof changed === "string" && changed.startsWith("ERROR:")) {
-    return fail(name, `the settings transaction rejected the change: ${changed.slice(7).trim()}`);
+  const bufferBefore = await readLoggerBuffer(evaluate);
+  if (bufferBefore.error) return fail(name, bufferBefore.error);
+
+  const pointed = await pointSidecarAt(evaluate, listener, { enabled: true });
+  if (pointed.error) {
+    return fail(name, `the settings transaction rejected the change: ${pointed.error}`);
   }
 
-  const built = await buildParser(evaluate);
-  if (built.error) return fail(name, `building the parser threw: ${built.error}`);
-  await wait(evaluate, settleMs);
-
-  const probes = listener.requests().slice(requestsBefore);
-  if (probes.length === 0) {
+  const built = await buildExtractor(evaluate);
+  if (built.error) return fail(name, `building the full-text extractor threw: ${built.error}`);
+  if (built.provenanceId !== "obsidian-pdfjs") {
     return fail(
       name,
-      `no request reached ${listener.origin}, so the parser choice proves nothing about a failed probe`,
+      `expected the PDF.js extractor despite the sidecar being enabled, got provenance ${JSON.stringify(built.provenanceId)}`,
     );
   }
-  // Class names are minified in a production bundle, so the discriminator is
-  // structural: a selector means the sidecar was adopted, a bare parser means
-  // the fallback was taken.
-  if (built.parserSelector) {
+
+  const sent = listener.requests().slice(requestsBefore);
+  if (sent.length > 0) {
     return fail(
       name,
-      `the probe to ${listener.origin} failed but the build still produced a sidecar selector`,
+      `the sidecar is enabled but indexing must not consult it, yet ${sent.length} request(s) reached it: ${sent.map((r) => `${r.method} ${r.path}`).join(", ")}`,
     );
   }
-  if (!built.parser) return fail(name, "the parser build returned neither a parser nor a selector");
 
-  const introduced = diagnostics.errors().slice(errorsBefore);
-  if (introduced.length > 0) {
-    return fail(name, `the failed probe raised: ${introduced.map((entry) => entry.text).join("; ")}`);
+  const bufferAfter = await readLoggerBuffer(evaluate);
+  if (bufferAfter.error) return fail(name, bufferAfter.error);
+  const introduced = bufferAfter.lines.slice(bufferBefore.lines.length);
+  const noted = introduced.some((line) => /not used for indexing/.test(line));
+  if (!noted) {
+    return fail(
+      name,
+      "enabling the sidecar did not log the documented note that indexing does not consult it",
+    );
+  }
+
+  const introducedErrors = diagnostics.errors().slice(errorsBefore);
+  if (introducedErrors.length > 0) {
+    return fail(
+      name,
+      `enabling the sidecar raised: ${introducedErrors.map((entry) => entry.text).join("; ")}`,
+    );
   }
 
   return pass(
     name,
-    `enabled through the settings transaction, ${probes.length} probe request reached ${listener.origin} and was refused, and PDF.js was selected without a renderer error`,
+    `enabled through the settings transaction and pointed at ${listener.origin}, building the full-text extractor still sent nothing, still returned PDF.js, and logged the documented note to its diagnostics buffer without a renderer error`,
   );
 }
 

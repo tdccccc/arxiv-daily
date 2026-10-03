@@ -107,4 +107,23 @@ describe("classifyPaperNote", () => {
       reason: "user_content",
     });
   });
+
+  it("completes quickly and trims long-whitespace YAML values (CodeQL js/polynomial-redos)", () => {
+    const longWhitespaceValue = `arxiv:${"\t".repeat(30_000)}`;
+    const start = performance.now();
+    const identityResult = classifyPaperNote(`---\n${longWhitespaceValue}\n---\n# text`, id);
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs).toBeLessThan(200);
+    expect(identityResult).toMatchObject({ kind: "conflict", reason: "identity_invalid" });
+
+    const longWhitespaceTitle = `title:${" ".repeat(30_000)}Trimmed title${" ".repeat(30_000)}`;
+    const start2 = performance.now();
+    const classified = classifyPaperNote(
+      ["---", longWhitespaceTitle, `arxiv_id: "${id}"`, "---", detailMarkdown().split("---\n").at(-1)].join("\n"),
+      id,
+    );
+    const elapsedMs2 = performance.now() - start2;
+    expect(elapsedMs2).toBeLessThan(200);
+    expect(classified).toMatchObject({ kind: "verified_detail", metadata: { title: "Trimmed title" } });
+  });
 });

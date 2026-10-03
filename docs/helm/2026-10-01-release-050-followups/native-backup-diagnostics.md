@@ -35,3 +35,13 @@ sourceHash为71122e97faf9a4e14987025db14b6c6902c94737c0acc15df3a776040ff1c8f3。
 诊断未在macOS上运行，根因未定，不称数据完整性缺陷已修复。建议授权推送诊断分支并创建Draft PR，获取一轮有界平台对照。如果复现则按首个出错阶段修复；如果未复现则保留未知风险和证据，交用户决定继续调查或进入发布，不无限重跑直到假装证明安全。
 
 没有push诊断分支、创建新PR、合并诊断、打tag或发布，也未触碰其他worktree。此前CodeQL五告警已在ace7745的远程检查通过，与本次native异常是不同结果。
+
+## 后续更新（分支fix/release-050-readiness，2026-10-03）
+
+诊断分支已获授权push并合并：PR52（`test(native): diagnose intermittent backup byte mismatch`）head `53623bb`通过全部10项required检查及CodeQL结果检查（0条新增告警），已以普通merge并入main，合并提交为`bdfec4e13f7188b96af4cd2437b9c4bd1de527b6`。
+
+[PR52 native诊断CI](https://github.com/tdccccc/arxiv-daily/actions/runs/37033667259)实际结果：Linux x64/arm64与macOS x64/arm64各完成四种模式×100次循环，Windows x64/arm64各完成两种native模式×100次循环，**共2000次循环全部通过，零失败**；每个平台的原有10项native测试也全部通过。两个macOS目标均为Node22.17.0/Darwin24.6.0，native源码哈希与原始失败构建一致。
+
+结论未变：根因仍未定位，复跑与本轮有界诊断均未复现问题，不称数据完整性缺陷已修复或已排除。原始失败证据（[run 37012308927 attempt 1](https://github.com/tdccccc/arxiv-daily/actions/runs/37012308927/attempts/1)）保留不覆盖。诊断代码保留在CI中，后续若复现可提供write/close/link/rename/sync各阶段的字节与inode证据，而不只是一个裸测试失败。
+
+本分支（fix/release-050-readiness，从main@bdfec4e创建）已在`docs/releases/0.5.0.md`新增"Known issues"小节记录此项，供发布说明读者知悉；该小节未声称问题已解决，只记录已观察到的事实、已执行的诊断范围和已知的不确定性。goal.md第7项成功标准（定位根因）本轮仍未达成，保持未勾选。

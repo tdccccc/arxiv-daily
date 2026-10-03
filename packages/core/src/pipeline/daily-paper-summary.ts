@@ -413,10 +413,19 @@ export function validateStructuredPaperSummaryValue(
 function extractSectionTitles(markdown: string | null | undefined): string[] {
   if (!markdown) return [];
   const titles: string[] = [];
-  const heading = /^##\s+(.+)$/gm;
-  let match: RegExpExecArray | null;
-  while ((match = heading.exec(markdown)) !== null) {
-    const title = match[1]?.trim() ?? "";
+  // Locate heading markers separately from whitespace and body scanning (same
+  // technique as extractAbstractSection below), so long runs of whitespace
+  // never participate in overlapping \s+/(.+) searches (CodeQL
+  // js/polynomial-redos).
+  const headings = /^##/gm;
+  let heading: RegExpExecArray | null;
+  while ((heading = headings.exec(markdown)) !== null) {
+    let cursor = heading.index + 2;
+    if (!/\s/u.test(markdown[cursor] ?? "")) continue;
+    while (cursor < markdown.length && /\s/u.test(markdown[cursor]!)) cursor += 1;
+    let end = cursor;
+    while (end < markdown.length && !/[\r\n\u2028\u2029]/u.test(markdown[end]!)) end += 1;
+    const title = markdown.slice(cursor, end).trim();
     if (title && !titles.includes(title)) titles.push(title);
   }
   return titles;
