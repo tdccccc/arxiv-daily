@@ -1,3 +1,4 @@
+import { modelCombobox, mountModelCombobox } from "./model-combobox";
 import { mountSettingsNavigation } from "./settings-navigation";
 import { settingsSetupGuide } from "./settings-setup";
 import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
@@ -26,7 +27,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
  const emailHosted = v.email.mode === 'hosted';
  return `<form class="settings-form"><div class="settings-host-context"><p>${snapshot.setupRequired ? '首次使用：选择保存目录，再配置下方 LLM 和研究主题。' : '设置保存后立即生效。'}</p><label>保存根目录（本机绝对路径）${input('vaultRoot',v.vaultRoot)}</label><p>模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。</p><code>${escape(snapshot.configPath)}</code></div><div class="settings-setup-host">${settingsSetupGuide(snapshot,firstReportComplete)}</div>
  ${row(v.schedule.enabled?'Enable · Running':'Enable · Paused',toggle('schedule.enabled',v.schedule.enabled),'When on, daily reports run automatically on weekdays (weekends are skipped).')}
- ${group('LLM',row('API base URL',input('baseUrl',v.baseUrl,'url','placeholder="Provider URL"'))+row('API key',secret('apiKey',v.apiKeyConfigured))+row('Model',input('model',v.model,'text','list="settings-model-options" placeholder="Model name"')+'<datalist id="settings-model-options"></datalist>'+button('models','Get models')+'<select data-model-picker aria-label="Available models" hidden></select><span class="settings-model-status" role="status"></span>')+row('Reasoning effort',select('reasoningEffort',v.reasoningEffort,{none:'None',low:'Low',medium:'Medium',high:'High'})))}
+ ${group('LLM',row('API base URL',input('baseUrl',v.baseUrl,'url','placeholder="Provider URL"'))+row('API key',secret('apiKey',v.apiKeyConfigured))+row('Model',modelCombobox(v.model)+button('models','Get models')+'<span class="settings-model-status" role="status"></span>')+row('Reasoning effort',select('reasoningEffort',v.reasoningEffort,{none:'None',low:'Low',medium:'Medium',high:'High'})))}
  ${group('arXiv categories',`<div class="settings-categories">${v.categories.map(categoryRow).join('')}</div>${button('add-category','Add category')}`)}
  ${group('Research topics',`<div class="settings-topic-list">${v.topics.map(t=>topicRow(t)).join('')}</div>${button('add-topic','Add topic')}`)}
  ${row('Automatic detail notes',select('detailProfile',v.detailProfile,{conservative:'Fewer',balanced:'Recommended',broad:'More',...(v.detailProfile==='custom'?{custom:'Custom (current values)'}:{})},'detailSelection.profile'))}
@@ -41,6 +42,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
 
 export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false): void {
  mountSettingsNavigation(form);
+ const modelControl=mountModelCombobox(form);
  let busy=false, revision=snapshot.revision, libraryCancelling=false, libraryRevisionPending=false;
  let currentSnapshot=snapshot;
  let library: (CliLibraryConnectionInspection & { run?: import('../server').WorkbenchRun }) | undefined;
@@ -96,12 +98,8 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(result.settings)revision=result.settings.revision;
   if(result.library){library=result.library;renderLibrary();}
   if(result.models){
-   find('datalist').innerHTML=result.models.map(model=>`<option value="${escape(model)}"></option>`).join('');
-   const picker=find<HTMLSelectElement>('[data-model-picker]');
-   picker.innerHTML='<option value="">Choose a model…</option>'+result.models.map(model=>`<option value="${escape(model)}">${escape(model)}</option>`).join('');
-   picker.hidden=result.models.length===0;picker.value=result.models.includes(get('model'))?get('model'):'';
+   modelControl.setOptions(result.models);
    find('.settings-model-status').textContent=result.models.length?`Loaded ${result.models.length} models. Choose from the list or type a model name.`:'No models returned; type a model name to continue.';
-   if(!picker.hidden)picker.focus();
   }
   if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
  }
@@ -119,7 +117,6 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  });
  form.addEventListener('change',event=>{
   const target=event.target;
-  if(target instanceof HTMLSelectElement && target.hasAttribute('data-model-picker') && target.value)find<HTMLInputElement>('[name="model"]').value=target.value;
   if(target instanceof HTMLSelectElement && target.name==='timezone')find<HTMLInputElement>('[name="timezoneCustom"]').value='';
   if(target instanceof HTMLInputElement && target.name==='timezoneCustom' && target.value.trim()){
    const dropdown=find<HTMLSelectElement>('[name="timezone"]');const value=target.value.trim();

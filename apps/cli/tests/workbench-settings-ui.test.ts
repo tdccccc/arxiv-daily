@@ -114,7 +114,7 @@ it.each([{remote:false,hosted:false,sidecar:false},{remote:true,hosted:true,side
   }
   expect(Array.from(root.querySelectorAll('[data-settings-heading]')).map(e => e.textContent)).toEqual(expectedGroups);
   expect(Array.from(root.querySelectorAll<HTMLElement>('[data-setting-name]')).filter(e=>!e.closest('[hidden]')).map(e => e.dataset.settingName)).toEqual(expectedNames);
-  expect(root.querySelector('input[name="model"]')?.getAttribute('list')).toBeTruthy();
+  expect(root.querySelector('input[name="model"][role="combobox"]')?.getAttribute('aria-controls')).toBeTruthy();
   expect(root.querySelector('select[name="reasoningEffort"]')).toBeTruthy();
   expect(root.querySelector('select[name="schedule.runAtLocal"]')).toBeTruthy();
   expect(root.querySelector('input[name="schedule.enabled"]')?.getAttribute('type')).toBe('checkbox');
@@ -149,7 +149,7 @@ it("loads models without changing the draft and sends email only from its explic
  await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
  input(root,'model','unlisted-draft'); input(root,'apiKey','new-key');
  root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
- await vi.waitFor(()=>expect(root.querySelector('datalist option')?.getAttribute('value')).toBe('listed-model'));
+ await vi.waitFor(()=>expect(root.querySelector('[role=option]')?.textContent).toBe('listed-model'));
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('unlisted-draft');
  expect(root.querySelector<HTMLInputElement>('[name="apiKey"]')!.value).toBe('');
  const actions=()=>fetcher.mock.calls.filter(([url])=>String(url)==='api/settings/action').map(([,init])=>JSON.parse(String(init!.body)));
@@ -254,10 +254,10 @@ it('reveals a saved key on demand and offers an explicit model selector after fe
  key.value='new-draft';show.click();expect(key.value).toBe('new-draft');expect(key.type).toBe('text');
  expect(fetcher.mock.calls.filter(([u])=>String(u)==='api/settings/secret')).toHaveLength(1);
  root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
- await vi.waitFor(()=>expect(root.querySelector<HTMLSelectElement>('[data-model-picker]')?.hidden).toBe(false));
- const picker=root.querySelector<HTMLSelectElement>('[data-model-picker]')!;
- expect(Array.from(picker.options).map(o=>o.value)).toEqual(['','model-a','model-b']);
- picker.value='model-b';picker.dispatchEvent(new Event('change',{bubbles:true}));
+ await vi.waitFor(()=>expect(root.querySelector<HTMLInputElement>('[name=model]')?.getAttribute('aria-expanded')).toBe('true'));
+ expect(root.querySelector('[data-setting-name="Model"] select')).toBeNull();
+ expect(Array.from(root.querySelectorAll('[role=option]')).map(o=>o.textContent)).toEqual(['model-a','model-b']);
+ root.querySelectorAll<HTMLButtonElement>('[role=option]')[1]!.click();
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('model-b');
  show.click();await vi.waitFor(()=>expect(key.value).toBe('stored-secret'));
 });

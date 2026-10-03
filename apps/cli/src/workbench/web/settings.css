@@ -63,4 +63,12 @@
  .settings-section > h3 { margin:0 -14px 4px; padding:14px; }
 }
 .settings-model-status { flex-basis:100%; color:var(--muted); font-size:12px; line-height:1.5; }
-.settings-form [data-model-picker] { width:100%; }
+
+
+.model-combobox { position:relative; width:230px; max-width:100%; }
+.settings-form .model-combobox > input { width:100%; padding-right:34px; }
+.settings-form .model-combobox > [data-model-toggle] { position:absolute; right:3px; top:3px; bottom:3px; border:0; width:28px; padding:0; background:transparent; color:var(--muted); }
+.model-choices { position:absolute; top:calc(100% + 5px); left:0; right:0; z-index:20; max-height:220px; overflow:auto; padding:4px; border:1px solid var(--line); border-radius:7px; background:var(--surface); box-shadow:0 8px 24px #0002; }
+.settings-form .model-choices > [role=option] { display:block; width:100%; border:0; border-radius:4px; text-align:left; padding:8px 10px; overflow-wrap:anywhere; }
+.settings-form .model-choices > [role=option]:hover, .settings-form .model-choices > [aria-selected=true] { background:var(--accent-soft); color:var(--accent); }
+.model-empty { padding:10px; font-size:12px; color:var(--muted); line-height:1.5; }
