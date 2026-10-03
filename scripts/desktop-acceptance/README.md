@@ -1,9 +1,10 @@
 # Desktop acceptance harness
 
 Drives a real, isolated Obsidian through the checks that otherwise need a person
-clicking: PDF `#page=N` location, the optional parser sidecar staying inert until
-enabled, legacy settings migration, the personal library settings page, and a
-renderer that logs no errors.
+clicking: PDF `#page=N` location, the optional parser sidecar staying inert for
+full-text indexing whether it is disabled or explicitly enabled, legacy settings
+migration, the personal library settings page, and a renderer that logs no
+errors.
 
 Two Obsidian sessions run in sequence, because the checks need two different
 persisted states: one with settings that predate the sidecar, one with a
@@ -154,12 +155,19 @@ If the harness cannot run, these steps are the equivalent record:
 4. Open any PDF with `#page=4` appended to its path. The viewer must land on
    page 4, not merely open the file.
 5. In settings, confirm the PDF parser sidecar is **off** after loading settings
-   that predate it.
-6. Point the sidecar at a loopback port you control and enable it. The probe
-   must reach it, fail, and leave PDF.js selected with nothing logged as an
-   error. Note that the plugin's HTTP goes out through Obsidian's `requestUrl`
-   in the Electron main process, so the developer console's network tab will
-   not show it — bind an actual socket.
+   that predate it. Point it at a loopback port you control; building the
+   full-text index's PDF extractor (`app.plugins.plugins["arxiv-daily"]
+   .buildFullTextExtractor()`) must send it nothing and must return PDF.js.
+   Note that the plugin's HTTP goes out through Obsidian's `requestUrl` in the
+   Electron main process, so the developer console's network tab will not show
+   it — bind an actual socket.
+6. Enable the sidecar through the settings page, still pointed at that same
+   loopback port. Full-text indexing no longer consults the sidecar at all
+   (title+abstract indexing replaced the structured-parser path it used to
+   probe; see `docs/helm/2026-09-02-directions-inside-topics`) — building the
+   extractor again must send nothing to the listener, must still return
+   PDF.js, and must log a console note that the sidecar is not used for
+   indexing.
 7. Open Settings → arXiv Daily. Personal library must sit between Output &
    schedule and Email delivery. Its Library row must offer at most three
    buttons, none of them an authorization step or a Manage menu, all on one

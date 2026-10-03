@@ -8,7 +8,7 @@ import {
   runScenarios,
   settingsMigrationScenario,
   sidecarDisabledScenario,
-  sidecarFallbackScenario,
+  sidecarEnabledIgnoredScenario,
 } from "./scenarios.mjs";
 import { blockersFromError } from "./app-state.mjs";
 import { librarySettingsScenarios } from "./library-settings.mjs";
@@ -72,7 +72,7 @@ try {
         () => settingsMigrationScenario({ session }),
         () => sidecarDisabledScenario({ session, listener }),
         () => pdfPageLocationScenario({ session }),
-        () => sidecarFallbackScenario({ session, listener }),
+        () => sidecarEnabledIgnoredScenario({ session, listener }),
       ]);
       return {
         results,

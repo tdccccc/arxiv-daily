@@ -5,7 +5,7 @@ import {
   runScenarios,
   settingsMigrationScenario,
   sidecarDisabledScenario,
-  sidecarFallbackScenario,
+  sidecarEnabledIgnoredScenario,
 } from "../desktop-acceptance/scenarios.mjs";
 
 /** Session stub: `answers` maps an expression substring to a value or function. */
@@ -80,9 +80,18 @@ function fakeListener() {
   };
 }
 
-/** Session stub whose parser build reaches the listener only when enabled. */
-function sidecarSession({ enabled, built, probes, errorsOnChange = [], preexisting = [] }, listener) {
-  const errors = [...preexisting];
+/**
+ * Session stub for the full-text extractor build. `enabled` drives two
+ * things at once, mirroring `buildFullTextExtractor` in plugin/main.ts: it is
+ * read back from the settings JSON, and it is what makes the real plugin log
+ * the "not used for indexing" note. `probes` simulates a regression where
+ * building the extractor talks to the sidecar anyway.
+ */
+function sidecarSession(
+  { enabled, builtProvenanceId = "obsidian-pdfjs", probes, errorsOnChange = [], preexisting = [] },
+  listener,
+) {
+  const entries = [...preexisting];
   return {
     evaluate: async (expression) => {
       if (expression.includes("pdfParserSidecar ?? null")) {
@@ -93,32 +102,39 @@ function sidecarSession({ enabled, built, probes, errorsOnChange = [], preexisti
         });
       }
       if (expression.includes("settingsChanges.changeValue")) {
-        errors.push(...errorsOnChange);
+        entries.push(...errorsOnChange);
         return "changed";
       }
-      if (expression.includes("buildFullTextDocumentParser")) {
+      if (expression.includes("buildFullTextExtractor")) {
         if (probes) listener.record();
-        return JSON.stringify(built);
+        if (enabled) {
+          entries.push({
+            source: "console",
+            level: "info",
+            text: "[arxiv-daily] fulltext: the local PDF parser sidecar is not used for indexing; the index reads titles and abstracts with PDF.js",
+          });
+        }
+        return JSON.stringify({ provenanceId: builtProvenanceId });
       }
       return "waited";
     },
-    diagnostics: { errors: () => errors },
+    diagnostics: {
+      errors: () => entries.filter((entry) => entry.level === "error"),
+      entries: () => [...entries],
+    },
   };
 }
 
-const pdfjsOnly = { parser: true, parserSelector: false };
-const sidecarAdopted = { parser: false, parserSelector: true };
-
-test("the disabled scenario passes when building the parser sends nothing", async () => {
+test("the disabled scenario passes when building the extractor sends nothing", async () => {
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: false, built: pdfjsOnly, probes: false }, listener);
+  const session = sidecarSession({ enabled: false, probes: false }, listener);
   const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, true);
 });
 
 test("the disabled scenario fails when a request still reached the listener", async () => {
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: false, built: pdfjsOnly, probes: true }, listener);
+  const session = sidecarSession({ enabled: false, probes: true }, listener);
   const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, false);
   assert.match(result.detail, /capabilities/);
@@ -126,65 +142,67 @@ test("the disabled scenario fails when a request still reached the listener", as
 
 test("the disabled scenario fails when the setting defaulted to enabled", async () => {
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: false }, listener);
+  const session = sidecarSession({ enabled: true, probes: false }, listener);
   const result = await sidecarDisabledScenario({ session, listener });
   assert.equal(result.passed, false);
 });
 
-test("the fallback scenario passes when a refused probe produced PDF.js", async () => {
+test("the disabled scenario fails when the build did not return the PDF.js extractor", async () => {
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: true }, listener);
-  const result = await sidecarFallbackScenario({ session, listener });
+  const session = sidecarSession({ enabled: false, builtProvenanceId: "sidecar-docling", probes: false }, listener);
+  const result = await sidecarDisabledScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /provenance/);
+});
+
+test("the enabled-ignored scenario passes when enabling it still sends nothing and logs the note", async () => {
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: true, probes: false }, listener);
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
   assert.equal(result.passed, true);
-  assert.match(result.detail, /probe request reached/);
+  assert.match(result.detail, /logged the documented note/);
 });
 
-test("the fallback scenario fails when no request ever reached the endpoint", async () => {
-  // Without an observed request the pass would be vacuous: building returns the
-  // PDF.js parser whenever the sidecar is off.
+test("the enabled-ignored scenario fails when a request reached the listener despite being enabled", async () => {
+  // Without this check the pass would be vacuous against a regression that
+  // reintroduced a probe: the extractor is PDF.js either way.
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: true, built: pdfjsOnly, probes: false }, listener);
-  const result = await sidecarFallbackScenario({ session, listener });
+  const session = sidecarSession({ enabled: true, probes: true }, listener);
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
   assert.equal(result.passed, false);
-  assert.match(result.detail, /no request reached/);
+  assert.match(result.detail, /must not consult it/);
 });
 
-test("the fallback scenario fails when the sidecar was adopted despite a refusal", async () => {
+test("the enabled-ignored scenario fails when the build did not return the PDF.js extractor", async () => {
   const listener = fakeListener();
-  const session = sidecarSession({ enabled: true, built: sidecarAdopted, probes: true }, listener);
-  const result = await sidecarFallbackScenario({ session, listener });
+  const session = sidecarSession({ enabled: true, builtProvenanceId: "sidecar-docling", probes: false }, listener);
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
   assert.equal(result.passed, false);
-  assert.match(result.detail, /selector/);
+  assert.match(result.detail, /provenance/);
 });
 
-test("the fallback scenario fails when the settings transaction rejected the change", async () => {
+test("the enabled-ignored scenario fails when no documented note was logged", async () => {
+  // enabled: false means the stub never pushes the note, standing in for a
+  // regression where enabling the setting stopped logging it.
+  const listener = fakeListener();
+  const session = sidecarSession({ enabled: false, probes: false }, listener);
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /documented note/);
+});
+
+test("the enabled-ignored scenario fails when the settings transaction rejected the change", async () => {
   const listener = fakeListener();
   const session = {
     evaluate: async (expression) =>
       expression.includes("settingsChanges.changeValue")
         ? "ERROR: Invalid sidecar configuration"
         : "waited",
-    diagnostics: { errors: () => [] },
+    diagnostics: { errors: () => [], entries: () => [] },
   };
-  const result = await sidecarFallbackScenario({ session, listener });
+  const result = await sidecarEnabledIgnoredScenario({ session, listener });
   assert.equal(result.passed, false);
   assert.match(result.detail, /Invalid sidecar configuration/);
-});
-
-test("the fallback scenario fails when the failed probe raised a console error", async () => {
-  const listener = fakeListener();
-  const session = sidecarSession(
-    {
-      enabled: true,
-      built: pdfjsOnly,
-      probes: true,
-      errorsOnChange: [{ source: "console", level: "error", text: "sidecar probe exploded" }],
-    },
-    listener,
-  );
-  const result = await sidecarFallbackScenario({ session, listener });
-  assert.equal(result.passed, false);
-  assert.match(result.detail, /exploded/);
 });
 
 test("the migration scenario passes when old settings gained the sidecar defaults", async () => {
