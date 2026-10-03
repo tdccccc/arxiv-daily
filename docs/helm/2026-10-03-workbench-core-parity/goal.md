@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-04T01:28:18+08:00
-revision: 12
+updated: 2026-10-04T01:33:54+08:00
+revision: 13
 
 ## Intent
 
@@ -45,3 +45,5 @@ revision: 12
 8. P8 — 单一可输入模型选择框 — status: done
 
 9. P9 — 周末日报无更新状态 — status: done
+
+10. P10 — 简化标题与品牌图标提案供审核 — status: done

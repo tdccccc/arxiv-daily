@@ -51,3 +51,7 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T01:28:18+08:00 — P9 accepted, review batch held
 
 周末工作台入口复用core日期规则提前跳过；精确匹配旧周末无bucket记录的展示，不修改真实历史。49项相关回归与typecheck通过。已保存源代码，未构建或打包，不推进P2，等待用户继续反馈后统一版本。
+
+## 2026-10-04T01:33:54+08:00 — P10 wordmark and proposal
+
+用户要求标题只保留加粗加大的arxiv daily，并先审核新图标。标题源码已改（21项UI测试）；四个SVG与预览图供审核，新图标未用于实际UI。暂停等待反馈，继续不打包新版本。
