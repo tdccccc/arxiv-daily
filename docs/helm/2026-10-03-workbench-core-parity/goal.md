@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-03T16:40:24+08:00
-revision: 6
+updated: 2026-10-03T17:03:11+08:00
+revision: 8
 
 ## Intent
 
@@ -39,3 +39,5 @@ revision: 6
 5. P5 — 按 Obsidian 原设置复刻全部条目与宿主操作 — status: done
 
 6. P6 — 设置导航与区域区分 — status: done
+
+7. P7 — 修复密钥显示与模型选择 — status: done

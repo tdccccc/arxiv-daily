@@ -27,3 +27,11 @@ Return focus to P2: connection, consent and build controls are now available in 
 ## 2026-10-03T16:40:24+08:00 — P6 accepted
 
 On track: left jump navigation and stronger settings sections added without changing original controls. Verified 34 UI +12 DSH checks and built 0.1.6. Existing P5 behavior preserved; resume P2 library catalog/search next.
+
+## 2026-10-03T16:49:17+08:00 — P7 fix
+
+用户报告Show与Get models不可用。根因：保存后空密钥框仅切type；datalist没有明确展开入口。保留P5/P6，新增P7。用户明确请求密钥显示，修订此前仅显示新输入的宿主限制，采用显式受保护POST显示已存密钥。
+
+## 2026-10-03T17:03:11+08:00 — P7 accepted
+
+On track: saved-key Show/Hide and explicit model selector work in regression tests; DSH0.1.7 built. This supersedes P5's new-input-only reveal limitation in response to the user request. P2 remains the next product phase.
