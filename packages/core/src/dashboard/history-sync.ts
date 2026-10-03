@@ -933,7 +933,10 @@ function extractArxivIds(text: string): string[] {
 function cleanDailyHeading(heading: string): string {
   return heading
     .replace(/\s*(?:→|->)\s*(?:\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))\s*$/g, "")
-    .replace(/<!--.*?-->/g, "")
+    // [\s\S]*? (not .*?) so a comment spanning a line break is still fully
+    // removed, closing the CodeQL js/bad-tag-filter / incomplete-multi-
+    // character-sanitization gap where "<!--" could otherwise survive.
+    .replace(/<!--[\s\S]*?-->/g, "")
     .trim();
 }
 
@@ -999,5 +1002,13 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function normalizeVaultPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, "");
+  // Scan the slash boundaries instead of /^\/+|\/+$/g, which forces the
+  // regex engine to retry across a long run of repeated slashes
+  // (CodeQL js/polynomial-redos; same fix as paper-index's normalizeStoragePath).
+  const normalized = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && normalized[start] === "/") start += 1;
+  while (end > start && normalized[end - 1] === "/") end -= 1;
+  return normalized.slice(start, end);
 }

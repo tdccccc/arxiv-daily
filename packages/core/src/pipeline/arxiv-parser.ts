@@ -50,11 +50,19 @@ function parseHeaderDate(headerText: string): string | null {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+/**
+ * Defense-in-depth tag stripping before DOMParser/linkedom parses the arXiv
+ * listing: parsed documents here are never attached to a live document and
+ * only `.textContent` of specific selectors is read (see parseRecent below),
+ * so scripts never execute and stylesheets never apply regardless of this
+ * function. Closing tags allow optional whitespace before '>' (e.g.
+ * "</script >"), matching real HTML parsing (CodeQL js/bad-tag-filter).
+ */
 function stripUnsafeTags(html: string): string {
   return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
     .replace(/<link\b[^>]*\/?>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
 }
 
 /**
