@@ -63,6 +63,34 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
     assert.equal(response.status, 200, await response.text());
     assert.equal((await (await get('api/settings')).json()).setupRequired, false);
   }
+  // Exercise the packed host's real persistence boundary in both configured and first-run cases.
+  const beforeSettings = await (await get('api/settings')).json();
+  const extendedValues = {
+    ...beforeSettings.values,
+    apiKey: 'fixture-settings-secret-never-log',
+    reasoningEffort: 'high', detailProfile: 'conservative', linkStyle: 'relative', summaryLanguage: 'en',
+    schedule: { enabled: false, tickIntervalMin: 7, runAtLocal: '10:15', runUntilLocal: '17:45' },
+    embedding: { mode: 'local', baseUrl: '', model: '', dimension: 384, apiKey: 'fixture-embedding-secret-never-log' },
+    pdfParserSidecar: { enabled: false, capabilitiesUrl: 'http://127.0.0.1:5001/v1/capabilities', parseUrl: 'http://127.0.0.1:5001/v1/parse' },
+    email: { enabled: false, mode: 'self', to: 'reader@example.test', fromEmail: 'papers@example.test', fromName: 'Research reports', apiKey: 'fixture-email-secret-never-log', hostedToken: 'fixture-hosted-secret-never-log' },
+    logLevel: 'warn',
+  };
+  const updateSettings = await fetch(new URL('api/settings', url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: beforeSettings.revision, values: extendedValues }) });
+  const updatedText = await updateSettings.text();
+  assert.equal(updateSettings.status, 200, updatedText);
+  const afterSettingsResponse = await get('api/settings');
+  const afterSettingsText = await afterSettingsResponse.text();
+  const afterSettings = JSON.parse(afterSettingsText);
+  for (const key of ['reasoningEffort', 'detailProfile', 'linkStyle', 'summaryLanguage', 'schedule', 'pdfParserSidecar', 'logLevel']) {
+    assert.deepEqual(afterSettings.values[key], extendedValues[key], `${key} must round-trip through the installed DSH host`);
+  }
+  assert.deepEqual(afterSettings.values.embedding, { mode: 'local', baseUrl: '', model: '', dimension: 384, apiKeyConfigured: true });
+  assert.deepEqual(afterSettings.values.email, { enabled: false, mode: 'self', to: 'reader@example.test', fromEmail: 'papers@example.test', fromName: 'Research reports', apiKeyConfigured: true, hostedTokenConfigured: true });
+  assert.equal(afterSettings.values.apiKeyConfigured, true);
+  assert.notEqual(afterSettings.revision, beforeSettings.revision);
+  assert.doesNotMatch(updatedText + afterSettingsText, /fixture-(?:settings|embedding|email|hosted)-secret-never-log/);
+  const librarySettings = await (await get('api/settings/library')).json();
+  assert.equal(librarySettings.status.kind, 'disconnected');
   assert.match((await (await get('api/document?path=arxiv-daily/papers/manual.md')).json()).html, /katex/);
   assert.equal(await readFile(log, 'utf8'), '', 'opening and reading makes no provider requests');
   const post = (route, body) => fetch(new URL(route, url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -91,7 +119,7 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal(reopened.result.ok, true); assert.notEqual(reopened.result.value.url, url);
   const saved = await (await fetch(new URL(`api/paper?key=${encodeURIComponent(paper.key)}`, reopened.result.value.url))).json();
   assert.equal(saved.paper.status, 'to_read'); assert.equal(saved.paper.starred, true);
-  assert.doesNotMatch(output, /fixture-secret-never-log|did not activate|already has an interceptor/);
+  assert.doesNotMatch(output, /fixture(?:-(?:settings|embedding|email|hosted))?-secret-never-log|did not activate|already has an interceptor/);
   child.kill('SIGTERM'); await exited;
   await assert.rejects(fetch(reopened.result.value.url), 'DSH shutdown must close its workbench listener');
 });

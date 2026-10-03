@@ -332,13 +332,13 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     try {
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
-      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot);
+      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(run => run.status === "completed"));
       bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
         closeDialog();
         find(".connection-banner").hidden = true;
         if (!await loadStatus()) return;
         await initializeWorkspace(true);
-      });
+      }, acceptRun, status?.recentRuns?.some(run => run.status === "completed"));
     } catch (error) {
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.textContent = message(error);
@@ -368,6 +368,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     if (run && currentRun?.id === run.id && currentRun.status !== "running" && run.status === "running") return;
     const previous = currentRun;
     currentRun = run;
+    root.querySelector(".settings-form")?.dispatchEvent(new CustomEvent("workbench-run", { detail: run }));
     renderRun();
     if (run?.id !== previous?.id || run?.status !== previous?.status || run?.date !== previous?.date) void calendar.refresh();
     clearTimeout(pollTimer);

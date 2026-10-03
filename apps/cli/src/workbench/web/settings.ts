@@ -1,55 +1,171 @@
+import { settingsSetupGuide } from "./settings-setup";
+import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
 import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
-import type { Topic } from "@arxiv-daily/core";
+import { ARXIV_CATEGORIES, DEFAULT_SETTINGS, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
+import { descriptions } from './settings-copy';
 export type { WorkbenchSettings as SettingsSnapshot } from "../settings";
 const escape = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-function field(name: string, label: string, value: string, type = 'text'): string {
-  return `<label class="settings-field">${label}<input name="${name}" type="${type}" value="${escape(value)}" ${type === 'password' ? 'autocomplete="new-password"' : ''}></label>`;
+const button = (action: string, label: string) => `<button type="button" data-settings="${action}">${label}</button>`;
+const zones = { 'Asia/Shanghai': 'Shanghai (UTC+8)', 'Asia/Tokyo': 'Tokyo (UTC+9)', 'US/Eastern': 'US East (UTC-5)', 'US/Pacific': 'US West (UTC-8)', 'Europe/London': 'London (UTC+0)', 'Europe/Berlin': 'Berlin (UTC+1)', 'Europe/Moscow': 'Moscow (UTC+3)', 'Australia/Sydney': 'Sydney (UTC+10)', UTC: 'UTC' };
+function input(name: string, value: string | number, type = 'text', extra = ''): string { return `<input name="${name}" aria-label="${name}" type="${type}" value="${escape(String(value))}" ${extra}>`; }
+function select(name: string, value: string, options: Record<string, string>, key = name): string { return `<select name="${name}" aria-label="${name}" data-setting-key="${key}">${Object.entries(options).map(([id,label]) => `<option value="${id}" ${id === value ? 'selected' : ''}>${escape(label)}</option>`).join('')}</select>`; }
+function toggle(name: string, value: boolean, key = name): string { return `<input name="${name}" aria-label="${name}" type="checkbox" role="switch" data-setting-key="${key}" ${value ? 'checked' : ''}>`; }
+function secret(name: string, configured: boolean): string { return `<div class="settings-secret">${input(name,'','password','autocomplete="new-password"')}<button type="button" data-settings="show-secret" aria-label="Show ${name}">Show</button><small>${configured ? 'Saved. Leave blank to keep unchanged.' : 'Saved only on this device.'}</small></div>`; }
+function row(name: string, controls: string, desc = descriptions[name] ?? '', extra = ''): string { return `<div class="setting-item" data-setting-name="${escape(name)}" ${extra}><div class="setting-item-info"><div class="setting-item-name">${escape(name)}</div><div class="setting-item-description">${escape(desc)}</div></div><div class="setting-item-control">${controls}</div></div>`; }
+function group(name: string, content: string): string { return `<section class="settings-section"><h3 data-settings-heading>${name}</h3>${content}</section>`; }
+function categoryRow(value: string, index: number): string {
+ const known = ARXIV_CATEGORIES.some(group => group.categories.some(c => c.id === value));
+ return row(String(index + 1), `<select name="category" aria-label="Category ${index+1}">${ARXIV_CATEGORIES.map(group => `<optgroup label="${escape(group.label)}">${group.categories.map(c => `<option value="${c.id}" ${c.id === value ? 'selected' : ''}>${escape(`${c.id} — ${c.name}`)}</option>`).join('')}</optgroup>`).join('')}${!known ? `<option selected value="${escape(value)}">${escape(value)} — custom</option>` : ''}</select>${button('remove-category','Delete')}`, '', 'data-category-row');
 }
-function topicRow(topic: Topic): string {
-  return `<fieldset class="settings-topic" data-topic-id="${escape(topic.id)}"><legend>关注主题</legend><div class="settings-grid">${field('topicName', '名称', topic.name)}${field('topicTag', '标签', topic.tag)}</div><label class="settings-field">筛选描述<textarea name="topicDescription" rows="3">${escape(topic.description)}</textarea></label><div class="settings-topic-actions"><label><input type="checkbox" name="topicDetail" ${topic.detail ? 'checked' : ''}> 自动生成详细总结</label><button type="button" class="quiet-button" data-settings="remove-topic">删除主题</button></div></fieldset>`;
+function topicRow(topic: Topic, open = false): string { return `<details class="settings-topic" data-topic-id="${escape(topic.id)}" data-setting-name="${escape(topic.name.trim() || '(unnamed)')}" ${open ? 'open' : ''}><summary><span class="settings-topic-name">${escape(topic.name.trim() || '(unnamed)')}</span><span class="settings-topic-tag">${topic.tag ? escape('#'+topic.tag) : ''}</span><span class="settings-topic-star" title="Detail report enabled">${topic.detail ? '★' : ''}</span></summary><div class="settings-topic-body"><label>Name${input('topicName',topic.name)}</label><label>Tag${input('topicTag',topic.tag)}</label><label>Description<textarea name="topicDescription" rows="3">${escape(topic.description)}</textarea></label><label class="settings-detail-toggle">Detail report <input name="topicDetail" type="checkbox" ${topic.detail ? 'checked' : ''}></label>${button('remove-topic','Delete')}</div></details>`; }
+function times(value: string): Record<string,string> { const out: Record<string,string> = {}; for(let h=0;h<24;h++)for(let m=0;m<60;m+=15){const t=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;out[t]=t;} out[value]=value; return Object.fromEntries(Object.entries(out).sort()); }
+export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = false): string {
+ const d=DEFAULT_SETTINGS, v=Object.assign({ reasoningEffort: d.llm.thinkingMode ? d.llm.reasoningEffort : 'none', detailProfile: d.detailSelection.profile, linkStyle:d.output.linkStyle, schedule:d.schedule, embedding:{...d.embedding,apiKeyConfigured:false}, pdfParserSidecar:d.pdfParserSidecar, email:{...d.email,apiKeyConfigured:false,hostedTokenConfigured:false}, logLevel:d.advanced.logLevel }, snapshot.values);
+ const hiddenRemote = v.embedding.mode !== 'remote' ? 'hidden' : '', hiddenParser = !v.pdfParserSidecar.enabled ? 'hidden' : '';
+ const emailHosted = v.email.mode === 'hosted';
+ return `<form class="settings-form"><div class="settings-host-context"><p>${snapshot.setupRequired ? '首次使用：选择保存目录，再配置下方 LLM 和研究主题。' : '设置保存后立即生效。'}</p><label>保存根目录（本机绝对路径）${input('vaultRoot',v.vaultRoot)}</label><p>模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。</p><code>${escape(snapshot.configPath)}</code></div><div class="settings-setup-host">${settingsSetupGuide(snapshot,firstReportComplete)}</div>
+ ${row(v.schedule.enabled?'Enable · Running':'Enable · Paused',toggle('schedule.enabled',v.schedule.enabled),'When on, daily reports run automatically on weekdays (weekends are skipped).')}
+ ${group('LLM',row('API base URL',input('baseUrl',v.baseUrl,'url','placeholder="Provider URL"'))+row('API key',secret('apiKey',v.apiKeyConfigured))+row('Model',input('model',v.model,'text','list="settings-model-options" placeholder="Model name"')+'<datalist id="settings-model-options"></datalist>'+button('models','Get models'))+row('Reasoning effort',select('reasoningEffort',v.reasoningEffort,{none:'None',low:'Low',medium:'Medium',high:'High'})))}
+ ${group('arXiv categories',`<div class="settings-categories">${v.categories.map(categoryRow).join('')}</div>${button('add-category','Add category')}`)}
+ ${group('Research topics',`<div class="settings-topic-list">${v.topics.map(t=>topicRow(t)).join('')}</div>${button('add-topic','Add topic')}`)}
+ ${row('Automatic detail notes',select('detailProfile',v.detailProfile,{conservative:'Fewer',balanced:'Recommended',broad:'More',...(v.detailProfile==='custom'?{custom:'Custom (current values)'}:{})},'detailSelection.profile'))}
+ ${row('Timezone',select('timezone',v.timezone,zones)+input('timezoneCustom',Object.hasOwn(zones,v.timezone)?'':v.timezone,'text','placeholder="Or enter custom timezone"'))}
+ ${group('Output & schedule',row('Daily reports folder',input('dailyDir',v.dailyDir))+row('Paper notes folder',input('papersDir',v.papersDir))+row('Link style',select('linkStyle',v.linkStyle,{wikilink:'Obsidian wikilink',relative:'Standard relative link'},'output.linkStyle'))+row('Summary language',select('summaryLanguage',v.summaryLanguage,{zh:'Chinese',en:'English'},'output.summaryLanguage'))+row('Run window',`<label>Start ${select('schedule.runAtLocal',v.schedule.runAtLocal,times(v.schedule.runAtLocal))}</label><label>End ${select('schedule.runUntilLocal',v.schedule.runUntilLocal,times(v.schedule.runUntilLocal))}</label>`)+row('Check every (minutes)',input('schedule.tickIntervalMin',v.schedule.tickIntervalMin)))}
+ ${group('Personal library',row('Library','<div class="settings-library-controls">'+button('library-connect','Choose folder')+'</div>','Choose a folder of PDFs, then build a search index. Separate from daily reports.','data-library-row')+row('Embedding',select('embedding.mode',v.embedding.mode,{local:'Local (offline, default)',remote:'Remote (fast, full text leaves this device)'}),'Local embeds on this device. Switch to remote only if you have an embeddings API.')+row('Embedding API base URL',input('embedding.baseUrl',v.embedding.baseUrl,'url'),'OpenAI-compatible embeddings endpoint.',`data-remote ${hiddenRemote}`)+row('Embedding API key',secret('embedding.apiKey',v.embedding.apiKeyConfigured),'Saved only on this device.',`data-remote ${hiddenRemote}`)+row('Embedding model',input('embedding.model',v.embedding.model),'Model name sent to the endpoint.',`data-remote ${hiddenRemote}`)+row('Embedding dimension',input('embedding.dimension',v.embedding.dimension,'number','min="1" step="1"'),'Vector width of the remote model. Must match the model.',`data-remote ${hiddenRemote}`)+row('Better PDF parser',toggle('pdfParserSidecar.enabled',v.pdfParserSidecar.enabled))+row('Sidecar capability URL',input('pdfParserSidecar.capabilitiesUrl',v.pdfParserSidecar.capabilitiesUrl,'url'),descriptions['Sidecar capability URL'],`data-parser ${hiddenParser}`)+row('Sidecar parse URL',input('pdfParserSidecar.parseUrl',v.pdfParserSidecar.parseUrl,'url'),descriptions['Sidecar parse URL'],`data-parser ${hiddenParser}`))}
+ ${group('Email delivery',`<div class="settings-email-guide"></div>`+row('How to send',select('email.mode',v.email.mode,{self:'Send yourself',hosted:'Official delivery (beta)'}),'Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.')+row('Your email',input('email.to',v.email.to,'email','placeholder="you@example.com"')+`<span data-email-hosted ${emailHosted?'':'hidden'}>${button('email-verify','Send verification')}</span>`,'Where digests are delivered. With From empty, use the email on your Resend account.')+row('Verification code',secret('email.hostedToken',v.email.hostedTokenConfigured)+button('email-test','Send test'),descriptions['Verification code'],`data-email-hosted ${emailHosted?'':'hidden'}`)+row('Resend API key',secret('email.apiKey',v.email.apiKeyConfigured)+button('email-test','Send test'),descriptions['Resend API key'],`data-email-self ${emailHosted?'hidden':''}`)+row('From email',input('email.fromEmail',v.email.fromEmail,'text','placeholder="Leave blank for simplest setup"'),descriptions['From email'],`data-email-self ${emailHosted?'hidden':''}`)+row('From name',input('email.fromName',v.email.fromName,'text','placeholder="arXiv Daily"'),descriptions['From name'],`data-email-self ${emailHosted?'hidden':''}`)+row('Daily auto-send',toggle('email.enabled',v.email.enabled),'When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.'))}
+ ${group('Advanced',row('Log level',select('logLevel',v.logLevel,{debug:'Debug',info:'Info',warn:'Warn',error:'Error'},'advanced.logLevel')))}
+ ${group('Help & feedback',row('Report a bug','<a href="https://github.com/tdccccc/arxiv-daily/issues/new?body=-%20arXiv%20Daily%3A%20Workbench" target="_blank" rel="noopener noreferrer">Open</a>')+row('Request a feature','<a href="https://github.com/tdccccc/arxiv-daily/issues/new" target="_blank" rel="noopener noreferrer">Open</a>')+row('Documentation','<a href="https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md" target="_blank" rel="noopener noreferrer">Open</a>')+row('Repository','<a href="https://github.com/tdccccc/arxiv-daily" target="_blank" rel="noopener noreferrer">Open</a>'))}
+ <div class="settings-action-host"></div><p class="settings-action-status" role="status"></p><p class="form-error" role="alert" hidden></p><div class="dialog-footer">${button('close','取消')}<button type="submit" class="primary-button">${snapshot.setupRequired?'保存并开始使用':'保存设置'}</button></div></form>`;
 }
-export function settingsForm(snapshot: SettingsSnapshot): string {
-  const v = snapshot.values;
-  return `<form class="settings-form"><p class="dialog-description">${snapshot.setupRequired ? '选择研究记录保存位置，配置模型与关注主题，即可生成第一份日报。' : '保存后立即生效，已有研究记录仍保存在原目录。'}</p><div class="settings-layout"><nav class="settings-navigation" aria-label="设置分组">${[['records', '研究记录'], ['model', '模型 API'], ['discovery', '每日发现']].map(([key, label]) => `<button type="button" data-settings-group="${key}" aria-controls="settings-${key}" aria-current="${key === 'records' ? 'true' : 'false'}">${label}</button>`).join('')}</nav><div class="settings-panels"><section id="settings-records" data-settings-panel><h3>研究记录</h3>${field('vaultRoot', '保存根目录（本机绝对路径）', v.vaultRoot)}<div class="settings-grid">${field('dailyDir', '日报子目录', v.dailyDir)}${field('papersDir', '论文总结子目录', v.papersDir)}</div></section><section id="settings-model" data-settings-panel hidden><h3>模型 API</h3><p class="settings-hint">论文筛选和总结使用独立的模型 API，与 DSH 或 Claude Code 的对话模型独立配置。</p><div class="settings-grid">${field('provider', '服务商', v.provider)}${field('model', '模型名称', v.model)}</div>${field('baseUrl', 'API 地址', v.baseUrl)}${field('apiKey', 'API 密钥', '', 'password')}<p class="settings-hint">${v.apiKeyConfigured ? '已配置密钥；留空保留现有密钥。' : '尚未配置密钥。密钥保存后不会回显。'}</p></section><section id="settings-discovery" data-settings-panel hidden><h3>每日发现</h3>${field('categories', 'arXiv 分类（逗号分隔）', v.categories.join(', '))}<div class="settings-grid">${field('timezone', '时区', v.timezone)}<label class="settings-field">总结语言<select name="summaryLanguage"><option value="zh" ${v.summaryLanguage === 'zh' ? 'selected' : ''}>中文</option><option value="en" ${v.summaryLanguage === 'en' ? 'selected' : ''}>English</option></select></label></div><div class="settings-topic-list">${v.topics.map(topicRow).join('')}</div><button type="button" class="quiet-button" data-settings="add-topic">＋ 添加主题</button></section><p class="settings-hint">配置文件：<code class="config-path">${escape(snapshot.configPath)}</code></p></div></div><p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">取消</button><button type="submit" class="primary-button">${snapshot.setupRequired ? '保存并开始使用' : '保存设置'}</button></div></form>`;
-}
-export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>): void {
-  let busy = false;
-  form.addEventListener('click', event => {
-    const group = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-settings-group]') : null;
-    if (group) {
-      for (const panel of Array.from(form.querySelectorAll<HTMLElement>('[data-settings-panel]'))) panel.hidden = panel.id !== `settings-${group.dataset.settingsGroup}`;
-      for (const button of Array.from(form.querySelectorAll<HTMLElement>('[data-settings-group]'))) button.setAttribute('aria-current', String(button === group));
-      return;
-    }
-    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-settings]') : null;
-    if (busy || !target) return;
-    if (target.dataset.settings === 'add-topic') {
-      form.querySelector('.settings-topic-list')!.insertAdjacentHTML('beforeend', topicRow({ id: crypto.randomUUID(), name: '', tag: '', description: '', detail: true }));
-      form.querySelector<HTMLInputElement>('.settings-topic:last-child input')?.focus();
-    } else target.closest('.settings-topic')?.remove();
-  });
-  form.addEventListener('submit', event => {
-    event.preventDefault();
-    if (busy) return;
-    const get = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).value.trim();
-    const topics = Array.from(form.querySelectorAll<HTMLElement>('.settings-topic')).map(row => ({
-      id: row.dataset.topicId!,
-      name: row.querySelector<HTMLInputElement>('[name="topicName"]')!.value.trim(),
-      tag: row.querySelector<HTMLInputElement>('[name="topicTag"]')!.value.trim(),
-      description: row.querySelector<HTMLTextAreaElement>('[name="topicDescription"]')!.value.trim(),
-      detail: row.querySelector<HTMLInputElement>('[name="topicDetail"]')!.checked,
-    }));
-    const apiKey = get('apiKey');
-    const values = { vaultRoot: get('vaultRoot'), provider: get('provider'), model: get('model'), baseUrl: get('baseUrl'), ...(apiKey ? { apiKey } : {}), categories: get('categories').split(/[,，\s]+/).filter(Boolean), timezone: get('timezone'), summaryLanguage: get('summaryLanguage'), dailyDir: get('dailyDir'), papersDir: get('papersDir'), topics };
-    const button = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
-    const error = form.querySelector<HTMLElement>('[role="alert"]')!;
-    const label = button.textContent;
-    busy = true; button.disabled = true; button.textContent = '正在保存…'; error.hidden = true;
-    void request<SettingsSnapshot>('api/settings', { revision: snapshot.revision, values }).then(async () => {
-      if (form.isConnected) await saved();
-    }).catch(reason => {
-      if (!form.isConnected) return;
-      error.hidden = false; error.textContent = reason instanceof Error ? reason.message : '保存失败，请重试。';
-    }).finally(() => { busy = false; button.disabled = false; button.textContent = label; });
-  });
+
+export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false): void {
+ let busy=false, revision=snapshot.revision, libraryCancelling=false, libraryRevisionPending=false;
+ let currentSnapshot=snapshot;
+ let library: (CliLibraryConnectionInspection & { run?: import('../server').WorkbenchRun }) | undefined;
+ const get=(name:string) => (form.elements.namedItem(name) as HTMLInputElement)?.value.trim() ?? '';
+ const checked=(name:string) => (form.elements.namedItem(name) as HTMLInputElement).checked;
+ const find=<T extends HTMLElement=HTMLElement>(selector:string)=>form.querySelector<T>(selector)!;
+ function values() {
+  const topics=Array.from(form.querySelectorAll<HTMLElement>('.settings-topic')).map(row=>({id:row.dataset.topicId!,name:row.querySelector<HTMLInputElement>('[name="topicName"]')!.value.trim(),tag:row.querySelector<HTMLInputElement>('[name="topicTag"]')!.value.trim(),description:row.querySelector<HTMLTextAreaElement>('[name="topicDescription"]')!.value.trim(),detail:row.querySelector<HTMLInputElement>('[name="topicDetail"]')!.checked}));
+  const key=(name:string,field='apiKey')=>get(name)?{[field]:get(name)}:{};
+  return {vaultRoot:get('vaultRoot'),provider:snapshot.values.provider,baseUrl:get('baseUrl'),model:get('model'),...key('apiKey'),reasoningEffort:get('reasoningEffort'),categories:Array.from(form.querySelectorAll<HTMLElement>('[data-category-row]')).map(row=>row.querySelector<HTMLSelectElement>('select')!.value),topics,timezone:get('timezoneCustom')||get('timezone'),detailProfile:get('detailProfile'),dailyDir:get('dailyDir'),papersDir:get('papersDir'),linkStyle:get('linkStyle'),summaryLanguage:get('summaryLanguage'),schedule:{enabled:checked('schedule.enabled'),runAtLocal:get('schedule.runAtLocal'),runUntilLocal:get('schedule.runUntilLocal'),tickIntervalMin:Number(get('schedule.tickIntervalMin'))},embedding:{mode:get('embedding.mode'),baseUrl:get('embedding.baseUrl'),model:get('embedding.model'),dimension:Number(get('embedding.dimension')),...key('embedding.apiKey')},pdfParserSidecar:{enabled:checked('pdfParserSidecar.enabled'),capabilitiesUrl:get('pdfParserSidecar.capabilitiesUrl'),parseUrl:get('pdfParserSidecar.parseUrl')},email:{enabled:checked('email.enabled'),mode:get('email.mode'),to:get('email.to'),fromEmail:get('email.fromEmail'),fromName:get('email.fromName'),...key('email.apiKey'),...key('email.hostedToken','hostedToken')},logLevel:get('logLevel')};
+ }
+ function conditions() {
+  for(const el of Array.from(form.querySelectorAll<HTMLElement>('[data-remote]')))el.hidden=get('embedding.mode')!=='remote';
+  for(const el of Array.from(form.querySelectorAll<HTMLElement>('[data-parser]')))el.hidden=!checked('pdfParserSidecar.enabled');
+  for(const el of Array.from(form.querySelectorAll<HTMLElement>('[data-email-hosted]')))el.hidden=get('email.mode')!=='hosted';
+  for(const el of Array.from(form.querySelectorAll<HTMLElement>('[data-email-self]')))el.hidden=get('email.mode')==='hosted';
+  const schedule=find('[data-setting-name^="Enable ·"]'); schedule.dataset.settingName=checked('schedule.enabled')?'Enable · Running':'Enable · Paused';schedule.querySelector('.setting-item-name')!.textContent=schedule.dataset.settingName;
+  const hosted=get('email.mode')==='hosted';
+  const desc=(name:string,text:string)=>{find(`[data-setting-name="${name}"] .setting-item-description`).textContent=text;};
+  desc('Embedding',get('embedding.mode')==='remote'?'Remote sends full text to an embeddings API. Switching modes rebuilds the index.':'Local embeds on this device. Switch to remote only if you have an embeddings API.');
+  desc('How to send',hosted?'Official delivery (Beta) is a shared free service with a small daily limit. Prefer Send yourself if you need many messages or reliable high volume.':'Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.');
+  desc('Your email',hosted?'Where verification and daily digests are sent.':'Where digests are delivered. With From empty, use the email on your Resend account.');
+  desc('Daily auto-send',hosted?'When on, a digest is emailed after each successful daily report. Official delivery may stop for the day if the shared limit is reached; report generation still continues.':'When on, a digest is emailed after each successful daily report. Email problems do not stop report generation.');
+  find('.settings-email-guide').textContent=hosted?'Official delivery (Beta): enter your email, send verification, then paste the code from the verification page.':'Send yourself: enter your email and Resend API key, then send a test.';
+  for(const el of Array.from(form.querySelectorAll<HTMLButtonElement>('[data-settings="remove-category"]')))el.hidden=form.querySelectorAll('[data-category-row]').length<=1;
+ }
+ function renderLibrary() {
+  if(!library)return;
+  const run=library.run;
+  const row=libraryRowPresentation({status:library.status,embeddingMode:get('embedding.mode')==='remote'?'remote':'local',...(run?.status==='running'?{activity:{phase:run.label,cancelling:libraryCancelling}}:{})});
+  find('[data-library-row] .setting-item-description').textContent=row.description;
+  find('.settings-library-controls').innerHTML=[['library-connect',row.chooseFolder],['library-build',row.primary],['library-cancel',row.cancel],['library-revoke',row.revoke]].map(([action,item])=>{if(!item||typeof item==='string')return '';return `<button type="button" data-settings="${action}" ${item.disabled?'disabled':''}>${escape(item.label)}</button>`;}).join('');
+ }
+ async function refreshLibrary() { library=await request<typeof library>('api/settings/library'); if(form.isConnected){renderLibrary();if(library?.run?.status==='running'){lockLibraryInputs(true);onRun?.(library.run);}} }
+ async function saveDraft() {
+  const secrets=Array.from(form.querySelectorAll<HTMLInputElement>('.settings-secret input')).map(el=>({el,value:el.value}));
+  const result=await request<SettingsSnapshot>('api/settings',{revision,values:values()}); revision=result.revision;currentSnapshot=result;find('.settings-setup-host').innerHTML=settingsSetupGuide(result,firstReportComplete);
+  for(const {el,value} of secrets)if(el.value===value){el.value='';el.type='password';el.closest('.settings-secret')!.querySelector('button')!.textContent='Show';el.closest('.settings-secret')!.querySelector('small')!.textContent='Saved. Leave blank to keep unchanged.';}
+  return result;
+ }
+ async function task(operation:()=>Promise<void>, actionButton?: HTMLButtonElement) {
+  if(busy)return;busy=true;find('[role="alert"]').hidden=true;
+  const submit=find<HTMLButtonElement>('[type="submit"]');submit.disabled=true;
+  const originalLabel=actionButton?.textContent ?? '';
+  if(actionButton){actionButton.disabled=true;if(actionButton.dataset.settings==='models')actionButton.textContent='Fetching…';else if(actionButton.dataset.settings?.startsWith('email-'))actionButton.textContent='Sending…';}
+  try{await operation();}catch(error){if(form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:'操作失败，请重试。';}}
+  finally{busy=false;submit.disabled=library?.run?.status==='running'||libraryRevisionPending;if(actionButton){actionButton.disabled=false;actionButton.textContent=originalLabel;}}
+ }
+ async function action(name:string,extra:Record<string,unknown>={}) {
+  const result=await request<{settings?:SettingsSnapshot;library?:typeof library;models?:string[];run?:import('../server').WorkbenchRun}>('api/settings/action',{revision,action:name,...extra});
+  if(!form.isConnected)return;
+  if(result.settings)revision=result.settings.revision;
+  if(result.library){library=result.library;renderLibrary();}
+  if(result.models){find('datalist').innerHTML=result.models.map(model=>`<option value="${escape(model)}"></option>`).join('');find('.settings-action-status').textContent=result.models.length?`Loaded ${result.models.length} models. Your current model is kept.`:'No models returned; type a model name to continue.';}
+  if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
+ }
+ function lockLibraryInputs(locked: boolean) {
+  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings="close"])')))control.disabled=locked;
+  find<HTMLButtonElement>('[type="submit"]').disabled=locked || busy;if(!locked)renderLibrary();
+ }
+ form.addEventListener('workbench-run',event=>{
+  const run=(event as CustomEvent<import('../server').WorkbenchRun|null>).detail;
+  if(run?.status==='completed')void request<{recentRuns?:Array<{status:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(entry=>entry.status==='completed')??firstReportComplete;if(form.isConnected)find('.settings-setup-host').innerHTML=settingsSetupGuide(currentSnapshot,firstReportComplete);}).catch(()=>{});
+  if(library?.run && run?.id===library.run.id){
+   library.run=run;if(run.status!=='running')libraryCancelling=false;renderLibrary();
+   if(run.status!=='running'){libraryRevisionPending=true;void Promise.all([request<SettingsSnapshot>('api/settings'),refreshLibrary()]).then(([current])=>{revision=current.revision;}).catch(error=>{if(form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:'Could not reload settings.';}}).finally(()=>{libraryRevisionPending=false;lockLibraryInputs(false);});}
+  }
+ });
+ form.addEventListener('change',event=>{
+  const target=event.target;
+  if(target instanceof HTMLSelectElement && target.name==='timezone')find<HTMLInputElement>('[name="timezoneCustom"]').value='';
+  if(target instanceof HTMLInputElement && target.name==='timezoneCustom' && target.value.trim()){
+   const dropdown=find<HTMLSelectElement>('[name="timezone"]');const value=target.value.trim();
+   if(!Array.from(dropdown.options).some(option=>option.value===value))dropdown.add(new Option(value,value));
+   dropdown.value=value;
+  }
+  conditions();renderLibrary();updateTopic(event);
+ });
+ function updateTopic(event:Event) {
+  const target=event.target;if(!(target instanceof HTMLInputElement))return;
+  const topic=target.closest<HTMLElement>('.settings-topic');if(!topic)return;
+  const name=topic.querySelector<HTMLInputElement>('[name="topicName"]')!.value.trim()||'(unnamed)';
+  const tag=topic.querySelector<HTMLInputElement>('[name="topicTag"]')!.value.trim();
+  topic.dataset.settingName=name;topic.querySelector('.settings-topic-name')!.textContent=name;
+  topic.querySelector('.settings-topic-tag')!.textContent=tag?'#'+tag:'';
+  topic.querySelector('.settings-topic-star')!.textContent=topic.querySelector<HTMLInputElement>('[name="topicDetail"]')!.checked?'★':'';
+ }
+ form.addEventListener('input',updateTopic);
+ form.addEventListener('click',event=>{
+  const setup=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-setup-action]'):null;
+  if(setup){
+   const name=setup.dataset.setupAction;
+   if(name==='llm'||name==='arxiv'||name==='topics'){
+    const heading=Array.from(form.querySelectorAll<HTMLElement>('[data-settings-heading]')).find(h=>h.textContent===({llm:'LLM',arxiv:'arXiv categories',topics:'Research topics'})[name]);
+    heading?.scrollIntoView?.({block:'start',behavior:'smooth'});heading?.parentElement?.querySelector<HTMLElement>('input,select,button')?.focus();return;
+   }
+   void task(async()=>{
+    if(name==='dashboard'){await saved();return;}
+    if(name==='enable'){find<HTMLInputElement>('[name="schedule.enabled"]').checked=true;conditions();}
+    await saveDraft();
+    if(name==='generate'){const result=await request<{run:import('../server').WorkbenchRun}>('api/runs',{kind:'daily'});onRun?.(result.run);}
+   },setup);return;
+  }
+  const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;
+  const name=target.dataset.settings!;
+  if(name==='close'){form.closest('dialog')?.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')?.click();return;}
+  if(name==='show-secret'){const field=target.previousElementSibling as HTMLInputElement;field.type=field.type==='password'?'text':'password';target.textContent=field.type==='password'?'Show':'Hide';return;}
+  if(busy)return;
+  if(name==='add-topic'){find('.settings-topic-list').insertAdjacentHTML('beforeend',topicRow({id:crypto.randomUUID(),name:'',tag:'',description:'',detail:true},true));return;}
+  if(name==='remove-topic'){target.closest('.settings-topic')!.remove();return;}
+  if(name==='add-category'){const current=values().categories;const next=ARXIV_CATEGORIES.flatMap(g=>g.categories).find(c=>!current.includes(c.id));find('.settings-categories').insertAdjacentHTML('beforeend',categoryRow(next?.id??'cs.LG',current.length));conditions();return;}
+  if(name==='remove-category'){if(form.querySelectorAll('[data-category-row]').length>1)target.closest('[data-category-row]')!.remove();Array.from(form.querySelectorAll<HTMLElement>('[data-category-row]')).forEach((row,i)=>{row.dataset.settingName=String(i+1);row.querySelector('.setting-item-name')!.textContent=String(i+1);});conditions();return;}
+  if(name==='library-connect'){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="Choose library folder"><label>PDF folder absolute path ${input('libraryPath','')}</label>${button('confirm-library-connect','Choose folder')}${button('cancel-action','Cancel')}</div>`;find<HTMLInputElement>('[name="libraryPath"]').focus();return;}
+  if(name==='cancel-action'){find('.settings-action-host').innerHTML='';return;}
+  void task(async()=>{
+   if(name==='library-cancel'){if(library?.run){libraryCancelling=true;renderLibrary();try{const result=await request<{run:import('../server').WorkbenchRun}>('api/runs/cancel',{id:library.run.id});library.run=result.run;libraryCancelling=result.run.status==='running';onRun?.(result.run);}catch(error){libraryCancelling=false;throw error;}finally{renderLibrary();}}return;}
+   await saveDraft();
+   if(name==='confirm-library-connect'){await action('library-connect',{path:get('libraryPath')});find('.settings-action-host').innerHTML='';return;}
+   if(name==='library-build'){
+    await refreshLibrary();
+    if(library?.status.kind!=='authorized' && library?.disclosure){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="Library processing consent"><h4>Confirm library processing</h4><pre>${escape(`Folder: ${library.disclosure.selectedRoot}\nEligible files: ${library.disclosure.eligibleExtensions.join(', ')}\nProcessing depth: ${library.disclosure.processingDepth}\nModel endpoint: ${library.disclosure.endpoint}${library.disclosure.embeddingEndpoint ? `\nEmbedding endpoint: ${library.disclosure.embeddingEndpoint}` : ''}`)}</pre>${button('confirm-library-build','Confirm and build index')}${button('cancel-action','Cancel')}</div>`;return;}
+   }
+   if(name==='confirm-library-build'){if(!library?.disclosure)throw new Error('请重新查看授权范围。');await action('library-build',{fingerprint:library.disclosure.authorizationFingerprint});find('.settings-action-host').innerHTML='';return;}
+   await action(name);
+  },target);
+ });
+ form.addEventListener('submit',event=>{event.preventDefault();void task(async()=>{await saveDraft();if(form.isConnected)await saved();});});
+ conditions();
+ if(!snapshot.setupRequired)void refreshLibrary().catch(error=>{if(form.isConnected)find('[data-library-row] .setting-item-description').textContent=error instanceof Error?error.message:'Unable to load library.';});
 }

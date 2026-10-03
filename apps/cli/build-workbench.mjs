@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 /** Produce a self-contained client: no CDN, source checkout, or runtime node_modules required. */
 export async function buildWorkbenchAssets(here) {
   const web = resolve(here, "src/workbench/web");
-  const build = await esbuild.build({ entryPoints: [resolve(web, "app.ts")], bundle: true, platform: "browser", format: "iife", target: "es2022", minify: true, write: false });
+  const build = await esbuild.build({ entryPoints: [resolve(web, "app.ts")], bundle: true, loader: { ".md": "text" }, platform: "browser", format: "iife", target: "es2022", minify: true, write: false });
   const require = createRequire(import.meta.url);
   const katexDir = dirname(require.resolve("katex"));
   const assets = {
