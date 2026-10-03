@@ -35,3 +35,11 @@ On track: left jump navigation and stronger settings sections added without chan
 ## 2026-10-03T17:03:11+08:00 — P7 accepted
 
 On track: saved-key Show/Hide and explicit model selector work in regression tests; DSH0.1.7 built. This supersedes P5's new-input-only reveal limitation in response to the user request. P2 remains the next product phase.
+
+## 2026-10-04T01:13:26+08:00 — P8 model control
+
+用户截图要求模型选择合并到Get models左侧原框。P7显示密钥和获取接口保留，单独select由P8替换，采用可输入combobox。
+
+## 2026-10-04T01:15:50+08:00 — P8 accepted
+
+单模型combobox修复已验收：保留原值，Get models成功直接展开框下选项，移除P7第二select。0.1.8已打包，未修改用户安装。后续继续P2。

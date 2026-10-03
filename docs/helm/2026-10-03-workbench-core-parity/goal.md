@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-03T17:03:11+08:00
-revision: 8
+updated: 2026-10-04T01:15:50+08:00
+revision: 10
 
 ## Intent
 
@@ -41,3 +41,5 @@ revision: 8
 6. P6 — 设置导航与区域区分 — status: done
 
 7. P7 — 修复密钥显示与模型选择 — status: done
+
+8. P8 — 单一可输入模型选择框 — status: done
