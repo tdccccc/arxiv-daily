@@ -1529,4 +1529,35 @@ describe("syncDashboardHistory", () => {
       title: "Commented Paper",
     });
   });
+
+  it("leaves no comment opener in a daily heading after nested or unterminated comments", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": [
+        "---",
+        "date: 2026-06-10",
+        "---",
+        "",
+        "# Daily",
+        "",
+        "## Photo-z",
+        "### Nested <!<!---->-- Paper <!-- unterminated → [[2606.00008]]",
+        "- **作者**: A. Author",
+        "- **arXiv**: [2606.00008](https://arxiv.org/abs/2606.00008)",
+      ].join("\n"),
+    });
+    const store = new PaperIndexStore(
+      storage,
+      output,
+      () => new Date("2026-06-14T00:00:00.000Z"),
+    );
+
+    const index = await syncDashboardHistory({
+      vault: makeVault(files),
+      store,
+      output,
+      topics,
+    });
+
+    expect(index.papers["arxiv:2606.00008"]).toMatchObject({ title: "Nested" });
+  });
 });

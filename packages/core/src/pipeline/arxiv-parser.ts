@@ -51,18 +51,16 @@ function parseHeaderDate(headerText: string): string | null {
 }
 
 /**
- * Defense-in-depth tag stripping before DOMParser/linkedom parses the arXiv
- * listing: parsed documents here are never attached to a live document and
- * only `.textContent` of specific selectors is read (see parseRecent below),
- * so scripts never execute and stylesheets never apply regardless of this
- * function. Closing tags allow optional whitespace before '>' (e.g.
- * "</script >"), matching real HTML parsing (CodeQL js/bad-tag-filter).
+ * Drop script, style and link elements from the parsed listing so their
+ * contents never leak into the `.textContent` read below. Removing them from
+ * the parsed tree (instead of regex-stripping the markup first) follows the
+ * parser's own tag rules, so odd end tags like "</script\t\n bar>" or an
+ * unterminated "<script" cannot slip through. The document is never attached
+ * to a live page, so these elements never run or apply either way.
  */
-function stripUnsafeTags(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
-    .replace(/<link\b[^>]*\/?>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
+function removeUnsafeElements(doc: Document): void {
+  const unsafe = Array.from(doc.querySelectorAll("script, style, link")) as unknown as Element[];
+  for (const el of unsafe) el.remove();
 }
 
 /**
@@ -74,8 +72,8 @@ function stripUnsafeTags(html: string): string {
  * and arXiv id. Callers who need abstracts fetch /abs/<id> separately.
  */
 export function parseRecent(html: string, markupParser: MarkupParser): DateBucket[] {
-  const safe = stripUnsafeTags(html);
-  const doc = markupParser.parseFromString(safe, "text/html");
+  const doc = markupParser.parseFromString(html, "text/html");
+  removeUnsafeElements(doc);
   const buckets: DateBucket[] = [];
   const dls = Array.from(doc.querySelectorAll("dl#articles")) as unknown as Element[];
   for (const dl of dls) {

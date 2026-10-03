@@ -931,13 +931,26 @@ function extractArxivIds(text: string): string[] {
 }
 
 function cleanDailyHeading(heading: string): string {
-  return heading
-    .replace(/\s*(?:→|->)\s*(?:\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))\s*$/g, "")
-    // [\s\S]*? (not .*?) so a comment spanning a line break is still fully
-    // removed, closing the CodeQL js/bad-tag-filter / incomplete-multi-
-    // character-sanitization gap where "<!--" could otherwise survive.
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .trim();
+  return stripHtmlComments(
+    heading.replace(/\s*(?:→|->)\s*(?:\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))\s*$/g, ""),
+  ).trim();
+}
+
+/**
+ * Remove HTML comments until none remain. A removal can join text into a new
+ * "<!--" (e.g. "<!<!---->--"), so the scan resumes just before each cut, and
+ * an unterminated comment drops the rest of the text as HTML would. The
+ * result never contains "<!--"; each pass shortens the text, so it ends.
+ */
+function stripHtmlComments(text: string): string {
+  let out = text;
+  let start = out.indexOf("<!--");
+  while (start !== -1) {
+    const end = out.indexOf("-->", start + 4);
+    out = end === -1 ? out.slice(0, start) : out.slice(0, start) + out.slice(end + 3);
+    start = out.indexOf("<!--", Math.max(0, start - 3));
+  }
+  return out;
 }
 
 function firstH1(markdown: string): string {
