@@ -2,12 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parse, stringify } from "smol-toml";
-import { DEFAULT_SETTINGS, arxivCategories, sha256Hex, validateFilterConfig, type Topic } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, arxivCategories, sha256Hex, type Topic } from "@arxiv-daily/core";
 import { NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
+import { extendedSettings, patchExtendedSettings, type ExtendedSettingsValues } from "./settings-fields";
 import { WorkbenchError } from "./documents";
 
-export interface WorkbenchSettingsValues {
+export interface WorkbenchSettingsValues extends ExtendedSettingsValues {
   vaultRoot: string; baseUrl: string; provider: string; model: string; apiKeyConfigured: boolean;
   categories: string[]; timezone: string; summaryLanguage: "zh" | "en"; topics: Topic[]; dailyDir: string; papersDir: string;
 }
@@ -23,7 +24,7 @@ export async function readWorkbenchSettings(configPath: string): Promise<Workben
   try { const url = new URL(baseUrl); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; baseUrl = url.toString(); } catch { baseUrl = ""; }
   return {
     setupRequired: config === null, revision: config?.configRevision ?? null, configPath,
-    values: { vaultRoot: config?.vaultRoot ?? "", baseUrl, provider: settings.llm.provider, model: settings.llm.model,
+    values: { ...extendedSettings(config), vaultRoot: config?.vaultRoot ?? "", baseUrl, provider: settings.llm.provider, model: settings.llm.model,
       apiKeyConfigured: Boolean(settings.llm.apiKey.trim()), categories: arxivCategories(settings.arxiv), timezone: settings.arxiv.timezone,
       summaryLanguage: settings.output.summaryLanguage ?? "zh", topics: structuredClone(settings.arxiv.topics),
       dailyDir: settings.output.dailyDir, papersDir: settings.output.papersDir },
@@ -53,15 +54,15 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
     if (raw !== null) await decode(configPath, raw);
     const document = raw === null ? {} : parse(raw);
     const llm = table(document.llm), arxiv = table(document.arxiv), output = table(document.output);
-    const content = stringify({ ...document, vault_root: values.vaultRoot,
+    const updated = { ...document, vault_root: values.vaultRoot,
       llm: { ...llm, base_url: values.baseUrl, provider: values.provider, model: values.model,
         api_key: values.apiKey || llm.api_key || "" },
       arxiv: { ...arxiv, categories: values.categories, timezone: values.timezone, topics: values.topics },
       output: { ...output, summary_language: values.summaryLanguage, daily_dir: values.dailyDir, papers_dir: values.papersDir },
-    });
-    const next = await decode(configPath, content);
-    const validation = validateFilterConfig(next.settings);
-    if (!validation.ok) invalid("请填写模型密钥、有效主题和输出目录。");
+    };
+    patchExtendedSettings(updated, body.values);
+    const content = stringify(updated);
+    await decode(configPath, content);
     assertRevision(await readOptional(target), expected);
     await new NodeStorageAdapter(directory).writeTextAtomic(fileName, content, 0o600);
     return await loadCliConfig({ configPath });
@@ -69,36 +70,36 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
 }
 
 function validateValues(value: Record<string, unknown>) {
-  const text = (key: string) => {
+  const text = (key: string, allowEmpty = false) => {
     const input = value[key];
-    if (typeof input !== "string" || !input.trim() || input.length > 20000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(input)) invalid(`请填写有效的 ${key}。`);
+    if (typeof input !== "string" || (!allowEmpty && !input.trim()) || input.length > 20000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(input)) invalid(`请填写有效的 ${key}。`);
     return input.trim();
   };
   let vaultRoot = text("vaultRoot");
   if (vaultRoot === "~") vaultRoot = os.homedir();
   else if (vaultRoot.startsWith("~/")) vaultRoot = path.join(os.homedir(), vaultRoot.slice(2));
   if (!path.isAbsolute(vaultRoot)) invalid("保存目录必须使用绝对路径。");
-  const baseUrl = text("baseUrl");
+  const baseUrl = text("baseUrl", true);
   try {
-    const url = new URL(baseUrl);
+    const url = new URL(baseUrl || "https://placeholder.invalid");
     if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) invalid("模型地址须为不含凭证、查询参数的 HTTP(S) 地址。");
   } catch { invalid("模型地址须为不含凭证、查询参数的 HTTP(S) 地址。"); }
   const timezone = text("timezone");
   try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { invalid("请选择有效时区。"); }
   if (value.summaryLanguage !== "zh" && value.summaryLanguage !== "en") invalid("请选择中文或英文。");
-  if (!Array.isArray(value.categories) || !value.categories.length || value.categories.length > 200 || value.categories.some(c => typeof c !== "string" || !/^[a-zA-Z][a-zA-Z0-9.-]*$/.test(c))) invalid("请填写有效 arXiv 分类。");
+  if (!Array.isArray(value.categories) || value.categories.length > 200 || value.categories.some(c => typeof c !== "string" || !/^[a-zA-Z][a-zA-Z0-9.-]*$/.test(c))) invalid("请填写有效 arXiv 分类。");
   if (new Set(value.categories).size !== value.categories.length) invalid("arXiv 分类不能重复。");
-  if (!Array.isArray(value.topics) || !value.topics.length || value.topics.length > 100) invalid("请至少填写一个研究主题。");
+  if (!Array.isArray(value.topics) || value.topics.length > 100) invalid("请至少填写一个研究主题。");
   const ids = new Set<string>();
   const topics: Topic[] = value.topics.map(topic => {
-    if (!record(topic) || ["id", "name", "tag", "description"].some(key => typeof topic[key] !== "string" || !topic[key].trim() || topic[key].length > 20000) || typeof topic.detail !== "boolean") invalid("研究主题格式无效。");
+    if (!record(topic) || ["id", "name", "tag", "description"].some(key => typeof topic[key] !== "string" || (key === "id" && !topic[key].trim()) || topic[key].length > 20000) || typeof topic.detail !== "boolean") invalid("研究主题格式无效。");
     const id = (topic.id as string).trim();
     if (ids.has(id)) invalid("研究主题标识重复。");
     ids.add(id);
     return { id, name: (topic.name as string).trim(), tag: (topic.tag as string).trim(), description: (topic.description as string).trim(), detail: topic.detail as boolean };
   });
   if (value.apiKey !== undefined && (typeof value.apiKey !== "string" || value.apiKey.length > 20000)) invalid("模型密钥格式无效。");
-  return { vaultRoot, baseUrl, provider: text("provider"), model: text("model"), categories: value.categories as string[], timezone,
+  return { vaultRoot, baseUrl, provider: text("provider"), model: text("model", true), categories: value.categories as string[], timezone,
     summaryLanguage: value.summaryLanguage, topics, dailyDir: text("dailyDir"), papersDir: text("papersDir"), apiKey: typeof value.apiKey === "string" ? value.apiKey.trim() : "" };
 }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }

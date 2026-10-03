@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse, stringify } from "smol-toml";
+import { connectCliLibrary, authorizeCliLibrary, inspectCliLibraryConnection } from "../src/library-connection-cmd";
 import { readWorkbenchSettings, saveWorkbenchSettings } from "../src/workbench/settings";
 
 const roots: string[] = [];
@@ -48,7 +49,7 @@ describe("workbench settings", () => {
     await expect(saveWorkbenchSettings(configPath, { revision: view.revision, values })).rejects.toMatchObject({ status: 409 });
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
   });
-  it.each([{ vaultRoot: "relative/path" }, { baseUrl: "file:///tmp/model" }, { baseUrl: "https://user:secret@model.test" }, { timezone: "invalid/zone" }, { topics: [] }, { dailyDir: "../escape" }, { categories: [] }, { categories: ["cs.AI", "cs.AI"] }])("rejects invalid values without writing: %j", async patch => {
+  it.each([{ vaultRoot: "relative/path" }, { baseUrl: "file:///tmp/model" }, { baseUrl: "https://user:secret@model.test" }, { timezone: "invalid/zone" }, { dailyDir: "../escape" }, { categories: ["cs.AI", "cs.AI"] }])("rejects invalid values without writing: %j", async patch => {
     const { configPath, values } = await fixture();
     await expect(saveWorkbenchSettings(configPath, { revision: null, values: { ...values, ...patch } })).rejects.toMatchObject({ status: 400 });
     await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -76,6 +77,63 @@ describe("workbench settings", () => {
     await saveWorkbenchSettings(link, { revision: view.revision, values: { ...view.values, model: "linked-model" } });
     expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
     expect((await readWorkbenchSettings(configPath)).values.model).toBe("linked-model");
+  });
+  it("round trips Obsidian settings while keeping CLI cron independent", async () => {
+    const { configPath, values } = await fixture();
+    const saved = await saveWorkbenchSettings(configPath, { revision: null, values: { ...values,
+      reasoningEffort: "none", detailProfile: "broad", linkStyle: "relative",
+      schedule: { enabled: true, runAtLocal: "08:15", runUntilLocal: "17:45", tickIntervalMin: 7 },
+      embedding: { mode: "remote", baseUrl: "https://embedding.example/v1", model: "embed", dimension: 512, apiKey: "embedding-private" },
+      pdfParserSidecar: { enabled: true, capabilitiesUrl: "http://127.0.0.1:5555/cap", parseUrl: "http://127.0.0.1:5555/parse" },
+      email: { enabled: true, mode: "self", to: "reader@example.com", fromEmail: "sender@example.com", fromName: "Reader", apiKey: "email-private", hostedToken: "hosted-private" }, logLevel: "warn"
+    } });
+    expect(saved.settings.llm.thinkingMode).toBe(false);
+    expect(saved.settings.detailSelection).toMatchObject({ profile: "broad", softLimit: 5 });
+    expect(saved.settings.output.linkStyle).toBe("relative");
+    expect(saved.settings.schedule.enabled).toBe(false);
+    expect(saved).toMatchObject({ workbenchSchedule: { enabled: true, tickIntervalMin: 7 } });
+    expect(saved.settings.pdfParserSidecar.enabled).toBe(true);
+    const view = await readWorkbenchSettings(configPath);
+    expect(view.values).toMatchObject({ reasoningEffort: "none", detailProfile: "broad", linkStyle: "relative", schedule: { enabled: true },
+      embedding: { mode: "remote", model: "embed", dimension: 512, apiKeyConfigured: true }, email: { apiKeyConfigured: true, hostedTokenConfigured: true }, logLevel: "warn" });
+    for (const secret of ["embedding-private", "email-private", "hosted-private"]) expect(JSON.stringify(view)).not.toContain(secret);
+    const again = await saveWorkbenchSettings(configPath, { revision: view.revision, values: view.values });
+    expect(again.settings.embedding.apiKey).toBe("embedding-private");
+    expect(again.settings.email.apiKey).toBe("email-private");
+    expect(again.settings.email.hostedToken).toBe("hosted-private");
+  });
+  it("saves incomplete setup for incremental editing", async () => {
+    const { configPath, values } = await fixture();
+    await expect(saveWorkbenchSettings(configPath, { revision: null, values: { ...values, apiKey: "", model: "", baseUrl: "", categories: [], topics: [] } })).resolves.toMatchObject({ settings: { llm: { apiKey: "" }, arxiv: { topics: [] } } });
+  });
+  it.each([
+    { reasoningEffort: "invalid" }, { detailProfile: "invalid" }, { linkStyle: "invalid" }, { logLevel: "invalid" },
+    { schedule: { enabled: true, runAtLocal: "25:00", runUntilLocal: "18:00", tickIntervalMin: 20 } },
+    { schedule: { enabled: true, runAtLocal: "18:00", runUntilLocal: "09:00", tickIntervalMin: 20 } },
+    { pdfParserSidecar: { enabled: true, capabilitiesUrl: "https://external.example/cap", parseUrl: "https://external.example/parse" } },
+    { pdfParserSidecar: { enabled: true, capabilitiesUrl: "http://127.0.0.1:5/cap", parseUrl: "http://127.0.0.1:6/parse" } },
+  ])("rejects invalid extended settings %j", async patch => {
+    const { configPath, values } = await fixture();
+    await expect(saveWorkbenchSettings(configPath, { revision: null, values: { ...values, ...patch } })).rejects.toMatchObject({ status: 400 });
+  });
+  it("preserves custom thresholds and cron, and requires new consent after endpoint expansion", async () => {
+    const { configPath, values } = await fixture();
+    let config = await saveWorkbenchSettings(configPath, { revision: null, values });
+    const connected = await connectCliLibrary(config, path.dirname(configPath));
+    config = await authorizeCliLibrary(connected, inspectCliLibraryConnection(connected).disclosure!.authorizationFingerprint);
+    expect(inspectCliLibraryConnection(config).status.kind).toBe("authorized");
+    const doc = parse(await fs.readFile(configPath, "utf8"));
+    const schedule = { enabled: true, on: "10:30", until: "18:30", interval_hours: 4, weekdays_only: false };
+    const detail = { profile: "custom", normal_threshold: 81, exceptional_threshold: 97, soft_limit: 2 };
+    Object.assign(doc, { schedule, detail_selection: detail });
+    await fs.writeFile(configPath, stringify(doc));
+    const view = await readWorkbenchSettings(configPath);
+    const saved = await saveWorkbenchSettings(configPath, { revision: view.revision, values: { ...view.values, embedding: { ...view.values.embedding, mode: "remote", baseUrl: "https://remote.example/v1" } } });
+    expect(saved.settings.detailSelection).toEqual({ profile: "custom", normalThreshold: 81, exceptionalThreshold: 97, softLimit: 2 });
+    expect(inspectCliLibraryConnection(saved).status.kind).toBe("authorization-invalidated");
+    const after = parse(await fs.readFile(configPath, "utf8"));
+    expect(after.schedule).toEqual(schedule);
+    expect(after.library).toEqual(doc.library);
   });
   it("does not mistake malformed existing config for first use", async () => {
     const { configPath, values } = await fixture();
