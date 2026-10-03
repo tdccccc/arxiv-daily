@@ -261,3 +261,31 @@ it('reveals a saved key on demand and offers an explicit model selector after fe
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('model-b');
  show.click();await vi.waitFor(()=>expect(key.value).toBe('stored-secret'));
 });
+
+it('does not rebuild Getting started or move the settings position when loading models',async()=>{
+ const {root}=setup(false,false,undefined,path=>path==='api/settings/action'?json({models:['test','another-model']}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-setup')).toBeTruthy());
+ root.querySelector<HTMLElement>('.settings-setup')!.dataset.preserved='true';
+ const scroll=root.querySelector<HTMLElement>('.settings-content')!;scroll.scrollTop=240;
+ root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[role=option]')?.textContent).toBe('test'));
+ expect(root.querySelector<HTMLElement>('.settings-setup')?.dataset.preserved).toBe('true');
+ expect(scroll.scrollTop).toBe(240);
+});
+
+it('keeps a completed setup guide absent when Get models saves changed settings',async()=>{
+ const completeValues={...values,schedule:{...DEFAULT_SETTINGS.schedule,enabled:true}};
+ const {root}=setup(false,false,undefined,(path,init)=>{
+  if(path==='api/status')return json({llm:{ready:true},recentRuns:[{status:'completed'}]});
+  if(path==='api/settings')return json({setupRequired:false,revision:'r1',configPath:'/config.toml',values:init?.method==='POST'?{...completeValues,...JSON.parse(String(init.body)).values,apiKeyConfigured:true}:completeValues});
+  if(path==='api/settings/action')return json({models:['test']});
+ });
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ expect(root.querySelector('.settings-setup')).toBeNull();
+ root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!.checked=false;
+ root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[role=option]')?.textContent).toBe('test'));
+ expect(root.querySelector('.settings-setup')).toBeNull();
+});

@@ -45,6 +45,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  const modelControl=mountModelCombobox(form);
  let busy=false, revision=snapshot.revision, libraryCancelling=false, libraryRevisionPending=false;
  let currentSnapshot=snapshot;
+ let lastCompletedRun: string | undefined;
  let library: (CliLibraryConnectionInspection & { run?: import('../server').WorkbenchRun }) | undefined;
  const get=(name:string) => (form.elements.namedItem(name) as HTMLInputElement)?.value.trim() ?? '';
  const checked=(name:string) => (form.elements.namedItem(name) as HTMLInputElement).checked;
@@ -77,9 +78,16 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   find('.settings-library-controls').innerHTML=[['library-connect',row.chooseFolder],['library-build',row.primary],['library-cancel',row.cancel],['library-revoke',row.revoke]].map(([action,item])=>{if(!item||typeof item==='string')return '';return `<button type="button" data-settings="${action}" ${item.disabled?'disabled':''}>${escape(item.label)}</button>`;}).join('');
  }
  async function refreshLibrary() { library=await request<typeof library>('api/settings/library'); if(form.isConnected){renderLibrary();if(library?.run?.status==='running'){lockLibraryInputs(true);onRun?.(library.run);}} }
- async function saveDraft() {
+ function refreshVisibleSetupGuide() {
+  const host=find('.settings-setup-host');
+  if(!host.querySelector('.settings-setup'))return;
+  const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
+  if(host.innerHTML!==content)host.innerHTML=content;
+ }
+ async function saveDraft(refreshGuide = false) {
   const secrets=Array.from(form.querySelectorAll<HTMLInputElement>('.settings-secret input')).map(el=>({el,value:el.value}));
-  const result=await request<SettingsSnapshot>('api/settings',{revision,values:values()}); revision=result.revision;currentSnapshot=result;find('.settings-setup-host').innerHTML=settingsSetupGuide(result,firstReportComplete);
+  const result=await request<SettingsSnapshot>('api/settings',{revision,values:values()}); revision=result.revision;currentSnapshot=result;
+  if(refreshGuide)refreshVisibleSetupGuide();
   for(const {el,value} of secrets)if(el.value===value){el.value='';delete el.dataset.revealed;el.type='password';el.closest('.settings-secret')!.querySelector('button')!.textContent='Show';el.closest('.settings-secret')!.querySelector('small')!.textContent='Saved. Leave blank to keep unchanged.';}
   return result;
  }
@@ -109,7 +117,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  }
  form.addEventListener('workbench-run',event=>{
   const run=(event as CustomEvent<import('../server').WorkbenchRun|null>).detail;
-  if(run?.status==='completed')void request<{recentRuns?:Array<{status:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(entry=>entry.status==='completed')??firstReportComplete;if(form.isConnected)find('.settings-setup-host').innerHTML=settingsSetupGuide(currentSnapshot,firstReportComplete);}).catch(()=>{});
+  if(run?.status==='completed' && run.id!==lastCompletedRun){lastCompletedRun=run.id;void request<{recentRuns?:Array<{status:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(entry=>entry.status==='completed')??firstReportComplete;if(form.isConnected)refreshVisibleSetupGuide();}).catch(()=>{});}
   if(library?.run && run?.id===library.run.id){
    library.run=run;if(run.status!=='running')libraryCancelling=false;renderLibrary();
    if(run.status!=='running'){libraryRevisionPending=true;void Promise.all([request<SettingsSnapshot>('api/settings'),refreshLibrary()]).then(([current])=>{revision=current.revision;}).catch(error=>{if(form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:'Could not reload settings.';}}).finally(()=>{libraryRevisionPending=false;lockLibraryInputs(false);});}
@@ -146,7 +154,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    void task(async()=>{
     if(name==='dashboard'){await saved();return;}
     if(name==='enable'){find<HTMLInputElement>('[name="schedule.enabled"]').checked=true;conditions();}
-    await saveDraft();
+    await saveDraft(true);
     if(name==='generate'){const result=await request<{run:import('../server').WorkbenchRun}>('api/runs',{kind:'daily'});onRun?.(result.run);}
    },setup);return;
   }
