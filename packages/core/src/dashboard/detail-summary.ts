@@ -16,24 +16,45 @@ export function looksLikeDetailSummary(markdown: string): boolean {
   if (body.length < MIN_DETAIL_SUMMARY_BODY_CHARS) return false;
   if (!/^#\s+\S.+$/m.test(body)) return false;
 
+  const headings = extractH2Headings(body);
   const matchedHeadings = DETAIL_SUMMARY_HEADINGS.filter((heading) =>
-    new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`, "m").test(body),
+    headings.includes(heading),
   ).length;
   if (matchedHeadings >= 3) return true;
 
-  const sectionCount = (body.match(/^##\s+\S+/gm) ?? []).length;
-  return sectionCount >= 4 && !isLightweightNote(body);
+  return headings.length >= 4 && !isLightweightNote(headings);
 }
 
 function stripYamlFrontmatter(markdown: string): string {
   return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "");
 }
 
-function isLightweightNote(body: string): boolean {
-  const sections = body.match(/^##\s+(.+)$/gm) ?? [];
-  return sections.length <= 1 && sections.some((section) => /^##\s+Notes\s*$/.test(section));
+function isLightweightNote(headings: string[]): boolean {
+  return headings.length <= 1 && headings.some((heading) => heading === "Notes");
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const WHITESPACE = /\s/u;
+const LINE_TERMINATOR = /[\r\n\u2028\u2029]/u;
+
+/**
+ * Collect "## Heading" titles with position scans instead of a backtracking
+ * regex, so a body with long runs of whitespace after "##" never participates
+ * in overlapping \s+ / \s* searches (CodeQL js/polynomial-redos).
+ */
+function extractH2Headings(body: string): string[] {
+  const titles: string[] = [];
+  const headingStarts = /^##/gm;
+  let heading: RegExpExecArray | null;
+  while ((heading = headingStarts.exec(body)) !== null) {
+    let cursor = heading.index + 2;
+    if (!WHITESPACE.test(body[cursor] ?? "")) continue;
+    while (cursor < body.length && WHITESPACE.test(body[cursor]!) && !LINE_TERMINATOR.test(body[cursor]!)) {
+      cursor += 1;
+    }
+    let end = cursor;
+    while (end < body.length && !LINE_TERMINATOR.test(body[end]!)) end += 1;
+    const title = body.slice(cursor, end).trimEnd();
+    if (title) titles.push(title);
+  }
+  return titles;
 }

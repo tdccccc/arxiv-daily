@@ -138,10 +138,14 @@ function extractLegacyHeadingId(headingLine: string): string | null {
 }
 
 function extractSourceSections(block: string): string {
+  // compact() below collapses and trims whatever (.+) captures, so a
+  // redundant \s* immediately before it only duplicated what (.+) already
+  // matches, letting CodeQL flag the ambiguous split on long whitespace runs
+  // (js/polynomial-redos). (.+) alone is unambiguous and linear.
   return compact(
-    /^>\s*信息来源[:：]\s*(.+)$/m.exec(block)?.[1] ??
-      /^>\s*Source sections[:：]\s*(.+)$/im.exec(block)?.[1] ??
-      /^Source sections[:：]\s*(.+)$/im.exec(block)?.[1] ??
+    /^>\s*信息来源[:：](.+)$/m.exec(block)?.[1] ??
+      /^>\s*Source sections[:：](.+)$/im.exec(block)?.[1] ??
+      /^Source sections[:：](.+)$/im.exec(block)?.[1] ??
       "",
   );
 }

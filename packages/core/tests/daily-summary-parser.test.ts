@@ -99,6 +99,19 @@ describe("extractPaperSummaries", () => {
     });
   });
 
+  it("trims long whitespace runs around source sections quickly (CodeQL js/polynomial-redos)", () => {
+    const markdown = [
+      "### Example Paper → [[2606.11111]]",
+      `> 信息来源：${" ".repeat(30_000)}Abstract${" ".repeat(30_000)}`,
+      "- **arXiv**: [2606.11111](https://arxiv.org/abs/2606.11111)",
+      "- **核心问题**: What problem.",
+    ].join("\n");
+    const start = performance.now();
+    const summaries = extractPaperSummaries(markdown);
+    expect(performance.now() - start).toBeLessThan(200);
+    expect(summaries["2606.11111"]?.sourceSections).toBe("Abstract");
+  });
+
   it("restores legacy H3 heading identity without accepting bracket-ID summary prose", () => {
     const summaries = extractPaperSummaries([
       "## Topic",

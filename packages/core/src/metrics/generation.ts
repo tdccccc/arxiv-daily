@@ -86,13 +86,17 @@ export function generationMetricsCallout(metrics: GenerationMetrics): string {
 
 export function appendGenerationMetrics(markdown: string, metrics?: GenerationMetrics): string {
   if (!metrics) return markdown;
-  const base = stripGenerationMetrics(markdown).replace(/\s+$/, "");
+  const base = stripGenerationMetrics(markdown).trimEnd();
   return `${base}\n\n${generationMetricsCallout(metrics)}\n`;
 }
 
 export function stripGenerationMetrics(markdown: string): string {
   const marker = markdown.lastIndexOf(GENERATION_METRICS_MARKER);
-  return marker < 0 ? markdown : markdown.slice(0, marker).replace(/\s+$/, "");
+  // String.prototype.trimEnd trims the same whitespace/line-terminator set as
+  // \s, in linear time. /\s+$/ without an anchor-only sink can be retried
+  // from every index in a long non-trailing whitespace run, which CodeQL
+  // flags as js/polynomial-redos.
+  return marker < 0 ? markdown : markdown.slice(0, marker).trimEnd();
 }
 
 function addUsage(target: TokenUsage, source: TokenUsage): void {

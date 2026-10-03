@@ -181,11 +181,15 @@ export function emailProse(value: string): string {
   if (!value) return "";
   let s = value;
 
-  // Display / block math delimiters → simplified body
-  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, body: string) => simplifyLatex(body));
-  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, body: string) => simplifyLatex(body));
-  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, body: string) => simplifyLatex(body));
-  // Inline $...$ (single line)
+  // Display / block math delimiters → simplified body. A lazy [\s\S]*?
+  // between two multi-character delimiters can backtrack quadratically when
+  // the opening delimiter repeats without ever closing (CodeQL
+  // js/polynomial-redos), so scan delimiter positions directly instead.
+  s = replaceDelimited(s, "\\[", "\\]", simplifyLatex);
+  s = replaceDelimited(s, "$$", "$$", simplifyLatex);
+  s = replaceDelimited(s, "\\(", "\\)", simplifyLatex);
+  // Inline $...$ (single line). [^$\n]+? cannot overlap with the single-char
+  // $ delimiter, so this lazy match is already linear and left as a regex.
   s = s.replace(/\$([^$\n]+?)\$/g, (_, body: string) => simplifyLatex(body));
 
   // Any remaining TeX-ish fragments outside delimiters
@@ -199,6 +203,38 @@ export function emailProse(value: string): string {
     .replace(/([([])\s+/g, "$1")
     .replace(/\s+([)\]])/g, "$1")
     .trim();
+}
+
+/**
+ * Replace every `open ... close` delimited span with `transform(body)`,
+ * scanning literal delimiter positions with indexOf instead of a lazy regex.
+ * Matches the lazy-lookahead-regex semantics (leftmost open, nearest
+ * following close, non-overlapping, unmatched tails left untouched) in
+ * linear time regardless of how often an unterminated `open` repeats.
+ */
+function replaceDelimited(
+  value: string,
+  open: string,
+  close: string,
+  transform: (body: string) => string,
+): string {
+  let result = "";
+  let cursor = 0;
+  for (;;) {
+    const start = value.indexOf(open, cursor);
+    if (start < 0) {
+      result += value.slice(cursor);
+      return result;
+    }
+    const end = value.indexOf(close, start + open.length);
+    if (end < 0) {
+      result += value.slice(cursor);
+      return result;
+    }
+    result += value.slice(cursor, start);
+    result += transform(value.slice(start + open.length, end));
+    cursor = end + close.length;
+  }
 }
 
 /** End of a TeX control word: not another letter (underscore may follow: \Omega_m). */

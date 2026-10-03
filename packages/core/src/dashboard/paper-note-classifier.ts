@@ -78,7 +78,11 @@ function readStrictArxivIdentity(
 ): { kind: "missing" | "match" | "mismatch" | "invalid" } {
   const ids: string[] = [];
   for (const line of yaml.split(/\r?\n/)) {
-    const key = /^(arxiv_id|arxiv):(?:[ \t]*(.*))?$/.exec(line);
+    // The captured value is trimmed below, so an optional leading
+    // [ \t]* before (.*) only duplicated what .* already matches, letting
+    // CodeQL's js/polynomial-redos flag the ambiguous split on long
+    // whitespace runs. (.*) alone is unambiguous and linear.
+    const key = /^(arxiv_id|arxiv):(.*)$/.exec(line);
     if (!key) continue;
     const value = (key[2] ?? "").trim();
     const quoted = /^(?:"([^"]*)"|'([^']*)')$/.exec(value);
@@ -101,7 +105,9 @@ function readVerifiedDetailMetadata(
   const metadata: VerifiedDetailMetadata = { arxivId };
   const values = new Map<string, string>();
   for (const line of yaml.split(/\r?\n/)) {
-    const match = /^(title|authors|primary_topic|published):(?:[ \t]*(.*))?$/.exec(line);
+    // See readStrictArxivIdentity above: the raw value is trimmed below,
+    // so (.*) alone (no redundant [ \t]* prefix) avoids the ambiguous split.
+    const match = /^(title|authors|primary_topic|published):(.*)$/.exec(line);
     if (!match?.[1]) continue;
     const raw = (match[2] ?? "").trim();
     const value = decodeYamlScalar(raw)?.trim();

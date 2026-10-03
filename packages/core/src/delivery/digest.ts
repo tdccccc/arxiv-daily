@@ -113,7 +113,12 @@ function digestPaperFromSlot(slot: DailyPaperSlot): DigestPaper {
 }
 
 function joinVaultPath(dir: string, file: string): string {
-  const trimmed = dir.replace(/\/+$/, "");
+  // Scan the trailing-slash boundary instead of /\/+$/, which forces the
+  // regex engine to retry at every "/" in a long run of repeated slashes
+  // (CodeQL js/polynomial-redos).
+  let end = dir.length;
+  while (end > 0 && dir[end - 1] === "/") end -= 1;
+  const trimmed = dir.slice(0, end);
   return trimmed ? `${trimmed}/${file}` : file;
 }
 
