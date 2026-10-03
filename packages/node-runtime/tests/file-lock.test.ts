@@ -111,6 +111,37 @@ describe("machine-local file lock", () => {
     expect(Object.keys((await store.load()).papers).sort()).toEqual(["arxiv:2609.00000", "arxiv:2609.00001", "arxiv:2609.00002"]);
   });
 
+  it("does not admit a stalled acquirer whose claimed generation was pruned meanwhile", async () => {
+    const { vault, lockRoot } = await fixture();
+    const other = new NodeFileLock(vault, { lockRoot });
+    const seed = await other.acquire("counter");
+    await seed!.release();
+    let stalled = false;
+    // The stalled acquirer has read g0 as released and is about to claim g1
+    // while three full cycles finish elsewhere; their releases prune g0 and g1.
+    const slow = new NodeFileLock(vault, {
+      lockRoot,
+      beforeOwnerPublish: async () => {
+        if (stalled) return;
+        stalled = true;
+        for (let cycle = 0; cycle < 3; cycle++) {
+          const lease = await other.acquire("counter");
+          await lease!.release();
+        }
+      },
+    });
+    const lease = await slow.acquire("counter", { wait: true });
+    expect(lease).not.toBeNull();
+    try {
+      expect(await other.acquire("counter")).toBeNull();
+    } finally {
+      await lease!.release();
+    }
+    const next = await other.acquire("counter");
+    expect(next).not.toBeNull();
+    await next!.release();
+  });
+
   it("excludes another instance and allows reacquisition after release", async () => {
     const { vault, lockRoot, locks } = await fixture();
     const other = new NodeFileLock(vault, { lockRoot });
