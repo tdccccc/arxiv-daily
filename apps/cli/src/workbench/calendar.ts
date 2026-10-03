@@ -1,3 +1,4 @@
+import { isWeekendReportDate, isLegacyWeekendAnnouncementGap, WEEKEND_REPORT_MESSAGE } from "./announcement-calendar";
 import { calendarCells, createStorageStateStore, formatDate, PaperIndexStore, shiftMonth, todayInTz, type RunStateEntry } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../config";
@@ -85,6 +86,9 @@ function resolveDay(date: string, today: string, report: DocumentEntry | undefin
     return state.papersWritten === 0
       ? { ...base, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" }
       : { ...base, state: "report-missing", message: "运行记录显示已完成，但日报文件已缺失；重复运行会跳过此日期。" };
+  }
+  if (isWeekendReportDate(date) && (!state || state.status === "pending" && !state.error || isLegacyWeekendAnnouncementGap(date, state.error))) {
+    return { ...base, state: "skipped", message: WEEKEND_REPORT_MESSAGE };
   }
   if (state?.status === "failed_transient") return { ...base, state: "failed", canGenerate: true, actionLabel: "重试生成", message: state.error || "生成暂时失败，可以重试。" };
   if (state?.status === "failed_permanent") return { ...base, state: "failed", message: state.error || "生成已停止，当前流程不会再次生成此日期。" };

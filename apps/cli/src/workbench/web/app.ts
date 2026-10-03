@@ -355,7 +355,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   function renderRun(): void {
     const tray = find(".run-tray");
     if (!currentRun || dismissedRun === currentRun.id) { tray.hidden = true; return; }
-    const labels = { running: "正在运行", completed: "已完成", failed: "生成失败", cancelled: "已取消" };
+    const labels = { running: "正在运行", completed: "已完成", failed: "生成失败", cancelled: "已取消", skipped: "已跳过" };
     const keepOpen = tray.querySelector("details")?.open;
     tray.hidden = false;
     tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${labels[currentRun.status]}</span><strong>${escapeHtml(currentRun.label)}</strong></div>${currentRun.status === "running" ? '<button class="quiet-button" data-action="cancel-run">取消任务</button>' : '<button class="icon-button" data-action="dismiss-run" aria-label="关闭任务状态">×</button>'}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>查看运行详情</summary><pre></pre></details>`;

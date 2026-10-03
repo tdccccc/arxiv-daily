@@ -149,7 +149,7 @@ it("cancels a run using its AbortSignal and exposes execution failures", async (
   expect((await get("api/runs/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: started.run.id }) })).status).toBe(202);
   await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run.status).toBe("cancelled"));
   run.mockRejectedValueOnce(new Error("provider secret-model-key failed"));
-  await get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily" }) });
+  await get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily", date: "2026-10-01" }) });
   await vi.waitFor(async () => {
     const { run: result } = await (await get("api/runs/current")).json();
     expect(result.status).toBe("failed");

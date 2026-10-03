@@ -21,7 +21,7 @@ it("serves first-run setup and activates saved settings without restarting", asy
   const get = (route: string, body?: unknown) => fetch(new URL(route, app.url), body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   expect(await (await get("")).text()).toBe("setup");
   expect(await (await get("api/status")).json()).toMatchObject({ setupRequired: true });
-  expect((await get("api/runs", { kind: "daily" })).status).toBe(409);
+  expect((await get("api/runs", { kind: "daily", date: "2026-10-01" })).status).toBe(409);
   const initial = await (await get("api/settings")).json();
   expect(initial).toMatchObject({ setupRequired: true, revision: null });
   const values = { ...initial.values, vaultRoot: join(root, "vault"), baseUrl: "https://api.example.com/v1", provider: "custom", model: "test", apiKey: "secret-onboard-key", categories: ["cs.AI"], topics: [{ id: "test", name: "Models", tag: "models", description: "Efficient language models", detail: true }] };
@@ -35,7 +35,7 @@ it("serves first-run setup and activates saved settings without restarting", asy
   expect(await (await get("api/status")).json()).toMatchObject({ vaultRoot: values.vaultRoot });
   expect((await get("api/papers")).status).toBe(200);
   expect((await get("api/settings", { revision: null, values })).status).toBe(409);
-  expect((await get("api/runs", { kind: "daily" })).status).toBe(202);
+  expect((await get("api/runs", { kind: "daily", date: "2026-10-01" })).status).toBe(202);
   await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
   const revision = JSON.parse(text).revision;
   expect((await get("api/settings", { revision, values })).status).toBe(409);

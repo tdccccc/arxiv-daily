@@ -1,3 +1,4 @@
+import { isWeekendReportDate, WEEKEND_REPORT_MESSAGE } from "./announcement-calendar";
 import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -33,7 +34,7 @@ export interface WorkbenchRun {
   label: string;
   /** Configured-timezone date for daily jobs; paper-note jobs have no calendar date. */
   date: string | null;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "completed" | "failed" | "cancelled" | "skipped";
   output: string;
   exitCode: number | null;
   startedAt: string;
@@ -233,6 +234,11 @@ export async function startWorkbench(options: WorkbenchOptions) {
       const body = await readJson(req);
       const task = parseTask(body, formatDate(todayInTz(now(), config.settings.arxiv.timezone)));
       if (run?.status === "running") throw new WorkbenchError(409, "已有任务正在运行，请等待完成或先取消。");
+      if (saving) throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
+      if (task.date && isWeekendReportDate(task.date)) {
+        run = { id: randomBytes(12).toString("hex"), label: task.label, date: task.date, status: "skipped", output: WEEKEND_REPORT_MESSAGE, exitCode: 0, startedAt: now().toISOString(), finishedAt: now().toISOString() };
+        return json(res, 202, { run });
+      }
       if (!options.run) throw new WorkbenchError(503, "当前工作台未提供生成操作。");
       const current = beginRun(task.label, task.date, (io, signal) => options.run!(task.args, io, signal));
       return json(res, 202, { run: current });

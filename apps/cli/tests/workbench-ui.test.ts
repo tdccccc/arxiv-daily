@@ -158,3 +158,11 @@ describe("reading workbench UI", () => {
     expect(document.activeElement).toBe(root.querySelector('[data-kind="papers"]'));
   });
 });
+
+it('shows a weekend skip as neutral skipped rather than failed or completed', async()=>{
+ const run={id:'weekend',label:'2026-10-03 日报',date:'2026-10-03',status:'skipped',output:'周末 arXiv 无更新，已跳过日报生成。',exitCode:0,startedAt:'2026-10-03',finishedAt:'2026-10-03'};
+ const {root}=setup(url=>url.pathname.endsWith('api/runs/current')?json({run}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.run-state')?.textContent).toBe('已跳过'));
+ expect(root.querySelector('.run-tray')?.textContent).not.toContain('生成失败');
+ expect(root.querySelector('.run-tray pre')?.textContent).toContain('周末');
+});

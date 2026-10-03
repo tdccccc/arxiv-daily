@@ -134,3 +134,23 @@ it("overlays an owned daily job before state persistence with a timezone-correct
   expect((await paper.json()).run.date).toBeNull();
   finish(0);
 });
+
+it('treats weekend announcement gaps as skipped without hiding real errors or saved reports', async()=>{
+ const gap='all arXiv categories failed: date 2026-10-03 is newer than newest astro-ph.CO /recent bucket 2026-10-02; arXiv announce page may not be available yet; date 2026-10-03 is newer than newest astro-ph.GA /recent bucket 2026-10-02; arXiv announce page may not be available yet';
+ const {get}=await setup({now:'2026-10-12T12:00:00Z',records:{'2026-10-03':state('failed_transient',{error:gap}),'2026-10-04':state('failed_transient',{error:'HTTP 503 upstream unavailable'})},reports:['2026-10-10']});
+ const calendar=await(await get('api/calendar?month=2026-10')).json();const day=(date:string)=>calendar.cells.find((c:{date:string}|null)=>c?.date===date);
+ expect(day('2026-10-03')).toMatchObject({state:'skipped',canGenerate:false,message:expect.stringContaining('周末')});
+ expect(day('2026-10-04')).toMatchObject({state:'failed',message:'HTTP 503 upstream unavailable'});
+ expect(day('2026-10-10')).toMatchObject({state:'has-report'});
+ expect(day('2026-10-11')).toMatchObject({state:'skipped',canGenerate:false});
+ expect(day('2026-10-12')).toMatchObject({state:'not-generated',canGenerate:true});
+});
+it('skips weekend daily requests using core calendar rules without running the pipeline',async()=>{
+ const {get,run}=await setup({now:'2026-10-03T12:00:00Z'});
+ for(const body of [{kind:'daily'},{kind:'daily',date:'2026-10-04'}]){
+  const response=await get('api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  expect(response.status).toBe(202);
+  expect((await response.json()).run).toMatchObject({status:'skipped',exitCode:0,output:expect.stringContaining('周末')});
+ }
+ expect(run).not.toHaveBeenCalled();
+});
