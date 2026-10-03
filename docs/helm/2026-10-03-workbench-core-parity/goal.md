@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-04T01:51:51+08:00
-revision: 15
+updated: 2026-10-04T02:22:20+08:00
+revision: 17
 
 ## Intent
 
@@ -49,3 +49,5 @@ revision: 15
 10. P10 — 简化标题与品牌图标提案供审核 — status: done
 
 11. P11 — 纯文字品牌与统一预览版本 — status: done
+
+12. P12 — 模型获取不重建首次引导 — status: done

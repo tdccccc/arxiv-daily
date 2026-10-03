@@ -67,3 +67,11 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T01:51:51+08:00 — P11 shipped for user review
 
 采用arxiv-daily纯字标，已把近期单框模型选择、周末skip、标题改动合并成0.1.9并安装到用户Web profile。270 CLI/20 DSH检查及hash校验通过。保留现有会话等待用户重启，暂停等待效果反馈；P2/P3/P4不自动推进。
+
+## 2026-10-04T02:21:14+08:00 — P12 model fetch regression
+
+用户报告Get models后Getting started重新出现。saveDraft每次替换guide导致状态/布局重新展开。分离静默保存与显式guide更新，两条复现测试已Red→Green。
+
+## 2026-10-04T02:22:20+08:00 — P12 accepted
+
+Get models静默保存不再重绘或重新插入引导，两条用户场景回归通过。0.1.10已安装且hash匹配，保持现有会话等待用户重启，其他功能暂不推进。
