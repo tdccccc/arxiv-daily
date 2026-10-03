@@ -1,6 +1,6 @@
 # arxiv daily — identity proposal 01
 
-Status: awaiting user review. Not imported by the workbench or any plugin package.
+Status: initial proposal not selected. See [round 2 alternatives](alternatives/comparison.png). No mark is imported by the workbench or any plugin package.
 
 Visual thesis: a calm, substantial lowercase a in deep teal, with a small amber daily-update marker. The mark stays readable without detail or typography at icon sizes.
 

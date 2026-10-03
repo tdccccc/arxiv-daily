@@ -55,3 +55,7 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T01:33:54+08:00 — P10 wordmark and proposal
 
 用户要求标题只保留加粗加大的arxiv daily，并先审核新图标。标题源码已改（21项UI测试）；四个SVG与预览图供审核，新图标未用于实际UI。暂停等待反馈，继续不打包新版本。
+
+## 2026-10-04T01:42:12+08:00 — Identity alternatives for review
+
+首版标识未获用户认可，按请求准备六个不同方向A–F与单色/小尺寸对照，位于docs/design/arxiv-daily-identity/alternatives。已渲染查看comparison.png并校验12个SVG。仅设计稿，未选定、未接入UI、不打包版本，等待选择后细化。
