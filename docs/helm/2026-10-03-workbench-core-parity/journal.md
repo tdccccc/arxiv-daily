@@ -59,3 +59,11 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T01:42:12+08:00 — Identity alternatives for review
 
 首版标识未获用户认可，按请求准备六个不同方向A–F与单色/小尺寸对照，位于docs/design/arxiv-daily-identity/alternatives。已渲染查看comparison.png并校验12个SVG。仅设计稿，未选定、未接入UI、不打包版本，等待选择后细化。
+
+## 2026-10-04T01:47:51+08:00 — Pure wordmark selected and release requested
+
+用户不再要图标，选择arxiv-daily字标；本轮要求更新统一版本，纳入单模型combobox、周末skip、标题简化。原图标提案仅作历史文档，不接入运行包。
+
+## 2026-10-04T01:51:51+08:00 — P11 shipped for user review
+
+采用arxiv-daily纯字标，已把近期单框模型选择、周末skip、标题改动合并成0.1.9并安装到用户Web profile。270 CLI/20 DSH检查及hash校验通过。保留现有会话等待用户重启，暂停等待效果反馈；P2/P3/P4不自动推进。
