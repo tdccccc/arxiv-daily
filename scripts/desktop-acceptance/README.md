@@ -110,6 +110,13 @@ is believed*. A refused capture fails the run; it never becomes a file.
 | `library-row-three-buttons-narrow-panel.png` | The granted three-button row at the narrow panel, where the buttons no longer fit on one line and wrap rather than squeeze the description out |
 | `library-row-three-buttons-wide-panel.png` | The same three-button row at the wide panel, where all three still fit on one line |
 | `library-row-three-buttons-stacked-panel.png` | The same three-button row below the stacking breakpoint |
+| `direction-review-stale-coverage.png` | The review dialog's default page when recorded coverage is stale: one primary "Update suggestions" action, no accept bar |
+| `direction-review-read-failure.png` | The default page on a read failure: "Try again" primary, with More options open to show the disabled generation fallback and its reason |
+| `direction-review-nothing-new.png` | The default page when nothing new needs review: "Done" is the only action |
+| `direction-review-candidate-list.png` | The default page with real directions to review: the direction list and the Add to research topics bar below it |
+| `direction-review-library-overview.png` | The page reached from More options → Library overview, with its own Back to review action |
+| `direction-review-long-direction-wide.png` | A long direction's heading at the wide viewport: unbold, wrapped inside the dialog |
+| `direction-review-long-direction-narrow.png` | The same heading at the narrow viewport |
 
 The three panel widths are produced by emulating the renderer's device metrics,
 so Obsidian's own responsive rules decide the panel width rather than an
@@ -197,6 +204,8 @@ If the harness cannot run, these steps are the equivalent record:
 | `trust.mjs` | Trust prompt and plugin readiness |
 | `scenarios.mjs` | The sidecar, migration and PDF location scenarios |
 | `library-settings.mjs` | The personal library settings page walk |
+| `topic-directions.mjs` | The topic direction list's collapse/wrap geometry |
+| `direction-review.mjs` | The library direction review dialog's redesigned default page |
 | `screenshots.mjs` | Element-clipped PNGs of the states worth looking at |
 | `settings-fixture.mjs` | The persisted states each session starts from |
 | `smoke.mjs` | Minimal session probe, useful when debugging the harness |
