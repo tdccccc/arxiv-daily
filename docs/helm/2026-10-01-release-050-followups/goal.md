@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-01T23:06:37+08:00
-updated: 2026-10-02T16:04:14+08:00
-revision: 12
+updated: 2026-10-02T22:57:28+08:00
+revision: 13
 owner: codex-root-2026-10-01
 
 ## Intent
@@ -18,7 +18,8 @@ owner: codex-root-2026-10-01
 - [x] 审核对话框大屏有足够空间，小窗口可以滚动与操作（用户确认窗口操作正常）。
 - [x] 两个修复独立提交，要求的检查有实际记录，备份后部署手测文件且不碰 data.json。
 - [x] 用户手测通过后，完成版本同步、发行说明核对和发布前本地检查与提交（71d6453）。
-- [ ] 处理授权push后当前PR结果检查报告的5条CodeQL告警，并在再次授权push后核对结果。
+- [x] 处理授权push后当前PR结果检查报告的5条CodeQL告警，并在再次授权push后核对结果（ace7745的CodeQL无新增告警）。
+- [ ] 定位合并后macOS arm64原生备份一次内容异常；同SHA重跑成功不代替根因验证。
 
 ## Non-goals
 
@@ -40,8 +41,9 @@ owner: codex-root-2026-10-01
 3. P3 — 整分支融合、标题摘要重建与新主题方向流程通过回归并部署 — status: done
 4. P4 — 单一Personal library区域，选择目录自动准备、首次审核自动生成 — status: done
 5. P5 — 已有资料库的模型、缓存和旧建议升级可恢复，界面保留重试 — status: done
-6. P6 — 当前PR的5条CodeQL告警得到核实、修复与验证 — status: active
+6. P6 — 当前PR的5条CodeQL告警得到核实、修复与验证 — status: done
+7. P7 — 取得macOS原生备份异常的逐阶段诊断与修复证据 — status: active
 
 ## Open questions
 
-- 首次push已获用户A授权并完成；修复CI发现的问题后，再次push需单次授权。
+- PR51已按用户授权合并；正式发布暂未授权。main CI一次备份异常虽复跑成功，诊断仍待远程验证。

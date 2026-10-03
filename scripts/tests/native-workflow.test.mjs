@@ -32,10 +32,14 @@ function assertNativeWorkflow(value) {
   for (const step of job.steps) {
     if (step.uses) assert.match(step.uses, /^[^@\s]+@[0-9a-f]{40}$/);
     assert.ok(!step["continue-on-error"]);
-    if (step.run && /test|smoke/.test(step.run)) assert.equal(step.if, undefined);
+    if (step.name === "Diagnose native hard-link backup integrity") {
+      // The extra diagnostic must also run after a failed base test, but only
+      // once a native binary exists. Ordinary acceptance tests stay mandatory.
+      assert.equal(step.if, "${{ !cancelled() && steps.native_build.outcome == 'success' }}");
+    } else if (step.run && /test|smoke/.test(step.run)) assert.equal(step.if, undefined);
   }
   const commands = job.steps.map(step => step.run ?? "").join("\n");
-  for (const command of ["native-sdk.mjs", "native-build.mjs", "native/tests/storage.test.cjs", "tests/native-private-storage.test.ts", "tests/native-storage-loader.test.ts", "native-package-smoke.mjs", "native-assets.mjs export"]) {
+  for (const command of ["native-sdk.mjs", "native-build.mjs", "native/tests/storage.test.cjs", "native/tests/backup-diagnostic.cjs", "tests/native-private-storage.test.ts", "tests/native-storage-loader.test.ts", "native-package-smoke.mjs", "native-assets.mjs export"]) {
     assert.ok(commands.includes(command), `missing native verification: ${command}`);
   }
   const upload = job.steps.find(step => step.name === "Upload native binary");
@@ -80,6 +84,9 @@ test("native CI rejects skipped tests, tolerated failures, and a fake single-pla
   const skipped = structuredClone(original);
   skipped.jobs.build.steps.find(step => step.run?.includes("native/tests/storage.test.cjs")).if = "${{ false }}";
   assert.throws(() => assertNativeWorkflow(skipped));
+  const skippedDiagnostic = structuredClone(original);
+  skippedDiagnostic.jobs.build.steps.find(step => step.name === "Diagnose native hard-link backup integrity").if = "${{ false }}";
+  assert.throws(() => assertNativeWorkflow(skippedDiagnostic));
   const tolerated = structuredClone(original);
   tolerated.jobs.build["continue-on-error"] = true;
   assert.throws(() => assertNativeWorkflow(tolerated));
