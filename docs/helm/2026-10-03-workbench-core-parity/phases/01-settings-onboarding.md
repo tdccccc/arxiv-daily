@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-03T00:22:59+08:00
-revision: 1
+updated: 2026-10-03T12:38:19+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ revision: 1
 - Red signal: 新设置服务契约测试缺少实现；再验证修订冲突、保留密钥、首次创建。
 - Green check: workbench-settings tests
 - regression checks: cli-config、cli-library-config tests
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — 首次启动与 HTTP 接入
 
@@ -36,7 +36,7 @@ revision: 1
 - Red signal: 无配置 ui 启动失败；settings HTTP 不存在。
 - Green check: cli-workbench、workbench-server/onboarding tests
 - regression checks: embedding、marks、generation HTTP guards
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — 设置界面
 
@@ -45,7 +45,7 @@ revision: 1
 - Red signal: DOM 中无法编辑保存设置，首次访问无引导。
 - Green check: workbench settings UI tests
 - regression checks: workbench UI tests、CLI typecheck、DSH build/Host tests
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
@@ -56,3 +56,13 @@ revision: 1
 
 - 如果需要 DSH 专属业务副本，改回共享工作台边界。
 - 配置损坏不可静默当作首次运行覆盖。
+
+## Observed evidence
+
+- 配置契约缺模块 Red；typed stub 后 11 行为 Red；实现与补充校验后 14 设置测试 Green，含真实并发创建冲突、symlink、未知配置保留。
+- CLI 无配置启动 Red（退出2而非0）；HTTP 无配置 Red（构造文档服务异常）；修复后首次设置、生成、运行中保存拒绝、换目录与外部来源防护 Green。
+- UI 缺少表单 Red，分组导航 Red，真实保存发现主题id丢失 Red；修复后 DOM→真实配置回读与导航均 Green。
+- 全量 CLI：26文件230测试通过；DSH：20测试通过、无skip，含两个真实隔离 Host 场景（已有配置/无配置→保存→模拟日报→阅读标记→停用/启用）。
+- CLI typecheck、boundaries、product inventory、diff check通过；linux/x64 DSH 0.1.4包已生成。
+- 不运行真实模型、邮件或desktop视觉自动化。设置范围为研究记录、模型API、每日发现；邮件/embedding/schedule字段保留但暂未开放编辑。
+- 已接受实现：91a800f。此前名称修改独立保存于b4c3c8b。
