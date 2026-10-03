@@ -1,3 +1,5 @@
+> Decision: user chose a pure `arxiv-daily` wordmark. Icon proposals are closed and retained only as design history; no icon integration is pending.
+
 # arxiv daily — identity proposal 01
 
 Status: initial proposal not selected. See [round 2 alternatives](alternatives/comparison.png). No mark is imported by the workbench or any plugin package.

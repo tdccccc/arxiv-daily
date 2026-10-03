@@ -59,7 +59,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   root.innerHTML = `
     <a class="skip-link" href="#reading-content">跳到正文</a>
     <header class="app-header">
-      <a class="brand" href="./" aria-label="arxiv daily 首页">arxiv daily</a>
+      <a class="brand" href="./" aria-label="arxiv-daily 首页">arxiv<span class="brand-hyphen">-</span>daily</a>
       <div class="header-actions"><button class="quiet-button" data-action="theme" aria-label="切换深浅色">◐ <span class="desktop-label">外观</span></button><button class="quiet-button" data-action="settings">设置</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> 生成</button></div>
     </header>
     <div class="connection-banner" role="alert" hidden></div>

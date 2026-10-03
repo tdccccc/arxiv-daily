@@ -20,7 +20,8 @@ svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.5; fill: 
 .skip-link { position: fixed; top: -80px; left: 20px; z-index: 100; padding: 12px; background: var(--surface); }
 .skip-link:focus { top: 10px; }
 .app-header { height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 0 30px; border-bottom: 1px solid var(--line); gap: 16px; }
-.brand { display: flex; align-items: center; gap: 12px; color: var(--ink); font-size: 28px; letter-spacing: -.8px; font-weight: 750; line-height: 1.1; }
+.brand { display: inline-flex; align-items: baseline; color: var(--ink); font-family: "SF Pro Display", "Inter", "Segoe UI", sans-serif; font-size: 28px; letter-spacing: -.045em; font-weight: 750; line-height: 1.1; white-space: nowrap; }
+.brand-hyphen { color: var(--accent); margin-inline: .03em; font-weight: 550; }
 .brand:hover { text-decoration: none; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .quiet-button, .primary-button, .icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 12px; font-size: 13px; border-radius: 6px; transition: background-color .15s, color .15s; white-space: nowrap; }

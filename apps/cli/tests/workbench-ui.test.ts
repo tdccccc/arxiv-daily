@@ -167,9 +167,9 @@ it('shows a weekend skip as neutral skipped rather than failed or completed', as
  expect(root.querySelector('.run-tray pre')?.textContent).toContain('周末');
 });
 
-it('shows only the enlarged arxiv daily wordmark while the new icon awaits approval', async()=>{
+it('shows the final arxiv-daily wordmark without an icon or reader subtitle', async()=>{
  const {root}=setup();
- expect(root.querySelector('.brand')?.textContent).toBe('arxiv daily');
+ expect(root.querySelector('.brand')?.textContent).toBe('arxiv-daily');
  expect(root.querySelector('.brand small')).toBeNull();
  expect(root.querySelector('.brand-mark')).toBeNull();
 });

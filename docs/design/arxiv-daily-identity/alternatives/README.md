@@ -1,3 +1,5 @@
+> Decision: user chose a pure `arxiv-daily` wordmark. Icon proposals are closed and retained only as design history; no icon integration is pending.
+
 # Identity options — round 2
 
 User rejected the first proposal and requested more options. These are independent vector directions, not runtime assets. No icon is approved or integrated.
