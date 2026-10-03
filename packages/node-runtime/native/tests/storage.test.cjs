@@ -166,7 +166,11 @@ test("has exactly one winner across independent operating-system processes", asy
     child.stdout.on("data", chunk => { output += chunk; });
     child.stderr.on("data", chunk => { error += chunk; });
     child.once("error", reject);
-    child.once("exit", code => code === 0 ? resolve(output) : reject(new Error(error)));
+    // 'exit' can fire before the child's stdout pipe has finished draining
+    // (Node explicitly documents this ordering is not guaranteed); 'close'
+    // is the event guaranteed to fire only after stdio has fully ended, so
+    // `output` is complete whenever this callback runs.
+    child.once("close", code => code === 0 ? resolve(output) : reject(new Error(error)));
   })));
   assert.equal(results.filter(value => value === "won").length, 1);
   assert.equal(results.filter(value => value === "busy").length, 5);

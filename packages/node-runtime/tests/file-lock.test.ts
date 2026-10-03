@@ -24,7 +24,8 @@ beforeAll(async () => {
 afterEach(async () => {
   await Promise.all(Array.from(children, (child) => new Promise<void>((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
-    child.once("exit", () => resolve());
+    // 'close' (not 'exit') guarantees the child's stdio has fully drained.
+    child.once("close", () => resolve());
     child.kill("SIGKILL");
   })));
   children.clear();
@@ -45,7 +46,9 @@ function child(vault: string, lockRoot: string, mode: string, count = 10) {
   process.stderr?.on("data", (chunk) => { errors += String(chunk); });
   const done = new Promise<void>((resolve, reject) => {
     process.once("error", reject);
-    process.once("exit", (code, signal) => code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(errors || `worker exit ${code}`)));
+    // 'close' (not 'exit') guarantees `errors` has the worker's complete
+    // stderr output before the rejection message is built from it.
+    process.once("close", (code, signal) => code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(errors || `worker exit ${code}`)));
   });
   const acquired = new Promise<void>((resolve) => process.on("message", (message) => {
     if (message === "acquired" || message === "read") resolve();
