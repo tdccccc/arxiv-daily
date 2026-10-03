@@ -24,7 +24,7 @@ function fixture(t) {
 test('footer opens the workbench before any conversation, supports retry and closes the overlay', async t => {
   const f = fixture(t); assert.ok(f.slots.has('sidebar.footer.action')); assert.ok(f.slots.has('shell.overlay'));
   await React.act(async () => f.root.render(React.createElement(React.StrictMode, null, React.createElement(f.slots.get('sidebar.footer.action'), { wide: true }), React.createElement(f.slots.get('shell.overlay')))));
-  assert.match(f.element.textContent, /文献工作台/); assert.equal(f.calls.length, 0);
+  assert.match(f.element.textContent, /arxiv-daily/); assert.equal(f.calls.length, 0);
   await React.act(async () => f.element.querySelector('button').click());
   assert.ok(f.element.querySelector('[role=dialog]')); assert.match(f.element.textContent, /正在打开/);
   assert.equal(f.calls.length, 2, 'StrictMode retries mount safely without a conversation');
@@ -34,13 +34,13 @@ test('footer opens the workbench before any conversation, supports retry and clo
   await React.act(async () => f.finish({ ok: true, value: { url: workbenchUrl } }));
   assert.equal(f.element.querySelector('iframe').src, workbenchUrl);
   assert.equal(f.calls.at(-1)[2].frameOrigin, 'http://127.0.0.1:3080');
-  await React.act(async () => f.element.querySelector('[aria-label="关闭文献工作台"]').click());
+  await React.act(async () => f.element.querySelector('[aria-label="关闭 arxiv-daily"]').click());
   assert.equal(f.element.querySelector('[role=dialog]'), null);
 });
 test('right Sidebar guide names the shared reader tab and collapsed footer keeps an accessible icon', async t => {
-  const f = fixture(t); assert.equal(f.definitions.length, 1); assert.equal(f.definitions[0].guide[0].title(), '文献');
+  const f = fixture(t); assert.equal(f.definitions.length, 1); assert.equal(f.definitions[0].guide[0].title(), 'arxiv-daily');
   await React.act(async () => f.root.render(React.createElement(f.slots.get('sidebar.footer.action'), { wide: false })));
-  assert.equal(f.element.querySelector('button').getAttribute('aria-label'), '文献工作台');
+  assert.equal(f.element.querySelector('button').getAttribute('aria-label'), 'arxiv-daily');
   assert.ok(f.element.querySelector('svg')); assert.equal(f.element.textContent, '');
   await React.act(async () => f.root.render(React.createElement(f.slots.get('sidebar.right.pane.tab'))));
   await React.act(async () => f.finish({ ok: true, value: { url: workbenchUrl } }));

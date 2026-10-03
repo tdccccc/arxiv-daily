@@ -21,8 +21,8 @@ export function createOpener(ctx, location) {
 
 export function installClient(ctx, React, location) {
   ctx.effect(() => ctx.locale.register(PLUGIN, {
-    zh: { open: '文献', title: '文献工作台', description: '筛选论文、阅读日报与详细总结', opening: '正在打开…', retry: '重试', refresh: '刷新', close: '关闭文献工作台', external: '在浏览器打开', frame: '文献工作台页面' },
-    en: { open: 'Papers', title: 'Research workbench', description: 'Filter papers and read reports and paper notes', opening: 'Opening…', retry: 'Retry', refresh: 'Refresh', close: 'Close research workbench', external: 'Open in browser', frame: 'Research workbench page' },
+    zh: { open: 'arxiv-daily', title: 'arxiv-daily', description: '筛选论文、阅读日报与详细总结', opening: '正在打开…', retry: '重试', refresh: '刷新', close: '关闭 arxiv-daily', external: '在浏览器打开', frame: 'arxiv-daily' },
+    en: { open: 'arxiv-daily', title: 'arxiv-daily', description: 'Filter papers and read reports and paper notes', opening: 'Opening…', retry: 'Retry', refresh: 'Refresh', close: 'Close arxiv-daily', external: 'Open in browser', frame: 'arxiv-daily' },
   }));
   const t = ctx.locale.bind(PLUGIN), h = React.createElement;
   let shown = false;

@@ -1,6 +1,6 @@
 # arXiv Daily for DeepSeek Harness
 
-左侧栏“设置”上方提供固定的“文献工作台”入口，空白新建页面也能打开。右侧栏入口页同时提供“文献”标签，两处显示同一工作台。日历、论文列表、日报、详细总结和待读/收藏使用现有 arXiv Daily 核心及本地 Markdown。打开、搜索和标记不需要 Agent 对话，也不调用模型。
+左侧栏“设置”上方提供固定的“arxiv-daily”入口，空白新建页面也能打开。右侧栏入口页同时提供“arxiv-daily”标签，两处显示同一工作台。日历、论文列表、日报、详细总结和待读/收藏使用现有 arXiv Daily 核心及本地 Markdown。打开、搜索和标记不需要 Agent 对话，也不调用模型。
 
 ## 构建与安装
 
@@ -18,22 +18,22 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package
 ```
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.2.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.3.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.2.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.3.tgz
 ```
 
-重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“文献”侧栏标签。
+重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“arxiv-daily”侧栏标签。
 
-## 从 0.1.0 / 0.1.1 升级
+## 从 0.1.0 / 0.1.1 / 0.1.2 升级
 
-0.1.2 增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
+0.1.3 将两侧入口和标签的显示名称统一为 `arxiv-daily`。0.1.2 已增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.2.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.3.tgz
 ```
 
 然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
@@ -41,11 +41,11 @@ dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.2.tgz
 ## 使用
 
 1. 沿用已有 arXiv Daily CLI 配置。首次使用时，在终端运行随包提供的 CLI：`node /absolute/plugin/path/lib/arxiv-daily-cli.cjs init`；从仓库试用也可运行 `node apps/cli/dist/arxiv-daily-cli.cjs init`。配置默认位于系统用户配置目录中的 `arxiv-daily/config.toml`。
-2. 点击左侧栏“设置”上方的“文献工作台”，无需先发消息。插件自动启动并显示全局文献面板；点 × 关闭。首次启动失败会显示提示，可完成设置后重试。
-3. 也可以打开右侧栏，在入口页（或“＋”新标签页）选择“文献”。进入工作台后直接选择日期、搜索论文、阅读日报/总结、保存待读或收藏。“生成”按钮调用既有 CLI 流程，使用 arXiv Daily 配置的模型与邮件设置。
+2. 点击左侧栏“设置”上方的“arxiv-daily”，无需先发消息。插件自动启动并显示全局文献面板；点 × 关闭。首次启动失败会显示提示，可完成设置后重试。
+3. 也可以打开右侧栏，在入口页（或“＋”新标签页）选择“arxiv-daily”。进入工作台后直接选择日期、搜索论文、阅读日报/总结、保存待读或收藏。“生成”按钮调用既有 CLI 流程，使用 arXiv Daily 配置的模型与邮件设置。
 4. 可使用 DSH 自带的侧栏放大或浮动功能。较窄时工作台通过“日历与筛选”切换导航。
 
-工作台进程在同一插件实例的会话间共享。关闭阅读标签不会停止生成；禁用插件或退出 DSH 会停止它。插件重载后旧工作台链接会失效，再次点击“文献”获取新链接。
+工作台进程在同一插件实例的会话间共享。关闭阅读标签不会停止生成；禁用插件或退出 DSH 会停止它。插件重载后旧工作台链接会失效，再次点击“arxiv-daily”获取新链接。
 
 旧版已在 DSH `0.1.7-alpha.1` 验证 Host 接口；本轮本机 DSH 已更新至 `0.2.0-rc.2`，在该版本验证固定入口的 SlotCore 注册和 Host 接口；未自动操作 Electron 桌面界面，其他版本仍需实测。
 
