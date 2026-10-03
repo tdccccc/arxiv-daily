@@ -1,3 +1,4 @@
+import { mountSettingsNavigation } from "./settings-navigation";
 import { settingsSetupGuide } from "./settings-setup";
 import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
 import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
@@ -39,6 +40,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
 }
 
 export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false): void {
+ mountSettingsNavigation(form);
  let busy=false, revision=snapshot.revision, libraryCancelling=false, libraryRevisionPending=false;
  let currentSnapshot=snapshot;
  let library: (CliLibraryConnectionInspection & { run?: import('../server').WorkbenchRun }) | undefined;
@@ -96,7 +98,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
  }
  function lockLibraryInputs(locked: boolean) {
-  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings="close"])')))control.disabled=locked;
+  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings="close"]):not([data-settings-nav])')))control.disabled=locked;
   find<HTMLButtonElement>('[type="submit"]').disabled=locked || busy;if(!locked)renderLibrary();
  }
  form.addEventListener('workbench-run',event=>{
