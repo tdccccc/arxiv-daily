@@ -84,25 +84,140 @@ export class NodeStorageAdapter implements StorageAdapter {
     content: string,
     mode?: number,
   ): Promise<void> {
-    if (mode !== undefined && this.nativeStorage) {
-      return this.nativeStorage.writeTextAtomic(storagePath, content, mode);
+    if (mode !== undefined) {
+      // Private writes (a mode is given) must never silently degrade to an
+      // unsynced, backup-less write: ADR 0009 requires automatic delivery to
+      // fail closed rather than fall back to a less-protected path. The
+      // native backend and the Linux descriptor-anchored backend are the
+      // only backends allowed to serve this call.
+      if (this.nativeStorage) {
+        return this.nativeStorage.writeTextAtomic(storagePath, content, mode);
+      }
+      if (!supportsDescriptorAnchoredCreate()) {
+        throw new Error("private atomic storage is unavailable on this host");
+      }
+      return this.writeTextAtomicLinux(storagePath, content, mode);
     }
     const target = this.toFsPath(storagePath);
     const suffix = crypto.randomUUID().replace(/-/g, "");
     const tmp = this.toFsPath(`${storagePath}.tmp-${suffix}`);
-    const bak = this.toFsPath(`${storagePath}.bak-${suffix}`);
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await fs.writeFile(tmp, content, {
-      encoding: "utf8",
-      ...(mode === undefined ? {} : { mode }),
-    });
-    if (mode !== undefined) await fs.chmod(tmp, mode);
+    await fs.writeFile(tmp, content, { encoding: "utf8" });
     try {
       await (this.options.renameAtomic ?? fs.rename)(tmp, target);
-      if (mode !== undefined) await fs.chmod(target, mode);
     } finally {
       await fs.rm(tmp, { force: true }).catch(() => undefined);
-      await fs.rm(bak, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Linux-only fallback for a private atomic write when no native storage
+   * binding is bundled. Mirrors createTextExclusiveLinux's descriptor-pinned
+   * traversal so the target cannot be swapped out via a symlink mid-write,
+   * then syncs the temp file's data before the rename and syncs the parent
+   * directory after it so the new name survives a crash.
+   */
+  private async writeTextAtomicLinux(
+    storagePath: string,
+    content: string,
+    mode: number,
+  ): Promise<void> {
+    const normalized = validateExclusiveStoragePath(storagePath);
+    await fs.mkdir(this.rootDir, { recursive: true, mode: 0o700 });
+
+    const handles: fs.FileHandle[] = [];
+    let createdTmp: string | undefined;
+    try {
+      const rootHandle = await openDirectoryNoFollow(this.rootDir);
+      handles.push(rootHandle);
+      const realRoot = await validatedDescriptorPath(rootHandle, this.rootDir);
+      const configuredRealRoot = await fs.realpath(this.rootDir);
+      if (realRoot !== configuredRealRoot) {
+        throw new Error("atomic write root descriptor is inconsistent");
+      }
+
+      const parts = normalized.split("/");
+      const fileName = parts.pop();
+      if (!fileName) throw new Error("atomic write target is invalid");
+      let parentHandle = rootHandle;
+
+      for (const part of parts) {
+        const descriptorParent = `/proc/self/fd/${parentHandle.fd}`;
+        const next = `${descriptorParent}/${part}`;
+        try {
+          const nextHandle = await openDirectoryNoFollow(next);
+          handles.push(nextHandle);
+          parentHandle = nextHandle;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT") {
+            if (code === "ELOOP" || code === "ENOTDIR") {
+              throw new Error("atomic write parent is a symlink or not a directory");
+            }
+            throw error;
+          }
+          try {
+            await fs.mkdir(next, { mode: 0o700 });
+          } catch (mkdirError) {
+            if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+              throw mkdirError;
+            }
+          }
+          const nextHandle = await openDirectoryNoFollow(next);
+          handles.push(nextHandle);
+          parentHandle = nextHandle;
+        }
+        const realParent = await validatedDescriptorPath(parentHandle, storagePath);
+        assertContained(realRoot, realParent, storagePath);
+      }
+
+      await assertDescriptorCurrent(
+        rootHandle,
+        parentHandle,
+        this.rootDir,
+        realRoot,
+        parts,
+        storagePath,
+      );
+
+      const suffix = crypto.randomUUID().replace(/-/g, "");
+      const tmpTarget = `/proc/self/fd/${parentHandle.fd}/${fileName}.tmp-${suffix}`;
+      const flags =
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        fsConstants.O_NOFOLLOW;
+      const tmpHandle = await fs.open(tmpTarget, flags, mode);
+      handles.push(tmpHandle);
+      createdTmp = tmpTarget;
+      await tmpHandle.writeFile(content, "utf8");
+      await tmpHandle.chmod(mode);
+      // Sync the temp file's data before it becomes reachable under the
+      // final name, so a crash never exposes a partially-written target.
+      await tmpHandle.sync();
+
+      await assertDescriptorCurrent(
+        rootHandle,
+        parentHandle,
+        this.rootDir,
+        realRoot,
+        parts,
+        storagePath,
+      );
+      const finalTarget = `/proc/self/fd/${parentHandle.fd}/${fileName}`;
+      await (this.options.renameAtomic ?? fs.rename)(tmpTarget, finalTarget);
+      createdTmp = undefined;
+      // Sync the parent directory so the rename itself is durable too.
+      await parentHandle.sync();
+    } catch (error) {
+      if (createdTmp) {
+        await fs.rm(createdTmp, { force: true }).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      for (const handle of handles.reverse()) {
+        await handle.close().catch(() => undefined);
+      }
     }
   }
 

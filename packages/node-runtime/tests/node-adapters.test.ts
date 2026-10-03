@@ -237,6 +237,32 @@ describe("NodeStorageAdapter", () => {
     )).toEqual([]);
   });
 
+  it("writes and overwrites a private file through the Linux descriptor-anchored fallback", async () => {
+    if (process.platform !== "linux") return;
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+
+    await storage.writeTextAtomic("private/state.json", "first", 0o600);
+    expect(await storage.readText("private/state.json")).toBe("first");
+    expect(await fileMode(join(root, "private/state.json"))).toBe(0o600);
+
+    await storage.writeTextAtomic("private/state.json", "second", 0o600);
+    expect(await storage.readText("private/state.json")).toBe("second");
+    expect((await fsReaddir(join(root, "private"))).filter((entry) =>
+      entry.includes(".tmp-"),
+    )).toEqual([]);
+  });
+
+  it("fails closed for a private write with no native storage on a non-descriptor-anchored platform", async () => {
+    if (process.platform === "linux") return;
+    const root = await makeTempDir();
+    const storage = new NodeStorageAdapter(root);
+
+    await expect(
+      storage.writeTextAtomic("private/state.json", "content", 0o600),
+    ).rejects.toThrow("private atomic storage is unavailable on this host");
+  });
+
   it("exclusively creates one file across independent adapter instances", async () => {
     const root = await makeTempDir();
     const first = new NodeStorageAdapter(root) as NodeStorageAdapter & {
