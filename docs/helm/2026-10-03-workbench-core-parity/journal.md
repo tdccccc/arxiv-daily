@@ -43,3 +43,11 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T01:15:50+08:00 — P8 accepted
 
 单模型combobox修复已验收：保留原值，Get models成功直接展开框下选项，移除P7第二select。0.1.8已打包，未修改用户安装。后续继续P2。
+
+## 2026-10-04T01:27:09+08:00 — P9 review fix
+
+用户报告周末日期请求显示失败。确认自动调度已有周末guard，而workbench手工日期入口调用runForDateNow未guard。新增workbench入口与日历展示修复，不改变核心手工/强制路径，不写用户旧状态。用户要求收集修改后统一版本：本轮不build/pack，P2维持pending。
+
+## 2026-10-04T01:28:18+08:00 — P9 accepted, review batch held
+
+周末工作台入口复用core日期规则提前跳过；精确匹配旧周末无bucket记录的展示，不修改真实历史。49项相关回归与typecheck通过。已保存源代码，未构建或打包，不推进P2，等待用户继续反馈后统一版本。
