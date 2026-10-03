@@ -37,3 +37,16 @@
 原目标`/home/tiandc/Desktop/plugin_test/.obsidian/plugins/arxiv-daily/`先检查再备份，创建`main.js.bak-20261002-pre-codeql-fixes`与`styles.css.bak-20261002-pre-codeql-fixes`，未覆盖旧备份。三件资产校验一致：main.js `6006fd34f4ff91e0b5b033ea971ca6071b0f239d4beb13674b29d60021184d2b`、styles.css `c1b84403be62a5ad5de4e5ed42e387176b0a8607fac395146749f41fefbe696d`、manifest.json `6f9b6e674c8f838acb81edb5fd1b5e0ae766c7105abedd3817fe292938d76a8f`。记录`/tmp/arxiv-050-codeql-deploy.json`，未碰data.json/启动Obsidian/修改其它worktree。
 
 下一步只申请再次push当前分支并等待新检查；PR说明/ready、合并、tag和发布仍分别授权。
+
+## 另一批预先存在的告警（17条，分支fix/release-050-readiness，2026-10-03）
+
+与上面5条「本次新增」告警不同，`gh api 'repos/tdccccc/arxiv-daily/code-scanning/alerts?state=open&per_page=100'`在main@bdfec4e上另外列出17条自2026-08-23起即存在、与PR51/52无关的open high-severity告警：js/polynomial-redos×11（`packages/core/src/{dashboard,delivery,metrics,pipeline}`下的标题/YAML值/路径/数学定界符解析）、js/incomplete-multi-character-sanitization×3与js/bad-tag-filter×2（`history-sync.ts`的HTML注释剥离、`arxiv-parser.ts`的script/style标签剥离）、js/incomplete-url-substring-sanitization×1（`arxiv-fetcher.test.ts`测试内的mock URL判断）。
+
+逐条读取被标记代码与输入来源后：14条在代码中修复（含回归测试，含对抗性长输入计时断言），3条判定为不适用/误报并写入具体理由，未在本地关闭或抑制任何GitHub告警（关闭仍需用户审阅后另行操作）：
+
+- 11条ReDoS：统一改为位置扫描（不依赖可能跨行回溯的`\s+`/`\s*`组合），或删除重复加捕获组前多余的`[ \t]*`（捕获值随后仍会trim），或改用原生`String.prototype.trimEnd()`替代`/\s+$/`，或把惰性`[\s\S]*?`两定界符匹配改写为`indexOf`扫描，手法与main已有的005906f/2f01ac0一致。
+- `history-sync.ts`的`<!--.*?-->`改为`<!--[\s\S]*?-->`以匹配跨行注释；但该函数唯一调用方`parseDailyCandidates`按行解析，传入的`heading`字符串在生产路径上不可能包含换行，因此这是防御性修复，无法通过公开API构造出"跨行"场景来验证行为差异。
+- `arxiv-parser.ts`的`stripUnsafeTags`闭合标签正则加`\s*`（如`</script\s*>`），修复`js/bad-tag-filter`；同一函数另外两条`incomplete-multi-character-sanitization`（未闭合标签场景）判定为误报：该函数是DOMParser/linkedom解析前的防御性剥离，解析出的document从不挂载到真实DOM，`parseRecent`只读取特定selector的`.textContent`，脚本不会执行、样式不会生效，与`email-render.ts`那种真正渲染为HTML邮件（有`escapeHtml`）的路径不同。
+- `arxiv-fetcher.test.ts`的`req.url.includes("export.arxiv.org")`判定为误报：这是测试内mock HTTP client的分支判断，URL完全由被测生产代码构造（固定的arxiv.org端点），不是攻击者可控输入，不存在净化边界。
+
+验证：`npx vitest run`（packages/core）2360通过/2既有跳过；plugin工作区987通过；`npm run typecheck`全部4个workspace通过。17条告警的逐条表格、具体修复提交摘要和3条误报的完整理由见本分支最终报告（父会话转交）；誊写为`/tmp/arxiv-050-codeql-dismissals.json`（{number, rule, path, reason, comment}数组）供用户审阅后决定是否在GitHub上关闭——本地未对这17条或历史其它open alerts执行任何dismiss操作。
