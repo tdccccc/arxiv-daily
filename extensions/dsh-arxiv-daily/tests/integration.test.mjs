@@ -9,7 +9,7 @@ import { installedDsh } from './dsh-environment.mjs';
 const execute = promisify(execFile);
 const dsh = installedDsh();
 const project = resolve(import.meta.dirname, '../../..');
-test('packed plugin installs into actual DSH and serves authenticated research workflows without agent turns', { timeout: 60000, skip: !dsh && 'Install DSH or set DSH_CLI for integration acceptance' }, async t => {
+for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configured'}: packed plugin installs into actual DSH and serves authenticated research workflows without agent turns`, { timeout: 60000, skip: !dsh && 'Install DSH or set DSH_CLI for integration acceptance' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'arxiv-dsh-integration-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const manifest = JSON.parse(await readFile(resolve(project, 'extensions/dsh-arxiv-daily/dist/package/package.json'), 'utf8'));
@@ -19,7 +19,7 @@ test('packed plugin installs into actual DSH and serves authenticated research w
   await mkdir(join(configHome, 'arxiv-daily'), { recursive: true });
   await mkdir(join(vault, 'arxiv-daily/papers'), { recursive: true });
   await writeFile(join(vault, 'arxiv-daily/papers/manual.md'), '# Standalone Markdown\n\n$x^2$\n');
-  await writeFile(join(configHome, 'arxiv-daily/config.toml'), `vault_root = ${JSON.stringify(vault)}\ncache_dir = ${JSON.stringify(join(root, 'cache'))}\n[llm]\nprovider = "openai"\napi_key = "fixture-secret-never-log"\nbase_url = "https://fixture.invalid/v1"\nmodel = "fixture-model"\nthinking_mode = false\n[arxiv]\ncategories = ["astro-ph"]\ntimezone = "UTC"\n[[arxiv.topics]]\nname = "Photometric redshifts"\ntag = "photo-z"\ndescription = "Photometric redshift estimation and calibration"\ndetail = true\n[output]\nsummary_language = "en"\nlink_style = "relative"\n[advanced]\nlog_level = "error"\n`);
+  if (!firstRun) await writeFile(join(configHome, 'arxiv-daily/config.toml'), `vault_root = ${JSON.stringify(vault)}\ncache_dir = ${JSON.stringify(join(root, 'cache'))}\n[llm]\nprovider = "openai"\napi_key = "fixture-secret-never-log"\nbase_url = "https://fixture.invalid/v1"\nmodel = "fixture-model"\nthinking_mode = false\n[arxiv]\ncategories = ["astro-ph"]\ntimezone = "UTC"\n[[arxiv.topics]]\nname = "Photometric redshifts"\ntag = "photo-z"\ndescription = "Photometric redshift estimation and calibration"\ndetail = true\n[output]\nsummary_language = "en"\nlink_style = "relative"\n[advanced]\nlog_level = "error"\n`);
   const env = { ...process.env, DSH_HOME: join(root, 'dsh'), XDG_CONFIG_HOME: configHome, APPDATA: configHome };
   const packed = JSON.parse((await execute('npm', ['pack', './dist/package', '--pack-destination', root, '--json'], { cwd: resolve(project, 'extensions/dsh-arxiv-daily'), env })).stdout)[0];
   assert.equal(packed.files.some(file => /(^|\/)src\//.test(file.path)), false);
@@ -56,6 +56,13 @@ test('packed plugin installs into actual DSH and serves authenticated research w
   const url = first.result.value.url;
   const get = async route => { const response = await fetch(new URL(route, url)); assert.equal(response.status, 200); return response; };
   assert.ok((await get('')).headers.get('content-security-policy').includes(`frame-ancestors ${origin}`));
+  if (firstRun) {
+    assert.equal((await (await get('api/status')).json()).setupRequired, true);
+    const initial = await (await get('api/settings')).json();
+    const response = await fetch(new URL('api/settings', url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: null, values: { ...initial.values, vaultRoot: vault, provider: 'openai', apiKey: 'fixture-secret-never-log', baseUrl: 'https://fixture.invalid/v1', model: 'fixture-model', categories: ['astro-ph'], timezone: 'UTC', summaryLanguage: 'en', topics: [{ id: 'photo-z', name: 'Photometric redshifts', tag: 'photo-z', description: 'Photometric redshift estimation and calibration', detail: true }] } }) });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal((await (await get('api/settings')).json()).setupRequired, false);
+  }
   assert.match((await (await get('api/document?path=arxiv-daily/papers/manual.md')).json()).html, /katex/);
   assert.equal(await readFile(log, 'utf8'), '', 'opening and reading makes no provider requests');
   const post = (route, body) => fetch(new URL(route, url), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

@@ -1,3 +1,4 @@
+import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
@@ -26,6 +27,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   const lifetime = new AbortController();
   let disposed = false;
   let status: ProductStatus | null = null;
+  let setupRequired = false;
   let kind: "all" | "daily" | "papers" = "all";
   let query = "", scope: PaperScope = "all", topic = "", sort = "published", direction = "desc", offset = 0;
   let documentsMode = false;
@@ -115,12 +117,14 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     banner.hidden = false;
   }
 
-  async function loadStatus(): Promise<void> {
+  async function loadStatus(): Promise<boolean> {
     try {
-      const result = await request<ProductStatus>("api/status");
-      if (disposed) return;
-      status = result;
-    } catch (error) { reportConnection(error); }
+      const result = await request<ProductStatus | { setupRequired: true }>("api/status");
+      if (disposed) return false;
+      setupRequired = "setupRequired" in result && result.setupRequired === true;
+      status = setupRequired ? null : result as ProductStatus;
+      return true;
+    } catch (error) { reportConnection(error); return false; }
   }
 
   function syncMarkValues(): void {
@@ -322,18 +326,29 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     dialog.addEventListener("cancel", event => { event.preventDefault(); closeDialog(); });
   }
 
-  function showSettings(): void {
-    if (!status) {
-      showDialog("当前设置", '<p class="dialog-description">尚未读取到设置，请重新连接工作台。</p><button class="primary-button" data-action="reconnect">重新连接</button>');
-      return;
+  async function showSettings(): Promise<void> {
+    showDialog(setupRequired ? "首次使用 arXiv Daily" : "设置", '<p class="dialog-description">正在读取设置…</p>');
+    const activeDialog = dialog!;
+    try {
+      const snapshot = await request<SettingsSnapshot>("api/settings");
+      if (disposed || dialog !== activeDialog) return;
+      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot);
+      bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
+        closeDialog();
+        find(".connection-banner").hidden = true;
+        if (!await loadStatus()) return;
+        await initializeWorkspace(true);
+      });
+    } catch (error) {
+      if (disposed || dialog !== activeDialog) return;
+      activeDialog.querySelector(".dialog-description")!.textContent = message(error);
     }
-    const fields = [["输出目录", status.vaultRoot], ["模型", `${status.llm.provider} · ${status.llm.model}`], ["模型 API", status.llm.keyConfigured ? "已配置" : "未配置"], ["arXiv 分类", status.categories.join("、")], ["总结语言", status.output.summaryLanguage === "zh" ? "中文" : "English"], ["邮件", status.emailEnabled ? "已开启，日报成功后按配置发送" : "未开启"]];
-    showDialog("当前设置", `<p class="dialog-description">工作台使用启动时读取的 CLI 设置。</p><dl class="settings-list">${fields.map(([name, value]) => `<div><dt>${name}</dt><dd>${escapeHtml(value || "未设置")}</dd></div>`).join("")}</dl><h3 class="settings-subtitle">关注主题</h3><div class="settings-topics">${status.topics.length ? status.topics.map(topic => `<div><strong>${escapeHtml(topic.name)}</strong><p>${escapeHtml(topic.description)}</p></div>`).join("") : "尚未配置主题"}</div><div class="settings-help"><strong>修改设置</strong><p>在终端运行 <code>arxiv-daily init</code>，或编辑下方 TOML 文件。保存后重启工作台，使新设置生效。</p><code class="config-path">${escapeHtml(status.configPath)}</code><p>论文生成使用这里配置的模型 API，与 Claude Code 的对话模型独立。</p></div>`);
   }
 
   function showGeneration(date = ""): void {
+    if (setupRequired) { void showSettings(); return; }
     const unavailable = !status || !status.llm.ready;
-    showDialog("生成研究内容", `<p class="dialog-description">筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。</p><form class="generation-form"><fieldset class="generation-kind"><legend>内容类型</legend><label><input type="radio" name="kind" value="daily" checked> 日报</label><label><input type="radio" name="kind" value="paper"> 单篇详细总结</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">日报日期 <span>留空生成今天的日报</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">arXiv ID 或链接</label><input id="run-paper" name="paper" type="text" placeholder="例如 2609.12345" autocomplete="off"></div>${status?.emailEnabled ? '<p class="generation-note">邮件已开启：日报成功后，会按现有配置发送邮件。</p>' : ""}${unavailable ? '<p class="generation-note">模型 API 尚未就绪，请先在终端完成配置并重启工作台。</p>' : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">取消</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>开始生成</button></div></form>`);
+    showDialog("生成研究内容", `<p class="dialog-description">筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。</p><form class="generation-form"><fieldset class="generation-kind"><legend>内容类型</legend><label><input type="radio" name="kind" value="daily" checked> 日报</label><label><input type="radio" name="kind" value="paper"> 单篇详细总结</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">日报日期 <span>留空生成今天的日报</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">arXiv ID 或链接</label><input id="run-paper" name="paper" type="text" placeholder="例如 2609.12345" autocomplete="off"></div>${status?.emailEnabled ? '<p class="generation-note">邮件已开启：日报成功后，会按现有配置发送邮件。</p>' : ""}${unavailable ? '<p class="generation-note">模型 API 尚未就绪，请先打开“设置”完成配置。</p>' : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">取消</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>开始生成</button></div></form>`);
     find<HTMLInputElement>("#run-date").value = date;
   }
 
@@ -411,7 +426,18 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   }
   function reconnect(): void {
     find(".connection-banner").hidden = true;
-    void loadStatus(); void pollRun(); void calendar.refresh();
+    void loadStatus().then(ok => { if (ok) void initializeWorkspace(true); });
+  }
+
+  async function initializeWorkspace(refresh = false): Promise<void> {
+    if (disposed) return;
+    if (setupRequired) {
+      reading.innerHTML = '<div class="empty-reading"><h1>开始积累你的研究记录</h1><p>先设置保存目录、模型 API 和关注主题。</p><button class="primary-button" data-action="settings">开始设置</button></div>';
+      await showSettings(); return;
+    }
+    void pollRun();
+    if (refresh) void calendar.refresh();
+    else if (selectedDate) void calendar.selectDate(selectedDate); else void calendar.load();
     if (selectedPath) void openDocument(selectedPath, "none", location.hash);
     else if (selectedKey) void openPaper(selectedKey, false, true);
     else { listScroll = reading.scrollTop; void loadList(true); }
@@ -516,11 +542,8 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   root.addEventListener("submit", submit);
   root.addEventListener("keydown", keydown);
   window.addEventListener("popstate", popstate);
-  readRoute(); syncFilters(); void loadStatus(); void pollRun();
-  if (selectedPath) void openDocument(selectedPath, "none", location.hash);
-  else if (selectedKey) void openPaper(selectedKey, false);
-  else void showList(false, true);
-  if (selectedDate) void calendar.selectDate(selectedDate); else void calendar.load();
+  readRoute(); syncFilters();
+  void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
   return () => {
     disposed = true;
     calendar.dispose(); disposeSidebar();

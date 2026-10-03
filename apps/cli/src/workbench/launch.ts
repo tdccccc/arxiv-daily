@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
+import { resolveCliConfigPath } from "../config-path";
 import type { CliIo } from "../main-types";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
@@ -12,15 +13,15 @@ export interface RunWorkbenchOptions {
   env: Record<string, string | undefined>;
 }
 
-export async function runWorkbench(config: CliRuntimeConfig, io: CliIo, options: RunWorkbenchOptions): Promise<number> {
+export async function runWorkbench(config: CliRuntimeConfig | undefined, io: CliIo, options: RunWorkbenchOptions): Promise<number> {
   const executable = process.argv[1];
   if (!executable) throw new Error("The workbench must be launched from the built CLI");
   const beforeWrite = async () => {
     const current = await loadCliConfig({ env: options.env });
-    if (current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, "配置已改变，请重启工作台后再操作。");
+    if (!config || current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, "配置已改变，请重启工作台后再操作。");
   };
   const app = await startWorkbench({
-    config, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
+    config, configPath: config?.configPath ?? resolveCliConfigPath(options.env), onConfigSaved: next => { config = next; }, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
     run: async (args, output, signal) => {
       await beforeWrite();
       if (signal.aborted) return 1;

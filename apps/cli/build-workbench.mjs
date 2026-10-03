@@ -12,7 +12,7 @@ export async function buildWorkbenchAssets(here) {
   const assets = {
     "index.html": { type: "text/html; charset=utf-8", body: await readFile(resolve(web, "index.html"), "utf8") },
     "app.js": { type: "text/javascript; charset=utf-8", body: build.outputFiles[0].text },
-    "style.css": { type: "text/css; charset=utf-8", body: (await Promise.all(["style.css", "papers.css", "sidebar.css"].map(name => readFile(resolve(web, name), "utf8")))).join("\n") },
+    "style.css": { type: "text/css; charset=utf-8", body: (await Promise.all(["style.css", "papers.css", "sidebar.css", "settings.css"].map(name => readFile(resolve(web, name), "utf8")))).join("\n") },
     "katex.css": { type: "text/css; charset=utf-8", body: await readFile(resolve(katexDir, "katex.min.css"), "utf8") },
   };
   for (const name of await readdir(resolve(katexDir, "fonts"))) {

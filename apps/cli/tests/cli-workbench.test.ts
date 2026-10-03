@@ -69,3 +69,21 @@ it("allows only the fixed DSH desktop application origin among custom schemes", 
   for (const origin of ["dsh-app://evil", "dsh-app://app/path", "file://", "null", "dsh-app:"]) expect(await runCli({ argv: ["ui", "--frame-origin", origin], loadConfig, io, ui })).toBe(2);
   expect(loadConfig).not.toHaveBeenCalled();
 });
+
+it("opens setup when configuration is missing but refuses malformed existing configuration", async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "arxiv-ui-init-"));
+  try {
+    const { io } = fixture(); const ui = vi.fn(async () => 0);
+    const env = { XDG_CONFIG_HOME: root };
+    expect(await runCli({ argv: ["ui", "--no-open"], env, io, ui })).toBe(0);
+    expect(ui).toHaveBeenCalledWith(undefined, expect.anything(), expect.objectContaining({ open: false }));
+    await mkdir(join(root, "arxiv-daily"), { recursive: true });
+    await writeFile(join(root, "arxiv-daily/config.toml"), "broken = [");
+    ui.mockClear();
+    expect(await runCli({ argv: ["ui"], env, io, ui })).toBe(2);
+    expect(ui).not.toHaveBeenCalled();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

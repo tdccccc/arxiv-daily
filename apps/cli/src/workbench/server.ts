@@ -10,11 +10,14 @@ import { WorkbenchDocuments, WorkbenchError } from "./documents";
 import { inspectCalendar } from "./calendar";
 import { validateFrameOrigin } from "./embedding";
 import { WorkbenchPapers } from "./papers";
+import { readWorkbenchSettings, saveWorkbenchSettings } from "./settings";
 import { readPreferences, savePreferences } from "./preferences";
 
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
-  config: CliRuntimeConfig;
+  config?: CliRuntimeConfig;
+  configPath?: string;
+  onConfigSaved?: (config: CliRuntimeConfig) => void;
   port?: number;
   assets?: Record<string, WorkbenchAsset>;
   run?: (args: string[], io: CliIo, signal: AbortSignal) => Promise<number>;
@@ -37,14 +40,19 @@ export interface WorkbenchRun {
 
 /** Ephemeral reading server. Durable state stays owned by the existing product. */
 export async function startWorkbench(options: WorkbenchOptions) {
-  const { config } = options;
+  let config = options.config;
+  const configPath = options.configPath ?? config?.configPath;
+  if (!configPath) throw new Error("Missing configuration path");
   const frameAncestor = options.frameOrigin === undefined ? "'none'" : validateFrameOrigin(options.frameOrigin);
   const now = options.now ?? (() => new Date());
   if (!Number.isInteger(options.port ?? 0) || (options.port ?? 0) < 0 || (options.port ?? 0) > 65535) throw new Error("Port must be 0..65535");
-  const documents = new WorkbenchDocuments(config);
-  const papers = new WorkbenchPapers(config, documents);
+  let documents = config ? new WorkbenchDocuments(config) : undefined;
+  let papers = config && documents ? new WorkbenchPapers(config, documents) : undefined;
   const prefix = `/${randomBytes(24).toString("hex")}/`;
-  const secrets = [config.settings.llm.apiKey, config.settings.embedding.apiKey, config.settings.email.apiKey, config.settings.email.hostedToken].filter((value): value is string => Boolean(value));
+  const secrets: string[] = [];
+  const rememberSecrets = (value: CliRuntimeConfig) => { secrets.push(...[value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken].filter((key): key is string => Boolean(key))); };
+  if (config) rememberSecrets(config);
+  let saving = false;
   const redact = (text: string) => redactText(text, { secrets });
   let origin = "";
   let run: WorkbenchRun | null = null;
@@ -67,13 +75,42 @@ export async function startWorkbench(options: WorkbenchOptions) {
     const method = req.method || "GET";
     const landing = method === "GET" && (route === "" || route === "index.html");
     if (req.headers["sec-fetch-site"] === "cross-site" && !landing) throw new WorkbenchError(403, "此工作台只接受本机页面的请求。");
+    // Static assets and harmless preferences remain available before first-run setup.
+    if (method === "GET") {
+      const asset = Object.hasOwn(options.assets || {}, route || "index.html") ? options.assets?.[route || "index.html"] : undefined;
+      if (asset) {
+        res.writeHead(200, { "Content-Type": asset.type });
+        return res.end(asset.encoding === "base64" ? Buffer.from(asset.body, "base64") : asset.body);
+      }
+    }
+    if (method === "GET" && route === "api/settings") return json(res, 200, await readWorkbenchSettings(configPath!));
+    if (method === "POST" && route === "api/settings") {
+      const body = await readJson(req);
+      if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成后再保存设置。");
+      saving = true;
+      try {
+        const next = await saveWorkbenchSettings(configPath!, body);
+        config = next;
+        documents = new WorkbenchDocuments(next);
+        papers = new WorkbenchPapers(next, documents);
+        rememberSecrets(next);
+        options.onConfigSaved?.(next);
+        return json(res, 200, await readWorkbenchSettings(configPath!));
+      } finally { saving = false; }
+    }
+    if (method === "GET" && route === "api/preferences") return json(res, 200, await readPreferences(configPath!));
+    if (method === "POST" && route === "api/preferences") return json(res, 200, await savePreferences(configPath!, await readJson(req)));
+    if (method === "GET" && route === "api/runs/current") return json(res, 200, { run });
+    if (!config || !documents || !papers) {
+      if (method === "GET" && route === "api/status") return json(res, 200, { setupRequired: true });
+      return json(res, 409, { setupRequired: true, error: "请先完成设置，再使用文献工作台。" });
+    }
+    if (saving && method === "POST") throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
     if (method === "GET" && route === "api/calendar") return json(res, 200, await inspectCalendar(config, documents, url.searchParams.get("month"), now(), run));
     if (method === "GET" && route === "api/papers") return json(res, 200, await papers.list(url.searchParams, now(), run));
     if (method === "GET" && route === "api/paper") return json(res, 200, { paper: await papers.paper(url.searchParams.get("key") || "") });
     if (method === "POST" && route === "api/paper/mark") return json(res, 200, { paper: await papers.mark(await readJson(req), options.beforeWrite) });
-    if (method === "GET" && route === "api/preferences") return json(res, 200, await readPreferences(config.configPath));
-    if (method === "POST" && route === "api/preferences") return json(res, 200, await savePreferences(config.configPath, await readJson(req)));
     if (method === "GET" && route === "api/documents") {
       const kind = url.searchParams.get("kind") || "all";
       const offset = Number(url.searchParams.get("offset") ?? 0);
@@ -174,7 +211,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 8192) throw new WorkbenchError(413, "请求过大。");
+    if (size > 65536) throw new WorkbenchError(413, "请求过大。");
     chunks.push(Buffer.from(chunk));
   }
   try {

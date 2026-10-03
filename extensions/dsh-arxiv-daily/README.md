@@ -18,31 +18,31 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package
 ```
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.3.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.4.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.3.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.4.tgz
 ```
 
 重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“arxiv-daily”侧栏标签。
 
-## 从 0.1.0 / 0.1.1 / 0.1.2 升级
+## 从旧版本升级
 
-0.1.3 将两侧入口和标签的显示名称统一为 `arxiv-daily`。0.1.2 已增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
+0.1.4 增加图形首次使用与可保存设置页，直接在 DSH 内完成配置。0.1.3 将两侧入口和标签的显示名称统一为 `arxiv-daily`。0.1.2 已增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.3.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.4.tgz
 ```
 
 然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
 
 ## 使用
 
-1. 沿用已有 arXiv Daily CLI 配置。首次使用时，在终端运行随包提供的 CLI：`node /absolute/plugin/path/lib/arxiv-daily-cli.cjs init`；从仓库试用也可运行 `node apps/cli/dist/arxiv-daily-cli.cjs init`。配置默认位于系统用户配置目录中的 `arxiv-daily/config.toml`。
-2. 点击左侧栏“设置”上方的“arxiv-daily”，无需先发消息。插件自动启动并显示全局文献面板；点 × 关闭。首次启动失败会显示提示，可完成设置后重试。
-3. 也可以打开右侧栏，在入口页（或“＋”新标签页）选择“arxiv-daily”。进入工作台后直接选择日期、搜索论文、阅读日报/总结、保存待读或收藏。“生成”按钮调用既有 CLI 流程，使用 arXiv Daily 配置的模型与邮件设置。
+1. 点击左侧栏“设置”上方的“arxiv-daily”，无需先发消息；也可在右侧栏入口页选择“arxiv-daily”。
+2. 首次使用会自动打开设置页。填写研究记录保存目录、模型 API 密钥与关注主题，点击“保存并开始使用”。已有 CLI 配置会直接沿用，不必再运行 `init`。
+3. 工作台右上角“设置”提供类似 Obsidian 的分组导航：研究记录、模型 API、每日发现。可以修改目录、模型、arXiv 分类、时区、总结语言及多个主题，点击“保存设置”后立即生效。密钥不回显，留空保留旧密钥；运行中暂不能保存，外部修改冲突会提示重新打开设置。随后点击“生成”运行第一份日报。已有邮件、嵌入模型、定时与文献库配置保留，但这些分组尚未接入设置页。
 4. 可使用 DSH 自带的侧栏放大或浮动功能。较窄时工作台通过“日历与筛选”切换导航。
 
 工作台进程在同一插件实例的会话间共享。关闭阅读标签不会停止生成；禁用插件或退出 DSH 会停止它。插件重载后旧工作台链接会失效，再次点击“arxiv-daily”获取新链接。

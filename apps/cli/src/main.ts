@@ -157,7 +157,14 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       });
     }
 
-    const config = await loadConfig({ env });
+    let config: CliRuntimeConfig;
+    try { config = await loadConfig({ env }); }
+    catch (error) {
+      if (parsed.name === "ui" && error instanceof CliConfigError && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return await (opts.ui ?? runWorkbench)(undefined, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}) });
+      }
+      throw error;
+    }
     secrets = [
       config.settings.llm.apiKey,
       config.settings.email.apiKey,

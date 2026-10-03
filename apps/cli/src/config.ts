@@ -87,7 +87,7 @@ export async function loadCliConfig(
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       throw new CliConfigError(
-        `CLI config not found: ${configPath}\nRun: arxiv-daily init`,
+        `CLI config not found: ${configPath}\nRun: arxiv-daily init`, e,
       );
     }
     throw new CliConfigError(`failed to read CLI config: ${configPath}`, e);

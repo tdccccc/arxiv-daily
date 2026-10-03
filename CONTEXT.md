@@ -51,8 +51,8 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | **Embedding mode** | Whether a paper's title and abstract are embedded locally (offline, the default) or via a named remote embedding endpoint (fast; the text leaves the machine). Chosen when a library is first prepared for indexing; switching modes rebuilds the index. |
 | **Plugin settings store** | Where the plugin product persists product settings and secrets (Obsidian plugin data). Independent of the CLI product. |
 | **CLI config** | The CLI product’s single configuration file (TOML). Holds product settings, deployment paths, and secrets for that machine. |
-| **Init** | First-run interactive setup for the CLI product that writes CLI config. Required before other CLI commands succeed. |
-| **Manual configuration** | Changing product settings by editing the product’s own store (plugin UI / data, or CLI TOML). No automatic cross-product settings sync. |
+| **Init** | Terminal first-run setup for the CLI product that writes CLI config. The reading workbench also supports graphical first-run setup against the same configuration. |
+| **Manual configuration** | Changing product settings by editing the product’s own store (plugin UI / data, or workbench settings / CLI TOML). No automatic cross-product settings sync. |
 
 ## Vault data
 
