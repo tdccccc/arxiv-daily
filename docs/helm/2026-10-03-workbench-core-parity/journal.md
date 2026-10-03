@@ -19,3 +19,11 @@ P1 on track：无配置打开、图形编辑保存、立即运行日报已打通
 On track: replaced the custom settings design with the Obsidian 1.13+ controls and section order. P5 evidence and host adaptations are recorded in its phase. New 0.1.5 archive is ready, not automatically installed in the user's running DSH. Restart is required after upgrade.
 
 Return focus to P2: connection, consent and build controls are now available in Settings through P5. Remaining library product work is the dedicated catalog/search/review experience; P3 direction review and P4 richer run management are still pending. Do not redo the accepted settings layer or claim full application parity.
+
+## 2026-10-03T16:37:51+08:00 — P6 navigation
+
+用户确认基本复刻完成，要求左侧导航点击跳转和更明显的区域区分。P5继续done，新增P6视觉/导航增量，暂缓P2。保留全部原设置字段和顺序。
+
+## 2026-10-03T16:40:24+08:00 — P6 accepted
+
+On track: left jump navigation and stronger settings sections added without changing original controls. Verified 34 UI +12 DSH checks and built 0.1.6. Existing P5 behavior preserved; resume P2 library catalog/search next.
