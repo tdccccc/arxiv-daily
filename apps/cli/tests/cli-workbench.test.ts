@@ -87,3 +87,15 @@ it("opens setup when configuration is missing but refuses malformed existing con
     expect(ui).not.toHaveBeenCalled();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+it("uses the shared scheduled tick with workbench minute/window settings", async () => {
+  const { config, io } = fixture();
+  const tick = vi.fn(async () => {});
+  const buildRuntime = vi.fn(async (_config: CliRuntimeConfig) => ({ pipeline: { runForDate: vi.fn() }, manualFetch: { fetchAndSummarize: vi.fn() }, scheduler: { runForDateNow: vi.fn(), tick } }));
+  Object.assign(config, { workbenchSchedule: { enabled: true, runAtLocal: "09:15", runUntilLocal: "18:45", tickIntervalMin: 20 } });
+  config.settings.llm.apiKey = "test";
+  config.settings.arxiv.topics = [{ id: "test", name: "Test", tag: "test", description: "Test research", detail: false }];
+  expect(await runCli({ argv: ["run", "--scheduled"], io, loadConfig: async () => config, buildRuntime })).toBe(0);
+  expect(tick).toHaveBeenCalledOnce();
+  expect(buildRuntime.mock.calls[0]?.[0].settings.schedule).toMatchObject({ enabled: true, tickIntervalMin: 20, runAtLocal: "09:15" });
+});

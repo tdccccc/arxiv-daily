@@ -3,7 +3,8 @@ import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { formatDate, modernArxivResources, redactText, todayInTz } from "@arxiv-daily/core";
-import type { CliRuntimeConfig } from "../config";
+import { loadCliConfig, type CliRuntimeConfig } from "../config";
+import { inspectWorkbenchLibrary, performSettingsAction } from "./settings-actions";
 import type { CliIo } from "../main-types";
 import { inspectProduct } from "../inspect-cmd";
 import { WorkbenchDocuments, WorkbenchError } from "./documents";
@@ -11,6 +12,7 @@ import { inspectCalendar } from "./calendar";
 import { validateFrameOrigin } from "./embedding";
 import { WorkbenchPapers } from "./papers";
 import { readWorkbenchSettings, saveWorkbenchSettings } from "./settings";
+import { WorkbenchSchedule } from "./schedule";
 import { readPreferences, savePreferences } from "./preferences";
 
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
@@ -63,6 +65,35 @@ export async function startWorkbench(options: WorkbenchOptions) {
     res.end(redact(JSON.stringify(value)));
   };
 
+  const autoSchedule = new WorkbenchSchedule(() => saving || run?.status === "running" || !options.run, () => {
+    beginRun("Automatic daily report check", null, (io, signal) => options.run!(["run", "--scheduled"], io, signal));
+  });
+  function activate(next: CliRuntimeConfig) {
+    config = next;
+    documents = new WorkbenchDocuments(next);
+    papers = new WorkbenchPapers(next, documents);
+    rememberSecrets(next);
+    options.onConfigSaved?.(next);
+    autoSchedule.update(next.workbenchSchedule);
+  }
+  function beginRun(label: string, date: string | null, execute: (io: CliIo, signal: AbortSignal) => Promise<number>) {
+    if (saving || run?.status === "running") throw new WorkbenchError(409, "已有操作正在运行，请等待完成。");
+    controller = new AbortController();
+    const signal = controller.signal;
+    const current: WorkbenchRun = { id: randomBytes(12).toString("hex"), label: label, date: date, status: "running", output: "", exitCode: null, startedAt: now().toISOString(), finishedAt: null };
+    run = current;
+    const write = (chunk: string) => { current.output = (current.output + redact(String(chunk))).slice(-24000); };
+    running = Promise.resolve().then(() => execute({ stdout: { write }, stderr: { write } }, signal)).then(code => {
+      current.exitCode = code;
+      current.status = signal.aborted ? "cancelled" : code === 0 ? "completed" : "failed";
+    }).catch(error => {
+      write(`\n${error instanceof Error ? error.message : "任务执行失败"}\n`);
+      current.exitCode = 1;
+      current.status = signal.aborted ? "cancelled" : "failed";
+    }).finally(() => { current.finishedAt = now().toISOString(); });
+    return current;
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse) {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -90,11 +121,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
       saving = true;
       try {
         const next = await saveWorkbenchSettings(configPath!, body);
-        config = next;
-        documents = new WorkbenchDocuments(next);
-        papers = new WorkbenchPapers(next, documents);
-        rememberSecrets(next);
-        options.onConfigSaved?.(next);
+        activate(next);
         return json(res, 200, await readWorkbenchSettings(configPath!));
       } finally { saving = false; }
     }
@@ -106,6 +133,50 @@ export async function startWorkbench(options: WorkbenchOptions) {
       return json(res, 409, { setupRequired: true, error: "请先完成设置，再使用文献工作台。" });
     }
     if (saving && method === "POST") throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
+    if (method === "GET" && route === "api/settings/library") return json(res, 200, { ...inspectWorkbenchLibrary(config), ...(run?.label === "Build index" ? { run } : {}) });
+    if (method === "POST" && route === "api/settings/action") {
+      const { revision, ...body } = await readJson(req);
+      if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
+      if (!["models", "library-connect", "library-revoke", "library-build", "email-test", "email-verify"].includes(String(body.action))) throw new WorkbenchError(400, "未知设置操作。");
+      saving = true;
+      let current: CliRuntimeConfig;
+      try {
+        current = await loadCliConfig({ configPath: configPath! });
+        if (revision !== current.configRevision || config.configRevision !== current.configRevision) throw new WorkbenchError(409, "配置已改变，请重新打开设置并保存。");
+        if (body.action === "library-build") {
+          const library = inspectWorkbenchLibrary(current);
+          if (library.status.kind !== "authorized" && (!library.disclosure || body.fingerprint !== library.disclosure.authorizationFingerprint)) throw new WorkbenchError(409, "请先审核并确认文献库的当前处理授权。");
+        }
+        if (["library-build", "email-test", "email-verify"].includes(String(body.action))) {
+          saving = false;
+          const labels: Record<string, string> = { "library-build": "Build index", "email-test": "Send test", "email-verify": "Send verification" };
+          const started = beginRun(labels[String(body.action)]!, null, async (io, signal) => {
+            let completed = false;
+            try {
+              const result = await performSettingsAction(current, body, io, signal);
+              if (result.message) io.stdout.write(result.message + "\n");
+              completed = true;
+              return 0;
+            } finally {
+              // Authorization may have committed even when processing fails.
+              try { activate(await loadCliConfig({ configPath: configPath! })); }
+              catch {
+                io.stderr.write("配置重新读取失败，请重新打开工作台。\n");
+                if (completed) throw new WorkbenchError(409, "配置重新读取失败，请重新打开工作台。");
+              }
+            }
+          });
+          return json(res, 202, { run: started });
+        }
+        controller = new AbortController();
+        const result = await performSettingsAction(current, body, { stdout: { write: () => {} }, stderr: { write: () => {} } }, controller.signal);
+        if (result.config) activate(result.config);
+        return json(res, 200, { ...(result.models ? { models: result.models } : {}), ...(result.library ? { library: result.library } : {}), settings: await readWorkbenchSettings(configPath!), ...(result.message ? { message: result.message } : {}) });
+      } catch (error) {
+        if (error instanceof WorkbenchError) throw error;
+        throw new WorkbenchError(400, redact(error instanceof Error ? error.message : "设置操作失败。"));
+      } finally { saving = false; }
+    }
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
     if (method === "GET" && route === "api/calendar") return json(res, 200, await inspectCalendar(config, documents, url.searchParams.get("month"), now(), run));
     if (method === "GET" && route === "api/papers") return json(res, 200, await papers.list(url.searchParams, now(), run));
@@ -153,19 +224,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
       const task = parseTask(body, formatDate(todayInTz(now(), config.settings.arxiv.timezone)));
       if (run?.status === "running") throw new WorkbenchError(409, "已有任务正在运行，请等待完成或先取消。");
       if (!options.run) throw new WorkbenchError(503, "当前工作台未提供生成操作。");
-      controller = new AbortController();
-      const signal = controller.signal;
-      const current: WorkbenchRun = { id: randomBytes(12).toString("hex"), label: task.label, date: task.date, status: "running", output: "", exitCode: null, startedAt: now().toISOString(), finishedAt: null };
-      run = current;
-      const write = (chunk: string) => { current.output = (current.output + redact(String(chunk))).slice(-24000); };
-      running = Promise.resolve().then(() => options.run!(task.args, { stdout: { write }, stderr: { write } }, signal)).then(code => {
-        current.exitCode = code;
-        current.status = signal.aborted ? "cancelled" : code === 0 ? "completed" : "failed";
-      }).catch(error => {
-        write(`\n${error instanceof Error ? error.message : "任务执行失败"}\n`);
-        current.exitCode = 1;
-        current.status = signal.aborted ? "cancelled" : "failed";
-      }).finally(() => { current.finishedAt = now().toISOString(); });
+      const current = beginRun(task.label, task.date, (io, signal) => options.run!(task.args, io, signal));
       return json(res, 202, { run: current });
     }
     if (method === "POST" && route === "api/runs/cancel") {
@@ -195,9 +254,11 @@ export async function startWorkbench(options: WorkbenchOptions) {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing address");
   origin = `http://127.0.0.1:${address.port}`;
+  autoSchedule.update(config?.workbenchSchedule);
   return {
     url: `${origin}${prefix}`,
     close: async () => {
+      autoSchedule.close();
       controller?.abort();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       await running;

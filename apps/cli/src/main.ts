@@ -37,6 +37,7 @@ export interface CliCommandRuntime {
   };
   scheduler?: {
     runForDateNow(date: string): Promise<CliRunResult>;
+    tick?: () => Promise<void>;
   };
   manualFetch: {
     fetchAndSummarize(id: string, date: string, signal?: AbortSignal): Promise<ManualFetchResult>;
@@ -80,7 +81,7 @@ type CliCommand =
   | { name: "papers"; query: string; offset: number; limit: number }
   | { name: "library"; args: string[] }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
-  | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
+  | { name: "run"; mode: "today" | "date" | "id" | "scheduled"; date?: string; id?: string }
   | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
   | { name: "schedule"; sub: "show" | "install" | "uninstall" }
   | { name: "data"; sub: "export"; out?: string }
@@ -228,6 +229,10 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       return 2;
     }
 
+    if (parsed.name === "run" && parsed.mode === "scheduled") {
+      config = { ...config, settings: { ...config.settings, schedule: config.workbenchSchedule ?? config.settings.schedule } };
+      if (!config.settings.schedule.enabled) return 0;
+    }
     const runtime = await buildRuntime(config);
     const removeSignalHandlers = installSignalHandlers(runtime.operations, io);
     try {
@@ -243,6 +248,11 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       }
 
       if (parsed.name === "run") {
+        if (parsed.mode === "scheduled") {
+          if (!runtime.scheduler?.tick) throw new Error("Scheduled runs require the shared scheduler");
+          await runtime.scheduler.tick();
+          return 0;
+        }
         if (parsed.mode === "id") {
           if (!parsed.id) throw new Error("run --id requires an arXiv id");
           const date =
@@ -375,6 +385,10 @@ function parseCli(argv: string[]): CliCommand {
   }
 
   if (commandName === "run") {
+    if (commandArgs.includes("--scheduled")) {
+      if (commandArgs.length !== 1) throw new Error("run --scheduled takes no other options");
+      return { name: "run", mode: "scheduled" };
+    }
     const today = commandArgs.includes("--today");
     const date = optionValue(commandArgs, "--date");
     const id = optionValue(commandArgs, "--id");
