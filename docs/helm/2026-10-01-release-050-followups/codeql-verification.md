@@ -50,3 +50,7 @@
 - `arxiv-fetcher.test.ts`的`req.url.includes("export.arxiv.org")`判定为误报：这是测试内mock HTTP client的分支判断，URL完全由被测生产代码构造（固定的arxiv.org端点），不是攻击者可控输入，不存在净化边界。
 
 验证：`npx vitest run`（packages/core）2360通过/2既有跳过；plugin工作区987通过；`npm run typecheck`全部4个workspace通过。17条告警的逐条表格、具体修复提交摘要和3条误报的完整理由见本分支最终报告（父会话转交）；誊写为`/tmp/arxiv-050-codeql-dismissals.json`（{number, rule, path, reason, comment}数组）供用户审阅后决定是否在GitHub上关闭——本地未对这17条或历史其它open alerts执行任何dismiss操作。
+
+### PR53上CodeQL复查（2026-10-04）
+
+PR53的CodeQL结果检查失败：上述正则修法仍被判为4条告警——`history-sync.ts`注释剥离仍可能残留`<!--`（如`<!<!---->--`），`arxiv-parser.ts`对未闭合`<script`/`<style`仍不完整，且闭合标签可带属性样内容（`</script\t\n bar>`）。改为`64939bf`：listing先解析，再从DOM树删除script/style/link元素，交由解析器自身规则判定，不再正则剥离；标题注释改为线性扫描、每次切除后回退3字符重扫、未闭合注释截到末尾，结果不含`<!--`。新增parser测试（奇异闭合标签、title/authors内嵌script/style/link、未闭合script）与history-sync测试（嵌套/未闭合注释）。原拟dismiss的#19/#20因此改为代码修复，只剩#16（测试mock）待合并后附理由关闭。
