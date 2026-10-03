@@ -26,7 +26,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
  const emailHosted = v.email.mode === 'hosted';
  return `<form class="settings-form"><div class="settings-host-context"><p>${snapshot.setupRequired ? '首次使用：选择保存目录，再配置下方 LLM 和研究主题。' : '设置保存后立即生效。'}</p><label>保存根目录（本机绝对路径）${input('vaultRoot',v.vaultRoot)}</label><p>模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。</p><code>${escape(snapshot.configPath)}</code></div><div class="settings-setup-host">${settingsSetupGuide(snapshot,firstReportComplete)}</div>
  ${row(v.schedule.enabled?'Enable · Running':'Enable · Paused',toggle('schedule.enabled',v.schedule.enabled),'When on, daily reports run automatically on weekdays (weekends are skipped).')}
- ${group('LLM',row('API base URL',input('baseUrl',v.baseUrl,'url','placeholder="Provider URL"'))+row('API key',secret('apiKey',v.apiKeyConfigured))+row('Model',input('model',v.model,'text','list="settings-model-options" placeholder="Model name"')+'<datalist id="settings-model-options"></datalist>'+button('models','Get models'))+row('Reasoning effort',select('reasoningEffort',v.reasoningEffort,{none:'None',low:'Low',medium:'Medium',high:'High'})))}
+ ${group('LLM',row('API base URL',input('baseUrl',v.baseUrl,'url','placeholder="Provider URL"'))+row('API key',secret('apiKey',v.apiKeyConfigured))+row('Model',input('model',v.model,'text','list="settings-model-options" placeholder="Model name"')+'<datalist id="settings-model-options"></datalist>'+button('models','Get models')+'<select data-model-picker aria-label="Available models" hidden></select><span class="settings-model-status" role="status"></span>')+row('Reasoning effort',select('reasoningEffort',v.reasoningEffort,{none:'None',low:'Low',medium:'Medium',high:'High'})))}
  ${group('arXiv categories',`<div class="settings-categories">${v.categories.map(categoryRow).join('')}</div>${button('add-category','Add category')}`)}
  ${group('Research topics',`<div class="settings-topic-list">${v.topics.map(t=>topicRow(t)).join('')}</div>${button('add-topic','Add topic')}`)}
  ${row('Automatic detail notes',select('detailProfile',v.detailProfile,{conservative:'Fewer',balanced:'Recommended',broad:'More',...(v.detailProfile==='custom'?{custom:'Custom (current values)'}:{})},'detailSelection.profile'))}
@@ -78,15 +78,16 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  async function saveDraft() {
   const secrets=Array.from(form.querySelectorAll<HTMLInputElement>('.settings-secret input')).map(el=>({el,value:el.value}));
   const result=await request<SettingsSnapshot>('api/settings',{revision,values:values()}); revision=result.revision;currentSnapshot=result;find('.settings-setup-host').innerHTML=settingsSetupGuide(result,firstReportComplete);
-  for(const {el,value} of secrets)if(el.value===value){el.value='';el.type='password';el.closest('.settings-secret')!.querySelector('button')!.textContent='Show';el.closest('.settings-secret')!.querySelector('small')!.textContent='Saved. Leave blank to keep unchanged.';}
+  for(const {el,value} of secrets)if(el.value===value){el.value='';delete el.dataset.revealed;el.type='password';el.closest('.settings-secret')!.querySelector('button')!.textContent='Show';el.closest('.settings-secret')!.querySelector('small')!.textContent='Saved. Leave blank to keep unchanged.';}
   return result;
  }
  async function task(operation:()=>Promise<void>, actionButton?: HTMLButtonElement) {
   if(busy)return;busy=true;find('[role="alert"]').hidden=true;
   const submit=find<HTMLButtonElement>('[type="submit"]');submit.disabled=true;
   const originalLabel=actionButton?.textContent ?? '';
+  if(actionButton?.dataset.settings==='models')find('.settings-model-status').textContent='Fetching models…';
   if(actionButton){actionButton.disabled=true;if(actionButton.dataset.settings==='models')actionButton.textContent='Fetching…';else if(actionButton.dataset.settings?.startsWith('email-'))actionButton.textContent='Sending…';}
-  try{await operation();}catch(error){if(form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:'操作失败，请重试。';}}
+  try{await operation();}catch(error){if(form.isConnected){if(actionButton?.dataset.settings==='models')find('.settings-model-status').textContent=error instanceof Error?error.message:'Could not load models.';find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:'操作失败，请重试。';}}
   finally{busy=false;submit.disabled=library?.run?.status==='running'||libraryRevisionPending;if(actionButton){actionButton.disabled=false;actionButton.textContent=originalLabel;}}
  }
  async function action(name:string,extra:Record<string,unknown>={}) {
@@ -94,7 +95,14 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(!form.isConnected)return;
   if(result.settings)revision=result.settings.revision;
   if(result.library){library=result.library;renderLibrary();}
-  if(result.models){find('datalist').innerHTML=result.models.map(model=>`<option value="${escape(model)}"></option>`).join('');find('.settings-action-status').textContent=result.models.length?`Loaded ${result.models.length} models. Your current model is kept.`:'No models returned; type a model name to continue.';}
+  if(result.models){
+   find('datalist').innerHTML=result.models.map(model=>`<option value="${escape(model)}"></option>`).join('');
+   const picker=find<HTMLSelectElement>('[data-model-picker]');
+   picker.innerHTML='<option value="">Choose a model…</option>'+result.models.map(model=>`<option value="${escape(model)}">${escape(model)}</option>`).join('');
+   picker.hidden=result.models.length===0;picker.value=result.models.includes(get('model'))?get('model'):'';
+   find('.settings-model-status').textContent=result.models.length?`Loaded ${result.models.length} models. Choose from the list or type a model name.`:'No models returned; type a model name to continue.';
+   if(!picker.hidden)picker.focus();
+  }
   if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
  }
  function lockLibraryInputs(locked: boolean) {
@@ -111,6 +119,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  });
  form.addEventListener('change',event=>{
   const target=event.target;
+  if(target instanceof HTMLSelectElement && target.hasAttribute('data-model-picker') && target.value)find<HTMLInputElement>('[name="model"]').value=target.value;
   if(target instanceof HTMLSelectElement && target.name==='timezone')find<HTMLInputElement>('[name="timezoneCustom"]').value='';
   if(target instanceof HTMLInputElement && target.name==='timezoneCustom' && target.value.trim()){
    const dropdown=find<HTMLSelectElement>('[name="timezone"]');const value=target.value.trim();
@@ -128,7 +137,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   topic.querySelector('.settings-topic-tag')!.textContent=tag?'#'+tag:'';
   topic.querySelector('.settings-topic-star')!.textContent=topic.querySelector<HTMLInputElement>('[name="topicDetail"]')!.checked?'★':'';
  }
- form.addEventListener('input',updateTopic);
+ form.addEventListener('input',event=>{if(event.target instanceof HTMLInputElement)delete event.target.dataset.revealed;updateTopic(event);});
  form.addEventListener('click',event=>{
   const setup=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-setup-action]'):null;
   if(setup){
@@ -147,7 +156,18 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;
   const name=target.dataset.settings!;
   if(name==='close'){form.closest('dialog')?.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')?.click();return;}
-  if(name==='show-secret'){const field=target.previousElementSibling as HTMLInputElement;field.type=field.type==='password'?'text':'password';target.textContent=field.type==='password'?'Show':'Hide';return;}
+  if(name==='show-secret'){
+   const field=target.previousElementSibling as HTMLInputElement;
+   if(field.type==='text'){field.type='password';if(field.dataset.revealed==='true'){field.value='';delete field.dataset.revealed;}target.textContent='Show';return;}
+   if(field.value){field.type='text';target.textContent='Hide';return;}
+   if(revision===null){field.closest('.settings-secret')!.querySelector('small')!.textContent='尚未保存密钥，请先输入。';return;}
+   target.disabled=true;target.textContent='Loading…';const initial=field.value;
+   void request<{value:string}>('api/settings/secret',{revision,field:field.name}).then(result=>{
+    if(!form.isConnected||field.value!==initial)return;
+    if(!result.value){field.closest('.settings-secret')!.querySelector('small')!.textContent='尚未保存密钥。';return;}
+    field.value=result.value;field.type='text';field.dataset.revealed='true';
+   }).catch(error=>{if(form.isConnected)field.closest('.settings-secret')!.querySelector('small')!.textContent=error instanceof Error?error.message:'无法显示密钥。';}).finally(()=>{target.disabled=false;target.textContent=field.type==='text'?'Hide':'Show';});return;
+  }
   if(busy)return;
   if(name==='add-topic'){find('.settings-topic-list').insertAdjacentHTML('beforeend',topicRow({id:crypto.randomUUID(),name:'',tag:'',description:'',detail:true},true));return;}
   if(name==='remove-topic'){target.closest('.settings-topic')!.remove();return;}

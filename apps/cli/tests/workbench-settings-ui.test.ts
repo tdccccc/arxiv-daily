@@ -242,3 +242,22 @@ it("restores an active library run when settings opens and prevents duplicate ca
  expect(root.querySelector<HTMLButtonElement>('[data-settings="library-cancel"]')!.disabled).toBe(true);
  finishCancel(json({run:{...run,status:'cancelled'}}));
 });
+
+it('reveals a saved key on demand and offers an explicit model selector after fetching', async()=>{
+ const {root,fetcher}=setup(false,false,undefined,(path)=>path==='api/settings/secret'?json({value:'stored-secret'}):path==='api/settings/action'?json({models:['model-a','model-b']}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ const key=root.querySelector<HTMLInputElement>('[name="apiKey"]')!;const show=key.nextElementSibling as HTMLButtonElement;
+ expect(fetcher.mock.calls.some(([u])=>String(u)==='api/settings/secret')).toBe(false);
+ show.click();await vi.waitFor(()=>expect(key.value).toBe('stored-secret'));expect(key.type).toBe('text');
+ show.click();expect(key.type).toBe('password');expect(key.value).toBe('');
+ key.value='new-draft';show.click();expect(key.value).toBe('new-draft');expect(key.type).toBe('text');
+ expect(fetcher.mock.calls.filter(([u])=>String(u)==='api/settings/secret')).toHaveLength(1);
+ root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector<HTMLSelectElement>('[data-model-picker]')?.hidden).toBe(false));
+ const picker=root.querySelector<HTMLSelectElement>('[data-model-picker]')!;
+ expect(Array.from(picker.options).map(o=>o.value)).toEqual(['','model-a','model-b']);
+ picker.value='model-b';picker.dispatchEvent(new Event('change',{bubbles:true}));
+ expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('model-b');
+ show.click();await vi.waitFor(()=>expect(key.value).toBe('stored-secret'));
+});

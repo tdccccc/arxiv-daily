@@ -16,6 +16,15 @@ it("binds settings actions to revisions and updates the active config after libr
   const app = await startWorkbench({ config, onConfigSaved: updated }); cleanup.push(app.close);
   const request = (route: string, body?: unknown) => fetch(new URL(route, app.url), body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   expect((await request("api/settings/library")).status).toBe(200);
+  const reveal = await request("api/settings/secret", { revision: config.configRevision, field: "apiKey" });
+  expect(reveal.status).toBe(200); expect(await reveal.json()).toEqual({ value: "test-secret" });
+  expect(reveal.headers.get('cache-control')).toBe('no-store');
+  expect((await request("api/settings/secret", { revision: 'stale', field: "apiKey" })).status).toBe(409);
+  expect((await request("api/settings/secret", { revision: config.configRevision, field: "vaultRoot" })).status).toBe(400);
+  expect(await (await request('api/settings')).text()).not.toContain('test-secret');
+  expect((await request('api/settings/secret')).status).toBe(404);
+  expect((await fetch(new URL('api/settings/secret',app.url),{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://other.invalid'},body:JSON.stringify({revision:config.configRevision,field:'apiKey'})})).status).toBe(403);
+
   expect((await request("api/settings/action", { revision: "stale", action: "library-connect", path: folder })).status).toBe(409);
   const connected = await request("api/settings/action", { revision: config.configRevision, action: "library-connect", path: folder });
   expect(connected.status).toBe(200);

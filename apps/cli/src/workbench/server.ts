@@ -134,6 +134,16 @@ export async function startWorkbench(options: WorkbenchOptions) {
     }
     if (saving && method === "POST") throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
     if (method === "GET" && route === "api/settings/library") return json(res, 200, { ...inspectWorkbenchLibrary(config), ...(run?.label === "Build index" ? { run } : {}) });
+    if (method === "POST" && route === "api/settings/secret") {
+      const body = await readJson(req);
+      if (typeof body.field !== "string" || Object.keys(body).some(key => !["revision", "field"].includes(key)) || !["apiKey", "embedding.apiKey", "email.apiKey", "email.hostedToken"].includes(String(body.field))) throw new WorkbenchError(400, "请选择有效的密钥字段。");
+      const current = await loadCliConfig({ configPath: configPath! });
+      if (body.revision !== current.configRevision) throw new WorkbenchError(409, "配置已改变，请重新打开设置后查看。");
+      const values: Record<string, string | undefined> = { apiKey: current.settings.llm.apiKey, "embedding.apiKey": current.settings.embedding.apiKey, "email.apiKey": current.settings.email.apiKey, "email.hostedToken": current.settings.email.hostedToken };
+      // Deliberate, user-initiated reveal only. Normal JSON projections stay redacted.
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({ value: values[String(body.field)] ?? "" }));
+    }
     if (method === "POST" && route === "api/settings/action") {
       const { revision, ...body } = await readJson(req);
       if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");

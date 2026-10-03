@@ -89,6 +89,11 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal(afterSettings.values.apiKeyConfigured, true);
   assert.notEqual(afterSettings.revision, beforeSettings.revision);
   assert.doesNotMatch(updatedText + afterSettingsText, /fixture-(?:settings|embedding|email|hosted)-secret-never-log/);
+  const revealResponse = await fetch(new URL('api/settings/secret',url), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:afterSettings.revision,field:'apiKey'})});
+  assert.equal(revealResponse.status,200);
+  assert.deepEqual(await revealResponse.json(),{value:'fixture-settings-secret-never-log'});
+  assert.equal(revealResponse.headers.get('cache-control'),'no-store');
+
   const librarySettings = await (await get('api/settings/library')).json();
   assert.equal(librarySettings.status.kind, 'disconnected');
   assert.match((await (await get('api/document?path=arxiv-daily/papers/manual.md')).json()).html, /katex/);

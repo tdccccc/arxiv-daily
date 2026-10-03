@@ -62,3 +62,5 @@
  .settings-section { padding:0 14px 12px; }
  .settings-section > h3 { margin:0 -14px 4px; padding:14px; }
 }
+.settings-model-status { flex-basis:100%; color:var(--muted); font-size:12px; line-height:1.5; }
+.settings-form [data-model-picker] { width:100%; }
