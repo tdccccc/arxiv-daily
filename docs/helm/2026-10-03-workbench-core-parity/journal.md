@@ -91,3 +91,7 @@ Get models静默保存不再重绘或重新插入引导，两条用户场景回�
 ## 2026-10-04T19:18:06+08:00 — P14 accepted
 
 业务设置共享定义、编辑规则和模型/邮件操作已收拢。跨宿主真实适配器合同通过；兼容旧custom reasoning及sender name空白。CLI299/Obsidian771/core34/DSH20检查通过，DSH0.1.12已安装且hash匹配，Obsidian仅构建不部署。配置值不静默同步，宿主事务与授权保留，后续文献库主页面等原路线仍pending，等待用户检查。
+
+## 2026-10-04T21:58:40+08:00 — P15 queued before context compression
+
+用户同意共享层优先优化：先做core结构化运行状态，前端仅适配展示。已保存P15目标/测试边界和resume.md，尚未修改执行逻辑。压缩后直接按P15继续，不重新询问范围。
