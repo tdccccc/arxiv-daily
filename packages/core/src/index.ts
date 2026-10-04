@@ -154,3 +154,6 @@ export * from "./settings/appearance";
 export { settingsMessages } from "./presentation/settings-translations";
 export { readingMessages } from "./presentation/reading-translations";
 export { workbenchMessages } from "./presentation/workbench-translations";
+export * from "./settings/editing";
+export * from "./services/settings-operations";
+export * from "./settings/schema";

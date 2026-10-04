@@ -48,6 +48,8 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | Term | Meaning |
 |---|---|
 | **Interface appearance** | Theme and interface display language, independent of generated summary language and research content. Hosts share the preference definition and UI messages; each host owns persistence and rendering. |
+| **Shared settings schema** | The common description of business setting fields, groups, ordering, controls, options and conditional visibility used by host settings interfaces. |
+| **Settings draft** | An editable configuration that may be incomplete; saving its structurally valid fields does not imply that a model, schedule or delivery operation is ready to run. |
 | **Product settings** | User choices that shape discovery and output: categories, topics, summary language, detail policy, email preferences, paths under the vault, LLM endpoint fields, embedding mode fields. |
 | **Embedding mode** | Whether a paper's title and abstract are embedded locally (offline, the default) or via a named remote embedding endpoint (fast; the text leaves the machine). Chosen when a library is first prepared for indexing; switching modes rebuilds the index. |
 | **Plugin settings store** | Where the plugin product persists product settings and secrets (Obsidian plugin data). Independent of the CLI product. |
