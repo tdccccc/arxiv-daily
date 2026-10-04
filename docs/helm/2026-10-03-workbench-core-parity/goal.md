@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-04T21:58:40+08:00
-revision: 22
+updated: 2026-10-04T23:04:36+08:00
+revision: 23
 
 ## Intent
 
@@ -56,4 +56,4 @@ revision: 22
 
 14. P14 — 统一业务设置定义、编辑规则与操作服务 — status: done
 
-15. P15 — Core结构化运行状态与各端展示 — status: active
+15. P15 — Core结构化运行状态与各端展示 — status: done

@@ -2,7 +2,7 @@
 
 ## User-approved next work
 
-Start P15 in phases/15-structured-run-status.md: strengthen structured run outcomes in core first, then adapt Obsidian, CLI and DSH. Afterward prioritize paper-list decision support, personal-library UX and direction review. Do not restart completed settings work.
+P15 implementation and verification are complete; see phases/15-structured-run-status.md. DSH0.1.13 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
 
 ## Workspace
 
@@ -18,27 +18,21 @@ Literature workflows are primary; agent conversation auxiliary. DSH is the first
 
 Settings follow Obsidian business semantics with user-approved extra Appearance group, left jump navigation, theme light/dark/system and UI language zh/en. UI language is independent of summary language. Pure arxiv-daily wordmark; all icon proposals rejected and archived, do not revive.
 
-## Latest completed work
+## Previous settings release and installed version
 
 DSH0.1.12 installed into Web profile and bundle hash verified. User must restart dsh web/refresh to load new running code. Do not recommend --profile desktop. Electron uses its native plugin manager. Obsidian source adapted and built, NOT deployed to user's actual plugin.
 
 Shared business settings now live in core settings/schema.ts (metadata/options/conditions/topic fields/time choices), settings/editing.ts (candidate normalization), services/settings-operations.ts (test/verification email). Model list already shares LlmClient. Obsidian definitions/change-service and CLI workbench/init consume these. Hosts retain storage, secret placeholder semantics, revision locks, authorization, and runtime transactions. No automatic value synchronization. Obsidian legacy complex topic editors retain their pre-existing live-draft rollback limit.
 
-Last verified: CLI299 tests, Obsidian771, focusedcore34, DSH20; all typechecks, boundaries, inventory and builds pass. Implementation commits fef7915,16c4007,234d7e9; acceptance3099329. Goal/P15 docs are the only new changes during compaction preparation.
+Last verified: CLI299 tests, Obsidian771, focusedcore34, DSH20; all typechecks, boundaries, inventory and builds pass. Implementation commits fef7915,16c4007,234d7e9; acceptance3099329. P15 results and its new package are recorded below.
 
-## P15 investigation anchors
+## P15 result
 
-- packages/core/src/sources/types.ts: SourceListForDateResult currently only ok/error.
-- packages/core/src/sources/arxiv-source-adapter.ts: missingRecentDateReason produces newer-than-newest diagnostic; missing buckets become failed_transient, older-than-oldest permanent; partial discovery rejected.
-- packages/core/src/pipeline/pipeline.ts: PipelineResult + fetchPapersForDate bridge source outcomes.
-- packages/core/src/services/scheduling/scheduler-driver.ts: automatic tick checks weekends; runForDateNowAt is manual and does not use that guard.
-- packages/core/src/services/state-store.ts and run-history.ts: inspect existing status/history persistence before extending.
-- apps/cli/src/main.ts: writeRunResult and manual vs scheduled entry.
-- apps/cli/src/workbench/announcement-calendar.ts: interim weekend guard and exact legacy error-string matcher. Replace new-result guessing with core outcomes; keep safe old-record compatibility if needed.
-- apps/cli/src/workbench/calendar.ts/server.ts/web/app.ts: day state, ephemeral job state and UI labels.
-- plugin dashboard/status adapters: discover actual call chain rather than guessing.
+Core source reports pending/awaiting_announcement for newer buckets; explicit empty announcements are no_updates. Pipeline reuses arXiv weekend policy for manual generation, preserving existing report repair. Completed zero filtering is no_matches. State/history persist optional outcome and failureAttempts; waiting does not exhaust the real-failure budget. Old records retain fallback compatibility.
 
-User example: 2026-10-03 all categories newer than newest astro-ph.CO/GA recent bucket2026-10-02. Expected no update/waiting, not generation failed. Interim DSH guard uses core isWeekendDate and a narrow read-only legacy matcher; it is not the final architecture.
+Workbench child CLI results use typed IPC (main-types.ts, main.ts, workbench/launch.ts, server.ts). Do not replace this with exit-code or log-string inference. Obsidian calendar/cache handling and shared notices consume outcomes. No-update days do not finish first-report onboarding. Durable errors and saved reports take precedence over old owned-run state.
+
+Validation evidence: core279 focused, CLI312 full plus subsequent75/27 focused regressions, Obsidian774 full, DSH20 including isolated actual Host; typechecks/boundaries/inventory/builds passed. No Electron visual walkthrough. Implementation commits c00cff9,1c1f33b. Package: extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.13.tgz (linux/x64); user Web profile remains0.1.12 until installed.
 
 ## Runtime pitfall
 

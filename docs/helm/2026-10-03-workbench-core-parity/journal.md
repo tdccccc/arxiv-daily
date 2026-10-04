@@ -95,3 +95,13 @@ Get models静默保存不再重绘或重新插入引导，两条用户场景回�
 ## 2026-10-04T21:58:40+08:00 — P15 queued before context compression
 
 用户同意共享层优先优化：先做core结构化运行状态，前端仅适配展示。已保存P15目标/测试边界和resume.md，尚未修改执行逻辑。压缩后直接按P15继续，不重新询问范围。
+
+## 2026-10-04T23:04:36+08:00 — P15 accepted
+
+On track: structured source/pipeline outcomes and additive state/history fields now distinguish awaiting announcements, confirmed no updates and no matches. Actual failures have a separate retry budget; legacy state and pending finalization remain compatible. Core manual weekend policy replaces the workbench-only bypass.
+
+Host integration required an L1 transport adjustment: actual DSH tests exposed that in-process callbacks never crossed the child CLI boundary. Typed IPC now carries results; configured and first-run packed Host paths pass for successful generation, waiting and no updates, including persisted calendar states. Obsidian adapters and bilingual workbench views consume outcomes. First-report onboarding excludes no-update days, and durable errors outrank stale job outcomes.
+
+Observed Red/Green and regressions are recorded in phase15: core279 focused, CLI312 full plus subsequent75/27 focused, Obsidian774 full, DSH20 including actual Host; final artifact Host rerun2/2; typechecks/boundaries/inventory/builds pass. Commits c00cff9,1c1f33b,3922e08. DSH0.1.13 linux/x64 package is ready at extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.13.tgz. No production profile/vault was modified; installed Web version remains0.1.12 and Obsidian was only built. No Computer Use, real paid models or email.
+
+P15 is complete within the requested scope. P2/P3/P4 stay pending for subsequent work.
