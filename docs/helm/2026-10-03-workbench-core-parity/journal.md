@@ -75,3 +75,11 @@ On track: saved-key Show/Hide and explicit model selector work in regression tes
 ## 2026-10-04T02:22:20+08:00 — P12 accepted
 
 Get models静默保存不再重绘或重新插入引导，两条用户场景回归通过。0.1.10已安装且hash匹配，保持现有会话等待用户重启，其他功能暂不推进。
+
+## 2026-10-04T17:39:35+08:00 — P13 appearance and language
+
+用户要求排查中英文混用，并新增外观分组容纳主题与界面语言。界面语言与总结语言独立；保留之前Obsidian字段结构，新增用户明确授权的外观组。
+
+## 2026-10-04T18:11:35+08:00 — P13 accepted
+
+用户追加尽量统一core：已把appearance类型/默认/校验和词典放core，前端消费共享定义、宿主存储用锁合并独立偏好。0.1.11已安装，292 CLI/20 DSH检查通过。主题与界面语言集中在设置外观，保存后应用，与summary_language独立。Obsidian原生渲染/存储未强制合并；其后续国际化仍需独立接入。等待用户效果反馈。
