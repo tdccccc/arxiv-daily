@@ -77,6 +77,10 @@ test("native CI assembles every same-run platform artifact before accepting the 
   assert.equal(download.with["digest-mismatch"], "error");
   assert.equal(download.with.path, "packages/node-runtime/native/prebuilds");
   assert.ok(job.steps.some(step => step.run === "node scripts/native-assets.mjs verify" && step.if === undefined));
+  const release = job.steps.find(step => step.env?.ARXIV_DAILY_NATIVE_RELEASE === "1");
+  assert.ok(release, "the assembled matrix must also be built the way a release builds it");
+  assert.equal(release.if, undefined);
+  assert.match(release.run, /npm run build\nnpm run check:obsidian-submission/);
 });
 
 test("native CI rejects skipped tests, tolerated failures, and a fake single-platform matrix", () => {

@@ -14,8 +14,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Obsidian's current submission documentation does not define a 1 MiB limit.
 // Keep a repository safety budget so accidental bundle explosions still fail,
-// without rejecting valid plugins that include a local ML runtime.
-export const OBSIDIAN_BUNDLE_BUDGET_BYTES = 2 * 1024 * 1024;
+// without rejecting valid plugins that include a local ML runtime. Release
+// builds also embed all six native storage binaries (ADR 0009), about 0.5 MiB
+// more than a development build, so the budget is sized for the release build.
+export const OBSIDIAN_BUNDLE_BUDGET_BYTES = 3 * 1024 * 1024;
 export const OBSIDIAN_DESCRIPTION_LIMIT = 250;
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 

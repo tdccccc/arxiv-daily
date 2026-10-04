@@ -119,6 +119,8 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22.17.0
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Download complete native matrix
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -128,3 +130,13 @@ jobs:
           path: packages/node-runtime/native/prebuilds
       - name: Verify release asset assembly
         run: node scripts/native-assets.mjs verify
+      - name: Install dependencies
+        run: npm ci
+      - name: Check release bundles with the full native matrix
+        # The release job embeds all six binaries; check that bundle's size and
+        # submission rules here so a tag never fails on them after the fact.
+        env:
+          ARXIV_DAILY_NATIVE_RELEASE: "1"
+        run: |
+          npm run build
+          npm run check:obsidian-submission
