@@ -1,6 +1,6 @@
 {
   "name": "dsh-arxiv-daily",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Read, filter and save research papers in the DSH sidebar with arXiv Daily",
   "type": "module",
   "license": "MIT",

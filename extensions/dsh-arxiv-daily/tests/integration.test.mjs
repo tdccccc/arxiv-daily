@@ -19,7 +19,7 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   await mkdir(join(configHome, 'arxiv-daily'), { recursive: true });
   await mkdir(join(vault, 'arxiv-daily/papers'), { recursive: true });
   await writeFile(join(vault, 'arxiv-daily/papers/manual.md'), '# Standalone Markdown\n\n$x^2$\n');
-  if (!firstRun) await writeFile(join(configHome, 'arxiv-daily/config.toml'), `vault_root = ${JSON.stringify(vault)}\ncache_dir = ${JSON.stringify(join(root, 'cache'))}\n[llm]\nprovider = "openai"\napi_key = "fixture-secret-never-log"\nbase_url = "https://fixture.invalid/v1"\nmodel = "fixture-model"\nthinking_mode = false\n[arxiv]\ncategories = ["astro-ph"]\ntimezone = "UTC"\n[[arxiv.topics]]\nname = "Photometric redshifts"\ntag = "photo-z"\ndescription = "Photometric redshift estimation and calibration"\ndetail = true\n[output]\nsummary_language = "en"\nlink_style = "relative"\n[advanced]\nlog_level = "error"\n`);
+  if (!firstRun) await writeFile(join(configHome, 'arxiv-daily/config.toml'), `vault_root = ${JSON.stringify(vault)}\ncache_dir = ${JSON.stringify(join(root, 'cache'))}\n[llm]\nprovider = "openai"\napi_key = "fixture-secret-never-log"\nbase_url = "https://fixture.invalid/v1"\nmodel = "fixture-model"\nthinking_mode = true\nreasoning_effort = "vendor-effort"\n[arxiv]\ncategories = ["astro-ph"]\ntimezone = "UTC"\n[[arxiv.topics]]\nname = "Photometric redshifts"\ntag = "photo-z"\ndescription = "Photometric redshift estimation and calibration"\ndetail = true\n[output]\nsummary_language = "en"\nlink_style = "relative"\n[advanced]\nlog_level = "error"\n`);
   const env = { ...process.env, DSH_HOME: join(root, 'dsh'), XDG_CONFIG_HOME: configHome, APPDATA: configHome };
   const packed = JSON.parse((await execute('npm', ['pack', './dist/package', '--pack-destination', root, '--json'], { cwd: resolve(project, 'extensions/dsh-arxiv-daily'), env })).stdout)[0];
   assert.equal(packed.files.some(file => /(^|\/)src\//.test(file.path)), false);
@@ -65,6 +65,7 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   }
   // Exercise the packed host's real persistence boundary in both configured and first-run cases.
   const beforeSettings = await (await get('api/settings')).json();
+  if (!firstRun) assert.equal(beforeSettings.values.reasoningEffort, 'vendor-effort', 'legacy custom reasoning survives the shared projection');
   const extendedValues = {
     ...beforeSettings.values,
     apiKey: 'fixture-settings-secret-never-log',
