@@ -108,8 +108,8 @@ import type { HostAdapters, HttpClient } from "@arxiv-daily/core";
 import {
   deliverDailyEmailIfEnabled,
   resolveResendApiKey,
-  sampleDailyDigest,
-  startHostedEmailVerification,
+  sendSettingsTestEmail,
+  requestSettingsEmailVerification,
   supportsAutomaticEmailDelivery,
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
@@ -2735,24 +2735,12 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async sendTestEmail(date?: string): Promise<string> {
-    const day =
-      date ??
-      formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
-    const digest = sampleDailyDigest({
-      date: day,
-      language: this.settings.output.summaryLanguage,
-      categories: arxivCategories(this.settings.arxiv).join(", "),
-      dailyPath: `${this.settings.output.dailyDir}/${day}.md`,
-    });
-    const email = { ...this.settings.email, enabled: true };
-    const result = await deliverDailyEmailIfEnabled(digest, {
+    const result = await sendSettingsTestEmail({
+      settings: this.settings,
       storage: this.host.storage,
       http: this.host.http,
-      output: this.settings.output,
-      email,
-      apiKey: resolveResendApiKey(this.settings.email),
       logger: this.logger,
-      force: true,
+      date,
     });
     return testEmailResultMessage(result, this.automaticEmailSupported());
   }
@@ -2760,10 +2748,10 @@ export default class ArxivDailyPlugin extends Plugin {
   async sendHostedVerificationEmail(): Promise<string> {
     const to = this.settings.email.to?.trim() ?? "";
     if (!to) throw new Error("Enter your email before sending a verification message");
-    await startHostedEmailVerification({
+    await requestSettingsEmailVerification({
+      settings: this.settings,
       http: this.host.http,
       baseUrl: this.settings.email.hostedBaseUrl,
-      email: to,
     });
     return "Verification email sent. Open the link, then paste the code from that page into Verification code.";
   }

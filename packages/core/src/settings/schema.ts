@@ -22,6 +22,7 @@ export const SETTINGS_KEYS = {
   output: {
     dailyDir: "output.dailyDir",
     papersDir: "output.papersDir",
+    maxDailyPapers: "output.maxDailyPapers",
     linkStyle: "output.linkStyle",
     summaryLanguage: "output.summaryLanguage",
   },
@@ -77,7 +78,7 @@ export const TIMEZONE_OPTIONS: ReadonlyArray<{ value: string; label: string }> =
   { value: "UTC", label: "UTC" },
 ];
 
-export type BusinessSettingId = "scheduleEnabled" | "apiBaseUrl" | "apiKey" | "model" | "reasoningEffort" | "categories" | "topics" | "detailProfile" | "timezone" | "dailyDir" | "papersDir" | "linkStyle" | "summaryLanguage" | "runWindow" | "tickInterval" | "library" | "embeddingMode" | "embeddingBaseUrl" | "embeddingApiKey" | "embeddingModel" | "embeddingDimension" | "sidecarEnabled" | "sidecarCapabilitiesUrl" | "sidecarParseUrl" | "emailMode" | "emailTo" | "hostedToken" | "emailApiKey" | "fromEmail" | "fromName" | "emailEnabled" | "logLevel";
+export type BusinessSettingId = "scheduleEnabled" | "apiBaseUrl" | "apiKey" | "model" | "reasoningEffort" | "categories" | "topics" | "detailProfile" | "timezone" | "maxDailyPapers" | "dailyDir" | "papersDir" | "linkStyle" | "summaryLanguage" | "runWindow" | "tickInterval" | "library" | "embeddingMode" | "embeddingBaseUrl" | "embeddingApiKey" | "embeddingModel" | "embeddingDimension" | "sidecarEnabled" | "sidecarCapabilitiesUrl" | "sidecarParseUrl" | "emailMode" | "emailTo" | "hostedToken" | "emailApiKey" | "fromEmail" | "fromName" | "emailEnabled" | "logLevel";
 export interface BusinessSettingsContext {
   emailMode: PluginSettings['email']['mode'];
   embeddingMode: PluginSettings['embedding']['mode'];
@@ -168,6 +169,13 @@ const fields: Record<BusinessSettingId, SettingMetadata> = {
     "description": "Which timezone defines the current day for reports and schedules.",
     "control": "timezone"
   },
+  "maxDailyPapers": {
+    "key": "output.maxDailyPapers",
+    "name": "Daily paper limit",
+    "description": "Maximum papers across all topics in each daily report. Default is 20.",
+    "control": "number",
+    "defaultValue": 20
+  },
   "dailyDir": {
     "key": "output.dailyDir",
     "name": "Daily reports folder",
@@ -215,7 +223,7 @@ const fields: Record<BusinessSettingId, SettingMetadata> = {
   },
   "library": {
     "name": "Library",
-    "description": "Choose a folder of PDFs, then build a search index. Separate from daily reports.",
+    "description": "Choose a folder of PDFs to prepare its search index automatically. Only suggestions you accept change daily reports.",
     "control": "library"
   },
   "embeddingMode": {
@@ -224,8 +232,8 @@ const fields: Record<BusinessSettingId, SettingMetadata> = {
     "description": "",
     "control": "dropdown",
     "options": {
-      "local": "Local (offline, default)",
-      "remote": "Remote (fast, full text leaves this device)"
+      "local": "Local (default, one-time model download)",
+      "remote": "Remote (titles and abstracts leave this device)"
     }
   },
   "embeddingBaseUrl": {
@@ -362,8 +370,8 @@ export function getBusinessSetting(id: BusinessSettingId, context: Partial<Busin
   if (id === 'reasoningEffort' && typeof current.reasoningEffort === 'string' && !Object.hasOwn(field.options!, current.reasoningEffort)) Object.defineProperty(field.options!, current.reasoningEffort, { value: 'Custom (current values)', enumerable: true, configurable: true, writable: true });
   if (id === 'detailProfile' && current.detailProfile === 'custom') field.options!.custom = 'Custom (current values)';
   if (id === 'embeddingMode') field.description = current.embeddingMode === 'remote'
-    ? 'Remote sends full text to an embeddings API. Switching modes rebuilds the index.'
-    : 'Local embeds on this device. Switch to remote only if you have an embeddings API.';
+    ? 'Remote sends titles and abstracts to an embeddings API. Switching modes rebuilds the index.'
+    : 'Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.';
   if (id === 'emailMode') field.description = current.emailMode === 'hosted'
     ? 'Official delivery (Beta) is a shared free service with a small daily limit. Prefer Send yourself if you need many messages or reliable high volume.'
     : 'Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.';
@@ -380,9 +388,9 @@ export function getBusinessSettingsSections(context: Partial<BusinessSettingsCon
     field('scheduleEnabled'),
     group('llm','LLM',['apiBaseUrl','apiKey','model','reasoningEffort']),
     {type:'list',id:'categories',heading:'arXiv categories',field:getBusinessSetting('categories',context),emptyState:'No categories yet — use Add category to add one.',addItemName:'Add category'},
-    {type:'list',id:'topics',heading:'Research topics',field:getBusinessSetting('topics',context),emptyState:'No topics yet. Add one to define what to track.',addItemName:'Add topic'},
+    {type:'list',id:'topics',heading:'Research topics',field:getBusinessSetting('topics',context),emptyState:'No topics yet. Generate from your library or add a topic.',addItemName:'Add topic'},
     field('detailProfile'), field('timezone'),
-    group('output','Output & schedule',['dailyDir','papersDir','linkStyle','summaryLanguage','runWindow','tickInterval']),
+    group('output','Output & schedule',['maxDailyPapers','dailyDir','papersDir','linkStyle','summaryLanguage','runWindow','tickInterval']),
     group('library','Personal library',['library','embeddingMode','embeddingBaseUrl','embeddingApiKey','embeddingModel','embeddingDimension','sidecarEnabled','sidecarCapabilitiesUrl','sidecarParseUrl']),
     group('email','Email delivery',['emailMode','emailTo','hostedToken','emailApiKey','fromEmail','fromName','emailEnabled']),
     group('advanced','Advanced',['logLevel']),

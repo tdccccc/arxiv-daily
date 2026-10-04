@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   allSettingKeys,
   buildSettingDefinitions,
@@ -7,7 +7,7 @@ import {
   SETTING_KEYS,
   writeSettingValue,
 } from "../src/settings/definitions";
-import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS, getBusinessSettingsSections, businessSettingsContext } from "@arxiv-daily/core";
 import type { SettingDefinitionItem } from "obsidian";
 
 describe("setting key path mapping", () => {
@@ -427,4 +427,42 @@ describe("buildSettingDefinitions structure", () => {
     expect(dailyAutoSendDesc(false, false)).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
     expect(dailyAutoSendDesc(true, true)).not.toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
   });
+  it.each([false,true])("uses shared names, descriptions, options and visibility (expanded=%s)", expanded => {
+    const host=makeFullHost();
+    host.plugin.settings.embedding.mode=expanded?'remote':'local';
+    host.plugin.settings.pdfParserSidecar.enabled=expanded;
+    host.plugin.settings.email.mode=expanded?'hosted':'self';
+    host.plugin.settings.detailSelection.profile=expanded?'custom':'balanced';
+    host.plugin.settings.schedule.enabled=expanded;
+    const items=buildSettingDefinitions(host);
+    for(const section of getBusinessSettingsSections(businessSettingsContext(host.plugin.settings))){
+      if(section.type==='list'){
+        const list=items.find(item=>item.type==='list'&&item.heading===section.heading);
+        expect(list).toMatchObject({emptyState:section.emptyState,addItem:{name:section.addItemName}});
+        continue;
+      }
+      const expected=section.type==='field'?[section.field]:section.items;
+      const actual=section.type==='field'?items.filter(item=>item.name===section.field.name):items.find(item=>item.type==='group'&&item.heading===section.heading)?.items.filter(item=>item.name);
+      expect(actual?.map(item=>({name:item.name,description:item.desc}))).toEqual(expected.map(item=>({name:item.name,description:item.description})));
+      for(const item of actual??[])if(item.control){
+        const metadata=expected.find(field=>field.name===item.name)!;
+        expect(item.control.key).toBe(metadata.key);
+        if(item.control.type==='dropdown')expect(item.control.options).toEqual(metadata.options);
+      }
+    }
+  });
+
+  it("keeps host-specific render callbacks and output field routing", () => {
+    const host=makeFullHost();host.renderOutputDirectoryRow=vi.fn();host.renderApiKeyRow=vi.fn();
+    const items=buildSettingDefinitions(host);
+    const all=items.flatMap(item=>item.type==='group'?item.items:[item]);
+    const setting={} as import("obsidian").Setting;
+    all.find(item=>item.name==='Daily reports folder')?.render?.(setting);
+    all.find(item=>item.name==='Paper notes folder')?.render?.(setting);
+    all.find(item=>item.name==='API key')?.render?.(setting);
+    expect(host.renderOutputDirectoryRow).toHaveBeenNthCalledWith(1,setting,'dailyDir');
+    expect(host.renderOutputDirectoryRow).toHaveBeenNthCalledWith(2,setting,'papersDir');
+    expect(host.renderApiKeyRow).toHaveBeenCalledWith(setting);
+  });
+
 });

@@ -6,7 +6,7 @@ import {
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
-import { emailStatus, emailTest } from "../src/email-cmd";
+import { emailStatus, emailTest, emailVerifyStart } from "../src/email-cmd";
 
 function captureIo() {
   const stdout: string[] = [];
@@ -114,5 +114,20 @@ describe("email status", () => {
     const { io, stdout } = captureIo();
     await emailStatus(testConfig(), io, true);
     expect(stdout.join("")).toContain("auto-send: would run on completed daily");
+  });
+});
+
+
+describe("CLI settings verification", () => {
+  it("uses the official endpoint and preserves CLI messages and exit codes", async () => {
+    const config = testConfig(); config.settings.email.hostedBaseUrl = "https://ignored.example.test";
+    const host = testHost(false); const {io,stdout,stderr} = captureIo();
+    expect(await emailVerifyStart(config,host,io)).toBe(0);
+    expect(vi.mocked(host.http.request).mock.calls[0]![0].url).toBe("https://mail.arxiv-daily.top/v1/verify/start");
+    expect(stdout.join("")).toContain("verification email requested");
+    config.settings.email.to = " ";
+    expect(await emailVerifyStart(config,host,io)).toBe(2);
+    expect(stderr.join("")).toContain("email.to is empty");
+    expect(host.http.request).toHaveBeenCalledTimes(1);
   });
 });

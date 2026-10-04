@@ -1,16 +1,12 @@
 import {
   AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
-  deliverDailyEmailIfEnabled,
   isEmailCredentialsReady,
   isEmailDeliveryConfigured,
   resolveEmailDeliveryMode,
   resolveResendApiKey,
-  sampleDailyDigest,
-  startHostedEmailVerification,
+  sendSettingsTestEmail,
+  requestSettingsEmailVerification,
   supportsAutomaticEmailDelivery,
-  formatDate,
-  todayInTz,
-  arxivCategories,
 } from "@arxiv-daily/core";
 import type { HostAdapters } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
@@ -56,23 +52,12 @@ export async function emailTest(
   dateArg?: string,
   now: () => Date = () => new Date(),
 ): Promise<number> {
-  const date =
-    dateArg ??
-    formatDate(todayInTz(now(), config.settings.arxiv.timezone));
-  const digest = sampleDailyDigest({
-    date,
-    language: config.settings.output.summaryLanguage,
-    categories: arxivCategories(config.settings.arxiv).join(", "),
-    dailyPath: `${config.settings.output.dailyDir}/${date}.md`,
-  });
-  const email = { ...config.settings.email, enabled: true };
-  const result = await deliverDailyEmailIfEnabled(digest, {
+  const result = await sendSettingsTestEmail({
+    settings: config.settings,
     storage: host.storage,
     http: host.http,
-    output: config.settings.output,
-    email,
-    apiKey: resolveResendApiKey(config.settings.email, {}),
-    force: true,
+    date: dateArg,
+    now,
   });
   if (
     result.kind === "delivered" ||
@@ -105,9 +90,9 @@ export async function emailVerifyStart(
     return 2;
   }
   try {
-    await startHostedEmailVerification({
+    await requestSettingsEmailVerification({
+      settings: config.settings,
       http: host.http,
-      email: to,
       // never pass user hosted_base_url from file per product decision
     });
     writeLine(

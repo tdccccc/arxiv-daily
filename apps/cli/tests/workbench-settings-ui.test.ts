@@ -326,3 +326,10 @@ it('keeps translated labels separate from user topics, model identifiers and sub
  expect(root.querySelector('[data-settings="models"]')!.textContent).toBe('获取模型');
  expect(root.querySelector('nav[aria-label="设置导航"]')).toBeTruthy();
 });
+
+it('uses the shared current enable label for both the row and its accessible control',async()=>{
+ const {root}=setup();await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action=settings]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[name="schedule.enabled"]')).toBeTruthy());
+ const control=root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!;control.checked=true;control.dispatchEvent(new Event('change',{bubbles:true}));
+ expect(control.getAttribute('aria-label')).toBe('Enable · Running');
+});

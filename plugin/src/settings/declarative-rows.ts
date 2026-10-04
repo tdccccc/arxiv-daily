@@ -1,3 +1,4 @@
+import { getBusinessSetting, TIMEZONE_OPTIONS } from "@arxiv-daily/core";
 import {
   Notice,
   ToggleComponent,
@@ -10,7 +11,6 @@ import {
   llmHttpWarning,
   modelFetchNoticeMessage,
   renderRunWindowTimeSelect,
-  TIMEZONE_OPTIONS,
   validateOutputDirectoryDraft,
 } from "./tab";
 import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
@@ -112,12 +112,7 @@ export function renderReasoningEffortRow(
 ): void {
   prepareRow(setting);
   const select = setting.controlEl.createEl("select");
-  const options = [
-    ["none", "None"],
-    ["low", "Low"],
-    ["medium", "Medium"],
-    ["high", "High"],
-  ] as const;
+  const options = Object.entries(getBusinessSetting("reasoningEffort", { reasoningEffort: tab.plugin.settings.llm.reasoningEffort }).options!);
   for (const [value, label] of options) {
     select.createEl("option", { value, text: label });
   }
@@ -535,12 +530,7 @@ export function renderEmailModeRow(
 ): void {
   prepareRow(setting);
   const select = setting.controlEl.createEl("select");
-  const selfOption = select.createEl("option");
-  selfOption.value = "self";
-  selfOption.textContent = "Send yourself";
-  const hostedOption = select.createEl("option");
-  hostedOption.value = "hosted";
-  hostedOption.textContent = "Official delivery (beta)";
+  for (const [value,text] of Object.entries(getBusinessSetting("emailMode").options!)) select.createEl("option", { value, text });
   select.value = tab.plugin.settings.email.mode === "hosted" ? "hosted" : "self";
   select.addEventListener("change", () => {
     const next = select.value === "hosted" ? "hosted" : "self";
@@ -724,10 +714,7 @@ export function renderEmbeddingModeRow(
 ): void {
   prepareRow(setting);
   const select = setting.controlEl.createEl("select");
-  const local = select.createEl("option", { text: "Local (default, one-time model download)" });
-  local.value = "local";
-  const remote = select.createEl("option", { text: "Remote (titles and abstracts leave this device)" });
-  remote.value = "remote";
+  for (const [value,text] of Object.entries(getBusinessSetting("embeddingMode").options!)) select.createEl("option", { value, text });
   select.value = tab.plugin.settings.embedding.mode;
   select.addEventListener("change", () => {
     const next = select.value === "remote" ? "remote" : "local";

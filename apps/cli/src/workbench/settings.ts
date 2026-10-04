@@ -5,7 +5,8 @@ import { parse, stringify } from "smol-toml";
 import { DEFAULT_SETTINGS, arxivCategories, sha256Hex, type Topic } from "@arxiv-daily/core";
 import { NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
-import { extendedSettings, patchExtendedSettings, type ExtendedSettingsValues } from "./settings-fields";
+import { extendedSettings, type ExtendedSettingsValues } from "./settings-fields";
+import { patchWorkbenchBusinessSettings } from "./settings-adapter";
 import { WorkbenchError } from "./documents";
 
 export interface WorkbenchSettingsValues extends ExtendedSettingsValues {
@@ -34,7 +35,7 @@ export async function readWorkbenchSettings(configPath: string): Promise<Workben
 /** Same target and lock identity as the CLI's library connection writer. */
 export async function saveWorkbenchSettings(configPath: string, body: unknown): Promise<CliRuntimeConfig> {
   if (!record(body) || !(body.revision === null || typeof body.revision === "string") || !record(body.values)) invalid("设置请求无效。");
-  const values = validateValues(body.values);
+
   const expected = body.revision;
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   let target: string;
@@ -51,16 +52,12 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
   try {
     const raw = await readOptional(target);
     assertRevision(raw, expected);
-    if (raw !== null) await decode(configPath, raw);
+    const previous = raw !== null ? await decode(configPath, raw) : null;
     const document = raw === null ? {} : parse(raw);
-    const llm = table(document.llm), arxiv = table(document.arxiv), output = table(document.output);
-    const updated = { ...document, vault_root: values.vaultRoot,
-      llm: { ...llm, base_url: values.baseUrl, provider: values.provider, model: values.model,
-        api_key: values.apiKey || llm.api_key || "" },
-      arxiv: { ...arxiv, categories: values.categories, timezone: values.timezone, topics: values.topics },
-      output: { ...output, summary_language: values.summaryLanguage, daily_dir: values.dailyDir, papers_dir: values.papersDir },
-    };
-    patchExtendedSettings(updated, body.values);
+    const vaultRoot = resolveVaultRoot(body.values.vaultRoot ?? previous?.vaultRoot);
+    const updated: Record<string, unknown> = { ...document, vault_root: vaultRoot };
+    try { patchWorkbenchBusinessSettings(updated, body.values, previous); }
+    catch (error) { throw new WorkbenchError(400, error instanceof Error ? error.message : "设置内容无效。"); }
     const content = stringify(updated);
     await decode(configPath, content);
     assertRevision(await readOptional(target), expected);
@@ -69,41 +66,15 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
   } finally { await lease.release(); }
 }
 
-function validateValues(value: Record<string, unknown>) {
-  const text = (key: string, allowEmpty = false) => {
-    const input = value[key];
-    if (typeof input !== "string" || (!allowEmpty && !input.trim()) || input.length > 20000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(input)) invalid(`请填写有效的 ${key}。`);
-    return input.trim();
-  };
-  let vaultRoot = text("vaultRoot");
-  if (vaultRoot === "~") vaultRoot = os.homedir();
-  else if (vaultRoot.startsWith("~/")) vaultRoot = path.join(os.homedir(), vaultRoot.slice(2));
-  if (!path.isAbsolute(vaultRoot)) invalid("保存目录必须使用绝对路径。");
-  const baseUrl = text("baseUrl", true);
-  try {
-    const url = new URL(baseUrl || "https://placeholder.invalid");
-    if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) invalid("模型地址须为不含凭证、查询参数的 HTTP(S) 地址。");
-  } catch { invalid("模型地址须为不含凭证、查询参数的 HTTP(S) 地址。"); }
-  const timezone = text("timezone");
-  try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { invalid("请选择有效时区。"); }
-  if (value.summaryLanguage !== "zh" && value.summaryLanguage !== "en") invalid("请选择中文或英文。");
-  if (!Array.isArray(value.categories) || value.categories.length > 200 || value.categories.some(c => typeof c !== "string" || !/^[a-zA-Z][a-zA-Z0-9.-]*$/.test(c))) invalid("请填写有效 arXiv 分类。");
-  if (new Set(value.categories).size !== value.categories.length) invalid("arXiv 分类不能重复。");
-  if (!Array.isArray(value.topics) || value.topics.length > 100) invalid("请至少填写一个研究主题。");
-  const ids = new Set<string>();
-  const topics: Topic[] = value.topics.map(topic => {
-    if (!record(topic) || ["id", "name", "tag", "description"].some(key => typeof topic[key] !== "string" || (key === "id" && !topic[key].trim()) || topic[key].length > 20000) || typeof topic.detail !== "boolean") invalid("研究主题格式无效。");
-    const id = (topic.id as string).trim();
-    if (ids.has(id)) invalid("研究主题标识重复。");
-    ids.add(id);
-    return { id, name: (topic.name as string).trim(), tag: (topic.tag as string).trim(), description: (topic.description as string).trim(), detail: topic.detail as boolean };
-  });
-  if (value.apiKey !== undefined && (typeof value.apiKey !== "string" || value.apiKey.length > 20000)) invalid("模型密钥格式无效。");
-  return { vaultRoot, baseUrl, provider: text("provider"), model: text("model", true), categories: value.categories as string[], timezone,
-    summaryLanguage: value.summaryLanguage, topics, dailyDir: text("dailyDir"), papersDir: text("papersDir"), apiKey: typeof value.apiKey === "string" ? value.apiKey.trim() : "" };
+function resolveVaultRoot(input: unknown): string {
+  if (typeof input !== "string" || !input.trim() || input.length > 20000 || /[\u0000-\u001f]/u.test(input)) invalid("请填写有效的 vaultRoot。");
+  let value = input.trim();
+  if (value === "~") value = os.homedir();
+  else if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));
+  if (!path.isAbsolute(value)) invalid("保存目录必须使用绝对路径。");
+  return value;
 }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
-function table(value: unknown): Record<string, unknown> { return record(value) ? value : {}; }
 function invalid(message: string): never { throw new WorkbenchError(400, message); }
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
 async function readOptional(file: string): Promise<string | null> { try { return await fs.readFile(file, "utf8"); } catch (error) { if (missing(error)) return null; throw error; } }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getBusinessSetting, TIMEZONE_OPTIONS } from "@arxiv-daily/core";
 import { renderInitToml, runInit } from "../src/init";
 
 describe("CLI init template", () => {
@@ -69,6 +70,7 @@ describe("CLI init template", () => {
     ];
     let i = 0;
     const written: { path: string; body: string }[] = [];
+    const display: string[] = [];
     const code = await runInit({
       isTTY: true,
       configPath: "/tmp/arxiv-daily-init-test.toml",
@@ -87,7 +89,7 @@ describe("CLI init template", () => {
         throw err;
       },
       mkdir: async () => undefined,
-      stdout: { write: () => undefined },
+      stdout: { write: value => { display.push(value); } },
       stderr: { write: () => undefined },
     });
     expect(code).toBe(0);
@@ -103,5 +105,37 @@ describe("CLI init template", () => {
     expect(written[0]!.body).toContain("\nmax_daily_papers = 20\n");
     expect(written[0]!.body).toContain("thinking_mode = true");
     expect(written[0]!.body).toContain('reasoning_effort = "high"');
+    for (const id of ["reasoningEffort", "emailMode", "summaryLanguage"] as const) {
+      for (const [value,label] of Object.entries(getBusinessSetting(id).options!)) {
+        if (id !== "reasoningEffort" || value !== "none") expect(display.join(" ")).toContain(label);
+      }
+    }
+    for (const option of TIMEZONE_OPTIONS) expect(display.join(" ")).toContain(option.label);
+
   });
+  it("re-prompts custom endpoints and timezones using shared settings validation", async () => {
+    const urls = ["file:///tmp/model", "https://user:secret@model.test/v1", "https://model.test/v1?api_key=secret", "https://model.test/v1"];
+    const zones = ["invalid/timezone", "Pacific/Auckland"];
+    let body = ""; const errors: string[] = [];
+    const code = await runInit({
+      configPath:"/tmp/init-shared-validation.toml", isTTY:true,
+      ask: async prompt => {
+        if (prompt.startsWith("API base URL")) return urls.shift() ?? "https://model.test/v1";
+        if (prompt.startsWith("LLM API key")) return "test-key";
+        if (prompt.startsWith("Timezone for")) return "__other__";
+        if (prompt.startsWith("IANA timezone")) return zones.shift() ?? "Pacific/Auckland";
+        if (/fetch|connect|thinking|schedule/i.test(prompt)) return "n";
+        return "";
+      },
+      fetchModels: async () => [],
+      readFile: async () => {throw Object.assign(new Error("missing"),{code:"ENOENT"});},
+      mkdir:async()=>{}, writeFile:async(_path,text)=>{body=text;}, stdout:{write:()=>{}},stderr:{write:text=>errors.push(text)},
+    });
+    expect(code).toBe(0); expect(urls).toEqual([]); expect(zones).toEqual([]);
+    expect(body).toContain('base_url = "https://model.test/v1"');
+    expect(body).toContain('timezone = "Pacific/Auckland"');
+    expect(errors.join(" ")).toContain("llm.baseUrl");
+    expect(errors.join(" ")).toContain("arxiv.timezone");
+  });
+
 });

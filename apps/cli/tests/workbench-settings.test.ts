@@ -144,3 +144,24 @@ describe("workbench settings", () => {
     expect(await fs.readFile(configPath, "utf8")).toBe("broken = [");
   });
 });
+
+it('uses the same core edit rules for model and email drafts as the Obsidian transaction', async()=>{
+ const { normalizeSettingsEdits }=await import('@arxiv-daily/core');
+ const {configPath,values}=await fixture();
+ const before=await saveWorkbenchSettings(configPath,{revision:null,values});
+ const view=await readWorkbenchSettings(configPath);
+ const input={...view.values,model:'  shared-model  ',email:{...view.values.email,to:'reader@',fromName:'  Lab sender  '}};
+ const candidate=structuredClone(before.settings);candidate.llm.model=input.model;candidate.email.to=input.email.to;candidate.email.fromName=input.email.fromName;
+ const shared=normalizeSettingsEdits(candidate,['llm.model','email.to','email.fromName']);
+ const saved=await saveWorkbenchSettings(configPath,{revision:view.revision,values:input});
+ expect(saved.settings.llm.model).toBe(shared.llm.model);
+ expect(saved.settings.email).toMatchObject({to:shared.email.to,fromName:shared.email.fromName});
+});
+
+it('preserves an existing custom reasoning effort when unrelated settings are saved',async()=>{
+ const {configPath,values}=await fixture();await saveWorkbenchSettings(configPath,{revision:null,values});
+ const doc=parse(await fs.readFile(configPath,'utf8'));Object.assign(doc.llm as object,{thinking_mode:true,reasoning_effort:'vendor-effort'});await fs.writeFile(configPath,stringify(doc));
+ const view=await readWorkbenchSettings(configPath);expect(view.values.reasoningEffort).toBe('vendor-effort');
+ const next=await saveWorkbenchSettings(configPath,{revision:view.revision,values:{...view.values,model:'new-model'}});
+ expect(next.settings.llm.reasoningEffort).toBe('vendor-effort');
+});
