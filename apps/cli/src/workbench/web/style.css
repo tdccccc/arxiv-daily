@@ -56,7 +56,8 @@ svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.5; fill: 
 .calendar-day.not-generated { background: var(--calendar-ready-bg); border-color: var(--calendar-ready-line); color: var(--calendar-ready-ink); }
 .calendar-day.running { background: var(--calendar-running-bg); border-color: var(--calendar-running-line); color: var(--calendar-running-ink); }
 .calendar-day.failed, .calendar-day.report-missing { background: var(--calendar-error-bg); border-color: var(--calendar-error-line); color: var(--calendar-error-ink); }
-.calendar-day.no-matches, .calendar-day.skipped { background: var(--calendar-neutral-bg); color: var(--calendar-neutral-ink); }
+.calendar-day.awaiting-announcement { background: var(--calendar-running-bg); color: var(--calendar-running-ink); border-style: dashed; }
+.calendar-day.no-matches, .calendar-day.no-updates, .calendar-day.skipped { background: var(--calendar-neutral-bg); color: var(--calendar-neutral-ink); }
 .calendar-day.future { border-color: transparent; background: transparent; color: var(--calendar-neutral-ink); }
 .calendar-day:hover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .calendar-day.is-today { box-shadow: inset 0 0 0 1px var(--accent); border-color: var(--accent); font-weight: 650; }
@@ -71,7 +72,8 @@ svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.5; fill: 
 .calendar-dot.not-generated { background: var(--calendar-ready-bg); border-color: var(--calendar-ready-ink); }
 .calendar-dot.running { background: var(--calendar-running-bg); border-color: var(--calendar-running-ink); }
 .calendar-dot.failed { background: var(--calendar-error-bg); border-color: var(--calendar-error-ink); }
-.calendar-dot.no-matches { background: var(--calendar-neutral-bg); border-color: var(--muted); }
+.calendar-dot.awaiting-announcement { background: var(--calendar-running-bg); border-color: var(--calendar-running-ink); border-style: dashed; }
+.calendar-dot.no-matches, .calendar-dot.no-updates { background: var(--calendar-neutral-bg); border-color: var(--muted); }
 .calendar-legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; padding: 14px 0; color: var(--calendar-neutral-ink); font-size: 11px; }
 .calendar-legend > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .calendar-summary { min-height: 58px; display: flex; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 12px 0; }
@@ -167,6 +169,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .run-heading > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .run-heading strong { font-size: 12px; font-weight: 550; }
 .run-state { color: var(--muted); font-size: 10px; }
+.run-state.pending { color: var(--calendar-running-ink); }
 .run-state.running { color: var(--accent); }
 .run-tray details { margin-top: 12px; font-size: 11px; color: var(--muted); }
 .run-tray summary { cursor: pointer; }

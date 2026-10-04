@@ -5,7 +5,7 @@ import { mountSettingsNavigation } from "./settings-navigation";
 import { settingsSetupGuide } from "./settings-setup";
 import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
 import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
-import { ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
+import { isCompletedDiscovery, ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
 import { descriptions } from './settings-copy';
 export type { WorkbenchSettings as SettingsSnapshot } from "../settings";
 const escape = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -154,7 +154,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  }
  form.addEventListener('workbench-run',event=>{
   const run=(event as CustomEvent<import('../server').WorkbenchRun|null>).detail;
-  if(run?.status==='completed' && run.id!==lastCompletedRun){lastCompletedRun=run.id;void request<{recentRuns?:Array<{status:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(entry=>entry.status==='completed')??firstReportComplete;if(form.isConnected)refreshVisibleSetupGuide();}).catch(()=>{});}
+  if(run?.status==='completed' && run.id!==lastCompletedRun){lastCompletedRun=run.id;void request<{recentRuns?:Array<{status:string;outcome?:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(isCompletedDiscovery)??firstReportComplete;if(form.isConnected)refreshVisibleSetupGuide();}).catch(()=>{});}
   if(library?.run && run?.id===library.run.id){
    library.run=run;if(run.status!=='running')libraryCancelling=false;renderLibrary();
    if(run.status!=='running'){libraryRevisionPending=true;void Promise.all([request<SettingsSnapshot>('api/settings'),refreshLibrary()]).then(([current])=>{revision=current.revision;}).catch(error=>{if(form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:t('Could not reload settings.');}}).finally(()=>{libraryRevisionPending=false;lockLibraryInputs(false);});}

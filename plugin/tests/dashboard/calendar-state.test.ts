@@ -70,6 +70,25 @@ describe("Calendar State Model", () => {
 });
 
 describe("Calendar Cell Builder", () => {
+  it("distinguishes structured waiting, no updates and no matches without a report", () => {
+    expect(resolveCalendarCellState({ runnable: true, runState: runState("pending", { outcome: "awaiting_announcement" }) }))
+      .toEqual({ state: "runnable", emptyReason: "awaiting-announcement" });
+    expect(resolveCalendarCellState({ runnable: false, runState: runState("pending", { outcome: "awaiting_announcement" }) }))
+      .toEqual({ state: "empty", emptyReason: "awaiting-announcement" });
+    expect(resolveCalendarCellState({ runnable: true, runState: runState("completed", { outcome: "no_updates", papersWritten: 0 }) }))
+      .toEqual({ state: "empty", emptyReason: "arxiv-not-updated" });
+    expect(resolveCalendarCellState({ runnable: true, runState: runState("completed", { outcome: "no_matches", papersWritten: 0 }) }))
+      .toEqual({ state: "no-relevant-papers" });
+    expect(calendarCellAriaLabel({ date: "2026-06-22", state: "runnable", emptyReason: "awaiting-announcement" }))
+      .toBe("2026-06-22: awaiting arXiv announcement, retry daily report");
+    expect(calendarCellAriaLabel({ date: "2026-06-22", state: "no-relevant-papers" }))
+      .toBe("2026-06-22: no matching papers");
+  });
+
+  it("allows waiting dates to retry even when absent from the recent cache", () => {
+    expect(isCalendarRunWhitelisted(whitelistInput({ date: "2026-06-22", recentDates: new Set(), runState: runState("pending", { outcome: "awaiting_announcement" }) }))).toBe(true);
+  });
+
   it("uses run state to hide already resolved no-work dates", () => {
     expect(
       resolveCalendarCellState({
@@ -371,7 +390,7 @@ describe("resolveCalendarEmptyReason", () => {
     ).toBe("before-tracking");
   });
 
-  it("keeps real tracked dates without reports as arXiv not updated", () => {
+  it("does not infer source availability from an absent cached date", () => {
     expect(
       resolveCalendarEmptyReason({
         date: "2026-06-23",
@@ -379,7 +398,7 @@ describe("resolveCalendarEmptyReason", () => {
         trackingStartDate: "2026-06-20",
         recentDates: new Set(),
       }),
-    ).toBe("arxiv-not-updated");
+    ).toBe("not-run");
   });
 
   it("does not hide dates before tracking start when /recent can still run them", () => {
@@ -557,7 +576,7 @@ describe("calendarCellAriaLabel", () => {
 });
 
 describe("runDateFromCalendar", () => {
-  it("shows the running notice before refreshing recent dates", async () => {
+  it("delegates absent cached dates to core after showing the running notice", async () => {
     const events: string[] = [];
     let createView: ((leaf: unknown) => unknown) | undefined;
     const settings = {
@@ -586,7 +605,7 @@ describe("runDateFromCalendar", () => {
         refresh: vi.fn(async () => {
           events.push("refresh");
         }),
-        hasDate: vi.fn(() => true),
+        hasDate: vi.fn(() => false),
       },
       scheduler: {
         runForDateNow: vi.fn(async () => {
@@ -596,7 +615,8 @@ describe("runDateFromCalendar", () => {
       },
     };
     registerDashboardView(plugin as never);
-    const view = createView?.({}) as { runDateFromCalendar(date: string): Promise<void> };
+    const view = createView?.({}) as { runDateFromCalendar(date: string): Promise<void>; reloadIndex(): Promise<void> };
+    view.reloadIndex = vi.fn(async () => {});
 
     await expect(view.runDateFromCalendar("2026-06-22")).rejects.toThrow(
       "stop before reload",

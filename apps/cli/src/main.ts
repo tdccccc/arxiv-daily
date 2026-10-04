@@ -117,9 +117,10 @@ Config: $XDG_CONFIG_HOME/arxiv-daily/config.toml (run init first)
 
 export async function runCli(opts: RunCliOptions = {}): Promise<number> {
   const argv = opts.argv ?? process.argv.slice(2);
-  const rawIo = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
+  const rawIo: CliIo = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
   let secrets: string[] = [];
   const io: CliIo = {
+    onRunResult: rawIo.onRunResult,
     stdout: { write: (chunk) => rawIo.stdout.write(redactText(String(chunk), { secrets })) },
     stderr: { write: (chunk) => rawIo.stderr.write(redactText(String(chunk), { secrets })) },
   };
@@ -473,10 +474,18 @@ function optionValue(argv: string[], option: string): string | undefined {
 }
 
 function writeRunResult(io: CliIo, date: string, result: CliRunResult): number {
+  io.onRunResult?.({ date, kind: result.kind,
+    ...("outcome" in result ? { outcome: result.outcome } : {}),
+    ...(result.kind === "completed" ? { papersWritten: result.papersWritten } : {}),
+  });
+  if (result.kind === "pending" && result.outcome === "awaiting_announcement") {
+    writeLine(io.stdout, `run ${date}: awaiting_announcement (${result.reason})`);
+    return 0;
+  }
   if (result.kind === "completed") {
     writeLine(
       io.stdout,
-      `run ${date}: completed (${result.papersWritten} papers written)`,
+      `run ${date}: completed (${result.papersWritten} papers written)${result.outcome ? ` [${result.outcome}]` : ""}`,
     );
     return 0;
   }
@@ -540,7 +549,13 @@ async function defaultBuildRuntime(
 }
 
 if (typeof require !== "undefined" && require.main === module) {
-  void runCli()
+  void runCli({ io: {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    onRunResult: event => {
+      if (process.connected && process.send) process.send({ type: "arxiv-daily/run-result", event }, () => {});
+    },
+  } })
     .then((code) => {
       process.exitCode = code;
     })

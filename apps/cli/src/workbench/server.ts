@@ -1,4 +1,5 @@
-import { isWeekendReportDate, WEEKEND_REPORT_MESSAGE } from "./announcement-calendar";
+import type { RunOutcome } from "@arxiv-daily/core";
+import type { CliRunEvent } from "../main-types";
 import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -34,7 +35,8 @@ export interface WorkbenchRun {
   label: string;
   /** Configured-timezone date for daily jobs; paper-note jobs have no calendar date. */
   date: string | null;
-  status: "running" | "completed" | "failed" | "cancelled" | "skipped";
+  status: "running" | "completed" | "failed" | "cancelled" | "skipped" | "pending";
+  outcome?: RunOutcome;
   output: string;
   exitCode: number | null;
   startedAt: string;
@@ -84,9 +86,16 @@ export async function startWorkbench(options: WorkbenchOptions) {
     const current: WorkbenchRun = { id: randomBytes(12).toString("hex"), label: label, date: date, status: "running", output: "", exitCode: null, startedAt: now().toISOString(), finishedAt: null };
     run = current;
     const write = (chunk: string) => { current.output = (current.output + redact(String(chunk))).slice(-24000); };
-    running = Promise.resolve().then(() => execute({ stdout: { write }, stderr: { write } }, signal)).then(code => {
+    let resultEvent: CliRunEvent | undefined;
+    running = Promise.resolve().then(() => execute({ stdout: { write }, stderr: { write }, onRunResult: (event) => {
+      if (date === event.date) resultEvent = event;
+    } }, signal)).then(code => {
       current.exitCode = code;
       current.status = signal.aborted ? "cancelled" : code === 0 ? "completed" : "failed";
+      if (!signal.aborted && code === 0 && resultEvent) {
+        if (resultEvent.kind === "pending" || resultEvent.kind === "skipped") current.status = resultEvent.kind;
+        current.outcome = resultEvent.outcome;
+      }
     }).catch(error => {
       write(`\n${error instanceof Error ? error.message : "任务执行失败"}\n`);
       current.exitCode = 1;
@@ -235,10 +244,6 @@ export async function startWorkbench(options: WorkbenchOptions) {
       const task = parseTask(body, formatDate(todayInTz(now(), config.settings.arxiv.timezone)));
       if (run?.status === "running") throw new WorkbenchError(409, "已有任务正在运行，请等待完成或先取消。");
       if (saving) throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
-      if (task.date && isWeekendReportDate(task.date)) {
-        run = { id: randomBytes(12).toString("hex"), label: task.label, date: task.date, status: "skipped", output: WEEKEND_REPORT_MESSAGE, exitCode: 0, startedAt: now().toISOString(), finishedAt: now().toISOString() };
-        return json(res, 202, { run });
-      }
       if (!options.run) throw new WorkbenchError(503, "当前工作台未提供生成操作。");
       const current = beginRun(task.label, task.date, (io, signal) => options.run!(task.args, io, signal));
       return json(res, 202, { run: current });

@@ -333,3 +333,11 @@ it('uses the shared current enable label for both the row and its accessible con
  const control=root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!;control.checked=true;control.dispatchEvent(new Event('change',{bubbles:true}));
  expect(control.getAttribute('aria-label')).toBe('Enable · Running');
 });
+
+it('keeps first-report setup incomplete after a no-update day',async()=>{
+ const {root}=setup(false,false,undefined,path=>path==='api/status'?json({llm:{ready:true},recentRuns:[{status:'completed',outcome:'no_updates',papersWritten:0}]}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-setup')).toBeTruthy());
+ expect(root.querySelector('.settings-setup li:nth-child(4)')?.getAttribute('data-complete')).toBe('false');
+});

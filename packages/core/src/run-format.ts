@@ -48,3 +48,8 @@ export function describeRunResults(
     .map((entry) => `${entry.date}: ${describeResult(entry.result)}`)
     .join("\n");
 }
+
+/** A no-announcement day has not exercised the discovery configuration. */
+export function isCompletedDiscovery(entry: { status: string; outcome?: string }): boolean {
+  return entry.status === "completed" && entry.outcome !== "no_updates";
+}

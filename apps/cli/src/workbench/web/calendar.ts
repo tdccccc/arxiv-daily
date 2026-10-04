@@ -3,7 +3,7 @@ import type { WorkbenchCalendar, WorkbenchCalendarDay } from "../calendar";
 
 export const calendarStateLabels: Record<WorkbenchCalendarDay["state"], string> = {
   "has-report": "已有日报", "not-generated": "尚未生成", running: "正在生成", failed: "生成失败",
-  "no-matches": "无匹配论文", skipped: "已跳过", "report-missing": "日报文件缺失", future: "未来日期",
+  "no-matches": "无匹配论文", "no-updates": "当日无更新", "awaiting-announcement": "等待公告发布", skipped: "已跳过", "report-missing": "日报文件缺失", future: "未来日期",
 };
 
 interface CalendarOptions {
@@ -28,7 +28,7 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     <div class="calendar-body" id="daily-calendar-body"><div class="calendar-navigation"><button class="icon-button" data-calendar-action="previous" aria-label="${t("上个月")}">‹</button><strong class="calendar-month" aria-live="polite">${t("日报日历")}</strong><button class="icon-button" data-calendar-action="next" aria-label="${t("下个月")}">›</button><button class="quiet-button calendar-today" data-calendar-action="today">${t("回到今天")}</button></div>
     <div class="calendar-error" role="alert" hidden></div><div class="calendar-weekdays" aria-hidden="true"><span>${t("一")}</span><span>${t("二")}</span><span>${t("三")}</span><span>${t("四")}</span><span>${t("五")}</span><span>${t("六")}</span><span>${t("日")}</span></div>
     <div class="calendar-grid" role="group" aria-label="${t("日报日期")}"><div class="calendar-loading" role="status">${t("正在读取日历…")}</div></div>
-    <div class="calendar-legend" aria-label="${t("日历状态图例")}"><span><i class="calendar-dot has-report"></i>${t("有日报")}</span><span><i class="calendar-dot not-generated"></i>${t("可生成")}</span><span><i class="calendar-dot running"></i>${t("生成中")}</span><span><i class="calendar-dot failed"></i>${t("需处理")}</span><span><i class="calendar-dot no-matches"></i>${t("无匹配")}</span></div>
+    <div class="calendar-legend" aria-label="${t("日历状态图例")}"><span><i class="calendar-dot has-report"></i>${t("有日报")}</span><span><i class="calendar-dot not-generated"></i>${t("可生成")}</span><span><i class="calendar-dot running"></i>${t("生成中")}</span><span><i class="calendar-dot failed"></i>${t("需处理")}</span><span><i class="calendar-dot no-matches"></i>${t("无匹配")}</span><span><i class="calendar-dot no-updates"></i>${t("当日无更新")}</span><span><i class="calendar-dot awaiting-announcement"></i>${t("等待公告发布")}</span></div>
     <div class="calendar-summary" aria-live="polite"></div></div>`;
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => host.querySelector<T>(selector)!;
 
@@ -55,7 +55,7 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
       const countLabel = showCount ? day.papers === null ? t("，论文数未知") : t("，{0} 篇论文", day.papers) : "";
       const caption = showCount
         ? `<span class="calendar-day-count">${day.papers === null ? "—" : t("{0}篇", day.papers)}</span>`
-        : `<span class="calendar-day-mark" aria-hidden="true">${day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "skipped" ? "–" : ""}</span>`;
+        : `<span class="calendar-day-mark" aria-hidden="true">${day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "awaiting-announcement" ? "…" : day.state === "skipped" || day.state === "no-updates" ? "–" : ""}</span>`;
       return `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" title="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span class="calendar-day-number">${Number(day.date.slice(8))}</span>${caption}</button>`;
     }).join("");
     const selected = days.find(day => day.date === selectedDate);

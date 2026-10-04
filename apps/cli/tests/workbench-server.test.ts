@@ -174,3 +174,16 @@ it("permits the DSH desktop frame but still refuses API writes from its parent",
   expect((await fetch(new URL("api/status", app.url))).headers.get("content-security-policy")).toContain("frame-ancestors dsh-app://app");
   expect((await fetch(new URL("api/preferences", app.url), { method: "POST", headers: { Origin: "dsh-app://app", "Content-Type": "application/json" }, body: '{}' })).status).toBe(403);
 });
+
+it.each([
+  ["pending", "awaiting_announcement"],
+  ["completed", "no_updates"],
+  ["completed", "no_matches"],
+] as const)("keeps structured %s/%s in the job response", async (kind, outcome) => {
+  const { get } = await setup(async (_args, io) => {
+    io.onRunResult?.({ date: "2026-10-02", kind, outcome });
+    return 0;
+  });
+  await get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily", date: "2026-10-02" }) });
+  await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run).toMatchObject({ status: kind, outcome, exitCode: 0 }));
+});

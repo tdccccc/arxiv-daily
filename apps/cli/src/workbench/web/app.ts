@@ -1,5 +1,5 @@
 import { t, getUiLanguage, setUiLanguage } from "./i18n";
-import { DEFAULT_UI_APPEARANCE, normalizeUiAppearancePreferences, type UiAppearancePreferences } from "@arxiv-daily/core";
+import { isCompletedDiscovery, DEFAULT_UI_APPEARANCE, normalizeUiAppearancePreferences, type UiAppearancePreferences } from "@arxiv-daily/core";
 import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
@@ -377,14 +377,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     try {
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
-      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(run => run.status === "completed"), appearance);
+      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(isCompletedDiscovery), appearance);
       bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
         if (disposed) return;
         closeDialog();
         find(".connection-banner").hidden = true;
         if (!await loadStatus()) return;
         await initializeWorkspace(true);
-      }, acceptRun, status?.recentRuns?.some(run => run.status === "completed"), { appearance, onAppearanceSaved });
+      }, acceptRun, status?.recentRuns?.some(isCompletedDiscovery), { appearance, onAppearanceSaved });
     } catch (error) {
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.textContent = message(error);
@@ -401,10 +401,12 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function renderRun(): void {
     const tray = find(".run-tray");
     if (!currentRun || dismissedRun === currentRun.id) { tray.hidden = true; return; }
-    const labels = { running: t("正在运行"), completed: t("已完成"), failed: t("生成失败"), cancelled: t("已取消"), skipped: t("已跳过") };
+    const labels = { pending: t("等待公告发布"), running: t("正在运行"), completed: t("已完成"), failed: t("生成失败"), cancelled: t("已取消"), skipped: t("已跳过") };
+    const outcomeLabels = { awaiting_announcement: "等待公告发布", no_updates: "当日无更新", no_matches: "无匹配论文", papers_written: "日报已保存" };
+    const label = currentRun.outcome && (currentRun.status === "pending" || currentRun.status === "completed") ? t(outcomeLabels[currentRun.outcome]) : labels[currentRun.status];
     const keepOpen = tray.querySelector("details")?.open;
     tray.hidden = false;
-    tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${t(labels[currentRun.status])}</span><strong>${escapeHtml(runLabel(currentRun.label))}</strong></div>${currentRun.status === "running" ? `<button class="quiet-button" data-action="cancel-run">${t("取消任务")}</button>` : `<button class="icon-button" data-action="dismiss-run" aria-label="${t("关闭任务状态")}">×</button>`}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>${t("查看运行详情")}</summary><pre></pre></details>`;
+    tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${label}</span><strong>${escapeHtml(runLabel(currentRun.label))}</strong></div>${currentRun.status === "running" ? `<button class="quiet-button" data-action="cancel-run">${t("取消任务")}</button>` : `<button class="icon-button" data-action="dismiss-run" aria-label="${t("关闭任务状态")}">×</button>`}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>${t("查看运行详情")}</summary><pre></pre></details>`;
     tray.querySelector("pre")!.textContent = t(currentRun.output) || t("等待运行输出…");
   }
 

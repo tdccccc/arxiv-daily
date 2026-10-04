@@ -7,7 +7,7 @@ import type { WorkbenchRun } from "./server";
 
 export interface WorkbenchCalendarDay {
   date: string;
-  state: "has-report" | "not-generated" | "running" | "failed" | "no-matches" | "skipped" | "report-missing" | "future";
+  state: "has-report" | "not-generated" | "running" | "failed" | "no-matches" | "no-updates" | "awaiting-announcement" | "skipped" | "report-missing" | "future";
   reportPath: string | null;
   reportTitle: string | null;
   papers: number | null;
@@ -82,12 +82,18 @@ function resolveDay(date: string, today: string, report: DocumentEntry | undefin
     return { ...base, state: "running", message: "该日期的日报任务正在运行。" };
   }
   if (date > today) return { ...base, state: "future", message: "未来日期，暂不可生成日报。" };
+  const persistedOutcome = state?.status === "pending" || state?.status === "completed" || state?.status === "skipped" ? state.outcome : undefined;
+  const outcome = state ? persistedOutcome
+    : ownedRun?.date === date && (ownedRun.status === "pending" || ownedRun.status === "completed") ? ownedRun.outcome : undefined;
+  if (outcome === "awaiting_announcement") return { ...base, papers: null, state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", message: "该日期的公告尚未发布，可以稍后重新检查。" };
+  if (outcome === "no_updates") return { ...base, papers: 0, state: "no-updates", message: "已确认该日期所选分类没有新论文。" };
+  if (outcome === "no_matches") return { ...base, papers: 0, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" };
   if (state?.status === "completed") {
     return state.papersWritten === 0
       ? { ...base, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" }
       : { ...base, state: "report-missing", message: "运行记录显示已完成，但日报文件已缺失；重复运行会跳过此日期。" };
   }
-  if (isWeekendReportDate(date) && (!state || state.status === "pending" && !state.error || isLegacyWeekendAnnouncementGap(date, state.error))) {
+  if (!state?.outcome && !outcome && isWeekendReportDate(date) && (!state || state.status === "pending" && !state.error || isLegacyWeekendAnnouncementGap(date, state.error))) {
     return { ...base, state: "skipped", message: WEEKEND_REPORT_MESSAGE };
   }
   if (state?.status === "failed_transient") return { ...base, state: "failed", canGenerate: true, actionLabel: "重试生成", message: state.error || "生成暂时失败，可以重试。" };

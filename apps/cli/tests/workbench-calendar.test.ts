@@ -145,12 +145,38 @@ it('treats weekend announcement gaps as skipped without hiding real errors or sa
  expect(day('2026-10-11')).toMatchObject({state:'skipped',canGenerate:false});
  expect(day('2026-10-12')).toMatchObject({state:'not-generated',canGenerate:true});
 });
-it('skips weekend daily requests using core calendar rules without running the pipeline',async()=>{
+it('delegates weekend requests to core instead of manufacturing an ephemeral skip',async()=>{
  const {get,run}=await setup({now:'2026-10-03T12:00:00Z'});
  for(const body of [{kind:'daily'},{kind:'daily',date:'2026-10-04'}]){
   const response=await get('api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   expect(response.status).toBe(202);
-  expect((await response.json()).run).toMatchObject({status:'skipped',exitCode:0,output:expect.stringContaining('周末')});
+  await vi.waitFor(async () => expect((await (await get('api/runs/current')).json()).run.status).toBe('completed'));
  }
- expect(run).not.toHaveBeenCalled();
+ expect(run).toHaveBeenCalledTimes(2);
+});
+
+
+it("shows structured announcement outcomes independently of old errors and weekend inference", async () => {
+  const { get } = await setup({ now: "2026-10-12T12:00:00Z", records: {
+    "2026-10-03": state("pending", { outcome: "awaiting_announcement", error: "legacy diagnostic", papersWritten: 0 }),
+    "2026-10-05": state("completed", { outcome: "no_updates", papersWritten: 0 }),
+    "2026-10-06": state("completed", { outcome: "no_matches", papersWritten: 0 }),
+    "2026-10-07": state("completed", { outcome: "papers_written", papersWritten: 2 }),
+    "2026-10-08": state("failed_transient", { outcome: "awaiting_announcement", error: "HTTP 503 upstream unavailable" }),
+  }});
+  const result = await (await get("api/calendar?month=2026-10")).json();
+  const day = (date: string) => result.cells.find((cell: { date: string } | null) => cell?.date === date);
+  expect(day("2026-10-03")).toMatchObject({ state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", papers: null });
+  expect(day("2026-10-05")).toMatchObject({ state: "no-updates", canGenerate: false, papers: 0 });
+  expect(day("2026-10-06")).toMatchObject({ state: "no-matches", canGenerate: false, papers: 0 });
+  expect(day("2026-10-07")).toMatchObject({ state: "report-missing", papers: 2 });
+  expect(day("2026-10-08")).toMatchObject({ state: "failed", message: "HTTP 503 upstream unavailable", canGenerate: true });
+});
+
+it('does not hide a durable failure behind an older owned waiting outcome', async () => {
+ const {get}=await setup({ now:'2026-10-04T12:00:00Z',records:{'2026-10-02':state('failed_transient',{error:'network offline'})}, run:async(_args,io)=>{io.onRunResult?.({date:'2026-10-02',kind:'pending',outcome:'awaiting_announcement'});return 0;} });
+ await get('api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'daily',date:'2026-10-02'})});
+ await vi.waitFor(async()=>expect((await(await get('api/runs/current')).json()).run.status).toBe('pending'));
+ const calendar=await(await get('api/calendar?month=2026-10')).json();
+ expect(calendar.cells.find((cell:{date:string}|null)=>cell?.date==='2026-10-02')).toMatchObject({state:'failed',message:'network offline'});
 });

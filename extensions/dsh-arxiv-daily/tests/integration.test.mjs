@@ -104,6 +104,18 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   let run;
   for (let i = 0; i < 250; i++) { run = (await (await get('api/runs/current')).json()).run; if (run.status !== 'running') break; await new Promise(resolve => setTimeout(resolve, 50)); }
   assert.equal(run.status, 'completed', run.output);
+  assert.equal(run.outcome, 'papers_written');
+  for (const [date, status, outcome, calendarState] of [
+    ['2026-05-12', 'pending', 'awaiting_announcement', 'awaiting-announcement'],
+    ['2026-10-03', 'completed', 'no_updates', 'no-updates'],
+  ]) {
+    assert.equal((await post('api/runs', { kind: 'daily', date })).status, 202);
+    for (let i = 0; i < 250; i++) { run = (await (await get('api/runs/current')).json()).run; if (run.status !== 'running') break; await new Promise(resolve => setTimeout(resolve, 50)); }
+    assert.equal(run.status, status, run.output);
+    assert.equal(run.outcome, outcome);
+    const calendar = await (await get(`api/calendar?month=${date.slice(0, 7)}`)).json();
+    assert.equal(calendar.cells.find(cell => cell?.date === date).state, calendarState);
+  }
   const list = await (await get('api/papers?date=2026-05-11')).json(); assert.equal(list.total, 2);
   const paper = list.papers.find(p => !p.detailPath); assert.ok(paper, 'index-only discoveries remain available');
   assert.equal((await post('api/paper/mark', { key: paper.key, action: 'status', value: 'to_read', expected: 'inbox' })).status, 200);

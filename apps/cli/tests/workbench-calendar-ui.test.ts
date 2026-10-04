@@ -230,3 +230,39 @@ describe("daily calendar in the reading workbench", () => {
     expect(root.classList.contains("show-filters")).toBe(false);
   });
 });
+
+
+it.each([
+  ["pending", "awaiting_announcement", "等待公告发布", "Awaiting announcement"],
+  ["completed", "no_updates", "当日无更新", "No updates"],
+  ["completed", "no_matches", "无匹配论文", "No matching papers"],
+  ["completed", "papers_written", "日报已保存", "Daily report saved"],
+])("renders structured %s/%s outcomes in both interface languages", async (runStatus, outcome, zh, en) => {
+  for (const [language, label] of [["zh", zh], ["en", en]]) {
+    const { root } = setup(url => {
+      if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language, theme: "light" } });
+      if (url.pathname.endsWith("api/runs/current")) return json({ run: { id: language, kind: "daily", date: "2026-10-03", label: "2026-10-03", status: runStatus, outcome, output: "", startedAt: "2026-10-03T00:00:00Z", finishedAt: "2026-10-03T00:00:01Z", exitCode: 0 } });
+    });
+    await vi.waitFor(() => expect(root.querySelector(".run-state")?.textContent).toBe(label));
+    expect(root.querySelector('[data-action="cancel-run"]')).toBeNull();
+  }
+});
+
+
+it.each([["zh", "等待公告发布", "当日无更新", "重新检查公告"], ["en", "Awaiting announcement", "No updates", "Check announcement again"]])("shows distinct calendar availability with a recheck action in %s", async (language, waiting, empty, recheck) => {
+  const { root } = setup(url => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language, theme: "light" } });
+    if (url.pathname.endsWith("api/calendar")) {
+      const value = calendar();
+      Object.assign(value.cells.find(cell => cell?.date === "2026-10-03")!, { state: "awaiting-announcement", papers: null, canGenerate: true, actionLabel: "重新检查公告" });
+      Object.assign(value.cells.find(cell => cell?.date === "2026-10-04")!, { state: "no-updates", papers: 0, canGenerate: false, actionLabel: null });
+      return json(value);
+    }
+  });
+  await ready(root);
+  expect(day(root, "2026-10-03").getAttribute("aria-label")).toContain(waiting);
+  expect(day(root, "2026-10-04").getAttribute("aria-label")).toContain(empty);
+  expect(day(root, "2026-10-04").classList.contains("failed")).toBe(false);
+  day(root, "2026-10-03").click();
+  expect(root.querySelector('.calendar-summary [data-action="generate-date"]')?.textContent).toContain(recheck);
+});

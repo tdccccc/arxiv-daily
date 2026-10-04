@@ -265,3 +265,9 @@ describe("setup guide completion marker", () => {
     expect(settings.onboarding.guideCompleted).toBe(false);
   });
 });
+
+it("does not count a no-update day as first report completion", () => {
+  expect(getSetupStatus(DEFAULT_SETTINGS, {
+    "2026-10-03": { status: "completed", attempts: 1, lastAttempt: 1, papersWritten: 0, outcome: "no_updates" },
+  }).firstReportComplete).toBe(false);
+});

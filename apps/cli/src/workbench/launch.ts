@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { resolveCliConfigPath } from "../config-path";
-import type { CliIo } from "../main-types";
+import { isCliRunEvent, type CliIo } from "../main-types";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
 import { WorkbenchError } from "./documents";
@@ -27,9 +27,14 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
       if (signal.aborted) return 1;
       return new Promise<number>((resolve, reject) => {
         // Dispatch the same executable; do not reconstruct scheduler / manual-fetch behavior here.
-        const child = spawn(process.execPath, [executable, ...args], { env: options.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-        child.stdout.setEncoding("utf8").on("data", (chunk: string) => output.stdout.write(chunk));
-        child.stderr.setEncoding("utf8").on("data", (chunk: string) => output.stderr.write(chunk));
+        const child = spawn(process.execPath, [executable, ...args], { env: options.env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+        child.on("message", (message: unknown) => {
+          if (!message || typeof message !== "object") return;
+          const envelope = message as { type?: unknown; event?: unknown };
+          if (envelope.type === "arxiv-daily/run-result" && isCliRunEvent(envelope.event)) output.onRunResult?.(envelope.event);
+        });
+        child.stdout!.setEncoding("utf8").on("data", (chunk: string) => output.stdout.write(chunk));
+        child.stderr!.setEncoding("utf8").on("data", (chunk: string) => output.stderr.write(chunk));
         const cancel = () => { child.kill("SIGINT"); };
         signal.addEventListener("abort", cancel, { once: true });
         child.once("spawn", () => { if (signal.aborted) cancel(); });
