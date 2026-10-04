@@ -2,7 +2,7 @@
 
 ## User-approved next work
 
-P15 implementation and verification are complete; see phases/15-structured-run-status.md. DSH0.1.13 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
+P15 and P16 are complete. Current branch is rebased onto main c2de350 (0.5.0), with backup/claude-code-research-plugin-pre-rebase at eafe972. DSH0.1.14 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
 
 ## Workspace
 
@@ -41,3 +41,9 @@ Never rpc.intercept('/api') in DSH: collides with Gateway. Working host uses ctx
 ## Verification
 
 Use temporary XDG/DSH_HOME/vault. DSH fixtures and actual installed Host acceptance are in extensions/dsh-arxiv-daily/tests. Build via node extensions/dsh-arxiv-daily/build.mjs; package via npm pack dist/package. CLI vitest config apps/cli/vitest.config.mts, plugin equivalent; core script may need8GiB/single fork for broad runs. Do not conflate DOM/Host tests with an Electron visual walkthrough.
+
+## P16 current integration
+
+Main's schema6 proposals contain topics[].directions. Accepted directions are normal settings topics; standalone profiles and personalized daily snapshots were removed by main. CLI library confirm/review use atomic topicSettings read/change and root-TOML library_proposal_acceptances. Retired profile commands explicitly reject with migration guidance. Main's title/abstract index uses bounded page text and skips document sidecars. Do not reintroduce removed profile imports.
+
+Workbench supports direction rows + daily paper limit, preserves direction id/origin and old-client omissions. CLI config normalization now gives legacy directions stable IDs across loads. Main download progress, setup completion marker, native settings actions, parser provenance and P15 waiting/failure budgets all retained. Checks: CLI339, plugin1007, focused core suites, DSH20, Claude7, native workflow5; builds/typechecks/boundaries/inventory pass. No whole-core/cross-platform/Electron-visual claim. Latest artifact0.1.14 (linux/x64); no production install or push. See phase16 for precise evidence.

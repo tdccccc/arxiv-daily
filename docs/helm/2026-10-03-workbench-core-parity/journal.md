@@ -109,3 +109,9 @@ P15 is complete within the requested scope. P2/P3/P4 stay pending for subsequent
 ## 2026-10-05T01:53:35+08:00 — P16 start
 
 用户授权将当前分支rebase到最新main。备份eafe972，目标7e1774b；104项关键基线通过。按行为保持型整合执行，主线不变，不push或安装生产插件。
+
+## 2026-10-05T02:15:06+08:00 — P16 rebase accepted
+
+Rebased all77 original commits onto main c2de350; retained backup eafe972. No dropped patches (67 unchanged,10 adapted), plus scoped integration/docs/release checkpoints. Main's removal of standalone profiles required CLI topic acceptance and atomic receipts, not restoration of obsolete stores. Shared settings now preserve direction lists and the daily cap; P15 stays intact. Stable legacy direction IDs and page-text-only library parsing fixed with observed regressions.
+
+CLI339, Obsidian1007, core focused suites, DSH20 actual Host, Claude package7 and native workflow5 passed; typechecks/boundaries/inventory/builds passed. DSH0.1.14 packaged locally; no production install, main edit or push. Detailed coverage/limitations in phase16. P16 complete; remaining product phases stay pending.
