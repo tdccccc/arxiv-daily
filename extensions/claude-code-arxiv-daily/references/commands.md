@@ -19,43 +19,41 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/arxiv-daily-cli.cjs" COMMAND [ARGUMENTS]
 | `library status` | Disclose current library scope, processing endpoints, authorization status/fingerprint |
 | `library authorize --fingerprint HASH` / `library revoke` | Grant the exact reviewed scope or revoke it |
 | `library prepare` | Prepare isolated pinned PDF/runtime packages in the product cache |
-| `library scan` / `library index` | Reconcile the catalog, then build/reuse full-text indexes and generate applicable incremental suggestions |
-| `library propose` / `library directions` | Generate clustered proposals; inspect proposals, confirmed directions and suggestions |
-| `library confirm --candidate ID --proposal-revision N --profile-revision N` | Confirm the displayed candidate through the existing coordinator |
-| `library update` | Recompute incremental direction suggestions from the indexed library |
-| `library search --query TEXT [--mode hybrid\|lexical\|dense] [--limit N]` | Retrieve full-text evidence; limit 1–50, default 10 |
-| `library review --input REQUEST.json` | Revise a direction or review a suggestion using its displayed version |
+| `library scan` / `library index` | Reconcile the catalog, then build/reuse title-and-abstract indexes |
+| `library propose` / `library directions` | Generate clustered proposals; inspect proposals, configured topics and acceptance receipts |
+| `library confirm --candidate ID --proposal-revision N` | Confirm the displayed candidate through the existing coordinator |
+| `library search --query TEXT [--mode hybrid\|lexical\|dense] [--limit N]` | Retrieve indexed title-and-abstract evidence; limit 1–50, default 10 |
+| `library review --input REQUEST.json` | Edit a candidate or accept proposed topics using the displayed version |
 | `schedule show` | Inspect the existing scheduling configuration |
 | `schedule install` / `schedule uninstall` | Apply/remove the managed OS schedule, only when requested |
 | `data export --out PATH.zip` / `data import PATH.zip [--yes]` | Existing Vault-data portability workflow, only when requested |
 | `help` | Complete product command help |
 
-Generation commands use progress messages and a final result line, with status 0 for completed/skipped/done/already-exists, 1 for pending/runtime failure, and 2 for configuration/argument failure. A background process ID is not a completed result. `status` and `papers` print JSON; they do not start generation or require a valid model key to inspect existing data.
+Generation commands use progress messages and a final result line, with status 0 for completed/skipped/done/already-exists and awaiting-announcement, 1 for other pending/runtime failure, and 2 for configuration/argument failure. A background process ID is not a completed result. `status` and `papers` print JSON; they do not start generation or require a valid model key to inspect existing data.
 
 Configuration is `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`) on Linux/macOS, or `%APPDATA%/arxiv-daily/config.toml` on Windows. `vault_root` selects the output folder. Settings are not discovered from the current directory and are not automatically copied from Obsidian. The old prototype's `--workspace`, `save`, `read`, filename-inventory `library` interface, and `confirm-direction` command have been removed. The new `library` command group invokes the shared product workflow.
 
 Daily reports, detailed notes, Paper Index, run state and checkpoints follow the normal product output layout. Do not directly edit internal JSON, generate replacement reports in chat, or migrate old `arxiv-daily-agent/` records into it. Read the CLI exit status and preserve existing user-authored notes.
 
-## Reviewing directions and suggestions
+## Reviewing proposed topics
 
-Read `library directions` first. Its output has `proposal`, `profile`, `suggestions` and aligned `suggestionKeys`. Revision values are numbers. Supported JSON requests:
+Read `library directions` first. Its output contains `proposal`, `topics` and `acceptances`. Candidates are in `proposal.topics[].directions`; revision values are numbers.
 
 | `operation` | Other required fields |
 |---|---|
 | `update-candidate` | `candidateId`, `expectedProposalRevision`, `patch`; optional `representativePaperKeys` |
-| `update-direction` | `directionId`, `expectedProfileRevision`, `patch`; optional `representativePaperKeys` |
-| `enable`, `disable`, `lock`, `unlock` | `directionId`, `expectedProfileRevision` |
-| `apply` | `key`, `expectedSuggestionsRevision`, `expectedProfileRevision`, `expectedProposalRevision` (null when no proposal exists) |
-| `dismiss` | `key`, `expectedSuggestionsRevision` |
+| `accept-topics` | `topicIds`, `expectedProposalRevision`; optional `candidateIds` |
 
-`patch` uses the existing direction fields: `name`, `description`, `discoveryCues`. For example, after the user asks to disable a displayed direction:
+`patch` supports `text` and `discoveryCues`. After the user confirms displayed topics:
 
 ```json
 {
-  "operation": "disable",
-  "directionId": "ID_FROM_PROFILE",
-  "expectedProfileRevision": 3
+  "operation": "accept-topics",
+  "topicIds": ["ID_FROM_PROPOSAL"],
+  "expectedProposalRevision": 3
 }
 ```
 
-A stale version is an error. Applying suggestions follows the original sequential persistence semantics; if consuming a suggestion fails after a profile/proposal commit, inspect the current records before retrying. Do not claim a cross-file transaction or overwrite files to hide the error.
+Acceptance atomically saves normal research topics and acceptance receipts in the CLI TOML. Repeated acceptance does not recreate a direction the researcher subsequently removed. A stale proposal or config is an error: refresh and reconcile. Accepted directions participate in ordinary topic filtering; later library authorization changes do not erase accepted settings.
+
+The independent interest profile and its enable/disable/lock/unlock/apply/dismiss operations are retired. Edit accepted research directions in topic settings. `library update` is retired; scan, index and propose to prepare new suggestions for review.

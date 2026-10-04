@@ -107,14 +107,14 @@ node "$ARXIV_DAILY_CLI" library directions
 审核候选后，用显示的 ID 和版本确认：
 
 ```sh
-node "$ARXIV_DAILY_CLI" library confirm --candidate "候选ID" --proposal-revision 0 --profile-revision 0
+node "$ARXIV_DAILY_CLI" library confirm --candidate "候选ID" --proposal-revision 0
 node "$ARXIV_DAILY_CLI" run --today
 node "$ARXIV_DAILY_CLI" library search --query "你关心的具体问题"
 ```
 
-确认后的有效方向会进入原来的日报筛选，与手动主题共同工作；日报解释发现来源和相对于已有文献的新意。新增论文后再次 `scan`、`index`，有变化的索引会按原规则生成增量建议，建议仍须人工审核。修改方向、启停、锁定、应用/忽略建议见 [命令参考](references/commands.md)。
+确认后的方向会原子保存为普通研究主题，与手动输入的方向使用同一日报筛选流程。新增论文后再次 `scan`、`index`、`propose`，审核后接受新的主题或方向。候选编辑和主题接受见 [命令参考](references/commands.md)。
 
-本地索引不把全文发送到模型服务，也可先索引、后为方向生成授权。远程 embedding 会发送全文片段，必须取得显示范围的授权。切换端点或处理范围会使旧授权失效；`library revoke` 可撤销。库连接保存进同一 TOML，连接/授权操作保留其他设置值，但会规范化 TOML 格式。
+本地索引不把全文发送到模型服务，也可先索引、后为方向生成授权。远程 embedding 会发送标题和摘要，必须取得显示范围的授权。切换端点或处理范围会使旧授权失效；`library revoke` 可撤销。库连接保存进同一 TOML，连接/授权操作保留其他设置值，但会规范化 TOML 格式。
 
 `prepare` 将锁定的 PDF.js 和本地推理依赖装到产品缓存；选择远程 embedding 时不安装本地 CPU 组件。本地 e5 模型权重在首次使用时下载，后续复用缓存。已在 Linux Node 20.19 和 Node 22 验证实际 PDF 解析和 CPU 推理；Windows/macOS CPU运行尚待验收。
 
