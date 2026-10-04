@@ -105,3 +105,7 @@ Host integration required an L1 transport adjustment: actual DSH tests exposed t
 Observed Red/Green and regressions are recorded in phase15: core279 focused, CLI312 full plus subsequent75/27 focused, Obsidian774 full, DSH20 including actual Host; final artifact Host rerun2/2; typechecks/boundaries/inventory/builds pass. Commits c00cff9,1c1f33b,3922e08. DSH0.1.13 linux/x64 package is ready at extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.13.tgz. No production profile/vault was modified; installed Web version remains0.1.12 and Obsidian was only built. No Computer Use, real paid models or email.
 
 P15 is complete within the requested scope. P2/P3/P4 stay pending for subsequent work.
+
+## 2026-10-05T01:53:35+08:00 — P16 start
+
+用户授权将当前分支rebase到最新main。备份eafe972，目标7e1774b；104项关键基线通过。按行为保持型整合执行，主线不变，不push或安装生产插件。
