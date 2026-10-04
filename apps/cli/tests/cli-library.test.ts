@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stringify as stringifyToml } from "smol-toml";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   authorizeLibraryConnection,
   createLibraryConnection,
@@ -10,16 +10,15 @@ import {
   createPersonalLibraryIdentificationFingerprint,
   decodePersonalLibraryCatalog,
   decodePersonalLibraryDirectionProposal,
-  decodePersonalLibraryInterestProfile,
   decodeFullTextKnowledgeBaseManifest,
   PersonalLibraryCatalogStore,
   PersonalLibraryDirectionProposalStore,
-  PersonalLibraryInterestProfileStore,
   FullTextKnowledgeBaseFileStore,
   type DocumentParser,
   type EmbeddingModel,
   type HttpClient,
 } from "@arxiv-daily/core";
+import * as nodeRuntime from "@arxiv-daily/node-runtime";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
 import { runCliLibrary } from "../src/library-cmd";
@@ -111,10 +110,8 @@ async function fixture({ authorized = true, remote = false } = {}) {
       modelRequests.push(user);
       const match = /<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(user);
       if (!match) throw new Error("Fixture model expected paper_data");
-      const parsed = JSON.parse(match[1]!) as { paperKey: string }[] | { clusters: { paperKeys: string[] }[] };
-      const answer = Array.isArray(parsed)
-        ? { candidates: [{ name: "Research direction", description: "A direction supported by this cluster.", discoveryCues: ["methods", "evaluation"], representativePaperKeys: parsed.slice(0, 3).map(paper => paper.paperKey) }] }
-        : { suggestions: parsed.clusters.map(cluster => ({ kind: "new", paperKeys: cluster.paperKeys, reason: "New coherent research theme." })) };
+      const parsed = JSON.parse(match[1]!) as { groups: { id: string; papers: {paperKey:string}[] }[] };
+      const answer = { topics: parsed.groups.map((group,index) => ({suggestedName:`Research theme ${index}`,directions:[{text:`Research direction ${index}`,discoveryCues:["methods","evaluation"],groupIds:[group.id],representativePaperKeys:group.papers.slice(0,3).map(paper=>paper.paperKey)}]})) };
       return { status: 200, headers: {}, bodyText: `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(answer) } }] })}\n\ndata: [DONE]\n\n` };
     }
     throw new Error(`Unexpected fixture HTTP request: ${request.url}`);
@@ -136,7 +133,6 @@ async function fixture({ authorized = true, remote = false } = {}) {
       storage, scope, identification,
       catalog: new PersonalLibraryCatalogStore(storage, config.settings.output),
       proposal: new PersonalLibraryDirectionProposalStore(storage, config.settings.output, scope, identification),
-      profile: new PersonalLibraryInterestProfileStore(storage, config.settings.output, scope, identification),
       knowledgeBase: new FullTextKnowledgeBaseFileStore(storage, config.settings.output, scope, identification),
     };
   }
@@ -173,30 +169,30 @@ describe("CLI shared library workflow", () => {
     expect(proposed.code, proposed.stderr).toBe(0);
     const proposal = decodePersonalLibraryDirectionProposal(JSON.parse(proposed.stdout));
     expect(proposal).not.toBeNull();
-    expect(proposal!.candidates).toHaveLength(2);
+    expect(proposal!.topics.flatMap(topic => topic.directions)).toHaveLength(2);
     expect(decodePersonalLibraryDirectionProposal(JSON.parse(await stores.storage.readText(stores.proposal.paths.documentPath))))
       .toEqual(proposal);
     const beforeConfirm = await f.invoke(["directions"]);
     expect(beforeConfirm.code, beforeConfirm.stderr).toBe(0);
     const review = JSON.parse(beforeConfirm.stdout);
-    expect(review.profile.directions).toEqual([]);
+    expect(review.acceptances).toEqual([]);
     expect(review.proposal).toEqual(proposal);
-    const candidate = proposal!.candidates[0]!;
-    const confirmArgs = ["confirm", "--candidate", candidate.id, "--proposal-revision", String(proposal!.revision), "--profile-revision", String(review.profile.revision)];
+    const candidate = proposal!.topics.flatMap(topic => topic.directions)[0]!;
+    const confirmArgs = ["confirm", "--candidate", candidate.id, "--proposal-revision", String(proposal!.revision)];
     const confirmed = await f.invoke(confirmArgs);
     expect(confirmed.code, confirmed.stderr).toBe(0);
     const confirmedReview = JSON.parse(confirmed.stdout);
-    const profile = decodePersonalLibraryInterestProfile(confirmedReview.profile);
-    expect(profile).not.toBeNull();
-    expect(profile!.directions).toHaveLength(1);
-    expect(profile!.directions[0]).toMatchObject({ name: candidate.name, status: "active" });
-    expect(decodePersonalLibraryInterestProfile(JSON.parse(await stores.storage.readText(stores.profile.paths.documentPath))))
-      .toEqual(profile);
-    // Fresh stores and config loads recover the same authoritative records.
-    expect(await f.stores().profile.load()).toEqual(profile);
+    expect(confirmedReview.topics.flatMap((topic: {directions:{text:string}[]})=>topic.directions).some((direction:{text:string})=>direction.text===candidate.text)).toBe(true);
+    expect(confirmedReview.acceptances).toHaveLength(1);
     const reloaded = await f.invoke(["directions"]);
     expect(reloaded.code, reloaded.stderr).toBe(0);
-    expect(JSON.parse(reloaded.stdout).profile).toEqual(profile);
+    expect(JSON.parse(reloaded.stdout).topics).toEqual(confirmedReview.topics);
+    const acceptFile = join(f.root, "accept.json");
+    await writeFile(acceptFile, JSON.stringify({ operation: "accept-topics", topicIds: [proposal!.topics[0]!.id], candidateIds: [candidate.id], expectedProposalRevision: confirmedReview.proposal.revision }));
+    const repeatedAcceptance = await f.invoke(["review", "--input", acceptFile]);
+    expect(repeatedAcceptance.code, repeatedAcceptance.stderr).toBe(0);
+    expect(JSON.parse(repeatedAcceptance.stdout).topics).toEqual(confirmedReview.topics);
+    expect(JSON.parse(repeatedAcceptance.stdout).acceptances).toEqual(confirmedReview.acceptances);
     const repeatedIndex = await f.invoke(["index"]);
     expect(repeatedIndex.code, repeatedIndex.stderr).toBe(0);
     expect(JSON.parse(repeatedIndex.stdout)).toMatchObject({ indexed: 0, reused: 6, failed: 0 });
@@ -209,7 +205,7 @@ describe("CLI shared library workflow", () => {
     expect(lexicalMatches.every((match: { paperKey: string; rankingScoreKind: string }) =>
       ["arxiv:2610.00001", "arxiv:2610.00002", "arxiv:2610.00003"].includes(match.paperKey)
       && match.rankingScoreKind === "bm25")).toBe(true);
-    expect(lexicalMatches[0].hits[0]).toMatchObject({ source: "lexical", page: 1 });
+    expect(lexicalMatches[0].hits[0]).toMatchObject({ source: "lexical" });
     expect(lexicalMatches[0].hits[0].text).toContain("agents");
     // Core checks model identity even for lexical mode; the lazy model must not infer.
     expect(f.embedding.embed).toHaveBeenCalledTimes(embeddingCallsBeforeSearch);
@@ -219,17 +215,63 @@ describe("CLI shared library workflow", () => {
     expect(hybridMatches).toHaveLength(2);
     expect(hybridMatches[0].rankingScoreKind).toBe("rrf");
     expect(hybridMatches[0].hits.some((hit: { text: string }) => hit.text.includes("agents"))).toBe(true);
-    // Confirming removes the accepted candidate. Use the still-pending second
-    // candidate with old revisions to exercise the revision gate itself.
+    // A mismatched proposal revision cannot append a second direction.
     const staleConfirmation = await f.invoke([
-      "confirm", "--candidate", proposal!.candidates[1]!.id,
-      "--proposal-revision", String(proposal!.revision),
-      "--profile-revision", String(review.profile.revision),
+      "confirm", "--candidate", proposal!.topics.flatMap(topic => topic.directions)[1]!.id,
+      "--proposal-revision", String(proposal!.revision + 1),
     ]);
     expect(staleConfirmation.code).not.toBe(0);
     expect(staleConfirmation.stderr).toMatch(/revision|stale|review/i);
-    expect(await f.stores().profile.load()).toEqual(profile);
+    expect((await loadCliConfig({configPath:f.configPath})).settings.arxiv.topics).toEqual(confirmedReview.topics);
     await f.assertSourcesUnchanged();
+  });
+
+  it("explains retired profile operations without modifying topic settings", async () => {
+    const f = await fixture();
+    const before = await readFile(f.configPath, "utf8");
+    const update = await f.invoke(["update"]);
+    expect(update.code).toBe(2);
+    expect(update.stderr).toMatch(/retired.*topic settings/);
+    const file = join(f.root, "old-review.json");
+    await writeFile(file, JSON.stringify({ operation: "lock", directionId: "old-profile" }));
+    const review = await f.invoke(["review", "--input", file]);
+    expect(review.code).toBe(2);
+    expect(review.stderr).toMatch(/profiles are retired/);
+    expect(await readFile(f.configPath, "utf8")).toBe(before);
+  });
+
+  it("indexes titles and abstracts without probing an enabled document sidecar", async () => {
+    const f = await fixture();
+    const document = parseToml(await readFile(f.configPath, "utf8"));
+    await writeFile(f.configPath, stringifyToml({ ...document, pdf_parser_sidecar: {
+      enabled: true, capabilities_url: "http://127.0.0.1:5001/v1/capabilities", parse_url: "http://127.0.0.1:5001/v1/parse",
+    } }));
+    const config = await loadCliConfig({ configPath: f.configPath });
+    expect(config.settings.pdfParserSidecar.enabled).toBe(true);
+    const scanned = await f.invoke(["scan"]);
+    expect(scanned.code, scanned.stderr).toBe(0);
+    const sidecarRequests: string[] = [];
+    const http: HttpClient = { request: async request => {
+      if (new URL(request.url).hostname === "127.0.0.1") {
+        sidecarRequests.push(request.url);
+        return { status: 200, headers: {}, bodyText: JSON.stringify({ protocolVersion: 1,
+          parser: { id: "fixture-sidecar", version: "1" }, capabilities: ["page-text", "document-structure"],
+          maxRequestBytes: 5_000_000, maxResponseBytes: 2_000_000,
+        }) };
+      }
+      return f.http.request(request);
+    } };
+    const createParser = vi.spyOn(nodeRuntime, "createNodeLibraryDocumentParser").mockResolvedValue(f.parser);
+    try {
+      const out: string[] = [], err: string[] = [];
+      const code = await runCliLibrary(config, ["index"], {
+        stdout: { write: text => out.push(text) }, stderr: { write: text => err.push(text) },
+      }, { http, createEmbedding: f.options.createEmbedding });
+      expect(code, err.join("")).toBe(0);
+      expect(JSON.parse(out.join(""))).toMatchObject({ indexed: 6, failed: 0, searchablePapers: 6 });
+      expect(sidecarRequests).toEqual([]);
+      await f.assertSourcesUnchanged();
+    } finally { createParser.mockRestore(); }
   });
 
   it("allows local indexing without a model-processing grant but refuses direction inference", async () => {
@@ -245,7 +287,8 @@ describe("CLI shared library workflow", () => {
     expect(f.modelRequests).toEqual([]);
     expect(await f.stores().proposal.load()).toBeNull();
     const review = JSON.parse((await f.invoke(["directions"])).stdout);
-    expect(review.suggestions.pendingAuthorization.bufferedPaperCount).toBe(6);
+    expect(review.proposal).toBeNull();
+    expect(review.acceptances).toEqual([]);
     await f.assertSourcesUnchanged();
   });
 

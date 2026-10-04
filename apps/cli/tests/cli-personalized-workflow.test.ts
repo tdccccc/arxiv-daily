@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { stringify } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import {
   LibraryWorkflow,
   Logger,
   authorizeLibraryConnection,
   createLibraryConnection,
-  parseDailyReportDiscoveryProvenance,
-  parseDailyReportPersonalNovelty,
   revokeLibraryConnection,
   type ChatMessage,
   type DocumentParser,
@@ -17,15 +15,14 @@ import {
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeStorageAdapter, openScopedLibrarySource, type FetchLike } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
+import { createCliTopicSettings } from "../src/library-topic-settings";
 import { runCli } from "../src/main";
 import { buildCliRuntime, type CliRuntime } from "../src/runtime";
 
 const DATE = "2026-10-01";
 const MANUAL_ID = "2610.10001";
 const LIBRARY_ID = "2610.10002";
-const DIRECTION_ID = "confirmed-agent-evaluation";
 const MODEL_URL = "https://model.example/v1";
-const NOVELTY = "Adds intervention-based evaluation absent from the representative abstracts.";
 const roots: string[] = [];
 const runtimes: CliRuntime[] = [];
 afterEach(async () => {
@@ -67,6 +64,7 @@ function fencedData(messages: ChatMessage[]): unknown {
 }
 
 /** Only the network transport is controlled; real LlmClient and ArxivFetcher decode every response. */
+let acceptedTopicTag = "";
 function transport() {
   const calls: Array<{ kind: string; messages: ChatMessage[] }> = [];
   const requests: string[] = [];
@@ -78,29 +76,15 @@ function transport() {
       const system = messages[0]?.content ?? "";
       let kind: string;
       let content: string;
-      if (system.includes("You propose provisional research directions")) {
+      if (system.includes("You organize a personal literature library")) {
         kind = "propose";
-        const papers = fencedData(messages) as Array<{ paperKey: string }>;
-        content = JSON.stringify({ candidates: [{
-          name: "Agent evaluation", description: "Reliable evaluation of autonomous research agents.",
-          discoveryCues: ["agent evaluation", "reliability"],
-          representativePaperKeys: papers.slice(0, 3).map(({ paperKey }) => paperKey),
-        }] });
-      } else if (system.includes("选择最匹配的主题")) {
+        const payload = fencedData(messages) as {groups:{id:string;papers:{paperKey:string}[]}[]};
+        content = JSON.stringify({topics:payload.groups.map((group,index)=>({suggestedName:`Agent evaluation ${index}`,directions:[{text:"Reliable evaluation of autonomous research agents.",discoveryCues:["agent evaluation","reliability"],groupIds:[group.id],representativePaperKeys:group.papers.slice(0,3).map(p=>p.paperKey)}]}))});
+      } else if (system.includes("为所有命中论文评分")) {
         kind = "manual-filter";
-        // The same deterministic model answer in both runs excludes the agent paper.
-        content = JSON.stringify({ papers: [{ id: MANUAL_ID, category: "astronomy" }] });
-      } else if (system.includes("You classify new arXiv papers against researcher-confirmed directions")) {
-        kind = "library-filter";
-        const payload = fencedData(messages) as { papers: Array<{ paperKey: string }>; directions: Array<{ id: string }> };
-        expect(payload.directions.map(({ id }) => id)).toContain(DIRECTION_ID);
-        content = JSON.stringify({ papers: payload.papers.map(({ paperKey }) => ({
-          paperKey, directionIds: paperKey === `arxiv:${LIBRARY_ID}` ? [DIRECTION_ID] : [],
-        })) });
-      } else if (system.includes("compare one new arXiv paper against its representative prior papers")) {
-        kind = "novelty";
-        const payload = fencedData(messages) as { paper: { paperKey: string }; basis: Array<{ paperKey: string; abstract: string }> };
-        content = JSON.stringify({ differenceType: "new-method", comparisonBasis: [payload.basis[0]!.paperKey], evidenceDepth: "metadata-and-abstract", explanation: NOVELTY });
+        const topic = acceptedTopicTag;
+        expect(JSON.stringify(messages)).toContain("Reliable evaluation of autonomous research agents.");
+        content = JSON.stringify({papers:[{id:MANUAL_ID,category:"astronomy",directions:["astronomy#1"],relevanceScore:90},{id:LIBRARY_ID,category:topic,directions:[`${topic}#1`],relevanceScore:90}]});
       } else if (system.includes("严格 JSON 对象") || system.includes("strict JSON object")) {
         kind = "summary";
         const id = /ID: (\d{4}\.\d{4,5})/.exec(messages[1]?.content ?? "")?.[1];
@@ -161,6 +145,7 @@ async function fixture(authorized: boolean) {
   };
   let id = 0;
   const workflow = new LibraryWorkflow({
+    topicSettings: createCliTopicSettings(config),
     storage: host.storage, output: config.settings.output, connection, source, http: host.http,
     arxivFetcher: seedRuntime.fetcher, llm: seedRuntime.llm,
     createParser: async () => ({ parser }), createEmbedding: async () => embedding,
@@ -169,20 +154,21 @@ async function fixture(authorized: boolean) {
   const catalog = await workflow.scan();
   expect(await workflow.index()).toMatchObject({ indexed: 6, failed: 0 });
   const proposal = await workflow.propose();
-  expect(proposal.candidates).toHaveLength(2);
-  const candidate = proposal.candidates.find((entry) => entry.representatives.some(({ paperKey }) => paperKey === "arxiv:2610.00001"))!;
-  const confirmed = await workflow.confirm({ candidateId: candidate.id, directionId: DIRECTION_ID, status: "active", draft: {
-    name: candidate.name, description: candidate.description, discoveryCues: candidate.discoveryCues,
+  expect(proposal.topics.flatMap(topic=>topic.directions)).toHaveLength(2);
+  const candidate = proposal.topics.flatMap(topic=>topic.directions).find((entry) => entry.representatives.some(({ paperKey }) => paperKey === "arxiv:2610.00001"))!;
+  const confirmed = await workflow.confirm({ candidateId: candidate.id, status: "active", draft: {
+    text: candidate.text, discoveryCues: candidate.discoveryCues,
     representativePaperKeys: candidate.representatives.map(({ paperKey }) => paperKey),
   } });
+  acceptedTopicTag = confirmed.topics.find(topic=>topic.directions.some(direction=>direction.text===candidate.text))!.tag;
   seedRuntime.dispose?.();
-  if (!authorized) await fs.writeFile(configPath, stringify({ ...document, library: revokeLibraryConnection(connection) }));
+  if (!authorized) await fs.writeFile(configPath, stringify({ ...parse(await fs.readFile(configPath,"utf8")), library: revokeLibraryConnection(connection) }));
   network.calls.length = 0;
   network.requests.length = 0;
-  return { configPath, host, network, logger, sourceBytes, selectedRoot, catalog, profile: confirmed.profile };
+  return { configPath, host, network, logger, sourceBytes, selectedRoot, catalog, topics: confirmed.topics };
 }
 
-describe("CLI personalized discovery through the complete daily workflow", () => {
+describe("CLI accepted topics through the complete daily workflow", () => {
   it.each([true, false])("writes a real daily and paper index with library authorization=%s", async (authorized) => {
     const f = await fixture(authorized);
     const stdout: string[] = [], stderr: string[] = [];
@@ -198,49 +184,18 @@ describe("CLI personalized discovery through the complete daily workflow", () =>
       io: { stdout: { write: (chunk) => { stdout.push(String(chunk)); } }, stderr: { write: (chunk) => { stderr.push(String(chunk)); } } },
     });
     expect(code, [...stderr, ...f.logger.getBuffer()].join("\n")).toBe(0);
-    expect(stdout.join("\n")).toContain(`completed (${authorized ? 2 : 1} papers written)`);
+    expect(stdout.join("\n")).toContain(`completed (${2} papers written)`);
     const dailyPath = runtime!.writer.dailyPath(DATE);
     const daily = await f.host.storage.readText(dailyPath);
     const inbox = await runtime!.paperIndex.load();
     expect(daily).toContain(metadata(MANUAL_ID).title);
     expect(inbox.papers[`arxiv:${MANUAL_ID}`]?.primaryTopic).toBe("astronomy");
     expect(f.network.calls.filter(({ kind }) => kind === "manual-filter")).toHaveLength(1);
-    const provenance = parseDailyReportDiscoveryProvenance(daily, DATE);
-    const novelty = parseDailyReportPersonalNovelty(daily, DATE);
-    expect(provenance.kind).toBe("valid"); expect(novelty.kind).toBe("valid");
-    if (provenance.kind !== "valid" || novelty.kind !== "valid") throw new Error("Invalid committed report markers");
-    if (authorized) {
-      expect(daily).toContain(metadata(LIBRARY_ID).title);
-      expect(daily).toContain("> 个人新颖性：新方法");
-      expect(daily).toContain("evaluation absent from the representative abstracts");
-      expect(daily).toContain("证据深度：元数据与摘要");
-      const entry = inbox.papers[`arxiv:${LIBRARY_ID}`]!;
-      expect(entry.primaryTopic).toBe("personal-library");
-      const occurrence = provenance.occurrences.find(({ arxivId }) => arxivId === LIBRARY_ID)!;
-      expect(occurrence.provenance).toMatchObject({ manualTopicTags: [], directions: [{ id: DIRECTION_ID }] });
-      expect(occurrence.provenance.directions[0]!.representatives.every(({ evidenceDepth }) => evidenceDepth === "metadata-and-abstract")).toBe(true);
-      expect(entry.discoveryProvenanceByReport[dailyPath]).toEqual(occurrence.provenance);
-      expect(novelty.occurrences).toEqual([{ arxivId: LIBRARY_ID, novelty: {
-        differenceType: "new-method", comparisonBasis: ["arxiv:2610.00001"], evidenceDepth: "metadata-and-abstract", explanation: NOVELTY,
-      } }]);
-      expect(entry.noveltyByReport[dailyPath]).toEqual(novelty.occurrences[0]!.novelty);
-      expect(f.network.calls.filter(({ kind }) => kind === "library-filter")).toHaveLength(1);
-      expect(f.network.calls.filter(({ kind }) => kind === "novelty")).toHaveLength(1);
-      const noveltyInput = fencedData(f.network.calls.find(({ kind }) => kind === "novelty")!.messages) as {
-        paper: { paperKey: string }; basis: Array<Record<string, unknown>>;
-      };
-      expect(noveltyInput.paper.paperKey).toBe(`arxiv:${LIBRARY_ID}`);
-      for (const basis of noveltyInput.basis) {
-        expect(Object.keys(basis).sort()).toEqual(["abstract", "authors", "categories", "paperKey", "published", "title"]);
-        expect(basis.abstract).toBe(f.catalog.papers[String(basis.paperKey)]!.abstract);
-      }
-    } else {
-      expect(daily).not.toContain(metadata(LIBRARY_ID).title);
-      expect(inbox.papers[`arxiv:${LIBRARY_ID}`]).toBeUndefined();
-      expect(novelty.occurrences).toEqual([]);
-      expect(f.network.calls.some(({ kind }) => kind === "library-filter" || kind === "novelty")).toBe(false);
-    }
-    expect(f.network.calls.filter(({ kind }) => kind === "summary")).toHaveLength(authorized ? 2 : 1);
+    expect(daily).toContain(metadata(LIBRARY_ID).title);
+    expect(inbox.papers[`arxiv:${LIBRARY_ID}`]?.primaryTopic).toBe(acceptedTopicTag);
+    expect(f.network.calls.map(({kind})=>kind)).not.toContain("library-filter");
+    expect(f.network.calls.map(({kind})=>kind)).not.toContain("novelty");
+    expect(f.network.calls.filter(({kind})=>kind==="summary")).toHaveLength(2);
     expect(runtime!.stateStore.snapshot()[DATE]?.status).toBe("completed");
     for (const [name, bytes] of f.sourceBytes) expect(await fs.readFile(path.join(f.selectedRoot, name), "utf8")).toBe(bytes);
   }, 45_000);

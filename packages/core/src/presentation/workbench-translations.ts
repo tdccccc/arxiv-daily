@@ -1,5 +1,18 @@
 /** Shared workbench chrome messages; research content is never passed through this catalog. */
 export const workbenchMessages: ReadonlyArray<readonly [string, string]> = [
+  ["每日日报论文上限", "Daily paper limit"],
+  ["每份日报中所有主题合计的论文数量上限，默认为 20 篇。", "Maximum papers across all topics in each daily report. Default is 20."],
+  ["研究方向", "Directions"],
+  ["添加方向", "Add direction"],
+  ["移除方向", "Remove direction"],
+  ["一个具体的研究方向", "One specific direction"],
+  ["每行填写该主题下关注的一个具体方向，AI 会据此匹配论文。", "One line per specific thread you follow inside this topic. The AI matches papers against these."],
+  ["本地（默认，模型仅需下载一次）", "Local (default, one-time model download)"],
+  ["远程（标题和摘要会离开此设备）", "Remote (titles and abstracts leave this device)"],
+  ["远程模式会将标题和摘要发送至嵌入 API。切换模式后需要重建索引。", "Remote sends titles and abstracts to an embeddings API. Switching modes rebuilds the index."],
+  ["本地模式在首次构建索引时下载模型（约 130 MB），之后在此设备上生成嵌入。仅在已有嵌入 API 时切换至远程模式。", "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API."],
+  ["选择 PDF 文件夹后会自动准备搜索索引。只有你接受的建议才会影响日报。", "Choose a folder of PDFs to prepare its search index automatically. Only suggestions you accept change daily reports."],
+  ["尚无主题，可以从文献库生成或手动添加。", "No topics yet. Generate from your library or add a topic."],
   ["等待公告发布", "Awaiting announcement"],
   ["当日无更新", "No updates"],
   ["日报已保存", "Daily report saved"],

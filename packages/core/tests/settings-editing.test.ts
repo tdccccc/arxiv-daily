@@ -11,11 +11,11 @@ describe("shared settings editing", () => {
   });
   it("accepts incomplete model, topic and email drafts", () => {
     const input = fresh(); input.llm.apiKey = ""; input.llm.model = ""; input.llm.baseUrl = "";
-    input.arxiv.topics = [{ id: "topic-1", name: "", tag: "", description: "line one\nline two", detail: false }];
+    input.arxiv.topics = [{ id: "topic-1", name: "", tag: "", description: "line one", directions: [{id:"d",text:"line one",origin:"manual"}], detail: false }];
     input.email.to = "user@"; input.email.fromEmail = "partial"; input.email.fromName = "  Sender Name  ";
     expect(normalizeSettingsEdits(input, ["llm", "arxiv.topics", "email"]).email.to).toBe("user@");
     expect(normalizeSettingsEdits(input, ["email"]).email.fromName).toBe("  Sender Name  ");
-    expect(normalizeSettingsEdits(input, ["arxiv.topics"]).arxiv.topics[0]?.description).toContain("\n");
+    expect(normalizeSettingsEdits(input, ["arxiv.topics"]).arxiv.topics[0]?.description).toBe("line one");
   });
   it("normalizes categories, output paths and a named detail policy", () => {
     const input = fresh(); input.arxiv.categories = [" cs.LG ", "cs.AI"]; input.output.dailyDir = " notes\\daily "; input.detailSelection.profile = "broad";
@@ -38,9 +38,9 @@ describe("shared settings editing", () => {
   it("rejects duplicate categories and duplicate or missing topic identities", () => {
     const input = fresh(); input.arxiv.categories = ["cs.AI", " cs.AI "];
     expect(() => normalizeSettingsEdits(input, ["arxiv.categories"])).toThrow(/categor/i);
-    input.arxiv.topics = [{ id: "one", name: "", tag: "", description: "", detail: false }, { id: "one", name: "", tag: "", description: "", detail: false }];
+    input.arxiv.topics = [{ id: "one", name: "", tag: "", description: "", directions: [], detail: false }, { id: "one", name: "", tag: "", description: "", directions: [], detail: false }];
     expect(() => normalizeSettingsEdits(input, ["arxiv.topics"])).toThrow(/topic/i);
-    input.arxiv.topics = [{ id: "", name: "", tag: "", description: "", detail: false }];
+    input.arxiv.topics = [{ id: "", name: "", tag: "", description: "", directions: [], detail: false }];
     expect(() => normalizeSettingsEdits(input, ["arxiv.topics"])).toThrow(/topic/i);
   });
   it("enforces run-window ordering and readiness only when scheduling is enabled", () => {

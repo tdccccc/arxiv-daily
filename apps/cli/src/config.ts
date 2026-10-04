@@ -346,7 +346,14 @@ function mapTopic(raw: unknown, index: number): Topic {
   // `detail` keeps the CLI's own default (true) rather than the shared one;
   // everything else goes through normalizeTopic so the plugin and the CLI
   // derive the description shadow the same way (ADR 0012).
-  return normalizeTopic({ id, name, tag, description, directions: raw.directions, detail });
+  // Read-only loads must not invent fresh direction identities on every read.
+  const directions = Array.isArray(raw.directions)
+    ? raw.directions.map((direction, directionIndex) => isRecord(direction)
+      ? { ...direction, id: typeof direction.id === "string" && direction.id.trim()
+        ? direction.id : `cli-direction-${sha256Hex(`${id}:${directionIndex}:${String(direction.text ?? "")}`).slice(0, 16)}` }
+      : direction)
+    : description.trim() ? [{ id: `cli-direction-${sha256Hex(`${id}:0:${description.trim()}`).slice(0, 16)}`, text: description, origin: "migrated" }] : [];
+  return normalizeTopic({ id, name, tag, description, directions, detail });
 }
 
 function mapWorkbenchSchedule(raw: unknown): PluginSettings["schedule"] {

@@ -1,3 +1,5 @@
+import { deriveTopicDescription, normalizeTopic } from "./topics";
+import { isValidMaxDailyPapers } from "./daily-paper-limit";
 import { getBusinessSetting } from "./schema";
 import type { PluginSettings } from "./types";
 import { isDetailSelectionProfile, sanitizeDetailSelection } from "./detail-selection";
@@ -30,7 +32,18 @@ export function normalizeSettingsEdits(candidate: PluginSettings, changedKeys: r
       if (!id || ids.has(id)) invalid("arxiv.topics.id");
       ids.add(id);
       bool(topic.detail, "arxiv.topics.detail");
-      return { ...topic, id, name: text(topic.name, "arxiv.topics.name"), tag: text(topic.tag, "arxiv.topics.tag"), description: text(topic.description, "arxiv.topics.description", true) };
+      const rawDirections = Object.hasOwn(topic, "directions") ? topic.directions : normalizeTopic(topic).directions;
+      if (!Array.isArray(rawDirections) || rawDirections.length > 1000) invalid("arxiv.topics.directions");
+      const directionIds = new Set<string>();
+      const directions = rawDirections.map(direction => {
+        if (!direction || typeof direction !== "object") invalid("arxiv.topics.directions");
+        const directionId = text(direction.id, "arxiv.topics.directions.id");
+        if (!directionId || directionIds.has(directionId)) invalid("arxiv.topics.directions.id");
+        directionIds.add(directionId);
+        enumValue(direction.origin, ["manual", "migrated", "library"], "arxiv.topics.directions.origin");
+        return { ...direction, id: directionId, text: text(direction.text, "arxiv.topics.directions.text", true).replace(/\s*\n+\s*/g, " ") };
+      });
+      return { ...topic, id, name: text(topic.name, "arxiv.topics.name"), tag: text(topic.tag, "arxiv.topics.tag"), directions, description: deriveTopicDescription(directions) };
     });
   }
   if (touches("arxiv.timezone")) {
@@ -60,6 +73,7 @@ export function normalizeSettingsEdits(candidate: PluginSettings, changedKeys: r
     }
     if (vaultRelativeDirectoriesCollide(result.output.dailyDir, result.output.papersDir)) throw new Error("Daily and papers directories must be different");
   }
+  if (touches("output.maxDailyPapers") && !isValidMaxDailyPapers(result.output.maxDailyPapers)) invalid("output.maxDailyPapers");
   if (touches("output.linkStyle") && result.output.linkStyle !== undefined) enumValue(result.output.linkStyle, Object.keys(getBusinessSetting('linkStyle').options!), "output.linkStyle");
   if (touches("output.summaryLanguage") && result.output.summaryLanguage !== undefined) enumValue(result.output.summaryLanguage, Object.keys(getBusinessSetting('summaryLanguage').options!), "output.summaryLanguage");
   if (touches("pdfParserSidecar")) {

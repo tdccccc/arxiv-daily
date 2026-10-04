@@ -1,7 +1,8 @@
-import { DEFAULT_SETTINGS, type PluginSettings, type DetailSelectionProfile } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, normalizeMaxDailyPapers, type PluginSettings, type DetailSelectionProfile } from "@arxiv-daily/core";
 import type { CliRuntimeConfig } from "../config";
 
 export interface ExtendedSettingsValues {
+  maxDailyPapers: number;
   reasoningEffort: string;
   detailProfile: DetailSelectionProfile;
   linkStyle: "wikilink" | "relative";
@@ -19,6 +20,7 @@ export function extendedSettings(config: CliRuntimeConfig | null): ExtendedSetti
   const s = config?.settings ?? DEFAULT_SETTINGS;
   const effort = s.llm.reasoningEffort;
   return {
+    maxDailyPapers: normalizeMaxDailyPapers(s.output.maxDailyPapers),
     reasoningEffort: !s.llm.thinkingMode ? "none" : effort,
     detailProfile: s.detailSelection.profile, linkStyle: s.output.linkStyle ?? "wikilink",
     schedule: { ...(config?.workbenchSchedule ?? DEFAULT_SETTINGS.schedule), enabled: config?.workbenchSchedule?.enabled ?? false },

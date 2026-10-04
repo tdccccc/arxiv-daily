@@ -10,7 +10,7 @@ it("matches the five Obsidian setup steps, gates generation and hides only after
   expect(Array.from(root.querySelectorAll('li strong')).map(e=>e.textContent)).toEqual(['Connect AI','Choose paper sources','Describe your research interests','Generate your first report','Turn on daily reports']);
   expect(root.querySelector('[data-setup-action="generate"]')).toBeNull();
   snapshot.values.apiKeyConfigured=true; snapshot.values.baseUrl='https://example.test/v1'; snapshot.values.model='model';
-  snapshot.values.topics=[{id:'focus',name:'Test',tag:'test',description:'Research',detail:true}];
+  snapshot.values.topics=[{id:'focus',name:'Test',tag:'test',description:'Research',directions:[{id:'d1',text:'Research',origin:'manual'}],detail:true}];
   root.innerHTML=settingsSetupGuide(snapshot);
   expect(root.querySelector('[data-setup-action="generate"]')).toBeTruthy();
   snapshot.values.schedule.enabled=true;

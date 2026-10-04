@@ -8,7 +8,7 @@ const roots:string[]=[];afterEach(async()=>{for(const root of roots.splice(0))aw
 async function fixture(){const root=await mkdtemp(join(tmpdir(),'shared-settings-hosts-'));roots.push(root);const file=join(root,'config.toml');const initial=await readWorkbenchSettings(file);const config=await saveWorkbenchSettings(file,{revision:null,values:{...initial.values,vaultRoot:join(root,'vault')}});const settings=structuredClone(config.settings);const persist=vi.fn(async()=>{});const plugin=new SettingsChangeService({settings,persistSettings:persist});return {file,config,settings,persist,plugin};}
 it('applies identical model, topic and email draft edits through both real host adapters',async()=>{
  const {file,config,settings,plugin}=await fixture();
- const topics=[{id:'focus',name:'  Research  ',tag:'  focus ',description:'  First line\nSecond line ',detail:true}];
+ const topics=[{id:'focus',name:'  Research  ',tag:'  focus ',description:'stale',directions:[{id:'first',text:'First line',origin:'manual'}],detail:true}];
  await plugin.change({changes:[{key:'llm.model',value:'  same-model  '},{key:'arxiv.topics',value:topics},{key:'email.to',value:' reader@ '},{key:'email.fromName',value:'  Lab sender  '}]});
  const next=await saveWorkbenchSettings(file,{revision:config.configRevision,values:{model:'  same-model  ',topics,email:{to:' reader@ ',fromName:'  Lab sender  '}}});
  expect(next.settings.llm).toEqual(settings.llm);expect(next.settings.arxiv.topics).toEqual(settings.arxiv.topics);expect(next.settings.email).toEqual(settings.email);

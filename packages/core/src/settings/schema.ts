@@ -399,6 +399,7 @@ export function getBusinessSettingsSections(context: Partial<BusinessSettingsCon
 
 /** Topic subfields share labels and editing controls while hosts retain their editor widgets. */
 const topicFields = {
+ directions: { name: "Directions", control: "textarea", description: "One line per specific thread you follow inside this topic. The AI matches papers against these.", placeholder: "One specific direction" },
  name: { name: "Name", control: "text", description: "Heading text used as the section title in the daily report.", placeholder: "Topic name" },
  tag: { name: "Tag", control: "text", description: "Kebab-case ASCII slug. Written into each paper's YAML frontmatter as an Obsidian #tag.", placeholder: "Topic tag" },
  description: { name: "Description", control: "textarea", description: "Plain-language description of what belongs here. The AI uses this to decide which papers go into this topic.", placeholder: "What papers belong in this topic?" },
@@ -406,7 +407,7 @@ const topicFields = {
 } as const;
 export type TopicSettingKey = keyof typeof topicFields;
 export function getTopicSettingField(key: TopicSettingKey) { return { key, ...topicFields[key] }; }
-export function getTopicSettingFields() { return (Object.keys(topicFields) as TopicSettingKey[]).map(getTopicSettingField); }
+export function getTopicSettingFields() { return (['name', 'directions', 'detail'] as TopicSettingKey[]).map(getTopicSettingField); }
 
 export function isValidLocalTime(value: string): boolean {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);

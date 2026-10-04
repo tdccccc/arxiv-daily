@@ -4,13 +4,11 @@ import * as path from "node:path";
 import {
   ArxivFetcher, LibraryWorkflow, Logger, LlmClient,
   FullTextKnowledgeBaseFileStore, FullTextGenerationIndexStore,
-  PersonalLibraryCatalogStore, PersonalLibraryInterestProfileStore,
-  buildPersonalizedDailyDiscoverySnapshot, createPersonalLibraryScopeFingerprint,
+  createPersonalLibraryScopeFingerprint,
   createPersonalLibraryIdentificationFingerprint, createRemoteEmbeddingModel,
-  searchFullTextKnowledgeBase, libraryIncrementalSuggestionKey, sha256Hex, redactText,
-  probeLoopbackSidecarParser, SidecarFallbackDocumentParserSelector,
+  searchFullTextKnowledgeBase, redactText,
   validateLlmConfig, validateEmbeddingConfig,
-  type HttpClient, type StorageAdapter, type DocumentParser, type DocumentParserSelector, type EmbeddingModel,
+  type HttpClient, type DocumentParser, type DocumentParserSelector, type EmbeddingModel,
   type LibraryReviewSnapshot, type PersonalLibraryDirectionTextPatch,
 } from "@arxiv-daily/core";
 import {
@@ -19,6 +17,7 @@ import {
 } from "@arxiv-daily/node-runtime";
 import { CliConfigError, type CliRuntimeConfig } from "./config";
 import { connectCliLibrary, authorizeCliLibrary, revokeCliLibrary, inspectCliLibraryConnection } from "./library-connection-cmd";
+import { createCliTopicSettings } from "./library-topic-settings";
 import type { CliIo } from "./main-types";
 
 export interface CliLibraryOptions {
@@ -42,6 +41,7 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
   try {
     signal.throwIfAborted();
     const [command = "status", ...rest] = args;
+    if (command === "update") throw new CliConfigError("Library profile updates are retired; generate proposals with library propose and accept them into research topic settings");
     if (command === "connect") {
       if (rest.length !== 1) throw new CliConfigError("library connect requires a directory path");
       print(inspectCliLibraryConnection(await connectCliLibrary(config, rest[0]!)));
@@ -69,8 +69,8 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       print({ prepared });
       return 0;
     }
-    if (!["scan", "index", "propose", "directions", "confirm", "search", "update", "review"].includes(command)) throw new CliConfigError(`Unknown library command: ${command}`);
-    const context = await libraryContext(config, options);
+    if (!["scan", "index", "propose", "directions", "confirm", "search", "review"].includes(command)) throw new CliConfigError(`Unknown library command: ${command}`);
+    const context = await libraryContext(config, { ...options, signal });
     lease = await context.storage.acquireLock("personal-library-workflow", { wait: true, signal, timeoutMs: 30_000 });
     if (!lease) throw new Error("Personal library is busy");
     await context.assertCurrent();
@@ -79,7 +79,7 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
     });
     watcher.on("error", error => controller.abort(error));
     stopWatch = () => watcher.close();
-    if (["scan", "index", "propose", "directions", "update"].includes(command) && rest.length) throw new CliConfigError(`library ${command} takes no arguments`);
+    if (["scan", "index", "propose", "directions"].includes(command) && rest.length) throw new CliConfigError(`library ${command} takes no arguments`);
     if (command === "scan") {
       const catalog = await context.workflow.scan({ signal });
       print({ revision: catalog.revision, lastScan: catalog.lastScan, paperCount: Object.keys(catalog.papers).length });
@@ -89,17 +89,16 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       print(await context.workflow.propose({ signal }));
     } else if (command === "directions") {
       print(reviewView(await context.workflow.review()));
-    } else if (command === "update") {
-      print(await context.workflow.updateSuggestions({ signal }));
+
     } else if (command === "confirm") {
-      const flags = parseFlags(rest, ["candidate", "proposal-revision", "profile-revision"]);
+      const flags = parseFlags(rest, ["candidate", "proposal-revision"]);
       const snapshot = await context.workflow.review();
-      const candidate = snapshot.proposal?.candidates.find(candidate => candidate.id === flags.candidate);
+      const candidate = snapshot.proposal?.topics.flatMap(topic => topic.directions).find(candidate => candidate.id === flags.candidate);
       if (!candidate) throw new Error("Direction candidate was not found; inspect library directions again");
       print(reviewView(await context.workflow.confirm({
         candidateId: candidate.id, status: "active", signal,
-        expectedProposalRevision: revision(flags["proposal-revision"]), expectedProfileRevision: revision(flags["profile-revision"]),
-        draft: { name: candidate.name, description: candidate.description, discoveryCues: candidate.discoveryCues, representativePaperKeys: candidate.representatives.map(paper => paper.paperKey) },
+        expectedProposalRevision: revision(flags["proposal-revision"]),
+        draft: { text: candidate.text, discoveryCues: candidate.discoveryCues, representativePaperKeys: candidate.representatives.map(paper => paper.paperKey) },
       })));
     } else if (command === "search") {
       const flags = parseFlags(rest, ["query", "mode", "limit"]);
@@ -148,9 +147,10 @@ async function libraryContext(config: CliRuntimeConfig, options: CliLibraryOptio
   const storage = new NodeStorageAdapter(config.vaultRoot);
   const logger = new Logger(config.settings.advanced.logLevel);
   logger.setSensitiveValues([config.settings.llm.apiKey, config.settings.embedding.apiKey]);
+  const topicSettings = createCliTopicSettings(config);
   const assertCurrent = async () => {
     options.signal?.throwIfAborted();
-    if (config.configRevision && `sha256:${sha256Hex(await fs.readFile(config.configPath, "utf8"))}` !== config.configRevision) throw new Error("CLI configuration changed during library work; reload and retry");
+    await topicSettings.assertCurrent();
   };
   const assertAuthorized = async (_purpose: "directions" | "embedding") => {
     await assertCurrent();
@@ -171,18 +171,11 @@ async function libraryContext(config: CliRuntimeConfig, options: CliLibraryOptio
     }
     return embedding = createNodeLibraryEmbeddingModel(config.cacheDir, { signal });
   };
-  const createParser = options.createParser ?? (async (signal?: AbortSignal) => {
-    const parser = await createNodeLibraryDocumentParser(config.cacheDir);
-    if (!config.settings.pdfParserSidecar.enabled) return { parser };
-    try {
-      const sidecar = await probeLoopbackSidecarParser({ http, ...config.settings.pdfParserSidecar, signal });
-      return { parserSelector: new SidecarFallbackDocumentParserSelector(sidecar, parser) };
-    } catch (error) {
-      signal?.throwIfAborted();
-      logger.warn("Local document sidecar unavailable; using Node PDF.js", error);
-      return { parser };
-    }
-  });
+  // Library indexing extracts bounded page text for titles and abstracts.
+  // Structured-document sidecars belong to document reading, not this index.
+  const createParser = options.createParser ?? (async () => ({
+    parser: await createNodeLibraryDocumentParser(config.cacheDir),
+  }));
   const scope = createPersonalLibraryScopeFingerprint(connection);
   const identity = createPersonalLibraryIdentificationFingerprint(connection.eligibleExtensions);
   return {
@@ -192,37 +185,13 @@ async function libraryContext(config: CliRuntimeConfig, options: CliLibraryOptio
     workflow: new LibraryWorkflow({
       storage, output: config.settings.output, connection, source, http, arxivFetcher: fetcher,
       createParser, createEmbedding, llm: new LlmClient(config.settings.llm, logger, http),
-      assertCurrent, assertAuthorized, embeddingRequiresAuthorization: config.settings.embedding.mode === "remote", logger,
+      topicSettings, assertCurrent, assertAuthorized, embeddingRequiresAuthorization: config.settings.embedding.mode === "remote", logger,
     }),
   };
 }
 
-/** Optional personalization only; the manual-topic product path must always remain usable. */
-export async function loadCliPersonalizedDiscovery(config: CliRuntimeConfig, storage: StorageAdapter, logger: Logger) {
-  if (!config.libraryConnection || inspectCliLibraryConnection(config).status.kind !== "authorized") return undefined;
-  try {
-    const connection = config.libraryConnection;
-    const source = await openScopedLibrarySource(connection.selectedRoot);
-    if (source.rootIdentity !== connection.rootIdentity || source.canonicalRoot !== connection.selectedRoot) throw new Error("Library folder identity changed");
-    const scope = createPersonalLibraryScopeFingerprint(connection);
-    const identity = createPersonalLibraryIdentificationFingerprint(connection.eligibleExtensions);
-    const [catalog, profile] = await Promise.all([
-      new PersonalLibraryCatalogStore(storage, config.settings.output).load(scope, identity),
-      new PersonalLibraryInterestProfileStore(storage, config.settings.output, scope, identity).load(),
-    ]);
-    return buildPersonalizedDailyDiscoverySnapshot({ catalog, profile, onWarning: (stage, error) => logger.warn(`Personalized ${stage} unavailable`, error) });
-  } catch (error) {
-    logger.warn("Personal library unavailable; using manual research topics", error);
-    return undefined;
-  }
-}
-
 function reviewView(snapshot: LibraryReviewSnapshot) {
-  return {
-    catalogSummary: snapshot.catalog.lastScan, profile: snapshot.profile, proposal: snapshot.proposal,
-    suggestions: snapshot.suggestions,
-    suggestionKeys: snapshot.suggestions.suggestions.map(libraryIncrementalSuggestionKey),
-  };
+  return { catalogSummary: snapshot.catalog.lastScan, topics: snapshot.topics, proposal: snapshot.proposal, acceptances: snapshot.acceptances };
 }
 function parseFlags(args: string[], accepted: string[]) {
   const flags: Record<string, string> = {};
@@ -245,14 +214,11 @@ function revision(value: unknown): number {
 async function applyReview(workflow: LibraryWorkflow, request: Record<string, unknown>, signal: AbortSignal) {
   if (!request || typeof request !== "object" || Array.isArray(request)) throw new CliConfigError("review input must be an object");
   if (request.operation === "update-candidate") return workflow.updateCandidate({ signal, expectedProposalRevision: revision(request.expectedProposalRevision), candidateId: required(request.candidateId, "candidateId"), patch: request.patch as PersonalLibraryDirectionTextPatch, ...(request.representativePaperKeys ? { representativePaperKeys: request.representativePaperKeys as string[] } : {}) });
-  if (request.operation === "dismiss") return workflow.dismissSuggestion({ signal, key: required(request.key, "key"), expectedSuggestionsRevision: revision(request.expectedSuggestionsRevision) });
-  const common = { signal, expectedProfileRevision: revision(request.expectedProfileRevision) };
-  const directionId = request.directionId === undefined ? "" : required(request.directionId, "directionId");
-  if (request.operation === "enable" || request.operation === "disable") return workflow.setDirectionEnabled({ ...common, directionId, enabled: request.operation === "enable" });
-  if (request.operation === "lock") return workflow.lockDirection({ ...common, directionId });
-  if (request.operation === "unlock") return workflow.unlockDirection({ ...common, directionId });
-  if (request.operation === "update-direction") return workflow.updateDirection({ ...common, directionId, patch: request.patch as PersonalLibraryDirectionTextPatch, ...(request.representativePaperKeys ? { representativePaperKeys: request.representativePaperKeys as string[] } : {}) });
-  const suggestion = { ...common, key: required(request.key, "key"), expectedSuggestionsRevision: revision(request.expectedSuggestionsRevision) };
-  if (request.operation === "apply") return workflow.applySuggestion({ ...suggestion, expectedProposalRevision: request.expectedProposalRevision === null ? null : revision(request.expectedProposalRevision) });
+  if (request.operation === "accept-topics") {
+    if (!Array.isArray(request.topicIds) || !request.topicIds.every(value => typeof value === "string" && value.trim())) throw new CliConfigError("topicIds must be an array of topic IDs");
+    if (request.candidateIds !== undefined && (!Array.isArray(request.candidateIds) || !request.candidateIds.every(value => typeof value === "string" && value.trim()))) throw new CliConfigError("candidateIds must be an array of direction IDs");
+    return workflow.acceptTopics({ signal, topicIds: request.topicIds as string[], candidateIds: request.candidateIds as string[] | undefined, expectedProposalRevision: revision(request.expectedProposalRevision) });
+  }
+  if (["dismiss", "enable", "disable", "lock", "unlock", "update-direction", "apply"].includes(String(request.operation))) throw new CliConfigError("Library profiles are retired; accept proposed directions into normal research topic settings and edit them there");
   throw new CliConfigError("Unknown review operation");
 }

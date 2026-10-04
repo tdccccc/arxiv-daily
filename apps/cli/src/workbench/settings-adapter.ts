@@ -5,7 +5,7 @@ import type { CliRuntimeConfig } from '../config';
 const paths: Record<string, readonly [string,string]> = {
  'llm.apiKey':['llm','api_key'],'llm.provider':['llm','provider'],'llm.baseUrl':['llm','base_url'],'llm.model':['llm','model'],'llm.thinkingMode':['llm','thinking_mode'],'llm.reasoningEffort':['llm','reasoning_effort'],
  'arxiv.categories':['arxiv','categories'],'arxiv.topics':['arxiv','topics'],'arxiv.timezone':['arxiv','timezone'],
- 'output.dailyDir':['output','daily_dir'],'output.papersDir':['output','papers_dir'],'output.linkStyle':['output','link_style'],'output.summaryLanguage':['output','summary_language'],
+ 'output.maxDailyPapers':['output','max_daily_papers'],'output.dailyDir':['output','daily_dir'],'output.papersDir':['output','papers_dir'],'output.linkStyle':['output','link_style'],'output.summaryLanguage':['output','summary_language'],
  'schedule.enabled':['workbench_schedule','enabled'],'schedule.runAtLocal':['workbench_schedule','run_at_local'],'schedule.runUntilLocal':['workbench_schedule','run_until_local'],'schedule.tickIntervalMin':['workbench_schedule','tick_interval_min'],
  'embedding.mode':['embedding','mode'],'embedding.baseUrl':['embedding','base_url'],'embedding.apiKey':['embedding','api_key'],'embedding.model':['embedding','model'],'embedding.dimension':['embedding','dimension'],
  'pdfParserSidecar.enabled':['pdf_parser_sidecar','enabled'],'pdfParserSidecar.capabilitiesUrl':['pdf_parser_sidecar','capabilities_url'],'pdfParserSidecar.parseUrl':['pdf_parser_sidecar','parse_url'],
@@ -13,7 +13,7 @@ const paths: Record<string, readonly [string,string]> = {
  'advanced.logLevel':['advanced','log_level'],
  'detailSelection.profile':['detail_selection','profile'],'detailSelection.normalThreshold':['detail_selection','normal_threshold'],'detailSelection.exceptionalThreshold':['detail_selection','exceptional_threshold'],'detailSelection.softLimit':['detail_selection','soft_limit'],
 };
-const flat: Record<string,string> = { apiKey:'llm.apiKey',provider:'llm.provider',baseUrl:'llm.baseUrl',model:'llm.model',categories:'arxiv.categories',topics:'arxiv.topics',timezone:'arxiv.timezone',dailyDir:'output.dailyDir',papersDir:'output.papersDir',summaryLanguage:'output.summaryLanguage',linkStyle:'output.linkStyle',detailProfile:'detailSelection.profile',logLevel:'advanced.logLevel' };
+const flat: Record<string,string> = { maxDailyPapers:'output.maxDailyPapers', apiKey:'llm.apiKey',provider:'llm.provider',baseUrl:'llm.baseUrl',model:'llm.model',categories:'arxiv.categories',topics:'arxiv.topics',timezone:'arxiv.timezone',dailyDir:'output.dailyDir',papersDir:'output.papersDir',summaryLanguage:'output.summaryLanguage',linkStyle:'output.linkStyle',detailProfile:'detailSelection.profile',logLevel:'advanced.logLevel' };
 const secrets = new Set(['llm.apiKey','embedding.apiKey','email.apiKey','email.hostedToken']);
 export function patchWorkbenchBusinessSettings(document: Record<string,unknown>, input: Record<string,unknown>, previous: CliRuntimeConfig | null): void {
  const before = structuredClone(previous?.settings ?? DEFAULT_SETTINGS);
@@ -24,6 +24,13 @@ export function patchWorkbenchBusinessSettings(document: Record<string,unknown>,
   const [group,field]=key.split('.') as [keyof PluginSettings,string];
   const target=candidate[group] as unknown as Record<string,unknown>;
   if(JSON.stringify(target[field])!==JSON.stringify(value))changed.push(key);
+  // Older clients omit directions; they cannot replace an accepted direction list
+  // merely by resubmitting the compatibility description shadow.
+  if (key === 'arxiv.topics' && Array.isArray(value)) value = value.map(topic => {
+   if (!topic || typeof topic !== 'object' || Object.hasOwn(topic, 'directions')) return topic;
+   const existing = before.arxiv.topics.find(saved => saved.id === topic.id);
+   return existing ? { ...topic, directions: structuredClone(existing.directions) } : topic;
+  });
   target[field]=value;
  }
  for(const [source,key] of Object.entries(flat))if(Object.hasOwn(input,source))assign(key,input[source]);

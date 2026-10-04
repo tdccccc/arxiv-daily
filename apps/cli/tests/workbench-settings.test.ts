@@ -12,7 +12,7 @@ async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-settings-")); roots.push(root);
   const configPath = path.join(root, "config", "config.toml");
   const initial = await readWorkbenchSettings(configPath);
-  const values = { ...initial.values, vaultRoot: path.join(root, "vault"), baseUrl: "https://api.deepseek.com/v1", provider: "deepseek", model: "test-model", apiKey: "private-test-key", categories: ["cs.AI"], timezone: "Asia/Shanghai", topics: [{ id: "focus", name: "Agents", tag: "agents", description: "Research agents", detail: false }] };
+  const values = { ...initial.values, vaultRoot: path.join(root, "vault"), baseUrl: "https://api.deepseek.com/v1", provider: "deepseek", model: "test-model", apiKey: "private-test-key", categories: ["cs.AI"], timezone: "Asia/Shanghai", topics: [{ id: "focus", name: "Agents", tag: "agents", description: "Research agents", directions:[{id:"agents",text:"Research agents",origin:"manual" as const}], detail: false }] };
   return { configPath, values };
 }
 describe("workbench settings", () => {

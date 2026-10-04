@@ -51,6 +51,8 @@ export class ObsidianPdfDocumentParser implements DocumentParser {
 export class ObsidianPdfTextExtractor implements PdfTextExtractor {
   private readonly parser: ObsidianPdfDocumentParser;
 
+  get provenance() { return this.parser.provenance; }
+
   constructor(pdfjsLib?: PdfJsLib) {
     this.parser = new ObsidianPdfDocumentParser(pdfjsLib);
   }

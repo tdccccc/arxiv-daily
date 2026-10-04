@@ -8,7 +8,7 @@ import { readWorkbenchSettings, saveWorkbenchSettings } from "../src/workbench/s
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { buildSettingDefinitions, type SettingDefinitionsHost } from "../../../plugin/src/settings/definitions";
 import { mountWorkbench } from "../src/workbench/web/app";
-const values = { vaultRoot: "/notes", baseUrl: "https://api.example/v1", provider: "openai", model: "test", apiKeyConfigured: true, categories: ["cs.AI"], timezone: "Asia/Shanghai", summaryLanguage: "zh", topics: [{ id: "existing-topic", name: "Models", tag: "models", description: "Inference", detail: true }], dailyDir: "daily", papersDir: "papers" };
+const values = { vaultRoot: "/notes", baseUrl: "https://api.example/v1", provider: "openai", model: "test", apiKeyConfigured: true, categories: ["cs.AI"], timezone: "Asia/Shanghai", summaryLanguage: "zh", topics: [{ id: "existing-topic", name: "Models", tag: "models", description: "Inference", directions: [{id:"inference",text:"Inference",origin:"manual" as const}], detail: true }], dailyDir: "daily", papersDir: "papers" };
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
 let dispose = () => {};
 beforeEach(()=>setUiLanguage("en"));
@@ -59,7 +59,7 @@ it("opens first-run setup before data requests and refreshes the workspace after
   root.querySelector<HTMLButtonElement>('[data-settings="add-topic"]')!.click();
   expect(root.querySelectorAll(".settings-topic")).toHaveLength(2);
   const second = root.querySelectorAll<HTMLElement>(".settings-topic")[1]!;
-  input(second, "topicName", "Vision"); input(second, "topicTag", "vision"); input(second, "topicDescription", "Video");
+  input(second, "topicName", "Vision"); second.querySelector<HTMLButtonElement>('[data-settings="add-direction"]')!.click(); input(second, "topicDirection", "Video");
   input(root, "reasoningEffort", "high"); input(root, "detailProfile", "broad");
   input(root, "schedule.runAtLocal", "09:30"); input(root, "schedule.runUntilLocal", "18:00"); input(root, "schedule.tickIntervalMin", "15");
   input(root, "embedding.mode", "remote"); input(root, "embedding.baseUrl", "https://embedding.example/v1"); input(root, "embedding.model", "embed-test"); input(root, "embedding.dimension", "768"); input(root, "embedding.apiKey", "embedding-secret");
@@ -99,7 +99,7 @@ it.each([{remote:false,hosted:false,sidecar:false},{remote:true,hosted:true,side
   root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
   await vi.waitFor(() => expect(root.querySelector(".settings-form")).toBeTruthy());
   settings.arxiv.topics = values.topics; settings.arxiv.categories = values.categories;
-  const host = new Proxy({ plugin: { settings }, showSetupGuide: false }, { get(target, key) { if (key in target) return target[key as keyof typeof target]; if (String(key).startsWith("render")) return () => {}; return undefined; } }) as unknown as SettingDefinitionsHost;
+  const host = new Proxy({ plugin: { settings, getLibraryConnectionStatus:()=>({kind:"disconnected"}) }, showSetupGuide: false }, { get(target, key) { if (key in target) return target[key as keyof typeof target]; if (String(key).startsWith("render")) return () => {}; return undefined; } }) as unknown as SettingDefinitionsHost;
   const definitions = buildSettingDefinitions(host);
   const expectedNames: string[] = [], expectedGroups: string[] = [];
   for (const definition of definitions) {
@@ -161,7 +161,7 @@ it("loads models without changing the draft and sends email only from its explic
  await vi.waitFor(()=>expect(actions().map(a=>a.action)).toEqual(['models','email-test']));
  expect(actions().every(a=>a.revision==='revision-1')).toBe(true);
 });
-it("uses the newly selected timezone and mirrors topic tag and detail indicators", async () => {
+it("uses the newly selected timezone and mirrors topic names and detail indicators", async () => {
  const {root,fetcher}=setup(false,false,undefined,(path,init)=>path==='api/settings'&&!init?.method?json({setupRequired:false,revision:'r1',configPath:'/config.toml',values:{...values,timezone:'Pacific/Auckland'}}):undefined);
  await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
  root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
@@ -170,10 +170,10 @@ it("uses the newly selected timezone and mirrors topic tag and detail indicators
  const zone=root.querySelector<HTMLSelectElement>('[name="timezone"]')!;
  zone.value='UTC'; zone.dispatchEvent(new Event('change',{bubbles:true}));
  expect(root.querySelector<HTMLInputElement>('[name="timezoneCustom"]')!.value).toBe('');
- expect(root.querySelector('.settings-topic summary')!.textContent).toContain('#models');
+ expect(root.querySelector('[name="topicTag"]')).toBeNull();
  expect(root.querySelector('.settings-topic summary')!.textContent).toContain('★');
- input(root,'topicTag','new-tag'); root.querySelector('[name="topicTag"]')!.dispatchEvent(new Event('input',{bubbles:true}));
- expect(root.querySelector('.settings-topic summary')!.textContent).toContain('#new-tag');
+ input(root,'topicName','New topic'); root.querySelector('[name="topicName"]')!.dispatchEvent(new Event('input',{bubbles:true}));
+ expect(root.querySelector('.settings-topic summary')!.textContent).toContain('New topic');
  submit(root);
  await vi.waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='POST')).toBe(true));
  expect(JSON.parse(String(fetcher.mock.calls.find(([,init])=>init?.method==='POST')![1]!.body)).values.timezone).toBe('UTC');
@@ -318,7 +318,7 @@ it('keeps translated labels separate from user topics, model identifiers and sub
  await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('English');
  expect(root.querySelector<HTMLInputElement>('[name="topicName"]')!.value).toBe('Theme');
- expect(root.querySelector<HTMLTextAreaElement>('[name="topicDescription"]')!.value).toBe('Saved only on this device.');
+ expect(root.querySelector<HTMLTextAreaElement>('[name="topicDirection"]')!.value).toBe('Saved only on this device.');
  expect(root.querySelector('.settings-topic-name')!.textContent).toBe('Theme');
  expect(root.querySelector('[data-setting-name="Theme"] .setting-item-name')!.textContent).toBe('主题');
  expect(root.querySelector('[data-setting-name="Run window"] .setting-item-name')!.textContent).toBe('运行时间段');

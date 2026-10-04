@@ -13,7 +13,7 @@ describe('shared business settings schema', () => {
   expect(visibleIds()).not.toContain('embeddingApiKey');expect(visibleIds()).not.toContain('sidecarParseUrl');expect(visibleIds()).not.toContain('hostedToken');expect(visibleIds()).toContain('emailApiKey');
   const context={embeddingMode:'remote',sidecarEnabled:true,emailMode:'hosted'} as const;
   expect(visibleIds(context)).toEqual(expect.arrayContaining(['embeddingApiKey','sidecarParseUrl','hostedToken']));expect(visibleIds(context)).not.toContain('emailApiKey');expect(visibleIds(context)).not.toContain('fromEmail');
-  expect(getBusinessSetting('embeddingMode',context).description).toContain('Remote sends full text');
+  expect(getBusinessSetting('embeddingMode',context).description).toContain('Remote sends titles and abstracts');
   expect(getBusinessSetting('emailMode',context).description).toContain('shared free service');
  });
  it('shares exact options and preserves custom detail profile only when already selected', () => {
@@ -43,6 +43,6 @@ it('retains existing custom reasoning options safely and shares topic editor fie
  expect(getBusinessSetting('reasoningEffort',{reasoningEffort:'vendor-effort'}).options?.['vendor-effort']).toBe('Custom (current values)');
  const options=getBusinessSetting('reasoningEffort',{reasoningEffort:'__proto__'}).options!;
  expect(Object.hasOwn(options,'__proto__')).toBe(true);expect(Object.getPrototypeOf(options)).toBe(Object.prototype);
- expect(getTopicSettingFields().map(field=>[field.key,field.control])).toEqual([['name','text'],['tag','text'],['description','textarea'],['detail','checkbox']]);
+ expect(getTopicSettingFields().map(field=>[field.key,field.control])).toEqual([['name','text'],['directions','textarea'],['detail','checkbox']]);
  expect(runWindowTimeOptions('08:07')).toHaveLength(97);
 });

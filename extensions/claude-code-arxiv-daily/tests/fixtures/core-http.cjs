@@ -56,15 +56,15 @@ function llmResponse(body, url) {
   const system = body.messages?.find(m => m.role === 'system')?.content ?? '';
   const user = body.messages?.filter(m => m.role === 'user').map(m => m.content).join('\n') ?? '';
   let result;
-  if (system.includes('选择最匹配的主题')) {
+  if (system.includes('每篇论文判断它命中了哪些方向')) {
     record('filter', url);
     assert.match(user, /2605\.08080/);
     assert.match(user, /2605\.08068/);
     assert.match(user, /2605\.08001/);
     result = JSON.stringify({ papers: scenario === 'zero' ? [] : [
-      { id: '2605.08080', category: 'photo-z' },
-      { id: '2605.08068', category: 'photo-z' },
-      { id: '2605.08001', category: 'skip' },
+      { id: '2605.08080', category: 'photo-z', directions: ['photo-z#1'], relevanceScore: 95 },
+      { id: '2605.08068', category: 'photo-z', directions: ['photo-z#1'], relevanceScore: 80 },
+      { id: '2605.08001', category: 'skip', directions: [], relevanceScore: 0 },
     ] });
   } else if (system.includes('strict research-paper evaluator')) {
     record('selector', url);

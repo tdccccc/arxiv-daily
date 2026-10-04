@@ -167,6 +167,7 @@ describe("buildSettingDefinitions structure", () => {
       renderScheduleEnabledRow: () => {},
       renderRunWindowRow: () => {},
       renderTickIntervalRow: () => {},
+      renderDailyPaperLimitRow: () => {},
       renderEmailGuideRow: () => {},
       renderEmailModeRow: () => {},
       renderEmailToRow: () => {},
@@ -441,7 +442,8 @@ describe("buildSettingDefinitions structure", () => {
         expect(list).toMatchObject({emptyState:section.emptyState,addItem:{name:section.addItemName}});
         continue;
       }
-      const expected=section.type==='field'?[section.field]:section.items;
+      // The native title/abstract index deliberately hides the retired structured-PDF controls.
+      const expected=(section.type==='field'?[section.field]:section.items).filter(field=>!field.id.startsWith('sidecar'));
       const actual=section.type==='field'?items.filter(item=>item.name===section.field.name):items.find(item=>item.type==='group'&&item.heading===section.heading)?.items.filter(item=>item.name);
       expect(actual?.map(item=>({name:item.name,description:item.desc}))).toEqual(expected.map(item=>({name:item.name,description:item.description})));
       for(const item of actual??[])if(item.control){
@@ -450,6 +452,32 @@ describe("buildSettingDefinitions structure", () => {
         if(item.control.type==='dropdown')expect(item.control.options).toEqual(metadata.options);
       }
     }
+  });
+
+  it("adds native library guide and direction actions without exposing sidecar controls", () => {
+    const base = makeFullHost();
+    const host = {
+      ...base,
+      plugin: {
+        ...base.plugin,
+        getLibraryConnectionStatus: () => ({ kind: "connected" }),
+        libraryIndexStatus: { snapshot: () => ({ lastRun: { papers: 6 } }) },
+      },
+      renderLibraryGuideRow: vi.fn(),
+      renderLibraryDirectionsRow: vi.fn(),
+    };
+    const items = buildSettingDefinitions(host);
+    const library = items.find(item => item.type === "group" && item.heading === "Personal library");
+    if (!library || library.type !== "group") throw new Error("missing library section");
+    expect(library.items[0]).toMatchObject({ name: "", render: expect.any(Function) });
+    const directions = library.items.find(item => item.name === "Topics from library");
+    expect(directions?.desc).toContain("Only directions added to Research topics steer daily reports");
+    expect(library.items.some(item => item.name.includes("Sidecar") || item.name.includes("Structured PDF"))).toBe(false);
+    const setting = {} as import("obsidian").Setting;
+    library.items[0]!.render?.(setting);
+    directions?.render?.(setting);
+    expect(host.renderLibraryGuideRow).toHaveBeenCalledWith(setting);
+    expect(host.renderLibraryDirectionsRow).toHaveBeenCalledWith(setting);
   });
 
   it("keeps host-specific render callbacks and output field routing", () => {

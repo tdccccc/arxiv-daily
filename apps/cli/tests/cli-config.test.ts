@@ -227,3 +227,9 @@ tick_interval_min = 13
   expect(config).toMatchObject({ workbenchSchedule: { enabled: true, tickIntervalMin: 13 } });
   expect(config.settings.schedule.enabled).toBe(false);
 });
+
+it('keeps normalized direction identities stable across read-only legacy config loads', async () => {
+ const options={configPath:'/cfg.toml',readText:async()=>minimalToml};
+ const first=await loadCliConfig(options), second=await loadCliConfig(options);
+ expect(first.settings.arxiv.topics).toEqual(second.settings.arxiv.topics);
+});
