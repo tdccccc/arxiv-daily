@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-04T18:11:35+08:00
-revision: 19
+updated: 2026-10-04T19:18:06+08:00
+revision: 21
 
 ## Intent
 
@@ -53,3 +53,5 @@ revision: 19
 12. P12 — 模型获取不重建首次引导 — status: done
 
 13. P13 — 统一界面语言与外观设置 — status: done
+
+14. P14 — 统一业务设置定义、编辑规则与操作服务 — status: done
