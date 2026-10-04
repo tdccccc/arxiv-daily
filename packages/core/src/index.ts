@@ -149,3 +149,8 @@ export * from "./utils/redaction";
 export * from "./utils/retry";
 export * from "./utils/slugify";
 export * from "./utils/time";
+
+export * from "./settings/appearance";
+export { settingsMessages } from "./presentation/settings-translations";
+export { readingMessages } from "./presentation/reading-translations";
+export { workbenchMessages } from "./presentation/workbench-translations";

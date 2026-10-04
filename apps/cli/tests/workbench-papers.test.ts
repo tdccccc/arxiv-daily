@@ -84,11 +84,11 @@ it("never exposes an index path outside allowed documents and reports missing pa
 
 it("keeps layout preferences outside Vault data and restores them in another server", async () => {
   const { get, config } = await fixture();
-  const before = await get("api/preferences"); expect(before.status).toBe(200); expect(await before.json()).toEqual({ sidebarWidth: null, sidebarCollapsed: false });
+  const before = await get("api/preferences"); expect(before.status).toBe(200); expect(await before.json()).toEqual({ sidebarWidth: null, sidebarCollapsed: false, appearance: { theme: "light", language: "zh" } });
   const post = (body: unknown) => get("api/preferences", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   expect((await post({ sidebarWidth: 570, sidebarCollapsed: true })).status).toBe(200);
   const another = await startWorkbench({ config }); cleanup.push(another.close);
-  expect(await (await fetch(new URL("api/preferences", another.url))).json()).toEqual({ sidebarWidth: 570, sidebarCollapsed: true });
+  expect(await (await fetch(new URL("api/preferences", another.url))).json()).toEqual({ sidebarWidth: 570, sidebarCollapsed: true, appearance: { theme: "light", language: "zh" } });
   expect((await post({ sidebarWidth: 9000, sidebarCollapsed: false })).status).toBe(400);
 });
 
