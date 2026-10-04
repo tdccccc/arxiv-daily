@@ -1,3 +1,4 @@
+import { isWeekendDate } from "../utils/time";
 import type { MarkupParser } from "../core/adapters";
 import { buildDailyDigest, emptyDailyDigest } from "../delivery/digest";
 import type { DailyDigest } from "../delivery/types";
@@ -5,6 +6,7 @@ import type { Logger } from "../services/logger";
 import type { ProgressReporter } from "../services/progress";
 import { NoopProgressReporter } from "../services/progress";
 import type {
+  RunOutcome,
   ArxivSettings,
   AdvancedSettings,
   OutputSettings,
@@ -64,8 +66,8 @@ interface SourcePaperMeta extends PaperMeta {
 }
 
 export type PipelineResult =
-  | { kind: "completed"; papersWritten: number; digest?: DailyDigest }
-  | { kind: "pending"; reason: string }
+  | { kind: "completed"; papersWritten: number; digest?: DailyDigest; outcome?: RunOutcome }
+  | { kind: "pending"; reason: string; outcome?: RunOutcome }
   | { kind: "cancelled"; reason: string }
   | { kind: "failed_transient"; reason: string }
   | { kind: "failed_permanent"; reason: string };
@@ -185,6 +187,13 @@ export class ArxivPipeline {
     }
     throwIfCancelled(signal);
 
+    // arXiv /recent labels announcement dates, not the user's local publish time.
+    // Reuse the scheduler's no-announcement calendar for manual runs as well.
+    const [y, m, d] = dateStr.split("-").map(Number);
+    if (this.sourceAdapter.sourceId === "arxiv" && isWeekendDate({ y: y!, m: m!, d: d! })) {
+      return { kind: "completed", papersWritten: 0, outcome: "no_updates" };
+    }
+
     // 1-2. Discover papers via SourceAdapter (arXiv /recent + abstract enrich).
     this.progress.setStage("fetch-recent");
     stageStart("fetch-recent");
@@ -199,8 +208,8 @@ export class ArxivPipeline {
     // 3. Empty day
     if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
-      // Don't write empty file - let scheduler retry later
-      return { kind: "pending", reason: "no papers from arXiv" };
+      // A successfully fetched empty announcement is terminal, not unpublished.
+      return { kind: "completed", papersWritten: 0, outcome: "no_updates" };
     }
 
     // 4. Abstract enrichment is performed inside SourceAdapter.listForDate.
@@ -250,6 +259,7 @@ export class ArxivPipeline {
       return {
         kind: "completed",
         papersWritten: 0,
+        outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
       };
     }
@@ -289,6 +299,7 @@ export class ArxivPipeline {
       return {
         kind: "completed",
         papersWritten: 0,
+        outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
       };
     }
@@ -548,6 +559,7 @@ export class ArxivPipeline {
     return {
       kind: "completed",
       papersWritten: enriched.length,
+      outcome: "papers_written",
       digest,
     };
   }
@@ -765,6 +777,9 @@ export class ArxivPipeline {
       channels: arxivCategories(this.deps.arxiv),
       signal,
     });
+    if (listed.kind === "pending") {
+      return { kind: "error", result: { kind: "pending", reason: listed.reason, outcome: listed.outcome } };
+    }
     if (listed.kind === "error") {
       return {
         kind: "error",

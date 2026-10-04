@@ -60,6 +60,7 @@ export class ArxivSourceAdapter implements SourceAdapter {
         : this.deps.defaultCategories;
     const byId = new Map<string, SourcePaperMeta>();
     const succeededCategories: string[] = [];
+    const awaiting: Array<{ channel: string; reason: string }> = [];
     const failures: Array<{ kind: FailureKind; reason: string }> = [];
 
     for (const category of categories) {
@@ -100,6 +101,10 @@ export class ArxivSourceAdapter implements SourceAdapter {
       const bucket = buckets.find((b) => b.announceDate === dateStr);
       if (!bucket) {
         const bounds = recentDateBounds(buckets);
+        if (bounds && dateStr > bounds.newest) {
+          awaiting.push({ channel: category, reason: missingRecentDateReason(dateStr, category, buckets, bounds) });
+          continue;
+        }
         failures.push({
           // /recent only ever moves forward: a date older than its oldest
           // day can never appear again, so retrying it cannot succeed.
@@ -132,11 +137,21 @@ export class ArxivSourceAdapter implements SourceAdapter {
       };
     }
 
+    if (awaiting.length > 0) {
+      return {
+        kind: "pending",
+        outcome: "awaiting_announcement",
+        channels: awaiting.map((entry) => entry.channel),
+        reason: awaiting.map((entry) => entry.reason).join("; "),
+      };
+    }
+
     const papers = Array.from(byId.values());
     await this.enrichAbstracts(papers, signal);
 
     return {
       kind: "ok",
+      outcome: papers.length === 0 ? "no_updates" : "available",
       papers,
       channels: succeededCategories,
       dateWindow: "recent",

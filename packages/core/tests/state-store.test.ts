@@ -800,6 +800,9 @@ describe("StateStore", () => {
 
   it.each([
     ["schema 1", '"schemaVersion":1,', "error", "42"],
+    ["schema 1", '"schemaVersion":1,', "outcome", '"unknown"'],
+    ["schema 1", '"schemaVersion":1,', "failureAttempts", "-1"],
+    ["schema 1", '"schemaVersion":1,', "failureAttempts", "1.5"],
     ["schema 1", '"schemaVersion":1,', "papersWritten", "1e400"],
     ["schema-less legacy", "", "error", "42"],
     ["schema-less legacy", "", "papersWritten", "1e400"],

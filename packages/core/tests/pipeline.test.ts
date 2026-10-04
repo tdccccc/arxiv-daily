@@ -332,9 +332,9 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    const result = await pipeline.runForDate("2026-06-13");
+    const result = await pipeline.runForDate("2026-06-15");
 
-    expect(result.kind).toBe("failed_transient");
+    expect(result).toMatchObject({ kind: "pending", outcome: "awaiting_announcement" });
     expect((result as any).reason).toContain("newer than newest");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
     expect(d.writer.writeDaily).not.toHaveBeenCalled();

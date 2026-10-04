@@ -1,4 +1,4 @@
-import type { RunState, RunStateEntry, RunStatus } from "../settings/types";
+import type { RunOutcome, RunState, RunStateEntry, RunStatus } from "../settings/types";
 import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "./paper-index";
@@ -82,6 +82,7 @@ export class StateStore {
       candidate[date] = {
         ...prev,
         status: "skipped",
+        outcome: undefined,
         lastAttempt: Date.now(),
         error: reason,
       };
@@ -97,12 +98,14 @@ export class StateStore {
         status: "running",
         lastAttempt: Date.now(),
         attempts: prev.attempts + 1,
+        failureAttempts: prev.failureAttempts ?? prev.attempts,
+        outcome: undefined,
       };
       return { result: undefined, persist: true };
     });
   }
 
-  async setCompleted(date: string, papersWritten: number): Promise<void> {
+  async setCompleted(date: string, papersWritten: number, outcome?: RunOutcome): Promise<void> {
     await this.enqueueMutation((candidate) => {
       const prev = getRunStateEntry(candidate, date);
       candidate[date] = {
@@ -110,18 +113,20 @@ export class StateStore {
         status: "completed",
         lastAttempt: Date.now(),
         papersWritten,
+        outcome,
         error: undefined,
       };
       return { result: undefined, persist: true };
     });
   }
 
-  async setPending(date: string, reason: string): Promise<void> {
+  async setPending(date: string, reason: string, outcome?: RunOutcome): Promise<void> {
     await this.enqueueMutation((candidate) => {
       const prev = getRunStateEntry(candidate, date);
       candidate[date] = {
         ...prev,
         status: "pending",
+        outcome,
         lastAttempt: Date.now(),
         error: reason,
       };
@@ -138,15 +143,18 @@ export class StateStore {
       const prev = getRunStateEntry(candidate, date);
       let status: Extract<RunStatus, "failed_transient" | "failed_permanent"> =
         kind === "permanent" ? "failed_permanent" : "failed_transient";
+      const failureAttempts = priorFailureAttempts(prev) + 1;
       const retriesExhausted =
-        status === "failed_transient" && prev.attempts >= MAX_TRANSIENT_ATTEMPTS;
+        status === "failed_transient" && failureAttempts >= MAX_TRANSIENT_ATTEMPTS;
       if (retriesExhausted) status = "failed_permanent";
       const persistedMessage = retriesExhausted
-        ? `retries exhausted after ${prev.attempts} attempts: ${message}`
+        ? `retries exhausted after ${failureAttempts} attempts: ${message}`
         : message;
       candidate[date] = {
         ...prev,
         status,
+        failureAttempts,
+        outcome: undefined,
         lastAttempt: Date.now(),
         error: persistedMessage,
       };
@@ -188,13 +196,16 @@ export class StateStore {
         if (now - entry.lastAttempt < maxAgeMs) continue;
         // A crash or force-quit is transient; the retry cap still applies.
         const message = "recovered stale running state after startup";
-        const retriesExhausted = entry.attempts >= MAX_TRANSIENT_ATTEMPTS;
+        const failureAttempts = priorFailureAttempts(entry) + 1;
+        const retriesExhausted = failureAttempts >= MAX_TRANSIENT_ATTEMPTS;
         candidate[date] = {
           ...entry,
           status: retriesExhausted ? "failed_permanent" : "failed_transient",
+          failureAttempts,
+          outcome: undefined,
           lastAttempt: now,
           error: retriesExhausted
-            ? `retries exhausted after ${entry.attempts} attempts: ${message}`
+            ? `retries exhausted after ${failureAttempts} attempts: ${message}`
             : message,
         };
         recovered.push(date);
@@ -280,6 +291,11 @@ export class StateStore {
   }
 }
 
+// Legacy running attempts already include the in-flight attempt.
+function priorFailureAttempts(entry: RunStateEntry): number {
+  return entry.failureAttempts ?? Math.max(0, entry.attempts - (entry.status === "running" ? 1 : 0));
+}
+
 function getRunStateEntry(runState: RunState, date: string): RunStateEntry {
   return (
     runState[date] ?? {
@@ -302,6 +318,8 @@ function runStatesEqual(left: RunState, right: RunState): boolean {
       leftEntry?.status === rightEntry?.status &&
       leftEntry?.lastAttempt === rightEntry?.lastAttempt &&
       leftEntry?.attempts === rightEntry?.attempts &&
+      leftEntry?.failureAttempts === rightEntry?.failureAttempts &&
+      leftEntry?.outcome === rightEntry?.outcome &&
       leftEntry?.error === rightEntry?.error &&
       leftEntry?.papersWritten === rightEntry?.papersWritten
     );
@@ -455,6 +473,10 @@ function parseRunStateEntries(
     }
     const entry = rawEntry as Partial<RunStateEntry>;
     const optionalFieldsInvalid =
+      ("failureAttempts" in entry &&
+        (typeof entry.failureAttempts !== "number" ||
+          !Number.isSafeInteger(entry.failureAttempts) || entry.failureAttempts < 0)) ||
+      ("outcome" in entry && !isRunOutcome(entry.outcome)) ||
       ("error" in entry && typeof entry.error !== "string") ||
       ("papersWritten" in entry &&
         (typeof entry.papersWritten !== "number" ||
@@ -474,6 +496,8 @@ function parseRunStateEntries(
       status: entry.status,
       lastAttempt: entry.lastAttempt,
       attempts: entry.attempts,
+      ...(entry.failureAttempts !== undefined ? { failureAttempts: entry.failureAttempts } : {}),
+      ...(entry.outcome !== undefined ? { outcome: entry.outcome } : {}),
       error: typeof entry.error === "string" ? entry.error : undefined,
       papersWritten:
         typeof entry.papersWritten === "number" ? entry.papersWritten : undefined,
@@ -554,4 +578,8 @@ async function writeAtomic(
     if (await storage.exists(bak)) await storage.rename(bak, path);
     throw e;
   }
+}
+
+function isRunOutcome(value: unknown): value is RunOutcome {
+  return value === "awaiting_announcement" || value === "no_updates" || value === "no_matches" || value === "papers_written";
 }

@@ -6,9 +6,13 @@ export type RunResult = PipelineResult | { kind: "skipped"; reason: string };
 export function describeResult(result: RunResult | null | undefined): string {
   if (!result) return "no result";
   if (result.kind === "completed") {
+    if (result.outcome === "no_updates") return "no arXiv updates";
+    if (result.outcome === "no_matches") return "no matching papers";
     return `done (${result.papersWritten} papers)`;
   }
-  if (result.kind === "pending") return `pending: ${result.reason}`;
+  if (result.kind === "pending") {
+    return `${result.outcome === "awaiting_announcement" ? "awaiting announcement" : "pending"}: ${result.reason}`;
+  }
   if (result.kind === "cancelled") return `cancelled: ${result.reason}`;
   if (result.kind === "failed_transient") {
     return `transient: ${result.reason}`;

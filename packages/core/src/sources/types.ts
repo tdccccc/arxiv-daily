@@ -57,10 +57,17 @@ export interface SourceListForDateOptions {
 export type SourceListForDateResult =
   | {
       kind: "ok";
+      outcome?: "available" | "no_updates";
       papers: SourcePaperMeta[];
       /** Channels/categories that contributed papers or empty success. */
       channels: string[];
       dateWindow?: string;
+    }
+  | {
+      kind: "pending";
+      outcome: "awaiting_announcement";
+      channels: string[];
+      reason: string;
     }
   | {
       kind: "error";
