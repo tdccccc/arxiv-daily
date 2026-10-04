@@ -109,7 +109,9 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal((await post('api/paper/mark', { key: paper.key, action: 'star', value: true, expected: 'normal' })).status, 200);
   const actual = (await (await get(`api/paper?key=${encodeURIComponent(paper.key)}`)).json()).paper;
   assert.equal(actual.status, 'to_read'); assert.equal(actual.starred, true);
+  assert.equal((await post('api/preferences', { appearance: { theme: 'dark', language: 'en' } })).status, 200);
   assert.equal((await post('api/preferences', { sidebarWidth: 530, sidebarCollapsed: false })).status, 200);
+  assert.deepEqual((await (await get('api/preferences')).json()).appearance, { theme: 'dark', language: 'en' });
   assert.equal((await (await get('api/preferences')).json()).sidebarWidth, 530);
   const gatewayCall = async (method, args) => {
     const response = await fetch(origin + '/api/' + method, { ...request, body: JSON.stringify({ type: 'client-request', rpcId: 'host-action', method, payload: { args } }) });
@@ -124,6 +126,8 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal(reopened.result.ok, true); assert.notEqual(reopened.result.value.url, url);
   const saved = await (await fetch(new URL(`api/paper?key=${encodeURIComponent(paper.key)}`, reopened.result.value.url))).json();
   assert.equal(saved.paper.status, 'to_read'); assert.equal(saved.paper.starred, true);
+  const restoredPreferences = await (await fetch(new URL('api/preferences', reopened.result.value.url))).json();
+  assert.deepEqual(restoredPreferences.appearance, { theme: 'dark', language: 'en' });
   assert.doesNotMatch(output, /fixture(?:-(?:settings|embedding|email|hosted))?-secret-never-log|did not activate|already has an interceptor/);
   child.kill('SIGTERM'); await exited;
   await assert.rejects(fetch(reopened.result.value.url), 'DSH shutdown must close its workbench listener');

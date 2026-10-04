@@ -1,6 +1,8 @@
+import { setUiLanguage } from "../src/workbench/web/i18n";
 // @vitest-environment happy-dom
-import { afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { mountSettingsNavigation } from '../src/workbench/web/settings-navigation';
+beforeEach(()=>setUiLanguage('en'));
 afterEach(() => { document.body.innerHTML=''; vi.restoreAllMocks(); });
 it('adds jump navigation without hiding settings, submitting changes or losing drafts', () => {
  const form=document.createElement('form');
@@ -8,8 +10,8 @@ it('adds jump navigation without hiding settings, submitting changes or losing d
  document.body.append(form); const submit=vi.fn();form.addEventListener('submit',submit);
  const scroll=vi.fn();form.querySelectorAll<HTMLElement>('section')[1]!.scrollIntoView=scroll;
  mountSettingsNavigation(form);
- const nav=form.querySelector('nav[aria-label="设置导航"]');expect(nav).toBeTruthy();
- expect(Array.from(nav!.querySelectorAll('button')).map(b=>b.textContent)).toEqual(['设置概览','LLM','Timezone','Email delivery']);
+ const nav=form.querySelector('nav[aria-label="Settings navigation"]');expect(nav).toBeTruthy();
+ expect(Array.from(nav!.querySelectorAll('button')).map(b=>b.textContent)).toEqual(['Settings overview','LLM','Timezone','Email delivery']);
  const email=Array.from(nav!.querySelectorAll('button')).find(b=>b.textContent==='Email delivery')!;email.click();
  expect(scroll).toHaveBeenCalled(); expect(email.getAttribute('aria-current')).toBe('location');
  expect(submit).not.toHaveBeenCalled();expect(form.querySelector<HTMLInputElement>('[name=model]')!.value).toBe('draft');

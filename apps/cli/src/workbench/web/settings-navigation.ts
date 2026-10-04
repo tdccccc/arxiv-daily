@@ -1,15 +1,16 @@
+import { t } from "./i18n";
 /** Move existing nodes: navigation never recreates controls or submits their drafts. */
 export function mountSettingsNavigation(form: HTMLFormElement): void {
   if (form.querySelector('.settings-layout')) return;
   const layout = document.createElement('div'); layout.className = 'settings-layout';
-  const nav = document.createElement('nav'); nav.className = 'settings-navigation'; nav.setAttribute('aria-label', '设置导航');
+  const nav = document.createElement('nav'); nav.className = 'settings-navigation'; nav.setAttribute('aria-label', t('设置导航'));
   const content = document.createElement('div'); content.className = 'settings-content';
   for (const child of Array.from(form.children)) if (!child.classList.contains('dialog-footer')) content.append(child);
   layout.append(nav, content); form.prepend(layout);
   const entries: Array<{ target: HTMLElement; button: HTMLButtonElement }> = [];
   for (const target of Array.from(content.children) as HTMLElement[]) {
     const heading = target.querySelector<HTMLElement>('[data-settings-heading]');
-    const name = target.classList.contains('settings-host-context') ? '设置概览' : heading?.textContent || (['Automatic detail notes', 'Timezone'].includes(target.dataset.settingName || '') ? target.dataset.settingName : undefined);
+    const name = target.classList.contains('settings-host-context') ? t('设置概览') : (heading ? t(heading.dataset.settingsKey || heading.textContent || '') : '') || (['Automatic detail notes', 'Timezone'].includes(target.dataset.settingName || '') ? t(target.dataset.settingName!) : undefined);
     if (!name) continue;
     target.id = `settings-section-${entries.length}`;
     target.classList.add('settings-nav-target');

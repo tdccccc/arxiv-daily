@@ -1,5 +1,6 @@
+import { setUiLanguage, getUiLanguage } from "../src/workbench/web/i18n";
 // @vitest-environment happy-dom
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { mountWorkbench } from "../src/workbench/web/app";
 const values = { vaultRoot: "/notes", baseUrl: "https://api.example/v1", provider: "openai", model: "test", apiKeyConfigured: true, categories: ["cs.AI"], timezone: "Asia/Shanghai", summaryLanguage: "zh", topics: [{ id: "existing-topic", name: "Models", tag: "models", description: "Inference", detail: true }], dailyDir: "daily", papersDir: "papers" };
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
 let dispose = () => {};
+beforeEach(()=>setUiLanguage("en"));
 afterEach(() => { dispose(); document.body.innerHTML = ""; vi.restoreAllMocks(); });
 function setup(first = false, fail = false, configPath?: string, override?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined) {
   history.replaceState({}, "", "/capability/");
@@ -30,7 +32,7 @@ function setup(first = false, fail = false, configPath?: string, override?: (pat
       return json({ setupRequired: !configured, revision: configured ? "revision-1" : null, configPath: "/config.toml", values });
     }
     if (path === "api/settings/library") return json({ status: { kind: "disconnected" } });
-    if (path === "api/preferences") return json({ sidebarWidth: null, sidebarCollapsed: false });
+    if (path === "api/preferences") return json({ sidebarWidth: null, sidebarCollapsed: false, appearance: {theme:"light",language:getUiLanguage()} });
     if (!configured) return json({ error: "请先设置", setupRequired: true }, 409);
     if (path === "api/runs/current") return json({ run: null });
     if (path === "api/calendar") return json({ month: "2026-10", today: "2026-10-03", timezone: "Asia/Shanghai", previousMonth: "2026-09", nextMonth: "2026-11", cells: [] });
@@ -48,11 +50,11 @@ it("opens first-run setup before data requests and refreshes the workspace after
   const configPath = join(directory, "config.toml");
   const { root, fetcher } = setup(true, false, configPath);
   await vi.waitFor(() => expect(root.querySelector(".settings-form")).toBeTruthy());
-  expect(root.querySelector("dialog")?.textContent).toContain("首次使用");
+  expect(root.querySelector("dialog")?.textContent).toMatch(/首次使用|First/);
   expect(fetcher.mock.calls.some(([u]) => /api\/(calendar|papers|runs)/.test(String(u)))).toBe(false);
   expect(root.querySelector<HTMLInputElement>('[name="apiKey"]')?.type).toBe("password");
   expect(root.querySelector<HTMLInputElement>('[name="apiKey"]')?.value).toBe("");
-  expect(root.querySelector("dialog")?.textContent).toContain("独立");
+  expect(root.querySelector("dialog")?.textContent).toContain("independent");
   input(root, "vaultRoot", "/new-notes"); input(root, "apiKey", "new-secret");
   root.querySelector<HTMLButtonElement>('[data-settings="add-topic"]')!.click();
   expect(root.querySelectorAll(".settings-topic")).toHaveLength(2);
@@ -112,8 +114,8 @@ it.each([{remote:false,hosted:false,sidecar:false},{remote:true,hosted:true,side
       }
     }
   }
-  expect(Array.from(root.querySelectorAll('[data-settings-heading]')).map(e => e.textContent)).toEqual(expectedGroups);
-  expect(Array.from(root.querySelectorAll<HTMLElement>('[data-setting-name]')).filter(e=>!e.closest('[hidden]')).map(e => e.dataset.settingName)).toEqual(expectedNames);
+  expect(Array.from(root.querySelectorAll<HTMLElement>('[data-settings-heading]')).filter(e=>e.dataset.settingsKey!=='Appearance').map(e => e.textContent)).toEqual(expectedGroups);
+  expect(Array.from(root.querySelectorAll<HTMLElement>('[data-setting-name]')).filter(e=>!e.closest('[hidden]')&&!['Theme','Interface language'].includes(e.dataset.settingName??'')).map(e => e.dataset.settingName)).toEqual(expectedNames);
   expect(root.querySelector('input[name="model"][role="combobox"]')?.getAttribute('aria-controls')).toBeTruthy();
   expect(root.querySelector('select[name="reasoningEffort"]')).toBeTruthy();
   expect(root.querySelector('select[name="schedule.runAtLocal"]')).toBeTruthy();
@@ -154,6 +156,7 @@ it("loads models without changing the draft and sends email only from its explic
  expect(root.querySelector<HTMLInputElement>('[name="apiKey"]')!.value).toBe('');
  const actions=()=>fetcher.mock.calls.filter(([url])=>String(url)==='api/settings/action').map(([,init])=>JSON.parse(String(init!.body)));
  expect(actions().map(a=>a.action)).toEqual(['models']);
+ expect(fetcher.mock.calls.some(([url,init])=>String(url)==='api/preferences'&&init?.method==='POST')).toBe(false);
  root.querySelector<HTMLButtonElement>('[data-email-self] [data-settings="email-test"]')!.click();
  await vi.waitFor(()=>expect(actions().map(a=>a.action)).toEqual(['models','email-test']));
  expect(actions().every(a=>a.revision==='revision-1')).toBe(true);
@@ -288,4 +291,38 @@ it('keeps a completed setup guide absent when Get models saves changed settings'
  root.querySelector<HTMLButtonElement>('[data-settings="models"]')!.click();
  await vi.waitFor(()=>expect(root.querySelector('[role=option]')?.textContent).toBe('test'));
  expect(root.querySelector('.settings-setup')).toBeNull();
+});
+it('offers interface appearance separately from the report language and preserves user text', async () => {
+ setUiLanguage('zh');
+ const {root,fetcher}=setup();
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ expect(root.querySelector('[data-settings-key="Appearance"]')?.textContent).toBe('外观');
+ expect(root.querySelector('[data-setting-name="API key"] .setting-item-name')?.textContent).toBe('API 密钥');
+ expect(root.querySelector<HTMLInputElement>('[name="topicName"]')!.value).toBe('Models');
+ const theme=root.querySelector<HTMLSelectElement>('[name="appearance.theme"]')!;
+ const language=root.querySelector<HTMLSelectElement>('[name="appearance.language"]')!;
+ theme.value='dark';language.value='en';
+ submit(root);
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeNull());
+ const product=fetcher.mock.calls.find(([url,init])=>String(url)==='api/settings'&&init?.method==='POST')!;
+ const preferences=fetcher.mock.calls.find(([url,init])=>String(url)==='api/preferences'&&init?.method==='POST')!;
+ expect(JSON.parse(String(product[1]!.body)).values.summaryLanguage).toBe('zh');
+ expect(JSON.parse(String(preferences[1]!.body))).toEqual({appearance:{theme:'dark',language:'en'}});
+});
+it('keeps translated labels separate from user topics, model identifiers and submitted fields', async()=>{
+ setUiLanguage('zh');
+ const customValues={...values,model:'English',topics:[{id:'theme',name:'Theme',tag:'Theme',description:'Saved only on this device.',detail:true}]};
+ const {root}=setup(false,false,undefined,(path,init)=>path==='api/settings'&&!init?.method?json({setupRequired:false,revision:'r1',configPath:'/config.toml',values:customValues}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('English');
+ expect(root.querySelector<HTMLInputElement>('[name="topicName"]')!.value).toBe('Theme');
+ expect(root.querySelector<HTMLTextAreaElement>('[name="topicDescription"]')!.value).toBe('Saved only on this device.');
+ expect(root.querySelector('.settings-topic-name')!.textContent).toBe('Theme');
+ expect(root.querySelector('[data-setting-name="Theme"] .setting-item-name')!.textContent).toBe('主题');
+ expect(root.querySelector('[data-setting-name="Run window"] .setting-item-name')!.textContent).toBe('运行时间段');
+ expect(root.querySelector<HTMLInputElement>('[name="email.apiKey"]')!.getAttribute('aria-label')).toBe('Resend API 密钥');
+ expect(root.querySelector('[data-settings="models"]')!.textContent).toBe('获取模型');
+ expect(root.querySelector('nav[aria-label="设置导航"]')).toBeTruthy();
 });

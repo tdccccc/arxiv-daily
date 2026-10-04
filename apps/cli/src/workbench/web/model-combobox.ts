@@ -1,6 +1,7 @@
+import { t } from "./i18n";
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]!);
 export function modelCombobox(value: string): string {
-  return `<div class="model-combobox"><input name="model" aria-label="Model" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="settings-model-choices" autocomplete="off" value="${escape(value)}" placeholder="Model name"><button type="button" data-model-toggle aria-label="展开模型选项" disabled>▾</button><div id="settings-model-choices" class="model-choices" role="listbox" aria-label="Available models" hidden></div></div>`;
+  return `<div class="model-combobox"><input name="model" aria-label= "${escape(t('Model'))}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="settings-model-choices" autocomplete="off" value="${escape(value)}" placeholder= "${escape(t('Model name'))}"><button type="button" data-model-toggle aria-label= "${escape(t('展开模型选项'))}" disabled>▾</button><div id="settings-model-choices" class="model-choices" role="listbox" aria-label= "${escape(t('Available models'))}" hidden></div></div>`;
 }
 export function mountModelCombobox(root: HTMLElement) {
   const box = root.querySelector<HTMLElement>('.model-combobox')!;
@@ -17,7 +18,7 @@ export function mountModelCombobox(root: HTMLElement) {
   function open(filter = '') {
     if (!models.length || input.disabled) return;
     visible = models.filter(model => model.toLocaleLowerCase().includes(filter.toLocaleLowerCase())); active = -1;
-    list.innerHTML = visible.length ? visible.map((model,i) => `<button type="button" role="option" id="settings-model-option-${i}" data-model-index="${i}" aria-selected="false" tabindex="-1">${escape(model)}</button>`).join('') : '<div class="model-empty">No matching models. You can type a model name.</div>';
+    list.innerHTML = visible.length ? visible.map((model,i) => `<button type="button" role="option" id="settings-model-option-${i}" data-model-index="${i}" aria-selected="false" tabindex="-1">${escape(model)}</button>`).join('') : `<div class="model-empty">${escape(t('No matching models. You can type a model name.'))}</div>`;
     list.hidden = false; input.setAttribute('aria-expanded','true'); input.removeAttribute('aria-activedescendant');
   }
   function choose(index: number) {

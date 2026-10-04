@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { WorkbenchCalendar, WorkbenchCalendarDay } from "../calendar";
 
 export const calendarStateLabels: Record<WorkbenchCalendarDay["state"], string> = {
@@ -23,18 +24,18 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
   const mobile = window.matchMedia("(max-width: 760px)");
   let expanded = !mobile.matches;
 
-  host.innerHTML = `<div class="calendar-mobile-heading"><span>按日期阅读</span><button class="quiet-button" data-calendar-action="toggle" aria-controls="daily-calendar-body"></button></div>
-    <div class="calendar-body" id="daily-calendar-body"><div class="calendar-navigation"><button class="icon-button" data-calendar-action="previous" aria-label="上个月">‹</button><strong class="calendar-month" aria-live="polite">日报日历</strong><button class="icon-button" data-calendar-action="next" aria-label="下个月">›</button><button class="quiet-button calendar-today" data-calendar-action="today">回到今天</button></div>
-    <div class="calendar-error" role="alert" hidden></div><div class="calendar-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
-    <div class="calendar-grid" role="group" aria-label="日报日期"><div class="calendar-loading" role="status">正在读取日历…</div></div>
-    <div class="calendar-legend" aria-label="日历状态图例"><span><i class="calendar-dot has-report"></i>有日报</span><span><i class="calendar-dot not-generated"></i>可生成</span><span><i class="calendar-dot running"></i>生成中</span><span><i class="calendar-dot failed"></i>需处理</span><span><i class="calendar-dot no-matches"></i>无匹配</span></div>
+  host.innerHTML = `<div class="calendar-mobile-heading"><span>${t("按日期阅读")}</span><button class="quiet-button" data-calendar-action="toggle" aria-controls="daily-calendar-body"></button></div>
+    <div class="calendar-body" id="daily-calendar-body"><div class="calendar-navigation"><button class="icon-button" data-calendar-action="previous" aria-label="${t("上个月")}">‹</button><strong class="calendar-month" aria-live="polite">${t("日报日历")}</strong><button class="icon-button" data-calendar-action="next" aria-label="${t("下个月")}">›</button><button class="quiet-button calendar-today" data-calendar-action="today">${t("回到今天")}</button></div>
+    <div class="calendar-error" role="alert" hidden></div><div class="calendar-weekdays" aria-hidden="true"><span>${t("一")}</span><span>${t("二")}</span><span>${t("三")}</span><span>${t("四")}</span><span>${t("五")}</span><span>${t("六")}</span><span>${t("日")}</span></div>
+    <div class="calendar-grid" role="group" aria-label="${t("日报日期")}"><div class="calendar-loading" role="status">${t("正在读取日历…")}</div></div>
+    <div class="calendar-legend" aria-label="${t("日历状态图例")}"><span><i class="calendar-dot has-report"></i>${t("有日报")}</span><span><i class="calendar-dot not-generated"></i>${t("可生成")}</span><span><i class="calendar-dot running"></i>${t("生成中")}</span><span><i class="calendar-dot failed"></i>${t("需处理")}</span><span><i class="calendar-dot no-matches"></i>${t("无匹配")}</span></div>
     <div class="calendar-summary" aria-live="polite"></div></div>`;
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => host.querySelector<T>(selector)!;
 
   function renderExpansion(): void {
     find(".calendar-body").hidden = !expanded;
     const toggle = find<HTMLButtonElement>('[data-calendar-action="toggle"]');
-    toggle.textContent = expanded ? "收起日历" : "展开日历";
+    toggle.textContent = expanded ? t("收起日历") : t("展开日历");
     toggle.setAttribute("aria-expanded", String(expanded));
   }
 
@@ -44,21 +45,21 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     const restoreDate = active?.dataset.calendarDate;
     const days = data.cells.filter((day): day is WorkbenchCalendarDay => day !== null);
     const target = [focusedDate, selectedDate, data.today, days[0]?.date].find(date => days.some(day => day.date === date));
-    find(".calendar-month").textContent = `${Number(data.month.slice(0, 4))} 年 ${Number(data.month.slice(5))} 月`;
-    find(".calendar-grid").setAttribute("aria-label", `${data.month} 日报日期`);
+    find(".calendar-month").textContent = t("{0} 年 {1} 月", Number(data.month.slice(0, 4)), Number(data.month.slice(5)));
+    find(".calendar-grid").setAttribute("aria-label", t("{0} 日报日期", data.month));
     find<HTMLButtonElement>('[data-calendar-action="previous"]').disabled = data.previousMonth === data.month;
     find<HTMLButtonElement>('[data-calendar-action="next"]').disabled = data.nextMonth === data.month;
     find(".calendar-grid").innerHTML = data.cells.map(day => {
       if (!day) return '<span class="calendar-blank" aria-hidden="true"></span>';
       const showCount = day.state === "has-report" || day.state === "no-matches";
-      const countLabel = showCount ? day.papers === null ? "，论文数未知" : `，${day.papers} 篇论文` : "";
+      const countLabel = showCount ? day.papers === null ? t("，论文数未知") : t("，{0} 篇论文", day.papers) : "";
       const caption = showCount
-        ? `<span class="calendar-day-count">${day.papers === null ? "—" : `${day.papers}篇`}</span>`
+        ? `<span class="calendar-day-count">${day.papers === null ? "—" : t("{0}篇", day.papers)}</span>`
         : `<span class="calendar-day-mark" aria-hidden="true">${day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "skipped" ? "–" : ""}</span>`;
-      return `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date}，${calendarStateLabels[day.state]}${countLabel}" title="${day.date} · ${calendarStateLabels[day.state]}${countLabel}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span class="calendar-day-number">${Number(day.date.slice(8))}</span>${caption}</button>`;
+      return `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" title="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span class="calendar-day-number">${Number(day.date.slice(8))}</span>${caption}</button>`;
     }).join("");
     const selected = days.find(day => day.date === selectedDate);
-    find(".calendar-summary").innerHTML = selected ? `<div class="calendar-selected-heading"><time datetime="${selected.date}">${selected.date}</time><span>${calendarStateLabels[selected.state]}${selected.papers !== null ? ` · ${selected.papers} 篇` : ""}</span></div>${selected.canGenerate ? `<button class="quiet-button" data-action="generate-date" data-date="${selected.date}">${escapeHtml(selected.actionLabel || "生成日报")} <span aria-hidden="true">↗</span></button>` : ""}` : '<span class="calendar-hint">选择日期查看日报或运行状态</span>';
+    find(".calendar-summary").innerHTML = selected ? `<div class="calendar-selected-heading"><time datetime="${selected.date}">${selected.date}</time><span>${t(calendarStateLabels[selected.state])}${selected.papers !== null ? ` · ${t("{0} 篇", selected.papers)}` : ""}</span></div>${selected.canGenerate ? `<button class="quiet-button" data-action="generate-date" data-date="${selected.date}">${escapeHtml(t(selected.actionLabel || "生成日报"))} <span aria-hidden="true">↗</span></button>` : ""}` : `<span class="calendar-hint">${t("选择日期查看日报或运行状态")}</span>`;
     if (restoreDate) focusDate(restoreDate);
   }
 
@@ -81,7 +82,7 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
       return true;
     } catch (error) {
       if (!disposed && current === version) {
-        find(".calendar-error").innerHTML = '<span>日历暂时不可用</span><button class="quiet-button" data-calendar-action="retry">重试</button>';
+        find(".calendar-error").innerHTML = `<span>${t("日历暂时不可用")}</span><button class="quiet-button" data-calendar-action="retry">${t("重试")}</button>`;
         find(".calendar-error").hidden = false;
         if (!data) find(".calendar-grid").innerHTML = "";
         options.onError(error);

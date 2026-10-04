@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { DEFAULT_SETTINGS, validateFilterConfig } from '@arxiv-daily/core';
 import type { WorkbenchSettings } from '../settings';
 const escape = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -12,7 +13,7 @@ export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportCompl
   const validation = validateFilterConfig(configured);
   const enabled = v.schedule?.enabled ?? false;
   if (validation.ok && firstReportComplete && enabled) return '';
-  const button = (action: string, text: string) => `<button type="button" data-setup-action="${action}">${text}</button>`;
+  const button = (action: string, text: string) => `<button type="button" data-setup-action="${action}">${escape(t(text))}</button>`;
   const steps = [
     { done: llmReady, name: 'Connect AI', text: 'Add an API key, API base URL, and model under LLM.', action: button('llm', 'Connect AI') },
     { done: categoriesReady, name: 'Choose paper sources', text: 'Select at least one arXiv category under arXiv categories.', action: button('arxiv', 'Choose sources') },
@@ -21,5 +22,5 @@ export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportCompl
     { done: enabled, name: 'Turn on daily reports', text: validation.ok ? 'Reports then run by themselves on weekdays, inside the run window below.' : 'Available once the configuration above is complete.', action: validation.ok ? button('enable', 'Turn on daily reports') : '' },
   ];
   const count = steps.filter(s => s.done).length;
-  return `<div class="settings-setup"><h2>Getting started</h2><p>${count} of 5 complete</p><progress max="5" value="${count}" aria-label="Setup progress"></progress><ol>${steps.map(s => `<li data-complete="${s.done}"><strong>${s.name}</strong><p>${s.text}</p>${s.action}</li>`).join('')}</ol>${validation.reasons.length ? `<details><summary>Configuration details</summary><p>${escape(validation.reasons.join('; '))}</p></details>` : ''}${button('dashboard', 'Open dashboard')}</div>`;
+  return `<div class="settings-setup"><h2>${escape(t('Getting started'))}</h2><p>${escape(t('{0} of 5 complete',count))}</p><progress max="5" value="${count}" aria-label="${escape(t('Setup progress'))}"></progress><ol>${steps.map(s => `<li data-complete="${s.done}"><strong>${escape(t(s.name))}</strong><p>${escape(t(s.text))}</p>${s.action}</li>`).join('')}</ol>${validation.reasons.length ? `<details><summary>${escape(t('Configuration details'))}</summary><p>${escape(validation.reasons.join('; '))}</p></details>` : ''}${button('dashboard', 'Open dashboard')}</div>`;
 }

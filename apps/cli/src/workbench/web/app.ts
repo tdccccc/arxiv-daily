@@ -1,3 +1,5 @@
+import { t, getUiLanguage, setUiLanguage } from "./i18n";
+import { DEFAULT_UI_APPEARANCE, normalizeUiAppearancePreferences, type UiAppearancePreferences } from "@arxiv-daily/core";
 import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
@@ -11,6 +13,7 @@ export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
   searchDelayMs?: number;
   pollIntervalMs?: number;
+  appearance?: UiAppearancePreferences;
 }
 
 type ProductStatus = Awaited<ReturnType<typeof inspectProduct>>;
@@ -23,6 +26,45 @@ const symbols = {
 };
 
 export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOptions = {}): () => void {
+  const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const lifetime = new AbortController();
+  let disposed = false, generation = 0;
+  let disposeContent: (() => void) | undefined;
+  let restoreScroll: MutationObserver | undefined;
+  let appearance: UiAppearancePreferences = options.appearance ?? { ...DEFAULT_UI_APPEARANCE, language: getUiLanguage() };
+  function render(next: UiAppearancePreferences) {
+    if (disposed) return;
+    const scroll = root.querySelector<HTMLElement>('.reading-pane')?.scrollTop ?? 0;
+    generation += 1;
+    restoreScroll?.disconnect(); disposeContent?.();
+    appearance = next; setUiLanguage(next.language);
+    document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en';
+    document.title = t('arxiv-daily · 阅读工作台');
+    disposeContent = mountWorkbenchContent(root, { ...options, appearance: next }, async value => {
+      if (value.language !== appearance.language || value.theme !== appearance.theme) render(value);
+    });
+    if (scroll > 0) {
+      restoreScroll = new MutationObserver(() => {
+        if (!root.querySelector('.markdown-body, .paper-workspace, .document-list')) return;
+        const pane = root.querySelector<HTMLElement>('.reading-pane'); if (pane) pane.scrollTop = scroll;
+        restoreScroll?.disconnect();
+      });
+      restoreScroll.observe(root, { childList: true, subtree: true });
+    }
+  }
+  render(appearance);
+  const initialGeneration = generation;
+  if (!options.appearance) void fetcher('api/preferences', { signal: lifetime.signal }).then(async response => {
+    if (!response.ok) return;
+    const value = await response.json() as { appearance?: UiAppearancePreferences };
+    if (disposed || generation !== initialGeneration || !value.appearance) return;
+    const saved = normalizeUiAppearancePreferences(value.appearance);
+    if (saved.language !== appearance.language || saved.theme !== appearance.theme) render(saved);
+  }).catch(() => { /* Sidebar and settings provide retry UI for unavailable preferences. */ });
+  return () => { disposed = true; lifetime.abort(); restoreScroll?.disconnect(); disposeContent?.(); };
+}
+
+function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const lifetime = new AbortController();
   let disposed = false;
@@ -54,28 +96,31 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
 
   root.className = "workbench";
   root.dataset.view = "list";
-  root.dataset.theme = preference("theme") || "light";
+  const appearance = options.appearance ?? DEFAULT_UI_APPEARANCE;
+  const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+  const applyTheme = () => { root.dataset.theme = appearance.theme === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : appearance.theme; };
+  applyTheme(); systemTheme?.addEventListener?.('change', applyTheme);
   root.style.setProperty("--reading-size", `${fontSize}px`);
   root.innerHTML = `
-    <a class="skip-link" href="#reading-content">跳到正文</a>
+    <a class="skip-link" href="#reading-content">${t("跳到正文")}</a>
     <header class="app-header">
-      <a class="brand" href="./" aria-label="arxiv-daily 首页">arxiv<span class="brand-hyphen">-</span>daily</a>
-      <div class="header-actions"><button class="quiet-button" data-action="theme" aria-label="切换深浅色">◐ <span class="desktop-label">外观</span></button><button class="quiet-button" data-action="settings">设置</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> 生成</button></div>
+      <a class="brand" href="./" aria-label="${t("arxiv-daily 首页")}">arxiv<span class="brand-hyphen">-</span>daily</a>
+      <div class="header-actions"><button class="quiet-button" data-action="settings">${t("设置")}</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> ${t("生成")}</button></div>
     </header>
     <div class="connection-banner" role="alert" hidden></div>
     <div class="workspace">
-      <aside class="library-pane" aria-label="日历与筛选">
-        <div class="library-heading"><span>我的阅读</span><button class="quiet-button show-filters" data-action="show-filters">返回列表</button><button class="icon-button" data-action="refresh" aria-label="刷新文档">↻</button></div>
-        <section class="calendar-panel" aria-label="日报日历"></section>
-        <label class="search-box">${symbols.search}<input type="search" aria-label="搜索标题、作者、arXiv ID 或日期" placeholder="搜索标题、作者或关键词" autocomplete="off"></label>
-        <nav class="paper-scopes" aria-label="阅读筛选">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${label}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
-        <label class="topic-filter">主题<select data-filter="topic" aria-label="筛选主题"><option value="">全部主题</option></select></label>
-        <div class="navigation-footer"><button class="quiet-button" data-action="clear-date">浏览全部日期</button><button class="quiet-button" data-action="browse-documents">浏览 Markdown 文件 ↗</button></div>
+      <aside class="library-pane" aria-label="${t("日历与筛选")}">
+        <div class="library-heading"><span>${t("我的阅读")}</span><button class="quiet-button show-filters" data-action="show-filters">${t("返回列表")}</button><button class="icon-button" data-action="refresh" aria-label="${t("刷新文档")}">↻</button></div>
+        <section class="calendar-panel" aria-label="${t("日报日历")}"></section>
+        <label class="search-box">${symbols.search}<input type="search" aria-label="${t("搜索标题、作者、arXiv ID 或日期")}" placeholder="${t("搜索标题、作者或关键词")}" autocomplete="off"></label>
+        <nav class="paper-scopes" aria-label="${t("阅读筛选")}">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${t(label)}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
+        <label class="topic-filter">${t("Topic")}<select data-filter="topic" aria-label="${t("筛选主题")}"><option value="">${t("全部主题")}</option></select></label>
+        <div class="navigation-footer"><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
       </aside>
       <main class="reading-pane" id="reading-content" tabindex="-1"></main>
-      <aside class="toc-pane" aria-label="文章目录"></aside>
+      <aside class="toc-pane" aria-label="${t("文章目录")}"></aside>
     </div>
-    <section class="run-tray" aria-label="生成任务" hidden></section>
+    <section class="run-tray" aria-label="${t("生成任务")}" hidden></section>
     <div class="dialog-host"></div>`;
 
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
@@ -102,10 +147,10 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
         ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
       });
       const value = await response.json() as T & { error?: string };
-      if (!response.ok) throw new Error(value.error || `请求失败（${response.status}）`);
+      if (!response.ok) throw new Error(value.error ? t(value.error) : t("请求失败（{0}）", response.status));
       return value;
     } catch (error) {
-      if (error instanceof TypeError) throw new Error("无法连接本地工作台。请确认启动它的终端仍在运行，再重新连接。");
+      if (error instanceof TypeError) throw new Error(t("无法连接本地工作台。请确认启动它的终端仍在运行，再重新连接。"));
       throw error;
     }
   }
@@ -113,7 +158,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   function reportConnection(error: unknown): void {
     if (disposed) return;
     const banner = find(".connection-banner");
-    banner.innerHTML = `<span>${escapeHtml(message(error))}</span><button class="quiet-button" data-action="reconnect">重新连接</button>`;
+    banner.innerHTML = `<span>${escapeHtml(message(error))}</span><button class="quiet-button" data-action="reconnect">${t("重新连接")}</button>`;
     banner.hidden = false;
   }
 
@@ -164,23 +209,23 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     find<HTMLSelectElement>('[data-filter="topic"]').disabled = documentsMode;
   }
   function listToolbar(): string {
-    return `<div class="paper-list-heading"><div><span class="day-eyebrow">${documentsMode ? "本地研究记录" : selectedDate || "我的文献"}</span><h1>${documentsMode ? "Markdown 文件" : scopes[scope]}</h1></div><button class="quiet-button show-filters" data-action="show-filters">日历与筛选</button></div>`;
+    return `<div class="paper-list-heading"><div><span class="day-eyebrow">${documentsMode ? t("本地研究记录") : selectedDate || t("我的文献")}</span><h1>${documentsMode ? t("Markdown 文件") : t(scopes[scope])}</h1></div><button class="quiet-button show-filters" data-action="show-filters">${t("日历与筛选")}</button></div>`;
   }
   function renderList(): void {
     if (root.dataset.view !== "list" || !paperList) return;
     const unknown = paperList.total === 0 && paperList.day?.reportPath && paperList.day.papers !== 0 && !query && !topic && scope === "all";
-    reading.innerHTML = `<div class="paper-workspace">${listToolbar()}${dayHeading(paperList.day)}<div class="paper-list-tools"><span class="list-caption" aria-live="polite">${unknown ? "日报已保存，论文索引尚无可用条目" : `${paperList.total} 篇论文`}</span><label>排序 <select data-filter="sort" aria-label="论文排序">${Object.entries({ published: "发表日期", title: "标题", priority: "优先级", relevance: "相关度" }).map(([value, label]) => `<option value="${value}" ${sort === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><button class="quiet-button" data-action="direction" aria-label="切换排序方向">${direction === "asc" ? "↑ 升序" : "↓ 降序"}</button></div><div class="paper-list">${paperRows(paperList, pendingMarks) || `<div class="list-empty"><h2>${unknown ? "可直接阅读完整日报" : "没有匹配的论文"}</h2><p>${unknown ? "尚未找到对应的论文索引；原始 Markdown 仍可阅读。" : "可调整日期或筛选条件，也可通过“生成”获取新论文。"}</p></div>`}</div>${pagination(paperList.total, paperList.nextOffset)}</div>`;
+    reading.innerHTML = `<div class="paper-workspace">${listToolbar()}${dayHeading(paperList.day)}<div class="paper-list-tools"><span class="list-caption" aria-live="polite">${unknown ? t("日报已保存，论文索引尚无可用条目") : t("{0} 篇论文", paperList.total)}</span><label>${t("排序")} <select data-filter="sort" aria-label="${t("论文排序")}">${Object.entries({ published: t("发表日期"), title: t("标题"), priority: t("优先级"), relevance: t("相关度") }).map(([value, label]) => `<option value="${value}" ${sort === value ? "selected" : ""}>${t(label)}</option>`).join("")}</select></label><button class="quiet-button" data-action="direction" aria-label="${t("切换排序方向")}">${direction === "asc" ? t("↑ 升序") : t("↓ 降序")}</button></div><div class="paper-list">${paperRows(paperList, pendingMarks) || `<div class="list-empty"><h2>${unknown ? t("可直接阅读完整日报") : t("没有匹配的论文")}</h2><p>${unknown ? t("尚未找到对应的论文索引；原始 Markdown 仍可阅读。") : t("可调整日期或筛选条件，也可通过“生成”获取新论文。")}</p></div>`}</div>${pagination(paperList.total, paperList.nextOffset)}</div>`;
     for (const [key, count] of Object.entries(paperList.counts)) find(`[data-count="${key}"]`).textContent = String(count);
-    find<HTMLSelectElement>('[data-filter="topic"]').innerHTML = `<option value="">全部主题</option>${[...new Set([...paperList.topics, ...(topic ? [topic] : [])])].map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+    find<HTMLSelectElement>('[data-filter="topic"]').innerHTML = `<option value="">${t("全部主题")}</option>${[...new Set([...paperList.topics, ...(topic ? [topic] : [])])].map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
     syncFilters(); syncMarkValues();
   }
   function pagination(total: number, next: number | null): string {
-    return `<div class="paper-pagination"><button class="quiet-button" data-action="previous-page" ${offset === 0 ? "disabled" : ""}>← 上一页</button><span>第 ${Math.floor(offset / 20) + 1} 页${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}</span><button class="quiet-button" data-action="next-page" ${next === null ? "disabled" : ""}>下一页 →</button></div>`;
+    return `<div class="paper-pagination"><button class="quiet-button" data-action="previous-page" ${offset === 0 ? "disabled" : ""}>${t("← 上一页")}</button><span>${t("第 {0} 页", Math.floor(offset / 20) + 1)}${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}</span><button class="quiet-button" data-action="next-page" ${next === null ? "disabled" : ""}>${t("下一页 →")}</button></div>`;
   }
   async function loadList(restore = false): Promise<void> {
     const version = ++listVersion;
     const scroll = restore ? listScroll : 0;
-    reading.innerHTML = '<div class="reading-loading" role="status">正在读取列表…</div>';
+    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在读取列表…")}</div>`;
     try {
       const params = new URLSearchParams({ q: query, offset: String(offset), limit: "20" });
       if (documentsMode) {
@@ -188,7 +233,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
         const result = await request<DocumentList>(`api/documents?${params}`);
         if (disposed || version !== listVersion || root.dataset.view !== "list") return;
         entries = result.documents; nextOffset = result.nextOffset;
-        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="文档类型">${Object.entries({ all: "全部文件", daily: "日报", papers: "论文总结" }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${label}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || "已保存文档")}</span><span class="document-row-title">${escapeHtml(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || '<div class="list-empty">暂无匹配文件</div>'}</div>${pagination(result.total, result.nextOffset)}</div>`;
+        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="${t("文档类型")}">${Object.entries({ all: t("全部文件"), daily: t("日报"), papers: t("论文总结") }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${t(label)}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || t("已保存文档"))}</span><span class="document-row-title">${escapeHtml(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || `<div class="list-empty">${t("暂无匹配文件")}</div>`}</div>${pagination(result.total, result.nextOffset)}</div>`;
       } else {
         for (const [key, value] of Object.entries({ scope, topic, sort, direction, date: selectedDate })) if (value) params.set(key, value);
         const result = await request<WorkbenchPaperList>(`api/papers?${params}`);
@@ -198,7 +243,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       reading.scrollTop = scroll;
     } catch (error) {
       if (disposed || version !== listVersion || root.dataset.view !== "list") return;
-      reading.innerHTML = `<div class="empty-reading"><h1>列表暂时不可用</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">重试</button><button class="quiet-button" data-action="browse-documents">浏览 Markdown 文件</button></div>`;
+      reading.innerHTML = `<div class="empty-reading"><h1>${t("列表暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">${t("重试")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件")}</button></div>`;
       reportConnection(error);
     }
   }
@@ -221,7 +266,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     const version = ++documentVersion;
     selectedPath = path; selectedKey = ""; activePaper = null;
     if (historyMode !== "none") { route(historyMode); if (hash) { const url = new URL(location.href); url.hash = hash; history.replaceState(history.state, "", url); } }
-    reading.innerHTML = '<div class="reading-loading" role="status">正在打开文档…</div>';
+    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在打开文档…")}</div>`;
     try {
       const result = await request<ReadingDocument>(`api/document?path=${encodeURIComponent(path)}`);
       if (disposed || version !== documentVersion) return;
@@ -230,8 +275,8 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       if (hash) scrollToHash(hash); else reading.scrollTop = 0;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
-      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">← 返回列表</button><h1>暂时无法打开文档</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">重试读取</button></div>`;
-      if (message(error).includes("无法连接")) reportConnection(error);
+      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("暂时无法打开文档")}</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">${t("重试读取")}</button></div>`;
+      if (message(error).includes("无法连接") || message(error).includes("Cannot connect")) reportConnection(error);
     }
   }
   async function openPaper(key: string, push = true, preserveScroll = false): Promise<void> {
@@ -239,14 +284,14 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     beginReading(push); const version = ++documentVersion;
     selectedKey = key; selectedPath = "";
     if (push) route();
-    reading.innerHTML = '<div class="reading-loading" role="status">正在打开论文…</div>';
+    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在打开论文…")}</div>`;
     try {
       const result = await request<{ paper: WorkbenchPaper }>(`api/paper?key=${encodeURIComponent(key)}`);
       if (disposed || version !== documentVersion) return;
       activePaper = result.paper; reading.innerHTML = overview(result.paper, pendingMarks.has(key)); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
-      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">← 返回列表</button><h1>论文暂时不可用</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="retry-paper">重试</button></div>`;
+      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("论文暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="retry-paper">${t("重试")}</button></div>`;
     }
   }
   async function saveMark(key: string, action: "status" | "star", value: string | boolean): Promise<void> {
@@ -280,8 +325,8 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   }
 
   function renderDocument(entry: ReadingDocument): void {
-    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">← 返回列表</button><span class="reading-kind">${entry.kind === "daily" ? "研究日报" : "论文总结"}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="缩小字号">A−</button><button class="icon-button" data-action="font-up" aria-label="放大字号">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
-      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || "已保存文档")}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${escapeHtml(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, "arXiv 原文", "original")}${sourceLink(entry.pdfUrl, "阅读 PDF", "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">来源日报 · ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="文档正文"></article><footer class="article-footer"><span>Markdown 保存在本地</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
+    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><span class="reading-kind">${entry.kind === "daily" ? t("研究日报") : t("论文总结")}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="${t("缩小字号")}">A−</button><button class="icon-button" data-action="font-up" aria-label="${t("放大字号")}">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
+      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${escapeHtml(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
     // The local service owns Markdown sanitization. All other API text is escaped above.
     find("article").innerHTML = entry.html;
     const firstHeading = find("article").querySelector("h1");
@@ -289,7 +334,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
       find(".document-title").id = firstHeading.id;
       firstHeading.remove();
     }
-    find(".toc-pane").innerHTML = entry.headings.length ? `<div class="toc-inner"><span class="toc-label">本页目录</span><nav>${entry.headings.map(heading => `<a href="#${encodeURIComponent(heading.id)}" class="toc-level-${heading.level}">${escapeHtml(heading.title)}</a>`).join("")}</nav><span class="toc-note">阅读原文，核对结论。</span></div>` : "";
+    find(".toc-pane").innerHTML = entry.headings.length ? `<div class="toc-inner"><span class="toc-label">${t("本页目录")}</span><nav>${entry.headings.map(heading => `<a href="#${encodeURIComponent(heading.id)}" class="toc-level-${heading.level}">${escapeHtml(heading.title)}</a>`).join("")}</nav><span class="toc-note">${t("阅读原文，核对结论。")}</span></div>` : "";
   }
 
   function sourceLink(url: string | null, label: string, source: string): string {
@@ -320,25 +365,26 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
     dialog.setAttribute("aria-labelledby", "dialog-title");
-    dialog.innerHTML = `<div class="dialog-heading"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close-dialog" aria-label="关闭弹窗">×</button></div>${content}`;
+    dialog.innerHTML = `<div class="dialog-heading"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close-dialog" aria-label="${t("关闭弹窗")}">×</button></div>${content}`;
     find(".dialog-host").append(dialog);
     if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
     dialog.addEventListener("cancel", event => { event.preventDefault(); closeDialog(); });
   }
 
   async function showSettings(): Promise<void> {
-    showDialog(setupRequired ? "首次使用 arXiv Daily" : "设置", '<p class="dialog-description">正在读取设置…</p>');
+    showDialog(setupRequired ? t("首次使用 arXiv Daily") : t("设置"), `<p class="dialog-description">${t("正在读取设置…")}</p>`);
     const activeDialog = dialog!;
     try {
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
-      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(run => run.status === "completed"));
+      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(run => run.status === "completed"), appearance);
       bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
+        if (disposed) return;
         closeDialog();
         find(".connection-banner").hidden = true;
         if (!await loadStatus()) return;
         await initializeWorkspace(true);
-      }, acceptRun, status?.recentRuns?.some(run => run.status === "completed"));
+      }, acceptRun, status?.recentRuns?.some(run => run.status === "completed"), { appearance, onAppearanceSaved });
     } catch (error) {
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.textContent = message(error);
@@ -348,18 +394,18 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   function showGeneration(date = ""): void {
     if (setupRequired) { void showSettings(); return; }
     const unavailable = !status || !status.llm.ready;
-    showDialog("生成研究内容", `<p class="dialog-description">筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。</p><form class="generation-form"><fieldset class="generation-kind"><legend>内容类型</legend><label><input type="radio" name="kind" value="daily" checked> 日报</label><label><input type="radio" name="kind" value="paper"> 单篇详细总结</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">日报日期 <span>留空生成今天的日报</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">arXiv ID 或链接</label><input id="run-paper" name="paper" type="text" placeholder="例如 2609.12345" autocomplete="off"></div>${status?.emailEnabled ? '<p class="generation-note">邮件已开启：日报成功后，会按现有配置发送邮件。</p>' : ""}${unavailable ? '<p class="generation-note">模型 API 尚未就绪，请先打开“设置”完成配置。</p>' : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">取消</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>开始生成</button></div></form>`);
+    showDialog(t("生成研究内容"), `<p class="dialog-description">${t("筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。")}</p><form class="generation-form"><fieldset class="generation-kind"><legend>${t("内容类型")}</legend><label><input type="radio" name="kind" value="daily" checked> ${t("日报")}</label><label><input type="radio" name="kind" value="paper"> ${t("单篇详细总结")}</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">${t("日报日期")} <span>${t("留空生成今天的日报")}</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">${t("arXiv ID 或链接")}</label><input id="run-paper" name="paper" type="text" placeholder="${t("例如 2609.12345")}" autocomplete="off"></div>${status?.emailEnabled ? `<p class="generation-note">${t("邮件已开启：日报成功后，会按现有配置发送邮件。")}</p>` : ""}${unavailable ? `<p class="generation-note">${t("模型 API 尚未就绪，请先打开“设置”完成配置。")}</p>` : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">${t("取消")}</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>${t("开始生成")}</button></div></form>`);
     find<HTMLInputElement>("#run-date").value = date;
   }
 
   function renderRun(): void {
     const tray = find(".run-tray");
     if (!currentRun || dismissedRun === currentRun.id) { tray.hidden = true; return; }
-    const labels = { running: "正在运行", completed: "已完成", failed: "生成失败", cancelled: "已取消", skipped: "已跳过" };
+    const labels = { running: t("正在运行"), completed: t("已完成"), failed: t("生成失败"), cancelled: t("已取消"), skipped: t("已跳过") };
     const keepOpen = tray.querySelector("details")?.open;
     tray.hidden = false;
-    tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${labels[currentRun.status]}</span><strong>${escapeHtml(currentRun.label)}</strong></div>${currentRun.status === "running" ? '<button class="quiet-button" data-action="cancel-run">取消任务</button>' : '<button class="icon-button" data-action="dismiss-run" aria-label="关闭任务状态">×</button>'}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>查看运行详情</summary><pre></pre></details>`;
-    tray.querySelector("pre")!.textContent = currentRun.output || "等待运行输出…";
+    tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${t(labels[currentRun.status])}</span><strong>${escapeHtml(runLabel(currentRun.label))}</strong></div>${currentRun.status === "running" ? `<button class="quiet-button" data-action="cancel-run">${t("取消任务")}</button>` : `<button class="icon-button" data-action="dismiss-run" aria-label="${t("关闭任务状态")}">×</button>`}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>${t("查看运行详情")}</summary><pre></pre></details>`;
+    tray.querySelector("pre")!.textContent = t(currentRun.output) || t("等待运行输出…");
   }
 
   function acceptRun(run: WorkbenchRun | null): void {
@@ -395,9 +441,9 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     const body = selected === "paper" ? { kind: "paper", id } : { kind: "daily", ...(date ? { date } : {}) };
     const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const errorBox = form.querySelector<HTMLElement>(".form-error")!;
-    if (selected === "paper" && !id) { errorBox.hidden = false; errorBox.textContent = "请输入 arXiv ID 或链接。"; return; }
+    if (selected === "paper" && !id) { errorBox.hidden = false; errorBox.textContent = t("请输入 arXiv ID 或链接。"); return; }
     submit.disabled = true;
-    submit.textContent = "正在启动…";
+    submit.textContent = t("正在启动…");
     try {
       const result = await request<{ run: WorkbenchRun }>("api/runs", body);
       if (disposed) return;
@@ -406,7 +452,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     } catch (error) {
       if (disposed) return;
       submit.disabled = false;
-      submit.textContent = "开始生成";
+      submit.textContent = t("开始生成");
       errorBox.hidden = false;
       errorBox.textContent = message(error);
     }
@@ -416,7 +462,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     if (!currentRun || currentRun.status !== "running") return;
     const button = find<HTMLButtonElement>('[data-action="cancel-run"]');
     button.disabled = true;
-    button.textContent = "正在取消…";
+    button.textContent = t("正在取消…");
     try { acceptRun((await request<{ run: WorkbenchRun }>("api/runs/cancel", { id: currentRun.id })).run); }
     catch (error) { reportConnection(error); void pollRun(); }
   }
@@ -433,7 +479,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   async function initializeWorkspace(refresh = false): Promise<void> {
     if (disposed) return;
     if (setupRequired) {
-      reading.innerHTML = '<div class="empty-reading"><h1>开始积累你的研究记录</h1><p>先设置保存目录、模型 API 和关注主题。</p><button class="primary-button" data-action="settings">开始设置</button></div>';
+      reading.innerHTML = `<div class="empty-reading"><h1>${t("开始积累你的研究记录")}</h1><p>${t("先设置保存目录、模型 API 和关注主题。")}</p><button class="primary-button" data-action="settings">${t("开始设置")}</button></div>`;
       await showSettings(); return;
     }
     void pollRun();
@@ -491,7 +537,6 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "back") { void showList(true, true).then(() => reading.focus()); }
     else if (action === "cancel-run") void cancelRun();
     else if (action === "dismiss-run") { dismissedRun = currentRun?.id || ""; renderRun(); }
-    else if (action === "theme") { root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark"; preference("theme", root.dataset.theme); }
     else if (action === "font-up" || action === "font-down") { fontSize = Math.max(14, Math.min(22, fontSize + (action === "font-up" ? 1 : -1))); root.style.setProperty("--reading-size", `${fontSize}px`); preference("font-size", String(fontSize)); }
   }
 
@@ -548,6 +593,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   return () => {
     disposed = true;
     calendar.dispose(); disposeSidebar();
+    systemTheme?.removeEventListener?.("change", applyTheme);
     lifetime.abort();
     clearTimeout(searchTimer); clearTimeout(pollTimer);
     closeDialog();
@@ -561,10 +607,12 @@ function preference(key: string, value?: string): string | null {
   try { if (value !== undefined) localStorage.setItem(`arxiv-daily-reader:${key}`, value); return localStorage.getItem(`arxiv-daily-reader:${key}`); } catch { return null; }
 }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
-function message(error: unknown): string { return error instanceof Error ? error.message : "操作未完成，请重试。"; }
+function message(error: unknown): string { return error instanceof Error ? t(error.message) : t("操作未完成，请重试。"); }
 function routeDate(): string { const date = new URL(location.href).searchParams.get("date") || ""; return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ""; }
 
 if (typeof document !== "undefined") {
   const app = document.getElementById("app");
   if (app) mountWorkbench(app);
 }
+
+function runLabel(label: string): string { const daily=/^(\d{4}-\d{2}-\d{2}) 日报$/.exec(label); const paper=/^(.+) 详细总结$/.exec(label); return daily ? t("{0} 日报",daily[1]!) : paper ? t("{0} 详细总结",paper[1]!) : t(label); }

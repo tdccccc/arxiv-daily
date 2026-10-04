@@ -1,3 +1,4 @@
+import { setUiLanguage } from "../src/workbench/web/i18n";
 // @vitest-environment happy-dom
 import { afterEach, expect, it } from 'vitest';
 import { modelCombobox, mountModelCombobox } from '../src/workbench/web/model-combobox';
@@ -25,4 +26,12 @@ it('allows free text and closes suggestions on Escape or leaving the field',()=>
  form.querySelector<HTMLButtonElement>('[data-model-toggle]')!.click();form.querySelector<HTMLButtonElement>('[type=submit]')!.focus();
  expect(input.getAttribute('aria-expanded')).toBe('false');
  control.setOptions([]);expect(form.querySelector<HTMLButtonElement>('[data-model-toggle]')!.disabled).toBe(true);expect(input.value).toBe('unknown');
+});
+
+it('localizes model picker controls without translating identifiers',()=>{
+ setUiLanguage('zh');const form=document.createElement('form');form.innerHTML=modelCombobox('English');document.body.append(form);
+ const control=mountModelCombobox(form);const input=form.querySelector<HTMLInputElement>('input')!;
+ expect(input.value).toBe('English');expect(input.placeholder).toBe('模型名称');expect(form.querySelector('[data-model-toggle]')?.getAttribute('aria-label')).toBe('展开模型选项');
+ control.setOptions(['Chinese']);expect(form.querySelector('[role=option]')?.textContent).toBe('Chinese');
+ setUiLanguage('en');form.innerHTML=modelCombobox('中文模型');expect(form.querySelector('input')?.getAttribute('placeholder')).toBe('Model name');expect(form.querySelector('input')?.getAttribute('value')).toBe('中文模型');
 });
