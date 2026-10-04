@@ -18,7 +18,10 @@ interface Decision {
 
 /** Local PID namespace only; no time-based takeover of a live owner. */
 export class NodeFileLock {
-  constructor(private readonly root: string, private readonly options: { lockRoot?: string } = {}) {}
+  constructor(
+    private readonly root: string,
+    private readonly options: { lockRoot?: string; beforeOwnerPublish?: () => Promise<void> } = {},
+  ) {}
 
   async acquire(key: string, options: StorageLockOptions = {}): Promise<StorageLock | null> {
     throwIfCancelled(options.signal);
@@ -92,7 +95,18 @@ export class NodeFileLock {
     }
     const owner: Owner = { version: 1, generation: latest + 1, pid: process.pid, token: randomUUID() };
     await assertCurrent();
+    await this.options.beforeOwnerPublish?.();
     if (!await publish(path.join(dir, `g${owner.generation}.owner.json`), owner)) return null;
+    // Releases prune generations two behind them, so an acquirer that stalled
+    // here can re-create an already pruned owner record. Pruning never removes
+    // the newest generation, so a newer one still exists in that case: close
+    // the stale claim and start over from the real latest generation.
+    if (await hasNewerGeneration(dir, owner.generation)) {
+      await publish(path.join(dir, `g${owner.generation}.decision.json`), {
+        version: 1, token: owner.token, kind: "released",
+      } satisfies Decision).catch(() => false);
+      return this.tryAcquire(dir, assertCurrent);
+    }
     let released = false;
     return {
       release: async () => {
@@ -114,6 +128,13 @@ export class NodeFileLock {
       },
     };
   }
+}
+
+async function hasNewerGeneration(dir: string, generation: number): Promise<boolean> {
+  return (await fs.readdir(dir)).some((name) => {
+    const match = /^g(\d+)\.owner\.json$/.exec(name);
+    return match !== null && Number(match[1]) > generation;
+  });
 }
 
 async function requireDirectory(dir: string) {

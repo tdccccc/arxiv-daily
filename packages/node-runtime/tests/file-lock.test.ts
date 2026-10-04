@@ -24,7 +24,8 @@ beforeAll(async () => {
 afterEach(async () => {
   await Promise.all(Array.from(children, (child) => new Promise<void>((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
-    child.once("exit", () => resolve());
+    // 'close' (not 'exit') guarantees the child's stdio has fully drained.
+    child.once("close", () => resolve());
     child.kill("SIGKILL");
   })));
   children.clear();
@@ -45,7 +46,9 @@ function child(vault: string, lockRoot: string, mode: string, count = 10) {
   process.stderr?.on("data", (chunk) => { errors += String(chunk); });
   const done = new Promise<void>((resolve, reject) => {
     process.once("error", reject);
-    process.once("exit", (code, signal) => code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(errors || `worker exit ${code}`)));
+    // 'close' (not 'exit') guarantees `errors` has the worker's complete
+    // stderr output before the rejection message is built from it.
+    process.once("close", (code, signal) => code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(errors || `worker exit ${code}`)));
   });
   const acquired = new Promise<void>((resolve) => process.on("message", (message) => {
     if (message === "acquired" || message === "read") resolve();
@@ -106,6 +109,37 @@ describe("machine-local file lock", () => {
       await second.done;
     }
     expect(Object.keys((await store.load()).papers).sort()).toEqual(["arxiv:2609.00000", "arxiv:2609.00001", "arxiv:2609.00002"]);
+  });
+
+  it("does not admit a stalled acquirer whose claimed generation was pruned meanwhile", async () => {
+    const { vault, lockRoot } = await fixture();
+    const other = new NodeFileLock(vault, { lockRoot });
+    const seed = await other.acquire("counter");
+    await seed!.release();
+    let stalled = false;
+    // The stalled acquirer has read g0 as released and is about to claim g1
+    // while three full cycles finish elsewhere; their releases prune g0 and g1.
+    const slow = new NodeFileLock(vault, {
+      lockRoot,
+      beforeOwnerPublish: async () => {
+        if (stalled) return;
+        stalled = true;
+        for (let cycle = 0; cycle < 3; cycle++) {
+          const lease = await other.acquire("counter");
+          await lease!.release();
+        }
+      },
+    });
+    const lease = await slow.acquire("counter", { wait: true });
+    expect(lease).not.toBeNull();
+    try {
+      expect(await other.acquire("counter")).toBeNull();
+    } finally {
+      await lease!.release();
+    }
+    const next = await other.acquire("counter");
+    expect(next).not.toBeNull();
+    await next!.release();
   });
 
   it("excludes another instance and allows reacquisition after release", async () => {
