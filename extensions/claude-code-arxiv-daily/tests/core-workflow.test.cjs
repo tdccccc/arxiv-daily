@@ -149,12 +149,14 @@ test('an unpublished announce date remains retryable without an empty report or 
   const f = await fixture(t);
   const unpublishedDate = '2026-05-12';
   const result = f.run(['run', '--date', unpublishedDate]);
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stderr, /failed_transient/);
-  assert.match(result.stderr, /newer than newest/);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /awaiting_announcement/);
+  assert.match(result.stdout, /newer than newest/);
   await assert.rejects(f.read(`arxiv-daily/daily/${unpublishedDate}.md`), { code: 'ENOENT' });
   const state = await f.json('arxiv-daily/.index/run-state.json');
-  assert.equal(state.runState[unpublishedDate].status, 'failed_transient');
+  assert.equal(state.runState[unpublishedDate].status, 'pending');
+  assert.equal(state.runState[unpublishedDate].outcome, 'awaiting_announcement');
+  assert.equal(state.runState[unpublishedDate].failureAttempts, 0);
   assert.deepEqual((await f.requests()).map(r => r.kind), ['recent']);
 });
 

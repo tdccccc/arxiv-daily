@@ -103,7 +103,10 @@ test('copied CLI serves its complete reading UI and dispatches original product 
   });
   const reread = await (await fetch(new URL(`api/paper?key=${encodeURIComponent(indexOnly.key)}`, freshUrl))).json();
   assert.equal(reread.paper.status, 'to_read'); assert.equal(reread.paper.starred, true);
-  assert.deepEqual(await (await fetch(new URL('api/preferences', freshUrl))).json(), { sidebarWidth: 570, sidebarCollapsed: true });
+  const preferences = await (await fetch(new URL('api/preferences', freshUrl))).json();
+  assert.equal(preferences.sidebarWidth, 570);
+  assert.equal(preferences.sidebarCollapsed, true);
+  assert.deepEqual(preferences.appearance, { theme: 'light', language: 'zh' });
   fresh.kill('SIGTERM'); await freshExit;
 
   await fs.appendFile(configPath, '\n# changed configuration\n');
