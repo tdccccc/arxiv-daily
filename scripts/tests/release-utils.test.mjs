@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
@@ -154,4 +154,35 @@ test("release checker accepts current metadata and both tools reject malformed v
     assert.equal(result.status, 2, `${script}: ${result.stdout}${result.stderr}`);
     assert.match(result.stderr, /Invalid SemVer/);
   }
+});
+
+
+test("release checker accepts nested dependencies without accepting unknown workspaces", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "arxiv-release-nested-deps-"));
+  try {
+    const files = [...packageFiles, ...manifestFiles, "versions.json", "plugin/versions.json",
+      "package-lock.json", "THIRD_PARTY_NOTICES.md", "scripts/release-utils.mjs", "scripts/check-release-version.mjs"];
+    for (const file of files) {
+      await mkdir(dirname(join(fixture, file)), { recursive: true });
+      await copyFile(join(root, file), join(fixture, file));
+    }
+    const lock = JSON.parse(await readFile(join(fixture, "package-lock.json"), "utf8"));
+    for (const path of ["apps/cli/node_modules/commander", "apps/cli/node_modules/@fixture/scoped",
+      "packages/core/node_modules/outer/node_modules/inner"]) {
+      lock.packages[path] = { version: "1.0.0" };
+    }
+    const check = () => spawnSync(process.execPath,
+      [join(fixture, "scripts/check-release-version.mjs"), lock.version], { encoding: "utf8" });
+    await writeFile(join(fixture, "package-lock.json"), JSON.stringify(lock));
+    const accepted = check();
+    assert.equal(accepted.status, 0, accepted.stderr);
+    for (const path of ["apps/unexpected", "packages/node_modules-like"]) {
+      lock.packages[path] = { name: "unexpected", version: lock.version };
+      await writeFile(join(fixture, "package-lock.json"), JSON.stringify(lock));
+      const rejected = check();
+      assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+      assert.ok(rejected.stderr.includes(`unexpected workspace package ${path}`), rejected.stderr);
+      delete lock.packages[path];
+    }
+  } finally { await rm(fixture, { recursive: true, force: true }); }
 });
