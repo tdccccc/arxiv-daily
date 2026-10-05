@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-05T11:17:00+08:00
-revision: 27
+updated: 2026-10-05T11:24:56+08:00
+revision: 28
 
 ## Intent
 
@@ -61,3 +61,5 @@ revision: 27
 16. P16 — Rebase到最新主线并保留两端功能 — status: done
 
 17. P17 — 修复工作台各阅读入口的Markdown与公式显示 — status: done
+
+18. P18 — 阅读附录/生成统计与前进后退导航 — status: active
