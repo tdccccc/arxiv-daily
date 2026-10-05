@@ -18,22 +18,22 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package
 ```
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.15.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.16.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.15.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
 ```
 
 重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“arxiv-daily”侧栏标签。
 
 ## 从旧版本升级
 
-0.1.15 修复论文概览、摘要、推荐理由、标题和目录中的 Markdown/LaTeX 显示，支持跨空行的块公式；KaTeX 样式与字体随包离线提供，已有内容无需重新生成。0.1.14 同步 main 0.5.0：方向按普通研究主题保存，设置保留多方向及每日论文上限，文献库使用标题摘要索引；保留 P15 运行状态。0.1.13 统一 core 运行状态：等待公告、当日无更新、筛选无匹配与真实失败分别展示；等待不消耗失败重试额度，子进程通过结构化消息通知工作台，旧历史保持兼容。0.1.12 与 Obsidian 共用 core 业务设置描述、编辑规则和邮件设置操作；模型/主题/邮件保持各宿主独立存储，不自动同步密钥。0.1.11 新增“外观”：主题（浅色/深色/跟随系统）和界面语言（中文/English）保存后生效；界面文案统一翻译，研究内容与总结语言独立。0.1.10 修复 Get models 保存配置时重新插入 Getting started，获取模型不会重建引导或改变当前滚动位置。0.1.9 汇总已确认的单框模型选择、周末无更新跳过与纯文字 arxiv-daily 标题；不采用待选图标。0.1.8 将模型输入与下拉合并为 Get models 左侧的单一可输入选择框，支持键盘和筛选。0.1.7 修复密钥 Show/Hide，点击后可查看已保存密钥；Get models 加载后提供显式下拉选择，失败原因显示在模型行。0.1.6 增加设置左侧跳转导航、当前区域高亮和清晰分区，窄屏导航位于顶部；原设置条目不变。0.1.5 按 Obsidian 1.13+ 设置原条目重做，保留原分组、顺序、下拉选项、开关和条件显示，并接通文献库、模型列表、邮件按钮及分钟级自动检查。0.1.4 增加图形首次使用与可保存设置页，直接在 DSH 内完成配置。0.1.3 将两侧入口和标签的显示名称统一为 `arxiv-daily`。0.1.2 已增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
+0.1.16 将 Summary sources 及附加信息与正文分隔，页尾显示 token、生成耗时与具体生成时间；新增工作台前进/后退并恢复筛选和滚动位置。旧记录缺失的统计明确显示未记录，关联日报统计不冒充单篇用量。0.1.15 修复论文概览、摘要、推荐理由、标题和目录中的 Markdown/LaTeX 显示，支持跨空行的块公式；KaTeX 样式与字体随包离线提供，已有内容无需重新生成。0.1.14 同步 main 0.5.0：方向按普通研究主题保存，设置保留多方向及每日论文上限，文献库使用标题摘要索引；保留 P15 运行状态。0.1.13 统一 core 运行状态：等待公告、当日无更新、筛选无匹配与真实失败分别展示；等待不消耗失败重试额度，子进程通过结构化消息通知工作台，旧历史保持兼容。0.1.12 与 Obsidian 共用 core 业务设置描述、编辑规则和邮件设置操作；模型/主题/邮件保持各宿主独立存储，不自动同步密钥。0.1.11 新增“外观”：主题（浅色/深色/跟随系统）和界面语言（中文/English）保存后生效；界面文案统一翻译，研究内容与总结语言独立。0.1.10 修复 Get models 保存配置时重新插入 Getting started，获取模型不会重建引导或改变当前滚动位置。0.1.9 汇总已确认的单框模型选择、周末无更新跳过与纯文字 arxiv-daily 标题；不采用待选图标。0.1.8 将模型输入与下拉合并为 Get models 左侧的单一可输入选择框，支持键盘和筛选。0.1.7 修复密钥 Show/Hide，点击后可查看已保存密钥；Get models 加载后提供显式下拉选择，失败原因显示在模型行。0.1.6 增加设置左侧跳转导航、当前区域高亮和清晰分区，窄屏导航位于顶部；原设置条目不变。0.1.5 按 Obsidian 1.13+ 设置原条目重做，保留原分组、顺序、下拉选项、开关和条件显示，并接通文献库、模型列表、邮件按钮及分钟级自动检查。0.1.4 增加图形首次使用与可保存设置页，直接在 DSH 内完成配置。0.1.3 将两侧入口和标签的显示名称统一为 `arxiv-daily`。0.1.2 已增加固定的左侧入口和右侧标签，移除会话输入区的旧按钮；同时保留 0.1.1 的 API Gateway 共存修复。Web profile 可用新包替换旧依赖：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.15.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
 ```
 
 然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
