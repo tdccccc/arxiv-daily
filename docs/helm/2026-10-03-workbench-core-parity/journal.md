@@ -145,3 +145,9 @@ Root3881 passed/2 real-corpus opt-in skips; release tools368; DSH20; Claude pack
 ## 2026-10-05T12:59:01+08:00 — P2 accepted, P3 started
 
 Personal-library HTTP/DOM flow now handles catalog and indexed fallback PDFs without requiring an agent conversation. Core retrieval, source guards and existing settings are reused. CLI387, final adapter46, UI27, DSH20, typecheck/build passed; no real corpus/model. Proceed to P3 parity against native review operations with typed service boundaries and receipt-safe acceptance.
+
+## 2026-10-05T13:14:56+08:00 — P3 accepted; DSH0.1.17 packaged
+
+Connected the existing native proposal workflow to web/DSH: explicit authorization, evidence/drafts, rename/move/remove, preview, partial acceptance and overview. Preserved ordinary topics/receipts; did not restore retired profiles. Readonly review/catalog/PDF no longer queue behind model jobs. Fixed delayed-body operation gating and preview restoration with observed regressions.
+
+Full repository3950 passed/2 real-corpus opt-in skips; types/boundaries/inventory/build passed; lint0 errors/22 warnings. Final DSH20 actual isolated Host, Claude7, documentation34 links and package bytes verified. Package0.1.17 sha2567daeeecadb2802534f746bf187b17f531b9d884cea5fc3231657c7ce4838f294. Core df00de4, service20d90e6, UI7b5e32c, docs/version41a4857. No production install, user corpus/model/email, Computer Use, push or main merge. P2/P3done; P4 remains pending, no active phase.

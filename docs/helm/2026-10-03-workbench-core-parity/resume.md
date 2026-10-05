@@ -2,14 +2,14 @@
 
 ## User-approved next work
 
-P15–P19 are complete. The verified workbench and updated docs are merged into local main (base before merge a1cd713; integration d1ad169 plus closing docs). Feature worktree is retained. Backups: backup/main-before-workbench-20261005, backup/workbench-before-main-merge and backup/claude-code-research-plugin-pre-rebase. DSH0.1.16 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
+P2 and P3 are now complete after P19. Personal library browsing/search/PDF and direction review/overview are implemented in the retained feature worktree, with local DSH0.1.17 packaged. Local main remains the earlier P19 merge at678febe; these new commits are not merged or pushed. No production install occurred. User requested these two GUI workflows; do not restart them or activate P4 automatically. P4 richer run management remains pending.
 
 ## Workspace
 
 - /home/tiandc/Documents/code/arxiv-daily/.worktree/claude-code-research-plugin
 - branch feat/claude-code-research-plugin
 - Default Chinese. No Computer Use; screenshots supplied by user may be read. No real paid model calls/email or writes to user vault for testing.
-- Main checkout contains unrelated work. All implementation stays in this worktree.
+- Main remains at the previous merge; separate Obsidian warning worktrees are untouched. All implementation stays in this worktree.
 - Helm and code-change-discipline apply. Preserve staged/unrelated edits, observe Red/Green, inspect staged diff before scoped Conventional Commits.
 
 ## Product decisions
@@ -59,3 +59,11 @@ Core metrics now include durable generatedAt and versioned JSON inside the exist
 ## P19 merge state
 
 Local main contains the first workbench/DSH iteration and7 updated user docs. No remote push/tag/publication/production installation occurred. Full acceptance: root3881 pass/2 explicit real-corpus skips; release-tools368; DSH20; Claude7; all types/build/submission/smokes/published-manifest pass; audit0, lint0 errors/22 permitted warnings. Fixed release checker nested dependency handling + DSH CI runtime input coverage. Subsequent GUI work P2/P3/P4 remains pending. Keep this distinction from a fully published release or complete library GUI parity.
+
+## P2/P3 result after P19
+
+LibraryWorkflow now exposes guarded renameTopic/moveDirection/removeCandidate/previewDirection, plus indexedPapers on review snapshots. WorkbenchLibrary reuses CLI context and core for catalog/search/PDF/review/actions; independent analysis authorization is at api/library/authorize. Long propose/preview jobs use the existing run tray, previews return through api/library/preview?runId, never parsed terminal logs. Review is at ?view=review and catalog at ?view=library; both have left-side entries.
+
+Review supports proposed/overview tabs, representative evidence, drafts, renaming/moving/deleting candidates, weak-evidence selection, explicit partial acceptance and history-aware preview restoration. Proposal receipts keep processed candidates from being edited/re-added. Config/proposal revision checks, explicit endpoint authorization, scoped PDF reads and cancellation stay enforced. Atomic read views do not wait behind long model jobs; search and mutations keep their lease. PDF cap25MiB.
+
+Full3950 pass/2 real-corpus opt-in skips (CLI422/Obsidian1007), all types/boundaries/inventory/root build; lint0 errors/22 pre-existing warnings; DSH20 actual isolated Host and Claude7 passed. Final0.1.17 package sha2567daeeecadb2802534f746bf187b17f531b9d884cea5fc3231657c7ce4838f294. No real-model/corpus/email or browser automation, no Electron visual check, no publication/install/main merge. See phase03 for evidence. P4 is the only pending product phase.
