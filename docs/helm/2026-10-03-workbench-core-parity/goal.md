@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-05T12:16:11+08:00
-revision: 30
+updated: 2026-10-05T12:29:28+08:00
+revision: 31
 
 ## Intent
 
@@ -64,4 +64,4 @@ revision: 30
 
 18. P18 — 阅读附录/生成统计与前进后退导航 — status: done
 
-19. P19 — 合并前验收、用户文档与本地主线合并 — status: active
+19. P19 — 合并前验收、用户文档与本地主线合并 — status: done

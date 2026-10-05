@@ -2,7 +2,7 @@
 
 ## User-approved next work
 
-P15–P18 are complete. Current branch is rebased onto main c2de350 (0.5.0), with backup/claude-code-research-plugin-pre-rebase at eafe972. DSH0.1.16 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
+P15–P19 are complete. The verified workbench and updated docs are merged into local main (base before merge a1cd713; integration d1ad169 plus closing docs). Feature worktree is retained. Backups: backup/main-before-workbench-20261005, backup/workbench-before-main-merge and backup/claude-code-research-plugin-pre-rebase. DSH0.1.16 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
 
 ## Workspace
 
@@ -55,3 +55,7 @@ Workbench markdown.ts now exports safe inline rendering plus blank-line-aware di
 ## P18 current reading context
 
 Core metrics now include durable generatedAt and versioned JSON inside the existing callout. splitGenerationMetrics returns {body,metrics}, preserving later notes and code examples. Workbench API/rendering exposes generationMetrics and scoped paper.generation; overview appendix starts at Summary sources and generation-footer is last. Old missing data stays unrecorded. Header adds session-bounded history back/forward with scroll/filter/hash restoration, no history.length inference. Tested core332 focused, CLI358 full, plugin1007 full, DSH20 actual Host; all typechecks/boundaries/builds pass. Latest local package0.1.16; no production install. See phase18.
+
+## P19 merge state
+
+Local main contains the first workbench/DSH iteration and7 updated user docs. No remote push/tag/publication/production installation occurred. Full acceptance: root3881 pass/2 explicit real-corpus skips; release-tools368; DSH20; Claude7; all types/build/submission/smokes/published-manifest pass; audit0, lint0 errors/22 permitted warnings. Fixed release checker nested dependency handling + DSH CI runtime input coverage. Subsequent GUI work P2/P3/P4 remains pending. Keep this distinction from a fully published release or complete library GUI parity.

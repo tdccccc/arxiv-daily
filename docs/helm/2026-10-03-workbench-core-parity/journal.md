@@ -131,3 +131,9 @@ Observed Red/Green：core332、CLI358、Obsidian1007、DSH20通过，typechecks/
 ## 2026-10-05T12:16:11+08:00 — P19 merge acceptance start
 
 用户认为首版接近可用并请求合入主线及更新README。进入完整验收和用户文档整理；仅授权本地main合并，不推送或发布。main初始a1cd713、feature4d2b583均干净，后续GUI阶段保持pending。
+
+## 2026-10-05T12:29:28+08:00 — P19 local main merge accepted
+
+First workbench merge accepted after full gate. main a1cd713 was clean; backup/main-before-workbench-20261005 preserved it, then main fast-forwarded to feature d1ad169. Seven user docs updated and35 links checked. Shared functionality is ready as a first iteration; dedicated library/review GUI remains pending.
+
+Root3881 passed/2 real-corpus opt-in skips; release tools368; DSH20; Claude package7; typechecks/boundaries/inventory/build/submission/smokes/published-manifest all passed; audit0. Lint0 errors/22 allowed warnings. Fixed nested-dependency release checker and DSH runtime-file CI coverage with observed regressions. No push/publish/install, user corpus access or Computer Use. Closing records will be fast-forwarded to main as well.
